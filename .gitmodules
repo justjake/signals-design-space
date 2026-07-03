@@ -1,0 +1,37 @@
+[submodule "tb-reactivity-benchmark"]
+	path = tb-reactivity-benchmark
+	url = https://github.com/transitive-bullshit/js-reactivity-benchmark
+[submodule "milomg-reactivity-benchmark"]
+	path = milomg-reactivity-benchmark
+	url = https://github.com/milomg/js-reactivity-benchmark
+[submodule "upstream-alien-signals"]
+	path = upstream-alien-signals
+	url = https://github.com/stackblitz/alien-signals
+[submodule "vendor/anod"]
+	path = vendor/anod
+	url = https://github.com/visj/anod.git
+[submodule "vendor/lite-signal"]
+	path = vendor/lite-signal
+	url = https://github.com/PeshoVurtoleta/lite-signal.git
+[submodule "vendor/reactively"]
+	path = vendor/reactively
+	url = https://github.com/milomg/reactively.git
+[submodule "vendor/cellx"]
+	path = vendor/cellx
+	url = https://github.com/Riim/cellx.git
+[submodule "vendor/signia"]
+	path = vendor/signia
+	url = https://github.com/tldraw/signia.git
+[submodule "vendor/preact-signals"]
+	path = vendor/preact-signals
+	url = https://github.com/preactjs/signals.git
+[submodule "vendor/solid"]
+	path = vendor/solid
+	url = https://github.com/solidjs/solid.git
+	branch = next
+[submodule "vendor/svelte"]
+	path = vendor/svelte
+	url = https://github.com/sveltejs/svelte.git
+[submodule "vendor/leptos"]
+	path = vendor/leptos
+	url = https://github.com/leptos-rs/leptos.git
