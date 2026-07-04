@@ -1,0 +1,36 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "sbench"
+  ],
+  "timestamp": "2026-07-03T19-21-40",
+  "node": "v24.16.0",
+  "loadavg": [
+    1.83447265625,
+    3.2216796875,
+    3.98388671875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createSignals",
+      "time": 3.4591670000000008
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createComputations",
+      "time": 56.58183300000002
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "updateSignals",
+      "time": 295.1827089999997
+    }
+  ]
+}

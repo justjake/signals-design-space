@@ -1,0 +1,5 @@
+framework,metric,kb
+arena-masked,signals-10k,3264.76
+arena-masked,computeds-10k,3561.42
+arena-masked,effects-10k,2396.35
+arena-masked,grid-100x100,5495.07

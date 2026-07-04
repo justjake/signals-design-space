@@ -1,0 +1,17 @@
+{
+	"extends": "../tsconfig.base.json",
+	"compilerOptions": {
+		// DOM matches milomg-reactivity-benchmark's own tsconfig; its bench
+		// sources rely on the DOM console.assert signature.
+		"lib": ["ESNext", "DOM"],
+		"types": ["node"]
+	},
+	"include": [
+		"adapters",
+		"bench",
+		"conformance",
+		"memory",
+		"util",
+		"vitest.config.ts"
+	]
+}

@@ -1,0 +1,141 @@
+{
+  "kind": "bench",
+  "framework": "sweep",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-03T20-30-11",
+  "node": "v24.16.0",
+  "loadavg": [
+    4.49560546875,
+    4.30615234375,
+    4.4423828125
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "avoidablePropagation",
+      "time": 100.750167
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "broadPropagation",
+      "time": 65.11437499999988
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "deepPropagation",
+      "time": 28.601666999999907
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "diamond",
+      "time": 72.45337500000005
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "mux",
+      "time": 79.33833300000015
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "repeatedObservers",
+      "time": 12.171499999999924
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "triangle",
+      "time": 23.003458000000137
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "unstable",
+      "time": 8.622749999999542
+    },
+    {
+      "suite": "kairo",
+      "framework": "sweep",
+      "test": "molBench",
+      "time": 13.534458999999515
+    },
+    {
+      "suite": "sbench",
+      "framework": "sweep",
+      "test": "createSignals",
+      "time": 0.7811659999999989
+    },
+    {
+      "suite": "sbench",
+      "framework": "sweep",
+      "test": "createComputations",
+      "time": 67.97462500000009
+    },
+    {
+      "suite": "sbench",
+      "framework": "sweep",
+      "test": "updateSignals",
+      "time": 53503.14095699997
+    },
+    {
+      "suite": "cellx",
+      "framework": "sweep",
+      "test": "cellx1000",
+      "time": 2.705500999999984
+    },
+    {
+      "suite": "cellx",
+      "framework": "sweep",
+      "test": "cellx2500",
+      "time": 5.214375000000032
+    },
+    {
+      "suite": "dynamic",
+      "framework": "sweep",
+      "test": "2-10x5 - lazy80%",
+      "time": 193.61699999999996
+    },
+    {
+      "suite": "dynamic",
+      "framework": "sweep",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 100.67483300000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "sweep",
+      "test": "4-1000x12 - dyn5%",
+      "time": 2024.280791000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "sweep",
+      "test": "25-1000x5",
+      "time": 989.7594170000011
+    },
+    {
+      "suite": "dynamic",
+      "framework": "sweep",
+      "test": "3-5x500",
+      "time": 77.71074999999837
+    },
+    {
+      "suite": "dynamic",
+      "framework": "sweep",
+      "test": "6-100x15 - dyn50%",
+      "time": 196.7376660000009
+    }
+  ]
+}

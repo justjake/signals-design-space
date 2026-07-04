@@ -1,0 +1,30 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "cellx"
+  ],
+  "timestamp": "2026-07-03T18-48-20",
+  "node": "v24.16.0",
+  "loadavg": [
+    5.89013671875,
+    5.30908203125,
+    5.2373046875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx1000",
+      "time": 6.075833000000003
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx2500",
+      "time": 17.011250000000032
+    }
+  ]
+}

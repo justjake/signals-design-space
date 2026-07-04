@@ -1,0 +1,141 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-03T20-30-11",
+  "node": "v24.16.0",
+  "loadavg": [
+    3.4609375,
+    4.03125,
+    4.5419921875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "avoidablePropagation",
+      "time": 94.056041
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "broadPropagation",
+      "time": 72.39795900000013
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "deepPropagation",
+      "time": 33.35454200000004
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "diamond",
+      "time": 79.29087500000014
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "mux",
+      "time": 72.90454199999976
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "repeatedObservers",
+      "time": 11.911666999999852
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "triangle",
+      "time": 24.25099999999975
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "unstable",
+      "time": 12.0790420000003
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "molBench",
+      "time": 13.399916999999732
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createSignals",
+      "time": 15.679792000000006
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createComputations",
+      "time": 65.48816700000003
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "updateSignals",
+      "time": 302.40487299999927
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx1000",
+      "time": 6.093333000000001
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx2500",
+      "time": 12.606915999999956
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "2-10x5 - lazy80%",
+      "time": 139.635084
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 118.71245799999997
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "4-1000x12 - dyn5%",
+      "time": 300.23879099999976
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "25-1000x5",
+      "time": 393.483166
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "3-5x500",
+      "time": 86.34737499999937
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-100x15 - dyn50%",
+      "time": 189.4576249999991
+    }
+  ]
+}

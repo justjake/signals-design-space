@@ -1,0 +1,7 @@
+framework,suite,test,time
+arena-links,dynamic,2-10x5 - lazy80%,196.12458300000003
+arena-links,dynamic,6-10x10 - dyn25% - lazy80%,147.92833299999984
+arena-links,dynamic,4-1000x12 - dyn5%,375.3305419999997
+arena-links,dynamic,25-1000x5,484.53254200000083
+arena-links,dynamic,3-5x500,117.34004199999981
+arena-links,dynamic,6-100x15 - dyn50%,235.71791699999994

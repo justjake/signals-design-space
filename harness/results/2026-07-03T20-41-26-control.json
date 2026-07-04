@@ -1,0 +1,141 @@
+{
+  "kind": "bench",
+  "framework": "control",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-03T20-41-26",
+  "node": "v24.16.0",
+  "loadavg": [
+    4.931640625,
+    4.4462890625,
+    4.47607421875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "avoidablePropagation",
+      "time": 100.36462500000002
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "broadPropagation",
+      "time": 74.38699999999994
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "deepPropagation",
+      "time": 30.63166699999988
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "diamond",
+      "time": 78.83924999999999
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "mux",
+      "time": 77.47154200000023
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "repeatedObservers",
+      "time": 12.336749999999938
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "triangle",
+      "time": 27.072833000000173
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "unstable",
+      "time": 12.312332999999853
+    },
+    {
+      "suite": "kairo",
+      "framework": "control",
+      "test": "molBench",
+      "time": 13.840916999999536
+    },
+    {
+      "suite": "sbench",
+      "framework": "control",
+      "test": "createSignals",
+      "time": 3.837583000000002
+    },
+    {
+      "suite": "sbench",
+      "framework": "control",
+      "test": "createComputations",
+      "time": 68.78125000000023
+    },
+    {
+      "suite": "sbench",
+      "framework": "control",
+      "test": "updateSignals",
+      "time": 302.8265849999998
+    },
+    {
+      "suite": "cellx",
+      "framework": "control",
+      "test": "cellx1000",
+      "time": 5.495084000000013
+    },
+    {
+      "suite": "cellx",
+      "framework": "control",
+      "test": "cellx2500",
+      "time": 13.388127000000011
+    },
+    {
+      "suite": "dynamic",
+      "framework": "control",
+      "test": "2-10x5 - lazy80%",
+      "time": 145.5485000000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "control",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 123.77420799999982
+    },
+    {
+      "suite": "dynamic",
+      "framework": "control",
+      "test": "4-1000x12 - dyn5%",
+      "time": 301.0882919999999
+    },
+    {
+      "suite": "dynamic",
+      "framework": "control",
+      "test": "25-1000x5",
+      "time": 388.93174999999974
+    },
+    {
+      "suite": "dynamic",
+      "framework": "control",
+      "test": "3-5x500",
+      "time": 104.98529100000087
+    },
+    {
+      "suite": "dynamic",
+      "framework": "control",
+      "test": "6-100x15 - dyn50%",
+      "time": 188.59775000000081
+    }
+  ]
+}

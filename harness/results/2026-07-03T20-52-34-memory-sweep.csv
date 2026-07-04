@@ -1,0 +1,5 @@
+framework,metric,kb
+sweep,signals-10k,2824.23
+sweep,computeds-10k,3848.18
+sweep,effects-10k,5593.27
+sweep,grid-100x100,9046.26

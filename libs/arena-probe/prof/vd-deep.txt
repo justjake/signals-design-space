@@ -1,0 +1,178 @@
+Statistical profiling result from vd-deep.log, (1510 ticks, 16 unaccounted, 0 excluded).
+
+ [Shared libraries]:
+   ticks  total  nonlib   name
+     22    1.5%          /usr/lib/system/libsystem_c.dylib
+      4    0.3%          /usr/lib/libc++.1.dylib
+      1    0.1%          /usr/lib/system/libsystem_malloc.dylib
+      1    0.1%          /usr/lib/system/libsystem_kernel.dylib
+
+ [JavaScript]:
+   ticks  total  nonlib   name
+    767   50.8%   51.8%  JS: *checkDirty file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:257:20
+    271   17.9%   18.3%  JS: *<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:645:9
+    228   15.1%   15.4%  JS: *propagate file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:193:19
+     10    0.7%    0.7%  JS: *run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+      7    0.5%    0.5%  JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      2    0.1%    0.1%  JS: *<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:631:18
+      1    0.1%    0.1%  JS: +propagate file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:193:19
+      1    0.1%    0.1%  JS: +checkDirty file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:257:20
+      1    0.1%    0.1%  JS: *updateSignal file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:439:22
+      1    0.1%    0.1%  JS: *updateComputed file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:419:24
+      1    0.1%    0.1%  JS: *link file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:119:14
+
+ [C++]:
+   ticks  total  nonlib   name
+    129    8.5%    8.7%  t ___cxx_global_var_init
+      9    0.6%    0.6%  T _pthread_key_create
+      7    0.5%    0.5%  T _mig_get_reply_port
+      7    0.5%    0.5%  T ___pthread_init
+      4    0.3%    0.3%  t __pthread_mutex_global_init
+      4    0.3%    0.3%  t __pthread_bsdthread_init
+      3    0.2%    0.2%  t std::__1::ostreambuf_iterator<char, std::__1::char_traits<char>> std::__1::__pad_and_output[abi:nn180100]<char, std::__1::char_traits<char>>(std::__1::ostreambuf_iterator<char, std::__1::char_traits<char>>, char const*, char const*, char const*, std::__1::ios_base&, char)
+      3    0.2%    0.2%  t std::__1::basic_ostream<char, std::__1::char_traits<char>>& std::__1::__put_character_sequence[abi:nn180100]<char, std::__1::char_traits<char>>(std::__1::basic_ostream<char, std::__1::char_traits<char>>&, char const*, unsigned long)
+      3    0.2%    0.2%  t ___pfz_setup
+      3    0.2%    0.2%  T _chmod
+      2    0.1%    0.1%  T _pthread_key_init_np
+      1    0.1%    0.1%  t __os_once_gate_wait
+      1    0.1%    0.1%  T node::loader::ModuleWrap::New(v8::FunctionCallbackInfo<v8::Value> const&)
+
+ [Summary]:
+   ticks  total  nonlib   name
+   1290   85.4%   87.0%  JavaScript
+    176   11.7%   11.9%  C++
+      0    0.0%    0.0%  GC
+     28    1.9%          Shared libraries
+     16    1.1%          Unaccounted
+
+ [C++ entry points]:
+   ticks    cpp   total   name
+    148   77.9%    9.8%  t ___cxx_global_var_init
+      9    4.7%    0.6%  T _pthread_key_create
+      7    3.7%    0.5%  T _mig_get_reply_port
+      7    3.7%    0.5%  T ___pthread_init
+      4    2.1%    0.3%  t __pthread_mutex_global_init
+      3    1.6%    0.2%  t std::__1::basic_ostream<char, std::__1::char_traits<char>>& std::__1::__put_character_sequence[abi:nn180100]<char, std::__1::char_traits<char>>(std::__1::basic_ostream<char, std::__1::char_traits<char>>&, char const*, unsigned long)
+      3    1.6%    0.2%  t __pthread_bsdthread_init
+      3    1.6%    0.2%  t ___pfz_setup
+      2    1.1%    0.1%  t std::__1::ostreambuf_iterator<char, std::__1::char_traits<char>> std::__1::__pad_and_output[abi:nn180100]<char, std::__1::char_traits<char>>(std::__1::ostreambuf_iterator<char, std::__1::char_traits<char>>, char const*, char const*, char const*, std::__1::ios_base&, char)
+      2    1.1%    0.1%  T _pthread_key_init_np
+      1    0.5%    0.1%  T node::loader::ModuleWrap::New(v8::FunctionCallbackInfo<v8::Value> const&)
+      1    0.5%    0.1%  T _chmod
+
+ [Bottom up (heavy) profile]:
+  Note: percentage shows a share of a particular caller in the total
+  amount of its parent calls.
+  Callers occupying less than 1.0% are not shown.
+
+   ticks parent  name
+    767   50.8%  JS: *checkDirty file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:257:20
+    758   98.8%    JS: *run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+    758  100.0%      JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+    758  100.0%        Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+    758  100.0%          t ___cxx_global_var_init
+      9    1.2%    JS: +run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+      7   77.8%      JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      7  100.0%        Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+      7  100.0%          t ___cxx_global_var_init
+      2   22.2%      JS: +flush file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:599:15
+      2  100.0%        JS: +<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:631:18
+      2  100.0%          JS: +deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      2  100.0%            Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+
+    271   17.9%  JS: *<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:645:9
+    256   94.5%    JS: *checkDirty file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:257:20
+    251   98.0%      JS: *run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+    251  100.0%        JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+    251  100.0%          Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+    251  100.0%            t ___cxx_global_var_init
+      5    2.0%      JS: +run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+      3   60.0%        JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      3  100.0%          Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+      3  100.0%            t ___cxx_global_var_init
+      2   40.0%        JS: +flush file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:599:15
+      2  100.0%          JS: +<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:631:18
+      2  100.0%            JS: ^deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      4    1.5%    JS: *run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+      4  100.0%      JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      4  100.0%        Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+      4  100.0%          t ___cxx_global_var_init
+
+    228   15.1%  JS: *propagate file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:193:19
+    227   99.6%    JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+    227  100.0%      Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+    227  100.0%        t ___cxx_global_var_init
+
+    129    8.5%  t ___cxx_global_var_init
+     72   55.8%    JS: *run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+     72  100.0%      JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+     72  100.0%        Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+     72  100.0%          t ___cxx_global_var_init
+     23   17.8%    JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+     23  100.0%      JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+     21   91.3%        t ___cxx_global_var_init
+     21  100.0%          Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+     21  100.0%            t ___cxx_global_var_init
+      1    4.3%        JS: ~<anonymous> node:internal/streams/duplex:1:1
+      1  100.0%          JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+      1  100.0%            JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+      1    4.3%        JS: ~<anonymous> node:internal/perf/resource_timing:1:1
+      1  100.0%          JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+      1  100.0%            JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+     12    9.3%    JS: ~__require node:internal/deps/amaro/dist/index:8:49
+     12  100.0%      JS: ~<anonymous> node:internal/deps/amaro/dist/index:1:1
+     12  100.0%        JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+     12  100.0%          JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+     12  100.0%            t ___cxx_global_var_init
+      2    1.6%    JS: ~lib/wasm.js node:internal/deps/amaro/dist/index:35:16
+      2  100.0%      JS: ~__require node:internal/deps/amaro/dist/index:8:49
+      2  100.0%        JS: ~<anonymous> node:internal/deps/amaro/dist/index:1:1
+      2  100.0%          JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+      2  100.0%            JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+      2    1.6%    JS: ~<anonymous> node:internal/main/run_main_module:1:1
+      2    1.6%    JS: wasm-function[787]
+      2  100.0%      JS: wasm-function[1077]
+      2  100.0%        JS: wasm-function[63]
+      2  100.0%          JS: wasm-function[103]
+      2  100.0%            JS: wasm-function[2927]
+      2    1.6%    JS: +run file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:445:13
+      1   50.0%      JS: +flush file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:599:15
+      1  100.0%        JS: +<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/src/v-d-linksplit.ts:631:18
+      1  100.0%          JS: ^deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      1  100.0%            Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+      1   50.0%      JS: *deep file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:27:14
+      1  100.0%        Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+      1  100.0%          t ___cxx_global_var_init
+
+     22    1.5%  /usr/lib/system/libsystem_c.dylib
+     20   90.9%    JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+     20  100.0%      JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+     18   90.0%        t ___cxx_global_var_init
+     18  100.0%          Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+     18  100.0%            t ___cxx_global_var_init
+      1    5.0%        JS: ~<anonymous> node:stream:1:1
+      1  100.0%          JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+      1  100.0%            JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+      1    5.0%        JS: ~<anonymous> node:internal/streams/duplex:1:1
+      1  100.0%          JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+      1  100.0%            JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+      1    4.5%    JS: ~<anonymous> node:internal/main/run_main_module:1:1
+
+     16    1.1%  UNKNOWN
+     11   68.8%    JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+     11  100.0%      JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+     10   90.9%        t ___cxx_global_var_init
+     10  100.0%          Script: ~<anonymous> file:///Users/jitl/src/alien-signals-opt/libs/arena-probe/prof/driver.mjs:1:1
+     10  100.0%            t ___cxx_global_var_init
+      1    9.1%        JS: ~<anonymous> node:perf_hooks:1:1
+      1  100.0%          JS: ^compileForInternalLoader node:internal/bootstrap/realm:383:27
+      1  100.0%            JS: ^requireBuiltin node:internal/bootstrap/realm:420:24
+      3   18.8%    JS: ~<anonymous> node:internal/main/run_main_module:1:1
+      1    6.3%    t ___cxx_global_var_init
+      1  100.0%      JS: ~<anonymous> node:internal/main/run_main_module:1:1
+      1    6.3%    JS: wasm-function[2834]
+      1  100.0%      JS: wasm-function[617]
+      1  100.0%        JS: wasm-function[206]
+      1  100.0%          JS: wasm-function[4143]
+      1  100.0%            JS: wasm-function[2270]
+

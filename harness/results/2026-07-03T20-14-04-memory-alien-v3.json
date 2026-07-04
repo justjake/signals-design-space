@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "alien-v3",
+  "timestamp": "2026-07-03T20-14-04",
+  "node": "v24.16.0",
+  "loadavg": [
+    6.05419921875,
+    5.2275390625,
+    5.404296875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "alien-v3",
+      "metric": "signals-10k",
+      "kb": 3059.66
+    },
+    {
+      "framework": "alien-v3",
+      "metric": "computeds-10k",
+      "kb": 3535.67
+    },
+    {
+      "framework": "alien-v3",
+      "metric": "effects-10k",
+      "kb": 3856.92
+    },
+    {
+      "framework": "alien-v3",
+      "metric": "grid-100x100",
+      "kb": 7124.16
+    }
+  ]
+}

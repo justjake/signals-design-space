@@ -1,0 +1,12 @@
+framework,suite,test,time
+sweep,kairo,avoidablePropagation,101.21470800000009
+sweep,kairo,broadPropagation,70.3265409999999
+sweep,kairo,deepPropagation,29.033583000000363
+sweep,kairo,diamond,74.8080829999999
+sweep,kairo,mux,80.15599999999995
+sweep,kairo,repeatedObservers,12.243791999999758
+sweep,kairo,triangle,22.795000000000073
+sweep,kairo,unstable,8.631709000000228
+sweep,kairo,molBench,14.39850000000024
+sweep,cellx,cellx1000,2.57141600000001
+sweep,cellx,cellx2500,5.263042999999996

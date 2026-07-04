@@ -1,0 +1,11 @@
+{
+	"name": "alien-signals-opt",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"conformance": "pnpm -C harness conformance",
+		"bench": "pnpm -C harness bench",
+		"memory": "pnpm -C harness memory",
+		"typecheck": "pnpm -C harness typecheck"
+	}
+}

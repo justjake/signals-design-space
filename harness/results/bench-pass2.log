@@ -1,0 +1,199 @@
+
+> @lab/harness@0.0.0 bench /Users/jitl/src/alien-signals-opt/harness
+> tsx bench/run.ts --frameworks alien-v3,control,sweep,arrayd,arena --suites kairo,sbench,cellx,dynamic --timeout 1200000
+
+
+=== alien-v3 :: kairo ===
+[alien-v3] running suite: kairo
+  avoidablePropagation: 94.06 ms
+  broadPropagation: 72.40 ms
+  deepPropagation: 33.35 ms
+  diamond: 79.29 ms
+  mux: 72.90 ms
+  repeatedObservers: 11.91 ms
+  triangle: 24.25 ms
+  unstable: 12.08 ms
+  molBench: 13.40 ms
+
+=== alien-v3 :: sbench ===
+[alien-v3] running suite: sbench
+  createSignals: 15.68 ms
+  createComputations: 65.49 ms
+  updateSignals: 302.40 ms
+
+=== alien-v3 :: cellx ===
+[alien-v3] running suite: cellx
+  cellx1000: 6.09 ms
+  cellx2500: 12.61 ms
+
+=== alien-v3 :: dynamic ===
+[alien-v3] running suite: dynamic
+  2-10x5 - lazy80%: 139.64 ms
+  6-10x10 - dyn25% - lazy80%: 118.71 ms
+  4-1000x12 - dyn5%: 300.24 ms
+  25-1000x5: 393.48 ms
+  3-5x500: 86.35 ms
+  6-100x15 - dyn50%: 189.46 ms
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-alien-v3.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-alien-v3.csv
+
+=== control :: kairo ===
+[control] running suite: kairo
+  avoidablePropagation: 94.26 ms
+  broadPropagation: 80.20 ms
+  deepPropagation: 32.20 ms
+  diamond: 77.17 ms
+  mux: 73.60 ms
+  repeatedObservers: 12.16 ms
+  triangle: 24.23 ms
+  unstable: 13.30 ms
+  molBench: 13.57 ms
+
+=== control :: sbench ===
+[control] running suite: sbench
+  createSignals: 3.46 ms
+  createComputations: 67.42 ms
+  updateSignals: 301.33 ms
+
+=== control :: cellx ===
+[control] running suite: cellx
+  cellx1000: 5.81 ms
+  cellx2500: 12.56 ms
+
+=== control :: dynamic ===
+[control] running suite: dynamic
+  2-10x5 - lazy80%: 145.18 ms
+  6-10x10 - dyn25% - lazy80%: 118.70 ms
+  4-1000x12 - dyn5%: 299.10 ms
+  25-1000x5: 391.54 ms
+  3-5x500: 104.69 ms
+  6-100x15 - dyn50%: 185.72 ms
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-control.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-control.csv
+
+=== sweep :: kairo ===
+[sweep] running suite: kairo
+  avoidablePropagation: 100.75 ms
+  broadPropagation: 65.11 ms
+  deepPropagation: 28.60 ms
+  diamond: 72.45 ms
+  mux: 79.34 ms
+  repeatedObservers: 12.17 ms
+  triangle: 23.00 ms
+  unstable: 8.62 ms
+  molBench: 13.53 ms
+
+=== sweep :: sbench ===
+[sweep] running suite: sbench
+  createSignals: 0.78 ms
+  createComputations: 67.97 ms
+  updateSignals: 53503.14 ms
+
+=== sweep :: cellx ===
+[sweep] running suite: cellx
+  cellx1000: 2.71 ms
+  cellx2500: 5.21 ms
+
+=== sweep :: dynamic ===
+[sweep] running suite: dynamic
+  2-10x5 - lazy80%: 193.62 ms
+  6-10x10 - dyn25% - lazy80%: 100.67 ms
+  4-1000x12 - dyn5%: 2024.28 ms
+  25-1000x5: 989.76 ms
+  3-5x500: 77.71 ms
+  6-100x15 - dyn50%: 196.74 ms
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-sweep.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-sweep.csv
+
+=== arrayd :: kairo ===
+[arrayd] running suite: kairo
+  avoidablePropagation: 97.54 ms
+  broadPropagation: 75.41 ms
+  deepPropagation: 30.88 ms
+  diamond: 83.07 ms
+  mux: 72.95 ms
+  repeatedObservers: 11.66 ms
+  triangle: 29.53 ms
+  unstable: 10.10 ms
+  molBench: 13.50 ms
+
+=== arrayd :: sbench ===
+[arrayd] running suite: sbench
+  createSignals: 7.94 ms
+  createComputations: 142.27 ms
+  updateSignals: 301.51 ms
+
+=== arrayd :: cellx ===
+[arrayd] running suite: cellx
+  cellx1000: 6.70 ms
+  cellx2500: 15.61 ms
+
+=== arrayd :: dynamic ===
+[arrayd] running suite: dynamic
+  2-10x5 - lazy80%: 161.73 ms
+  6-10x10 - dyn25% - lazy80%: 139.66 ms
+  4-1000x12 - dyn5%: 296.93 ms
+  25-1000x5: 380.41 ms
+  3-5x500: 92.32 ms
+  6-100x15 - dyn50%: 200.91 ms
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-arrayd.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-arrayd.csv
+
+=== arena :: kairo ===
+[arena] running suite: kairo
+  avoidablePropagation: 122.99 ms
+  broadPropagation: 107.92 ms
+  deepPropagation: 42.98 ms
+  diamond: 96.06 ms
+  mux: 85.25 ms
+  repeatedObservers: 20.17 ms
+  triangle: 30.52 ms
+  unstable: 22.50 ms
+  molBench: 13.58 ms
+
+=== arena :: sbench ===
+[arena] running suite: sbench
+  createSignals: 3.08 ms
+  createComputations: 43.78 ms
+  updateSignals: 340.85 ms
+
+=== arena :: cellx ===
+[arena] running suite: cellx
+  cellx1000: 5.61 ms
+  cellx2500: 14.23 ms
+
+=== arena :: dynamic ===
+[arena] running suite: dynamic
+  2-10x5 - lazy80%: 183.28 ms
+  6-10x10 - dyn25% - lazy80%: 132.81 ms
+  4-1000x12 - dyn5%: 330.38 ms
+  25-1000x5: 382.74 ms
+  3-5x500: 91.93 ms
+  6-100x15 - dyn50%: 200.88 ms
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-arena.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-30-11-arena.csv
+
+time in ms (fastest-of-N per the milomg harness; lower is better)
+
+suite/test                         |   alien-v3 |    control |      sweep |     arrayd |      arena
+---------------------------------------------------------------------------------------------------
+kairo/avoidablePropagation         |      94.06 |      94.26 |     100.75 |      97.54 |     122.99
+kairo/broadPropagation             |      72.40 |      80.20 |      65.11 |      75.41 |     107.92
+kairo/deepPropagation              |      33.35 |      32.20 |      28.60 |      30.88 |      42.98
+kairo/diamond                      |      79.29 |      77.17 |      72.45 |      83.07 |      96.06
+kairo/mux                          |      72.90 |      73.60 |      79.34 |      72.95 |      85.25
+kairo/repeatedObservers            |      11.91 |      12.16 |      12.17 |      11.66 |      20.17
+kairo/triangle                     |      24.25 |      24.23 |      23.00 |      29.53 |      30.52
+kairo/unstable                     |      12.08 |      13.30 |       8.62 |      10.10 |      22.50
+kairo/molBench                     |      13.40 |      13.57 |      13.53 |      13.50 |      13.58
+sbench/createSignals               |      15.68 |       3.46 |       0.78 |       7.94 |       3.08
+sbench/createComputations          |      65.49 |      67.42 |      67.97 |     142.27 |      43.78
+sbench/updateSignals               |     302.40 |     301.33 |   53503.14 |     301.51 |     340.85
+cellx/cellx1000                    |       6.09 |       5.81 |       2.71 |       6.70 |       5.61
+cellx/cellx2500                    |      12.61 |      12.56 |       5.21 |      15.61 |      14.23
+dynamic/2-10x5 - lazy80%           |     139.64 |     145.18 |     193.62 |     161.73 |     183.28
+dynamic/6-10x10 - dyn25% - lazy80% |     118.71 |     118.70 |     100.67 |     139.66 |     132.81
+dynamic/4-1000x12 - dyn5%          |     300.24 |     299.10 |    2024.28 |     296.93 |     330.38
+dynamic/25-1000x5                  |     393.48 |     391.54 |     989.76 |     380.41 |     382.74
+dynamic/3-5x500                    |      86.35 |     104.69 |      77.71 |      92.32 |      91.93
+dynamic/6-100x15 - dyn50%          |     189.46 |     185.72 |     196.74 |     200.91 |     200.88

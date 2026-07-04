@@ -1,0 +1,4 @@
+framework,suite,test,time
+arrayd,sbench,createSignals,7.684082999999994
+arrayd,sbench,createComputations,120.13858200000033
+arrayd,sbench,updateSignals,278.7227890000004

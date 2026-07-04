@@ -1,0 +1,4 @@
+framework,suite,test,time
+control,sbench,createSignals,3.5528750000000002
+control,sbench,createComputations,69.38724999999988
+control,sbench,updateSignals,305.03754100000015

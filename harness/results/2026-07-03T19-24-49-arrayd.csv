@@ -1,0 +1,9 @@
+framework,suite,test,time
+arrayd,cellx,cellx1000,5.642666999999982
+arrayd,cellx,cellx2500,12.262790999999936
+arrayd,dynamic,2-10x5 - lazy80%,146.57425000000012
+arrayd,dynamic,6-10x10 - dyn25% - lazy80%,133.75008400000002
+arrayd,dynamic,4-1000x12 - dyn5%,278.80525000000034
+arrayd,dynamic,25-1000x5,371.52970900000037
+arrayd,dynamic,3-5x500,89.74037500000031
+arrayd,dynamic,6-100x15 - dyn50%,185.2948749999996

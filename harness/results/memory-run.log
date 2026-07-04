@@ -1,0 +1,53 @@
+
+> @lab/harness@0.0.0 memory /Users/jitl/src/alien-signals-opt/harness
+> tsx memory/run.ts --frameworks alien-v3,control,sweep,arrayd,arena
+
+
+=== memory probe: alien-v3 ===
+signals-10k: 3059.69 KB
+computeds-10k: 3534.95 KB
+effects-10k: 3861.06 KB
+grid-100x100: 7120.87 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-alien-v3.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-alien-v3.csv
+
+=== memory probe: control ===
+signals-10k: 3059.72 KB
+computeds-10k: 3613.39 KB
+effects-10k: 3858.52 KB
+grid-100x100: 7204.72 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-control.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-control.csv
+
+=== memory probe: sweep ===
+signals-10k: 2824.23 KB
+computeds-10k: 3848.18 KB
+effects-10k: 5593.27 KB
+grid-100x100: 9046.26 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-sweep.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-sweep.csv
+
+=== memory probe: arrayd ===
+signals-10k: 3850.39 KB
+computeds-10k: 4157.91 KB
+effects-10k: 2937.45 KB
+grid-100x100: 7508.95 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-arrayd.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-arrayd.csv
+
+=== memory probe: arena ===
+signals-10k: 3263.89 KB
+computeds-10k: 3560.91 KB
+effects-10k: 2392.84 KB
+grid-100x100: 5531.16 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-arena.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-03T20-52-34-memory-arena.csv
+
+retained heap in KB (measured through the shared adapter; lower is better)
+
+metric        |   alien-v3 |    control |      sweep |     arrayd |      arena
+------------------------------------------------------------------------------
+signals-10k   |    3059.69 |    3059.72 |    2824.23 |    3850.39 |    3263.89
+computeds-10k |    3534.95 |    3613.39 |    3848.18 |    4157.91 |    3560.91
+effects-10k   |    3861.06 |    3858.52 |    5593.27 |    2937.45 |    2392.84
+grid-100x100  |    7120.87 |    7204.72 |    9046.26 |    7508.95 |    5531.16

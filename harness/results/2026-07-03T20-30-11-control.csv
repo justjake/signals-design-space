@@ -1,0 +1,21 @@
+framework,suite,test,time
+control,kairo,avoidablePropagation,94.257292
+control,kairo,broadPropagation,80.19941700000004
+control,kairo,deepPropagation,32.20166700000027
+control,kairo,diamond,77.17125000000033
+control,kairo,mux,73.59991599999967
+control,kairo,repeatedObservers,12.162832999999864
+control,kairo,triangle,24.230290999999852
+control,kairo,unstable,13.299708999999893
+control,kairo,molBench,13.573374999999942
+control,sbench,createSignals,3.4594159999999974
+control,sbench,createComputations,67.41945899999962
+control,sbench,updateSignals,301.33158400000025
+control,cellx,cellx1000,5.810585000000021
+control,cellx,cellx2500,12.564915
+control,dynamic,2-10x5 - lazy80%,145.17825000000005
+control,dynamic,6-10x10 - dyn25% - lazy80%,118.69683299999997
+control,dynamic,4-1000x12 - dyn5%,299.1024580000003
+control,dynamic,25-1000x5,391.53600000000006
+control,dynamic,3-5x500,104.68987499999821
+control,dynamic,6-100x15 - dyn50%,185.7169159999994

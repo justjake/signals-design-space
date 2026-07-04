@@ -1,0 +1,4 @@
+framework,suite,test,time
+alien-v3,sbench,createSignals,3.4591670000000008
+alien-v3,sbench,createComputations,56.58183300000002
+alien-v3,sbench,updateSignals,295.1827089999997

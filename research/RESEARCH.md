@@ -384,8 +384,20 @@ machine):
    cellx 0.9×. Proven gotchas:
    - naive **parallel column arrays lose** (deep chain 1.8× worse than
      objects) — record interleaving is where the wins come from;
-   - **buffers must be const bindings** (growth by reassignment = 2× on
-     every hot path; production needs segmented buffers);
+   - **buffers must be const bindings**, and the growth story is settled
+     by a follow-up measurement
+     (`~/src/react-signals-fable-v2/docs/research/v8-growable-buffer-bindings.md`,
+     2026-07-03): **factory-closure rebuild over const buffers** is the
+     only strategy at exact const parity (TurboFan embeds closure-const
+     bases like module consts; grow = rebuild the engine closure over
+     doubled buffers at an operation boundary, O(log n) events ever).
+     Rejected by measurement: segment tables (+35–40%/access), resizable
+     ArrayBuffers (+66–83% traversal, 2× writes), mutable let bindings
+     (+34–43% honest steady-state — the earlier "~2×" folded growth-event
+     costs in), per-function aliases (+26–30%). Growth *events* are
+     near-free; only growth *support* on the read path costs. Note the
+     methodology lesson: call-free micro-loops cannot detect any of this
+     — binding strategy must be measured at engine scale;
    - **type-segregated value columns rejected** (Float64Array+tag worse
      than one packed `unknown[]`);
    - spike node records have 3 spare slots (stride 8, 5 used) — room for
@@ -450,6 +462,56 @@ Four follow-up reports in `sources/gap-*.md`; what changed our picture:
   waitAsync wake); FrameSweep's strict cross-thread consistency costs
   20–25% single-thread tax. Recommendation matches our plan: SoA layout
   first (SAB-compat comes free), threads later if ever.
+
+## 7b. Arena propagation-deficit investigations (2026-07-03, this repo)
+
+- `libs/arena` (full v3 conformance, 179/179): propagation +13–69% vs
+  alien-v3; creation −40% (createComputations), effects memory −38%.
+- `libs/arena-links` (links-only arena, 179/179): slower everywhere — the
+  id→object table hop kills it; full-arena or nothing.
+- **Masking null result** (`libs/arena-masked`, 179/179): applying the
+  `& MASK` BCE idiom to every plane access changed kairo by 0.97–1.08×
+  (noise) and *cost* +21%/+15% on createComputations/updateSignals —
+  typed-array bounds checks are effectively free on data-dependent graph
+  walks in V8 (and the closure-const mask idiom does not eliminate them;
+  it just adds an AND). **Bounds checks are exonerated**; the deficit
+  lives elsewhere (suspects: growth-support overhead per public op,
+  values/fns side-array hops, register pressure from 4+ base/length
+  pairs, transliteration-level slack vs alien's years of tuning).
+- **Deficit decomposed** (arena-probe tick profiles + ablations): the one
+  dumb thing was `link()` at 475 bytecodes vs V8's 460 inline limit
+  (`kExceedsBytecodeLimit`) — typed-array field access doubles bytecode
+  (context-load+add+keyed vs one `GetNamedProperty`), so the hottest
+  helper never inlined. Fast-path split fixes it: measured deep −8%,
+  broad −10%, diamond −13%; + plane merge + boundary-lite flush →
+  **deep 1.15×, broad 0.95×, diamond 0.92× vs alien** with creation/
+  memory wins retained. Unrecoverable floor ~13–15% on deep checkDirty:
+  bytecode inflation + register pressure + no load-elimination across
+  Int32Array stores are the representation's price. Arena *wins* pure
+  read paths (reads 0.79×, isolate 0.81×) — the deficit was always
+  write-path marking. Nulls: scratch-stack aliasing, side-array
+  addressing, try/finally removal, masking, flag-ladder op count
+  (instrumented: per-visit ops identical to upstream's minimum — the
+  deficit is per-op cost, not op count), write-entry growth check
+  (growth tax lives in flush-loop + computed-read wrapper checks only).
+  GC-attributed nuance: alien's deep pays ~1.5 ms/23 GCs per run for
+  its cons-cell stacks, arena zero — netting arena's deep-chain floor
+  to ~1.03× effective. Artifacts: libs/arena-probe/ (variants, drivers,
+  tick profiles).
+- **Port landed** (libs/arena, 179/179 all configs): link() 475→168
+  bytecodes (verified inlining), single merged plane + simplified growth,
+  boundary-lite flush (slack audit passed, written into flush() comment).
+  Tier-0 shapes now ALL ≤1.0× vs alien (deep 0.90, broad 0.84–0.88,
+  diamond 0.89, reads 0.74–0.87, create 0.96). Kairo improved 7–19% on
+  8/9 tests but still trails alien at kairo scale (e.g. broad 98.6 vs
+  70.3 ms) — OPEN QUESTION: shapes-vs-kairo divergence is scale/effect-
+  count dependent (kairo's bigger fanouts + effect-heavy flush); suspect
+  effect queue/notify path at high effect counts. Next probe target.
+- Iteration tooling: `harness/bench/shapes.ts` — tier-0 shape benches,
+  ~0.4 s/framework, ratio-focused, checksum-verified; now with GC
+  attribution (Node 24 needs `observe({type:'gc', buffered:true})` +
+  timestamp-window attribution) and p99, plus quiet-read shapes
+  (`reads`, `isolate`).
 
 ## 8. Research frontiers (open questions worth prototyping)
 

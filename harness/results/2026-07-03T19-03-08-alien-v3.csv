@@ -1,0 +1,10 @@
+framework,suite,test,time
+alien-v3,kairo,avoidablePropagation,95.96941600000002
+alien-v3,kairo,broadPropagation,72.03974999999991
+alien-v3,kairo,deepPropagation,30.736499999999978
+alien-v3,kairo,diamond,78.8267920000003
+alien-v3,kairo,mux,75.14008299999978
+alien-v3,kairo,repeatedObservers,11.751000000000204
+alien-v3,kairo,triangle,25.506500000000415
+alien-v3,kairo,unstable,12.17804200000046
+alien-v3,kairo,molBench,14.263834000000315

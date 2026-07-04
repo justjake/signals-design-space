@@ -1,0 +1,54 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "dynamic"
+  ],
+  "timestamp": "2026-07-03T18-01-24",
+  "node": "v24.16.0",
+  "loadavg": [
+    3.3427734375,
+    5.7041015625,
+    6.3193359375
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "2-10x5 - lazy80%",
+      "time": 134.67208300000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 114.47979199999986
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "4-1000x12 - dyn5%",
+      "time": 277.12204199999996
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "25-1000x5",
+      "time": 354.7174159999995
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "3-5x500",
+      "time": 79.2866670000003
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-100x15 - dyn50%",
+      "time": 169.90383299999849
+    }
+  ]
+}

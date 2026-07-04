@@ -1,0 +1,1 @@
+@@PROF {"lib":"../src/v-a-nogrowth.ts","shape":"deep","scale":5,"ms":18.9,"checksum":10099}

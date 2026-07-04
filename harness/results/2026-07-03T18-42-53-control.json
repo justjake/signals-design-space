@@ -1,0 +1,36 @@
+{
+  "kind": "bench",
+  "framework": "control",
+  "suites": [
+    "sbench"
+  ],
+  "timestamp": "2026-07-03T18-42-53",
+  "node": "v24.16.0",
+  "loadavg": [
+    5.71533203125,
+    5.25244140625,
+    5.2666015625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "control",
+      "test": "createSignals",
+      "time": 3.5528750000000002
+    },
+    {
+      "suite": "sbench",
+      "framework": "control",
+      "test": "createComputations",
+      "time": 69.38724999999988
+    },
+    {
+      "suite": "sbench",
+      "framework": "control",
+      "test": "updateSignals",
+      "time": 305.03754100000015
+    }
+  ]
+}

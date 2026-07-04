@@ -1,0 +1,13 @@
+framework,suite,test,time
+arrayd,kairo,avoidablePropagation,98.62987500000003
+arrayd,kairo,broadPropagation,76.79195800000002
+arrayd,kairo,deepPropagation,30.922041999999692
+arrayd,kairo,diamond,80.50149999999985
+arrayd,kairo,mux,73.36529100000007
+arrayd,kairo,repeatedObservers,11.521166999999878
+arrayd,kairo,triangle,28.638542000000143
+arrayd,kairo,unstable,10.138500000000022
+arrayd,kairo,molBench,13.898417000000336
+arrayd,sbench,createSignals,7.808584000000003
+arrayd,sbench,createComputations,143.39220899999975
+arrayd,sbench,updateSignals,301.76512399999956

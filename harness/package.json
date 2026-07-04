@@ -1,0 +1,28 @@
+{
+	"name": "@lab/harness",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"scripts": {
+		"conformance": "vitest run",
+		"bench": "tsx bench/run.ts",
+		"memory": "tsx memory/run.ts",
+		"typecheck": "tsc -p tsconfig.json"
+	},
+	"dependencies": {
+		"@lab/arena": "workspace:*",
+		"@lab/arena-links": "workspace:*",
+		"@lab/arrayd": "workspace:*",
+		"@lab/control": "workspace:*",
+		"@lab/sweep": "workspace:*",
+		"alien-signals": "file:../upstream-alien-signals"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"esbuild": "0.28.1",
+		"reactive-framework-test-suite": "0.0.2",
+		"tsx": "4.23.0",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

@@ -1,0 +1,36 @@
+{
+  "kind": "bench",
+  "framework": "arrayd",
+  "suites": [
+    "sbench"
+  ],
+  "timestamp": "2026-07-03T19-21-40",
+  "node": "v24.16.0",
+  "loadavg": [
+    1.8203125,
+    3.24267578125,
+    3.99560546875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "arrayd",
+      "test": "createSignals",
+      "time": 7.684082999999994
+    },
+    {
+      "suite": "sbench",
+      "framework": "arrayd",
+      "test": "createComputations",
+      "time": 120.13858200000033
+    },
+    {
+      "suite": "sbench",
+      "framework": "arrayd",
+      "test": "updateSignals",
+      "time": 278.7227890000004
+    }
+  ]
+}

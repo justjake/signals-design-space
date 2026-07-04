@@ -16,9 +16,11 @@ Companions: [RESEARCH.md](./RESEARCH.md) (§refs), [LIBRARIES.md](./LIBRARIES.md
 - Benchmarks: milomg suite, one framework per process, per-shape reporting,
   mean/p99 + GC time alongside fastest-of-N, `--jitless` pass.
 - Layout facts already paid for: record interleaving ≫ parallel columns;
-  const buffer bindings; one packed `unknown[]` value column; never
-  truncate arrays (endIndex/validity flags); no object pooling of
-  short-lived nodes; no WASM core.
+  const buffer bindings with **closure-rebuild growth** (segment tables
+  +35–40%/access and resizable ArrayBuffers +66–83% are measured rejects
+  — v8-growable-buffer-bindings note, RESEARCH.md §7); one packed
+  `unknown[]` value column; never truncate arrays (endIndex/validity
+  flags); no object pooling of short-lived nodes; no WASM core.
 
 **Control (not one of the ten): tuned alien-v3.** Persistent scratch
 stacks replacing propagate/checkDirty cons cells + Preact-style global
@@ -49,8 +51,9 @@ walking must close that gap.
 source-map Int32Array, bitECS.
 **Design**: stride-8 `Int32Array` records for nodes and links (or
 idea-1-style array edges inside the arena — A/B), packed `unknown[]`
-values, kind-bits-in-flags dispatch, free lists, segmented const-bound
-growth, per-system arena instances, full v3-equivalent semantics
+values, kind-bits-in-flags dispatch, free lists, closure-rebuild growth
+(engine factory over const buffers, swapped at operation boundaries),
+per-system arena instances, full v3-equivalent semantics
 including exact re-run trimming. Handles = bound closures over ids.
 **Should win**: creation (spike: 6×), memory (~2.5×), write throughput
 (1.6×), everything at large graph scale (samara: 6× at 1000×1000).
