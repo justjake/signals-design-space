@@ -88,12 +88,14 @@ Write your complete design spec to: ${roundDir}/design-${stance.key}.md
 Then return the structured summary the author prompt specifies.`
 
 const codexAuthorPrompt = (stance) => `You are a RUNNER for a cross-LLM (codex) design AUTHOR in round ${round} of the design loop.
-Do not design anything yourself. Steps:
-1. Run exactly this command with the Bash tool, run_in_background: true (authoring a full spec may take 15-45 minutes):
-   codex exec -c model_reasoning_effort=max --sandbox workspace-write --cd "$PWD" -o "${roundDir}/author-${stance.key}-final.txt" "You are a design AUTHOR. Read design-loop/SEEDS/prompts/author.md and follow it exactly, starting with its read-first list (design-loop/SEEDS/background.md first) and honoring its do-not-read list. Your assigned stance: ${stance.key} — ${stance.brief}. Write your complete design spec to the file ${roundDir}/design-${stance.key}.md using your file tools. Your final message must be ONLY the structured summary the author prompt specifies (file path, mechanism count, seam touch-point count, unwalked cases, 5-sentence summary)."
-2. Wait for completion (you are re-invoked when the background command exits). If it failed or ${roundDir}/design-${stance.key}.md is missing or under 300 lines, retry ONCE.
-3. Read ${roundDir}/author-${stance.key}-final.txt (and if needed skim the design file's headings) to fill the structured summary. Do not edit the design.
-4. Return the structured summary. On double failure return mechanismCount: -1 with the error in summary.`
+Do not design anything yourself. CRITICAL: you are a workflow subagent — you are NOT re-invoked when background commands finish, and ending your turn kills your child processes. Never end your turn to "wait".
+Steps:
+1. Start codex DETACHED with a single foreground Bash call that returns immediately:
+   nohup codex exec -c model_reasoning_effort=max --sandbox workspace-write --cd "$PWD" -o "${roundDir}/author-${stance.key}-final.txt" "You are a design AUTHOR. Read design-loop/SEEDS/prompts/author.md and follow it exactly, starting with its read-first list (design-loop/SEEDS/background.md first) and honoring its do-not-read list. Your assigned stance: ${stance.key} — ${stance.brief}. Write your complete design spec to the file ${roundDir}/design-${stance.key}.md using your file tools. Your final message must be ONLY the structured summary the author prompt specifies (file path, mechanism count, seam touch-point count, unwalked cases, 5-sentence summary)." > "${roundDir}/codex-author-${stance.key}.log" 2>&1 & echo "started pid $!"
+2. Wait IN-TURN for "${roundDir}/author-${stance.key}-final.txt" to exist and be non-empty (authoring may take 15-45 minutes): use the Monitor tool with an until-condition (load it via ToolSearch if needed). If Monitor is unavailable, run repeated foreground Bash waits like: timeout 540 bash -c 'until [ -s "${roundDir}/author-${stance.key}-final.txt" ]; do sleep 20; done'; echo done — repeating that call as many times as needed. Check the .log for a crash between waits.
+3. If codex crashed or the design file is missing/under 300 lines after it exits: retry step 1 ONCE.
+4. Read ${roundDir}/author-${stance.key}-final.txt (and if needed skim the design file's headings) to fill the structured summary. Do not edit the design.
+5. Return the structured summary. On double failure return mechanismCount: -1 with the error in summary.`
 
 const claudeReviewPrompt = (stance, designFile) => `You are the CLAUDE REVIEWER in round ${round} of the design loop at ${DL}/.
 Read ${DL}/SEEDS/prompts/reviewer-claude.md FIRST and follow it exactly
@@ -103,12 +105,14 @@ Write your review to: ${roundDir}/review-${stance.key}-claude.md
 Then return the structured summary (reviewer: "claude").`
 
 const codexReviewPrompt = (stance, designFile) => `You are a RUNNER for the cross-LLM (codex) reviewer in round ${round} of the design loop.
-Do not review the design yourself. Steps:
-1. Run exactly this command with the Bash tool, run_in_background: true (it may take 5-20 minutes):
-   codex exec -c model_reasoning_effort=max --sandbox read-only --cd "$PWD" -o "${roundDir}/review-${stance.key}-codex.md" "Read design-loop/SEEDS/prompts/reviewer-codex.md and follow it exactly. The design file under review is: ${designFile}"
-2. Wait for it to finish (you will be re-invoked when the background command exits). If it fails or the output file is missing/empty, retry ONCE with the same command.
-3. Read ${roundDir}/review-${stance.key}-codex.md and extract: blocker count, high count, the verdict line (map to one of: implementation-ready | repairable | architecturally-unsound), and the single worst failing schedule in one paragraph.
-4. Return the structured summary (reviewer: "codex", file: the review path). If codex failed twice, return blockers: -1 and put the error in worstSchedule.`
+Do not review the design yourself. CRITICAL: you are a workflow subagent — you are NOT re-invoked when background commands finish, and ending your turn kills your child processes. Never end your turn to "wait".
+Steps:
+1. Start codex DETACHED with a single foreground Bash call that returns immediately:
+   nohup codex exec -c model_reasoning_effort=max --sandbox read-only --cd "$PWD" -o "${roundDir}/review-${stance.key}-codex.md" "Read design-loop/SEEDS/prompts/reviewer-codex.md and follow it exactly. The design file under review is: ${designFile}" > "${roundDir}/codex-review-${stance.key}.log" 2>&1 & echo "started pid $!"
+2. Wait IN-TURN for "${roundDir}/review-${stance.key}-codex.md" to exist and be non-empty (may take 10-30 minutes): use the Monitor tool with an until-condition (load via ToolSearch if needed). If Monitor is unavailable, run repeated foreground Bash waits like: timeout 540 bash -c 'until [ -s "${roundDir}/review-${stance.key}-codex.md" ]; do sleep 20; done'; echo done — repeating as many times as needed. Check the .log for a crash between waits.
+3. If codex crashed or the file is still missing/empty after it exits: retry step 1 ONCE.
+4. Read ${roundDir}/review-${stance.key}-codex.md and extract: blocker count, high count, the verdict line (map to one of: implementation-ready | repairable | architecturally-unsound), and the single worst failing schedule in one paragraph.
+5. Return the structured summary (reviewer: "codex", file: the review path). If codex failed twice, return blockers: -1 and put the error in worstSchedule.`
 
 // ---- Phase 1+2: authors, each design reviewed as soon as it lands (no cross-design barrier)
 const perDesign = await pipeline(
