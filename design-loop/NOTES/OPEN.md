@@ -26,24 +26,27 @@ round-2 champion; judge sustained with zero confirmed blockers.
 - **O19.** G-Q's ≤2% vs the measured 2.4–3.8% branch floor [SPKHQ]:
   SPK-L (idle machine) decides; pre-registered monitor renegotiation to
   ≤3% or the mitigation ladder. A requirements decision, not a defect.
-- **O20.** Browser continuation-carrier feasibility/overhead (bundled
-  promise-reaction host hook) — SP-F8. Rule: if the hook cannot be built
-  at <0.5% event overhead, the platform prerequisite stands (loud
-  self-test), documented as a support-matrix line; monitor decides whether
-  a dev-throw-on-post-await-write degraded mode ships instead. **The one
-  architecture-relevant open spike (gates exit).**
+- **O20 — CLOSED (SP-F8 → I30/S22).** Carrier FEASIBLE: bundler twin-build,
+  ≈0% unarmed, <0.5% gate passed; prerequisite moves host→build (transform
+  + loud boot self-test + AsyncContext feature-detect ladder + support-
+  matrix line). Degraded dev-throw mode not needed as default. The
+  champion must integrate the build-prerequisite surface (round-3 builder).
 - **O21.** Flattened-prefix length on deep suspense chains: measured
   inside SPK-G8; fallback = whole-mask clock vector (coarser refetch,
   flagged).
 
-## Round-3 docket
+## Round-3 docket (the dry-check round)
 
-No confirmed blockers stand against the round-2 champion. Round 3 waits on
-SP-F8 (O20), then: builder integrates SP-F8's outcome + judge nits
-(explainability 7 — the one-pager lags the repairs); cost adversary
-re-runs W1/W2/W3/W5 against the repaired mechanisms; challenger seeded on
-the lock-in/carrier stratum (multi-root × async × watermarks — the least
-battle-tested new math) only if SP-F8 or the adversary opens a hole.
+No confirmed blockers stand against the round-2 champion; SP-F8 resolved
+FEASIBLE. Round 3: builder integrates I30's build-prerequisite surface
+(transform spec, boot self-test, AsyncContext ladder, support matrix) +
+judge nits (explainability 7 — the one-pager lags the repairs; audit-table
+consolidation for the mechanisms score); cost adversary re-runs
+W1/W2/W3/W5 plus fresh attacks on the round-2 NEW math (visStamps, staged
+evaluators, retroactive delivery, watermarked lock-in, quiescence
+refresh). If this round confirms zero new blockers again with no material
+score improvement, the exit criteria are met → prepare the exit case for
+Jake.
 
 ## Spike queue
 
@@ -59,4 +62,4 @@ battle-tested new math) only if SP-F8 or the adversary opens a hole.
 | SPK-G8 | held-open bursts + typeahead restarts + prefix length | fail → pinless-frontier hybrid (O18) / whole-mask clock vector (O21) | queued |
 | SPK-W | logged-write price | >2× DIRECT → inline-2 receipts / tape pooling | queued |
 | SPK-R | retirement reconcile + targeted effect flush (10k atoms × 5k effects) | >2× the batch's own render → segmented folds | queued |
-| SP-F8 | continuation-carrier feasibility + overhead | <0.5% event overhead or platform prerequisite + degraded-mode decision | **running** |
+| SP-F8 | continuation-carrier feasibility + overhead | <0.5% event overhead or platform prerequisite | **DONE — FEASIBLE** (twin-build carrier, I30/S22) |

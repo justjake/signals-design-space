@@ -150,3 +150,12 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   own default batch and retires while the action parks → committed state
   moves before the action settles — C12 violated with no thrown rejection
   [WALK harden-codex 5]. Rule: I26/D15.
+- **S22. Promise-patching carriers: global then-patch and
+  scope-returned-thenable wrapping are correctness-dead — empirically.**
+  `await` of native promises uses internal PerformPromiseThen and bare
+  thenables call their own `then`; a patch sees only explicit `.then()`
+  calls, so identity silently drops on ordinary compositions. React 19's
+  entangled-action thenables cover parking (lifetime) only, never
+  continuation identity. The living alternative is the I30 twin-build
+  transform (or platform AsyncContext when it ships). [MEASURE/PROVEN
+  SP-F8 prototype, research/experiments/spf8-continuation-carrier.md]

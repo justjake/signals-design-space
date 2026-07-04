@@ -198,3 +198,18 @@ independent confirmation by both reviewers. Curated by the monitor only.
   live write path did — post-fold equality cannot pick the right
   representative for both a U-only and a T+U view. [WALK lean-codex 8;
   synthesis §5.2′/R15]
+- **I30. The continuation carrier is FEASIBLE at <0.5% event overhead via
+  a bundler twin-build** (SP-F8, MEASURED 2026-07-04): each async fn
+  compiles to native body + token-carrying generator driver behind a
+  one-null-check dispatch; driver runs only while an action token is live.
+  Unarmed ≈0% (noise floor); in-action +12 ns/await — cheaper than Node's
+  AsyncLocalStorage (+38%) on the same shape; 74/74 correctness incl.
+  Promise.all, timers, async generators, catch/finally restore, two
+  interleaved actions with zero bleed. TC39 AsyncContext is Stage 4
+  (ES2026) but shipped NOWHERE yet — ship the twin build behind an
+  AsyncContext feature-detect ladder. THE PREREQUISITE MOVES FROM HOST TO
+  BUILD: uncompiled third-party async code writing signals post-await
+  inside an action misattributes; the loud boot self-test verifies the
+  transform (never silent); support-matrix line: "requires
+  bundled/transformed app code (or future AsyncContext)". Provenance:
+  `research/experiments/spf8-continuation-carrier.md` + spf8-proto/.
