@@ -89,7 +89,7 @@ Then return the structured summary the author prompt specifies.`
 const codexAuthorPrompt = (stance) => `You are a RUNNER for a cross-LLM (codex) design AUTHOR in round ${round} of the design loop.
 Do not design anything yourself. Steps:
 1. Run exactly this command with the Bash tool, run_in_background: true (authoring a full spec may take 15-45 minutes):
-   codex exec --sandbox workspace-write --cd "$PWD" -o "${roundDir}/author-${stance.key}-final.txt" "You are a design AUTHOR. Read design-loop/SEEDS/prompts/author.md and follow it exactly, starting with its read-first list (design-loop/SEEDS/background.md first) and honoring its do-not-read list. Your assigned stance: ${stance.key} — ${stance.brief}. Write your complete design spec to the file ${roundDir}/design-${stance.key}.md using your file tools. Your final message must be ONLY the structured summary the author prompt specifies (file path, mechanism count, seam touch-point count, unwalked cases, 5-sentence summary)."
+   codex exec -c model_reasoning_effort=xhigh --sandbox workspace-write --cd "$PWD" -o "${roundDir}/author-${stance.key}-final.txt" "You are a design AUTHOR. Read design-loop/SEEDS/prompts/author.md and follow it exactly, starting with its read-first list (design-loop/SEEDS/background.md first) and honoring its do-not-read list. Your assigned stance: ${stance.key} — ${stance.brief}. Write your complete design spec to the file ${roundDir}/design-${stance.key}.md using your file tools. Your final message must be ONLY the structured summary the author prompt specifies (file path, mechanism count, seam touch-point count, unwalked cases, 5-sentence summary)."
 2. Wait for completion (you are re-invoked when the background command exits). If it failed or ${roundDir}/design-${stance.key}.md is missing or under 300 lines, retry ONCE.
 3. Read ${roundDir}/author-${stance.key}-final.txt (and if needed skim the design file's headings) to fill the structured summary. Do not edit the design.
 4. Return the structured summary. On double failure return mechanismCount: -1 with the error in summary.`
@@ -104,7 +104,7 @@ Then return the structured summary (reviewer: "claude").`
 const codexReviewPrompt = (stance, designFile) => `You are a RUNNER for the cross-LLM (codex) reviewer in round ${round} of the design loop.
 Do not review the design yourself. Steps:
 1. Run exactly this command with the Bash tool, run_in_background: true (it may take 5-20 minutes):
-   codex exec --sandbox read-only --cd "$PWD" -o "${roundDir}/review-${stance.key}-codex.md" "Read design-loop/SEEDS/prompts/reviewer-codex.md and follow it exactly. The design file under review is: ${designFile}"
+   codex exec -c model_reasoning_effort=xhigh --sandbox read-only --cd "$PWD" -o "${roundDir}/review-${stance.key}-codex.md" "Read design-loop/SEEDS/prompts/reviewer-codex.md and follow it exactly. The design file under review is: ${designFile}"
 2. Wait for it to finish (you will be re-invoked when the background command exits). If it fails or the output file is missing/empty, retry ONCE with the same command.
 3. Read ${roundDir}/review-${stance.key}-codex.md and extract: blocker count, high count, the verdict line (map to one of: implementation-ready | repairable | architecturally-unsound), and the single worst failing schedule in one paragraph.
 4. Return the structured summary (reviewer: "codex", file: the review path). If codex failed twice, return blockers: -1 and put the error in worstSchedule.`
@@ -116,11 +116,11 @@ const perDesign = await pipeline(
     stance.author === 'codex' ? codexAuthorPrompt(stance) : authorPrompt(stance),
     stance.author === 'codex'
       ? { label: `author-codex:${stance.key}`, phase: 'Author', schema: AUTHOR_SCHEMA, effort: 'low' }
-      : { label: `author:${stance.key}`, phase: 'Author', schema: AUTHOR_SCHEMA },
+      : { label: `author:${stance.key}`, phase: 'Author', schema: AUTHOR_SCHEMA, model: 'fable', effort: 'max' },
   ).then(a => a && { stance, design: a }),
   (r) => r && parallel([
     () => agent(claudeReviewPrompt(r.stance, r.design.file), {
-      label: `review-claude:${r.stance.key}`, phase: 'Review', schema: REVIEW_SCHEMA,
+      label: `review-claude:${r.stance.key}`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'fable', effort: 'max',
     }),
     () => agent(codexReviewPrompt(r.stance, r.design.file), {
       label: `review-codex:${r.stance.key}`, phase: 'Review', schema: REVIEW_SCHEMA, effort: 'low',
@@ -145,7 +145,7 @@ This round's artifacts:
 ${inventory}
 Write the repaired final design to: ${roundDir}/synthesis.md
 Write the proposed notes diff to: ${roundDir}/notes-diff.md
-Then return the structured summary.`, { label: 'synthesis', phase: 'Synthesize', schema: SYNTH_SCHEMA })
+Then return the structured summary.`, { label: 'synthesis', phase: 'Synthesize', schema: SYNTH_SCHEMA, model: 'fable', effort: 'max' })
 if (!synth) throw new Error('synthesis agent failed')
 
 // ---- Phase 4: judge (independent; does not read reviews)
@@ -155,7 +155,7 @@ Read ${DL}/SEEDS/prompts/judge.md FIRST and follow it exactly (including its
 do-not-read list: no reviews, no prior rounds).
 The final design under judgment: ${roundDir}/synthesis.md
 Write your judgment to: ${roundDir}/judge.md
-Then return the structured verdict.`, { label: 'judge', phase: 'Judge', schema: JUDGE_SCHEMA })
+Then return the structured verdict.`, { label: 'judge', phase: 'Judge', schema: JUDGE_SCHEMA, model: 'fable', effort: 'max' })
 
 return {
   round,
