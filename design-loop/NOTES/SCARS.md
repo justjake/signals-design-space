@@ -52,3 +52,57 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   U's render excludes T and shows 0; truncation variants lose the write
   entirely. Rule: I7 (drop only on empty history; equality lives in
   fold/notify). (Codex finding 4 + review F5.)
+
+## Round 1 (2026-07-04): rounds/round-01/
+
+- **S9. Reachability-derived fast-path routing without a freshness check**
+  ("unflagged ⇒ serve canonical to any world"). Killing schedule: quiesce
+  with kernel-stale nodes (flags cleared, staleness persists); new
+  transition writes an atom with no out-edges yet; an urgent pass reads the
+  stale node → the pull freshly evaluates against newest, acquires the
+  pending write through a branch no walk ever saw → torn urgent frame.
+  Twin: a yield-gap NEWEST read lazily creates a never-evaluated node's
+  cache+edges with no mark; the pinned pass serves it. Repair is a routing
+  rule (freshness conjunct, I12), not more marking. (TK-F1 + CO-F1.)
+- **S10. Equality-filtered per-token late-join correction.** Killing
+  schedule: `c = x1 && x2`; t1 writes x1, t2 writes x2, both pre-mount;
+  per-token projections all equal committed → no corrective; React renders
+  {t1,t2} jointly, bails out on the new component → torn committed frame no
+  reconciler path repairs. Subset divergence defeats any fixed comparison
+  set; corrections must be reach-based (I13). (OP-F2 + TK-F2.)
+- **S11. Commit-gate safety nets keyed to deferred-token liveness and
+  single-root commit edges** (fork-native's viable core). Killing
+  schedules per missed divergence dimension: (1) edge re-track under a
+  live default mask + yield-gap sync write + flushSync exclusion → gate
+  fast-out passes, torn commit; (2) fold without a retirement pin +
+  mid-pass retirement on another root → one pass renders two worlds; (3)
+  spanning batch: skew tag tested against the lagging root's mask and
+  cleared at the first root's commit while the hazard lives → torn commit
+  on the lagging root. The gate's value was "the trigger list is small";
+  the fixes make the trigger list the whole problem. (FN-F1/F2/F3.)
+- **S12. Global/shared update queues folded without a retirement
+  watermark.** Killing schedule: token retires mid-yield; the resumed
+  pass's first read of a not-yet-memoized node satisfies fullyRetired at
+  read time → siblings disagree about one atom inside one committed tree.
+  React's per-fiber queues never needed the pin; any many-consumer store
+  does (I15). (FN-F2.)
+- **S13. Per-(world, batch) equality-retained frontier retention.** Killing
+  schedule: n live transitions round-robin-writing deps of one watched
+  computed retain the powerset — 2^n live graphs, each write paying pulls
+  per graph; at the 31-batch bound the worst case is 2^31 while the spike
+  gates tested "1, 2, 8, 31 graphs." The multi-batch induction requires the
+  family; capping it is a retention-rule redesign with a new proof. (OP-F3.)
+- **S14. Canonical-value delivery cutoffs gating world-cache invalidation
+  notifications.** Killing schedule: deferred T `update(+1)` rendered and
+  finished-uncommitted; urgent `set(3)` equal to canonical → k0Changed
+  false → delivery AND the runInBatch corrective both skipped; T's world
+  silently moved 4→3; T commits its stale rendered tree. Cutoff decisions
+  are per-world; a canonical-only gate must never guard cross-world
+  notification. (CO-F2.)
+- **S15. "Discarded nodes are GC fodder" over arena-resident records.** A
+  collected JS wrapper cannot reclaim a bump-allocated integer record, and
+  abandoned fresh-node mounts (StrictMode, interrupted transitions) are
+  ordinary, so the leak is unbounded. Killing schedule: repeat
+  mount-evaluate-abandon; K0 grows monotonically; K1 reset and lineage
+  drops reclaim nothing. Any "harmless discard" claim over arena state must
+  name the reclamation or staging protocol. (Codex TKC-9.)

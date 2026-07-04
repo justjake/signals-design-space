@@ -1,0 +1,12 @@
+File path: `design-loop/rounds/round-01/design-open.md`  
+Mechanism count: 7  
+Seam touch-point count: 8  
+Unwalked cases: None  
+
+5-sentence summary:
+
+1. The design preserves the closed monomorphic arena for DIRECT execution and head-equivalent React passes.
+2. React-mode writes always append receipts whose exact world folds reproduce React’s skip-and-rebase semantics.
+3. Sparse world-local graphs and retained projection frontiers provide sound divergent-dependency tracking and equality cutoff.
+4. An eight-touch fork protocol supplies batch identity, pass context, yield edges, retirement, lane-scoped scheduling, and stable hook cells.
+5. Provider-free hooks, exact suspense cells, committed-only effects, and loud single-root enforcement complete the architecture, with two performance spikes explicitly unmeasured.

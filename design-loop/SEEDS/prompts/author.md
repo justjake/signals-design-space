@@ -19,7 +19,9 @@ seam between them, co-designed.
 Do NOT read: `research/specs/*` (the legacy candidate designs),
 `react-concurrent-signals-arena.md`, `reviews/*`, other rounds, other
 authors' files. Whole designs anchor; that is why you get mechanisms and
-scars instead. Reading them disqualifies your design.
+scars instead. Reading them disqualifies your design. ONE exception: if
+your stance brief explicitly names a champion artifact (a prior round's
+`synthesis.md`), that specific file is REQUIRED reading for your stance.
 
 ## Your stance
 

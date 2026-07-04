@@ -1,51 +1,88 @@
 # OPEN — live questions (stance sources for the next round)
 
-- **O1. Where does per-world dependency knowledge live?** The axis. Known
-  points: second kernel with real head-world tracking (D-style; structural
-  obligations, indirection tax); compensated single kernel (A-repaired
-  style; semantic completeness obligations, zero kernel tax); per-world
-  bits in a separate overlay structure (B's insight without B's hot-walk
-  invasion); fork-native (React-owned queues). Round-1 stances should cover
-  at least three of these.
-- **O2. host-callback indirection tax** — MEASURED (SP1 → INVARIANTS I11):
-  >5% on 2 of 3 recompute-dense shapes (deep 1.06×, broad 1.06–1.09×;
-  diamond 1.02×), plus +9–16% on quiet read/write paths. The decision rule
-  triggered: the codegen-fusion variant (SP1b) must be measured before any
-  closed-kernel/two-kernel design is judged on performance. Open residue:
-  how much of the tax is call boundary vs entity-table storage (SP1b
-  isolates); kairo-scale GC behavior of the entity table untested.
-- **O3. Shadow-sync completeness cost** (if two-kernel wins): what does the
-  dev-mode brute-force validator cost, and can the sync obligation be
-  bounded to an enumerable site list with an invariant sweep?
-- **O4. React-owned update queues for atoms** (fork-native stance):
-  feasible? Hook queues are per-fiber/single-consumer; atoms are
-  many-consumer. Must answer: where does the queue live, who processes it
-  outside renders (effects, non-React reads), and what is the rebase cost
-  on React upgrades. License to fail fast with the killing schedule.
-- **O5. Yield/resume protocol shape**: listener edges
-  (onRenderPassYield/Resume) vs a cheap per-callstack query — cost per
-  read/write in each; who flips what state.
-- **O6. Grouped-notification lane preservation** (C6): per-write synchronous
-  delivery (ARMED-style dedup, needs per-batch granularity per I5) vs
-  drain grouping under fork lane-scoped execution — cost per fan-out shape.
-- **O7. Per-root committed views** (C11): where does the per-root
-  (pin, locked-in-mask) table live and who consumes it (effect flush
-  filter)?
-- **O8. Suspense world key** (C15): fork-provided render-lineage id vs
-  canonicalized include-mask — define lifetime across pass restarts.
-- **O9. Held-open-transition hot reads** (the G-8 class): kernel-cache
-  (two-kernel) vs world-memo machinery — if memos exist at all, validate
-  with per-slot write clocks (I-grade mechanism, mechanism-library) rather
-  than per-read certificates?
-- **O10. Coalescing** of same-batch writes during long transitions: legality
-  conditions (no open pass?) and whether it's worth its mechanism slot at
-  all in each architecture.
+Closed this round (resolution recorded in DECISIONS/INVARIANTS): O2 (I11),
+O4 (S11 + the fork-native maximalist kill), O5 (edge events + one flag
+read, unattacked), O6 (D10), O8 (D11), O9 (D9), O10 (coalescing declined by
+all four designs — legality preconditions exceed the win; retirement
+compaction covers growth).
+
+- **O1 (narrowed).** Per-world dependency knowledge lives in K1 as real
+  recorded edges (D8), pending continued judge scrutiny. The compensated
+  single kernel remains the named fallback if K1 costs disqualify (the walk
+  structure and delivery dedup survive that swap); revisit only on SPK-*
+  gate failure.
+- **O3.** SP2 unblocked (architecture picked): E-PRESERVE dev validator
+  cost; >10% dev overhead → sampled validation.
+- **O7 (narrowed).** Per-root lock-in table lives in the bindings' root
+  registry (pass-world derivation, effect flush, fixup worlds consume it).
+  REMAINING RISK: the fork-side per-root facts have no current-generation
+  existence proof — fork tests 2/3/4 are on the critical path (synthesis
+  gap G4).
+- **O11.** Mount-fixup over-render under many live transitions: reach-based
+  correctives cost ≤ live-deferred-count renders per flagged mount. Is that
+  constant acceptable at 10k-mount scale, or does the fixup need a cheaper
+  reach test (per-slot touched-cone bloom)? Measure in the
+  react-concurrent-store harness before optimizing.
+- **O12.** Value-blind delivery fan-out (adopted-by-choice in D8's walk):
+  SPK-N1's grid decides whether `notifyCutoff:'evaluate'` ships default-on
+  above a fan-out threshold. The round's single NEEDS-MEASUREMENT
+  adjudication.
+- **O13.** Counter horizons and allocators: state mid-episode behavior at
+  globalSeq saturation (a named guard is required even if physically
+  remote — forced-small test builds cannot exist without one), the
+  token-serial live-skip allocator construction, and the K1 tag width +
+  clear policy — tag-wrap is MISSED notification, not over-notification
+  (refutes the champion §7.4's claim; three codex reviews converged here).
+- **O14.** Async-action continuation identity: what does write
+  classification answer during a post-await continuation? Parking is
+  lifetime only; "one token across the await" is an unaccompanied
+  assertion. Needs a fork async-scope fact + fork test (two concurrent
+  parked actions, interleaved settlements, differential vs React 19).
+- **O15.** Fold-callback purity: do `update(fn)`/reducer callbacks reading
+  signals throw, read-untracked-at-fold-world, or record deps? Pick and
+  enforce (React parity suggests: throw in dev).
+- **O16.** Reducer identity in ReducerAtom folds: which reducer version
+  replays queued actions after a rebase (React uses the rendered one)?
+  Stage per lineage or document + differential-test.
+- **O17.** Does the public computed API expose `previous` (donor does)? If
+  yes it is a world-eval input that memo validity and rebase must cover;
+  if no, say so and pin with a conformance note. Also pin sentinel
+  settlement semantics at NEWEST and the RENDER_NEWEST↔world suspension
+  boundary (one duplicate fetch, one identity flip max).
+
+## Round-2 docket (confirmed blockers against the champion, all local)
+
+1. **The I16 validity-source family (one redesign, three holes):** judge B1
+   (fingerprint collapse at retirement compaction, C12/C16) + TKC-2
+   (sentinel memos survive thenable settlement, C15) + TKC-8 (fnVersion
+   absent from the validity predicate). Repair as a closed change-source
+   enumeration with an auditable table.
+2. **I17:** afterRetrack flag raise is node-local; equality cutoff strands
+   CLEAN downstream nodes → invariant R serves divergent values (TKC-3B).
+3. **I18:** mount fixup's live-token enumeration goes empty when a batch
+   retires inside the mount window; advertised fallback unreachable (TKC-4).
+4. **I19:** lockedIn masks never cleared at slot recycle → a root renders a
+   new batch's uncommitted writes against its own DOM (TKC-6).
+5. **I20:** lineage-keyed positional thenable cache survives intra-batch
+   writes → retry renders stale-world data (CO-codex-4).
+6. **O14:** async-action post-await attribution unconstructed (CO-codex-3).
+7. **SPK-H remedy:** hooks must compile out of DIRECT mode (closure
+   rebuild); design the LOGGED-mode hook story and queue its measurement.
+8. **SPK-Q remedy:** the read-routing branch moves behind the LOGGED-mode
+   closure rebuild.
+
+Plus non-blocker round-2 work: K1 tag-wrap (O13), arena reclamation for
+abandoned fresh nodes (S15), purity/reducer/previous pins (O15–O17).
 
 ## Spike queue
 
 | id | question | method | decision rule | status |
 | --- | --- | --- | --- | --- |
-| SP1 | O2 host tax | host-protocol kernel extraction; tier-0, one-framework-per-process, ABBA, conformance-gated | >5% recompute-dense → measure fusion variant too | **DONE — rule triggered** (I11; `research/experiments/sp1-host-callback-tax.md`) |
-| SP1b | O2 residue: call boundary vs storage | 3-way donor / host / fused | fused ≈ donor ⇒ boundary; fused ≈ host ⇒ storage | **DONE — fused ≈ host on every shape: the tax is the STORAGE change; boundary ≈ 0** (I11; `research/experiments/sp1b-fusion-isolation.md`) |
-| SP1c | can a closed-protocol kernel keep donor perf? | donor kernel + 4-callback host protocol, but value/fn side columns stay packed and plane-index-aligned (policy owns semantics, not storage) | ≤2% on all tier-0 ⇒ closed-kernel designs unblocked at donor perf | queued — run when a round's winner depends on it |
-| SP2 | O3 validator cost | prototype brute-force K1-edge cross-check on synthetic forked topologies | >10% forked-mode overhead in dev builds → needs cheaper invariant | blocked on round-1 architecture pick |
+| SP1/SP1b | host tax | — | — | DONE (I11: boundary free; storage 5–12%) |
+| SP1c | closed protocol + packed columns ≈ donor? | as specified | ≤2% ⇒ unblocks closed-kernel refactors | DEPRIORITIZED (no design depends on it) |
+| SP2 | O3 validator cost | brute-force K1-edge cross-check, synthetic forked topologies | >10% dev overhead → sampled validation | unblocked, queued |
+| SPK-H | K0 two-hook recompute tax | donor vs hooked; tier-0 + kairo | >1% → hooks compiled out of DIRECT; re-measure LOGGED | **DONE — RULE TRIGGERED** (deep 1.025–1.035 min across 3 sessions; `research/experiments/spkh-spkq-kernel-hook-tax.md`); LOGGED-mode tax measurement queued |
+| SPK-W | logged-write price | set-heavy isolated writes | >2× DIRECT → inline-2 receipts / tape pooling | queued (needs overlay prototype) |
+| SPK-N1 | O12 fan-out grid (suppressed-write × watchers 10/100/10k) | adversarial cone 1k, 100 writes/frame | >2× DIRECT propagate class or >1 spurious render/(watcher,batch) → per-slot-marks fallback or default-on evaluate-cutoff | queued (the O12 adjudication) |
+| SPK-G8 | held-open read bursts (+ first-touch routing) | kairo-scale held transition, mixed read/write | fail → per-(atom, worldKey) fold cache | queued (needs overlay prototype) |
+| SPK-Q | quiet-React read tax | donor + NEWEST branch, tier-0 | >2% → branch behind LOGGED closure rebuild only | **DONE — RULE TRIGGERED** (reads 1.024–1.038 min across 3 sessions, thin margin; idle-machine rerun is the cheap challenge) |

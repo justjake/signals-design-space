@@ -74,3 +74,65 @@ independent confirmation by both reviewers. Curated by the monitor only.
   Provenance: `research/experiments/sp1-host-callback-tax.md`,
   `research/experiments/sp1b-fusion-isolation.md`; `libs/arena-host`,
   `libs/arena-host-fused`.
+
+## Round 1 (2026-07-04): rounds/round-01/ — walked-schedule provenance per line
+
+- **I12. A mark/flag fast-path routing gate is sound only with a freshness
+  conjunct**: serve the canonical kernel to a non-newest world only if the
+  node is unflagged AND its cached value can be served without recompute. A
+  lazy pull / first evaluation is a fresh newest-basis evaluation that can
+  acquire a receipted atom through an edge no plane has recorded;
+  reachability-derived flags cannot see a path the pull itself creates.
+  Provenance: [WALK review-two-kernel-claude F1] + [WALK
+  review-compensated-overlay-claude F1]; codex independently re-derived the
+  class (TKC-3A) — both-model. Repaired construction: synthesis §5.3
+  invariant R (judge re-walked, held).
+- **I13. Equality-filtered per-token correction cannot witness joint
+  multi-batch divergence**; late-join/mount corrections must be reach-based
+  (schedule into every live batch that could reach the node; over-render is
+  the price). Adversarial f diverges only on rendered subsets; subset
+  enumeration is exponential. Provenance: [WALK review-open-claude F2] +
+  [WALK review-two-kernel-claude F2]; both-model (codex TKC-5 duplicate).
+- **I14. Retirement and per-root lock-in edges need their own notification
+  path to committed-world observers** (write-time queue entries get consumed
+  by earlier flushes; urgent-applied retirement folds are value-no-ops;
+  store-only batches never commit on any root). Provenance: [WALK
+  review-compensated-overlay-claude F3] + [WALK review-fork-native-claude
+  F4]. Positive construction: synthesis §10.4 three-trigger inventory.
+- **I15. Every retirement stamp/pin comparison must live on one monotone
+  number line with write seqs** — a private retire counter vs a global-seq
+  pin admits retiredSeq(1) ≤ pin(100) for a post-pin retirement (C7 drift);
+  dropping the `retired ≤ pin` clause fails from the other side. The seed
+  visibility rule's two pins are load-bearing, verbatim. Provenance: [WALK
+  review-two-kernel-claude F3] + [WALK review-fork-native-claude F2].
+- **I16. World-cache validity must enumerate a CLOSED set of change sources
+  for world-visible outcomes.** Writes and retirement epochs are not
+  enough: retirement *compaction* collapses version fingerprints (judge
+  B1), thenable *settlement* changes a sentinel memo's correct outcome
+  (TKC-2), and *evaluation-function identity* changes the value with no
+  signal write (TKC-8). Three independent holes in one predicate family —
+  repair as a single change-source enumeration, and audit it as a table.
+  Provenance: three walked schedules; two models + judge independently.
+- **I17. Node-local fixup at an edge-creation site is insufficient for a
+  path-transitive invariant**: a reach/sensitivity flag raised at re-track
+  must propagate through existing out-edges, because equality cutoff can
+  leave downstream nodes CLEAN and unflagged while genuinely
+  world-divergent. Provenance: [WALK addendum A2 / codex TKC-3B,
+  re-derived against the repaired design].
+- **I18. Mount/subscribe fixups must not rely solely on enumerating LIVE
+  tokens**: a batch can retire inside the render→layout-effect window,
+  making every per-token corrective unreachable; the fallback trigger must
+  be a value/version compare against the current committed-for-root world.
+  Provenance: [WALK addendum A3 / codex TKC-4].
+- **I19 (extends I8). Every mask/bit column needs a stated clear site
+  paired with the identity-recycle it outlives** (lock-in masks at slot
+  recycle; notification columns; observed/ref counts) — retainer tables
+  must include mask, seq, and allocator retainers and be checked by schema
+  sweep, not prose. Provenance: [WALK addendum A4 / codex TKC-6] + judge
+  C13 inventory gap.
+- **I20. Positional suspense caches need world-CONTENT validity, not just
+  batch-set (lineage) identity**: an intra-batch write invalidates the
+  value memo, but a lineage-keyed positional cache survives and replays a
+  thenable fetched from the stale world. Stable-identity-across-pure-
+  retries AND invalidate-on-included-write must both hold. Provenance:
+  [WALK codex CO-4, confirmed against the winner's §8.4].

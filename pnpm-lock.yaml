@@ -50,7 +50,19 @@ importers:
 
   libs/arena: {}
 
+  libs/arena-host: {}
+
+  libs/arena-host-fused: {}
+
   libs/arena-links: {}
+
+  libs/arena-masked: {}
+
+  libs/arena-probe: {}
+
+  libs/arena-spkh: {}
+
+  libs/arena-spkq: {}
 
   libs/arrayd: {}
 

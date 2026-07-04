@@ -41,9 +41,14 @@ concurrency story, gates stated as numbers.
    (`design-loop: round NN — <headline>`), posts a summary to the human, and
    decides continue / park.
 
-Isolation rule: nothing crosses rounds except `NOTES/` (curated) and
-`SEEDS/` (frozen; prompt patches allowed between rounds, recorded in the
-round commit).
+Isolation rule: nothing crosses rounds except `NOTES/` (curated), `SEEDS/`
+(frozen; prompt patches allowed between rounds, recorded in the round
+commit), and — once a round has produced a winner — **the champion
+artifact** (that round's `synthesis.md`), which converging-phase stances
+must be able to repair. A stance's brief says whether it reads the champion
+(builders/attackers do; challengers may deliberately not, for
+anti-anchoring). Competing drafts, reviews, and judgments still never cross
+rounds.
 
 ## NOTES evidence rules (the gatekeeping that keeps the genome clean)
 
