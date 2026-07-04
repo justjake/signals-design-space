@@ -42,47 +42,63 @@
  * pushing ids onto the free list — deliberately not implemented here.
  */
 
-// ---- record layout ---------------------------------------------------------
-// Node fields (M plane, stride 8; ids are pre-multiplied: id = record * 8).
-const FLAGS = 0;
-const DEPS = 1; // doubles as the free-list next pointer for freed records
-const DEPS_TAIL = 2;
-const SUBS = 3;
-const SUBS_TAIL = 4;
-const GEN = 5; // bumped on free; disposers capture it to defuse stale ids
-// fields 6-7 spare (pad to one cache line per record)
+// ---- record layout + flags as a const enum -----------------------------------
+// A const enum (not module-level `const`s) so every consumer toolchain inlines
+// the values as literals. Rationale: esbuild BUNDLING demotes module-scope
+// `const` to mutable `var` (lazy-init/scope-merge hoisting), which costs
+// TurboFan its constant-folding of these hot numbers — measured +15-21% on
+// kairo workloads through the harness's bundled child. Same-file const enum
+// members are inlined as numeric literals by esbuild (transform AND bundle
+// modes), tsx, vitest, and tsc alike, so the codegen no longer depends on how
+// the library is packaged. (See RESEARCH.md §7b bundling investigation.)
+const enum C {
+	// Node fields (M plane, stride 8; ids are pre-multiplied: id = record * 8).
+	FLAGS = 0,
+	DEPS = 1, // doubles as the free-list next pointer for freed records
+	DEPS_TAIL = 2,
+	SUBS = 3,
+	SUBS_TAIL = 4,
+	GEN = 5, // bumped on free; disposers capture it to defuse stale ids
+	// fields 6-7 spare (pad to one cache line per record)
 
-// Link fields (M plane, stride 8; link records share the plane with nodes).
-const VERSION = 0;
-const DEP = 1;
-const SUB = 2;
-const PREV_SUB = 3;
-const NEXT_SUB = 4;
-const PREV_DEP = 5;
-const NEXT_DEP = 6; // doubles as the free-list next pointer for freed links
-// field 7 spare
+	// Link fields (M plane, stride 8; link records share the plane with nodes).
+	VERSION = 0,
+	DEP = 1,
+	SUB = 2,
+	PREV_SUB = 3,
+	NEXT_SUB = 4,
+	PREV_DEP = 5,
+	NEXT_DEP = 6, // doubles as the free-list next pointer for freed links
+	// field 7 spare
 
-// ---- flags (upstream ReactiveFlags + HasChildEffect + kind bits) -----------
-const MUTABLE = 1;
-const WATCHING = 2;
-const RECURSED_CHECK = 4;
-const RECURSED = 8;
-const DIRTY = 16;
-const PENDING = 32;
-const HAS_CHILD_EFFECT = 64;
-const K_SIGNAL = 128;
-const K_COMPUTED = 256;
-const K_EFFECT = 512;
-const K_SCOPE = 1024;
-const KIND_MASK = K_SIGNAL | K_COMPUTED | K_EFFECT | K_SCOPE;
+	// Flags (upstream ReactiveFlags + HasChildEffect + kind bits).
+	MUTABLE = 1,
+	WATCHING = 2,
+	RECURSED_CHECK = 4,
+	RECURSED = 8,
+	DIRTY = 16,
+	PENDING = 32,
+	HAS_CHILD_EFFECT = 64,
+	K_SIGNAL = 128,
+	K_COMPUTED = 256,
+	K_EFFECT = 512,
+	K_SCOPE = 1024,
+	KIND_MASK = K_SIGNAL | K_COMPUTED | K_EFFECT | K_SCOPE,
+
+	// Min free records guaranteed at each op boundary. Nodes and links draw
+	// from one shared pool; the old split-plane budget (256 node + 1024 link
+	// records) is preserved as its sum, so any allocation pattern that fit the
+	// old per-plane slack still fits the merged slack.
+	REC_SLACK = 1280,
+}
 
 // ---- shared mutable state (survives engine rebuilds) ------------------------
 // Scalar heads/counters live at module level so a rebuilt engine resumes
 // exactly where the old one stopped; only the buffer bindings live in the
 // engine closure.
 let recNext = 8; // bump pointer, shared by nodes and links (record 0 burned)
-let nodeFreeHead = 0; // free list threaded through M[id + DEPS]
-let linkFreeHead = 0; // free list threaded through M[id + NEXT_DEP]
+let nodeFreeHead = 0; // free list threaded through M[id + C.DEPS]
+let linkFreeHead = 0; // free list threaded through M[id + C.NEXT_DEP]
 let growPending = false;
 
 let cycle = 0;
@@ -110,12 +126,6 @@ let propSp = 0;
 let checkStack = new Int32Array(4096);
 let checkSp = 0;
 
-// Min free records guaranteed at each op boundary. Nodes and links draw from
-// one shared pool; the old split-plane budget (256 node + 1024 link records)
-// is preserved as its sum, so any allocation pattern that fit the old
-// per-plane slack still fits the merged slack.
-const REC_SLACK = 1280;
-
 // ---- the engine -------------------------------------------------------------
 
 interface Engine {
@@ -137,12 +147,20 @@ interface Engine {
 
 function createEngine(records: number, carry?: Int32Array): Engine {
 	const M = new Int32Array(records * 8);
+	// Bundler-proof aliases for the module-level side arrays: esbuild
+	// bundling demotes module-scope `const` to mutable `var`, so TurboFan
+	// loses their constant-folding at module scope; a function-scope const
+	// is preserved verbatim and folds via the same one-closure-cell context
+	// specialization that embeds M.
+	const vals = values;
+	const fnTab = fns;
+	const queue = queued;
 	if (carry !== undefined) {
 		M.set(carry);
 	}
 	// Allocators flag growth once the bump pointer crosses the watermark:
-	// keep at least REC_SLACK records AND half the plane free at every boundary.
-	const WM = Math.min(M.length >> 1, M.length - REC_SLACK * 8);
+	// keep at least C.REC_SLACK records AND half the plane free at every boundary.
+	const WM = Math.min(M.length >> 1, M.length - C.REC_SLACK * 8);
 	if (recNext > WM) {
 		growPending = true;
 	}
@@ -154,7 +172,7 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		newComputed,
 		newEffect,
 		newScope,
-		gen: (id) => M[id + GEN],
+		gen: (id) => M[id + C.GEN],
 		read,
 		write,
 		computedRead,
@@ -170,8 +188,8 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		let id: number;
 		if (nodeFreeHead !== 0) {
 			id = nodeFreeHead;
-			nodeFreeHead = M[id + DEPS];
-			M[id + DEPS] = 0;
+			nodeFreeHead = M[id + C.DEPS];
+			M[id + C.DEPS] = 0;
 		} else {
 			id = recNext;
 			if (id >= M.length) {
@@ -182,28 +200,28 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 				growPending = true;
 			}
 		}
-		M[id + FLAGS] = flags;
+		M[id + C.FLAGS] = flags;
 		const v = id >> 2;
-		while (values.length <= v + 1) {
-			values.push(undefined);
+		while (vals.length <= v + 1) {
+			vals.push(undefined);
 		}
-		while (fns.length <= id >> 3) {
-			fns.push(undefined);
+		while (fnTab.length <= id >> 3) {
+			fnTab.push(undefined);
 		}
 		return id;
 	}
 
 	function freeNode(id: number): void {
-		M[id + FLAGS] = 0;
-		M[id + DEPS_TAIL] = 0;
-		M[id + SUBS] = 0;
-		M[id + SUBS_TAIL] = 0;
-		++M[id + GEN];
+		M[id + C.FLAGS] = 0;
+		M[id + C.DEPS_TAIL] = 0;
+		M[id + C.SUBS] = 0;
+		M[id + C.SUBS_TAIL] = 0;
+		++M[id + C.GEN];
 		const v = id >> 2;
-		values[v] = undefined;
-		values[v + 1] = undefined;
-		fns[id >> 3] = undefined;
-		M[id + DEPS] = nodeFreeHead;
+		vals[v] = undefined;
+		vals[v + 1] = undefined;
+		fnTab[id >> 3] = undefined;
+		M[id + C.DEPS] = nodeFreeHead;
 		nodeFreeHead = id;
 	}
 
@@ -218,7 +236,7 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		let id: number;
 		if (linkFreeHead !== 0) {
 			id = linkFreeHead;
-			linkFreeHead = M[id + NEXT_DEP];
+			linkFreeHead = M[id + C.NEXT_DEP];
 		} else {
 			id = recNext;
 			if (id >= M.length) {
@@ -233,21 +251,21 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	function freeLink(id: number): void {
-		M[id + NEXT_DEP] = linkFreeHead;
+		M[id + C.NEXT_DEP] = linkFreeHead;
 		linkFreeHead = id;
 	}
 
 	// ---- system.ts transliteration -------------------------------------------
 
 	function link(dep: number, sub: number, version: number): void {
-		const prevDep = M[sub + DEPS_TAIL];
-		if (prevDep !== 0 && M[prevDep + DEP] === dep) {
+		const prevDep = M[sub + C.DEPS_TAIL];
+		if (prevDep !== 0 && M[prevDep + C.DEP] === dep) {
 			return;
 		}
-		const nextDep = prevDep !== 0 ? M[prevDep + NEXT_DEP] : M[sub + DEPS];
-		if (nextDep !== 0 && M[nextDep + DEP] === dep) {
-			M[nextDep + VERSION] = version;
-			M[sub + DEPS_TAIL] = nextDep;
+		const nextDep = prevDep !== 0 ? M[prevDep + C.NEXT_DEP] : M[sub + C.DEPS];
+		if (nextDep !== 0 && M[nextDep + C.DEP] === dep) {
+			M[nextDep + C.VERSION] = version;
+			M[sub + C.DEPS_TAIL] = nextDep;
 			return;
 		}
 		linkInsert(dep, sub, version, prevDep, nextDep);
@@ -258,60 +276,60 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// monolithic link() was 475 bytecodes — kExceedsBytecodeLimit — and never
 	// inlined into the read paths despite running on every tracked read).
 	function linkInsert(dep: number, sub: number, version: number, prevDep: number, nextDep: number): void {
-		const prevSub = M[dep + SUBS_TAIL];
-		if (prevSub !== 0 && M[prevSub + VERSION] === version && M[prevSub + SUB] === sub) {
+		const prevSub = M[dep + C.SUBS_TAIL];
+		if (prevSub !== 0 && M[prevSub + C.VERSION] === version && M[prevSub + C.SUB] === sub) {
 			return;
 		}
 		const newLink = allocLink();
-		M[sub + DEPS_TAIL] = newLink;
-		M[dep + SUBS_TAIL] = newLink;
-		M[newLink + VERSION] = version;
-		M[newLink + DEP] = dep;
-		M[newLink + SUB] = sub;
-		M[newLink + PREV_DEP] = prevDep;
-		M[newLink + NEXT_DEP] = nextDep;
-		M[newLink + PREV_SUB] = prevSub;
-		M[newLink + NEXT_SUB] = 0;
+		M[sub + C.DEPS_TAIL] = newLink;
+		M[dep + C.SUBS_TAIL] = newLink;
+		M[newLink + C.VERSION] = version;
+		M[newLink + C.DEP] = dep;
+		M[newLink + C.SUB] = sub;
+		M[newLink + C.PREV_DEP] = prevDep;
+		M[newLink + C.NEXT_DEP] = nextDep;
+		M[newLink + C.PREV_SUB] = prevSub;
+		M[newLink + C.NEXT_SUB] = 0;
 		if (nextDep !== 0) {
-			M[nextDep + PREV_DEP] = newLink;
+			M[nextDep + C.PREV_DEP] = newLink;
 		}
 		if (prevDep !== 0) {
-			M[prevDep + NEXT_DEP] = newLink;
+			M[prevDep + C.NEXT_DEP] = newLink;
 		} else {
-			M[sub + DEPS] = newLink;
+			M[sub + C.DEPS] = newLink;
 		}
 		if (prevSub !== 0) {
-			M[prevSub + NEXT_SUB] = newLink;
+			M[prevSub + C.NEXT_SUB] = newLink;
 		} else {
-			M[dep + SUBS] = newLink;
+			M[dep + C.SUBS] = newLink;
 		}
 	}
 
-	function unlink(id: number, sub = M[id + SUB]): number {
-		const dep = M[id + DEP];
-		const prevDep = M[id + PREV_DEP];
-		const nextDep = M[id + NEXT_DEP];
-		const nextSub = M[id + NEXT_SUB];
-		const prevSub = M[id + PREV_SUB];
+	function unlink(id: number, sub = M[id + C.SUB]): number {
+		const dep = M[id + C.DEP];
+		const prevDep = M[id + C.PREV_DEP];
+		const nextDep = M[id + C.NEXT_DEP];
+		const nextSub = M[id + C.NEXT_SUB];
+		const prevSub = M[id + C.PREV_SUB];
 		if (nextDep !== 0) {
-			M[nextDep + PREV_DEP] = prevDep;
+			M[nextDep + C.PREV_DEP] = prevDep;
 		} else {
-			M[sub + DEPS_TAIL] = prevDep;
+			M[sub + C.DEPS_TAIL] = prevDep;
 		}
 		if (prevDep !== 0) {
-			M[prevDep + NEXT_DEP] = nextDep;
+			M[prevDep + C.NEXT_DEP] = nextDep;
 		} else {
-			M[sub + DEPS] = nextDep;
+			M[sub + C.DEPS] = nextDep;
 		}
 		if (nextSub !== 0) {
-			M[nextSub + PREV_SUB] = prevSub;
+			M[nextSub + C.PREV_SUB] = prevSub;
 		} else {
-			M[dep + SUBS_TAIL] = prevSub;
+			M[dep + C.SUBS_TAIL] = prevSub;
 		}
 		freeLink(id);
 		if (prevSub !== 0) {
-			M[prevSub + NEXT_SUB] = nextSub;
-		} else if ((M[dep + SUBS] = nextSub) === 0) {
+			M[prevSub + C.NEXT_SUB] = nextSub;
+		} else if ((M[dep + C.SUBS] = nextSub) === 0) {
 			unwatched(dep);
 		}
 		return nextDep;
@@ -321,38 +339,38 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		// No try/finally: propagate never runs user code (notify only queues),
 		// so it cannot throw and always drains the stack back to its base.
 		let cur = startLink;
-		let next = M[cur + NEXT_SUB];
+		let next = M[cur + C.NEXT_SUB];
 		const stackBase = propSp;
 
 		top: do {
-			const sub = M[cur + SUB];
-			let flags = M[sub + FLAGS];
+			const sub = M[cur + C.SUB];
+			let flags = M[sub + C.FLAGS];
 
-			if (!(flags & (RECURSED_CHECK | RECURSED | DIRTY | PENDING))) {
-				M[sub + FLAGS] = flags | PENDING;
+			if (!(flags & (C.RECURSED_CHECK | C.RECURSED | C.DIRTY | C.PENDING))) {
+				M[sub + C.FLAGS] = flags | C.PENDING;
 				if (innerWrite) {
-					M[sub + FLAGS] |= RECURSED;
+					M[sub + C.FLAGS] |= C.RECURSED;
 				}
-			} else if (!(flags & (RECURSED_CHECK | RECURSED))) {
+			} else if (!(flags & (C.RECURSED_CHECK | C.RECURSED))) {
 				flags = 0;
-			} else if (!(flags & RECURSED_CHECK)) {
-				M[sub + FLAGS] = (flags & ~RECURSED) | PENDING;
-			} else if (!(flags & (DIRTY | PENDING)) && isValidLink(cur, sub)) {
-				M[sub + FLAGS] = flags | (RECURSED | PENDING);
-				flags &= MUTABLE;
+			} else if (!(flags & C.RECURSED_CHECK)) {
+				M[sub + C.FLAGS] = (flags & ~C.RECURSED) | C.PENDING;
+			} else if (!(flags & (C.DIRTY | C.PENDING)) && isValidLink(cur, sub)) {
+				M[sub + C.FLAGS] = flags | (C.RECURSED | C.PENDING);
+				flags &= C.MUTABLE;
 			} else {
 				flags = 0;
 			}
 
-			if (flags & WATCHING) {
+			if (flags & C.WATCHING) {
 				notify(sub);
 			}
 
-			if (flags & MUTABLE) {
-				const subSubs = M[sub + SUBS];
+			if (flags & C.MUTABLE) {
+				const subSubs = M[sub + C.SUBS];
 				if (subSubs !== 0) {
 					cur = subSubs;
-					const nextSub = M[cur + NEXT_SUB];
+					const nextSub = M[cur + C.NEXT_SUB];
 					if (nextSub !== 0) {
 						if (propSp === propStack.length) {
 							const bigger = new Int32Array(propStack.length * 2);
@@ -367,14 +385,14 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 			}
 
 			if ((cur = next) !== 0) {
-				next = M[cur + NEXT_SUB];
+				next = M[cur + C.NEXT_SUB];
 				continue;
 			}
 
 			while (propSp > stackBase) {
 				cur = propStack[--propSp];
 				if (cur !== 0) {
-					next = M[cur + NEXT_SUB];
+					next = M[cur + C.NEXT_SUB];
 					continue top;
 				}
 			}
@@ -392,34 +410,34 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 		try {
 			top: do {
-				const dep = M[cur + DEP];
-				const depFlags = M[dep + FLAGS];
+				const dep = M[cur + C.DEP];
+				const depFlags = M[dep + C.FLAGS];
 
-				if (M[sub + FLAGS] & DIRTY) {
+				if (M[sub + C.FLAGS] & C.DIRTY) {
 					dirty = true;
-				} else if ((depFlags & (MUTABLE | DIRTY)) === (MUTABLE | DIRTY)) {
-					const depSubs = M[dep + SUBS];
+				} else if ((depFlags & (C.MUTABLE | C.DIRTY)) === (C.MUTABLE | C.DIRTY)) {
+					const depSubs = M[dep + C.SUBS];
 					if (update(dep)) {
-						if (M[depSubs + NEXT_SUB] !== 0) {
+						if (M[depSubs + C.NEXT_SUB] !== 0) {
 							shallowPropagate(depSubs);
 						}
 						dirty = true;
 					}
-				} else if ((depFlags & (MUTABLE | PENDING)) === (MUTABLE | PENDING)) {
+				} else if ((depFlags & (C.MUTABLE | C.PENDING)) === (C.MUTABLE | C.PENDING)) {
 					if (checkSp === checkStack.length) {
 						const bigger = new Int32Array(checkStack.length * 2);
 						bigger.set(checkStack);
 						checkStack = bigger;
 					}
 					checkStack[checkSp++] = cur;
-					cur = M[dep + DEPS];
+					cur = M[dep + C.DEPS];
 					sub = dep;
 					++checkDepth;
 					continue;
 				}
 
 				if (!dirty) {
-					const nextDep = M[cur + NEXT_DEP];
+					const nextDep = M[cur + C.NEXT_DEP];
 					if (nextDep !== 0) {
 						cur = nextDep;
 						continue;
@@ -429,20 +447,20 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 				while (checkDepth--) {
 					cur = checkStack[--checkSp];
 					if (dirty) {
-						const subSubs = M[sub + SUBS];
+						const subSubs = M[sub + C.SUBS];
 						if (update(sub)) {
-							if (M[subSubs + NEXT_SUB] !== 0) {
+							if (M[subSubs + C.NEXT_SUB] !== 0) {
 								shallowPropagate(subSubs);
 							}
-							sub = M[cur + SUB];
+							sub = M[cur + C.SUB];
 							continue;
 						}
 						dirty = false;
 					} else {
-						M[sub + FLAGS] &= ~PENDING;
+						M[sub + C.FLAGS] &= ~C.PENDING;
 					}
-					sub = M[cur + SUB];
-					const nextDep = M[cur + NEXT_DEP];
+					sub = M[cur + C.SUB];
+					const nextDep = M[cur + C.NEXT_DEP];
 					if (nextDep !== 0) {
 						cur = nextDep;
 						continue top;
@@ -452,7 +470,7 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 				// Upstream: `dirty && !!sub.flags` — a live node always has its
 				// kind bits set; flags reads 0 only if sub was disposed (record
 				// zeroed) by re-entrant user code during update().
-				return dirty && M[sub + FLAGS] !== 0;
+				return dirty && M[sub + C.FLAGS] !== 0;
 			} while (true);
 		} finally {
 			checkSp = stackBase;
@@ -462,24 +480,24 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	function shallowPropagate(startLink: number): void {
 		let cur = startLink;
 		do {
-			const sub = M[cur + SUB];
-			const flags = M[sub + FLAGS];
-			if ((flags & (PENDING | DIRTY)) === PENDING) {
-				M[sub + FLAGS] = flags | DIRTY;
-				if ((flags & (WATCHING | RECURSED_CHECK)) === WATCHING) {
+			const sub = M[cur + C.SUB];
+			const flags = M[sub + C.FLAGS];
+			if ((flags & (C.PENDING | C.DIRTY)) === C.PENDING) {
+				M[sub + C.FLAGS] = flags | C.DIRTY;
+				if ((flags & (C.WATCHING | C.RECURSED_CHECK)) === C.WATCHING) {
 					notify(sub);
 				}
 			}
-		} while ((cur = M[cur + NEXT_SUB]) !== 0);
+		} while ((cur = M[cur + C.NEXT_SUB]) !== 0);
 	}
 
 	function isValidLink(checkLink: number, sub: number): boolean {
-		let cur = M[sub + DEPS_TAIL];
+		let cur = M[sub + C.DEPS_TAIL];
 		while (cur !== 0) {
 			if (cur === checkLink) {
 				return true;
 			}
-			cur = M[cur + PREV_DEP];
+			cur = M[cur + C.PREV_DEP];
 		}
 		return false;
 	}
@@ -487,14 +505,14 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// ---- index.ts transliteration ---------------------------------------------
 
 	function update(node: number): boolean {
-		const flags = M[node + FLAGS];
-		if (flags & K_COMPUTED) {
+		const flags = M[node + C.FLAGS];
+		if (flags & C.K_COMPUTED) {
 			return updateComputed(node);
 		}
-		if (flags & K_SIGNAL) {
+		if (flags & C.K_SIGNAL) {
 			return updateSignal(node);
 		}
-		M[node + FLAGS] = (flags & KIND_MASK) | MUTABLE;
+		M[node + C.FLAGS] = (flags & C.KIND_MASK) | C.MUTABLE;
 		return true;
 	}
 
@@ -503,11 +521,11 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		const firstInsertedIndex = insertIndex;
 
 		do {
-			queued[insertIndex++] = e;
-			M[e + FLAGS] &= ~WATCHING;
-			const subs = M[e + SUBS];
-			e = subs !== 0 ? M[subs + SUB] : 0;
-			if (e === 0 || !(M[e + FLAGS] & WATCHING)) {
+			queue[insertIndex++] = e;
+			M[e + C.FLAGS] &= ~C.WATCHING;
+			const subs = M[e + C.SUBS];
+			e = subs !== 0 ? M[subs + C.SUB] : 0;
+			if (e === 0 || !(M[e + C.FLAGS] & C.WATCHING)) {
 				break;
 			}
 		} while (true);
@@ -518,22 +536,22 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		// segment in place so outer effects run before inner.
 		let left = firstInsertedIndex;
 		while (left < --insertIndex) {
-			const tmp = queued[left];
-			queued[left++] = queued[insertIndex];
-			queued[insertIndex] = tmp;
+			const tmp = queue[left];
+			queue[left++] = queue[insertIndex];
+			queue[insertIndex] = tmp;
 		}
 	}
 
 	function unwatched(node: number): void {
-		const flags = M[node + FLAGS];
-		if (flags & K_COMPUTED) {
-			if (M[node + DEPS_TAIL] !== 0) {
-				M[node + FLAGS] = K_COMPUTED | MUTABLE | DIRTY;
+		const flags = M[node + C.FLAGS];
+		if (flags & C.K_COMPUTED) {
+			if (M[node + C.DEPS_TAIL] !== 0) {
+				M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY;
 				disposeAllDepsInReverse(node);
 			}
-		} else if (flags & K_SIGNAL) {
+		} else if (flags & C.K_SIGNAL) {
 			// Nothing to do for signals.
-		} else if (flags & (K_EFFECT | K_SCOPE)) {
+		} else if (flags & (C.K_EFFECT | C.K_SCOPE)) {
 			dispose(node);
 		}
 	}
@@ -541,11 +559,11 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// Upstream's HasChildEffect slow path in updateComputed/run: unlink every
 	// dep that is not a signal/computed (i.e. child effects/scopes), in reverse.
 	function unlinkChildEffects(sub: number): void {
-		let cur = M[sub + DEPS_TAIL];
+		let cur = M[sub + C.DEPS_TAIL];
 		while (cur !== 0) {
-			const prev = M[cur + PREV_DEP];
-			const dep = M[cur + DEP];
-			if (!(M[dep + FLAGS] & (K_COMPUTED | K_SIGNAL))) {
+			const prev = M[cur + C.PREV_DEP];
+			const dep = M[cur + C.DEP];
+			if (!(M[dep + C.FLAGS] & (C.K_COMPUTED | C.K_SIGNAL))) {
 				unlink(cur, sub);
 			}
 			cur = prev;
@@ -553,81 +571,81 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	function updateComputed(c: number): boolean {
-		if (M[c + FLAGS] & HAS_CHILD_EFFECT) {
+		if (M[c + C.FLAGS] & C.HAS_CHILD_EFFECT) {
 			unlinkChildEffects(c);
 		}
-		M[c + DEPS_TAIL] = 0;
-		M[c + FLAGS] = K_COMPUTED | MUTABLE | RECURSED_CHECK;
+		M[c + C.DEPS_TAIL] = 0;
+		M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
 		try {
 			++cycle;
 			const v = c >> 2;
-			const oldValue = values[v];
-			return oldValue !== (values[v] = (fns[c >> 3] as (previousValue?: unknown) => unknown)(oldValue));
+			const oldValue = vals[v];
+			return oldValue !== (vals[v] = (fnTab[c >> 3] as (previousValue?: unknown) => unknown)(oldValue));
 		} finally {
 			--enterDepth;
 			activeSub = prevSub;
-			M[c + FLAGS] &= ~RECURSED_CHECK;
+			M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
 			purgeDeps(c);
 		}
 	}
 
 	function updateSignal(s: number): boolean {
-		M[s + FLAGS] = K_SIGNAL | MUTABLE;
+		M[s + C.FLAGS] = C.K_SIGNAL | C.MUTABLE;
 		const v = s >> 2;
-		return values[v] !== (values[v] = values[v + 1]);
+		return vals[v] !== (vals[v] = vals[v + 1]);
 	}
 
 	function run(e: number): void {
-		const flags = M[e + FLAGS];
+		const flags = M[e + C.FLAGS];
 		if (
-			flags & DIRTY
-			|| (flags & PENDING && checkDirty(M[e + DEPS], e))
+			flags & C.DIRTY
+			|| (flags & C.PENDING && checkDirty(M[e + C.DEPS], e))
 		) {
-			if (flags & HAS_CHILD_EFFECT) {
+			if (flags & C.HAS_CHILD_EFFECT) {
 				unlinkChildEffects(e);
 			}
 			const cv = (e >> 2) + 1;
-			if (values[cv]) {
+			if (vals[cv]) {
 				runCleanup(e);
-				if (M[e + FLAGS] === 0) {
+				if (M[e + C.FLAGS] === 0) {
 					return; // disposed by its own cleanup
 				}
 			}
-			M[e + DEPS_TAIL] = 0;
-			M[e + FLAGS] = K_EFFECT | WATCHING | RECURSED_CHECK;
+			M[e + C.DEPS_TAIL] = 0;
+			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK;
 			const prevSub = activeSub;
 			activeSub = e;
 			++enterDepth;
 			try {
 				++cycle;
 				++runDepth;
-				values[cv] = (fns[e >> 3] as () => (() => void) | void)();
+				vals[cv] = (fnTab[e >> 3] as () => (() => void) | void)();
 			} finally {
 				--runDepth;
 				--enterDepth;
 				activeSub = prevSub;
-				M[e + FLAGS] &= ~RECURSED_CHECK;
+				M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
 				purgeDeps(e);
 			}
-		} else if (M[e + DEPS] !== 0) {
-			M[e + FLAGS] = K_EFFECT | WATCHING | (flags & HAS_CHILD_EFFECT);
+		} else if (M[e + C.DEPS] !== 0) {
+			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & C.HAS_CHILD_EFFECT);
 		}
 	}
 
-	// flush() abort path: re-arm effects still queued after a throw.
+	// flush() abort path: re-arm effects still queue after a throw.
 	function requeueAbort(e: number): void {
-		if (M[e + FLAGS] & KIND_MASK) {
-			M[e + FLAGS] |= WATCHING | RECURSED;
+		if (M[e + C.FLAGS] & C.KIND_MASK) {
+			M[e + C.FLAGS] |= C.WATCHING | C.RECURSED;
 		}
 	}
 
 	function runCleanup(e: number): void {
 		const cv = (e >> 2) + 1;
-		const cleanup = values[cv] as () => void;
-		values[cv] = undefined;
+		const cleanup = vals[cv] as () => void;
+		vals[cv] = undefined;
 		const prevSub = activeSub;
 		activeSub = 0;
 		++enterDepth;
@@ -641,17 +659,17 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 	// effectOper + effectScopeOper: dispose an effect (runs cleanup) or scope.
 	function dispose(e: number): void {
-		const flags = M[e + FLAGS];
-		if (!(flags & KIND_MASK)) {
+		const flags = M[e + C.FLAGS];
+		if (!(flags & C.KIND_MASK)) {
 			return; // already disposed
 		}
-		M[e + FLAGS] = 0;
+		M[e + C.FLAGS] = 0;
 		disposeAllDepsInReverse(e);
-		const sub = M[e + SUBS];
+		const sub = M[e + C.SUBS];
 		if (sub !== 0) {
 			unlink(sub);
 		}
-		if (flags & K_EFFECT && values[(e >> 2) + 1]) {
+		if (flags & C.K_EFFECT && vals[(e >> 2) + 1]) {
 			runCleanup(e);
 		}
 		// Deferred reclamation: the queue (or an in-flight walk) may still hold
@@ -661,17 +679,17 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	function disposeAllDepsInReverse(sub: number): void {
-		let cur = M[sub + DEPS_TAIL];
+		let cur = M[sub + C.DEPS_TAIL];
 		while (cur !== 0) {
-			const prev = M[cur + PREV_DEP];
+			const prev = M[cur + C.PREV_DEP];
 			unlink(cur, sub);
 			cur = prev;
 		}
 	}
 
 	function purgeDeps(sub: number): void {
-		const depsTail = M[sub + DEPS_TAIL];
-		let dep = depsTail !== 0 ? M[depsTail + NEXT_DEP] : M[sub + DEPS];
+		const depsTail = M[sub + C.DEPS_TAIL];
+		let dep = depsTail !== 0 ? M[depsTail + C.NEXT_DEP] : M[sub + C.DEPS];
 		while (dep !== 0) {
 			dep = unlink(dep, sub);
 		}
@@ -680,48 +698,48 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// ---- operations dispatched from the public wrappers ------------------------
 
 	function newSignal(value: unknown): number {
-		const id = allocNode(K_SIGNAL | MUTABLE);
+		const id = allocNode(C.K_SIGNAL | C.MUTABLE);
 		const v = id >> 2;
-		values[v] = value; // currentValue
-		values[v + 1] = value; // pendingValue
+		vals[v] = value; // currentValue
+		vals[v + 1] = value; // pendingValue
 		return id;
 	}
 
 	function newComputed(getter: (previousValue?: unknown) => unknown): number {
-		const id = allocNode(K_COMPUTED);
-		fns[id >> 3] = getter;
+		const id = allocNode(C.K_COMPUTED);
+		fnTab[id >> 3] = getter;
 		return id;
 	}
 
 	function newEffect(fn: () => (() => void) | void): number {
-		const e = allocNode(K_EFFECT | WATCHING | RECURSED_CHECK);
-		fns[e >> 3] = fn;
+		const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK);
+		fnTab[e >> 3] = fn;
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
 			link(e, prevSub, 0);
-			M[prevSub + FLAGS] |= HAS_CHILD_EFFECT;
+			M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
 		}
 		++enterDepth;
 		try {
 			++runDepth;
-			values[(e >> 2) + 1] = fn();
+			vals[(e >> 2) + 1] = fn();
 		} finally {
 			--runDepth;
 			--enterDepth;
 			activeSub = prevSub;
-			M[e + FLAGS] &= ~RECURSED_CHECK;
+			M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
 		}
 		return e;
 	}
 
 	function newScope(fn: () => void): number {
-		const e = allocNode(K_SCOPE | MUTABLE);
+		const e = allocNode(C.K_SCOPE | C.MUTABLE);
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
 			link(e, prevSub, 0);
-			M[prevSub + FLAGS] |= HAS_CHILD_EFFECT;
+			M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
 		}
 		++enterDepth;
 		try {
@@ -735,9 +753,9 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 	// signalOper read path.
 	function read(s: number): unknown {
-		if (M[s + FLAGS] & DIRTY) {
+		if (M[s + C.FLAGS] & C.DIRTY) {
 			if (updateSignal(s)) {
-				const subs = M[s + SUBS];
+				const subs = M[s + C.SUBS];
 				if (subs !== 0) {
 					shallowPropagate(subs);
 				}
@@ -746,17 +764,17 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		if (activeSub !== 0) {
 			link(s, activeSub, cycle);
 		}
-		return values[s >> 2];
+		return vals[s >> 2];
 	}
 
 	// signalOper write path; the WRAPPER flushes (iff this returns true), so
-	// growth can happen between queued effects at the top level (upstream
+	// growth can happen between queue effects at the top level (upstream
 	// flushes inline here, only when the changed signal had subscribers).
 	function write(s: number, value: unknown): boolean {
 		const p = (s >> 2) + 1;
-		if (values[p] !== (values[p] = value)) {
-			M[s + FLAGS] = K_SIGNAL | MUTABLE | DIRTY;
-			const subs = M[s + SUBS];
+		if (vals[p] !== (vals[p] = value)) {
+			M[s + C.FLAGS] = C.K_SIGNAL | C.MUTABLE | C.DIRTY;
+			const subs = M[s + C.SUBS];
 			if (subs !== 0) {
 				propagate(subs, runDepth !== 0);
 				return true;
@@ -767,41 +785,41 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 	// computedOper.
 	function computedRead(c: number): unknown {
-		const flags = M[c + FLAGS];
+		const flags = M[c + C.FLAGS];
 		if (
-			flags & DIRTY
+			flags & C.DIRTY
 			|| (
-				flags & PENDING
+				flags & C.PENDING
 				&& (
-					checkDirty(M[c + DEPS], c)
-					|| (M[c + FLAGS] = flags & ~PENDING, false)
+					checkDirty(M[c + C.DEPS], c)
+					|| (M[c + C.FLAGS] = flags & ~C.PENDING, false)
 				)
 			)
 		) {
 			if (updateComputed(c)) {
-				const subs = M[c + SUBS];
+				const subs = M[c + C.SUBS];
 				if (subs !== 0) {
 					shallowPropagate(subs);
 				}
 			}
-		} else if (flags === K_COMPUTED) { // upstream `!flags`: never evaluated
-			M[c + FLAGS] = K_COMPUTED | MUTABLE | RECURSED_CHECK;
+		} else if (flags === C.K_COMPUTED) { // upstream `!flags`: never evaluated
+			M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
 			const prevSub = activeSub;
 			activeSub = c;
 			++enterDepth;
 			try {
-				values[c >> 2] = (fns[c >> 3] as () => unknown)();
+				vals[c >> 2] = (fnTab[c >> 3] as () => unknown)();
 			} finally {
 				--enterDepth;
 				activeSub = prevSub;
-				M[c + FLAGS] &= ~RECURSED_CHECK;
+				M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
 			}
 		}
 		const sub = activeSub;
 		if (sub !== 0) {
 			link(c, sub, cycle);
 		}
-		return values[c >> 2];
+		return vals[c >> 2];
 	}
 }
 
@@ -835,7 +853,7 @@ function boundaryWork(): void {
 	if (growPending) {
 		growPending = false;
 		let records = E.records;
-		while (recNext > Math.min((records * 8) >> 1, (records - REC_SLACK) * 8)) {
+		while (recNext > Math.min((records * 8) >> 1, (records - C.REC_SLACK) * 8)) {
 			records *= 2;
 		}
 		if (records !== E.records) {
@@ -848,7 +866,7 @@ function flush(): void {
 	// Boundary-lite: growth/reclamation only BEFORE the flush loop, not between
 	// effects. Safe because (a) all user code during flush runs at
 	// enterDepth >= 1, so E cannot be swapped mid-loop (the `engine` hoist is
-	// sound), and (b) the watermark guarantees >= REC_SLACK (1280) free records
+	// sound), and (b) the watermark guarantees >= C.REC_SLACK (1280) free records
 	// at flush start while cascade re-runs re-track through the link() fast
 	// path / free lists (net new records per flush audited at ~tens across the
 	// conformance suite and shapes workloads; a pathological cascade that
@@ -856,16 +874,17 @@ function flush(): void {
 	// than corrupting in-flight walks).
 	maybeBoundary();
 	const engine = E;
+	const queue = queued; // function-scope alias survives bundling (see createEngine note)
 	try {
 		while (notifyIndex < queuedLength) {
-			const e = queued[notifyIndex];
-			queued[notifyIndex++] = 0;
+			const e = queue[notifyIndex];
+			queue[notifyIndex++] = 0;
 			engine.run(e);
 		}
 	} finally {
 		while (notifyIndex < queuedLength) {
-			const e = queued[notifyIndex];
-			queued[notifyIndex++] = 0;
+			const e = queue[notifyIndex];
+			queue[notifyIndex++] = 0;
 			E.requeueAbort(e);
 		}
 		notifyIndex = 0;
@@ -902,7 +921,7 @@ export function computed<T>(getter: (previousValue?: T) => T): () => T {
 	maybeBoundary();
 	const id = E.newComputed(getter as (previousValue?: unknown) => unknown);
 	// No maybeBoundary on the read path: top-level first-eval read sequences
-	// allocate well under REC_SLACK between the surrounding safe-points (see
+	// allocate well under C.REC_SLACK between the surrounding safe-points (see
 	// flush() audit note); steady-state reads allocate nothing.
 	return () => E.computedRead(id) as T;
 }
