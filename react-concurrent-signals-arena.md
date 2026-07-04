@@ -432,12 +432,13 @@ asks the fork "what batch am I in?" at write time.
 
 Specified in section 16. Loading `cosignal/tracing` installs a tracer into the
 core's single checked slot; not loading it costs one `tracer !== undefined`
-check per traced site. The tracer records into a packed integer ring
-(zero allocation per event — traces of a zero-allocation engine must not
-manufacture the GC pressure they claim to observe); human-readable events are
-a lazy decoder view. `cosignal/graphviz` renders DOT source for the live
-dependency graph and for causal trace timelines, and imports only *types* from
-tracing.
+check per traced site. The tracer records packed integer records with no
+per-event allocation (traces of a zero-allocation engine must not manufacture
+the GC pressure they claim to observe), in two recording modes: a
+flight-recorder ring (devtools default) and a lossless chunked session mode
+for whole-boot captures; human-readable events are a lazy decoder view.
+`cosignal/graphviz` renders DOT source for the live dependency graph and for
+causal trace timelines, and imports only *types* from tracing.
 
 ### 4.7 Explicitly supported situations
 
@@ -2096,8 +2097,8 @@ literals through a `defineSchema()` that only validates and types; evaluated
 by the generator, never imported by shipping code). It declares:
 
 - all three planes (`M` stride 8, `G` stride 4, and the tracing module's
-  ring plane `T` stride 8 — section 16.2; ids pre-multiplied; record 0
-  burned in M and G);
+  trace plane `T` stride 8, ring or chunk list per mode — section 16.2; ids
+  pre-multiplied; record 0 burned in M and G);
 - every record family and field: slot number, a `kind` string (`flags`,
   `NodeId`, `LinkId`, `LogId`, `u31`, `spare`), a doc comment, and an owner
   note (which operation writes the field, which clears it);
@@ -2227,14 +2228,14 @@ policy-level lifecycle sites (retirement/absorption, pass start/end,
 broadcast decisions, effect runs, suspensions), gives complete causality
 without touching kernel hot loops.
 
-**Storage: a packed arena ring, not an object stream.** Trace events are
-fixed-size integer records in their own `Int32Array` ring (the trace plane
-`T`, stride 8, capacity a power of two, default 2^16 records = 2 MiB). The
-reasoning is the same asymmetry that shaped every other plane in this
-design: the **write side is hot** — per-read and per-write events fire at
-engine frequency — while the **read side is rare and human** (someone opened
-devtools). So writes are packed integer stores and reads hydrate lazily.
-Three consequences make this a requirement rather than a preference:
+**Storage: packed arena records, not an object stream.** Trace events are
+fixed-size integer records in their own `Int32Array` storage (the trace
+plane `T`, stride 8). The reasoning is the same asymmetry that shaped every
+other plane in this design: the **write side is hot** — per-read and
+per-write events fire at engine frequency — while the **read side is rare
+and human** (someone opened devtools). So writes are packed integer stores
+and reads hydrate lazily. Three consequences make this a requirement rather
+than a preference:
 
 - **Fidelity.** An object-allocating tracer perturbs exactly the thing being
   observed: this is a zero-allocation library, and its GC behavior is a
@@ -2243,10 +2244,11 @@ Three consequences make this a requirement rather than a preference:
   traced profile a lie. A zero-allocation recorder is the only way traces of
   a zero-allocation engine are trustworthy.
 - **Flight-recorder mode.** Because recording is allocation-free and
-  fixed-cost, the ring can run *always-on* in development ("last 65k events
-  before the bug"), overwriting oldest records — feasible only packed; an
-  object stream with this policy would be a permanent allocation storm.
-- **The decoder is not extra cost.** Reading the ring requires an
+  fixed-cost, the recorder can run *always-on* in development ("last 65k
+  events before the bug"), overwriting oldest records — feasible only
+  packed; an object stream with this policy would be a permanent allocation
+  storm.
+- **The decoder is not extra cost.** Reading the records requires an
   id-to-object decoder — which the design already builds: the generated
   debug twin (15.2) that powers the DevTools formatter and `verifyArena`.
   The trace record layout lives in `tools/schema.ts` like every other plane,
@@ -2254,6 +2256,40 @@ Three consequences make this a requirement rather than a preference:
   pipeline. The human-facing outputs (timeline, cause-chain queries, DOT
   renderings) are required deliverables regardless of representation; only
   the recorder's cost model was at stake, and packing wins it.
+
+**Trace modes.** The tracer runs in one of three modes. All three share the
+same record format and the same emit path — there is never a second
+recorder, and the mode distinction lives *only* in the end-of-chunk branch,
+taken once per `chunkSize` (or `capacity`) events, so it adds no per-event
+cost:
+
+- **`OFF`** — the slot is `undefined`; one check per emit site (G-18).
+- **`RING(capacity)`** — the flight recorder: one `Int32Array` of
+  `capacity` records (a power of two, default 2^16 records = 2 MiB), oldest
+  overwritten. The devtools-open default and the always-on development
+  mode; history is bounded, loss (overwrite) is expected and detectable.
+- **`SESSION(chunkSize, maxBytes)`** — the **lossless** capture mode, for
+  user-invoked bounded recordings: "trace my whole app boot", "record this
+  interaction end to end". Same emit path; the difference is what happens
+  when the current chunk fills: instead of wrapping, the recorder **appends
+  a new fixed-size `Int32Array` chunk** (`chunkSize` records, a power of
+  two) to a chunk list and keeps writing. **Nothing is ever copied.**
+  Growth-by-doubling-with-copy is explicitly rejected for this mode: boot
+  traces are the big ones, and a doubling copy stalls the app hardest at
+  exactly the moments worth tracing; chunk append is one bounded allocation
+  per `chunkSize` events, constant no matter how much history has
+  accumulated. A filled chunk is **sealed** — immutable from that moment —
+  so the decoder and the devtools extension can stream, serialize, or
+  transfer sealed chunks incrementally *while recording continues*, with no
+  coordination against the writer.
+
+  The guarantee, stated plainly for users: **a SESSION trace is lossless up
+  to `maxBytes`.** If appending the next chunk would cross `maxBytes`, the
+  recorder emits a loud `truncation-marker` event (recording the boundary's
+  event id) and degrades to RING behavior over the final chunk — recent
+  events keep flowing, but the capture is now marked partial. Loss is never
+  silent: the marker event, a `stats()` flag, and a decoder warning all
+  surface it.
 
 **Record layout** (trace plane `T`, stride 8; generated from the schema):
 
@@ -2266,20 +2302,28 @@ Three consequences make this a requirement rather than a preference:
 | +4 | `TIME` | microseconds since the previous event (delta encoding; saturates at 2^31−1, and a saturated delta emits a `clock-sync` event carrying an absolute timestamp in its arg slots) |
 | +5..+7 | `ARG0..ARG2` | kind-specific integers: seq, walk ticket, duration in µs, counts, label ids |
 
-The event **id** is a monotonic counter; a record's ring position is
-`id & (capacity − 1)`, so an id both names an event and locates it until
+The event **id** is a monotonic counter that doubles as the event's
+sequence number and its address. In RING mode, a record's position is
+`id & (capacity − 1)`, so an id names an event and locates it until
 overwritten (a decoder detects overwrite by comparing ids; a drop counter
-records how many events a lagging subscriber lost). **Labels and other
-strings** never enter the ring: they are interned once (at node creation /
-first use) into a table mapping small integer label ids to strings, and
-records carry the ids. **Rare object payloads** — an absorb's old/new
-values, a thenable identity — go into a small side **ref-ring** (a plain
-array, default capacity 256, parallel-indexed by its own counter; the trace
-record stores the ref-ring index in an arg slot). Documented retention rule:
-the ref-ring retains those objects until overwritten — bounded by its
-capacity, but it *can* extend object lifetimes, so its capacity is
-configurable and 0 disables ref capture entirely (events still record,
-payload slots read as "dropped").
+records how many events a lagging subscriber lost). In SESSION mode, with
+`chunkSize` a power of two, the position is
+`chunks[id >> log2(chunkSize)]` at slot `(id & (chunkSize − 1)) * stride` —
+ids are stable addresses for the whole session. Because ids are dense and
+monotonic, **losslessness is provable, not promised**: a decoder verifies a
+SESSION capture by checking that the ids it holds form one gap-free range
+with no `truncation-marker` inside it, and the tooling surfaces exactly that
+("events 0–1,842,113, verified complete"). **Labels and other strings**
+never enter the records: they are interned once (at node creation / first
+use) into a table mapping small integer label ids to strings, and records
+carry the ids. **Rare object payloads** — an absorb's old/new values, a
+thenable identity — go into a small side **ref-ring** (a plain array,
+default capacity 256, parallel-indexed by its own counter; the trace record
+stores the ref-ring index in an arg slot). Documented retention rule: the
+ref-ring retains those objects until overwritten — bounded by its capacity,
+but it *can* extend object lifetimes, so its capacity is configurable and 0
+disables ref capture entirely (events still record, payload slots read as
+"dropped").
 
 **Event kinds and their payloads** (fields mapped onto the record slots
 above):
@@ -2298,25 +2342,47 @@ above):
 | `render-pass-start/end` | container label id, pin, include mask |
 | `render-read` | node id, world key; flags: resolved-via (kernel / replay / memo) |
 | `suspend` / `settle` | node id, thenable ref-ring index, world key |
-| `mark-repair` / `sweep` / `quiescence` / `clock-sync` | counts / absolute time |
+| `mark-repair` / `sweep` / `quiescence` / `clock-sync` / `truncation-marker` | counts / absolute time / drop-boundary event id |
 
 **The decoder view.** The verbose "object event" (`{id, time, cause, type,
-…named fields}`) exists only as a **lazy decoder view over the ring** —
-generated hydrators that materialize one event object on demand — never as a
-second recorder. Everything human-facing sits on that view: the subscription
-API (subscribers receive decoded events in chunks at operation boundaries —
-the feed for the planned Chrome devtools timeline extension), the cause-chain
-helpers (`whyDidRerun(computedOrLabel)`, `whyDidRender(componentLabel)`,
-`effectRunCount(label)`, which walk `CAUSE` edges *inside the ring* and only
-decode the events they return), and the DOT renderer (16.4).
+…named fields}`) exists only as a **lazy decoder view over the packed
+records** — generated hydrators that materialize one event object on
+demand — never as a second recorder. Everything human-facing sits on that
+view: the subscription API (subscribers receive decoded events in batches at
+operation boundaries, and in SESSION mode may instead consume whole sealed
+chunks as they seal — the feed for the planned Chrome devtools timeline
+extension), the cause-chain helpers (`whyDidRerun(computedOrLabel)`,
+`whyDidRender(componentLabel)`, `effectRunCount(label)`, which walk `CAUSE`
+edges *inside the packed records* and only decode the events they return),
+and the DOT renderer (16.4).
+
+**The two use cases, documented as recipes:**
+
+- *Devtools-open ring:* opening the devtools extension (or calling
+  `startTracing({ mode: 'ring' })`) records the flight recorder; the
+  timeline shows the ring's live tail and marks overwrite-loss with the drop
+  counter.
+- *Whole-boot capture:* `startTracing({ mode: 'session', … })` must run
+  **before the engine's first operation** to capture a truly complete boot.
+  The ordering that makes this work is documented and asserted: import
+  `cosignal/tracing` and start the session before any application module
+  creates its first atom — the tracer slot is checked per emit, so events
+  before installation are simply never recorded, and the decoder's
+  completeness proof will show the trace starting at event id 0 only when
+  the session was installed first. (The engine itself initializes lazily on
+  first use, so no import-cycle gymnastics are needed — just "tracing setup
+  first" in the app entry point.)
 
 **Cost, gated.** Untraced: one `tracer !== undefined` check per site (G-18,
 zero within noise). Traced: per event, a bounds-masked bump, seven integer
-stores, and one `performance.now()` — no allocation. The falsifiable target:
-with tracing enabled at default capacity (ref-ring off), tier-0 shapes run
-at **≤1.15× untraced**, measured and recorded at M6 (gate G-19); if the
-measured number beats the ceiling, the measured number becomes the pinned
-regression gate thereafter.
+stores, and one `performance.now()` — no allocation in RING mode, and in
+SESSION mode one `Int32Array` chunk allocation amortized per `chunkSize`
+events (G-20). The falsifiable target: with tracing enabled (RING, default
+capacity, ref-ring off), tier-0 shapes run at **≤1.15× untraced**, measured
+and recorded at M6 (gate G-19), with SESSION mode measured alongside and
+required to match RING within noise (same emit path); if the measured
+numbers beat the ceiling, the measured numbers become the pinned regression
+gates thereafter.
 
 ### 16.3 Handle inspection: DevTools custom formatter and terminal twin
 
@@ -2365,8 +2431,9 @@ is deliberately *not* behind per-site tracer checks in the production
 kernel — the production kernel contains zero tracing instructions. When
 that detail is needed, the generated **traced kernel stamp** (15.2) — the
 same code with integer event emits spliced at its `/*TRACE*/` marks,
-writing `flags-transition` / `link` / `unlink` / `stack-depth` records into
-the same trace ring (16.2) — is swapped in at an operation boundary using
+writing `flags-transition` / `link` / `unlink` / `stack-depth` records
+through the same recorder, in whatever mode it is running (16.2) — is
+swapped in at an operation boundary using
 the growth machinery (rebuild the engine closure over the same buffers).
 Attach and detach on a running app; the production stamp's type feedback is
 never touched.
@@ -2666,8 +2733,9 @@ non-conformant build is not a result.
 | G-16 | log-plane residue after quiescence | — | zero bytes, zero live slots | gate, M3 |
 | G-17 | speculation high-water marks (plane G bytes, memo counts) on transition benchmarks | — | published per run | report |
 | G-18 | tracing unloaded | no-tracing build | zero overhead within noise (one check per site) | gate, M6 |
-| G-19 | tracing enabled, default ring capacity, ref-ring off, tier-0 shapes | untraced build | ≤1.15× (the packed-recorder budget, 16.2); the measured number becomes the pinned regression gate thereafter | gate, M6 |
-| G-20 | traced run, engine + recorder | — | zero allocations per event (heap-profile verified — the fidelity property of 16.2) | gate, M6 |
+| G-19 | tracing enabled (RING, default capacity, ref-ring off), tier-0 shapes; SESSION measured alongside | untraced build | ≤1.15× (the packed-recorder budget, 16.2), SESSION within noise of RING (same emit path); the measured numbers become the pinned regression gates thereafter | gate, M6 |
+| G-20 | traced run, engine + recorder | — | RING: zero allocations per event; SESSION: zero per event with exactly one chunk allocation amortized per `chunkSize` events (heap-profile verified — the fidelity property of 16.2) | gate, M6 |
+| G-21 | SESSION losslessness under sustained engine load until `maxBytes` breach | — | decoder proves one gap-free event-id range up to the emitted `truncation-marker`; zero silent loss; sealed chunks streamed during recording decode identically to post-hoc | gate, M6 |
 
 Asymptotic claims (O(1) truncation splice, O(live entries) retirement,
 O(cone) notify walk) are verified by instrumented counters in debug builds,
@@ -2798,15 +2866,20 @@ mount-mid-transition case, the entanglement single-commit test, the
 two-batch re-notify test, the ReducerAtom/useReducer differential, the
 flushSync exclusion, tearing stress (G-14) — all green; standing rules.
 
-**M6 — Tracing, formatter, graphviz.** Tracer slot, the packed trace ring
-and its decoder view (16.2), DevTools formatter and terminal twin (16.3),
-DOT renderers (16.4), traced-kernel stamp swap (16.5). *Exit:* G-18 (zero
-overhead unloaded); G-19 (tracing-enabled overhead measured against the
-≤1.15× ceiling and pinned); G-20 (zero allocations per traced event,
-heap-profile verified); cause-chain answer tests (`whyDidRender` et al.)
-running as decoder views over the ring; ring-overwrite and drop-counter
-tests; DOT snapshot tests; attach/detach-traced-kernel test; standing
-rules.
+**M6 — Tracing, formatter, graphviz.** Tracer slot, the packed trace
+recorder in all three modes (OFF/RING/SESSION) and its decoder view (16.2),
+DevTools formatter and terminal twin (16.3), DOT renderers (16.4),
+traced-kernel stamp swap (16.5). *Exit:* G-18 (zero overhead unloaded);
+G-19 (tracing-enabled overhead measured against the ≤1.15× ceiling, SESSION
+within noise of RING, both pinned); G-20 (allocation discipline per mode,
+heap-profile verified); G-21 (SESSION losslessness: gap-free event-id proof,
+truncation-marker on `maxBytes` breach with degrade-to-RING, sealed-chunk
+streaming decodes identically during and after recording); whole-boot
+capture recipe test (session started before first engine operation; decoder
+verifies completeness from event id 0); cause-chain answer tests
+(`whyDidRender` et al.) running as decoder views over the packed records;
+ring-overwrite and drop-counter tests; DOT snapshot tests;
+attach/detach-traced-kernel test; standing rules.
 
 **M7 — Benchmarks and hardening.** Register in the js-reactivity-benchmark
 (core mode, in-transition mode, LOGGED-idle mode); React microbenches;
