@@ -105,3 +105,40 @@ preference. Curated by the monitor only.
   world evals; R-guarded K0 seed else undefined). `ctx.use` gains a lazy
   factory form; eager form guarantees identity stability only. Proof:
   [WALK cost-codex 5 + lean-codex 5/7], synthesis §13/§9.1′.
+
+## Round 3 (2026-07-04)
+
+
+- **D12 amendment (champion pointer).** Round-3 champion:
+  `rounds/round-03/synthesis.md` — architecture class D8 unchanged;
+  repairs R1–R17; breaker transplants adopted WITH invariants: F9
+  hook-publication (I41), immutable per-root lock views (I34), full-cone
+  refresh carry (I42), corrected split G-R comparator (breaker B4),
+  ActionScope + realm affinity, breaker W1/W2/W3/W5 spike workloads.
+  Proof: adjudication table Part I — every confirmed finding carries an
+  in-architecture repair endorsed-shaped by its own reviewer's judgment;
+  no confirmed finding invalidates K0/K1/tape/visibility/seam.
+- **D16 amendment (reducer identity).** "Dev-warn on swap with pending
+  receipts" is insufficient alone; the settled semantics are I38's:
+  promotion-visible folds (re-fold NEWEST at promotion; publication before
+  same-commit folds), always-append for stageable reducer atoms, and the
+  differential battery extended to swap-with-pending rows. Proof:
+  [WALK breaker-codex 1/2], synthesis C3-R.
+- **D17 (new). F8's boundary contract is settled and closed against
+  re-litigation absent new evidence:** at carrier rung 2, raw post-await
+  signal writes in uncompiled code misattribute to their ambient batch —
+  sound, bounded, dev-warned, boot-tested per I30/O20/D15; this is a
+  declared build-prerequisite support boundary, not a preamble
+  runtime-restriction move, so "no reliable rejection ⇒ blocker" does not
+  apply. The supported escape hatch for opaque boundaries is explicit
+  ActionScope.set/dispatch; scheduler shims (I36) shrink the in-app
+  class; rung 1 erases it. Proof: [REFUTED-WALK exit-codex 2 ≡
+  breaker-codex 5 — both re-raised I30's own recorded schedule with no
+  new evidence; synthesis Part I #10].
+- **D18 (new). useSignalEffect evaluator identity rides React's native
+  deps re-fire; no staging/F9 path for effects.** A deps change re-runs
+  the effect at its own commit, which re-tracks and re-subscribes;
+  routing effect fn changes through staged publication leaves the new
+  dependency edge-less forever. Proof: [WALK breaker-codex 3], synthesis
+  C16-D.
+

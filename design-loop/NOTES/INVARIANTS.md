@@ -213,3 +213,128 @@ independent confirmation by both reviewers. Curated by the monitor only.
   transform (never silent); support-matrix line: "requires
   bundled/transformed app code (or future AsyncContext)". Provenance:
   `research/experiments/spf8-continuation-carrier.md` + spf8-proto/.
+
+## Round 3 (2026-07-04): rounds/round-03/ — applied from its notes-diff (monitor-validated)
+
+
+- **I31. Evaluator identity is a fourth world-divergence source with no
+  receipt; every routing/validity surface needs an evaluator conjunct.**
+  A pass holding a staged evaluator diverges from K0's cache with zero
+  receipts: fast-path routing needs a staged-probe conjunct, RENDER_NEWEST
+  must demote on staging (not only on writes), memo validity must compare
+  a flattened evaluator-stamp vector BEFORE any clock-based serve (nested
+  evaluators included), and promotion must dirty the K0 node or the
+  pre-promotion cache serves forever. [BOTH exit-claude F1 ≡ exit-codex 5;
+  ladder half exit-codex 6; repaired construction synthesis §6.2′/§8′,
+  re-walked T11′]
+- **I32. K1 is a union across worlds; unions of per-world-acyclic graphs
+  cycle. Every value-blind full walk needs per-walk visited state.**
+  Monotone-frontier recursions (edge-add `newBits & ~touched`)
+  self-terminate; value-blind notification/retirement walks do not — a
+  two-flag program (`c = flag ? d : a`, `d = flag ? b : c`) hangs the
+  write path. Per-walk generation stamp; cost priced in G-N/G-W; wrap
+  lifecycle row required. [BOTH exit-claude F3 ≡ exit-codex 7; synthesis
+  T12]
+- **I33. Untracked reads license temporal staleness, never world leakage.**
+  A K0 cache produced by an evaluation whose untracked read hit a
+  receipted atom embeds possibly-pending state; serving it to any
+  non-newest world leaks an excluded write (no edge exists to route, and
+  recording one would violate untracked semantics). Node-grain taint
+  (recomputed per NEWEST evaluation: untracked read hit non-empty tape)
+  as a routing conjunct; world evaluations fold untracked reads in-world,
+  edge-free. [WALK exit-codex 4; synthesis T13]
+- **I34 (extends I21/I14). Every visibility-flip SOURCE needs both a stamp
+  minted at every occurrence AND a durable (re-enumerable) flush path.**
+  Watermark ADVANCES are flips (they admit entries below an
+  already-visible max); consumable write-time queue entries get eaten by
+  earlier unrelated flushes. Retirement → per-atom retireVisStamp;
+  lock-in AND every advance → per-(root, slot) lockStamp captured in an
+  immutable re-minted lock view whose id is part of committed-for-root
+  worldKeys; retirement/lock-in flushes enumerate via touchedList, never
+  only the queue. Root-scoping the lock term is load-bearing: a global
+  lock-side stamp lets root A starve root B. [WALK exit-claude F2 +
+  breaker-claude F3 (same family, two designs); root-scoping
+  breaker §2.1-B1, held by both its reviewers; synthesis C11-A]
+- **I35. Side-effect-bearing caches must value-revalidate before
+  re-fetching.** Stamps legitimately over-invalidate (I21); a suspense
+  capsule that refetches on every stamp move re-fetches settled resources
+  on content-neutral flips (lock→retired handover; equal-value churn) —
+  duplicate side effects and starvation under same-atom traffic. On fp
+  mismatch: re-fold in this world, equality-stable compare, re-stamp in
+  place when equal, refetch only on real change. Validity-by-value is
+  legal where delivery-by-value is not (D13 governs delivery only).
+  [WALK breaker-codex 4 + breaker-claude F7 (severity resolved by walk);
+  synthesis C15-5″]
+- **I36. Carrier capture must be registration-time for host-scheduled
+  callbacks (AsyncContext parity); invocation-time capture alone strands
+  every async callback scheduled inside an action.** The twin-build
+  transform captures at generator instantiation; an async function handed
+  to setTimeout inside an action instantiates on a bare stack and captures
+  null → its writes commit before the action settles. Armed-gated
+  registration shims on enumerated schedulers (timeout/interval/microtask/
+  rAF/message) close the class; unshimmed registrars are documented
+  boundary. Not an S22 repeat: shims cover explicit registration only —
+  awaits still ride the transform. Verified against SP-F8: its "timers"
+  row tested plain callbacks resolving awaited promises, not async-fn
+  callbacks. [WALK exit-codex 1 + MEASURE spf8 artifact re-read;
+  synthesis C12-T]
+- **I37. A carrier token consulted after its retirement must degrade to
+  ambient classification (+ dev warn), uniformly across rungs.** A
+  fire-and-forget child continuation can outlive its action; rejecting
+  crashes, re-interning creates never-retired receipts, recycling
+  contaminates. Ambient fallback is React parity (a late un-awaited
+  child's setState lands in its own batch). Per-resource park refcounts
+  are NOT admissible: AsyncContext has no resource-creation hook (rung
+  asymmetry) and a leaked never-settling child parks a lane forever.
+  [WALK exit-codex 3; synthesis C12-F]
+- **I38 (refines I7 and D16). Fold-op meaning is world-scoped once
+  evaluators can stage.** (a) The empty-history equality drop is legal
+  only for ops with world-invariant meaning — plain `set` always;
+  updater/reducer only under immutable evaluators; stageable ReducerAtoms
+  always append (a dropped "no-op" action replays differently under the
+  staged reducer). (b) Reducer promotion with pending receipts must
+  re-fold NEWEST under the new committed reducer and notify; (c) within a
+  commit, evaluator/reducer publication precedes the retirement folds due
+  at that commit, or the fold compacts under the stale reducer while the
+  committed tree rendered the new one. [WALK breaker-codex 1 + 2
+  (cross-design — exit candidate had the same text); synthesis C3-R]
+- **I39. Slot bookkeeping must outlive every pass whose pin excludes the
+  slot's entries, and slot demand must be bounded anyway.** Clearing
+  touched columns at retirement while a pinned pass lives serves K0 to a
+  world that excludes the retired write (torn frame); retaining them
+  makes live-plus-retiring slots exceed 31 under an input storm during
+  one yielded transition. Retain via the unswept gate (I10) AND define
+  saturation: force-clear the oldest fully-retired slot and flip affected
+  pinned passes to world-path-only (per-pass flag), with a forced test.
+  [WALK breaker-claude F1 (both horns) + F5; synthesis T14]
+- **I40. Evaluator stamps inside retry-crossing identity keys must be
+  lineage-stable for equal dep values.** A Suspense retry is a new pass;
+  per-pass fresh stamps make capsule prefixes mismatch every retry →
+  refetch-forever livelock with duplicate side-effectful fetches (the
+  S20-adjacent world-instance-identity class). Stage per pass for I22;
+  mint per (lineage, hook, deps-values). [WALK breaker-claude F2
+  (cross-design — exit candidate §11.1/§9.2 identical); synthesis
+  C15-4′/C14]
+- **I41. The evaluator promotion edge is "hook becomes current" (fork
+  fact), not effect execution.** Hidden Offscreen commits promote with no
+  effect firing; error-abandoned subtrees and stale alternates never do
+  (generation CAS); publication must precede the same commit's retirement
+  folds (I38c) and layout effects. [breaker §2.1-B2 construction, held by
+  BOTH breaker reviewers; ordering hole breaker-codex 1-B; synthesis
+  §11.1′/F9]
+- **I42. Refresh-exemption carry must be the full reverse-reachable K1
+  cone.** Reach is path-transitive; carrying only direct in-edges strands
+  upstream links (`x→u` of `x→u→w`) and the next episode's write tears.
+  Two-strike rank Σ(2−strikes) proves termination for a fixed observed
+  set. [breaker §2.1-B3 + termination held by breaker-claude; the
+  exit-candidate's in-edge carry killed by the same schedule; synthesis
+  T8-N′]
+- **I43. Mount-fixup corrective skipping is inclusion+clock, never
+  equality.** Skip token t iff slot(t) ∈ the mount's rendered
+  mask∪lockView AND wc[slot(t)] ≤ the rendered pass pin — a fully
+  included token cannot diverge for that watcher, and a post-pin write
+  fails the clock. Unconditional correctives double-render every mount
+  inside a live batch's own pass (C9); equality-filtered skipping is S10.
+  [WALK breaker-codex 6 (cross-design — exit-candidate C9(a) hand-waved
+  "React bails"); synthesis C9′]
+

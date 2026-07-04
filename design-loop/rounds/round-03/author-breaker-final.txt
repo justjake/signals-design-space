@@ -1,0 +1,12 @@
+- File path: [design-breaker.md](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-03/design-breaker.md)
+- Mechanism count: 10
+- Seam touch-point count: 9
+- Unwalked cases: None
+
+Architecture summary:
+
+1. The design retains the two-kernel champion: byte-identical DIRECT K0, always-logged React receipts, K1 pending-world edges, and React-parity ordered folds.
+2. Immutable per-root/per-slot lock stamps prevent cross-root Suspense starvation while preserving visibility-flip injectivity.
+3. A new hook-publication seam promotes staged evaluators for exact committed fibers, including hidden Offscreen commits while excluding abandoned work.
+4. Generation-bearing retro-delivery queues, exact-include watermarks, and transitive K1 cone carry armor slot recycling, multi-root action interleavings, and quiescence refresh.
+5. Async actions use native AsyncContext or the transformed carrier, with explicit `ActionScope` support and a declared unsupported boundary for arbitrary uncompiled post-await raw writes.

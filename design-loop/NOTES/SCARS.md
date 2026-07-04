@@ -159,3 +159,71 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   continuation identity. The living alternative is the I30 twin-build
   transform (or platform AsyncContext when it ships). [MEASURE/PROVEN
   SP-F8 prototype, research/experiments/spf8-continuation-carrier.md]
+
+## Round 3 (2026-07-04): rounds/round-03/
+
+
+- **S23. Evaluator-blind fast paths ("worlds diverge only through
+  receipts").** Killing schedule: React-state-only transition classified
+  RENDER_NEWEST; useComputed stages f_B; both the staging component and a
+  sibling are served f_A's K0 cache; the pass commits a wrong frame;
+  promotion never dirties K0 → wrong NEWEST forever, no receipt, no
+  backstop. Second horn: the validity ladder serving on slot clocks
+  without comparing evaluator stamps replays a discarded closure's value
+  inside its own pass. Why not local-as-written: routing, RENDER_NEWEST
+  classification, memo validity, AND promotion all need the conjunct —
+  one omission re-opens it. (exit-claude F1 + exit-codex 5/6; repaired
+  R1/R2.)
+- **S24. Per-pass-minted evaluator stamps inside retry-crossing identity
+  keys.** Killing schedule: suspense retry = new pass → re-stage vs
+  committed → fresh stamp → flattened prefix mismatch → drop settled
+  thenable → refetch → suspend → repeat: transition never commits,
+  duplicate fetch per retry. Rule: I40 lineage-stable minting.
+  (breaker-claude F2; identical text in the exit candidate.)
+- **S25. Invocation-time-only carrier capture.** Killing schedule:
+  `startTransition(async () => { await new Promise(res => setTimeout(async
+  () => { a.set(1); res() }, 0)); await gate })` — the timer invokes the
+  transformed async callback on a bare stack; genBody captures null;
+  the write lands in default D and commits before the action settles;
+  the boot probe cannot see the composition. Rule: I36 registration-time
+  capture for host schedulers; residual registrars documented.
+  (exit-codex 1.)
+- **S26. Consumable write-time queues as the only committed-observer
+  trigger for lock-in/advance flips.** Killing schedule: E's queue entry
+  consumed by an earlier unrelated retirement flush; the watermark
+  advance that later exposes the parked write mints nothing the snapshot
+  observes and re-enqueues nothing → effect stale until full retirement
+  (unbounded, io-gated). Rule: I34 stamp-every-mint-site + durable
+  touchedList enumeration. (exit-claude F2 + breaker-claude F3.)
+- **S27. World-invariant-op assumption in write-time drops ("empty-tape
+  equality drop is always safe").** Killing schedule: dispatch "tick"
+  under committed r0 (identity) with empty tape → dropped; the transition
+  stages r1 (s+1) → nothing to replay → ReducerAtom 0 vs useReducer 1.
+  Rule: I38a. (breaker-codex 2.)
+- **S28. Unordered/effect-grain evaluator publication around retirement
+  folds.** Killing schedules: (a) hidden Offscreen commit never runs the
+  hook effect → committed tree from f1, committed evaluator f0 —
+  divergence with no write; (b) fold-before-publication compacts a
+  pending reducer receipt under the stale reducer while the committed
+  tree rendered the new one — permanent 10-vs-1 fork. Rule: I41 (F9
+  hook-becomes-current edge, CAS, publication-before-folds).
+  (breaker §2.1-B2 + breaker-codex 1-B.)
+- **S29. Retirement-time touched-column clearing (and, dually, unbounded
+  slot retention) around pinned passes.** Killing schedules: (a) clear at
+  retire → resumed pin-p pass reads K0-clean computed 11 beside folded
+  atom 0 — torn frame matching no world; (b) retain until pins release →
+  one yielded transition + ~31 retiring input batches exhausts slot
+  interning with no stated behavior. Rule: I39 (unswept retention + the
+  saturation spillover). (breaker-claude F1/F5.)
+- **S30. Direct-in-edge-only carry for refresh-exempt nodes.** Killing
+  schedule: K1-only chain x→u→w, w exempt; carry {u→w}; reset; next
+  episode's write to x reaches nothing → torn commit. Rule: I42 full
+  reverse-reachable cone. (breaker §2.1-B3; exit-candidate §5.4 had the
+  in-edge text.)
+- **S31. Stamp-move ⇒ refetch for side-effect-bearing caches.** Killing
+  schedule: lock→retired visibility handover on an already-visible entry
+  (or equal-value urgent churn) moves fp with no content change; the
+  capsule discards its settled thenable and re-runs the factory — repeated
+  per touching retirement: duplicate fetches, transition starvation.
+  Rule: I35 value-revalidation before refetch. (breaker-codex 4 +
+  breaker-claude F7.)
