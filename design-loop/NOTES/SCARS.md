@@ -52,8 +52,3 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   U's render excludes T and shows 0; truncation variants lose the write
   entirely. Rule: I7 (drop only on empty history; equality lives in
   fold/notify). (Codex finding 4 + review F5.)
-- **S9. "Perfect elegance" as a judge exit criterion.** Killing schedule:
-  JUDGING.md accepted "immune by construction" (G7) without the
-  construction; the claim was false (S3). Rule: D8 — constructions
-  mandatory, judges re-walk, exit is convergence + human sign-off. (This
-  loop's own design exists because of this scar.)

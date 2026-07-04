@@ -1,19 +1,25 @@
 # Mechanism library (frozen seed): parts à la carte
 
-Extracted mechanisms from the four legacy candidates (A log-overlay,
-B versioned-core, C forked-worlds, D minimal-kernel) and the synthesized
-spec. Authors may adopt, adapt, or ignore any of these — **but may not read
-the legacy specs themselves** (whole designs anchor; mechanisms don't).
-Each entry: what it is / what it solves / known cost or caveat.
+Extracted mechanisms from four legacy design attempts (labeled A log-overlay,
+B versioned-core, C forked-worlds, D minimal-kernel — labels are provenance
+only) and their synthesis. Authors may adopt, adapt, or ignore any of these
+— **but may not read the legacy specs themselves** (whole designs anchor;
+mechanisms don't). **None of these is a default**: a design that uses none
+of them and walks the battery is at no disadvantage. The binding constraints
+live in `requirements.md`; the binding *facts* (what measured fast or slow)
+live in `research-facts.md` — innovate new structure from those facts
+freely. Each entry: what it is / what it solves / known cost or caveat.
 
-## Substrate (settled — reuse unless your architecture forces otherwise)
+## Proven artifacts available for reuse (optional, not prescribed)
 
 - **Arena kernel** (`libs/arena/src/index.ts`): alien-signals v3 semantics on
   one Int32Array plane, stride 8, interleaved node+link records,
   premultiplied ids, DEPS_TAIL re-track cursor, iterative walks with
-  persistent scratch stacks, `link`/`linkInsert` split. 179/179, beats alien
-  on tier-0. This is the proven engine; candidates quarrel about what wraps
-  it, not about it.
+  persistent scratch stacks, `link`/`linkInsert` split. 179/179 conformant,
+  beats alien-signals on every tier-0 shape. Available as a starting point
+  or as an existence proof of what the layout class achieves; a design may
+  propose a different layout if it respects the measured facts (and prices
+  the deviation).
 - **Closure-rebuild growth**; watermark slack; deferred frees + GEN
   generation counters; free-list discipline. (Substrate.)
 - **Schema/codegen**: `tools/schema.ts` single source → const-enum region,
@@ -32,12 +38,14 @@ Each entry: what it is / what it solves / known cost or caveat.
 
 - **Per-atom write tape + base record + global seq tickets** (A §9, D §7.4
   equivalently): every write in React mode appends {op, batch, seq,
-  retiredSeq}; worlds fold by filtering + replay in seq order. Solves C2/C3
-  exactly (React hook-queue parity math). Caveat: always-log is load-bearing
-  (C2); coalescing legal only with no open pass.
-- **Visibility rule** (A §10.2 = D §7.4 read rule): entry visible iff
-  (retired ≤ pin) or (batch ∈ include-mask and seq ≤ pin). Clause-for-clause
-  React lane filtering. Proven parity math — reuse verbatim.
+  retiredSeq}; worlds fold by filtering + replay in seq order. ONE known
+  mechanism producing the settled semantics of DECISIONS D3 — the semantics
+  are required, this representation is not. Caveat if adopted: always-log is
+  load-bearing (C2); coalescing legal only with no open pass.
+- **Visibility rule as math** (A §10.2 = D §7.4 read rule): entry visible
+  iff (retired ≤ pin) or (batch ∈ include-mask and seq ≤ pin). This is the
+  clause-for-clause statement of React's lane filtering — any design's world
+  answers must AGREE with it (D3), however they are computed.
 - **Writer's-world** (A §10.2): retired ∪ applied ∪ own-batch — the world a
   batch's own render will show; useful for pre-render cutoff decisions.
   Caveat: eager per-write evaluation against it is the expensive shape.

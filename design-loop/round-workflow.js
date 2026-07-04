@@ -9,9 +9,11 @@ export const meta = {
   ],
 }
 
-// args: { round: number, stances: [{key, brief}], repo?: string }
+// args: { round: number, stances: [{key, brief, author?: 'claude'|'codex'}] }
+// author defaults to 'claude'; author: 'codex' runs the author role through
+// the codex CLI for cross-model design diversity.
 if (!args || !args.round || !Array.isArray(args.stances) || args.stances.length < 2) {
-  throw new Error('args required: { round: <int>, stances: [{key, brief}, ...] (>=2) }')
+  throw new Error('args required: { round: <int>, stances: [{key, brief, author?}, ...] (>=2) }')
 }
 const round = args.round
 const rn = String(round).padStart(2, '0')
@@ -77,13 +79,20 @@ const JUDGE_SCHEMA = {
 
 const authorPrompt = (stance) => `You are an AUTHOR agent in round ${round} of the design loop at ${DL}/.
 Read ${DL}/SEEDS/prompts/author.md FIRST and follow it exactly (including its
-do-not-read list — you must not open research/specs/, reviews/, other rounds,
-or react-concurrent-signals-arena.md).
+do-not-read list and its read-first list starting with SEEDS/background.md).
 
 Your assigned stance: "${stance.key}" — ${stance.brief}
 
 Write your complete design spec to: ${roundDir}/design-${stance.key}.md
 Then return the structured summary the author prompt specifies.`
+
+const codexAuthorPrompt = (stance) => `You are a RUNNER for a cross-LLM (codex) design AUTHOR in round ${round} of the design loop.
+Do not design anything yourself. Steps:
+1. Run exactly this command with the Bash tool, run_in_background: true (authoring a full spec may take 15-45 minutes):
+   codex exec --sandbox workspace-write --cd "$PWD" -o "${roundDir}/author-${stance.key}-final.txt" "You are a design AUTHOR. Read design-loop/SEEDS/prompts/author.md and follow it exactly, starting with its read-first list (design-loop/SEEDS/background.md first) and honoring its do-not-read list. Your assigned stance: ${stance.key} — ${stance.brief}. Write your complete design spec to the file ${roundDir}/design-${stance.key}.md using your file tools. Your final message must be ONLY the structured summary the author prompt specifies (file path, mechanism count, seam touch-point count, unwalked cases, 5-sentence summary)."
+2. Wait for completion (you are re-invoked when the background command exits). If it failed or ${roundDir}/design-${stance.key}.md is missing or under 300 lines, retry ONCE.
+3. Read ${roundDir}/author-${stance.key}-final.txt (and if needed skim the design file's headings) to fill the structured summary. Do not edit the design.
+4. Return the structured summary. On double failure return mechanismCount: -1 with the error in summary.`
 
 const claudeReviewPrompt = (stance, designFile) => `You are the CLAUDE REVIEWER in round ${round} of the design loop at ${DL}/.
 Read ${DL}/SEEDS/prompts/reviewer-claude.md FIRST and follow it exactly
@@ -103,9 +112,12 @@ Do not review the design yourself. Steps:
 // ---- Phase 1+2: authors, each design reviewed as soon as it lands (no cross-design barrier)
 const perDesign = await pipeline(
   args.stances,
-  (stance) => agent(authorPrompt(stance), {
-    label: `author:${stance.key}`, phase: 'Author', schema: AUTHOR_SCHEMA,
-  }).then(a => a && { stance, design: a }),
+  (stance) => agent(
+    stance.author === 'codex' ? codexAuthorPrompt(stance) : authorPrompt(stance),
+    stance.author === 'codex'
+      ? { label: `author-codex:${stance.key}`, phase: 'Author', schema: AUTHOR_SCHEMA, effort: 'low' }
+      : { label: `author:${stance.key}`, phase: 'Author', schema: AUTHOR_SCHEMA },
+  ).then(a => a && { stance, design: a }),
   (r) => r && parallel([
     () => agent(claudeReviewPrompt(r.stance, r.design.file), {
       label: `review-claude:${r.stance.key}`, phase: 'Review', schema: REVIEW_SCHEMA,

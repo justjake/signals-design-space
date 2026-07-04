@@ -18,8 +18,9 @@ architecture is the design space.
   world; parity with `useReducer` is a conformance test, not a hope.
 - **R4 Hooks** (`cosignal/react`): `useSignal`, `useAtom`, `useReducerAtom`,
   `useComputed(fn, deps, opts?)` (closes over props/state; signal reads
-  auto-tracked), `useSignalEffect(fn, deps?)` (committed state only). No
-  provider component. Multiple roots.
+  auto-tracked), `useSignalEffect(fn, deps?)` (committed state only).
+  Provider-free preferred; a provider component is acceptable if it
+  demonstrably buys correctness or simplicity (justify the trade).
 - **R5 Transitions**: full `startTransition`/`useTransition` parity — signal
   and React state move in lockstep; optional `startSignalTransition` /
   `useSignalTransition` throughput helpers.
@@ -32,8 +33,11 @@ architecture is the design space.
 - **R8 Writes inside computeds**: tolerated when acyclic;
   `configure({forbidWritesInComputeds})`; render-world evaluation always
   rejects writes.
-- **R9 Multiple roots** including batches spanning roots (per-root commit
-  lock-in; per-root committed views for effects).
+- **R9 Multiple roots**: per-root self-consistency is required (a root must
+  never contradict its own committed DOM). Cross-root simultaneity for a
+  spanning batch is NOT required; the design declares its multi-root scope
+  and walks C11 at that declared scope (full / degraded / v1 single-root
+  with loud detection).
 - **R10 SSR/hydration** from serialized atom state (RSC/Flight out of scope v1).
 - **R11 Tracing**: lazily-loadable, zero-allocation recorder (ring + lossless
   session modes), causality queries, Graphviz renderers; untraced cost = one
@@ -41,9 +45,13 @@ architecture is the design space.
   it unless the architecture forces changes.)
 - **R12 React fork**: see `fork-charter.md` — the old "minimal additive patch"
   constraint is lifted; maintainability is a scored axis instead.
-- **R13 Core non-React API**: `effect()`, `effectScope()`, `batch()`,
-  `untracked()`, `configure()`; benchmark contracts (synchronous flush outside
-  batch, fresh mid-batch reads).
+- **R13 Core non-React API**: `effect()`, `batch()`, `untracked()`,
+  `configure()` (`effectScope()` optional — include only if it earns its
+  keep). Scheduling/flush behavior may be configurable; the hard requirement
+  is **benchmark integrability**: the design must drive the
+  js-reactivity-benchmark adapter honestly (exact pull counts, checksum
+  contracts, fresh mid-batch reads, effects observable synchronously under
+  some documented configuration).
 
 ## P — Performance (gates, not adjectives)
 

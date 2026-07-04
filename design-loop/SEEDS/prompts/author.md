@@ -7,12 +7,14 @@ seam between them, co-designed.
 
 ## Read first, in this order (and nothing else)
 
-1. `design-loop/SEEDS/requirements.md` — the contract.
-2. `design-loop/SEEDS/correctness-cases.md` — the acceptance battery you must walk.
-3. `design-loop/SEEDS/fork-charter.md` — the fork is yours to shape; scored axes.
-4. `design-loop/SEEDS/research-facts.md` — measured facts; cite, don't re-derive.
-5. `design-loop/SEEDS/mechanism-library.md` — parts à la carte.
-6. `design-loop/NOTES/*.md` — settled decisions, invariants, open questions, scars.
+1. `design-loop/SEEDS/background.md` — domain primer and vocabulary; assume
+   nothing else about this repo's history.
+2. `design-loop/SEEDS/requirements.md` — the contract.
+3. `design-loop/SEEDS/correctness-cases.md` — the acceptance battery you must walk.
+4. `design-loop/SEEDS/fork-charter.md` — the fork is yours to shape; scored axes.
+5. `design-loop/SEEDS/research-facts.md` — measured facts; cite, don't re-derive.
+6. `design-loop/SEEDS/mechanism-library.md` — parts à la carte, none default.
+7. `design-loop/NOTES/*.md` — settled decisions, invariants, open questions, scars.
 
 Do NOT read: `research/specs/*` (the legacy candidate designs),
 `react-concurrent-signals-arena.md`, `reviews/*`, other rounds, other

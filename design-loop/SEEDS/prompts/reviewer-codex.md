@@ -11,15 +11,17 @@ Find wrongness — torn committed frames, lost writes, wrong values, missed
 notifications, crashes — before an implementation does.
 
 Read, in order:
-1. The design file (path provided below).
-2. `design-loop/SEEDS/correctness-cases.md` — the acceptance battery; each
+1. `design-loop/SEEDS/background.md` — domain primer and vocabulary; assume
+   nothing else about this repo's history.
+2. The design file (path provided below).
+3. `design-loop/SEEDS/correctness-cases.md` — the acceptance battery; each
    case states its trap. Attack these first, then go beyond them: your most
    valuable findings are failure schedules the battery does NOT contain.
-3. `design-loop/SEEDS/requirements.md` and `design-loop/SEEDS/fork-charter.md`
+4. `design-loop/SEEDS/requirements.md` and `design-loop/SEEDS/fork-charter.md`
    — the contract.
-4. `design-loop/SEEDS/research-facts.md` — measured facts; a design
+5. `design-loop/SEEDS/research-facts.md` — measured facts; a design
    contradicting one needs a new measurement, not an argument.
-5. `design-loop/NOTES/SCARS.md` — known-dead approaches with the schedules
+6. `design-loop/NOTES/SCARS.md` — known-dead approaches with the schedules
    that killed them; repeating a scar is an automatic blocker.
 
 Do not read `research/specs/`, `reviews/`, `react-concurrent-signals-arena.md`,

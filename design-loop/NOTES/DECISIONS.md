@@ -11,10 +11,12 @@ preference. Curated by the monitor only.
 - **D2. Committed-false batches fold; writes are never dropped on
   retirement.** Proof: C12; whether a write persists must not depend on who
   is subscribed. (Killed candidate C's drop-on-abort; SCARS S4.)
-- **D3. The visibility rule is React's:** entry visible iff (retired ≤ pin)
-  ∨ (batch ∈ include-mask ∧ seq ≤ pin); replay in seq order. Proof: C3
-  parity walk; clause-for-clause map onto React hook-queue lane filtering.
-  Reuse verbatim; do not invent alternative fold semantics.
+- **D3. The visibility/rebase SEMANTICS are React's** — what a render for a
+  given batch set may observe, and replay-in-write-order rebasing (I2), are
+  fixed by parity (proof: C2/C3 walks; they map clause-for-clause onto
+  React's hook-queue lane filtering). Any mechanism is acceptable if it
+  provably produces these answers; no particular log/tape/queue
+  representation is mandated.
 - **D4. The canonical kernel stays closed and monomorphic**, with
   CI-enforced bytecode budgets; no per-link world state in the primary hot
   walks. Proof: measured facts (research-facts.md: link-split, inline
@@ -34,7 +36,3 @@ preference. Curated by the monitor only.
   legacy candidates were anchored on a fixed observation-only fork, and two
   known blockers (yield edges, lane-scoped grouped delivery) are pure fork
   facts.
-- **D8. Loop meta-rule: "by construction" claims require the construction**
-  (invariant/induction written out); reviewers attack constructions; judges
-  re-walk. Proof: the prior judgment accepted an unaccompanied immunity
-  claim that was false (JUDGING.md G7 vs review 08-52 F2).

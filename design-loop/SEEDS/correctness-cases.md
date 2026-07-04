@@ -12,6 +12,14 @@ Rules of engagement:
   false.)
 - Reviewers attack these cases first; judges re-walk them last. A case that
   cannot be walked in a design is a blocker, not a TODO.
+- **Restricting the interface is a legitimate design move.** A design may
+  resolve a case by *forbidding the pattern at runtime* (a thrown error with
+  a clear message) when the pattern is avoidable user code — but it must
+  then (a) show the forbidden pattern is reliably *detectable* at the point
+  of rejection, (b) define which nearby compositions remain legal, and walk
+  those, and (c) never forbid ordinary React behavior the user doesn't
+  control (flushSync in an event, time-slicing yields, StrictMode replays,
+  a component mounting mid-transition — those must be handled, not banned).
 
 Notation: `T`,`k` = deferred (transition-like) batches; `U` = urgent batch;
 `D` = default-priority batch (urgent-classified, but renders asynchronously —
@@ -104,14 +112,24 @@ suppressed. Cache-validity must not serve the first evaluation's value.
 Schedule: `batch(() => { a.set(1); startTransition(() => b.set(2)) })` — the
 engine-level batch closes *after* the transition scope ends.
 
-Required: watcher setStates for `b`'s cone are assigned to the transition's
-lanes (its render includes them; one commit carries them); `a`'s cone gets
-urgent scheduling. The trap: draining a shared notification queue at batch
-close runs outside the `startTransition` scope — React assigns the wrong
-lane, the transition commits without its components, correction arrives a
-frame late. Any design that groups/coalesces notifications must state the
-mechanism that preserves each write's batch context (e.g. fork-provided
-`runInBatch`, or per-write synchronous delivery).
+Required — one of two resolutions, stated explicitly:
+
+- **Handle it**: watcher setStates for `b`'s cone are assigned to the
+  transition's lanes (its render includes them; one commit carries them);
+  `a`'s cone gets urgent scheduling. Name the mechanism that preserves each
+  write's batch context across the grouped drain (e.g. fork lane-scoped
+  execution, or per-write synchronous delivery).
+- **Forbid it** (per the preamble rule): reject mixed-context writes inside
+  an explicit `batch()` at the write site (detectable: the write's
+  classification/batch differs from the batch's opening context — show the
+  detection). Then walk the legal compositions that remain:
+  `startTransition(() => batch(...))`, plain unbatched writes inside
+  `startTransition`, and a provided `startSignalTransition` helper.
+
+The trap either way: any *implicit* grouping (e.g. coalescing broadcasts per
+event without user-visible `batch()`) cannot be forbidden — the user wrote
+no special code — so implicit grouping must preserve per-write context or
+not exist. State which your design does.
 
 ## C7 — Writes and reads during a yielded render pass
 
@@ -165,16 +183,32 @@ component's correction (the corrective update is assigned to k's own lanes —
 a fresh `startTransition` is NOT equivalent and must be shown why). If k
 retires in the race window, fall back to an urgent pre-paint correction.
 
-## C11 — Multi-root spanning batch
+## C11 — Multiple roots (declared-scope case)
 
-Schedule: batch k spans roots A and B; root A commits k while B is still
-pending.
+Cross-root *simultaneity* is NOT required — React itself commits roots at
+different times, even for one transition. What is required is **per-root
+self-consistency** and an explicitly declared scope. The design must pick
+and walk one of:
 
-Required: later renders on A keep including k (A's committed DOM must not be
-contradicted); A's passive effects (`useSignalEffect`, committed-world reads)
-observe k's values after A's commit even though the token hasn't fully
-retired; B eventually commits; k retires exactly once. The trap: a single
-global "committed" world is wrong per root during the window.
+- **Full spanning support**: batch k spans roots A and B; A commits k while
+  B is pending. Later renders on A keep including k (A must never contradict
+  its own committed DOM); A's passive effects observe k's values after A's
+  commit even though the token hasn't fully retired; B eventually commits; k
+  retires exactly once. The trap: a single global "committed" world is wrong
+  per root during the window.
+- **Degraded multi-root**: roots are supported; a spanning batch may commit
+  per-root with visible cross-root skew, but each root remains
+  self-consistent (no root contradicts its own DOM; corrections are
+  urgent-scheduled, bounded, and documented).
+- **v1 single-root scope**: a second root is rejected loudly (per the
+  preamble rule — detectable at root registration), with the multi-root
+  story named as future work and nothing in the architecture that
+  forecloses it.
+
+Hidden-gap warning: apps acquire second roots accidentally (portals are
+fine — same root; but modals/microfrontends/devtools overlays often use
+`createRoot` twice). "Single root" is a legitimate scope only if violation
+is detected, not silently wrong.
 
 ## C12 — Store-only transitions persist
 

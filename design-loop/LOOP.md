@@ -96,4 +96,20 @@ Workflow({ scriptPath: 'design-loop/round-workflow.js',
 
 The workflow writes all round artifacts but never touches `NOTES/` and never
 commits — those are monitor duties. Codex reviews run via
-`codex exec -s read-only -C <repo> -o <outfile> "<prompt>"`.
+`codex exec -s read-only -C <repo> -o <outfile> "<prompt>"`; a stance with
+`author: 'codex'` runs the author role through
+`codex exec -s workspace-write` for cross-model design diversity (its design
+still gets both reviews; the claude review is then the cross-model one).
+
+## Attic (contamination control)
+
+The pre-loop architecture artifacts are **removed from the working tree** so
+no loop agent (including codex, which has repo read access) can anchor on
+them even by accident: `research/specs/` (four candidate specs + the panel
+judgment), `react-concurrent-signals-arena.md` (the synthesized spec),
+`reviews/` (its adversarial reviews and the re-judgment), and
+`research/IDEAS.md` (ten kernel design sketches). Their verified content was
+distilled into `SEEDS/` and `NOTES/` first. They live in git history —
+recover any of them with `git show '<attic-commit>^:<path>'` (the removal
+commit is titled `attic: remove pre-loop design artifacts`). The monitor may
+consult history for provenance checks; loop agents may not.

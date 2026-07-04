@@ -8,6 +8,11 @@ facts. Provenance keys: [RESEARCH] `research/RESEARCH.md` + sources/,
 [SYNTH] `react-concurrent-signals-arena.md` §7/§15/§18, [JUDGE]
 `research/specs/JUDGING.md`, [SPECS] `research/specs/*`.
 
+Note: [SYNTH]/[JUDGE]/[SPECS] targets (and `reviews/*`) are deliberately
+removed from the working tree to prevent anchoring (see LOOP.md "Attic");
+they are historical citations, recoverable from git by the monitor. Loop
+agents cite the keys and trust the numbers; they do not chase these paths.
+
 ## Kernel / layout (the settled substrate)
 
 - Donor arena kernel vs alien-signals v3 (one-framework-per-process, tier-0):

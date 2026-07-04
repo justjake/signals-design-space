@@ -8,11 +8,13 @@ they hide a defect.
 
 ## Read
 
-1. The design under review (path given).
-2. `design-loop/SEEDS/correctness-cases.md` — attack these first.
-3. `design-loop/SEEDS/requirements.md`, `fork-charter.md`,
+1. `design-loop/SEEDS/background.md` — domain primer; assume nothing else
+   about this repo's history.
+2. The design under review (path given).
+3. `design-loop/SEEDS/correctness-cases.md` — attack these first.
+4. `design-loop/SEEDS/requirements.md`, `fork-charter.md`,
    `research-facts.md` — the contract and the measured facts.
-4. `design-loop/NOTES/SCARS.md` and `INVARIANTS.md` — known dead ends and
+5. `design-loop/NOTES/SCARS.md` and `INVARIANTS.md` — known dead ends and
    proven facts; a design repeating a scar is an automatic blocker, and a
    design contradicting a measured fact must bring a new measurement.
 
