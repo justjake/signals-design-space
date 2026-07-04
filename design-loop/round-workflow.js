@@ -12,10 +12,11 @@ export const meta = {
 // args: { round: number, stances: [{key, brief, author?: 'claude'|'codex'}] }
 // author defaults to 'claude'; author: 'codex' runs the author role through
 // the codex CLI for cross-model design diversity.
-if (!args || !args.round || !Array.isArray(args.stances) || args.stances.length < 2) {
+const input = typeof args === 'string' ? JSON.parse(args) : args
+if (!input || !input.round || !Array.isArray(input.stances) || input.stances.length < 2) {
   throw new Error('args required: { round: <int>, stances: [{key, brief, author?}, ...] (>=2) }')
 }
-const round = args.round
+const round = input.round
 const rn = String(round).padStart(2, '0')
 const DL = 'design-loop'
 const roundDir = `${DL}/rounds/round-${rn}`
@@ -111,7 +112,7 @@ Do not review the design yourself. Steps:
 
 // ---- Phase 1+2: authors, each design reviewed as soon as it lands (no cross-design barrier)
 const perDesign = await pipeline(
-  args.stances,
+  input.stances,
   (stance) => agent(
     stance.author === 'codex' ? codexAuthorPrompt(stance) : authorPrompt(stance),
     stance.author === 'codex'
@@ -130,7 +131,7 @@ const perDesign = await pipeline(
 
 const rounds = perDesign.filter(Boolean)
 if (rounds.length === 0) throw new Error('no designs produced')
-log(`${rounds.length}/${args.stances.length} designs authored and reviewed`)
+log(`${rounds.length}/${input.stances.length} designs authored and reviewed`)
 
 // ---- Phase 3: synthesis (barrier justified: adjudicates across ALL designs+reviews)
 phase('Synthesize')
