@@ -1,0 +1,6 @@
+File path: `design-loop/rounds/round-02/design-lean-challenger.md`  
+Mechanism count: 9  
+Seam touch-point count: 9  
+Unwalked cases: None  
+
+The design keeps cached newest state in K0 and records speculative dependencies in an edge-only K1. Every React-mode write enters an ordered replay ledger before updating K0. Each render pass evaluates non-newest values in isolated scratch storage that survives yields but is never reused by another pass. A union reach walk provides transitive invalidation and synchronous writer-context delivery without cross-write dedup. Exact full-token clock snapshots validate only Suspense/error capsules, while the fork supplies classification, yield/resume, root lock-in, retirement, async attribution, and lane-scoped scheduling.

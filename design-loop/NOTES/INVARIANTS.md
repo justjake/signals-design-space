@@ -136,3 +136,65 @@ independent confirmation by both reviewers. Curated by the monitor only.
   thenable fetched from the stale world. Stable-identity-across-pure-
   retries AND invalidate-on-included-write must both hold. Provenance:
   [WALK codex CO-4, confirmed against the winner's §8.4].
+
+## Round 2 (2026-07-04): rounds/round-02/ — evidence class per line
+
+- **I21. Monotone max-of-seqs fingerprints are not injective over
+  visibility flips.** An OLDER entry becoming visible beneath an
+  already-visible newer one (retirement's retired clause, per-root lock-in
+  growth) changes the fold without moving the max; effect snapshots skip
+  re-runs and thenable prefixes replay stale fetches. Every validity
+  fingerprint needs a visibility-flip stamp (per-atom visStamp minted at
+  every retirement fold touching the atom AND at every per-root lock-in of
+  a slot holding its entries; over-invalidation only). [BOTH harden-claude
+  F1 + harden-codex 2; repaired: synthesis §8/R1, re-walked]
+- **I22. Evaluator identity is world-scoped state.** A hook-supplied
+  fn/deps/reducer swap is a render-phase mutation; one shared mutable
+  evaluator cannot serve concurrent passes, leaks uncommitted closures
+  into NEWEST/committed evaluations after discards, and goes stale across
+  restarts. Stage per pass; promote at the hook's OWN commit effect (hook
+  grain, never pass grain); NEWEST/committed use the committed evaluator.
+  [BOTH — four schedules, two models, three designs; synthesis §11.1′/R2]
+- **I23. Mark/flag propagation on edge-add is insufficient without
+  retroactive lane-scoped delivery**: a K1 edge recorded after a write
+  must replay every still-live receipt's delivery through the new edge
+  (runInBatch per slot bit), or a later single-lane render commits a torn
+  frame corrected only post-retirement. Flags route reads; they do not
+  schedule React. [WALK harden-codex 3; positive construction verified
+  held by BOTH cost-hardened reviewers]
+- **I24. Suspense content-validity stamps must be retry-stable
+  receipt-line facts.** Per-(world-instance) memo-identity stamps re-fetch
+  forever; global retirement clocks starve transitions under unrelated
+  urgent traffic. Valid stamps: per-atom fingerprints (incl. I21 visStamp)
+  and evaluator stamps, flattened across nested evaluations. [BOTH
+  harden-codex 4 + lean-claude F1; synthesis §9.2′/R6]
+- **I25. Per-root lock-in is a write-PREFIX, not token membership.** With
+  post-await writes attributed to a parked action token, a root that
+  committed the token's earlier updates must bound its committed view by a
+  watermark (the committed pass's pin), or continuation writes leak into
+  committed-for-root views before any commit carries them. [WALK
+  lean-codex 1; synthesis §5.2′/R13]
+- **I26. Async-action attribution = parking (lifetime) + continuation
+  carrier (identity) — separate duties.** Ambient classification of raw
+  post-await writes violates C12. Known-good carrier: token captured at
+  async-resource creation, pushed per continuation, finally-restored; host
+  async-context hook; loud startup self-test on unsupported hosts. [WALK
+  harden-codex 5 (violation) + lean §5.1 construction held by BOTH lean
+  reviewers; synthesis §12′/R7] Feasibility/overhead: SP-F8.
+- **I27. The reach induction needs its basis-edge premise restored at
+  every episode boundary.** A watched node whose current basis edges exist
+  only in K1 strands after the K1 reset — quiescence must refresh
+  (K0-pull at NEWEST) every K1-touched node with a committed watcher or
+  effect-dep snapshot before clearing K1; R8-legal write during refresh →
+  retry once then exempt-and-carry-forward (else livelock). [WALK
+  synthesis T8-N + lean §M3 construction with its livelock schedule]
+- **I28. Fold-replayed callbacks must not read signals — throw in all
+  builds.** An untracked-at-fold-world read is an invisible dependency (no
+  edge, no validity entry, no notification path); replay purity is
+  load-bearing for I2 and every world-cache validity argument. [WALK
+  cost-codex 3; positive form lean §1.1 held; synthesis §13/R12]
+- **I29. World folds must apply custom equality stepwise against the
+  view's accumulator** (keep the old reference on equal), exactly as the
+  live write path did — post-fold equality cannot pick the right
+  representative for both a U-only and a T+U view. [WALK lean-codex 8;
+  synthesis §5.2′/R15]

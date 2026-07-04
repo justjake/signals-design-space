@@ -106,3 +106,47 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   mount-evaluate-abandon; K0 grows monotonically; K1 reset and lineage
   drops reclaim nothing. Any "harmless discard" claim over arena state must
   name the reclamation or staging protocol. (Codex TKC-9.)
+
+## Round 2 (2026-07-04): rounds/round-02/
+
+- **S16. Value-based delivery suppression against commit-recorded
+  baselines.** Killing schedules: (a) held T renders c=1
+  (finished-uncommitted); a later T-segment write returns c to 0 → cutoff
+  compares T-world 0 == committed lastRendered 0 → suppress → React
+  commits the stale finished subtree [WALK cost-codex 2]; (b) suppression
+  state strands: a same-slot second write prunes at the stamped atom and
+  never re-reaches the suppressed node [WALK cost-claude CH-1].
+  Suppression soundness needs per-pending-render knowledge no engine
+  record has; delivery stays value-blind (D13).
+- **S17. Cross-write delivery-elision state with shared per-node stamps
+  (frontier pruning).** Killing schedule: k delivers through c (stamp E1);
+  W re-arms k (E2); j's walk overwrites the shared stamp (E3); k's next
+  write prunes at the root since E3 ≥ E2 → no delivery → k commits stale.
+  One era per node cannot validate 32 bits; per-slot eras break memory;
+  clearing sweeps reintroduce the cost. [BOTH CH-2 + cost-codex 6]
+- **S18. Pinless shared world memos without enumerated ownership.**
+  Killing schedules: (a) quiescence-via-touched-lists misses memos on
+  untouched nodes; interned mask ids recycle to collisions; seq reset
+  inverts the clock window → a previous episode's world value validates
+  and commits [WALK cost-claude CH-3]; (b) two live pins share one memo
+  slot: root B's overwrite feeds root A's resumed pass a foreign
+  `ctx.previous` [WALK cost-codex 5]. Survives only as O18's measured
+  fallback hybrid.
+- **S19. Full-token per-root lock-in and pass-grain publication.** Killing
+  schedules: (a) async T locked into root A at first commit; a post-await
+  write under T leaks into A's committed view before any commit carries it
+  [WALK lean-codex 1]; (b) pass-grain publication ships staged state from
+  error-boundary-abandoned subtrees inside the winning pass [WALK
+  lean-codex 2]. Rules: watermarked lock-in (I25); hook-commit-grain
+  publication (I22).
+- **S20. Global retirement clocks in resource identity keys.** Killing
+  schedule: capsule keyed on a global retireClock; every unrelated urgent
+  retirement re-keys every suspense capsule → refetch + re-suspend per
+  interaction → transition starvation with duplicate side-effectful
+  fetches [WALK lean-claude F1]. Retirement components of validity must be
+  relevance-filtered (touched-atom visStamps — I21/I24).
+- **S21. Ambient (context-sampled) classification for post-await action
+  writes.** Killing schedule: raw `a.set(2)` after `await` lands in its
+  own default batch and retires while the action parks → committed state
+  moves before the action settles — C12 violated with no thrown rejection
+  [WALK harden-codex 5]. Rule: I26/D15.

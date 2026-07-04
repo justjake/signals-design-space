@@ -71,3 +71,37 @@ preference. Curated by the monitor only.
   Mask keys drift on unrelated commits; live-set ids churn on spanning
   urgent traffic; passSerial re-fetches forever. Settles O8. (I20 adds the
   content-validity conjunct on top of the identity key.)
+
+## Round 2 (2026-07-04)
+
+- **D12. Round-2 champion: the repaired harden design**
+  (`rounds/round-02/synthesis.md`) — architecture class D8 unchanged;
+  repairs R1–R15 + T8-N within the audit-table discipline. Proof: the only
+  round-2 design whose confirmed defects all carried in-architecture
+  repairs endorsed by both its reviewers, while each competitor's new
+  load-bearing mechanism took a kill-class schedule (S16–S19); **judge
+  sustained with ZERO confirmed blockers on a full-battery re-walk**
+  (scores 9/7/8/8/7). Standing caveat: SP-F8 (continuation-carrier browser
+  feasibility, O20) is the one open architecture-relevant spike.
+- **D13. Delivery suppression by value is dead; delivery stays value-blind
+  with per-(watcher, slot) dedup (extends D10).** Value cutoffs cannot see
+  finished-but-uncommitted React work; cross-write elision state strands
+  re-deliveries. The only admissible fan-out fallback is per-slot-mark
+  delivery dedup per render cycle — never an equality cutoff. Proof:
+  [WALK cost-codex 2] + [BOTH CH-1/CH-2 ≡ cost-codex 6].
+- **D14. O15 settled: signal reads/writes inside `update(fn)`/reducer
+  folds throw in ALL builds** (read-before-dispatch is the legal
+  composition). Proof: I28; the dev-throw/prod-untracked split died.
+- **D15. O14 settled: fork fact F8 = continuation carrier + parked
+  retirement, with the loud host self-test** (I26). Post-await signal
+  writes belong to the action; C12 walks verbatim. Priced consequence:
+  per-root lock-in gains watermarks (I25). Feasibility spike SP-F8 gates
+  exit.
+- **D16. O16/O17 settled.** Reducer identity: constructor reducers
+  immutable; hook reducers stage per pass, promote at the hook's commit
+  effect (I22); differential-tested at stable-reducer scope, dev-warn on
+  swap-with-pending-receipts. `ctx.previous`: exposed, three-way rule
+  (donor-global at NEWEST — conformance-pinned; per-(node, worldKey) in
+  world evals; R-guarded K0 seed else undefined). `ctx.use` gains a lazy
+  factory form; eager form guarantees identity stability only. Proof:
+  [WALK cost-codex 5 + lean-codex 5/7], synthesis §13/§9.1′.
