@@ -46,5 +46,6 @@
 | id | question | method | decision rule | status |
 | --- | --- | --- | --- | --- |
 | SP1 | O2 host tax | host-protocol kernel extraction; tier-0, one-framework-per-process, ABBA, conformance-gated | >5% recompute-dense → measure fusion variant too | **DONE — rule triggered** (I11; `research/experiments/sp1-host-callback-tax.md`) |
-| SP1b | O2 residue: call boundary vs storage | fused variant: same entity-table storage, dispatch spliced into kernel (no upcall); 3-way donor / host / fused | fused ≈ donor ⇒ tax is the call boundary (fusable); fused ≈ host ⇒ tax is the storage change (fusion won't save it) | **running** |
+| SP1b | O2 residue: call boundary vs storage | 3-way donor / host / fused | fused ≈ donor ⇒ boundary; fused ≈ host ⇒ storage | **DONE — fused ≈ host on every shape: the tax is the STORAGE change; boundary ≈ 0** (I11; `research/experiments/sp1b-fusion-isolation.md`) |
+| SP1c | can a closed-protocol kernel keep donor perf? | donor kernel + 4-callback host protocol, but value/fn side columns stay packed and plane-index-aligned (policy owns semantics, not storage) | ≤2% on all tier-0 ⇒ closed-kernel designs unblocked at donor perf | queued — run when a round's winner depends on it |
 | SP2 | O3 validator cost | prototype brute-force K1-edge cross-check on synthetic forked topologies | >10% forked-mode overhead in dev builds → needs cheaper invariant | blocked on round-1 architecture pick |

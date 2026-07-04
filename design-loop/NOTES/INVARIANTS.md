@@ -54,15 +54,23 @@ independent confirmation by both reviewers. Curated by the monitor only.
   sound iff slot recycling is gated on zero *unswept* entries, not zero
   live entries. Provenance: fork registry design + A-synthesis §9.2 slot
   audit (verified held in review 08-52).
-- **I11. The closed-kernel host-callback tax is real and exceeds the 5%
-  gate on recompute-dense shapes** (SP1, measured 2026-07-04,
-  conformance-validated 179/179 + growth stress + exact pull counts before
-  benchmarking): vs the donor kernel, min-of-N ratios deep **1.06×**, broad
-  **1.06×** (mean 1.09×), diamond 1.02×; reads 1.09×; scale-1 write
-  +12–16%. The tax is NOT confined to recompute upcalls — quiet read/write
-  paths pay accessor indirection too — and the measurement bundles (a)
-  call-boundary cost and (b) the packed-side-columns → handle-indexed
-  entity-object storage change; SP1b (fusion variant) isolates them. Any
-  design putting a call boundary or object-table hop on kernel hot paths
-  must price against these numbers, not predictions. Provenance:
-  `research/experiments/sp1-host-callback-tax.md`, `libs/arena-host`.
+- **I11. The closed-kernel *protocol boundary* is free; the *storage
+  change* is what costs 5–12%** (SP1 + SP1b, measured 2026-07-04, both
+  conformance-gated: 179/179 + growth stress + exact pull counts before any
+  benchmarking). SP1: a closed kernel with values/dispatch moved to a
+  handle-indexed entity-object table runs deep 1.06–1.07×, broad
+  1.05–1.09×, reads 1.09–1.12×, create 1.08–1.09× vs the donor (diamond
+  ~1.0–1.02×, within noise). SP1b three-way isolation (donor / host /
+  fused-dispatch): the call-boundary component is **0.99–1.02× on every
+  shape** (a const-bound four-callback host protocol costs the same as
+  same-closure calls), while the storage component carries the **full tax**
+  (deep 1.08, broad 1.06, reads 1.11, create 1.08 min ratios).
+  Implications: (a) closed-kernel/host-protocol designs are NOT blocked by
+  the protocol itself; (b) what must stay packed is the kernel-adjacent
+  value/fn side columns, index-aligned to the plane — moving them into
+  policy objects costs 5–12% regardless of fusion; (c) codegen fusion of
+  the dispatch buys nothing. SP1c (closed protocol + packed side columns
+  kept in-plane-aligned, predicted ≈donor) is the queued validation.
+  Provenance: `research/experiments/sp1-host-callback-tax.md`,
+  `research/experiments/sp1b-fusion-isolation.md`; `libs/arena-host`,
+  `libs/arena-host-fused`.
