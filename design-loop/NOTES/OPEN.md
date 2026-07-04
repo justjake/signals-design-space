@@ -7,11 +7,13 @@
   bits in a separate overlay structure (B's insight without B's hot-walk
   invasion); fork-native (React-owned queues). Round-1 stances should cover
   at least three of these.
-- **O2. host-callback indirection tax** — UNMEASURED. Spike pre-registered:
-  extract a host-protocol kernel from `libs/arena` (delete values/fns/kind
-  dispatch; add 4-callback host), run deep/broad/diamond vs donor. Decision
-  rule: >5% on recompute-dense shapes → codegen-fusion variant must also be
-  measured before a two-kernel design is judged on performance.
+- **O2. host-callback indirection tax** — MEASURED (SP1 → INVARIANTS I11):
+  >5% on 2 of 3 recompute-dense shapes (deep 1.06×, broad 1.06–1.09×;
+  diamond 1.02×), plus +9–16% on quiet read/write paths. The decision rule
+  triggered: the codegen-fusion variant (SP1b) must be measured before any
+  closed-kernel/two-kernel design is judged on performance. Open residue:
+  how much of the tax is call boundary vs entity-table storage (SP1b
+  isolates); kairo-scale GC behavior of the entity table untested.
 - **O3. Shadow-sync completeness cost** (if two-kernel wins): what does the
   dev-mode brute-force validator cost, and can the sync obligation be
   bounded to an enumerable site list with an invariant sweep?
@@ -43,5 +45,6 @@
 
 | id | question | method | decision rule | status |
 | --- | --- | --- | --- | --- |
-| SP1 | O2 host tax | D §16-style M1 extraction; tier-0 deep/broad/diamond, one-framework-per-process, bundled child | >5% recompute-dense → measure fusion variant too | **queued (pre-round-1)** |
+| SP1 | O2 host tax | host-protocol kernel extraction; tier-0, one-framework-per-process, ABBA, conformance-gated | >5% recompute-dense → measure fusion variant too | **DONE — rule triggered** (I11; `research/experiments/sp1-host-callback-tax.md`) |
+| SP1b | O2 residue: call boundary vs storage | fused variant: same entity-table storage, dispatch spliced into kernel (no upcall); 3-way donor / host / fused | fused ≈ donor ⇒ tax is the call boundary (fusable); fused ≈ host ⇒ tax is the storage change (fusion won't save it) | **running** |
 | SP2 | O3 validator cost | prototype brute-force K1-edge cross-check on synthetic forked topologies | >10% forked-mode overhead in dev builds → needs cheaper invariant | blocked on round-1 architecture pick |

@@ -54,3 +54,15 @@ independent confirmation by both reviewers. Curated by the monitor only.
   sound iff slot recycling is gated on zero *unswept* entries, not zero
   live entries. Provenance: fork registry design + A-synthesis §9.2 slot
   audit (verified held in review 08-52).
+- **I11. The closed-kernel host-callback tax is real and exceeds the 5%
+  gate on recompute-dense shapes** (SP1, measured 2026-07-04,
+  conformance-validated 179/179 + growth stress + exact pull counts before
+  benchmarking): vs the donor kernel, min-of-N ratios deep **1.06×**, broad
+  **1.06×** (mean 1.09×), diamond 1.02×; reads 1.09×; scale-1 write
+  +12–16%. The tax is NOT confined to recompute upcalls — quiet read/write
+  paths pay accessor indirection too — and the measurement bundles (a)
+  call-boundary cost and (b) the packed-side-columns → handle-indexed
+  entity-object storage change; SP1b (fusion variant) isolates them. Any
+  design putting a call boundary or object-table hop on kernel hot paths
+  must price against these numbers, not predictions. Provenance:
+  `research/experiments/sp1-host-callback-tax.md`, `libs/arena-host`.

@@ -14,6 +14,7 @@ export const adapterNames = [
 	'arena',
 	'arena-links',
 	'arena-masked',
+	'arena-host',
 ] as const;
 
 export type AdapterName = (typeof adapterNames)[number];
@@ -26,6 +27,7 @@ const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>>
 	arena: () => import('./arena'),
 	'arena-links': () => import('./arena-links'),
 	'arena-masked': () => import('./arena-masked'),
+	'arena-host': () => import('./arena-host'),
 };
 
 export function isAdapterName(name: string): name is AdapterName {
