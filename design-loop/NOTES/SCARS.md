@@ -227,3 +227,70 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   per touching retirement: duplicate fetches, transition starvation.
   Rule: I35 value-revalidation before refetch. (breaker-codex 4 +
   breaker-claude F7.)
+
+## Round 4 (2026-07-04): rounds/round-04/
+
+
+- **S32. Live-sampled committed evaluators for pass folds ("staged, else
+  committed" with no pin clause).** Killing schedule: shared ReducerAtom,
+  receipts {X:inc, Y:dec}; r0=±1, r1=±10 (NEWEST 0 under both); root-B
+  pass folds X-world = 1 under r0 and yields; root A commits a staged r1
+  → P3 re-folds NEWEST 0→0, equality gate suppresses the walk; B resumes
+  → sibling folds X-world under now-committed r1 = 10; one committed
+  frame holds 1 and 10, matching no reducer version. Why not local: the
+  fold rule, memo ladder, RENDER_NEWEST classification, and promotion
+  delivery all sample "committed" — the repair is a visibility rule
+  (pin-scoped versions, I45) plus value-blind promotion delivery, not
+  added checks. (a-claude F1 ≡ a-codex 1; synthesis R1.)
+- **S33. Delivery dedup re-armed only at watcher render.** Killing
+  schedule: T writes a=1 (bit set, setState delivered); T's pass pins and
+  yields before the watcher renders; a carried continuation writes a=2
+  post-pin → bit suppresses the only setState; the pass renders 1 and
+  commits (watermark = pin); a later unrelated T-lane commit advances the
+  watermark past s2 while the watcher bails out → committed-for-root 2
+  beside committed DOM 1 until the parked token's io-gated retirement.
+  (a-codex 2 ≡ b-codex 2; rule I44; synthesis R2.)
+- **S34. Hook-time-only stage gating.** Killing schedule: components S
+  before O in tree order; a React-state-only transition changes O's
+  useComputed deps; S reads the node pre-stage (committed f_A serve), O
+  stages f_B and renders f_B output → commit mixes evaluator worlds; the
+  naive restart re-runs S before O with an empty stage table → f_A again
+  → livelock or torn attempt 2. (b-claude F1 ≡ b-codex 4; rule I46;
+  synthesis R3.)
+- **S35. Watcher reconcile at retirement only (advances drain effects
+  only).** Killing schedule: c = flag ? a : b, W mounted; parked K writes
+  flag=true (walk reaches W); K's pass pins, yields; store-only default D
+  writes a (no edge to c) and retires; the resumed pass evaluates c=0
+  (correct for its world), records the a→c edge too late for D, and
+  commits, locking K → committed-for-root c=1 beside committed DOM c=0
+  with no correction until K's io-gated retirement. (b-codex 3
+  instantiated against consolidate-a; rule I47; synthesis R4.)
+- **S36. Immediate slot release at retirement (clear reach bits, free the
+  slot, keep only receipts).** Same schedule as S35 built on
+  consolidate-b: the retired writer's bits are gone, so the
+  late-discovered K1 edge carries nothing and the commit-time reconcile
+  (against the pass's claimed world) passes → committed tear with no
+  correction point at all. Retention (I10/I39) is load-bearing for I47's
+  coverage construction. (b-codex 3; rejected in synthesis Part II.)
+- **S37. The coarse receipt-count read gate as sole routing rule ("any
+  unswept receipt anywhere ⇒ every render read world-routes").** Died on
+  its own declared terms, not on a tear: the gate routes all render reads
+  through world memos during exactly the traffic P1 measures, re-accepts
+  O18's scarred restart-revalidation cost, and its author declared no
+  fallback admissible ("a failed numeric gate rejects the design", b
+  §13); its replacement math independently took the S34 stage hole and
+  the I48 value-identity blocker. Future simplification attempts start
+  from this price. (synthesis Part II; b §13/§13.1.)
+- **S38. Quiescence-only counter renumbering — and live rewrites that do
+  not first discard WIP passes.** Killing schedules: (a) forced-small
+  horizon with a live pin: a post-wrap retirement stamps retiredSeq=1 ≤
+  pin=6 → false retired-visibility and false compaction → torn resumed
+  frame [a-codex 5]; (b) live rewrite renumbers the library's stage
+  records while React's WIP hook holds the old F9 integer → CAS rejects
+  the winning publication or collides with a fresh stage [b-codex 5].
+  Rule: I49 (discard-WIP-first, then rewrite). (synthesis R8.)
+- **S39. Generation-only guards on settlement of reusable capsule
+  slots.** Killing schedule: 2-bit capsuleGen; five refetches while q0
+  pends; gen wraps to 0; q0 settles late, passes the gen check, and
+  poisons q4's capsule (wrong resource / early unsuspend). Rule: I50
+  (exact thenable identity). (b-codex 6; synthesis R10.)

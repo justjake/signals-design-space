@@ -338,3 +338,96 @@ independent confirmation by both reviewers. Curated by the monitor only.
   [WALK breaker-codex 6 (cross-design — exit-candidate C9(a) hand-waved
   "React bails"); synthesis C9′]
 
+
+## Round 4 (2026-07-04): rounds/round-04/ — applied from its notes-diff (monitor-validated)
+
+
+- **I44. Render-re-arm-only per-(watcher, slot) delivery dedup loses
+  same-slot post-pin writes.** A set bit may suppress only writes that
+  scheduled-but-unstarted work will fold; once a pass on the watcher's
+  root has captured a pin below the write's seq (started, yielded, or
+  completed-uncommitted), delivery must fire again — React's
+  interleaved-update restart supplies the follow-up render (fork test
+  32). Otherwise a later same-token watermark advance commits the write
+  with no scheduled work for the watcher → torn committed DOM for an
+  io-gated duration. The round-3 champion carries the identical rule.
+  [BOTH: a-codex 2 ≡ b-codex 2 (same schedule, two designs); synthesis R2
+  re-derivation + repaired construction]
+- **I45. Committed-evaluator visibility is pin-scoped state, symmetric
+  with receipts; promotion delivery must be value-blind.** F2's discard
+  fact protects same-root passes only; promotion is global-committed, so
+  a pass folding under a live-sampled committed evaluator tears
+  intra-pass when a cross-root F9 promotion lands mid-yield. Effective
+  evaluator = staged-in-this-pass else the committed version with
+  greatest promotedAtSeq ≤ pass pin; superseded versions retained
+  pin-gated (tape-compaction discipline). Equality-gating promotion
+  notification on NEWEST is the S14 class: a NEWEST-equal promotion
+  (r1(r1-fold) == r0-fold) still flips every non-newest world. Computed
+  promotions need the same walk (K0-dirty alone notifies nobody).
+  [BOTH: a-claude F1 ≡ a-codex 1 (two independent schedules); synthesis
+  R1 + re-walk]
+- **I46. Stage visibility must span the whole pass, not begin at the
+  owner hook's execution.** Hook-time staging leaves tree-order-earlier
+  consumers on the old evaluator → one commit, two evaluator worlds (the
+  S23 residue). Sound shape: seed passStages from the lineage stage
+  cache at pass start; treat any mid-pass stage-set change (mint,
+  adoption, or contradiction-with-seed) as a divergence event that walks
+  the node's cone delivering own-lane updates to watchers already
+  rendered in this pass (queued to the yield/end drain → React's
+  pre-commit interleaved restart); write the lineage cache through on
+  committed-selection so restarts terminate. Applies to BOTH round-4
+  designs (consolidate-a's C1-X1 walked only after-stager siblings).
+  [BOTH: b-claude F1 ≡ b-codex 4; synthesis R3 + coverage/termination
+  constructions]
+- **I47 (extends I14/I34). Every committed-visibility flip's durable
+  drain must reconcile watchers, not only effects — at retirement AND at
+  every per-root lock-in/watermark advance.** A dependency edge
+  discovered by a pinned pass after its writer retired has no live-token
+  delivery path; the advance that exposes the write is the only
+  pre-retirement correction point (global retirement can be io-gated).
+  Coverage is closed: flips occur only at drains; touchedList[t]
+  membership is guaranteed for any node whose committed fold t can flip,
+  because bits flow through write walks and edge-adds while t is
+  live-or-retired-unswept, and a swept/force-cleared token has no future
+  flips (compaction is pin-gated; lock records cleared at full
+  retirement; force-clear targets fully-retired slots only).
+  [WALK: b-codex 3, re-instantiated against consolidate-a's
+  effects-only advance drains; synthesis R4 construction + re-walk]
+- **I48. One fold, one reference: per-(atom, world) fold results must be
+  memoized, and the committed value installed at commit must be the
+  committing world's memoized reference** (prefix equality holds by I25
+  watermark = committing pass pin). Re-invoking updater/reducer ops per
+  read yields `a.state !== a.state` within one render and
+  reconcile/fixup correction ping-pong. Fresh references across
+  *different* worlds are React's own rebase behavior (C3) and stay
+  legal. [WALK: b-codex 1; synthesis R9]
+- **I49. A shared monotone seq line needs a live-episode horizon
+  protocol: discard all WIP passes first, then order-preserving rewrite
+  + epoch bump.** Quiescence-only renumbering wraps under never-quiescent
+  traffic → a post-wrap retirement stamps below a live pin → false
+  retired-visibility and false compaction → torn frame. A live rewrite
+  without the discard step strands seq-bearing identities held outside
+  the library (F9 stage ids on React's WIP hooks) → publication CAS
+  rejects the winner or collides. After discarding WIP passes, no
+  seq-bearing identity survives outside the library. [WALK: a-codex 5 +
+  b-codex 5 (the two horns of one protocol); synthesis R8]
+- **I50 (extends I35/I8). Settlement callbacks for reusable capsule
+  slots must validate the exact thenable identity (reference), never a
+  wrappable generation.** Forced 2-bit gen + in-flight refetches: a
+  superseded pending thenable settles after wrap and validates against
+  the current occupant → wrong resource consumed / suspension ends
+  early. [WALK: b-codex 6; synthesis R10]
+- **I51 (extends I39, instance of I16-for-consumers). Force-clear
+  compensation must enumerate EVERY consumer of the swept state**: pass
+  reads (fastPathDisabled) AND the mount-fixup fast-out (capture the
+  flag in the watcher's rendered-world snapshot). `touched==0 ∧ CT` is a
+  cache-provenance certificate, not a committed-currency certificate,
+  for a pass whose pin the sweep bypassed. [WALK: a-claude F2; synthesis
+  R5]
+- **I52 (extends I43). The mount-fixup skip bound is per-visibility-
+  clause**: mask inclusion is bounded by the render pin; lock inclusion
+  by that slot's watermark — skip iff wc[s] ≤ max of the bounds the
+  rendered world's clauses actually granted. A single pin bound skips
+  entanglement for post-watermark writes of a locked live token.
+  [WALK: a-codex 4 (consolidate-b §7.2 shares the defect); synthesis R6]
+

@@ -1,0 +1,5 @@
+- File path: [design-consolidate-b.md](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-04/design-consolidate-b.md)
+- Mechanism count: 6
+- Seam touch-point count: 16
+- Unwalked cases: None
+- 5-sentence summary: The design replaces taint, staged probes, `RENDER_NEWEST`, and spillover flags with one exact-world routing rule. K0 remains untouched while receipts and K1 provide replayable values and real world-specific topology. One common basis unifies memo, evaluator, lock-view, and Suspense validity. Immutable lock views use their existing ids, while unconditional committed comparison repairs mount fixup. The F1–F9 seam retains action attribution and publication ordering, with all C1–C17 cases and nine round-4 attacks walked without gaps.

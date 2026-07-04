@@ -142,3 +142,35 @@ preference. Curated by the monitor only.
   dependency edge-less forever. Proof: [WALK breaker-codex 3], synthesis
   C16-D.
 
+
+## Round 4 (2026-07-04)
+
+
+- **D12 amendment (champion pointer).** Round-4 champion:
+  `rounds/round-04/synthesis.md`, which incorporates
+  `rounds/round-04/design-consolidate-a.md` as normative base text
+  (self-contained restatement of the architecture) and amends it with
+  repairs R1–R14 + transplants T1–T4. Architecture class D8 unchanged.
+  Proof: adjudication Part I — 19 confirmed findings, every one carrying
+  an in-architecture repair that reuses or deletes machinery; all four
+  reviews' verified-held lists confirm the K0/tape/K1/visibility/seam
+  core.
+- **D19 (new). Fresh render-allocated arena records are pass-owned:
+  commit transfers ownership; discard/lineage-death gen-frees.** This is
+  the standing answer to SCAR S15's reclamation demand. Proof: [BOTH
+  a-claude F3 ≡ a-codex 3 confirmed the gap in consolidate-a];
+  consolidate-b's §11 construction survived both its reviews
+  (transplanted with its generation invariant; synthesis R7).
+- **D20 (new). lockViewId is the sole lock-visibility version; per-slot
+  lockStamps and per-atom lockTerm are deleted.** I34's obligations are
+  carried by: immutable per-advance view re-mints, the id in
+  committed-for-root worldKeys and every basis/snapshot header, durable
+  touchedList drains, and I35 value revalidation on id movement. Proof:
+  consolidate-b's construction attacked and held by BOTH its reviewers
+  (b-claude verified-held 7, b-codex verified-held lock-view row);
+  synthesis T2 consumer audit (memos, snapshots, prefixes, fixup).
+- **D21 (new). ActionScope surface is set/dispatch only** (runSync
+  deleted — re-enters ambient carrier state with no walked need; D17's
+  sanctioned escape is set/dispatch). Proof: no round-4 walk required
+  runSync; synthesis T3.
+

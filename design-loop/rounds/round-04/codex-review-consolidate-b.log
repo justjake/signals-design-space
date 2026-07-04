@@ -1,0 +1,2915 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.3
+--------
+workdir: /Users/jitl/src/alien-signals-opt
+model: gpt-5.6-sol
+provider: openai
+approval: on-request
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 019f2f0b-353c-7820-94cb-518b00a50232
+--------
+user
+Read design-loop/SEEDS/prompts/reviewer-codex.md and follow it exactly. The design file under review is: /Users/jitl/src/alien-signals-opt/design-loop/rounds/round-04/design-consolidate-b.md
+2026-07-04T21:31:32.938797Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", error=\"invalid_token\", error_description=\"Missing or invalid access token\", resource_metadata=\"https://mcp.sentry.dev/.well-known/oauth-protected-resource/mcp\"" })
+2026-07-04T21:31:32.939296Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", resource_metadata=\"https://observability.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp\", error=\"invalid_token\", error_description=\"Missing or invalid access token\"" })
+2026-07-04T21:31:33.091127Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://app.pganalyze.com/.well-known/oauth-protected-resource\"" })
+2026-07-04T21:31:33.450372Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://api.polarsignals.com/.well-known/oauth-protected-resource/api/mcp\"" })
+codex
+I’ll load the reviewer instructions first, then inspect the specified design and only the supporting repo context those instructions require. I’ll also do a quick prior-review memory check for this repo so the analysis stays consistent with earlier findings.
+exec
+/bin/zsh -lc 'rg -n "alien-signals-opt|packed-layout|schedule-based|design-loop|round-04|design-consolidate" /Users/jitl/.codex/memories/MEMORY.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+1:# Task Group: alien-signals-opt / architecture-spec correctness review and review-response adjudication
+4:applies_to: cwd=/Users/jitl/src/alien-signals-opt; reuse_rule=safe for architecture/spec review work in this checkout and similar correctness-audit follow-ups; treat exact review files and document contents as checkout-specific
+10:- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, correctness blockers saved to the requested `reviews/` naming pattern)
+14:- alien-signals-opt, react-concurrent-signals-arena.md, correctness review, architecture-spec review, packed layout, React fork protocol, speculative dependency notification, memo invalidation, logging activation, urgent writes
+20:- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, response accepted in part but quiescence-gate parity remained unsound)
+35:- The packed-layout design in `react-concurrent-signals-arena.md` means future fixes should be judged on whether they preserve the core layout constraints; if a fix needs new state, prefer side structures or explicitly priced alternatives instead of casually growing the canonical records [Task 1]
+
+exec
+/bin/zsh -lc 'wc -l design-loop/SEEDS/prompts/reviewer-codex.md design-loop/rounds/round-04/design-consolidate-b.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+      54 design-loop/SEEDS/prompts/reviewer-codex.md
+    1479 design-loop/rounds/round-04/design-consolidate-b.md
+    1533 total
+
+exec
+/bin/zsh -lc "sed -n '1,60p' /Users/jitl/.codex/memories/MEMORY.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# Task Group: alien-signals-opt / architecture-spec correctness review and review-response adjudication
+
+scope: Correctness-first review workflow for `react-concurrent-signals-arena.md`, including saved review-file outputs and follow-up adjudication of an author response against the original counterexamples
+applies_to: cwd=/Users/jitl/src/alien-signals-opt; reuse_rule=safe for architecture/spec review work in this checkout and similar correctness-audit follow-ups; treat exact review files and document contents as checkout-specific
+
+## Task 1: Review `react-concurrent-signals-arena.md` for correctness, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, correctness blockers saved to the requested `reviews/` naming pattern)
+
+### keywords
+
+- alien-signals-opt, react-concurrent-signals-arena.md, correctness review, architecture-spec review, packed layout, React fork protocol, speculative dependency notification, memo invalidation, logging activation, urgent writes
+
+## Task 2: Assess the author response to the correctness review, partial
+
+### rollout_summary_files
+
+- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, response accepted in part but quiescence-gate parity remained unsound)
+
+### keywords
+
+- review response, plain-language summaries, F1, F2, quiescence gate, flushSync exclusion, torn frames, lane attribution, root-specific committed views, mark-only first-log walks
+
+## User preferences
+
+- when the user asked to "look for correctness issues foremost" -> in review/spec work, prioritize correctness over style or completeness and judge fixes as system-level tradeoffs, not isolated edits [Task 1]
+- when the user asked to write to `reviews/<timestamp>-codex-<document reviewed>-<review summary>.md` -> use that review-file naming convention for saved critiques in this workflow [Task 1]
+- when the user asked "what do you think?" about the response file -> evaluate the response itself against the original blocker schedules instead of rehashing only the first review [Task 2]
+- when the user said "i dont know what F1..FN mean. you need to restate / summarize the issue for me when responding" -> restate each issue plainly first and only use reviewer shorthand after translation [Task 2]
+
+## Reusable knowledge
+
+- The packed-layout design in `react-concurrent-signals-arena.md` means future fixes should be judged on whether they preserve the core layout constraints; if a fix needs new state, prefer side structures or explicitly priced alternatives instead of casually growing the canonical records [Task 1]
+- The highest-signal blockers in the initial review were concrete: speculative dependencies had no notification path, memo certificates could miss unlogged atoms, logging began too late, equality could drop logged actions, first urgent logged writes never marked their cone, committed views were root-specific, and Suspense cache keys were ambiguous for multi-batch passes [Task 1]
+- In this design, logging activation and lane attribution are tightly coupled; any quiescence-based gate must be tested against schedules where the write itself creates the later React work whose receipt needs to be excluded from `flushSync` [Task 2]
+- Root-specific committed views, a quiescence epoch bump, mark-only first-log walks, and the update/reducer purity contract were accepted as real fixes during the response round, while the fallback "sync passes include the open default batch" was still judged to create torn frames [Task 2]
+
+## Failures and how to do differently
+
+- Symptom: a spec sounds internally coherent but still hides correctness holes. Cause: individual invariants were reviewed in isolation. Fix: trace an explicit schedule/counterexample through overlay evaluation, memo validity, watcher notification, and logging activation before accepting the design [Task 1][Task 2]
+- Symptom: a proposed optimization looks harmless because React is currently quiescent. Cause: the write itself can create pending React work after the gate decision. Fix: test proposed gates against the exact motivating counterexample, especially lane attribution and `flushSync` exclusion cases [Task 2]
+- Symptom: review responses are hard for the user to apply. Cause: the explanation leans on reviewer labels like `F1..FN` without restating the issue. Fix: name the problem directly first and keep shorthand secondary [Task 2]
+
+# Task Group: react-signals-fable-v2 / sibling comparison, cross-checkout fixes, and commit workflow
+
+scope: Evidence-backed comparison between `react-signals-fable-v2` and `~/src/react-signals-fable`, plus the follow-through patch/commit workflow when the user wants the stronger baseline and concrete carry-over fixes
+applies_to: cwd=/Users/jitl/src/react-signals-fable-v2; reuse_rule=safe for sibling comparison, cross-checkout patching, and vendored-React commit flow across these two checkouts; treat exact SHAs, workspace write constraints, and local test command quirks as checkout-specific
+
+## Task 1: Compare `react-signals-fable-v2` vs `react-signals-fable`, choose a baseline, and port fixes, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-07-03T04-19-36-DgMs-compare_v1_v2_fix_render_purity_batch_retirement.md (cwd=/Users/jitl/src/react-signals-fable-v2, rollout_path=/Users/jitl/.codex/sessions/2026/07/03/rollout-2026-07-03T00-19-36-019f2634-1847-7bf1-a945-3af0130da914.jsonl, updated_at=2026-07-03T22:38:30+00:00, thread_id=019f2634-1847-7bf1-a945-3af0130da914, v2 chosen as cleaner baseline while specific v1 correctness gaps were fixed and validated)
+
+### keywords
+
+- react-signals-fable-v2, react-signals-fable, concept-convergence, render purity, batch retirement, committed roots, pruned roots, vitest EPERM, configLoader runner, vendor/react
+
+
+exec
+/bin/zsh -lc "sed -n '1,240p' design-loop/SEEDS/prompts/reviewer-codex.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# REVIEWER prompt — codex (v1)
+
+(Fed to `codex exec` as a standalone prompt; codex has read-only repo
+access. A runner supplies the design path and output path.)
+
+You are an adversarial correctness reviewer for one design spec of a
+concurrent-React signals system (signals library + React fork protocol,
+co-designed). You are the cross-model reviewer: a different LLM authored and
+another reviewed this design, and your independent perspective is the point.
+Find wrongness — torn committed frames, lost writes, wrong values, missed
+notifications, crashes — before an implementation does.
+
+Read, in order:
+1. `design-loop/SEEDS/background.md` — domain primer and vocabulary; assume
+   nothing else about this repo's history.
+2. The design file (path provided below).
+3. `design-loop/SEEDS/correctness-cases.md` — the acceptance battery; each
+   case states its trap. Attack these first, then go beyond them: your most
+   valuable findings are failure schedules the battery does NOT contain.
+4. `design-loop/SEEDS/requirements.md` and `design-loop/SEEDS/fork-charter.md`
+   — the contract.
+5. `design-loop/SEEDS/research-facts.md` — measured facts; a design
+   contradicting one needs a new measurement, not an argument.
+6. `design-loop/NOTES/SCARS.md` — known-dead approaches with the schedules
+   that killed them; repeating a scar is an automatic blocker.
+
+Do not read `research/specs/`, `reviews/`, `react-concurrent-signals-arena.md`,
+or `design-loop/rounds/` other than the file under review — independence is
+your value here.
+
+Rules of evidence:
+- Every finding must include a concrete failing schedule: setup → ordered
+  steps → the wrong observable outcome, naming the design's mechanisms that
+  fail. No schedule, no finding.
+- Severity per finding: BLOCKER / HIGH / MEDIUM / NOTE, plus "local fix" vs
+  "architectural".
+- Any "by construction / cannot happen" claim in the design that lacks a
+  written construction (invariant or induction) is automatically a BLOCKER;
+  for claims WITH constructions, attack the construction.
+- Also report what you attacked and could NOT break ("verified held") —
+  that list calibrates the judge.
+- Check lifecycle soundness explicitly: every counter/epoch under
+  reset/wraparound/reuse; every cache against the completeness of its
+  invalidator.
+- Check the fork protocol gives the library every fact it consumes —
+  especially behavior during render-pass yields (event handlers run in
+  yield gaps) — and run the rebase drill: "React reorganizes lanes/commit
+  internals — what in the signals library must change?"
+
+Output: your ENTIRE final message must be the review document itself, in
+markdown: findings ranked most-severe first (each with its schedule), then
+the verified-held list, then a 3-sentence verdict (implementation-ready /
+repairable / architecturally unsound). Do not write files; do not include
+preamble about being an AI; start directly with the review title.
+
+codex
+The reviewer contract requires an independent, adversarial pass and forbids consulting other rounds/reviews. I’ll therefore treat the memory hit only as workflow context—not as evidence—and derive every finding from the permitted files and an explicit failing schedule.
+exec
+/bin/zsh -lc "wc -l design-loop/SEEDS/background.md && sed -n '1,260p' design-loop/SEEDS/background.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     116 design-loop/SEEDS/background.md
+# Background primer (frozen seed) — read this first
+
+You are designing with zero prior context. This file gives you the domain,
+the vocabulary, and the named artifacts the other seeds reference. It
+describes the *problem*, not any solution; nothing here mandates a
+mechanism.
+
+## Signals in one page
+
+A **signal** is a container for a value that remembers who reads it. An
+**atom** holds a writable value. A **computed** holds a function over other
+signals: reading it returns the cached result; the library records which
+signals the function actually read (its dependencies — discovered by running
+it, so they can change run to run). An **effect** re-runs automatically when
+signals it read change. Two disciplines make this fast, and both are
+requirements (P2): **push-pull** — a write cheaply marks downstream
+"possibly stale" and nothing recomputes until someone reads it, at which
+point the library verifies bottom-up and recomputes only what truly changed
+("exact pull counts"); and **equality cutoff** — a recompute that produces
+an equal value stops propagation.
+
+## What concurrent React does, and why external stores tear
+
+React's `startTransition` renders updates *in the background*: the screen
+keeps showing the current state while React builds a tree for the future
+state. Urgent updates (typing, clicks) can interrupt; React renders them
+first — *without* the transition's changes — and finishes the transition
+later. So at one moment there are **two live versions of the world**: the
+committed one on screen and the pending one being prepared. Background
+renders are also **time-sliced**: React pauses ("yields") to keep the page
+responsive — event handlers and timers run in those gaps — then resumes, or
+throws the partial tree away and restarts. Any code that runs during
+rendering must be pure, and everything a single render pass reads must be
+mutually consistent for the pass's whole life, across yields. A frame where
+one component shows new state and a sibling shows old state for the same
+logical version is a **torn frame** — the cardinal sin in this domain.
+
+React's own state survives all this because `setState` does not overwrite:
+it appends an **update** to a per-hook queue, tagged with a **lane**
+(React's internal priority/batch bitmask). A render for some lanes applies
+exactly the queued updates in those lanes, skips the rest, and **rebases**:
+skipped updates are re-applied later over the newer base, in original queue
+order (this is why interleaved functional updates commute correctly — see
+case C3). External stores have a single current value, so React's escape
+hatch `useSyncExternalStore` forces consistency by de-optimizing: every
+store change re-renders synchronously, and store writes during a concurrent
+render discard it. External state can never ride in a transition. **This
+project exists to eliminate that de-opt**: signals must move through
+transitions, Suspense, and interruptions in lockstep with React state.
+
+## The fork premise
+
+We maintain our own build of React (a fork we fully control — see
+`fork-charter.md`). The fork can expose facts userspace cannot observe
+(which batch a write belongs to, what a render pass includes, when a batch
+retires, pass yields/resumes) and can offer control surfaces (e.g.
+scheduling an update into an existing batch's lanes). The signals library
+and the fork protocol are **co-designed**; the seam between them is a scored
+deliverable.
+
+## Vocabulary used by the other seeds
+
+- **batch** — the set of updates React renders and retires as a unit (one
+  event, or one transition). **urgent** = renders promptly (discrete input
+  is sync-priority; timers/network land in a *default* priority that renders
+  soon but asynchronously — so a `flushSync` in the same event can legally
+  render *without* a pending default batch: case C2). **deferred** =
+  transition-like, renders in the background, commits later.
+- **token** — a stable integer identity for a batch across the fork
+  boundary. Lane *bits* are recycled by React and leak internals; tokens are
+  minted, never reused while live. At most 31 batches are live at once (one
+  per lane).
+- **render pass** — one attempt to render a root: fresh stack → completion
+  or discard. Spans yields; a restart is a new pass.
+- **world / view** — one self-consistent assignment of values to all atoms:
+  the committed world, a pending world (committed + some batches), or
+  whatever a specific pass must see. A pass's world must not drift while it
+  is paused. How worlds are represented is the design's business; *that*
+  they exist is the requirement.
+- **retirement** — a batch leaving React's books (commit, or closing with
+  no React work). Writes must survive retirement regardless of who was
+  subscribed (case C12).
+- **watcher** — whatever the design calls a mounted component's
+  subscription. The one load-bearing, settled trick (DECISIONS D5): notify
+  a component by calling its `setState` synchronously in the *writer's*
+  execution context, so React assigns the writer's priority — transition
+  writes schedule transition re-renders, urgent writes urgent ones, and
+  React's batching/loop-guards apply for free.
+- **tracked read** — a read inside a computed/effect evaluation that
+  registers a dependency edge. **untracked** — a read that must not.
+- **StrictMode** — dev mode where React double-invokes renders and
+  mount/unmount cycles; designs must tolerate replayed renders and
+  double-mounts (case C14).
+
+## Named artifacts (so citations elsewhere make sense)
+
+- **alien-signals (v3.2.1)** — the fastest published conformant object-graph
+  signals library; our performance baseline ("1.0×"). Its push-pull
+  algorithm with exact re-verification is the semantics bar.
+- **the 179-case conformance suite** — a cross-framework reactive-semantics
+  test suite (laziness, cutoffs, dynamic dependencies, re-entrancy, effect
+  ordering) with `testPullCounts: true` asserting *exact* recompute counts.
+  Passing it, including under forced arena-growth stress, is table stakes.
+- **js-reactivity-benchmark (milomg fork)** — the primary ranking suite
+  (includes the **kairo** workloads and **tier-0 shapes**: deep chain,
+  broad fan-out, diamond, quiet reads, isolated writes, creation). Rankings
+  are only valid one-framework-per-process (see research-facts.md).
+- **react-concurrent-store** — the React team's own experimental userspace
+  concurrent store; its harness and 14 scenarios (plus its documented
+  known-bug: mount-mid-transition with suspending pending state) are the
+  React-integration conformance bar (case C9/C15).
+- **arena / plane** — a large pre-allocated `Int32Array` treated as an
+  array of fixed-size integer records, identified by integer ids: GC-
+  invisible, cache-friendly, bump-allocated. The measured facts about what
+  makes arena layouts fast (or slow) are in `research-facts.md`; no
+  specific record layout is prescribed.
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-04/design-consolidate-b.md | sed -n '1,260p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     1	# Round 4 design — exact-world consolidation
+     2	
+     3	Status: complete consolidation candidate. Stance: `consolidate-b`, inheriting
+     4	the round-3 two-kernel champion. This design adds no mechanism. It replaces
+     5	several narrow fast-path repairs with one coarser invariant, unifies three
+     6	parallel validity records, and deletes the saturation state machine.
+     7	
+     8	## One-page summary
+     9	
+    10	The single-world engine is the measured donor arena, called **K0**. The
+    11	non-React entry point is a DIRECT build whose emitted hot paths are the donor
+    12	hot paths: no receipt checks, fork calls, or world branches. Importing the
+    13	React binding activates the LOGGED build monotonically. Every later write,
+    14	urgent or deferred, appends a receipt before it updates K0. Receipts are
+    15	replayed in write order, filtered by a render pass's token set, sequence pin,
+    16	and immutable per-root committed-prefix view. This is React's update-queue
+    17	arithmetic expressed for a many-consumer store.
+    18	
+    19	The consolidation rule is deliberately coarse: **if any unswept receipt
+    20	exists anywhere, every render-phase signal read uses its exact pinned world**.
+    21	The same is true after that pass stages a hook evaluator. Only a render pass
+    22	with no receipt history and no staged evaluator may read K0 directly. Core
+    23	reads outside React still read K0's newest state. This rule deletes the
+    24	`WORLD_TAINT` bit, its missing tracked-serve propagation, per-node staged
+    25	probes, `RENDER_NEWEST` and its demotions, and the saturation spill flag. A
+    26	receipt cannot disappear while an older pass needs it: retirement may release
+    27	the receipt's 5-bit slot, but compaction of the receipt itself waits until all
+    28	live pins include its retirement. Therefore the coarse gate remains closed
+    29	for every pass that could otherwise see a cache from the wrong world.
+    30	
+    31	World evaluations record real dependency edges in a second, add-only arena,
+    32	**K1**. K0 remains unchanged. Every write performs a value-blind reach walk
+    33	over K0 union K1 and calls each reached watcher's `setState` synchronously in
+    34	the writer's batch context. A per-walk generation terminates union cycles;
+    35	full walks execute no user code and edge-add deliveries use the already
+    36	required deferred-delivery drain, so walks never nest and one `lastWalk`
+    37	column is sufficient. K1 also preserves K0 edges removed while receipt
+    38	history exists. At quiescence, observed K1 nodes refresh into K0 and K1 resets;
+    39	a twice-writing refresh target carries its full reverse-reachable K1 cone.
+    40	
+    41	World memos and positional Suspense capsules share one canonical **basis**:
+    42	the world header, included-slot write clocks, atom fingerprint plus value
+    43	entries, computed stage-id plus value entries, and thenable settlement
+    44	entries. There is no separate evaluator-stamp vector, suspense prefix, or
+    45	lock-term fingerprint. On a moved fact, the consumer re-folds or re-evaluates
+    46	the referenced value; equality keeps the old reference and restamps the same
+    47	basis. A resource factory runs again only when a basis value really changes
+    48	or the evaluator containing that factory changes.
+    49	Hook stage identity and F9 publication identity are the same immutable
+    50	`stageId`, stable for equal deps within one render lineage and never shared by
+    51	an unpublished stage across lineages.
+    52	
+    53	Each root holds an immutable **lock view** of token prefixes already committed
+    54	on that root. Every lock-in or watermark advance re-mints the view and its
+    55	`lockViewId`; that id is the sole lock visibility version. Per-slot
+    56	`lockStamp` and per-atom `lockTerm` are deleted. World keys observe the view
+    57	id, Suspense bases value-revalidate when it moves, and affected committed
+    58	effects are forced through the slot's durable touched list. Before a root
+    59	publishes a new view, the fork ends every other resumable pass on that root;
+    60	a retry captures the new immutable view. Other roots retain their own views.
+    61	
+    62	Mount fixup has two independent, simple duties. For each still-live reached
+    63	token, it skips a lane correction only when that token and all its writes up
+    64	to the render pin were included; otherwise it schedules `setState` into that
+    65	token with `runInBatch`. It then **always** compares the rendered value with
+    66	the current committed-for-this-root value and issues an urgent pre-paint
+    67	correction if they differ. There is no vacuous “all live tokens were skipped”
+    68	guard. A mount from a token's own committed pass compares equal because root
+    69	lock-in precedes layout effects; a token retiring in the render-to-subscribe
+    70	window is absent from the first loop but is caught by the comparison.
+    71	
+    72	Async actions retain the existing split: fork parking controls lifetime and
+    73	the continuation carrier controls attribution. The carrier uses AsyncContext
+    74	when available, otherwise the measured twin-build transform plus armed-only
+    75	wrappers for the enumerated host registrars. Every wrapper invokes the same
+    76	live-token bracket; nested registration composes, and a token that retires
+    77	before invocation degrades to ambient classification with a development
+    78	warning. `ActionScope.set/dispatch` is the explicit opaque-boundary escape
+    79	hatch. No `ActionScope.runSync` surface remains.
+    80	
+    81	The concurrency mechanism inventory falls from ten to six. The price is
+    82	intentional: one pending or pin-retained receipt routes unrelated render reads
+    83	through world memos. That cost is unmeasured and must pass the existing
+    84	restart/typeahead and React-parity gates; this round does not add a fallback.
+    85	DIRECT performance, the K0 layout, receipt semantics, K1 delivery, and the
+    86	fork seam remain the champion's architecture.
+    87	
+    88	## 1. Scope and user contract
+    89	
+    90	### 1.1 Public core API
+    91	
+    92	- `Atom<T>({state, effect?, isEqual?, label?})` exposes tracked `state`,
+    93	  `set`, and `update`. Its optional observed-lifecycle effect runs after a
+    94	  microtask-stable 0-to-1 observer transition and cleans up after a
+    95	  microtask-stable 1-to-0 transition.
+    96	- `Computed<T>({fn(ctx), isEqual?, label?})` is lazy and cached. `ctx.use`
+    97	  accepts a thenable or a lazy factory; the lazy form is required for
+    98	  side-effectful acquisition. `ctx.previous` follows section 6.5.
+    99	- `ReducerAtom<S,A>` logs actions and replays them with the effective reducer
+   100	  of the evaluated world. Constructor reducers are immutable. A hook-owned
+   101	  reducer may stage a new reducer under the rules in section 8.
+   102	- `effect`, `batch`, `untracked`, and `configure` form the non-React API.
+   103	  `batch` delays core-effect flushing only; it never delays watcher delivery.
+   104	  Synchronous effect flushing is a documented configuration for benchmark
+   105	  adapters.
+   106	- Writes inside ordinary computeds are accepted when the graph remains
+   107	  acyclic. `configure({forbidWritesInComputeds:true})` rejects them. Every
+   108	  render-world evaluation rejects writes. Signal access from an updater or a
+   109	  replayed reducer callback throws in all builds.
+   110	- React-coupled update storms use React's own render/update-depth limits
+   111	  because delivery is a real `setState`. Signal-only evaluation/write cycles
+   112	  use the engine's generation-checked cycle and flush-depth limits.
+   113	
+   114	Errors and suspensions are reference-stable sentinel values until the getter
+   115	boundary rethrows them. Graph tracking always closes in `finally`, so a throw
+   116	cannot leave half-installed edges.
+   117	
+   118	### 1.2 React API
+   119	
+   120	`cosignal/react` exports `useSignal`, `useAtom`, `useReducerAtom`,
+   121	`useComputed(fn,deps,opts?)`, and `useSignalEffect(fn,deps?)`. Hook computeds
+   122	close over props/state and auto-track signal reads. It also exports
+   123	`startSignalTransition(fn(scope))`; `scope` has only `set` and `dispatch`.
+   124	Ordinary `startTransition` and `useTransition` require no provider. Importing
+   125	the binding feature-detects fork protocol v4 and fails loudly on stock or
+   126	version-skewed React.
+   127	
+   128	`useSignalEffect` reads only committed-for-root state. Its function/deps
+   129	identity is owned by React's native effect re-fire; it does not use staged
+   130	evaluator publication. Core `effect()` instead observes K0 NEWEST and may run
+   131	before React commits.
+   132	
+   133	### 1.3 Multi-root scope
+   134	
+   135	Full spanning batches are supported. Roots may commit at different times, but
+   136	each root's later renders and effects include every prefix already committed
+   137	on that root. A token retires globally exactly once after its React work and
+   138	parked action have closed.
+   139	
+   140	A hook-stageable signal node has one owning hook/root, already identified by
+   141	its F9 publication record. Subscribing that node from another root throws at
+   142	subscription time. This detectable restriction avoids inventing per-root
+   143	evaluator publication: share ordinary atoms, computeds, and constructor
+   144	ReducerAtoms across roots; create a separate `useComputed` or
+   145	`useReducerAtom` per root. Portals remain in their parent root and are legal.
+   146	
+   147	### 1.4 SSR and hydration
+   148	
+   149	SSR runs DIRECT and serializes atom ids, generations, and values. Hydration
+   150	restores K0 before the React bridge activates LOGGED. No receipt exists at the
+   151	switch, so every restored cache has the restored committed basis. RSC/Flight
+   152	is outside v1.
+   153	
+   154	## 2. Mechanism inventory — six
+   155	
+   156	1. **K0 and twin builds.** The closed donor arena is the only DIRECT engine;
+   157	   the LOGGED build adds policy at operation boundaries while retaining its
+   158	   packed hot layout.
+   159	2. **Receipt ledger and exact worlds.** Per-atom tapes, one sequence line,
+   160	   stable batch tokens, generation-checked live slots, pass pins, immutable
+   161	   per-root lock views, replay folds, retirement, and pin-gated compaction are
+   162	   one value-history mechanism.
+   163	3. **K1 reach plane.** Real world edges, E-PRESERVE, per-slot reach masks and
+   164	   durable touched lists, edge-add carry/delivery, quiescent refresh, and cone
+   165	   carry form one reach mechanism beside K0.
+   166	4. **World evaluation basis.** The coarse receipt/stage gate, pinned world
+   167	   memos, one flattened basis representation, positional lineage capsules,
+   168	   and equality revalidation form one cache mechanism.
+   169	5. **Value-blind delivery and bindings.** Non-reentrant union walks,
+   170	   `walkGen`, watcher/slot render-cycle dedup, synchronous `setState`, mount
+   171	   fixup, reconcile checks, and committed-effect drains form one delivery
+   172	   mechanism.
+   173	6. **Versioned fork/build seam.** Protocol facts F1-F9, stage/publication
+   174	   records, action parking, the continuation transform, registrar wrappers,
+   175	   retired-token fallback, and `ActionScope.set/dispatch` form one boundary
+   176	   mechanism.
+   177	
+   178	Tracing, schema generation, tests, allocators, epochs, and numeric gates are
+   179	process/substrate, not additional concurrency mechanisms.
+   180	
+   181	### 2.1 Consolidation ledger
+   182	
+   183	Deleted outright:
+   184	
+   185	- `WORLD_TAINT` and every set/clear/propagate rule;
+   186	- per-node staged-evaluator routing probes;
+   187	- `RENDER_NEWEST`, write/stage demotion, and its pass state;
+   188	- `fastPathDisabled(pass)`, `lastRetireSeq`, retained retired slots, and the
+   189	  saturation force-clear policy;
+   190	- per-(root,slot) `lockStamp` and per-atom `lockTerm` scans;
+   191	- separate evaluator-stamp vectors and separate Suspense content prefixes;
+   192	- a second fn stamp distinct from F9 publication id;
+   193	- `ActionScope.runSync`.
+   194	
+   195	Unified:
+   196	
+   197	- world-memo validity, evaluator identity, lock-view identity, and Suspense
+   198	  content validity consume the same basis;
+   199	- a stage record's `stageId` is also its F9 publication id;
+   200	- every registrar wrapper and transformed continuation uses the same
+   201	  live-token carrier bracket.
+   202	
+   203	### 2.2 Settled obligations under the simpler invariant
+   204	
+   205	The design preserves D1-D18's product semantics. Three prior implementation
+   206	invariants change representation rather than being ignored:
+   207	
+   208	- I33's world-leak obligation remains, but its taint implementation is
+   209	  deleted. The receipt-count/pin-retention induction in sections 4.5 and 6.1
+   210	  covers direct untracked reads and every tracked parent uniformly.
+   211	- I34 still has one root-scoped version minted at every lock-in/advance and a
+   212	  durable flush. The immutable view's existing id is that version; a second
+   213	  per-slot stamp and `lockTerm` are redundant.
+   214	- I10/I39 required retired-slot retention or a spill flag because cleared
+   215	  reach bits could authorize K0. Reach bits no longer authorize render reads.
+   216	  Old tape entries keep `(slot,slotGen)` and `receiptCount` keeps exact-world
+   217	  routing closed, so the same forced schedules permit immediate generated-
+   218	  slot release. A recycled generation cannot match an old pass.
+   219	
+   220	Always-log, replay order, K0 closure, clocks, value-blind delivery, lineage
+   221	identity, F9 publication, reducer semantics, and the async support boundary
+   222	are unchanged.
+   223	
+   224	## 3. Packed substrate
+   225	
+   226	K0 starts from the measured arena donor: one interleaved `Int32Array` plane
+   227	for node/link records, packed `unknown[]` value/fn side columns, iterative
+   228	walks, persistent scratch stacks, and split `link`/`linkInsert` fast paths.
+   229	Buffers remain closure constants; growth rebuilds closures only at operation
+   230	boundaries. Same-file non-exported `const enum` values provide offsets. K1 is
+   231	a separate warm-reused arena so no world bit or branch enters K0 traversal.
+   232	
+   233	World memos, bases, receipts, basis entries, watcher records, and lock views
+   234	use bump/free-list side planes with generation-checked ids. Collections are
+   235	built directly with loops and mutation. No steady render constructs a JS
+   236	array, `Map`, `Set`, closure, or iterator. Custom equality and sentinel policy
+   237	live in wrappers; K0 compares stable references.
+   238	
+   239	Implementation uses TypeScript `type` declarations, branded integer ids, and
+   240	`undefined` for absence. No runtime `null` sentinel is needed. Development
+   241	branches use the build-time `__DEV__` define, never a runtime constant.
+   242	
+   243	The measured donor ratios versus alien-signals v3 are deep 0.90, broad
+   244	0.84-0.88, diamond 0.89, reads 0.74-0.87, and create 0.96. Those are inherited
+   245	targets, not re-measured claims. [ARENA][SYNTH §18.2] Full-arena
+   246	storage, interleaving, closure
+   247	constants, and bytecode budgets are retained because the seed measurements
+   248	show their alternatives lose materially.
+   249	
+   250	## 4. Receipt ledger and world arithmetic
+   251	
+   252	### 4.1 Identities and records
+   253	
+   254	A **token** is a stable integer batch identity with a deferred bit. It is
+   255	never reused while live. A live token occupies one of at most 31 slots and
+   256	has a `slotGen`; masks are always interpreted with the captured generation.
+   257	Retired tape entries retain `{slot,slotGen}` even after the slot is recycled.
+   258	
+   259	`globalSeq` is one monotone integer line. Writes, retirements, lock-view ids,
+   260	and stage ids mint from it. A pass captures `pin=globalSeq` at start. Each atom
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-04/design-consolidate-b.md | sed -n '261,520p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+   261	has a base and a tape of:
+   262	
+   263	```
+   264	{ seq, slot, slotGen, op, retiredSeq }
+   265	```
+   266	
+   267	`op` is `set(value)`, updater, or reducer action. The tape is in `seq` order.
+   268	`retiredSeq=0` means live. `receiptCount` counts unswept entries globally; it
+   269	is the already required “any live history” fact used by E-PRESERVE and episode
+   270	quiescence. It falls only when entries leave tapes, never when their slot
+   271	retires. `wc[slot,slotGen]` is the global sequence of that generated token's
+   272	latest write, so it is directly comparable with a pass pin.
+   273	
+   274	### 4.2 Write path
+   275	
+   276	In LOGGED, a write executes in this order:
+   277	
+   278	1. F1 returns or lazily mints the writer's token and live slot.
+   279	2. Mint `seq`, append the receipt, increment `receiptCount`, and set the slot
+   280	   write clock `wc[slot,slotGen]=seq`.
+   281	3. Apply the op to K0 NEWEST with stepwise equality. On equal, retain the old
+   282	   reference.
+   283	4. Run the K0 union K1 reach/delivery walk in the writer's context.
+   284	5. Flush core effects only if the outer engine `batch` closes.
+   285	
+   286	The append precedes the K0 mutation. Thus no callback can observe a changed K0
+   287	while `receiptCount==0`.
+   288	
+   289	An equal write may be dropped only when that atom's tape is empty and the op's
+   290	meaning is world-invariant: plain `set`, an updater on an ordinary Atom, or an
+   291	action under an immutable constructor reducer. A hook-stageable ReducerAtom
+   292	always appends. With nonempty history every op appends, including an equal
+   293	`set`.
+   294	
+   295	### 4.3 Visibility and fold
+   296	
+   297	A render world is:
+   298	
+   299	```
+   300	{ rootId, included[(slot,slotGen)], pin, lockView, episode, passStages }
+   301	```
+   302	
+   303	Receipt `e` is visible exactly when at least one clause holds:
+   304	
+   305	1. `e.retiredSeq != 0 && e.retiredSeq <= world.pin`;
+   306	2. `(e.slot,e.slotGen)` is included and `e.seq <= world.pin`;
+   307	3. the captured lock view contains `(e.slot,e.slotGen,watermark)` and
+   308	   `e.seq <= min(world.pin, watermark)`.
+   309	
+   310	Fold starts at the atom base and visits receipts in increasing `seq`, applying
+   311	only visible ops. Equality is applied after every op and retains the old
+   312	reference when equal. Updater/reducer callbacks run under a guard that rejects
+   313	all signal reads and writes.
+   314	
+   315	**Replay invariant.** Base case: before any receipt, fold equals the base and
+   316	React's queue has the same base. Inductive step: for the next receipt, both
+   317	models either skip it because its batch is excluded or apply the same op to
+   318	the same accumulator; stepwise equality preserves the same representative.
+   319	Retirement changes visibility, not order. Therefore every prefix has the same
+   320	value as React's lane-filtered updater queue.
+   321	
+   322	### 4.4 Immutable root lock views
+   323	
+   324	Each root points to an immutable sorted vector of
+   325	`{slot,slotGen,watermark}` and an id minted from `globalSeq`. A root commit
+   326	raises each included token's watermark to the committing pass pin and swaps a
+   327	new pooled view if any entry changed. Dropping a retired token also re-mints.
+   328	The committing pass is the only same-root pass allowed to survive that swap;
+   329	F2 ends/discards other resumable passes first. Old vectors remain until their
+   330	last captured reference drops.
+   331	
+   332	`lockViewId` is the only lock visibility version. It is in world keys and the
+   333	common basis header. A lock change forces committed effects reached through
+   334	the changed slot's durable touched list. No atom fingerprint scans a view.
+   335	
+   336	### 4.5 Retirement, slot release, and compaction
+   337	
+   338	Retirement occurs once per token, whether or not React committed work.
+   339	`committed=false` does not discard writes. In order:
+   340	
+   341	1. Mint one retirement sequence and write it to every receipt of the token.
+   342	   Mint `retireVisStamp` on each touched atom.
+   343	2. Publish any root lock-view removals only after those stamps exist.
+   344	3. Force committed-effect/reconcile drains by enumerating the token's durable
+   345	   touched list; the write-time queue is only an optimization.
+   346	4. Clear this slot's reach bits and watcher dedup through that same list, then
+   347	   release the slot and increment `slotGen`.
+   348	5. Compact only the all-retired tape prefix whose every `retiredSeq` is at or
+   349	   below the minimum live pass pin. Decrement `receiptCount` for removed
+   350	   entries and preserve replay order in the base.
+   351	
+   352	Retired entries can therefore outlive their slot, but generation checks keep
+   353	old masks distinct from a recycled occupant. Since only live tokens own
+   354	slots, the 31-live-token premise is the complete capacity bound; there is no
+   355	saturation state.
+   356	
+   357	**Pin-retention invariant.** Base: a new pass pins before later retirements.
+   358	Step: an entry whose retirement is later than that pin fails the compaction
+   359	predicate, so `receiptCount>0` and the entry remains foldable. Only after the
+   360	last excluding pin ends may compaction remove it, at which point no pass can
+   361	ask for the older world. This is the construction that permits immediate
+   362	slot release without a spill flag.
+   363	
+   364	## 5. K1 reach and delivery
+   365	
+   366	K1 records the real dependency edges discovered by exact-world evaluations.
+   367	It is a union across worlds and may contain cycles even though every single
+   368	world evaluation is cycle-free. Edges are add-only within an episode.
+   369	
+   370	For a write in slot `s`, a full walk over K0 union K1:
+   371	
+   372	- stamps each visited record with the current `walkGen`;
+   373	- ORs `(s,slotGen)` into each node's reach mask and appends the node once to
+   374	  `touchedList[s,slotGen]`;
+   375	- calls each reached watcher at most once for `(watcher,s,slotGen,renderCycle)`;
+   376	- follows every outgoing edge regardless of dirty/equality state.
+   377	
+   378	The watcher call is `setState` in the writer's stack. Marks never stop the
+   379	walk. A watcher re-arms its slot bit when it renders, so a later write after a
+   380	completed render can deliver again.
+   381	
+   382	When a K1 edge is added, existing reach bits propagate through existing
+   383	out-edges to a fixed point. For every newly carried still-live token, watcher
+   384	delivery runs in `runInBatch(token)`. Edge additions discovered in a render
+   385	slice drain at yield/end. Edge additions discovered while a full walk has
+   386	`walkDepth=1` join that same drain and run after the walk. Core effects flush
+   387	after it. Full walks contain no reducer, equality, computed, effect, or other
+   388	user callback; React's state enqueue does not synchronously render. Hence
+   389	`walkDepth` never exceeds one.
+   390	
+   391	**Walk termination.** Base: the start record is stamped with generation G.
+   392	Step: an unstamped record is stamped once before its finite outgoing edges are
+   393	pushed; a stamped record pushes nothing. With no nested full walk, no other G
+   394	can overwrite a stamp until completion. The finite union graph is therefore
+   395	visited at most once per record, including when it contains a cycle.
+   396	
+   397	**E-PRESERVE.** While `receiptCount>0`, every edge removed by a K0 retrack is
+   398	copied to K1 with endpoint generations. This is not slot-scoped. If no receipt
+   399	exists, a removed branch cannot matter to another world; a later receipt on
+   400	the branch selector creates history before K0 mutates and its evaluation
+   401	records the needed world path.
+   402	
+   403	At true quiescence—`receiptCount==0`, no live pass, no unpublished stage, and
+   404	no active delivery—refresh every K1-touched node with a committed watcher or
+   405	effect snapshot through K0 NEWEST, then reset K1 and bump the episode. A
+   406	target that writes during refresh retries once. On a second failure it is
+   407	exempt and its full reverse-reachable K1 cone is carried to the next episode.
+   408	For a fixed observed set, the rank
+   409	`sum(2 - failures[target])` decreases on every failed refresh, so the sweep
+   410	terminates in at most `2N+1` attempts; ordinary signal-loop limits cover an
+   411	unbounded stream of newly observed targets.
+   412	
+   413	## 6. Exact-world evaluation and the common basis
+   414	
+   415	### 6.1 The only render read gate
+   416	
+   417	Every active render slice has a pass frame supplied by F2. A signal read in
+   418	that slice executes:
+   419	
+   420	```
+   421	if receiptCount == 0 && passStages is empty:
+   422	  return K0.read(node)
+   423	return readInWorld(node, pass.world)
+   424	```
+   425	
+   426	There is no node-local reach, taint, cleanliness, newest, or spillover
+   427	conjunct. During a yield the pass frame is absent, so handlers and core effects
+   428	read K0 NEWEST.
+   429	
+   430	**World-isolation invariant.** Base: with no receipts and no stages, every
+   431	world equals K0. Step for a write: the append makes `receiptCount>0` before K0
+   432	changes, so all subsequent render reads fold. Step for retirement: an
+   433	excluding live pin retains the receipt and count; without such a pin the
+   434	retired value is committed for every possible pass. Step for a stage: the
+   435	pass table becomes nonempty before the staged evaluator is read. Step for
+   436	discard/promotion: the stage table dies or becomes committed, and F2 prevents
+   437	a same-root stale pass from resuming across publication. Thus a K0 render
+   438	serve occurs only when its world and evaluator basis are identical.
+   439	
+   440	This proof covers tracked parents of untracked children without propagation:
+   441	when an untracked K0 read could embed a receipted value, `receiptCount>0`, so
+   442	neither that child nor any tracked parent can be served from K0 to a render.
+   443	
+   444	### 6.2 World memos
+   445	
+   446	Atoms fold directly. A computed is memoized by `(nodeGen, worldKey)`, where
+   447	the key contains episode, root, included slot generations, pin, and
+   448	`lockViewId`. A pass pins the exact memo record it uses; another pass may
+   449	create another record but never overwrite it. `EVALUATING` in the same world
+   450	throws a cycle. Evaluation rejects writes, tracks ordinary reads into K1, and
+   451	folds untracked reads in the same world without adding an edge or a basis
+   452	dependency.
+   453	
+   454	Fresh nodes take this path whenever history or stages exist, so their first
+   455	evaluation cannot leak K0.
+   456	
+   457	### 6.3 One canonical basis
+   458	
+   459	A basis is a flat packed sequence built directly during evaluation:
+   460	
+   461	- header: episode, world identity, `lockViewId`;
+   462	- one `(slot,slotGen,wc)` for each included/locked live slot;
+   463	- tracked atom `(atomId,nodeGen,fingerprint,valueRef)` entries;
+   464	- computed `(nodeId,nodeGen,effectiveStageId,valueRef)` entries for completed
+   465	  nested reads, flattened through those reads;
+   466	- the resource-owning computed's effective stage id in the header;
+   467	- thenable `(capsuleGen,settlementVersion)` entries.
+   468	
+   469	`fingerprint` is the atom's newest world-visible receipt seq, base seq,
+   470	reducer stage id, and `retireVisStamp`. Lock visibility is represented once by
+   471	the header, not per atom.
+   472	
+   473	Validation first compares generations, episode, world identity, stage ids,
+   474	and slot clocks. If every cheap fact matches, it serves. On a moved atom fact,
+   475	it folds that atom in the candidate world and applies the atom's equality; on
+   476	equal it retains `valueRef` and restamps. On a moved nested-computed stage id,
+   477	it evaluates that completed child under the effective stage and compares its
+   478	stable output reference; on equal it restamps. A changed value invalidates the
+   479	consumer. The resource-owning evaluator has no completed output at its
+   480	`ctx.use` position, so its stage-id change invalidates the capsule directly:
+   481	the factory code itself may have changed. Settlement changes invalidate the
+   482	throwing/suspending sentinel.
+   483	
+   484	This single representation is consumed by world memos, `ctx.previous`
+   485	records, effect snapshots, and Suspense capsules. Consumers may stop at the
+   486	first changed value, but they do not maintain translated copies.
+   487	
+   488	### 6.4 Suspense capsules
+   489	
+   490	The fork supplies a render lineage id stable across retries/replays for one
+   491	root and logical batch set. `ctx.use(factory)` owns a capsule at
+   492	`(nodeGen,lineageId,position)`. The capsule stores its settled/pending thenable
+   493	and the common basis prefix at that position.
+   494	
+   495	On retry, equal basis values reuse the identical thenable. A moved header,
+   496	clock, fingerprint, or nested stage id runs the value revalidation above.
+   497	Equal values restamp the capsule in place; a changed value or owning-stage id
+   498	generation-drops this position and later positions, then calls the factory
+   499	again. The eager `ctx.use(thenable)` form can guarantee identity only when the
+   500	caller supplies the same thenable.
+   501	
+   502	For a pass containing several batches, identity is lineage, while content is
+   503	the full world basis. A token alone, a mask alone, and a pass serial are never
+   504	keys.
+   505	
+   506	### 6.5 Previous values
+   507	
+   508	K0 NEWEST uses the donor's previous value. A world evaluation uses the prior
+   509	value of the exact pinned memo record. A fresh world record uses a K0 value
+   510	only when the render gate would allow K0; otherwise `ctx.previous` is
+   511	`undefined`. Errors and suspension boxes count as values for this rule.
+   512	
+   513	## 7. Delivery, subscriptions, and effects
+   514	
+   515	### 7.1 Watchers
+   516	
+   517	A watcher is a mounted component record containing its root, node, last
+   518	rendered value, render world, render pin, and a 31-bit delivery mask paired
+   519	with slot generations. Delivery synchronously increments a private React
+   520	state cell. Calling it in the writer's execution context gives the update the
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-04/design-consolidate-b.md | sed -n '521,780p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+   521	writer's priority and token. No implicit notification batch exists.
+   522	
+   523	Delivery is value-blind. Equality still cuts off K0 and world recomputation,
+   524	but it does not decide whether already-finished React work is safe. The
+   525	per-(watcher,slot,render-cycle) bit only deduplicates work already scheduled in
+   526	that same token; rendering clears that token's bit.
+   527	
+   528	At fold/reconcile time, the binding compares the watcher's last rendered
+   529	value against the value in the committing root world. An equal value retains
+   530	the reference and needs no new React update. This reconcile comparison never
+   531	suppresses the original write-time delivery.
+   532	
+   533	### 7.2 Mount and subscribe fixup
+   534	
+   535	The layout-phase subscription records the rendered value/world first, then:
+   536	
+   537	```
+   538	for each live written token t whose generated slot is in reachMask(node):
+   539	  if renderWorld includes t && wc[t] <= renderPin:
+   540	    continue
+   541	  if runInBatch(t, () => setState(watcher)) == RETIRED:
+   542	    setState(watcher) // urgent pre-paint fallback
+   543	
+   544	now = evaluate(node, committedForRoot(root))
+   545	if !node.isEqual(now, renderedValue):
+   546	  setState(watcher)   // urgent pre-paint correction
+   547	```
+   548	
+   549	The skip applies only to the token-lane correction. The committed comparison
+   550	is unconditional. Layout cannot run for an uncommitted mount; F3 installs the
+   551	root lock view before layout, so a mount from its own committing pass compares
+   552	against a world containing the prefix it rendered. A token that retired
+   553	before the loop is caught by the comparison. A token retiring between the
+   554	test and `runInBatch` returns `RETIRED` and takes the fallback.
+   555	
+   556	### 7.3 Late edges and reconcile backstop
+   557	
+   558	A K1 edge created after a write carries every still-live reach bit and queues
+   559	the corresponding `runInBatch` deliveries before that render pass can commit.
+   560	The fork also invokes a pre-mutation reconcile check for a root: every watcher
+   561	rendered by the candidate commit is compared to the pass world it claims. A
+   562	late update inserted after completed work makes React restart that work; it is
+   563	not allowed to commit and repair a torn frame later.
+   564	
+   565	### 7.4 Effects and observed lifecycle
+   566	
+   567	`useSignalEffect` records a common basis snapshot of its committed-for-root
+   568	reads. It is considered for re-run at:
+   569	
+   570	- a root commit containing a reached token;
+   571	- every lock-view lock-in or watermark advance, by the changed token's
+   572	  durable touched list;
+   573	- token retirement, by the retiring token's durable touched list;
+   574	- thenable settlement.
+   575	
+   576	Lock-view drains force basis revalidation even though no per-atom lock stamp
+   577	exists. Cleanup runs before the next committed invocation. A deps change uses
+   578	React's own effect cleanup/re-fire and retracks from scratch.
+   579	
+   580	Core `effect()` uses K0 NEWEST, is queued by the ordinary graph, and flushes at
+   581	the configured engine batch boundary. Atom observed-lifecycle counts include
+   582	watchers and effects; microtask damping makes StrictMode mount/unmount flaps
+   583	net to one start and one eventual cleanup.
+   584	
+   585	## 8. Hook evaluator identity and F9 publication
+   586	
+   587	### 8.1 Immutable evaluator records
+   588	
+   589	Each hook-stageable node has an immutable committed evaluator record
+   590	`{fn,depsValues,stageId,ownerRoot,ownerHookGen}`. A pass invocation selects in
+   591	this order:
+   592	
+   593	1. if incoming deps equal the committed record, use that record;
+   594	2. else if they equal this lineage's current record for the hook, reuse it;
+   595	3. else create a record whose `stageId=++globalSeq` and replace the lineage's
+   596	   current pointer, retaining the old record while any pass/capsule holds it.
+   597	
+   598	Equal deps use the record's old function, matching `useMemo`. `stageId` is
+   599	also the opaque F9 publication id; there is no second fn stamp. A pass that
+   600	selects a noncommitted record puts it in `passStages` before any read of the
+   601	node, forcing all later render reads through exact-world evaluation.
+   602	
+   603	If deps oscillate A-to-B-to-A within one lineage, committed A is reused when
+   604	available. An uncommitted A that was displaced may receive a new id; that is a
+   605	real evaluator transition, but the common basis retains a resource when its
+   606	re-evaluated output is equal. An unpublished record is never reused by another
+   607	lineage. Once F9 promotes it, it is the committed record and all later
+   608	lineages may select it.
+   609	
+   610	### 8.2 Publication
+   611	
+   612	Render attaches the stage id plus `(nodeGen,ownerRoot,hookSlot,workGen)` to
+   613	the exact WIP hook. F9 emits only records whose hooks become current. Hidden
+   614	Offscreen hooks count as current; error-abandoned children and stale
+   615	alternates do not. A generation CAS rejects an obsolete publication.
+   616	
+   617	For one commit the order is:
+   618	
+   619	1. publish winning evaluator/reducer records;
+   620	2. dirty each published K0 node and run its value-blind delivery walk in the
+   621	   committing batch context;
+   622	3. for a promoted ReducerAtom with pending receipts, replay those receipts
+   623	   from its committed base under the new reducer and install the equality-
+   624	   stable K0 NEWEST result;
+   625	4. install the root's new lock view;
+   626	5. perform retirements/folds due at this commit;
+   627	6. run reconcile checks, then user layout effects.
+   628	
+   629	The publication walk is required even when the current value compares equal:
+   630	the new evaluator can change a downstream result on its next inputs. Reducer
+   631	re-fold precedes the walk's reconcile read.
+   632	
+   633	`publicationsComplete(passId)` releases that pass's hook attachments. Pass
+   634	discard releases pass refs but not the lineage cache: retries in the same
+   635	lineage must retain its current immutable record. F5 lineage death releases
+   636	unpublished lineage records and capsules; published records are committed
+   637	ownership.
+   638	
+   639	### 8.3 Reducer rules
+   640	
+   641	Constructor ReducerAtoms have immutable reducers and use ordinary receipt
+   642	drop rules. Hook ReducerAtoms always append actions. A pass folds with its
+   643	selected reducer record; committed/core NEWEST uses the committed record.
+   644	Promotion reinterprets pending actions, never actions already compacted into
+   645	the committed base. Publication precedes same-commit retirement, so both use
+   646	the reducer that produced the committed tree.
+   647	
+   648	The single-owner-root check in section 1.3 is performed when a watcher first
+   649	subscribes. It is unnecessary for immutable constructor reducers and ordinary
+   650	computeds.
+   651	
+   652	## 9. Async actions and carrier boundaries
+   653	
+   654	Parking and attribution are separate. F3 keeps an action token live until the
+   655	thenable returned from the transition action settles. The carrier tells F1
+   656	which live token owns a post-await write.
+   657	
+   658	Carrier ladder:
+   659	
+   660	1. native AsyncContext, when the host provides the required semantics;
+   661	2. the measured twin-build transform [I30/SP-F8]: compiled async bodies dispatch through
+   662	   a token-carrying generator only while an action is armed;
+   663	3. Node AsyncLocalStorage by explicit server opt-in only;
+   664	4. otherwise registration fails its loud asynchronous boot probe.
+   665	
+   666	At rung 2, wrappers are installed on the 0-to-1 armed-action transition and
+   667	removed on 1-to-0 if they still own the host property. They cover callback
+   668	registration for `setTimeout`, `setInterval`, `queueMicrotask`,
+   669	`requestAnimationFrame`, `requestIdleCallback`, and same-realm
+   670	`MessagePort.addEventListener('message', cb)`/`onmessage` assignment. Each
+   671	captures the current token at registration and invokes through:
+   672	
+   673	```
+   674	if token is still live-and-parked: push token; call; finally restore
+   675	else: call under ambient context; dev-warn once for this registration
+   676	```
+   677	
+   678	An async callback invoked inside the bracket instantiates its transformed
+   679	body while the token is current. A nested registration captures the same
+   680	token. Every interval tick repeats the liveness test. A pre-existing
+   681	MessagePort listener triggered by `postMessage` inside an action is not a
+   682	registration inside the action and belongs to the documented opaque-boundary
+   683	class; use `scope.set/dispatch` in that listener. Cross-realm ports cannot
+   684	carry tokens.
+   685	
+   686	If a transformed continuation itself resumes after settlement, its push uses
+   687	the same liveness check and falls back to ambient classification. It never
+   688	re-interns a retired token or extends parking for an un-awaited child.
+   689	
+   690	`ActionScope.set(atom,value)` and `ActionScope.dispatch(atom,action)` supply
+   691	the captured token explicitly after checking realm, generation, and
+   692	liveness. Calls after settlement throw “ActionScope closed.” Raw post-await
+   693	writes in untransformed code are attributed to their ambient batch, are never
+   694	lost, and warn while another action is armed. The support matrix says to
+   695	transform that code, use ActionScope, or use an AsyncContext host.
+   696	
+   697	## 10. Fork protocol v4
+   698	
+   699	The boundary carries only opaque integer ids, generated token tuples, and
+   700	callbacks. No Fiber, lane mask, or React update-queue object crosses it.
+   701	There are nine facts and **16 seam touch points**.
+   702	
+   703	### 10.1 Facts
+   704	
+   705	**F1 — write context.** `currentBatch()` returns `{token,deferred,realm}` or
+   706	ambient. It lazily claims a token for store-only work. A carried token is
+   707	returned only while live-and-parked.
+   708	
+   709	**F2 — render pass lifecycle.** Start supplies
+   710	`{passId,rootId,includedTokens,lineageId}` and the binding captures
+   711	`pin=globalSeq` in the resulting frame. Yield removes the render frame; resume
+   712	restores it; end declares complete or discarded. Before F9 publishes a new
+   713	evaluator basis or F3 changes a root lock view, every other resumable pass on
+   714	that root receives discard.
+   715	
+   716	**F3 — root commit and retirement.** Root commit supplies the exact included
+   717	token watermarks. A token retires exactly once after all root work and its
+   718	returned async action settle. `committed=false` is diagnostic only and does
+   719	not change persistence. F9 publication and lock-in/retirement ordering follow
+   720	section 8.2.
+   721	
+   722	**F4 — lane-scoped scheduling.** `runInBatch(token,callback)` executes the
+   723	callback so React queues its updates in that live token and returns `JOINED`;
+   724	if retirement won the race it does not run the callback and returns
+   725	`RETIRED`.
+   726	
+   727	**F5 — render lineage.** A lineage id is stable across retries/replays of one
+   728	root and logical batch set and dies at commit or abandonment. It is not a pass
+   729	serial or token-set hash.
+   730	
+   731	**F6 — DOM mutation window.** One edge reports entry/exit so tracing and the
+   732	reconcile backstop can distinguish pre-mutation correction from user layout.
+   733	
+   734	**F7 — root identity.** Every pass and commit carries a stable root id; ids
+   735	are generation-checked and never reused live. Portals report the parent root.
+   736	
+   737	**F8 — action parking and capabilities.** Park/settle edges expose the token
+   738	lifetime. Protocol registration reports carrier and registrar-wrapper
+   739	capabilities so the binding can run its per-bundle boot probe.
+   740	
+   741	**F9 — hook publication.** Render attaches an opaque stage id to one WIP hook;
+   742	commit emits winning ids before root lock/fold/layout and completes the pass's
+   743	publication set.
+   744	
+   745	### 10.2 The 16 touch points
+   746	
+   747	1. protocol registration/capability negotiation;
+   748	2. current-batch classification and lazy claim;
+   749	3. pass start;
+   750	4. pass yield;
+   751	5. pass resume;
+   752	6. pass end/discard;
+   753	7. lineage death;
+   754	8. root commit/lock watermark publication;
+   755	9. exactly-once token retirement;
+   756	10. `runInBatch` override scope;
+   757	11. DOM mutation-window edge (one paired site);
+   758	12. action park;
+   759	13. action settle;
+   760	14. WIP-hook publication attachment;
+   761	15. winning-hook publication emission;
+   762	16. publication-complete sweep.
+   763	
+   764	### 10.3 Fork invariants
+   765	
+   766	- A live token maps to one lane/batch identity; its integer stays stable while
+   767	  React may recycle internal lane bits.
+   768	- A pass's included tokens and pin never mutate. Yield/resume changes only
+   769	  call-stack activity.
+   770	- Same-root evaluator publication and lock changes first discard other
+   771	  resumable passes; a discarded pass cannot emit F9 or commit.
+   772	- F9 emission, root lock publication, retirement folds, reconcile, and layout
+   773	  occur in that order.
+   774	- Retirement is exactly once and waits for async parking independently of
+   775	  subscriber count.
+   776	- `runInBatch` either joins the exact live token or reports retirement; it
+   777	  never silently creates a replacement transition.
+   778	
+   779	### 10.4 Rebase drill
+   780	
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-04/design-consolidate-b.md | sed -n '781,1040p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+   781	- Lane names, counts, or update-queue representation change: reimplement F1,
+   782	  F2's include set, and F4 inside the fork; the signals library changes zero
+   783	  lines.
+   784	- Scheduler/yield implementation moves: re-anchor F2 start/yield/resume/end
+   785	  to the semantic stack edges and rerun the pass tests.
+   786	- Commit phases or Offscreen internals move: re-anchor F3/F9 to “hook becomes
+   787	  current, then root prefix becomes committed, before user layout.” No signal
+   788	  type changes.
+   789	- Entangled-action internals move: reimplement F8 parking and settle; carrier
+   790	  build code is unchanged.
+   791	- If React can no longer provide a fact with its stated invariant, protocol
+   792	  version changes and the binding fails loudly. It never samples an internal
+   793	  approximation.
+   794	
+   795	### 10.5 Fork-owned tests
+   796	
+   797	1. urgent/default/deferred classification and lazy store-only token claim;
+   798	2. token stability while lane bits recycle;
+   799	3. pass include set plus binding-captured pin across restart;
+   800	4. yield removes render context and resume restores it;
+   801	5. handler in a yield gap classifies ambient urgent/default;
+   802	6. discard cannot later commit;
+   803	7. same-root urgent commit discards an older yielded pass before F9/lock
+   804	   publication;
+   805	8. two roots receive distinct stable ids; portals retain the parent id;
+   806	9. spanning token locks independently into A then B and retires once;
+   807	10. store-only token retires with `committed=false` and persists;
+   808	11. parked async action cannot retire before settle;
+   809	12. `runInBatch` joins the original token;
+   810	13. `runInBatch` retirement race returns `RETIRED`;
+   811	14. updates inserted after completed work force restart before commit;
+   812	15. lineage id survives Suspense retries and dies at commit/abandon;
+   813	16. DOM mutation edges bracket mutation and precede layout;
+   814	17. hidden Offscreen hook publishes when it becomes current;
+   815	18. error-abandoned hook publishes nothing;
+   816	19. stale alternate fails publication CAS;
+   817	20. F9 publication precedes reducer fold and layout;
+   818	21. root lock watermark equals the committing pass pin;
+   819	22. post-await write extends a parked token watermark without leaking early;
+   820	23. transformed await retains carrier identity;
+   821	24. timer, microtask, rAF, idle, interval, and registered MessagePort callback
+   822	    retain a live token;
+   823	25. retired callback falls back ambient and warns once;
+   824	26. nested registrar callbacks retain then lose the token at settlement;
+   825	27. per-bundle boot probe rejects a missing transform;
+   826	28. protocol version skew fails before the first signal write.
+   827	
+   828	## 11. Lifecycles, counters, and reclamation
+   829	
+   830	| item | minted/set | retained by | clear/reset and collision defense |
+   831	|---|---|---|---|
+   832	| `globalSeq` | writes, retirements, views, stages | receipts, pins, stamps, ids | quiescent renumber rewrites retained values and bumps episode |
+   833	| token serial | F1 | fork registry, receipts | never reused live; wrap only after quiescence + token epoch bump |
+   834	| slot + `slotGen` | live-token claim | live token, masks, receipts | reach state clears at retirement; gen increments before reuse |
+   835	| `wc[slot,gen]` | each write | basis headers | zeroed only after gen increments; gen mismatch invalidates |
+   836	| pass pin/id | F2 start | pass, memo pins | pass end; ids generation-checked |
+   837	| `lockViewId` | every view re-mint | root, pass, basis | pooled view dies after refs; episode in every key |
+   838	| lineage id | F5 | stage records, capsules | lineage death; fork generation prevents reuse collision |
+   839	| `stageId` | changed lineage deps | records, basis, F9 | globalSeq/episode; unpublished records swept |
+   840	| `walkGen/lastWalk` | each full walk | K0/K1 records | with `walkDepth=0`, wrap clears the whole column then restarts at 1 |
+   841	| node/link gen | allocator reuse | edges, memos, watchers | increment before free-list reuse; mismatch rejects |
+   842	| `retireVisStamp` | retirement touching atom | bases, snapshots | globalSeq/episode renumber |
+   843	| capsule generation | content change | thenable callbacks | increment before suffix reuse; stale settlements ignored |
+   844	| receipt count | append/sweep | render gate, E-PRESERVE | reaches zero only after all tapes empty |
+   845	
+   846	Quiescent global renumber runs only at an operation boundary with no active
+   847	walk. Forced-small-counter tests invoke the same rewrite. If a configured
+   848	horizon is reached with live passes/tokens, the runtime performs a full
+   849	order-preserving rewrite under the existing operation-boundary stop; it does
+   850	not wrap. `walkGen` has its own whole-column clear because full walks cannot
+   851	nest.
+   852	
+   853	Abandoned fresh arena nodes are reclaimed through pass-owned allocation
+   854	lists: commit transfers them to ordinary ownership; discard returns their
+   855	records after generation increment. StrictMode repeated mount/abandon cannot
+   856	grow the bump plane without bound.
+   857	
+   858	## 12. Tracing and diagnostics
+   859	
+   860	Tracing is a lazily imported module. Each event site performs one recorder-
+   861	slot check. When absent it allocates nothing. Ring mode writes fixed integer
+   862	records into a preallocated plane and overwrites old records with a loss
+   863	counter; lossless-session mode grows only at operation boundaries. Events
+   864	include write/token/seq, pass and world ids, fold decisions, K0/K1 edges,
+   865	delivery cause, F9 publication, lock view, retirement, carrier fallback, and
+   866	effect flush.
+   867	
+   868	Queries walk integer causality links for “why did this watcher render?”, “why
+   869	is this memo invalid?”, and “which receipt is visible here?”. Graphviz exports
+   870	K0, K1, and a selected world without mutating them. Labels are cold side data.
+   871	
+   872	Development assertions include the strong E-PRESERVE reach comparison, mask
+   873	generation checks, pass/lock ordering, publication ownership, reducer-fold
+   874	guard, no-user-code full walks, and receipt-count/tape agreement.
+   875	
+   876	## 13. Costs and release gates
+   877	
+   878	All ratios are medians from one-framework-per-process runs on an idle machine;
+   879	unmeasured rows are release-blocking spikes, not claims.
+   880	
+   881	| gate | budget | current status |
+   882	|---|---|---|
+   883	| core semantics | 179/179, exact pull counts, forced growth | inherited donor target; must rerun |
+   884	| DIRECT tier-0 | no slower than alien-signals v3 on every shape | donor measured below 1.0; symbol/bytecode diff must prove no concurrency op |
+   885	| React rerender | <=1.10x equivalent `useState` | unmeasured |
+   886	| 10k subscriptions | <=1.15x equivalent hooks | unmeasured; mount pays one committed cached eval |
+   887	| LOGGED quiet | <=1.02x tier-0 | at risk: prior 1.024-1.038 floor [SPKHQ -> OPEN O19]; idle rerun or requirements decision required |
+   888	| logged write | <=2.0x DIRECT | unmeasured |
+   889	| union delivery | <=2.0x DIRECT propagation; <=1 spurious render per watcher/token/cycle | unmeasured, includes `walkGen` |
+   890	| exact-world active render | <=1.10x equivalent React state; cost proportional to rendered reads, not whole graph | unmeasured; coarse `receiptCount` gate is the consolidation bet |
+   891	| lock view | O(number of locked live tokens), max 31, pooled; atom fp O(1) | implementation assertion; benchmark dense commits |
+   892	| basis validation | O(included slots + flattened tracked prefix) | unmeasured; deep-prefix/typeahead grid required |
+   893	| retirement | <=2.0x DIRECT `batch()` for core; <=2.0x equivalent useState commit for React | unmeasured; reports callback time separately |
+   894	| carrier | unarmed approximately 0; armed <=15 ns/await | measured transform +12 ns/await [I30/SP-F8]; registrar wrapper costs unmeasured |
+   895	| allocation | zero engine allocations in steady rerender; report heapUsed and plane bytes side by side | allocator counters in CI |
+   896	
+   897	If the coarse exact-world row fails, this design fails the round: no
+   898	certificate, taint, frontier, pinless cache, or other fallback is smuggled
+   899	into a consolidation artifact. The inherited process order is oracle first,
+   900	frozen K0 contract, schema regenerate-and-diff, bytecode budgets, then the
+   901	pre-registered performance grid.
+   902	
+   903	### 13.1 Open-item disposition
+   904	
+   905	| open item | disposition in this design |
+   906	|---|---|
+   907	| O1 | K1 remains the real per-world dependency plane; no compensated-single-kernel fallback is added |
+   908	| O3 | E-PRESERVE uses the strong reading; its brute-force dev validator is measured, and over 10% dev cost selects the already listed sampled-validation policy |
+   909	| O7 / O23 | F3 root watermarks and F9 hook publication remain implementation existence proofs; fork tests 7-9 and 17-22 gate them |
+   910	| O12 | delivery remains value-blind; the existing fan-out grid and held-batch row decide viability, with no new suppression rule |
+   911	| O18 | the coarse exact-world gate deliberately accepts restart revalidation; the pinless-frontier fallback is not admitted in a no-new-mechanism round |
+   912	| O19 | the 2% quiet requirement remains at risk and needs the idle rerun or explicit requirement decision |
+   913	| O21 | the common basis owns flattened-prefix and staged-value revalidation cost; the deep/typeahead grid measures it |
+   914	| O22 | registrar matrix includes armed install cost, nested callbacks, retired fallback, warning rate, and the exact MessagePort boundary |
+   915	
+   916	O20 remains closed by the measured twin-build carrier and loud per-bundle
+   917	probe. No closed decision is reopened.
+   918	
+   919	## 14. Round-4 attack docket — re-derived walks
+   920	
+   921	These walks attack only math introduced or merged in round 3. Each outcome is
+   922	obtained with an existing mechanism or by deleting the attacked mechanism.
+   923	
+   924	### A1 — taint set/clear, tracked serves, and DIRECT-to-LOGGED caches
+   925	
+   926	Setup: `c = untracked(() => a.state)`, `p = c.state + 1`; `p` tracks `c`.
+   927	K0 initially caches `c=0,p=1`. T writes `a=1`; a sync pass S excludes T.
+   928	
+   929	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+   930	|---|---|---|
+   931	| 1 | T write / receipt ledger | append `a:{T,s1,set1}` before K0 becomes 1; `receiptCount=1`; no `a->c` edge, correctly |
+   932	| 2 | NEWEST core read | K0 may evaluate/cache `c=1`; a tracked K0 read may then cache `p=2`; no taint is recorded or needed |
+   933	| 3 | S render / coarse gate | `receiptCount!=0`, so S cannot serve either K0 cache; world-evaluate p, then c; c's untracked atom fold excludes T and returns 0; p=1 |
+   934	| 4 | yield and T retirement | S's frame is absent during the gap; retirement gets `r>s.pin`, so pin-gated compaction retains the receipt and count despite immediate slot release |
+   935	| 5 | S resume | count is still nonzero; exact fold still excludes T; no clear race exists |
+   936	| 6 | S ends | compaction may now fold/remove the retired receipt; every possible future pass includes that committed value, so K0's cached 1/2 is a legal temporally stale untracked result |
+   937	| 7 | pre-existing DIRECT cache variant | bridge activation occurs with zero receipts; first LOGGED append raises count before K0 mutation, so the old cache is served only while all worlds equal |
+   938	
+   939	outcome: the judge's tracked-serve blocker is removed, not patched. No cache
+   940	containing pending state can cross into a render while history exists.
+   941	
+   942	residual risk: the coarse gate's cost, pinned by the held-transition and
+   943	typeahead performance rows.
+   944	
+   945	### A2 — `walkGen` under edge-add delivery reentrancy
+   946	
+   947	Setup: K0 union K1 contains `c->d->c`; an outer write walk reaches a place
+   948	where React work later creates an edge carrying another live token.
+   949	
+   950	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+   951	|---|---|---|
+   952	| 1 | outer delivery walk | set `walkDepth=1`, mint G1; stamp c then d; d's edge to c sees G1 and stops |
+   953	| 2 | watcher enqueue | `setState` only appends React work; it invokes no render or user callback inside the walk |
+   954	| 3 | edge-add request while depth 1 | existing deferred edge-delivery drain records `(token,edge,slotGen)`; it does not start a full walk or overwrite `lastWalk` |
+   955	| 4 | outer completion | set depth 0; every G1 record was visited once |
+   956	| 5 | drain | generation/liveness-check the queued token; invoke `runInBatch`; any required new full walk now mints G2 after G1 is finished |
+   957	| 6 | reducer/effect variants | reducer/equality/evaluation happened before the walk under guards; effects flush after the drain, so none can nest a full walk |
+   958	
+   959	outcome: a single `lastWalk` cell is sufficient because full walks are
+   960	serialized with the already existing edge-delivery drain.
+   961	
+   962	residual risk: a future React enqueue path that synchronously renders would
+   963	violate the no-user-code assertion; fork test 14 and a `walkDepth` dev throw
+   964	pin it.
+   965	
+   966	### A3 — immutable lock views, yielded same-root passes, and fingerprint cost
+   967	
+   968	Setup: root A pass P captures lock view V1 and yields; urgent U commits on A
+   969	and would advance a token watermark.
+   970	
+   971	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+   972	|---|---|---|
+   973	| 1 | P start | retain immutable V1/id1 and pin p1 |
+   974	| 2 | U pre-commit / F2 | emit `passEnd(P,discard)` before the root view changes; P's frame, memo pins, and unpublished stages release |
+   975	| 3 | U commit / F3 | mint V2/id2 with raised watermark and atomically swap A's pointer |
+   976	| 4 | retry P2 | capture V2; no continuation can resume with V1 on A |
+   977	| 5 | root B | B's independent view/id do not move; no cross-root fingerprint churn |
+   978	| 6 | observers | world keys and basis header compare id2; touchedList for the advanced slot force-revalidates only reached committed effects |
+   979	| 7 | atom fingerprint | reads base/visible seq/reducer/vRetire only: O(1); no <=31-entry `lockTerm` scan |
+   980	
+   981	outcome: `lockViewId` replaces both lock stamps and lock terms while retaining
+   982	root scoping and immutable pass snapshots.
+   983	
+   984	residual risk: the fork must prove the discard-before-swap edge on every
+   985	same-root commit path, including Offscreen; tests 7 and 21 pin it.
+   986	
+   987	### A4 — lineage-stable ids under deps oscillation and lineage changes
+   988	
+   989	Setup: one hook sees deps A, then B, then A across retries of lineage L; a
+   990	second lineage L2 later renders the hook.
+   991	
+   992	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+   993	|---|---|---|
+   994	| 1 | L/A | A equals committed record E0; reuse E0 stage id, no unpublished stage |
+   995	| 2 | L/B | mint E1 with `stageId=publicationId=s1`; store as L's current record |
+   996	| 3 | pure B retry | deps equal E1; reuse s1, so the positional capsule identity/basis does not churn |
+   997	| 4 | L/A | compare committed first; reuse E0. If A were only an older unpublished alternative, mint E2; common-basis value revalidation retains resources whose input stayed equal |
+   998	| 5 | L abandonment / lineage death | E1/E2 publish nothing and die when unreferenced; an ordinary retry discard retains the lineage pointer |
+   999	| 6 | L2 | cannot reuse unpublished L records; it selects committed E0 or mints its own record |
+  1000	| 7 | L commit-B variant | F9 promotes E1; L2 may now select E1 as the immutable committed record |
+  1001	
+  1002	outcome: pure retries are stable, oscillation has React/useMemo semantics,
+  1003	and unpublished identities cannot leak across lineages.
+  1004	
+  1005	residual risk: deps comparison and record retention are pinned by A/B/A,
+  1006	StrictMode, discard, and forced-id-wrap rows.
+  1007	
+  1008	### A5 — value-revalidated prefixes through staged evaluators
+  1009	
+  1010	Setup: a staged child evaluator changes stage id before a downstream
+  1011	`ctx.use(factory)`. In one branch the child's equality-stable output is the
+  1012	same; in the other it changes. The prefix depth is N.
+  1013	
+  1014	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1015	|---|---|---|
+  1016	| 1 | retry basis compare | child `(id,oldStage,oldValueRef)` mismatches current stage id |
+  1017	| 2 | world evaluator | evaluate child with the staged record before reaching the downstream use position |
+  1018	| 3a | equal branch | child equality retains `oldValueRef`; update the basis stage id in place; continue through remaining entries; reuse the same settled thenable |
+  1019	| 3b | changed branch | new value reference differs; generation-drop this and later positions; invoke factory once for the changed content |
+  1020	| 4 | lock/retire stamp variant | fold the moved atom, use the same equality rule, and restamp on equal |
+  1021	| 5 | owning-evaluator variant | if the stage id belongs to the computed containing this `ctx.use`, invalidate directly because the factory code may differ and no completed output exists yet |
+  1022	| 6 | deep chain | visit at most N flattened entries and fold only moved ones; no secondary vector or hash is built |
+  1023	
+  1024	outcome: a nested evaluator-id move is value-revalidated; an owning-evaluator
+  1025	move refetches because it changes the acquisition code itself.
+  1026	
+  1027	residual risk: linear prefix work is unmeasured and release-blocking in the
+  1028	deep-prefix/typeahead grid.
+  1029	
+  1030	### A6 — F9/reducer ordering across roots and former saturation
+  1031	
+  1032	Setup: spanning T has pending actions on root-A-owned hook ReducerAtom RA and
+  1033	root-B-owned hook ReducerAtom RB. A stages reducer rA1; B stages rB1. Both
+  1034	have older committed reducers.
+  1035	
+  1036	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1037	|---|---|---|
+  1038	| 1 | T writes | append RA and RB actions under T; both remain replayable; delivery schedules each owning root |
+  1039	| 2 | A commit | F9 publishes only A's winning stage; re-fold RA pending actions under rA1; value-blind notify; lock T through A's pin; then fold retirements due on A |
+  1040	| 3 | B still pending | B's stage record and world memo remain pass-owned; A cannot publish or mutate RB's owner record |
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-04/design-consolidate-b.md | sed -n '1041,1300p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+  1041	| 4 | B commit | publish rB1, re-fold RB, lock B's prefix, then retire/fold in the same order |
+  1042	| 5 | T global retirement | after both roots/actions close, stamp tapes once; constructor/shared immutable signals remain legal across roots |
+  1043	| 6 | illegal shared stageable node | second-root subscription throws before either commit; supporting it would require the forbidden new per-root evaluator mechanism |
+  1044	| 7 | old “promotion during saturation” | no retired slot is retained: retirement drains and increments slotGen before reuse; promotion's union walk runs atomically, while pin-retained tape keeps `receiptCount>0` and exact-world routing |
+  1045	
+  1046	outcome: each root publishes the reducer that produced its own tree before
+  1047	folding its receipts, and deletion of retained slots removes the promotion x
+  1048	saturation interleaving.
+  1049	
+  1050	residual risk: the owner-root restriction and publication order require
+  1051	fork/binding differential tests with both commit orders.
+  1052	
+  1053	### A7 — registrar liveness, nested registration, and MessageChannel
+  1054	
+  1055	Setup: T registers an async timer callback which registers a microtask and a
+  1056	MessagePort listener; T may settle before any invocation.
+  1057	
+  1058	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1059	|---|---|---|
+  1060	| 1 | registration under T | each installed wrapper captures `(T,tokenGen,realm)`; no token is copied through message data |
+  1061	| 2a | timer before settle | liveness passes; wrapper pushes T; transformed async body captures T; nested microtask/listener registration captures T |
+  1062	| 2b | timer after settle | liveness fails; callback runs ambient and warns once; its transformed body captures ambient, never retired T |
+  1063	| 3 | settle between callback and await | synchronous prefix cannot interleave with settle; each later transformed resumption checks liveness again and becomes ambient if retired |
+  1064	| 4 | interval | every tick independently checks; early ticks use T, later ticks ambient |
+  1065	| 5 | registered MessagePort callback | listener registered under T uses the same bracket on delivery; a listener installed before T is explicitly boundary-class and uses ActionScope for T-owned writes |
+  1066	| 6 | nested action | `armedActions` refcount keeps wrappers installed; inner token shadows during its registration and finally restores outer T |
+  1067	| 7 | final settle | 1-to-0 restores host functions only if wrapper identity still matches, avoiding clobbering another patcher |
+  1068	
+  1069	outcome: token lifetime is checked at every actual continuation entry, nested
+  1070	capture is stack-correct, and MessageChannel support has an exact boundary.
+  1071	
+  1072	residual risk: cached original host functions and unlisted registrars are the
+  1073	documented boundary, measured by warning-rate and coverage tests.
+  1074	
+  1075	### A8 — slot release during an open pass or walk
+  1076	
+  1077	Setup: old pass P excludes token D; D retires while P is pinned, and a new
+  1078	token needs D's slot. Also consider an active delivery walk.
+  1079	
+  1080	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1081	|---|---|---|
+  1082	| 1 | D retirement | stamp D's receipts; durable-drain touchedList; clear D reach bits; increment slotGen and release slot |
+  1083	| 2 | receipt retention | `retiredSeq(D)>P.pin`, so tape compaction refuses; `receiptCount>0` |
+  1084	| 3 | P resume | coarse gate forces exact-world fold; D's retirement clause fails at P.pin, so P sees the old value despite cleared reach bits |
+  1085	| 4 | new token J | occupies same slot with new gen; P's captured gen and D receipts cannot match J; J clock/dedup start zero |
+  1086	| 5 | active full walk | retirement/write interleaving cannot occur because the walk calls no user code; an edge-delivery drain completes before returning to code that can retire/claim |
+  1087	| 6 | queued render edge after D retired | queued `(D,oldGen)` liveness check fails and is dropped; committed comparison/retirement drain already covers observers |
+  1088	| 7 | P end | compaction may remove D; only now can `receiptCount` reach zero and permit K0 render reads |
+  1089	
+  1090	outcome: the spillover state machine is unnecessary; only live tokens consume
+  1091	the 31 slots, and exact-world history—not a pass flag—protects old pins.
+  1092	
+  1093	residual risk: generation comparison must be present at every mask/clock/
+  1094	dedup consumer; schema-generated audits and forced 2-slot tests pin it.
+  1095	
+  1096	### A9 — mount-fixup skip versus retirement race
+  1097	
+  1098	Setup: compare a mount from k's own committing pass with an urgent mount that
+  1099	excluded k and whose layout effect runs after k retires.
+  1100	
+  1101	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1102	|---|---|---|
+  1103	| 1a | own-pass mount | render world contains k through pin; root commit installs that prefix before layout |
+  1104	| 2a | token loop | if k remains globally live, inclusion+clock skips only `runInBatch(k)`; if retired, it is absent |
+  1105	| 3a | unconditional compare | committed-for-root contains the same locked/retired prefix, so equality yields no urgent update and no double render |
+  1106	| 1b | excluding urgent mount | render omits k; if k live, loop schedules correction into k; committed world still equals rendered, so compare is quiet |
+  1107	| 2b | k retires before layout | k is absent from the loop; committed-for-root now includes it; unconditional compare differs and schedules urgent pre-paint correction |
+  1108	| 3b | retire between loop and call | `runInBatch` returns RETIRED; urgent fallback fires |
+  1109	| 4 | mixed tokens | included live prefixes are already in this root's lock view; excluded live tokens get lane updates; every retired difference is visible to the unconditional comparison |
+  1110	
+  1111	outcome: no vacuous quantifier controls the comparison. C9 avoids an extra
+  1112	token render and the retire-race fallback remains total.
+  1113	
+  1114	residual risk: layout ordering is pinned by F3/F9 tests and the mixed
+  1115	included/excluded/retired mount matrix.
+  1116	
+  1117	## 15. Acceptance battery — complete walks
+  1118	
+  1119	Notation: `RM(n)` is a node's generated reach mask, `TL(s)` is the durable
+  1120	touched list, `M(n,w)` is a pinned world memo, and `LVr` is root r's immutable
+  1121	lock view. All steps occur in LOGGED unless explicitly DIRECT.
+  1122	
+  1123	### C1: world-divergent dependency and seven variants
+  1124	
+  1125	Setup: `flag=false,a=0,b=0`; `c=flag?a:b`; W watches c. K0 edges are
+  1126	`flag->c,b->c`.
+  1127	
+  1128	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1129	|---|---|---|
+  1130	| 1 | k writes flag=true | append `flag:{k,s1}`; K0 newest flag=true; union walk uses K0 `flag->c`, sets `RM(c)+=k`, `TL(k)+=c/W`, and delivers W in k |
+  1131	| 2 | k pass reads c | count nonzero -> world path; fold flag=true; read a=0; `M(c,wk)=0`; K1 records `flag->c,a->c`; basis records k clock and atom values |
+  1132	| 3 | k writes a=1 | append s2 and bump `wc[k]`; union walk follows K1 `a->c`; if W rendered since step 1 it re-delivers, otherwise its existing k update covers s2 |
+  1133	| 4 | k reads/retries | memo clock moved; fold/evaluate gives c=1; K1 topology remains real for k |
+  1134	| 5 | before root commit | a committed/excluding world folds flag=false and b=0, so c=0; no K0 cache is render-served while history exists |
+  1135	| 6 | k commit | reconcile reads wk=1; root lock view installs k prefix; W and siblings commit 1 together |
+  1136	
+  1137	outcome: the later write reaches c through its real K1 edge, and every render
+  1138	uses the correct fold.
+  1139	
+  1140	residual risk: K1 edge omission or edge-add delivery; pinned by the core C1
+  1141	test and randomized branch-flip oracle.
+  1142	
+  1143	Variants:
+  1144	
+  1145	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1146	|---|---|---|
+  1147	| T2 | k writes committed-only b | K0 edge may deliver conservatively; wk has flag=true and folds a, so c remains 1 by equality; no wrong cache serve |
+  1148	| T3 | k sets flag=false | clock invalidates M; world eval selects b and records `b->c`; c follows k's b value; union retains both branch edges safely |
+  1149	| T4 | urgent U writes b | U receipt/delivery uses its token; a k view with flag=true still selects a, so c does not change even after U retirement becomes visible |
+  1150	| T5 | urgent U writes a | U render excludes k and evaluates its own world; after U retires, a fresh k pass pin includes U and folds k flag plus retired U a, so c reflects U |
+  1151	| T6 | k retires and slot recycles | old receipts/masks carry old `slotGen`; new token gen cannot match; old pinned pass exact-folds retained receipt; episode bump guards later reuse |
+  1152	| T7a | pass includes k+j | key/memo/basis contain both generated tokens and their clocks; it may suspend without changing either pin or LV |
+  1153	| T7b | j commits alone | same-root older pass is discarded before LV changes; retry captures new LV; a different root's old pass retains its own immutable LV and exact world |
+  1154	
+  1155	outcome: every branch, urgent, reuse, and multi-batch variant has an explicit
+  1156	world identity and dependency path.
+  1157	
+  1158	residual risk: multi-root commit ordering; fork tests 7, 9, 21 plus C11 cover
+  1159	it.
+  1160	
+  1161	### C2: flushSync excludes a pending default batch
+  1162	
+  1163	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1164	|---|---|---|
+  1165	| 1 | default D writes a=1 | append D receipt before K0=1; `receiptCount=1`; K0/K1 walk marks and delivers a/c watchers in D |
+  1166	| 2 | `flushSync` pass starts | F2 include set excludes D; pin may be after s1 but mask does not contain D |
+  1167	| 3 | pass reads a | coarse gate -> fold; live D fails retired/include/lock clauses, so a=0 |
+  1168	| 4 | pass reads c | coarse gate forbids K0's possible 11; M evaluates from folded a=0, so c=10 |
+  1169	| 5 | commit | reconcile sees one world `(a=0,c=10)`; D remains scheduled separately |
+  1170	
+  1171	outcome: atom and computed show the same D-excluding world.
+  1172	
+  1173	residual risk: append/K0 ordering and include-set accuracy; unit test pauses
+  1174	between internal write steps and fork test 1 pins both.
+  1175	
+  1176	### C3: updater rebase parity
+  1177	
+  1178	Setup: a=1; T `+1`; U `x2`.
+  1179	
+  1180	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1181	|---|---|---|
+  1182	| 1 | T write | tape `[T:+1@s1]`; K0 NEWEST=2 |
+  1183	| 2 | U write | tape adds `[U:x2@s2]`; K0 NEWEST replays live order ->4 |
+  1184	| 3 | U render | fold base1, skip T, apply U ->2 |
+  1185	| 4 | U retirement | stamp U; do not discard/reorder its op around older live T; K0 newest remains 4 |
+  1186	| 5 | T render after U | apply T +1 then retired-visible U x2 ->4 |
+  1187	| 6 | T retirement/compaction | fold ordered prefix to base4; tapes leave only after pins allow |
+  1188	| 7 | plain set variant | base1, T +1, later visible `set5` -> set replaces accumulator, final 5 rather than 6 |
+  1189	| 8 | useReducer differential | each world feeds the same included/skipped action sequence to the effective immutable reducer; snapshots match React after every step |
+  1190	
+  1191	outcome: values are 2, then 4, then committed 4, matching React queue order.
+  1192	
+  1193	residual risk: compaction across skipped entries; randomized queue oracle and
+  1194	side-by-side `useReducer` pin it.
+  1195	
+  1196	Staged-reducer extension:
+  1197	
+  1198	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1199	|---|---|---|
+  1200	| R1 | T dispatches A under committed r0 | hook ReducerAtom always appends; K0 evaluates pending A with r0 |
+  1201	| R2 | committing pass stages r1 | exact world folds A with pass r1; F9 id is attached |
+  1202	| R3 | commit | publish r1, re-fold pending A under r1, value-blind deliver, then retire/fold under r1 |
+  1203	| R4 | no-op-under-r0 action | it was not dropped; if r1 makes it effective, the pass and React `useReducer` both apply it |
+  1204	
+  1205	outcome: evaluator publication cannot leave K0, tape folds, and the committed
+  1206	tree using different reducers.
+  1207	
+  1208	residual risk: publication ordering; fork test 20 and swap-with-pending
+  1209	differentials.
+  1210	
+  1211	### C4: two batches write an already-stale region
+  1212	
+  1213	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1214	|---|---|---|
+  1215	| 1 | T1 writes a | full walk G1 reaches c/W; watcher dedup bit T1 set; `setState` queued in T1 |
+  1216	| 2 | T2 writes before render | full walk G2 does not stop at dirty marks; distinct watcher bit T2 was clear, so `setState` queues in T2 |
+  1217	| 3 | joint or separate render | each included set folds its own receipts; rendering clears only included token dedup bits |
+  1218	
+  1219	outcome: W has work in both lanes; staleness never gates a walk.
+  1220	
+  1221	residual risk: accidental shared stamp pruning; tests assert two update queue
+  1222	tokens before any render.
+  1223	
+  1224	### C5: equal first write, effective second write in one batch
+  1225	
+  1226	Setup: `c=a*0+b`, W watches c; k writes a then b.
+  1227	
+  1228	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1229	|---|---|---|
+  1230	| 1 | k writes a=1 | receipt and clock move; value-blind delivery queues W even though a later pull keeps c equal; pure-core K0 equality still cuts off propagation |
+  1231	| 2a | W has not rendered | its existing k update necessarily reads through pin including the later b write; dedup need not enqueue twice |
+  1232	| 2b | W rendered between writes | render clears W's k bit; second full walk reaches W and enqueues again |
+  1233	| 3 | k writes b=7 | append/clock invalidates M; exact evaluation gives c=7; no first-evaluation cache can validate |
+  1234	
+  1235	outcome: conservative first delivery or re-armed second delivery both ensure W
+  1236	commits 7.
+  1237	
+  1238	residual risk: confusing core equality with React delivery; separate counters
+  1239	and a regression assert the distinction.
+  1240	
+  1241	### C6: lane attribution inside engine `batch`
+  1242	
+  1243	Schedule: `batch(() => { a.set(1); startTransition(() => b.set(2)) })`.
+  1244	
+  1245	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1246	|---|---|---|
+  1247	| 1 | outer engine batch | delays core-effect flush only; captures no lane for later watcher delivery |
+  1248	| 2 | a write | F1 returns urgent/default token A; synchronous walk calls a-watchers in A context |
+  1249	| 3 | transition b write | F1 returns deferred token T; synchronous walk calls b-watchers before the transition scope exits, in T context |
+  1250	| 4 | outer close | flush core effects; it does not replay/group watcher calls |
+  1251	| 5 | `startTransition(()=>batch(...))` | all writes see T and deliver in T; legal |
+  1252	| 6 | plain transition writes / helper | ordinary writes see T; `startSignalTransition` additionally supplies ActionScope and parking |
+  1253	
+  1254	outcome: attribution is preserved per write; there is no implicit grouping to
+  1255	misclassify.
+  1256	
+  1257	residual risk: future notification coalescing is forbidden by a lane-token
+  1258	trace assertion.
+  1259	
+  1260	### C7: reads and writes in a yielded pass gap
+  1261	
+  1262	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1263	|---|---|---|
+  1264	| 1 | transition pass P starts | F2 installs pass frame/world/pin; reads exact P world while history exists |
+  1265	| 2 | P yields | F2 removes frame but retains immutable P data/memo pins |
+  1266	| 3 | click handler reads a | no render frame -> K0 NEWEST, not P |
+  1267	| 4 | handler writes a | allowed; F1 classifies click token U, appends U receipt, delivers in U |
+  1268	| 5 | P resumes | F2 restores original world and pin; U receipt after pin is excluded unless P is discarded/restarted |
+  1269	| 6 | render write check | only an active resumed render frame rejects writes; the gap had none |
+  1270	
+  1271	outcome: handler observes/writes newest while P remains internally pinned.
+  1272	
+  1273	residual risk: missing a scheduler yield edge; fork tests 4-5.
+  1274	
+  1275	### C8: equal writes keep receipts
+  1276	
+  1277	Setup: a=0; T set1; U set1.
+  1278	
+  1279	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1280	|---|---|---|
+  1281	| 1 | T set1 | tape was empty, value changes, append T; K0=1 |
+  1282	| 2 | U set1 | tape is nonempty, so append U despite equality with K0; K0 retains old reference |
+  1283	| 3 | U render excluding T | fold base0, skip T, apply U set1 ->1 |
+  1284	| 4 | T closes/aborts first | committed=false still stamps/folds T; U receipt independently represents 1 |
+  1285	| 5 | overlapping transitions same value | each nonempty-history write has its own receipt/token and each single-token world folds to 1 |
+  1286	
+  1287	outcome: equality never erases a world-visible write once history exists.
+  1288	
+  1289	residual risk: “equal K0” fast-return before append; write-path order test
+  1290	forbids it.
+  1291	
+  1292	### C9: mount mid-transition, existing and fresh nodes
+  1293	
+  1294	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1295	|---|---|---|
+  1296	| 1 | k writes atoms | receipts make count nonzero; write walks establish all currently known reach paths |
+  1297	| 2 | k pass reads existing c | coarse gate -> exact `M(c,wk)`; atom folds include k; K1 records k-world edges |
+  1298	| 3 | k pass constructs fresh f | pass-owned arena allocation; count nonzero -> first read evaluates f directly in wk, records K1 edges and basis; no K0 probe occurs |
+  1299	| 4 | pass retries | pinned memos/bases validate by clocks/stages; same world values returned |
+  1300	| 5 | k root commit | lock view contains rendered prefix; fresh allocations transfer to committed ownership |
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-04/design-consolidate-b.md | sed -n '1301,1540p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+  1301	| 6 | layout fixup | included+clock skips redundant k lane correction; unconditional committed-for-root comparison equals rendered value because lock-in preceded layout |
+  1302	| 7 | discard variant | pass-owned fresh records are generation-freed; no subscription/effect escaped |
+  1303	
+  1304	outcome: both nodes read k on their first render and the mount incurs no
+  1305	second k render.
+  1306	
+  1307	residual risk: an accidental K0 fresh-node shortcut; test asserts world-path
+  1308	counter on first read and arena reclamation on discard.
+  1309	
+  1310	### C10: late subscription joins the pending token
+  1311	
+  1312	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1313	|---|---|---|
+  1314	| 1 | k writes a | `RM(a)`/`TL(k)` receive k even with no watcher |
+  1315	| 2 | urgent pass mounts W excluding k | exact fold renders old a; subscription records excluded world |
+  1316	| 3 | layout token loop | k is live/reached but absent from rendered mask/LV; `runInBatch(k,setState)` returns JOINED |
+  1317	| 4 | React k render | corrective is in k's original lanes, so the render that includes k also includes W; one commit carries both |
+  1318	| 5a | k retired before layout | no live loop entry; committed comparison sees retired a and issues urgent pre-paint correction |
+  1319	| 5b | k retires after enumeration | `runInBatch` returns RETIRED; same urgent fallback |
+  1320	| 6 | edge created after k write | K1 edge-add carry queues the same k correction before commit |
+  1321	
+  1322	outcome: a live token gets exactly its own-lane correction; a retired token
+  1323	gets the only possible pre-paint correction.
+  1324	
+  1325	residual risk: F4 mistakenly spawning a fresh transition; fork tests 12-14
+  1326	assert token identity and restart behavior.
+  1327	
+  1328	### C11: full spanning multi-root support
+  1329	
+  1330	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1331	|---|---|---|
+  1332	| 1 | spanning k writes | one token/tape schedules reached watchers in roots A and B |
+  1333	| 2 | A renders k through pin pA | exact world includes k; B may remain on its old world |
+  1334	| 3 | A commit | F9 for A-owned hooks, then `LVA` re-mints with `(k,pA)`; A DOM and committed-for-A reads agree; k remains live for B/action |
+  1335	| 4 | later A render excluding k lanes | clause 3 includes k through `LVA`; it cannot contradict A's DOM |
+  1336	| 5 | A passive effect | committed-for-A uses current `LVA` and observes the prefix A committed |
+  1337	| 6 | post-await k write s2 | K0/tape newest move; A's `LVA` still caps at pA, so A committed reads do not leak s2; delivery schedules A/B in k |
+  1338	| 7 | A commits s2 | view advances to pA2/id2; changed-slot TL forces A effects; old same-root pass was discarded first |
+  1339	| 8 | B commit | `LVB` independently locks B's rendered watermark; visible cross-root skew was allowed, each root internally consistent |
+  1340	| 9 | global retirement | after both roots and parking close, stamp once, drain each root's affected observers, drop lock entries, recycle slot |
+  1341	
+  1342	outcome: per-root lock views preserve each root's committed prefix while the
+  1343	token spans roots and advances.
+  1344	
+  1345	residual risk: fork-side root/commit facts; tests 7-9 and 21-22 are on the
+  1346	critical path.
+  1347	
+  1348	### C12: store-only and async transitions persist
+  1349	
+  1350	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1351	|---|---|---|
+  1352	| 1 | `startTransition(()=>a.set(5))` | F1 lazily claims T despite no watcher; append receipt; no React update is required |
+  1353	| 2 | transition closes | F3 retires T once with `committed=false`; policy still stamps/folds 5 into committed base |
+  1354	| 3 | later read | K0/base returns 5; persistence did not consult watcher count |
+  1355	| 4 | async T synchronous prefix set1 | append under parked T; retirement prohibited while returned thenable pending |
+  1356	| 5 | transformed continuation after await | carrier liveness passes; set2 appends under the same T |
+  1357	| 6 | settle | F8 unpark then F3 retire; replay set1,set2 in order -> base2 |
+  1358	| 7 | shimmed timer callback | registration captured T; invocation before settle runs under T; after settle runs ambient+warn |
+  1359	| 8 | untransformed opaque code | raw write is an ordinary ambient batch, never lost; `scope.set/dispatch` is the supported exact attribution path |
+  1360	
+  1361	outcome: subscriber-free writes persist, and supported async continuations
+  1362	remain parked until settlement.
+  1363	
+  1364	residual risk: build/registrar coverage; per-bundle boot probe and carrier
+  1365	matrix pin the declared boundary.
+  1366	
+  1367	### C13: counter and identity lifecycle
+  1368	
+  1369	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1370	|---|---|---|
+  1371	| 1 | quiesce episode E | every tape empty, no pass/token/stage/capsule refs; K1 refresh completes |
+  1372	| 2 | global renumber | rewrite retained base/stamp/id fields, bump episode, reset seq; every memo/basis key contains episode |
+  1373	| 3 | slot reuse | clear RM/dedup/TL, increment `slotGen`, then zero wc; old receipt/pass mask gen mismatch |
+  1374	| 4 | node/link reuse | allocator increments gen before reuse; stale K1 edge/memo/watcher rejects |
+  1375	| 5 | `walkGen` forced wrap | depth is zero; clear every `lastWalk`, reset G=1; no old stamp can compare equal |
+  1376	| 6 | lock view pool reuse | old view remains until refcount zero; new id plus episode differs |
+  1377	| 7 | lineage/stage/capsule reuse | lineage and node generations plus episode separate old records; stale thenable settlement checks capsule gen |
+  1378	| 8 | token serial wrap | allowed only after no live token; token epoch changes and is checked with serial |
+  1379	| 9 | forced-small test | run all counters at 2- or 3-bit horizons with an old pass, retirement, slot reuse, and Suspense settlement; values must match unbounded oracle |
+  1380	
+  1381	outcome: every reusable number is paired with an epoch, generation, retained
+  1382	reference, or whole-column clear.
+  1383	
+  1384	residual risk: an omitted schema consumer; generated retainer tables and
+  1385	forced wrap tests fail CI on any unlisted counter field.
+  1386	
+  1387	### C14: StrictMode and replay
+  1388	
+  1389	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1390	|---|---|---|
+  1391	| 1 | double render | reads only create pass-owned memos/K1 additions/stages; K1 additions are idempotent; no render write is allowed |
+  1392	| 2 | first attempt discarded | memo pins, fresh nodes, and F9 attachments release by generation; F9 emits nothing; lineage stage/capsule records remain for a same-lineage replay |
+  1393	| 3 | replay with equal deps | lineage record and stage id reuse; same positional capsule/thenable returned |
+  1394	| 4 | replay with changed deps | new stage id; common basis forces recompute/value validation before capsule reuse |
+  1395	| 5 | double mount/unmount | refcounts flap but microtask damping starts one observed effect and cleans after stable zero |
+  1396	| 6 | throwing/suspending getter | sentinel box closes tracking in `finally`; graph contains only completed edges |
+  1397	
+  1398	outcome: replay is pure, resources retain stable identity, and lifecycle
+  1399	effects net correctly.
+  1400	
+  1401	residual risk: Offscreen/StrictMode ordering changes; fork F9 tests and the
+  1402	React harness run in dev and production builds.
+  1403	
+  1404	### C15: Suspense across worlds and batch sets
+  1405	
+  1406	Setup: k makes c suspend; a component mounts in k; later the promise settles.
+  1407	
+  1408	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1409	|---|---|---|
+  1410	| 1 | k write/pass | receipt count forces exact world; c evaluates with k atoms and reaches `ctx.use(factory)` |
+  1411	| 2 | capsule create | key `(cGen,lineageL,position)`; store thenable q and common basis prefix for full k world; React `use` suspends on q |
+  1412	| 3 | committed/excluding render | exact-evaluates its own world and cannot see L's q or suspension; a non-React core NEWEST getter follows its separately documented newest contract |
+  1413	| 4 | mount mid-transition | same lineage/world reaches same position; equal basis returns q and suspends on first render |
+  1414	| 5 | q settles | settlement version dirties the k memo and schedules retry; q identity remains |
+  1415	| 6 | retry | lineage L stable; basis values equal -> consume q's settled value, no refetch |
+  1416	| 7 | multi-batch `{k,j}` | F5 gives the joint logical lineage; basis header/mask/clocks distinguish it from k-only without using one token as identity |
+  1417	| 8 | included write changed input | clock/fingerprint moves; re-fold differs -> drop suffix/refetch once |
+  1418	| 9 | lock/retire/evaluator id moved but input equal | value revalidation retains old reference, restamps basis, and reuses q |
+  1419	| 10 | commit | root lock contains rendered prefixes; lineage dies after committed consumers transfer; stale settlements check capsule gen |
+  1420	
+  1421	outcome: thenable identity survives pure retries, while actual world content
+  1422	changes invalidate it.
+  1423	
+  1424	residual risk: deep flattened basis cost and factory purity; typeahead/deep-
+  1425	prefix gate and lazy-factory tests pin both.
+  1426	
+  1427	### C16: effects observe committed state only
+  1428	
+  1429	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1430	|---|---|---|
+  1431	| 1 | default D writes a | K0 NEWEST becomes new; D receipt live; write queue may note effect E but E's committed snapshot is unchanged |
+  1432	| 2 | unrelated token retires/flushes | `useSignalEffect` evaluates committed-for-root world whose LV excludes D; exact fold returns old a; basis value equal, so no new-value observation |
+  1433	| 3 | core effect variant | documented NEWEST contract may read K0 new immediately; separate API, expected |
+  1434	| 4 | D root commit | LV locks D prefix before effects; D's durable TL forces E revalidation; it now reads new a and runs |
+  1435	| 5 | D store-only retirement | retirement stamp/TL similarly exposes and flushes committed value even without React work |
+  1436	| 6 | effect deps change | React native effect re-fire cleans, runs new function, records new K0/K1 dependencies; no F9 staging path |
+  1437	
+  1438	outcome: React effects never observe applied-but-uncommitted D, then observe it
+  1439	at the commit/retirement edge that makes it committed.
+  1440	
+  1441	residual risk: a fast queue bypassing durable trigger enumeration; tests
+  1442	consume the queue early and require the later TL drain to fire.
+  1443	
+  1444	### C17: optimistic rollback
+  1445	
+  1446	| step | actor/mechanism | state touched (values, marks, edges, log, lanes) |
+  1447	|---|---|---|
+  1448	| 1 | API inspection | no truncate/rollback method is exported from Atom, transition helpers, fork protocol, or ActionScope |
+  1449	| 2 | React abandonment | `committed=false` retirement still folds receipts; it is not rollback |
+  1450	| 3 | attempted internal call | no policy entry point exists; TypeScript and compiled-export snapshots reject it |
+  1451	
+  1452	outcome: the optional case is closed by deleting the surface; React batches
+  1453	never truncate signal history.
+  1454	
+  1455	residual risk: accidental debug export; public API snapshot test pins it.
+  1456	
+  1457	## 16. Known gaps and unwalked cases
+  1458	
+  1459	No acceptance case or round-4 docket schedule is unwalked.
+  1460	
+  1461	The remaining gaps are measurements and implementation existence proofs, not
+  1462	unstated correctness mechanisms:
+  1463	
+  1464	- the coarse exact-world gate during long receipt history may fail the React
+  1465	  1.10x or typeahead gate;
+  1466	- LOGGED-quiet has a previously measured 2.4-3.8% floor against a 2% contract;
+  1467	- flattened basis length/value revalidation cost is unmeasured;
+  1468	- value-blind fan-out, dense retirement, lock-view copy cost, and registrar
+  1469	  wrapper cost are unmeasured;
+  1470	- current-generation React implementations of F2 same-root discard ordering,
+  1471	  F3 per-root watermarks, and F9 Offscreen publication must be built and pass
+  1472	  the fork tests;
+  1473	- registrar coverage is intentionally finite. Pre-existing MessagePort
+  1474	  listeners, cached original host functions, and unlisted schedulers require
+  1475	  ActionScope or native AsyncContext and warn when detectable.
+  1476	
+  1477	No fallback mechanism is authorized in this consolidation round. A failed
+  1478	correctness proof rejects the design; a failed numeric gate rejects the
+  1479	design or requires an explicit requirement change.
+
+codex
+I’ve completed the design read. Next I’m running the mandated acceptance battery against its mechanisms, then I’ll cross-check the requirements, fork contract, measured facts, and known-dead schedules in that exact order.
+exec
+/bin/zsh -lc "wc -l design-loop/SEEDS/correctness-cases.md && nl -ba design-loop/SEEDS/correctness-cases.md | sed -n '1,280p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     288 design-loop/SEEDS/correctness-cases.md
+     1	# Acceptance battery: the correctness cases (frozen seed)
+     2	
+     3	Rules of engagement:
+     4	
+     5	- A design must **walk every case**: name the mechanisms that fire, in order,
+     6	  and show the values/marks/edges at each step. A table or trace, not prose
+     7	  assurance.
+     8	- Any "immune / correct **by construction**" claim must include the
+     9	  construction — the induction or invariant, written out. Unaccompanied
+    10	  by-construction claims are an automatic reviewer blocker. (This rule exists
+    11	  because the previous judgment accepted exactly such a claim and it was
+    12	  false.)
+    13	- Reviewers attack these cases first; judges re-walk them last. A case that
+    14	  cannot be walked in a design is a blocker, not a TODO.
+    15	- **Restricting the interface is a legitimate design move.** A design may
+    16	  resolve a case by *forbidding the pattern at runtime* (a thrown error with
+    17	  a clear message) when the pattern is avoidable user code — but it must
+    18	  then (a) show the forbidden pattern is reliably *detectable* at the point
+    19	  of rejection, (b) define which nearby compositions remain legal, and walk
+    20	  those, and (c) never forbid ordinary React behavior the user doesn't
+    21	  control (flushSync in an event, time-slicing yields, StrictMode replays,
+    22	  a component mounting mid-transition — those must be handled, not banned).
+    23	
+    24	Notation: `T`,`k` = deferred (transition-like) batches; `U` = urgent batch;
+    25	`D` = default-priority batch (urgent-classified, but renders asynchronously —
+    26	it can be *excluded* from a sync render). "World of X" = the state a render
+    27	for X must observe. All cases assume React-mode (bindings active).
+    28	
+    29	---
+    30	
+    31	## C1 — World-divergent dependency (the killer; family of 7)
+    32	
+    33	Setup: atoms `flag=false, a=0, b=0`; computed `c = flag ? a : b`; component W
+    34	subscribed to `c`; canonical deps of `c` = {flag, b}.
+    35	
+    36	Schedule: deferred batch k: `flag.set(true)` → (k-world read of `c` may
+    37	happen here, caching 0 via `a`) → same batch k: `a.set(1)`.
+    38	
+    39	Required: the k-world value of `c` becomes 1 (any k-world cache invalidated);
+    40	W is re-rendered **in k's lane before k commits** (no torn commit where
+    41	siblings show k's world and W shows stale); committed world still reads 0
+    42	via `b`.
+    43	
+    44	The trap: `a` has **no canonical edge** to `c`. Any invalidation or
+    45	notification derived only from canonical topology cannot reach `c`/W. Any
+    46	cache-validity record that only captured "atoms with concurrency state at
+    47	evaluation time" misses `a` (it acquires state *after* the evaluation).
+    48	
+    49	Variants that must also be walked: T2 write to committed-only dep `b` in k
+    50	(no k-world change; over-invalidation ok, wrong value not); T3 shared dep
+    51	flips back (`flag=false` in k); T4 urgent write to `b` (committed changes,
+    52	k-world doesn't); T5 urgent write to `a` (k-world sees it — pending worlds
+    53	include applied urgent state); T6 slot/world-id reuse hygiene after k
+    54	retires; T7 two live batches render together, one suspends, one commits
+    55	alone (multi-batch and single-batch views over the same nodes).
+    56	
+    57	## C2 — flushSync excludes a pending default batch (forces always-log)
+    58	
+    59	Setup: atom `a=0`, computed `c = a + 10`, components on both.
+    60	
+    61	Schedule: in one event: `a.set(1)` lands in default-priority batch D
+    62	(urgent-classified, applied to canonical state if the design applies urgent
+    63	writes); then `flushSync(setState)` renders **SyncLane only** — D excluded.
+    64	
+    65	Required: the flushSync render reads `a=0` AND `c=10`. Both. A design whose
+    66	canonical value moved and whose downstream computed can be served from a
+    67	canonical cache shows `c=11` next to `a=0` — torn frame.
+    68	
+    69	The trap: (a) skipping history for urgent writes makes the older world
+    70	unreconstructible (this case is the proof that **every** write needs a
+    71	receipt in React mode); (b) recording the receipt but not marking/knowing
+    72	the *downstream cone* is world-sensitive leaves `c` on the canonical fast
+    73	path.
+    74	
+    75	## C3 — Rebase parity (React's updater-queue arithmetic)
+    76	
+    77	Setup: `a=1`. Deferred T: `a.update(x=>x+1)`; then urgent U:
+    78	`a.update(x=>x*2)`.
+    79	
+    80	Required, in order: urgent render (excludes T) shows 2; U commits (fold is a
+    81	no-op vs canonical); T's render shows 4 (`(1+1)*2` — replay in write order);
+    82	T commits → committed value 4. `useReducer` side-by-side test must match at
+    83	every step. A design that applies-and-discards the urgent updater folds T to
+    84	2 or 3 — wrong. A plain `set 5` after a pending `+1` must commit 5 (not 6).
+    85	
+    86	## C4 — Two-batch write into an already-stale region (re-notify)
+    87	
+    88	Setup: component W on computed `c` over atom `a`.
+    89	
+    90	Schedule: T1 writes `a` (W notified, re-render scheduled in T1's lane); before
+    91	any re-render/commit, a *different* deferred batch T2 writes `a`.
+    92	
+    93	Required: W is also scheduled in **T2's lane** (T2's render includes W). The
+    94	trap: once-per-staleness notification dedup (marks that stop walks; an ARMED
+    95	bit that re-arms only after the watcher re-runs) has no path from the second
+    96	write to W in T2's lane.
+    97	
+    98	## C5 — Cutoff-suppressed first write, effective second write (same batch)
+    99	
+   100	Setup: `c` reads `a` but its value doesn't change when `a` goes 0→1 (e.g.
+   101	`c = a*0 + b`); watcher on `c`.
+   102	
+   103	Schedule: batch k writes `a=1` (broadcast correctly suppressed — value equal);
+   104	then k writes `b=7`.
+   105	
+   106	Required: the second write reaches the watcher (setState in k's lane) even
+   107	though the region is already marked/stale and the first broadcast was
+   108	suppressed. Cache-validity must not serve the first evaluation's value.
+   109	
+   110	## C6 — Lane attribution under grouped notification
+   111	
+   112	Schedule: `batch(() => { a.set(1); startTransition(() => b.set(2)) })` — the
+   113	engine-level batch closes *after* the transition scope ends.
+   114	
+   115	Required — one of two resolutions, stated explicitly:
+   116	
+   117	- **Handle it**: watcher setStates for `b`'s cone are assigned to the
+   118	  transition's lanes (its render includes them; one commit carries them);
+   119	  `a`'s cone gets urgent scheduling. Name the mechanism that preserves each
+   120	  write's batch context across the grouped drain (e.g. fork lane-scoped
+   121	  execution, or per-write synchronous delivery).
+   122	- **Forbid it** (per the preamble rule): reject mixed-context writes inside
+   123	  an explicit `batch()` at the write site (detectable: the write's
+   124	  classification/batch differs from the batch's opening context — show the
+   125	  detection). Then walk the legal compositions that remain:
+   126	  `startTransition(() => batch(...))`, plain unbatched writes inside
+   127	  `startTransition`, and a provided `startSignalTransition` helper.
+   128	
+   129	The trap either way: any *implicit* grouping (e.g. coalescing broadcasts per
+   130	event without user-visible `batch()`) cannot be forbidden — the user wrote
+   131	no special code — so implicit grouping must preserve per-write context or
+   132	not exist. State which your design does.
+   133	
+   134	## C7 — Writes and reads during a yielded render pass
+   135	
+   136	Schedule: a transition render is time-sliced and yields; during the yield a
+   137	click handler runs: reads `a.state`, writes `a.set(x)`; the pass later
+   138	resumes.
+   139	
+   140	Required: the handler's read resolves in the **newest** world (not the pass's
+   141	pinned world); the write does not throw and is classified/logged under the
+   142	click's batch; the resumed pass still observes its original pinned world.
+   143	
+   144	The trap: any "am I in render?" state scoped to [pass-start, pass-end] is
+   145	wrong during yields — passes span yields, and handlers run in the gaps. The
+   146	fork must expose yield/resume (or equivalent per-callstack truth); the
+   147	design must say how reads know.
+   148	
+   149	## C8 — Equality drops must not lose receipts
+   150	
+   151	Setup: `a=0`; deferred T: `a.set(1)`. Then urgent U: `a.set(1)` — equal to
+   152	the *newest* value.
+   153	
+   154	Required: U's write must still exist in U's world: U's render (excluding T)
+   155	shows 1. If T is later truncated/aborted (where supported), committed value
+   156	is still 1. Walk also: two overlapping transitions writing the same value.
+   157	
+   158	Sound rule of thumb (prove yours): dropping an equal write is safe only when
+   159	no history exists for the atom — with any history, worlds disagree about the
+   160	accumulator, so equality must move to fold/notify time.
+   161	
+   162	## C9 — Mount mid-transition (existing and fresh nodes)
+   163	
+   164	Schedule: transition k writes atoms; while k is pending/rendering, a
+   165	component mounts and reads (a) an existing computed over k-touched atoms,
+   166	(b) a **freshly created** node (`useComputed` created during this render)
+   167	over the same atoms.
+   168	
+   169	Required: both reads resolve in the pass's world (which includes k) on the
+   170	first render — no double render, no canonical leak. The trap for (b): a
+   171	brand-new node has no marks/edges/shadow yet; the first evaluation may run
+   172	before any world-sensitivity is discoverable. State the mechanism (e.g.
+   173	evaluate-then-recheck, or eager world-routing for fresh nodes).
+   174	
+   175	## C10 — Late subscription joins the pending batch (entanglement)
+   176	
+   177	Schedule: transition k writes atom `a`; component mounts (subscribes to `a`)
+   178	after the write but before k commits; k's world-value for the component
+   179	differs from what it rendered.
+   180	
+   181	Required: exactly **one** commit containing both k's updates and the
+   182	component's correction (the corrective update is assigned to k's own lanes —
+   183	a fresh `startTransition` is NOT equivalent and must be shown why). If k
+   184	retires in the race window, fall back to an urgent pre-paint correction.
+   185	
+   186	## C11 — Multiple roots (declared-scope case)
+   187	
+   188	Cross-root *simultaneity* is NOT required — React itself commits roots at
+   189	different times, even for one transition. What is required is **per-root
+   190	self-consistency** and an explicitly declared scope. The design must pick
+   191	and walk one of:
+   192	
+   193	- **Full spanning support**: batch k spans roots A and B; A commits k while
+   194	  B is pending. Later renders on A keep including k (A must never contradict
+   195	  its own committed DOM); A's passive effects observe k's values after A's
+   196	  commit even though the token hasn't fully retired; B eventually commits; k
+   197	  retires exactly once. The trap: a single global "committed" world is wrong
+   198	  per root during the window.
+   199	- **Degraded multi-root**: roots are supported; a spanning batch may commit
+   200	  per-root with visible cross-root skew, but each root remains
+   201	  self-consistent (no root contradicts its own DOM; corrections are
+   202	  urgent-scheduled, bounded, and documented).
+   203	- **v1 single-root scope**: a second root is rejected loudly (per the
+   204	  preamble rule — detectable at root registration), with the multi-root
+   205	  story named as future work and nothing in the architecture that
+   206	  forecloses it.
+   207	
+   208	Hidden-gap warning: apps acquire second roots accidentally (portals are
+   209	fine — same root; but modals/microfrontends/devtools overlays often use
+   210	`createRoot` twice). "Single root" is a legitimate scope only if violation
+   211	is detected, not silently wrong.
+   212	
+   213	## C12 — Store-only transitions persist
+   214	
+   215	Schedule: `startTransition(() => a.set(5))` with **no subscribed component**;
+   216	also: an async action `startTransition(async () => { a.set(1); await io();
+   217	a.set(2) })` with no React work.
+   218	
+   219	Required: the writes commit to canonical state when the batch retires (and
+   220	for the async action, not before the action settles). Whether a write
+   221	persists must never depend on who is subscribed. (Drop-on-abort killed a
+   222	prior candidate; its schedule lives in SCARS.)
+   223	
+   224	## C13 — Counter/world-id lifecycle soundness
+   225	
+   226	Schedule: drive the system to full quiescence (all batches retired, caches
+   227	reset); begin a new episode; drive sequence/ticket counters to values that
+   228	collide with retained bookkeeping from the previous episode (force small
+   229	counters in tests).
+   230	
+   231	Required: no stale cache entry, mark, or world record from a previous
+   232	episode can validate in the new one. State every counter, what references
+   233	it, and what makes cross-episode reuse safe (epoch bump, generation check,
+   234	plane reset — name it per structure). Include forced-wraparound tests for
+   235	every counter with a horizon.
+   236	
+   237	## C14 — StrictMode and replayed renders
+   238	
+   239	Required: render-phase reads are pure (no graph mutation observable across a
+   240	discarded/replayed pass; no double-fired writes — render-phase writes
+   241	throw); double-mounted effects/observed-lifecycle net to one subscription
+   242	(microtask flap damping); per-world thenable identity is stable across
+   243	replays (same positional thenable per world — or React re-suspends forever).
+   244	
+   245	## C15 — Suspense across worlds (R6 hard case)
+   246	
+   247	Schedule: transition k causes computed `c` to suspend (async data); while
+   248	suspended, a component mounts mid-transition reading `c`; promise settles;
+   249	React retries.
+   250	
+   251	Required: mount suspends via React `use` protocol against the k-world
+   252	thenable; retry re-evaluates through a per-world cache with stable identity;
+   253	canonical world never observes the suspension; k commits with settled value.
+   254	Also walk: which key identifies "the world" for the thenable cache when a
+   255	pass includes multiple batches (a single token is not enough; passSerial
+   256	alone re-fetches forever — state your key and its lifetime).
+   257	
+   258	## C16 — Effects observe committed state only
+   259	
+   260	Schedule: urgent write applied but not yet committed (e.g. default-priority
+   261	batch D pending render); an unrelated retirement flushes `useSignalEffect`s.
+   262	
+   263	Required: the effect's reads exclude D's applied-but-uncommitted write; after
+   264	D commits, the effect re-runs (or first runs) seeing it. Core `effect()` is
+   265	allowed a different documented contract (newest), but it must be *stated*
+   266	and walked.
+   267	
+   268	## C17 — Optimistic rollback (only if the design exposes truncation)
+   269	
+   270	Schedule: policy API truncates a pending batch's writes mid-flight while
+   271	another batch and an open pass exist.
+   272	
+   273	Required: no world ever observes a half-removed batch; caches/memos that
+   274	folded the truncated writes invalidate; watchers whose values revert are
+   275	notified. If the design does not expose truncation, say so and delete this
+   276	surface — React batches themselves never truncate.
+   277	
+   278	---
+   279	
+   280	## Walk format (required per case)
+
+exec
+/bin/zsh -lc "nl -ba design-loop/SEEDS/correctness-cases.md | sed -n '281,340p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+   281	
+   282	```
+   283	C<n>: <one-line restatement>
+   284	step | actor/mechanism | state touched (values, marks, edges, log, lanes)
+   285	...
+   286	outcome: <matches Required because ...>
+   287	residual risk: <what could regress this; which test pins it>
+   288	```
+
+exec
+/bin/zsh -lc "wc -l design-loop/SEEDS/requirements.md && nl -ba design-loop/SEEDS/requirements.md | sed -n '1,320p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+      86 design-loop/SEEDS/requirements.md
+     1	# Requirements (frozen seed)
+     2	
+     3	What the product is: a from-scratch TypeScript signals library with
+     4	no-compromise concurrent React integration (no `useSyncExternalStore`), backed
+     5	by a React fork we fully control. These requirements are the contract; the
+     6	architecture is the design space.
+     7	
+     8	## R — Functional (the user-facing chrome; largely settled by prior work)
+     9	
+    10	- **R1 Atom**: `new Atom<T>({ state, effect?, isEqual?, label? })`;
+    11	  `atom.state` (tracked read), `set(v)`, `update(fn)`. `effect` runs on
+    12	  observed 0→1 with cleanup on 1→0, microtask-debounced (flap-proof).
+    13	- **R2 Computed**: `new Computed<T>({ fn(ctx), isEqual?, label? })`; lazy,
+    14	  cached, exact re-verification; `ctx.use(thenable)` suspense with per-world
+    15	  positional identity; `ctx.previous`. Errors/suspensions are cached values
+    16	  (sentinel boxes) — a throwing getter can never corrupt graph state.
+    17	- **R3 ReducerAtom**: `dispatch(action)`; actions are logged and replayed per
+    18	  world; parity with `useReducer` is a conformance test, not a hope.
+    19	- **R4 Hooks** (`cosignal/react`): `useSignal`, `useAtom`, `useReducerAtom`,
+    20	  `useComputed(fn, deps, opts?)` (closes over props/state; signal reads
+    21	  auto-tracked), `useSignalEffect(fn, deps?)` (committed state only).
+    22	  Provider-free preferred; a provider component is acceptable if it
+    23	  demonstrably buys correctness or simplicity (justify the trade).
+    24	- **R5 Transitions**: full `startTransition`/`useTransition` parity — signal
+    25	  and React state move in lockstep; optional `startSignalTransition` /
+    26	  `useSignalTransition` throughput helpers.
+    27	- **R6 Suspense parity**, including the mount-mid-transition-while-suspending
+    28	  case (react-concurrent-store's documented known bug must be a passing test),
+    29	  and fresh nodes (`useComputed` mounted mid-transition) reading the pass's
+    30	  world correctly on first render.
+    31	- **R7 Infinite-loop rejection**: React's own limits for React-coupled storms;
+    32	  engine cycle detection for signal-only loops.
+    33	- **R8 Writes inside computeds**: tolerated when acyclic;
+    34	  `configure({forbidWritesInComputeds})`; render-world evaluation always
+    35	  rejects writes.
+    36	- **R9 Multiple roots**: per-root self-consistency is required (a root must
+    37	  never contradict its own committed DOM). Cross-root simultaneity for a
+    38	  spanning batch is NOT required; the design declares its multi-root scope
+    39	  and walks C11 at that declared scope (full / degraded / v1 single-root
+    40	  with loud detection).
+    41	- **R10 SSR/hydration** from serialized atom state (RSC/Flight out of scope v1).
+    42	- **R11 Tracing**: lazily-loadable, zero-allocation recorder (ring + lossless
+    43	  session modes), causality queries, Graphviz renderers; untraced cost = one
+    44	  slot check per site. (The synthesized spec §16 is the reference bar; reuse
+    45	  it unless the architecture forces changes.)
+    46	- **R12 React fork**: see `fork-charter.md` — the old "minimal additive patch"
+    47	  constraint is lifted; maintainability is a scored axis instead.
+    48	- **R13 Core non-React API**: `effect()`, `batch()`, `untracked()`,
+    49	  `configure()` (`effectScope()` optional — include only if it earns its
+    50	  keep). Scheduling/flush behavior may be configurable; the hard requirement
+    51	  is **benchmark integrability**: the design must drive the
+    52	  js-reactivity-benchmark adapter honestly (exact pull counts, checksum
+    53	  contracts, fresh mid-batch reads, effects observable synchronously under
+    54	  some documented configuration).
+    55	
+    56	## P — Performance (gates, not adjectives)
+    57	
+    58	- **P1** Signal-driven re-render within 10% of equivalent `useState`;
+    59	  10k-subscription mount within 15%.
+    60	- **P2** Pure-core (no React) at-or-below alien-signals v3 on every tier-0
+    61	  shape; exact pull counts (`testPullCounts: true`); 179/179 conformance
+    62	  including growth stress. Donor reference points in `research-facts.md`.
+    63	- **P3** Concurrency machinery costs ~nothing when inactive: pure-core users
+    64	  execute zero concurrency instructions; React-mounted-but-quiet ≤2% on
+    65	  tier-0; every hot mechanism carries a numeric gate and a CI check (the
+    66	  synthesized spec's §18 gate-table style is the bar).
+    67	- **P4** Zero engine allocation on steady re-render traffic; memory wins
+    68	  reported as heapUsed + plane bytes side by side.
+    69	
+    70	## E — Engineering
+    71	
+    72	- pnpm workspaces; TypeScript; `type` over `interface`; `undefined` over
+    73	  `null` (each `null` justified); ships compiled JS (same-file `const enum`
+    74	  allowed per the measured bundler-demotion hazard); branded id types;
+    75	  `__DEV__` by define, never by runtime const.
+    76	- Process apparatus is inherited, not redesigned: oracle-first sequencing,
+    77	  frozen-kernel contract suite, bytecode budgets CI, pre-registered
+    78	  experiments, per-milestone numeric exit gates. (These survived review;
+    79	  spend design tokens elsewhere.)
+    80	- Plain-spoken spec: every concept defined in plain English before use; the
+    81	  concurrency story must fit on one page (judged).
+    82	
+    83	## Non-negotiable correctness bar
+    84	
+    85	Every case in `correctness-cases.md`, walked mechanism-by-mechanism.
+    86	`useState`/`useReducer`/`startTransition` parity is the product.
+
+exec
+/bin/zsh -lc "wc -l design-loop/SEEDS/fork-charter.md && nl -ba design-loop/SEEDS/fork-charter.md | sed -n '1,320p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+      65 design-loop/SEEDS/fork-charter.md
+     1	# Fork charter (frozen seed)
+     2	
+     3	The old constraint — "minimal additive patch to React" — is **lifted**. We
+     4	own the fork. Depth is allowed; what is scored is size, maintainability, and
+     5	seam stability, not shallowness for its own sake.
+     6	
+     7	## Goals, restated as scoreable properties
+     8	
+     9	1. **Fork size**: count of touched reconciler files and lines; count of new
+    10	   concepts introduced into reconciler code.
+    11	2. **Maintainability**: every hook site edge-triggered from a place the
+    12	   reconciler already mutates its own bookkeeping (never sampled state);
+    13	   each site documents its invariant in place; the fork carries its own
+    14	   reconciler-level test suite that runs on every rebase; inert-when-unused
+    15	   (one null-check per site with no listener).
+    16	3. **Seam stability** (the co-design goal): the signals library depends only
+    17	   on a versioned protocol document (`fork-protocol.md` in the design), not
+    18	   on reconciler internals. Judge runs a **rebase drill**: "React renamed
+    19	   lanes / moved commit phases / changed update-queue internals — what in
+    20	   the signals library changes?" The right answer is "nothing; the fork
+    21	   re-implements the same protocol facts."
+    22	
+    23	## Protocol facts known to be required (from the acceptance battery)
+    24	
+    25	- Write classification: is-a-write-right-now deferred; which batch (integer
+    26	  token, minted lazily, never reused live; deferred bit in the token).
+    27	- Pass lifecycle: start(root, includedBatches) / end — **plus yield/resume
+    28	  edges** (C7: handlers run in yield gaps; wall-clock pass scoping is wrong).
+    29	- Retirement: exactly once per token, with committed flag; per-root commit
+    30	  lock-in for spanning batches (C11); async-action parking (C12).
+    31	- Lane-scoped scheduling: run a callback so its updates join an existing
+    32	  batch's lanes (`runInBatch`-class; C6, C10).
+    33	- A stable render-lineage identity for suspense caches across a batch's
+    34	  passes (C15).
+    35	- DOM mutation window (unrelated nicety; keep).
+    36	
+    37	Candidates may propose MORE than this list — that is the point of the
+    38	charter — but every addition must earn its place against goals 1–3.
+    39	
+    40	## The liberated design space (directions candidates may now take seriously)
+    41	
+    42	- **Deeper observation**: expose the include-set/lineage/yield facts above
+    43	  natively rather than reconstructing them.
+    44	- **Lane-scoped execution**: richer entanglement/override scopes than a
+    45	  single `runInBatch`.
+    46	- **React-owned external state** (the wildcard): fiber-detached update
+    47	  queues managed by the reconciler itself — atoms whose visibility/rebase
+    48	  semantics are literally React's own update-queue code, deleting the
+    49	  library's reimplementation of lane filtering and rebasing. If a candidate
+    50	  takes this route it must confront honestly: hook queues are per-fiber and
+    51	  single-consumer (an atom is many-consumer — closer to context than to a
+    52	  hook); non-React reads/effects need a synchronous fold path anyway;
+    53	  reconciler surgery at this depth makes rebase cost the dominant risk, so
+    54	  goal 2 is the make-or-break axis. License to fail fast: a candidate may
+    55	  conclude "explored, not viable, because X" — that conclusion, with the
+    56	  schedule/mechanism that kills it, is a valuable round output.
+    57	
+    58	## Hard rules
+    59	
+    60	- No Fiber objects, no lane bitmasks, no update-queue internals cross the
+    61	  boundary — integers and documented callbacks only.
+    62	- Version-skew: bindings feature-detect the protocol and fail loudly on
+    63	  stock React (no silent degraded mode).
+    64	- The fork's test suite is part of the design deliverable, not an
+    65	  afterthought: every protocol fact gets a reconciler-level test.
+
+exec
+/bin/zsh -lc "wc -l design-loop/SEEDS/research-facts.md && nl -ba design-loop/SEEDS/research-facts.md | sed -n '1,340p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+      89 design-loop/SEEDS/research-facts.md
+     1	# Measured facts (frozen seed; provenance required to cite)
+     2	
+     3	Numbers below are measured in this repo or its sibling; cite them rather than
+     4	re-deriving. UNMEASURED items are flagged — treat them as spike targets, not
+     5	facts. Provenance keys: [RESEARCH] `research/RESEARCH.md` + sources/,
+     6	[GUIDE] `research/packed-structs-guide.md` / `packed-authoring-practices.md`,
+     7	[ARENA] `libs/arena` results, [LINKS] `libs/arena-links` A/B,
+     8	[SYNTH] `react-concurrent-signals-arena.md` §7/§15/§18, [JUDGE]
+     9	`research/specs/JUDGING.md`, [SPECS] `research/specs/*`.
+    10	
+    11	Note: [SYNTH]/[JUDGE]/[SPECS] targets (and `reviews/*`) are deliberately
+    12	removed from the working tree to prevent anchoring (see LOOP.md "Attic");
+    13	they are historical citations, recoverable from git by the monitor. Loop
+    14	agents cite the keys and trust the numbers; they do not chase these paths.
+    15	
+    16	## Kernel / layout (the settled substrate)
+    17	
+    18	- Donor arena kernel vs alien-signals v3 (one-framework-per-process, tier-0):
+    19	  deep 0.90×, broad 0.84–0.88×, diamond 0.89×, reads 0.74–0.87×, create
+    20	  0.96×; 179/179 conformance with exact pull counts. Kairo-scale GC-inclusive
+    21	  reality ≤1.4× (honest ceiling; ≤1.25× is a target with no named mechanism
+    22	  yet). [ARENA][SYNTH §18.2]
+    23	- Record interleaving ≫ parallel arrays for hot traversal fields: naive
+    24	  one-array-per-field measured 1.8× WORSE than objects on deep chains.
+    25	  Cold/rarely-touched parallel columns are not covered by this result.
+    26	  [RESEARCH][SYNTH §7.1]
+    27	- Nodes+links share one plane: −2% deep / −8% diamond vs split planes.
+    28	  [SYNTH §7.1]
+    29	- Buffers as closure constants are the only binding at const parity; segment
+    30	  tables +35–40%/access, resizable ArrayBuffers +66–83% traversal, mutable
+    31	  `let` +34–43%, per-function aliases +26–30%. Growth = closure rebuild at
+    32	  operation boundaries. [GUIDE][SYNTH §14.1]
+    33	- Bundlers demote module-scope `const` → `var`: +15–21% on kairo through a
+    34	  bundled child. Same-file non-exported `const enum` inlines everywhere that
+    35	  matters; cross-file does not. [GUIDE][SYNTH §15]
+    36	- V8 inlining: ~460 bytecodes/callee, 920 cumulative, greedy ≤27; typed-array
+    37	  access ≈2× bytecode of property loads. The monolithic `link()` at 475
+    38	  bytecodes silently never inlined; split fast path 168 → −8–13% on
+    39	  traversal shapes. Budgets must be CI-enforced. [GUIDE][SYNTH §18.3]
+    40	- One-framework-per-process or feedback pollution skews results up to 3×.
+    41	  [RESEARCH]
+    42	- Links-only arena (object nodes + integer link records) LOSES: the
+    43	  id→nodesById→flags hop adds a dependent load per traversed link — kairo
+    44	  1.2–1.6×, creation ~1.7× vs alien. Full-arena (flags/topology in-plane)
+    45	  is required for the traversal win. [LINKS]
+    46	- JSC (bun) inverts some V8-tuned rankings; arena still wins there, but
+    47	  V8-specific tunings don't travel. Rank per-engine. [repo commit 0d3371f]
+    48	- Value storage: one packed `unknown[]` side column beats type-segregated
+    49	  columns (Float64 + tags measured worse). Never holey. [RESEARCH][SYNTH §7.1]
+    50	
+    51	## Concurrency architecture facts (from the arena round + re-judgment)
+    52	
+    53	- React's own model: setState appends lane-tagged updates to per-hook queues;
+    54	  renders apply included lanes and rebase the rest; urgent-applied results
+    55	  become the base only for *unskipped* prefixes — replay-in-write-order over
+    56	  the pre-batch base is the parity-correct fold (C3's 4-not-3 arithmetic).
+    57	  [SPECS b §10.2 kill][JUDGE]
+    58	- Canonical-topology-only invalidation/notification is unsound under
+    59	  world-divergent dependencies (C1). Verified architectural in candidate C;
+    60	  verified present-but-compensable in synthesized A; solved structurally in
+    61	  B (per-link world bits + per-slot write clocks) and D (second kernel whose
+    62	  edges are the head world's real topology). [re-judgment 2026-07-04, both
+    63	  reviews, SPECS]
+    64	- Per-slot write clocks (B): cached per-world value valid iff its seq ≥ every
+    65	  included slot's write clock — coarse, sound, no per-atom certificates.
+    66	  [SPECS b §8.1/§9.5]
+    67	- D's two-kernel model: K1 lazily shadowed, bulk-reset at unfork; head
+    68	  evaluations re-track real head deps in K1. Its `host.refresh` indirection
+    69	  tax is **UNMEASURED** (predicted ≤3–5% on recompute-dense shapes; fusion
+    70	  fallback designed). Spike pre-registered. [SPECS d §14/§15]
+    71	- Fork facts an engine cannot get from userspace: current write's batch +
+    72	  deferred classification; a pass's included batches + lifecycle; retirement
+    73	  (exactly once); lane-scoped scheduling into an existing batch
+    74	  (`runInBatch`); DOM mutation window. Passes span yields; **handlers run in
+    75	  yield gaps** — any [pass-start, pass-end]-scoped "in render" state is wrong
+    76	  there (C7). [SYNTH §6][review 08-52]
+    77	- ≤31 live batches (one per lane) — slot/mask encodings of live batches are
+    78	  sound; entries outlive slots only if recycling is gated on unswept counts.
+    79	  [SYNTH §6.2/§9.2]
+    80	
+    81	## Cost model warnings (paid before, don't repeat)
+    82	
+    83	- Eager per-write world evaluation on the write path (watcher cutoffs) is
+    84	  the expensive shape; kernel-staleness + lazy pull, or memo-shared
+    85	  evaluation, are the two known mitigations — price whichever you pick
+    86	  (fan-out gates). [SYNTH §10.6/G-7][SPECS d]
+    87	- Always-log in React mode is the honest price of C2; gate the logged write
+    88	  at ≤2× DIRECT rather than wishing it away. DIRECT mode (no React) must
+    89	  execute zero concurrency instructions. [SYNTH §9.1/G-6][JUDGE]
+
+exec
+/bin/zsh -lc "wc -l design-loop/NOTES/SCARS.md && nl -ba design-loop/NOTES/SCARS.md | sed -n '1,360p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     229 design-loop/NOTES/SCARS.md
+     1	# SCARS — dead approaches, each recorded as the schedule that killed it
+     2	
+     3	Format: the approach, the killing schedule, why the fix isn't local. Bare
+     4	prohibitions anchor; schedules teach. Curated by the monitor only.
+     5	
+     6	- **S1. No-log urgent writes ("urgent goes straight to committed").**
+     7	  Killing schedule: C3 — deferred `+1` pending, urgent `×2` applied and
+     8	  discarded; fold replays `+1` over the new base → 3; React commits 4. Also
+     9	  unrepresentable: C2 (flushSync excluding an applied default batch). Why
+    10	  not local: retaining urgent ops IS always-logging; the "no side log"
+    11	  identity dies with it. (Candidate B's kill; extraction 2026-07-04.)
+    12	- **S2. Read-only canonical topology for all worlds + "marking through
+    13	  canonical topology never misses".** Killing schedule: C1 — k writes
+    14	  `flag` then `a`; the k-world cache of `c` (`SV_READY`-style) is served
+    15	  forever; no walk from `a` reaches `c`; watcher never notified in k's
+    16	  lane; torn commit corrected one frame late. Why not local: the design's
+    17	  own analysis concedes the repair is per-world dependency tracking, which
+    18	  its read-cheapness premise forbids. (Candidate C's kill; verified against
+    19	  C §10.4's induction — it covers only mark-then-read-once.)
+    20	- **S3. Canonical-only notify walks bolted onto an overlay ("the walk
+    21	  reaches everyone who matters").** Killing schedule: C1 again, in the
+    22	  synthesized winner: overlay evaluations are untracked, so the divergent
+    23	  dep has no edge; the always-walk of §9.8 walks the wrong graph. Why not
+    24	  local-as-claimed: the repair needs registries + full certificates + drain
+    25	  re-validation (a 4-mechanism compensation stack), or a structural
+    26	  mechanism (world edges / second kernel). (Review 2026-07-04T08-52 F2/F3.)
+    27	- **S4. Drop-on-abort retirement (committed=false discards writes).**
+    28	  Killing schedule: C12 — `startTransition(() => a.set(5))` with no
+    29	  subscriber → no React work → committed=false → write silently reverts.
+    30	  Local one-branch fix exists (fold instead), so the scar is the *policy*,
+    31	  not the machinery: persistence must never depend on subscription.
+    32	- **S5. Certificates that record only "atoms with concurrency state at
+    33	  evaluation time".** Killing schedule: C1's memo half — `a` is unlogged
+    34	  when world-k first reads it, acquires a tape on the later write, and no
+    35	  recorded source moves → stale cache validates; the spec's own T1
+    36	  justification contradicted its own definition. Rule: validity records
+    37	  must cover the COMPLETE read set (sentinel for no-state-yet), and nested
+    38	  evaluations must flatten/merge child certificates. (Review F3 + codex
+    39	  finding 2, mutually confirmed.)
+    40	- **S6. Concurrency machinery keyed to watcher count.** Killing schedule:
+    41	  `startTransition(() => { atom.set(1); setShow(true) })` mounting the
+    42	  FIRST watcher — the write predates LOGGED mode, no receipt exists, urgent
+    43	  renders leak the transition value. Rule: activation is monotonic on
+    44	  bridge registration. (Codex finding 3, independently verified.)
+    45	- **S7. Wall-clock-scoped render context ([passStart, passEnd] scalar).**
+    46	  Killing schedule: C7 — urgent write in a handler during a yielded
+    47	  transition render throws "write during render" / reads resolve against
+    48	  the pin. Rule: render-context truth is per-callstack; the fork must
+    49	  expose yield/resume. (Review F1; applies to every legacy candidate.)
+    50	- **S8. Equality-gating writes against the newest world.** Killing
+    51	  schedule: C8 — deferred T `set 1`, urgent U `set 1` dropped as equal;
+    52	  U's render excludes T and shows 0; truncation variants lose the write
+    53	  entirely. Rule: I7 (drop only on empty history; equality lives in
+    54	  fold/notify). (Codex finding 4 + review F5.)
+    55	
+    56	## Round 1 (2026-07-04): rounds/round-01/
+    57	
+    58	- **S9. Reachability-derived fast-path routing without a freshness check**
+    59	  ("unflagged ⇒ serve canonical to any world"). Killing schedule: quiesce
+    60	  with kernel-stale nodes (flags cleared, staleness persists); new
+    61	  transition writes an atom with no out-edges yet; an urgent pass reads the
+    62	  stale node → the pull freshly evaluates against newest, acquires the
+    63	  pending write through a branch no walk ever saw → torn urgent frame.
+    64	  Twin: a yield-gap NEWEST read lazily creates a never-evaluated node's
+    65	  cache+edges with no mark; the pinned pass serves it. Repair is a routing
+    66	  rule (freshness conjunct, I12), not more marking. (TK-F1 + CO-F1.)
+    67	- **S10. Equality-filtered per-token late-join correction.** Killing
+    68	  schedule: `c = x1 && x2`; t1 writes x1, t2 writes x2, both pre-mount;
+    69	  per-token projections all equal committed → no corrective; React renders
+    70	  {t1,t2} jointly, bails out on the new component → torn committed frame no
+    71	  reconciler path repairs. Subset divergence defeats any fixed comparison
+    72	  set; corrections must be reach-based (I13). (OP-F2 + TK-F2.)
+    73	- **S11. Commit-gate safety nets keyed to deferred-token liveness and
+    74	  single-root commit edges** (fork-native's viable core). Killing
+    75	  schedules per missed divergence dimension: (1) edge re-track under a
+    76	  live default mask + yield-gap sync write + flushSync exclusion → gate
+    77	  fast-out passes, torn commit; (2) fold without a retirement pin +
+    78	  mid-pass retirement on another root → one pass renders two worlds; (3)
+    79	  spanning batch: skew tag tested against the lagging root's mask and
+    80	  cleared at the first root's commit while the hazard lives → torn commit
+    81	  on the lagging root. The gate's value was "the trigger list is small";
+    82	  the fixes make the trigger list the whole problem. (FN-F1/F2/F3.)
+    83	- **S12. Global/shared update queues folded without a retirement
+    84	  watermark.** Killing schedule: token retires mid-yield; the resumed
+    85	  pass's first read of a not-yet-memoized node satisfies fullyRetired at
+    86	  read time → siblings disagree about one atom inside one committed tree.
+    87	  React's per-fiber queues never needed the pin; any many-consumer store
+    88	  does (I15). (FN-F2.)
+    89	- **S13. Per-(world, batch) equality-retained frontier retention.** Killing
+    90	  schedule: n live transitions round-robin-writing deps of one watched
+    91	  computed retain the powerset — 2^n live graphs, each write paying pulls
+    92	  per graph; at the 31-batch bound the worst case is 2^31 while the spike
+    93	  gates tested "1, 2, 8, 31 graphs." The multi-batch induction requires the
+    94	  family; capping it is a retention-rule redesign with a new proof. (OP-F3.)
+    95	- **S14. Canonical-value delivery cutoffs gating world-cache invalidation
+    96	  notifications.** Killing schedule: deferred T `update(+1)` rendered and
+    97	  finished-uncommitted; urgent `set(3)` equal to canonical → k0Changed
+    98	  false → delivery AND the runInBatch corrective both skipped; T's world
+    99	  silently moved 4→3; T commits its stale rendered tree. Cutoff decisions
+   100	  are per-world; a canonical-only gate must never guard cross-world
+   101	  notification. (CO-F2.)
+   102	- **S15. "Discarded nodes are GC fodder" over arena-resident records.** A
+   103	  collected JS wrapper cannot reclaim a bump-allocated integer record, and
+   104	  abandoned fresh-node mounts (StrictMode, interrupted transitions) are
+   105	  ordinary, so the leak is unbounded. Killing schedule: repeat
+   106	  mount-evaluate-abandon; K0 grows monotonically; K1 reset and lineage
+   107	  drops reclaim nothing. Any "harmless discard" claim over arena state must
+   108	  name the reclamation or staging protocol. (Codex TKC-9.)
+   109	
+   110	## Round 2 (2026-07-04): rounds/round-02/
+   111	
+   112	- **S16. Value-based delivery suppression against commit-recorded
+   113	  baselines.** Killing schedules: (a) held T renders c=1
+   114	  (finished-uncommitted); a later T-segment write returns c to 0 → cutoff
+   115	  compares T-world 0 == committed lastRendered 0 → suppress → React
+   116	  commits the stale finished subtree [WALK cost-codex 2]; (b) suppression
+   117	  state strands: a same-slot second write prunes at the stamped atom and
+   118	  never re-reaches the suppressed node [WALK cost-claude CH-1].
+   119	  Suppression soundness needs per-pending-render knowledge no engine
+   120	  record has; delivery stays value-blind (D13).
+   121	- **S17. Cross-write delivery-elision state with shared per-node stamps
+   122	  (frontier pruning).** Killing schedule: k delivers through c (stamp E1);
+   123	  W re-arms k (E2); j's walk overwrites the shared stamp (E3); k's next
+   124	  write prunes at the root since E3 ≥ E2 → no delivery → k commits stale.
+   125	  One era per node cannot validate 32 bits; per-slot eras break memory;
+   126	  clearing sweeps reintroduce the cost. [BOTH CH-2 + cost-codex 6]
+   127	- **S18. Pinless shared world memos without enumerated ownership.**
+   128	  Killing schedules: (a) quiescence-via-touched-lists misses memos on
+   129	  untouched nodes; interned mask ids recycle to collisions; seq reset
+   130	  inverts the clock window → a previous episode's world value validates
+   131	  and commits [WALK cost-claude CH-3]; (b) two live pins share one memo
+   132	  slot: root B's overwrite feeds root A's resumed pass a foreign
+   133	  `ctx.previous` [WALK cost-codex 5]. Survives only as O18's measured
+   134	  fallback hybrid.
+   135	- **S19. Full-token per-root lock-in and pass-grain publication.** Killing
+   136	  schedules: (a) async T locked into root A at first commit; a post-await
+   137	  write under T leaks into A's committed view before any commit carries it
+   138	  [WALK lean-codex 1]; (b) pass-grain publication ships staged state from
+   139	  error-boundary-abandoned subtrees inside the winning pass [WALK
+   140	  lean-codex 2]. Rules: watermarked lock-in (I25); hook-commit-grain
+   141	  publication (I22).
+   142	- **S20. Global retirement clocks in resource identity keys.** Killing
+   143	  schedule: capsule keyed on a global retireClock; every unrelated urgent
+   144	  retirement re-keys every suspense capsule → refetch + re-suspend per
+   145	  interaction → transition starvation with duplicate side-effectful
+   146	  fetches [WALK lean-claude F1]. Retirement components of validity must be
+   147	  relevance-filtered (touched-atom visStamps — I21/I24).
+   148	- **S21. Ambient (context-sampled) classification for post-await action
+   149	  writes.** Killing schedule: raw `a.set(2)` after `await` lands in its
+   150	  own default batch and retires while the action parks → committed state
+   151	  moves before the action settles — C12 violated with no thrown rejection
+   152	  [WALK harden-codex 5]. Rule: I26/D15.
+   153	- **S22. Promise-patching carriers: global then-patch and
+   154	  scope-returned-thenable wrapping are correctness-dead — empirically.**
+   155	  `await` of native promises uses internal PerformPromiseThen and bare
+   156	  thenables call their own `then`; a patch sees only explicit `.then()`
+   157	  calls, so identity silently drops on ordinary compositions. React 19's
+   158	  entangled-action thenables cover parking (lifetime) only, never
+   159	  continuation identity. The living alternative is the I30 twin-build
+   160	  transform (or platform AsyncContext when it ships). [MEASURE/PROVEN
+   161	  SP-F8 prototype, research/experiments/spf8-continuation-carrier.md]
+   162	
+   163	## Round 3 (2026-07-04): rounds/round-03/
+   164	
+   165	
+   166	- **S23. Evaluator-blind fast paths ("worlds diverge only through
+   167	  receipts").** Killing schedule: React-state-only transition classified
+   168	  RENDER_NEWEST; useComputed stages f_B; both the staging component and a
+   169	  sibling are served f_A's K0 cache; the pass commits a wrong frame;
+   170	  promotion never dirties K0 → wrong NEWEST forever, no receipt, no
+   171	  backstop. Second horn: the validity ladder serving on slot clocks
+   172	  without comparing evaluator stamps replays a discarded closure's value
+   173	  inside its own pass. Why not local-as-written: routing, RENDER_NEWEST
+   174	  classification, memo validity, AND promotion all need the conjunct —
+   175	  one omission re-opens it. (exit-claude F1 + exit-codex 5/6; repaired
+   176	  R1/R2.)
+   177	- **S24. Per-pass-minted evaluator stamps inside retry-crossing identity
+   178	  keys.** Killing schedule: suspense retry = new pass → re-stage vs
+   179	  committed → fresh stamp → flattened prefix mismatch → drop settled
+   180	  thenable → refetch → suspend → repeat: transition never commits,
+   181	  duplicate fetch per retry. Rule: I40 lineage-stable minting.
+   182	  (breaker-claude F2; identical text in the exit candidate.)
+   183	- **S25. Invocation-time-only carrier capture.** Killing schedule:
+   184	  `startTransition(async () => { await new Promise(res => setTimeout(async
+   185	  () => { a.set(1); res() }, 0)); await gate })` — the timer invokes the
+   186	  transformed async callback on a bare stack; genBody captures null;
+   187	  the write lands in default D and commits before the action settles;
+   188	  the boot probe cannot see the composition. Rule: I36 registration-time
+   189	  capture for host schedulers; residual registrars documented.
+   190	  (exit-codex 1.)
+   191	- **S26. Consumable write-time queues as the only committed-observer
+   192	  trigger for lock-in/advance flips.** Killing schedule: E's queue entry
+   193	  consumed by an earlier unrelated retirement flush; the watermark
+   194	  advance that later exposes the parked write mints nothing the snapshot
+   195	  observes and re-enqueues nothing → effect stale until full retirement
+   196	  (unbounded, io-gated). Rule: I34 stamp-every-mint-site + durable
+   197	  touchedList enumeration. (exit-claude F2 + breaker-claude F3.)
+   198	- **S27. World-invariant-op assumption in write-time drops ("empty-tape
+   199	  equality drop is always safe").** Killing schedule: dispatch "tick"
+   200	  under committed r0 (identity) with empty tape → dropped; the transition
+   201	  stages r1 (s+1) → nothing to replay → ReducerAtom 0 vs useReducer 1.
+   202	  Rule: I38a. (breaker-codex 2.)
+   203	- **S28. Unordered/effect-grain evaluator publication around retirement
+   204	  folds.** Killing schedules: (a) hidden Offscreen commit never runs the
+   205	  hook effect → committed tree from f1, committed evaluator f0 —
+   206	  divergence with no write; (b) fold-before-publication compacts a
+   207	  pending reducer receipt under the stale reducer while the committed
+   208	  tree rendered the new one — permanent 10-vs-1 fork. Rule: I41 (F9
+   209	  hook-becomes-current edge, CAS, publication-before-folds).
+   210	  (breaker §2.1-B2 + breaker-codex 1-B.)
+   211	- **S29. Retirement-time touched-column clearing (and, dually, unbounded
+   212	  slot retention) around pinned passes.** Killing schedules: (a) clear at
+   213	  retire → resumed pin-p pass reads K0-clean computed 11 beside folded
+   214	  atom 0 — torn frame matching no world; (b) retain until pins release →
+   215	  one yielded transition + ~31 retiring input batches exhausts slot
+   216	  interning with no stated behavior. Rule: I39 (unswept retention + the
+   217	  saturation spillover). (breaker-claude F1/F5.)
+   218	- **S30. Direct-in-edge-only carry for refresh-exempt nodes.** Killing
+   219	  schedule: K1-only chain x→u→w, w exempt; carry {u→w}; reset; next
+   220	  episode's write to x reaches nothing → torn commit. Rule: I42 full
+   221	  reverse-reachable cone. (breaker §2.1-B3; exit-candidate §5.4 had the
+   222	  in-edge text.)
+   223	- **S31. Stamp-move ⇒ refetch for side-effect-bearing caches.** Killing
+   224	  schedule: lock→retired visibility handover on an already-visible entry
+   225	  (or equal-value urgent churn) moves fp with no content change; the
+   226	  capsule discards its settled thenable and re-runs the factory — repeated
+   227	  per touching retirement: duplicate fetches, transition starvation.
+   228	  Rule: I35 value-revalidation before refetch. (breaker-codex 4 +
+   229	  breaker-claude F7.)
+
+codex
+Several acceptance walks hold, but the adversarial schedules expose interactions the document’s own walks do not cover—especially immutable pass pins versus delivery dedup, replayed functional updates versus reference identity, and immediate slot release versus dependencies discovered after retirement. I’m now checking each candidate finding against the exact stated invariants so the final review contains only reproducible failures.
+exec
+/bin/zsh -lc "rg -n \"Atoms fold directly|at most once for \\(watcher|re-arms|passStages|before any read|publish winning|restart that work|slot release|still-live token|full order-preserving rewrite|receiptCount|committing root world|pass world it claims|layout-phase subscription\" design-loop/rounds/round-04/design-consolidate-b.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+216:  Old tape entries keep `(slot,slotGen)` and `receiptCount` keeps exact-world
+218:  slot release. A recycled generation cannot match an old pass.
+268:`retiredSeq=0` means live. `receiptCount` counts unswept entries globally; it
+279:2. Mint `seq`, append the receipt, increment `receiptCount`, and set the slot
+287:while `receiptCount==0`.
+300:{ rootId, included[(slot,slotGen)], pin, lockView, episode, passStages }
+336:### 4.5 Retirement, slot release, and compaction
+349:   below the minimum live pass pin. Decrement `receiptCount` for removed
+359:predicate, so `receiptCount>0` and the entry remains foldable. Only after the
+362:slot release without a spill flag.
+379:walk. A watcher re-arms its slot bit when it renders, so a later write after a
+383:out-edges to a fixed point. For every newly carried still-live token, watcher
+397:**E-PRESERVE.** While `receiptCount>0`, every edge removed by a K0 retrack is
+403:At true quiescence—`receiptCount==0`, no live pass, no unpublished stage, and
+421:if receiptCount == 0 && passStages is empty:
+431:world equals K0. Step for a write: the append makes `receiptCount>0` before K0
+441:when an untracked K0 read could embed a receipted value, `receiptCount>0`, so
+446:Atoms fold directly. A computed is memoized by `(nodeGen, worldKey)`, where
+529:value against the value in the committing root world. An equal value retains
+535:The layout-phase subscription records the rendered value/world first, then:
+561:rendered by the candidate commit is compared to the pass world it claims. A
+562:late update inserted after completed work makes React restart that work; it is
+600:selects a noncommitted record puts it in `passStages` before any read of the
+619:1. publish winning evaluator/reducer records;
+890:| exact-world active render | <=1.10x equivalent React state; cost proportional to rendered reads, not whole graph | unmeasured; coarse `receiptCount` gate is the consolidation bet |
+931:| 1 | T write / receipt ledger | append `a:{T,s1,set1}` before K0 becomes 1; `receiptCount=1`; no `a->c` edge, correctly |
+933:| 3 | S render / coarse gate | `receiptCount!=0`, so S cannot serve either K0 cache; world-evaluate p, then c; c's untracked atom fold excludes T and returns 0; p=1 |
+934:| 4 | yield and T retirement | S's frame is absent during the gap; retirement gets `r>s.pin`, so pin-gated compaction retains the receipt and count despite immediate slot release |
+1044:| 7 | old “promotion during saturation” | no retired slot is retained: retirement drains and increments slotGen before reuse; promotion's union walk runs atomically, while pin-retained tape keeps `receiptCount>0` and exact-world routing |
+1075:### A8 — slot release during an open pass or walk
+1083:| 2 | receipt retention | `retiredSeq(D)>P.pin`, so tape compaction refuses; `receiptCount>0` |
+1088:| 7 | P end | compaction may remove D; only now can `receiptCount` reach zero and permit K0 render reads |
+1165:| 1 | default D writes a=1 | append D receipt before K0=1; `receiptCount=1`; K0/K1 walk marks and delivers a/c watchers in D |
+
+codex
+The final set is now narrowed to failures with explicit wrong outcomes; I’m excluding purely stylistic gaps and performance speculation. I’ll finish with the broken constructions first, then a compact list of acceptance paths that did survive the attack.
+exec
+/bin/zsh -lc "nl -ba /Users/jitl/.codex/memories/MEMORY.md | sed -n '1,42p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     1	# Task Group: alien-signals-opt / architecture-spec correctness review and review-response adjudication
+     2	
+     3	scope: Correctness-first review workflow for `react-concurrent-signals-arena.md`, including saved review-file outputs and follow-up adjudication of an author response against the original counterexamples
+     4	applies_to: cwd=/Users/jitl/src/alien-signals-opt; reuse_rule=safe for architecture/spec review work in this checkout and similar correctness-audit follow-ups; treat exact review files and document contents as checkout-specific
+     5	
+     6	## Task 1: Review `react-concurrent-signals-arena.md` for correctness, success
+     7	
+     8	### rollout_summary_files
+     9	
+    10	- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, correctness blockers saved to the requested `reviews/` naming pattern)
+    11	
+    12	### keywords
+    13	
+    14	- alien-signals-opt, react-concurrent-signals-arena.md, correctness review, architecture-spec review, packed layout, React fork protocol, speculative dependency notification, memo invalidation, logging activation, urgent writes
+    15	
+    16	## Task 2: Assess the author response to the correctness review, partial
+    17	
+    18	### rollout_summary_files
+    19	
+    20	- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, response accepted in part but quiescence-gate parity remained unsound)
+    21	
+    22	### keywords
+    23	
+    24	- review response, plain-language summaries, F1, F2, quiescence gate, flushSync exclusion, torn frames, lane attribution, root-specific committed views, mark-only first-log walks
+    25	
+    26	## User preferences
+    27	
+    28	- when the user asked to "look for correctness issues foremost" -> in review/spec work, prioritize correctness over style or completeness and judge fixes as system-level tradeoffs, not isolated edits [Task 1]
+    29	- when the user asked to write to `reviews/<timestamp>-codex-<document reviewed>-<review summary>.md` -> use that review-file naming convention for saved critiques in this workflow [Task 1]
+    30	- when the user asked "what do you think?" about the response file -> evaluate the response itself against the original blocker schedules instead of rehashing only the first review [Task 2]
+    31	- when the user said "i dont know what F1..FN mean. you need to restate / summarize the issue for me when responding" -> restate each issue plainly first and only use reviewer shorthand after translation [Task 2]
+    32	
+    33	## Reusable knowledge
+    34	
+    35	- The packed-layout design in `react-concurrent-signals-arena.md` means future fixes should be judged on whether they preserve the core layout constraints; if a fix needs new state, prefer side structures or explicitly priced alternatives instead of casually growing the canonical records [Task 1]
+    36	- The highest-signal blockers in the initial review were concrete: speculative dependencies had no notification path, memo certificates could miss unlogged atoms, logging began too late, equality could drop logged actions, first urgent logged writes never marked their cone, committed views were root-specific, and Suspense cache keys were ambiguous for multi-batch passes [Task 1]
+    37	- In this design, logging activation and lane attribution are tightly coupled; any quiescence-based gate must be tested against schedules where the write itself creates the later React work whose receipt needs to be excluded from `flushSync` [Task 2]
+    38	- Root-specific committed views, a quiescence epoch bump, mark-only first-log walks, and the update/reducer purity contract were accepted as real fixes during the response round, while the fallback "sync passes include the open default batch" was still judged to create torn frames [Task 2]
+    39	
+    40	## Failures and how to do differently
+    41	
+    42	- Symptom: a spec sounds internally coherent but still hides correctness holes. Cause: individual invariants were reviewed in isolation. Fix: trace an explicit schedule/counterexample through overlay evaluation, memo validity, watcher notification, and logging activation before accepting the design [Task 1][Task 2]
+
+codex
+# Adversarial correctness review — Round 4 exact-world consolidation
+
+## Findings
+
+### 1. BLOCKER · architectural — Functional receipts do not produce a stable atom value within one world
+
+The replay invariant proves arithmetic order for one fold, but atoms “fold directly” on every read and no per-world atom-result cache is defined.
+
+**Failing schedule**
+
+1. Setup: `a={n:0}` with default reference equality. Park transition T and call `a.update(x => ({n: x.n + 1}))`.
+2. The write stores the updater as the receipt op and invokes it once for K0, producing object `o1`.
+3. Pass P includes T. Its first `a.state` folds from the base and invokes the updater, producing `o2`.
+4. A second `a.state` in the same evaluation and exact same world folds again, producing `o3`.
+5. Although both invocations are pure, `o2 !== o3`. A component can therefore render `a.state === a.state` as false.
+6. Reconcile or mount fixup can fold again to `o4`, compare it with rendered `o2`, and repeatedly schedule corrections despite no intervening write.
+
+**Wrong outcome:** one world does not define one stable value reference, unlike `useState`/`useReducer`. Reducers returning fresh objects fail identically.
+
+The §4.3 induction assumes applying the same op to the same accumulator preserves the same representative; that is false across separate callback invocations. Repair requires a canonical per-atom/per-world fold result or an equivalent receipt-result cache, including complete invalidation and reclamation rules.
+
+### 2. BLOCKER · local fix — Delivery dedup can consume the only notification for a post-pin write
+
+The claim that one queued update covers later same-token writes fails once a pass has captured its immutable pin but has not yet rendered the watcher.
+
+**Failing schedule**
+
+1. Setup: mounted W reads `a=0`; async transition T remains parked.
+2. T writes `a=1` at `s1`. The walk queues W in T and sets W’s T delivery bit.
+3. React starts pass P, capturing `pin=s1`, then yields before W renders. W’s bit remains set because re-arming occurs only when W renders.
+4. T’s continuation writes `a=2` at `s2`. The walk reaches W but suppresses `setState` because the same T bit is still set.
+5. P resumes. Its immutable pin excludes `s2`, so W renders `a=1` and only then clears the bit.
+6. P commits and locks T only through `s1`. No React update exists for `s2`; keep T parked indefinitely so retirement cannot provide a later backstop.
+
+**Wrong outcome:** `a=2` has a live receipt but W is never scheduled to render it. The pre-mutation reconcile sees the pass’s claimed `s1` world and therefore accepts the stale candidate.
+
+The smallest sound repair is to remove this dedup. Preserving it requires making coverage sequence-aware so an update queued before a pass pin cannot suppress a later write outside that pin.
+
+### 3. BLOCKER · architectural — Immediate slot release loses dependencies discovered after retirement
+
+Pin retention preserves old values, but it does not preserve the retired token’s reach information long enough to notify a dependency discovered by that old pass.
+
+**Failing schedule**
+
+1. Setup a fresh episode with `flag=false, a=0, b=0`, `c=flag?a:b`, and mounted W on `c`. K0 has `flag→c` and `b→c`; K1 has no `a→c`.
+2. Parked transition K writes `flag=true`. The existing `flag→c` edge schedules W. Pass P starts after that write, captures its pin, and yields before evaluating W.
+3. In the yield gap, store-only default token D writes `a=1`. Neither K0 nor K1 contains `a→c`, so D does not reach W.
+4. D has no React work and retires. Its receipt remains because P’s pin predates retirement, but retirement clears D’s reach bits and releases its slot.
+5. P resumes. Its exact world includes K but excludes D, so it evaluates `c=0` through `a=0` and adds `a→c` to K1.
+6. Edge-add carry handles only still-live tokens. D is retired and its reach bit was cleared, so this newly discovered edge schedules nothing.
+7. P’s pre-mutation reconcile compares W with P’s claimed world and accepts `c=0`. Once K’s prefix is locked, committed-for-root state contains `flag=true` plus globally retired `a=1`, whose correct `c` is 1.
+
+**Wrong outcome:** the root can commit `flag=true, c=0` while its committed signal world evaluates `c=1`. W was already mounted, so mount-only fixup cannot supply the missing pre-commit notification.
+
+This refutes the construction that receipt retention alone permits immediate slot release. A repair needs retained retired reach state, a late-edge committed correction, or commit validation against the actual post-lock committed world.
+
+### 4. BLOCKER · architectural — Evaluator publication is too late to notify consumers and too early to survive a restart
+
+`passStages` protects only reads after a stage is selected. A React-state-only evaluator change can leave already-finished or bailed-out consumers on the old evaluator, making F9 publication their first notification.
+
+**Failing schedule**
+
+1. Hook-owned signal H has committed evaluator A. Same-root sibling W legally subscribes to H and displays A.
+2. A transition changes the owner hook’s React deps to B without any signal receipt.
+3. W bails out or finishes before the owner renders, so it remains on A while `passStages` is still empty.
+4. The owner creates stage B and renders B. The prospective stage gate cannot revisit W.
+5. At commit, §8.2 first publishes B as committed and then walks H, finally queuing W.
+6. If the candidate commits normally, W’s update is too late and the frame contains owner B beside W A.
+7. If the fork honors §7.3 by restarting finished work before mutation, B has already been published even though its hook never became current. An urgent interruption or abandonment can then leave K0/core reads using B while React remains on A; no tentative-publication rollback exists.
+
+**Wrong outcome:** either a torn commit occurs or an evaluator from an uncommitted hook escapes into committed/core state.
+
+The world-isolation stage induction only proves that the stage table is populated before the staged node’s later read; it does not cover earlier consumers. Repair requires a render-order-independent staging/publication protocol, not merely a later delivery walk.
+
+### 5. BLOCKER · architectural — Live `globalSeq` renumber cannot rewrite F9 identities held by React
+
+The lifecycle section promises a full rewrite with live passes and tokens, but `stageId` is both an immutable library identity and an opaque integer copied into React’s WIP hook.
+
+**Failing schedule**
+
+1. Under a forced-small `globalSeq` horizon, pass P creates evaluator stage B with `stageId=7`, attaches 7 to its WIP hook through F9, and yields.
+2. Other writes or lock-view mints reach the horizon while P remains live.
+3. The prescribed live full rewrite renumbers retained stage records and bumps the episode.
+4. None of the 16 protocol touch points rewrites the integer already stored in React’s WIP hook.
+5. P resumes and commits; React emits the old 7. The generation CAS either rejects B, leaving evaluator A behind a DOM rendered with B, or 7 collides with a newly minted stage and publishes the wrong record.
+
+**Wrong outcome:** React’s committed tree and the library’s committed evaluator diverge.
+
+Keeping 7 unchanged merely moves the collision to post-reset reuse because F9 carries no episode. The design must discard all affected WIP passes before renumbering, add an epoch-bearing F9 identity, or separate externally held stage IDs from the rewritten sequence line.
+
+### 6. BLOCKER · local fix — Capsule generations can wrap while stale thenables remain live
+
+`capsuleGen` is only incremented before reuse; no epoch or non-colliding identity protects callbacks within one long-lived lineage.
+
+**Failing schedule**
+
+1. Force a two-bit capsule generation. Lineage L creates pending thenable `q0` at position P with generation 0.
+2. Inputs change repeatedly while `q0` remains pending. Each change generation-drops P and installs `q1`, `q2`, `q3`, then `q4`.
+3. P’s reused capsule generation wraps to 0 for `q4`. L and the episode are still live, so neither lineage nor episode identity changed.
+4. `q0` settles. Its stale callback sees the same capsule id and generation 0 and passes the documented stale-settlement check.
+5. The callback mutates or invalidates `q4`’s capsule as though `q0` were its current thenable.
+
+**Wrong outcome:** a retry can consume the wrong resource result or stop suspending before `q4` settles.
+
+The callback must additionally validate a non-wrapping settlement identity or the exact thenable reference, or the slot cannot be reused while any prior callback remains possible.
+
+## Verified held
+
+- The standard live-token C1 schedule works: an exact-world evaluation records the divergent K1 edge, and a later write carries the live token through it.
+- C2 and C8 hold: receipt append precedes K0 mutation, and an equal write cannot disappear once that atom has history.
+- C3’s numeric, pure-updater queue order matches React’s 4-not-3 arithmetic; the blocker above concerns stable representatives across repeated folds.
+- C4 holds for distinct live tokens because walks ignore stale marks and watcher dedup is generation/token-specific.
+- C6 and C7 hold: watcher delivery occurs synchronously in each writer’s context, and yield removes the pass frame before handlers run.
+- C9’s existing and fresh nodes route through exact-world evaluation whenever receipt history or a stage already exists.
+- C10’s stated mount race is covered by `runInBatch` plus the retired-token urgent fallback.
+- Per-root immutable lock views correctly prevent a post-await write from leaking past a root’s committed watermark in the ordinary C11 schedule.
+- The single-`lastWalk` termination proof holds under the stated no-user-code and deferred edge-drain rules, including K0∪K1 cycles.
+- Common-basis value revalidation avoids refetching solely because a relevant stamp moved, before generation wrap.
+- The enumerated async registrar wrappers preserve live-token attribution across nested callbacks and degrade explicitly after retirement.
+- C17 holds because no truncation surface exists.
+
+## Verdict
+
+This design is architecturally unsound as written. The coarse exact-world gate does repair several cache leaks, but the constructions still fail stable per-world value identity, post-pin delivery, retired late-edge delivery, and render-order-independent evaluator publication. Do not implement it until those mechanisms and the live-id lifecycle are specified and the schedules above pass forced tests.
+
+
+tokens used
+138,104
+# Adversarial correctness review — Round 4 exact-world consolidation
+
+## Findings
+
+### 1. BLOCKER · architectural — Functional receipts do not produce a stable atom value within one world
+
+The replay invariant proves arithmetic order for one fold, but atoms “fold directly” on every read and no per-world atom-result cache is defined.
+
+**Failing schedule**
+
+1. Setup: `a={n:0}` with default reference equality. Park transition T and call `a.update(x => ({n: x.n + 1}))`.
+2. The write stores the updater as the receipt op and invokes it once for K0, producing object `o1`.
+3. Pass P includes T. Its first `a.state` folds from the base and invokes the updater, producing `o2`.
+4. A second `a.state` in the same evaluation and exact same world folds again, producing `o3`.
+5. Although both invocations are pure, `o2 !== o3`. A component can therefore render `a.state === a.state` as false.
+6. Reconcile or mount fixup can fold again to `o4`, compare it with rendered `o2`, and repeatedly schedule corrections despite no intervening write.
+
+**Wrong outcome:** one world does not define one stable value reference, unlike `useState`/`useReducer`. Reducers returning fresh objects fail identically.
+
+The §4.3 induction assumes applying the same op to the same accumulator preserves the same representative; that is false across separate callback invocations. Repair requires a canonical per-atom/per-world fold result or an equivalent receipt-result cache, including complete invalidation and reclamation rules.
+
+### 2. BLOCKER · local fix — Delivery dedup can consume the only notification for a post-pin write
+
+The claim that one queued update covers later same-token writes fails once a pass has captured its immutable pin but has not yet rendered the watcher.
+
+**Failing schedule**
+
+1. Setup: mounted W reads `a=0`; async transition T remains parked.
+2. T writes `a=1` at `s1`. The walk queues W in T and sets W’s T delivery bit.
+3. React starts pass P, capturing `pin=s1`, then yields before W renders. W’s bit remains set because re-arming occurs only when W renders.
+4. T’s continuation writes `a=2` at `s2`. The walk reaches W but suppresses `setState` because the same T bit is still set.
+5. P resumes. Its immutable pin excludes `s2`, so W renders `a=1` and only then clears the bit.
+6. P commits and locks T only through `s1`. No React update exists for `s2`; keep T parked indefinitely so retirement cannot provide a later backstop.
+
+**Wrong outcome:** `a=2` has a live receipt but W is never scheduled to render it. The pre-mutation reconcile sees the pass’s claimed `s1` world and therefore accepts the stale candidate.
+
+The smallest sound repair is to remove this dedup. Preserving it requires making coverage sequence-aware so an update queued before a pass pin cannot suppress a later write outside that pin.
+
+### 3. BLOCKER · architectural — Immediate slot release loses dependencies discovered after retirement
+
+Pin retention preserves old values, but it does not preserve the retired token’s reach information long enough to notify a dependency discovered by that old pass.
+
+**Failing schedule**
+
+1. Setup a fresh episode with `flag=false, a=0, b=0`, `c=flag?a:b`, and mounted W on `c`. K0 has `flag→c` and `b→c`; K1 has no `a→c`.
+2. Parked transition K writes `flag=true`. The existing `flag→c` edge schedules W. Pass P starts after that write, captures its pin, and yields before evaluating W.
+3. In the yield gap, store-only default token D writes `a=1`. Neither K0 nor K1 contains `a→c`, so D does not reach W.
+4. D has no React work and retires. Its receipt remains because P’s pin predates retirement, but retirement clears D’s reach bits and releases its slot.
+5. P resumes. Its exact world includes K but excludes D, so it evaluates `c=0` through `a=0` and adds `a→c` to K1.
+6. Edge-add carry handles only still-live tokens. D is retired and its reach bit was cleared, so this newly discovered edge schedules nothing.
+7. P’s pre-mutation reconcile compares W with P’s claimed world and accepts `c=0`. Once K’s prefix is locked, committed-for-root state contains `flag=true` plus globally retired `a=1`, whose correct `c` is 1.
+
+**Wrong outcome:** the root can commit `flag=true, c=0` while its committed signal world evaluates `c=1`. W was already mounted, so mount-only fixup cannot supply the missing pre-commit notification.
+
+This refutes the construction that receipt retention alone permits immediate slot release. A repair needs retained retired reach state, a late-edge committed correction, or commit validation against the actual post-lock committed world.
+
+### 4. BLOCKER · architectural — Evaluator publication is too late to notify consumers and too early to survive a restart
+
+`passStages` protects only reads after a stage is selected. A React-state-only evaluator change can leave already-finished or bailed-out consumers on the old evaluator, making F9 publication their first notification.
+
+**Failing schedule**
+
+1. Hook-owned signal H has committed evaluator A. Same-root sibling W legally subscribes to H and displays A.
+2. A transition changes the owner hook’s React deps to B without any signal receipt.
+3. W bails out or finishes before the owner renders, so it remains on A while `passStages` is still empty.
+4. The owner creates stage B and renders B. The prospective stage gate cannot revisit W.
+5. At commit, §8.2 first publishes B as committed and then walks H, finally queuing W.
+6. If the candidate commits normally, W’s update is too late and the frame contains owner B beside W A.
+7. If the fork honors §7.3 by restarting finished work before mutation, B has already been published even though its hook never became current. An urgent interruption or abandonment can then leave K0/core reads using B while React remains on A; no tentative-publication rollback exists.
+
+**Wrong outcome:** either a torn commit occurs or an evaluator from an uncommitted hook escapes into committed/core state.
+
+The world-isolation stage induction only proves that the stage table is populated before the staged node’s later read; it does not cover earlier consumers. Repair requires a render-order-independent staging/publication protocol, not merely a later delivery walk.
+
+### 5. BLOCKER · architectural — Live `globalSeq` renumber cannot rewrite F9 identities held by React
+
+The lifecycle section promises a full rewrite with live passes and tokens, but `stageId` is both an immutable library identity and an opaque integer copied into React’s WIP hook.
+
+**Failing schedule**
+
+1. Under a forced-small `globalSeq` horizon, pass P creates evaluator stage B with `stageId=7`, attaches 7 to its WIP hook through F9, and yields.
+2. Other writes or lock-view mints reach the horizon while P remains live.
+3. The prescribed live full rewrite renumbers retained stage records and bumps the episode.
+4. None of the 16 protocol touch points rewrites the integer already stored in React’s WIP hook.
+5. P resumes and commits; React emits the old 7. The generation CAS either rejects B, leaving evaluator A behind a DOM rendered with B, or 7 collides with a newly minted stage and publishes the wrong record.
+
+**Wrong outcome:** React’s committed tree and the library’s committed evaluator diverge.
+
+Keeping 7 unchanged merely moves the collision to post-reset reuse because F9 carries no episode. The design must discard all affected WIP passes before renumbering, add an epoch-bearing F9 identity, or separate externally held stage IDs from the rewritten sequence line.
+
+### 6. BLOCKER · local fix — Capsule generations can wrap while stale thenables remain live
+
+`capsuleGen` is only incremented before reuse; no epoch or non-colliding identity protects callbacks within one long-lived lineage.
+
+**Failing schedule**
+
+1. Force a two-bit capsule generation. Lineage L creates pending thenable `q0` at position P with generation 0.
+2. Inputs change repeatedly while `q0` remains pending. Each change generation-drops P and installs `q1`, `q2`, `q3`, then `q4`.
+3. P’s reused capsule generation wraps to 0 for `q4`. L and the episode are still live, so neither lineage nor episode identity changed.
+4. `q0` settles. Its stale callback sees the same capsule id and generation 0 and passes the documented stale-settlement check.
+5. The callback mutates or invalidates `q4`’s capsule as though `q0` were its current thenable.
+
+**Wrong outcome:** a retry can consume the wrong resource result or stop suspending before `q4` settles.
+
+The callback must additionally validate a non-wrapping settlement identity or the exact thenable reference, or the slot cannot be reused while any prior callback remains possible.
+
+## Verified held
+
+- The standard live-token C1 schedule works: an exact-world evaluation records the divergent K1 edge, and a later write carries the live token through it.
+- C2 and C8 hold: receipt append precedes K0 mutation, and an equal write cannot disappear once that atom has history.
+- C3’s numeric, pure-updater queue order matches React’s 4-not-3 arithmetic; the blocker above concerns stable representatives across repeated folds.
+- C4 holds for distinct live tokens because walks ignore stale marks and watcher dedup is generation/token-specific.
+- C6 and C7 hold: watcher delivery occurs synchronously in each writer’s context, and yield removes the pass frame before handlers run.
+- C9’s existing and fresh nodes route through exact-world evaluation whenever receipt history or a stage already exists.
+- C10’s stated mount race is covered by `runInBatch` plus the retired-token urgent fallback.
+- Per-root immutable lock views correctly prevent a post-await write from leaking past a root’s committed watermark in the ordinary C11 schedule.
+- The single-`lastWalk` termination proof holds under the stated no-user-code and deferred edge-drain rules, including K0∪K1 cycles.
+- Common-basis value revalidation avoids refetching solely because a relevant stamp moved, before generation wrap.
+- The enumerated async registrar wrappers preserve live-token attribution across nested callbacks and degrade explicitly after retirement.
+- C17 holds because no truncation surface exists.
+
+## Verdict
+
+This design is architecturally unsound as written. The coarse exact-world gate does repair several cache leaks, but the constructions still fail stable per-world value identity, post-pin delivery, retired late-edge delivery, and render-order-independent evaluator publication. Do not implement it until those mechanisms and the live-id lifecycle are specified and the schedules above pass forced tests.
+
+

@@ -43,6 +43,12 @@ round-2 champion; judge sustained with zero confirmed blockers.
   hook-becomes-current publication edge (hidden Offscreen, error
   abandonment, alternates) has no current-generation React existence
   proof; fork tests 20–23 on the critical path with O7's 15–17.
+- **O24 (new).** D13-fallback obligation: per-slot-mark delivery dedup may
+  not be adopted on SPK-N1/SPK-W gate failure without its own walked
+  schedule first (S17 re-entry risk). [a-claude F7]
+- **O25 (new).** K1/E-PRESERVE growth without quiescence is a declared gap
+  (synthesis G9) with a bounded mid-episode sweep; SPK-K1 measures the
+  residual. [a-claude F5]
 
 ## Round-3 outcome
 
@@ -54,27 +60,32 @@ suppression contradicting its own retire-race walk) and scored mechanisms
 5 — a complexity-accretion signal. Exit criteria NOT met. Champion updated
 to `rounds/round-03/synthesis.md` (D12 amendment).
 
-## Round-4 docket (consolidation: repair-only, NO new mechanisms)
+## Round-4 outcome
 
-Repair the judge's 2 blockers + adversarially re-derive the round-3 NEW
-math, each with its attack: taint routing conjunct (I33 — taint set/clear
-races across yield gaps; DIRECT→LOGGED transition caches; propagation
-through tracked serves, the judge's blocker), walkGen termination (I32 —
-reentrant walks from edge-add deliveries inside a walk), immutable lock
-views + lockTerm fp (I34 — view re-mint vs yielded same-root passes; fp
-cost), lineage-stable stamps (I40 — deps oscillation within one lineage;
-cross-lineage reuse), value-revalidated prefixes (I35 — revalidation
-through staged evaluators; deep-prefix fold cost), F9 ordering + reducer
-re-fold (I38/I41 — multi-root commits with pending receipts both sides;
-promotion during saturation), scheduler shims + retired-token fallback
-(I36/I37 — shim liveness races; nested registrations; MessageChannel),
-saturation spillover (I39 — force-clear during an open walk; fastPath
-flag vs RENDER_NEWEST), mount-fixup skip rule (I43 — the judge's second
-blocker). HARD CONSTRAINT: no new mechanisms; every repair reuses or
-DELETES machinery — the mechanisms score must recover, not fall. If round
-4 comes back dry, round 5 does not exist: the budget (5) reserves it, but
-a dry round 4 = second-dry after re-review of all new math → prepare the
-exit case.
+NOT dry. 20 findings adjudicated: 19 CONFIRMED (three cross-design classes
+— I44 dedup, I46 stage-temporal, I47 drain coverage; I44/I47 textually
+inherited by the round-3 champion), 0 refuted, 1 needs-measurement. The
+round-4 docket's own repair targets ALL HELD under adversarial
+re-derivation (taint merge, walkGen atomicity, lock views, lineage stamps,
+I35 revalidation, F9 ordering, shims, saturation, mount w_fx); the new
+blockers came from ADJACENT strata (evaluator visibility I45, delivery
+dedup I44, drain coverage I47, lifecycle horizons I49/I50, reclamation
+D19). Judge: 2 new blockers, both minted by the round's own repairs (R12
+baseline fast-out; R1 unrouted evaluator versions); mechanisms recovered
+5→6 with a net state deletion. Champion: rounds/round-04/synthesis.md.
+
+## Round-5 docket (FINAL budgeted round — surgical)
+
+One job: adversarially re-derive ONLY the round-4 synthesis's new math —
+R1 pin-resolved version chain, R2 pass-aware suppression, R3
+seeding/walk/termination (incl. A/B/A), R4 closed drain coverage, R8 live
+renumber, R9 reference installation, R12 baseline comparator — plus the
+merged fork-test list, repairing the judge's 2 blockers (R12 fast-out;
+R1 unrouted evaluator versions) with MINIMAL diffs. NO new mechanisms; no
+scope beyond the listed math; every repair ships with the attacking
+schedule as a pinned case. Judge re-walks the full battery. Dry ⇒ exit
+case per LOOP.md. Not dry ⇒ budget cap: exit case presents best-so-far
+with open items documented.
 
 ## Spike queue
 
@@ -88,6 +99,7 @@ exit case.
 | SPK-L | LOGGED-quiet residual + activation cost (idle machine) | >2% confirmed → renegotiate ≤3% or mitigation ladder | queued (needs idle machine) |
 | SPK-N1 | value-blind fan-out grid + held-batch row + breaker W1 workload + walkGen pricing | >2× DIRECT propagate or >1 spurious render/(watcher,batch) → per-slot-mark dedup (D13) | queued |
 | SPK-G8 | held-open bursts + typeahead restarts (breaker W3) + prefix/stamp-vector length + I35 re-fold cost | fail → pinless-frontier hybrid (O18) / whole-mask clock vector (O21) | queued |
-| SPK-W | logged-write price + walkGen stamp | >2× DIRECT → inline-2 receipts / tape pooling | queued |
-| SPK-R | dense retirement (breaker W5 A/B) under the corrected SPLIT comparator: G-R-core vs DIRECT batch(), G-R-react vs useState — old render-relative gate DELETED (zero-denominator defect, breaker B4) | per comparator | queued |
+| SPK-W | logged-write price + walkGen stamp + staging-walk/restart frequency (R3) + pass-aware dedup check (R2) | >2× DIRECT → inline-2 receipts / tape pooling | queued |
+| SPK-R | dense retirement (breaker W5 A/B) + advance-drain watcher reconcile (R4) + promotion walk (R1), under the corrected SPLIT comparator: G-R-core vs DIRECT batch(), G-R-react vs useState — old render-relative gate DELETED (zero-denominator defect, breaker B4) | per comparator | queued |
 | SP-F8 | continuation-carrier feasibility + overhead | <0.5% event overhead or platform prerequisite | **DONE — FEASIBLE** (twin-build carrier, I30/S22) |
+| SPK-K1 | K1 growth under never-quiescent traffic with the G9 sweep | >1 MB/h steady growth or >5% walk degradation on soak → extend sweep predicate (sampled reachability), else G9 stands documented | queued |
