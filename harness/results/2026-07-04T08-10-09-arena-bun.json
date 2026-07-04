@@ -1,0 +1,73 @@
+{
+  "kind": "bench",
+  "framework": "arena",
+  "suites": [
+    "kairo"
+  ],
+  "timestamp": "2026-07-04T08-10-09",
+  "node": "v24.16.0",
+  "runtime": "bun",
+  "loadavg": [
+    4.1865234375,
+    4.1435546875,
+    4.0693359375
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "avoidablePropagation",
+      "time": 40.548625000000015
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "broadPropagation",
+      "time": 69.27570800000001
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "deepPropagation",
+      "time": 28.69854199999986
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "diamond",
+      "time": 48.07300000000009
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "mux",
+      "time": 38.68704200000002
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "repeatedObservers",
+      "time": 9.555667000000085
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "triangle",
+      "time": 15.713416999999936
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "unstable",
+      "time": 17.37704100000019
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena",
+      "test": "molBench",
+      "time": 9.118375000000015
+    }
+  ]
+}

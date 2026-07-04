@@ -1,0 +1,9 @@
+framework,suite,test,time
+arena,cellx,cellx1000,4.842044000000001
+arena,cellx,cellx2500,12.107749999999982
+arena,dynamic,2-10x5 - lazy80%,132.232125
+arena,dynamic,6-10x10 - dyn25% - lazy80%,65.705917
+arena,dynamic,4-1000x12 - dyn5%,229.9602500000001
+arena,dynamic,25-1000x5,255.31275000000005
+arena,dynamic,3-5x500,55.8940419999999
+arena,dynamic,6-100x15 - dyn50%,138.9138750000002

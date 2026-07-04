@@ -1,0 +1,73 @@
+{
+  "kind": "bench",
+  "framework": "arrayd",
+  "suites": [
+    "kairo"
+  ],
+  "timestamp": "2026-07-04T08-10-09",
+  "node": "v24.16.0",
+  "runtime": "bun",
+  "loadavg": [
+    3.94189453125,
+    4.095703125,
+    4.05224609375
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "avoidablePropagation",
+      "time": 41.79441700000001
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "broadPropagation",
+      "time": 94.96758399999999
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "deepPropagation",
+      "time": 30.421291999999994
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "diamond",
+      "time": 66.45283400000017
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "mux",
+      "time": 53.49612500000012
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "repeatedObservers",
+      "time": 19.265625
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "triangle",
+      "time": 25.735291999999845
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "unstable",
+      "time": 27.366749999999683
+    },
+    {
+      "suite": "kairo",
+      "framework": "arrayd",
+      "test": "molBench",
+      "time": 9.120417000000089
+    }
+  ]
+}

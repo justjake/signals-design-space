@@ -1,0 +1,9 @@
+framework,suite,test,time
+alien-v3,cellx,cellx1000,5.081750000000007
+alien-v3,cellx,cellx2500,12.755707999999984
+alien-v3,dynamic,2-10x5 - lazy80%,139.51820799999996
+alien-v3,dynamic,6-10x10 - dyn25% - lazy80%,123.94749999999999
+alien-v3,dynamic,4-1000x12 - dyn5%,301.2892079999997
+alien-v3,dynamic,25-1000x5,383.7532080000001
+alien-v3,dynamic,3-5x500,87.58266700000058
+alien-v3,dynamic,6-100x15 - dyn50%,195.7466659999991

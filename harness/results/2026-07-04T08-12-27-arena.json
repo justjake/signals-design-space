@@ -1,0 +1,68 @@
+{
+  "kind": "bench",
+  "framework": "arena",
+  "suites": [
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-04T08-12-27",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    3.78564453125,
+    3.9033203125,
+    3.9716796875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "cellx",
+      "framework": "arena",
+      "test": "cellx1000",
+      "time": 4.757457000000006
+    },
+    {
+      "suite": "cellx",
+      "framework": "arena",
+      "test": "cellx2500",
+      "time": 11.805665999999931
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena",
+      "test": "2-10x5 - lazy80%",
+      "time": 134.56345799999997
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 98.31908300000009
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena",
+      "test": "4-1000x12 - dyn5%",
+      "time": 276.21225000000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena",
+      "test": "25-1000x5",
+      "time": 302.95045800000025
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena",
+      "test": "3-5x500",
+      "time": 73.90533400000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena",
+      "test": "6-100x15 - dyn50%",
+      "time": 158.62216600000102
+    }
+  ]
+}

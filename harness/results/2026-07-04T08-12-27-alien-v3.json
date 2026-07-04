@@ -1,0 +1,68 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-04T08-12-27",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    4.08203125,
+    3.9658203125,
+    3.9951171875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx1000",
+      "time": 5.081750000000007
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx2500",
+      "time": 12.755707999999984
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "2-10x5 - lazy80%",
+      "time": 139.51820799999996
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 123.94749999999999
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "4-1000x12 - dyn5%",
+      "time": 301.2892079999997
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "25-1000x5",
+      "time": 383.7532080000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "3-5x500",
+      "time": 87.58266700000058
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-100x15 - dyn50%",
+      "time": 195.7466659999991
+    }
+  ]
+}

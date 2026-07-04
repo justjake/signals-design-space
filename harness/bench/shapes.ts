@@ -30,6 +30,10 @@
  *   pnpm -C harness exec tsx bench/shapes.ts --frameworks alien-v3,sweep \
  *     --shapes reads,isolate,broad --reps 20
  *
+ * Runtime selection: --runtime node|bun (default node). With bun, children
+ * are spawned as `bun <this file>` (bun executes TS directly). JSC/bun does
+ * not expose PerformanceObserver('gc'), so GC columns print gc:n/a there.
+ *
  * Child protocol (spawned automatically): SHAPES_FRAMEWORK, SHAPES,
  * SHAPES_SCALE, SHAPES_REPS env vars; rows print as `@@ROW {json}`.
  *
@@ -232,11 +236,18 @@ async function runChild(): Promise<void> {
 	// process's GC history and dispatches asynchronously. So: collect ALL gc
 	// entries with their startTime, record a [t0,t1] window per shape, settle
 	// at the end, and attribute entries to shapes by timestamp window.
+	// Bun/JSC does not support the 'gc' entry type at all: report gcN = -1
+	// (rendered as gc:n/a by the parent) instead of a misleading gc:0.
+	// (cast: @types/node omits the static supportedEntryTypes on perf_hooks'
+	// PerformanceObserver; it exists at runtime in both node and bun)
+	const supported = (PerformanceObserver as unknown as { supportedEntryTypes?: readonly string[] })
+		.supportedEntryTypes;
+	const gcSupported = (supported ?? []).includes('gc');
 	const gcEntries: Array<{ t: number; dur: number }> = [];
 	const obs = new PerformanceObserver((list) => {
 		for (const e of list.getEntries()) gcEntries.push({ t: e.startTime, dur: e.duration });
 	});
-	obs.observe({ type: 'gc', buffered: true });
+	if (gcSupported) obs.observe({ type: 'gc', buffered: true });
 
 	interface Pending {
 		shape: string;
@@ -273,8 +284,8 @@ async function runChild(): Promise<void> {
 			ms: p.times[0]!,
 			p99: p.times[Math.min(p.times.length - 1, Math.floor(p.times.length * 0.99))]!,
 			mean: p.times.reduce((s, t) => s + t, 0) / p.times.length,
-			gcMs: inWindow.reduce((s, e) => s + e.dur, 0),
-			gcN: inWindow.length,
+			gcMs: gcSupported ? inWindow.reduce((s, e) => s + e.dur, 0) : 0,
+			gcN: gcSupported ? inWindow.length : -1,
 			checksum: p.checksum,
 		};
 		console.log(`@@ROW ${JSON.stringify(row)}`);
@@ -290,11 +301,21 @@ function runParent(): void {
 	const shapes = arg('--shapes', Object.keys(SHAPES).join(','));
 	const scale = arg('--scale', '1');
 	const reps = Number(arg('--reps', '3'));
+	const runtime = arg('--runtime', 'node');
+	if (runtime !== 'node' && runtime !== 'bun') {
+		console.error(`unknown --runtime ${JSON.stringify(runtime)}; expected node or bun`);
+		process.exit(1);
+	}
+	// node children go through tsx (TS loader); bun executes TS natively.
+	const [cmd, args] =
+		runtime === 'bun'
+			? (['bun', [fileURLToPath(import.meta.url)]] as const)
+			: (['pnpm', ['exec', 'tsx', fileURLToPath(import.meta.url)]] as const);
 
 	const rows: Row[] = [];
 	for (const fw of frameworks) {
 		const t0 = performance.now();
-		const res = spawnSync('pnpm', ['exec', 'tsx', fileURLToPath(import.meta.url)], {
+		const res = spawnSync(cmd, [...args], {
 			cwd: fileURLToPath(new URL('..', import.meta.url)),
 			env: {
 				...process.env,
@@ -313,7 +334,9 @@ function runParent(): void {
 		for (const line of res.stdout.split('\n')) {
 			if (line.startsWith('@@ROW ')) rows.push(JSON.parse(line.slice(6)));
 		}
-		console.error(`${fw}: child done in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+		console.error(
+			`${fw} (${runtime}): child done in ${((performance.now() - t0) / 1000).toFixed(1)}s`,
+		);
 	}
 
 	const base = frameworks[0];
@@ -325,7 +348,8 @@ function runParent(): void {
 	const pad = (s: string, n: number) => s.padEnd(n);
 	const showP99 = reps >= 10;
 	const colW = showP99 ? 36 : 28;
-	console.log('\n' + pad('shape', 10) + frameworks.map((f) => pad(f, colW)).join(''));
+	console.log(`\nruntime: ${runtime}`);
+	console.log(pad('shape', 10) + frameworks.map((f) => pad(f, colW)).join(''));
 	for (const [shapeName, m] of byShape) {
 		const baseRow = m.get(base!);
 		let line = pad(shapeName, 10);
@@ -336,7 +360,8 @@ function runParent(): void {
 				continue;
 			}
 			const ratio = baseRow && fw !== base ? ` (${(r.ms / baseRow.ms).toFixed(2)}x)` : '';
-			const gc = r.gcN > 0 ? ` gc:${r.gcMs.toFixed(1)}ms/${r.gcN}` : ' gc:0';
+			const gc =
+				r.gcN < 0 ? ' gc:n/a' : r.gcN > 0 ? ` gc:${r.gcMs.toFixed(1)}ms/${r.gcN}` : ' gc:0';
 			const p99 = showP99 ? ` p99:${r.p99.toFixed(1)}` : '';
 			line += pad(`${r.ms.toFixed(1)}ms${ratio}${gc}${p99}`, colW);
 		}

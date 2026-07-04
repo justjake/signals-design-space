@@ -1,0 +1,10 @@
+framework,suite,test,time
+arena,kairo,avoidablePropagation,41.837042
+arena,kairo,broadPropagation,68.94233299999996
+arena,kairo,deepPropagation,28.382667000000083
+arena,kairo,diamond,47.35395799999992
+arena,kairo,mux,37.08004200000005
+arena,kairo,repeatedObservers,9.247624999999971
+arena,kairo,triangle,15.56625000000031
+arena,kairo,unstable,17.086625000000367
+arena,kairo,molBench,9.007833000000119

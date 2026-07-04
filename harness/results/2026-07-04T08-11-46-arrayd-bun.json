@@ -1,0 +1,68 @@
+{
+  "kind": "bench",
+  "framework": "arrayd",
+  "suites": [
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-04T08-11-46",
+  "node": "v24.16.0",
+  "runtime": "bun",
+  "loadavg": [
+    3.6455078125,
+    3.9052734375,
+    3.9775390625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "cellx",
+      "framework": "arrayd",
+      "test": "cellx1000",
+      "time": 5.534124999999994
+    },
+    {
+      "suite": "cellx",
+      "framework": "arrayd",
+      "test": "cellx2500",
+      "time": 13.817209000000005
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arrayd",
+      "test": "2-10x5 - lazy80%",
+      "time": 191.30487500000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arrayd",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 137.84000000000015
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arrayd",
+      "test": "4-1000x12 - dyn5%",
+      "time": 323.54112499999974
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arrayd",
+      "test": "25-1000x5",
+      "time": 372.8432079999993
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arrayd",
+      "test": "3-5x500",
+      "time": 93.01299999999901
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arrayd",
+      "test": "6-100x15 - dyn50%",
+      "time": 198.33945800000038
+    }
+  ]
+}
