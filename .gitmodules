@@ -42,3 +42,6 @@
 	path = vendor/react
 	url = https://github.com/justjake/react.git
 	branch = cosignal-fork
+[submodule "daishi-concurrent-benchmark"]
+	path = daishi-concurrent-benchmark
+	url = https://github.com/justjake/will-this-react-global-state-work-in-concurrent-rendering

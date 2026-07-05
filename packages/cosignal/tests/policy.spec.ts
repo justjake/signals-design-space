@@ -136,6 +136,109 @@ describe('error sentinel boxes', () => {
 		expect(downstreamEvals).toBe(2);
 	});
 
+	// Pins the exceptional-outcome cutoff against payload-identity collisions:
+	// the stored payload for "threw undefined" and the value "returned
+	// undefined" are identity-equal, so the throw↔return transition must
+	// propagate on the outcome CHANGE itself, not on the payload compare.
+	test('throws undefined, then returns undefined: downstream sees the transition', () => {
+		const a = new Atom(0);
+		let evals = 0;
+		const c = new Computed<undefined>(() => {
+			evals++;
+			if (a.state === 0) {
+				// eslint-disable-next-line no-throw-literal
+				throw undefined;
+			}
+			return undefined;
+		});
+		const readOutcome = (): 'threw' | 'returned' => {
+			try {
+				c.state;
+				return 'returned';
+			} catch {
+				return 'threw';
+			}
+		};
+		let effectRuns = 0;
+		let effectSaw: 'threw' | 'returned' | undefined;
+		const dispose = effect(() => {
+			effectRuns++;
+			try {
+				c.state;
+				effectSaw = 'returned';
+			} catch {
+				effectSaw = 'threw';
+			}
+		});
+		let depEvals = 0;
+		const d = new Computed(() => {
+			depEvals++;
+			return readOutcome();
+		});
+		expect(effectRuns).toBe(1);
+		expect(effectSaw).toBe('threw');
+		expect(d.state).toBe('threw');
+		expect(depEvals).toBe(1);
+		expect(readOutcome()).toBe('threw');
+		expect(evals).toBe(1);
+
+		a.set(1); // re-evaluates: now RETURNS undefined — downstream must move
+		expect(effectRuns).toBe(2);
+		expect(effectSaw).toBe('returned');
+		expect(d.state).toBe('returned');
+		expect(depEvals).toBe(2);
+		expect(readOutcome()).toBe('returned');
+		expect(c.state).toBeUndefined();
+		dispose();
+	});
+
+	test('returns undefined, then throws undefined: downstream sees the transition', () => {
+		const a = new Atom(0);
+		const c = new Computed<undefined>(() => {
+			if (a.state === 0) {
+				return undefined;
+			}
+			// eslint-disable-next-line no-throw-literal
+			throw undefined;
+		});
+		const readOutcome = (): 'threw' | 'returned' => {
+			try {
+				c.state;
+				return 'returned';
+			} catch {
+				return 'threw';
+			}
+		};
+		let effectRuns = 0;
+		let effectSaw: 'threw' | 'returned' | undefined;
+		const dispose = effect(() => {
+			effectRuns++;
+			try {
+				c.state;
+				effectSaw = 'returned';
+			} catch {
+				effectSaw = 'threw';
+			}
+		});
+		let depEvals = 0;
+		const d = new Computed(() => {
+			depEvals++;
+			return readOutcome();
+		});
+		expect(effectRuns).toBe(1);
+		expect(effectSaw).toBe('returned');
+		expect(d.state).toBe('returned');
+		expect(depEvals).toBe(1);
+
+		a.set(1); // re-evaluates: now THROWS undefined — downstream must move
+		expect(effectRuns).toBe(2);
+		expect(effectSaw).toBe('threw');
+		expect(d.state).toBe('threw');
+		expect(depEvals).toBe(2);
+		expect(readOutcome()).toBe('threw');
+		dispose();
+	});
+
 	test('an effect observing a throwing computed surfaces the error to the writer', () => {
 		const a = new Atom(1);
 		const c = new Computed(() => {

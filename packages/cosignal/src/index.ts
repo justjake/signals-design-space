@@ -60,18 +60,20 @@
  *
  * With that vocabulary, the file's four layers, top to bottom:
  *
- *   1. Sentinels (SuspendedRead, CycleError, SentinelBox). A computed's
- *      function can fail to produce a value: it can throw, or it can read
- *      async data that isn't ready yet (`ctx.use` on a pending promise — a
- *      SUSPENSION). Rather than make every caller handle those cases, the
- *      engine stores a small placeholder object (a "sentinel BOX") in the
- *      slot where the value would have gone. The box records what happened —
- *      the thrown error, or the pending promise — and is reused across
- *      re-evaluations so the kernel's identity compare sees "no change". A
- *      read that hits a box doesn't return it: it UNBOXES — throws the box's
- *      contents, either the original error or a SuspendedRead marker that
- *      tells the caller (e.g. React's Suspense machinery) "this value is
- *      still loading".
+ *   1. Sentinels (SuspendedRead, CycleError). A computed's function can fail
+ *      to produce a value: it can throw, or it can read async data that
+ *      isn't ready yet (`ctx.use` on a pending promise — a SUSPENSION).
+ *      Rather than make every caller handle those cases, the engine stores
+ *      the RAW payload of what happened — the thrown value, or the pending
+ *      thenable — in the slot where the value would have gone, and marks the
+ *      outcome in the node's flags (HAS_BOX, plus BOX_SUSPENDED for
+ *      suspensions). The cutoff treats "same payload + same outcome bits" as
+ *      no change, so a re-thrown identical error causes no downstream churn,
+ *      while an outcome FLIP propagates even when the payloads are
+ *      identity-equal (throw undefined → return undefined). A read that hits
+ *      an exceptional slot doesn't return it: it throws — the original error,
+ *      or a SuspendedRead marker (stable per thenable) that tells the caller
+ *      (e.g. React's Suspense machinery) "this value is still loading".
  *   2. The evaluation context — the ONE `ctx` object every computed function
  *      receives (`ctx.previous`, `ctx.use`). Its members are getters that
  *      resolve "which computed is evaluating right now" from kernel state,
@@ -143,10 +145,11 @@
  *       one argument (upstream passes `previousValue`; `ctx.previous` now
  *       reads the cache live via `activeSub`, so plain computeds pay ZERO
  *       policy instructions per recompute), and the two kernel eval sites
- *       (updateComputed, computedRead's first-eval branch) box exceptions via
- *       the cold `boxThrown` catch hook — a throwing getter never corrupts
- *       graph state, and the kernel value slot then holds a SentinelBox
- *       (flagged HAS_BOX; unboxed by the cold boxedRead read tail).
+ *       (updateComputed, computedRead's first-eval branch) store exceptions
+ *       via the cold `storeThrown` catch hook — a throwing getter never
+ *       corrupts graph state; the kernel value slot then holds the RAW
+ *       thrown value / pending thenable (flagged HAS_BOX, + BOX_SUSPENDED
+ *       for suspensions; unwrapped by the cold boxedRead read tail).
  *       computedRead is split hot/slow the same way link/linkInsert is: the
  *       D2+D3 additions pushed the monolith past V8's 460-byte inline cliff,
  *       and the outlined form measures FASTER than the un-split form on
@@ -201,44 +204,12 @@ export class CycleError extends Error {
 	}
 }
 
-// SentinelBox kinds.
-const BOX_ERROR: BoxKind = 0;
-const BOX_SUSPENDED: BoxKind = 1;
-
-/**
- * Reference-stable sentinel cached as the computed's kernel value when its
- * evaluation throws (BOX_ERROR, payload = the thrown value) or suspends
- * (BOX_SUSPENDED, payload = the pending thenable). The kernel compares
- * identity only, so a re-evaluation that produces the same payload returns
- * the PREVIOUS box and downstream sees no change; a different payload mints a
- * new box and propagates. Read sites unbox: errors rethrow the payload,
- * suspensions throw the box's stable SuspendedRead.
- */
-class SentinelBox {
-	readonly kind: BoxKind;
-	readonly payload: unknown;
-	/** Stable per box, minted for suspended boxes only. */
-	readonly sr: SuspendedRead | undefined;
-	constructor(kind: BoxKind, payload: unknown, sr?: SuspendedRead) {
-		this.kind = kind;
-		this.payload = payload;
-		this.sr = sr;
-	}
-}
-
-/**
- * Box detection never uses `instanceof` on a hot path (measured ~9ns per
- * `instanceof` there — 2.4× on read-heavy workloads). Reads route on the
- * kernel's HAS_BOX flag; the policy-side compares (ctx.previous, the isEqual
- * wrapper, boxThrown's identity check) are single pointer compares against
- * the Computed's `_box` mirror, where NO_BOX (a sentinel no evaluation ever
- * returns) means "no box" with no undefined ambiguity. The mirror invariant
- * is one-sided — if the value slot holds a box, `_box` equals it — maintained
- * by `boxThrown`, the only producer of boxes; a later successful evaluation
- * may leave `_box` pointing at a dead box, which is harmless (the compare
- * simply fails against the new plain value).
- */
-const NO_BOX = new SentinelBox(BOX_ERROR, undefined);
+// Exceptional-outcome detection never uses `instanceof` on a hot path
+// (measured ~9ns per `instanceof` there — 2.4× on read-heavy workloads).
+// Reads route on the kernel's HAS_BOX flag; the policy-side filters
+// (ctx.previous, the isEqual wrapper) test the same flag bits, which the
+// eval-start rewrite deliberately PRESERVES while the getter runs so the
+// residual slot payload can be told apart from a plain previous value.
 
 // ---- the evaluation context ----------------------------------------------------
 
@@ -248,7 +219,7 @@ export type ComputedCtx<T> = {
 	 * recency, or determinism is guaranteed, and the function must be
 	 * correct if `previous` were arbitrarily stale or undefined. In the base
 	 * build: the cached value, read live; undefined on first evaluation and
-	 * while the cache holds an error/suspension sentinel.
+	 * while the cache holds an error/suspension outcome.
 	 */
 	readonly previous: T | undefined;
 	/**
@@ -298,8 +269,6 @@ type Generation = number;
 type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see Plane). */
 type ValueIndex = number;
-/** A SentinelBox kind tag (BOX_ERROR | BOX_SUSPENDED). */
-type BoxKind = number;
 
 // ---- record layout + flags as const enums ---------------------------------------
 // Const enums (not module-level `const`s) so every consumer toolchain inlines
@@ -354,12 +323,19 @@ const enum NodeFlag {
 	K_EFFECT = 512,
 	K_SCOPE = 1024,
 	KIND_MASK = K_SIGNAL | K_COMPUTED | K_EFFECT | K_SCOPE,
-	// D3: the computed's cached value is a sentinel box. Set exactly at the
-	// two kernel catch sites (with boxThrown); cleared for free by the
-	// eval-start flag rewrite in updateComputed/first-eval — every other flag
+	// D3: the computed's cached value is an exceptional outcome — the value
+	// slot holds the RAW thrown value (HAS_BOX alone) or the pending thenable
+	// (HAS_BOX | BOX_SUSPENDED). Set exactly at the two kernel catch sites
+	// (with storeThrown); the eval-start flag rewrite in updateComputed
+	// PRESERVES the bits while the getter runs (ctx.previous and the isEqual
+	// wrapper filter the residual slot payload by them) and a successful
+	// evaluation clears them in the finally's flag write — every other flag
 	// site either ORs bits or is followed by a forced recompute (unwatched
-	// sets DIRTY), so a stale clear can never serve a box unboxed.
+	// sets DIRTY), so a stale clear can never serve a payload unwrapped.
 	HAS_BOX = 2048,
+	/** Refines HAS_BOX (never set without it): the payload is a pending
+	 * thenable, not a thrown error. */
+	BOX_SUSPENDED = 4096,
 }
 
 /** Plane geometry: the strides, shifts, and offsets that address a record's
@@ -896,29 +872,44 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function updateComputed(c: NodeId): boolean {
-		if (M[c + NodeField.FLAGS] & NodeFlag.HAS_CHILD_EFFECT) {
+		const oldFlags = M[c + NodeField.FLAGS];
+		if (oldFlags & NodeFlag.HAS_CHILD_EFFECT) {
 			unlinkChildEffects(c);
 		}
 		M[c + NodeField.DEPS_TAIL] = 0;
-		M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK;
+		// D3: the eval-start rewrite PRESERVES the exceptional bits — while the
+		// getter runs, the value slot still holds the PREVIOUS outcome, and
+		// ctx.previous / the isEqual wrapper need the bits to tell a residual
+		// error/thenable payload from a plain previous value.
+		M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
+			| (oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED));
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
 		const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
 		const oldValue = vals[v];
+		const oldExc: NodeFlags = oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED);
+		// Success clears the exceptional bits (folded into the finally's
+		// RECURSED_CHECK clear); the catch overrides with the new outcome's bits.
+		let keep = ~(NodeFlag.RECURSED_CHECK | NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED);
 		try {
 			++cycle;
-			return oldValue !== (vals[v] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx));
+			// The cutoff treats an outcome-bit delta as a change: transitioning
+			// from an exceptional outcome to a plain value must propagate even
+			// when the payloads are identity-equal (threw undefined → returns
+			// undefined).
+			return oldValue !== (vals[v] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx)) || oldExc !== 0;
 		} catch (e) {
-			// D3: a throwing getter never corrupts graph state — the exception
-			// becomes a reference-stable sentinel box in the value slot (cold).
-			vals[v] = boxThrown(c, e, oldValue);
-			M[c + NodeField.FLAGS] |= NodeFlag.HAS_BOX;
-			return oldValue !== vals[v];
+			// D3: a throwing getter never corrupts graph state — the raw thrown
+			// value / pending thenable becomes the cached payload (cold).
+			const bits = storeThrown(c, e, oldValue, oldExc);
+			M[c + NodeField.FLAGS] = (M[c + NodeField.FLAGS] & ~(NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED)) | bits;
+			keep = ~NodeFlag.RECURSED_CHECK;
+			return oldExc !== bits || oldValue !== vals[v];
 		} finally {
 			--enterDepth;
 			activeSub = prevSub;
-			M[c + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
+			M[c + NodeField.FLAGS] &= keep;
 			purgeDeps(c);
 		}
 	}
@@ -1167,8 +1158,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			try {
 				vals[c >> Plane.ID_TO_VALUE_SHIFT] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx);
 			} catch (e) {
-				vals[c >> Plane.ID_TO_VALUE_SHIFT] = boxThrown(c, e, vals[c >> Plane.ID_TO_VALUE_SHIFT]); // D3 (cold)
-				M[c + NodeField.FLAGS] |= NodeFlag.HAS_BOX;
+				M[c + NodeField.FLAGS] |= storeThrown(c, e, undefined, 0); // D3 (cold; first eval — no previous outcome)
 			} finally {
 				--enterDepth;
 				activeSub = prevSub;
@@ -1179,12 +1169,13 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (sub !== 0) {
 			link(c, sub, cycle);
 		}
-		// D3: a boxed cache unwraps on the cold path — errors rethrow, settled
-		// suspensions self-heal, pending suspensions throw their stable
-		// SuspendedRead. The link above already registered the subscription,
-		// so recovery re-notifies whoever observed the sentinel.
-		if (M[c + NodeField.FLAGS] & NodeFlag.HAS_BOX) {
-			return boxedRead(c);
+		// D3: an exceptional cache unwraps on the cold path — errors rethrow,
+		// settled suspensions self-heal, pending suspensions throw the
+		// thenable's stable SuspendedRead. The link above already registered
+		// the subscription, so recovery re-notifies whoever observed the throw.
+		const f = M[c + NodeField.FLAGS];
+		if (f & NodeFlag.HAS_BOX) {
+			return boxedRead(c, f);
 		}
 		return vals[c >> Plane.ID_TO_VALUE_SHIFT];
 	}
@@ -1506,13 +1497,19 @@ type InstrumentedThenable = PromiseLike<unknown> & {
 	status?: 'pending' | 'fulfilled' | 'rejected';
 	value?: unknown;
 	reason?: unknown;
+	/** The thenable's stable SuspendedRead, minted lazily at the first read
+	 * that observes it pending — every read site throws THIS instance while
+	 * the thenable is pending, so observers can dedupe by identity. */
+	sr?: SuspendedRead;
 };
 
 /**
  * ctx.previous (hoisted; called from POLICY_CTX). The evaluating node is the
  * kernel's activeSub; its value slot still holds the previous cached value
- * during the evaluation (updateComputed assigns after the getter returns).
- * Boxes read as undefined. Leaked-ctx calls outside a computed evaluation
+ * during the evaluation (updateComputed assigns after the getter returns),
+ * and the eval-start rewrite preserved the exceptional bits, so one flag
+ * test filters both "not a computed" and "residual error/thenable payload"
+ * (which reads as undefined). Leaked-ctx calls outside a computed evaluation
  * fall under `previous`'s license to be arbitrarily stale or undefined.
  */
 function ctxPrevious(): unknown {
@@ -1520,12 +1517,10 @@ function ctxPrevious(): unknown {
 	if (c === 0) {
 		return undefined;
 	}
-	const v = values[c >> Plane.ID_TO_VALUE_SHIFT];
-	const owner = values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET];
-	if (owner instanceof Computed && (v === owner._box || v === NO_BOX)) {
+	if ((E.buffer()[c + NodeField.FLAGS]! & (NodeFlag.K_COMPUTED | NodeFlag.HAS_BOX)) !== NodeFlag.K_COMPUTED) {
 		return undefined;
 	}
-	return v;
+	return values[c >> Plane.ID_TO_VALUE_SHIFT];
 }
 
 /**
@@ -1581,7 +1576,7 @@ function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): un
 		case 'rejected':
 			throw t.reason;
 		case 'pending':
-			throw new SuspendedRead(t);
+			throw (t.sr ??= new SuspendedRead(t));
 		default: {
 			t.status = 'pending';
 			t.then(
@@ -1598,7 +1593,7 @@ function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): un
 					}
 				},
 			);
-			throw new SuspendedRead(t);
+			throw (t.sr ??= new SuspendedRead(t));
 		}
 	}
 }
@@ -1630,49 +1625,49 @@ function suspenseEvalFn(owner: Computed<unknown>, inner: (ctx: unknown) => unkno
 }
 
 /**
- * The kernel's exception hook (D3), cold: turns whatever a computed
- * evaluation threw into the reference-stable sentinel box that becomes the
- * cached value. Same payload → the previous box is returned, so downstream
- * sees no change (the kernel compares identity).
+ * The kernel's exception hook (D3), cold: stores whatever a computed
+ * evaluation threw as the RAW cached payload — the thrown value for an
+ * error, the pending thenable for a suspension — and returns the exceptional
+ * flag bits for the outcome. The caller folds the bits into the node's flags
+ * and into its change cutoff: same payload + same bits ⇒ no change; any
+ * delta ⇒ propagate. The settle listener is attached only on TRANSITION
+ * (the previous outcome was not a suspension, or suspended on a different
+ * thenable), so re-suspending on the same pending thenable stays
+ * listener-stable.
  */
-function boxThrown(c: NodeId, e: unknown, oldValue: unknown): SentinelBox {
-	const owner = ownerOf(c);
-	const prevBox = oldValue !== undefined && oldValue === owner._box ? (oldValue as SentinelBox) : undefined;
+function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
+	const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
 	if (e instanceof SuspendedRead) {
-		const t = e.thenable;
-		if (prevBox !== undefined && prevBox.kind === BOX_SUSPENDED && prevBox.payload === t) {
-			return prevBox; // same pending thenable — identity stable across re-eval
+		const t = e.thenable as InstrumentedThenable;
+		values[v] = t;
+		if ((oldExc & NodeFlag.BOX_SUSPENDED) === 0 || oldValue !== t) {
+			attachSettle(c, t);
 		}
-		const box = new SentinelBox(BOX_SUSPENDED, t, e);
-		owner._box = box;
-		attachSettle(owner, box, t as InstrumentedThenable);
-		return box;
+		return NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED;
 	}
-	if (prevBox !== undefined && prevBox.kind === BOX_ERROR && prevBox.payload === e) {
-		return prevBox; // rethrown identical error — no downstream churn
-	}
-	const box = new SentinelBox(BOX_ERROR, e);
-	owner._box = box;
-	return box;
+	values[v] = e;
+	return NodeFlag.HAS_BOX;
 }
 
 /**
- * Settlement-invalidate: when the pending thenable of a suspended box
+ * Settlement-invalidate: when the pending thenable of a suspended computed
  * settles, mark the computed stale and propagate so watchers re-run and
- * readers recompute. Guarded by reference identity — the box must still be
- * the node's cached value AND still carry this exact thenable — so
+ * readers recompute. Stale-guarded — the node must still cache THIS thenable
+ * as a suspension (suspended bit set AND the slot holds `t`) — so
  * out-of-order settlement of superseded work is inert.
  */
-function attachSettle(owner: Computed<unknown>, box: SentinelBox, t: InstrumentedThenable): void {
-	const id = owner._id;
+function attachSettle(c: NodeId, t: InstrumentedThenable): void {
 	const onSettle = (): void => {
-		if (values[id >> Plane.ID_TO_VALUE_SHIFT] !== box || box.payload !== t) {
+		if (
+			(E.buffer()[c + NodeField.FLAGS]! & NodeFlag.BOX_SUSPENDED) === 0
+			|| values[c >> Plane.ID_TO_VALUE_SHIFT] !== t
+		) {
 			return;
 		}
 		try {
 			maybeBoundary();
-			owner._settleReplay = true; // the next evaluation is a replay
-			E.invalidateComputed(id);
+			ownerOf(c)._settleReplay = true; // the next evaluation is a replay
+			E.invalidateComputed(c);
 			if (batchDepth === 0) {
 				flush();
 			}
@@ -1689,34 +1684,30 @@ function attachSettle(owner: Computed<unknown>, box: SentinelBox, t: Instrumente
 
 /**
  * Cold read tail (hoisted; called from the kernel's computedRead when the
- * HAS_BOX flag is set): the cached value is a sentinel box. Errors rethrow
- * their payload. Suspended boxes whose thenable already settled self-heal
- * (invalidate + recompute) so a read after `await` is deterministic even
- * before the settle listener's microtask runs; pending suspensions throw the
- * box's stable SuspendedRead. The self-heal re-read recurses through the
- * kernel tail at most once more: a further box minted during the recursion
- * necessarily carries a thenable that was pending at mint, which throws —
- * settlement cannot occur inside this synchronous frame.
+ * HAS_BOX flag is set): the cached value is a raw exceptional payload.
+ * Errors rethrow the payload directly. Suspensions whose thenable already
+ * settled self-heal (invalidate + recompute) so a read after `await` is
+ * deterministic even before the settle listener's microtask runs; pending
+ * suspensions throw the thenable's stable SuspendedRead (minted lazily on
+ * it). The self-heal re-read recurses through the kernel tail at most once
+ * more: a payload stored during the recursion necessarily carries a thenable
+ * that was pending at mint, which throws — settlement cannot occur inside
+ * this synchronous frame.
  */
-function boxedRead(c: NodeId): unknown {
-	const box = values[c >> Plane.ID_TO_VALUE_SHIFT] as SentinelBox;
-	if (box.kind !== BOX_SUSPENDED) {
-		throw box.payload;
+function boxedRead(c: NodeId, flags: NodeFlags): unknown {
+	const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
+	if ((flags & NodeFlag.BOX_SUSPENDED) === 0) {
+		throw values[v];
 	}
-	const t = box.payload as InstrumentedThenable;
+	const t = values[v] as InstrumentedThenable;
 	if (t.status === undefined || t.status === 'pending') {
-		throw box.sr;
+		throw (t.sr ??= new SuspendedRead(t));
 	}
-	const owner = ownerOf(c);
-	owner._settleReplay = true; // the recompute below is a settle replay
+	ownerOf(c)._settleReplay = true; // the recompute below is a settle replay
 	E.invalidateComputed(c);
 	const next = E.computedRead(c);
 	if (batchDepth === 0) {
 		flush();
-	}
-	if (next === box) {
-		// Defensive: no progress (should be unreachable) — surface as-is.
-		throw box.sr;
 	}
 	return next;
 }
@@ -1863,8 +1854,6 @@ export class Computed<T> {
 	_slotIndex: number;
 	/** True while the next evaluation is a settlement replay. @internal */
 	_settleReplay: boolean;
-	/** Mirror of the sentinel box in the kernel cache, or NO_BOX. @internal */
-	_box: SentinelBox;
 	readonly label: string | undefined;
 
 	constructor(fn: (ctx: ComputedCtx<T>) => T, options?: ComputedOptions<T>) {
@@ -1872,7 +1861,6 @@ export class Computed<T> {
 		this._slots = undefined;
 		this._slotIndex = 0;
 		this._settleReplay = false;
-		this._box = NO_BOX;
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);
@@ -1882,12 +1870,14 @@ export class Computed<T> {
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
-			const self = this;
+			// The wrapper runs inside the evaluation, where the eval-start
+			// rewrite preserved the exceptional bits — HAS_BOX set means `prev`
+			// is a residual error/thenable payload, not a comparable value.
 			const iv: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
 			fns[id >> Plane.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 				const prev = values[iv];
 				const next = (fn as (ctx: unknown) => unknown)(ctxArg);
-				if (prev === undefined || prev === self._box) {
+				if (prev === undefined || (E.buffer()[id + NodeField.FLAGS]! & NodeFlag.HAS_BOX) !== 0) {
 					return next;
 				}
 				return isEqual(prev, next) ? prev : next;

@@ -319,7 +319,9 @@ export class AtomNode {
 	baseSeq: Seq = 0;
 	/** Packed receipt columns (the engine truth; `tape` materializes them). */
 	tp = new Tape();
-	/** Full-history retention (invariant surface): materialized compacted receipts, kept only when `bridge.retainArchive`. */
+	/** Referee surface — not consulted by engine logic. Full-history retention
+	 * for the oracle's retention invariant (`shadowFoldAtom` replays it):
+	 * materialized compacted receipts, kept only when `bridge.retainArchive`. */
 	archiveStore: Receipt[] = [];
 	origin: Value;
 	equals: Equals;
@@ -345,11 +347,15 @@ export class AtomNode {
 		this.handle = handle;
 	}
 
-	/** Test/diagnostic surface: the tape as materialized Receipt objects. */
+	/** Referee surface — not consulted by engine logic (which reads the packed
+	 * `tp` columns). The tape as materialized Receipt objects; read by: oracle
+	 * `checkInvariants` (via the model cast), twin tests, graphviz. */
 	get tape(): Receipt[] {
 		return this.tp.materialize();
 	}
 
+	/** Referee surface — mirrors the model AtomNode's `archive` field for the
+	 * structural cast; read by retention comparisons in tests. */
 	get archive(): Receipt[] {
 		return this.archiveStore;
 	}
@@ -414,6 +420,9 @@ export type WorldMemo = {
 export type SlotMeta = {
 	id: SlotId;
 	tenant: TokenId | undefined;
+	/** Referee surface — the engine mints/resets this but never reads it; only
+	 * the oracle's `checkInvariants` tenancy rules consult it (via the model
+	 * cast). */
 	claimSeq: Seq;
 	/** Sequence of the last write under this slot; zeroed when a new tenant
 	 * claims it (memo validation compares it against evaluation stamps). */
@@ -445,8 +454,6 @@ export type Pass = {
 	rendered: Set<WatcherId>;
 	/** Pass-world memo plane — dies with the pass record. */
 	memos: Map<NodeId, WorldMemo>;
-	/** Edge-add deliveries discovered inside a render slice, queued to yield/end. */
-	pendingEdgeDeliveries: { nodeId: NodeId; bits: number }[];
 };
 
 export type RootState = {
@@ -499,7 +506,8 @@ export class Watcher {
 		this.snapshot = snapshot;
 	}
 
-	/** Test surface: the dedup bits as a Set of slot ids. */
+	/** Referee surface — not consulted by engine logic (which tests `dedupBits`
+	 * directly). The dedup bits materialized as a Set for twin/battery tests. */
 	get dedup(): Set<SlotId> {
 		const out = new Set<SlotId>();
 		for (let s = 0; s < SLOT_COUNT; s++) if ((this.dedupBits >>> s) & SlotBits.LOW_BIT) out.add(s);
@@ -532,7 +540,7 @@ export type World =
 	| { kind: 'newest' }
 	| { kind: 'pass'; pass: Pass }
 	| { kind: 'committed'; root: RootId }
-	| { kind: 'mountFix'; maskSlots: Set<SlotId>; maskBits?: SlotSet; pin: Seq; root: RootId; excludeLiveTokens?: Set<TokenId> };
+	| { kind: 'mountFix'; maskSlots: Set<SlotId>; pin: Seq; root: RootId; excludeLiveTokens?: Set<TokenId> };
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
@@ -643,10 +651,7 @@ let publiclyRegistered = false;
 // bit test per write, instead of closure property loads + a Map probe per op.
 /**
  * Read routing mode: 0 = quiet (straight kernel), 1 = an overlay world fold
- * is on stack (registered reads serve the world fold), 2 = a bridge kernel
- * evaluation is on stack (registered reads serve the kernel AND record the
- * kernel-acquired dep into the overlay's K1 edge plane — the mirror for
- * raw-handle reads inside computed fns, which the bridge readers never see).
+ * is on stack (registered reads serve the world fold).
  */
 let routeReads = 0;
 /** Nonzero when logged-mode write classification is armed (mode==='logged' && !bridgeApplying). */
@@ -783,6 +788,13 @@ export function __newBridgeForTest(): CosignalBridge {
  * `AtomNode.handle` (kernel-backed newest storage, eager stepwise apply on
  * every logged write) and the module-level logged table (public-write
  * classification + world read routing).
+ *
+ * Referee surface: the twin tests run `checkInvariants(bridge as unknown as
+ * CosignalModel)` / `snapshotModel(...)` against this class, so some fields
+ * and getters exist only to stay structurally snapshot-compatible with the
+ * model or to serve tests/diagnostics. Those members are tagged
+ * "Referee surface" at their definition sites — the engine's own logic never
+ * consults them; everything untagged is load-bearing.
  */
 export class CosignalBridge {
 	nodes = new Map<NodeId, AnyNode>();
@@ -849,11 +861,9 @@ export class CosignalBridge {
 	/** Last-token cache (windowed writes hit one token repeatedly). */
 	private lastTokenId = 0;
 	private lastTokenRef: Token | undefined = undefined;
-	/** Kernel-eval frame taint accumulator, valid while kernelEvalNode ≠ 0. */
-	private kernelEvalNode: NodeId = 0;
-	private kernelEvalTaint = false;
-	/** Full-history archive for retention invariants (tests opt in; keeping
-	 * every compacted receipt forever would grow without bound otherwise). */
+	/** Referee surface — full-history archiving for the oracle's retention
+	 * invariants (tests opt in; keeping every compacted receipt forever would
+	 * grow without bound otherwise). */
 	retainArchive = false;
 	/** Event-stream base offset (0 unless a capacity cap drops old events). */
 	private eventsBase = 0;
@@ -861,8 +871,9 @@ export class CosignalBridge {
 	private eventCapacity: number | undefined = undefined;
 
 	/**
-	 * Diagnostic surface: the K1 union plane as dep → dependents
-	 * (materialized from the adjacency columns; graphviz + soak metrics).
+	 * Referee surface — not consulted by engine logic. The K1 union plane as
+	 * dep → dependents, materialized from the adjacency columns; read by:
+	 * graphviz, twin tests, soak metrics.
 	 */
 	get episodeEdges(): Map<NodeId, Set<NodeId>> {
 		const out = new Map<NodeId, Set<NodeId>>();
@@ -1152,9 +1163,7 @@ export class CosignalBridge {
 				return ((this.root(world.root).committedBits >>> slots[i]!) & SlotBits.LOW_BIT) === 1;
 			}
 			case 'mountFix': {
-				if (world.maskBits !== undefined) {
-					if (((world.maskBits >>> slots[i]!) & SlotBits.LOW_BIT) === 1 && seqs[i]! <= world.pin) return true;
-				} else if (world.maskSlots.has(slots[i]!) && seqs[i]! <= world.pin) return true;
+				if (world.maskSlots.has(slots[i]!) && seqs[i]! <= world.pin) return true;
 				if (world.excludeLiveTokens?.has(atom.tp.tokens[i]!)) return false; // corrective-covered (audit form)
 				if (retired[i]! !== 0) return true; // committed truth at NOW
 				return ((this.root(world.root).committedBits >>> slots[i]!) & SlotBits.LOW_BIT) === 1;
@@ -1186,7 +1195,9 @@ export class CosignalBridge {
 		return this.inCallback(() => reducer(prev, payload));
 	}
 
-	/** Retention-invariant helper: the same fold over the FULL history from origin. */
+	/** Referee surface — called only by the oracle's `checkInvariants` (via the
+	 * model cast): the same fold over the FULL history from origin, for the
+	 * retention invariant. Engine logic never calls it. */
 	shadowFoldAtom(atom: AtomNode, world: World): Value {
 		let value = atom.origin;
 		for (const e of [...atom.archiveStore, ...atom.tp.materialize()]) {
@@ -1273,13 +1284,13 @@ export class CosignalBridge {
 	 * first, then per-dependency fingerprint rechecks. Returns true if the
 	 * memo may serve (re-stamped when the fingerprint step carried it).
 	 */
-	private validateMemo(m: WorldMemo, world: World, stack: Set<NodeId> | undefined): boolean {
+	private validateMemo(m: WorldMemo, world: World): boolean {
 		if (m.epoch !== this.epoch) return false;
 		if (m.checkedOp === this.seq) return true; // nothing minted since last validation ⇒ nothing changed
 		if (m.validating) return false; // stale dep lists can cross-link; refuse instead of recursing
 		m.validating = true;
 		try {
-			if (!this.validateMemoInner(m, world, stack)) return false;
+			if (!this.validateMemoInner(m, world)) return false;
 		} finally {
 			m.validating = false;
 		}
@@ -1287,7 +1298,7 @@ export class CosignalBridge {
 		return true;
 	}
 
-	private validateMemoInner(m: WorldMemo, world: World, stack: Set<NodeId> | undefined): boolean {
+	private validateMemoInner(m: WorldMemo, world: World): boolean {
 		let quiet = false;
 		if (world.kind === 'pass') {
 			quiet = this.passClocksQuiet(world.pass, m.seq);
@@ -1308,7 +1319,7 @@ export class CosignalBridge {
 				if (this.fpOf(m.atoms[i]!, world) !== m.fps[i]!) return false;
 			}
 			for (let i = 0; i < m.comps.length; i++) {
-				if (!Object.is(this.evaluate(m.comps[i]!, world, stack), m.compValues[i])) return false;
+				if (!Object.is(this.evaluate(m.comps[i]!, world), m.compValues[i])) return false;
 			}
 			m.seq = this.seq; // re-stamp
 		}
@@ -1355,7 +1366,7 @@ export class CosignalBridge {
 			return v;
 		}
 		let m = plane.get(atom.id);
-		if (m !== undefined && this.validateMemo(m, world, undefined)) {
+		if (m !== undefined && this.validateMemo(m, world)) {
 			this.captureAtomDep(atom, m.fps[0]!);
 			return m.value;
 		}
@@ -1407,7 +1418,7 @@ export class CosignalBridge {
 	 * edge-free. Reads inside fold callbacks throw (updaters/reducers must
 	 * be pure); per-world cycles throw instead of recursing.
 	 */
-	evaluate(node: AnyNode, world: World, stack?: Set<NodeId>): Value {
+	evaluate(node: AnyNode, world: World): Value {
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		if (node.kind === 'atom') return this.atomValue(node, world);
 		const plane = this.memoPlaneOf(world);
@@ -1416,7 +1427,7 @@ export class CosignalBridge {
 			const word = this.touched[node.id]!;
 			if (word === 0) {
 				const nm = this.newestMemos.get(node.id);
-				if (nm !== undefined && this.validateMemo(nm, NEWEST, stack)) {
+				if (nm !== undefined && this.validateMemo(nm, NEWEST)) {
 					this.captureCompDep(node, nm.value);
 					return nm.value;
 				}
@@ -1425,14 +1436,13 @@ export class CosignalBridge {
 		// World path: the memo ladder.
 		if (plane !== undefined) {
 			const m = plane.get(node.id);
-			if (m !== undefined && this.validateMemo(m, world, stack)) {
+			if (m !== undefined && this.validateMemo(m, world)) {
 				this.captureCompDep(node, m.value);
 				return m.value;
 			}
 		}
 		// Per-world cycle detection via the mark column: marks carry the
-		// current top-level evaluation generation; `stack` remains accepted
-		// for surface compat but the column is authoritative.
+		// current top-level evaluation generation.
 		const marks = this.evalMark;
 		if (marks[node.id] === this.evalGen && this.evalDepth > 0) {
 			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
@@ -1442,8 +1452,6 @@ export class CosignalBridge {
 		this.evalDepth++;
 		const savedWorld = this.activeWorld;
 		this.setWorld(world);
-		const savedSlice = this.renderSlicePass;
-		if (world.kind === 'pass') this.renderSlicePass = world.pass; // edge-add queueing context
 		const savedFrame = this.frame;
 		const savedSink = this.currentSink;
 		const savedTaint = this.newestFrameTaint;
@@ -1486,7 +1494,6 @@ export class CosignalBridge {
 			this.frame = savedFrame;
 			this.currentSink = savedSink;
 			this.newestFrameTaint = savedTaint;
-			this.renderSlicePass = savedSlice;
 			this.setWorld(savedWorld);
 			this.evalDepth--;
 			marks[node.id] = 0;
@@ -1568,9 +1575,6 @@ export class CosignalBridge {
 		// coverage); the replay's only lost effect is catch-up lane
 		// scheduling, which the React-runtime wiring must revisit.
 	}
-
-	/** The pass whose render slice is evaluating (survives nested newest pulls). */
-	private renderSlicePass: Pass | undefined = undefined;
 
 	private edgeCount = 0;
 	private lastSweepEdges = 0;
@@ -1786,30 +1790,14 @@ export class CosignalBridge {
 		found.length = 0;
 	}
 
-	/** Nodes reachable from `from` over the union graph (including `from`). */
-	reachableFrom(from: NodeId): Set<NodeId> {
-		const reached = new Set<NodeId>([from]);
-		const queue = [from];
-		while (queue.length > 0) {
-			const cur = queue.pop()!;
-			const outs = this.outList[cur];
-			if (outs === undefined) continue;
-			for (const next of outs) {
-				if (!reached.has(next)) {
-					reached.add(next);
-					queue.push(next);
-				}
-			}
-		}
-		return reached;
-	}
-
 	// -------------------------------------------------- batches and slots
 
 	liveTokens(): Token[] {
 		return [...this.tokens.values()].filter((t) => t.state === 'live');
 	}
 
+	/** Referee surface — open-pass pins for twin tests (model parity); engine
+	 * logic uses `minLivePin` below. */
 	livePins(): Seq[] {
 		const pins: Seq[] = [];
 		for (const p of this.openPassByRoot.values()) pins.push(p.pin);
@@ -2173,7 +2161,7 @@ export class CosignalBridge {
 			maskTokens, maskSlots, capturedCommittedSlots,
 			maskBits, includedBits,
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
-			memos: new Map(), pendingEdgeDeliveries: [],
+			memos: new Map(),
 		};
 		this.passes.set(pass.id, pass);
 		this.openPassByRoot.set(rootId, pass);
@@ -3068,6 +3056,8 @@ export class CosignalBridge {
 		return this.evaluate(node, { kind: 'pass', pass });
 	}
 
+	/** Referee surface — read by twin tests and trace.spec; engine logic and
+	 * the shim consume `eventsSince`/`eventCursor` instead. */
 	eventsOfType<T extends BridgeEvent['type']>(type: T): Extract<BridgeEvent, { type: T }>[] {
 		return this.events.filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
 	}

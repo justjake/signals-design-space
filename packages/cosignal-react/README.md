@@ -97,9 +97,13 @@ subscribes to the protocol events. It returns a handle
 (`{ bridge, shim, dispose }`); `dispose()` unhooks everything (mainly for
 tests).
 
-This package re-exports the full `cosignal/logged` surface, so
-applications can import `Atom`, `ReducerAtom`, `effect`, `batch`, … from
-`cosignal-react` directly.
+This package re-exports the app-facing part of the engine surface —
+`Atom`, `ReducerAtom`, `effect`, `effectScope`, `batch`, `untracked`,
+`SuspendedRead` and their option types — so applications can import them
+from `cosignal-react` directly. Bridge internals (the `CosignalBridge`
+class, `Tape`, event/receipt types, …) are deliberately not re-exported;
+import those from `cosignal/logged` if you are writing engine-level
+tooling.
 
 ## Hooks
 
