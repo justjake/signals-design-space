@@ -3,5 +3,6 @@ packages:
   - harness
   - packages/cosignal
   - packages/cosignal-oracle
+  - packages/cosignal-react
 onlyBuiltDependencies:
   - esbuild

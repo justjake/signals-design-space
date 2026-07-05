@@ -1,0 +1,29 @@
+{
+	"name": "cosignal-react",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "cosignal v1 React bindings: the fork shim (unstable_subscribeToExternalRuntime -> CosignalBridge) plus the hook surface (useSignal/useComputed/useReducerAtom/useSignalEffect/startSignalTransition) per spec/cosignal-v1.md sections 3.2-3.5, 5.10, 5.11.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"cosignal": "workspace:*",
+		"react": "*",
+		"react-dom": "*"
+	},
+	"devDependencies": {
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"jsdom": "^26.1.0",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}
