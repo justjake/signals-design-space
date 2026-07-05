@@ -3,7 +3,7 @@
 	"private": true,
 	"version": "0.1.0",
 	"license": "MIT",
-	"description": "cosignal v1 React bindings: the fork shim (unstable_subscribeToExternalRuntime -> CosignalBridge) plus the hook surface (useSignal/useComputed/useReducerAtom/useSignalEffect/startSignalTransition) per spec/cosignal-v1.md sections 3.2-3.5, 5.10, 5.11.",
+	"description": "React bindings for cosignal: the useSignal, useComputed, useReducerAtom, and useSignalEffect hooks plus startSignalTransition, backed by an external-runtime bridge that keeps concurrent renders, transitions, and committed UI state consistent (tear-free).",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {

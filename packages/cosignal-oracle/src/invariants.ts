@@ -143,7 +143,7 @@ function checkMonotone(m: CosignalModel): void {
 		if (p.pin > m.seq) fail(`pass ${p.id} pin ${p.pin} above global counter ${m.seq}`);
 	}
 	for (const t of m.tokens.values()) {
-		if (t.parked && t.state === 'retired') fail(`token ${t.id} both parked and retired (§4.1 fact 3)`);
+		if (t.parked && t.state === 'retired') fail(`token ${t.id} both parked and retired — parked tokens may not retire before settlement`);
 	}
 }
 
@@ -187,7 +187,7 @@ function checkStructure(m: CosignalModel): void {
 		for (const tid of root.committedTokens) {
 			const t = m.tokens.get(tid);
 			if (t === undefined || t.state !== 'live') {
-				fail(`per-root row for root ${root.id} names non-live token ${tid} (§5.3 step 5: rows clear at retirement)`);
+				fail(`per-root row for root ${root.id} names non-live token ${tid} — per-root rows must clear at retirement`);
 			}
 		}
 	}

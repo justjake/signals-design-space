@@ -311,9 +311,9 @@ export class CosignalModel {
 	/** Activates logged (concurrent) mode: once, monotonically; illegal inside open evaluation frames. */
 	registerBridge(): void {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
-			throw new ScheduleError('registerReactBridge inside an open evaluation/fold frame (§3.6)');
+			throw new ScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this.mode === 'logged') throw new ScheduleError('bridge already registered (§3.2: once)');
+		if (this.mode === 'logged') throw new ScheduleError('bridge already registered — registration happens exactly once');
 		this.mode = 'logged';
 	}
 
@@ -473,10 +473,10 @@ export class CosignalModel {
 	 * a cycle within one world throws rather than looping.
 	 */
 	evaluate(node: AnyNode, world: World, stack?: Set<NodeId>): Value {
-		if (this.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold (§3.1)');
+		if (this.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		if (node.kind === 'atom') return this.foldAtom(node, world);
 		const seen = stack ?? new Set<NodeId>();
-		if (seen.has(node.id)) throw new ScheduleError(`cyclic evaluation of ${node.name} within one world (§3.6)`);
+		if (seen.has(node.id)) throw new ScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
 		seen.add(node.id);
 		this.evalDepth++;
 		try {
@@ -559,9 +559,9 @@ export class CosignalModel {
 
 	/** Mint a batch token. At most 31 live at once — one per React priority lane. */
 	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
-		if (this.mode !== 'logged') throw new ScheduleError('batches exist only in LOGGED mode (§5.1)');
+		if (this.mode !== 'logged') throw new ScheduleError('batches exist only in logged mode — register the React bridge first');
 		if (this.liveTokens().length >= SLOT_COUNT) {
-			throw new ScheduleError('at most 31 live tokens (§4.1 fact 1 invariant)');
+			throw new ScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
 		const token: Token = {
 			id: this.nextToken++, priority,
@@ -654,7 +654,7 @@ export class CosignalModel {
 		// pending usually means a post-await write the author expected to join
 		// the action — warn so they re-wrap it or use the action scope.
 		if (this.liveTokens().some((t) => t.parked)) {
-			this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope (§3.5)' });
+			this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope' });
 		}
 		this.write(ambient.id, node, op);
 	}
@@ -662,8 +662,8 @@ export class CosignalModel {
 	/** Action-scope write: classifies into the action's token explicitly (works after await); throws once settled. */
 	scopeWrite(tokenId: TokenId, node: AtomNode, op: Op): void {
 		const t = this.token(tokenId);
-		if (!t.action) throw new ScheduleError('scope writes require an action token (§3.2)');
-		if (t.state !== 'live') throw new ScheduleError('ActionScope closed (§3.6)');
+		if (!t.action) throw new ScheduleError('scope writes require an action token');
+		if (t.state !== 'live') throw new ScheduleError('ActionScope closed — the action already settled');
 		this.write(tokenId, node, op);
 	}
 
@@ -673,8 +673,8 @@ export class CosignalModel {
 	 * arming the concurrent machinery mid-life is safe.
 	 */
 	write(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
-		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render (§3.6)');
-		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold (§3.1)');
+		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
+		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		if (node.kind !== 'atom') throw new ScheduleError('writes target atoms');
 		if (this.mode === 'direct') {
 			const next = this.applyOp(node, op, node.base);
@@ -690,7 +690,7 @@ export class CosignalModel {
 			return;
 		}
 		const token = this.token(tokenId);
-		if (token.state !== 'live') throw new ScheduleError(`write into retired token ${tokenId} (§4.1 fact 4 fallback is fork scope)`);
+		if (token.state !== 'live') throw new ScheduleError(`write into retired token ${tokenId} — a retired batch accepts no new writes`);
 
 		// Drop check — the ONLY legal equality drop: empty tape AND the op
 		// evaluates equal against the base. With pending history present, a
@@ -782,14 +782,14 @@ export class CosignalModel {
 	passStart(rootId: RootId, includeTokens: TokenId[]): Pass {
 		for (const p of this.passes.values()) {
 			if (p.state !== 'ended' && p.root === rootId) {
-				throw new ScheduleError(`root ${rootId} already has an open pass (§4.1 fact 2)`);
+				throw new ScheduleError(`root ${rootId} already has an open pass — one render pass per root at a time`);
 			}
 		}
 		const maskTokens = new Set<TokenId>();
 		const maskSlots = new Set<SlotId>();
 		for (const id of includeTokens) {
 			const t = this.token(id);
-			if (t.state !== 'live') throw new ScheduleError('mask captures live tokens only (§5.4)');
+			if (t.state !== 'live') throw new ScheduleError('mask captures live tokens only — a retired batch is already permanent history');
 			maskTokens.add(id);
 			// A live token with no slot never wrote; its later receipts postdate the
 			// pin and are excluded by the pin cap anyway (claims are sequenced, so
@@ -935,7 +935,7 @@ export class CosignalModel {
 			for (const tid of opts?.retireAtCommit ?? []) {
 				const t = this.token(tid); // throws on unknown ids before any mutation
 				if (!p.maskTokens.has(tid)) {
-					throw new ScheduleError(`token ${tid} is not rendered by pass ${p.id}; its retirement cannot be due at this commit (§4.2)`);
+					throw new ScheduleError(`token ${tid} is not rendered by pass ${p.id}; its retirement cannot be due at this commit`);
 				}
 				if (t.state !== 'live' || t.parked) {
 					throw new ScheduleError(`token ${tid} cannot retire at this commit (already retired, or parked)`);
@@ -1021,8 +1021,8 @@ export class CosignalModel {
 	/** Retirement fires exactly once per token; parked action tokens retire only at settlement. */
 	retire(tokenId: TokenId, committed: boolean): void {
 		const t = this.token(tokenId);
-		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per token (§4.1 fact 3)');
-		if (t.parked) throw new ScheduleError('parked action tokens retire only at settlement (§4.1 fact 3)');
+		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per token');
+		if (t.parked) throw new ScheduleError('parked action tokens retire only at settlement');
 		this.retireInternal(t, committed);
 	}
 
@@ -1238,7 +1238,7 @@ export class CosignalModel {
 				});
 				if (!Object.is(vCovered, w.lastRenderedValue)) {
 					throw new InvariantViolation(
-						`flag-5 fast-out unsound: watcher ${w.name} fast-out held but v_fx=${String(vFx)} ≠ v_r=${String(w.lastRenderedValue)} and the residue is not corrective-covered (§5.10)`,
+						`fast-out unsound: watcher ${w.name} fast-out held but the fixup value ${String(vFx)} differs from the rendered value ${String(w.lastRenderedValue)} and the residue is not covered by the scheduled correctives`,
 					);
 				}
 			}
@@ -1302,11 +1302,11 @@ export class CosignalModel {
 	 * scratch at every write, which is the refreshed state by construction.
 	 */
 	quiesce(): void {
-		if (!this.quiescent()) throw new ScheduleError('quiescence requires no live tokens, pins, or parked actions (§5.12)');
+		if (!this.quiescent()) throw new ScheduleError('quiescence requires no live tokens, pins, or parked actions');
 		// Residue check: with no live pins, the last retirement compacted every tape.
 		for (const n of this.nodes.values()) {
 			if (n.kind === 'atom' && n.tape.length > 0) {
-				throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.tape.length} receipts (§5.12)`);
+				throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.tape.length} receipts`);
 			}
 		}
 		this.episodeEdges.clear();

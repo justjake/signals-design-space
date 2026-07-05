@@ -58,7 +58,7 @@
  * alien-signals (each is policy plumbing at a cold site; the hot walks are
  * untouched — measured ≈parity on benchmark workloads):
  *
- *   D1. Node field 6 (otherwise a spare pad field) is `C.LIFECYCLE`: a 0/1
+ *   D1. Node field 6 (otherwise a spare pad field) is `NodeField.LIFECYCLE`: a 0/1
  *       flag set at creation for atoms carrying an observed-lifecycle
  *       effect, so the kernel's own liveness transitions can drive the
  *       observed-lifecycle option (AtomOptions.effect). Checked only in
@@ -132,8 +132,8 @@ export class CycleError extends Error {
 }
 
 // SentinelBox kinds.
-const BOX_ERROR = 0;
-const BOX_SUSPENDED = 1;
+const BOX_ERROR: BoxKind = 0;
+const BOX_SUSPENDED: BoxKind = 1;
 
 /**
  * Reference-stable sentinel cached as the computed's kernel value when its
@@ -145,11 +145,11 @@ const BOX_SUSPENDED = 1;
  * suspensions throw the box's stable SuspendedRead.
  */
 class SentinelBox {
-	readonly kind: number;
+	readonly kind: BoxKind;
 	readonly payload: unknown;
 	/** Stable per box, minted for suspended boxes only. */
 	readonly sr: SuspendedRead | undefined;
-	constructor(kind: number, payload: unknown, sr?: SuspendedRead) {
+	constructor(kind: BoxKind, payload: unknown, sr?: SuspendedRead) {
 		this.kind = kind;
 		this.payload = payload;
 		this.sr = sr;
@@ -207,17 +207,45 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 	},
 };
 
-// ---- record layout + flags as a const enum -----------------------------------
-// A const enum (not module-level `const`s) so every consumer toolchain inlines
+// ---- semantic number types ------------------------------------------------------
+// Plain type aliases — zero runtime cost, no branding, no casts. They name what
+// each number MEANS so signatures read as the layout docs above.
+
+/** Premultiplied node record id: the Int32 plane index of the record's field 0
+ * (id = record ordinal × Plane.STRIDE). 0 = "none" (record 0 is burned). */
+type NodeId = number;
+/** Premultiplied link record id (links share the plane and stride with nodes). 0 = "none". */
+type LinkId = number;
+/** A premultiplied record id of either kind (the shared bump pointer / allocators). */
+type RecordId = number;
+/** A node's FLAGS field value: a bitwise OR of NodeFlag members. */
+type NodeFlags = number;
+/** The global evaluation cycle counter, stamped into link VERSION fields on re-track. */
+type Version = number;
+/** A node's GEN field value: bumped on free so disposers can defuse stale ids. */
+type Generation = number;
+/** A count of fixed-stride records (nodes and links draw from one shared pool). */
+type RecordCount = number;
+/** Index into the `values` side column (two slots per record; see Plane). */
+type ValueIndex = number;
+/** A SentinelBox kind tag (BOX_ERROR | BOX_SUSPENDED). */
+type BoxKind = number;
+
+// ---- record layout + flags as const enums ---------------------------------------
+// Const enums (not module-level `const`s) so every consumer toolchain inlines
 // the values as literals. Rationale: esbuild BUNDLING demotes module-scope
 // `const` to mutable `var` (lazy-init/scope-merge hoisting), which costs
 // TurboFan its constant-folding of these hot numbers — measured +15-21% on
 // benchmark workloads when bundled. Same-file const enum members are inlined
 // as numeric literals by esbuild (transform AND bundle modes), tsx, vitest,
 // and tsc alike, so the codegen no longer depends on how the library is
-// packaged.
-const enum C {
-	// Node fields (M plane, stride 8; ids are pre-multiplied: id = record * 8).
+// packaged. They must STAY in this file: esbuild-based tools inline const
+// enum members only within one file — a cross-file access becomes a real
+// property lookup at runtime.
+
+/** Field offsets within a NODE record (M plane, stride 8; ids are
+ * pre-multiplied: id = record ordinal * 8). */
+const enum NodeField {
 	FLAGS = 0,
 	DEPS = 1, // doubles as the free-list next pointer for freed records
 	DEPS_TAIL = 2,
@@ -226,8 +254,11 @@ const enum C {
 	GEN = 5, // bumped on free; disposers capture it to defuse stale ids
 	LIFECYCLE = 6, // D1: 1 iff the node is an atom with an observed-lifecycle effect
 	// field 7 spare (pad to one cache line per record)
+}
 
-	// Link fields (M plane, stride 8; link records share the plane with nodes).
+/** Field offsets within a LINK record (link records share the plane, stride,
+ * and premultiplied ids with node records). */
+const enum LinkField {
 	VERSION = 0,
 	DEP = 1,
 	SUB = 2,
@@ -236,8 +267,11 @@ const enum C {
 	PREV_DEP = 5,
 	NEXT_DEP = 6, // doubles as the free-list next pointer for freed links
 	// field 7 spare
+}
 
-	// Flags (upstream ReactiveFlags + HasChildEffect + kind bits).
+/** Bit values of a node's FLAGS field (upstream ReactiveFlags + HasChildEffect
+ * + kind bits). A flags word is an OR of these (see `type NodeFlags`). */
+const enum NodeFlag {
 	MUTABLE = 1,
 	WATCHING = 2,
 	RECURSED_CHECK = 4,
@@ -256,6 +290,28 @@ const enum C {
 	// site either ORs bits or is followed by a forced recompute (unwatched
 	// sets DIRTY), so a stale clear can never serve a box unboxed.
 	HAS_BOX = 2048,
+}
+
+/** Plane geometry: the strides, shifts, and offsets that address a record's
+ * fields and its side-column slots from its premultiplied id. */
+const enum Plane {
+	/** Int32 fields per record; ids are premultiplied by this (id = record ordinal × STRIDE). */
+	STRIDE = 8,
+	/** id >> ID_TO_VALUE_SHIFT: premultiplied id → the record's base index in
+	 * the `values` side column (each record owns 2 value slots: 8 / 4 = 2). */
+	ID_TO_VALUE_SHIFT = 2,
+	/** id >> ID_TO_FN_SHIFT: premultiplied id → the record's index in the
+	 * `fns` side column (one fn slot per record: 8 / 8 = 1). */
+	ID_TO_FN_SHIFT = 3,
+	/** valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
+	 * signal's pending value, an effect's cleanup fn, or the computed's
+	 * owning Computed instance (D4). */
+	AUX_VALUE_OFFSET = 1,
+	/** length >> HALF_PLANE_SHIFT: half the plane — the "keep at least half
+	 * the plane free" watermark term. */
+	HALF_PLANE_SHIFT = 1,
+	/** Records budgeted per configured capacity unit: one node + two links. */
+	RECORDS_PER_UNIT = 3,
 
 	// Min free records guaranteed at each op boundary. Nodes and links draw
 	// from one shared pool; the slack is the sum of per-kind floors (256 node
@@ -269,21 +325,21 @@ const enum C {
 // exactly where the old one stopped; only the buffer bindings live in the
 // engine closure. (This is also what lets the logged build's table rebuild
 // at the seam without copying anything but the plane.)
-let recNext = 8; // bump pointer, shared by nodes and links (record 0 burned)
-let nodeFreeHead = 0; // free list threaded through M[id + C.DEPS]
-let linkFreeHead = 0; // free list threaded through M[id + C.NEXT_DEP]
+let recNext: RecordId = Plane.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
+let nodeFreeHead: NodeId = 0; // free list threaded through M[id + NodeField.DEPS]
+let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.NEXT_DEP]
 let growPending = false;
 
-let cycle = 0;
+let cycle: Version = 0;
 let runDepth = 0;
 let batchDepth = 0;
 let notifyIndex = 0;
 let queuedLength = 0;
-let activeSub = 0;
+let activeSub: NodeId = 0;
 let enterDepth = 0; // live engine frames that captured M; 0 = op boundary
 
-const queued: number[] = [];
-const pendingFree: number[] = []; // disposed effect/scope records awaiting sweep
+const queued: NodeId[] = [];
+const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting sweep
 
 // Side columns, indexed off the id: values[id >> 2] = current/computed value,
 // values[(id >> 2) + 1] = signal pending value OR effect cleanup fn OR the
@@ -304,31 +360,31 @@ let checkSp = 0;
 // ---- the engine (the operation table) -----------------------------------------
 
 interface Engine {
-	records: number;
+	records: RecordCount;
 	buffer(): Int32Array;
-	newSignal(value: unknown): number;
-	newComputed(getter: (ctx: unknown) => unknown): number;
-	newEffect(fn: () => (() => void) | void): number;
-	newScope(fn: () => void): number;
-	gen(id: number): number;
-	read(s: number): unknown;
-	write(s: number, value: unknown): boolean;
-	computedRead(c: number): unknown;
-	run(e: number): void;
-	requeueAbort(e: number): void;
-	dispose(e: number): void;
+	newSignal(value: unknown): NodeId;
+	newComputed(getter: (ctx: unknown) => unknown): NodeId;
+	newEffect(fn: () => (() => void) | void): NodeId;
+	newScope(fn: () => void): NodeId;
+	gen(id: NodeId): Generation;
+	read(s: NodeId): unknown;
+	write(s: NodeId, value: unknown): boolean;
+	computedRead(c: NodeId): unknown;
+	run(e: NodeId): void;
+	requeueAbort(e: NodeId): void;
+	dispose(e: NodeId): void;
 	sweepPendingFree(): void;
 	// D5: cold policy ops (never called from the hot walks).
 	/** Marks a computed stale and propagates to its subs (settlement-invalidate). */
-	invalidateComputed(c: number): boolean;
+	invalidateComputed(c: NodeId): boolean;
 	/** D1: flags the node for observed-lifecycle delivery. */
-	markLifecycle(id: number): void;
+	markLifecycle(id: NodeId): void;
 	/** True iff the currently-evaluating subscriber is a computed. */
 	activeIsComputed(): boolean;
 }
 
-function createEngine(records: number, carry?: Int32Array): Engine {
-	const M = new Int32Array(records * 8);
+function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+	const M = new Int32Array(records * Plane.STRIDE);
 	// Bundler-proof aliases for the module-level side arrays: esbuild
 	// bundling demotes module-scope `const` to mutable `var`, so TurboFan
 	// loses their constant-folding at module scope; a function-scope const
@@ -342,8 +398,8 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		M.set(carry);
 	}
 	// Allocators flag growth once the bump pointer crosses the watermark:
-	// keep at least C.REC_SLACK records AND half the plane free at every boundary.
-	const WM = Math.min(M.length >> 1, M.length - C.REC_SLACK * 8);
+	// keep at least Plane.REC_SLACK records AND half the plane free at every boundary.
+	const WM = Math.min(M.length >> Plane.HALF_PLANE_SHIFT, M.length - Plane.REC_SLACK * Plane.STRIDE);
 	if (recNext > WM) {
 		growPending = true;
 	}
@@ -355,7 +411,7 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		newComputed,
 		newEffect,
 		newScope,
-		gen: (id) => M[id + C.GEN],
+		gen: (id) => M[id + NodeField.GEN],
 		read,
 		write,
 		computedRead,
@@ -365,52 +421,52 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		sweepPendingFree,
 		invalidateComputed,
 		markLifecycle: (id) => {
-			M[id + C.LIFECYCLE] = 1;
+			M[id + NodeField.LIFECYCLE] = 1;
 		},
-		activeIsComputed: () => activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0,
+		activeIsComputed: () => activeSub !== 0 && (M[activeSub + NodeField.FLAGS] & NodeFlag.K_COMPUTED) !== 0,
 	};
 
 	// ---- allocation ----------------------------------------------------------
 
-	function allocNode(flags: number): number {
-		let id: number;
+	function allocNode(flags: NodeFlags): NodeId {
+		let id: NodeId;
 		if (nodeFreeHead !== 0) {
 			id = nodeFreeHead;
-			nodeFreeHead = M[id + C.DEPS];
-			M[id + C.DEPS] = 0;
+			nodeFreeHead = M[id + NodeField.DEPS];
+			M[id + NodeField.DEPS] = 0;
 		} else {
 			id = recNext;
 			if (id >= M.length) {
 				throw new Error('cosignal: arena exhausted mid-operation; raise COSIGNAL_INITIAL_RECORDS');
 			}
-			recNext = id + 8;
+			recNext = id + Plane.STRIDE;
 			if (recNext > WM) {
 				growPending = true;
 			}
 		}
-		M[id + C.FLAGS] = flags;
-		const v = id >> 2;
-		while (vals.length <= v + 1) {
+		M[id + NodeField.FLAGS] = flags;
+		const v: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
+		while (vals.length <= v + Plane.AUX_VALUE_OFFSET) {
 			vals.push(undefined);
 		}
-		while (fnTab.length <= id >> 3) {
+		while (fnTab.length <= id >> Plane.ID_TO_FN_SHIFT) {
 			fnTab.push(undefined);
 		}
 		return id;
 	}
 
-	function freeNode(id: number): void {
-		M[id + C.FLAGS] = 0;
-		M[id + C.DEPS_TAIL] = 0;
-		M[id + C.SUBS] = 0;
-		M[id + C.SUBS_TAIL] = 0;
-		M[id + C.LIFECYCLE] = 0; // D1
-		++M[id + C.GEN];
-		const v = id >> 2;
+	function freeNode(id: NodeId): void {
+		M[id + NodeField.FLAGS] = 0;
+		M[id + NodeField.DEPS_TAIL] = 0;
+		M[id + NodeField.SUBS] = 0;
+		M[id + NodeField.SUBS_TAIL] = 0;
+		M[id + NodeField.LIFECYCLE] = 0; // D1
+		++M[id + NodeField.GEN];
+		const v: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
 		vals[v] = undefined;
-		vals[v + 1] = undefined;
-		fnTab[id >> 3] = undefined;
-		M[id + C.DEPS] = nodeFreeHead;
+		vals[v + Plane.AUX_VALUE_OFFSET] = undefined;
+		fnTab[id >> Plane.ID_TO_FN_SHIFT] = undefined;
+		M[id + NodeField.DEPS] = nodeFreeHead;
 		nodeFreeHead = id;
 	}
 
@@ -421,17 +477,17 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		pendingFree.length = 0;
 	}
 
-	function allocLink(): number {
-		let id: number;
+	function allocLink(): LinkId {
+		let id: LinkId;
 		if (linkFreeHead !== 0) {
 			id = linkFreeHead;
-			linkFreeHead = M[id + C.NEXT_DEP];
+			linkFreeHead = M[id + LinkField.NEXT_DEP];
 		} else {
 			id = recNext;
 			if (id >= M.length) {
 				throw new Error('cosignal: arena exhausted mid-operation; raise COSIGNAL_INITIAL_RECORDS');
 			}
-			recNext = id + 8;
+			recNext = id + Plane.STRIDE;
 			if (recNext > WM) {
 				growPending = true;
 			}
@@ -439,22 +495,22 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		return id;
 	}
 
-	function freeLink(id: number): void {
-		M[id + C.NEXT_DEP] = linkFreeHead;
+	function freeLink(id: LinkId): void {
+		M[id + LinkField.NEXT_DEP] = linkFreeHead;
 		linkFreeHead = id;
 	}
 
 	// ---- system.ts transliteration -------------------------------------------
 
-	function link(dep: number, sub: number, version: number): void {
-		const prevDep = M[sub + C.DEPS_TAIL];
-		if (prevDep !== 0 && M[prevDep + C.DEP] === dep) {
+	function link(dep: NodeId, sub: NodeId, version: Version): void {
+		const prevDep = M[sub + NodeField.DEPS_TAIL];
+		if (prevDep !== 0 && M[prevDep + LinkField.DEP] === dep) {
 			return;
 		}
-		const nextDep = prevDep !== 0 ? M[prevDep + C.NEXT_DEP] : M[sub + C.DEPS];
-		if (nextDep !== 0 && M[nextDep + C.DEP] === dep) {
-			M[nextDep + C.VERSION] = version;
-			M[sub + C.DEPS_TAIL] = nextDep;
+		const nextDep = prevDep !== 0 ? M[prevDep + LinkField.NEXT_DEP] : M[sub + NodeField.DEPS];
+		if (nextDep !== 0 && M[nextDep + LinkField.DEP] === dep) {
+			M[nextDep + LinkField.VERSION] = version;
+			M[sub + NodeField.DEPS_TAIL] = nextDep;
 			return;
 		}
 		linkInsert(dep, sub, version, prevDep, nextDep);
@@ -464,106 +520,106 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// fast path above stays under V8's inlining bytecode budget (upstream
 	// monolithic link() was 475 bytecodes — kExceedsBytecodeLimit — and never
 	// inlined into the read paths despite running on every tracked read).
-	function linkInsert(dep: number, sub: number, version: number, prevDep: number, nextDep: number): void {
-		const prevSub = M[dep + C.SUBS_TAIL];
-		if (prevSub !== 0 && M[prevSub + C.VERSION] === version && M[prevSub + C.SUB] === sub) {
+	function linkInsert(dep: NodeId, sub: NodeId, version: Version, prevDep: LinkId, nextDep: LinkId): void {
+		const prevSub = M[dep + NodeField.SUBS_TAIL];
+		if (prevSub !== 0 && M[prevSub + LinkField.VERSION] === version && M[prevSub + LinkField.SUB] === sub) {
 			return;
 		}
 		const newLink = allocLink();
-		M[sub + C.DEPS_TAIL] = newLink;
-		M[dep + C.SUBS_TAIL] = newLink;
-		M[newLink + C.VERSION] = version;
-		M[newLink + C.DEP] = dep;
-		M[newLink + C.SUB] = sub;
-		M[newLink + C.PREV_DEP] = prevDep;
-		M[newLink + C.NEXT_DEP] = nextDep;
-		M[newLink + C.PREV_SUB] = prevSub;
-		M[newLink + C.NEXT_SUB] = 0;
+		M[sub + NodeField.DEPS_TAIL] = newLink;
+		M[dep + NodeField.SUBS_TAIL] = newLink;
+		M[newLink + LinkField.VERSION] = version;
+		M[newLink + LinkField.DEP] = dep;
+		M[newLink + LinkField.SUB] = sub;
+		M[newLink + LinkField.PREV_DEP] = prevDep;
+		M[newLink + LinkField.NEXT_DEP] = nextDep;
+		M[newLink + LinkField.PREV_SUB] = prevSub;
+		M[newLink + LinkField.NEXT_SUB] = 0;
 		if (nextDep !== 0) {
-			M[nextDep + C.PREV_DEP] = newLink;
+			M[nextDep + LinkField.PREV_DEP] = newLink;
 		}
 		if (prevDep !== 0) {
-			M[prevDep + C.NEXT_DEP] = newLink;
+			M[prevDep + LinkField.NEXT_DEP] = newLink;
 		} else {
-			M[sub + C.DEPS] = newLink;
+			M[sub + NodeField.DEPS] = newLink;
 		}
 		if (prevSub !== 0) {
-			M[prevSub + C.NEXT_SUB] = newLink;
+			M[prevSub + LinkField.NEXT_SUB] = newLink;
 		} else {
-			M[dep + C.SUBS] = newLink;
+			M[dep + NodeField.SUBS] = newLink;
 			// D1: first subscriber attached — the liveness bit flips 0→1.
-			if (M[dep + C.LIFECYCLE] !== 0) {
+			if (M[dep + NodeField.LIFECYCLE] !== 0) {
 				lifecycleWatched(dep);
 			}
 		}
 	}
 
-	function unlink(id: number, sub = M[id + C.SUB]): number {
-		const dep = M[id + C.DEP];
-		const prevDep = M[id + C.PREV_DEP];
-		const nextDep = M[id + C.NEXT_DEP];
-		const nextSub = M[id + C.NEXT_SUB];
-		const prevSub = M[id + C.PREV_SUB];
+	function unlink(id: LinkId, sub: NodeId = M[id + LinkField.SUB]): LinkId {
+		const dep = M[id + LinkField.DEP];
+		const prevDep = M[id + LinkField.PREV_DEP];
+		const nextDep = M[id + LinkField.NEXT_DEP];
+		const nextSub = M[id + LinkField.NEXT_SUB];
+		const prevSub = M[id + LinkField.PREV_SUB];
 		if (nextDep !== 0) {
-			M[nextDep + C.PREV_DEP] = prevDep;
+			M[nextDep + LinkField.PREV_DEP] = prevDep;
 		} else {
-			M[sub + C.DEPS_TAIL] = prevDep;
+			M[sub + NodeField.DEPS_TAIL] = prevDep;
 		}
 		if (prevDep !== 0) {
-			M[prevDep + C.NEXT_DEP] = nextDep;
+			M[prevDep + LinkField.NEXT_DEP] = nextDep;
 		} else {
-			M[sub + C.DEPS] = nextDep;
+			M[sub + NodeField.DEPS] = nextDep;
 		}
 		if (nextSub !== 0) {
-			M[nextSub + C.PREV_SUB] = prevSub;
+			M[nextSub + LinkField.PREV_SUB] = prevSub;
 		} else {
-			M[dep + C.SUBS_TAIL] = prevSub;
+			M[dep + NodeField.SUBS_TAIL] = prevSub;
 		}
 		freeLink(id);
 		if (prevSub !== 0) {
-			M[prevSub + C.NEXT_SUB] = nextSub;
-		} else if ((M[dep + C.SUBS] = nextSub) === 0) {
+			M[prevSub + LinkField.NEXT_SUB] = nextSub;
+		} else if ((M[dep + NodeField.SUBS] = nextSub) === 0) {
 			unwatched(dep);
 		}
 		return nextDep;
 	}
 
-	function propagate(startLink: number, innerWrite: boolean): void {
+	function propagate(startLink: LinkId, innerWrite: boolean): void {
 		// No try/finally: propagate never runs user code (notify only queues),
 		// so it cannot throw and always drains the stack back to its base.
 		let cur = startLink;
-		let next = M[cur + C.NEXT_SUB];
+		let next = M[cur + LinkField.NEXT_SUB];
 		const stackBase = propSp;
 
 		top: do {
-			const sub = M[cur + C.SUB];
-			let flags = M[sub + C.FLAGS];
+			const sub = M[cur + LinkField.SUB];
+			let flags = M[sub + NodeField.FLAGS];
 
-			if (!(flags & (C.RECURSED_CHECK | C.RECURSED | C.DIRTY | C.PENDING))) {
-				M[sub + C.FLAGS] = flags | C.PENDING;
+			if (!(flags & (NodeFlag.RECURSED_CHECK | NodeFlag.RECURSED | NodeFlag.DIRTY | NodeFlag.PENDING))) {
+				M[sub + NodeField.FLAGS] = flags | NodeFlag.PENDING;
 				if (innerWrite) {
-					M[sub + C.FLAGS] |= C.RECURSED;
+					M[sub + NodeField.FLAGS] |= NodeFlag.RECURSED;
 				}
-			} else if (!(flags & (C.RECURSED_CHECK | C.RECURSED))) {
+			} else if (!(flags & (NodeFlag.RECURSED_CHECK | NodeFlag.RECURSED))) {
 				flags = 0;
-			} else if (!(flags & C.RECURSED_CHECK)) {
-				M[sub + C.FLAGS] = (flags & ~C.RECURSED) | C.PENDING;
-			} else if (!(flags & (C.DIRTY | C.PENDING)) && isValidLink(cur, sub)) {
-				M[sub + C.FLAGS] = flags | (C.RECURSED | C.PENDING);
-				flags &= C.MUTABLE;
+			} else if (!(flags & NodeFlag.RECURSED_CHECK)) {
+				M[sub + NodeField.FLAGS] = (flags & ~NodeFlag.RECURSED) | NodeFlag.PENDING;
+			} else if (!(flags & (NodeFlag.DIRTY | NodeFlag.PENDING)) && isValidLink(cur, sub)) {
+				M[sub + NodeField.FLAGS] = flags | (NodeFlag.RECURSED | NodeFlag.PENDING);
+				flags &= NodeFlag.MUTABLE;
 			} else {
 				flags = 0;
 			}
 
-			if (flags & C.WATCHING) {
+			if (flags & NodeFlag.WATCHING) {
 				notify(sub);
 			}
 
-			if (flags & C.MUTABLE) {
-				const subSubs = M[sub + C.SUBS];
+			if (flags & NodeFlag.MUTABLE) {
+				const subSubs = M[sub + NodeField.SUBS];
 				if (subSubs !== 0) {
 					cur = subSubs;
-					const nextSub = M[cur + C.NEXT_SUB];
+					const nextSub = M[cur + LinkField.NEXT_SUB];
 					if (nextSub !== 0) {
 						if (propSp === propStack.length) {
 							const bigger = new Int32Array(propStack.length * 2);
@@ -578,14 +634,14 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 			}
 
 			if ((cur = next) !== 0) {
-				next = M[cur + C.NEXT_SUB];
+				next = M[cur + LinkField.NEXT_SUB];
 				continue;
 			}
 
 			while (propSp > stackBase) {
 				cur = propStack[--propSp];
 				if (cur !== 0) {
-					next = M[cur + C.NEXT_SUB];
+					next = M[cur + LinkField.NEXT_SUB];
 					continue top;
 				}
 			}
@@ -594,7 +650,7 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		} while (true);
 	}
 
-	function checkDirty(startLink: number, startSub: number): boolean {
+	function checkDirty(startLink: LinkId, startSub: NodeId): boolean {
 		let cur = startLink;
 		let sub = startSub;
 		const stackBase = checkSp;
@@ -603,34 +659,34 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 		try {
 			top: do {
-				const dep = M[cur + C.DEP];
-				const depFlags = M[dep + C.FLAGS];
+				const dep = M[cur + LinkField.DEP];
+				const depFlags = M[dep + NodeField.FLAGS];
 
-				if (M[sub + C.FLAGS] & C.DIRTY) {
+				if (M[sub + NodeField.FLAGS] & NodeFlag.DIRTY) {
 					dirty = true;
-				} else if ((depFlags & (C.MUTABLE | C.DIRTY)) === (C.MUTABLE | C.DIRTY)) {
-					const depSubs = M[dep + C.SUBS];
+				} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
+					const depSubs = M[dep + NodeField.SUBS];
 					if (update(dep)) {
-						if (M[depSubs + C.NEXT_SUB] !== 0) {
+						if (M[depSubs + LinkField.NEXT_SUB] !== 0) {
 							shallowPropagate(depSubs);
 						}
 						dirty = true;
 					}
-				} else if ((depFlags & (C.MUTABLE | C.PENDING)) === (C.MUTABLE | C.PENDING)) {
+				} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) === (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
 					if (checkSp === checkStack.length) {
 						const bigger = new Int32Array(checkStack.length * 2);
 						bigger.set(checkStack);
 						checkStack = bigger;
 					}
 					checkStack[checkSp++] = cur;
-					cur = M[dep + C.DEPS];
+					cur = M[dep + NodeField.DEPS];
 					sub = dep;
 					++checkDepth;
 					continue;
 				}
 
 				if (!dirty) {
-					const nextDep = M[cur + C.NEXT_DEP];
+					const nextDep = M[cur + LinkField.NEXT_DEP];
 					if (nextDep !== 0) {
 						cur = nextDep;
 						continue;
@@ -640,20 +696,20 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 				while (checkDepth--) {
 					cur = checkStack[--checkSp];
 					if (dirty) {
-						const subSubs = M[sub + C.SUBS];
+						const subSubs = M[sub + NodeField.SUBS];
 						if (update(sub)) {
-							if (M[subSubs + C.NEXT_SUB] !== 0) {
+							if (M[subSubs + LinkField.NEXT_SUB] !== 0) {
 								shallowPropagate(subSubs);
 							}
-							sub = M[cur + C.SUB];
+							sub = M[cur + LinkField.SUB];
 							continue;
 						}
 						dirty = false;
 					} else {
-						M[sub + C.FLAGS] &= ~C.PENDING;
+						M[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
 					}
-					sub = M[cur + C.SUB];
-					const nextDep = M[cur + C.NEXT_DEP];
+					sub = M[cur + LinkField.SUB];
+					const nextDep = M[cur + LinkField.NEXT_DEP];
 					if (nextDep !== 0) {
 						cur = nextDep;
 						continue top;
@@ -663,62 +719,62 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 				// Upstream: `dirty && !!sub.flags` — a live node always has its
 				// kind bits set; flags reads 0 only if sub was disposed (record
 				// zeroed) by re-entrant user code during update().
-				return dirty && M[sub + C.FLAGS] !== 0;
+				return dirty && M[sub + NodeField.FLAGS] !== 0;
 			} while (true);
 		} finally {
 			checkSp = stackBase;
 		}
 	}
 
-	function shallowPropagate(startLink: number): void {
+	function shallowPropagate(startLink: LinkId): void {
 		let cur = startLink;
 		do {
-			const sub = M[cur + C.SUB];
-			const flags = M[sub + C.FLAGS];
-			if ((flags & (C.PENDING | C.DIRTY)) === C.PENDING) {
-				M[sub + C.FLAGS] = flags | C.DIRTY;
-				if ((flags & (C.WATCHING | C.RECURSED_CHECK)) === C.WATCHING) {
+			const sub = M[cur + LinkField.SUB];
+			const flags = M[sub + NodeField.FLAGS];
+			if ((flags & (NodeFlag.PENDING | NodeFlag.DIRTY)) === NodeFlag.PENDING) {
+				M[sub + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
+				if ((flags & (NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK)) === NodeFlag.WATCHING) {
 					notify(sub);
 				}
 			}
-		} while ((cur = M[cur + C.NEXT_SUB]) !== 0);
+		} while ((cur = M[cur + LinkField.NEXT_SUB]) !== 0);
 	}
 
-	function isValidLink(checkLink: number, sub: number): boolean {
-		let cur = M[sub + C.DEPS_TAIL];
+	function isValidLink(checkLink: LinkId, sub: NodeId): boolean {
+		let cur = M[sub + NodeField.DEPS_TAIL];
 		while (cur !== 0) {
 			if (cur === checkLink) {
 				return true;
 			}
-			cur = M[cur + C.PREV_DEP];
+			cur = M[cur + LinkField.PREV_DEP];
 		}
 		return false;
 	}
 
 	// ---- index.ts transliteration ---------------------------------------------
 
-	function update(node: number): boolean {
-		const flags = M[node + C.FLAGS];
-		if (flags & C.K_COMPUTED) {
+	function update(node: NodeId): boolean {
+		const flags = M[node + NodeField.FLAGS];
+		if (flags & NodeFlag.K_COMPUTED) {
 			return updateComputed(node);
 		}
-		if (flags & C.K_SIGNAL) {
+		if (flags & NodeFlag.K_SIGNAL) {
 			return updateSignal(node);
 		}
-		M[node + C.FLAGS] = (flags & C.KIND_MASK) | C.MUTABLE;
+		M[node + NodeField.FLAGS] = (flags & NodeFlag.KIND_MASK) | NodeFlag.MUTABLE;
 		return true;
 	}
 
-	function notify(e: number): void {
+	function notify(e: NodeId): void {
 		let insertIndex = queuedLength;
 		const firstInsertedIndex = insertIndex;
 
 		do {
 			queue[insertIndex++] = e;
-			M[e + C.FLAGS] &= ~C.WATCHING;
-			const subs = M[e + C.SUBS];
-			e = subs !== 0 ? M[subs + C.SUB] : 0;
-			if (e === 0 || !(M[e + C.FLAGS] & C.WATCHING)) {
+			M[e + NodeField.FLAGS] &= ~NodeFlag.WATCHING;
+			const subs = M[e + NodeField.SUBS];
+			e = subs !== 0 ? M[subs + LinkField.SUB] : 0;
+			if (e === 0 || !(M[e + NodeField.FLAGS] & NodeFlag.WATCHING)) {
 				break;
 			}
 		} while (true);
@@ -735,117 +791,117 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		}
 	}
 
-	function unwatched(node: number): void {
-		const flags = M[node + C.FLAGS];
-		if (flags & C.K_COMPUTED) {
-			if (M[node + C.DEPS_TAIL] !== 0) {
-				M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY;
+	function unwatched(node: NodeId): void {
+		const flags = M[node + NodeField.FLAGS];
+		if (flags & NodeFlag.K_COMPUTED) {
+			if (M[node + NodeField.DEPS_TAIL] !== 0) {
+				M[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY;
 				disposeAllDepsInReverse(node);
 			}
-		} else if (flags & C.K_SIGNAL) {
+		} else if (flags & NodeFlag.K_SIGNAL) {
 			// D1: last subscriber detached — the liveness bit flips 1→0.
-			if (M[node + C.LIFECYCLE] !== 0) {
+			if (M[node + NodeField.LIFECYCLE] !== 0) {
 				lifecycleUnwatched(node);
 			}
-		} else if (flags & (C.K_EFFECT | C.K_SCOPE)) {
+		} else if (flags & (NodeFlag.K_EFFECT | NodeFlag.K_SCOPE)) {
 			dispose(node);
 		}
 	}
 
 	// Upstream's HasChildEffect slow path in updateComputed/run: unlink every
 	// dep that is not a signal/computed (i.e. child effects/scopes), in reverse.
-	function unlinkChildEffects(sub: number): void {
-		let cur = M[sub + C.DEPS_TAIL];
+	function unlinkChildEffects(sub: NodeId): void {
+		let cur = M[sub + NodeField.DEPS_TAIL];
 		while (cur !== 0) {
-			const prev = M[cur + C.PREV_DEP];
-			const dep = M[cur + C.DEP];
-			if (!(M[dep + C.FLAGS] & (C.K_COMPUTED | C.K_SIGNAL))) {
+			const prev = M[cur + LinkField.PREV_DEP];
+			const dep = M[cur + LinkField.DEP];
+			if (!(M[dep + NodeField.FLAGS] & (NodeFlag.K_COMPUTED | NodeFlag.K_SIGNAL))) {
 				unlink(cur, sub);
 			}
 			cur = prev;
 		}
 	}
 
-	function updateComputed(c: number): boolean {
-		if (M[c + C.FLAGS] & C.HAS_CHILD_EFFECT) {
+	function updateComputed(c: NodeId): boolean {
+		if (M[c + NodeField.FLAGS] & NodeFlag.HAS_CHILD_EFFECT) {
 			unlinkChildEffects(c);
 		}
-		M[c + C.DEPS_TAIL] = 0;
-		M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
+		M[c + NodeField.DEPS_TAIL] = 0;
+		M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK;
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
-		const v = c >> 2;
+		const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
 		const oldValue = vals[v];
 		try {
 			++cycle;
-			return oldValue !== (vals[v] = (fnTab[c >> 3] as (ctx: unknown) => unknown)(evalCtx));
+			return oldValue !== (vals[v] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx));
 		} catch (e) {
 			// D3: a throwing getter never corrupts graph state — the exception
 			// becomes a reference-stable sentinel box in the value slot (cold).
 			vals[v] = boxThrown(c, e, oldValue);
-			M[c + C.FLAGS] |= C.HAS_BOX;
+			M[c + NodeField.FLAGS] |= NodeFlag.HAS_BOX;
 			return oldValue !== vals[v];
 		} finally {
 			--enterDepth;
 			activeSub = prevSub;
-			M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
+			M[c + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 			purgeDeps(c);
 		}
 	}
 
-	function updateSignal(s: number): boolean {
-		M[s + C.FLAGS] = C.K_SIGNAL | C.MUTABLE;
-		const v = s >> 2;
-		return vals[v] !== (vals[v] = vals[v + 1]);
+	function updateSignal(s: NodeId): boolean {
+		M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE;
+		const v: ValueIndex = s >> Plane.ID_TO_VALUE_SHIFT;
+		return vals[v] !== (vals[v] = vals[v + Plane.AUX_VALUE_OFFSET]);
 	}
 
-	function run(e: number): void {
-		const flags = M[e + C.FLAGS];
+	function run(e: NodeId): void {
+		const flags = M[e + NodeField.FLAGS];
 		if (
-			flags & C.DIRTY
-			|| (flags & C.PENDING && checkDirty(M[e + C.DEPS], e))
+			flags & NodeFlag.DIRTY
+			|| (flags & NodeFlag.PENDING && checkDirty(M[e + NodeField.DEPS], e))
 		) {
-			if (flags & C.HAS_CHILD_EFFECT) {
+			if (flags & NodeFlag.HAS_CHILD_EFFECT) {
 				unlinkChildEffects(e);
 			}
-			const cv = (e >> 2) + 1;
+			const cv: ValueIndex = (e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET;
 			if (vals[cv]) {
 				runCleanup(e);
-				if (M[e + C.FLAGS] === 0) {
+				if (M[e + NodeField.FLAGS] === 0) {
 					return; // disposed by its own cleanup
 				}
 			}
-			M[e + C.DEPS_TAIL] = 0;
-			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK;
+			M[e + NodeField.DEPS_TAIL] = 0;
+			M[e + NodeField.FLAGS] = NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK;
 			const prevSub = activeSub;
 			activeSub = e;
 			++enterDepth;
 			try {
 				++cycle;
 				++runDepth;
-				vals[cv] = (fnTab[e >> 3] as () => (() => void) | void)();
+				vals[cv] = (fnTab[e >> Plane.ID_TO_FN_SHIFT] as () => (() => void) | void)();
 			} finally {
 				--runDepth;
 				--enterDepth;
 				activeSub = prevSub;
-				M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
+				M[e + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 				purgeDeps(e);
 			}
-		} else if (M[e + C.DEPS] !== 0) {
-			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & C.HAS_CHILD_EFFECT);
+		} else if (M[e + NodeField.DEPS] !== 0) {
+			M[e + NodeField.FLAGS] = NodeFlag.K_EFFECT | NodeFlag.WATCHING | (flags & NodeFlag.HAS_CHILD_EFFECT);
 		}
 	}
 
 	// flush() abort path: re-arm effects still queue after a throw.
-	function requeueAbort(e: number): void {
-		if (M[e + C.FLAGS] & C.KIND_MASK) {
-			M[e + C.FLAGS] |= C.WATCHING | C.RECURSED;
+	function requeueAbort(e: NodeId): void {
+		if (M[e + NodeField.FLAGS] & NodeFlag.KIND_MASK) {
+			M[e + NodeField.FLAGS] |= NodeFlag.WATCHING | NodeFlag.RECURSED;
 		}
 	}
 
-	function runCleanup(e: number): void {
-		const cv = (e >> 2) + 1;
+	function runCleanup(e: NodeId): void {
+		const cv: ValueIndex = (e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET;
 		const cleanup = vals[cv] as () => void;
 		vals[cv] = undefined;
 		const prevSub = activeSub;
@@ -860,18 +916,18 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	// effectOper + effectScopeOper: dispose an effect (runs cleanup) or scope.
-	function dispose(e: number): void {
-		const flags = M[e + C.FLAGS];
-		if (!(flags & C.KIND_MASK)) {
+	function dispose(e: NodeId): void {
+		const flags = M[e + NodeField.FLAGS];
+		if (!(flags & NodeFlag.KIND_MASK)) {
 			return; // already disposed
 		}
-		M[e + C.FLAGS] = 0;
+		M[e + NodeField.FLAGS] = 0;
 		disposeAllDepsInReverse(e);
-		const sub = M[e + C.SUBS];
+		const sub = M[e + NodeField.SUBS];
 		if (sub !== 0) {
 			unlink(sub);
 		}
-		if (flags & C.K_EFFECT && vals[(e >> 2) + 1]) {
+		if (flags & NodeFlag.K_EFFECT && vals[(e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET]) {
 			runCleanup(e);
 		}
 		// Deferred reclamation: the queue (or an in-flight walk) may still hold
@@ -880,18 +936,18 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		pendingFree.push(e);
 	}
 
-	function disposeAllDepsInReverse(sub: number): void {
-		let cur = M[sub + C.DEPS_TAIL];
+	function disposeAllDepsInReverse(sub: NodeId): void {
+		let cur = M[sub + NodeField.DEPS_TAIL];
 		while (cur !== 0) {
-			const prev = M[cur + C.PREV_DEP];
+			const prev = M[cur + LinkField.PREV_DEP];
 			unlink(cur, sub);
 			cur = prev;
 		}
 	}
 
-	function purgeDeps(sub: number): void {
-		const depsTail = M[sub + C.DEPS_TAIL];
-		let dep = depsTail !== 0 ? M[depsTail + C.NEXT_DEP] : M[sub + C.DEPS];
+	function purgeDeps(sub: NodeId): void {
+		const depsTail = M[sub + NodeField.DEPS_TAIL];
+		let dep = depsTail !== 0 ? M[depsTail + LinkField.NEXT_DEP] : M[sub + NodeField.DEPS];
 		while (dep !== 0) {
 			dep = unlink(dep, sub);
 		}
@@ -899,49 +955,49 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 
 	// ---- operations dispatched from the public wrappers ------------------------
 
-	function newSignal(value: unknown): number {
-		const id = allocNode(C.K_SIGNAL | C.MUTABLE);
-		const v = id >> 2;
+	function newSignal(value: unknown): NodeId {
+		const id = allocNode(NodeFlag.K_SIGNAL | NodeFlag.MUTABLE);
+		const v: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
 		vals[v] = value; // currentValue
-		vals[v + 1] = value; // pendingValue
+		vals[v + Plane.AUX_VALUE_OFFSET] = value; // pendingValue
 		return id;
 	}
 
-	function newComputed(getter: (ctx: unknown) => unknown): number {
-		const id = allocNode(C.K_COMPUTED);
-		fnTab[id >> 3] = getter;
+	function newComputed(getter: (ctx: unknown) => unknown): NodeId {
+		const id = allocNode(NodeFlag.K_COMPUTED);
+		fnTab[id >> Plane.ID_TO_FN_SHIFT] = getter;
 		return id;
 	}
 
-	function newEffect(fn: () => (() => void) | void): number {
-		const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK);
-		fnTab[e >> 3] = fn;
+	function newEffect(fn: () => (() => void) | void): NodeId {
+		const e = allocNode(NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK);
+		fnTab[e >> Plane.ID_TO_FN_SHIFT] = fn;
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
 			link(e, prevSub, 0);
-			M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
+			M[prevSub + NodeField.FLAGS] |= NodeFlag.HAS_CHILD_EFFECT;
 		}
 		++enterDepth;
 		try {
 			++runDepth;
-			vals[(e >> 2) + 1] = fn();
+			vals[(e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] = fn();
 		} finally {
 			--runDepth;
 			--enterDepth;
 			activeSub = prevSub;
-			M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
+			M[e + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 		}
 		return e;
 	}
 
-	function newScope(fn: () => void): number {
-		const e = allocNode(C.K_SCOPE | C.MUTABLE);
+	function newScope(fn: () => void): NodeId {
+		const e = allocNode(NodeFlag.K_SCOPE | NodeFlag.MUTABLE);
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
 			link(e, prevSub, 0);
-			M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
+			M[prevSub + NodeField.FLAGS] |= NodeFlag.HAS_CHILD_EFFECT;
 		}
 		++enterDepth;
 		try {
@@ -954,10 +1010,10 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	// signalOper read path.
-	function read(s: number): unknown {
-		if (M[s + C.FLAGS] & C.DIRTY) {
+	function read(s: NodeId): unknown {
+		if (M[s + NodeField.FLAGS] & NodeFlag.DIRTY) {
 			if (updateSignal(s)) {
-				const subs = M[s + C.SUBS];
+				const subs = M[s + NodeField.SUBS];
 				if (subs !== 0) {
 					shallowPropagate(subs);
 				}
@@ -966,17 +1022,17 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		if (activeSub !== 0) {
 			link(s, activeSub, cycle);
 		}
-		return vals[s >> 2];
+		return vals[s >> Plane.ID_TO_VALUE_SHIFT];
 	}
 
 	// signalOper write path; the WRAPPER flushes (iff this returns true), so
 	// growth can happen between queue effects at the top level (upstream
 	// flushes inline here, only when the changed signal had subscribers).
-	function write(s: number, value: unknown): boolean {
-		const p = (s >> 2) + 1;
+	function write(s: NodeId, value: unknown): boolean {
+		const p: ValueIndex = (s >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET;
 		if (vals[p] !== (vals[p] = value)) {
-			M[s + C.FLAGS] = C.K_SIGNAL | C.MUTABLE | C.DIRTY;
-			const subs = M[s + C.SUBS];
+			M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE | NodeFlag.DIRTY;
+			const subs = M[s + NodeField.SUBS];
 			if (subs !== 0) {
 				propagate(subs, runDepth !== 0);
 				return true;
@@ -992,58 +1048,58 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	// mask test routes every non-trivial case — mid-evaluation re-entry (D2),
 	// dirty/pending revalidation, first evaluation, boxed cache (D3) — to the
 	// out-of-line slow path.
-	function computedRead(c: number): unknown {
-		const flags = M[c + C.FLAGS];
+	function computedRead(c: NodeId): unknown {
+		const flags = M[c + NodeField.FLAGS];
 		if (
-			flags & (C.RECURSED_CHECK | C.DIRTY | C.PENDING | C.HAS_BOX)
-			|| flags === C.K_COMPUTED
+			flags & (NodeFlag.RECURSED_CHECK | NodeFlag.DIRTY | NodeFlag.PENDING | NodeFlag.HAS_BOX)
+			|| flags === NodeFlag.K_COMPUTED
 		) {
 			return computedReadSlow(c, flags);
 		}
 		if (activeSub !== 0) {
 			link(c, activeSub, cycle);
 		}
-		return vals[c >> 2];
+		return vals[c >> Plane.ID_TO_VALUE_SHIFT];
 	}
 
 	// The full computedRead ladder, out of line (recompute/first-eval/boxed).
-	function computedReadSlow(c: number, flags: number): unknown {
+	function computedReadSlow(c: NodeId, flags: NodeFlags): unknown {
 		// D2: reading a computed while its own evaluation frame is open is a
 		// dependency cycle — throw instead of serving the stale cache
 		// (upstream alien-signals returns the stale cached value here).
-		if (flags & C.RECURSED_CHECK) {
+		if (flags & NodeFlag.RECURSED_CHECK) {
 			throw new CycleError('cosignal: computed read during its own evaluation (dependency cycle).');
 		}
 		if (
-			flags & C.DIRTY
+			flags & NodeFlag.DIRTY
 			|| (
-				flags & C.PENDING
+				flags & NodeFlag.PENDING
 				&& (
-					checkDirty(M[c + C.DEPS], c)
-					|| (M[c + C.FLAGS] = flags & ~C.PENDING, false)
+					checkDirty(M[c + NodeField.DEPS], c)
+					|| (M[c + NodeField.FLAGS] = flags & ~NodeFlag.PENDING, false)
 				)
 			)
 		) {
 			if (updateComputed(c)) {
-				const subs = M[c + C.SUBS];
+				const subs = M[c + NodeField.SUBS];
 				if (subs !== 0) {
 					shallowPropagate(subs);
 				}
 			}
-		} else if (flags === C.K_COMPUTED) { // upstream `!flags`: never evaluated
-			M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
+		} else if (flags === NodeFlag.K_COMPUTED) { // upstream `!flags`: never evaluated
+			M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK;
 			const prevSub = activeSub;
 			activeSub = c;
 			++enterDepth;
 			try {
-				vals[c >> 2] = (fnTab[c >> 3] as (ctx: unknown) => unknown)(evalCtx);
+				vals[c >> Plane.ID_TO_VALUE_SHIFT] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx);
 			} catch (e) {
-				vals[c >> 2] = boxThrown(c, e, vals[c >> 2]); // D3 (cold)
-				M[c + C.FLAGS] |= C.HAS_BOX;
+				vals[c >> Plane.ID_TO_VALUE_SHIFT] = boxThrown(c, e, vals[c >> Plane.ID_TO_VALUE_SHIFT]); // D3 (cold)
+				M[c + NodeField.FLAGS] |= NodeFlag.HAS_BOX;
 			} finally {
 				--enterDepth;
 				activeSub = prevSub;
-				M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
+				M[c + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 			}
 		}
 		const sub = activeSub;
@@ -1054,23 +1110,23 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		// suspensions self-heal, pending suspensions throw their stable
 		// SuspendedRead. The link above already registered the subscription,
 		// so recovery re-notifies whoever observed the sentinel.
-		if (M[c + C.FLAGS] & C.HAS_BOX) {
+		if (M[c + NodeField.FLAGS] & NodeFlag.HAS_BOX) {
 			return boxedRead(c);
 		}
-		return vals[c >> 2];
+		return vals[c >> Plane.ID_TO_VALUE_SHIFT];
 	}
 
 	// D5: settlement-invalidate primitive. Marks the computed stale exactly the
 	// way a dependency write would have and propagates to its subscribers; the
 	// wrapper flushes. Cold: called from settle listeners and read-site
 	// self-heal only.
-	function invalidateComputed(c: number): boolean {
-		const flags = M[c + C.FLAGS];
-		if (!(flags & C.K_COMPUTED)) {
+	function invalidateComputed(c: NodeId): boolean {
+		const flags = M[c + NodeField.FLAGS];
+		if (!(flags & NodeFlag.K_COMPUTED)) {
 			return false;
 		}
-		M[c + C.FLAGS] = flags | C.DIRTY;
-		const subs = M[c + C.SUBS];
+		M[c + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
+		const subs = M[c + NodeField.SUBS];
 		if (subs !== 0) {
 			propagate(subs, runDepth !== 0);
 			return true;
@@ -1089,14 +1145,14 @@ const initialRecords = (() => {
 })();
 
 // D6: configure({initialRecords}) raises this floor; the growth loop honors it.
-let desiredRecords = initialRecords * 3;
+let desiredRecords: RecordCount = initialRecords * Plane.RECORDS_PER_UNIT;
 
 // THE SEAM (see the header): the operation-table factory. Initialized to the
 // base table; nothing in THIS module ever reassigns it (a base-build bundle
 // const-folds it). The logged build (`cosignal/logged`) re-points it exactly
 // once through `__installTwinTable` below, then every operation — growth
 // included — routes through the logged table.
-let engineFactory: (records: number, carry?: Int32Array) => Engine = createEngine;
+let engineFactory: (records: RecordCount, carry?: Int32Array) => Engine = createEngine;
 
 /**
  * The fold-purity table (see runFold): every operation throws the fold error
@@ -1132,7 +1188,7 @@ const POISON: Engine = {
 
 // Plane capacity: 3x initialRecords shared records, budgeted as
 // initialRecords node records + 2x initialRecords link records in one plane.
-let E: Engine = engineFactory(initialRecords * 3);
+let E: Engine = engineFactory(initialRecords * Plane.RECORDS_PER_UNIT);
 
 /**
  * THE LOGGED-TABLE ATTACHMENT POINT (header: "re-points `engineFactory` at
@@ -1148,10 +1204,10 @@ let E: Engine = engineFactory(initialRecords * 3);
  * @internal
  */
 export function __installTwinTable(
-	wrap: (direct: (records: number, carry?: Int32Array) => Engine) => (records: number, carry?: Int32Array) => Engine,
+	wrap: (direct: (records: RecordCount, carry?: Int32Array) => Engine) => (records: RecordCount, carry?: Int32Array) => Engine,
 ): void {
 	if (enterDepth !== 0) {
-		throw new Error('cosignal: registerReactBridge inside an open evaluation/fold/walk frame (spec §3.6).');
+		throw new Error('cosignal: registerReactBridge was called inside an open evaluation/fold/walk frame; it may only run at an operation boundary.');
 	}
 	engineFactory = wrap(createEngine);
 	E = engineFactory(E.records, E.buffer());
@@ -1177,7 +1233,7 @@ function boundaryWork(): void {
 	if (growPending) {
 		growPending = false;
 		let records = E.records;
-		while (records < desiredRecords || recNext > Math.min((records * 8) >> 1, (records - C.REC_SLACK) * 8)) {
+		while (records < desiredRecords || recNext > Math.min((records * Plane.STRIDE) >> Plane.HALF_PLANE_SHIFT, (records - Plane.REC_SLACK) * Plane.STRIDE)) {
 			records *= 2;
 		}
 		if (records !== E.records) {
@@ -1190,7 +1246,7 @@ function flush(): void {
 	// Boundary-lite: growth/reclamation only BEFORE the flush loop, not between
 	// effects. Safe because (a) all user code during flush runs at
 	// enterDepth >= 1, so E cannot be swapped mid-loop (the `engine` hoist is
-	// sound), and (b) the watermark guarantees >= C.REC_SLACK (1280) free records
+	// sound), and (b) the watermark guarantees >= Plane.REC_SLACK (1280) free records
 	// at flush start while cascade re-runs re-track through the link() fast
 	// path / free lists (net new records per flush audited at ~tens across the
 	// conformance suite and benchmark workloads; a pathological cascade that
@@ -1239,14 +1295,14 @@ function foldPoisonOp(): never {
 function foldNoop(): void {}
 
 /** The Computed instance owning kernel node `c` (aux value slot, D4). */
-function ownerOf(c: number): Computed<unknown> {
-	return values[(c >> 2) + 1] as Computed<unknown>;
+function ownerOf(c: NodeId): Computed<unknown> {
+	return values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as Computed<unknown>;
 }
 
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
 // Delivered on the kernel's liveness bit: linkInsert's first-subscriber branch
 // and unwatched()'s signal branch call the two hooks below (guarded by the
-// node's C.LIFECYCLE field, D1). Both transitions run through a microtask
+// node's NodeField.LIFECYCLE field, D1). Both transitions run through a microtask
 // queue so observe/unobserve flaps within one tick coalesce to nothing.
 
 type LifecycleState = {
@@ -1260,7 +1316,7 @@ type LifecycleState = {
 	scheduled: boolean;
 };
 
-const lifecycleStates = new Map<number, LifecycleState>();
+const lifecycleStates = new Map<NodeId, LifecycleState>();
 let lifecycleQueue: LifecycleState[] = [];
 let lifecycleFlushScheduled = false;
 
@@ -1294,7 +1350,7 @@ function scheduleLifecycleFlush(): void {
 	});
 }
 
-function lifecycleTransition(id: number, wantMounted: boolean): void {
+function lifecycleTransition(id: NodeId, wantMounted: boolean): void {
 	const state = lifecycleStates.get(id);
 	if (state === undefined) {
 		return;
@@ -1309,17 +1365,17 @@ function lifecycleTransition(id: number, wantMounted: boolean): void {
 
 // Hoisted function declarations: the kernel calls these from linkInsert /
 // unwatched, which are defined earlier in the module.
-function lifecycleWatched(id: number): void {
+function lifecycleWatched(id: NodeId): void {
 	lifecycleTransition(id, true);
 }
 
-function lifecycleUnwatched(id: number): void {
+function lifecycleUnwatched(id: NodeId): void {
 	lifecycleTransition(id, false);
 }
 
 // ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
 
-function writeAtom(id: number, isEqual: ((a: unknown, b: unknown) => boolean) | undefined, value: unknown): void {
+function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | undefined, value: unknown): void {
 	// Writes-in-computeds: tolerated by default (upstream alien-signals
 	// semantics, conformance-pinned — a write that feeds the evaluating
 	// computed simply marks it pending again through the kernel's RECURSED
@@ -1337,7 +1393,7 @@ function writeAtom(id: number, isEqual: ((a: unknown, b: unknown) => boolean) | 
 	// exists, different worlds may fold different values.) Policy equality
 	// against the newest (pending) value here; the kernel's own identity
 	// compare covers the default.
-	if (isEqual !== undefined && isEqual(values[(id >> 2) + 1], value)) {
+	if (isEqual !== undefined && isEqual(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET], value)) {
 		return;
 	}
 	maybeBoundary();
@@ -1389,8 +1445,8 @@ function ctxPrevious(): unknown {
 	if (c === 0) {
 		return undefined;
 	}
-	const v = values[c >> 2];
-	const owner = values[(c >> 2) + 1];
+	const v = values[c >> Plane.ID_TO_VALUE_SHIFT];
+	const owner = values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET];
 	if (owner instanceof Computed && (v === owner._box || v === NO_BOX)) {
 		return undefined;
 	}
@@ -1419,7 +1475,7 @@ function ctxPrevious(): unknown {
  */
 function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): unknown {
 	const c = activeSub;
-	const owner = c !== 0 ? values[(c >> 2) + 1] : undefined;
+	const owner = c !== 0 ? values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] : undefined;
 	if (!(owner instanceof Computed)) {
 		throw new Error('cosignal: ctx.use may only be called during a computed evaluation.');
 	}
@@ -1430,7 +1486,7 @@ function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): un
 		// already-running evaluation needs no hygiene — its slots are fresh).
 		slots = owner._slots = [];
 		owner._slotIndex = 0;
-		fns[c >> 3] = suspenseEvalFn(owner, fns[c >> 3] as (ctx: unknown) => unknown);
+		fns[c >> Plane.ID_TO_FN_SHIFT] = suspenseEvalFn(owner, fns[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown);
 	}
 	const index = owner._slotIndex++;
 	const prev = slots[index] as InstrumentedThenable | undefined;
@@ -1504,7 +1560,7 @@ function suspenseEvalFn(owner: Computed<unknown>, inner: (ctx: unknown) => unkno
  * cached value. Same payload → the previous box is returned, so downstream
  * sees no change (the kernel compares identity).
  */
-function boxThrown(c: number, e: unknown, oldValue: unknown): SentinelBox {
+function boxThrown(c: NodeId, e: unknown, oldValue: unknown): SentinelBox {
 	const owner = ownerOf(c);
 	const prevBox = oldValue !== undefined && oldValue === owner._box ? (oldValue as SentinelBox) : undefined;
 	if (e instanceof SuspendedRead) {
@@ -1535,7 +1591,7 @@ function boxThrown(c: number, e: unknown, oldValue: unknown): SentinelBox {
 function attachSettle(owner: Computed<unknown>, box: SentinelBox, t: InstrumentedThenable): void {
 	const id = owner._id;
 	const onSettle = (): void => {
-		if (values[id >> 2] !== box || box.payload !== t) {
+		if (values[id >> Plane.ID_TO_VALUE_SHIFT] !== box || box.payload !== t) {
 			return;
 		}
 		try {
@@ -1567,8 +1623,8 @@ function attachSettle(owner: Computed<unknown>, box: SentinelBox, t: Instrumente
  * necessarily carries a thenable that was pending at mint, which throws —
  * settlement cannot occur inside this synchronous frame.
  */
-function boxedRead(c: number): unknown {
-	const box = values[c >> 2] as SentinelBox;
+function boxedRead(c: NodeId): unknown {
+	const box = values[c >> Plane.ID_TO_VALUE_SHIFT] as SentinelBox;
 	if (box.kind !== BOX_SUSPENDED) {
 		throw box.payload;
 	}
@@ -1635,7 +1691,7 @@ export type ComputedOptions<T> = {
 /** A writable signal. `.state` reads (tracked inside evaluations), `.set` writes. */
 export class Atom<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
-	readonly _id: number;
+	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
 	readonly label: string | undefined;
@@ -1660,7 +1716,7 @@ export class Atom<T> {
 						writeAtom(id, isEqual, value);
 					},
 					update(fn: (current: unknown) => unknown): void {
-						const next = runFold(() => fn(values[(id >> 2) + 1]));
+						const next = runFold(() => fn(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET]));
 						writeAtom(id, isEqual, next);
 					},
 				},
@@ -1693,7 +1749,7 @@ export class Atom<T> {
 	 */
 	update(fn: (current: T) => T): void {
 		const id = this._id;
-		const next = runFold(() => fn(values[(id >> 2) + 1] as T));
+		const next = runFold(() => fn(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as T));
 		writeAtom(id, this._isEqual, next);
 	}
 }
@@ -1717,7 +1773,7 @@ export class ReducerAtom<S, A> extends Atom<S> {
 	dispatch(action: A): void {
 		const id = this._id;
 		const reduce = this.reduce;
-		const next = runFold(() => reduce(values[(id >> 2) + 1] as S, action));
+		const next = runFold(() => reduce(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as S, action));
 		writeAtom(id, this._isEqual, next);
 	}
 }
@@ -1725,7 +1781,7 @@ export class ReducerAtom<S, A> extends Atom<S> {
 /** A derived signal. `.state` reads; the function re-runs on demand. */
 export class Computed<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
-	readonly _id: number;
+	readonly _id: NodeId;
 	/** ctx.use slot cache (per node, lazily created). @internal */
 	_slots: unknown[] | undefined;
 	/** ctx.use slot cursor for the evaluation in progress. @internal */
@@ -1747,13 +1803,13 @@ export class Computed<T> {
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);
 		this._id = id;
 		// D4: the aux value slot carries the owning instance (policy state).
-		values[(id >> 2) + 1] = this;
+		values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] = this;
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
 			const self = this;
-			const iv = id >> 2;
-			fns[id >> 3] = (ctxArg: unknown): unknown => {
+			const iv: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
+			fns[id >> Plane.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 				const prev = values[iv];
 				const next = (fn as (ctx: unknown) => unknown)(ctxArg);
 				if (prev === undefined || prev === self._box) {
@@ -1876,7 +1932,7 @@ export function configure(options: ConfigureOptions): void {
 		if (!Number.isFinite(n) || n < 2) {
 			throw new Error('cosignal: configure({ initialRecords }) must be a number >= 2.');
 		}
-		const target = Math.ceil(n) * 3;
+		const target = Math.ceil(n) * Plane.RECORDS_PER_UNIT;
 		if (target > desiredRecords) {
 			desiredRecords = target;
 		}

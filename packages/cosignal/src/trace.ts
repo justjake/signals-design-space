@@ -139,20 +139,63 @@ import type {
 } from './logged.js';
 
 // ---- record layout ---------------------------------------------------------------
+// Same-file const enums: esbuild-based toolchains inline the members as
+// literals within one file, so the emit path indexes records with constants
+// rather than variable loads.
 
-const STRIDE = 8;
-const F_KIND = 0; // kind code (low 6 bits) | kind-specific flags (bits 6..7)
-const F_CAUSE = 1; // provoking event id + 1 (0 = operation root)
-const F_SUBJECT = 2; // label id or entity id, per kind
-const F_WORLD = 3; // world code, token id, or root label, per kind
-const F_DT = 4; // µs since the previous record (saturating; see clock-sync)
-const F_ARG0 = 5;
-const F_ARG1 = 6;
-const F_ARG2 = 7;
+// ---- semantic number types (plain aliases; zero runtime cost) ----
+/** Dense, monotonic trace event id (from 0; also locates the record). */
+type TraceEventId = number;
+/** A kind code — one of the `K` values (the low 6 bits of the KIND field). */
+type TraceKindCode = number;
+/** A record's full KIND field: TraceKindCode | KindBits flag bits. */
+type KindWord = number;
+/** Interned label-table id (0 reserved = no label). */
+type LabelId = number;
+/** Absolute ref-ring index for a captured object payload (-1 = capture disabled). */
+type RefId = number;
+/** A microsecond clock reading or duration. */
+type Microseconds = number;
+/** The packed world encoding for eval records (see WorldPack). */
+type PackedWorld = number;
 
-const KIND_MASK = 63;
-const FLAG_A = 64; // per kind: committed? | interleaved? | action? | mount-fix world? | per-root-commit cause?
-const FLAG_B = 128; // per kind: ambient?
+/** Field offsets within one packed trace record. */
+const enum TraceField {
+	KIND = 0, // kind code (low 6 bits) | kind-specific flags (bits 6..7)
+	CAUSE = 1, // provoking event id + 1 (0 = operation root)
+	SUBJECT = 2, // label id or entity id, per kind
+	WORLD = 3, // world code, token id, or root label, per kind
+	DT = 4, // µs since the previous record (saturating; see clock-sync)
+	ARG0 = 5,
+	ARG1 = 6,
+	ARG2 = 7,
+}
+
+/** Trace record geometry. */
+const enum TraceRec {
+	/** Int32 fields per record: (id & capMask) * STRIDE is the record's base index. */
+	STRIDE = 8,
+	/** Bytes per Int32 field (record bytes = records × STRIDE × BYTES_PER_FIELD). */
+	BYTES_PER_FIELD = 4,
+}
+
+/** Bit layout of the KIND field. */
+const enum KindBits {
+	/** Low 6 bits: the kind code. */
+	KIND_MASK = 63,
+	/** Per kind: committed? | interleaved? | action? | mount-fix world? | per-root-commit cause? */
+	FLAG_A = 64,
+	/** Per kind: ambient? */
+	FLAG_B = 128,
+}
+
+/** The packed world encoding for eval records (see worldCode). */
+const enum WorldPack {
+	/** Bit 0: this eval ran in a mount-fixup world. */
+	MOUNT_FIX_BIT = 1,
+	/** code >> PAYLOAD_SHIFT: 0 = newest | +passId | −(rootLabel+1). */
+	PAYLOAD_SHIFT = 1,
+}
 
 const MAX_I32 = 0x7fffffff;
 
@@ -180,7 +223,7 @@ const KIND_NAMES = [
 export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>;
 
 /** Kinds that claim the causality register (operation provokers). */
-const CAUSE_SETTING = new Set<number>([
+const CAUSE_SETTING = new Set<TraceKindCode>([
 	K.write, K.writeDropped, K.batchSettle, K.batchRetire,
 	K.passStart, K.passYield, K.passResume, K.passEnd, K.rootCommit, K.epochReset,
 ]);
@@ -211,12 +254,12 @@ export type TracerOptions = {
 
 /** The structured (tool-facing) event: a lazy decode of one packed record. */
 export type TraceEvent = {
-	id: number;
+	id: TraceEventId;
 	kind: TraceKind;
 	/** µs since the previous recorded event (0 for the first). */
 	dt: number;
 	/** Provoking event id (walkable while retained), or undefined for operation roots. */
-	cause: number | undefined;
+	cause: TraceEventId | undefined;
 	/** Kind-specific fields; see the vocabulary table in the module doc. */
 	data: Record<string, unknown>;
 };
@@ -261,21 +304,21 @@ export class Tracer implements TraceHooks {
 	private readonly maxBytes: number;
 	private readonly now: () => number;
 	private chunks: Int32Array[] = [];
-	private head = 0; // next event id (dense, monotonic from 0)
+	private head: TraceEventId = 0; // next event id (dense, monotonic from 0)
 	private truncatedFlag = false;
 	private causeReg = 0; // current cause id + 1; 0 = at an operation boundary
-	private lastUs: number;
+	private lastUs: Microseconds;
 	// label interning: id 0 reserved (= no label)
 	private labels: string[] = [''];
-	private labelIds = new Map<string, number>();
+	private labelIds = new Map<string, LabelId>();
 	// ref-ring for rare object payloads (absolute indices detect overwrite)
 	private readonly refCap: number;
 	private refs: unknown[];
-	private refHead = 0;
+	private refHead: RefId = 0;
 	// eval pairing stack (preallocated; overflow degrades gracefully)
 	private evalSubj = new Int32Array(1024);
 	private evalWorld = new Int32Array(1024);
-	private evalT0: number[] = new Array<number>(1024).fill(0);
+	private evalT0: Microseconds[] = new Array<number>(1024).fill(0);
 	private evalSp = 0;
 	private evalOverflow = 0;
 
@@ -292,7 +335,7 @@ export class Tracer implements TraceHooks {
 		this.refs = new Array<unknown>(this.refCap);
 		this.now = opts?.now ?? defaultNow;
 		this.lastUs = this.now();
-		this.chunks.push(new Int32Array(this.cap * STRIDE));
+		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE));
 	}
 
 	/** Detach from the bridge: recording stops, the capture stays decodable. */
@@ -306,7 +349,7 @@ export class Tracer implements TraceHooks {
 
 	// ------------------------------------------------------------ emit core
 
-	private label(s: string): number {
+	private label(s: string): LabelId {
 		const got = this.labelIds.get(s);
 		if (got !== undefined) return got;
 		const id = this.labels.length;
@@ -315,7 +358,7 @@ export class Tracer implements TraceHooks {
 		return id;
 	}
 
-	private ref(v: unknown): number {
+	private ref(v: unknown): RefId {
 		if (this.refCap === 0) return -1;
 		const idx = this.refHead & (this.refCap - 1);
 		this.refs[idx] = v;
@@ -324,10 +367,10 @@ export class Tracer implements TraceHooks {
 
 	/**
 	 * The record buffer for `id`, allocating/wrapping per mode. The offset is
-	 * always `(id & capMask) * STRIDE` — returned buffer only, so the emit
+	 * always `(id & capMask) * TraceRec.STRIDE` — returned buffer only, so the emit
 	 * path allocates nothing.
 	 */
-	private bufFor(id: number): Int32Array {
+	private bufFor(id: TraceEventId): Int32Array {
 		if (this.mode === 'ring') return this.chunks[0]!;
 		const chunkIndex = id >> this.capLog;
 		if (this.truncatedFlag || chunkIndex < this.chunks.length) {
@@ -335,17 +378,17 @@ export class Tracer implements TraceHooks {
 		}
 		// chunk boundary: seal the current chunk, append the next — unless the
 		// budget is crossed, in which case degrade to ring over the final chunk.
-		const nextBytes = (this.chunks.length + 1) * this.cap * STRIDE * 4;
+		const nextBytes = (this.chunks.length + 1) * this.cap * TraceRec.STRIDE * TraceRec.BYTES_PER_FIELD;
 		if (nextBytes > this.maxBytes) {
 			this.truncatedFlag = true;
 			return this.chunks[this.chunks.length - 1]!;
 		}
-		this.chunks.push(new Int32Array(this.cap * STRIDE));
+		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE));
 		return this.chunks[this.chunks.length - 1]!;
 	}
 
 	/** The one write path: id mint, time delta, cause register, 8 integer stores. */
-	private rec(kindFlags: number, subject: number, world: number, a0: number, a1: number, a2: number): number {
+	private rec(kindFlags: KindWord, subject: number, world: number, a0: number, a1: number, a2: number): TraceEventId {
 		const t = this.now();
 		let dt = Math.round(t - this.lastUs);
 		this.lastUs = t;
@@ -357,34 +400,34 @@ export class Tracer implements TraceHooks {
 		return this.recRaw(kindFlags, subject, world, dt, a0, a1, a2);
 	}
 
-	private recRaw(kindFlags: number, subject: number, world: number, dt: number, a0: number, a1: number, a2: number): number {
+	private recRaw(kindFlags: KindWord, subject: number, world: number, dt: number, a0: number, a1: number, a2: number): TraceEventId {
 		// SESSION truncation boundary: mark loudly before the event that crossed it.
 		const preTrunc = this.truncatedFlag;
 		const id = this.head++;
 		const buf = this.bufFor(id);
-		const at = (id & this.capMask) * STRIDE;
+		const at = (id & this.capMask) * TraceRec.STRIDE;
 		if (this.mode === 'session' && this.truncatedFlag && !preTrunc) {
 			// the budget check inside slotFor flipped the flag for THIS id: record
 			// the boundary marker here, then re-emit the caller's event after it.
 			buf[at] = K.truncation;
-			buf[at + F_CAUSE] = 0;
-			buf[at + F_SUBJECT] = 0;
-			buf[at + F_WORLD] = 0;
-			buf[at + F_DT] = dt;
-			buf[at + F_ARG0] = id | 0;
-			buf[at + F_ARG1] = 0;
-			buf[at + F_ARG2] = 0;
+			buf[at + TraceField.CAUSE] = 0;
+			buf[at + TraceField.SUBJECT] = 0;
+			buf[at + TraceField.WORLD] = 0;
+			buf[at + TraceField.DT] = dt;
+			buf[at + TraceField.ARG0] = id | 0;
+			buf[at + TraceField.ARG1] = 0;
+			buf[at + TraceField.ARG2] = 0;
 			return this.recRaw(kindFlags, subject, world, 0, a0, a1, a2);
 		}
 		buf[at] = kindFlags | 0;
-		buf[at + F_CAUSE] = this.causeReg | 0;
-		buf[at + F_SUBJECT] = subject | 0;
-		buf[at + F_WORLD] = world | 0;
-		buf[at + F_DT] = dt | 0;
-		buf[at + F_ARG0] = a0 | 0;
-		buf[at + F_ARG1] = a1 | 0;
-		buf[at + F_ARG2] = a2 | 0;
-		if (CAUSE_SETTING.has(kindFlags & KIND_MASK)) this.causeReg = id + 1;
+		buf[at + TraceField.CAUSE] = this.causeReg | 0;
+		buf[at + TraceField.SUBJECT] = subject | 0;
+		buf[at + TraceField.WORLD] = world | 0;
+		buf[at + TraceField.DT] = dt | 0;
+		buf[at + TraceField.ARG0] = a0 | 0;
+		buf[at + TraceField.ARG1] = a1 | 0;
+		buf[at + TraceField.ARG2] = a2 | 0;
+		if (CAUSE_SETTING.has(kindFlags & KindBits.KIND_MASK)) this.causeReg = id + 1;
 		return id;
 	}
 
@@ -392,12 +435,12 @@ export class Tracer implements TraceHooks {
 	 * World encoding for eval records, packed allocation-free: bit 0 = mount-fix,
 	 * rest = 0 newest | +passId | −(rootLabel+1) for committed/mount-fix worlds.
 	 */
-	private worldCode(world: World): number {
+	private worldCode(world: World): PackedWorld {
 		switch (world.kind) {
 			case 'newest': return 0;
-			case 'pass': return world.pass.id << 1;
-			case 'committed': return -(this.label(world.root) + 1) << 1;
-			case 'mountFix': return (-(this.label(world.root) + 1) << 1) | 1;
+			case 'pass': return world.pass.id << WorldPack.PAYLOAD_SHIFT;
+			case 'committed': return -(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT;
+			case 'mountFix': return (-(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT) | WorldPack.MOUNT_FIX_BIT;
 		}
 	}
 
@@ -419,7 +462,7 @@ export class Tracer implements TraceHooks {
 				return;
 			case 'delivery':
 				this.rec(
-					K.delivery | (e.mode === 'interleaved' ? FLAG_A : 0),
+					K.delivery | (e.mode === 'interleaved' ? KindBits.FLAG_A : 0),
 					this.label(e.watcher), e.token, e.slot, e.seq, 0,
 				);
 				return;
@@ -434,7 +477,7 @@ export class Tracer implements TraceHooks {
 				return;
 			case 'reconcile-correction':
 				this.rec(
-					K.reconcileCorrection | (e.cause === 'per-root-commit' ? FLAG_A : 0),
+					K.reconcileCorrection | (e.cause === 'per-root-commit' ? KindBits.FLAG_A : 0),
 					this.label(e.watcher), this.label(e.root), this.ref(e.from), this.ref(e.to), 0,
 				);
 				return;
@@ -451,7 +494,7 @@ export class Tracer implements TraceHooks {
 				);
 				return;
 			case 'retired':
-				this.rec(K.batchRetire | (e.committed ? FLAG_A : 0), e.token, 0, e.retiredSeq, 0, 0);
+				this.rec(K.batchRetire | (e.committed ? KindBits.FLAG_A : 0), e.token, 0, e.retiredSeq, 0, 0);
 				return;
 			case 'slot-claimed':
 				this.rec(K.slotClaim, e.slot, e.token, 0, 0, 0);
@@ -478,11 +521,11 @@ export class Tracer implements TraceHooks {
 
 	batchOpen(t: Token): void {
 		const pri = t.priority === 'urgent' ? 0 : t.priority === 'default' ? 1 : 2;
-		this.rec(K.batchOpen | (t.action ? FLAG_A : 0) | (t.ambient ? FLAG_B : 0), t.id, 0, pri, 0, 0);
+		this.rec(K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0), t.id, 0, pri, 0, 0);
 	}
 
 	batchSettle(t: Token, committed: boolean): void {
-		this.rec(K.batchSettle | (committed ? FLAG_A : 0), t.id, 0, 0, 0, 0);
+		this.rec(K.batchSettle | (committed ? KindBits.FLAG_A : 0), t.id, 0, 0, 0, 0);
 	}
 
 	passStart(p: Pass): void {
@@ -498,7 +541,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	passEnd(p: Pass, kind: 'commit' | 'discard'): void {
-		this.rec(K.passEnd | (kind === 'commit' ? FLAG_A : 0), p.id, this.label(p.root), 0, 0, 0);
+		this.rec(K.passEnd | (kind === 'commit' ? KindBits.FLAG_A : 0), p.id, this.label(p.root), 0, 0, 0);
 	}
 
 	evalStart(node: ComputedNode, world: World): void {
@@ -519,11 +562,11 @@ export class Tracer implements TraceHooks {
 		}
 		if (this.evalSp === 0) return; // attached mid-evaluation: nothing to pair
 		this.evalSp--;
-		const packed = this.evalWorld[this.evalSp]!;
+		const packed: PackedWorld = this.evalWorld[this.evalSp]!;
 		const dur = Math.min(Math.round(this.now() - this.evalT0[this.evalSp]!), MAX_I32);
 		this.rec(
-			K.evalDone | ((packed & 1) !== 0 ? FLAG_A : 0),
-			this.evalSubj[this.evalSp]!, packed >> 1, dur, this.evalSp, 0,
+			K.evalDone | ((packed & WorldPack.MOUNT_FIX_BIT) !== 0 ? KindBits.FLAG_A : 0),
+			this.evalSubj[this.evalSp]!, packed >> WorldPack.PAYLOAD_SHIFT, dur, this.evalSp, 0,
 		);
 	}
 
@@ -542,12 +585,12 @@ export class Tracer implements TraceHooks {
 	// -------------------------------------------------- retention and decode
 
 	/** Lowest id still decodable. */
-	private firstRetained(): number {
+	private firstRetained(): TraceEventId {
 		if (this.mode === 'ring') return Math.max(0, this.head - this.cap);
 		return 0; // session: the sealed prefix is never dropped
 	}
 
-	private isRetained(id: number): boolean {
+	private isRetained(id: TraceEventId): boolean {
 		if (id < 0 || id >= this.head) return false;
 		if (this.mode === 'ring') return id >= this.head - this.cap;
 		if (!this.truncatedFlag) return true;
@@ -556,19 +599,19 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** Read a raw record field without decoding (queries walk records this way). */
-	private peek(id: number, field: number): number {
+	private peek(id: TraceEventId, field: TraceField): number {
 		const buf = this.mode === 'ring'
 			? this.chunks[0]!
 			: this.chunks[this.truncatedFlag && id >= (this.chunks.length - 1) * this.cap ? this.chunks.length - 1 : id >> this.capLog]!;
-		return buf[(id & this.capMask) * STRIDE + field]!;
+		return buf[(id & this.capMask) * TraceRec.STRIDE + field]!;
 	}
 
-	private refValue(refId: number): unknown {
+	private refValue(refId: RefId): unknown {
 		if (refId < 0 || this.refHead - refId > this.refCap) return REF_DROPPED;
 		return this.refs[refId & (this.refCap - 1)];
 	}
 
-	private labelOf(id: number): string {
+	private labelOf(id: LabelId): string {
 		return this.labels[id] ?? `?label:${id}`;
 	}
 
@@ -580,18 +623,18 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** Decode one event; undefined once overwritten (RING) or never recorded. */
-	decode(id: number): TraceEvent | undefined {
+	decode(id: TraceEventId): TraceEvent | undefined {
 		if (!this.isRetained(id)) return undefined;
-		const kf = this.peek(id, F_KIND);
-		const kind = kf & KIND_MASK;
-		const a = (kf & FLAG_A) !== 0;
-		const b = (kf & FLAG_B) !== 0;
-		const cause = this.peek(id, F_CAUSE);
-		const subject = this.peek(id, F_SUBJECT);
-		const world = this.peek(id, F_WORLD);
-		const a0 = this.peek(id, F_ARG0);
-		const a1 = this.peek(id, F_ARG1);
-		const a2 = this.peek(id, F_ARG2);
+		const kf = this.peek(id, TraceField.KIND);
+		const kind: TraceKindCode = kf & KindBits.KIND_MASK;
+		const a = (kf & KindBits.FLAG_A) !== 0;
+		const b = (kf & KindBits.FLAG_B) !== 0;
+		const cause = this.peek(id, TraceField.CAUSE);
+		const subject = this.peek(id, TraceField.SUBJECT);
+		const world = this.peek(id, TraceField.WORLD);
+		const a0 = this.peek(id, TraceField.ARG0);
+		const a1 = this.peek(id, TraceField.ARG1);
+		const a2 = this.peek(id, TraceField.ARG2);
 		let data: Record<string, unknown>;
 		switch (kind) {
 			case K.write:
@@ -677,7 +720,7 @@ export class Tracer implements TraceHooks {
 		return {
 			id,
 			kind: KIND_NAMES[kind] as TraceKind,
-			dt: this.peek(id, F_DT),
+			dt: this.peek(id, TraceField.DT),
 			cause: cause === 0 ? undefined : cause - 1,
 			data,
 		};
@@ -688,7 +731,7 @@ export class Tracer implements TraceHooks {
 		const out: TraceEvent[] = [];
 		for (let id = this.firstRetained(); id < this.head; id++) {
 			if (!this.isRetained(id)) continue;
-			if (kind !== undefined && KIND_NAMES[this.peek(id, F_KIND) & KIND_MASK] !== kind) continue;
+			if (kind !== undefined && KIND_NAMES[this.peek(id, TraceField.KIND) & KindBits.KIND_MASK] !== kind) continue;
 			const e = this.decode(id);
 			if (e !== undefined) out.push(e);
 		}
@@ -698,7 +741,7 @@ export class Tracer implements TraceHooks {
 	// ------------------------------------------------------ causality queries
 
 	/** The event and its provokers, event first, walking CAUSE to the operation root. */
-	causeChain(id: number): TraceEvent[] {
+	causeChain(id: TraceEventId): TraceEvent[] {
 		const out: TraceEvent[] = [];
 		let cur: number | undefined = id;
 		while (cur !== undefined) {
@@ -711,12 +754,12 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** Newest retained event of `kind` whose subject label is `name` (packed scan). */
-	private lastBySubject(kinds: number[], name: string): number | undefined {
+	private lastBySubject(kinds: TraceKindCode[], name: string): TraceEventId | undefined {
 		const label = this.labelIds.get(name);
 		if (label === undefined) return undefined;
 		for (let id = this.head - 1; id >= this.firstRetained(); id--) {
 			if (!this.isRetained(id)) continue;
-			if (kinds.includes(this.peek(id, F_KIND) & KIND_MASK) && this.peek(id, F_SUBJECT) === label) return id;
+			if (kinds.includes(this.peek(id, TraceField.KIND) & KindBits.KIND_MASK) && this.peek(id, TraceField.SUBJECT) === label) return id;
 		}
 		return undefined;
 	}
@@ -743,8 +786,8 @@ export class Tracer implements TraceHooks {
 		let n = 0;
 		for (let id = this.firstRetained(); id < this.head; id++) {
 			if (!this.isRetained(id)) continue;
-			const k = this.peek(id, F_KIND) & KIND_MASK;
-			if ((k === K.coreEffectRun || k === K.reactEffectRun) && this.peek(id, F_SUBJECT) === label) n++;
+			const k = this.peek(id, TraceField.KIND) & KindBits.KIND_MASK;
+			if ((k === K.coreEffectRun || k === K.reactEffectRun) && this.peek(id, TraceField.SUBJECT) === label) n++;
 		}
 		return n;
 	}
@@ -772,7 +815,7 @@ export class Tracer implements TraceHooks {
 			dropped: this.head - retained,
 			truncated: this.truncatedFlag,
 			chunks: this.chunks.length,
-			bytes: this.chunks.length * this.cap * STRIDE * 4,
+			bytes: this.chunks.length * this.cap * TraceRec.STRIDE * TraceRec.BYTES_PER_FIELD,
 			refsCaptured: Math.min(this.refHead, this.refCap),
 		};
 	}

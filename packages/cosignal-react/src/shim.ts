@@ -84,17 +84,17 @@ export const REQUIRED_CAPABILITIES = 511; // every version-1 capability bit (bit
 export function assertForkProtocol(): void {
 	const proto = React.unstable_externalRuntimeProtocol;
 	if (proto === undefined) {
-		throw new Error('cosignal-react: this React has no external-runtime protocol — run against the linked fork (pnpm fork:build).');
+		throw new Error('cosignal-react: this React build has no external-runtime protocol — cosignal-react requires a React build with external-runtime support.');
 	}
 	if (proto.version !== REQUIRED_PROTOCOL_VERSION || proto.capabilities !== REQUIRED_CAPABILITIES) {
 		throw new Error(
 			`cosignal-react: protocol mismatch (version ${proto.version}, capabilities ${proto.capabilities}; ` +
-				`need ${REQUIRED_PROTOCOL_VERSION}/${REQUIRED_CAPABILITIES}) — someone needs fork:build.`,
+				`need ${REQUIRED_PROTOCOL_VERSION}/${REQUIRED_CAPABILITIES}) — rebuild React and react-dom with matching external-runtime support.`,
 		);
 	}
 	const providers = proto.providerProtocols;
 	if (providers.length === 0) {
-		throw new Error('cosignal-react: no renderer registered an external-runtime provider — load react-dom/client (fork build) before registering.');
+		throw new Error('cosignal-react: no renderer registered an external-runtime provider — load a react-dom/client build with external-runtime support before registering.');
 	}
 	for (const p of providers) {
 		if (p.version !== REQUIRED_PROTOCOL_VERSION || p.capabilities !== REQUIRED_CAPABILITIES) {
@@ -574,7 +574,7 @@ export class Shim {
 	/** The single write entry for adopted atoms: records the WHOLE operation, classified into the batch context the write executes in. */
 	classifyWrite(node: AtomNode, op: Op): void {
 		if (React.unstable_getRenderContext() !== null) {
-			throw new Error('cosignal: signal write during render (§3.6 — write from an event handler or effect instead)');
+			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
 		const forkToken = React.unstable_getCurrentWriteBatch();
 		this.withBridge(() => {
@@ -599,7 +599,7 @@ export class Shim {
 					(forkToken & 1) === 0 &&
 					this.bridge.liveTokens().some((lt) => lt.parked)
 				) {
-					this.devWarn('a signal write after await landed outside the action — wrap it in startTransition or use the action scope (§3.5)');
+					this.devWarn('a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
 				}
 				this.bridge.write(tokenId, node, op);
 			}
@@ -620,7 +620,7 @@ export class Shim {
 	/** Action-scope writes: classify into the action's batch explicitly, from anywhere — including after an await. */
 	scopeWrite(bridgeToken: TokenId, node: AtomNode, op: Op): void {
 		if (React.unstable_getRenderContext() !== null) {
-			throw new Error('cosignal: signal write during render (§3.6)');
+			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
 		this.withBridge(() => this.bridge.scopeWrite(bridgeToken, node, op));
 		for (const [rootId, root] of this.bridge.roots) {

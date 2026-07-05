@@ -90,7 +90,7 @@ function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyNode {
 	if (signal instanceof Atom) return shim.nodeForAtom(signal as Atom<unknown>);
 	throw new Error(
 		'cosignal-react: useSignal accepts Atom/ReducerAtom handles or useComputed results. ' +
-			'Standalone Computed instances are not world-routable in v1 (kernel read routing is SPK-R) — wrap the computation in useComputed.',
+			"Standalone Computed instances cannot be routed to a render's world — wrap the computation in useComputed.",
 	);
 }
 
@@ -276,7 +276,7 @@ export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initia
 	if (record.reducer !== reducer && !warnedReducerSwap) {
 		warnedReducerSwap = true;
 		// eslint-disable-next-line no-console
-		console.warn('cosignal: useReducerAtom reducers are fixed at creation (§3.2) — remount with a key to change reducers.');
+		console.warn('cosignal: useReducerAtom reducers are fixed at creation — remount with a key to change reducers.');
 	}
 	const value = useSignal(record.atom as unknown as Atom<S>);
 	const dispatch = React.useCallback((action: A) => record.atom.dispatch(action), [record]);
@@ -354,11 +354,11 @@ export function startSignalTransition(fn: (scope: ActionScope) => unknown): void
 		const tokenId = forkToken === 0 ? undefined : shim.bridgeTokenFor(forkToken, { action: true });
 		const scope: ActionScope = {
 			set: (atom, value) => {
-				if (tokenId === undefined) throw new Error('cosignal: no transition batch context (fork provider missing).');
+				if (tokenId === undefined) throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
 				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as Atom<unknown>), { kind: 'set', value });
 			},
 			dispatch: (atom, action) => {
-				if (tokenId === undefined) throw new Error('cosignal: no transition batch context (fork provider missing).');
+				if (tokenId === undefined) throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
 				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as unknown as Atom<unknown>), { kind: 'dispatch', action });
 			},
 		};
