@@ -13,10 +13,10 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"alien-signals": "file:../../upstream-alien-signals",
+		"alien-signals": "link:../../upstream-alien-signals",
 		"cosignal": "workspace:*",
 		"cosignal-react": "workspace:*",
-		"dalien-signals": "file:../dalien-signals",
+		"dalien-signals": "link:../dalien-signals",
 		"jsdom": "^26.1.0",
 		"react": "*",
 		"react-dom": "*"

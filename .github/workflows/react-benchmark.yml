@@ -113,10 +113,6 @@ jobs:
       # Root install links the workspace packages (react-seam-bench,
       # cosignal, cosignal-react) and resolves react/react-dom/scheduler
       # through the pnpm overrides into the fork build restored above — so
-      # this must run after the cache step.
-      - name: Install workspace
-        run: pnpm install --no-frozen-lockfile
-
       - name: Build upstream alien-signals (esm/ is a local build artifact)
         working-directory: upstream-alien-signals
         run: |
@@ -128,6 +124,12 @@ jobs:
         run: |
           pnpm install --ignore-workspace
           node build.js
+
+      # After the react fork cache step and the linked packages' builds:
+      # pnpm resolves the react overrides and materializes link: deps at
+      # install time, so their build outputs must exist first.
+      - name: Install workspace
+        run: pnpm install --no-frozen-lockfile
 
       # cosignal and cosignal-react export TypeScript source directly; the
       # scenario bundler compiles them, so no separate build step.

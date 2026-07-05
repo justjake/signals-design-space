@@ -130,8 +130,8 @@ importers:
   packages/react-seam-bench:
     dependencies:
       alien-signals:
-        specifier: file:../../upstream-alien-signals
-        version: file:upstream-alien-signals
+        specifier: link:../../upstream-alien-signals
+        version: link:../../upstream-alien-signals
       cosignal:
         specifier: workspace:*
         version: link:../cosignal
@@ -139,8 +139,8 @@ importers:
         specifier: workspace:*
         version: link:../cosignal-react
       dalien-signals:
-        specifier: file:../dalien-signals
-        version: file:packages/dalien-signals
+        specifier: link:../dalien-signals
+        version: link:../dalien-signals
       jsdom:
         specifier: ^26.1.0
         version: 26.1.0
@@ -554,9 +554,6 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
-
-  dalien-signals@file:packages/dalien-signals:
-    resolution: {directory: packages/dalien-signals, type: directory}
 
   data-urls@5.0.0:
     resolution: {integrity: sha512-ZYP5VBHshaDAiVZxjbRVcFJpc+4xGgT0bK3vzy1HLN8jTO975HEbuYzZJcHoQEY5K1a0z8YayJkyVETa08eNTg==}
@@ -1235,8 +1232,6 @@ snapshots:
       rrweb-cssom: 0.8.0
 
   csstype@3.2.3: {}
-
-  dalien-signals@file:packages/dalien-signals: {}
 
   data-urls@5.0.0:
     dependencies:
