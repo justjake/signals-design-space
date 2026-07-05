@@ -605,3 +605,115 @@ oracle README's documented delivery tolerance ONLY (see the P1 report).
    else — legality, full snapshots, corrections, effect runs, counters —
    stays exact per step. The §5.10 errata-2 audit (in-engine
    BridgeInvariantViolation) enforces the corrective ⊇ floor on every mount.
+
+## One Core re-baseline (2026-07-05)
+
+Post-convergence honest numbers: One Core at HEAD (single `cosignal`
+entry: f6a109b One Core merge + 3ca5f3f two-form ctx.use/quiet-mode +
+d076402 observe-union, plus the Phase-3 adoption convergence in the
+working tree) vs the **pre-convergence base entry at 7c9c5ae** ("grind
+1", the last two-entry commit). Baseline ran from a `git archive` export
+of 7c9c5ae at /tmp/cosignal-base with the benches' absolute import paths
+rewritten to the export (same runners otherwise — the bench drivers
+differ from 7c9c5ae only in import lines). Same methodology as the rest
+of this file: one config per child process (`node --expose-gc --import
+tsx`, cwd=harness/), medians + [min..max] across processes, checksums
+against DCE. PROCS: 7 for SPK-L, 5 elsewhere.
+
+**Machine load disclosure:** the working-session M4 Max, NOT idle — load
+averages 4.16→4.75 (1-min) across the run (claude CLI + editors
+resident); node v24.16.0. HEAD and BASE alternated within one sitting
+(18:48–18:50), so both sides saw the same load regime. Treat ±5% as
+noise; the SPK-L-certified idle floor is a separate exercise.
+
+**Instrumentation caveat (One Core posture change):** production bridges
+no longer mint BridgeEvents (the log is gated on referee/tracer
+attachment), and deliveries reach the host through direct listeners. The
+event-derived columns (eventsPerWrite, deliveries/spurious per
+(watcher,batch)) therefore read 0 at HEAD — not because nothing is
+delivered but because the diagnostic stream no longer allocates;
+delivery decisions are policed by the fuzz/twin comparators instead.
+Base rows still pay and show per-write event minting. This is the
+intended production posture on both sides of the comparison, not a
+benchmark trick: the base entry's registered path always minted events;
+One Core's doesn't.
+
+### (a) Sync-only direct shapes (SPK-L set; per-op ns, unregistered)
+
+| shape | base entry @7c9c5ae | One Core @HEAD | Δ median | armed-idle residual base → HEAD |
+|---|---|---|---|---|
+| readPoll | 2.38 [2.29..2.65] | 2.43 [2.39..2.63] | +2.1% | +4.96% → **+0.23%** |
+| deepPropagate | 776.4 [766.6..782.4] | 773.6 [763.9..783.6] | −0.4% | +24.02% → **+0.54%** |
+| broadIsolate | 45.0 [43.9..47.8] | 48.6 [47.1..49.2] | **+7.9%** | +32.43% → **+17.98%** |
+| diamond | 115.0 [114.3..121.5] | 118.0 [114.6..128.6] | +2.6% | +24.89% → **+2.04%** |
+
+Reading: the old "your bundle carries zero concurrency code" build is
+gone; its replacement — one entry whose public read/write methods carry
+the host-seam branches — prices at **noise (±3%) on three of four
+shapes**. broadIsolate (write-heavy over many isolated atoms) shows
++7.9% with barely non-overlapping ranges: a small real regression on
+this machine, disclosed, not explained away. The armed-but-idle residual
+(registered bridge, unregistered signals — the old SPK-L/O19 metric)
+collapsed on three shapes (≤2%, meeting the O19 target the P1 pass
+failed) but broadIsolate still pays ~18%.
+
+### (b) Quiet-mode registered writes (Phase 1b; per-write ns)
+
+HEAD `spkw-quiet`: bridge registered, atom REGISTERED, nothing pending —
+vs the raw kernel write (HEAD spkw-direct), and vs what the same
+registered write cost at 7c9c5ae (always-receipt logged path, windowed;
+its closest pre-quiet equivalent).
+
+| shape | HEAD direct | HEAD quiet | quiet overhead | @7c9c5ae registered | improvement |
+|---|---|---|---|---|---|
+| bare | 5.06 [5.02..5.34] | 12.58 [12.28..12.89] | **+148.7% (2.5×)** | 83.3 [72.6..91.5] | **6.6× cheaper** |
+| chain3 | 78.1 [76.6..84.0] | 85.2 [84.3..88.0] | +9.1% | 367.9 [364.2..382.9] | 4.3× cheaper |
+| fan8 | 254.4 [250.2..256.8] | 265.3 [257.8..266.6] | +4.3% | 1029.4 [1019.3..1046.2] | 3.9× cheaper |
+| watch1 | 40.2 [39.4..40.8] | 45.0 [43.9..47.7] | +12.1% | 99.5 [98.5..109.0] | 2.2× cheaper |
+
+Reading: with real propagation attached the quiet fold sits within
+~4–12% of the kernel write. The bare atom pays the seam's fixed ~7.5 ns
+(stamp check + quiet branch + committed-base advance) over a 5 ns write
+— **+148.7% relative, failing the spkw-quiet-run header's ~10% aspiration
+on the ratio while being small in absolute terms**; published as
+measured. Versus the pre-convergence registered write, quiet writes are
+2.2–6.6× cheaper across shapes.
+
+### (c) Armed/concurrent shapes
+
+SPK-W (windowed batched writes + retirement; per-write ns):
+
+| shape | base loggedNs | HEAD loggedNs | Δ | base amortNs | HEAD amortNs | eventsPerWrite base → HEAD |
+|---|---|---|---|---|---|---|
+| bare | 83.3 [72.6..91.5] | 79.0 [76.3..89.2] | −5.2% | 102.5 | 102.2 | 1.05 → 0 |
+| chain3 | 367.9 [364.2..382.9] | 356.6 [340.7..370.4] | −3.1% | 389.3 | 377.7 | 2.05 → 0 |
+| fan8 | 1029.4 [1019.3..1046.2] | 938.0 [935.6..952.3] | **−8.9%** | 1056.0 | 960.7 | 9.05 → 0 |
+| watch1 | 99.5 [98.5..109.0] | 105.0 [99.4..125.8] | +5.5% (ranges overlap) | 126.2 | 133.6 | 2.06 → 0 |
+
+SPK-N1 (delivery fan-out grid; loggedPropNs, per write):
+
+| cell | base @7c9c5ae | One Core @HEAD | Δ |
+|---|---|---|---|
+| F1xB1xW8 | 512.9 [491.5..592.2] | 537.8 [535.3..577.2] | +4.9% |
+| F8xB1xW8 | 717.8 [690.1..794.3] | 777.1 [722.7..830.4] | **+8.3%** |
+| F64xB1xW8 | 2107.7 [2051.4..2309.2] | 1712.2 [1653.6..1790.2] | **−18.8%** |
+| F8xB4xW8 | 694.3 [664.6..1203.8] | 692.6 [675.6..715.1] | −0.2% |
+| F8xB4xW64 | 457.1 [441.6..525.8] | 382.7 [371.2..398.3] | **−16.3%** |
+| F64xB4xW64 | 1505.4 [1452.5..1570.9] | 1155.3 [1125.4..1180.7] | **−23.3%** |
+| F8xB2xW64+held | 404.7 [401.1..412.7] | 355.2 [333.8..367.7] | −12.2% |
+| F8xB2xW64+inter | 393.0 [382.6..435.2] | 371.0 [344.7..390.4] | −5.6% |
+
+Reading, plainly: **what got faster** — event-heavy armed paths, because
+the per-write BridgeEvent/suppressed-event allocation floor is gone
+(fan8 −8.9%; every W64/F64 fan-out row −12% to −23%; exactly the rows P1
+diagnosed as event-floor-bound). **What got slower** — the small
+low-fan-out N1 cells (+5–8%: the direct-listener queue's fixed cost is
+not amortized over fan-out there) and SPK-L broadIsolate (+7.9% direct,
++18% armed-idle). **What's noise** — SPK-W bare/chain3/watch1 deltas and
+SPK-N1 F8xB4xW8 (overlapping ranges on a loaded box). tapeLenEnd 1950
+and heldDegrade ≤1.0 on the held row match the P1 shape (§5.3 retention
+by design, no degradation regression).
+
+Verification state at these numbers: cosignal 188+1 skipped, oracle
+74+1 skipped, cosignal-react 53, conformance 179/179 ×
+{cosignal, cosignal-logged, arena}, both package tscs clean.

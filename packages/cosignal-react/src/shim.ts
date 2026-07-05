@@ -63,7 +63,7 @@
  */
 
 import * as React from 'react';
-import { __ctxUse, Atom, ReducerAtom, SuspendedRead, type ComputedCtx } from 'cosignal';
+import { __ctxUse, Atom, SuspendedRead, type ComputedCtx } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
@@ -157,10 +157,6 @@ type EvalFrame = {
 	read: Reader;
 };
 
-const BOUND: unique symbol = Symbol('cosignal-react.bound');
-type BoundState = { shim: Shim; node: AtomNode };
-type BindableAtom = Atom<unknown> & { [BOUND]?: BoundState };
-
 /** Whole-op codes shared with the engine's host write seam. */
 type HostOpKind = 0 | 1 | 2;
 
@@ -215,8 +211,8 @@ export class Shim {
 		assertForkProtocol();
 		// The engine's host seams: the core's public Atom methods route
 		// host-attributable writes (whole ops) to the classifier, and routed
-		// reads to the effective world; the observer feeds evaluation read
-		// logs (capsule identity) and effect dependency snapshots.
+		// reads to the effective world; the observer feeds effect dependency
+		// snapshots.
 		bridge.writeClassifier = (atom, kind, payload) => {
 			this.classifyWrite(this.nodeForAtom(atom), opOf(kind as HostOpKind, payload));
 		};
@@ -644,7 +640,7 @@ export class Shim {
 				try {
 					now = this.bridge.committedValue(dep.node, rec.root);
 				} catch (err) {
-					if (err instanceof SuspendedRead) continue; // pending capsule: not a flip
+					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip
 					throw err;
 				}
 				if (!Object.is(now, dep.value)) {
@@ -657,33 +653,31 @@ export class Shim {
 		}
 	}
 
-	// ---- adoption + instance patching ---------------------------------------------
+	// ---- adoption -------------------------------------------------------------------
 
 	/**
 	 * The bridge node for a public Atom/ReducerAtom, adopting on first use.
-	 * The original handle IS the bridge's kernel handle: the engine's own
-	 * kernel applies/reads re-enter the public methods with the host hooks'
-	 * recursion guard down, so no shadow handle is needed.
+	 * Resolution rides the CORE's own adoption stamp (`atom._hostStamp`,
+	 * written by `bridge.adoptAtom`/`bridge.atom` and validated against this
+	 * shim's bridge) — one stamp mechanism for handle→node resolution, shared
+	 * with the engine's write seam. The original handle IS the bridge's
+	 * kernel handle: the engine's own kernel applies/reads re-enter the
+	 * public methods with the host hooks' recursion guard down, so no shadow
+	 * handle is needed. Adoption itself (including ReducerAtom reducer
+	 * wiring) is entirely the engine's job.
 	 */
 	nodeForAtom(atom: Atom<unknown>): AtomNode {
-		const bindable = atom as BindableAtom;
-		const bound = bindable[BOUND];
-		if (bound !== undefined && bound.shim === this) return bound.node;
+		const stamp = atom._hostStamp;
+		if (stamp !== undefined && stamp.b === this.bridge) return stamp.n as AtomNode;
 		const existing = this.bridge.byKernelId.get(atom._id);
 		if (existing !== undefined) {
-			bindable[BOUND] = { shim: this, node: existing };
+			atom._hostStamp = { b: this.bridge, n: existing }; // re-stamp after a bridge swap
 			return existing;
 		}
-		const label = atom.label ?? `atom#${atom._id}`;
-		const node = this.bridge.adoptAtom(label, atom as Atom<Value>, atom._isEqual);
-		if (atom instanceof ReducerAtom) {
-			node.reducer = (state, action) => (atom.reduce as (s: unknown, a: unknown) => unknown)(state, action);
-		}
-		bindable[BOUND] = { shim: this, node };
-		return node;
+		return this.bridge.adoptAtom(atom.label ?? `atom#${atom._id}`, atom as Atom<Value>, atom._isEqual);
 	}
 
-	// ---- bound computeds + ctx.use capsules -----------------------------------------
+	// ---- bound computeds + suspense translation ---------------------------------------
 
 	/** ctx.previous cells: one per node, holding the last COMMITTED value (a best-effort hint; may be stale or undefined). */
 	previousCells = new Map<number, { value: unknown }>();

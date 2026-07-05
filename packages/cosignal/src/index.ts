@@ -1,5 +1,5 @@
 /**
- * cosignal — the base build (the `cosignal` entry).
+ * cosignal — the kernel and policy layer of the one `cosignal` entry.
  *
  * ─── VOCABULARY (in reading order; used throughout this file) ────────────────
  *
@@ -50,12 +50,13 @@
  *   level (not in the closure) precisely so a rebuilt engine resumes where
  *   the old one stopped.
  * - FOLD: applying a user's updater or reducer function to a value to
- *   produce the next value. The name comes from the concurrent build
- *   (`cosignal/logged`), which reconstructs alternative views of the state
- *   ("worlds", see the README) by re-applying — folding — recorded write
- *   operations over a base value; that only works if updaters and reducers
- *   are pure. Both builds therefore run them under the same FOLD-PURITY
- *   guard: signal reads and writes inside an updater or reducer throw (see
+ *   produce the next value. The name comes from the concurrent engine
+ *   (`./logged.ts`, part of this same entry), which reconstructs
+ *   alternative views of the state ("worlds", see the README) by
+ *   re-applying — folding — recorded write operations over a base value;
+ *   that only works if updaters and reducers are pure. They therefore run
+ *   under the same FOLD-PURITY guard whether or not a bridge is registered:
+ *   signal reads and writes inside an updater or reducer throw (see
  *   runFold).
  *
  * With that vocabulary, the file's four layers, top to bottom:
@@ -170,8 +171,8 @@
  * Everything else — GROWTH (closure rebuild over doubled buffers, swap at
  * operation boundaries only) and RECLAMATION (deferred free of disposed
  * effect/scope records; signal/computed records are owned by their handles
- * and are not reclaimed) — is kernel-wide behavior shared by both builds,
- * documented at its implementation sites below.
+ * and are not reclaimed) — is kernel-wide behavior, bridge registered or
+ * not, documented at its implementation sites below.
  */
 
 // ---- sentinels ----------------------------------------------------------------
@@ -225,9 +226,10 @@ export type ComputedCtx<T> = {
 	/**
 	 * The computed's last committed value — a hint only: no identity,
 	 * recency, or determinism is guaranteed, and the function must be
-	 * correct if `previous` were arbitrarily stale or undefined. In the base
-	 * build: the cached value, read live; undefined on first evaluation and
-	 * while the cache holds an error/suspension outcome.
+	 * correct if `previous` were arbitrarily stale or undefined. For a plain
+	 * `Computed`: the cached value, read live; undefined on first evaluation
+	 * and while the cache holds an error/suspension outcome. (React-bound
+	 * computeds serve the last committed value instead — see cosignal-react.)
 	 */
 	readonly previous: T | undefined;
 	/**
@@ -391,8 +393,7 @@ const enum Plane {
 // ---- shared mutable state (survives engine rebuilds) ------------------------
 // Scalar heads/counters live at module level so a rebuilt engine resumes
 // exactly where the old one stopped; only the buffer bindings live in the
-// engine closure. (This is also what lets the logged build's table rebuild
-// at the seam without copying anything but the plane.)
+// engine closure.
 let recNext: RecordId = Plane.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
 let nodeFreeHead: NodeId = 0; // free list threaded through M[id + NodeField.DEPS]
 let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.NEXT_DEP]
@@ -1548,11 +1549,12 @@ function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | 
 	if (forbidWritesInComputeds && E.activeIsComputed()) {
 		throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
 	}
-	// Equality drop: in the base build an atom's write history is always
-	// empty, so a write equal to the current pending value is simply dropped —
-	// this short-circuit is the whole rule. (In the logged build the same drop
-	// applies only while the atom has no un-retired receipts: once history
-	// exists, different worlds may fold different values.) Policy equality
+	// Equality drop: with no bridge registered an atom's write history is
+	// always empty, so a write equal to the current pending value is simply
+	// dropped — this short-circuit is the whole rule. (Under a registered
+	// bridge the same drop applies only while the atom has no un-retired
+	// receipts: once history exists, different worlds may fold different
+	// values.) Policy equality
 	// against the newest (pending) value here; the kernel's own identity
 	// compare covers the default.
 	if (isEqual !== undefined && isEqual(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET], value)) {
@@ -1566,8 +1568,8 @@ function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | 
 
 /**
  * Runs a reducer/updater under the fold-purity guard. The rule: updaters and
- * reducers must be pure — the logged build stores and replays them per
- * world — so signal reads and writes inside them throw, in all builds.
+ * reducers must be pure — a registered bridge stores and replays them per
+ * world — so signal reads and writes inside them always throw.
  * Mechanism: the operation table is swapped to the POISON table for the
  * duration, so every read/write/creation the fold attempts throws at the
  * dispatch site — and the hot read/write paths carry zero fold instructions.
@@ -1853,8 +1855,8 @@ export type AtomOptions<T> = {
 	effect?: (ctx: AtomCtx<T>) => void | (() => void);
 	/**
 	 * Policy equality for writes: an incoming value equal to the newest value
-	 * is dropped (in the base build unconditionally; in the logged build only
-	 * while the atom's write history holds no un-retired receipts). The
+	 * is dropped (unconditionally with no bridge registered; under a bridge,
+	 * only while the atom's write history holds no un-retired receipts). The
 	 * kernel itself compares reference identity only; keep values
 	 * reference-stable rather than relying on deep equality.
 	 */
@@ -1974,9 +1976,9 @@ export type ReducerAtomOptions<S> = AtomOptions<S>;
 
 /**
  * An atom whose writes go through a reducer. The reducer is fixed at
- * creation and must be pure — it runs under the fold-purity guard, and in
- * the logged build dispatched actions are stored and replayed through it
- * per world.
+ * creation and must be pure — it runs under the fold-purity guard, and
+ * with a bridge registered dispatched actions are stored and replayed
+ * through it per world.
  */
 export class ReducerAtom<S, A> extends Atom<S> {
 	readonly reduce: (state: S, action: A) => S;
@@ -2051,8 +2053,8 @@ export type Signal<T> = Atom<T> | Computed<T>;
 /**
  * Runs `fn` immediately with dependency tracking and re-runs it when tracked
  * signals change. Effects always observe the newest world (every write
- * applied) — in the base build, simply the current values. `fn` may return a
- * cleanup run before each re-run and at dispose. Returns a disposer.
+ * applied) — with no bridge registered, simply the current values. `fn` may
+ * return a cleanup run before each re-run and at dispose. Returns a disposer.
  */
 export function effect(fn: () => void | (() => void)): () => void {
 	maybeBoundary();

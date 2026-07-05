@@ -1,8 +1,8 @@
 /**
  * cosignal-react — the hook surface: useSignal, useComputed, useReducerAtom,
  * useSignalEffect, startSignalTransition, plus registerCosignalReact — the
- * activation call that arms the logged engine (`cosignal`) and
- * couples it to a protocol-v1 React build via the Shim.
+ * activation call that registers `cosignal`'s bridge (arming its write
+ * recording) and couples it to a protocol-v1 React build via the Shim.
  *
  * Watcher lifecycle, shared by the subscription hooks (a watcher is the
  * engine's record of one subscribed component instance): render mints (or
@@ -30,9 +30,9 @@ export type CosignalReactHandle = {
 };
 
 /**
- * Activates the bindings: arms the logged engine's write recording (once
- * per process) and subscribes the shim to the external-runtime protocol
- * events. Call during app setup, after importing react-dom/client (the
+ * Activates the bindings: registers the engine's bridge — arming write
+ * recording, once per process — and subscribes the shim to the
+ * external-runtime protocol events. Call during app setup, after importing react-dom/client (the
  * renderer must have registered its protocol provider first), before
  * rendering any root; throws on stock React — see assertForkProtocol.
  * `opts.bridge` injects a pre-built bridge (tests use

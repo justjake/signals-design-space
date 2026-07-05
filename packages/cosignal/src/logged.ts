@@ -146,7 +146,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, __assertHostWritable, __hostApplySet, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, ReducerAtom, __assertHostWritable, __hostApplySet, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -617,7 +617,7 @@ export type BridgeEvent =
 	| { type: 'epoch-reset'; epoch: Epoch };
 
 /**
- * The trace seam. The logged engine's semantic events flow to an OPTIONAL
+ * The trace seam. The concurrent engine's semantic events flow to an OPTIONAL
  * hook object held in `CosignalBridge.trace` — `undefined` unless
  * `cosignal/trace` (a lazily loaded, runtime-import-free entry) has attached
  * a recorder. Discipline, asserted by tests/trace-off.spec.ts:
@@ -752,11 +752,11 @@ function hostReadImpl(atom: Atom<unknown>): unknown {
 }
 
 /**
- * Activates the logged engine: swaps the operation-table binding at an
- * operation boundary via closure rebuild, exactly once per process, and
- * returns the bridge that the React bindings (or a test driver simulating
- * them) drive with protocol events. Throws inside any open evaluation/fold
- * frame (the swap must not happen under a live kernel frame) and on
+ * Activates the concurrent engine: arms the kernel's host seams
+ * (`__setHostWrite` / read routing), exactly once per process, and returns
+ * the bridge that the React bindings (or a test driver simulating them)
+ * drive with protocol events. Throws inside any open evaluation/fold frame
+ * (the seams must not arm under a live kernel frame) and on
  * re-registration.
  */
 export function registerReactBridge(): CosignalBridge {
@@ -1228,6 +1228,12 @@ export class CosignalBridge {
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
 		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
+		if (handle instanceof ReducerAtom) {
+			// Adoption must carry the reducer: worlds replay `dispatch` receipts
+			// through node.reducer, so an adopted ReducerAtom without it would
+			// break every fold. Engine-owned so no host can forget it.
+			node.reducer = handle.reduce as Reducer;
+		}
 		return node;
 	}
 

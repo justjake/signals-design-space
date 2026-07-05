@@ -76,7 +76,7 @@ silently later.
 
 ```tsx
 import { createRoot } from 'react-dom/client';
-import { Atom } from 'cosignal/logged';
+import { Atom } from 'cosignal';
 import { registerCosignalReact, useSignal } from 'cosignal-react';
 
 registerCosignalReact(); // once, after importing react-dom/client,
@@ -102,8 +102,7 @@ This package re-exports the app-facing part of the engine surface —
 `SuspendedRead` and their option types — so applications can import them
 from `cosignal-react` directly. Bridge internals (the `CosignalBridge`
 class, `Tape`, event/receipt types, …) are deliberately not re-exported;
-import those from `cosignal/logged` if you are writing engine-level
-tooling.
+import those from `cosignal` if you are writing engine-level tooling.
 
 ## Hooks
 
@@ -149,8 +148,31 @@ world could observe another closure's output mid-flight.
 
 Inside `fn`, `ctx.previous` is a hint carrying the last committed value
 (it may be stale or `undefined`; the function must be correct without
-it), and `ctx.use(thenable)` reads async data — while pending, the
-component suspends via React Suspense; settlement re-evaluates.
+it), and `ctx.use` reads async data — while a promise is pending, the
+component suspends via React Suspense; settlement re-evaluates. Two
+forms, matching React's own `use()` contract:
+
+- **`ctx.use(promise)`** — for a promise your data layer (react-query,
+  SWR, Relay, a hand-rolled cache) or component state already caches.
+  Fulfilled returns the value; rejected throws the reason; pending
+  suspends. The bindings store nothing — caching is the caller's job,
+  exactly as with React's `use()`.
+- **`ctx.use(key, factory)`** — the built-in per-node cache: the node
+  keeps a per-key map of promises for its own lifetime, so the factory
+  runs once per key and the same promise is reused across re-renders and
+  across concurrent render attempts. The key is the identity of the
+  thing being fetched and must carry every input that varies the
+  request — e.g. `ctx.use(['user', userId], () => fetchUser(userId))`.
+
+The parity boundary — the same lifecycle React documents for its own
+`use()`: the keyed cache lives exactly as long as the node. Changing
+`deps` recreates the node (the `useMemo` rule), and a **discarded mount
+attempt** — React throwing away speculative work that included this
+component's very first render — throws away hook state and with it the
+node, so the next attempt re-runs the factory and may refetch. Apps that
+need request dedup across such discards cache the promise in their data
+layer and pass it with the one-argument form; a component that survives
+(the normal case) never refetches on re-render.
 
 ### `useReducerAtom(reducer, initial)`
 
@@ -218,11 +240,12 @@ batch that caused them.
 
 The suite runs against a real protocol-v1 React build (via jsdom and
 `react-dom/client`), not mocks: hook behavior (StrictMode double-mount
-netting, deps-keyed recreation, replay fidelity of functional updates),
-fourteen concurrency scenarios — subscription, interleaved urgent writes
-mid-transition, the mid-transition mount with suspended pending state
-described above, multi-root skew, async actions — plus a React-level run
-of the engine's correctness battery and a tracer smoke test.
+netting, deps-keyed recreation, replay fidelity of functional updates,
+Suspense via both `ctx.use` forms), fifteen concurrency scenarios —
+subscription, interleaved urgent writes mid-transition, the
+mid-transition mount with suspended pending state described above,
+multi-root skew, async actions — plus a React-level run of the engine's
+correctness battery and a tracer smoke test.
 
 ## License
 

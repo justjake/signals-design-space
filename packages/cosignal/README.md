@@ -2,17 +2,19 @@
 
 A reactive state ("signals") library for JavaScript and TypeScript, built
 around a compact core that stores its dependency graph in packed integer
-arrays. One package, two builds:
+arrays. One package, one build:
 
 - **`cosignal`** — a plain, fast signals library: atoms, computed values,
-  effects, batching. Nothing else. Its module graph contains none of the
-  React-integration machinery below; if you import only this entry, your
-  bundle carries zero concurrency code (a build-isolation test enforces
-  this).
-- **`cosignal/logged`** — the same API plus the concurrent engine that
-  makes signals safe under React's concurrent rendering. It records every
-  write, so different views of the state ("worlds") can coexist without
-  ever mixing.
+  effects, batching — carrying a concurrent engine that makes the same
+  signals safe under React's concurrent rendering, dormant until
+  activated (`registerReactBridge()`, called for you by the separate
+  `cosignal-react` bindings). **Sync by default:** until activation,
+  every write applies immediately and the entire concurrency feature
+  costs one predictable branch per public read/write — no write records,
+  no batches, no alternative views of state are ever created (a
+  behavioral test enforces this). Once activated, the engine records
+  writes only while an update is actually in flight; see "Sync by
+  default: quiet mode" below.
 
 Two more entries are diagnostics: **`cosignal/trace`** (a zero-allocation
 event recorder) and **`cosignal/graphviz`** (DOT renderers for the
@@ -46,22 +48,42 @@ stop();
   to the current value. Options: `isEqual` (writes equal to the current
   value are dropped), `label` (debug name), and `effect` — an
   observed-lifecycle callback that runs when the atom gains its first
-  subscriber and cleans up when it loses its last one (useful for wiring
-  an atom to a remote subscription; observe/unobserve flaps within one
-  tick coalesce).
+  subscriber of ANY kind — a computed chain or `effect()` in this
+  library, or a React component subscribed through the `cosignal-react`
+  bindings — and cleans up once the last subscriber of every kind is
+  gone. One observation state over that union: an atom watched by both
+  kinds at once observes exactly once. Useful for wiring an atom to a
+  remote subscription; observe/unobserve flaps within one tick coalesce.
 - **`new ReducerAtom(reducer, initial, options?)`** — an atom whose writes
   go through a reducer: `.dispatch(action)`. The reducer is fixed at
-  creation and must be pure, because the concurrent build replays
+  creation and must be pure, because the concurrent engine replays
   dispatched actions to compute what different views of the state should
   show — an impure reducer would replay differently each time.
 - **`new Computed(fn, options?)`** — a derived signal; `.state` evaluates
   on demand and caches. `fn` receives a context object:
   - `ctx.previous` — the last cached value (a hint only: it may be stale
     or `undefined`; the function must be correct without it).
-  - `ctx.use(thenableOrFactory)` — read an async value inside a computed.
-    While the promise is pending, reads of the computed throw a stable
-    `SuspendedRead` carrier (React bindings translate this into
-    Suspense); settlement re-evaluates the computed.
+  - `ctx.use(...)` — read an async value inside a computed, in two forms.
+    Both follow React's `use()` contract: a fulfilled promise returns its
+    value, a rejected one throws its reason, and while a promise is
+    pending, reads of the computed throw a stable `SuspendedRead` carrier
+    (the React bindings translate this into Suspense); settlement
+    re-evaluates the computed.
+    - `ctx.use(promise)` — for a promise the CALLER caches (in a data
+      layer or in component state). The engine stores nothing; passing
+      the same settled promise later reads its value synchronously.
+    - `ctx.use(key, factory)` — the built-in cache: the computed keeps a
+      per-key map of promises for its own lifetime, so the factory runs
+      once per key and the same promise is reused across re-evaluations.
+      The key is the identity of the thing being fetched — it must carry
+      every input that varies the request. Example:
+      `ctx.use(['user', userId], () => fetchUser(userId))`: a different
+      `userId` is a different key (a new fetch); the same `userId` reuses
+      the same promise, even across interrupted and replayed renders.
+      Keys are JSON-ish scalars or arrays of them; the cache dies with
+      the computed. (A bare factory with no key is rejected — an unkeyed,
+      uncached promise would refetch on every re-evaluation, the footgun
+      React's `use()` documentation warns about.)
   - `isEqual` option: when a re-evaluation produces an equal result, the
     previous reference is returned so downstream consumers see no change
     (an "equality cutoff").
@@ -81,7 +103,7 @@ stop();
   a capacity floor for the core's storage (also settable via the
   `COSIGNAL_INITIAL_RECORDS` environment variable before first import).
 
-Two disciplines are enforced at runtime because the concurrent build
+Two disciplines are enforced at runtime because the concurrent engine
 depends on them:
 
 - **Updaters and reducers must be pure.** The functions passed to
@@ -104,13 +126,21 @@ push invalidation through the graph, reads pull recomputation lazily so
 only stale values re-evaluate — validated against a 179-case conformance
 suite (see "Testing" below).
 
-## The concurrent build: `cosignal/logged`
+## The concurrent engine
 
-`cosignal/logged` exports the same API and adds `registerReactBridge()`,
-the activation point the React bindings (the separate `cosignal-react`
-package) call once at startup. Until the bridge is armed, the logged
-build behaves exactly like the base build — the full conformance suite
-passes both ways.
+The same `cosignal` entry exports `registerReactBridge()`, the activation
+point the React bindings (the separate `cosignal-react` package) call
+once at startup:
+
+```ts
+import { registerReactBridge } from 'cosignal';
+
+const bridge = registerReactBridge(); // once, at app setup
+```
+
+Until it is called, the engine is dormant and the library is exactly the
+plain signals library above — the full conformance suite passes with the
+engine dormant, and again with the bridge registered but idle.
 
 ### Why a concurrent engine exists
 
@@ -125,7 +155,7 @@ urgent render reads state that only a pending transition should see, you
 get **tearing**: a single rendered frame showing a mixture of old and new
 state.
 
-The logged engine removes the single-current-value limitation:
+The engine removes the single-current-value limitation:
 
 - **Receipts.** Every write is recorded as a compact receipt — which
   operation (set / functional update / reducer action), which batch it
@@ -157,11 +187,70 @@ The receipts themselves live in packed parallel number arrays per atom,
 matching the core's no-allocation discipline: recording a write is a few
 integer stores, not an object allocation.
 
-The remaining logged exports (`CosignalBridge`, the node/pass/token
-types, `BridgeScheduleError`, `BridgeInvariantViolation`) are the seam
-the React bindings and the diagnostics entries drive; applications
-normally touch only `registerReactBridge()` indirectly via
-`cosignal-react`.
+### Sync by default: quiet mode
+
+Registering the bridge does not, by itself, make writes expensive. While
+nothing is pending — no live batch, no in-progress render pass — the
+bridge is **quiet**: a write to a registered atom folds directly into
+permanent history and the current value together, minting no receipt, no
+batch, and no event. The recording pipeline arms only while an update is
+actually in flight (a batch open, a render pass in progress) and disarms
+again once the last one retires. A transition that starts after a run of
+quiet writes begins from the already-advanced committed state — there is
+no history to reconstruct, because quiet writes ARE permanent history the
+moment they land. Net posture: an app that never starts a transition pays
+close to the plain write price with the machinery dormant; an app that
+does pays for recording exactly while a transition is pending.
+
+### The host contract
+
+`cosignal-react` is one **host driver** — the adapter connecting this
+engine to a concrete UI library. The bridge surface it drives is
+host-agnostic: any UI library whose renderer groups updates by priority
+("lanes") and can speculatively render a proposed frame, then commit or
+discard it and rebase remaining work (branch-commit-rebase semantics),
+could implement the same contract. A host driver's responsibilities:
+
+- **Batch lifecycle.** Open a batch (`openBatch`) for each group of
+  writes that must land together — one event handler, one transition —
+  and retire it (`retire(token, committed)`) once it is finished
+  everywhere, with a disposition: committed (its writes become permanent
+  history every world sees) or abandoned (its writes vanish). A batch
+  backing an asynchronous action can be parked — kept pending until the
+  action's promise settles (`settleAction`).
+- **Render passes.** Report each speculative render: `passStart(root,
+  includedBatches)` declares which batches the render may see (its view
+  is frozen at start, so pausing and resuming never drifts);
+  `passYield`/`passResume` bracket interruptions; `passEnd(pass,
+  'commit' | 'discard')` ends it with a disposition. At a commit the
+  engine snapshots committed state, folds the pass's batches into the
+  root's committed view, and reconciles subscribers that mounted during
+  the pass against updates that were in flight but not included.
+- **Per-root commits.** Each root (one independently rendered tree) has
+  its own committed view and a commit generation (`root(id)`
+  materializes it). The engine advances them at `passEnd('commit')`; the
+  host reconciles any commit its renderer reports beyond that
+  (idempotent set-add into the root's committed-batch table).
+- **Write classification.** Install `bridge.writeClassifier` to
+  attribute every host-attributable write to the batch context it
+  executes in — the engine's public atom methods capture each write as a
+  whole operation (set / functional update / reducer action) and hand it
+  over — and `setWorldProvider` to answer, per read, which world the
+  current call context should resolve in (a rendering subscriber reads
+  its own pass's frozen world; everything else reads newest).
+- **Delivery scheduling.** Receive the engine's re-render decisions
+  through direct callbacks — `onDelivery` (a batch's write reached a
+  subscriber), `onMountCorrective` (a freshly mounted subscriber must
+  join a still-live batch it rendered without), `onCorrection` (an
+  urgent pre-paint fix against committed truth) — and schedule each
+  re-render INTO the causing batch's own lane, so it renders and commits
+  together with its cause. Deliveries are value-blind: the engine
+  decides who must re-render; the host only schedules.
+
+The remaining engine exports (`CosignalBridge`, the node/pass/token
+types, `BridgeScheduleError`, `BridgeInvariantViolation`) are that seam;
+applications normally touch only `registerReactBridge()`, indirectly,
+via `cosignal-react`.
 
 ## Diagnostics: `cosignal/trace` and `cosignal/graphviz`
 
@@ -198,8 +287,8 @@ Two independent harnesses back the library's claims:
 - **Conformance.** The core passes a 179-case conformance suite for
   alien-signals-compatible semantics — dependency tracking, lazy
   re-evaluation, equality cutoffs, effect scheduling, edge cases like
-  diamond graphs and conditional dependencies. The logged build with the
-  bridge unarmed passes the identical suite, pinning that the concurrent
+  diamond graphs and conditional dependencies. The identical suite passes
+  again with the bridge registered and idle, pinning that the concurrent
   machinery costs nothing semantically when unused.
 - **Model-based testing.** The concurrent engine is developed against an
   executable reference model: a deliberately simple, obviously-correct

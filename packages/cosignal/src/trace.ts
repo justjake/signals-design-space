@@ -1,6 +1,6 @@
 /**
  * `cosignal/trace` — the lazily loaded diagnostics entry: a zero-allocation
- * event recorder for the logged build (the concurrent engine). It answers
+ * event recorder for the concurrent engine (the bridge). It answers
  * "why did this component re-render / this effect run / this value change?"
  * without perturbing the engine it observes. The disciplines it holds:
  *
@@ -20,8 +20,8 @@
  * entry pulls the other into a bundle. Until `attachTracer(bridge)` runs,
  * the engine's only tracing artifact is the `bridge.trace` slot, `undefined`
  * forever, checked once per emit site (tests/trace-off.spec.ts asserts the
- * discipline; the base build, `cosignal`, contains no tracing instructions
- * at all). `tracer.stop()` detaches at runtime; attaching again later
+ * discipline; the kernel itself contains no tracing instructions at all).
+ * `tracer.stop()` detaches at runtime; attaching again later
  * records a fresh capture.
  *
  * ## The recorder
