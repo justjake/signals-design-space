@@ -31,7 +31,7 @@ on:
       frameworks:
         description: 'Framework names (quoted, space-separated), or ALL'
         required: false
-        default: '"Dalien Signals" "Alien Signals" "Cosignal" "Cosignal Logged"'
+        default: '"Dalien Signals" "Alien Signals" "Cosignal"'
       rounds:
         description: 'Interleaved rounds per framework'
         required: false
@@ -42,7 +42,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignal" "Cosignal Logged"' }}
+  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignal"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:
