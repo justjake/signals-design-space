@@ -1070,11 +1070,12 @@ const initialRecords = (() => {
 // D6: configure({initialRecords}) raises this floor; the growth loop honors it.
 let desiredRecords = initialRecords * 3;
 
-// THE SEAM (see the header): the operation-table factory. Statically wired
-// (`const`) to the DIRECT table in this build; the LOGGED twin binds it as a
-// `let` and re-points it at registration, then rebuilds E once — after which
-// every operation, growth included, routes through the logged table.
-const engineFactory: (records: number, carry?: Int32Array) => Engine = createEngine;
+// THE SEAM (see the header): the operation-table factory. Initialized to the
+// DIRECT table; nothing in THIS module ever reassigns it (a DIRECT bundle
+// const-folds it). The LOGGED twin re-points it exactly once through
+// `__installTwinTable` below, then every operation — growth included —
+// routes through the logged table.
+let engineFactory: (records: number, carry?: Int32Array) => Engine = createEngine;
 
 /**
  * The fold-purity table (see runFold): every operation throws the fold error
@@ -1110,6 +1111,30 @@ const POISON: Engine = {
 // Footprint parity with the old split planes (initialRecords node records +
 // 2x initialRecords link records): 3x initialRecords shared records.
 let E: Engine = engineFactory(initialRecords * 3);
+
+/**
+ * THE TWIN ATTACHMENT POINT (header: "re-points `engineFactory` at the logged
+ * factory, then rebuilds `E` exactly once over the carried buffers"). Called
+ * only by the LOGGED entry's `registerReactBridge()` — never from this module,
+ * so a DIRECT bundle never reaches overlay code through it. Asserts the
+ * operation-boundary precondition (spec §3.6/§5.1): no live engine frame may
+ * hold the old table's buffers. `wrap` receives the DIRECT factory and must
+ * return a factory producing tables of the same `Engine` shape; growth
+ * thereafter rebuilds through the swapped binding — the donor's own pattern.
+ * @internal
+ */
+export function __installTwinTable(
+	wrap: (direct: (records: number, carry?: Int32Array) => Engine) => (records: number, carry?: Int32Array) => Engine,
+): void {
+	if (enterDepth !== 0) {
+		throw new Error('cosignal: registerReactBridge inside an open evaluation/fold/walk frame (spec §3.6).');
+	}
+	engineFactory = wrap(createEngine);
+	E = engineFactory(E.records, E.buffer());
+}
+
+/** The operation-table shape the twin factory must produce. @internal */
+export type { Engine as EngineTable };
 
 function maybeBoundary(): void {
 	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
