@@ -1,0 +1,159 @@
+# Benchmark the signal-library family (cosignal DIRECT, cosignal LOGGED,
+# dalien-signals) against upstream alien-signals whenever the cosignal
+# packages or the dalien-signals submodule pointer change on main. Node and
+# Bun run as parallel jobs; each uploads a CSV of per-test medians and a
+# rendered PNG chart.
+#
+# This is the family-wide sibling of packages/dalien-signals'
+# .github/workflows/benchmark.yml (which benchmarks dalien against upstream
+# on that repo's own pushes — it cannot measure cosignal because this repo
+# is private). Both share the same harness: the milomg js-reactivity-
+# benchmark plus the fork patch stored at
+# packages/dalien-signals/benchs/ci/milomg-fork.patch (median-of-N
+# estimator, interleaved isolated runner, family adapters). See that repo's
+# benchs/ci/README.md for the methodology and the do-not-shard-frameworks
+# rationale: cross-machine times are not comparable, so Node vs Bun is the
+# only parallel axis.
+
+name: benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/cosignal/**'
+      - 'packages/cosignal-react/**'
+      - 'packages/cosignal-oracle/**'
+      - 'packages/dalien-signals'
+      - '.github/workflows/benchmark.yml'
+  workflow_dispatch:
+    inputs:
+      frameworks:
+        description: 'Framework names (quoted, space-separated), or ALL'
+        required: false
+        default: '"Dalien Signals" "Alien Signals" "Cosignal" "Cosignal Logged"'
+      rounds:
+        description: 'Interleaved rounds per framework'
+        required: false
+        default: '3'
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FRAMEWORKS: ${{ inputs.frameworks || '"Dalien Signals" "Alien Signals" "Cosignal" "Cosignal Logged"' }}
+  ROUNDS: ${{ inputs.rounds || '3' }}
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node, bun]
+    name: bench-${{ matrix.runtime }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only the three submodules the benchmark needs — a full recursive
+      # init would pull the react fork and every vendor library.
+      - name: Init benchmark submodules
+        run: |
+          git submodule update --init \
+            packages/dalien-signals \
+            milomg-reactivity-benchmark \
+            upstream-alien-signals
+          git -C milomg-reactivity-benchmark apply \
+            "$GITHUB_WORKSPACE/packages/dalien-signals/benchs/ci/milomg-fork.patch"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+
+      - run: npm install -g pnpm
+
+      - name: Build upstream alien-signals (esm/ is a local build artifact)
+        working-directory: upstream-alien-signals
+        run: |
+          npm install
+          npm run build
+
+      - name: Build dalien-signals
+        working-directory: packages/dalien-signals
+        run: |
+          pnpm install --ignore-workspace
+          node build.js
+
+      # cosignal's exports point at TypeScript source with no dependencies;
+      # the harness bundler compiles it directly, so no install/build here.
+
+      - name: Build benchmark runner
+        working-directory: milomg-reactivity-benchmark
+        run: |
+          pnpm install --no-frozen-lockfile
+          cd packages/node
+          npx esbuild src/index.ts src/isolated.ts --bundle --format=esm --platform=node --target=esnext --outdir=dist --sourcemap=external
+
+      - name: Run benchmark (${{ matrix.runtime }})
+        working-directory: milomg-reactivity-benchmark/packages/node
+        run: |
+          if [ "$FRAMEWORKS" = "ALL" ]; then ARGS=""; else ARGS="$FRAMEWORKS"; fi
+          RUNNER=node
+          if [ "${{ matrix.runtime }}" = "bun" ]; then RUNNER=bun; fi
+          echo "$RUNNER dist/isolated.js --rounds $ROUNDS $ARGS"
+          echo "$ARGS" | xargs "$RUNNER" dist/isolated.js --rounds "$ROUNDS" > "$GITHUB_WORKSPACE/results-${{ matrix.runtime }}.csv"
+          cat "$GITHUB_WORKSPACE/results-${{ matrix.runtime }}.csv"
+
+      - name: Verify every requested framework produced results
+        run: |
+          if [ "$FRAMEWORKS" = "ALL" ]; then exit 0; fi
+          missing=0
+          eval "set -- $FRAMEWORKS"
+          for fw in "$@"; do
+            if ! grep -q "^$fw *," "results-${{ matrix.runtime }}.csv"; then
+              echo "::error::$fw produced no benchmark rows (its child crashed in every round)"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Render chart PNG
+        run: |
+          RUNTIME_VERSION=$(node --version)
+          if [ "${{ matrix.runtime }}" = "bun" ]; then RUNTIME_VERSION="bun $(bun --version)"; else RUNTIME_VERSION="Node $RUNTIME_VERSION"; fi
+          node packages/dalien-signals/benchs/chart.mjs \
+            "results-${{ matrix.runtime }}.csv" \
+            "benchmark-${{ matrix.runtime }}.svg" \
+            "Total benchmark time by framework" \
+            "js-reactivity-benchmark (median of $ROUNDS interleaved isolated rounds), $RUNTIME_VERSION, GitHub Actions $(uname -m) - lower is better"
+          HEIGHT=$(grep -o 'height="[0-9]*"' "benchmark-${{ matrix.runtime }}.svg" | head -1 | grep -o '[0-9]*')
+          google-chrome --headless=new --no-sandbox --disable-gpu \
+            --screenshot="benchmark-${{ matrix.runtime }}.png" \
+            --window-size=1080,"$HEIGHT" --force-device-scale-factor=2 \
+            --default-background-color=FFFFFFFF \
+            "file://$GITHUB_WORKSPACE/benchmark-${{ matrix.runtime }}.svg"
+
+      - name: Job summary
+        run: |
+          {
+            echo "### Benchmark totals (${{ matrix.runtime }}, median of $ROUNDS rounds)"
+            echo ""
+            echo '| framework | total (ms) |'
+            echo '| --- | ---: |'
+            awk -F',' 'NR>1 && $3+0>0 {gsub(/^ +| +$/,"",$1); t[$1]+=$3} END {for (f in t) printf "| %s | %d |\n", f, t[f]}' \
+              "results-${{ matrix.runtime }}.csv" | sort -t'|' -k3 -n
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.runtime }}
+          path: |
+            results-${{ matrix.runtime }}.csv
+            benchmark-${{ matrix.runtime }}.svg
+            benchmark-${{ matrix.runtime }}.png
+          if-no-files-found: error
