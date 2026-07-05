@@ -230,3 +230,8 @@ preference. Curated by the monitor only.
   refinement provoked by his "why keep retired urgent batches around at
   all" question.)
 - **C3 ratified** (useMemo semantics for useComputed).
+- **D26. Idle-overhead gate relaxed to ≤3% (Jake, 2026-07-05: "sure, it's
+  fine").** The quiet-React read tax (measured 2.4–3.8% under load) is
+  accepted against a ≤3% budget; the idle-machine measurement (SPK-L) is
+  demoted to informational, and the mitigation ladder ships only if a clean
+  idle number exceeds 3%.
