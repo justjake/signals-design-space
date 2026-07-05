@@ -44,13 +44,12 @@ const watchers = [];
 for (let i = 0; i < 4; i++) watchers.push(b.mountWatcher(setup.id, computeds[i], `w${i}`));
 b.passEnd(setup.id, 'commit');
 
-let holderA = b.openBatch('default');
+let holderA = b.openBatch();
 b.write(holderA.id, atoms[0], { kind: 'set', value: 1 });
 let holderB;
 
 const k1EdgeCount = () => { let n = 0; for (const s of b.episodeEdges.values()) n += s.size; return n; };
-const tapeTotal = () => { let n = 0; for (const nd of b.nodes.values()) if (nd.kind === 'atom') n += nd.tape.length; return n; };
-const archiveTotal = () => { let n = 0; for (const nd of b.nodes.values()) if (nd.kind === 'atom') n += nd.archive.length; return n; };
+const tapeTotal = () => { let n = 0; for (const nd of b.nodes.values()) if (nd.kind === 'atom') n += nd.tp.length; return n; };
 
 const samples = [];
 const t0 = Date.now();
@@ -72,7 +71,7 @@ function takeSample(now) {
 	samples.push({
 		t: (now - t0) / 1000, heap,
 		k1: k1EdgeCount(), k1Keys: b.episodeEdges.size,
-		tape: tapeTotal(), archive: archiveTotal(),
+		tape: tapeTotal(),
 		tokens: b.tokens.size, passes: b.passes.size,
 		events: b.events.length, eventsRate: eventsSinceSample,
 		writeNsMed: wMed,
@@ -87,13 +86,13 @@ while (Date.now() - t0 < DURATION_MS) {
 	if (now - lastRotate >= ROTATE_MS) { phase++; lastRotate = now; }
 	if (now - lastHold >= HOLD_MS) {
 		// overlap: open the new holder BEFORE retiring the old (never quiescent)
-		holderB = b.openBatch('default');
+		holderB = b.openBatch();
 		b.write(holderB.id, atoms[phase % NA], { kind: 'set', value: ++v });
 		b.retire(holderA.id, true);
 		holderA = holderB;
 		lastHold = now;
 	}
-	const tok = b.openBatch('default');
+	const tok = b.openBatch();
 	const preEvents = b.events.length;
 	for (let m = 0; m < 4; m++) {
 		const a = atoms[(frame + m * 13) % NA];

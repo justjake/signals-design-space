@@ -46,7 +46,7 @@ function repOnce() {
 	const windows = Math.ceil(WRITES / WINDOW);
 	const t0 = process.hrtime.bigint();
 	for (let w = 0; w < windows; w++) {
-		const tok = b.openBatch('default');
+		const tok = b.openBatch();
 		const s0 = process.hrtime.bigint();
 		for (let k = 0; k < WINDOW; k++) b.write(tok.id, a, { kind: 'set', value: ++i });
 		const s1 = process.hrtime.bigint();

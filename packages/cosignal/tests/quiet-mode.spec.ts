@@ -47,7 +47,7 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(1);
 		(a.handle as Atom<number>).update((v) => v + 1);
 		expect(probes()).toEqual(before); // ZERO pipeline activity
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.ambientToken).toBeUndefined();
 		expect(b.newestValue(a)).toBe(2);
 		expect(b.committedValue(a, 'A')).toBe(2); // base advanced WITH the kernel
@@ -58,11 +58,11 @@ describe('quiet-mode writes', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(5); // quiet fold
-		const t = b.openBatch('deferred');
+		const t = b.openBatch();
 		expect(b.quiet).toBe(false); // a live batch arms the pipeline
 		(a.handle as Atom<number>).set(6); // armed: classifies into the AMBIENT batch
 		expect(b.ambientToken).toBeDefined();
-		expect(a.tape).toHaveLength(1);
+		expect(a.tp.materialize()).toHaveLength(1);
 		b.write(t.id, a, { kind: 'update', fn: (v) => (v as number) * 10 });
 		expect(b.newestValue(a)).toBe(60);
 		// A pass excluding both live batches folds committed base — which
@@ -74,10 +74,10 @@ describe('quiet-mode writes', () => {
 		expect(b.quiet).toBe(false); // t is still live
 		b.retire(t.id, true);
 		expect(b.quiet).toBe(true); // LAST retirement: tapes compacted, quiet re-armed
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'A')).toBe(60);
 		(a.handle as Atom<number>).set(61); // and folds resume
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'A')).toBe(61);
 		expect(b.newestValue(a)).toBe(61);
 	});
@@ -86,7 +86,7 @@ describe('quiet-mode writes', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(5); // quiet history
-		const t = b.openBatch('deferred');
+		const t = b.openBatch();
 		b.write(t.id, a, { kind: 'update', fn: (v) => (v as number) + 1 }); // folds over base 5
 		const p = b.passStart('A', [t.id]);
 		expect(b.passValue(a, p)).toBe(6); // the transition world = quiet base + its own receipt
@@ -163,7 +163,7 @@ describe('quiet-mode writes', () => {
 		expect(() => handle.update((n) => n + handle.state)).toThrow(/not allowed inside an update|updaters and reducers must be pure/);
 		expect(b.newestValue(a)).toBe(1);
 		expect(b.committedValue(a, 'A')).toBe(1);
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.quiet).toBe(true); // the rejected write disturbed nothing
 		// Reducers: registered dispatch folds once over base.
 		const rHandle = new ReducerAtom<number, string>((s, act) => (act === 'inc' ? s + 1 : s), 10);
@@ -172,31 +172,31 @@ describe('quiet-mode writes', () => {
 		rHandle.dispatch('inc');
 		expect(b.newestValue(r)).toBe(11);
 		expect(b.committedValue(r, 'A')).toBe(11);
-		expect(r.tape).toHaveLength(0);
+		expect(r.tp.materialize()).toHaveLength(0);
 	});
 
 	it('pin-blocked arming: an open pass holds the pipeline armed past the last retirement; pass close compacts and re-arms', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
-		const t = b.openBatch('deferred');
+		const t = b.openBatch();
 		b.write(t.id, a, { kind: 'set', value: 1 });
 		const p = b.passStart('B', [t.id]); // pin freezes before the retirement below
 		b.retire(t.id, true);
 		// The pass's pin blocks compaction: the retired receipt is still on
 		// the tape, so quiet must NOT re-arm (a fold would slide base under
 		// a receipt that replays over it).
-		expect(a.tape).toHaveLength(1);
+		expect(a.tp.materialize()).toHaveLength(1);
 		expect(b.quiet).toBe(false);
 		(a.handle as Atom<number>).set(2); // armed semantics: ambient receipt
 		expect(b.ambientToken).toBeDefined();
-		expect(a.tape).toHaveLength(2);
+		expect(a.tp.materialize()).toHaveLength(2);
 		b.retire(b.ambientToken!, true);
 		expect(b.quiet).toBe(false); // pass still open
 		b.passEnd(p.id, 'discard'); // pin lapses: compaction drains, quiet re-arms
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.quiet).toBe(true);
 		(a.handle as Atom<number>).set(3);
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'B')).toBe(3);
 		expect(b.newestValue(a)).toBe(3);
 	});
@@ -209,7 +209,7 @@ describe('quiet-mode writes', () => {
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(1);
 		expect(b.ambientToken).toBeDefined(); // ambient batch minted: full pipeline
-		expect(a.tape).toHaveLength(1);
+		expect(a.tp.materialize()).toHaveLength(1);
 		expect(b.eventsOfType('write').length).toBe(1);
 	});
 
@@ -223,6 +223,6 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(42); // folds fine in the new episode
 		expect(b.newestValue(a)).toBe(42);
 		expect(b.committedValue(a, 'A')).toBe(42);
-		expect(a.tape).toHaveLength(0);
+		expect(a.tp.materialize()).toHaveLength(0);
 	});
 });

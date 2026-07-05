@@ -43,10 +43,10 @@
  *    receipts, so a functional update must reach the engine unfolded) and
  *    hand them to the classifier this shim installs on the bridge
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
- *    write-context API (unstable_getCurrentWriteBatch /
- *    unstable_isCurrentWriteDeferred); token 0 (no context) falls back to
- *    the bridge's ambient default batch (the engine-opened batch that
- *    adopts writes made outside any explicit batch). Raw `.state` reads
+ *    write-context API (unstable_getCurrentWriteBatch, whose low bit is
+ *    the deferred flag); token 0 (no provider registered) is unreachable
+ *    post-handshake and defensively falls back to the bridge's ambient
+ *    default batch (retired by the shim's own policy). Raw `.state` reads
  *    route through the core's host read hook into the bridge's effective
  *    world (evaluation world, else the ambient world this shim maintains
  *    around render passes and effect fires) — no prototype patching
@@ -157,15 +157,6 @@ type EvalFrame = {
 	read: Reader;
 };
 
-/** Whole-op codes shared with the engine's host write seam. */
-type HostOpKind = 0 | 1 | 2;
-
-function opOf(kind: HostOpKind, payload: unknown): Op {
-	if (kind === 0) return { kind: 'set', value: payload };
-	if (kind === 1) return { kind: 'update', fn: payload as (prev: Value) => Value };
-	return { kind: 'dispatch', action: payload };
-}
-
 let nextRootSerial = 1;
 let nextEffectSerial = 1;
 
@@ -213,8 +204,8 @@ export class Shim {
 		// host-attributable writes (whole ops) to the classifier, and routed
 		// reads to the effective world; the observer feeds effect dependency
 		// snapshots.
-		bridge.writeClassifier = (atom, kind, payload) => {
-			this.classifyWrite(this.nodeForAtom(atom), opOf(kind as HostOpKind, payload));
+		bridge.writeClassifier = (atom, op) => {
+			this.classifyWrite(this.nodeForAtom(atom), op); // the seam already rebuilt the whole Op
 		};
 		bridge.readAdopter = (atom) => this.nodeForAtom(atom);
 		// The ambient-world provider answers from the LIVE call context, per
@@ -361,8 +352,7 @@ export class Shim {
 			}
 			return existing;
 		}
-		const deferred = (forkToken & 1) === 1;
-		const token = this.bridge.openBatch(deferred ? 'deferred' : 'urgent', {
+		const token = this.bridge.openBatch({
 			action: opts?.action ?? false,
 		});
 		this.bridgeTokenByFork.set(forkToken, token.id);
@@ -430,6 +420,7 @@ export class Shim {
 			}
 			rec.minted = new Set();
 			rec.pass = undefined;
+			this.maybeRetireAmbient(); // the closing pass may have been the last thing keeping ambient pending
 			return;
 		}
 		// The end(commit) event is where the bridge captures its baseline:
@@ -442,6 +433,7 @@ export class Shim {
 		// (delivered at the operation boundary, inside this call).
 		this.bridge.passEnd(pass.id, 'commit');
 		rec.pass = undefined;
+		this.maybeRetireAmbient(); // the closing pass may have been the last thing keeping ambient pending
 		// ctx.previous cells must hold the last COMMITTED value — a pending
 		// render's value must never leak into the hint, because a pending
 		// transition may still be discarded — so update the cells from every
@@ -483,7 +475,35 @@ export class Shim {
 		else this.bridge.retire(mapped, committed); // batch done everywhere: its writes become permanent history
 		this.bridgeTokenByFork.delete(forkToken);
 		this.forkTokenByBridge.delete(mapped);
+		this.maybeRetireAmbient(); // the last protocol retirement may close the ambient batch's pending window
 		this.revalidateEffects(); // retirement/settlement can move committed values: re-check effects
+	}
+
+	/**
+	 * Ambient-batch retirement policy — the shim owns it because no protocol
+	 * batch mirrors the engine's ambient default batch (it is minted engine-
+	 * side for context-free writes), so no `onBatchRetired` will ever name it.
+	 * Ambient content is sync-committed by definition — a context-free write
+	 * is urgent truth the moment it lands — so the batch retires as soon as
+	 * nothing else is in flight: no live non-ambient token and no open pass.
+	 * Checked after every event that can close that window (a bare write
+	 * itself, a protocol batch retirement, a pass end). Leaving it live
+	 * would permanently block quiet-mode re-arming, tape compaction, and
+	 * quiescence, and keep ambient writes out of every committed world.
+	 */
+	private maybeRetireAmbient(): void {
+		const b = this.bridge;
+		const ambientId = b.ambientToken;
+		if (ambientId === undefined) return;
+		const ambient = b.tokens.get(ambientId);
+		if (ambient === undefined || ambient.state !== 'live') return;
+		for (const t of b.tokens.values()) {
+			if (t.state === 'live' && !t.ambient) return; // the pending window is still open
+		}
+		for (const p of b.passes.values()) {
+			if (p.state !== 'ended') return; // an open render still folds pre-retirement state
+		}
+		b.retire(ambientId, true); // sync-committed content locks into every committed world
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], generation: number): void {
@@ -541,7 +561,18 @@ export class Shim {
 		}
 		const forkToken = React.unstable_getCurrentWriteBatch();
 		if (forkToken === 0) {
-			this.bridge.bareWrite(node, op); // pre-provider / non-React context
+			// Defensively retained; UNREACHABLE post-handshake. Token 0 means
+			// "no renderer provider registered" (ReactExternalRuntime returns 0
+			// only then), and this shim's constructor asserted a provider —
+			// after that, getCurrentWriteBatch() mints a token for EVERY write
+			// (any call context) with a guaranteed close edge, so no write in
+			// the React path is ever context-free. Pinned by the ambient-
+			// retirement battery test.
+			this.bridge.bareWrite(node, op);
+			// If a bare write does land (a future build regression), the ambient
+			// batch it minted has no protocol counterpart to close it: retire it
+			// one-shot when nothing else is pending.
+			this.maybeRetireAmbient();
 		} else {
 			const tokenId = this.bridgeTokenFor(forkToken);
 			// Dev-warning heuristic. After an await, code runs on a fresh call
@@ -657,24 +688,19 @@ export class Shim {
 
 	/**
 	 * The bridge node for a public Atom/ReducerAtom, adopting on first use.
-	 * Resolution rides the CORE's own adoption stamp (`atom._hostStamp`,
-	 * written by `bridge.adoptAtom`/`bridge.atom` and validated against this
-	 * shim's bridge) — one stamp mechanism for handle→node resolution, shared
-	 * with the engine's write seam. The original handle IS the bridge's
-	 * kernel handle: the engine's own kernel applies/reads re-enter the
-	 * public methods with the host hooks' recursion guard down, so no shadow
-	 * handle is needed. Adoption itself (including ReducerAtom reducer
-	 * wiring) is entirely the engine's job.
+	 * Resolution IS the engine's `bridge.nodeFor` (the one stamp-validate +
+	 * registry-probe rule, shared with the host write seam) — this method
+	 * only adds adopt-on-miss. The original handle IS the bridge's kernel
+	 * handle: the engine's own kernel applies/reads re-enter the public
+	 * methods with the host hooks' recursion guard down, so no shadow handle
+	 * is needed. Adoption itself (including ReducerAtom reducer wiring) is
+	 * entirely the engine's job.
 	 */
 	nodeForAtom(atom: Atom<unknown>): AtomNode {
-		const stamp = atom._hostStamp;
-		if (stamp !== undefined && stamp.b === this.bridge) return stamp.n as AtomNode;
-		const existing = this.bridge.byKernelId.get(atom._id);
-		if (existing !== undefined) {
-			atom._hostStamp = { b: this.bridge, n: existing }; // re-stamp after a bridge swap
-			return existing;
-		}
-		return this.bridge.adoptAtom(atom.label ?? `atom#${atom._id}`, atom as Atom<Value>, atom._isEqual);
+		return (
+			this.bridge.nodeFor(atom) // the engine's one stamp-validate + registry-probe rule
+			?? this.bridge.adoptAtom(atom.label ?? `atom#${atom._id}`, atom as Atom<Value>, atom._isEqual)
+		);
 	}
 
 	// ---- bound computeds + suspense translation ---------------------------------------

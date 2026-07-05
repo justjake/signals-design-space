@@ -31,8 +31,6 @@ declare module 'react' {
 	export function unstable_subscribeToExternalRuntime(listener: ExternalRuntimeListener): () => void;
 	/** The write-context API: which batch is the current code executing on behalf of? 0 = none; bit 0 set = deferred (a transition or other non-urgent batch); a token is stable for its batch's whole life. */
 	export function unstable_getCurrentWriteBatch(): number;
-	/** True when the current write context is deferred (non-urgent). */
-	export function unstable_isCurrentWriteDeferred(): boolean;
 	/** The root container currently rendering on this call stack, or null outside render. */
 	export function unstable_getRenderContext(): null | { container: unknown };
 	/** Runs fn so the state updates it schedules join the token's batch, rendering and committing with it; a retired, unknown, or 0 token takes a discrete-urgent fallback instead. Throws if called during render (React error 605) — update attribution during a render pass belongs to the pass itself. */

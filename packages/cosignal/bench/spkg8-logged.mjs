@@ -44,7 +44,7 @@ function repBurst() {
 	let held;
 	let heldPass;
 	if (HELD) {
-		held = b.openBatch('deferred', { action: true });
+		held = b.openBatch({ action: true });
 		b.write(held.id, query, { kind: 'set', value: ++v });
 		heldPass = b.passStart('R', [held.id]);
 		b.renderWatcher(heldPass.id, watcher.id);
@@ -54,7 +54,7 @@ function repBurst() {
 	let writeNs = 0;
 	for (let f = 0; f < FRAMES; f++) {
 		b.events.length = 0;
-		const tok = b.openBatch('default');
+		const tok = b.openBatch();
 		const t0 = process.hrtime.bigint();
 		for (let k = 0; k < W; k++) b.write(tok.id, query, { kind: 'set', value: ++v });
 		const t1 = process.hrtime.bigint();
@@ -62,7 +62,7 @@ function repBurst() {
 		b.retire(tok.id, true);
 	}
 	const evalsPerWrite = evals / (FRAMES * W);
-	const tapeLen = query.tape.length;
+	const tapeLen = query.tp.length;
 	if (heldPass !== undefined) {
 		b.passResume(heldPass.id);
 		b.passEnd(heldPass.id, 'commit');
@@ -73,7 +73,7 @@ function repBurst() {
 
 function repTypeahead() {
 	const t0all = process.hrtime.bigint();
-	const T = b.openBatch('deferred', { action: true });
+	const T = b.openBatch({ action: true });
 	evals = 0;
 	let open;
 	let keyNs = 0;
@@ -87,7 +87,7 @@ function repTypeahead() {
 		const t1 = process.hrtime.bigint();
 		keyNs += Number(t1 - t0);
 	}
-	const tapeLen = query.tape.length; // retention/prefix length before settle
+	const tapeLen = query.tp.length; // retention/prefix length before settle
 	const evalsPerKey = evals / KEYS;
 	b.passResume(open.id);
 	b.passEnd(open.id, 'commit');

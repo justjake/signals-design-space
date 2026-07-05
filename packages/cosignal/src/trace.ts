@@ -63,7 +63,7 @@
  *
  *  write                {node, op, token, slot, seq}         a write was recorded: a receipt joined the atom's history
  *  write-dropped        {node, token}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
- *  batch-open           {token, priority, action, ambient}   a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
+ *  batch-open           {token, action, ambient}             a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
  *  batch-settle         {token, committed}                   an async action's promise settled; its retirement follows
  *  batch-retire         {token, retiredSeq, committed}       the batch retired: its writes became permanent history visible to every world
  *  slot-claim           {slot, token}                        a batch's first write claimed a slot
@@ -231,7 +231,6 @@ const CAUSE_SETTING = new Set<TraceKindCode>([
 ]);
 
 const OP_NAMES = ['set', 'update', 'dispatch'] as const;
-const PRIORITY_NAMES = ['urgent', 'default', 'deferred'] as const;
 const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const;
 
 /** Decoded payload placeholder for a ref-ring value that was overwritten (or capture disabled). */
@@ -522,8 +521,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	batchOpen(t: Token): void {
-		const pri = t.priority === 'urgent' ? 0 : t.priority === 'default' ? 1 : 2;
-		this.rec(K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0), t.id, 0, pri, 0, 0);
+		this.rec(K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0), t.id, 0, 0, 0, 0);
 	}
 
 	batchSettle(t: Token, committed: boolean): void {
@@ -646,7 +644,7 @@ export class Tracer implements TraceHooks {
 				data = { node: this.labelOf(subject), token: world };
 				break;
 			case K.batchOpen:
-				data = { token: subject, priority: PRIORITY_NAMES[a0], action: a, ambient: b };
+				data = { token: subject, action: a, ambient: b };
 				break;
 			case K.batchSettle:
 				data = { token: subject, committed: a };

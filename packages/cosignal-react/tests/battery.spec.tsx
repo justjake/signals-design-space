@@ -98,7 +98,7 @@ describe('battery (spec §6) at React level', () => {
 			mid = text(container);
 			// Always-log: the excluded write already holds a receipt.
 			const node = h.bridge.byKernelId.get(a._id)!;
-			expect(node.tape.length).toBe(1);
+			expect(node.tp.length).toBe(1);
 		});
 		expect(mid).toBe('a:0;b:2;');
 		await act(async () => {});
@@ -207,8 +207,9 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		expect(text(container)).toBe('a:5;');
 		const node = h.bridge.byKernelId.get(a._id)!;
-		const receiptCount = node.tape.length + node.archive.length;
-		expect(receiptCount).toBe(2); // both writes hold receipts
+		// Both writes held receipts (the retained referee event log counts
+		// them; the receipts themselves compacted into base at retirement).
+		expect(h.bridge.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
 	});
 
 	test('case 9(a) — mount inside the batch pass: k-world value on FIRST render, no correction', async () => {
@@ -584,5 +585,98 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('saved-1'); // settled atomically
+	});
+});
+
+describe('ambient batch retirement (a context-free write must never wedge the pipeline)', () => {
+	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the forkToken===0 arm is unreachable', async () => {
+		// F4 verdict half 1 (unreachability): once a renderer provider exists
+		// (the shim's handshake asserts one), unstable_getCurrentWriteBatch()
+		// mints a nonzero token for EVERY write — even from a bare timer-style
+		// call stack — with a guaranteed close edge. So no write in the React
+		// path ever reaches bareWrite, and no ambient batch is ever minted.
+		h = makeHarness();
+		h.bridge.setRetainEvents(false); // production posture: no event consumer…
+		h.bridge.setQuietWrites(true); // …and the quiet short-circuit armed
+		const a = new Atom(0);
+		const flag = new Atom(0); // written outside any React context; observed by no component
+		const io = deferred<void>();
+		const settled = deferred<void>();
+		const { container } = await h.mount(<Reader id="a" atom={a} />);
+		expect(h.bridge.quiet).toBe(true);
+		await act(async () => {
+			startSignalTransition(async (scope) => {
+				await io.promise;
+				scope.set(a, 1);
+				settled.resolve();
+			});
+		});
+		// The action is parked: the pipeline is armed until it settles.
+		expect(h.bridge.liveTokens().some((t) => t.parked)).toBe(true);
+		expect(h.bridge.quiet).toBe(false);
+		// The out-of-context write while the window is open: NOT ambient — the
+		// protocol supplies a real write batch (urgent), with a close edge.
+		flag.set(7);
+		expect(h.bridge.ambientToken).toBeUndefined(); // no ambient mint, ever
+		expect(h.bridge.liveTokens().some((t) => !t.parked && !t.ambient)).toBe(true); // it rode a protocol batch
+		// The window closes: the action settles; the write's own batch closes
+		// via the protocol's guaranteed close edge. Nothing lives on.
+		await act(async () => {
+			io.resolve();
+			await settled.promise;
+		});
+		await act(async () => {});
+		expect(h.bridge.liveTokens()).toHaveLength(0);
+		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (tapes compacted)
+		expect(h.bridge.quiet).toBe(true); // quiet mode re-armed for the next episode
+		const flagNode = h.bridge.byKernelId.get(flag._id)!;
+		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // the write persisted (committed truth)
+		expect(text(container)).toBe('a:1;');
+	});
+
+	test('fallback drivers: the shim retires an engine-minted ambient batch when the pending window closes; quiet re-arms', async () => {
+		// F4 verdict half 2 (the policy): an ambient batch CAN still be minted
+		// through the engine's own bareWrite (classifier-less fallback drivers;
+		// a hypothetical future build returning token 0). No protocol batch
+		// mirrors it, so no onBatchRetired will ever name it — the shim owns
+		// its retirement: ambient content is sync-committed by definition, so
+		// the batch retires as soon as no live non-ambient token and no open
+		// pass remain (checked at bare writes, batch retirements, pass ends).
+		h = makeHarness();
+		h.bridge.setRetainEvents(false);
+		h.bridge.setQuietWrites(true);
+		const a = new Atom(0);
+		const flag = new Atom(0);
+		const io = deferred<void>();
+		const settled = deferred<void>();
+		const { container } = await h.mount(<Reader id="a" atom={a} />);
+		await act(async () => {
+			startSignalTransition(async (scope) => {
+				await io.promise;
+				scope.set(a, 1);
+				settled.resolve();
+			});
+		});
+		expect(h.bridge.quiet).toBe(false); // pipeline armed: the parked action holds the window open
+		// Simulate the classifier-less route: a bare write straight into the
+		// engine while the window is open mints the ambient default batch.
+		const flagNode = h.handle.shim.nodeForAtom(flag as Atom<unknown>);
+		h.bridge.bareWrite(flagNode, { kind: 'set', value: 7 });
+		const ambient = h.bridge.ambientToken;
+		expect(ambient).toBeDefined(); // ambient minted; nothing protocol-side will ever retire it…
+		// The pending window closes: the action settles and its batch retires —
+		// the shim's policy retires the ambient batch with it.
+		await act(async () => {
+			io.resolve();
+			await settled.promise;
+		});
+		await act(async () => {});
+		expect(h.bridge.ambientToken).toBeUndefined(); // …the shim did
+		expect(h.bridge.tokens.get(ambient!)?.state ?? 'retired').toBe('retired');
+		expect(h.bridge.liveTokens()).toHaveLength(0);
+		expect(h.bridge.quiescent()).toBe(true); // liveness restored: quiesce() reachable again
+		expect(h.bridge.quiet).toBe(true); // quiet re-armed — compaction and re-arming no longer blocked
+		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // ambient content is committed truth
+		expect(text(container)).toBe('a:1;');
 	});
 });

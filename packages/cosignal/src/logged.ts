@@ -146,7 +146,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, ReducerAtom, __assertHostWritable, __hostApplySet, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, ReducerAtom, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -191,8 +191,6 @@ type WalkGen = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
 
-export type Priority = 'urgent' | 'default' | 'deferred';
-
 /** A write operation: set/update on atoms, dispatch on reducer atoms. */
 export type Op =
 	| { kind: 'set'; value: Value }
@@ -208,7 +206,7 @@ export type Op =
  * logs only. Receipts live int-packed in per-atom `Tape` columns ({kind,
  * slot, seq, retiredSeq, token} parallel number columns + one unknown[]
  * payload side column); this materialized object shape is the test/trace
- * surface (`atom.tape` getter, trace `receipt` hook).
+ * surface (`Tape.materialize()`, trace `receipt` hook).
  */
 export type Receipt = {
 	op: Op;
@@ -254,7 +252,7 @@ export class Tape {
 	}
 
 	push(kind: OpKind, slot: SlotId, seq: Seq, token: TokenId, payload: unknown): void {
-		probeReceipts++; // One Core probe (referee surface)
+		probes.receipts++; // One Core probe (referee surface)
 		this.kinds.push(kind);
 		this.slots.push(slot);
 		this.seqs.push(seq);
@@ -319,13 +317,10 @@ export class AtomNode {
 	/** The folded floor of the tape: retired, compacted history every world sees. */
 	base: Value;
 	baseSeq: Seq = 0;
-	/** Packed receipt columns (the engine truth; `tape` materializes them). */
+	/** Packed receipt columns (the engine truth; tests/diagnostics materialize
+	 * them via `tp.materialize()`; the referee's model-shaped view lives in
+	 * tests/model-view.ts). */
 	tp = new Tape();
-	/** Referee surface — not consulted by engine logic. Full-history retention
-	 * for the oracle's retention invariant (`shadowFoldAtom` replays it):
-	 * materialized compacted receipts, kept only when `bridge.retainArchive`. */
-	archiveStore: Receipt[] = [];
-	origin: Value;
 	equals: Equals;
 	/** True iff `equals` is the default Object.is (write fast path). */
 	eqIsDefault: boolean;
@@ -343,23 +338,9 @@ export class AtomNode {
 		this.id = id;
 		this.name = name;
 		this.base = initial;
-		this.origin = initial;
 		this.equals = equals;
 		this.eqIsDefault = eqIsDefault;
 		this.handle = handle;
-	}
-
-	/** Referee surface — not consulted by engine logic (which reads the packed
-	 * `tp` columns). The tape as materialized Receipt objects; read by: oracle
-	 * `checkInvariants` (via the model cast), twin tests, graphviz. */
-	get tape(): Receipt[] {
-		return this.tp.materialize();
-	}
-
-	/** Referee surface — mirrors the model AtomNode's `archive` field for the
-	 * structural cast; read by retention comparisons in tests. */
-	get archive(): Receipt[] {
-		return this.archiveStore;
 	}
 }
 
@@ -377,7 +358,6 @@ export type AnyNode = AtomNode | ComputedNode;
 
 export type Token = {
 	id: TokenId;
-	priority: Priority;
 	action: boolean;
 	parked: boolean;
 	state: 'live' | 'retired';
@@ -422,9 +402,11 @@ export type WorldMemo = {
 export type SlotMeta = {
 	id: SlotId;
 	tenant: TokenId | undefined;
-	/** Referee surface — the engine mints/resets this but never reads it; only
-	 * the oracle's `checkInvariants` tenancy rules consult it (via the model
-	 * cast). */
+	/** Claim sequence — a point on the shared timeline minted at every
+	 * intern (the mint itself is load-bearing for model parity: both sides
+	 * spend one sequence per claim). The engine never reads the stored
+	 * value; the oracle's `checkInvariants` tenancy orderings consult it
+	 * through the test-side model view. */
 	claimSeq: Seq;
 	/** Sequence of the last write under this slot; zeroed when a new tenant
 	 * claims it (memo validation compares it against evaluation stamps). */
@@ -540,14 +522,6 @@ export class Watcher {
 				__lifecycleRelease(this.kernelAtom);
 			}
 		}
-	}
-
-	/** Referee surface — not consulted by engine logic (which tests `dedupBits`
-	 * directly). The dedup bits materialized as a Set for twin/battery tests. */
-	get dedup(): Set<SlotId> {
-		const out = new Set<SlotId>();
-		for (let s = 0; s < SLOT_COUNT; s++) if ((this.dedupBits >>> s) & SlotBits.LOW_BIT) out.add(s);
-		return out;
 	}
 }
 
@@ -682,18 +656,14 @@ let bridgeApplying = false;
 let publiclyRegistered = false;
 
 // ---- One Core probes (referee surface) --------------------------------------------
-// Module-wide counters proving the zero-cost promise behaviorally: with no
-// bridge registered, heavy signal traffic must leave every one of these at
+// One module-wide counter record proving the zero-cost promise behaviorally:
+// with no bridge registered, heavy signal traffic must leave every field at
 // its baseline (tests/one-core.spec.ts). Engine logic never reads them.
-let probeReceipts = 0;
-let probeTokens = 0;
-let probeWorldEvals = 0;
-let probeBridgeEvents = 0;
-let probeBridges = 0;
+const probes = { receipts: 0, tokens: 0, worldEvals: 0, bridgeEvents: 0, bridges: 0 };
 
-/** Referee surface — cheap engine-activity counters for the zero-cost test. @internal */
+/** Referee surface — a snapshot of the engine-activity counters for the zero-cost test. @internal */
 export function __coreProbes(): { receipts: number; tokens: number; worldEvals: number; bridgeEvents: number; bridges: number } {
-	return { receipts: probeReceipts, tokens: probeTokens, worldEvals: probeWorldEvals, bridgeEvents: probeBridgeEvents, bridges: probeBridges };
+	return { ...probes };
 }
 
 // ---- the host-hook implementations (installed into index.ts's public methods) -----
@@ -723,15 +693,10 @@ function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown):
 	__assertHostWritable();
 	const classify = b.writeClassifier;
 	if (classify !== undefined) {
-		classify(atom, kind, payload);
+		classify(atom, opOf(kind, payload));
 		return true;
 	}
-	// Registry lookup, stamp-cached: adoption stamps `{b, n}` on the handle,
-	// so the steady state is one property load + identity compare; the Map
-	// probe only runs for un-stamped handles (or a stamp from a replaced
-	// bridge — test drivers swap bridges; the stamp validates against THIS).
-	const stamp = atom._hostStamp;
-	const node = stamp !== undefined && stamp.b === b ? (stamp.n as AtomNode) : b.byKernelId.get(atom._id);
+	const node = b.nodeFor(atom); // the ONE stamp-validate + registry-probe rule
 	if (node === undefined) {
 		return false; // unregistered and no adopter: exactly base semantics
 	}
@@ -796,12 +761,13 @@ export function __newBridgeForTest(): CosignalBridge {
  * every logged write) and the module-level logged table (public-write
  * classification + world read routing).
  *
- * Referee surface: the twin tests run `checkInvariants(bridge as unknown as
- * CosignalModel)` / `snapshotModel(...)` against this class, so some fields
- * and getters exist only to stay structurally snapshot-compatible with the
- * model or to serve tests/diagnostics. Those members are tagged
- * "Referee surface" at their definition sites — the engine's own logic never
- * consults them; everything untagged is load-bearing.
+ * Referee surface: the twin tests run the oracle's `checkInvariants` /
+ * `snapshotModel` against a MODEL VIEW of this class (tests/model-view.ts)
+ * that materializes the model's shape — tapes, archives, origins, dedup
+ * sets — from packed engine state plus a driver-side mirror fed by the
+ * `onCompact` hook, so the production class carries no mirror members. The
+ * few remaining "Referee surface" tags mark counters/knobs the engine
+ * mints but never reads.
  */
 export class CosignalBridge {
 	nodes = new Map<NodeId, AnyNode>();
@@ -812,6 +778,11 @@ export class CosignalBridge {
 	watchers = new Map<WatcherId, Watcher>();
 	reactEffects = new Map<EffectId, ReactEffect>();
 	coreEffects = new Map<EffectId, CoreEffect>();
+	/** The retained BridgeEvent log. Populated only while a referee retains
+	 * events (`setRetainEvents(true)`); a tracer attached without a referee
+	 * mints events but consumes them live at the `log()` waist, retaining
+	 * nothing here (fixed memory — the tracer's ring/session buffers hold the
+	 * capture). */
 	events: BridgeEvent[] = [];
 
 	/**
@@ -819,7 +790,8 @@ export class CosignalBridge {
 	 * `cosignal/trace` attaches): every site pays one check, nothing else.
 	 * Assigned only by `attachTracer`/`Tracer.stop` over there; the accessor
 	 * keeps `eventsOn` in sync (a live tracer consumes the event stream, so
-	 * events must mint while one is attached).
+	 * events must mint while one is attached — consumed at the `log()` waist,
+	 * never retained on the tracer's behalf).
 	 */
 	private _trace: TraceHooks | undefined = undefined;
 	get trace(): TraceHooks | undefined {
@@ -963,10 +935,13 @@ export class CosignalBridge {
 	/** Last-token cache (windowed writes hit one token repeatedly). */
 	private lastTokenId = 0;
 	private lastTokenRef: Token | undefined = undefined;
-	/** Referee surface — full-history archiving for the oracle's retention
-	 * invariants (tests opt in; keeping every compacted receipt forever would
-	 * grow without bound otherwise). */
-	retainArchive = false;
+	/** Optional compaction observer (referee/diagnostics seam): called once
+	 * per receipt as it folds into base and leaves the tape. The oracle's
+	 * retention invariant needs the full history; its archive mirror lives
+	 * OUTSIDE the engine (tests/model-view.ts), fed by this hook — keeping
+	 * every compacted receipt in-engine would grow without bound. Production
+	 * bridges leave it undefined and retain nothing. */
+	onCompact: ((atom: AtomNode, entry: Receipt) => void) | undefined = undefined;
 
 	// ---- quiet mode (Phase 1b) --------------------------------------------------
 	/**
@@ -1061,9 +1036,11 @@ export class CosignalBridge {
 	/**
 	 * Write classification for host-attributable public writes. When set, it
 	 * owns the WHOLE op (adoption on first write, batch context, render
-	 * guard); when unset, registered atoms classify into the ambient batch.
+	 * guard) — received already rebuilt as an `Op`, so exactly one
+	 * (kind, payload) → Op site exists (the host seam's `opOf`); when unset,
+	 * registered atoms classify into the ambient batch.
 	 */
-	writeClassifier: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => void) | undefined;
+	writeClassifier: ((atom: Atom<unknown>, op: Op) => void) | undefined;
 	/** Adopt-on-demand for routed reads of not-yet-registered atoms. */
 	readAdopter: ((atom: Atom<unknown>) => AtomNode) | undefined;
 	/** Observes every routed public read (node, world value) — the bindings
@@ -1082,7 +1059,7 @@ export class CosignalBridge {
 	inFoldCallback = false;
 
 	constructor() {
-		probeBridges++; // One Core probe (referee surface)
+		probes.bridges++; // One Core probe (referee surface)
 		for (let i = 0; i < SLOT_COUNT; i++) {
 			this.slots.push({
 				id: i,
@@ -1147,13 +1124,22 @@ export class CosignalBridge {
 	}
 
 	private log(e: BridgeEvent): void {
-		probeBridgeEvents++; // One Core probe (referee surface)
-		this.events.push(e);
-		const cap = this.eventCapacity;
-		if (cap !== undefined && this.events.length >= cap * 2) {
-			const drop = this.events.length - cap;
-			this.events.splice(0, drop);
-			this.eventsBase += drop;
+		probes.bridgeEvents++; // One Core probe (referee surface)
+		if (this._retainEvents) {
+			this.events.push(e);
+			const cap = this.eventCapacity;
+			if (cap !== undefined && this.events.length >= cap * 2) {
+				const drop = this.events.length - cap;
+				this.events.splice(0, drop);
+				this.eventsBase += drop;
+			}
+		} else {
+			// A tracer alone consumes events LIVE (the hook call below) into its
+			// own fixed-size buffers; nothing reads `this.events` later, so
+			// retaining here would grow memory for the life of the session.
+			// The absolute cursor still advances: a minted-but-unretained event
+			// counts as immediately dropped.
+			this.eventsBase++;
 		}
 		const tr = this.trace;
 		if (tr !== undefined) tr.event(e);
@@ -1171,11 +1157,13 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * Bound the retained event stream so long-running apps don't grow it
-	 * without limit: once set, the oldest events drop in amortized batches
-	 * past ~2× the capacity and `eventCursor()`/`eventsSince()` marks stay
-	 * stable. Unset by default — tests and diagnostics see the full
-	 * per-episode stream.
+	 * Bound the RETAINED event log (the referee's `setRetainEvents(true)`
+	 * stream — a tracer-only consumer already retains nothing) so a
+	 * long-retaining diagnostic session doesn't grow it without limit: once
+	 * set, the oldest events drop in amortized batches past ~2× the capacity
+	 * and `eventCursor()`/`eventsSince()` marks stay stable. Unset by default —
+	 * lockstep referees need the complete stream. Diagnostics knob; exercised
+	 * by the SPK-K1 soak bench (research/experiments/cosignal-gates.md).
 	 */
 	setEventCapacity(cap: number | undefined): void {
 		this.eventCapacity = cap;
@@ -1213,6 +1201,23 @@ export class CosignalBridge {
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
 		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
+		return node;
+	}
+
+	/**
+	 * Resolve a public handle to its registered node — the ONE
+	 * stamp-validate + registry-probe rule, shared by the host write seam and
+	 * the bindings' handle resolution. Adoption stamps `{b, n}` on the
+	 * handle, so the steady state is one property load + identity compare;
+	 * the Map probe runs only for un-stamped handles (or a stamp from a
+	 * replaced bridge — test drivers swap bridges; the stamp validates
+	 * against THIS bridge and re-stamps on a registry hit).
+	 */
+	nodeFor(atom: Atom<unknown>): AtomNode | undefined {
+		const stamp = atom._hostStamp;
+		if (stamp !== undefined && stamp.b === this) return stamp.n as AtomNode;
+		const node = this.byKernelId.get(atom._id);
+		if (node !== undefined) atom._hostStamp = { b: this, n: node }; // re-stamp after a bridge swap
 		return node;
 	}
 
@@ -1278,43 +1283,6 @@ export class CosignalBridge {
 		return out;
 	}
 
-	/**
-	 * The visibility rule — which receipts each world's fold replays:
-	 *  - newest: every receipt (the kernel applies writes eagerly, so this
-	 *    world is also readable straight off the kernel plane);
-	 *  - pass: (1) receipts retired at-or-before the pass's pin — permanent
-	 *    history the render started from — and (2) receipts from included
-	 *    batches up to the pin, so a paused-and-resumed render never sees a
-	 *    write that landed after it started;
-	 *  - committed-for-root: retired receipts (committed truth at NOW) plus
-	 *    receipts from batches this root has committed but that are still
-	 *    live elsewhere (membership);
-	 *  - mountFix: the mount-fixup world (see mountFixup) — the render's own
-	 *    inclusions at its pin, plus committed truth at NOW, minus live
-	 *    divergence already covered by scheduled corrective re-renders.
-	 */
-	visible(e: Receipt, world: World): boolean {
-		switch (world.kind) {
-			case 'newest':
-				return true;
-			case 'pass': {
-				const w = world.pass;
-				if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) return true; // clause 1: retired by my pin
-				return this.includedSet(w).has(e.slot) && e.seq <= w.pin; // clause 2: included, up to my pin
-			}
-			case 'committed': {
-				if (e.retiredSeq !== undefined) return true; // committed truth at now
-				return this.committedSlotsNow(world.root).has(e.slot); // membership
-			}
-			case 'mountFix': {
-				if (world.maskSlots.has(e.slot) && e.seq <= world.pin) return true; // the render's own inclusions, at its pin
-				if (world.excludeLiveTokens?.has(e.token)) return false; // live divergence already covered by scheduled correctives (audit form)
-				if (e.retiredSeq !== undefined) return true; // committed truth at NOW
-				return this.committedSlotsNow(world.root).has(e.slot); // the root's CURRENT committed set
-			}
-		}
-	}
-
 	/** Runs an updater/reducer/equals under the fold-purity guard: signal
 	 * reads and writes inside these callbacks throw, because they are
 	 * replayed per world and must stay pure. */
@@ -1378,7 +1346,24 @@ export class CosignalBridge {
 		return value;
 	}
 
-	/** The packed-column form of `visible` (same clauses, no Receipt object). */
+	/**
+	 * The visibility rule — which receipts each world's fold replays (over the
+	 * packed columns; no Receipt object). The clauses:
+	 *  - newest: every receipt (the kernel applies writes eagerly, so this
+	 *    world is also readable straight off the kernel plane);
+	 *  - pass: (1) receipts retired at-or-before the pass's pin — permanent
+	 *    history the render started from — and (2) receipts from included
+	 *    batches up to the pin, so a paused-and-resumed render never sees a
+	 *    write that landed after it started;
+	 *  - committed-for-root: retired receipts (committed truth at NOW) plus
+	 *    receipts from batches this root has committed but that are still
+	 *    live elsewhere (membership);
+	 *  - mountFix: the mount-fixup world (see mountFixup) — the render's own
+	 *    inclusions at its pin, plus committed truth at NOW, minus live
+	 *    divergence already covered by scheduled corrective re-renders.
+	 * (The referee's Receipt-shaped twin of this rule lives in
+	 * tests/model-view.ts and must mirror these clauses.)
+	 */
 	private visibleAt(atom: AtomNode, i: number, world: World, seqs: Seq[], retired: Seq[], slots: SlotId[]): boolean {
 		switch (world.kind) {
 			case 'newest':
@@ -1428,33 +1413,11 @@ export class CosignalBridge {
 		return this.inCallback(() => __hostRunFold(() => reducer(prev, payload)));
 	}
 
-	/** Referee surface — called only by the oracle's `checkInvariants` (via the
-	 * model cast): the same fold over the FULL history from origin, for the
-	 * retention invariant. Engine logic never calls it. */
-	shadowFoldAtom(atom: AtomNode, world: World): Value {
-		let value = atom.origin;
-		for (const e of [...atom.archiveStore, ...atom.tp.materialize()]) {
-			if (e.retiredSeq === undefined && !this.visible(e, world)) continue;
-			if (!this.visible(e, world)) continue;
-			const next = this.applyOp(atom, e.op, value);
-			if (!this.inCallback(() => atom.equals(next, value))) value = next;
-		}
-		return value;
-	}
-
-	/** Reads an atom's newest value straight from the kernel, guaranteed not
-	 * to be intercepted by the world-routing read hook. */
+	/** Reads an atom's newest value straight from the kernel — the core's
+	 * host-side read seam, which the world-routing hook can never intercept
+	 * (no seam toggling around the call). */
 	private kernelValueOf(handle: Atom<Value>): Value {
-		const saved = this.activeWorld;
-		const savedProvider = this.worldProvider;
-		this.worldProvider = undefined;
-		this.setWorld(undefined); // never let the world router intercept a kernel-plane read
-		try {
-			return handle.state;
-		} finally {
-			this.worldProvider = savedProvider;
-			this.setWorld(saved);
-		}
+		return __hostReadNewest(handle);
 	}
 
 	/**
@@ -1658,7 +1621,7 @@ export class CosignalBridge {
 	 * be pure); per-world cycles throw instead of recursing.
 	 */
 	evaluate(node: AnyNode, world: World): Value {
-		probeWorldEvals++; // One Core probe (referee surface)
+		probes.worldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		if (node.kind === 'atom') return this.atomValue(node, world);
 		const plane = this.memoPlaneOf(world);
@@ -2036,14 +1999,6 @@ export class CosignalBridge {
 		return [...this.tokens.values()].filter((t) => t.state === 'live');
 	}
 
-	/** Referee surface — open-pass pins for twin tests (model parity); engine
-	 * logic uses `minLivePin` below. */
-	livePins(): Seq[] {
-		const pins: Seq[] = [];
-		for (const p of this.openPassByRoot.values()) pins.push(p.pin);
-		return pins;
-	}
-
 	private minLivePin(): Seq {
 		let min = Number.POSITIVE_INFINITY;
 		for (const p of this.openPassByRoot.values()) if (p.pin < min) min = p.pin;
@@ -2051,16 +2006,18 @@ export class CosignalBridge {
 	}
 
 	/** Mint a batch token. At most 31 live at once — React schedules each
-	 * batch on one of its 31 lanes, so more can never be in flight. */
-	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
+	 * batch on one of its 31 lanes, so more can never be in flight. (The
+	 * lane/priority itself stays React's: the engine never consults it —
+	 * scheduling decisions ride the shim's forkToken map.) */
+	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
 		if (this.mode !== 'logged') throw new BridgeScheduleError('batches exist only in logged mode — register the React bridge first');
 		if (this.liveTokenCount >= SLOT_COUNT) {
 			throw new BridgeScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
 		const parked = opts?.action ?? false;
-		probeTokens++; // One Core probe (referee surface)
+		probes.tokens++; // One Core probe (referee surface)
 		const token: Token = {
-			id: this.nextToken++, priority,
+			id: this.nextToken++,
 			action: opts?.action ?? false,
 			parked, // async-action tokens park (cannot retire) until their promise settles
 			state: 'live', committedFlag: undefined, slot: undefined,
@@ -2164,7 +2121,7 @@ export class CosignalBridge {
 	 * op folds over committed base (updaters/reducers under both fold-purity
 	 * guards, exactly as replay would run them), the same equality drop as
 	 * the write path's tape-empty drop check applies, and an accepted write
-	 * advances base, origin, and the kernel TOGETHER — the invariant while
+	 * advances base and the kernel TOGETHER — the invariant while
 	 * quiet is base ≡ kernel newest ≡ every world's value, so a batch opened
 	 * later starts from a base that already contains the quiet history.
 	 * Memo coherence: the fold mints one sequence and stamps it into the
@@ -2185,7 +2142,6 @@ export class CosignalBridge {
 			return; // equality drop against base — the tape is empty by the quiet invariant
 		}
 		node.base = next;
-		node.origin = next; // quiet history is committed-only base state (as in direct mode)
 		node.baseSeq = this.cas = ++this.seq; // move the memo clocks: fingerprint + committed-advance (mintSeq, inlined)
 		// Direct kernel apply: the plain write tail, no public-method re-entry
 		// (the host seam already ran — policy checked, op folded).
@@ -2233,7 +2189,7 @@ export class CosignalBridge {
 		}
 		let ambient = this.ambientToken === undefined ? undefined : this.tokens.get(this.ambientToken);
 		if (ambient === undefined || ambient.state !== 'live') {
-			ambient = this.openBatch('default', { ambient: true });
+			ambient = this.openBatch({ ambient: true });
 			this.ambientToken = ambient.id;
 		}
 		// Dev warning heuristic: a bare-context write while an async action is
@@ -2270,8 +2226,7 @@ export class CosignalBridge {
 		if (this.mode === 'direct') {
 			const next = this.applyOp(node, op, node.base);
 			if (!this.inCallback(() => node.equals(next, node.base))) {
-				node.base = next;
-				node.origin = next; // pre-registration history is committed-only base state
+				node.base = next; // pre-registration history is committed-only base state
 				this.applyToKernel(node, next);
 			}
 			this.directFlushCoreEffects();
@@ -2941,7 +2896,7 @@ export class CosignalBridge {
 	 * order would change replay results) AND e.retiredSeq ≤ min(live pins)
 	 * (a pass pinned earlier still folds from base, so base must not move
 	 * past it). Compacted entries fold into base and are reclaimed (kept in
-	 * the archive only when `retainArchive`).
+	 * observed by the optional `onCompact` hook).
 	 */
 	private compactAll(): void {
 		if (this.dirtyAtoms.size === 0) return;
@@ -2965,7 +2920,7 @@ export class CosignalBridge {
 			cut++;
 		}
 		if (cut === 0) return;
-		const keepArchive = this.retainArchive;
+		const onCompact = this.onCompact;
 		for (let k = 0; k < cut; k++) {
 			const i = from + k;
 			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], atom.base);
@@ -2975,7 +2930,7 @@ export class CosignalBridge {
 				atom.base = next;
 			}
 			atom.baseSeq = tp.seqs[i]!;
-			if (keepArchive) atom.archiveStore.push(tp.entryAt(i));
+			if (onCompact !== undefined) onCompact(atom, tp.entryAt(i));
 			// A compacted receipt stops pinning its token record.
 			const tok = this.tokens.get(tp.tokens[i]!);
 			if (tok !== undefined) {
@@ -3342,9 +3297,9 @@ export class CosignalBridge {
 	 * The renumber duty list — every retained sequence value rewritten in
 	 * an order-preserving pass so the global counter can restart low: base
 	 * sequences, retirement stamps, the committed-advance counter, watcher
-	 * snapshot pins. Tapes are empty at quiescence; archives belong to the
-	 * dead episode and clear; memo planes were dropped (nothing retains a
-	 * stale sequence).
+	 * snapshot pins. Tapes are empty at quiescence; memo planes were dropped
+	 * (nothing retains a stale sequence); referee mirrors (archives/origins)
+	 * live test-side and reset themselves on the quiesce op.
 	 */
 	private renumber(): void {
 		const retained = new Set<Seq>([0]);
@@ -3363,8 +3318,6 @@ export class CosignalBridge {
 			if (n.kind !== 'atom') continue;
 			n.baseSeq = rw(n.baseSeq);
 			n.retirementStamp = rw(n.retirementStamp);
-			n.archiveStore = []; // per-episode retention comparisons only
-			n.origin = n.base;
 		}
 		this.cas = rw(this.cas);
 		for (const w of this.watchers.values()) w.snapshot.pin = rw(w.snapshot.pin);

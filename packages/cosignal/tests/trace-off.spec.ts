@@ -250,7 +250,7 @@ describe('R11 Graphviz renderers', () => {
 		const p = b.passStart('A', []);
 		b.mountWatcher(p.id, c, 'W');
 		b.passEnd(p.id, 'commit');
-		const t = b.openBatch('default');
+		const t = b.openBatch();
 		b.write(t.id, a, { kind: 'set', value: 1 });
 
 		const write = tr.events('write')[0]!;

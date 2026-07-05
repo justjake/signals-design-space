@@ -7,8 +7,8 @@
  * The test bodies' own `expect`s therefore assert the reference model's
  * required outcomes while the twin asserts engine ≡ model at every step.
  * `selfCheck` additionally runs the reference model's invariant battery on
- * BOTH sides (the bridge is structurally invariant-compatible) plus one
- * engine-only check ("K0 parity"): the kernel's newest value must equal
+ * BOTH sides (the engine through its model view — tests/model-view.ts) plus
+ * one engine-only check ("K0 parity"): the kernel's newest value must equal
  * folding the atom's base value through its receipts.
  */
 import { expect } from 'vitest';
@@ -35,10 +35,12 @@ import {
 	__newBridgeForTest,
 	BridgeScheduleError,
 	type AnyNode as ENode,
+	type AtomNode as EAtomNode,
 	type CosignalBridge,
 	type Pass as EPass,
 	type World as EWorld,
 } from '../src/logged.js';
+import { modelView, RefereeMirror } from './model-view.js';
 
 type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown };
 
@@ -78,15 +80,21 @@ function capture(fn: () => unknown): Thrown {
 export class TwinDriver {
 	readonly model = new CosignalModel();
 	readonly engine: CosignalBridge = __newBridgeForTest();
+	/** Full-history mirror (archives via onCompact + origins) — the referee
+	 * retains it OUTSIDE the engine; see tests/model-view.ts. */
+	readonly mirror = new RefereeMirror();
+	/** The engine presented in the model's shape for the oracle's checkers. */
+	private readonly view = modelView(this.engine, this.mirror) as unknown as CosignalModel;
 	private nodeMap = new Map<AnyNode, ENode>();
 	private passMap = new Map<number, EPass>();
 
 	constructor() {
 		// The reference model's retention invariant (checkRetention in
-		// invariants.ts) shadow-folds over the full history; the engine keeps
-		// its archive only when asked — retaining it unconditionally would
-		// grow memory without bound under a workload that never quiesces.
-		this.engine.retainArchive = true;
+		// invariants.ts) shadow-folds over the full history; the engine
+		// retains none of it — the mirror archives each receipt as compaction
+		// folds it out (retaining in-engine would grow without bound under a
+		// workload that never quiesces).
+		this.mirror.attach(this.engine);
 	}
 
 	// ---- state the test bodies read directly (model side; engine compared per op)
@@ -182,6 +190,7 @@ export class TwinDriver {
 		const eNode = this.engine.atom(name, initial, equals);
 		expect(eNode.id, 'twin atom: node ids diverged').toBe(mNode.id);
 		this.nodeMap.set(mNode, eNode);
+		this.mirror.setOrigin(eNode as EAtomNode, initial);
 		return mNode;
 	}
 
@@ -190,6 +199,7 @@ export class TwinDriver {
 		const eNode = this.engine.reducerAtom(name, reducer, initial);
 		expect(eNode.id).toBe(mNode.id);
 		this.nodeMap.set(mNode, eNode);
+		this.mirror.setOrigin(eNode as EAtomNode, initial);
 		return mNode;
 	}
 
@@ -206,7 +216,7 @@ export class TwinDriver {
 	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
 		let eId: number | undefined;
 		const t = this.both('openBatch', () => this.model.openBatch(priority, opts), () => {
-			eId = this.engine.openBatch(priority, opts).id;
+			eId = this.engine.openBatch(opts).id; // the engine mints no priority — scheduling stays React's (the model still records one)
 		});
 		expect(eId, 'twin openBatch: token ids diverged').toBe(t.id);
 		return t;
@@ -215,6 +225,8 @@ export class TwinDriver {
 	write(tokenId: number | undefined, node: AtomNode, op: Op): void {
 		this.both('write', () => this.model.write(tokenId, node, op), () =>
 			this.engine.write(tokenId, this.toEngine(node) as never, op));
+		// Direct-mode writes are committed-only base state: origin rides base.
+		if (this.engine.mode === 'direct') this.mirror.originsFromBase(this.engine);
 	}
 
 	bareWrite(node: AtomNode, op: Op): void {
@@ -300,11 +312,17 @@ export class TwinDriver {
 
 	quiesce(): void {
 		this.both('quiesce', () => this.model.quiesce(), () => this.engine.quiesce());
+		// Mirror the model's renumber: archives belong to the dead episode;
+		// origins reset to base (engine-side the view folds from these).
+		this.mirror.clearArchives();
+		this.mirror.originsFromBase(this.engine);
 	}
 
 	livePins(): number[] {
 		const m = this.model.livePins();
-		expect(this.engine.livePins(), 'twin livePins diverged').toEqual(m);
+		const e: number[] = [];
+		for (const p of this.engine.passes.values()) if (p.state !== 'ended') e.push(p.pin);
+		expect(e, 'twin livePins diverged').toEqual(m);
 		return m;
 	}
 
@@ -355,10 +373,10 @@ export class TwinDriver {
 	/** Full parity + invariants on both sides + the engine-only "K0 parity" check. */
 	verify(): void {
 		this.compareStreams('verify');
-		expect(JSON.stringify(snapshotModel(this.engine as unknown as CosignalModel)), 'twin observable snapshots diverged')
+		expect(JSON.stringify(snapshotModel(this.view)), 'twin observable snapshots diverged')
 			.toBe(JSON.stringify(snapshotModel(this.model)));
 		checkInvariants(this.model);
-		checkInvariants(this.engine as unknown as CosignalModel);
+		checkInvariants(this.view);
 		// Eager-apply invariant: writes land in the kernel immediately, so the
 		// kernel's newest value must equal replaying the receipts over the base.
 		for (const n of this.engine.nodes.values()) {

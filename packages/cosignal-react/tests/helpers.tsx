@@ -6,12 +6,15 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __newBridgeForTest, type CosignalBridge } from 'cosignal';
+import { __newBridgeForTest, type AtomNode, type CosignalBridge, type Receipt } from 'cosignal';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 export type Harness = {
 	handle: CosignalReactHandle;
 	bridge: CosignalBridge;
+	/** Receipts as compaction folded them out of the tapes (op-replay-fidelity
+	 * assertions; fed by the engine's onCompact referee seam). */
+	compacted: Array<{ atom: AtomNode; entry: Receipt }>;
 	roots: Root[];
 	containers: HTMLElement[];
 	/** createRoot over a fresh container div. */
@@ -22,15 +25,15 @@ export type Harness = {
 
 export function makeHarness(): Harness {
 	const bridge = __newBridgeForTest();
-	// The engine moves compacted receipts to its archive only on request —
-	// these tests inspect full receipt history (tape + archive).
-	bridge.retainArchive = true;
+	const compacted: Array<{ atom: AtomNode; entry: Receipt }> = [];
+	bridge.onCompact = (atom, entry) => compacted.push({ atom, entry });
 	const handle = registerCosignalReact({ bridge });
 	const roots: Root[] = [];
 	const containers: HTMLElement[] = [];
 	const h: Harness = {
 		handle,
 		bridge,
+		compacted,
 		roots,
 		containers,
 		newRoot() {

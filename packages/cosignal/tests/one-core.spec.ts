@@ -163,7 +163,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const before = __coreProbes();
 		la.handle.set(7); // application code writing through the public API, while QUIET
 		(la.handle as Atom<number>).update((n) => n + 1);
-		expect(la.tape).toHaveLength(0); // no receipt
+		expect(la.tp.materialize()).toHaveLength(0); // no receipt
 		expect(bridge.ambientToken).toBeUndefined(); // ambient batch NOT minted while quiet
 		expect(bridge.newestValue(la)).toBe(8); // kernel advanced
 		expect(bridge.committedValue(la, 'A')).toBe(8); // committed truth advanced WITH it
@@ -173,23 +173,23 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(afterQuiet.bridgeEvents).toBe(before.bridgeEvents);
 		// ARM the pipeline (a live batch exists): the same public writes now
 		// classify into the ambient default batch as WHOLE ops.
-		const t = bridge.openBatch('deferred');
+		const t = bridge.openBatch();
 		la.handle.set(100);
 		(la.handle as Atom<number>).update((n) => n + 1); // op captured UNFOLDED
-		expect(la.tape).toHaveLength(2);
-		expect(la.tape[0]!.op).toEqual({ kind: 'set', value: 100 });
-		expect(la.tape[1]!.op.kind).toBe('update'); // replay fidelity: the updater itself
+		expect(la.tp.materialize()).toHaveLength(2);
+		expect(la.tp.materialize()[0]!.op).toEqual({ kind: 'set', value: 100 });
+		expect(la.tp.materialize()[1]!.op.kind).toBe('update'); // replay fidelity: the updater itself
 		const ambient = bridge.ambientToken;
 		expect(ambient).toBeDefined();
-		expect(la.tape[0]!.token).toBe(ambient);
+		expect(la.tp.materialize()[0]!.token).toBe(ambient);
 		expect(bridge.newestValue(la)).toBe(101); // writes apply to the kernel immediately
 		expect(bridge.committedValue(la, 'A')).toBe(8); // not committed yet: base still holds the quiet fold
 		bridge.retire(ambient!, false);
 		expect(bridge.committedValue(la, 'A')).toBe(101); // persistence never depends on subscription
 		bridge.retire(t.id, true); // last retirement: quiet re-arms
-		expect(la.tape).toHaveLength(0); // pin-free retirement compacts the prefix
+		expect(la.tp.materialize()).toHaveLength(0); // pin-free retirement compacts the prefix
 		la.handle.set(500); // and the next write folds again
-		expect(la.tape).toHaveLength(0);
+		expect(la.tp.materialize()).toHaveLength(0);
 		expect(bridge.committedValue(la, 'A')).toBe(500);
 	});
 
@@ -240,7 +240,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		handle.set(42); // pre-registration history
 		const la = bridge.adoptAtom('adopted', handle);
 		expect(la.base).toBe(42);
-		expect(la.tape).toHaveLength(0);
+		expect(la.tp.materialize()).toHaveLength(0);
 		expect(bridge.committedValue(la, 'A')).toBe(42);
 	});
 
@@ -248,7 +248,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const la = bridge.atom('pure', 1);
 		const handle = la.handle as Atom<number>;
 		expect(() => handle.update((n) => n + (handle.state as number))).toThrow(/not allowed inside an update/);
-		expect(la.tape).toHaveLength(0); // the rejected write left no receipt
+		expect(la.tp.materialize()).toHaveLength(0); // the rejected write left no receipt
 		expect(bridge.newestValue(la)).toBe(1); // and no kernel mutation
 	});
 
@@ -261,7 +261,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 				return 1;
 			});
 			expect(() => probe.state).toThrow(/writes inside computeds are forbidden/);
-			expect(la.tape).toHaveLength(0); // policy first, capture second: no receipt behind the throw
+			expect(la.tp.materialize()).toHaveLength(0); // policy first, capture second: no receipt behind the throw
 			expect(bridge.newestValue(la)).toBe(0);
 		} finally {
 			configure({ forbidWritesInComputeds: false });
@@ -271,7 +271,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 	it('public reads of a registered atom inside an overlay world evaluation serve the world fold', () => {
 		const la = bridge.atom('routed', 0);
 		const viaHandle = bridge.computed('viaHandle', () => la.handle.state as number); // NOT the reader — the public API
-		const t = bridge.openBatch('deferred');
+		const t = bridge.openBatch();
 		bridge.write(t.id, la, { kind: 'set', value: 5 });
 		expect(bridge.newestValue(viaHandle)).toBe(5); // newest = kernel plane
 		const p = bridge.passStart('A', []); // t excluded

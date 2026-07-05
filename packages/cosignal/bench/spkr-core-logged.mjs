@@ -36,7 +36,7 @@ function repOnce() {
 	b.events.length = 0;
 	const t0 = process.hrtime.bigint();
 	const toks = [];
-	for (let k = 0; k < K; k++) toks.push(b.openBatch('default'));
+	for (let k = 0; k < K; k++) toks.push(b.openBatch());
 	for (let k = 0; k < K; k++) {
 		for (let m = 0; m < M; m++) b.write(toks[k].id, atoms[m % 4], { kind: 'set', value: ++v });
 	}

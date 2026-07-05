@@ -29,7 +29,7 @@ export function dependencyGraphToDot(bridge: CosignalBridge): string {
 	const lines: string[] = ['digraph cosignal {', '\trankdir=LR;', '\tnode [fontname="monospace"];'];
 	for (const n of bridge.nodes.values()) {
 		if (n.kind === 'atom') {
-			const tape = n.tape.length > 0 ? `|tape:${n.tape.length}` : '';
+			const tape = n.tp.length > 0 ? `|tape:${n.tp.length}` : '';
 			lines.push(`\tn${n.id} [shape=box, label=${q(`${n.name}#${n.id}${tape}`)}];`);
 		} else {
 			lines.push(`\tn${n.id} [shape=ellipse, label=${q(`${n.name}#${n.id}`)}];`);

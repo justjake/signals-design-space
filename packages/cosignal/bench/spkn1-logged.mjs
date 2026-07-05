@@ -37,7 +37,7 @@ b.passEnd(setup.id, 'commit');
 
 let v = 0;
 function repOnce() {
-	const held = HELD ? b.openBatch('default') : undefined;
+	const held = HELD ? b.openBatch() : undefined;
 	let writeNs = 0;
 	let frameNsTot = 0;
 	let maxDeliv = 0; // deliveries per (watcher,batch) within one cycle, max
@@ -47,7 +47,7 @@ function repOnce() {
 		b.events.length = 0;
 		const f0 = process.hrtime.bigint();
 		const toks = [];
-		for (let i = 0; i < B; i++) toks.push(b.openBatch('default'));
+		for (let i = 0; i < B; i++) toks.push(b.openBatch());
 		if (held !== undefined) b.write(held.id, a, { kind: 'set', value: ++v });
 		// per-(watcher,slot) delivery/spurious accounting keyed on event slices
 		const perWB = new Map(); // `${watcher}:${slot}` -> {d, s}
@@ -100,7 +100,7 @@ function repOnce() {
 			if (rec.s > maxSpurious) maxSpurious = rec.s;
 		}
 	}
-	const tapeLen = a.tape.length;
+	const tapeLen = a.tp.length;
 	if (held !== undefined) b.retire(held.id, true);
 	const n = firstLast.length;
 	const head = firstLast.slice(0, 5).reduce((x, y) => x + y, 0) / Math.min(5, n);

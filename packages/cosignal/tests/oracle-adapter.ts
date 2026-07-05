@@ -113,7 +113,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 	};
 	try {
 		switch (op.t) {
-			case 'open': reg.tokens.push(b.openBatch(op.priority, { action: op.action }).id); break;
+			case 'open': reg.tokens.push(b.openBatch({ action: op.action }).id); break; // op.priority is model-side only
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
 				const kind: WriteKind = atom.reducer !== undefined && op.kind !== 'equalNewest' ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;

@@ -760,14 +760,14 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 		const m = __newBridgeForTest();
 		m.registerBridge();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('urgent');
+		const t = m.openBatch();
 		let misbehave = true;
 		const evil = m.computed('evil', () => {
 			if (misbehave) m.write(t.id, a, { kind: 'set', value: 1 }); // a write during render
 			return 0;
 		});
 		expect(() => m.newestValue(evil)).toThrow(/write during a world evaluation/);
-		expect(a.tape).toHaveLength(0); // nothing landed
+		expect(a.tp.materialize()).toHaveLength(0); // nothing landed
 		misbehave = false; // the node behaves from here so later evaluations are clean
 		m.retire(t.id, false);
 		expect(m.newestValue(a)).toBe(0);

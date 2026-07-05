@@ -1346,6 +1346,17 @@ export function __hostApplySet(atom: Atom<unknown>, value: unknown): void {
 	writeAtom(atom._id, atom._isEqual, value);
 }
 
+/**
+ * Newest-value read for the host's own folds and eager applies: the plain
+ * kernel read path (`E.read` — dependency tracking included, exactly the
+ * public getter minus the host-seam interception), so the host can read the
+ * kernel plane regardless of any live routing context without toggling its
+ * seams around the call. @internal
+ */
+export function __hostReadNewest(atom: Atom<unknown>): unknown {
+	return E.read(atom._id);
+}
+
 function maybeBoundary(): void {
 	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
 		boundaryWork();
@@ -2165,4 +2176,57 @@ export function configure(options: ConfigureOptions): void {
 // surface types (Seq, SlotSet, Receipt, BridgeEvent, …). Until
 // registerReactBridge() runs, none of it executes: the host seams above stay
 // undefined and every read/write short-circuits into the plain kernel path.
-export * from './logged.js';
+// CURATED (no `export *`): the engine's internals — the packed Tape class,
+// node/watcher class VALUES, module seams — stay importable only from
+// './logged.js' inside this package; consumers get the activation function,
+// the bridge, its error classes, the two @internal test seams the sibling
+// packages' suites drive, and the bridge-surface TYPES.
+export {
+	registerReactBridge,
+	CosignalBridge,
+	BridgeScheduleError,
+	BridgeInvariantViolation,
+	// @internal test seams (cosignal-react's suite constructs per-test bridges
+	// and one-core.spec proves the zero-cost promise through these):
+	__newBridgeForTest,
+	__coreProbes,
+} from './logged.js';
+export type {
+	// entities (type-only: the classes construct nowhere outside the engine)
+	AtomNode,
+	Watcher,
+	ComputedNode,
+	AnyNode,
+	Token,
+	Pass,
+	PassState,
+	RootState,
+	SlotMeta,
+	WatcherSnapshot,
+	ReactEffect,
+	CoreEffect,
+	// operations and worlds (the tracing hook types stay on the
+	// `cosignal/trace` side of the seam; this entry never names them)
+	Op,
+	Receipt,
+	World,
+	BridgeEvent,
+	Reader,
+	ComputedFn,
+	Equals,
+	Reducer,
+	// scalar brands
+	Value,
+	NodeId,
+	TokenId,
+	SlotId,
+	RootId,
+	PassId,
+	WatcherId,
+	EffectId,
+	Seq,
+	Epoch,
+	CommitGen,
+	SlotSet,
+	KernelId,
+} from './logged.js';

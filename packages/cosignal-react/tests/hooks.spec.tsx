@@ -44,7 +44,7 @@ describe('useSignal', () => {
 		// The receipt holds the updater function itself, not a pre-folded value,
 		// so each world can replay it against its own view.
 		const node = h.bridge.byKernelId.get(a._id)!;
-		const ops = [...node.tape, ...node.archive].map((r) => r.op.kind);
+		const ops = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
 		expect(ops).toContain('update');
 	});
 
@@ -228,7 +228,7 @@ describe('useReducerAtom (§3.2)', () => {
 		});
 		expect(text(container)).toBe('107');
 		const node = h.bridge.byKernelId.get(r._id)!;
-		const kinds = [...node.tape, ...node.archive].map((x) => x.op.kind);
+		const kinds = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
 		expect(kinds).toContain('dispatch');
 	});
 });

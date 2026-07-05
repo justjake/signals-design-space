@@ -59,10 +59,10 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('writes: batch-open, slot-claim, receipt payload with op, fresh delivery caused by the write', () => {
-		const k = b.openBatch('deferred');
+		const k = b.openBatch();
 		b.write(k.id, flag, { kind: 'set', value: 1 });
 
-		expect(all(tr, 'batch-open')[0]!.data).toEqual({ token: k.id, priority: 'deferred', action: false, ambient: false });
+		expect(all(tr, 'batch-open')[0]!.data).toEqual({ token: k.id, action: false, ambient: false });
 		expect(all(tr, 'slot-claim')[0]!.data).toEqual({ slot: 0, token: k.id });
 		const seq = b.eventsOfType('write')[0]!.seq; // the slot claim minted its own seq before the write's
 		const w1 = all(tr, 'write')[0]!;
@@ -122,7 +122,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 	it('per-root commit with generation; react effect run caused by it', () => {
 		b.mountReactEffect('A', c, 'RE'); // committed c = 5
-		const t2 = b.openBatch('default');
+		const t2 = b.openBatch();
 		b.write(t2.id, a, { kind: 'set', value: 7 });
 		const p3 = b.passStart('A', [t2.id]);
 		b.renderWatcher(p3.id, w.id);
@@ -139,7 +139,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 	it('core effect run caused by its write; reconcile-correction caused by a top-level retirement', () => {
 		b.mountCoreEffect(c, 'CE'); // newest c = 7
-		const t3 = b.openBatch('default');
+		const t3 = b.openBatch();
 		b.write(t3.id, a, { kind: 'set', value: 8 });
 		const wr = last(tr, 'write');
 		const ce = last(tr, 'core-effect-run');
@@ -156,14 +156,14 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('write-dropped (§5.3 step 2) records the dropped token', () => {
-		const t4 = b.openBatch('urgent');
+		const t4 = b.openBatch();
 		b.write(t4.id, bb, { kind: 'set', value: 0 }); // empty tape, equal against base
 		expect(last(tr, 'write-dropped').data).toEqual({ node: 'b', token: t4.id });
 		b.retire(t4.id, false);
 	});
 
 	it('action settlement: batch-settle is the root; its retirement chains under it', () => {
-		const act = b.openBatch('default', { action: true });
+		const act = b.openBatch({ action: true });
 		expect(last(tr, 'batch-open').data).toMatchObject({ token: act.id, action: true });
 		b.scopeWrite(act.id, bb, { kind: 'set', value: 3 });
 		b.settleAction(act.id, true);
@@ -178,13 +178,13 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	it('ambient classification and op kinds: dispatch and update receipts; dev-warning while an action is parked', () => {
 		const r = b.reducerAtom('r', (s) => (s as number) + 1, 0);
 		b.bareWrite(r, { kind: 'dispatch', action: 'inc' });
-		expect(last(tr, 'batch-open').data).toMatchObject({ priority: 'default', ambient: true });
+		expect(last(tr, 'batch-open').data).toMatchObject({ ambient: true });
 		expect(last(tr, 'write').data).toMatchObject({ node: 'r', op: 'dispatch' });
 
 		b.write(undefined, a, { kind: 'update', fn: (p) => (p as number) + 1 }); // a: 8 → 9
 		expect(last(tr, 'write').data).toMatchObject({ node: 'a', op: 'update' });
 
-		const act2 = b.openBatch('default', { action: true }); // parked
+		const act2 = b.openBatch({ action: true }); // parked
 		b.bareWrite(a, { kind: 'set', value: 99 });
 		const warn = last(tr, 'dev-warning');
 		expect(warn.data['message']).toMatch(/outside the action/);
@@ -193,7 +193,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('slot-release-deferred while an open mask names the slot; released at the discard pass-end', () => {
-		const t5 = b.openBatch('deferred');
+		const t5 = b.openBatch();
 		b.write(t5.id, a, { kind: 'set', value: 42 });
 		const claimed = last(tr, 'slot-claim').data['slot'];
 		const p4 = b.passStart('A', [t5.id]);
@@ -216,7 +216,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		for (const t of b.liveTokens()) b.retire(t.id, true);
 		const p5 = b.passStart('A', []);
 		b.mountWatcher(p5.id, c, 'W2'); // renders committed-at-pin: c = 42
-		const t6 = b.openBatch('default');
+		const t6 = b.openBatch();
 		b.write(t6.id, a, { kind: 'set', value: 50 });
 		b.retire(t6.id, true); // cas moves past p5's pin
 		b.passEnd(p5.id, 'commit');
@@ -228,7 +228,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('mount fixup: fast-out-covered — post-pin write into a committed-live batch is exactly corrective-covered', () => {
-		const tc = b.openBatch('deferred');
+		const tc = b.openBatch();
 		b.write(tc.id, a, { kind: 'set', value: 70 });
 		const pc = b.passStart('A', [tc.id]);
 		b.renderWatcher(pc.id, w.id);
@@ -248,7 +248,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	it('mount fixup: compare-clean when the fast-out fails but values agree', () => {
 		const p8 = b.passStart('A', []);
 		b.mountWatcher(p8.id, c, 'W4'); // c = 80
-		const t8 = b.openBatch('default');
+		const t8 = b.openBatch();
 		b.write(t8.id, bb, { kind: 'set', value: 123 }); // c is on the a-path: value unaffected
 		b.retire(t8.id, true); // cas moves → fast-out fails
 		b.passEnd(p8.id, 'commit');
@@ -375,7 +375,7 @@ describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)
 		const tr = attachTracer(b, { mode: 'session' });
 		const tokens = [];
 		for (let i = 0; i < 31; i++) {
-			const t = b.openBatch('default');
+			const t = b.openBatch();
 			tokens.push(t);
 			b.write(t.id, a, { kind: 'set', value: i + 1 });
 		}
@@ -383,12 +383,48 @@ describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)
 		for (const t of tokens) b.retire(t.id, false); // all releases defer
 		expect(all(tr, 'slot-release-deferred')).toHaveLength(31);
 
-		const t32 = b.openBatch('default');
+		const t32 = b.openBatch();
 		b.write(t32.id, a, { kind: 'set', value: 99 }); // no free slot → backstop
 		const back = last(tr, 'slot-backstop-release');
 		expect(back.data).toEqual({ slot: 0, token: tokens[0]!.id }); // oldest retiredSeq evicted
 		expect(last(tr, 'slot-claim').data).toEqual({ slot: 0, token: t32.id });
 		b.passEnd(p.id, 'discard');
 		b.retire(t32.id, false);
+	});
+});
+
+describe('fixed memory under a tracer: the log retains nothing on the tracer’s behalf', () => {
+	it('production posture (no referee): hammering writes leaves bridge.events empty while the tracer records', () => {
+		const b = __newBridgeForTest();
+		b.setRetainEvents(false); // production posture: no referee — a tracer is the only consumer
+		b.registerBridge();
+		const a = b.atom('a', 0);
+		const tr = attachTracer(b, { mode: 'ring', capacity: 256, now: tick() });
+		const N = 5000;
+		for (let i = 0; i < N; i++) {
+			const t = b.openBatch();
+			b.write(t.id, a, { kind: 'set', value: i + 1 });
+			b.retire(t.id, true);
+		}
+		expect(b.events.length).toBe(0); // the log retained NOTHING — fixed memory
+		expect(b.eventCursor()).toBeGreaterThanOrEqual(N * 3); // yet events minted (the cursor counts them as dropped)
+		expect(tr.stats().recorded).toBeGreaterThanOrEqual(N * 3); // and the tracer consumed every one, live
+		expect(tr.stats().retained).toBe(256); // into its own fixed ring
+		tr.stop();
+	});
+
+	it('referee posture: retention is unchanged with a tracer attached (lockstep needs complete streams)', () => {
+		const b = __newBridgeForTest(); // retains events by default (referee mode)
+		b.registerBridge();
+		const a = b.atom('a', 0);
+		const tr = attachTracer(b, { mode: 'session', now: tick() });
+		const t = b.openBatch();
+		b.write(t.id, a, { kind: 'set', value: 1 });
+		b.retire(t.id, true);
+		expect(b.eventsOfType('write')).toHaveLength(1); // full stream retained for the referee
+		expect(b.eventsOfType('retired')).toHaveLength(1);
+		expect(b.events.length).toBe(b.eventCursor()); // nothing dropped
+		expect(tr.stats().recorded).toBeGreaterThan(0); // the tracer consumed the same stream
+		tr.stop();
 	});
 });
