@@ -8,7 +8,9 @@
 	"main": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./logged": "./src/logged.ts"
+		"./logged": "./src/logged.ts",
+		"./trace": "./src/trace.ts",
+		"./graphviz": "./src/graphviz.ts"
 	},
 	"scripts": {
 		"check": "tsc --noEmit -p tsconfig.json",

@@ -247,6 +247,59 @@ export type BridgeEvent =
 	| { type: 'dev-warning'; message: string }
 	| { type: 'epoch-reset'; epoch: number };
 
+/**
+ * R11 trace seam (§5.13 "Tracing"). The LOGGED engine's semantic events flow
+ * to an OPTIONAL hook object held in `CosignalBridge.trace` — `undefined`
+ * unless `cosignal/trace` (a lazily loaded, runtime-import-free entry) has
+ * attached a recorder. Discipline, asserted by tests/trace-off.spec.ts:
+ *
+ *  - this module NEVER imports the trace module (lazy-loadability: the twin
+ *    graph gains tracing only when the app imports `cosignal/trace`);
+ *  - every hook site is guarded by exactly one nullable-slot check
+ *    (`const tr = this.trace; if (tr !== undefined) ...`) — the whole
+ *    untraced cost, per R11 ("untraced cost = one slot check per site");
+ *  - hooks receive the engine's own live objects and integers; they must not
+ *    mutate them, and the recorder must not allocate per event.
+ *
+ * Two channels: `event(e)` re-uses the always-allocated BridgeEvent stream at
+ * its single `log()` waist (receipts/deliveries/retirements/commits/slots/
+ * corrections/effects), and dedicated hooks cover semantics the oracle-shaped
+ * stream does not carry: batch open/settle, pass start/yield/resume/end
+ * (fired BEFORE the end's consequences, unlike the pass-committed event),
+ * per-receipt ops, world evaluations, deferred slot release, and the mount
+ * fixup disposition (§5.10 fast-out vs compare vs correction). `opEnd()`
+ * marks the close of each compound public operation so the recorder can
+ * scope causality (see trace.ts `CAUSE`).
+ */
+export type TraceHooks = {
+	/** Every BridgeEvent, from the one `log()` waist. */
+	event(e: BridgeEvent): void;
+	/** §5.3 — a receipt was minted (fires with the 'write' event; carries the op). */
+	receipt(node: AtomNode, r: Receipt): void;
+	/** §4.1 fact 1 — a batch token was minted. */
+	batchOpen(t: Token): void;
+	/** §3.5 — an action token settled (its retirement follows). */
+	batchSettle(t: Token, committed: boolean): void;
+	/** §4.1 fact 2 — pass edges (end fires before retirements/commits/fixups). */
+	passStart(p: Pass): void;
+	passYield(p: Pass): void;
+	passResume(p: Pass): void;
+	passEnd(p: Pass, kind: 'commit' | 'discard'): void;
+	/** §5.5/§5.6 — a computed evaluation in a world opened/closed (paired; end fires on throw too). */
+	evalStart(node: ComputedNode, world: World): void;
+	evalEnd(): void;
+	/** §5.4 — a retired tenant's release was deferred (open render mask names the slot). */
+	slotReleaseDeferred(slot: SlotId, token: TokenId): void;
+	/** §5.10 — one per mount: how fixup resolved, and how many correctives were scheduled. */
+	mountFixup(
+		w: Watcher,
+		disposition: 'fast-out' | 'fast-out-covered' | 'compare-clean' | 'corrected',
+		correctives: number,
+	): void;
+	/** A compound public operation (write / passEnd / retire / settle / quiesce) finished. */
+	opEnd(): void;
+};
+
 const SLOT_COUNT = 31; // §2 "token": at most 31 live batches (one per React lane).
 
 // ---- module state + the logged operation table ----------------------------------
@@ -362,6 +415,13 @@ export class CosignalBridge {
 	coreEffects = new Map<EffectId, CoreEffect>();
 	events: BridgeEvent[] = [];
 
+	/**
+	 * R11 — the trace recorder slot (§5.13). `undefined` (the permanent state
+	 * unless `cosignal/trace` attaches): every site pays one check, nothing
+	 * else. Assigned only by `attachTracer`/`Tracer.stop` over there.
+	 */
+	trace: TraceHooks | undefined = undefined;
+
 	/** §5.1 — DIRECT until registerBridge(); direct writes leave no receipts. */
 	mode: 'direct' | 'logged' = 'direct';
 	/** The one global sequence line (§2). */
@@ -413,6 +473,8 @@ export class CosignalBridge {
 
 	private log(e: BridgeEvent): void {
 		this.events.push(e);
+		const tr = this.trace;
+		if (tr !== undefined) tr.event(e);
 	}
 
 	private mintSeq(): number {
@@ -609,6 +671,8 @@ export class CosignalBridge {
 		this.evalDepth++;
 		const savedWorld = this.activeWorld;
 		this.activeWorld = world.kind === 'newest' ? undefined : world;
+		const tr = this.trace; // R11: paired eval hooks; end fires on throw too
+		if (tr !== undefined) tr.evalStart(node, world);
 		try {
 			const read: Reader = (dep) => {
 				this.recordEdge(dep.id, node.id);
@@ -620,6 +684,7 @@ export class CosignalBridge {
 			this.activeWorld = savedWorld;
 			this.evalDepth--;
 			seen.delete(node.id);
+			if (tr !== undefined) tr.evalEnd();
 		}
 	}
 
@@ -700,6 +765,8 @@ export class CosignalBridge {
 			retiredSeq: undefined, writeSeqs: [], ambient: opts?.ambient ?? false,
 		};
 		this.tokens.set(token.id, token);
+		const tr = this.trace;
+		if (tr !== undefined) tr.batchOpen(token);
 		return token;
 	}
 
@@ -805,6 +872,8 @@ export class CosignalBridge {
 				this.applyToKernel(node, next);
 			}
 			this.flushCoreEffects();
+			const tr = this.trace;
+			if (tr !== undefined) tr.opEnd();
 			return;
 		}
 		if (tokenId === undefined) {
@@ -819,6 +888,8 @@ export class CosignalBridge {
 			const evaluated = this.applyOp(node, op, node.base);
 			if (this.inCallback(() => node.equals(evaluated, node.base))) {
 				this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+				const tr = this.trace;
+				if (tr !== undefined) tr.opEnd();
 				return;
 			}
 		}
@@ -826,9 +897,14 @@ export class CosignalBridge {
 		// §5.3 steps 1/3 — intern slot, append receipt, bump the slot write clock.
 		const slot = this.internSlot(token);
 		const seq = this.mintSeq();
-		node.tape.push({ op, token: token.id, slot: slot.id, seq, retiredSeq: undefined });
+		const receipt: Receipt = { op, token: token.id, slot: slot.id, seq, retiredSeq: undefined };
+		node.tape.push(receipt);
 		token.writeSeqs.push(seq);
 		slot.writeClock = seq;
+		{
+			const tr = this.trace;
+			if (tr !== undefined) tr.receipt(node, receipt);
+		}
 		this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
 
 		// §5.2/§5.3 step 3 — apply to K0 eagerly with stepwise equality, so the
@@ -848,6 +924,8 @@ export class CosignalBridge {
 			this.deliver(w, token, slot, seq);
 		}
 		this.flushCoreEffects(reached);
+		const tr = this.trace;
+		if (tr !== undefined) tr.opEnd();
 	}
 
 	/** The one K0 write site: routes through the public policy path (flush included). */
@@ -933,6 +1011,11 @@ export class CosignalBridge {
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
 		};
 		this.passes.set(pass.id, pass);
+		const tr = this.trace;
+		if (tr !== undefined) {
+			tr.passStart(pass);
+			tr.opEnd();
+		}
 		return pass;
 	}
 
@@ -947,12 +1030,22 @@ export class CosignalBridge {
 		const p = this.pass(id);
 		if (p.state !== 'open') throw new BridgeScheduleError('yield requires an open (running) pass');
 		p.state = 'yielded';
+		const tr = this.trace;
+		if (tr !== undefined) {
+			tr.passYield(p);
+			tr.opEnd();
+		}
 	}
 
 	passResume(id: PassId): void {
 		const p = this.pass(id);
 		if (p.state !== 'yielded') throw new BridgeScheduleError('resume requires a yielded pass');
 		p.state = 'open';
+		const tr = this.trace;
+		if (tr !== undefined) {
+			tr.passResume(p);
+			tr.opEnd();
+		}
 	}
 
 	/** §5.10 — mount a new watcher inside an open pass; renders in the pass's world. */
@@ -1063,10 +1156,19 @@ export class CosignalBridge {
 		}
 		p.state = 'ended';
 		p.endKind = kind;
+		{
+			// Trace-only pass-end: fires BEFORE the end's consequences (retirement
+			// folds, per-root commits, drains, fixups), unlike the pass-committed/
+			// pass-discarded events below, so consequences can cite it as cause.
+			const tr = this.trace;
+			if (tr !== undefined) tr.passEnd(p, kind);
+		}
 		if (kind === 'discard') {
 			for (const wid of p.mounted) this.watchers.delete(wid); // never subscribed; the tree died
 			this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
 			this.reevaluateDeferredReleases();
+			const tr = this.trace;
+			if (tr !== undefined) tr.opEnd();
 			return;
 		}
 		// (1) §4.2 baseline capture at the commit's committed-side entry.
@@ -1108,6 +1210,8 @@ export class CosignalBridge {
 		}
 		this.log({ type: 'pass-committed', pass: p.id, root: p.root });
 		this.reevaluateDeferredReleases();
+		const tr = this.trace;
+		if (tr !== undefined) tr.opEnd();
 	}
 
 	/** §5.4 — deferred releases re-evaluate at every pass end, commit and discard alike. */
@@ -1135,6 +1239,8 @@ export class CosignalBridge {
 		if (t.state === 'retired') throw new BridgeScheduleError('retirement fires exactly once per token (§4.1 fact 3)');
 		if (t.parked) throw new BridgeScheduleError('parked action tokens retire only at settlement (§4.1 fact 3)');
 		this.retireInternal(t, committed);
+		const tr = this.trace;
+		if (tr !== undefined) tr.opEnd();
 	}
 
 	/** §3.5 — the action's thenable settles; the fork then retires the token. */
@@ -1143,7 +1249,10 @@ export class CosignalBridge {
 		if (!t.action) throw new BridgeScheduleError('settle targets an action token');
 		if (!t.parked || t.state !== 'live') throw new BridgeScheduleError('action already settled');
 		t.parked = false;
+		const tr = this.trace;
+		if (tr !== undefined) tr.batchSettle(t, committed);
 		this.retireInternal(t, committed);
+		if (tr !== undefined) tr.opEnd();
 	}
 
 	/**
@@ -1189,6 +1298,8 @@ export class CosignalBridge {
 			const slot = this.slots[t.slot]!;
 			if (this.slotRetainedByOpenMask(slot.id)) {
 				slot.releasePending = true; // re-evaluated at every pass end (§5.4)
+				const tr = this.trace;
+				if (tr !== undefined) tr.slotReleaseDeferred(slot.id, t.id);
 			} else {
 				this.releaseSlot(slot);
 			}
@@ -1305,6 +1416,7 @@ export class CosignalBridge {
 		const vFx = this.evaluate(node, {
 			kind: 'mountFix', maskSlots: w.snapshot.maskSlots, pin: w.snapshot.pin, root: w.root,
 		});
+		const tr = this.trace; // R11: one disposition record per mount fixup (§5.10)
 		if (fastOut) {
 			if (!Object.is(vFx, w.lastRenderedValue)) {
 				// Errata 2 audit: fast-out divergence must be exactly corrective-
@@ -1319,14 +1431,20 @@ export class CosignalBridge {
 						`fast-out unsound: watcher ${w.name} fast-out held but v_fx=${String(vFx)} ≠ v_r=${String(w.lastRenderedValue)} and the residue is not corrective-covered (§5.10 errata 2)`,
 					);
 				}
+				if (tr !== undefined) tr.mountFixup(w, 'fast-out-covered', correctedLive.size);
+				return;
 			}
+			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctedLive.size);
 			return; // zero corrections — value-neutral modulo scheduled correctives
 		}
 		if (!Object.is(vFx, w.lastRenderedValue)) {
 			this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
 			w.lastRenderedValue = vFx; // urgent pre-paint correction
 			w.dedup.clear();
+			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctedLive.size);
+			return;
 		}
+		if (tr !== undefined) tr.mountFixup(w, 'compare-clean', correctedLive.size);
 	}
 
 	/** Transitive dependency closure feeding a node, over the union graph. */
@@ -1407,6 +1525,8 @@ export class CosignalBridge {
 		}
 		for (const w of this.watchers.values()) w.dedup.clear();
 		this.log({ type: 'epoch-reset', epoch: this.epoch });
+		const tr = this.trace;
+		if (tr !== undefined) tr.opEnd();
 	}
 
 	/**
