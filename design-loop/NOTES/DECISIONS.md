@@ -205,3 +205,28 @@ preference. Curated by the monitor only.
   Proof: synthesis RS1/RS2 constructions; C11-E + C1-X6 re-walks; quiet
   single-root promotions provably zero-cost (finding-3 branch repaired).
 
+
+## Post-loop rulings (Jake, 2026-07-05)
+
+- **D24. `ctx.previous` is a committed-value optimization HINT.** Always
+  returns the node's last committed value, read live at evaluation time; no
+  identity, recency, or per-world determinism is guaranteed, and the
+  documented contract requires the function to be correct if `previous`
+  were stale or `undefined`. Incremental-accumulator patterns that depend
+  on exact previous values are unsupported (keep such state in an atom).
+  Deletes the per-world previous apparatus entirely. (Jake's ruling —
+  previous exists for recompute efficiency, not semantics.)
+- **D25. Retired batches release their slot immediately; the slot table
+  holds only live batches (+ batches still named by an open pass's include
+  mask).** Construction: recycling requires retired ∧ slot ∉ every open
+  pass's mask; visibility clause 2 gains a slot-claim-epoch guard
+  (receipt.seq ≥ slotClaimSeq[slot], one compare vs a 32-int table) so
+  exclusion-retained receipts of freed slots cannot alias the slot's new
+  tenant. Consequence: slot demand ≤ React's live-batch bound + open-mask
+  pins ⇒ saturation unreachable; all spillover/degrade machinery deleted.
+  STATUS: pending one adversarial verification (paused-pass exclusion,
+  mid-pass retirement of an INCLUDED batch, writer's-world, sweep
+  interaction, composed with the degraded-multi-root cut). (Jake's ruling;
+  refinement provoked by his "why keep retired urgent batches around at
+  all" question.)
+- **C3 ratified** (useMemo semantics for useComputed).

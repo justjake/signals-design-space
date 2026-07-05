@@ -101,7 +101,18 @@ startTransition(async () => {
 Token lifetime (parking until the action settles, `isPending`) rides React's
 own entangled-action machinery, which S22 proved covers *lifetime* — it was
 only continuation *identity* that needed the carrier, and identity is now
-explicit.
+explicit. Two semantics pinned by round-1 findings:
+
+- **Delivery lanes:** `scope.set` runs its receipt-append AND its delivery
+  walk through `fork.runInBatch(scope.token, …)` — never the ambient
+  context. A post-await `scope.set` therefore setStates watchers in the
+  action's own lanes (§4.4's "writer's context" means the *receipt's
+  token's* context, which for raw writes is ambient-synchronous and for
+  scope writes is the scope).
+- **Settled scopes:** `scope.set` after the action settles **throws**
+  (reliably detectable: the scope object carries a settled flag; the
+  battery-preamble restriction move). The legal late-write composition is
+  a raw write (its own batch, parity semantics) or a fresh action.
 
 **What this deletes:** the twin build, the bundler transform, rung ladders,
 I36 registration-time scheduler shims, the boot self-test, S25's
@@ -232,12 +243,36 @@ visible(r, view) =
 
 **fold(atom, view):**
 1. list empty → return K0 value (the universal fast path — per-atom, so
-   quiet atoms stay fast even mid-window).
-2. all receipts visible → return K0 value (single pass over the list; the
-   common case for urgent renders).
+   quiet atoms stay fast even mid-window; safe for reducer atoms too:
+   with no pending receipts the I38b re-fold is a no-op, so K0 holds the
+   version-frozen committed value).
+2. all receipts visible AND (plain atom, or `lastPromotionSeq ≤ view.pin`)
+   → return K0 value (single pass over the list; the common case for
+   urgent renders). The promotion term is load-bearing for reducer atoms:
+   K0's in-place value is re-folded under NEWLY committed reducer versions
+   at promotion (§4.5), and a view pinned before that promotion must not
+   be served it (round-1 confirmed blocker) — such views take the replay
+   path, which resolves versions per-receipt below.
 3. else replay: start from base, apply visible receipts in seq order
    (`set` overwrites; `op` applies the updater under the reducer version
-   the view's pin admits, §4.5). Custom equality applies **stepwise
+   resolved **per receipt**: a still-pending op replays under
+   `chainResolve(slot, view)` — the view-resolved current version (I38b
+   re-fold parity) — while an op whose batch has RETIRED is frozen: at
+   retirement, the bridge stamps `frozenVersionSeq` onto the receipt,
+   resolving the chain under the retiring token's own view (stage-else-
+   chain as its final committing pass saw it), and replay thereafter uses
+   the frozen entry (React bakes committed updates into memoizedState;
+   later reducer swaps never re-process them — round-1 parity blocker).
+   Round 2 sharpened the anchor: the earlier `min(pin, retiredSeq)`
+   formula was evaluated lazily and re-bound frozen ops when a
+   later-committing pass back-dated a chain entry — an eager stamp at the
+   retirement edge cannot re-bind. The [root-commit, retirement] window
+   for multi-root/async batches keeps live I38b semantics until the stamp;
+   the `useReducer` differential battery gains a swap-in-window row as the
+   oracle (declared, §10). A chain entry is **retained while any receipt's
+   frozenVersionSeq references it** — chain pruning by minLivePin alone
+   strands frozen ops (round-2 finding).
+   Custom equality applies **stepwise
    against the view's accumulator, keeping the old reference on equal**,
    exactly as the live write path did (I29 — post-fold equality picks the
    wrong representative for T+U vs U-only views). Updater/reducer fns
@@ -291,14 +326,27 @@ stays invisible to that root until a later commit).
 every root that received its work has committed it and (for async actions)
 the action settled — for store-only batches (C12), at scope
 end/settlement, with **fold-not-drop** semantics always (D2/S4: writes
-persist regardless of subscription). `retiredSeq` stamps at retirement;
-pin-gated inclusion (§4.2) keeps resumed passes coherent (S12).
+persist regardless of subscription). `retiredSeq` is minted by
+**advancing globalSeq** (`retiredSeq = ++globalSeq`) — never stamped equal
+to an existing seq, so `retiredSeq == a live pin` is unrepresentable
+(I15's one-number-line discipline; round-1 minor). Pin-gated inclusion
+(§4.2) keeps resumed passes coherent (S12). Per-root committed Sets and
+watermark Maps are pruned like receipts: a token retired everywhere with
+`retiredSeq < minLivePin` leaves every root's Set (covered thereafter by
+the retired clause), and the quiescence sweep clears them entirely — they
+join the C13 structure enumeration with that guard (round-1 minor:
+previously unbounded).
 
-**Quiescence sweep:** when `liveReceipts == 0 ∧ livePasses == 0 ∧
-livePendingBatches == 0` at the end of a delivery or commit: prune demoted
-edges, empty version-chain history, dead taps, capsule pools. The sweep
-walks dirty-lists only (atoms-with-receipts, demoted-links,
-chains-with-history) — never the whole graph.
+**Quiescence sweep:** triggered when `livePasses == 0 ∧
+livePendingBatches == 0` at the end of a delivery or commit (round-2
+wording fix: the old `liveReceipts == 0` term deadlocked against the
+sweep's own job of pruning the last retired receipts — retired receipts
+are what the sweep clears, not a precondition). The sweep folds all
+remaining (necessarily retired) receipts into bases, prunes demoted edges,
+version-chain history not referenced by any frozenVersionSeq, dead taps,
+capsule pools, per-root sets, pending-free records, and clears
+hookish-cone bits. It walks dirty-lists only (atoms-with-receipts,
+demoted-links, chains-with-history) — never the whole graph.
 
 ### 4.4 Delivery — links, taps, deferred removals, and the rework ping
 
@@ -326,24 +374,42 @@ the "handle it" arm).
    lineage death (C14 purity: no *observable* divergence — the only effect
    is a spurious, correct-valued re-render).
 
-2b. **Retro-delivery at installation (I23/I18/I47 in one rule).** A tap or
-   watcher link is installed by an evaluation at pin p — but the leaf may
-   already hold receipts with `seq > p` whose write-time delivery ran
-   before this watcher existed. At installation, scan the leaf's receipt
-   tail for `seq > p` and, per distinct token t:
+2b. **Retro-delivery at installation (I23/I18/I47 in one rule; predicate
+   REPAIRED in adversarial round 1).** A tap or watcher link is installed
+   by an evaluation under view v — but the leaf may hold receipts whose
+   write-time delivery ran before this watcher existed. The installing
+   evaluation folded every receipt **visible** to v into its rendered
+   value; every **invisible** receipt is state this rendering does not yet
+   reflect. So the total rule: at installation, scan the leaf's FULL
+   receipt list for receipts with `!visible(r, v)` (§4.2's predicate —
+   this covers both seq > pin AND mask/committed-set exclusions; the
+   original `seq > pin` scan missed pending tokens' older writes, the
+   canonical C10 mount schedule) and, per distinct invisible token t:
    - t live → `fork.runInBatch(t, () => setState(watcher))` — the
      corrective joins t's **own** lanes, so t's render includes it in one
      commit (C10's requirement; a fresh `startTransition` is not
      equivalent). If t is in the current pass's own mask, this is an
      interleaved update on the rendering lane and React restarts the pass
      pre-commit at a fresh pin — the native rebase path.
-   - t retired → urgent setState (the seed's own sanctioned fallback:
-     "urgent pre-paint correction"), covering the edge-discovered-after-
-     writer-retired family (I47/S35 variant) with no drain machinery.
-   The scan is O(receipt tail past the pin) — receipts newer than a live
-   pin are few by construction. Over-delivery is the designed failure
-   mode; under-delivery is impossible while the rule holds (the leaf's
-   full receipt list was either visible to the fold or retro-delivered).
+   - t retired (invisible only by pin) → urgent setState (the seed's own
+     sanctioned fallback: "urgent pre-paint correction"), covering the
+     edge-discovered-after-writer-retired family (I47/S35 variant) with no
+     drain machinery.
+   The same scan covers the **evaluator/reducer version chains in the
+   evaluation's recorded basis** (leaves' reducer chains AND the flattened
+   hook-owned-node basis — a promoted evaluator reached *through* a
+   downstream computed is neither a leaf nor the linked node; round-2
+   finding): a chain entry invisible to v under §4.5's token-clause
+   predicate is a receipt-less visibility flip; live staging token →
+   `runInBatch(token, setState)`, retired → urgent. Every rendering is therefore either up-to-date or
+   has a scheduled corrective in the right lane, per leaf, at all times.
+   Correctives are re-derived on every attempt (installation runs per
+   evaluation), so a discarded WIP attempt loses nothing: the re-attempt
+   either folds the receipt (now-visible) or re-issues the corrective.
+   Mount-into-live-batch over-renders by design (I13: the smart filters
+   are the exponential trap). The scan is O(receipt list), lists are
+   liveness-pruned (§4.2), and it runs once per (watcher, leaf)
+   installation, not per read.
 
 3. **Deferred edge removal.** While `liveReceipts > 0 ∨ livePasses > 0`,
    K0 retracking never unlinks: a removed dependency edge is demoted to
@@ -401,23 +467,71 @@ fn = pass.stageTable.get(slot)            // staged this pass?
   version (and at the sweep). Constructor `Computed`/reducer fns are
   immutable (D16) and never chain.
 - **Staging:** a render that materializes a changed hook evaluator stages it
-  in the pass's `stageTable` (I22). Promotion happens at the hook's commit
-  effect, ordered **before that commit's folds**, via the φ7 publication
-  edge (I41/S28): CAS on the slot, `committedAtSeq = commit seq`; hidden/
-  Offscreen and error-abandoned subtrees never publish (φ7's contract).
-  Promotion re-folds the NEWEST K0 value of affected reducer atoms under
-  the newly committed versions (I38 — the K0 in-place value must equal
-  a fold of all receipts under committed-current semantics) and delivers
-  value-blind (§4.4).
+  in the pass's `stageTable` (I22). **Staging is itself a delivery event
+  (round 2):** when a hook stages a changed evaluator, the bridge delivers
+  value-blind setStates to the staged node's cone **in the pass's own
+  lanes** — a bailed-out same-root sibling whose DOM shows the old version
+  thereby joins this very pass and commit (round-2 blocker: promotion-time
+  delivery in the transition lane is post-paint for bailed siblings — a
+  one-frame same-root tear C11 forbids; cross-root skew remains sanctioned).
+  Promotion happens at the φ7 publication edge, ordered **before that
+  commit's folds** (I41/S28), taking I41 verbatim: publication fires for
+  every hook version that becomes current — **hidden Offscreen commits
+  included** (S28(a) is the scar for excluding them); only discarded,
+  error-abandoned, and stale-alternate hooks never publish (generation
+  CAS).
+
+  **Chain entries are receipt-shaped (round 2, replacing round 1's
+  `committedAtSeq = pin`):** an entry is `(fn, token, seq)` where token =
+  the staging batch and `seq = ++globalSeq` minted at publication
+  (monotone — the pin-stamping shortcut back-dated promotions below
+  concurrently live pins, defeating the §5 gate and re-binding frozen
+  ops; three round-2 blockers). An entry is **visible** to view v iff
+  `token ∈ v.mask` (the pass that staged it), OR `token ∈
+  v.committed(root)` (a root that committed the batch admits its
+  publications unconditionally — the committing render already showed the
+  staged output, which is how the publishing root's own committed view
+  resolves the NEW version without any seq gymnastics), OR
+  `token retired ∧ retiredSeq ≤ v.pin`. `chainResolve(slot, v)` = newest
+  visible entry — the SAME predicate shape as receipts, applied by the
+  fold, the read algorithm, and §4.4.2b's retro-scan alike (round-2
+  blocker: chronology-only chain visibility let an urgent mount on a
+  lagging root render the new version beside old-version committed DOM —
+  the same scar class the champion loop's round 5 repaired with tokened
+  evaluator bases). Promotion then does three things, in order:
+  1. **Dirties the promoted slot's K0 node** through the donor's own
+     invalidation path and sets `k0EvalVersion := the new version` — for
+     computeds AND reducer atoms. Without this, K0's dependency-versioned
+     pull validity never notices an evaluator swap: a NEWEST handler read
+     serves the retired evaluator's cache forever and core `effect()`
+     never re-fires (confirmed round-1 blocker; K0 = newest must be
+     enforced, not declared). Donor dirty propagation invalidates
+     downstream K0 caches transitively for free.
+  2. Re-folds the NEWEST K0 value of reducer atoms with **pending**
+     receipts under the newly committed versions (I38b).
+  3. Delivers value-blind through the cone (§4.4) on OTHER roots (the
+     publishing root was closed pre-commit by stage-time delivery above)
+     and advances the global stamp monotonically:
+     `lastPromotionSeq = max(lastPromotionSeq, entry.seq)` (round-2
+     blocker: the blind assign regressed under out-of-order commits,
+     re-opening the S32 surface through fold case 2).
 - **Shared-node staging order (S34):** if a pass evaluates a shared
   hook-owned node *before* the owning component stages a new version, the
   stage records a conflict and the fork restarts the pass **seeded** with
   the stage table (φ5b). The re-attempt reads the staged version uniformly.
-  Termination: at a fixed pin, the owner's deps and props are fixed, so the
-  staged fn is identical on the re-attempt — the conflict cannot recur
-  (A/B/A oscillation requires the pin to move, which is a new pass by
-  definition). One restart per newly-staged shared evaluator, bounded by
-  React's own update-depth limits (R7).
+  **Seed lifecycle (repaired in round 1):** seed entries are keyed by
+  owner-hook identity and carry the owner's generation; when the owner is
+  abandoned before publication — error-boundary unwind, deletion, a stale
+  alternate — the fork's abandonment edge (φ7's CAS family) sweeps its
+  entries before any re-attempt, so consumers can never render a version
+  whose owner died (the round-1 schedule: unwound owner's f_B seeded into
+  the retry while the committed tree keeps f_A). Termination is bounded,
+  not proven absolute: a re-attempt at a NEW pin may stage a different fn
+  (props moved), which is a fresh conflict; each restart consumes React's
+  own update-depth budget (φ9), so oscillation surfaces as React's
+  infinite-loop error rather than a hang — the same contract React gives
+  its own render-phase updates. The original "fixed pin ⇒ fixed fn"
+  argument was wrong (the restart takes a fresh pin) and is withdrawn.
 - `update(fn)`/reducer folds reject signal reads/writes inside the fn in
   all builds (D14). Render-phase writes throw (C14). `ctx.previous`
   follows D16's three-way rule; with no cross-pass world memos the
@@ -437,17 +551,50 @@ fn = pass.stageTable.get(slot)            // staged this pass?
 
 ### 4.6 Suspense capsules
 
-Per (hook slot × lineage id) — the lineage id is fork-minted per
-(root × batch-set), stable across restarts and replays, dead at
-commit/abandon (D11/φ6). A capsule stores `{ thenable, readLog:
-[(atom, foldedValue)] }`.
+Keyed by **hook-slot identity** (the hook instance object — GC'd identity,
+alive from mount to unmount), with the fork lineage id (φ6) gating only
+*replay stability inside one pass family* (C14: same positional thenable
+across StrictMode replays and retries of one lineage). Round 1 reopened
+D11's lineage-as-key with two confirmed schedules — new evidence per the
+loop's own reopening rule: (a) lineage = (root × batch-set) churns on
+every newly entangled transition, killing the capsule per keystroke
+(refetch + re-suspend per input — the S20 starvation class arriving
+through the key instead of a clock); (b) fold-replay mints fresh
+references per retry while any overlapping batch is live (I48), so a
+value-compare reuse rule refetches every retry — the S24 livelock class.
+A capsule stores `{ thenable, stampLog }` where stampLog = per-read-position
+`(atom, visibleSeqVector, opVersionSeqs)` entries — the **full vector of
+visible receipt seqs**, not the last one (round-2 blocker re-derived I21
+verbatim: a suffix/max stamp is not injective over mid-list visibility
+flips; a retirement can make an OLDER receipt visible without moving the
+tail, and a suffix-equal reuse then serves a thenable fetched under
+genuinely different world content) — plus the flattened `(slot, entrySeq)`
+evaluator basis of every hook-owned node the evaluation passed through
+(S5's lesson: the validity record covers the COMPLETE read set, evaluators
+included — a round-1 blocker caught the original atoms-only readLog).
+Receipt pruning folds pruned prefixes into `base`, and the stampLog
+records the base generation alongside — pruning bumps it, forcing the
+compare down the refetch branch, never a false-equal (round-2 audit).
 
-- **Reuse rule:** on retry under the same lineage, re-fold each `readLog`
-  atom in the pass's view and compare with the stored value via the atom's
-  `isEqual` — all equal ⇒ same thenable (identity-stable across retries,
-  C14/S24); any differ ⇒ re-run the factory (content-guarded refetch, I35/
-  S31 — stamps and visibility handovers that don't change values cannot
-  cause refetch, because no stamp appears anywhere in the rule).
+- **Capsule store shape (round 2):** per hook slot, a small map keyed by
+  lineage — two concurrently live suspended lineages get separate entries
+  (a single per-slot capsule livelocked under alternating displacement) —
+  with **stamp-based adoption across entries**: a new lineage first
+  compares its stampLog against existing entries and adopts a matching
+  entry's thenable instead of refetching. Adoption is what round 1's
+  key-change was for (lineage churn ≠ refetch); separate entries are what
+  the displacement schedule demanded; the stampLog arbitrates. Entries die
+  with their lineage; adopted thenables live as long as any referencing
+  entry. Hook-slot identity across mount restarts is fork-minted stable
+  (φ6 detail: a fresh-stack restart of a mounting component reuses the
+  same slot id — the raw hook object is NOT stable pre-first-commit,
+  round-2 finding).
+- **Reuse rule:** on re-evaluation reaching `ctx.use` at the same hook
+  slot, recompute the stampLog under the current view; **all stamps equal
+  ⇒ same thenable**; any differ ⇒ re-run the factory. This is
+  deliberately the champion's pre-blessed "coarser refetch, flagged"
+  fallback; the I35 value-revalidation refinement is a named rung, not
+  the base rule.
 - **Settlement** is guarded by **exact thenable identity** (I50/S39): a
   late settlement of a superseded thenable finds itself no longer
   installed and is ignored. No generation counters exist to wrap.
@@ -469,27 +616,50 @@ read(node, ctx):
       // K0 is newest by construction; reducer K0 values kept
       // committed-current by promotion re-fold (§4.5)
   // world read inside a pass:
-  if (s := ctx.scratch.get(node)) !== undefined: return s
+  if (s := ctx.scratch.get(node)) !== undefined:
+    link watcher→node in K0
+    install taps + retro-scan from s.basis    // leafSet AND evaluator basis —
+    return s.value          // a scratch hit must still subscribe THIS watcher
+                            // (round-1 blocker: the second watcher of a shared
+                            // computed was permanently unsubscribed)
+  if NOT node.hookishCone                                    // round 2, see below
+     AND liveReceipts === 0
+     AND lastPromotionSeq <= ctx.pin:                        // coarse gates, §2.3
+    link watcher→node in K0; return k0Read(node)   // no scratch entry minted:
+                            // a K0 serve has no basis to store; conjuncts are
+                            // cheap enough to re-run per read
   fn := resolveEvaluator(node, ctx)                          // §4.5
-  if fn === node.k0EvalVersion
-     AND liveReceipts === 0:                                 // coarse gate, §2.3
-    v := k0Read(node)                                        // pulls/validates in K0
-  else:
-    v := evaluate fn, leaf reads via fold(atom, ctx.view)    // §4.2
-         recording leaf set; install taps (§4.4)
-  ctx.scratch.set(node, v); link watcher→node in K0; return v
+  v := evaluate fn; leaf reads via fold(atom, ctx.view);     // §4.2
+       nested hook-owned nodes resolve via chainResolve(slot, ctx.view);
+       record basis = {leafSet, flattened (slot, entrySeq) evaluator basis};
+       install taps; retro-scan basis (§4.4.2b)
+  ctx.scratch.set(node, {value: v, basis}); link watcher→node in K0; return v
 ```
 
-The single evaluator conjunct (`fn === node.k0EvalVersion`) sits on the
-**only** K0-serving surface — there is exactly one fast path in the design,
-so I31's "every surface needs the conjunct" discipline has one surface to
-discipline (S23's routing horn; the cache horn is void because there are no
-cross-pass world caches to embed a version).
+**The hookish-cone bit (round 2):** a node whose evaluation closure
+contains any hook-owned evaluator — itself or transitively — sets a
+monotone boolean on itself and its downstream K0 cone at link time,
+cleared only at the quiescence sweep. Hookish nodes **never** take the
+armed in-pass fast path: round-2 verifiers showed both that a K0-arm
+serve has no installation basis for later scratch hits (torn second
+watcher) and that no node-local or global-pin conjunct correctly admits
+K0 caches downstream of tokened chain entries (whose visibility is
+per-root, not chronological). Plain-computed graphs — the overwhelming
+common case — keep the fast path; `useComputed`-bearing cones always
+world-route while armed. This is the S37 trade again, taken knowingly,
+priced under SPK-P2. The NEWEST arm stays sound for all nodes because
+promotion enforces K0 = newest (§4.5 step 1) under **chain-current**
+versions; NEWEST = the view that admits every entry, so no token clause
+is needed there.
 
 `useSignalEffect` bodies read through the root's **committed view**
 (`{ committed set, watermark, pin = watermark }`) — C16 by construction;
 core `effect()` reads NEWEST (documented contract, stated per C16's
-requirement).
+requirement). **Every view-parameterized evaluation installs links, taps,
+and the retro-scan — render and effect alike** (round-1 finding: a
+committed-view effect whose world branch diverges from K0 topology is
+otherwise a never-linked observer; the delivery rules in §4.4 are
+per-evaluation, not per-render).
 
 ### 5.1 Chrome coverage (the requirements not otherwise discussed)
 
@@ -522,13 +692,13 @@ requirement).
 
 | id | fact | needed for |
 |---|---|---|
-| φ1 | Per-callstack pass truth: `{root, mask, pin, lineage, stageTable}` exposed inside render, absent in yield gaps; yields/resumes visible | C7, S7 |
+| φ1 | Per-callstack pass truth: `{root, mask, pin, lineage, stageTable}` exposed inside render, absent in yield gaps; yields/resumes visible; PLUS an explicit live-pass registry (start/yield/resume/commit/discard edges) from which the bridge derives `livePasses` and `minLivePin` — per-callstack truth alone cannot answer "does any pass pin below s?" during yield gaps (round-1 finding) | C7, S7, §4.2 pruning, §4.3 sweep |
 | φ2 | Batch token minting + write classification (transition scope, default, sync); token = object; async-action lifetime rides entangled actions | C6, C12, §2.1 |
 | φ3 | Commit notification with watermark = committing pass's pin | I25, C11, S19 |
 | φ4 | Token lifecycle: per-root commit tracking, retirement signal (incl. store-only scope-end, action-settle) | C12, §4.3 |
 | φ5 | Lane-scoped scheduling + rework: `runInBatch(token, cb)` inserts cb's update into the live token's lanes (returns RETIRED for a dead token → caller falls back to urgent); `noteWrite(token)` ⇒ interleaved-update rework of in-flight passes (React-native rebase), incl. (a) same-lane writes with zero setStates, (b) same-root commit-during-yield restart, (c) restart-with-seed for stage conflicts | C1, C10, §4.4.2b, S34, S35 |
 | φ6 | Lineage id per (root × batch-set), stable across restarts/replays, dead at commit/abandon | D11, C15, S24 |
-| φ7 | Hook publication edge: staged evaluator/reducer becomes-current at the hook's commit effect, publication-before-folds, CAS, no publication from hidden/abandoned subtrees | I41, S28, §4.5 |
+| φ7 | Hook publication edge (I41 verbatim): commit emits publication for every hook version made current — **hidden Offscreen included** — anchored at the commit publication edge, never effect execution; discarded/error-abandoned/stale alternates never publish (generation CAS); ordered before same-commit folds/drains/layout; abandonment edges also sweep the owner's φ5b seed entries | I41, S28, §4.5 |
 | φ8 | Replay/StrictMode signals: pass identity for scratch; discarded passes distinguishable | C14 |
 | φ9 | React's update-depth limits apply to signal-driven storms (delivery is setState, so this is inheritance, asserted by test) | R7 |
 
@@ -646,17 +816,23 @@ inside the pass ⇒ eager world routing by construction (the read algorithm
 has no "new node" special case — evaluation context decides); taps installed
 at eval; K0 record allocated but its cache is not written from a world eval
 (world results live in scratch only), so no canonical leak ✓. Reclamation
-of abandoned fresh records: pass-owned, commit transfers, lineage-death
-frees (D19/S15).
+of abandoned fresh records: pass-owned, commit transfers ownership;
+lineage death moves the record to a pending-free list and the actual free
+happens at the quiescence sweep — freeing immediately would collide with
+§4.4.3's deferred edge removals if the record acquired edges (round-1
+finding resolved D19's contradiction; the deferral is bounded by the same
+activity window as every other deferred cleanup, S15's soak test pins it).
 
 ### C10 — late subscription joins the pending batch
 
 Mount after k's write, before k's commit — three sub-cases, all closed by
 §4.4's rules:
 
-1. **W evaluates after the write** (pass pin p < write seq, or a pass that
-   excludes k): W's fold renders its view-consistent value AND
-   installation retro-scans the leaf: receipt seq > p, token k live ⇒
+1. **W evaluates after the write** (pass pin p < write seq, OR a pass
+   whose mask/committed-set excludes k — the write may be *older* than p
+   and still invisible; round-1's repaired predicate): W's fold renders
+   its view-consistent value AND installation retro-scans the leaf for
+   **invisible** receipts: `!visible(r, view)`, token k live ⇒
    `runInBatch(k, setState(W))` ⇒ the corrective is in **k's own lanes** ⇒
    exactly one commit carries k's updates and W's correction ✓ (a fresh
    startTransition would mint new lanes — never used).
@@ -777,7 +953,7 @@ conjunct in §5.
 | S20 retire-clocks in capsule keys | keys = slot × lineage only (§4.6) |
 | S21 ambient post-await classification | renegotiated to React parity §2.1; explicit scope API; sync-prefix writes still action-bound |
 | S22 promise-patching carriers | no carrier exists; lifetime rides entangled actions (proven sufficient for lifetime by S22 itself) |
-| S23 evaluator-blind fast paths | single fast path, single conjunct (§5); no caches to embed versions |
+| S23 evaluator-blind fast paths | promotion dirties K0 + sets k0EvalVersion (§4.5 step 1); both K0-serving surfaces carry conjuncts incl. the global lastPromotionSeq ≤ pin term (§5) — K0's own cache IS a version-bearing cache and is now governed (round-1 repaired) |
 | S24 per-pass stamps in retry keys | lineage-stable keys; readLog values, not stamps (§4.6) |
 | S25 invocation-time carrier capture | no carrier |
 | S26 consumable-queue-only triggers | no consumable queues; delivery + commit drive effects (C16) |
@@ -785,7 +961,7 @@ conjunct in §5.
 | S28 unordered evaluator publication | φ7 publication-before-folds + promotion re-fold (§4.5) |
 | S29 touched-column clearing / unbounded slots | no columns, no interning; receipts prune by liveness |
 | S30 in-edge-only refresh carry | no refresh exemption machinery; delivery covers via taps + demoted edges |
-| S31 stamp-move ⇒ refetch | value revalidation only (§4.6) |
+| S31 stamp-move ⇒ refetch | base rule is now stamp-equal ⇒ reuse / stamp-move ⇒ refetch (coarser refetch, FLAGGED — the champion's own pre-blessed fallback); I35 value revalidation is a named rung where references are stable (§4.6, round-1 trade) |
 | S32 live-sampled committed evaluators | pin-resolved chains + value-blind promotion walk (§7 S32 walk) |
 | S33 render-armed delivery dedup | no dedup state; every write delivers |
 | S34 hook-time-only stage gating | conflict ⇒ seeded restart (§4.5), termination argued |
@@ -799,14 +975,15 @@ conjunct in §5.
 
 ## 9. Performance expectations (honest, gated, renegotiated)
 
-| path | expectation | gate (renegotiated) |
+| path | expectation | gate (renegotiated; round-1 honesty pass applied) |
 |---|---|---|
-| DIRECT (no bridge) | one dead branch per site | within 2% of alien-signals v3, tier-0 (was: at-or-below) |
-| React-mounted, quiet (no receipts) | branch + liveReceipts==0 check + evaluator compare per computed read | ≤4% vs DIRECT (was ≤2%; SPKHQ floor 2.4–3.8%) |
-| urgent render, receipts live | fold short-circuit case 2 (all-visible scan) per touched atom | ≤10% vs useState-equivalent (P1 kept for quiet; see next row for windows) |
-| render inside pending-transition window | full world path: re-derive per pass + fold scans | within 25% of useState during the window (new gate; spike SPK-P2) |
-| write, armed | append + K0 apply + cone walk + setStates + noteWrite | ≤2× DIRECT write on tier-0 fan-outs (spike SPK-P3) |
-| memory | receipts + taps + chains, all liveness-pruned; zero steady-state alloc when quiet (P4 kept for quiet paths) | soak test: bounded under S15-style mount/abandon churn and never-quiescent traffic (spike SPK-P1) |
+| DIRECT (no bridge) | dead hook-site branches (SPK-H 2.5–3.5%) + read-routing branch (SPK-Q 2.4–3.8%) + demoted-edge check in retrack (unpriced — added to SPK-P2's measurement list, round-1 split finding) | at-or-below alien-signals v3 on tier-0 (P2 kept; donor headroom argument §2.2) |
+| React-mounted, quiet (no receipts) | branch + liveReceipts + lastPromotionSeq + evaluator compare per computed read — **three-plus scalar ops where SPK-Q priced one at 2.4–3.8%** | ≤6% vs DIRECT (round-1 corrected; the prior ≤4% was unmeetable by PLAIN's own cited instrument) |
+| urgent render, receipts live | fold short-circuit case 2 (all-visible scan + promotion term) per touched atom | ≤10% vs useState-equivalent (P1 kept for quiet; see next row for windows) |
+| render inside pending-transition window | full world path: re-derive per pass + fold scans + per-eval tap/retro-scan | within 25% of useState during the window (spike SPK-P2) |
+| write, armed, isolated | append + K0 apply + cone walk + setStates + noteWrite | ≤2× DIRECT write (spike SPK-P3) |
+| write, armed, fan-out / repeated (C4-amplified) | one full walk + one setState **per watcher per write**, no dedup, by design (D13/I5) | ≤3× DIRECT on SPK-P3's dedicated fan-out × writes/frame row (round-1: the old gate's scoping hid this; now measured explicitly, with the pin-aware dedup bit of I44 as the pre-named — and pre-embargoed, S17-adjacent — fallback requiring its own walked schedule first) |
+| memory | receipts + taps + chains + per-root sets + pending-free lists, all liveness-pruned; zero steady-state alloc when quiet (P4 kept for quiet paths) | soak test: bounded under S15-style mount/abandon churn and never-quiescent traffic (spike SPK-P1) |
 
 Refinement ladder if SPK-P2/P3 fail their gates (pre-named, in-class, no
 semantic change): (1) per-node "receipt-free leaves" epoch short-circuit;
@@ -858,3 +1035,69 @@ zero suppression state, zero fixup passes, zero compile steps. Two
 capabilities were sold to pay for it (post-await ambient classification;
 cross-pass world-read speed), and both buyers are named in §2 with the
 human's signature.
+
+Post-repair honesty (round 1 made two mechanisms thicker): the evaluator
+mechanism gained the promotion three-step (K0 dirty + version stamp + global
+`lastPromotionSeq`) and the seed-lifecycle rule; the capsule mechanism
+traded value-compares for a stamp log. Still 6 mechanisms; the new
+obligations are structural and enumerable (a stamp per publication, a
+conjunct per K0-serving surface — there are two — and one scan predicate),
+not semantic completeness prayers. The count survives; the "one conjunct,
+one surface" slogan did not, and §5 now says two.
+
+## 12. Adversarial round 1 — ledger
+
+Ten attackers over disjoint slices, two independent verifiers per finding,
+all walks mechanism-level. Result: **35 findings — 30 confirmed, 2
+refuted, 3 split** (splits adjudicated by the monitor; all three sided
+with the confirming walk or were subsumed by a confirmed sibling).
+Confirmed findings clustered into root causes, all repaired in-place:
+
+| cluster | findings | repair |
+|---|---|---|
+| Retro-delivery predicate `seq > pin` missed mask-invisible receipts (the canonical C10 mount; 5 findings, 4 independent attackers) | blockers | predicate → `!visible(r, view)`, receipts and chain entries alike (§4.4.2b) |
+| Evaluator promotion invisible to K0 / downstream caches / old pins / the publishing root's own committed view (6 findings) | blockers/major | promotion dirties K0 + `k0EvalVersion`; global `lastPromotionSeq` conjunct on both serving surfaces and fold case 2; `committedAtSeq` = committing pass's pin (§4.5, §5, §4.2) |
+| Retired reducer ops re-folded under later versions (useReducer parity) | blocker | per-receipt frozen version: `chainResolve(slot, min(pin, retiredSeq))` (§4.2) |
+| Scratch hit skipped linking the second watcher of a shared computed | blocker | scratch stores leafSet; hits still link/tap/retro-scan (§5) |
+| Capsule readLog incomplete (no evaluator basis) + lineage-key churn + reference-churn livelock (3 findings) | blockers | stamp-log reuse rule, hook-slot key, lineage demoted to replay-stability; D11 reopened with the churn schedule as evidence (§4.6) |
+| φ7 inverted I41's hidden-Offscreen horn; φ5b seed outliving abandoned owners; false termination argument (3 findings) | blockers/major | I41 verbatim; seed swept on abandonment edges; termination re-argued as React-bounded (§4.5, §6) |
+| scope.set lanes ambient / settled-scope unspecified (3 findings) | blocker/major/minor | scope delivery via runInBatch; settled scope throws (§2.1) |
+| minLivePin/livePasses undefined under per-callstack-only φ1 | blocker | explicit live-pass registry (φ1) |
+| useSignalEffect reads never installed taps | major | installation is per-evaluation, render and effect alike (§5) |
+| D19 lineage-death free vs deferred edge removal | major | pending-free list, freed at sweep (§7 C9) |
+| Gate arithmetic (quiet ≤4% unmeetable; fan-out write cost hidden; demoted-edge branch unpriced; retiredSeq minting; per-root set growth) | major/minor | ≤6% quiet gate; explicit fan-out row ≤3×; SPK-P2 list extended; `retiredSeq = ++globalSeq`; sets join the prune/C13 tables (§4.3, §9) |
+
+Refuted (2): the φ5(b)-restart-defeats-backstop schedule (the repaired
+predicate re-derives correctives per attempt) and the StrictMode
+double-effect tap-destruction schedule (taps are keyed per rendering, not
+per effect run; damping holds). Both verifier walks agreed.
+
+## 13. Adversarial round 2 — the repair-verification ledger
+
+Six verifiers re-attacked ONLY the round-1 repairs. **All six came back
+BROKEN: 13 blockers + 4 major/minor — repair-minted, exactly the failure
+mode the champion loop's rounds 3–5 exhibited.** The convergent root
+causes and the round-2 repairs now in the text:
+
+| root cause | round-2 repair |
+|---|---|
+| `committedAtSeq = pin` back-dated promotions below live pins; blind `lastPromotionSeq` assign non-monotone; chronology-only chain visibility tore lagging roots (7 findings across 4 verifiers — the same class the champion's round 5 repaired with tokened evaluator bases) | chain entries are receipt-shaped `(fn, token, seq)`, monotone-minted, with the receipt visibility clauses; `lastPromotionSeq = max(...)` (§4.5) |
+| K0-arm scratch entries had no installation basis; scan basis missed evaluators reached through downstream computeds | hookish-cone bit: hook-bearing cones never take the armed fast path; K0 serves mint no scratch; world-path basis = leafSet + flattened evaluator basis, scanned in full (§5, §4.4.2b) |
+| Promotion-lane delivery post-paint for bailed same-root siblings | staging delivers own-lane value-blind setStates at stage time; promotion delivery is cross-root only (§4.5) |
+| Lazy `min(pin, retiredSeq)` re-bound frozen reducer ops under back-dated entries; chain pruning stranded frozen ops | eager `frozenVersionSeq` stamped at the retirement edge; chain entries retained while referenced; differential swap-in-window row declared (§4.2) |
+| Capsule suffix-stamp re-derived the I21 non-injectivity; single per-slot capsule livelocked dual live lineages; raw hook object unstable pre-commit | full visible-seq vectors + base generation; per-lineage entries with stamp-based cross-entry adoption; fork-minted stable slot ids (§4.6, φ6) |
+| Sweep trigger self-deadlocked on `liveReceipts == 0` | trigger = no passes ∧ no pending batches; retired-receipt folding is the sweep's job (§4.3) |
+
+**Standing residue (declared, unrepaired):** (1) the round-2 repairs have
+themselves not been re-attacked — two rounds of confirmed repair-minted
+blockers is the strongest possible argument that a third verification
+pass (and ultimately the loop's full author/review/judge apparatus) must
+run before this design is trusted; the convergence of round-2's findings
+with the champion loop's own round-5 repairs suggests the remaining
+defect mass is concentrated and shrinking, not that it is zero. (2)
+φ5(c) render-phase `runInBatch` legality remains the sharpest fork-side
+existence risk (§10.3). (3) The capsule's coarser-refetch trade and the
+hookish-cone bit's world-routing cost need typeahead- and
+useComputed-heavy measurements (SPK-P2 gains both rows). (4) The
+`useReducer` swap-in-window differential is an open oracle question, not
+a settled semantic.
