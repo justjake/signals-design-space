@@ -154,21 +154,85 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(r.state).toBe(5);
 	});
 
-	it('public writes to a REGISTERED atom classify into the ambient default batch with WHOLE ops', () => {
+	it('public writes to a REGISTERED atom: QUIET folds directly; ARMED classifies into the ambient default batch with WHOLE ops', () => {
+		// RE-PINNED for Phase 1b (quiet-mode writes). The old contract —
+		// attached-but-quiet registered writes always mint ambient receipts —
+		// is gone: while nothing is pending the pipeline stays disarmed and
+		// the write folds to committed base + kernel in one step.
 		const la = bridge.atom('pub', 0);
-		la.handle.set(7); // application code writing through the public API
+		const before = __coreProbes();
+		la.handle.set(7); // application code writing through the public API, while QUIET
+		(la.handle as Atom<number>).update((n) => n + 1);
+		expect(la.tape).toHaveLength(0); // no receipt
+		expect(bridge.ambientToken).toBeUndefined(); // ambient batch NOT minted while quiet
+		expect(bridge.newestValue(la)).toBe(8); // kernel advanced
+		expect(bridge.committedValue(la, 'A')).toBe(8); // committed truth advanced WITH it
+		const afterQuiet = __coreProbes();
+		expect(afterQuiet.receipts).toBe(before.receipts);
+		expect(afterQuiet.tokens).toBe(before.tokens);
+		expect(afterQuiet.bridgeEvents).toBe(before.bridgeEvents);
+		// ARM the pipeline (a live batch exists): the same public writes now
+		// classify into the ambient default batch as WHOLE ops.
+		const t = bridge.openBatch('deferred');
+		la.handle.set(100);
 		(la.handle as Atom<number>).update((n) => n + 1); // op captured UNFOLDED
 		expect(la.tape).toHaveLength(2);
-		expect(la.tape[0]!.op).toEqual({ kind: 'set', value: 7 });
+		expect(la.tape[0]!.op).toEqual({ kind: 'set', value: 100 });
 		expect(la.tape[1]!.op.kind).toBe('update'); // replay fidelity: the updater itself
 		const ambient = bridge.ambientToken;
 		expect(ambient).toBeDefined();
 		expect(la.tape[0]!.token).toBe(ambient);
-		expect(bridge.newestValue(la)).toBe(8); // writes apply to the kernel immediately
-		expect(bridge.committedValue(la, 'A')).toBe(0); // not committed yet: no root committed the batch and it has not retired
+		expect(bridge.newestValue(la)).toBe(101); // writes apply to the kernel immediately
+		expect(bridge.committedValue(la, 'A')).toBe(8); // not committed yet: base still holds the quiet fold
 		bridge.retire(ambient!, false);
-		expect(bridge.committedValue(la, 'A')).toBe(8); // persistence never depends on subscription
+		expect(bridge.committedValue(la, 'A')).toBe(101); // persistence never depends on subscription
+		bridge.retire(t.id, true); // last retirement: quiet re-arms
 		expect(la.tape).toHaveLength(0); // pin-free retirement compacts the prefix
+		la.handle.set(500); // and the next write folds again
+		expect(la.tape).toHaveLength(0);
+		expect(bridge.committedValue(la, 'A')).toBe(500);
+	});
+
+	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero receipts/tokens/events', () => {
+		// The Phase 1b population (the reviews' "wrong population" fix): atoms
+		// REGISTERED with the bridge, host attached, kernel derivations and
+		// effects subscribed — and NO transition, batch, or render pass ever
+		// open. Heavy public write/read traffic must leave the concurrency
+		// pipeline fully disarmed: zero receipts, zero batch tokens, zero
+		// bridge events.
+		const atoms = Array.from({ length: 20 }, (_, i) => bridge.atom(`reg${i}`, i));
+		const handles = atoms.map((n) => n.handle as Atom<number>);
+		const doubles = handles.map((h) => new Computed(() => h.state * 2));
+		let effectRuns = 0;
+		const dispose = effect(() => {
+			void doubles[0]!.state;
+			effectRuns++;
+		});
+		const rHandle = new ReducerAtom<number, number>((s, a) => s + a, 0);
+		const r = bridge.adoptAtom('regReducer', rHandle as unknown as Atom<number>);
+		r.reducer = (s, a) => (s as number) + (a as number); // registered reducer (as the bindings' adoption does)
+		const before = __coreProbes();
+		let sink = 0;
+		for (let round = 0; round < 50; round++) {
+			for (let i = 0; i < handles.length; i++) {
+				handles[i]!.set(round * 1000 + i);
+				handles[i]!.update((v) => v + 1);
+			}
+			rHandle.dispatch(1);
+			for (let i = 0; i < doubles.length; i++) sink += doubles[i]!.state;
+		}
+		dispose();
+		expect(sink).not.toBe(0);
+		expect(effectRuns).toBeGreaterThan(1); // kernel effects observed the quiet folds
+		const after = __coreProbes();
+		expect(after.receipts).toBe(before.receipts); // ZERO receipts
+		expect(after.tokens).toBe(before.tokens); // ZERO batch tokens (no ambient mint)
+		expect(after.bridgeEvents).toBe(before.bridgeEvents); // ZERO events
+		expect(bridge.ambientToken).toBeUndefined();
+		// And the folds are real: base == kernel == committed for every atom.
+		expect(bridge.newestValue(atoms[3]!)).toBe(49 * 1000 + 3 + 1);
+		expect(bridge.committedValue(atoms[3]!, 'A')).toBe(49 * 1000 + 3 + 1);
+		expect(bridge.committedValue(r, 'A')).toBe(50);
 	});
 
 	it('sync-era atoms join as committed-only base state (§5.1 rule 2)', () => {

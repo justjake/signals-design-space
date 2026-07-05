@@ -146,7 +146,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, __assertHostWritable, __hostRunFold, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, __assertHostWritable, __hostApplySet, __hostRunFold, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -692,9 +692,21 @@ function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown):
 		classify(atom, kind, payload);
 		return true;
 	}
-	const node = b.byKernelId.get(atom._id);
+	// Registry lookup, stamp-cached: adoption stamps `{b, n}` on the handle,
+	// so the steady state is one property load + identity compare; the Map
+	// probe only runs for un-stamped handles (or a stamp from a replaced
+	// bridge — test drivers swap bridges; the stamp validates against THIS).
+	const stamp = atom._hostStamp;
+	const node = stamp !== undefined && stamp.b === b ? (stamp.n as AtomNode) : b.byKernelId.get(atom._id);
 	if (node === undefined) {
 		return false; // unregistered and no adopter: exactly base semantics
+	}
+	if (b.quiet) {
+		// Quiet mode: nothing is pending, so the whole write is one fold —
+		// no Op object, no ambient batch, no receipt, no walk (Phase 1b).
+		// HostOpKind and OpKind share the 0/1/2 encoding by construction.
+		b.__quietWrite(node, kind as number as OpKind, payload);
+		return true;
 	}
 	b.bareWrite(node, opOf(kind, payload));
 	return true;
@@ -731,6 +743,11 @@ export function registerReactBridge(): CosignalBridge {
 export function __newBridgeForTest(): CosignalBridge {
 	const b = new CosignalBridge();
 	b.setRetainEvents(true); // the referee/tests read the event log; production bridges keep it off
+	// REFEREE MODE: the oracle models always-receipt semantics, so test/lockstep
+	// bridges run with the quiet-mode short-circuit disabled (production
+	// bridges from registerReactBridge() default it ON). The dedicated
+	// quiet-mode suite re-enables it explicitly.
+	b.setQuietWrites(false);
 	return b;
 }
 
@@ -777,6 +794,7 @@ export class CosignalBridge {
 	set trace(v: TraceHooks | undefined) {
 		this._trace = v;
 		this.eventsOn = this._retainEvents || v !== undefined;
+		this.recomputeQuiet(); // an event consumer (dis)arms quiet mode
 	}
 
 	/**
@@ -794,6 +812,7 @@ export class CosignalBridge {
 	setRetainEvents(on: boolean): void {
 		this._retainEvents = on;
 		this.eventsOn = on || this._trace !== undefined;
+		this.recomputeQuiet(); // an event consumer (dis)arms quiet mode
 	}
 
 	// ---- direct listeners (the bindings' consumption surface; no allocation) ----
@@ -914,6 +933,51 @@ export class CosignalBridge {
 	 * invariants (tests opt in; keeping every compacted receipt forever would
 	 * grow without bound otherwise). */
 	retainArchive = false;
+
+	// ---- quiet mode (Phase 1b) --------------------------------------------------
+	/**
+	 * The quiet-mode SEMANTIC switch (production default ON). While the
+	 * bridge is QUIET — nothing pending: no live batch token, no open render
+	 * pass, every tape compacted — an unclassified write to a registered atom
+	 * FOLDS DIRECTLY: committed base and the kernel advance together and no
+	 * receipt, tape append, token, delivery walk, or bridge event is minted.
+	 * The concurrency pipeline arms only while something is actually pending;
+	 * a transition that starts later begins from committed base, which the
+	 * folds already advanced — there is no history to reconstruct.
+	 *
+	 * Referee surface: the oracle models always-receipt semantics, so
+	 * lockstep/twin drivers run the engine with this OFF (see
+	 * `__newBridgeForTest`) and the dedicated quiet-mode suite polices the
+	 * short-circuit directly (tests/quiet-mode.spec.ts).
+	 */
+	quietWrites = true;
+	/**
+	 * The ARMED quiet state — the one boolean the write path branches on,
+	 * recomputed only at state transitions (batch open/retire, pass
+	 * start/end, registration, event-retention/tracer changes): quiet ⇔
+	 * quietWrites AND logged AND zero live tokens AND zero open passes AND
+	 * every tape compacted AND no event consumer. Event consumers (a referee
+	 * retaining the log, an attached tracer) disarm quiet so their streams
+	 * stay complete — production apps have neither.
+	 * @internal — read by the module-level host write hook; treat as private.
+	 */
+	quiet = false;
+
+	/** Referee surface — disables/enables the quiet-mode short-circuit (production defaults ON; lockstep drivers run with it OFF). */
+	setQuietWrites(on: boolean): void {
+		this.quietWrites = on;
+		this.recomputeQuiet();
+	}
+
+	private recomputeQuiet(): void {
+		this.quiet =
+			this.quietWrites
+			&& this.mode === 'logged'
+			&& this.liveTokenCount === 0
+			&& this.openPassByRoot.size === 0
+			&& this.dirtyAtoms.size === 0
+			&& !this.eventsOn;
+	}
 	/** Event-stream base offset (0 unless a capacity cap drops old events). */
 	private eventsBase = 0;
 	/** Optional event-stream capacity: oldest events drop past ~2× this. */
@@ -1095,6 +1159,7 @@ export class CosignalBridge {
 		activeBridge = this;
 		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
 		this.syncReadRouting();
+		this.recomputeQuiet(); // logged + nothing pending: quiet arms here
 	}
 
 	/** Registers a node id in the dense side columns. */
@@ -1113,6 +1178,7 @@ export class CosignalBridge {
 		const node = new AtomNode(this.nextNode++, name, initial, eq, equals === undefined, handle);
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
+		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
 		return node;
 	}
 
@@ -1127,6 +1193,7 @@ export class CosignalBridge {
 		const node = new AtomNode(this.nextNode++, name, current, equals ?? Object.is, equals === undefined, handle);
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
+		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
 		return node;
 	}
 
@@ -1962,6 +2029,7 @@ export class CosignalBridge {
 		};
 		this.tokens.set(token.id, token);
 		this.liveTokenCount++;
+		this.quiet = false; // a live batch: the pipeline is armed until the last retirement
 		if (parked) this.parkedCount++;
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchOpen(token);
@@ -2051,9 +2119,78 @@ export class CosignalBridge {
 
 	// ------------------------------------------------------ the write path
 
+	/**
+	 * Quiet-mode write fold — the whole write while nothing is pending. The
+	 * op folds over committed base (updaters/reducers under both fold-purity
+	 * guards, exactly as replay would run them), the same equality drop as
+	 * the write path's tape-empty drop check applies, and an accepted write
+	 * advances base, origin, and the kernel TOGETHER — the invariant while
+	 * quiet is base ≡ kernel newest ≡ every world's value, so a batch opened
+	 * later starts from a base that already contains the quiet history.
+	 * Memo coherence: the fold mints one sequence and stamps it into the
+	 * atom's baseSeq and the committed-advance clock (cas), so every memo
+	 * plane revalidates instead of serving pre-fold values. Observers: no
+	 * walk machinery is armed, so the small live-observer population is
+	 * reconciled value-gated, exactly like a durable drain (corrections for
+	 * watchers, re-runs for committed React effects, newest evaluations for
+	 * core effects). No receipt, no token, no tape append, no delivery walk,
+	 * no bridge event (event consumers disarm quiet). @internal
+	 */
+	__quietWrite(node: AtomNode, kind: OpKind, payload: unknown): void {
+		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
+		if (this.inFoldCallback) throw new BridgeScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
+		const prev = node.base;
+		const next = kind === OpKind.SET ? payload : this.applyOpPacked(node, kind, payload, prev);
+		if (node.eqIsDefault ? Object.is(next, prev) : this.inCallback(() => node.equals(next, prev))) {
+			return; // equality drop against base — the tape is empty by the quiet invariant
+		}
+		node.base = next;
+		node.origin = next; // quiet history is committed-only base state (as in direct mode)
+		node.baseSeq = this.cas = ++this.seq; // move the memo clocks: fingerprint + committed-advance (mintSeq, inlined)
+		// Direct kernel apply: the plain write tail, no public-method re-entry
+		// (the host seam already ran — policy checked, op folded).
+		__hostApplySet(node.handle, next);
+		if (this.watchers.size !== 0 || this.reactEffects.size !== 0) this.quietDrain();
+		if (this.coreEffects.size !== 0) this.directFlushCoreEffects();
+		if (this.notifyN !== 0) this.flushNotify();
+	}
+
+	/** Value-gated observer reconciliation for a quiet fold: committed truth
+	 * moved for every root, and no slot/walk state exists to scope candidates,
+	 * so every live watcher and committed React effect re-checks directly —
+	 * the same compare-and-correct blocks as drainCommittedObservers. */
+	private quietDrain(): void {
+		for (const w of this.watchers.values()) {
+			if (!w.live) continue;
+			const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: w.root });
+			if (!Object.is(now, w.lastRenderedValue)) {
+				w.lastRenderedValue = now; // the urgent pre-paint re-render
+				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
+				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0, undefined);
+			}
+		}
+		for (const e of this.reactEffects.values()) {
+			const now = this.evaluate(this.nodeById(e.node), { kind: 'committed', root: e.root });
+			if (!Object.is(now, e.lastValue)) {
+				e.lastValue = now;
+				e.runs++;
+			}
+		}
+	}
+
 	/** A write belongs to the batch context it executes in; a bare write has
-	 * none, so it joins the ambient default batch. */
+	 * none, so it joins the ambient default batch — unless the bridge is
+	 * QUIET, in which case the write folds directly (no ambient batch is
+	 * minted while nothing is pending). */
 	bareWrite(node: AtomNode, op: Op): void {
+		if (this.quiet) {
+			this.__quietWrite(
+				node,
+				op.kind === 'set' ? OpKind.SET : op.kind === 'update' ? OpKind.UPDATE : OpKind.DISPATCH,
+				op.kind === 'set' ? op.value : op.kind === 'update' ? op.fn : op.action,
+			);
+			return;
+		}
 		let ambient = this.ambientToken === undefined ? undefined : this.tokens.get(this.ambientToken);
 		if (ambient === undefined || ambient.state !== 'live') {
 			ambient = this.openBatch('default', { ambient: true });
@@ -2304,6 +2441,7 @@ export class CosignalBridge {
 		};
 		this.passes.set(pass.id, pass);
 		this.openPassByRoot.set(rootId, pass);
+		this.quiet = false; // an open render pass: the pipeline is armed until it closes
 		const tr = this.trace;
 		if (tr !== undefined) {
 			tr.passStart(pass);
@@ -2505,6 +2643,7 @@ export class CosignalBridge {
 			if (this.eventsOn) this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
 			this.reevaluateDeferredReleases();
 			this.reclaimAfterPassEnd(p);
+			this.recomputeQuiet(); // pass closed (and its pin unblocked compaction): quiet may re-arm
 			const tr = this.trace;
 			if (tr !== undefined) tr.opEnd();
 			this.flushNotify();
@@ -2569,6 +2708,7 @@ export class CosignalBridge {
 		if (this.eventsOn) this.log({ type: 'pass-committed', pass: p.id, root: p.root });
 		this.reevaluateDeferredReleases();
 		this.reclaimAfterPassEnd(p);
+		this.recomputeQuiet(); // pass closed (and its pin unblocked compaction): quiet may re-arm
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
@@ -2738,6 +2878,7 @@ export class CosignalBridge {
 		}
 		if (this.ambientToken === t.id) this.ambientToken = undefined;
 		this.maybeReclaimToken(t);
+		this.recomputeQuiet(); // the LAST retirement (with every tape compacted) re-arms quiet
 	}
 
 	private rebuildCommittedBits(r: RootState): void {
@@ -3146,6 +3287,7 @@ export class CosignalBridge {
 		}
 		for (const w of this.watchers.values()) w.dedupBits = 0;
 		if (this.eventsOn) this.log({ type: 'epoch-reset', epoch: this.epoch });
+		this.recomputeQuiet(); // quiescent by definition; re-derive from the new episode's state
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();

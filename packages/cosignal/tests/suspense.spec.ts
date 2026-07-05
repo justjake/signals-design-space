@@ -1,11 +1,22 @@
 /**
- * ctx.use — reading async values inside a computed, in the base build:
- * while the thenable is pending, reads throw a SuspendedRead carrier that
- * stays the same object across reads; settlement invalidates and
- * re-evaluates; that carrier's identity is stable across re-evaluation;
- * per-slot idempotence (pending previous work wins); the lazy factory
- * form; rejection rethrows the reason from cache; and read-site self-heal
- * (a read after settlement recomputes instead of throwing stale).
+ * ctx.use — reading async values inside a computed. Two forms, both exact
+ * React `use()` parity:
+ *
+ *  1. `ctx.use(thenable)` — caller-cached promise: settled work unwraps
+ *     synchronously; pending work throws a SuspendedRead that stays the same
+ *     object across reads and re-evaluations (a lazy expando on the
+ *     instrumented thenable); settlement invalidates and re-evaluates.
+ *  2. `ctx.use(key, factory)` — per-key cache scoped to the LIVING node:
+ *     same key shares the entry (pending shares the in-flight thenable,
+ *     settled replays the value/error) for the node's whole lifetime;
+ *     different keys coexist — one key's pending work never blocks or
+ *     collides with another key's settled work.
+ *
+ * The bare positional-factory form is GONE (this file used to pin its
+ * "pending previous wins across different inputs" semantics — that contract
+ * was judged world-unsound and replaced by the keyed contract below). Also
+ * covered: rejection rethrows the reason from cache, and read-site
+ * self-heal (a read after settlement recomputes instead of throwing stale).
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, SuspendedRead, effect } from '../src/index';
@@ -99,50 +110,63 @@ describe('ctx.use', () => {
 		expect(catchOf(() => c.state)).toBe(reason);
 	});
 
-	test('per-slot idempotence: while pending, a re-created thenable is dropped (pending previous wins)', async () => {
-		const gate = new Atom(0);
-		const made: Array<ReturnType<typeof deferred<string>>> = [];
-		const c = new Computed((ctx) => {
-			gate.state;
-			const d = deferred<string>();
-			made.push(d);
-			return ctx.use(d.promise);
-		});
-
-		const e1 = catchOf(() => c.state);
-		expect(made.length).toBe(1);
-		gate.set(1); // re-eval creates a NEW promise, but slot 0's is still pending
-		const e2 = catchOf(() => c.state);
-		expect(made.length).toBe(2);
-		expect(e2).toBe(e1); // the first thenable still owns the slot → same box
-
-		made[0].resolve('first');
-		await made[0].promise;
-		await tick();
-		expect(c.state).toBe('first'); // the ORIGINAL work's value is consumed
-	});
-
-	test('lazy factory form: not called while the slot is pending', async () => {
+	test('keyed form: same key shares the in-flight entry (factory not re-called while pending)', async () => {
 		const gate = new Atom(0);
 		let factoryCalls = 0;
 		const d = deferred<string>();
 		const c = new Computed((ctx) => {
 			gate.state;
-			return ctx.use(() => {
+			return ctx.use('req', () => {
 				factoryCalls++;
 				return d.promise;
 			});
 		});
-		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead);
+		const e1 = catchOf(() => c.state);
+		expect(e1).toBeInstanceOf(SuspendedRead);
 		expect(factoryCalls).toBe(1);
-		gate.set(1); // dep-driven re-eval while pending
-		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead);
-		expect(factoryCalls).toBe(1); // factory skipped — pending slot wins
-		d.resolve('lazy');
+		gate.set(1); // dep-driven re-eval while pending: same key → same entry
+		const e2 = catchOf(() => c.state);
+		expect(e2).toBe(e1); // shared entry ⇒ shared stable sentinel
+		expect(factoryCalls).toBe(1);
+		d.resolve('shared');
 		await d.promise;
 		await tick();
-		expect(c.state).toBe('lazy');
-		expect(factoryCalls).toBe(1); // settled slot consumed on the settle re-eval
+		expect(c.state).toBe('shared');
+		expect(factoryCalls).toBe(1); // the settled entry replays; no refetch
+	});
+
+	test('keyed form: different keys coexist — a settled key never suspends on another key\'s pending work', async () => {
+		// The cross-key schedule the reviews walked (single-world analog):
+		// key q1 settles; key q2 is fetched and left pending; a re-read that
+		// asks q1 again must serve q1's settled value synchronously — NOT
+		// suspend on q2's promise, NOT refetch q1.
+		const query = new Atom('q1');
+		const gates: Record<string, ReturnType<typeof deferred<string>>> = {
+			q1: deferred<string>(),
+			q2: deferred<string>(),
+		};
+		let fetches = 0;
+		const c = new Computed((ctx) => {
+			const q = query.state;
+			return ctx.use(['fetch', q], () => {
+				fetches++;
+				return gates[q]!.promise;
+			});
+		});
+		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead);
+		expect(fetches).toBe(1);
+		gates.q1!.resolve('DATA1');
+		await gates.q1!.promise;
+		await tick();
+		expect(c.state).toBe('DATA1'); // q1 settled
+		query.set('q2'); // new key: fetches q2, suspends on IT
+		const e2 = catchOf(() => c.state);
+		expect(e2).toBeInstanceOf(SuspendedRead);
+		expect((e2 as SuspendedRead).thenable).toBe(gates.q2!.promise);
+		expect(fetches).toBe(2);
+		query.set('q1'); // back to the settled key while q2 is still pending
+		expect(c.state).toBe('DATA1'); // synchronous replay — no suspension, no collision
+		expect(fetches).toBe(2); // and no refetch: entries live as long as the node
 	});
 
 	test('pre-instrumented custom thenables: settled status is consumed synchronously', () => {
@@ -178,13 +202,13 @@ describe('ctx.use', () => {
 		expect(c.state).toBe('healed'); // self-heal: invalidate + recompute on read
 	});
 
-	test('consumed use-slots reset once an evaluation completes (fresh work refetches)', async () => {
+	test('keyed entries persist for the node\'s lifetime: a changed key refetches, the old key replays', async () => {
 		const gate = new Atom(0);
 		let fetches = 0;
 		const boxes: Array<ReturnType<typeof deferred<number>>> = [];
 		const c = new Computed((ctx) => {
 			const g = gate.state;
-			return ctx.use(() => {
+			return ctx.use(g, () => {
 				fetches++;
 				const d = deferred<number>();
 				boxes.push(d);
@@ -193,16 +217,47 @@ describe('ctx.use', () => {
 			});
 		});
 		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead);
-		await boxes[0].promise;
+		await boxes[0]!.promise;
 		await tick();
 		expect(c.state).toBe(0);
 		expect(fetches).toBe(1);
-		gate.set(2); // dep change AFTER completion: the slot was consumed → refetch
+		gate.set(2); // NEW key: fresh entry, refetch
 		expect(catchOf(() => c.state)).toBeInstanceOf(SuspendedRead);
 		expect(fetches).toBe(2);
-		await boxes[1].promise;
+		await boxes[1]!.promise;
 		await tick();
 		expect(c.state).toBe(200);
+		gate.set(0); // back to a key that already settled: replay, NO refetch
+		expect(c.state).toBe(0);
+		expect(fetches).toBe(2);
+	});
+
+	test('the bare positional-factory form is gone (loud error), and keys reject objects/functions', () => {
+		const c1 = new Computed((ctx) => (ctx.use as (s: unknown) => unknown)(() => Promise.resolve(1)));
+		expect(catchOf(() => c1.state)).toMatchObject({ message: expect.stringMatching(/bare factory form.*removed/) });
+		const c2 = new Computed((ctx) => (ctx.use as (k: unknown, f: unknown) => unknown)({ q: 1 }, () => Promise.resolve(1)));
+		expect(catchOf(() => c2.state)).toMatchObject({ message: expect.stringMatching(/keys must be strings, numbers/) });
+		const c3 = new Computed((ctx) => (ctx.use as (s: unknown) => unknown)(42));
+		expect(catchOf(() => c3.state)).toMatchObject({ message: expect.stringMatching(/takes a thenable/) });
+	});
+
+	test('key serialization is type-stable: 1, "1", [1], true, "true", null, "null" all coexist', async () => {
+		const which = new Atom(0);
+		const keys: unknown[] = [1, '1', [1], true, 'true', null, 'null', [1, [2]], ['1,2']];
+		let fetches = 0;
+		const c = new Computed((ctx) => {
+			const k = keys[which.state];
+			return (ctx.use as (k: unknown, f: () => PromiseLike<unknown>) => unknown)(k, () => {
+				fetches++;
+				return Promise.resolve(`v${fetches}`);
+			});
+		});
+		for (let i = 0; i < keys.length; i++) {
+			which.set(i);
+			catchOf(() => c.state); // mint (suspends; Promise.resolve settles next tick)
+		}
+		await tick();
+		expect(fetches).toBe(keys.length); // every key minted its own entry
 	});
 
 	test('ctx.use outside a computed evaluation throws', () => {

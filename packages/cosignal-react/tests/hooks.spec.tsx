@@ -277,3 +277,55 @@ describe('useSignalEffect (§5.11)', () => {
 		expect(log[log.length - 1]).toBe('clean:2');
 	});
 });
+
+describe('AtomOptions.effect observed lifecycle on the React path (checkpoint: verify, do not fix)', () => {
+	test('KNOWN GAP: the observe-lifecycle callback NEVER fires for useSignal-only subscribers', async () => {
+		// MECHANISM. AtomOptions.effect is delivered on the KERNEL's liveness
+		// bit: linkInsert's first-subscriber branch / unwatched()'s signal
+		// branch (D1) — i.e. it fires when a kernel-level subscriber (a core
+		// Computed pulled by something live, a core effect()) attaches its
+		// first link to the atom's record. React subscribers are BRIDGE
+		// WATCHERS: useSignal mounts a watcher on the bridge's overlay plane
+		// and world evaluations read atom values via folds / kernelValueOf
+		// (an untracked kernel read) — no kernel link is ever created, the
+		// liveness bit never flips 0→1, and the callback never runs.
+		// Owner decision needed before changing this (the option was kept for
+		// real apps); this test PINS the current behavior loudly.
+		h = makeHarness();
+		const lifecycle: string[] = [];
+		const a = new Atom(0, {
+			effect: () => {
+				lifecycle.push('observe');
+				return () => lifecycle.push('unobserve');
+			},
+		});
+		function View() {
+			return <span>v:{useSignal(a)};</span>;
+		}
+		const { root, container } = await h.mount(<View />);
+		expect(text(container)).toBe('v:0;');
+		await act(async () => {}); // lifecycle delivery is microtask-coalesced — give it every chance
+		await act(async () => {
+			a.set(1); // subscribed and live: deliveries flow…
+		});
+		expect(text(container)).toBe('v:1;');
+		expect(lifecycle).toEqual([]); // …but the kernel never saw a subscriber: NO observe callback
+		await act(async () => {
+			root.render(<div />);
+		});
+		await act(async () => {}); // debounced unsubscribe + microtask flap damping settle
+		expect(lifecycle).toEqual([]); // and no unobserve either — the gap is symmetric
+		// CONTRAST (the same atom, a kernel subscriber): effect() flips the
+		// liveness bit and the callback fires — proving the option works and
+		// the gap is specific to bridge-watcher subscriptions.
+		const { effect } = await import('cosignal');
+		const dispose = effect(() => {
+			void a.state;
+		});
+		await act(async () => {}); // microtask delivery
+		expect(lifecycle).toEqual(['observe']);
+		dispose();
+		await act(async () => {});
+		expect(lifecycle).toEqual(['observe', 'unobserve']);
+	});
+});

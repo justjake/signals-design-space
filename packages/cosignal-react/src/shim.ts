@@ -51,19 +51,19 @@
  *    world (evaluation world, else the ambient world this shim maintains
  *    around render passes and effect fires) — no prototype patching
  *    anywhere.
- *  - Suspense capsules: a capsule is the shim's cache record for one
- *    ctx.use call — the thenable plus the inputs that produced it, so the
- *    same async work is reused instead of refetched. ctx.use inside bound
- *    computeds keys capsules on the computed's source and deps, matched by
- *    use-site position and by the values read before that site — the same
- *    inputs resolve to the same thenable in every world and across every
- *    render retry, while a world that genuinely sees different inputs
- *    refetches. See the `capsules` field for why value identity (not node
- *    identity, not a per-render bucket) is the key.
+ *  - Suspense: the core's `ctx.use` is the ONE implementation (two forms:
+ *    caller-cached thenable, and a per-key cache scoped to the living node —
+ *    see ComputedCtx.use in cosignal). Bound computeds delegate to it with a
+ *    node-scoped cache holder that lives and dies with the node. The shim's
+ *    only suspense job is translation: background world evaluations fold a
+ *    pending suspension to its stable SuspendedRead sentinel (so "still
+ *    pending" caches and compares like any value), while hook-initiated
+ *    evaluations let it unwind so the hooks can rethrow the thenable into
+ *    React Suspense.
  */
 
 import * as React from 'react';
-import { Atom, ReducerAtom, SuspendedRead } from 'cosignal';
+import { __ctxUse, Atom, ReducerAtom, SuspendedRead, type ComputedCtx } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
@@ -150,31 +150,11 @@ type EffectRec = {
 	live: boolean;
 };
 
-type Capsule = {
-	thenable: PromiseLike<unknown>;
-	/** Stable sentinel: background evaluations fold a pending capsule to THIS one object, so every world and retry sees a single "still pending" identity. */
-	sr: SuspendedRead;
-	state: 'pending' | 'fulfilled' | 'rejected';
-	value: unknown;
-	reason: unknown;
-	/** The use() position within the node's evaluation. */
-	position: number;
-	/** The owning useComputed's deps at mint (closure-input identity). */
-	deps: readonly unknown[];
-	/** (nodeId, value) pairs read before the use() site at mint — the world-identity prefix. */
-	prefix: Array<[number, unknown]>;
-};
-
-/** Bookkeeping for one bound-computed evaluation: read routing plus ctx.use state. */
+/** Bookkeeping for one bound-computed evaluation: read routing for nested
+ * bound-computed reads (and a marker that suppresses effect-capture inside
+ * the evaluation). */
 type EvalFrame = {
 	read: Reader;
-	untracked: Reader;
-	node: ComputedNode;
-	/** Capsule identity components stable across suspended-mount retries. */
-	fnSrc: string;
-	deps: readonly unknown[];
-	useIndex: number;
-	readLog: Array<[number, unknown]>;
 };
 
 const BOUND: unique symbol = Symbol('cosignal-react.bound');
@@ -225,23 +205,6 @@ export class Shim {
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
 	claimed = new Set<number>();
 	effects = new Map<number, EffectRec>();
-	/**
-	 * ctx.use capsules keyed by the computed's SOURCE (fn text + deps), matched
-	 * by (position, value-prefix): the same inputs serve the same thenable in
-	 * EVERY world and across every retry. Node identity is deliberately NOT
-	 * the key — when a mount suspends, React discards the in-progress
-	 * component and retries it from scratch, so the retry re-creates the hook
-	 * state and with it the computed node; node-keyed capsules would miss on
-	 * every retry and refetch forever, never settling. Instead a world's
-	 * identity is carried by the values its replay produced: a retry of the
-	 * same render replays the same values and reuses the capsule; a world
-	 * moved by a retirement or a different batch set replays different values
-	 * and refetches. Two worlds that replay identical inputs share one
-	 * capsule rather than refetching — sound, because worlds are pure replays,
-	 * so identical inputs mean observationally identical evaluations. The
-	 * trade: an occasional duplicate fetch is accepted; stale data never is.
-	 */
-	private capsules = new Map<string, Capsule[]>();
 	/** The bridge evaluation frames opened by bound computeds (innermost last). */
 	private evalStack: EvalFrame[] = [];
 	/** Set while an effect fire is tracking committed-for-root reads. */
@@ -274,11 +237,9 @@ export class Shim {
 			return undefined;
 		});
 		bridge.readObserver = (node, value) => {
-			const frame = this.evalStack[this.evalStack.length - 1];
-			if (frame !== undefined) {
-				frame.readLog.push([node.id, value]);
-				return;
-			}
+			// Reads inside a bound-computed evaluation are the computed's own
+			// dependencies (tracked by the bridge frame), not the effect's.
+			if (this.evalStack.length !== 0) return;
 			this.effectCapture?.deps.push({ node, value });
 		};
 		// Direct listeners — the load-bearing consumption surface. The bridge's
@@ -339,7 +300,6 @@ export class Shim {
 		this.bridge.setWorldProvider(undefined);
 		this.targets.clear();
 		this.effects.clear();
-		this.capsules.clear();
 	}
 
 	/** Listener bodies never throw across React's commit; failures are recorded. */
@@ -744,19 +704,22 @@ export class Shim {
 	 * and bound-computed reads inside `fn` route through the frame's tracked
 	 * reader (dependency edges in the kernel, values folded in the evaluating
 	 * world), ctx.previous reads the node's last-committed cell, and ctx.use
-	 * resolves capsules against the frame's identity (source, deps, use-site
-	 * position, value prefix). When the engine evaluates the node in the
-	 * background — no component rendering — a pending suspension folds to the
-	 * capsule's stable SuspendedRead sentinel instead of unwinding, so "still
-	 * pending" caches like any other value; hook-initiated evaluations rethrow
-	 * it so React can suspend the component.
+	 * is the core's two-form implementation over a cache holder scoped to
+	 * THIS node (created here, garbage-collected with the node — same key ⇒
+	 * same thenable for the node's lifetime, across worlds and re-renders;
+	 * a recreated node refetches, exactly like React discarding a useMemo
+	 * cache). When the engine evaluates the node in the background — no
+	 * component rendering — a pending suspension folds to the thenable's
+	 * stable SuspendedRead sentinel instead of unwinding, so "still pending"
+	 * caches like any other value; hook-initiated evaluations rethrow it so
+	 * React can suspend the component.
 	 */
-	makeComputedNode<T>(label: string, fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[] = []): ComputedNode {
+	makeComputedNode<T>(label: string, fn: (ctx: BoundCtx<T>) => T): ComputedNode {
 		const shim = this;
-		const fnSrc = String(fn);
+		const useHolder: { _useCache: Map<string, PromiseLike<unknown>> | undefined } = { _useCache: undefined };
 		let node: ComputedNode;
-		const wrapper = (read: Reader, untracked: Reader): Value => {
-			const frame: EvalFrame = { read, untracked, node, fnSrc, deps, useIndex: 0, readLog: [] };
+		const wrapper = (read: Reader): Value => {
+			const frame: EvalFrame = { read };
 			shim.evalStack.push(frame);
 			try {
 				const cell = shim.previousCell(node.id);
@@ -764,7 +727,8 @@ export class Shim {
 					get previous(): T | undefined {
 						return cell.value as T | undefined;
 					},
-					use: <V>(source: PromiseLike<V> | (() => PromiseLike<V>)): V => shim.ctxUse(frame, source) as V,
+					use: <V>(sourceOrKey: unknown, factory?: () => PromiseLike<V>): V =>
+						__ctxUse(useHolder, sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V,
 				};
 				return fn(ctx);
 			} catch (err) {
@@ -776,81 +740,6 @@ export class Shim {
 		};
 		node = this.bridge.computed(label, wrapper);
 		return node;
-	}
-
-	/** ctx.use: capsule lookup by (source, deps, use-site position, value prefix); mints a capsule and suspends on miss. */
-	private ctxUse(frame: EvalFrame, source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): unknown {
-		const position = frame.useIndex++;
-		let entries = this.capsules.get(frame.fnSrc);
-		if (entries === undefined) {
-			entries = [];
-			this.capsules.set(frame.fnSrc, entries);
-		}
-		for (const existing of entries) {
-			if (
-				existing.position !== position ||
-				!this.depsMatch(existing.deps, frame.deps) ||
-				!this.prefixMatches(existing.prefix, frame.readLog)
-			) {
-				continue;
-			}
-			if (existing.state === 'fulfilled') return existing.value;
-			if (existing.state === 'rejected') throw existing.reason;
-			throw existing.sr; // stable per capsule: retries and folds see one identity
-		}
-		// Miss: mint a fresh capsule. A prefix moved by a retirement or a
-		// changed batch set means this world genuinely sees different inputs,
-		// so it refetches (a duplicate fetch is acceptable; stale data is not).
-		// The identity prefix is the reads BEFORE the use() site: capture it
-		// before the factory runs, then truncate the factory's own reads from
-		// the log — the factory runs at mint only (an evaluation that matches
-		// an existing capsule never re-runs it), so reads inside it can never
-		// participate in capsule identity. Read your inputs before ctx.use.
-		const prefix = frame.readLog.slice();
-		const mark = frame.readLog.length;
-		const thenable = typeof source === 'function' ? source() : source;
-		frame.readLog.length = mark;
-		const capsule: Capsule = {
-			thenable,
-			sr: new SuspendedRead(thenable),
-			state: 'pending',
-			value: undefined,
-			reason: undefined,
-			position,
-			deps: frame.deps.slice(),
-			prefix,
-		};
-		entries.push(capsule);
-		thenable.then(
-			(value) => {
-				// Settlement identity: only THIS thenable settles THIS capsule.
-				if (capsule.thenable === thenable) {
-					capsule.state = 'fulfilled';
-					capsule.value = value;
-				}
-			},
-			(reason) => {
-				if (capsule.thenable === thenable) {
-					capsule.state = 'rejected';
-					capsule.reason = reason;
-				}
-			},
-		);
-		throw capsule.sr;
-	}
-
-	private depsMatch(a: readonly unknown[], b: readonly unknown[]): boolean {
-		if (a.length !== b.length) return false;
-		for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
-		return true;
-	}
-
-	private prefixMatches(prefix: Array<[number, unknown]>, readLog: Array<[number, unknown]>): boolean {
-		if (readLog.length < prefix.length) return false;
-		for (let i = 0; i < prefix.length; i++) {
-			if (prefix[i]![0] !== readLog[i]![0] || !Object.is(prefix[i]![1], readLog[i]![1])) return false;
-		}
-		return true;
 	}
 
 	/** Hook-initiated evaluation: SuspendedRead propagates (React will suspend). */
@@ -867,9 +756,7 @@ export class Shim {
 	routeComputedRead(node: ComputedNode): unknown {
 		const frame = this.evalStack[this.evalStack.length - 1];
 		if (frame !== undefined) {
-			const value = frame.read(node);
-			frame.readLog.push([node.id, value]);
-			return value;
+			return frame.read(node);
 		}
 		if (this.effectCapture !== undefined) return this.effectRead(node);
 		const rendering = this.renderingRoot();
@@ -944,10 +831,7 @@ export class Shim {
 	}
 }
 
-/** The evaluation context bound computed functions receive. */
-export type BoundCtx<T> = {
-	/** Last committed value of this node — a hint only: it may be stale or undefined, and the function must be correct without it. */
-	readonly previous: T | undefined;
-	/** Reads a thenable; while pending the read suspends via a capsule keyed to this evaluation's inputs, and settlement re-evaluates. */
-	use<V>(source: PromiseLike<V> | (() => PromiseLike<V>)): V;
-};
+/** The evaluation context bound computed functions receive — the core's
+ * ComputedCtx verbatim (`previous` hint + the two-form `ctx.use`), served
+ * over the bound node's own state. */
+export type BoundCtx<T> = ComputedCtx<T>;

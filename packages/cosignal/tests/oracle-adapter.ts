@@ -169,6 +169,10 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
  */
 export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 	const b = __newBridgeForTest();
+	// Referee mode: the model has always-receipt semantics — the engine's
+	// quiet-mode short-circuit stays DISABLED for lockstep (production
+	// defaults it ON; tests/quiet-mode.spec.ts polices the short-circuit).
+	b.setQuietWrites(false); // explicit, though __newBridgeForTest already defaults it off
 	buildEngineTopology(b);
 	b.registerBridge();
 	let drained = 0;

@@ -152,7 +152,7 @@
  *   D4. A computed's aux value slot — `values[(id >> 2) + 1]`, the "signal
  *       pending value OR effect cleanup" column, unused for computeds —
  *       holds the owning `Computed` instance (policy state for boxes and
- *       ctx.use slots; same packed side column, no extra map).
+ *       the ctx.use key cache; same packed side column, no extra map).
  *   D5. Engine gains cold policy ops the policy layer needs:
  *       invalidateComputed (settlement-invalidate), markLifecycle (D1),
  *       activeIsComputed (backs the forbidWritesInComputeds check).
@@ -208,6 +208,16 @@ export class CycleError extends Error {
 
 // ---- the evaluation context ----------------------------------------------------
 
+/**
+ * A `ctx.use(key, factory)` cache key: JSON-ish scalars and arrays thereof.
+ * The key must carry every input that varies the request (query strings,
+ * ids, page numbers) — the cache is per-key for the node's lifetime, so two
+ * calls with the same key share one request. Functions and objects are
+ * rejected loudly: they have no stable serialization, and a key that can't
+ * serialize can't dedupe.
+ */
+export type UseKey = string | number | boolean | null | readonly UseKey[];
+
 export type ComputedCtx<T> = {
 	/**
 	 * The computed's last committed value — a hint only: no identity,
@@ -218,14 +228,28 @@ export type ComputedCtx<T> = {
 	 */
 	readonly previous: T | undefined;
 	/**
-	 * Reads a thenable inside a computed. Fulfilled: returns the value.
-	 * Rejected: throws the reason. Pending: suspends the computed — read
-	 * sites observe a stable SuspendedRead until the thenable settles, and
-	 * settlement invalidates the computed. The lazy factory form is preferred
-	 * (the factory is not called while the slot's previous thenable is
-	 * pending); the eager form guarantees identity stability only.
+	 * Reads a thenable inside a computed — React's `use()` contract, in two
+	 * forms:
+	 *
+	 * 1. `ctx.use(thenable)` — the CALLER caches the promise (data layer,
+	 *    component state). Fulfilled: returns the value. Rejected: throws the
+	 *    reason. Pending: suspends the computed — read sites observe a stable
+	 *    SuspendedRead until the thenable settles, and settlement invalidates
+	 *    the computed. Passing the same (now settled) promise on a later
+	 *    evaluation reads the resolved value synchronously; the engine stores
+	 *    nothing beyond instrumentation on the thenable itself.
+	 * 2. `ctx.use(key, factory)` — the batteries-included form: the node keeps
+	 *    a per-key cache for its own lifetime. Same key ⇒ same thenable (the
+	 *    factory is not re-invoked; pending work is shared, settled work
+	 *    replays); different keys coexist. The key must carry the inputs that
+	 *    vary the request. The cache dies with the node.
+	 *
+	 * The bare positional-factory form (`ctx.use(() => fetch(...))`) was
+	 * removed: an unkeyed factory is the "uncached promise" footgun and is
+	 * unsound across worlds asking different queries.
 	 */
-	use<V>(source: PromiseLike<V> | (() => PromiseLike<V>)): V;
+	use<V>(source: PromiseLike<V>): V;
+	use<V>(key: UseKey, factory: () => PromiseLike<V>): V;
 };
 
 /**
@@ -238,8 +262,8 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 	get previous(): unknown {
 		return ctxPrevious();
 	},
-	use<V>(source: PromiseLike<V> | (() => PromiseLike<V>)): V {
-		return ctxUse(source as PromiseLike<unknown> | (() => PromiseLike<unknown>)) as V;
+	use<V>(sourceOrKey: PromiseLike<V> | UseKey, factory?: () => PromiseLike<V>): V {
+		return ctxUse(sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V;
 	},
 };
 
@@ -1307,6 +1331,17 @@ export function __assertHostWritable(): void {
 	}
 }
 
+/**
+ * Direct kernel apply for the host's quiet-mode fold: the plain-path write
+ * tail (`writeAtom` — equality drop, propagation, flush), skipping the
+ * public method and its host-seam re-entry. The caller has already run the
+ * host-writable policy check and folded the operation to a plain value.
+ * @internal
+ */
+export function __hostApplySet(atom: Atom<unknown>, value: unknown): void {
+	writeAtom(atom._id, atom._isEqual, value);
+}
+
 function maybeBoundary(): void {
 	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
 		boundaryWork();
@@ -1384,11 +1419,6 @@ function foldPoisonOp(): never {
 }
 
 function foldNoop(): void {}
-
-/** The Computed instance owning kernel node `c` (aux value slot, D4). */
-function ownerOf(c: NodeId): Computed<unknown> {
-	return values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as Computed<unknown>;
-}
 
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
 // Delivered on the kernel's liveness bit: linkInsert's first-subscriber branch
@@ -1517,8 +1547,6 @@ function runFold<T>(fn: () => T): T {
 
 // ---- the computed evaluation policy --------------------------------------------
 
-const noop = (): void => {};
-
 type InstrumentedThenable = PromiseLike<unknown> & {
 	status?: 'pending' | 'fulfilled' | 'rejected';
 	value?: unknown;
@@ -1550,52 +1578,14 @@ function ctxPrevious(): unknown {
 }
 
 /**
- * ctx.use (hoisted; called from POLICY_CTX) — the canonical thenable protocol
- * (mirrors React's trackUsedThenable): instrument `status`/`value`/`reason`
- * onto the thenable itself; while a slot's previous thenable survives, a
- * thenable produced by re-evaluation is assumed to re-create the same work —
- * the previous one wins and the new one is silenced (the lazy factory is not
- * even called). Settled thenables synchronously return their value / throw
- * their reason.
- *
- * Slot lifetime (the React render-attempt analog): a settle-driven
- * re-evaluation is a REPLAY — every slot survives, so settled work is
- * consumed, never refetched. A dependency-driven re-evaluation is a fresh
- * attempt — settled slots are dropped (changed inputs refetch; at worst a
- * duplicate fetch) while still-pending slots survive for identity stability.
- * The suspense evaluation prologue (installed on first use, see
- * suspenseEvalFn) applies that hygiene per evaluation. Known corner (the
- * logged build refines this behavior per world): a dependency change landing
- * while a slot is pending dedupes into the in-flight work rather than
- * refetching.
+ * The canonical thenable protocol (mirrors React's trackUsedThenable):
+ * instrument `status`/`value`/`reason` onto the thenable itself, once.
+ * Settled thenables synchronously return their value / throw their reason;
+ * pending ones throw the thenable's stable SuspendedRead (a lazy expando on
+ * the thenable, so every read site and every re-evaluation observes ONE
+ * "still pending" identity per thenable).
  */
-function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): unknown {
-	const c = activeSub;
-	const owner = c !== 0 ? values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] : undefined;
-	if (!(owner instanceof Computed)) {
-		throw new Error('cosignal: ctx.use may only be called during a computed evaluation.');
-	}
-	let slots = owner._slots;
-	if (slots === undefined) {
-		// First-ever use on this node: create the slot store and install the
-		// suspense evaluation prologue for every later evaluation (the current,
-		// already-running evaluation needs no hygiene — its slots are fresh).
-		slots = owner._slots = [];
-		owner._slotIndex = 0;
-		fns[c >> Plane.ID_TO_FN_SHIFT] = suspenseEvalFn(owner, fns[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown);
-	}
-	const index = owner._slotIndex++;
-	const prev = slots[index] as InstrumentedThenable | undefined;
-	let t: InstrumentedThenable;
-	if (prev !== undefined) {
-		t = prev; // the slot's previous work wins for the whole attempt
-		if (typeof source !== 'function' && source !== prev) {
-			source.then(noop, noop); // silence the dropped re-creation
-		}
-	} else {
-		t = (typeof source === 'function' ? source() : source) as InstrumentedThenable;
-	}
-	slots[index] = t;
+function unwrapThenable(t: InstrumentedThenable): unknown {
 	switch (t.status) {
 		case 'fulfilled':
 			return t.value;
@@ -1625,29 +1615,91 @@ function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): un
 }
 
 /**
- * Evaluation prologue for computeds that use ctx.use, installed into the
- * kernel fn slot at the first use() call — only suspense users pay it. Runs
- * the slot-attempt hygiene described on ctxUse, then delegates to the
- * original evaluator.
+ * Stable serialization of a `ctx.use` key. Scalars serialize with a type
+ * discriminant (strings JSON-escape, so `1`, `'1'`, `true`, `'true'`, `null`,
+ * `'null'`, `NaN` all stay distinct); arrays serialize recursively. Anything
+ * else — functions, objects, undefined, symbols — is rejected loudly.
  */
-function suspenseEvalFn(owner: Computed<unknown>, inner: (ctx: unknown) => unknown): (ctx: unknown) => unknown {
-	return (ctxArg: unknown): unknown => {
-		owner._slotIndex = 0;
-		const slots = owner._slots!;
-		if (slots.length !== 0) {
-			if (owner._settleReplay) {
-				owner._settleReplay = false;
-			} else {
-				for (let i = 0; i < slots.length; i++) {
-					const s = slots[i] as InstrumentedThenable | undefined;
-					if (s !== undefined && s.status !== 'pending') {
-						slots[i] = undefined;
-					}
-				}
+function serializeUseKey(key: unknown): string {
+	if (typeof key === 'string') {
+		return JSON.stringify(key);
+	}
+	if (typeof key === 'number' || typeof key === 'boolean' || key === null) {
+		return String(key);
+	}
+	if (Array.isArray(key)) {
+		let out = '[';
+		for (let i = 0; i < key.length; i++) {
+			if (i !== 0) {
+				out += ',';
 			}
+			out += serializeUseKey(key[i]);
 		}
-		return inner(ctxArg);
-	};
+		return out + ']';
+	}
+	throw new Error(
+		'cosignal: ctx.use keys must be strings, numbers, booleans, null, or arrays of those — '
+			+ `got ${typeof key}. Put the serializable inputs in the key and close over the rest in the factory.`,
+	);
+}
+
+/**
+ * The two-form ctx.use dispatch over a node-scoped key cache — the ONE
+ * suspense implementation, shared with the React bindings' bound computeds
+ * (which pass their own per-node holder). See ComputedCtx.use for the
+ * contract. The keyed cache is monotone per node: same key ⇒ same thenable
+ * for the holder's lifetime — including across worlds, which is safe exactly
+ * because the key carries the world-varying inputs (a request cache never
+ * un-learns an answer; a world that asks a different question uses a
+ * different key). Entries evaporate with the holder (node disposal).
+ * @internal — bindings seam, not public API.
+ */
+export function __ctxUse(
+	holder: { _useCache: Map<string, PromiseLike<unknown>> | undefined },
+	sourceOrKey: unknown,
+	factory: (() => PromiseLike<unknown>) | undefined,
+): unknown {
+	if (factory === undefined) {
+		const t = sourceOrKey as InstrumentedThenable;
+		if (t === null || (typeof t !== 'object' && typeof t !== 'function') || typeof t.then !== 'function') {
+			throw new Error(
+				typeof sourceOrKey === 'function'
+					? 'cosignal: the bare factory form ctx.use(fn) was removed — pass ctx.use(key, factory) so the request is cached per key, or cache the promise yourself and pass ctx.use(promise).'
+					: 'cosignal: ctx.use takes a thenable, or (key, factory).',
+			);
+		}
+		return unwrapThenable(t);
+	}
+	if (typeof factory !== 'function') {
+		throw new Error('cosignal: ctx.use(key, factory) requires a factory function.');
+	}
+	const k = serializeUseKey(sourceOrKey);
+	const cache = (holder._useCache ??= new Map());
+	let t = cache.get(k) as InstrumentedThenable | undefined;
+	if (t === undefined) {
+		t = factory() as InstrumentedThenable;
+		if (t === null || (typeof t !== 'object' && typeof t !== 'function') || typeof t.then !== 'function') {
+			throw new Error('cosignal: the ctx.use factory must return a thenable.');
+		}
+		cache.set(k, t);
+	}
+	return unwrapThenable(t);
+}
+
+/**
+ * ctx.use (hoisted; called from POLICY_CTX): resolve the evaluating node's
+ * owning Computed (the per-key cache holder) and dispatch. The per-key cache
+ * lives on the living node and dies with it — a recreated node refetches,
+ * which is React's own uncached-promise story; callers needing cross-death
+ * dedup cache the promise in their data layer and use the one-arg form.
+ */
+function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | undefined): unknown {
+	const c = activeSub;
+	const owner = c !== 0 ? values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] : undefined;
+	if (!(owner instanceof Computed)) {
+		throw new Error('cosignal: ctx.use may only be called during a computed evaluation.');
+	}
+	return __ctxUse(owner, sourceOrKey, factory);
 }
 
 /**
@@ -1692,7 +1744,6 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
 		}
 		try {
 			maybeBoundary();
-			ownerOf(c)._settleReplay = true; // the next evaluation is a replay
 			E.invalidateComputed(c);
 			if (batchDepth === 0) {
 				flush();
@@ -1729,7 +1780,6 @@ function boxedRead(c: NodeId, flags: NodeFlags): unknown {
 	if (t.status === undefined || t.status === 'pending') {
 		throw (t.sr ??= new SuspendedRead(t));
 	}
-	ownerOf(c)._settleReplay = true; // the recompute below is a settle replay
 	E.invalidateComputed(c);
 	const next = E.computedRead(c);
 	if (batchDepth === 0) {
@@ -1786,6 +1836,11 @@ export class Atom<T> {
 	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
+	/** Host adoption stamp — `{ b: theBridge, n: itsAtomNode }`, written by the
+	 * host at registration/adoption so the per-write registry lookup is one
+	 * property load + identity compare instead of a Map probe. Declared here
+	 * (and initialized) so every Atom shares one hidden class. @internal */
+	_hostStamp: { b: unknown; n: unknown } | undefined;
 	readonly label: string | undefined;
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
@@ -1793,6 +1848,7 @@ export class Atom<T> {
 		const id = E.newSignal(initialState);
 		this._id = id;
 		this._isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
+		this._hostStamp = undefined;
 		this.label = options?.label;
 		const effect = options?.effect;
 		if (effect !== undefined) {
@@ -1900,19 +1956,15 @@ export class ReducerAtom<S, A> extends Atom<S> {
 export class Computed<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
 	readonly _id: NodeId;
-	/** ctx.use slot cache (per node, lazily created). @internal */
-	_slots: unknown[] | undefined;
-	/** ctx.use slot cursor for the evaluation in progress. @internal */
-	_slotIndex: number;
-	/** True while the next evaluation is a settlement replay. @internal */
-	_settleReplay: boolean;
+	/** ctx.use(key, factory) cache, scoped to this living node (lazily
+	 * created; dies with the node). Same key ⇒ same thenable for the node's
+	 * lifetime. @internal */
+	_useCache: Map<string, PromiseLike<unknown>> | undefined;
 	readonly label: string | undefined;
 
 	constructor(fn: (ctx: ComputedCtx<T>) => T, options?: ComputedOptions<T>) {
 		maybeBoundary();
-		this._slots = undefined;
-		this._slotIndex = 0;
-		this._settleReplay = false;
+		this._useCache = undefined;
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);

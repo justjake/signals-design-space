@@ -399,7 +399,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(new Set(committedNodeIds).size).toBe(2); // changed deps: fresh node
 	});
 
-	test('case 15 — Suspense across worlds: capsule identity by content, no refetch livelock (rows 2/3)', async () => {
+	test('case 15 — Suspense across worlds: node-scoped keyed cache, cross-key isolation, no refetch livelock (rows 2/3)', async () => {
 		h = makeHarness();
 		const q = new Atom('q1');
 		let fetches = 0;
@@ -419,11 +419,11 @@ describe('battery (spec §6) at React level', () => {
 			);
 		}
 		function App({ two }: { two: boolean }) {
-			// Read the query BEFORE ctx.use: pre-use reads form the capsule's
-			// validity prefix — reads made inside the factory run only at mint.
+			// The key carries the world-varying input (the query): each world
+			// resolves its own entry in the LIVING node's per-key cache.
 			const data = useComputed<string>((ctx) => {
 				const query = q.state as string;
-				return ctx.use(() => fetchLike(query));
+				return ctx.use(['fetch', query], () => fetchLike(query));
 			}, []);
 			return (
 				<React.Suspense fallback={<span>fb;</span>}>
@@ -433,30 +433,82 @@ describe('battery (spec §6) at React level', () => {
 			);
 		}
 		const { root, container } = await h.mount(<App two={false} />);
-		expect(text(container)).toBe('fb;'); // suspended on the q1 capsule
+		expect(text(container)).toBe('fb;'); // suspended on the q1 entry
 		expect(fetches).toBe(1);
 		await act(async () => {
 			gates.q1!.resolve('DATA1');
 		});
 		expect(text(container)).toBe('one:DATA1;');
-		expect(fetches).toBe(1); // the retry consumed the SAME capsule (row 3)
-		// Mid-transition world split: the transition refetches (moved prefix),
-		// the committed world keeps serving the settled q1 capsule.
+		// App (the node's owner) lives OUTSIDE the Suspense boundary, so the
+		// node — and its keyed cache — survived the discarded child attempt:
+		// the retry replays the same q1 entry. (Contrast case 15b, where the
+		// owner itself dies with the attempt and the factory re-runs.)
+		expect(fetches).toBe(1);
+		// Mid-transition world split: the pending world asks a DIFFERENT key
+		// (q2) and fetches it; the committed world's q1 entry is untouched.
 		await act(async () => {
 			React.startTransition(() => q.set('q2'));
 		});
 		expect(text(container)).toBe('one:DATA1;'); // pending; no fallback; no leak
+		// THE CROSS-KEY TEST: with q2's promise still pending, a mid-transition
+		// mount re-reads the node in the COMMITTED world (q1) — it must serve
+		// q1's settled entry synchronously, not suspend on q2's promise and
+		// not refetch q1.
 		await act(async () => {
-			root.render(<App two />); // mid-transition mount reads the SAME capsule (row 2)
+			root.render(<App two />);
 		});
 		expect(text(container)).toBe('one:DATA1;two:DATA1;');
-		expect(fetches).toBe(2); // exactly one fetch per distinct world content
+		expect(fetches).toBe(2); // exactly one fetch per distinct key
 		await act(async () => {
 			gates.q2!.resolve('DATA2');
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('one:DATA2;two:DATA2;');
-		expect(fetches).toBe(2); // settled capsule served everywhere — no livelock
+		expect(fetches).toBe(2); // settled entries replay everywhere — no livelock
+	});
+
+	test('case 15b — mount-retry parity: a discarded mount attempt discards the node, and the factory MAY re-run', async () => {
+		// RE-PINNED CONTRACT (was: `fetches === 1` across a discarded initial
+		// mount, served by the shim's capsule store keyed on fn source + value
+		// prefix). The capsule system is gone; the ctx.use cache now lives on
+		// the node, and the node is hook state — a mount attempt that suspends
+		// and is discarded takes its node (and cache) with it, so the retry
+		// re-creates both and re-runs the factory. That is React's own
+		// uncached-promise story for consumers that die with discarded work.
+		// Apps that want cross-death dedup cache the promise in their data
+		// layer (as `gate.promise` does here — the re-run factory returns the
+		// SAME settled promise, so the refetch costs nothing) or pass a
+		// caller-cached promise via the one-argument form.
+		h = makeHarness();
+		const gate = deferred<string>();
+		let factoryRuns = 0;
+		function Inner() {
+			// The node's owner is INSIDE the boundary: it dies with the attempt.
+			const data = useComputed<string>((ctx) => ctx.use('the-query', () => {
+				factoryRuns++;
+				return gate.promise;
+			}), []);
+			return <span>v:{useSignal(data)};</span>;
+		}
+		const { container } = await h.mount(
+			<React.Suspense fallback={<span>fb;</span>}>
+				<Inner />
+			</React.Suspense>,
+		);
+		expect(text(container)).toBe('fb;');
+		// How many attempts React makes before/after the fallback is the
+		// scheduler's business (observed: the initial mount already renders
+		// the child twice, minting two nodes) — the CONTRACT pinned here is
+		// only that discarded attempts do NOT share one cache: every attempt
+		// re-ran the factory, and the retry after settlement re-ran it again
+		// on a fresh node instead of replaying a dead node's entry.
+		const runsAtFallback = factoryRuns;
+		expect(runsAtFallback).toBeGreaterThanOrEqual(1);
+		await act(async () => {
+			gate.resolve('DATA');
+		});
+		expect(text(container)).toBe('v:DATA;'); // the retry unwraps the settled promise synchronously
+		expect(factoryRuns).toBeGreaterThan(runsAtFallback); // fresh node, fresh cache: the factory re-ran
 	});
 
 	test('case 16 — useSignalEffect observes committed-only; core effect() observes newest', async () => {

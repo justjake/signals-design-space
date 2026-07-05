@@ -247,14 +247,19 @@ let nextComputedSerial = 1;
  * could change, one world could observe another closure's output. A changed
  * function therefore only takes effect through changed deps (the useMemo
  * rule). Inside `fn`, ctx.previous is a hint carrying the last committed
- * value (possibly stale or undefined) and ctx.use(thenable) reads async
- * data, suspending the component via React Suspense while pending.
+ * value (possibly stale or undefined) and ctx.use reads async data
+ * (suspending the component via React Suspense while pending) in two forms:
+ * `ctx.use(promise)` for a promise the app's data layer caches, and
+ * `ctx.use(key, factory)` for a request cached per key on the node itself.
+ * The keyed cache lives exactly as long as the node: deps changes (and
+ * discarded mount attempts, which throw away hook state) recreate the node
+ * and refetch — React's own useMemo/uncached-promise lifecycle.
  */
 export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[]): BoundComputed<T> {
 	const shim = requireShim();
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	return React.useMemo(
-		() => new BoundComputed<T>(shim.makeComputedNode(`useComputed#${nextComputedSerial++}`, fn, deps), shim),
+		() => new BoundComputed<T>(shim.makeComputedNode(`useComputed#${nextComputedSerial++}`, fn), shim),
 		// The user's deps ARE the memo key: a changed fn takes effect only with changed deps.
 		[shim, ...deps],
 	);
