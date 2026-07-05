@@ -35,3 +35,6 @@
 [submodule "vendor/leptos"]
 	path = vendor/leptos
 	url = https://github.com/leptos-rs/leptos.git
+[submodule "packages/dalien-signals"]
+	path = packages/dalien-signals
+	url = https://github.com/justjake/alien-signals.git

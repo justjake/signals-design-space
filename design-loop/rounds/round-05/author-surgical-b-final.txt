@@ -1,0 +1,10 @@
+- File path: [design-surgical-b.md](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md)
+- Mechanism count: 9
+- Seam touch-point count: 9
+- Unwalked cases: None
+- Architecture summary:
+  1. The inherited K0, receipt-tape, K1 architecture remains intact.
+  2. R1 now routes using the existing exact evaluator basis.
+  3. R12’s unsound commit-baseline fast-out and state are deleted.
+  4. R2, R3, R4, R8, and R9 survived pinned adversarial walks.
+  5. Fork facts F1–F9 and merged tests 1–33 remain unchanged.

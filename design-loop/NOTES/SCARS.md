@@ -294,3 +294,54 @@ prohibitions anchor; schedules teach. Curated by the monitor only.
   pends; gen wraps to 0; q0 settles late, passes the gen check, and
   poisons q4's capsule (wrong resource / early unsuspend). Rule: I50
   (exact thenable identity). (b-codex 6; synthesis R10.)
+
+## Round 5 (2026-07-04): rounds/round-05/
+
+
+- **S40. Chronology-only (pin-only) evaluator-version visibility.** Killing
+  schedule: spanning transition T stages e1 on root A; A commits (F9 at q);
+  P3′ schedules root B's watcher in T's lanes so T keeps living; urgent U on
+  B (pin p2 > q, mask {U}, lockView(B) ∌ T) mounts W_new → effStamp selects
+  e1 because q ≤ p2 → U commits W_new=e1-output beside W_old=e0-DOM — torn
+  root-B frame until B's deferred T render (unbounded if e1 suspends on B).
+  Why not local: fixup/reconcile agree with the wrong value because
+  committed-for-root also resolves "at now"; the repair is the visibility
+  RULE (token'd entries, I53/D23), not a downstream check. (b-codex 1;
+  synthesis C11-E.)
+- **S41. Exact-basis (vector-compare) fast-path gating over K0-served
+  values without a constructed, priced K0-side basis.** Killing schedule
+  (surgical-b as written): quiet mount serves K0 under committed r0 (no
+  world memo exists — nothing retains the rendered basis); cross-root F9
+  promotes r1; a NEWEST read refreshes K0 and its basis to r1; layout fixup
+  reads B0-now = r1, matches committedForRoot-now = r1 → returns → W's
+  committed DOM shows r0-output indefinitely. The conservative horn
+  (unverifiable ⇒ always-fold) re-prices every quiet mount against P1 with
+  no authorized fallback. Deeper rule: routing conjuncts must be O(1)
+  resident words maintained by existing walks (marks/clocks), never vector
+  compares against state no mechanism maintains — the recording half would
+  land O(D) merges on the donor kernel's recompute epilogue, the measured
+  "invades every hot walk" class. (b-claude F1 + F3/F4; rejected in
+  synthesis Part II.)
+- **S42 (extends S33's family). Own-commit-neutral fixup fast-outs without
+  a population gate.** Killing schedule: Activity pre-renders hidden W in
+  deferred pass P_h (pin p1, mask ∅, effects deferred); one event writes
+  a@s2>p1 and reveals; u's render bails on the pre-rendered W; u's commit
+  captures baseline at entry (cas = init), folds u (cas moves
+  post-capture); W's layout fixup: loop sees only live tokens (u retired),
+  baseline.cas ≤ p1 ∧ lockView equal ∧ mask-∅ clocks vacuous → return → V
+  paints f(1) beside W's f(0), no future flip enumerates W. The
+  value-neutrality proof quantified over committing-pass watchers only;
+  the premise must be conjunct 0, not prose. (a-claude F1 ≡ a-codex 1;
+  synthesis RS3/K3.)
+- **S43. Asynchronous forced-discard (interleaved-update insertion) as the
+  renumber precondition, and fixed "one extent" slack at the crossing
+  mint.** Killing schedules: (a) insertion defers each root's abandonment
+  to its next scheduler slice; dense mint traffic crosses H with a live
+  yielded pin → post-wrap retiredSeq stamps below the pin → S38(a)
+  re-entered through the gap between the two readings of "discard";
+  (b) a single synchronous commit publishes S+1 hooks past any fixed
+  reserve → promotion q ≤ live pin p → P2″'s raced-pin test inverts →
+  unrouted version → torn resumed frame. Rules: discard is a synchronous
+  fork capability (F2 discardAllWip, test 36); horizon checks run at
+  extent ENTRY with a computed reserve (I56). (a-claude F3 + a-codex 2;
+  synthesis RS5/RS6.)

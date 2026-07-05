@@ -431,3 +431,58 @@ independent confirmation by both reviewers. Curated by the monitor only.
   entanglement for post-watermark writes of a locked live token.
   [WALK: a-codex 4 (consolidate-b §7.2 shares the defect); synthesis R6]
 
+
+## Round 5 (2026-07-04): rounds/round-05/ — applied from its notes-diff (monitor-validated)
+
+
+- **I53 (extends I45; reopens nothing — completes it). Evaluator-version
+  visibility must ride the full three-clause receipt rule, never chronology
+  alone.** `promotedAtSeq ≤ pin` treats every promotion as
+  instantly-globally-retired; a spanning transition's promotion then leaks
+  into a T-excluding pass on a lagging root (pin > q, T ∉ mask ∪ lockView) —
+  one committed root frame holds two evaluator versions, and the fixup agrees
+  with the wrong value because committed-for-root also resolved "at now".
+  Version entries must carry their promoting token and resolve
+  retired/mask/lock exactly as receipts do; retention = tape compaction
+  keyed on the token's retiredSeq. [WALK review-surgical-b-codex 1,
+  re-derived by synthesis against BOTH round-5 designs and the round-4
+  champion — synthesis C11-E kill + repaired walk]
+- **I54. Any own-commit-value-neutrality argument for a mount-fixup fast-out
+  holds only for watchers rendered BY the committing pass; deferred-effect
+  mounts (Offscreen/Activity reveal) must reach the committed compare.** A
+  quiet app gives `baseline.cas ≤ pin` while the commit's own fold of a
+  token outside w_r.mask moves truth post-capture, invisible to every
+  cas/lockView/wc conjunct → permanent torn committed DOM. The population
+  premise must be an explicit conjunct (generation-checked pass id).
+  [BOTH review-surgical-a-claude F1 ≡ review-surgical-a-codex 1 (two
+  independent schedules: K3, Offscreen variant); repaired construction
+  synthesis RS3, re-walked]
+- **I55. A pass-visible stage whose owner hook never publishes (error
+  abandonment, discarded alternate) needs a commit-time reconcile: flag the
+  commit, walk the stage's cone filtered to this pass's rendered watchers
+  with urgent pre-paint delivery, and write the lineage cache through.**
+  Otherwise outside-boundary consumers commit never-promoted evaluator
+  output with no receipt, no touched bit, no drain membership, and no fixup
+  (already-subscribed watchers) — torn indefinitely. Mounting watchers need
+  the commit flag as a fast-out conjunct (P4′ runs before layout
+  subscription). [WALK synthesis C1-X7(a)/(b); the (b) variant is
+  review-surgical-b-claude verified-held 4's schedule, filed by neither
+  review as a finding]
+- **I56 (extends I8/I49). A shared-counter horizon protocol must check at
+  atomic-extent ENTRY with a documented, runtime-computable per-extent mint
+  reserve; "renumber at the crossing mint's next boundary" is unsound
+  because one synchronous extent (a commit's F9 publications + fold stamps)
+  mints unboundedly many seqs.** Reserve bound = f(staged hooks, touched
+  atoms of retiring tokens, roots) — quantities the registry already holds;
+  crossing anyway must be a loud invariant throw kept dead by the sizing
+  rule. [WALK review-surgical-a-codex 2; repaired construction synthesis
+  RS5 with forced-tiny-H tests]
+- **I57 (instance of I19). Cross-mechanism "counts as an entry of slot s"
+  bookkeeping must be a real entry carrying never-reused token identity,
+  with an idempotent swept mark at force-clear; reclamation by the
+  compaction rule, never by decrementing a possibly-recycled slot
+  incarnation's count.** The abstract relation under forced saturation +
+  slot reuse either under-counts (bits clear early → flushSync-class tear)
+  or leaks slots. [WALK review-surgical-a-codex 4; dissolved structurally
+  by I53's token'd entries — synthesis RS1]
+

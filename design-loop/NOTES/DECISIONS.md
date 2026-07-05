@@ -174,3 +174,34 @@ preference. Curated by the monitor only.
   sanctioned escape is set/dispatch). Proof: no round-4 walk required
   runSync; synthesis T3.
 
+
+## Round 5 (2026-07-04)
+
+
+- **D12 amendment (champion pointer).** Round-5 champion:
+  `rounds/round-05/synthesis.md`, normative composition = that file ←
+  `rounds/round-04/synthesis.md` ← `rounds/round-04/design-consolidate-a.md`.
+  Architecture class D8 unchanged; repairs RS1–RS7 over surgical-a's Δ set.
+  Proof: adjudication Part I — every confirmed finding carries an
+  in-architecture repair; the round's one champion-level defect (I53) is
+  repaired with receipt machinery, no new mechanism; mechanisms 9.
+- **D22 (new). The mount-fixup committed-side fast-out is the commit-entry
+  baseline comparator with five conjuncts (population gate, cas ≤ pin,
+  lockViewId equality, included-slot clocks, no abandoned stages) — the
+  deletion alternative is rejected.** Deletion re-opens round-4's CONFIRMED
+  row 16 cost (a w_fx eval per in-window mount in exactly P1's measured
+  window, "no fallback authorized"), and its safety argument leaned on
+  basis state that nothing constructs (S41). Proof: synthesis RS3
+  construction + C9′(a) zero-eval pinned cost row + K2a/K2b/K3/C10(i)
+  re-walks. [surgical-b's S5-R12-A and error-abandoned-mount schedules kept
+  as pinned tests of the surviving comparator]
+- **D23 (new). Evaluator versions are token'd tape-class entries on the
+  hook's register: F9 samples F1.currentBatchToken() (fork test 35), the
+  entry rides the seed visibility rule, joins slot(t)'s unswept gate, and
+  compacts on universal visibility (t retired ∧ min live pins ≥
+  retiredSeq(t)).** Promotion marking condition: raced open pin (excluding
+  the committing frame), else defer to the commit's own retirement edge —
+  non-instant-retire promotions mark at commit end. Settles I53's mechanism.
+  Proof: synthesis RS1/RS2 constructions; C11-E + C1-X6 re-walks; quiet
+  single-root promotions provably zero-cost (finding-3 branch repaired).
+

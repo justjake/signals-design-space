@@ -74,7 +74,22 @@ D19). Judge: 2 new blockers, both minted by the round's own repairs (R12
 baseline fast-out; R1 unrouted evaluator versions); mechanisms recovered
 5→6 with a net state deletion. Champion: rounds/round-04/synthesis.md.
 
-## Round-5 docket (FINAL budgeted round — surgical)
+## Round-5 outcome (FINAL budgeted round)
+
+NOT dry, but the closest yet: 15 findings adjudicated, 13 CONFIRMED (all
+repaired in-round), 2 REFUTED; judge's independent re-walk confirmed ZERO
+new blockers against the repaired synthesis (scores 8/6/8/7/5); both
+surgical drafts held at 9 mechanisms. Champion:
+rounds/round-05/synthesis.md. Budget cap reached — loop concludes;
+EXIT-CASE.md presents best-so-far + the scope-cut proposals + the
+monitor-design convergence analysis for Jake's sign-off. Judge's two open
+architecture-relevant empirical items: O19 (SPK-L requirement decision)
+and the SPK-N1/G8 gate family. NEW O26: mechanically merge the three-file
+champion (round-3 base + round-4 diffs + round-5 diffs) into ONE document
+before implementation — explainability scored 5 because the story is
+scattered.
+
+## Round-5 docket (as executed — surgical)
 
 One job: adversarially re-derive ONLY the round-4 synthesis's new math —
 R1 pin-resolved version chain, R2 pass-aware suppression, R3

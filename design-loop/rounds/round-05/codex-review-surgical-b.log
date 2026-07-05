@@ -1,0 +1,2426 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.3
+--------
+workdir: /Users/jitl/src/alien-signals-opt
+model: gpt-5.6-sol
+provider: openai
+approval: on-request
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 019f2f6d-a991-7971-90d8-0d3f46fbbaae
+--------
+user
+Read design-loop/SEEDS/prompts/reviewer-codex.md and follow it exactly. The design file under review is: /Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md
+2026-07-04T23:19:05.083730Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", resource_metadata=\"https://observability.mcp.cloudflare.com/.well-known/oauth-protected-resource/mcp\", error=\"invalid_token\", error_description=\"Missing or invalid access token\"" })
+2026-07-04T23:19:05.123799Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"OAuth\", error=\"invalid_token\", error_description=\"Missing or invalid access token\", resource_metadata=\"https://mcp.sentry.dev/.well-known/oauth-protected-resource/mcp\"" })
+2026-07-04T23:19:05.283420Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://app.pganalyze.com/.well-known/oauth-protected-resource\"" })
+2026-07-04T23:19:05.501307Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"https://api.polarsignals.com/.well-known/oauth-protected-resource/api/mcp\"" })
+codex
+I’ll first read the reviewer prompt verbatim, then the relevant prior spec-review memory, and apply the prompt’s workflow to the round-05 design without making edits.
+exec
+/bin/zsh -lc "sed -n '1,240p' design-loop/SEEDS/prompts/reviewer-codex.md && rg -n -C 3 \"alien-signals-opt|packed-layout|schedule-based|design-loop\" /Users/jitl/.codex/memories/MEMORY.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# REVIEWER prompt — codex (v1)
+
+(Fed to `codex exec` as a standalone prompt; codex has read-only repo
+access. A runner supplies the design path and output path.)
+
+You are an adversarial correctness reviewer for one design spec of a
+concurrent-React signals system (signals library + React fork protocol,
+co-designed). You are the cross-model reviewer: a different LLM authored and
+another reviewed this design, and your independent perspective is the point.
+Find wrongness — torn committed frames, lost writes, wrong values, missed
+notifications, crashes — before an implementation does.
+
+Read, in order:
+1. `design-loop/SEEDS/background.md` — domain primer and vocabulary; assume
+   nothing else about this repo's history.
+2. The design file (path provided below).
+3. `design-loop/SEEDS/correctness-cases.md` — the acceptance battery; each
+   case states its trap. Attack these first, then go beyond them: your most
+   valuable findings are failure schedules the battery does NOT contain.
+4. `design-loop/SEEDS/requirements.md` and `design-loop/SEEDS/fork-charter.md`
+   — the contract.
+5. `design-loop/SEEDS/research-facts.md` — measured facts; a design
+   contradicting one needs a new measurement, not an argument.
+6. `design-loop/NOTES/SCARS.md` — known-dead approaches with the schedules
+   that killed them; repeating a scar is an automatic blocker.
+
+Do not read `research/specs/`, `reviews/`, `react-concurrent-signals-arena.md`,
+or `design-loop/rounds/` other than the file under review — independence is
+your value here.
+
+Rules of evidence:
+- Every finding must include a concrete failing schedule: setup → ordered
+  steps → the wrong observable outcome, naming the design's mechanisms that
+  fail. No schedule, no finding.
+- Severity per finding: BLOCKER / HIGH / MEDIUM / NOTE, plus "local fix" vs
+  "architectural".
+- Any "by construction / cannot happen" claim in the design that lacks a
+  written construction (invariant or induction) is automatically a BLOCKER;
+  for claims WITH constructions, attack the construction.
+- Also report what you attacked and could NOT break ("verified held") —
+  that list calibrates the judge.
+- Check lifecycle soundness explicitly: every counter/epoch under
+  reset/wraparound/reuse; every cache against the completeness of its
+  invalidator.
+- Check the fork protocol gives the library every fact it consumes —
+  especially behavior during render-pass yields (event handlers run in
+  yield gaps) — and run the rebase drill: "React reorganizes lanes/commit
+  internals — what in the signals library must change?"
+
+Output: your ENTIRE final message must be the review document itself, in
+markdown: findings ranked most-severe first (each with its schedule), then
+the verified-held list, then a 3-sentence verdict (implementation-ready /
+repairable / architecturally unsound). Do not write files; do not include
+preamble about being an AI; start directly with the review title.
+1:# Task Group: alien-signals-opt / architecture-spec correctness review and review-response adjudication
+2-
+3-scope: Correctness-first review workflow for `react-concurrent-signals-arena.md`, including saved review-file outputs and follow-up adjudication of an author response against the original counterexamples
+4:applies_to: cwd=/Users/jitl/src/alien-signals-opt; reuse_rule=safe for architecture/spec review work in this checkout and similar correctness-audit follow-ups; treat exact review files and document contents as checkout-specific
+5-
+6-## Task 1: Review `react-concurrent-signals-arena.md` for correctness, success
+7-
+8-### rollout_summary_files
+9-
+10:- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, correctness blockers saved to the requested `reviews/` naming pattern)
+11-
+12-### keywords
+13-
+14:- alien-signals-opt, react-concurrent-signals-arena.md, correctness review, architecture-spec review, packed layout, React fork protocol, speculative dependency notification, memo invalidation, logging activation, urgent writes
+15-
+16-## Task 2: Assess the author response to the correctness review, partial
+17-
+18-### rollout_summary_files
+19-
+20:- rollout_summaries/2026-07-04T12-13-45-YVoC-react_concurrent_signals_arena_review_and_response_feedback.md (cwd=/Users/jitl/src/alien-signals-opt, rollout_path=/Users/jitl/.codex/sessions/2026/07/04/rollout-2026-07-04T08-13-45-019f2d0c-8fc6-7f23-9c88-f023f85a598a.jsonl, updated_at=2026-07-04T13:11:22+00:00, thread_id=019f2d0c-8fc6-7f23-9c88-f023f85a598a, response accepted in part but quiescence-gate parity remained unsound)
+21-
+22-### keywords
+23-
+--
+32-
+33-## Reusable knowledge
+34-
+35:- The packed-layout design in `react-concurrent-signals-arena.md` means future fixes should be judged on whether they preserve the core layout constraints; if a fix needs new state, prefer side structures or explicitly priced alternatives instead of casually growing the canonical records [Task 1]
+36-- The highest-signal blockers in the initial review were concrete: speculative dependencies had no notification path, memo certificates could miss unlogged atoms, logging began too late, equality could drop logged actions, first urgent logged writes never marked their cone, committed views were root-specific, and Suspense cache keys were ambiguous for multi-batch passes [Task 1]
+37-- In this design, logging activation and lane attribution are tightly coupled; any quiescence-based gate must be tested against schedules where the write itself creates the later React work whose receipt needs to be excluded from `flushSync` [Task 2]
+38-- Root-specific committed views, a quiescence epoch bump, mark-only first-log walks, and the update/reducer purity contract were accepted as real fixes during the response round, while the fallback "sync passes include the open default batch" was still judged to create torn frames [Task 2]
+
+codex
+The reviewer prompt requires a strict source order and prohibits adjacent rounds and prior reviews. I’ll use only the six permitted sources plus the target design as evidence; the memory hit will not be used to import any earlier conclusion.
+exec
+/bin/zsh -lc "wc -l design-loop/SEEDS/background.md && sed -n '1,260p' design-loop/SEEDS/background.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     116 design-loop/SEEDS/background.md
+# Background primer (frozen seed) — read this first
+
+You are designing with zero prior context. This file gives you the domain,
+the vocabulary, and the named artifacts the other seeds reference. It
+describes the *problem*, not any solution; nothing here mandates a
+mechanism.
+
+## Signals in one page
+
+A **signal** is a container for a value that remembers who reads it. An
+**atom** holds a writable value. A **computed** holds a function over other
+signals: reading it returns the cached result; the library records which
+signals the function actually read (its dependencies — discovered by running
+it, so they can change run to run). An **effect** re-runs automatically when
+signals it read change. Two disciplines make this fast, and both are
+requirements (P2): **push-pull** — a write cheaply marks downstream
+"possibly stale" and nothing recomputes until someone reads it, at which
+point the library verifies bottom-up and recomputes only what truly changed
+("exact pull counts"); and **equality cutoff** — a recompute that produces
+an equal value stops propagation.
+
+## What concurrent React does, and why external stores tear
+
+React's `startTransition` renders updates *in the background*: the screen
+keeps showing the current state while React builds a tree for the future
+state. Urgent updates (typing, clicks) can interrupt; React renders them
+first — *without* the transition's changes — and finishes the transition
+later. So at one moment there are **two live versions of the world**: the
+committed one on screen and the pending one being prepared. Background
+renders are also **time-sliced**: React pauses ("yields") to keep the page
+responsive — event handlers and timers run in those gaps — then resumes, or
+throws the partial tree away and restarts. Any code that runs during
+rendering must be pure, and everything a single render pass reads must be
+mutually consistent for the pass's whole life, across yields. A frame where
+one component shows new state and a sibling shows old state for the same
+logical version is a **torn frame** — the cardinal sin in this domain.
+
+React's own state survives all this because `setState` does not overwrite:
+it appends an **update** to a per-hook queue, tagged with a **lane**
+(React's internal priority/batch bitmask). A render for some lanes applies
+exactly the queued updates in those lanes, skips the rest, and **rebases**:
+skipped updates are re-applied later over the newer base, in original queue
+order (this is why interleaved functional updates commute correctly — see
+case C3). External stores have a single current value, so React's escape
+hatch `useSyncExternalStore` forces consistency by de-optimizing: every
+store change re-renders synchronously, and store writes during a concurrent
+render discard it. External state can never ride in a transition. **This
+project exists to eliminate that de-opt**: signals must move through
+transitions, Suspense, and interruptions in lockstep with React state.
+
+## The fork premise
+
+We maintain our own build of React (a fork we fully control — see
+`fork-charter.md`). The fork can expose facts userspace cannot observe
+(which batch a write belongs to, what a render pass includes, when a batch
+retires, pass yields/resumes) and can offer control surfaces (e.g.
+scheduling an update into an existing batch's lanes). The signals library
+and the fork protocol are **co-designed**; the seam between them is a scored
+deliverable.
+
+## Vocabulary used by the other seeds
+
+- **batch** — the set of updates React renders and retires as a unit (one
+  event, or one transition). **urgent** = renders promptly (discrete input
+  is sync-priority; timers/network land in a *default* priority that renders
+  soon but asynchronously — so a `flushSync` in the same event can legally
+  render *without* a pending default batch: case C2). **deferred** =
+  transition-like, renders in the background, commits later.
+- **token** — a stable integer identity for a batch across the fork
+  boundary. Lane *bits* are recycled by React and leak internals; tokens are
+  minted, never reused while live. At most 31 batches are live at once (one
+  per lane).
+- **render pass** — one attempt to render a root: fresh stack → completion
+  or discard. Spans yields; a restart is a new pass.
+- **world / view** — one self-consistent assignment of values to all atoms:
+  the committed world, a pending world (committed + some batches), or
+  whatever a specific pass must see. A pass's world must not drift while it
+  is paused. How worlds are represented is the design's business; *that*
+  they exist is the requirement.
+- **retirement** — a batch leaving React's books (commit, or closing with
+  no React work). Writes must survive retirement regardless of who was
+  subscribed (case C12).
+- **watcher** — whatever the design calls a mounted component's
+  subscription. The one load-bearing, settled trick (DECISIONS D5): notify
+  a component by calling its `setState` synchronously in the *writer's*
+  execution context, so React assigns the writer's priority — transition
+  writes schedule transition re-renders, urgent writes urgent ones, and
+  React's batching/loop-guards apply for free.
+- **tracked read** — a read inside a computed/effect evaluation that
+  registers a dependency edge. **untracked** — a read that must not.
+- **StrictMode** — dev mode where React double-invokes renders and
+  mount/unmount cycles; designs must tolerate replayed renders and
+  double-mounts (case C14).
+
+## Named artifacts (so citations elsewhere make sense)
+
+- **alien-signals (v3.2.1)** — the fastest published conformant object-graph
+  signals library; our performance baseline ("1.0×"). Its push-pull
+  algorithm with exact re-verification is the semantics bar.
+- **the 179-case conformance suite** — a cross-framework reactive-semantics
+  test suite (laziness, cutoffs, dynamic dependencies, re-entrancy, effect
+  ordering) with `testPullCounts: true` asserting *exact* recompute counts.
+  Passing it, including under forced arena-growth stress, is table stakes.
+- **js-reactivity-benchmark (milomg fork)** — the primary ranking suite
+  (includes the **kairo** workloads and **tier-0 shapes**: deep chain,
+  broad fan-out, diamond, quiet reads, isolated writes, creation). Rankings
+  are only valid one-framework-per-process (see research-facts.md).
+- **react-concurrent-store** — the React team's own experimental userspace
+  concurrent store; its harness and 14 scenarios (plus its documented
+  known-bug: mount-mid-transition with suspending pending state) are the
+  React-integration conformance bar (case C9/C15).
+- **arena / plane** — a large pre-allocated `Int32Array` treated as an
+  array of fixed-size integer records, identified by integer ids: GC-
+  invisible, cache-friendly, bump-allocated. The measured facts about what
+  makes arena layouts fast (or slow) are in `research-facts.md`; no
+  specific record layout is prescribed.
+
+exec
+/bin/zsh -lc 'wc -l design-loop/rounds/round-05/design-surgical-b.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     605 design-loop/rounds/round-05/design-surgical-b.md
+
+exec
+/bin/zsh -lc "sed -n '1,220p' design-loop/rounds/round-05/design-surgical-b.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# Round 5 design — surgical-b: route evaluator versions; delete the baseline fast-out
+
+Status: final budgeted-round candidate. The complete normative design is the
+round-4 champion, `rounds/round-04/synthesis.md`, with exactly the two
+replacements in this file. No other round artifact is incorporated. All
+round-4 text not explicitly replaced below remains normative.
+
+Scope is intentionally closed to the round-5 docket: R1, R2, R3 (including
+A/B/A), R4, R8, R9, R12, and the merged fork-test list. The two judge
+blockers are repaired without a new mechanism: R1 generalizes the existing
+evaluator probe from “is staged?” to “does the cached flattened evaluator
+basis equal this world's effective versions?”, and R12's commit-baseline
+fast-out is deleted. Added state: none. Deleted state: two
+`commitBaseline` integers per root and their capture/lifecycle work.
+
+---
+
+## One page: the design that ships
+
+The inherited engine has nine cooperating mechanisms. K0 is the closed,
+packed donor kernel for the newest world. While a React bridge is registered,
+every atom write appends a receipt on a per-atom tape; a render world selects
+receipts by its immutable batch mask, global-sequence pin, and per-root lock
+view, then replays them in write order. K1 is a separate packed graph holding
+the real dependency edges discovered by non-newest evaluations. World memos
+store values plus a closed validity basis: slot write clocks, visibility
+stamps, exact flattened evaluator stamps, and the inherited suspense
+fingerprints. Watchers receive value-blind `setState` calls synchronously in
+the writer's execution context, so React supplies the writer's lanes.
+
+Hook evaluators and reducers are world-scoped. A render stages them under a
+lineage-stable stamp; F9 publishes only the hook version that actually becomes
+current. Committed evaluator versions sit on the same global sequence line as
+receipts, so an old pass resolves the version admitted by its pin. Round 4
+made memo validation version-aware but left the K0 routing gate version-blind:
+after K0 was recomputed under a newly promoted evaluator, an old pass could
+serve that K0 value before reaching the version-aware memo ladder. The repair
+uses the already-stored flattened evaluator vector as a mandatory exact
+precondition for every K0 serve and every fixup fast-out; no bit, clock, walk,
+or cache is added.
+
+The mount fixup closes the render-to-subscribe window. Its round-4
+`commitBaseline` optimization captured current committed currency immediately
+before layout, then mistook equality with that newly captured currency for
+proof that the earlier render used it. A retirement or cross-root promotion
+can occur after the mounting render but before that capture, when no watcher
+exists to receive the ordinary drain. The clean repair is deletion: after the
+existing structural fast-out and live-token entanglement loop, fixup always
+folds the current committed-for-root world and compares it with the rendered
+value. This withdraws the zero-`w_fx` in-transition-mount claim and charges the
+work to the existing mount gate; it removes state and a branch from F3.
+
+R2's pass-aware delivery, R3's lineage seeding and pre-commit restart, R4's
+durable drains, R8's discard-before-live-renumber, and R9's per-world atom
+identity survive adversarial re-derivation below. The fork remains nine
+versioned facts, tests 1–33 remain the merged suite, and the two new attacks
+are pinned as integration tests rather than new seam facts. DIRECT mode is
+unchanged and executes zero concurrency instructions. The repaired design has
+no unwalked docket case and no new correctness gap.
+
+---
+
+## Terms used in this amendment
+
+- **Global sequence (`seq`)**: the monotone integer line shared by writes,
+  retirements, evaluator promotions, render pins, and committed-advance
+  stamps. Comparisons across these events are meaningful because they use one
+  line.
+- **Batch token / slot / mask**: React gives each live batch a stable integer
+  token. The library interns at most 31 live-or-unswept tokens into slots; a
+  pass mask names the batches it renders.
+- **World**: an immutable view header containing a root, pass mask, pin, and
+  immutable per-root lock view. A receipt is visible when its retirement is at
+  or below the pin, its live slot is in the pass mask and its write is at or
+  below the pin, or its slot is in the root's lock view and its write is at or
+  below that slot's watermark.
+- **K0 / K1**: K0 is the canonical newest-world signal graph. K1 is the union
+  of real dependency edges recorded by non-newest evaluations. K1 does not
+  alter K0's hot traversal records.
+- **Canonical-trust (`CT`)**: the inherited freshness predicate that says a
+  K0 value can be served without recomputation. It is necessary but, for a
+  pass world, not sufficient.
+- **Touched word**: the inherited per-node slot/taint reach word. It routes
+  receipt-sensitive reads and feeds durable per-slot touched lists. It is not
+  the value-blind notification walk.
+- **Evaluator**: a `useComputed` function or reducer whose identity can change
+  with hook deps. A staged evaluator belongs to a render lineage until F9
+  publishes it. A committed evaluator version is
+  `{fn, deps, stamp, promotedAtSeq}`.
+- **Effective evaluator**: for a pass world, the pass's staged version when
+  present, otherwise the committed version with greatest
+  `promotedAtSeq <= world.pin`; for NEWEST and committed-for-root reads, the
+  latest committed version.
+- **Evaluator basis**: the exact flattened vector of `(evaluator, stamp)`
+  pairs consumed to produce a cached value. Each stageable evaluation records
+  its own pair before invoking user code and merges child vectors. The vector
+  already exists for memo validity and suspense content validity.
+- **World memo**: the per-`(node, worldKey)` cached value and its validity
+  basis. Atom folds use this same plane, so one atom has one reference in one
+  world.
+- **Watcher**: a mounted component subscription. Its notification is a
+  synchronous `setState` in the writer's context.
+- **Fixup (`w_fx`)**: the layout-time render-to-subscribe check. It first
+  entangles live batches that the mount may have missed, then compares the
+  rendered value with the current committed-for-root value and schedules an
+  urgent pre-paint correction if they differ.
+- **Lineage**: the fork identity stable across retries/replays of one root and
+  batch selection. Its stage cache lets a retry see staged evaluators before
+  tree-order-late owner hooks run.
+
+---
+
+## Normative replacement S5-R1 — evaluator versions participate in routing
+
+This extends round-4 R1; its pin-gated version chain, retention rule,
+promotion ordering P1′–P4, value-blind promotion walk, RENDER_NEWEST
+demotion, and memo/capsule validity checks remain unchanged.
+
+For the current K0 cached value of node `n`, let `B0(n)` be its existing
+flattened evaluator basis. Define the following predicate as math, not a new
+stored flag:
+
+```text
+EB0(n, w) := for every (e, stamp) in B0(n),
+             effectiveStamp(e, w) == stamp
+```
+
+Let `B_r(n, w_r)` be the basis of the exact cached result the render served:
+`B0(n)` when it served K0, otherwise the basis of `M(n, w_r)`. Define:
+
+```text
+EBr→c(n, w_r, w_c) := for every (e, stamp) in B_r(n, w_r),
+                      effectiveStamp(e, w_c) == stamp
+```
+
+Both are exact vector walks; there is no lossy hash and no allocation. The
+normative routing changes are:
+
+1. A pass-world read may serve K0 only if all inherited K0 gates hold **and
+   `EB0(n, world)` holds**. Test this before returning K0, not after entering
+   the world-memo ladder. A mismatch routes to the existing world evaluation.
+2. The staged-only routing probe is replaced by this effective-version probe.
+   A stage, a pin-resolved superseded committed version, and a nested
+   evaluator therefore use one rule.
+3. The mount fixup's initial structural fast-out may return only if its
+   inherited conditions hold **and `EBr→c(n, w_r, committedForRoot(now))`
+   holds**. The pass retains the cache/basis it served through layout under
+   the inherited pass-owned memo lifetime; this adds no watcher field. A
+   version change in the render-to-subscribe window must reach the final
+   `w_fx` compare.
+4. Every world memo still checks its own flattened evaluator basis before
+   clocks or value serve. Promotion still dirties K0, demotes open
+   RENDER_NEWEST passes, and performs the unconditional value-blind walk.
+
+No new completeness obligation is introduced: evaluator-basis flattening is
+already required by I31/I40 and round-4 R1 for memo and suspense validity.
+This amendment merely consults that same exact basis one decision earlier.
+
+### S5-R1-A pinned attack: recomputed K0 leaks a post-pin evaluator
+
+Setup: shared stageable reducer atom `ra`; committed reducer `r0` maps
+`inc` to `+1`, staged reducer `r1` maps it to `+10`; receipt X contains
+`inc`. Root B renders siblings B1 and B2 from X-world. Root A owns the hook
+that can publish `r1`.
+
+```text
+step | actor/mechanism | state touched (values, bases, lanes)
+1 | root-B pass P starts | pin=q; mask={X}; effective reducer=r0
+2 | B1 reads ra | fold under r0 => 1; B1 renders 1; P yields
+3 | root A F9 publishes r1 | promotedAt=sA>q; K0 dirtied; open P demoted; value-blind walk schedules B; no equality gate
+4 | NEWEST read on A | K0 recomputes ra under r1 => 10; K0 becomes CT with B0(ra)={(ra,r1)}
+5 | P resumes and B2 reads ra | EB0 compares effectiveStamp(ra,P)=r0 with cached r1 => mismatch; route existing world memo; fold X under r0 => 1
+6 | P commits | B1=1 and B2=1; queued publication delivery later renders both under r1 => 10
+outcome: the old pass cannot serve the recomputed K0 value; every committed frame uses one reducer version.
+residual risk: omitting the probe at any K0-return site reopens the leak; integration test S5-R1-A instruments every K0 serve and forces step 4.
+```
+
+Without rule 1, step 5 returns 10 because `touched==0` and K0 is clean; the
+version-aware memo ladder is never entered. That is the judge's R1 blocker.
+
+### R1 construction
+
+Base case: with no staged or superseded evaluator, every recorded basis pair
+resolves to the sole committed stamp. `EB0` holds, so the inherited K0 gates
+decide exactly as before.
+
+Inductive step for a stage: staging changes `effectiveStamp` in that pass.
+The node records its own evaluator pair before user code, and every parent
+that consumes it merges the pair; therefore the first cached node whose value
+could depend on the stage has a mismatching pair and routes. R3 restarts any
+watcher that rendered before the stage was minted.
+
+Inductive step for a promotion: consider the two possible K0 bases. If K0 is
+still based on the old version, a pre-promotion pass matches and is safe;
+NEWEST/latest worlds mismatch or see P2′ dirtiness and recompute. If K0 has
+been recomputed under the new version, latest worlds match and every pass
+pinned before promotion mismatches and world-routes. Flattening applies the
+same argument transitively to a parent cache. Thus replacing either K0 basis
+cannot make an incompatible world satisfy the exact predicate.
+
+Equal output does not weaken the argument: evaluator stamp identity, not
+value equality, controls routing, and promotion delivery remains value-blind.
+
+---
+
+## Normative replacement S5-R12 — delete the commit-baseline fast-out
+
+Round-4 R12 is deleted in full. Delete:
+
+- `commitBaseline = {cas, lockViewId}` from every root registry;
+- its F3 pre-layout capture;
+- `cas == baseline.cas && lockViewId == baseline.lockViewId => return` from
+  fixup;
+- its lifecycle and live-renumber rows; and
+- the claim that an in-transition mount reaching committed-side fixup does
+  zero `w_fx` evaluations.
+
+The rest of fixup is unchanged, with S5-R1's added evaluator conjunct:
+
+1. The inherited structural fast-out remains
+
+exec
+/bin/zsh -lc "sed -n '221,440p' design-loop/rounds/round-05/design-surgical-b.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+   `touched(n)==0 && CT(n) && !w_r.fastPathDisabled && EBr→c(...)`.
+2. The R6 live-token loop uses the per-clause visibility bound and calls
+   `runInBatch` for every missed live token.
+3. If execution reaches committed-side fixup, it **always** obtains the
+   memoized value for `committedForRoot(root(W), now)` and compares it with
+   the rendered reference/value under the node's equality policy.
+4. A difference schedules the inherited urgent pre-paint correction. Equality
+   records the current basis and returns without an update.
+
+### S5-R12-A pinned attack: retirement between render and baseline capture
+
+Setup: transition K mounts watcher W over `c=a`; pass P excludes default batch
+D. W does not exist before P, so no earlier notification can target it.
+
+```text
+step | actor/mechanism | state touched (values, marks, drains)
+1 | P renders fresh W | pin=p; a=0 and c=0; W is not subscribed yet; P yields
+2 | gap: D writes a=1 at sD>p | receipt logged; K0/newest becomes 1; write walk reaches c but no mounted W exists
+3 | D retires before P commits | retiredSeq=sR>p; D drain runs, but W is still absent; committed-for-root now includes a=1
+4 | P commits K | lock-in/folds/drains run before layout; old R12 captures baseline after D retirement and after this lock-in
+5 | W layout fixup | touched(c) is nonzero, so the first fast-out fails; D is retired, so the live-token loop has no D corrective
+6a | deleted behavior | old comparator sees current cas/lockViewId equal the just-captured baseline and returns, leaving DOM c=0 beside committed c=1 forever absent unrelated work
+6b | repaired behavior | no baseline branch exists; w_fx folds committed-for-root => 1; 1 != rendered 0; urgent pre-paint setState renders W=1
+outcome: every visibility change in the render-to-subscribe window is compared after subscription; the stale frame never paints.
+residual risk: reintroducing any “capture now, compare now” currency shortcut recreates the same tautology; integration test S5-R12-A holds P across D's full retirement.
+```
+
+### R12 construction
+
+Base case: if committed-for-root did not move after render, `w_fx` returns the
+same memoized reference/value, so fixup schedules nothing.
+
+Step for a receipt/lock visibility change before subscription: a relevant
+unswept change carries its slot through `touched`, a saturation sweep sets
+`fastPathDisabled`, and a relevant live token is examined by the R6 loop. The
+structural fast-out therefore cannot hide a relevant receipt change; the
+final fold observes current committed truth.
+
+Step for an evaluator promotion before subscription: S5-R1 makes the rendered
+evaluator basis fail `EBr→c`, so the structural fast-out cannot hide it; the
+final fold resolves the latest committed evaluator. After subscription,
+ordinary value-blind walks and R4 drains own later changes. Those three cases
+partition the render-to-subscribe timeline.
+
+The cost is explicit and unmeasured: every mount that reaches step 3 performs
+one committed-for-root memo lookup and, on invalid basis, one fold/evaluation.
+The 10k-mount transition and cross-root mount-storm rows remain in W2, but the
+expected result is now the P1 mount gate (within 15% of the equivalent React
+mount), not “zero `w_fx` evaluations.” Gate failure rejects this final design;
+no replacement mechanism is pre-authorized.
+
+---
+
+## Round-5 docket: independent adversarial re-derivation
+
+### R1 — REPAIRED AND HELD
+
+S5-R1-A is the killing schedule and repair walk. Two adjacent probes also
+hold:
+
+```text
+step | actor/mechanism | state touched (mount interaction)
+1 | old root-B pass P mounts W | pin=q; world memo records evaluator basis r0; W not subscribed
+2 | root A publishes r1 and recomputes K0 | promotedAt>q; P remains pinned; publication walk cannot target unmounted W
+3 | P commits and enters layout fixup | EBr→c resolves rendered r0 against committed r1 => false; structural fast-out forbidden
+4 | S5-R12 fixup | no commit-baseline branch; w_fx under r1 differs; urgent pre-paint correction
+outcome: the R1 router and R12 deletion close both the read path and the late-subscription path for the same version race.
+residual risk: the test must mount after P's first read and publish before layout; a pre-existing watcher would not exercise this seam.
+```
+
+### R2 — VERIFIED HELD: pass-aware same-slot suppression
+
+“Pass includes slot s” means `s` is in the pass's render mask, not merely in
+its root lock view. A started pass stays registered through completion until
+commit/discard. A set `(W,s)` bit suppresses a new write at `seq` only when no
+started-uncommitted pass on `root(W)` has both `s in pass.mask` and
+`pass.pin < seq`.
+
+```text
+step | actor/mechanism | state touched (bits, pass, lanes)
+1 | T writes a=1 at s1 | value-blind walk calls setState(W) in T; bit(W,T)=1
+2 | T pass P starts at pin p>=s1 and yields/completes before W consumes the new post-pin write | registry retains {mask:{T}, pin:p, uncommitted}
+3 | T continuation writes a=2 at s2>p | walk reaches W; bit is set, but P includes T below s2 => do not suppress; enqueue interleaved T update
+4 | P resumes/attempts commit | it may render/commit the p-world, but the interleaved update remains pending; fork test 14/32 forces restart before commit when insertion timing permits
+5 | follow-up T pass | fresh pin>=s2; W renders 2 before any watermark can advance through s2 without W's lane
+outcome: no watermark exposes s2 beside W's s1 DOM; completed-uncommitted and yielded passes take the same branch.
+residual risk: F2 must retain completed-uncommitted pass metadata and test 32 must pin insertion after completed work.
+```
+
+No-pass writes may suppress: the already scheduled T work has not started and
+will capture a pin at or above the new write. A pass that sees T only through
+an older lock watermark does not consume the pending T-lane update, so it is
+not a counterexample; the original scheduled T work remains and over-delivery
+is not needed. Different slots use different bits (C4).
+
+### R3 — VERIFIED HELD: lineage seeding, walk, and A/B/A
+
+Stable A→B:
+
+```text
+step | actor/mechanism | state touched (stage cache, watchers, restart)
+1 | pass P starts; lineage cache empty | passStages=A(committed); earlier sibling S renders A; lastRenderPassId(S)=P
+2 | owner O selects B | mint lineage-stable B stamp; cache:=B; stage-set change walks K0∪K1; S qualifies and receives queued own-lane update
+3 | yield/end drain | update enters React before commit; P restarts
+4 | retry P' starts | seed B before S renders; S renders B; O selects/reuses B; no stage-set change
+5 | P' commits | F9 publishes B only now; no tentative publication existed
+outcome: no commit contains an A consumer and B owner.
+residual risk: edge completeness and pre-commit restart are pinned by integration staging-order test plus fork tests 14/32.
+```
+
+Adversarial A/B/A:
+
+```text
+step | actor/mechanism | state touched (seed transitions)
+1 | attempt P0 seeds A | S renders A; O selects B; cache A→B; walk queues restart
+2 | attempt P1 seeds B | S renders B; O now selects committed A; hook authority removes B from cache; contradiction B→A walks and queues restart
+3 | attempt P2 seeds A | S renders A; O selects A; no change and no walk
+4 | P2 commits | F9 has no B publication; committed evaluator remains A
+outcome: two finite changes cause two pre-commit restarts, then a uniform A commit.
+residual risk: user render code that changes deps on every attempt can continue oscillating; React's existing render/update-depth rejection is the specified termination, not a signals-side loop.
+```
+
+Coverage induction: before a stage-set change, every earlier consumer either
+is the staged node's watcher or consumed it through K0/K1 edges recorded before
+the change; the full walk reaches both. Adding an edge can only add a route,
+and walk generation stamps terminate K1-union cycles. Consumers after the
+change read `passStages` directly. A restart seeds the latest selection, so a
+stable hook selection performs no second walk.
+
+### R4 — VERIFIED HELD: every committed visibility flip drains watchers
+
+```text
+step | actor/mechanism | state touched (late edge and drain)
+1 | parked K writes flag=true | K0 path flag→c→W; touchedList[K] contains c/W; W scheduled in K
+2 | K pass P pins p and yields | P world fixed
+3 | store-only D writes a=1 and retires | canonical graph has no a→c edge; D drain is quiet; D remains unswept because P's pin excludes it
+4 | P resumes under c=flag?a:b | P sees K's flag but excludes retired-after-pin D, so c=0; K1 records a→c; edge-add propagates D's retained bit
+5 | P commits and advances K to p | committed-for-root now sees K flag=true plus retired D a=1; advance drain enumerates touchedList[K], reconciles W, sees rendered 0 vs committed 1
+6 | urgent pre-paint correction | W renders 1 before paint
+outcome: the lock advance that first makes the combined value committed also performs its watcher correction; global K retirement need not occur.
+residual risk: clearing bits before the final possible flip breaks the induction; unswept retention and fully-retired-only force-clear tests pin it.
+```
+
+Coverage base: if a flipping token's receipt path existed at write time, its
+mark walk placed every reached node on that token's durable list. Coverage
+step: when a missing path edge is later inserted, the endpoint's retained
+token bits propagate through the new edge and append newly reached nodes.
+Only a token with no future flip may lose those bits: its entries are compacted
+and all root lock records are gone. Therefore retirement, lock-in, and every
+watermark advance enumerate every watcher whose committed value can change.
+Late subscriptions after a drain are handled by S5-R12 rather than extending
+the drain mechanism.
+
+### R8 — VERIFIED HELD: discard WIP before live renumber
+
+The order-preserving rewrite duty list includes tape `seq`/`retiredSeq`, atom
+`baseSeq`, slot write clocks, every lock-view watermark, committed-advance
+sequence, visibility stamps, evaluator `promotedAtSeq`, memo and capsule
+sequence/fingerprint fields, effect and watcher snapshot pins, lineage-cache
+stamps, and all other fields declared on the inherited §15 sequence ledger.
+Token serials and generation counters are separate domains.
+
+```text
+step | actor/mechanism | state touched (wrap and external identity)
+1 | pass P is live at pin 6; WIP hook holds F9 stage id 7 | next globalSeq mint would cross forced horizon H=7
+2 | operation-boundary horizon check | fork discards every WIP pass; P's pin and WIP F9 attachment die; no seq identity remains outside library-owned records
+3 | library rewrite | map retained ordered seqs monotonically into compact range; rewrite every ledger field, including lock watermarks and promotedAtSeq
+4 | epoch bump | every old worldKey/memo/capsule key fails; counters restart above rewritten maximum
+5 | React retries discarded work | new pass receives a new pin and lineage attachment in the rewritten epoch
+6 | later retirement | rewritten retiredSeq and pin preserve their original order; neither false visibility nor stale F9 CAS is possible
+outcome: the live-pin wrap horn and externally held WIP-stage-id horn are both removed before comparison values change.
+residual risk: an omitted seq-bearing field is fatal; forced-small-horizon tests populate every ledger row before step 2 and schema CI asserts rewrite coverage.
+```
+
+Ordering construction: the rewrite is strictly monotone on the finite retained
+set, so `<`, `<=`, and equality relationships are preserved. Discarding WIP is
+the base condition that makes the retained set library-closed. Epoch bumping
+then prevents an unrewritten cached key from validating accidentally.
+
+### R9 — VERIFIED HELD: one fold, one reference per atom/world
+
+```text
+step | actor/mechanism | state touched (fold memo and reference)
+1 | T logs updater x => ({v:x.v+1}) | receipt stores the op; no render fold yet
+2 | pass P first reads atom a in world w | replay once; result reference R stored in M(a,w) with prefix/fingerprint
+3 | P reads a again, including through a sibling computed | same valid M(a,w) returns R; updater is not reinvoked
+4 | P commits T at watermark equal to P.pin | committing visible prefix equals M(a,w)'s prefix; install R as committed reference before compacting
+5 | layout/effect/reconcile reads | committed memo returns R; no reference-only corrective ping-pong
+outcome: `a.state === a.state` within w and committed state owns the exact reference rendered by the committing pass.
+residual risk: any retirement path that replays an already memoized committing prefix instead of installing it is pinned by the object-reference differential test.
+```
+
+A different world may replay the updater and obtain a different reference;
+that is React's own rebase behavior. Stepwise custom equality keeps the prior
+accumulator reference on equal. A store-only retirement with no committing
+memo folds exactly once and installs that fresh result. Evaluator-basis checks
+from S5-R1 occur before serving a reducer fold memo, so R1 does not weaken R9.
+
+### R12 — REPAIRED AND HELD
+
+S5-R12-A is the killing schedule and repair walk. The deletion also makes the
+R4 late-subscription boundary simple: drains own already-mounted watchers;
+`w_fx` owns every mount that missed a drain. No captured-current shortcut sits
+between them.
+
+---
+
+## Acceptance-battery impact closure
+
+This round does not reopen or rederive math outside its docket. The round-4
+full C1–C17 walks remain normative. The only changed intersections are:
+
+| inherited case | round-5 effect |
+|---|---|
+| C1/C1-X1, C3-R/C3-M, C15 | S5-R1 makes the already-required exact evaluator vector a pre-K0 routing gate; pin arithmetic, publication, and suspense identity are unchanged. |
+| C2, C3, C8 | no write visibility, replay, or equality rule changed. |
+| C4/C5 | R2 rewalk above; delivery remains a separate full value-blind walk. |
+| C6/C7 | no grouping or pass/yield classification changed. |
+| C9/C10 | S5-R12 replaces the unsound baseline return with the existing final committed compare; S5-R1 supplies evaluator-window routing. |
+| C11 | pin-scoped evaluator versions and R4 cross-root drains are rewalked; full-spanning scope remains. |
+
+exec
+/bin/zsh -lc "sed -n '441,660p' design-loop/rounds/round-05/design-surgical-b.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+| C12 | parking/carrier and fold-on-retire are untouched. |
+| C13 | `commitBaseline` is removed from the lifecycle table; R8 has one fewer field to rewrite. |
+| C14 | R3 A/B/A/replay and F9 publication timing are rewalked; no tentative publication is added. |
+| C16 | effects still read committed-for-root snapshots and every visibility flip drains them. |
+| C17 | truncation remains absent from the API. |
+
+Unwalked docket cases: none. No inherited acceptance case loses its walk.
+
+---
+
+## Mechanism inventory — 9
+
+1. **K0 donor kernel and twin builds** — packed monomorphic newest-world
+   graph; DIRECT build contains no concurrency instructions.
+2. **Receipt tapes and React-parity folds** — every React-mode write logged;
+   replay in global write order with stepwise equality.
+3. **Tokens, slots, masks, pins, and immutable lock views** — per-root
+   watermarked committed visibility; unswept retention and saturation.
+4. **K1, touched words, and the two walks** — real world edges; monotone mark
+   propagation plus a separate full value-blind notification walk.
+5. **World memos and suspense capsules** — closed validity bases, including
+   atom fold identity and exact thenable settlement identity.
+6. **Evaluator staging, version chains, F9, and promotion** — S5-R1 changes
+   only where the existing flattened basis is consulted.
+7. **Watcher/binding records and fixup** — pass-aware delivery, live-token
+   entanglement, durable-drain reconcile; S5-R12 deletes commitBaseline.
+8. **Fork/build protocol F1–F9 and continuation carrier** — unchanged fact
+   count; F3 does less work after the deletion.
+9. **Episode lifecycle** — epoch/generation resets, discard-before-renumber,
+   pass-owned reclamation, and bounded inherited K1 sweep.
+
+State delta: `+0`; `-commitBaseline.cas`, `-commitBaseline.lockViewId` per
+root. Mechanism count remains 9.
+
+---
+
+## Fork protocol — 9 seam touch-points
+
+The boundary passes only integers, booleans, immutable integer collections,
+and callbacks; no Fiber, lane bitmask, or update-queue object crosses it.
+
+1. **F1 — write classification and token claim.** At a signal write, report
+   whether it is deferred and its lazily minted stable batch token. Tokens are
+   never reused while live or unswept.
+2. **F2 — pass lifecycle and callstack truth.** Report
+   start(rootId, included tokens, pin, lineage), yield, resume, completion,
+   commit, and discard. A handler in a yield gap has no render frame. F2 also
+   supplies the inherited discard-all-WIP control used at the R8 horizon.
+3. **F3 — per-root commit lock-in.** Report the generation-checked rootId,
+   committed token set, and each committing watermark. Ordering is F9
+   publication, folds/lock-view remint, durable watcher/effect drains, then
+   layout. S5-R12 removes only the library's commitBaseline capture.
+4. **F4 — retirement.** Exactly once per token, report committed flag and a
+   retirement point on the global sequence line. `committed=false` still
+   folds writes. Async actions park this edge until settlement.
+5. **F5 — lane-scoped execution.** `runInBatch(token, callback)` inserts the
+   callback's React update into that live token's lanes; a retired token returns
+   `RETIRED`, allowing urgent fallback.
+6. **F6 — render lineage.** Mint an identity per root and batch selection,
+   stable across its retries/replays and dead at commit/abandon.
+7. **F7 — DOM mutation window.** Edge-triggered begin/end facts delimit the
+   mutation interval for integration policy; no sampled reconciler state.
+8. **F8 — async-action parking and continuation carrier.** Preserve token
+   identity across transformed/platform-supported continuations and registered
+   host callbacks; a continuation that outlives retirement degrades to ambient
+   classification with a dev warning.
+9. **F9 — hook-becomes-current publication.** Emit the generation-checked
+   staged evaluator identity only for the hook version that becomes current,
+   including hidden Offscreen commits; emit nothing for discarded/error-
+   abandoned alternates; order publication before same-commit folds.
+
+Version skew is loud: bindings feature-detect the exact protocol version and
+reject stock or incompatible React. With no listener, each reconciler site is
+one null check. Rebase drill: if React renames lanes, moves phases, or rewrites
+queues, only the fork adapters that re-establish F1–F9 and their tests move;
+the signals library changes zero lines.
+
+### Merged fork-test list — all VERIFIED HELD
+
+The list below is the normative merged semantic suite. Tests 29–33 retain the
+round-4 merged numbering.
+
+| test | required observable assertion | fact |
+|---:|---|---|
+| 1 | A write outside a transition is classified urgent/default as React classifies the surrounding update. | F1 |
+| 2 | A transition write is deferred and receives the transition's token. | F1 |
+| 3 | One batch's token is stable across nested calls and action continuations. | F1/F8 |
+| 4 | A live or retired-unswept token is never reused; forced-small serials fail loudly rather than collide. | F1/F4 |
+| 5 | passStart reports exact rootId, included-token set, pin, and lineage before user render code. | F2/F6 |
+| 6 | yield removes render context from the JS callstack; resume restores the same immutable pass frame. | F2 |
+| 7 | A handler in a yield gap reads/writes ambient newest state and gets its own batch. | F1/F2 |
+| 8 | Each pass has exactly one terminal completion/commit/discard path; a restart is a new pass. | F2 |
+| 9 | Retirement fires exactly once for committed and committed-false tokens. | F4 |
+| 10 | A store-only token with no Fiber work still retires and persists its writes. | F4 |
+| 11 | An async action cannot retire before its returned action settles. | F4/F8 |
+| 12 | `runInBatch(t)` schedules into t's existing lanes, not a fresh transition. | F5 |
+| 13 | `runInBatch` on a retired token returns `RETIRED`; urgent fallback executes before paint. | F5 |
+| 14 | An own-lane update inserted at yield/end into an in-progress pass causes React's native pre-commit interleaved restart. | F2/F5 |
+| 15 | First commit of a spanning token locks only that root and reports its root generation. | F3 |
+| 16 | A later same-root commit advances the immutable lock view by the reported prefix, not whole-token membership. | F3 |
+| 17 | Two roots may commit at different times; global retirement remains exactly once after React is done with the token. | F3/F4 |
+| 18 | A lineage id survives Suspense retry and StrictMode replay for the same root/batch selection. | F6 |
+| 19 | Commit/abandon kills the lineage; a later selection cannot reuse it while caches survive. | F6 |
+| 20 | A hidden Offscreen hook that becomes current emits F9 even when effects do not run. | F9 |
+| 21 | Error-abandoned, discarded, and stale-alternate hooks emit no publication. | F2/F9 |
+| 22 | F9 publication is generation-checked and emitted once for the winning hook version. | F9 |
+| 23 | F9 publication precedes same-commit reducer folds, lock-in drains, and layout. | F3/F9 |
+| 24 | DOM mutation begin/end events bracket the real mutation interval exactly once per commit. | F7 |
+| 25 | Missing or incompatible protocol version fails loudly before bridge activation. | all |
+| 26 | With no bridge listener, every hook site performs only its single inert null check. | all |
+| 27 | Carrier identity survives await, Promise.all, transformed async generators, and shimmed timer/microtask/rAF registration without cross-action bleed. | F8 |
+| 28 | A fire-and-forget continuation invoked after token retirement uses ambient classification and warns; it neither resurrects nor parks the token. | F8 |
+| 29 | A discarded pass cannot later commit or emit lock/publication facts. | F2/F3/F9 |
+| 30 | A same-root urgent commit discards an older yielded pass before that pass can publish F9 or lock tokens. | F2/F3/F9 |
+| 31 | Root ids are stable and generation-checked; a portal reports its parent root, not a new root. | F2/F3 |
+| 32 | An update inserted after render work completed but before commit forces a pre-commit restart. | F2/F5 |
+| 33 | Every reported lock watermark equals the committing pass's pin. | F2/F3 |
+
+S5-R1-A and S5-R12-A are signal/fork integration tests, not additions to the
+seam: they compose existing facts and therefore leave the fork-test count and
+touch-point count unchanged.
+
+---
+
+## Cost and gate amendments
+
+- **R1 routing**: no allocation and no new stored word. On a React pass-world
+  K0-return candidate, the existing evaluator-basis probe now resolves
+  pin-gated committed versions as well as pass stages. Empty bases are one
+  length check; nonempty cost is linear in the already-flattened evaluator
+  prefix. Exact overhead is unmeasured. Charge it to G-Q/SPK-G8 and retain the
+  P1 ≤1.10× render and P3 quiet-React gate; do not assert a percentage before
+  measurement.
+- **R12 deletion**: removes two integers/root, one F3 capture, one compare,
+  its renumber row, and its lifecycle row. It adds a committed-for-root memo
+  lookup/fold to each fixup that survives the structural fast-out. Charge the
+  10k in-transition mount and cross-root mount-storm rows to W2 and the P1
+  mount ≤1.15× gate. No fallback is authorized in this final round.
+- **R2/R3/R4/R8/R9**: no implementation delta. Their existing SPK-W,
+  SPK-N1, SPK-R, and horizon tests remain. This artifact makes no new numeric
+  claim.
+- **DIRECT**: unchanged twin build; zero concurrency instructions.
+- **Steady rerender allocation**: unchanged; both repairs allocate zero.
+
+Known non-correctness gaps inherited unchanged: G9's bounded-but-not-proven-
+flat K1 growth under never-quiescent traffic and the queued performance spikes
+listed by the champion. They are outside the round-5 repair scope and are not
+hidden as correctness TODOs.
+
+---
+
+## Final audit ledger
+
+| docket item | verdict | normative delta | pinned schedule |
+|---|---|---|---|
+| R1 pin-resolved evaluator chain | blocker repaired; held | exact flattened evaluator basis gates K0 serve and fixup fast-out | S5-R1-A + mount interaction |
+| R2 pass-aware suppression | verified held | none; “includes” means pass mask | yield-gap same-slot post-pin write |
+| R3 seed/walk/termination | verified held | none | earlier consumer A→B; A/B/A |
+| R4 closed drain coverage | verified held | none | retired late-edge + lock advance |
+| R8 live renumber | verified held | delete commitBaseline from duty list only | live pin + WIP F9 id at forced horizon |
+| R9 reference installation | verified held | none | functional object updater, repeated read, committing install |
+| R12 baseline comparator | blocker repaired; held | optimization and state deleted | retirement between mount render and layout |
+| fork tests 1–33 | verified held | F3 is smaller; no fact added | merged list above |
+
+Mechanisms: **9**. Seam touch-points: **9**. Unwalked cases: **none**.
+
+exec
+/bin/zsh -lc 'wc -l design-loop/SEEDS/correctness-cases.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     288 design-loop/SEEDS/correctness-cases.md
+
+exec
+/bin/zsh -lc "sed -n '1,180p' design-loop/SEEDS/correctness-cases.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# Acceptance battery: the correctness cases (frozen seed)
+
+Rules of engagement:
+
+- A design must **walk every case**: name the mechanisms that fire, in order,
+  and show the values/marks/edges at each step. A table or trace, not prose
+  assurance.
+- Any "immune / correct **by construction**" claim must include the
+  construction — the induction or invariant, written out. Unaccompanied
+  by-construction claims are an automatic reviewer blocker. (This rule exists
+  because the previous judgment accepted exactly such a claim and it was
+  false.)
+- Reviewers attack these cases first; judges re-walk them last. A case that
+  cannot be walked in a design is a blocker, not a TODO.
+- **Restricting the interface is a legitimate design move.** A design may
+  resolve a case by *forbidding the pattern at runtime* (a thrown error with
+  a clear message) when the pattern is avoidable user code — but it must
+  then (a) show the forbidden pattern is reliably *detectable* at the point
+  of rejection, (b) define which nearby compositions remain legal, and walk
+  those, and (c) never forbid ordinary React behavior the user doesn't
+  control (flushSync in an event, time-slicing yields, StrictMode replays,
+  a component mounting mid-transition — those must be handled, not banned).
+
+Notation: `T`,`k` = deferred (transition-like) batches; `U` = urgent batch;
+`D` = default-priority batch (urgent-classified, but renders asynchronously —
+it can be *excluded* from a sync render). "World of X" = the state a render
+for X must observe. All cases assume React-mode (bindings active).
+
+---
+
+## C1 — World-divergent dependency (the killer; family of 7)
+
+Setup: atoms `flag=false, a=0, b=0`; computed `c = flag ? a : b`; component W
+subscribed to `c`; canonical deps of `c` = {flag, b}.
+
+Schedule: deferred batch k: `flag.set(true)` → (k-world read of `c` may
+happen here, caching 0 via `a`) → same batch k: `a.set(1)`.
+
+Required: the k-world value of `c` becomes 1 (any k-world cache invalidated);
+W is re-rendered **in k's lane before k commits** (no torn commit where
+siblings show k's world and W shows stale); committed world still reads 0
+via `b`.
+
+The trap: `a` has **no canonical edge** to `c`. Any invalidation or
+notification derived only from canonical topology cannot reach `c`/W. Any
+cache-validity record that only captured "atoms with concurrency state at
+evaluation time" misses `a` (it acquires state *after* the evaluation).
+
+Variants that must also be walked: T2 write to committed-only dep `b` in k
+(no k-world change; over-invalidation ok, wrong value not); T3 shared dep
+flips back (`flag=false` in k); T4 urgent write to `b` (committed changes,
+k-world doesn't); T5 urgent write to `a` (k-world sees it — pending worlds
+include applied urgent state); T6 slot/world-id reuse hygiene after k
+retires; T7 two live batches render together, one suspends, one commits
+alone (multi-batch and single-batch views over the same nodes).
+
+## C2 — flushSync excludes a pending default batch (forces always-log)
+
+Setup: atom `a=0`, computed `c = a + 10`, components on both.
+
+Schedule: in one event: `a.set(1)` lands in default-priority batch D
+(urgent-classified, applied to canonical state if the design applies urgent
+writes); then `flushSync(setState)` renders **SyncLane only** — D excluded.
+
+Required: the flushSync render reads `a=0` AND `c=10`. Both. A design whose
+canonical value moved and whose downstream computed can be served from a
+canonical cache shows `c=11` next to `a=0` — torn frame.
+
+The trap: (a) skipping history for urgent writes makes the older world
+unreconstructible (this case is the proof that **every** write needs a
+receipt in React mode); (b) recording the receipt but not marking/knowing
+the *downstream cone* is world-sensitive leaves `c` on the canonical fast
+path.
+
+## C3 — Rebase parity (React's updater-queue arithmetic)
+
+Setup: `a=1`. Deferred T: `a.update(x=>x+1)`; then urgent U:
+`a.update(x=>x*2)`.
+
+Required, in order: urgent render (excludes T) shows 2; U commits (fold is a
+no-op vs canonical); T's render shows 4 (`(1+1)*2` — replay in write order);
+T commits → committed value 4. `useReducer` side-by-side test must match at
+every step. A design that applies-and-discards the urgent updater folds T to
+2 or 3 — wrong. A plain `set 5` after a pending `+1` must commit 5 (not 6).
+
+## C4 — Two-batch write into an already-stale region (re-notify)
+
+Setup: component W on computed `c` over atom `a`.
+
+Schedule: T1 writes `a` (W notified, re-render scheduled in T1's lane); before
+any re-render/commit, a *different* deferred batch T2 writes `a`.
+
+Required: W is also scheduled in **T2's lane** (T2's render includes W). The
+trap: once-per-staleness notification dedup (marks that stop walks; an ARMED
+bit that re-arms only after the watcher re-runs) has no path from the second
+write to W in T2's lane.
+
+## C5 — Cutoff-suppressed first write, effective second write (same batch)
+
+Setup: `c` reads `a` but its value doesn't change when `a` goes 0→1 (e.g.
+`c = a*0 + b`); watcher on `c`.
+
+Schedule: batch k writes `a=1` (broadcast correctly suppressed — value equal);
+then k writes `b=7`.
+
+Required: the second write reaches the watcher (setState in k's lane) even
+though the region is already marked/stale and the first broadcast was
+suppressed. Cache-validity must not serve the first evaluation's value.
+
+## C6 — Lane attribution under grouped notification
+
+Schedule: `batch(() => { a.set(1); startTransition(() => b.set(2)) })` — the
+engine-level batch closes *after* the transition scope ends.
+
+Required — one of two resolutions, stated explicitly:
+
+- **Handle it**: watcher setStates for `b`'s cone are assigned to the
+  transition's lanes (its render includes them; one commit carries them);
+  `a`'s cone gets urgent scheduling. Name the mechanism that preserves each
+  write's batch context across the grouped drain (e.g. fork lane-scoped
+  execution, or per-write synchronous delivery).
+- **Forbid it** (per the preamble rule): reject mixed-context writes inside
+  an explicit `batch()` at the write site (detectable: the write's
+  classification/batch differs from the batch's opening context — show the
+  detection). Then walk the legal compositions that remain:
+  `startTransition(() => batch(...))`, plain unbatched writes inside
+  `startTransition`, and a provided `startSignalTransition` helper.
+
+The trap either way: any *implicit* grouping (e.g. coalescing broadcasts per
+event without user-visible `batch()`) cannot be forbidden — the user wrote
+no special code — so implicit grouping must preserve per-write context or
+not exist. State which your design does.
+
+## C7 — Writes and reads during a yielded render pass
+
+Schedule: a transition render is time-sliced and yields; during the yield a
+click handler runs: reads `a.state`, writes `a.set(x)`; the pass later
+resumes.
+
+Required: the handler's read resolves in the **newest** world (not the pass's
+pinned world); the write does not throw and is classified/logged under the
+click's batch; the resumed pass still observes its original pinned world.
+
+The trap: any "am I in render?" state scoped to [pass-start, pass-end] is
+wrong during yields — passes span yields, and handlers run in the gaps. The
+fork must expose yield/resume (or equivalent per-callstack truth); the
+design must say how reads know.
+
+## C8 — Equality drops must not lose receipts
+
+Setup: `a=0`; deferred T: `a.set(1)`. Then urgent U: `a.set(1)` — equal to
+the *newest* value.
+
+Required: U's write must still exist in U's world: U's render (excluding T)
+shows 1. If T is later truncated/aborted (where supported), committed value
+is still 1. Walk also: two overlapping transitions writing the same value.
+
+Sound rule of thumb (prove yours): dropping an equal write is safe only when
+no history exists for the atom — with any history, worlds disagree about the
+accumulator, so equality must move to fold/notify time.
+
+## C9 — Mount mid-transition (existing and fresh nodes)
+
+Schedule: transition k writes atoms; while k is pending/rendering, a
+component mounts and reads (a) an existing computed over k-touched atoms,
+(b) a **freshly created** node (`useComputed` created during this render)
+over the same atoms.
+
+Required: both reads resolve in the pass's world (which includes k) on the
+first render — no double render, no canonical leak. The trap for (b): a
+brand-new node has no marks/edges/shadow yet; the first evaluation may run
+before any world-sensitivity is discoverable. State the mechanism (e.g.
+evaluate-then-recheck, or eager world-routing for fresh nodes).
+
+## C10 — Late subscription joins the pending batch (entanglement)
+
+Schedule: transition k writes atom `a`; component mounts (subscribes to `a`)
+after the write but before k commits; k's world-value for the component
+differs from what it rendered.
+
+
+exec
+/bin/zsh -lc "sed -n '181,360p' design-loop/SEEDS/correctness-cases.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+Required: exactly **one** commit containing both k's updates and the
+component's correction (the corrective update is assigned to k's own lanes —
+a fresh `startTransition` is NOT equivalent and must be shown why). If k
+retires in the race window, fall back to an urgent pre-paint correction.
+
+## C11 — Multiple roots (declared-scope case)
+
+Cross-root *simultaneity* is NOT required — React itself commits roots at
+different times, even for one transition. What is required is **per-root
+self-consistency** and an explicitly declared scope. The design must pick
+and walk one of:
+
+- **Full spanning support**: batch k spans roots A and B; A commits k while
+  B is pending. Later renders on A keep including k (A must never contradict
+  its own committed DOM); A's passive effects observe k's values after A's
+  commit even though the token hasn't fully retired; B eventually commits; k
+  retires exactly once. The trap: a single global "committed" world is wrong
+  per root during the window.
+- **Degraded multi-root**: roots are supported; a spanning batch may commit
+  per-root with visible cross-root skew, but each root remains
+  self-consistent (no root contradicts its own DOM; corrections are
+  urgent-scheduled, bounded, and documented).
+- **v1 single-root scope**: a second root is rejected loudly (per the
+  preamble rule — detectable at root registration), with the multi-root
+  story named as future work and nothing in the architecture that
+  forecloses it.
+
+Hidden-gap warning: apps acquire second roots accidentally (portals are
+fine — same root; but modals/microfrontends/devtools overlays often use
+`createRoot` twice). "Single root" is a legitimate scope only if violation
+is detected, not silently wrong.
+
+## C12 — Store-only transitions persist
+
+Schedule: `startTransition(() => a.set(5))` with **no subscribed component**;
+also: an async action `startTransition(async () => { a.set(1); await io();
+a.set(2) })` with no React work.
+
+Required: the writes commit to canonical state when the batch retires (and
+for the async action, not before the action settles). Whether a write
+persists must never depend on who is subscribed. (Drop-on-abort killed a
+prior candidate; its schedule lives in SCARS.)
+
+## C13 — Counter/world-id lifecycle soundness
+
+Schedule: drive the system to full quiescence (all batches retired, caches
+reset); begin a new episode; drive sequence/ticket counters to values that
+collide with retained bookkeeping from the previous episode (force small
+counters in tests).
+
+Required: no stale cache entry, mark, or world record from a previous
+episode can validate in the new one. State every counter, what references
+it, and what makes cross-episode reuse safe (epoch bump, generation check,
+plane reset — name it per structure). Include forced-wraparound tests for
+every counter with a horizon.
+
+## C14 — StrictMode and replayed renders
+
+Required: render-phase reads are pure (no graph mutation observable across a
+discarded/replayed pass; no double-fired writes — render-phase writes
+throw); double-mounted effects/observed-lifecycle net to one subscription
+(microtask flap damping); per-world thenable identity is stable across
+replays (same positional thenable per world — or React re-suspends forever).
+
+## C15 — Suspense across worlds (R6 hard case)
+
+Schedule: transition k causes computed `c` to suspend (async data); while
+suspended, a component mounts mid-transition reading `c`; promise settles;
+React retries.
+
+Required: mount suspends via React `use` protocol against the k-world
+thenable; retry re-evaluates through a per-world cache with stable identity;
+canonical world never observes the suspension; k commits with settled value.
+Also walk: which key identifies "the world" for the thenable cache when a
+pass includes multiple batches (a single token is not enough; passSerial
+alone re-fetches forever — state your key and its lifetime).
+
+## C16 — Effects observe committed state only
+
+Schedule: urgent write applied but not yet committed (e.g. default-priority
+batch D pending render); an unrelated retirement flushes `useSignalEffect`s.
+
+Required: the effect's reads exclude D's applied-but-uncommitted write; after
+D commits, the effect re-runs (or first runs) seeing it. Core `effect()` is
+allowed a different documented contract (newest), but it must be *stated*
+and walked.
+
+## C17 — Optimistic rollback (only if the design exposes truncation)
+
+Schedule: policy API truncates a pending batch's writes mid-flight while
+another batch and an open pass exist.
+
+Required: no world ever observes a half-removed batch; caches/memos that
+folded the truncated writes invalidate; watchers whose values revert are
+notified. If the design does not expose truncation, say so and delete this
+surface — React batches themselves never truncate.
+
+---
+
+## Walk format (required per case)
+
+```
+C<n>: <one-line restatement>
+step | actor/mechanism | state touched (values, marks, edges, log, lanes)
+...
+outcome: <matches Required because ...>
+residual risk: <what could regress this; which test pins it>
+```
+
+exec
+/bin/zsh -lc 'wc -l design-loop/SEEDS/requirements.md design-loop/SEEDS/fork-charter.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+      86 design-loop/SEEDS/requirements.md
+      65 design-loop/SEEDS/fork-charter.md
+     151 total
+
+exec
+/bin/zsh -lc "sed -n '1,180p' design-loop/SEEDS/requirements.md && sed -n '1,160p' design-loop/SEEDS/fork-charter.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# Requirements (frozen seed)
+
+What the product is: a from-scratch TypeScript signals library with
+no-compromise concurrent React integration (no `useSyncExternalStore`), backed
+by a React fork we fully control. These requirements are the contract; the
+architecture is the design space.
+
+## R — Functional (the user-facing chrome; largely settled by prior work)
+
+- **R1 Atom**: `new Atom<T>({ state, effect?, isEqual?, label? })`;
+  `atom.state` (tracked read), `set(v)`, `update(fn)`. `effect` runs on
+  observed 0→1 with cleanup on 1→0, microtask-debounced (flap-proof).
+- **R2 Computed**: `new Computed<T>({ fn(ctx), isEqual?, label? })`; lazy,
+  cached, exact re-verification; `ctx.use(thenable)` suspense with per-world
+  positional identity; `ctx.previous`. Errors/suspensions are cached values
+  (sentinel boxes) — a throwing getter can never corrupt graph state.
+- **R3 ReducerAtom**: `dispatch(action)`; actions are logged and replayed per
+  world; parity with `useReducer` is a conformance test, not a hope.
+- **R4 Hooks** (`cosignal/react`): `useSignal`, `useAtom`, `useReducerAtom`,
+  `useComputed(fn, deps, opts?)` (closes over props/state; signal reads
+  auto-tracked), `useSignalEffect(fn, deps?)` (committed state only).
+  Provider-free preferred; a provider component is acceptable if it
+  demonstrably buys correctness or simplicity (justify the trade).
+- **R5 Transitions**: full `startTransition`/`useTransition` parity — signal
+  and React state move in lockstep; optional `startSignalTransition` /
+  `useSignalTransition` throughput helpers.
+- **R6 Suspense parity**, including the mount-mid-transition-while-suspending
+  case (react-concurrent-store's documented known bug must be a passing test),
+  and fresh nodes (`useComputed` mounted mid-transition) reading the pass's
+  world correctly on first render.
+- **R7 Infinite-loop rejection**: React's own limits for React-coupled storms;
+  engine cycle detection for signal-only loops.
+- **R8 Writes inside computeds**: tolerated when acyclic;
+  `configure({forbidWritesInComputeds})`; render-world evaluation always
+  rejects writes.
+- **R9 Multiple roots**: per-root self-consistency is required (a root must
+  never contradict its own committed DOM). Cross-root simultaneity for a
+  spanning batch is NOT required; the design declares its multi-root scope
+  and walks C11 at that declared scope (full / degraded / v1 single-root
+  with loud detection).
+- **R10 SSR/hydration** from serialized atom state (RSC/Flight out of scope v1).
+- **R11 Tracing**: lazily-loadable, zero-allocation recorder (ring + lossless
+  session modes), causality queries, Graphviz renderers; untraced cost = one
+  slot check per site. (The synthesized spec §16 is the reference bar; reuse
+  it unless the architecture forces changes.)
+- **R12 React fork**: see `fork-charter.md` — the old "minimal additive patch"
+  constraint is lifted; maintainability is a scored axis instead.
+- **R13 Core non-React API**: `effect()`, `batch()`, `untracked()`,
+  `configure()` (`effectScope()` optional — include only if it earns its
+  keep). Scheduling/flush behavior may be configurable; the hard requirement
+  is **benchmark integrability**: the design must drive the
+  js-reactivity-benchmark adapter honestly (exact pull counts, checksum
+  contracts, fresh mid-batch reads, effects observable synchronously under
+  some documented configuration).
+
+## P — Performance (gates, not adjectives)
+
+- **P1** Signal-driven re-render within 10% of equivalent `useState`;
+  10k-subscription mount within 15%.
+- **P2** Pure-core (no React) at-or-below alien-signals v3 on every tier-0
+  shape; exact pull counts (`testPullCounts: true`); 179/179 conformance
+  including growth stress. Donor reference points in `research-facts.md`.
+- **P3** Concurrency machinery costs ~nothing when inactive: pure-core users
+  execute zero concurrency instructions; React-mounted-but-quiet ≤2% on
+  tier-0; every hot mechanism carries a numeric gate and a CI check (the
+  synthesized spec's §18 gate-table style is the bar).
+- **P4** Zero engine allocation on steady re-render traffic; memory wins
+  reported as heapUsed + plane bytes side by side.
+
+## E — Engineering
+
+- pnpm workspaces; TypeScript; `type` over `interface`; `undefined` over
+  `null` (each `null` justified); ships compiled JS (same-file `const enum`
+  allowed per the measured bundler-demotion hazard); branded id types;
+  `__DEV__` by define, never by runtime const.
+- Process apparatus is inherited, not redesigned: oracle-first sequencing,
+  frozen-kernel contract suite, bytecode budgets CI, pre-registered
+  experiments, per-milestone numeric exit gates. (These survived review;
+  spend design tokens elsewhere.)
+- Plain-spoken spec: every concept defined in plain English before use; the
+  concurrency story must fit on one page (judged).
+
+## Non-negotiable correctness bar
+
+Every case in `correctness-cases.md`, walked mechanism-by-mechanism.
+`useState`/`useReducer`/`startTransition` parity is the product.
+# Fork charter (frozen seed)
+
+The old constraint — "minimal additive patch to React" — is **lifted**. We
+own the fork. Depth is allowed; what is scored is size, maintainability, and
+seam stability, not shallowness for its own sake.
+
+## Goals, restated as scoreable properties
+
+1. **Fork size**: count of touched reconciler files and lines; count of new
+   concepts introduced into reconciler code.
+2. **Maintainability**: every hook site edge-triggered from a place the
+   reconciler already mutates its own bookkeeping (never sampled state);
+   each site documents its invariant in place; the fork carries its own
+   reconciler-level test suite that runs on every rebase; inert-when-unused
+   (one null-check per site with no listener).
+3. **Seam stability** (the co-design goal): the signals library depends only
+   on a versioned protocol document (`fork-protocol.md` in the design), not
+   on reconciler internals. Judge runs a **rebase drill**: "React renamed
+   lanes / moved commit phases / changed update-queue internals — what in
+   the signals library changes?" The right answer is "nothing; the fork
+   re-implements the same protocol facts."
+
+## Protocol facts known to be required (from the acceptance battery)
+
+- Write classification: is-a-write-right-now deferred; which batch (integer
+  token, minted lazily, never reused live; deferred bit in the token).
+- Pass lifecycle: start(root, includedBatches) / end — **plus yield/resume
+  edges** (C7: handlers run in yield gaps; wall-clock pass scoping is wrong).
+- Retirement: exactly once per token, with committed flag; per-root commit
+  lock-in for spanning batches (C11); async-action parking (C12).
+- Lane-scoped scheduling: run a callback so its updates join an existing
+  batch's lanes (`runInBatch`-class; C6, C10).
+- A stable render-lineage identity for suspense caches across a batch's
+  passes (C15).
+- DOM mutation window (unrelated nicety; keep).
+
+Candidates may propose MORE than this list — that is the point of the
+charter — but every addition must earn its place against goals 1–3.
+
+## The liberated design space (directions candidates may now take seriously)
+
+- **Deeper observation**: expose the include-set/lineage/yield facts above
+  natively rather than reconstructing them.
+- **Lane-scoped execution**: richer entanglement/override scopes than a
+  single `runInBatch`.
+- **React-owned external state** (the wildcard): fiber-detached update
+  queues managed by the reconciler itself — atoms whose visibility/rebase
+  semantics are literally React's own update-queue code, deleting the
+  library's reimplementation of lane filtering and rebasing. If a candidate
+  takes this route it must confront honestly: hook queues are per-fiber and
+  single-consumer (an atom is many-consumer — closer to context than to a
+  hook); non-React reads/effects need a synchronous fold path anyway;
+  reconciler surgery at this depth makes rebase cost the dominant risk, so
+  goal 2 is the make-or-break axis. License to fail fast: a candidate may
+  conclude "explored, not viable, because X" — that conclusion, with the
+  schedule/mechanism that kills it, is a valuable round output.
+
+## Hard rules
+
+- No Fiber objects, no lane bitmasks, no update-queue internals cross the
+  boundary — integers and documented callbacks only.
+- Version-skew: bindings feature-detect the protocol and fail loudly on
+  stock React (no silent degraded mode).
+- The fork's test suite is part of the design deliverable, not an
+  afterthought: every protocol fact gets a reconciler-level test.
+
+exec
+/bin/zsh -lc 'wc -l design-loop/SEEDS/research-facts.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+      89 design-loop/SEEDS/research-facts.md
+
+exec
+/bin/zsh -lc "sed -n '1,180p' design-loop/SEEDS/research-facts.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# Measured facts (frozen seed; provenance required to cite)
+
+Numbers below are measured in this repo or its sibling; cite them rather than
+re-deriving. UNMEASURED items are flagged — treat them as spike targets, not
+facts. Provenance keys: [RESEARCH] `research/RESEARCH.md` + sources/,
+[GUIDE] `research/packed-structs-guide.md` / `packed-authoring-practices.md`,
+[ARENA] `libs/arena` results, [LINKS] `libs/arena-links` A/B,
+[SYNTH] `react-concurrent-signals-arena.md` §7/§15/§18, [JUDGE]
+`research/specs/JUDGING.md`, [SPECS] `research/specs/*`.
+
+Note: [SYNTH]/[JUDGE]/[SPECS] targets (and `reviews/*`) are deliberately
+removed from the working tree to prevent anchoring (see LOOP.md "Attic");
+they are historical citations, recoverable from git by the monitor. Loop
+agents cite the keys and trust the numbers; they do not chase these paths.
+
+## Kernel / layout (the settled substrate)
+
+- Donor arena kernel vs alien-signals v3 (one-framework-per-process, tier-0):
+  deep 0.90×, broad 0.84–0.88×, diamond 0.89×, reads 0.74–0.87×, create
+  0.96×; 179/179 conformance with exact pull counts. Kairo-scale GC-inclusive
+  reality ≤1.4× (honest ceiling; ≤1.25× is a target with no named mechanism
+  yet). [ARENA][SYNTH §18.2]
+- Record interleaving ≫ parallel arrays for hot traversal fields: naive
+  one-array-per-field measured 1.8× WORSE than objects on deep chains.
+  Cold/rarely-touched parallel columns are not covered by this result.
+  [RESEARCH][SYNTH §7.1]
+- Nodes+links share one plane: −2% deep / −8% diamond vs split planes.
+  [SYNTH §7.1]
+- Buffers as closure constants are the only binding at const parity; segment
+  tables +35–40%/access, resizable ArrayBuffers +66–83% traversal, mutable
+  `let` +34–43%, per-function aliases +26–30%. Growth = closure rebuild at
+  operation boundaries. [GUIDE][SYNTH §14.1]
+- Bundlers demote module-scope `const` → `var`: +15–21% on kairo through a
+  bundled child. Same-file non-exported `const enum` inlines everywhere that
+  matters; cross-file does not. [GUIDE][SYNTH §15]
+- V8 inlining: ~460 bytecodes/callee, 920 cumulative, greedy ≤27; typed-array
+  access ≈2× bytecode of property loads. The monolithic `link()` at 475
+  bytecodes silently never inlined; split fast path 168 → −8–13% on
+  traversal shapes. Budgets must be CI-enforced. [GUIDE][SYNTH §18.3]
+- One-framework-per-process or feedback pollution skews results up to 3×.
+  [RESEARCH]
+- Links-only arena (object nodes + integer link records) LOSES: the
+  id→nodesById→flags hop adds a dependent load per traversed link — kairo
+  1.2–1.6×, creation ~1.7× vs alien. Full-arena (flags/topology in-plane)
+  is required for the traversal win. [LINKS]
+- JSC (bun) inverts some V8-tuned rankings; arena still wins there, but
+  V8-specific tunings don't travel. Rank per-engine. [repo commit 0d3371f]
+- Value storage: one packed `unknown[]` side column beats type-segregated
+  columns (Float64 + tags measured worse). Never holey. [RESEARCH][SYNTH §7.1]
+
+## Concurrency architecture facts (from the arena round + re-judgment)
+
+- React's own model: setState appends lane-tagged updates to per-hook queues;
+  renders apply included lanes and rebase the rest; urgent-applied results
+  become the base only for *unskipped* prefixes — replay-in-write-order over
+  the pre-batch base is the parity-correct fold (C3's 4-not-3 arithmetic).
+  [SPECS b §10.2 kill][JUDGE]
+- Canonical-topology-only invalidation/notification is unsound under
+  world-divergent dependencies (C1). Verified architectural in candidate C;
+  verified present-but-compensable in synthesized A; solved structurally in
+  B (per-link world bits + per-slot write clocks) and D (second kernel whose
+  edges are the head world's real topology). [re-judgment 2026-07-04, both
+  reviews, SPECS]
+- Per-slot write clocks (B): cached per-world value valid iff its seq ≥ every
+  included slot's write clock — coarse, sound, no per-atom certificates.
+  [SPECS b §8.1/§9.5]
+- D's two-kernel model: K1 lazily shadowed, bulk-reset at unfork; head
+  evaluations re-track real head deps in K1. Its `host.refresh` indirection
+  tax is **UNMEASURED** (predicted ≤3–5% on recompute-dense shapes; fusion
+  fallback designed). Spike pre-registered. [SPECS d §14/§15]
+- Fork facts an engine cannot get from userspace: current write's batch +
+  deferred classification; a pass's included batches + lifecycle; retirement
+  (exactly once); lane-scoped scheduling into an existing batch
+  (`runInBatch`); DOM mutation window. Passes span yields; **handlers run in
+  yield gaps** — any [pass-start, pass-end]-scoped "in render" state is wrong
+  there (C7). [SYNTH §6][review 08-52]
+- ≤31 live batches (one per lane) — slot/mask encodings of live batches are
+  sound; entries outlive slots only if recycling is gated on unswept counts.
+  [SYNTH §6.2/§9.2]
+
+## Cost model warnings (paid before, don't repeat)
+
+- Eager per-write world evaluation on the write path (watcher cutoffs) is
+  the expensive shape; kernel-staleness + lazy pull, or memo-shared
+  evaluation, are the two known mitigations — price whichever you pick
+  (fan-out gates). [SYNTH §10.6/G-7][SPECS d]
+- Always-log in React mode is the honest price of C2; gate the logged write
+  at ≤2× DIRECT rather than wishing it away. DIRECT mode (no React) must
+  execute zero concurrency instructions. [SYNTH §9.1/G-6][JUDGE]
+
+exec
+/bin/zsh -lc 'wc -l design-loop/NOTES/SCARS.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     296 design-loop/NOTES/SCARS.md
+
+exec
+/bin/zsh -lc "sed -n '1,180p' design-loop/NOTES/SCARS.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+# SCARS — dead approaches, each recorded as the schedule that killed it
+
+Format: the approach, the killing schedule, why the fix isn't local. Bare
+prohibitions anchor; schedules teach. Curated by the monitor only.
+
+- **S1. No-log urgent writes ("urgent goes straight to committed").**
+  Killing schedule: C3 — deferred `+1` pending, urgent `×2` applied and
+  discarded; fold replays `+1` over the new base → 3; React commits 4. Also
+  unrepresentable: C2 (flushSync excluding an applied default batch). Why
+  not local: retaining urgent ops IS always-logging; the "no side log"
+  identity dies with it. (Candidate B's kill; extraction 2026-07-04.)
+- **S2. Read-only canonical topology for all worlds + "marking through
+  canonical topology never misses".** Killing schedule: C1 — k writes
+  `flag` then `a`; the k-world cache of `c` (`SV_READY`-style) is served
+  forever; no walk from `a` reaches `c`; watcher never notified in k's
+  lane; torn commit corrected one frame late. Why not local: the design's
+  own analysis concedes the repair is per-world dependency tracking, which
+  its read-cheapness premise forbids. (Candidate C's kill; verified against
+  C §10.4's induction — it covers only mark-then-read-once.)
+- **S3. Canonical-only notify walks bolted onto an overlay ("the walk
+  reaches everyone who matters").** Killing schedule: C1 again, in the
+  synthesized winner: overlay evaluations are untracked, so the divergent
+  dep has no edge; the always-walk of §9.8 walks the wrong graph. Why not
+  local-as-claimed: the repair needs registries + full certificates + drain
+  re-validation (a 4-mechanism compensation stack), or a structural
+  mechanism (world edges / second kernel). (Review 2026-07-04T08-52 F2/F3.)
+- **S4. Drop-on-abort retirement (committed=false discards writes).**
+  Killing schedule: C12 — `startTransition(() => a.set(5))` with no
+  subscriber → no React work → committed=false → write silently reverts.
+  Local one-branch fix exists (fold instead), so the scar is the *policy*,
+  not the machinery: persistence must never depend on subscription.
+- **S5. Certificates that record only "atoms with concurrency state at
+  evaluation time".** Killing schedule: C1's memo half — `a` is unlogged
+  when world-k first reads it, acquires a tape on the later write, and no
+  recorded source moves → stale cache validates; the spec's own T1
+  justification contradicted its own definition. Rule: validity records
+  must cover the COMPLETE read set (sentinel for no-state-yet), and nested
+  evaluations must flatten/merge child certificates. (Review F3 + codex
+  finding 2, mutually confirmed.)
+- **S6. Concurrency machinery keyed to watcher count.** Killing schedule:
+  `startTransition(() => { atom.set(1); setShow(true) })` mounting the
+  FIRST watcher — the write predates LOGGED mode, no receipt exists, urgent
+  renders leak the transition value. Rule: activation is monotonic on
+  bridge registration. (Codex finding 3, independently verified.)
+- **S7. Wall-clock-scoped render context ([passStart, passEnd] scalar).**
+  Killing schedule: C7 — urgent write in a handler during a yielded
+  transition render throws "write during render" / reads resolve against
+  the pin. Rule: render-context truth is per-callstack; the fork must
+  expose yield/resume. (Review F1; applies to every legacy candidate.)
+- **S8. Equality-gating writes against the newest world.** Killing
+  schedule: C8 — deferred T `set 1`, urgent U `set 1` dropped as equal;
+  U's render excludes T and shows 0; truncation variants lose the write
+  entirely. Rule: I7 (drop only on empty history; equality lives in
+  fold/notify). (Codex finding 4 + review F5.)
+
+## Round 1 (2026-07-04): rounds/round-01/
+
+- **S9. Reachability-derived fast-path routing without a freshness check**
+  ("unflagged ⇒ serve canonical to any world"). Killing schedule: quiesce
+  with kernel-stale nodes (flags cleared, staleness persists); new
+  transition writes an atom with no out-edges yet; an urgent pass reads the
+  stale node → the pull freshly evaluates against newest, acquires the
+  pending write through a branch no walk ever saw → torn urgent frame.
+  Twin: a yield-gap NEWEST read lazily creates a never-evaluated node's
+  cache+edges with no mark; the pinned pass serves it. Repair is a routing
+  rule (freshness conjunct, I12), not more marking. (TK-F1 + CO-F1.)
+- **S10. Equality-filtered per-token late-join correction.** Killing
+  schedule: `c = x1 && x2`; t1 writes x1, t2 writes x2, both pre-mount;
+  per-token projections all equal committed → no corrective; React renders
+  {t1,t2} jointly, bails out on the new component → torn committed frame no
+  reconciler path repairs. Subset divergence defeats any fixed comparison
+  set; corrections must be reach-based (I13). (OP-F2 + TK-F2.)
+- **S11. Commit-gate safety nets keyed to deferred-token liveness and
+  single-root commit edges** (fork-native's viable core). Killing
+  schedules per missed divergence dimension: (1) edge re-track under a
+  live default mask + yield-gap sync write + flushSync exclusion → gate
+  fast-out passes, torn commit; (2) fold without a retirement pin +
+  mid-pass retirement on another root → one pass renders two worlds; (3)
+  spanning batch: skew tag tested against the lagging root's mask and
+  cleared at the first root's commit while the hazard lives → torn commit
+  on the lagging root. The gate's value was "the trigger list is small";
+  the fixes make the trigger list the whole problem. (FN-F1/F2/F3.)
+- **S12. Global/shared update queues folded without a retirement
+  watermark.** Killing schedule: token retires mid-yield; the resumed
+  pass's first read of a not-yet-memoized node satisfies fullyRetired at
+  read time → siblings disagree about one atom inside one committed tree.
+  React's per-fiber queues never needed the pin; any many-consumer store
+  does (I15). (FN-F2.)
+- **S13. Per-(world, batch) equality-retained frontier retention.** Killing
+  schedule: n live transitions round-robin-writing deps of one watched
+  computed retain the powerset — 2^n live graphs, each write paying pulls
+  per graph; at the 31-batch bound the worst case is 2^31 while the spike
+  gates tested "1, 2, 8, 31 graphs." The multi-batch induction requires the
+  family; capping it is a retention-rule redesign with a new proof. (OP-F3.)
+- **S14. Canonical-value delivery cutoffs gating world-cache invalidation
+  notifications.** Killing schedule: deferred T `update(+1)` rendered and
+  finished-uncommitted; urgent `set(3)` equal to canonical → k0Changed
+  false → delivery AND the runInBatch corrective both skipped; T's world
+  silently moved 4→3; T commits its stale rendered tree. Cutoff decisions
+  are per-world; a canonical-only gate must never guard cross-world
+  notification. (CO-F2.)
+- **S15. "Discarded nodes are GC fodder" over arena-resident records.** A
+  collected JS wrapper cannot reclaim a bump-allocated integer record, and
+  abandoned fresh-node mounts (StrictMode, interrupted transitions) are
+  ordinary, so the leak is unbounded. Killing schedule: repeat
+  mount-evaluate-abandon; K0 grows monotonically; K1 reset and lineage
+  drops reclaim nothing. Any "harmless discard" claim over arena state must
+  name the reclamation or staging protocol. (Codex TKC-9.)
+
+## Round 2 (2026-07-04): rounds/round-02/
+
+- **S16. Value-based delivery suppression against commit-recorded
+  baselines.** Killing schedules: (a) held T renders c=1
+  (finished-uncommitted); a later T-segment write returns c to 0 → cutoff
+  compares T-world 0 == committed lastRendered 0 → suppress → React
+  commits the stale finished subtree [WALK cost-codex 2]; (b) suppression
+  state strands: a same-slot second write prunes at the stamped atom and
+  never re-reaches the suppressed node [WALK cost-claude CH-1].
+  Suppression soundness needs per-pending-render knowledge no engine
+  record has; delivery stays value-blind (D13).
+- **S17. Cross-write delivery-elision state with shared per-node stamps
+  (frontier pruning).** Killing schedule: k delivers through c (stamp E1);
+  W re-arms k (E2); j's walk overwrites the shared stamp (E3); k's next
+  write prunes at the root since E3 ≥ E2 → no delivery → k commits stale.
+  One era per node cannot validate 32 bits; per-slot eras break memory;
+  clearing sweeps reintroduce the cost. [BOTH CH-2 + cost-codex 6]
+- **S18. Pinless shared world memos without enumerated ownership.**
+  Killing schedules: (a) quiescence-via-touched-lists misses memos on
+  untouched nodes; interned mask ids recycle to collisions; seq reset
+  inverts the clock window → a previous episode's world value validates
+  and commits [WALK cost-claude CH-3]; (b) two live pins share one memo
+  slot: root B's overwrite feeds root A's resumed pass a foreign
+  `ctx.previous` [WALK cost-codex 5]. Survives only as O18's measured
+  fallback hybrid.
+- **S19. Full-token per-root lock-in and pass-grain publication.** Killing
+  schedules: (a) async T locked into root A at first commit; a post-await
+  write under T leaks into A's committed view before any commit carries it
+  [WALK lean-codex 1]; (b) pass-grain publication ships staged state from
+  error-boundary-abandoned subtrees inside the winning pass [WALK
+  lean-codex 2]. Rules: watermarked lock-in (I25); hook-commit-grain
+  publication (I22).
+- **S20. Global retirement clocks in resource identity keys.** Killing
+  schedule: capsule keyed on a global retireClock; every unrelated urgent
+  retirement re-keys every suspense capsule → refetch + re-suspend per
+  interaction → transition starvation with duplicate side-effectful
+  fetches [WALK lean-claude F1]. Retirement components of validity must be
+  relevance-filtered (touched-atom visStamps — I21/I24).
+- **S21. Ambient (context-sampled) classification for post-await action
+  writes.** Killing schedule: raw `a.set(2)` after `await` lands in its
+  own default batch and retires while the action parks → committed state
+  moves before the action settles — C12 violated with no thrown rejection
+  [WALK harden-codex 5]. Rule: I26/D15.
+- **S22. Promise-patching carriers: global then-patch and
+  scope-returned-thenable wrapping are correctness-dead — empirically.**
+  `await` of native promises uses internal PerformPromiseThen and bare
+  thenables call their own `then`; a patch sees only explicit `.then()`
+  calls, so identity silently drops on ordinary compositions. React 19's
+  entangled-action thenables cover parking (lifetime) only, never
+  continuation identity. The living alternative is the I30 twin-build
+  transform (or platform AsyncContext when it ships). [MEASURE/PROVEN
+  SP-F8 prototype, research/experiments/spf8-continuation-carrier.md]
+
+## Round 3 (2026-07-04): rounds/round-03/
+
+
+- **S23. Evaluator-blind fast paths ("worlds diverge only through
+  receipts").** Killing schedule: React-state-only transition classified
+  RENDER_NEWEST; useComputed stages f_B; both the staging component and a
+  sibling are served f_A's K0 cache; the pass commits a wrong frame;
+  promotion never dirties K0 → wrong NEWEST forever, no receipt, no
+  backstop. Second horn: the validity ladder serving on slot clocks
+  without comparing evaluator stamps replays a discarded closure's value
+  inside its own pass. Why not local-as-written: routing, RENDER_NEWEST
+  classification, memo validity, AND promotion all need the conjunct —
+  one omission re-opens it. (exit-claude F1 + exit-codex 5/6; repaired
+  R1/R2.)
+- **S24. Per-pass-minted evaluator stamps inside retry-crossing identity
+  keys.** Killing schedule: suspense retry = new pass → re-stage vs
+  committed → fresh stamp → flattened prefix mismatch → drop settled
+  thenable → refetch → suspend → repeat: transition never commits,
+
+exec
+/bin/zsh -lc "sed -n '181,360p' design-loop/NOTES/SCARS.md" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+  duplicate fetch per retry. Rule: I40 lineage-stable minting.
+  (breaker-claude F2; identical text in the exit candidate.)
+- **S25. Invocation-time-only carrier capture.** Killing schedule:
+  `startTransition(async () => { await new Promise(res => setTimeout(async
+  () => { a.set(1); res() }, 0)); await gate })` — the timer invokes the
+  transformed async callback on a bare stack; genBody captures null;
+  the write lands in default D and commits before the action settles;
+  the boot probe cannot see the composition. Rule: I36 registration-time
+  capture for host schedulers; residual registrars documented.
+  (exit-codex 1.)
+- **S26. Consumable write-time queues as the only committed-observer
+  trigger for lock-in/advance flips.** Killing schedule: E's queue entry
+  consumed by an earlier unrelated retirement flush; the watermark
+  advance that later exposes the parked write mints nothing the snapshot
+  observes and re-enqueues nothing → effect stale until full retirement
+  (unbounded, io-gated). Rule: I34 stamp-every-mint-site + durable
+  touchedList enumeration. (exit-claude F2 + breaker-claude F3.)
+- **S27. World-invariant-op assumption in write-time drops ("empty-tape
+  equality drop is always safe").** Killing schedule: dispatch "tick"
+  under committed r0 (identity) with empty tape → dropped; the transition
+  stages r1 (s+1) → nothing to replay → ReducerAtom 0 vs useReducer 1.
+  Rule: I38a. (breaker-codex 2.)
+- **S28. Unordered/effect-grain evaluator publication around retirement
+  folds.** Killing schedules: (a) hidden Offscreen commit never runs the
+  hook effect → committed tree from f1, committed evaluator f0 —
+  divergence with no write; (b) fold-before-publication compacts a
+  pending reducer receipt under the stale reducer while the committed
+  tree rendered the new one — permanent 10-vs-1 fork. Rule: I41 (F9
+  hook-becomes-current edge, CAS, publication-before-folds).
+  (breaker §2.1-B2 + breaker-codex 1-B.)
+- **S29. Retirement-time touched-column clearing (and, dually, unbounded
+  slot retention) around pinned passes.** Killing schedules: (a) clear at
+  retire → resumed pin-p pass reads K0-clean computed 11 beside folded
+  atom 0 — torn frame matching no world; (b) retain until pins release →
+  one yielded transition + ~31 retiring input batches exhausts slot
+  interning with no stated behavior. Rule: I39 (unswept retention + the
+  saturation spillover). (breaker-claude F1/F5.)
+- **S30. Direct-in-edge-only carry for refresh-exempt nodes.** Killing
+  schedule: K1-only chain x→u→w, w exempt; carry {u→w}; reset; next
+  episode's write to x reaches nothing → torn commit. Rule: I42 full
+  reverse-reachable cone. (breaker §2.1-B3; exit-candidate §5.4 had the
+  in-edge text.)
+- **S31. Stamp-move ⇒ refetch for side-effect-bearing caches.** Killing
+  schedule: lock→retired visibility handover on an already-visible entry
+  (or equal-value urgent churn) moves fp with no content change; the
+  capsule discards its settled thenable and re-runs the factory — repeated
+  per touching retirement: duplicate fetches, transition starvation.
+  Rule: I35 value-revalidation before refetch. (breaker-codex 4 +
+  breaker-claude F7.)
+
+## Round 4 (2026-07-04): rounds/round-04/
+
+
+- **S32. Live-sampled committed evaluators for pass folds ("staged, else
+  committed" with no pin clause).** Killing schedule: shared ReducerAtom,
+  receipts {X:inc, Y:dec}; r0=±1, r1=±10 (NEWEST 0 under both); root-B
+  pass folds X-world = 1 under r0 and yields; root A commits a staged r1
+  → P3 re-folds NEWEST 0→0, equality gate suppresses the walk; B resumes
+  → sibling folds X-world under now-committed r1 = 10; one committed
+  frame holds 1 and 10, matching no reducer version. Why not local: the
+  fold rule, memo ladder, RENDER_NEWEST classification, and promotion
+  delivery all sample "committed" — the repair is a visibility rule
+  (pin-scoped versions, I45) plus value-blind promotion delivery, not
+  added checks. (a-claude F1 ≡ a-codex 1; synthesis R1.)
+- **S33. Delivery dedup re-armed only at watcher render.** Killing
+  schedule: T writes a=1 (bit set, setState delivered); T's pass pins and
+  yields before the watcher renders; a carried continuation writes a=2
+  post-pin → bit suppresses the only setState; the pass renders 1 and
+  commits (watermark = pin); a later unrelated T-lane commit advances the
+  watermark past s2 while the watcher bails out → committed-for-root 2
+  beside committed DOM 1 until the parked token's io-gated retirement.
+  (a-codex 2 ≡ b-codex 2; rule I44; synthesis R2.)
+- **S34. Hook-time-only stage gating.** Killing schedule: components S
+  before O in tree order; a React-state-only transition changes O's
+  useComputed deps; S reads the node pre-stage (committed f_A serve), O
+  stages f_B and renders f_B output → commit mixes evaluator worlds; the
+  naive restart re-runs S before O with an empty stage table → f_A again
+  → livelock or torn attempt 2. (b-claude F1 ≡ b-codex 4; rule I46;
+  synthesis R3.)
+- **S35. Watcher reconcile at retirement only (advances drain effects
+  only).** Killing schedule: c = flag ? a : b, W mounted; parked K writes
+  flag=true (walk reaches W); K's pass pins, yields; store-only default D
+  writes a (no edge to c) and retires; the resumed pass evaluates c=0
+  (correct for its world), records the a→c edge too late for D, and
+  commits, locking K → committed-for-root c=1 beside committed DOM c=0
+  with no correction until K's io-gated retirement. (b-codex 3
+  instantiated against consolidate-a; rule I47; synthesis R4.)
+- **S36. Immediate slot release at retirement (clear reach bits, free the
+  slot, keep only receipts).** Same schedule as S35 built on
+  consolidate-b: the retired writer's bits are gone, so the
+  late-discovered K1 edge carries nothing and the commit-time reconcile
+  (against the pass's claimed world) passes → committed tear with no
+  correction point at all. Retention (I10/I39) is load-bearing for I47's
+  coverage construction. (b-codex 3; rejected in synthesis Part II.)
+- **S37. The coarse receipt-count read gate as sole routing rule ("any
+  unswept receipt anywhere ⇒ every render read world-routes").** Died on
+  its own declared terms, not on a tear: the gate routes all render reads
+  through world memos during exactly the traffic P1 measures, re-accepts
+  O18's scarred restart-revalidation cost, and its author declared no
+  fallback admissible ("a failed numeric gate rejects the design", b
+  §13); its replacement math independently took the S34 stage hole and
+  the I48 value-identity blocker. Future simplification attempts start
+  from this price. (synthesis Part II; b §13/§13.1.)
+- **S38. Quiescence-only counter renumbering — and live rewrites that do
+  not first discard WIP passes.** Killing schedules: (a) forced-small
+  horizon with a live pin: a post-wrap retirement stamps retiredSeq=1 ≤
+  pin=6 → false retired-visibility and false compaction → torn resumed
+  frame [a-codex 5]; (b) live rewrite renumbers the library's stage
+  records while React's WIP hook holds the old F9 integer → CAS rejects
+  the winning publication or collides with a fresh stage [b-codex 5].
+  Rule: I49 (discard-WIP-first, then rewrite). (synthesis R8.)
+- **S39. Generation-only guards on settlement of reusable capsule
+  slots.** Killing schedule: 2-bit capsuleGen; five refetches while q0
+  pends; gen wraps to 0; q0 settles late, passes the gen check, and
+  poisons q4's capsule (wrong resource / early unsuspend). Rule: I50
+  (exact thenable identity). (b-codex 6; synthesis R10.)
+
+codex
+The first concrete break is in evaluator visibility, not the new basis comparison itself: promotion is ordered only by `pin`, while receipt visibility also depends on a pass mask and per-root lock view. I’m now checking that against multi-root urgent interruption and the mount-fixup path, then I’ll separate true breaks from cases that merely cannot be audited because the submission delegates them to the prohibited round-4 file.
+exec
+/bin/zsh -lc 'rg -n "complete normative design|committed evaluator versions|Effective evaluator|greatest|committed-for-root|promotion|queued publication|Full spanning|round-4 full C1|structural fast-out|fastPathDisabled|pass retains|committed view|per-root|pin" design-loop/rounds/round-05/design-surgical-b.md design-loop/SEEDS/correctness-cases.md design-loop/SEEDS/requirements.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+design-loop/SEEDS/requirements.md:36:- **R9 Multiple roots**: per-root self-consistency is required (a root must
+design-loop/rounds/round-05/design-surgical-b.md:3:Status: final budgeted-round candidate. The complete normative design is the
+design-loop/rounds/round-05/design-surgical-b.md:23:receipts by its immutable batch mask, global-sequence pin, and per-root lock
+design-loop/rounds/round-05/design-surgical-b.md:34:receipts, so an old pass resolves the version admitted by its pin. Round 4
+design-loop/rounds/round-05/design-surgical-b.md:45:proof that the earlier render used it. A retirement or cross-root promotion
+design-loop/rounds/round-05/design-surgical-b.md:48:existing structural fast-out and live-token entanglement loop, fixup always
+design-loop/rounds/round-05/design-surgical-b.md:49:folds the current committed-for-root world and compares it with the rendered
+design-loop/rounds/round-05/design-surgical-b.md:57:are pinned as integration tests rather than new seam facts. DIRECT mode is
+design-loop/rounds/round-05/design-surgical-b.md:66:  retirements, evaluator promotions, render pins, and committed-advance
+design-loop/rounds/round-05/design-surgical-b.md:72:- **World**: an immutable view header containing a root, pass mask, pin, and
+design-loop/rounds/round-05/design-surgical-b.md:73:  immutable per-root lock view. A receipt is visible when its retirement is at
+design-loop/rounds/round-05/design-surgical-b.md:74:  or below the pin, its live slot is in the pass mask and its write is at or
+design-loop/rounds/round-05/design-surgical-b.md:75:  below the pin, or its slot is in the root's lock view and its write is at or
+design-loop/rounds/round-05/design-surgical-b.md:90:- **Effective evaluator**: for a pass world, the pass's staged version when
+design-loop/rounds/round-05/design-surgical-b.md:91:  present, otherwise the committed version with greatest
+design-loop/rounds/round-05/design-surgical-b.md:92:  `promotedAtSeq <= world.pin`; for NEWEST and committed-for-root reads, the
+design-loop/rounds/round-05/design-surgical-b.md:105:  rendered value with the current committed-for-root value and schedules an
+design-loop/rounds/round-05/design-surgical-b.md:115:This extends round-4 R1; its pin-gated version chain, retention rule,
+design-loop/rounds/round-05/design-surgical-b.md:116:promotion ordering P1′–P4, value-blind promotion walk, RENDER_NEWEST
+design-loop/rounds/round-05/design-surgical-b.md:143:   A stage, a pin-resolved superseded committed version, and a nested
+design-loop/rounds/round-05/design-surgical-b.md:145:3. The mount fixup's initial structural fast-out may return only if its
+design-loop/rounds/round-05/design-surgical-b.md:147:   holds**. The pass retains the cache/basis it served through layout under
+design-loop/rounds/round-05/design-surgical-b.md:159:### S5-R1-A pinned attack: recomputed K0 leaks a post-pin evaluator
+design-loop/rounds/round-05/design-surgical-b.md:168:1 | root-B pass P starts | pin=q; mask={X}; effective reducer=r0
+design-loop/rounds/round-05/design-surgical-b.md:173:6 | P commits | B1=1 and B2=1; queued publication delivery later renders both under r1 => 10
+design-loop/rounds/round-05/design-surgical-b.md:193:Inductive step for a promotion: consider the two possible K0 bases. If K0 is
+design-loop/rounds/round-05/design-surgical-b.md:194:still based on the old version, a pre-promotion pass matches and is safe;
+design-loop/rounds/round-05/design-surgical-b.md:197:pinned before promotion mismatches and world-routes. Flattening applies the
+design-loop/rounds/round-05/design-surgical-b.md:202:value equality, controls routing, and promotion delivery remains value-blind.
+design-loop/rounds/round-05/design-surgical-b.md:220:1. The inherited structural fast-out remains
+design-loop/rounds/round-05/design-surgical-b.md:221:   `touched(n)==0 && CT(n) && !w_r.fastPathDisabled && EBr→c(...)`.
+design-loop/rounds/round-05/design-surgical-b.md:230:### S5-R12-A pinned attack: retirement between render and baseline capture
+design-loop/rounds/round-05/design-surgical-b.md:237:1 | P renders fresh W | pin=p; a=0 and c=0; W is not subscribed yet; P yields
+design-loop/rounds/round-05/design-surgical-b.md:239:3 | D retires before P commits | retiredSeq=sR>p; D drain runs, but W is still absent; committed-for-root now includes a=1
+design-loop/rounds/round-05/design-surgical-b.md:243:6b | repaired behavior | no baseline branch exists; w_fx folds committed-for-root => 1; 1 != rendered 0; urgent pre-paint setState renders W=1
+design-loop/rounds/round-05/design-surgical-b.md:250:Base case: if committed-for-root did not move after render, `w_fx` returns the
+design-loop/rounds/round-05/design-surgical-b.md:255:`fastPathDisabled`, and a relevant live token is examined by the R6 loop. The
+design-loop/rounds/round-05/design-surgical-b.md:256:structural fast-out therefore cannot hide a relevant receipt change; the
+design-loop/rounds/round-05/design-surgical-b.md:259:Step for an evaluator promotion before subscription: S5-R1 makes the rendered
+design-loop/rounds/round-05/design-surgical-b.md:260:evaluator basis fail `EBr→c`, so the structural fast-out cannot hide it; the
+design-loop/rounds/round-05/design-surgical-b.md:266:one committed-for-root memo lookup and, on invalid basis, one fold/evaluation.
+design-loop/rounds/round-05/design-surgical-b.md:283:1 | old root-B pass P mounts W | pin=q; world memo records evaluator basis r0; W not subscribed
+design-loop/rounds/round-05/design-surgical-b.md:284:2 | root A publishes r1 and recomputes K0 | promotedAt>q; P remains pinned; publication walk cannot target unmounted W
+design-loop/rounds/round-05/design-surgical-b.md:285:3 | P commits and enters layout fixup | EBr→c resolves rendered r0 against committed r1 => false; structural fast-out forbidden
+design-loop/rounds/round-05/design-surgical-b.md:297:`pass.pin < seq`.
+design-loop/rounds/round-05/design-surgical-b.md:302:2 | T pass P starts at pin p>=s1 and yields/completes before W consumes the new post-pin write | registry retains {mask:{T}, pin:p, uncommitted}
+design-loop/rounds/round-05/design-surgical-b.md:305:5 | follow-up T pass | fresh pin>=s2; W renders 2 before any watermark can advance through s2 without W's lane
+design-loop/rounds/round-05/design-surgical-b.md:307:residual risk: F2 must retain completed-uncommitted pass metadata and test 32 must pin insertion after completed work.
+design-loop/rounds/round-05/design-surgical-b.md:311:will capture a pin at or above the new write. A pass that sees T only through
+design-loop/rounds/round-05/design-surgical-b.md:328:residual risk: edge completeness and pre-commit restart are pinned by integration staging-order test plus fork tests 14/32.
+design-loop/rounds/round-05/design-surgical-b.md:355:2 | K pass P pins p and yields | P world fixed
+design-loop/rounds/round-05/design-surgical-b.md:356:3 | store-only D writes a=1 and retires | canonical graph has no a→c edge; D drain is quiet; D remains unswept because P's pin excludes it
+design-loop/rounds/round-05/design-surgical-b.md:357:4 | P resumes under c=flag?a:b | P sees K's flag but excludes retired-after-pin D, so c=0; K1 records a→c; edge-add propagates D's retained bit
+design-loop/rounds/round-05/design-surgical-b.md:358:5 | P commits and advances K to p | committed-for-root now sees K flag=true plus retired D a=1; advance drain enumerates touchedList[K], reconciles W, sees rendered 0 vs committed 1
+design-loop/rounds/round-05/design-surgical-b.md:361:residual risk: clearing bits before the final possible flip breaks the induction; unswept retention and fully-retired-only force-clear tests pin it.
+design-loop/rounds/round-05/design-surgical-b.md:364:Coverage base: if a flipping token's receipt path existed at write time, its
+design-loop/rounds/round-05/design-surgical-b.md:379:sequence/fingerprint fields, effect and watcher snapshot pins, lineage-cache
+design-loop/rounds/round-05/design-surgical-b.md:385:1 | pass P is live at pin 6; WIP hook holds F9 stage id 7 | next globalSeq mint would cross forced horizon H=7
+design-loop/rounds/round-05/design-surgical-b.md:386:2 | operation-boundary horizon check | fork discards every WIP pass; P's pin and WIP F9 attachment die; no seq identity remains outside library-owned records
+design-loop/rounds/round-05/design-surgical-b.md:389:5 | React retries discarded work | new pass receives a new pin and lineage attachment in the rewritten epoch
+design-loop/rounds/round-05/design-surgical-b.md:390:6 | later retirement | rewritten retiredSeq and pin preserve their original order; neither false visibility nor stale F9 CAS is possible
+design-loop/rounds/round-05/design-surgical-b.md:391:outcome: the live-pin wrap horn and externally held WIP-stage-id horn are both removed before comparison values change.
+design-loop/rounds/round-05/design-surgical-b.md:397:the base condition that makes the retained set library-closed. Epoch bumping
+design-loop/rounds/round-05/design-surgical-b.md:407:4 | P commits T at watermark equal to P.pin | committing visible prefix equals M(a,w)'s prefix; install R as committed reference before compacting
+design-loop/rounds/round-05/design-surgical-b.md:408:5 | layout/effect/reconcile reads | committed memo returns R; no reference-only corrective ping-pong
+design-loop/rounds/round-05/design-surgical-b.md:410:residual risk: any retirement path that replays an already memoized committing prefix instead of installing it is pinned by the object-reference differential test.
+design-loop/rounds/round-05/design-surgical-b.md:435:| C1/C1-X1, C3-R/C3-M, C15 | S5-R1 makes the already-required exact evaluator vector a pre-K0 routing gate; pin arithmetic, publication, and suspense identity are unchanged. |
+design-loop/rounds/round-05/design-surgical-b.md:438:| C6/C7 | no grouping or pass/yield classification changed. |
+design-loop/rounds/round-05/design-surgical-b.md:440:| C11 | pin-scoped evaluator versions and R4 cross-root drains are rewalked; full-spanning scope remains. |
+design-loop/rounds/round-05/design-surgical-b.md:444:| C16 | effects still read committed-for-root snapshots and every visibility flip drains them. |
+design-loop/rounds/round-05/design-surgical-b.md:457:3. **Tokens, slots, masks, pins, and immutable lock views** — per-root
+design-loop/rounds/round-05/design-surgical-b.md:463:6. **Evaluator staging, version chains, F9, and promotion** — S5-R1 changes
+design-loop/rounds/round-05/design-surgical-b.md:486:   start(rootId, included tokens, pin, lineage), yield, resume, completion,
+design-loop/rounds/round-05/design-surgical-b.md:489:3. **F3 — per-root commit lock-in.** Report the generation-checked rootId,
+design-loop/rounds/round-05/design-surgical-b.md:529:| 5 | passStart reports exact rootId, included-token set, pin, and lineage before user render code. | F2/F6 |
+design-loop/rounds/round-05/design-surgical-b.md:557:| 33 | Every reported lock watermark equals the committing pass's pin. | F2/F3 |
+design-loop/rounds/round-05/design-surgical-b.md:569:  pin-gated committed versions as well as pass stages. Empty bases are one
+design-loop/rounds/round-05/design-surgical-b.md:575:  its renumber row, and its lifecycle row. It adds a committed-for-root memo
+design-loop/rounds/round-05/design-surgical-b.md:576:  lookup/fold to each fixup that survives the structural fast-out. Charge the
+design-loop/rounds/round-05/design-surgical-b.md:594:| docket item | verdict | normative delta | pinned schedule |
+design-loop/rounds/round-05/design-surgical-b.md:596:| R1 pin-resolved evaluator chain | blocker repaired; held | exact flattened evaluator basis gates K0 serve and fixup fast-out | S5-R1-A + mount interaction |
+design-loop/rounds/round-05/design-surgical-b.md:597:| R2 pass-aware suppression | verified held | none; “includes” means pass mask | yield-gap same-slot post-pin write |
+design-loop/rounds/round-05/design-surgical-b.md:600:| R8 live renumber | verified held | delete commitBaseline from duty list only | live pin + WIP F9 id at forced horizon |
+design-loop/SEEDS/correctness-cases.md:69:The trap: (a) skipping history for urgent writes makes the older world
+design-loop/SEEDS/correctness-cases.md:129:The trap either way: any *implicit* grouping (e.g. coalescing broadcasts per
+design-loop/SEEDS/correctness-cases.md:131:no special code — so implicit grouping must preserve per-write context or
+design-loop/SEEDS/correctness-cases.md:141:pinned world); the write does not throw and is classified/logged under the
+design-loop/SEEDS/correctness-cases.md:142:click's batch; the resumed pass still observes its original pinned world.
+design-loop/SEEDS/correctness-cases.md:156:is still 1. Walk also: two overlapping transitions writing the same value.
+design-loop/SEEDS/correctness-cases.md:158:Sound rule of thumb (prove yours): dropping an equal write is safe only when
+design-loop/SEEDS/correctness-cases.md:189:different times, even for one transition. What is required is **per-root
+design-loop/SEEDS/correctness-cases.md:193:- **Full spanning support**: batch k spans roots A and B; A commits k while
+design-loop/SEEDS/correctness-cases.md:200:  per-root with visible cross-root skew, but each root remains
+design-loop/SEEDS/correctness-cases.md:228:collide with retained bookkeeping from the previous episode (force small
+design-loop/SEEDS/correctness-cases.md:242:(microtask flap damping); per-world thenable identity is stable across
+design-loop/SEEDS/correctness-cases.md:287:residual risk: <what could regress this; which test pins it>
+
+exec
+/bin/zsh -lc "nl -ba design-loop/rounds/round-05/design-surgical-b.md | sed -n '1,215p;425,452p;476,565p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     1	# Round 5 design — surgical-b: route evaluator versions; delete the baseline fast-out
+     2	
+     3	Status: final budgeted-round candidate. The complete normative design is the
+     4	round-4 champion, `rounds/round-04/synthesis.md`, with exactly the two
+     5	replacements in this file. No other round artifact is incorporated. All
+     6	round-4 text not explicitly replaced below remains normative.
+     7	
+     8	Scope is intentionally closed to the round-5 docket: R1, R2, R3 (including
+     9	A/B/A), R4, R8, R9, R12, and the merged fork-test list. The two judge
+    10	blockers are repaired without a new mechanism: R1 generalizes the existing
+    11	evaluator probe from “is staged?” to “does the cached flattened evaluator
+    12	basis equal this world's effective versions?”, and R12's commit-baseline
+    13	fast-out is deleted. Added state: none. Deleted state: two
+    14	`commitBaseline` integers per root and their capture/lifecycle work.
+    15	
+    16	---
+    17	
+    18	## One page: the design that ships
+    19	
+    20	The inherited engine has nine cooperating mechanisms. K0 is the closed,
+    21	packed donor kernel for the newest world. While a React bridge is registered,
+    22	every atom write appends a receipt on a per-atom tape; a render world selects
+    23	receipts by its immutable batch mask, global-sequence pin, and per-root lock
+    24	view, then replays them in write order. K1 is a separate packed graph holding
+    25	the real dependency edges discovered by non-newest evaluations. World memos
+    26	store values plus a closed validity basis: slot write clocks, visibility
+    27	stamps, exact flattened evaluator stamps, and the inherited suspense
+    28	fingerprints. Watchers receive value-blind `setState` calls synchronously in
+    29	the writer's execution context, so React supplies the writer's lanes.
+    30	
+    31	Hook evaluators and reducers are world-scoped. A render stages them under a
+    32	lineage-stable stamp; F9 publishes only the hook version that actually becomes
+    33	current. Committed evaluator versions sit on the same global sequence line as
+    34	receipts, so an old pass resolves the version admitted by its pin. Round 4
+    35	made memo validation version-aware but left the K0 routing gate version-blind:
+    36	after K0 was recomputed under a newly promoted evaluator, an old pass could
+    37	serve that K0 value before reaching the version-aware memo ladder. The repair
+    38	uses the already-stored flattened evaluator vector as a mandatory exact
+    39	precondition for every K0 serve and every fixup fast-out; no bit, clock, walk,
+    40	or cache is added.
+    41	
+    42	The mount fixup closes the render-to-subscribe window. Its round-4
+    43	`commitBaseline` optimization captured current committed currency immediately
+    44	before layout, then mistook equality with that newly captured currency for
+    45	proof that the earlier render used it. A retirement or cross-root promotion
+    46	can occur after the mounting render but before that capture, when no watcher
+    47	exists to receive the ordinary drain. The clean repair is deletion: after the
+    48	existing structural fast-out and live-token entanglement loop, fixup always
+    49	folds the current committed-for-root world and compares it with the rendered
+    50	value. This withdraws the zero-`w_fx` in-transition-mount claim and charges the
+    51	work to the existing mount gate; it removes state and a branch from F3.
+    52	
+    53	R2's pass-aware delivery, R3's lineage seeding and pre-commit restart, R4's
+    54	durable drains, R8's discard-before-live-renumber, and R9's per-world atom
+    55	identity survive adversarial re-derivation below. The fork remains nine
+    56	versioned facts, tests 1–33 remain the merged suite, and the two new attacks
+    57	are pinned as integration tests rather than new seam facts. DIRECT mode is
+    58	unchanged and executes zero concurrency instructions. The repaired design has
+    59	no unwalked docket case and no new correctness gap.
+    60	
+    61	---
+    62	
+    63	## Terms used in this amendment
+    64	
+    65	- **Global sequence (`seq`)**: the monotone integer line shared by writes,
+    66	  retirements, evaluator promotions, render pins, and committed-advance
+    67	  stamps. Comparisons across these events are meaningful because they use one
+    68	  line.
+    69	- **Batch token / slot / mask**: React gives each live batch a stable integer
+    70	  token. The library interns at most 31 live-or-unswept tokens into slots; a
+    71	  pass mask names the batches it renders.
+    72	- **World**: an immutable view header containing a root, pass mask, pin, and
+    73	  immutable per-root lock view. A receipt is visible when its retirement is at
+    74	  or below the pin, its live slot is in the pass mask and its write is at or
+    75	  below the pin, or its slot is in the root's lock view and its write is at or
+    76	  below that slot's watermark.
+    77	- **K0 / K1**: K0 is the canonical newest-world signal graph. K1 is the union
+    78	  of real dependency edges recorded by non-newest evaluations. K1 does not
+    79	  alter K0's hot traversal records.
+    80	- **Canonical-trust (`CT`)**: the inherited freshness predicate that says a
+    81	  K0 value can be served without recomputation. It is necessary but, for a
+    82	  pass world, not sufficient.
+    83	- **Touched word**: the inherited per-node slot/taint reach word. It routes
+    84	  receipt-sensitive reads and feeds durable per-slot touched lists. It is not
+    85	  the value-blind notification walk.
+    86	- **Evaluator**: a `useComputed` function or reducer whose identity can change
+    87	  with hook deps. A staged evaluator belongs to a render lineage until F9
+    88	  publishes it. A committed evaluator version is
+    89	  `{fn, deps, stamp, promotedAtSeq}`.
+    90	- **Effective evaluator**: for a pass world, the pass's staged version when
+    91	  present, otherwise the committed version with greatest
+    92	  `promotedAtSeq <= world.pin`; for NEWEST and committed-for-root reads, the
+    93	  latest committed version.
+    94	- **Evaluator basis**: the exact flattened vector of `(evaluator, stamp)`
+    95	  pairs consumed to produce a cached value. Each stageable evaluation records
+    96	  its own pair before invoking user code and merges child vectors. The vector
+    97	  already exists for memo validity and suspense content validity.
+    98	- **World memo**: the per-`(node, worldKey)` cached value and its validity
+    99	  basis. Atom folds use this same plane, so one atom has one reference in one
+   100	  world.
+   101	- **Watcher**: a mounted component subscription. Its notification is a
+   102	  synchronous `setState` in the writer's context.
+   103	- **Fixup (`w_fx`)**: the layout-time render-to-subscribe check. It first
+   104	  entangles live batches that the mount may have missed, then compares the
+   105	  rendered value with the current committed-for-root value and schedules an
+   106	  urgent pre-paint correction if they differ.
+   107	- **Lineage**: the fork identity stable across retries/replays of one root and
+   108	  batch selection. Its stage cache lets a retry see staged evaluators before
+   109	  tree-order-late owner hooks run.
+   110	
+   111	---
+   112	
+   113	## Normative replacement S5-R1 — evaluator versions participate in routing
+   114	
+   115	This extends round-4 R1; its pin-gated version chain, retention rule,
+   116	promotion ordering P1′–P4, value-blind promotion walk, RENDER_NEWEST
+   117	demotion, and memo/capsule validity checks remain unchanged.
+   118	
+   119	For the current K0 cached value of node `n`, let `B0(n)` be its existing
+   120	flattened evaluator basis. Define the following predicate as math, not a new
+   121	stored flag:
+   122	
+   123	```text
+   124	EB0(n, w) := for every (e, stamp) in B0(n),
+   125	             effectiveStamp(e, w) == stamp
+   126	```
+   127	
+   128	Let `B_r(n, w_r)` be the basis of the exact cached result the render served:
+   129	`B0(n)` when it served K0, otherwise the basis of `M(n, w_r)`. Define:
+   130	
+   131	```text
+   132	EBr→c(n, w_r, w_c) := for every (e, stamp) in B_r(n, w_r),
+   133	                      effectiveStamp(e, w_c) == stamp
+   134	```
+   135	
+   136	Both are exact vector walks; there is no lossy hash and no allocation. The
+   137	normative routing changes are:
+   138	
+   139	1. A pass-world read may serve K0 only if all inherited K0 gates hold **and
+   140	   `EB0(n, world)` holds**. Test this before returning K0, not after entering
+   141	   the world-memo ladder. A mismatch routes to the existing world evaluation.
+   142	2. The staged-only routing probe is replaced by this effective-version probe.
+   143	   A stage, a pin-resolved superseded committed version, and a nested
+   144	   evaluator therefore use one rule.
+   145	3. The mount fixup's initial structural fast-out may return only if its
+   146	   inherited conditions hold **and `EBr→c(n, w_r, committedForRoot(now))`
+   147	   holds**. The pass retains the cache/basis it served through layout under
+   148	   the inherited pass-owned memo lifetime; this adds no watcher field. A
+   149	   version change in the render-to-subscribe window must reach the final
+   150	   `w_fx` compare.
+   151	4. Every world memo still checks its own flattened evaluator basis before
+   152	   clocks or value serve. Promotion still dirties K0, demotes open
+   153	   RENDER_NEWEST passes, and performs the unconditional value-blind walk.
+   154	
+   155	No new completeness obligation is introduced: evaluator-basis flattening is
+   156	already required by I31/I40 and round-4 R1 for memo and suspense validity.
+   157	This amendment merely consults that same exact basis one decision earlier.
+   158	
+   159	### S5-R1-A pinned attack: recomputed K0 leaks a post-pin evaluator
+   160	
+   161	Setup: shared stageable reducer atom `ra`; committed reducer `r0` maps
+   162	`inc` to `+1`, staged reducer `r1` maps it to `+10`; receipt X contains
+   163	`inc`. Root B renders siblings B1 and B2 from X-world. Root A owns the hook
+   164	that can publish `r1`.
+   165	
+   166	```text
+   167	step | actor/mechanism | state touched (values, bases, lanes)
+   168	1 | root-B pass P starts | pin=q; mask={X}; effective reducer=r0
+   169	2 | B1 reads ra | fold under r0 => 1; B1 renders 1; P yields
+   170	3 | root A F9 publishes r1 | promotedAt=sA>q; K0 dirtied; open P demoted; value-blind walk schedules B; no equality gate
+   171	4 | NEWEST read on A | K0 recomputes ra under r1 => 10; K0 becomes CT with B0(ra)={(ra,r1)}
+   172	5 | P resumes and B2 reads ra | EB0 compares effectiveStamp(ra,P)=r0 with cached r1 => mismatch; route existing world memo; fold X under r0 => 1
+   173	6 | P commits | B1=1 and B2=1; queued publication delivery later renders both under r1 => 10
+   174	outcome: the old pass cannot serve the recomputed K0 value; every committed frame uses one reducer version.
+   175	residual risk: omitting the probe at any K0-return site reopens the leak; integration test S5-R1-A instruments every K0 serve and forces step 4.
+   176	```
+   177	
+   178	Without rule 1, step 5 returns 10 because `touched==0` and K0 is clean; the
+   179	version-aware memo ladder is never entered. That is the judge's R1 blocker.
+   180	
+   181	### R1 construction
+   182	
+   183	Base case: with no staged or superseded evaluator, every recorded basis pair
+   184	resolves to the sole committed stamp. `EB0` holds, so the inherited K0 gates
+   185	decide exactly as before.
+   186	
+   187	Inductive step for a stage: staging changes `effectiveStamp` in that pass.
+   188	The node records its own evaluator pair before user code, and every parent
+   189	that consumes it merges the pair; therefore the first cached node whose value
+   190	could depend on the stage has a mismatching pair and routes. R3 restarts any
+   191	watcher that rendered before the stage was minted.
+   192	
+   193	Inductive step for a promotion: consider the two possible K0 bases. If K0 is
+   194	still based on the old version, a pre-promotion pass matches and is safe;
+   195	NEWEST/latest worlds mismatch or see P2′ dirtiness and recompute. If K0 has
+   196	been recomputed under the new version, latest worlds match and every pass
+   197	pinned before promotion mismatches and world-routes. Flattening applies the
+   198	same argument transitively to a parent cache. Thus replacing either K0 basis
+   199	cannot make an incompatible world satisfy the exact predicate.
+   200	
+   201	Equal output does not weaken the argument: evaluator stamp identity, not
+   202	value equality, controls routing, and promotion delivery remains value-blind.
+   203	
+   204	---
+   205	
+   206	## Normative replacement S5-R12 — delete the commit-baseline fast-out
+   207	
+   208	Round-4 R12 is deleted in full. Delete:
+   209	
+   210	- `commitBaseline = {cas, lockViewId}` from every root registry;
+   211	- its F3 pre-layout capture;
+   212	- `cas == baseline.cas && lockViewId == baseline.lockViewId => return` from
+   213	  fixup;
+   214	- its lifecycle and live-renumber rows; and
+   215	- the claim that an in-transition mount reaching committed-side fixup does
+   425	
+   426	---
+   427	
+   428	## Acceptance-battery impact closure
+   429	
+   430	This round does not reopen or rederive math outside its docket. The round-4
+   431	full C1–C17 walks remain normative. The only changed intersections are:
+   432	
+   433	| inherited case | round-5 effect |
+   434	|---|---|
+   435	| C1/C1-X1, C3-R/C3-M, C15 | S5-R1 makes the already-required exact evaluator vector a pre-K0 routing gate; pin arithmetic, publication, and suspense identity are unchanged. |
+   436	| C2, C3, C8 | no write visibility, replay, or equality rule changed. |
+   437	| C4/C5 | R2 rewalk above; delivery remains a separate full value-blind walk. |
+   438	| C6/C7 | no grouping or pass/yield classification changed. |
+   439	| C9/C10 | S5-R12 replaces the unsound baseline return with the existing final committed compare; S5-R1 supplies evaluator-window routing. |
+   440	| C11 | pin-scoped evaluator versions and R4 cross-root drains are rewalked; full-spanning scope remains. |
+   441	| C12 | parking/carrier and fold-on-retire are untouched. |
+   442	| C13 | `commitBaseline` is removed from the lifecycle table; R8 has one fewer field to rewrite. |
+   443	| C14 | R3 A/B/A/replay and F9 publication timing are rewalked; no tentative publication is added. |
+   444	| C16 | effects still read committed-for-root snapshots and every visibility flip drains them. |
+   445	| C17 | truncation remains absent from the API. |
+   446	
+   447	Unwalked docket cases: none. No inherited acceptance case loses its walk.
+   448	
+   449	---
+   450	
+   451	## Mechanism inventory — 9
+   452	
+   476	
+   477	## Fork protocol — 9 seam touch-points
+   478	
+   479	The boundary passes only integers, booleans, immutable integer collections,
+   480	and callbacks; no Fiber, lane bitmask, or update-queue object crosses it.
+   481	
+   482	1. **F1 — write classification and token claim.** At a signal write, report
+   483	   whether it is deferred and its lazily minted stable batch token. Tokens are
+   484	   never reused while live or unswept.
+   485	2. **F2 — pass lifecycle and callstack truth.** Report
+   486	   start(rootId, included tokens, pin, lineage), yield, resume, completion,
+   487	   commit, and discard. A handler in a yield gap has no render frame. F2 also
+   488	   supplies the inherited discard-all-WIP control used at the R8 horizon.
+   489	3. **F3 — per-root commit lock-in.** Report the generation-checked rootId,
+   490	   committed token set, and each committing watermark. Ordering is F9
+   491	   publication, folds/lock-view remint, durable watcher/effect drains, then
+   492	   layout. S5-R12 removes only the library's commitBaseline capture.
+   493	4. **F4 — retirement.** Exactly once per token, report committed flag and a
+   494	   retirement point on the global sequence line. `committed=false` still
+   495	   folds writes. Async actions park this edge until settlement.
+   496	5. **F5 — lane-scoped execution.** `runInBatch(token, callback)` inserts the
+   497	   callback's React update into that live token's lanes; a retired token returns
+   498	   `RETIRED`, allowing urgent fallback.
+   499	6. **F6 — render lineage.** Mint an identity per root and batch selection,
+   500	   stable across its retries/replays and dead at commit/abandon.
+   501	7. **F7 — DOM mutation window.** Edge-triggered begin/end facts delimit the
+   502	   mutation interval for integration policy; no sampled reconciler state.
+   503	8. **F8 — async-action parking and continuation carrier.** Preserve token
+   504	   identity across transformed/platform-supported continuations and registered
+   505	   host callbacks; a continuation that outlives retirement degrades to ambient
+   506	   classification with a dev warning.
+   507	9. **F9 — hook-becomes-current publication.** Emit the generation-checked
+   508	   staged evaluator identity only for the hook version that becomes current,
+   509	   including hidden Offscreen commits; emit nothing for discarded/error-
+   510	   abandoned alternates; order publication before same-commit folds.
+   511	
+   512	Version skew is loud: bindings feature-detect the exact protocol version and
+   513	reject stock or incompatible React. With no listener, each reconciler site is
+   514	one null check. Rebase drill: if React renames lanes, moves phases, or rewrites
+   515	queues, only the fork adapters that re-establish F1–F9 and their tests move;
+   516	the signals library changes zero lines.
+   517	
+   518	### Merged fork-test list — all VERIFIED HELD
+   519	
+   520	The list below is the normative merged semantic suite. Tests 29–33 retain the
+   521	round-4 merged numbering.
+   522	
+   523	| test | required observable assertion | fact |
+   524	|---:|---|---|
+   525	| 1 | A write outside a transition is classified urgent/default as React classifies the surrounding update. | F1 |
+   526	| 2 | A transition write is deferred and receives the transition's token. | F1 |
+   527	| 3 | One batch's token is stable across nested calls and action continuations. | F1/F8 |
+   528	| 4 | A live or retired-unswept token is never reused; forced-small serials fail loudly rather than collide. | F1/F4 |
+   529	| 5 | passStart reports exact rootId, included-token set, pin, and lineage before user render code. | F2/F6 |
+   530	| 6 | yield removes render context from the JS callstack; resume restores the same immutable pass frame. | F2 |
+   531	| 7 | A handler in a yield gap reads/writes ambient newest state and gets its own batch. | F1/F2 |
+   532	| 8 | Each pass has exactly one terminal completion/commit/discard path; a restart is a new pass. | F2 |
+   533	| 9 | Retirement fires exactly once for committed and committed-false tokens. | F4 |
+   534	| 10 | A store-only token with no Fiber work still retires and persists its writes. | F4 |
+   535	| 11 | An async action cannot retire before its returned action settles. | F4/F8 |
+   536	| 12 | `runInBatch(t)` schedules into t's existing lanes, not a fresh transition. | F5 |
+   537	| 13 | `runInBatch` on a retired token returns `RETIRED`; urgent fallback executes before paint. | F5 |
+   538	| 14 | An own-lane update inserted at yield/end into an in-progress pass causes React's native pre-commit interleaved restart. | F2/F5 |
+   539	| 15 | First commit of a spanning token locks only that root and reports its root generation. | F3 |
+   540	| 16 | A later same-root commit advances the immutable lock view by the reported prefix, not whole-token membership. | F3 |
+   541	| 17 | Two roots may commit at different times; global retirement remains exactly once after React is done with the token. | F3/F4 |
+   542	| 18 | A lineage id survives Suspense retry and StrictMode replay for the same root/batch selection. | F6 |
+   543	| 19 | Commit/abandon kills the lineage; a later selection cannot reuse it while caches survive. | F6 |
+   544	| 20 | A hidden Offscreen hook that becomes current emits F9 even when effects do not run. | F9 |
+   545	| 21 | Error-abandoned, discarded, and stale-alternate hooks emit no publication. | F2/F9 |
+   546	| 22 | F9 publication is generation-checked and emitted once for the winning hook version. | F9 |
+   547	| 23 | F9 publication precedes same-commit reducer folds, lock-in drains, and layout. | F3/F9 |
+   548	| 24 | DOM mutation begin/end events bracket the real mutation interval exactly once per commit. | F7 |
+   549	| 25 | Missing or incompatible protocol version fails loudly before bridge activation. | all |
+   550	| 26 | With no bridge listener, every hook site performs only its single inert null check. | all |
+   551	| 27 | Carrier identity survives await, Promise.all, transformed async generators, and shimmed timer/microtask/rAF registration without cross-action bleed. | F8 |
+   552	| 28 | A fire-and-forget continuation invoked after token retirement uses ambient classification and warns; it neither resurrects nor parks the token. | F8 |
+   553	| 29 | A discarded pass cannot later commit or emit lock/publication facts. | F2/F3/F9 |
+   554	| 30 | A same-root urgent commit discards an older yielded pass before that pass can publish F9 or lock tokens. | F2/F3/F9 |
+   555	| 31 | Root ids are stable and generation-checked; a portal reports its parent root, not a new root. | F2/F3 |
+   556	| 32 | An update inserted after render work completed but before commit forces a pre-commit restart. | F2/F5 |
+   557	| 33 | Every reported lock watermark equals the committing pass's pin. | F2/F3 |
+   558	
+   559	S5-R1-A and S5-R12-A are signal/fork integration tests, not additions to the
+   560	seam: they compose existing facts and therefore leave the fork-test count and
+   561	touch-point count unchanged.
+   562	
+   563	---
+   564	
+   565	## Cost and gate amendments
+
+exec
+/bin/zsh -lc 'rg -n -i "by construction|cannot happen|cannot|impossible|no .*gap|no .*miss|therefore|always|every" design-loop/rounds/round-05/design-surgical-b.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+22:every atom write appends a receipt on a per-atom tape; a render world selects
+39:precondition for every K0 serve and every fixup fast-out; no bit, clock, walk,
+48:existing structural fast-out and live-token entanglement loop, fixup always
+59:no unwalked docket case and no new correctness gap.
+124:EB0(n, w) := for every (e, stamp) in B0(n),
+132:EBr→c(n, w_r, w_c) := for every (e, stamp) in B_r(n, w_r),
+144:   evaluator therefore use one rule.
+151:4. Every world memo still checks its own flattened evaluator basis before
+174:outcome: the old pass cannot serve the recomputed K0 value; every committed frame uses one reducer version.
+175:residual risk: omitting the probe at any K0-return site reopens the leak; integration test S5-R1-A instruments every K0 serve and forces step 4.
+183:Base case: with no staged or superseded evaluator, every recorded basis pair
+188:The node records its own evaluator pair before user code, and every parent
+189:that consumes it merges the pair; therefore the first cached node whose value
+196:been recomputed under the new version, latest worlds match and every pass
+199:cannot make an incompatible world satisfy the exact predicate.
+210:- `commitBaseline = {cas, lockViewId}` from every root registry;
+223:   `runInBatch` for every missed live token.
+224:3. If execution reaches committed-side fixup, it **always** obtains the
+244:outcome: every visibility change in the render-to-subscribe window is compared after subscription; the stale frame never paints.
+256:structural fast-out therefore cannot hide a relevant receipt change; the
+260:evaluator basis fail `EBr→c`, so the structural fast-out cannot hide it; the
+265:The cost is explicit and unmeasured: every mount that reaches step 3 performs
+284:2 | root A publishes r1 and recomputes K0 | promotedAt>q; P remains pinned; publication walk cannot target unmounted W
+340:residual risk: user render code that changes deps on every attempt can continue oscillating; React's existing render/update-depth rejection is the specified termination, not a signals-side loop.
+343:Coverage induction: before a stage-set change, every earlier consumer either
+350:### R4 — VERIFIED HELD: every committed visibility flip drains watchers
+365:mark walk placed every reached node on that token's durable list. Coverage
+369:and all root lock records are gone. Therefore retirement, lock-in, and every
+370:watermark advance enumerate every watcher whose committed value can change.
+377:`baseSeq`, slot write clocks, every lock-view watermark, committed-advance
+386:2 | operation-boundary horizon check | fork discards every WIP pass; P's pin and WIP F9 attachment die; no seq identity remains outside library-owned records
+387:3 | library rewrite | map retained ordered seqs monotonically into compact range; rewrite every ledger field, including lock watermarks and promotedAtSeq
+388:4 | epoch bump | every old worldKey/memo/capsule key fails; counters restart above rewritten maximum
+392:residual risk: an omitted seq-bearing field is fatal; forced-small-horizon tests populate every ledger row before step 2 and schema CI asserts rewrite coverage.
+423:`w_fx` owns every mount that missed a drain. No captured-current shortcut sits
+444:| C16 | effects still read committed-for-root snapshots and every visibility flip drains them. |
+455:2. **Receipt tapes and React-parity folds** — every React-mode write logged;
+535:| 11 | An async action cannot retire before its returned action settles. | F4/F8 |
+543:| 19 | Commit/abandon kills the lineage; a later selection cannot reuse it while caches survive. | F6 |
+550:| 26 | With no bridge listener, every hook site performs only its single inert null check. | all |
+553:| 29 | A discarded pass cannot later commit or emit lock/publication facts. | F2/F3/F9 |
+557:| 33 | Every reported lock watermark equals the committing pass's pin. | F2/F3 |
+560:seam: they compose existing facts and therefore leave the fork-test count and
+
+exec
+/bin/zsh -lc 'rg -n -C 3 "horizon|operation-boundary|reserve|preflight|discard-all|F9 stage id|globalSeq mint|renumber" design-loop/rounds/round-05/design-surgical-b.md' in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+51-work to the existing mount gate; it removes state and a branch from F3.
+52-
+53-R2's pass-aware delivery, R3's lineage seeding and pre-commit restart, R4's
+54:durable drains, R8's discard-before-live-renumber, and R9's per-world atom
+55-identity survive adversarial re-derivation below. The fork remains nine
+56-versioned facts, tests 1–33 remain the merged suite, and the two new attacks
+57-are pinned as integration tests rather than new seam facts. DIRECT mode is
+--
+211-- its F3 pre-layout capture;
+212-- `cas == baseline.cas && lockViewId == baseline.lockViewId => return` from
+213-  fixup;
+214:- its lifecycle and live-renumber rows; and
+215-- the claim that an in-transition mount reaching committed-side fixup does
+216-  zero `w_fx` evaluations.
+217-
+--
+371-Late subscriptions after a drain are handled by S5-R12 rather than extending
+372-the drain mechanism.
+373-
+374:### R8 — VERIFIED HELD: discard WIP before live renumber
+375-
+376-The order-preserving rewrite duty list includes tape `seq`/`retiredSeq`, atom
+377-`baseSeq`, slot write clocks, every lock-view watermark, committed-advance
+--
+382-
+383-```text
+384-step | actor/mechanism | state touched (wrap and external identity)
+385:1 | pass P is live at pin 6; WIP hook holds F9 stage id 7 | next globalSeq mint would cross forced horizon H=7
+386:2 | operation-boundary horizon check | fork discards every WIP pass; P's pin and WIP F9 attachment die; no seq identity remains outside library-owned records
+387-3 | library rewrite | map retained ordered seqs monotonically into compact range; rewrite every ledger field, including lock watermarks and promotedAtSeq
+388-4 | epoch bump | every old worldKey/memo/capsule key fails; counters restart above rewritten maximum
+389-5 | React retries discarded work | new pass receives a new pin and lineage attachment in the rewritten epoch
+390:6 | later retirement | rewritten retiredSeq and pin preserve their original order; neither false visibility nor stale F9 CAS is possible
+391-outcome: the live-pin wrap horn and externally held WIP-stage-id horn are both removed before comparison values change.
+392:residual risk: an omitted seq-bearing field is fatal; forced-small-horizon tests populate every ledger row before step 2 and schema CI asserts rewrite coverage.
+393-```
+394-
+395-Ordering construction: the rewrite is strictly monotone on the finite retained
+396:set, so `<`, `<=`, and equality relationships are preserved. Discarding WIP is
+397-the base condition that makes the retained set library-closed. Epoch bumping
+398-then prevents an unrewritten cached key from validating accidentally.
+399-
+--
+466-   entanglement, durable-drain reconcile; S5-R12 deletes commitBaseline.
+467-8. **Fork/build protocol F1–F9 and continuation carrier** — unchanged fact
+468-   count; F3 does less work after the deletion.
+469:9. **Episode lifecycle** — epoch/generation resets, discard-before-renumber,
+470-   pass-owned reclamation, and bounded inherited K1 sweep.
+471-
+472-State delta: `+0`; `-commitBaseline.cas`, `-commitBaseline.lockViewId` per
+--
+485-2. **F2 — pass lifecycle and callstack truth.** Report
+486-   start(rootId, included tokens, pin, lineage), yield, resume, completion,
+487-   commit, and discard. A handler in a yield gap has no render frame. F2 also
+488:   supplies the inherited discard-all-WIP control used at the R8 horizon.
+489-3. **F3 — per-root commit lock-in.** Report the generation-checked rootId,
+490-   committed token set, and each committing watermark. Ordering is F9
+491-   publication, folds/lock-view remint, durable watcher/effect drains, then
+--
+500-   stable across its retries/replays and dead at commit/abandon.
+501-7. **F7 — DOM mutation window.** Edge-triggered begin/end facts delimit the
+502-   mutation interval for integration policy; no sampled reconciler state.
+503:8. **F8 — async-action parking and continuation carrier.** Preserve token
+504-   identity across transformed/platform-supported continuations and registered
+505-   host callbacks; a continuation that outlives retirement degrades to ambient
+506-   classification with a dev warning.
+--
+572-  P1 ≤1.10× render and P3 quiet-React gate; do not assert a percentage before
+573-  measurement.
+574-- **R12 deletion**: removes two integers/root, one F3 capture, one compare,
+575:  its renumber row, and its lifecycle row. It adds a committed-for-root memo
+576-  lookup/fold to each fixup that survives the structural fast-out. Charge the
+577-  10k in-transition mount and cross-root mount-storm rows to W2 and the P1
+578-  mount ≤1.15× gate. No fallback is authorized in this final round.
+579-- **R2/R3/R4/R8/R9**: no implementation delta. Their existing SPK-W,
+580:  SPK-N1, SPK-R, and horizon tests remain. This artifact makes no new numeric
+581-  claim.
+582-- **DIRECT**: unchanged twin build; zero concurrency instructions.
+583-- **Steady rerender allocation**: unchanged; both repairs allocate zero.
+--
+597-| R2 pass-aware suppression | verified held | none; “includes” means pass mask | yield-gap same-slot post-pin write |
+598-| R3 seed/walk/termination | verified held | none | earlier consumer A→B; A/B/A |
+599-| R4 closed drain coverage | verified held | none | retired late-edge + lock advance |
+600:| R8 live renumber | verified held | delete commitBaseline from duty list only | live pin + WIP F9 id at forced horizon |
+601-| R9 reference installation | verified held | none | functional object updater, repeated read, committing install |
+602-| R12 baseline comparator | blocker repaired; held | optimization and state deleted | retirement between mount render and layout |
+603-| fork tests 1–33 | verified held | F3 is smaller; no fact added | merged list above |
+
+exec
+/bin/zsh -lc "nl -ba /Users/jitl/.codex/memories/MEMORY.md | sed -n '1,6p'" in /Users/jitl/src/alien-signals-opt
+ succeeded in 0ms:
+     1	# Task Group: alien-signals-opt / architecture-spec correctness review and review-response adjudication
+     2	
+     3	scope: Correctness-first review workflow for `react-concurrent-signals-arena.md`, including saved review-file outputs and follow-up adjudication of an author response against the original counterexamples
+     4	applies_to: cwd=/Users/jitl/src/alien-signals-opt; reuse_rule=safe for architecture/spec review work in this checkout and similar correctness-audit follow-ups; treat exact review files and document contents as checkout-specific
+     5	
+     6	## Task 1: Review `react-concurrent-signals-arena.md` for correctness, success
+
+codex
+# Correctness review — round-05 `design-surgical-b`
+
+## 1. BLOCKER — architectural: pin-only evaluator visibility tears a lagging root
+
+Receipt visibility depends on the pass mask, pin, and per-root lock view ([design:72](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:72)). Evaluator visibility instead uses only `promotedAtSeq <= world.pin`, and committed-for-root reads always use the latest version ([design:90](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:90)). A pin orders events but does not prove that a pass includes the batch that produced an evaluator promotion.
+
+Setup: shared stageable computed `c`; evaluator `e0` returns `1`, evaluator `e1` returns `10`. Root A owns the hook; root B has existing watcher `W_old` showing `1`. Transition T changes A to `e1` and spans both roots.
+
+| step | actor/mechanism | state touched |
+|---:|---|---|
+| 1 | T renders A | `e1` is staged; R3/promotion delivery queues `W_old` in T |
+| 2 | root A commits before B | F9 publishes `e1` at `s`; A locks T, but B’s lock view still excludes T; `W_old` remains DOM `1` |
+| 3 | urgent U renders root B before its T work | U excludes T; its pin `q > s`; U mounts fresh watcher `W_new` while memoized `W_old` skips its pending T update |
+| 4 | `W_new` reads `c` | no B-local stage exists, so `effectiveStamp` selects globally published `e1` solely because `s <= q`; K0 or world evaluation returns `10` |
+| 5 | U commits B | `W_old=1`, `W_new=10`; both display the same shared computed in one committed root |
+| 6 | mount fixup | `W_new` already equals latest `committedForRoot(B)=10`, so fixup schedules nothing; queued T delivery repairs `W_old` only later |
+
+Outcome: root B paints a torn frame. This violates the required per-root self-consistency while exercising the design’s declared full-spanning scope. The design explicitly permits publication delivery to happen later ([design:173](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:173)), so the delivery walk is not a barrier against this schedule.
+
+Repair requires evaluator versions to carry batch/root visibility and be selected using the pass mask and root lock watermark, not chronology alone. Prior versions must also remain retained while any consuming root has not admitted the promotion. Add an integration test combining cross-root F9 publication, a lagging root, and an urgent mount that excludes the spanning transition.
+
+## 2. BLOCKER — local specification fix: the submitted normative design is outside the review boundary
+
+The artifact declares that its complete normative design is the round-4 synthesis ([design:3](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:3)), which the reviewer prompt explicitly forbids reading. Its C1–C17 closure is only a table of “unchanged” assertions ([design:428](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:428)), despite the acceptance battery requiring every case to be walked mechanism-by-mechanism ([correctness-cases:3](/Users/jitl/src/alien-signals-opt/design-loop/SEEDS/correctness-cases.md:3)).
+
+Concrete C2 schedule demonstrating the missing normative branch:
+
+| step | actor/mechanism | state touched |
+|---:|---|---|
+| 1 | default D writes `a=1` | receipt logged; newest K0 may hold `a=1`, `c=a+10=11` |
+| 2 | `flushSync` pass S starts | S excludes D; atom folding reconstructs `a=0` |
+| 3 | S reads plain computed `c` | its evaluator basis is empty, so new `EB0` is vacuously true |
+| 4 | K0 routing | correctness now depends entirely on the undefined “inherited K0 gates” |
+| 5 | wrong branch not excluded by this artifact | serving K0 yields `c=11` beside `a=0` |
+
+Outcome: the submitted text contains no reviewable mechanism that rules out the C2 torn frame. The external base may contain such a gate, but incorporating that complete normative text is required before this artifact can receive correctness credit. This is locally repairable by supplying a merged, self-contained design rather than changing the architecture.
+
+## Verified held
+
+Within the mechanisms actually specified here, I attacked and could not break:
+
+- S5-R1-A’s original old-pass leak: after K0 is recomputed under a post-pin evaluator, exact flattened-basis comparison correctly routes the old pass to its pinned version.
+- Nested evaluator bases and equal-output promotions: flattening propagates the relevant stamp, and stamp comparison does not incorrectly disappear behind value equality.
+- S5-R12-A’s stated retirement window: once execution reaches committed-side fixup, deleting `commitBaseline` forces the final comparison and repairs that schedule.
+- R2’s same-slot post-pin continuation write: retained started/uncommitted pass metadata prevents suppression and preserves the later T update.
+- R3’s same-root earlier-consumer and A/B/A schedules: stage-change walks plus lineage seeding force finite restarts for stable selections.
+- R4’s stated late-edge schedule: K’s original walk puts W on `touchedList[K]`; retained D bits propagate through the later K1 edge, and K’s lock advance reconciles W.
+- R8’s stated single-boundary rewrite: discarding WIP before a monotone rewrite preserves comparisons in the enumerated schedule.
+- R9’s repeated same-world atom reads: the fold memo returns one reference and installs that reference when the committing prefix matches.
+- C7’s yield-gap callstack distinction: F2 yield/resume facts keep event-handler reads and writes out of the paused pass world.
+
+## Verdict
+
+The design is architecturally unsound as submitted. The exact-basis gate repairs the old-pass K0 leak and deleting `commitBaseline` repairs its stated mount race, but pin-only evaluator promotion still permits a torn committed frame on a lagging root. Implementation should not begin until evaluator visibility is batch- and root-aware and the complete C1–C17 normative design is supplied in the reviewable artifact.
+
+
+tokens used
+191,020
+# Correctness review — round-05 `design-surgical-b`
+
+## 1. BLOCKER — architectural: pin-only evaluator visibility tears a lagging root
+
+Receipt visibility depends on the pass mask, pin, and per-root lock view ([design:72](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:72)). Evaluator visibility instead uses only `promotedAtSeq <= world.pin`, and committed-for-root reads always use the latest version ([design:90](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:90)). A pin orders events but does not prove that a pass includes the batch that produced an evaluator promotion.
+
+Setup: shared stageable computed `c`; evaluator `e0` returns `1`, evaluator `e1` returns `10`. Root A owns the hook; root B has existing watcher `W_old` showing `1`. Transition T changes A to `e1` and spans both roots.
+
+| step | actor/mechanism | state touched |
+|---:|---|---|
+| 1 | T renders A | `e1` is staged; R3/promotion delivery queues `W_old` in T |
+| 2 | root A commits before B | F9 publishes `e1` at `s`; A locks T, but B’s lock view still excludes T; `W_old` remains DOM `1` |
+| 3 | urgent U renders root B before its T work | U excludes T; its pin `q > s`; U mounts fresh watcher `W_new` while memoized `W_old` skips its pending T update |
+| 4 | `W_new` reads `c` | no B-local stage exists, so `effectiveStamp` selects globally published `e1` solely because `s <= q`; K0 or world evaluation returns `10` |
+| 5 | U commits B | `W_old=1`, `W_new=10`; both display the same shared computed in one committed root |
+| 6 | mount fixup | `W_new` already equals latest `committedForRoot(B)=10`, so fixup schedules nothing; queued T delivery repairs `W_old` only later |
+
+Outcome: root B paints a torn frame. This violates the required per-root self-consistency while exercising the design’s declared full-spanning scope. The design explicitly permits publication delivery to happen later ([design:173](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:173)), so the delivery walk is not a barrier against this schedule.
+
+Repair requires evaluator versions to carry batch/root visibility and be selected using the pass mask and root lock watermark, not chronology alone. Prior versions must also remain retained while any consuming root has not admitted the promotion. Add an integration test combining cross-root F9 publication, a lagging root, and an urgent mount that excludes the spanning transition.
+
+## 2. BLOCKER — local specification fix: the submitted normative design is outside the review boundary
+
+The artifact declares that its complete normative design is the round-4 synthesis ([design:3](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:3)), which the reviewer prompt explicitly forbids reading. Its C1–C17 closure is only a table of “unchanged” assertions ([design:428](/Users/jitl/src/alien-signals-opt/design-loop/rounds/round-05/design-surgical-b.md:428)), despite the acceptance battery requiring every case to be walked mechanism-by-mechanism ([correctness-cases:3](/Users/jitl/src/alien-signals-opt/design-loop/SEEDS/correctness-cases.md:3)).
+
+Concrete C2 schedule demonstrating the missing normative branch:
+
+| step | actor/mechanism | state touched |
+|---:|---|---|
+| 1 | default D writes `a=1` | receipt logged; newest K0 may hold `a=1`, `c=a+10=11` |
+| 2 | `flushSync` pass S starts | S excludes D; atom folding reconstructs `a=0` |
+| 3 | S reads plain computed `c` | its evaluator basis is empty, so new `EB0` is vacuously true |
+| 4 | K0 routing | correctness now depends entirely on the undefined “inherited K0 gates” |
+| 5 | wrong branch not excluded by this artifact | serving K0 yields `c=11` beside `a=0` |
+
+Outcome: the submitted text contains no reviewable mechanism that rules out the C2 torn frame. The external base may contain such a gate, but incorporating that complete normative text is required before this artifact can receive correctness credit. This is locally repairable by supplying a merged, self-contained design rather than changing the architecture.
+
+## Verified held
+
+Within the mechanisms actually specified here, I attacked and could not break:
+
+- S5-R1-A’s original old-pass leak: after K0 is recomputed under a post-pin evaluator, exact flattened-basis comparison correctly routes the old pass to its pinned version.
+- Nested evaluator bases and equal-output promotions: flattening propagates the relevant stamp, and stamp comparison does not incorrectly disappear behind value equality.
+- S5-R12-A’s stated retirement window: once execution reaches committed-side fixup, deleting `commitBaseline` forces the final comparison and repairs that schedule.
+- R2’s same-slot post-pin continuation write: retained started/uncommitted pass metadata prevents suppression and preserves the later T update.
+- R3’s same-root earlier-consumer and A/B/A schedules: stage-change walks plus lineage seeding force finite restarts for stable selections.
+- R4’s stated late-edge schedule: K’s original walk puts W on `touchedList[K]`; retained D bits propagate through the later K1 edge, and K’s lock advance reconciles W.
+- R8’s stated single-boundary rewrite: discarding WIP before a monotone rewrite preserves comparisons in the enumerated schedule.
+- R9’s repeated same-world atom reads: the fold memo returns one reference and installs that reference when the committing prefix matches.
+- C7’s yield-gap callstack distinction: F2 yield/resume facts keep event-handler reads and writes out of the paused pass world.
+
+## Verdict
+
+The design is architecturally unsound as submitted. The exact-basis gate repairs the old-pass K0 leak and deleting `commitBaseline` repairs its stated mount race, but pin-only evaluator promotion still permits a torn committed frame on a lagging root. Implementation should not begin until evaluator visibility is batch- and root-aware and the complete C1–C17 normative design is supplied in the reviewable artifact.
+
+
