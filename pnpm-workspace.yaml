@@ -1,5 +1,7 @@
 packages:
   - libs/*
   - harness
+  - packages/cosignal
+  - packages/cosignal-oracle
 onlyBuiltDependencies:
   - esbuild
