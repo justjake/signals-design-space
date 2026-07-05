@@ -1,40 +1,100 @@
 /**
  * cosignal — the logged build (`cosignal/logged`): the concurrent-worlds
- * engine riding the base kernel. This module is the base build's twin: it is
- * never imported by `./index.ts` (a base-build bundle's module graph stops at
- * index.ts — asserted by tests/twin-build.spec.ts), and it attaches through
- * the one seam index.ts anticipates: `__installTwinTable` re-points the
- * operation-table factory at the logged table and rebuilds the table exactly
- * once over the carried buffers.
+ * engine riding the base KERNEL. The kernel is the base build's
+ * dependency-tracking engine (index.ts, whose header defines its terms): it
+ * stores every signal, computed, effect, and dependency edge as fixed-size
+ * integer records in shared arrays — and it holds exactly ONE current value
+ * per atom. React's concurrent rendering needs several views of the state
+ * to coexist (a paused background render must keep seeing the state it
+ * started from while urgent updates land and commit — the README tells the
+ * full story), so this module records every write and reconstructs the
+ * other views on demand.
  *
- * Vocabulary used throughout (see also the package README):
- *   - K0 — the kernel's own dependency graph and value plane (packed
- *     Int32Array records in index.ts). K1 — this overlay's episode-scoped
- *     edge plane, recording the dependency edges world evaluations actually
- *     take. Walks run over the K0∪K1 union.
- *   - tape — the per-atom receipt log (class `Tape`); "fold" — replaying the
- *     receipts a world may see, in timeline order, over the atom's base.
- *   - token — a batch's identity record; slot — one of 31 interning-table
- *     entries a written batch occupies while its writes can still matter
- *     (mirroring React's lane count); pin — the timeline position a render
- *     pass froze at its start; pass — one render pass of one root.
- *   - cas — the committed-advance counter, bumped whenever committed truth
- *     moves (a per-root commit, or a retirement that changed history).
+ * This module is the base build's twin: it is never imported by
+ * `./index.ts` (a base-build bundle's module graph stops at index.ts —
+ * asserted by tests/twin-build.spec.ts), and it attaches through the one
+ * seam index.ts anticipates: `__installTwinTable` re-points the factory
+ * that builds the kernel's operation table (the object holding the
+ * kernel's operations as function fields; see index.ts) at the logged
+ * wrapper, rebuilding the table exactly once over the carried buffers.
  *
- * What lives here:
+ * Vocabulary, in reading order (see also the package README):
+ *
+ *   - A RECEIPT records one write: the operation (set / functional update /
+ *     reducer action), the batch it belongs to, and its position (`seq`) on
+ *     one global timeline. Receipts append to the written atom's TAPE — the
+ *     per-atom receipt log (class `Tape`). A FOLD replays, in timeline
+ *     order, the receipts a given view may see over the atom's BASE (the
+ *     permanent history, already collapsed to a single value); a WORLD is
+ *     one self-consistent assignment of values to every atom, produced by
+ *     such a fold. Ops are stored whole (not pre-folded) so updaters and
+ *     reducers replay per world — which is why they must be pure (the
+ *     FOLD-PURITY guard: signal reads/writes inside them throw).
+ *   - A BATCH is the group of writes belonging to one UI update (one event
+ *     handler, one transition, one async action); a TOKEN is a batch's
+ *     identity record. React schedules each batch on one of its 31 LANES
+ *     (a lane is React's internal unit of scheduling priority; work in one
+ *     lane renders and commits together), so at most 31 batches are ever
+ *     live at once. Each live batch that has written occupies a SLOT — one
+ *     entry of a 31-entry recycling table — so "which batches affect X"
+ *     fits in one 31-bit integer word (a SlotSet). INTERNING is claiming a
+ *     free slot for a batch at its first write; the slot's current batch is
+ *     its TENANT, and a released slot is recycled to the next claimant.
+ *   - A PASS is one render pass of one root. Its PIN is the timeline
+ *     position frozen at pass start — the pass folds nothing written after
+ *     its pin, so a paused-and-resumed render never drifts. Its MASK is the
+ *     set of live batches (and their slots) the pass is rendering.
+ *   - RETIREMENT ends a batch: its receipts become permanent history
+ *     visible to every world, and once no world can tell the difference
+ *     they COMPACT — fold into the atom's base and are reclaimed. `cas` is
+ *     the committed-advance counter, bumped whenever committed truth moves
+ *     (a per-root commit, or a retirement that changed history).
+ *   - A WATCHER is one subscribed component instance; a DELIVERY is the
+ *     notification that schedules a watcher's re-render after a write.
+ *     Deliveries are VALUE-BLIND: a delivery announces "a write in this
+ *     batch may affect you", never a value — whether the value changed
+ *     depends on the world doing the asking, so the receiving render folds
+ *     its own world. A DRAIN is the sweep run when committed truth moves:
+ *     re-check every observer the change could reach against committed
+ *     state and correct the stale ones.
+ *   - The engine keeps two dependency graphs. K0 is the kernel's own graph
+ *     (the packed records in index.ts), which only knows newest values. K1
+ *     is this module's overlay: a log of the dependency edges world
+ *     evaluations ACTUALLY took, recorded as they are observed.
+ *     Notification walks run over the K0∪K1 union. Per node, a TOUCHED word
+ *     (one SlotSet) remembers which slots' live writes can reach it; bit 31
+ *     is the TAINT bit — set when an untracked read observed pending state,
+ *     conservatively poisoning the node's fast paths (untracked reads leave
+ *     no edge, so the bit is the only trace).
+ *   - A MEMO caches one node's value in one world, together with
+ *     FINGERPRINTS — per-dependency version stamps (the highest receipt
+ *     sequence the world can see for that dependency) — that tell whether
+ *     the memo is still current. Each world keeps its memos in its own map,
+ *     called that world's MEMO PLANE (this module borrows index.ts's word
+ *     "plane" for any flat per-node storage layer). The MEMO LADDER is
+ *     evaluate()'s ordered chain of attempts, cheapest first: untouched
+ *     fast path, then memo validation, then a fresh fold.
+ *   - An EPISODE is the stretch between QUIESCENCE points — moments when
+ *     nothing is in flight (no live batches, no open passes, no PARKED
+ *     actions — async actions kept pending until their promise settles).
+ *     At quiescence the K1 overlay bulk-resets and every retained
+ *     sequence value renumbers, so counters and edge logs never grow
+ *     without bound.
+ *
+ * What lives here (full stories at the implementation sites):
  *   - receipts: every write appends {op, slot, seq, retiredSeq} to the
- *     written atom's tape; ops are stored whole (not pre-folded) so
- *     updaters/reducers replay per world under the fold-purity guard.
+ *     written atom's tape.
  *   - kernel riding: every logged write also applies to the kernel eagerly
- *     with stepwise equality — bridge atoms are kernel-backed `Atom` handles,
- *     and the newest world is read straight off the kernel plane. The
- *     engine-vs-reference-model diff verifies kernel value ≡ fold(base,
- *     receipts) at every step of the test corpus.
- *   - the K1 union edge plane: world evaluations record real dependency
- *     edges, add-only within an episode, bulk-reset at quiescence. Delivery
- *     reachability runs over the episode-accumulated K0∪K1 union — deliveries
- *     are deliberately conservative (a superset is safe; deliveries are
- *     value-blind and the receiving render folds its own world).
+ *     with stepwise equality (each step keeps the previous reference when
+ *     the atom's equals function says nothing changed) — bridge atoms are
+ *     kernel-backed `Atom` handles, and the newest world is read straight
+ *     off the kernel. The engine-vs-reference-model diff verifies kernel
+ *     value ≡ fold(base, receipts) at every step of the test corpus.
+ *   - the K1 edge log: add-only within an episode, bulk-reset at
+ *     quiescence. Delivery reachability runs over the episode-accumulated
+ *     K0∪K1 union — deliveries are deliberately conservative (a superset is
+ *     safe; deliveries are value-blind and the receiving render folds its
+ *     own world).
  *   - worlds as pure folds with the two-clause visibility rule (see
  *     `visible`), the committed-for-root world, and the fast-forwarded
  *     mount-fixup world (see `mountFixup`).
@@ -45,26 +105,35 @@
  *     slot releases; a re-claimed slot gets a fresh claim sequence, and a
  *     pass's pin/seq checks always postdate the claim; release is deferred
  *     while any open render mask names the slot and re-evaluated at every
- *     pass end; disposal keeps conservative dirt bits until no live pin can
- *     still need them; a loud release-anyway backstop prevents deadlock.
+ *     pass end; disposal keeps conservative touched bits until no live pin
+ *     can still need them; a loud release-anyway backstop prevents deadlock.
  *   - retirement ordering stamp → fold → drain → clear-rows → release, with
- *     pin-gated prefix compaction of tapes, and per-root commit lock-in.
- *   - mount fixup (see `mountFixup`), including two subtle rules: the
- *     fast-path's write-clock check quantifies over the committing pass's
- *     member tokens at commit time (a token whose first write landed
- *     mid-render is invisible to the earlier-captured slot set), and any
- *     divergence the fast path suppresses must be exactly covered by the
- *     scheduled corrective re-renders (asserted on every mount).
+ *     pin-gated prefix compaction of tapes, and per-root commit lock-in (a
+ *     root that committed UI from a still-live batch must keep agreeing
+ *     with its own screen).
+ *   - MOUNT FIXUP (see `mountFixup`): the commit-edge reconciliation for a
+ *     freshly mounted component. A component can mount while other updates
+ *     are in flight, and its subscription only activates at commit, so
+ *     writes could slip by unobserved between its render and its commit;
+ *     fixup joins it to the pending batches it missed and corrects
+ *     committed drift before paint. Two subtle rules: the fast-path's
+ *     write-clock check quantifies over the committing pass's member tokens
+ *     at commit time (a token whose first write landed mid-render is
+ *     invisible to the earlier-captured slot set), and any divergence the
+ *     fast path suppresses must be exactly covered by the scheduled
+ *     corrective re-renders (asserted on every mount).
  *   - effects: core effects observe the newest world and flush after the
  *     write's walk returns; committed observers (the useSignalEffect shape)
- *     evaluate in committed-for-root and revalidate at every durable flip.
- *   - episodes / quiescence / renumbering: when nothing is in flight, the
- *     overlay bulk-resets its planes and renumbers retained sequence values
- *     so counters never grow without bound.
+ *     evaluate in committed-for-root and revalidate at every DURABLE flip —
+ *     durable meaning a change to committed truth itself (a per-root
+ *     commit, a retirement, an async-action settlement), as opposed to a
+ *     pending write that could still be discarded.
+ *   - episodes / quiescence / renumbering, as defined above.
  *
  * The bridge surface consumes the external-runtime protocol's event shapes
  * (batch open/retire, pass begin/yield/resume/end with per-root commits,
- * settlements). The React bindings (`cosignal-react`) drive it from a real
+ * settlements) — the events a patched React build emits about its own
+ * scheduling. The React bindings (`cosignal-react`) drive it from a real
  * protocol build; the test suite drives it in lockstep with the reference
  * model (`cosignal-oracle`).
  *
@@ -111,8 +180,10 @@ export type CommitGen = number;
 /** A 31-bit slot set: bit i = slot i. In per-node touched words bit 31 is
  * the taint bit (see SlotBits). */
 export type SlotSet = number;
-/** A premultiplied kernel record id (the base kernel's node id currency —
- * `Atom._id`; distinct from the overlay's dense `NodeId`). */
+/** A premultiplied kernel record id — already multiplied by the kernel's
+ * record stride so it indexes the kernel's arrays directly (index.ts
+ * vocabulary). The base kernel's node id currency (`Atom._id`); distinct
+ * from the overlay's dense `NodeId`. */
 export type KernelId = number;
 /** Per-walk visited generation (walk termination without Set allocations). */
 type WalkGen = number;
@@ -156,16 +227,17 @@ const enum OpKind {
 
 /**
  * Int-packed receipt columns: recording a write is a few integer stores, not
- * an object allocation. Plain number arrays stay SMI-packed and grow in
- * place; the arrays themselves are the pool — no per-receipt objects ever
- * exist on the hot path.
+ * an object allocation. Plain number arrays stay SMI-packed (V8's fast
+ * small-integer array representation) and grow in place; the arrays
+ * themselves are the pool — no per-receipt objects ever exist on the hot
+ * path.
  */
 export class Tape {
 	/** Live window: entries [start, n). Compaction advances `start`; the
 	 * arrays rebase (fresh packed slices) only when the dead prefix crosses
 	 * the amortization threshold — never a per-retirement memmove
-	 * (shrink-in-place cycling drops V8 arrays to dictionary elements and
-	 * was measured at ~10µs per drop). */
+	 * (shrink-in-place cycling drops V8 arrays into dictionary mode, its
+	 * slow hash-map representation; measured at ~10µs per drop). */
 	start = 0;
 	n = 0;
 	kinds: OpKind[] = [];
@@ -337,7 +409,8 @@ export type WorldMemo = {
 	compValues: Value[];
 };
 
-/** One of the 31 interning-table entries a written batch occupies. */
+/** One entry of the 31-slot recycling table a written batch occupies (see
+ * the header's SLOT/INTERN/TENANT definitions). */
 export type SlotMeta = {
 	id: SlotId;
 	tenant: TokenId | undefined;
@@ -753,8 +826,11 @@ export class CosignalBridge {
 	/** Per-walk visited generation column (walk termination without Sets). */
 	private lastWalk: WalkGen[] = [0];
 	private walkGen: WalkGen = 0;
-	/** Per-slot touched lists (node ids), reset only when the slot's dirt can
-	 * be proven irrelevant to every live pin (keep-the-dirt discipline). */
+	/** Per-slot touched lists (node ids). "Dirt" = a slot's conservative
+	 * touched bits and lists; the KEEP-THE-DIRT discipline (referenced
+	 * wherever dirt could be cleared): dirt may only be cleared once it is
+	 * provably irrelevant to every live pin — some paused render may still
+	 * depend on the conservative coverage. */
 	private slotTouched: NodeId[][] = [];
 	/** Nodes by id (dense array twin of `nodes`). */
 	private nodesArr: (AnyNode | undefined)[] = [undefined];
@@ -1122,7 +1198,8 @@ export class CosignalBridge {
 		return value;
 	}
 
-	/** The kernel plane read for an atom's newest value, hook-proof. */
+	/** Reads an atom's newest value straight from the kernel, guaranteed not
+	 * to be intercepted by the world-routing read hook. */
 	private kernelValueOf(handle: Atom<Value>): Value {
 		const saved = this.activeWorld;
 		this.setWorld(undefined); // never let the world router intercept a kernel-plane read
@@ -1576,7 +1653,9 @@ export class CosignalBridge {
 	// notifications); durable drains expand over them so a committed-truth
 	// flip reaching a node only through untracked reads still
 	// reconcile-checks its observers (value-gated — the reference model's
-	// full-observer scan behavior, scoped to the affected cone).
+	// full-observer scan behavior, scoped to the affected CONE: the set of
+	// nodes reachable downstream of the change. "Cone" below always means
+	// that downstream reachable set).
 	private weakOutSets: (Set<NodeId> | undefined)[] = [];
 	private weakOutList: (NodeId[] | undefined)[] = [];
 
@@ -1592,7 +1671,9 @@ export class CosignalBridge {
 		this.weakOutList[dep]!.push(dependent);
 	}
 
-	/** Monotone marking frontier: `newBits & ~touched(n)`, self-terminating. */
+	/** Marking walk scratch. The walk visits a node only for bits it does not
+	 * already have (`newBits & ~touched(n)`); bits only ever turn on within an
+	 * episode (monotone), so the walk terminates without a visited set. */
 	private markStackN: NodeId[] = [];
 	private markStackB: SlotSet[] = [];
 
@@ -1987,7 +2068,8 @@ export class CosignalBridge {
 		if (tr !== undefined) tr.opEnd();
 	}
 
-	/** The one K0 write site: routes through the public policy path (flush included). */
+	/** The one K0 write site: routes through the base build's public write
+	 * path (index.ts's policy layer), so equality drop and effect flush apply. */
 	private applyToKernel(node: AtomNode, value: Value): void {
 		const saved = bridgeApplying;
 		const savedRoute = routeWrites;

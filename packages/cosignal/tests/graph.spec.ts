@@ -1,6 +1,7 @@
 /**
- * Graph disciplines of the base library: the observed lifecycle (flap
- * damping on the liveness bit), writes during computed evaluation
+ * Graph disciplines of the base library: the observed lifecycle
+ * (coalescing of rapid observe/unobserve flips of the engine's
+ * has-subscribers state), writes during computed evaluation
  * (tolerated / cycle / forbidden), cycle rejection, the batch/untracked
  * contracts, and the core's dispose/reclamation paths.
  */

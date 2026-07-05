@@ -9,7 +9,8 @@
  *  - `dependencyGraphToDot(bridge)` — a snapshot of the live dependency
  *    graph: atoms (annotated with how many receipts their history currently
  *    holds), computeds, the dependency edges the engine has recorded since
- *    its last quiescent reset, and live watchers and effects with their
+ *    it last went idle and reset them (the engine clears recorded edges
+ *    when no update is in flight), and live watchers and effects with their
  *    observation edges. Diffing two dumps is the workhorse for wiring bugs.
  *  - `traceToDot(events, filter?)` — the causal graph of a decoded trace
  *    (CAUSE edges: write → delivery → correction chains), one node per

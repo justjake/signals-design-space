@@ -17,10 +17,13 @@
  *    onRenderPassEnd(committed) -> passEnd('commit') at the moment the
  *    pass commits — before that commit's per-root report and before any
  *    retirement, which is what lets the bridge snapshot committed state as
- *    the baseline for mount fixups; onRenderPassEnd(discarded) ->
- *    passEnd('discard'); onBatchRetired -> retire (or settleAction for a
- *    parked async action); onRootCommitted -> idempotent reconciliation of
- *    the root's committed-batch table + effect re-checks.
+ *    the baseline for mount fixups (the engine's commit-time reconciliation
+ *    of freshly mounted components against updates that were in flight
+ *    while they mounted); onRenderPassEnd(discarded) -> passEnd('discard');
+ *    onBatchRetired -> retire (or settleAction for a parked async action —
+ *    one kept pending until its promise settles); onRootCommitted ->
+ *    idempotent reconciliation of the root's committed-batch table +
+ *    effect re-checks.
  *  - bridge event log -> React: after every bridge call the shim drains the
  *    events it appended and translates deliveries / mount correctives /
  *    urgent corrections into setStates via unstable_runInBatch, so each
@@ -39,14 +42,17 @@
  *    intercepts at the method level. The batch is read from the protocol's
  *    write-context API (unstable_getCurrentWriteBatch /
  *    unstable_isCurrentWriteDeferred); token 0 (no context) falls back to
- *    the bridge's ambient default batch.
- *  - Suspense capsules: ctx.use inside bound computeds keys thenables on
- *    the computed's source and deps, matched by use-site position and by
- *    the values read before that site — the same inputs resolve to the same
- *    thenable in every world and across every render retry, while a world
- *    that genuinely sees different inputs refetches. See the `capsules`
- *    field for why value identity (not node identity, not a per-render
- *    bucket) is the key.
+ *    the bridge's ambient default batch (the engine-opened batch that
+ *    adopts writes made outside any explicit batch).
+ *  - Suspense capsules: a capsule is the shim's cache record for one
+ *    ctx.use call — the thenable plus the inputs that produced it, so the
+ *    same async work is reused instead of refetched. ctx.use inside bound
+ *    computeds keys capsules on the computed's source and deps, matched by
+ *    use-site position and by the values read before that site — the same
+ *    inputs resolve to the same thenable in every world and across every
+ *    render retry, while a world that genuinely sees different inputs
+ *    refetches. See the `capsules` field for why value identity (not node
+ *    identity, not a per-render bucket) is the key.
  */
 
 import * as React from 'react';
@@ -105,7 +111,9 @@ export function assertForkProtocol(): void {
 
 // ---- shim types ------------------------------------------------------------------
 
-/** A live delivery target: one subscribed hook instance. */
+/** A live delivery target: the shim-side handle for one watcher (the
+ * engine's record of one subscribed component instance) that can re-render
+ * the owning component. */
 export type WatcherTarget = {
 	/** Schedules a re-render of the owning component (a setState bump). */
 	bump: () => void;
@@ -164,7 +172,10 @@ type EvalFrame = {
 };
 
 const BOUND: unique symbol = Symbol('cosignal-react.bound');
-/** Marks the shim's un-routed twin handles — the private handles the bridge uses to apply folded values to the kernel, which must bypass prototype routing. */
+/** Marks the shim's un-routed twin handles — the private handles the bridge
+ * uses to apply folded values to the kernel (cosignal's core engine, which
+ * holds the single newest value of every atom); those applies must bypass
+ * prototype routing. */
 const TWIN: unique symbol = Symbol('cosignal-react.twin');
 type BoundState = { shim: Shim; node: AtomNode };
 type PatchableAtom = Atom<unknown> & { [BOUND]?: BoundState; [TWIN]?: boolean };
@@ -722,8 +733,8 @@ export class Shim {
 	}
 
 	/**
-	 * Prototype-routed `.state` read: adopted atoms route through the world
-	 * ladder; un-adopted atoms adopt on demand when a routing context (bound
+	 * Prototype-routed `.state` read: adopted atoms route through the
+	 * world-routing order below (routeRead); un-adopted atoms adopt on demand when a routing context (bound
 	 * evaluation frame, effect capture, tracked render pass) is active, and
 	 * otherwise stay on the original kernel path — so plain reads outside any
 	 * React context cost nothing extra.
@@ -902,7 +913,7 @@ export class Shim {
 		}
 	}
 
-	/** Read routing for a BoundComputed's `.state` (same ladder as atoms). */
+	/** Read routing for a BoundComputed's `.state` (same routing order as routeRead). */
 	routeComputedRead(node: ComputedNode): unknown {
 		const frame = this.evalStack[this.evalStack.length - 1];
 		if (frame !== undefined) {

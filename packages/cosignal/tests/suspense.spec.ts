@@ -1,10 +1,11 @@
 /**
  * ctx.use — reading async values inside a computed, in the base build:
- * while the thenable is pending, reads throw a reference-stable
- * SuspendedRead box; settlement invalidates and re-evaluates; the box's
- * identity is stable across re-evaluation; per-slot idempotence (pending
- * previous work wins); the lazy factory form; rejection → error box; and
- * read-site self-heal.
+ * while the thenable is pending, reads throw a SuspendedRead carrier that
+ * stays the same object across reads; settlement invalidates and
+ * re-evaluates; that carrier's identity is stable across re-evaluation;
+ * per-slot idempotence (pending previous work wins); the lazy factory
+ * form; rejection rethrows the reason from cache; and read-site self-heal
+ * (a read after settlement recomputes instead of throwing stale).
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, SuspendedRead, effect } from '../src/index';

@@ -7,8 +7,9 @@
  *
  * The cases, in plain language:
  *   1  a computed whose dependencies differ between worlds (flag-flip) —
- *      the shape naive stores tear on; plus its taint/retention/storm/
- *      cycle/recreation family members
+ *      the shape naive stores tear on; plus its family members: untracked
+ *      reads (whose conservative marking the engine calls "taint"),
+ *      receipt retention, write storms, cycles, and node recreation
  *   2  a synchronous render excluding a pending default batch sees only
  *      old values — never a half-applied frame
  *   3  functional updates replay in write order over the pre-batch base

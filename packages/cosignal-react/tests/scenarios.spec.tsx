@@ -203,7 +203,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		expect(text(container)).toBe('r1:0;s:0;r2:0;');
 		expect(text(container)).not.toContain(':1'); // the design's raison d'être
 
-		// The mount fixup entangled r2 with the live transition batch:
+		// The mount fixup joined r2 to the live transition batch:
 		// a value-blind corrective was scheduled in the batch's own lane.
 		expect(h.bridge.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
 

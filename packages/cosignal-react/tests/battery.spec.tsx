@@ -8,8 +8,9 @@
  *  - case 9 rows c/d (foreign retirement / post-pin write IN the
  *    render→commit window) and case 10 races (i)/(ii) — sub-millisecond
  *    windows the public API cannot schedule; the reference-model and
- *    patched-React suites pin them. Rows a/e and the entanglement path are
- *    covered below.
+ *    patched-React suites pin them. Rows a/e and the batch-join path (a
+ *    mount's corrective re-render scheduled into a live batch's own lane)
+ *    are covered below.
  *  - case 13 rows 6-9 (counter wrap/horizon) — engine counters; the
  *    quiescence/epoch half is smoke-tested below.
  */
@@ -73,8 +74,9 @@ describe('battery (spec §6) at React level', () => {
 	});
 
 	test('case 2 — flushSync excludes a pending batch (always-log premise)', async () => {
-		// NOTE: this React generation entangles Default with Sync (unified sync
-		// lane), so a DEFAULT batch cannot stay pending across flushSync at the
+		// NOTE: this React generation ties the Default lane to the Sync lane so
+		// they render together (React calls this lane "entanglement"; unified
+		// sync lane), so a DEFAULT batch cannot stay pending across flushSync at the
 		// React level — verified empirically; the default-priority exclusion
 		// schedule is pinned engine-side (cosignal logged-battery). The
 		// React-reachable exclusion window is a DEFERRED batch, exercised here

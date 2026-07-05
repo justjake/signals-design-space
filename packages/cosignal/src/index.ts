@@ -1,38 +1,107 @@
 /**
  * cosignal — the base build (the `cosignal` entry).
  *
- * This file has four layers, top to bottom:
+ * ─── VOCABULARY (in reading order; used throughout this file) ────────────────
  *
- *   1. Sentinels — the policy-level error/suspension carriers (SuspendedRead,
- *      CycleError, SentinelBox). Reference-stable boxes cached as ordinary
- *      kernel values; read sites unbox and rethrow.
+ * THE KERNEL is the dependency-tracking engine that fills the middle of this
+ * file. It stores every signal, computed, effect, and dependency edge as a
+ * fixed-size integer record in shared arrays, and runs the reactive
+ * algorithm — writes push staleness marks down the graph, reads lazily pull
+ * recomputation — as index arithmetic over those records. The kernel knows
+ * nothing about user options: it compares values by reference identity only,
+ * has no error handling of its own, and no async story.
+ *
+ * THE POLICY LAYER is everything user-facing at the bottom of the file — the
+ * Atom / ReducerAtom / Computed classes, effect(), batch(), untracked(),
+ * configure(). "Policy" in this file always means a user-visible behavior
+ * decided outside the kernel: custom equality, what thrown errors and
+ * pending async reads do, the purity rules. The split exists so the kernel's
+ * hot paths stay small monomorphic integer code while every rule that could
+ * change lives in ordinary cold JavaScript around it.
+ *
+ * Kernel storage terms:
+ * - THE PLANE is the one shared Int32Array (`M` in createEngine) holding
+ *   every record; error messages call it the arena (a preallocated block
+ *   that records are carved out of). A RECORD is Plane.STRIDE (8)
+ *   consecutive Int32 slots; node records (signals/computeds/effects/scopes)
+ *   and link records (one dependency edge each) share the plane, the stride,
+ *   and one allocator.
+ * - A record's id is PREMULTIPLIED: it is the plane index of the record's
+ *   first field (record ordinal × Plane.STRIDE), so every field access is
+ *   plain addition — M[id + NodeField.FLAGS] — with no multiply anywhere.
+ * - JavaScript values and functions cannot live in an Int32Array, so they
+ *   sit in ordinary arrays running parallel to the plane — the SIDE COLUMNS
+ *   `values` and `fns` — indexed by shifting the same premultiplied id (see
+ *   the Plane const enum).
+ *
+ * Mechanics the whole file relies on:
+ * - OPERATION BOUNDARY: a moment when no evaluation, effect run, or graph
+ *   walk is anywhere on the call stack (`enterDepth === 0`). Deferred work —
+ *   growing the plane, freeing disposed records — runs only at boundaries,
+ *   because in-flight work holds direct references to the buffers.
+ * - CLOSURE REBUILD: the kernel's functions are created by one factory
+ *   (`createEngine`) and capture the plane as a closure constant — which is
+ *   what lets V8 fold the buffer reference into compiled code. The cost of
+ *   that choice: the buffer cannot be swapped under a live function. So to
+ *   grow, the module allocates a doubled plane, copies the records over, and
+ *   calls the factory again, producing a fresh set of functions closed over
+ *   the new buffer. That wholesale re-creation is a "closure rebuild"; it
+ *   happens only at operation boundaries. Scalar counters live at module
+ *   level (not in the closure) precisely so a rebuilt engine resumes where
+ *   the old one stopped.
+ * - FOLD: applying a user's updater or reducer function to a value to
+ *   produce the next value. The name comes from the concurrent build
+ *   (`cosignal/logged`), which reconstructs alternative views of the state
+ *   ("worlds", see the README) by re-applying — folding — recorded write
+ *   operations over a base value; that only works if updaters and reducers
+ *   are pure. Both builds therefore run them under the same FOLD-PURITY
+ *   guard: signal reads and writes inside an updater or reducer throw (see
+ *   runFold).
+ *
+ * With that vocabulary, the file's four layers, top to bottom:
+ *
+ *   1. Sentinels (SuspendedRead, CycleError, SentinelBox). A computed's
+ *      function can fail to produce a value: it can throw, or it can read
+ *      async data that isn't ready yet (`ctx.use` on a pending promise — a
+ *      SUSPENSION). Rather than make every caller handle those cases, the
+ *      engine stores a small placeholder object (a "sentinel BOX") in the
+ *      slot where the value would have gone. The box records what happened —
+ *      the thrown error, or the pending promise — and is reused across
+ *      re-evaluations so the kernel's identity compare sees "no change". A
+ *      read that hits a box doesn't return it: it UNBOXES — throws the box's
+ *      contents, either the original error or a SuspendedRead marker that
+ *      tells the caller (e.g. React's Suspense machinery) "this value is
+ *      still loading".
  *   2. The evaluation context — the ONE `ctx` object every computed function
- *      receives (`ctx.previous`, `ctx.use`), delegating to hoisted policy
- *      functions so the kernel can pass it with zero per-recompute setup.
- *   3. The kernel — an arena-style core: alien-signals v3.2.1's push-pull
- *      algorithm transliterated onto interleaved Int32Array records, with
- *      nodes and dependency links as fixed-stride packed records sharing one
- *      plane. Upstream's walk structure and flag ladder are preserved (plus a
- *      link/linkInsert hot/slow split); buffers are closure constants, walks
- *      use persistent scratch stacks, and capacity grows by closure rebuild
- *      over doubled buffers at operation boundaries. Validated against a
- *      179-case conformance suite (179/179) for alien-signals-compatible
- *      semantics. Deviations from a plain packed-array transliteration of
- *      upstream are enumerated below (D1–D7).
- *   4. The policy layer — Atom / ReducerAtom / Computed classes, effect(),
- *      batch(), untracked(), configure(); custom equality by
- *      wrapper-returns-old-reference; errors/suspensions as sentinel boxes;
- *      the observed lifecycle (AtomOptions.effect) with microtask flap
- *      damping; fold-purity and writes-in-computeds disciplines.
+ *      receives (`ctx.previous`, `ctx.use`). Its members are getters that
+ *      resolve "which computed is evaluating right now" from kernel state,
+ *      so passing it costs zero per-recompute setup.
+ *   3. The kernel — alien-signals v3.2.1's push-pull algorithm, re-expressed
+ *      over plane records instead of linked JavaScript objects. Upstream's
+ *      walk structure and flag transitions are preserved (plus a
+ *      link/linkInsert hot/slow split, see linkInsert); buffers are closure
+ *      constants; walks use persistent scratch stacks (module-level
+ *      Int32Array stacks reused across walks, replacing upstream's per-walk
+ *      linked-list allocations); capacity grows by closure rebuild over
+ *      doubled buffers at operation boundaries. Validated against a 179-case
+ *      conformance suite (179/179) for alien-signals-compatible semantics.
+ *      Deviations from a plain transliteration of upstream are enumerated
+ *      below (D1–D7).
+ *   4. The policy layer — the classes and functions named above; custom
+ *      equality by wrapper-returns-old-reference; errors/suspensions as
+ *      sentinel boxes; the observed lifecycle (AtomOptions.effect — the
+ *      "first subscriber attached / last one detached" callback) with
+ *      microtask flap damping; the fold-purity and writes-in-computeds
+ *      disciplines.
  *
  * ─── THE OPERATION-TABLE SEAM ────────────────────────────────────────────────
  *
- * The `Engine` record returned by `createEngine` IS the engine's operation
- * table: every public operation routes through the module-level binding
- * `E` (`E.read`, `E.write`, `E.computedRead`, …), and `E` is only ever
- * replaced at an operation boundary via closure rebuild — the same
- * closure-rebuild mechanism growth uses (`boundaryWork` →
- * `engineFactory(records, carry)`).
+ * The `Engine` record returned by `createEngine` is the engine's OPERATION
+ * TABLE: the one object whose function fields are the kernel's operations.
+ * Every public operation routes through the module-level binding `E`
+ * (`E.read`, `E.write`, `E.computedRead`, …), and `E` is only ever replaced
+ * at an operation boundary via closure rebuild — the same mechanism growth
+ * uses (`boundaryWork` → `engineFactory(records, carry)`).
  *
  * In the base build the table is statically wired: `engineFactory` is
  * initialized to `createEngine` (the base table), nothing in this module
@@ -54,9 +123,10 @@
  * reason; nothing else in the kernel or the policy layer is table-aware.
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Kernel deviations from a plain packed-array transliteration of upstream
- * alien-signals (each is policy plumbing at a cold site; the hot walks are
- * untouched — measured ≈parity on benchmark workloads):
+ * Kernel deviations from a plain transliteration of upstream alien-signals
+ * (each is policy plumbing at a cold site — code off the hot read/write
+ * paths, reached rarely; the hot walks are untouched — measured ≈parity on
+ * benchmark workloads):
  *
  *   D1. Node field 6 (otherwise a spare pad field) is `NodeField.LIFECYCLE`: a 0/1
  *       flag set at creation for atoms carrying an observed-lifecycle
@@ -339,7 +409,7 @@ let activeSub: NodeId = 0;
 let enterDepth = 0; // live engine frames that captured M; 0 = op boundary
 
 const queued: NodeId[] = [];
-const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting sweep
+const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the sweep (batch-freed at the next operation boundary)
 
 // Side columns, indexed off the id: values[id >> 2] = current/computed value,
 // values[(id >> 2) + 1] = signal pending value OR effect cleanup fn OR the
@@ -350,8 +420,9 @@ const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting swee
 const values: unknown[] = [undefined, undefined];
 const fns: (Function | undefined)[] = [undefined];
 
-// Persistent scratch stacks (upstream's cons-cell Stack<T>). Re-entrant
-// walks push above the caller's base and restore it on exit.
+// Persistent scratch stacks: module-level Int32Arrays reused by every graph
+// walk, replacing the linked-list stack upstream allocates per walk.
+// Re-entrant walks push above the caller's base and restore it on exit.
 let propStack = new Int32Array(4096);
 let propSp = 0;
 let checkStack = new Int32Array(4096);
@@ -397,8 +468,10 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	if (carry !== undefined) {
 		M.set(carry);
 	}
-	// Allocators flag growth once the bump pointer crosses the watermark:
-	// keep at least Plane.REC_SLACK records AND half the plane free at every boundary.
+	// Allocators flag growth once the bump pointer (the never-yet-used end of
+	// the plane; allocation takes a freed record first, else bumps this) crosses
+	// the watermark — the fill level that schedules growth. The rule: keep at
+	// least Plane.REC_SLACK records AND half the plane free at every boundary.
 	const WM = Math.min(M.length >> Plane.HALF_PLANE_SHIFT, M.length - Plane.REC_SLACK * Plane.STRIDE);
 	if (recNext > WM) {
 		growPending = true;
@@ -1041,7 +1114,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		return false;
 	}
 
-	// computedOper — clean-read fast path. Split from the recompute ladder the
+	// computedOper — clean-read fast path. Split from the recompute cases the
 	// same way link/linkInsert is split: the monolithic body plus the D2/D3
 	// additions sits at 448+ bytecodes, past V8's 460-byte inline cliff
 	// (measured: falling off costs ~2.5ns on every clean read). One combined
@@ -1062,7 +1135,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		return vals[c >> Plane.ID_TO_VALUE_SHIFT];
 	}
 
-	// The full computedRead ladder, out of line (recompute/first-eval/boxed).
+	// The full computedRead decision chain, out of line (recompute/first-eval/boxed).
 	function computedReadSlow(c: NodeId, flags: NodeFlags): unknown {
 		// D2: reading a computed while its own evaluation frame is open is a
 		// dependency cycle — throw instead of serving the stale cache
@@ -1157,11 +1230,12 @@ let engineFactory: (records: RecordCount, carry?: Int32Array) => Engine = create
 /**
  * The fold-purity table (see runFold): every operation throws the fold error
  * (requeueAbort no-ops so flush()'s finally can never mask one). Deliberately
- * its OWN object shape, distinct from createEngine's: the real engine must
- * stay the only live instance of its hidden class so V8 keeps its function
- * fields constant and inlines `E.op` call targets (sharing one map between
- * the two tables measurably killed that: +15-25% on recompute/read-heavy
- * benchmark workloads).
+ * its OWN object shape, distinct from createEngine's: V8 groups objects by
+ * hidden class (its internal record of an object's layout), and the real
+ * engine must stay the only live instance of its hidden class so V8 keeps
+ * the table's function fields constant and inlines `E.op` call targets
+ * (sharing one hidden class between the two tables measurably killed that:
+ * +15-25% on recompute/read-heavy benchmark workloads).
  * Legal code never dispatches through POISON — only fold-purity violations
  * reach it, and those throw — so the polymorphism it could introduce at
  * `E.op` sites is confined to code that is already erroring.
@@ -1379,7 +1453,8 @@ function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | 
 	// Writes-in-computeds: tolerated by default (upstream alien-signals
 	// semantics, conformance-pinned — a write that feeds the evaluating
 	// computed simply marks it pending again through the kernel's RECURSED
-	// ladder and settles by lazy revalidation). Evaluation *cycles* —
+	// flag transitions in propagate() and settles by lazy revalidation).
+	// Evaluation *cycles* —
 	// re-entrant reads — throw in computedRead (D2). The configure flag
 	// rejects every in-evaluation write. (Known pinhole: a write wrapped in
 	// untracked() clears the kernel's activeSub, so the flag cannot see it.)

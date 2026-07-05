@@ -4,14 +4,16 @@
  * activation call that arms the logged engine (`cosignal/logged`) and
  * couples it to a protocol-v1 React build via the Shim.
  *
- * Watcher lifecycle, shared by the subscription hooks: render mints (or
+ * Watcher lifecycle, shared by the subscription hooks (a watcher is the
+ * engine's record of one subscribed component instance): render mints (or
  * re-tracks) a watcher in the current pass's world, so the component reads
  * the view of the render it is part of; the layout effect claims the
  * subscription after commit (StrictMode's double-mount nets to one live
- * watcher via microtask-debounced unsubscription); the mount fixup itself
- * runs inside the bridge at the commit edge, and its corrective re-renders
- * and urgent corrections reach React as pre-paint setStates through the
- * shim.
+ * watcher via microtask-debounced unsubscription); the mount fixup — the
+ * engine's commit-time reconciliation of a freshly mounted component
+ * against updates that were in flight while it mounted — runs inside the
+ * bridge at the commit edge, and its corrective re-renders and urgent
+ * corrections reach React as pre-paint setStates through the shim.
  */
 
 import * as React from 'react';

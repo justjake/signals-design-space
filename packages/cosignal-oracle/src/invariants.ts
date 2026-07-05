@@ -3,8 +3,9 @@
  * one clause of the behavioral contract (stated in README.md):
  *
  * 1. fold determinism — evaluating any node twice in the same world agrees:
- *    folds and evaluations are pure, so a world's answer is a function of
- *    the schedule prefix, never of when you ask.
+ *    folds (replays of a world's visible receipts over the atom's base —
+ *    README vocabulary) and evaluations are pure, so a world's answer is a
+ *    function of the schedule prefix, never of when you ask.
  * 2. tenancy orderings — the three sequence orderings that make slot
  *    recycling safe: an un-retired receipt bearing a slot belongs to the
  *    slot's current tenant (stamp-before-release), every previous tenant's

@@ -6,8 +6,9 @@
  * enforced.
  *
  * Authority comes from SIMPLICITY: plain objects, no caches, no cleverness.
- * Worlds (self-consistent views of all atom values) are pure folds over
- * visibility-filtered receipt tapes; computeds are memo-free recursive
+ * Worlds (self-consistent views of all atom values) are pure folds — a fold
+ * replays the receipts a world may see, in timeline order, over the atom's
+ * base value (README vocabulary); computeds are memo-free recursive
  * evaluation in a given world; the React host is simulated as explicit
  * token/pass/retirement bookkeeping. Where the engine has optimizations
  * (dirty marking, memo tables, fast paths) the model simply recomputes

@@ -54,8 +54,9 @@
  * Terms as in the package README: a *receipt* records one write on the
  * written atom's history; a *batch* (identified by a token) groups the
  * writes of one UI update; a *slot* is one of 31 tracking entries a written
- * batch occupies while its writes can still matter (mirroring React's lane
- * count; slots are recycled); a *pass* is one render pass of one root,
+ * batch occupies while its writes can still matter (31 because React
+ * schedules work on 31 "lanes" — its internal units of priority; slots are
+ * recycled); a *pass* is one render pass of one root,
  * whose *pin* is the timeline position it froze at start; a *watcher* is
  * one mounted UI subscription; *retirement* makes a batch's writes
  * permanent history; a *world* is one self-consistent view of all values.
@@ -104,8 +105,9 @@
  * pass-start/yield/resume/end, root-commit, epoch-reset) record the old
  * register as their CAUSE and then claim it; consequence kinds (deliveries,
  * suppressions, slot transitions, evals, corrections, effect runs…) record
- * it untouched; the engine's `opEnd` hook clears it at each compound
- * operation boundary, so unrelated operations never chain. Chains are real
+ * it untouched; the engine's `opEnd` hook clears it whenever a compound
+ * public operation (a write, a pass end, a retirement, a settlement, a
+ * quiesce) finishes, so unrelated operations never chain. Chains are real
  * call chains: delivery ← its write; batch-retire inside a commit ← that
  * pass-end; reconcile-correction ← its root-commit or retirement.
  *
