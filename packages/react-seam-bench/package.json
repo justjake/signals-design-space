@@ -1,0 +1,31 @@
+{
+	"name": "react-seam-bench",
+	"private": true,
+	"version": "0.0.0",
+	"license": "MIT",
+	"description": "Benchmark of signal libraries as consumed by React: single-cell write-to-commit latency under fan-out, urgent-update latency during a large transition, and wide-tree mount cost. One contender per node process, interleaved rounds, medians.",
+	"type": "module",
+	"scripts": {
+		"build": "esbuild src/child.ts src/isolated.ts --bundle --platform=node --format=esm --outdir=dist --external:jsdom",
+		"bench": "node dist/isolated.js",
+		"chart": "node src/chart.mjs",
+		"check": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"alien-signals": "file:../../upstream-alien-signals",
+		"cosignal": "workspace:*",
+		"cosignal-react": "workspace:*",
+		"dalien-signals": "file:../dalien-signals",
+		"jsdom": "^26.1.0",
+		"react": "*",
+		"react-dom": "*"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"esbuild": "0.28.1",
+		"typescript": "6.0.3"
+	}
+}

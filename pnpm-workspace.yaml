@@ -4,5 +4,6 @@ packages:
   - packages/cosignal
   - packages/cosignal-oracle
   - packages/cosignal-react
+  - packages/react-seam-bench
 onlyBuiltDependencies:
   - esbuild
