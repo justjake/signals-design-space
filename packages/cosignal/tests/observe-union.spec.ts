@@ -1,0 +1,195 @@
+/**
+ * The observation union (AtomOptions.effect over BOTH consumer kinds):
+ * kernel-subscriber liveness (the D1 bit) and bridge-watcher liveness feed
+ * ONE refcount owned by the atom's lifecycle registration, so an atom
+ * observes once when its first consumer of ANY kind attaches and unobserves
+ * only when the last consumer of EVERY kind detaches. The microtask flap
+ * coalescing spans the union.
+ *
+ * ENGINE-DIRECT (no twin driver): the reference model deliberately models no
+ * observe lifecycle, and these transitions are direct callbacks — never
+ * BridgeEvents — so the lockstep comparison surfaces cannot see them (the
+ * last test pins that). Watcher liveness is driven the way the shim drives
+ * it: the commit layout loop flips it on; `w.live = false` is the shim's
+ * debounce-finalized unsubscribe / orphan sweep shape.
+ */
+import { describe, expect, it } from 'vitest';
+import { __newBridgeForTest, Atom, effect, type CosignalBridge } from '../src/index.js';
+
+const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
+
+function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
+	const log: string[] = [];
+	const atom = new Atom(initial, {
+		effect: () => {
+			log.push('observe');
+			return () => log.push('unobserve');
+		},
+	});
+	return { atom, log };
+}
+
+/** A fresh registered bridge in referee posture (events retained, quiet off). */
+function bridge(): CosignalBridge {
+	const b = __newBridgeForTest();
+	b.registerBridge();
+	return b;
+}
+
+describe('observation union at the bridge plane', () => {
+	it('a live watcher alone observes; dropping it unobserves', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const p = b.passStart('A', []);
+		const w = b.mountWatcher(p.id, node, 'W');
+		await tick();
+		expect(log).toEqual([]); // minted ≠ subscribed: a render alone does not observe
+		b.passEnd(p.id, 'commit'); // layout: the watcher goes live
+		expect(log).toEqual([]); // delivery is a microtask, never synchronous
+		await tick();
+		expect(log).toEqual(['observe']);
+		w.live = false; // debounce-finalized unsubscribe (the shim's shape)
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	it('kernel subscriber + watcher = ONE observation; unobserve only after BOTH detach', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const dispose = effect(() => {
+			void atom.state; // kernel consumer: links on the atom's record
+		});
+		await tick();
+		expect(log).toEqual(['observe']);
+		const p = b.passStart('A', []);
+		const w = b.mountWatcher(p.id, node, 'W');
+		b.passEnd(p.id, 'commit'); // watcher consumer joins (union 1→2)
+		await tick();
+		expect(log).toEqual(['observe']); // interior transition: no re-observe
+		dispose(); // kernel side leaves (2→1)
+		await tick();
+		expect(log).toEqual(['observe']); // still held by the watcher
+		w.live = false; // last consumer leaves (1→0)
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	it('deferMount hidden prepare never observes; the adoptMount reveal observes exactly once', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const hidden = b.passStart('A', []);
+		const w = b.mountWatcher(hidden.id, node, 'W');
+		b.deferMount(w.id); // Activity pre-render: layout effects deferred
+		b.passEnd(hidden.id, 'commit');
+		await tick();
+		expect(w.live).toBe(false);
+		expect(log).toEqual([]); // the hidden commit subscribed nothing
+		const reveal = b.passStart('A', []);
+		b.adoptMount(reveal.id, w.id);
+		b.passEnd(reveal.id, 'commit'); // adopting commit: subscribe fires HERE
+		await tick();
+		expect(log).toEqual(['observe']); // one clean 0→1 — the reveal never flapped
+		w.live = false;
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	it('same-tick handoff between consumer kinds coalesces (no flap either direction)', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const p = b.passStart('A', []);
+		const w = b.mountWatcher(p.id, node, 'W');
+		b.passEnd(p.id, 'commit');
+		await tick();
+		expect(log).toEqual(['observe']);
+		// watcher → kernel handoff within one tick: the union never sits at 0
+		// across a flush point, so nothing fires.
+		w.live = false;
+		const dispose = effect(() => {
+			void atom.state;
+		});
+		await tick();
+		expect(log).toEqual(['observe']);
+		// kernel → watcher handoff, same rule.
+		const p2 = b.passStart('A', []);
+		const w2 = b.mountWatcher(p2.id, node, 'W2');
+		b.passEnd(p2.id, 'commit');
+		dispose(); // same tick as w2 going live
+		await tick();
+		expect(log).toEqual(['observe']);
+		w2.live = false;
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	it('cold flap: commit-subscribe and unsubscribe within one tick net to nothing', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const p = b.passStart('A', []);
+		const w = b.mountWatcher(p.id, node, 'W');
+		b.passEnd(p.id, 'commit');
+		w.live = false; // same tick: e.g. a mount whose tree is immediately torn down
+		await tick();
+		expect(log).toEqual([]); // coalesced — the documented flap-damping contract
+	});
+
+	it('re-asserting watcher liveness is edge-filtered (idempotent, no double retain)', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const p = b.passStart('A', []);
+		const w = b.mountWatcher(p.id, node, 'W');
+		b.passEnd(p.id, 'commit');
+		w.live = true; // re-assertion (already live): must not double-count
+		await tick();
+		expect(log).toEqual(['observe']);
+		w.live = false; // a double retain would strand the union at 1 here
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	it('quiet mode: observation transitions need no armed pipeline (production posture)', async () => {
+		const b = __newBridgeForTest();
+		b.setRetainEvents(false); // no event consumer…
+		b.setQuietWrites(true); // …quiet short-circuit armed (production defaults)
+		b.registerBridge();
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		expect(b.quiet).toBe(true);
+		const p = b.passStart('A', []); // the pass disarms quiet while open…
+		const w = b.mountWatcher(p.id, node, 'W');
+		b.passEnd(p.id, 'commit'); // …and it re-arms at the commit
+		expect(b.quiet).toBe(true);
+		await tick();
+		expect(log).toEqual(['observe']); // fired with the pipeline fully quiet
+		atom.set(7); // quiet fold — still no receipts/tokens
+		expect(b.newestValue(node)).toBe(7);
+		expect(b.quiet).toBe(true);
+		w.live = false;
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+		expect(b.quiet).toBe(true);
+	});
+
+	it('observation transitions are direct callbacks — never BridgeEvents (lockstep surface unchanged)', async () => {
+		const b = bridge(); // referee posture: the event log is retained
+		const { atom, log } = observedAtom(0);
+		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const before = b.events.length;
+		const p = b.passStart('A', []);
+		const w = b.mountWatcher(p.id, node, 'W');
+		b.passEnd(p.id, 'commit');
+		await tick();
+		w.live = false;
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+		const minted = b.events.slice(before).map((e) => e.type);
+		expect(minted.filter((t) => /observe|lifecycle/i.test(t))).toEqual([]);
+		expect(minted).toEqual(['pass-committed']); // pass bookkeeping only
+	});
+});

@@ -278,54 +278,210 @@ describe('useSignalEffect (§5.11)', () => {
 	});
 });
 
-describe('AtomOptions.effect observed lifecycle on the React path (checkpoint: verify, do not fix)', () => {
-	test('KNOWN GAP: the observe-lifecycle callback NEVER fires for useSignal-only subscribers', async () => {
-		// MECHANISM. AtomOptions.effect is delivered on the KERNEL's liveness
-		// bit: linkInsert's first-subscriber branch / unwatched()'s signal
-		// branch (D1) — i.e. it fires when a kernel-level subscriber (a core
-		// Computed pulled by something live, a core effect()) attaches its
-		// first link to the atom's record. React subscribers are BRIDGE
-		// WATCHERS: useSignal mounts a watcher on the bridge's overlay plane
-		// and world evaluations read atom values via folds / kernelValueOf
-		// (an untracked kernel read) — no kernel link is ever created, the
-		// liveness bit never flips 0→1, and the callback never runs.
-		// Owner decision needed before changing this (the option was kept for
-		// real apps); this test PINS the current behavior loudly.
-		h = makeHarness();
-		const lifecycle: string[] = [];
-		const a = new Atom(0, {
+describe('AtomOptions.effect observed lifecycle on the React path (observation union)', () => {
+	// MECHANISM. Observation is ONE core concept counted over the UNION of
+	// consumer kinds: kernel subscribers (a live computed chain, a core
+	// effect()) flip the kernel liveness bit (D1), and React subscribers —
+	// bridge watchers minted by useSignal — retain/release the SAME refcount
+	// when their engine-side liveness flips (commit layout loop, reveal
+	// resubscribe, orphan sweep, debounce-finalized unsubscribe). The callback
+	// fires on the union's 0→1 transition, the cleanup on its 1→0, both
+	// microtask-coalesced, so same-tick flaps net to nothing regardless of
+	// which consumer kind produced them.
+
+	function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
+		const log: string[] = [];
+		const atom = new Atom(initial, {
 			effect: () => {
-				lifecycle.push('observe');
-				return () => lifecycle.push('unobserve');
+				log.push('observe');
+				return () => log.push('unobserve');
 			},
 		});
+		return { atom, log };
+	}
+
+	test('useSignal-only subscriber: observe after mount, unobserve after unmount', async () => {
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(0);
 		function View() {
 			return <span>v:{useSignal(a)};</span>;
 		}
 		const { root, container } = await h.mount(<View />);
 		expect(text(container)).toBe('v:0;');
-		await act(async () => {}); // lifecycle delivery is microtask-coalesced — give it every chance
+		await act(async () => {}); // observation delivery is microtask-coalesced
+		expect(log).toEqual(['observe']); // a React-only subscriber observes
 		await act(async () => {
-			a.set(1); // subscribed and live: deliveries flow…
+			a.set(1);
 		});
 		expect(text(container)).toBe('v:1;');
-		expect(lifecycle).toEqual([]); // …but the kernel never saw a subscriber: NO observe callback
+		expect(log).toEqual(['observe']); // deliveries do not re-observe
 		await act(async () => {
 			root.render(<div />);
 		});
-		await act(async () => {}); // debounced unsubscribe + microtask flap damping settle
-		expect(lifecycle).toEqual([]); // and no unobserve either — the gap is symmetric
-		// CONTRAST (the same atom, a kernel subscriber): effect() flips the
-		// liveness bit and the callback fires — proving the option works and
-		// the gap is specific to bridge-watcher subscriptions.
+		await act(async () => {}); // debounced unsubscribe + flap damping settle
+		expect(log).toEqual(['observe', 'unobserve']);
+		// CONTRAST (kernel subscriber): the union's other consumer kind — the
+		// kernel liveness bit — drives the same callback after the React leg
+		// is long gone.
 		const { effect } = await import('cosignal');
 		const dispose = effect(() => {
 			void a.state;
 		});
 		await act(async () => {}); // microtask delivery
-		expect(lifecycle).toEqual(['observe']);
+		expect(log).toEqual(['observe', 'unobserve', 'observe']);
 		dispose();
 		await act(async () => {});
-		expect(lifecycle).toEqual(['observe', 'unobserve']);
+		expect(log).toEqual(['observe', 'unobserve', 'observe', 'unobserve']);
+	});
+
+	test('mixed kernel + watcher consumers: one observation; unobserve only after BOTH detach', async () => {
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(0);
+		const { effect } = await import('cosignal');
+		const dispose = effect(() => {
+			void a.state; // kernel consumer attaches first
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe']);
+		function View() {
+			return <span>{useSignal(a)}</span>;
+		}
+		const { root } = await h.mount(<View />);
+		await act(async () => {});
+		expect(log).toEqual(['observe']); // watcher joined: interior transition, no re-observe
+		await act(async () => {
+			root.render(<div />); // React leg detaches…
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe']); // …but the kernel effect still holds the atom
+		dispose(); // the LAST consumer leaves
+		await act(async () => {});
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	test('StrictMode double render/effects: one observation, no flap', async () => {
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(1);
+		function View() {
+			return <span>{useSignal(a)}</span>;
+		}
+		const { root, container } = await h.mount(
+			<React.StrictMode>
+				<View />
+			</React.StrictMode>,
+		);
+		expect(text(container)).toBe('1');
+		await act(async () => {}); // orphan sweep + unsub debounce settle
+		expect(log).toEqual(['observe']); // double mount/unmount netted — no unobserve flap
+		await act(async () => {
+			a.set(2);
+		});
+		expect(text(container)).toBe('2');
+		expect(log).toEqual(['observe']);
+		await act(async () => {
+			root.render(<React.StrictMode><div /></React.StrictMode>);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	test('two components over one atom: observe once, unobserve after the LAST unmounts', async () => {
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(0);
+		function View() {
+			return <span>{useSignal(a)};</span>;
+		}
+		function App({ n }: { n: number }) {
+			return (
+				<>
+					{n >= 1 ? <View /> : null}
+					{n >= 2 ? <View /> : null}
+				</>
+			);
+		}
+		const { root } = await h.mount(<App n={2} />);
+		await act(async () => {});
+		expect(log).toEqual(['observe']); // two watchers, ONE observation
+		await act(async () => {
+			root.render(<App n={1} />);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe']); // one subscriber remains: no unobserve yet
+		await act(async () => {
+			root.render(<App n={0} />);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
+	test('Activity hide/reveal: same-tick toggle holds the observation; a real hide unobserves, the reveal re-observes', async () => {
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(1);
+		const Activity = (React as unknown as Record<string, unknown>).Activity as React.ComponentType<{
+			mode: 'visible' | 'hidden';
+			children?: React.ReactNode;
+		}>;
+		expect(Activity).toBeDefined();
+		function View() {
+			return <span>{useSignal(a)}</span>;
+		}
+		function App({ mode }: { mode: 'visible' | 'hidden' }) {
+			return (
+				<Activity mode={mode}>
+					<View />
+				</Activity>
+			);
+		}
+		const { root } = await h.mount(<App mode="visible" />);
+		await act(async () => {});
+		expect(log).toEqual(['observe']);
+		// Hide + reveal inside one tick: the retained watcher's claim cancels
+		// the debounced unsubscribe (the same netting StrictMode uses), so the
+		// upstream subscription never flaps.
+		await act(async () => {
+			root.render(<App mode="hidden" />);
+			root.render(<App mode="visible" />);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe']);
+		// A real hide IS an unsubscription (deliveries stop while hidden —
+		// case 9(e)): the union empties and the upstream subscription closes…
+		await act(async () => {
+			root.render(<App mode="hidden" />);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe', 'unobserve']);
+		// …and the reveal resubscribe observes again, once.
+		await act(async () => {
+			root.render(<App mode="visible" />);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe', 'unobserve', 'observe']);
+	});
+
+	test('quiet-mode interplay: observation transitions need no armed pipeline and leave none armed', async () => {
+		h = makeHarness();
+		h.bridge.setRetainEvents(false); // production posture: no event consumer…
+		h.bridge.setQuietWrites(true); // …and the quiet short-circuit armed
+		const { atom: a, log } = observedAtom(0);
+		expect(h.bridge.quiet).toBe(true);
+		function View() {
+			return <span>v:{useSignal(a)};</span>;
+		}
+		const { root, container } = await h.mount(<View />);
+		await act(async () => {});
+		expect(log).toEqual(['observe']); // watcher attach worked while quiet
+		expect(h.bridge.quiet).toBe(true); // and armed no pipeline
+		await act(async () => {
+			a.set(5); // quiet fold: no receipts — deliveries still flow
+		});
+		expect(text(container)).toBe('v:5;');
+		expect(h.bridge.quiet).toBe(true);
+		await act(async () => {
+			root.render(<div />);
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe', 'unobserve']);
+		expect(h.bridge.quiet).toBe(true);
 	});
 });

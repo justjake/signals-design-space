@@ -92,7 +92,8 @@
  *   4. The policy layer — the classes and functions named above; custom
  *      equality by wrapper-returns-old-reference; errors/suspensions as
  *      sentinel boxes; the observed lifecycle (AtomOptions.effect — the
- *      "first subscriber attached / last one detached" callback) with
+ *      "first subscriber attached / last one detached" callback, counted
+ *      over the union of kernel subscribers and bridge watchers) with
  *      microtask flap damping; the fold-purity and writes-in-computeds
  *      disciplines.
  *
@@ -127,10 +128,12 @@
  *
  *   D1. Node field 6 (otherwise a spare pad field) is `NodeField.LIFECYCLE`: a 0/1
  *       flag set at creation for atoms carrying an observed-lifecycle
- *       effect, so the kernel's own liveness transitions can drive the
- *       observed-lifecycle option (AtomOptions.effect). Checked only in
- *       linkInsert's first-subscriber branch and in unwatched()'s signal
- *       branch; cleared in freeNode.
+ *       effect, so the kernel's own liveness transitions can feed the
+ *       observed-lifecycle option (AtomOptions.effect) — one consumer kind
+ *       of the observation union (bridge watchers are the other; see the
+ *       observed-lifecycle section). Checked only in linkInsert's
+ *       first-subscriber branch and in unwatched()'s signal branch; cleared
+ *       in freeNode.
  *   D2. computedRead throws CycleError when the computed is re-entered
  *       during its own evaluation: reading a computed while its own
  *       evaluation frame is open is a dependency cycle, and throwing beats
@@ -1421,16 +1424,29 @@ function foldPoisonOp(): never {
 function foldNoop(): void {}
 
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
-// Delivered on the kernel's liveness bit: linkInsert's first-subscriber branch
-// and unwatched()'s signal branch call the two hooks below (guarded by the
-// node's NodeField.LIFECYCLE field, D1). Both transitions run through a microtask
-// queue so observe/unobserve flaps within one tick coalesce to nothing.
+// Observation is ONE state per registered atom, counted over the UNION of
+// consumer kinds. Two kinds feed the refcount:
+//   - the kernel liveness bit, contributing exactly 0/1: linkInsert's
+//     first-subscriber branch and unwatched()'s signal branch call the two
+//     hooks below (guarded by the node's NodeField.LIFECYCLE field, D1);
+//   - bridge watchers (the engine's record of one subscribed React
+//     component), one ref per live watcher: the watcher liveness setter in
+//     ./logged.ts calls __lifecycleRetain/__lifecycleRelease.
+// The effect runs on the union's 0→1 transition and the cleanup on its 1→0;
+// both run through a microtask queue so observe/unobserve flaps within one
+// tick coalesce to nothing REGARDLESS of which consumer kind produced them
+// (StrictMode double-mount netting, watcher claim/debounced-unsub, remount
+// handoffs). Atoms without the effect option never enter this map, and the
+// kernel hot paths stay gated on the LIFECYCLE field — the unregistered path
+// pays nothing.
 
 type LifecycleState = {
 	effect: (ctx: AtomCtx<unknown>) => void | (() => void);
 	ctx: AtomCtx<unknown>;
 	cleanup: (() => void) | undefined;
-	/** Desired state as of the last liveness transition. */
+	/** Union refcount: kernel liveness bit (0/1) + one per live bridge watcher. */
+	refs: number;
+	/** Desired state as of the last union transition (refs > 0). */
 	wantMounted: boolean;
 	/** Actual state (effect has run and not been cleaned up). */
 	isMounted: boolean;
@@ -1471,10 +1487,15 @@ function scheduleLifecycleFlush(): void {
 	});
 }
 
-function lifecycleTransition(id: NodeId, wantMounted: boolean): void {
+function lifecycleShift(id: NodeId, delta: -1 | 1): void {
 	const state = lifecycleStates.get(id);
 	if (state === undefined) {
 		return;
+	}
+	state.refs += delta;
+	const wantMounted = state.refs > 0;
+	if (state.wantMounted === wantMounted) {
+		return; // interior transition (1↔2, …): the union's edge did not move
 	}
 	state.wantMounted = wantMounted;
 	if (!state.scheduled) {
@@ -1485,13 +1506,32 @@ function lifecycleTransition(id: NodeId, wantMounted: boolean): void {
 }
 
 // Hoisted function declarations: the kernel calls these from linkInsert /
-// unwatched, which are defined earlier in the module.
+// unwatched, which are defined earlier in the module. Each is a strict edge
+// of the liveness bit (SUBS empty↔non-empty), so the kernel's contribution
+// to the union refcount is exactly 0 or 1.
 function lifecycleWatched(id: NodeId): void {
-	lifecycleTransition(id, true);
+	lifecycleShift(id, 1);
 }
 
 function lifecycleUnwatched(id: NodeId): void {
-	lifecycleTransition(id, false);
+	lifecycleShift(id, -1);
+}
+
+/**
+ * Bridge watcher retain/release — the second consumer kind feeding the
+ * observation union (the first is the kernel liveness bit). Called by the
+ * engine's watcher plane (./logged.ts) when a watcher over a registered
+ * atom's node flips live; a no-op for atoms carrying no observed-lifecycle
+ * effect. Direct callbacks only — observation transitions are NOT
+ * BridgeEvents and never enter the engine's event/lockstep stream. @internal
+ */
+export function __lifecycleRetain(id: NodeId): void {
+	lifecycleShift(id, 1);
+}
+
+/** @internal */
+export function __lifecycleRelease(id: NodeId): void {
+	lifecycleShift(id, -1);
 }
 
 // ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
@@ -1800,11 +1840,15 @@ export type AtomCtx<T> = {
 
 export type AtomOptions<T> = {
 	/**
-	 * Observed lifecycle: runs when the atom becomes observed (first
-	 * subscriber attaches — the kernel liveness bit flips 0→1); the returned
-	 * cleanup runs once the atom is no longer observed. Both are delivered in
-	 * a microtask so observe/unobserve flaps within one tick coalesce.
-	 * Intended for remote subscriptions.
+	 * Observed lifecycle: runs when the atom gains its first subscriber of
+	 * ANY kind — a kernel subscriber (a live computed chain, a core
+	 * `effect()`) or a React component subscribed through the bindings (a
+	 * bridge watcher; `useSignal`) — and the returned cleanup runs once the
+	 * last subscriber of every kind is gone. One observation state over the
+	 * union: an atom held by both kinds at once observes exactly once. Both
+	 * transitions are delivered in a microtask so observe/unobserve flaps
+	 * within one tick coalesce. Bare `.state` reads are not subscriptions and
+	 * do not observe. Intended for remote subscriptions.
 	 */
 	effect?: (ctx: AtomCtx<T>) => void | (() => void);
 	/**
@@ -1876,6 +1920,7 @@ export class Atom<T> {
 					},
 				},
 				cleanup: undefined,
+				refs: 0,
 				wantMounted: false,
 				isMounted: false,
 				scheduled: false,

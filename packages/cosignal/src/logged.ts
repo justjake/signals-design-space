@@ -146,7 +146,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, __assertHostWritable, __hostApplySet, __hostRunFold, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, __assertHostWritable, __hostApplySet, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -491,7 +491,11 @@ export class Watcher {
 	name: string;
 	readonly root: RootId;
 	readonly node: NodeId;
-	live = false;
+	/** Kernel record id of the watched ATOM node (0 for computed-node
+	 * watchers): the observation-union retain target for the `live` setter.
+	 * The kernel side no-ops for atoms carrying no observed-lifecycle effect. */
+	readonly kernelAtom: number;
+	private _live = false;
 	lastRenderedValue: Value;
 	snapshot: WatcherSnapshot;
 	/** Per-(watcher, slot) delivery dedup bits, one int word: a second write
@@ -499,13 +503,43 @@ export class Watcher {
 	 * render will fold it anyway. */
 	dedupBits: SlotSet = 0;
 
-	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, value: Value, snapshot: WatcherSnapshot) {
+	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, kernelAtom: number, value: Value, snapshot: WatcherSnapshot) {
 		this.id = id;
 		this.name = name;
 		this.root = root;
 		this.node = node;
+		this.kernelAtom = kernelAtom;
 		this.lastRenderedValue = value;
 		this.snapshot = snapshot;
+	}
+
+	/**
+	 * Subscribed-for-delivery bit. The setter is the watcher half of the
+	 * observation union (AtomOptions.effect): a live watcher over an atom
+	 * node holds one retain on that atom's observed lifecycle, released when
+	 * liveness drops. EVERY liveness site routes through here — the commit
+	 * layout loop and adoptMount reveals (engine side), and the reveal
+	 * resubscribe / StrictMode orphan sweep / debounce-finalized unsubscribe
+	 * (shim side, which flips this field directly) — so kernel subscribers
+	 * and bridge watchers count into ONE refcount, and same-tick flips
+	 * coalesce in the kernel's microtask flush. Edge-filtered: re-asserting
+	 * the current state is a no-op.
+	 */
+	get live(): boolean {
+		return this._live;
+	}
+	set live(value: boolean) {
+		if (value === this._live) {
+			return;
+		}
+		this._live = value;
+		if (this.kernelAtom !== 0) {
+			if (value) {
+				__lifecycleRetain(this.kernelAtom);
+			} else {
+				__lifecycleRelease(this.kernelAtom);
+			}
+		}
 	}
 
 	/** Referee surface — not consulted by engine logic (which tests `dedupBits`
@@ -2485,7 +2519,7 @@ export class CosignalBridge {
 		const p = this.pass(passId);
 		if (p.state === 'ended') throw new BridgeScheduleError('mount requires an open pass');
 		const value = this.evaluate(node, { kind: 'pass', pass: p });
-		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, value, {
+		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, node.kind === 'atom' ? node.handle._id : 0, value, {
 			passId: p.id, pin: p.pin,
 			maskSlots: new Set(p.maskSlots),
 			includedSlots: this.includedSet(p),
@@ -2545,6 +2579,11 @@ export class CosignalBridge {
 	private dropWatcher(wid: WatcherId): void {
 		const w = this.watchers.get(wid);
 		if (w === undefined) return;
+		// Deletion implies non-live: normally already false (discarded mounts
+		// never subscribed), but if a driver discards a pass holding an
+		// adopted live watcher, this releases its observation retain
+		// (edge-filtered no-op otherwise).
+		w.live = false;
 		this.watchers.delete(wid);
 		const byNode = this.watchersByNode[w.node];
 		if (byNode !== undefined) {
