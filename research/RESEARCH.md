@@ -503,10 +503,46 @@ Four follow-up reports in `sources/gap-*.md`; what changed our picture:
   boundary-lite flush (slack audit passed, written into flush() comment).
   Tier-0 shapes now ALL ≤1.0× vs alien (deep 0.90, broad 0.84–0.88,
   diamond 0.89, reads 0.74–0.87, create 0.96). Kairo improved 7–19% on
-  8/9 tests but still trails alien at kairo scale (e.g. broad 98.6 vs
-  70.3 ms) — OPEN QUESTION: shapes-vs-kairo divergence is scale/effect-
-  count dependent (kairo's bigger fanouts + effect-heavy flush); suspect
-  effect queue/notify path at high effect counts. Next probe target.
+  8/9 tests but still trailed alien at kairo scale under fastest-of-N
+  (e.g. broad 98.6 vs 70.3 ms) — was logged here as an OPEN QUESTION
+  (suspected effect queue/notify path at high effect counts). RESOLVED
+  2026-07-05, next bullet: not a flush defect.
+- **Kairo divergence RESOLVED (2026-07-05, dalien lineage —
+  `packages/dalien-signals`).** The open question decomposed into a
+  workload law plus an estimator artifact, and the productized fork now
+  wins the suite outright under a fair estimator:
+  - *Workload law*: the deficit tracks the **recompute set per update**,
+    not graph size. Sustained small-update writes (tens of nodes) run
+    1.15–1.45× upstream's time (~9% behind averaged over the nine-shape
+    sustained write matrix, `benchs/propagateSustained.mjs`); updates
+    recomputing thousands of nodes run 1.4–1.6× FASTER — upstream's
+    per-update traversal allocation is a GC tax that grows with recompute
+    depth, and its object graph falls out of cache before packed records
+    do. Kairo's graphs (10–1,000 nodes) straddle the crossover.
+  - *Estimator artifact*: fastest-of-N reporting selects away exactly the
+    amortized costs the DoD design eliminates (collection of what a run
+    allocated, deopt recovery, finalizer processing). Under per-process +
+    interleaved round-robin ×3 + median-of-runs (drift-cancelling; the
+    dalien adapter `reset()`s between tests, the arena analogue of the
+    wholesale collection a dead object graph gets for free), the current
+    fork **wins all nine kairo propagation tests under Node (1.1–2.7×;
+    8/9 under bun) and finishes first overall on both runtimes**.
+  - Mechanisms landed on the way that contribute (not estimator-only):
+    global write-epoch clean-read stamps (dynamic-suite win),
+    callback-site pre-seeding past JIT speculation thresholds
+    (`benchs/phaseTransition.mjs` — flat under shape diversity),
+    FinalizationRegistry handle reclamation (leak-free; −47% heap at 10k
+    effects), generation `reset()`.
+  - Provenance: `packages/dalien-signals` README (claims re-verified
+    against the current build, submodule 15b77ac / parent 675d1a5),
+    `benchs/results/`, paired same-session harness run
+    `harness/results/2026-07-04T23-21-57-*`; the withBuild scope-leak
+    harness artifact is documented in
+    `research/results/2026-07-03-first-cut.md` (framework-neutral, kept
+    to mirror upstream milomg). Residual: the BRIDGE adapter-layer
+    ablation (`libs/arena-probe/prof/kairo-broad.mjs`) was never run to a
+    written result — moot for the scoreboard now; the kit remains if
+    adapter overhead ever needs pinning.
 - Iteration tooling: `harness/bench/shapes.ts` — tier-0 shape benches,
   ~0.4 s/framework, ratio-focused, checksum-verified; now with GC
   attribution (Node 24 needs `observe({type:'gc', buffered:true})` +
