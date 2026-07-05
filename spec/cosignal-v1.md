@@ -1065,7 +1065,7 @@ for each LIVE written token t, slot s = slot(t) ∈ (r & SLOT_BITS):
 if w_r.passId == committingPass.id              // rendered BY this commit's pass (generation-checked)
  ∧ commitBaseline.cas ≤ w_r.pin                 // no foreign committed-side motion since my pin
  ∧ commitBaseline.rootCommitGen == w_r.rootCommitGen   // no root committed-view drift since my render
- ∧ ∀s ∈ w_r.mask: writeClock[s] ≤ w_r.pin:      // no post-pin write in any included slot
+ ∧ ∀t ∈ pass.maskTokens at commit: writeClock[t] ≤ w_r.pin:  // no post-pin write by any included TOKEN [errata 1]
   return
 v_fx = evaluate(n, w_fx)
 if !isEqual(v_fx, v_r): setStateW()             // urgent pre-paint correction
@@ -1105,8 +1105,10 @@ restricts the fast-out to watchers rendered by the committing pass — the
 exact population for which own-commit motion is provably value-neutral:
 own commits expose exactly the write set the pass rendered (fork
 test 25), *provided* no included entry postdates the pin, which the
-included-slot clock conjunct certifies (a post-pin write folded by the
-own-commit retirement falls through and fires). Everyone else — an
+included-token clock conjunct certifies (a post-pin write folded by the
+own-commit retirement falls through and fires; quantified over the
+committing pass's mask tokens at commit time, not the captured mask
+slots — errata 1 below). Everyone else — an
 Offscreen/Activity reveal, any deferred-effect mount — fails the pass-id
 conjunct and conservatively takes the compare. Over-firing is impossible
 to make unsound (the compare fires a value-true urgent correction);
@@ -1116,6 +1118,38 @@ Cost: clean mounts (zero word, clean cache) do zero work. Quiet in-pass
 mounts return in ≤ 3 + popcount(mask) int compares, zero evaluations.
 Fixups: ≤ |touched ∩ live non-included| corrective schedules plus at most
 one world evaluation, only when committed-side state moved in the window.
+
+**Oracle errata (2026-07-05, normative).** The executable model
+(`packages/cosignal-oracle`, findings in `tests/FLAGS.md`) checked this
+section's fast-out on every mount across the battery, scar, and fuzz
+corpora; three corrections bind the implementation:
+
+1. **The clock conjunct quantifies over the committing pass's mask
+   tokens at commit time, not the captured mask slots.** A token whose
+   first write lands mid-pass interns its slot after the watcher's mask
+   capture; a slot-quantified conjunct is then vacuously true, and if
+   that token retires at this commit, committed truth moves under a held
+   fast-out with no live token left for the corrective loop (fuzz
+   seed 29, shrunk to 5 ops). The pseudocode above carries the corrected
+   quantifier.
+2. **The corrective loop is a premise of the population argument, not an
+   optimization.** A live token already in the root's committed set can
+   write after the pin: the baseline counter, the root generation, and
+   the mask clocks are all silent, yet w_fx's deliberately uncapped
+   committed clause folds the write. The sound invariant — asserted by
+   the model on every mount — is: fast-out-suppressed divergence must be
+   exactly corrective-covered by the per-token loop (fuzz seed 173,
+   shrunk to 9 ops).
+3. **Legality fact the baseline conjunct leans on:** a retirement folded
+   inside a commit must belong to a batch that commit rendered (a mask
+   member). A foreign batch retiring inside another pass's commit lands
+   after the baseline capture and breaks the fast-out permanently; fork
+   tests 22/25 make that schedule unreachable — foreign batches retire
+   at their own closure (fuzz seed 97).
+
+Case 9 row 8's original "no false urgent" parenthetical contradicted
+correction 2's mechanism and is fixed in place (pinned as oracle battery
+case 9 (d′)).
 
 ### 5.11 Effects
 
@@ -1478,7 +1512,7 @@ outcome ✓. residual: these rows in the conformance battery.
 6 | store-only default D writes a and RETIRES during P_k's yield; W not yet subscribed | committed truth moves; cas := s_D > p (baseline captured at THIS commit's entry shows it)
 7 | fixup | loop: D retired ⇒ not enumerated; fast-out: baseline.cas > p ⇒ FAILS ⇒ v_fx (retired-at-now ∋ D) ≠ v_r ⇒ urgent pre-paint setState ✓ (the mandated fallback — reachable because the baseline is captured before this commit's own folds)
 (d) own-commit fold of a post-pin included write
-8 | a k-attributed write @s2 > p lands mid-yield (e.g. scope.set); k retires AT P_k's commit | retired clause would admit s2 to committed truth while W rendered without it; fast-out conjunct ∀s∈mask: wc[s] ≤ p FAILS (wc[k]=s2) ⇒ fall through ⇒ v_fx folds s2 ≠ v_r ⇒ fire ✓ (if k stays live instead, the loop's runInBatch is the corrector and the compare comes out equal — one bounded eval, no false urgent)
+8 | a k-attributed write @s2 > p lands mid-yield (e.g. scope.set); k retires AT P_k's commit | retired clause would admit s2 to committed truth while W rendered without it; fast-out conjunct ∀s∈mask: wc[s] ≤ p FAILS (wc[k]=s2) ⇒ fall through ⇒ v_fx folds s2 ≠ v_r ⇒ fire ✓ (if k stays live instead, the commit's own table update precedes layout, so w_fx's uncapped committed clause folds s2 and the compare FIRES value-true — committed truth really moved; the loop's runInBatch reconciles the pending side; one bounded eval — corrected per 5.10 errata, oracle battery case 9 (d′))
 (e) reveal-shaped mount (Offscreen/Activity)
 9 | watcher rendered by an older pass mounts during an unrelated commit whose folds move truth | passId conjunct FAILS ⇒ conservative fall-through ⇒ w_fx compare corrects pre-paint ✓
 outcome: both reads resolve in the pass's world on first render; included tokens never double-render; every committed-side in-window motion corrects before paint.
@@ -1829,17 +1863,30 @@ decided in the body beyond what coherence required.
    is documented in 5.3 with urgent-corrected behavior, but the fork's
    token identity for re-wrapped continuations was not re-derived by any
    input post-cuts (the slot-lifecycle side is verified).
+   MODEL-CHECKED (2026-07-05): consistent — the surviving surface
+   composes cleanly with the slot lifecycle, but it is invisible to
+   every fast-out conjunct and is sound only via corrective coverage;
+   see the 5.10 errata, correction 2.
 4. **Pass-world membership pin cap:** rendering "token membership" for
    pass worlds as (slot ∈ captured committed set ∧ seq ≤ pin) is an
    editorial composition to preserve pinned-world stability across
    yields; no input states the clause post-cuts, though the slot
    verification's tenancy arithmetic leans on exactly this seq-vs-pin
    exclusion.
+   MODEL-CHECKED (2026-07-05): correct — removing the cap makes a
+   yielded pass's value drift when a committed-member live token writes
+   after the pin, precisely the forbidden drift.
 5. **Fixup fast-out conjunct set:** the ratified five-conjunct fast-out
    lost its abandoned-stages conjunct (staging deleted) and had its
    lock-view conjunct re-anchored to the per-root generation; the
    four-conjunct population argument in 5.10 is re-checked editorially,
    not by an adversarial round.
+   MODEL-CHECKED (2026-07-05): three normative corrections — the clock
+   conjunct quantifies over mask TOKENS at commit time; the corrective
+   loop is a stated premise (invariant: suppressed divergence must be
+   exactly corrective-covered); case 9 row 8's parenthetical was wrong.
+   All folded into 5.10 (errata block) and pinned in
+   packages/cosignal-oracle (tests/FLAGS.md, fuzz seeds 29/173/97).
 6. **Horizon reserve formula:** the commit reserve lost its
    staged-hooks term with the staging deletion; the remaining terms are
    carried unchanged and the schema constants still need CI derivation.
@@ -1850,6 +1897,11 @@ decided in the body beyond what coherence required.
    backstop ships flag-free and the degradation machinery stays deleted,
    a reconciliation made editorially from the verification's own
    analysis.
+   MODEL-CHECKED (2026-07-05): correct — with receipts denormalizing
+   their slot at mint, a forced release changes no pinned fold; the
+   retained pass's world is byte-identical across the backstop
+   (receipt-level half verified under fuzzing; the keep-the-dirt half is
+   engine-side and lands with the LOGGED build).
 
 ## Appendix C — traceability
 
