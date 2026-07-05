@@ -239,6 +239,11 @@ export class Shim {
 
 	constructor(bridge: CosignalBridge) {
 		this.bridge = bridge;
+		// SPK-K1 coordination: the shim drains the event stream per operation
+		// through absolute cursors, so the bridge may bound the retained
+		// stream — without a cap it grows for the whole episode (§5.12 growth
+		// honesty). 64k events comfortably exceeds any single op's appends.
+		this.bridge.setEventCapacity(65536);
 		assertForkProtocol();
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches, lineageId) =>
@@ -465,7 +470,7 @@ export class Shim {
 
 	/** Runs a bridge operation, then translates the events it appended. */
 	withBridge<T>(fn: () => T): T {
-		const mark = this.bridge.events.length;
+		const mark = this.bridge.eventCursor(); // absolute — stable across ring drops (SPK-K1)
 		try {
 			return fn();
 		} finally {

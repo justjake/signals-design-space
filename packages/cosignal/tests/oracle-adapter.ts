@@ -24,10 +24,11 @@ import {
 import {
 	comparableEvents,
 	snapshotModel,
+	type DiffResult,
 	type EngineAdapter,
 } from '../../cosignal-oracle/src/adapter.js';
-import type { CosignalModel, ModelEvent } from '../../cosignal-oracle/src/model.js';
-import type { ScheduleOp, WriteKind } from '../../cosignal-oracle/src/schedule.js';
+import { CosignalModel, type ModelEvent } from '../../cosignal-oracle/src/model.js';
+import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
 
 /** The oracle's fixed fuzz topology (schedule.ts buildTopology), on the engine. */
 export function buildEngineTopology(b: CosignalBridge) {
@@ -46,14 +47,34 @@ export function buildEngineTopology(b: CosignalBridge) {
 	return { atoms: [flag, a, bb, r], computeds: [cFlip, cSum, cChain, cMix] };
 }
 
+/**
+ * Adapter-side entity registries. The MODEL retains dead token/pass records
+ * until quiescence, and schedule ops resolve entities by index over those
+ * maps; the engine now reclaims dead records mid-episode (SPK-K1), so the
+ * adapter mirrors the model's population itself to keep op resolution
+ * identical on both sides. Purely an indexing-fidelity shim — no tolerance.
+ */
+type EntityRegistry = { tokens: number[]; passes: number[] };
+
+const registries = new WeakMap<CosignalBridge, EntityRegistry>();
+
+function registryOf(b: CosignalBridge): EntityRegistry {
+	let r = registries.get(b);
+	if (r === undefined) {
+		r = { tokens: [], passes: [] };
+		registries.set(b, r);
+	}
+	return r;
+}
+
 function tokenAt(b: CosignalBridge, index: number): number | undefined {
-	const ids = [...b.tokens.keys()];
+	const ids = registryOf(b).tokens;
 	if (ids.length === 0) throw new BridgeScheduleError('no tokens yet');
 	return ids[index % ids.length];
 }
 
 function passAt(b: CosignalBridge, index: number): number {
-	const ids = [...b.passes.keys()];
+	const ids = registryOf(b).passes;
 	if (ids.length === 0) throw new BridgeScheduleError('no passes yet');
 	return ids[index % ids.length]!;
 }
@@ -79,9 +100,17 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 		}
 	};
 	const uniq = `${b.events.length}.${b.seq}.${b.epoch}`;
+	const reg = registryOf(b);
+	/** bareWrite may mint the ambient token — mirror the model's map growth. */
+	const syncAmbient = (): void => {
+		const amb = b.ambientToken;
+		if (amb !== undefined && reg.tokens[reg.tokens.length - 1] !== amb && !reg.tokens.includes(amb)) {
+			reg.tokens.push(amb);
+		}
+	};
 	try {
 		switch (op.t) {
-			case 'open': b.openBatch(op.priority, { action: op.action }); break;
+			case 'open': reg.tokens.push(b.openBatch(op.priority, { action: op.action }).id); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
 				const kind: WriteKind = atom.reducer !== undefined && op.kind !== 'equalNewest' ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;
@@ -92,6 +121,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 				const atom = atoms[op.atom % atoms.length]!;
 				const kind: WriteKind = atom.reducer !== undefined ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;
 				b.bareWrite(atom, writeOp(kind, op.value, op.atom % atoms.length));
+				syncAmbient();
 				break;
 			}
 			case 'scopeWrite': {
@@ -102,7 +132,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 			}
 			case 'settle': b.settleAction(tokenAt(b, op.token)!, op.committed); break;
 			case 'retire': b.retire(tokenAt(b, op.token)!, op.committed); break;
-			case 'passStart': b.passStart(op.root, op.include.map((i) => tokenAt(b, i)!)); break;
+			case 'passStart': reg.passes.push(b.passStart(op.root, op.include.map((i) => tokenAt(b, i)!)).id); break;
 			case 'yield': b.passYield(passAt(b, op.pass)); break;
 			case 'resume': b.passResume(passAt(b, op.pass)); break;
 			case 'end': b.passEnd(passAt(b, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => tokenAt(b, i)!) }); break;
@@ -111,7 +141,13 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 			case 'reactEffect': b.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
 			case 'coreEffect': b.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`); break;
 			case 'discardAllWip': b.discardAllWip(); break;
-			case 'quiesce': b.quiesce(); break;
+			case 'quiesce':
+				b.quiesce();
+				// The model drops every retired token and ended pass here; at
+				// quiescence that is all of them (no live tokens/passes remain).
+				reg.tokens.length = 0;
+				reg.passes.length = 0;
+				break;
 		}
 		return true;
 	} catch (err) {
@@ -142,4 +178,80 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 			return out;
 		},
 	};
+}
+
+// ---- the tolerant differ (perf pass P1) -------------------------------------
+//
+// The oracle's own `diffAgainstModel` compares the comparable event stream
+// EXACTLY per step. The SPK-N1 machinery discovers union edges at evaluation
+// sites and replays live slots at edge-adds (§5.5/§5.9), so delivery-decision
+// timing may lag the model's eager per-write union refresh — the oracle
+// README's documented engine-diff tolerance ("engine ⊇ required, ⊆
+// union-conservative"). This differ keeps every other comparison EXACT:
+//   - op legality per step (exact);
+//   - the full observable snapshot per step (exact — values never relax);
+//   - non-delivery comparable events per step (exact, in order);
+//   - delivery-decision events ('delivery'/'suppressed'/'mount-corrective'):
+//     cumulative multiset ⊆ the model's, keyed (type, watcher, token, slot)
+//     — mode/seq excluded (an edge-add replay carries the replay sequence).
+// The ⊇-required floor is enforced indirectly: exact snapshots, exact
+// value-gated corrections/effect-runs, and the engine's in-engine §5.10
+// errata-2 audit (BridgeInvariantViolation on uncovered fast-outs).
+
+const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);
+
+function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const e of events) {
+		if (!DELIVERYISH.has(e.type)) continue;
+		const d = e as unknown as { type: string; watcher: string; token: number; slot: number };
+		const key = `${d.type}|${d.watcher}|${d.token}|${d.slot}`;
+		out.set(key, (out.get(key) ?? 0) + 1);
+	}
+	return out;
+}
+
+export function diffAgainstModelTolerant(
+	engine: EngineAdapter,
+	ops: ScheduleOp[],
+	seed?: number,
+): DiffResult {
+	const m = new CosignalModel();
+	buildTopology(m);
+	m.registerBridge();
+	let drained = 0;
+	const modelPool = new Map<string, number>();
+	const engineUsed = new Map<string, number>();
+	for (let step = 0; step < ops.length; step++) {
+		const ok = applyOneOp(m, ops[step]!);
+		const mEvents = comparableEvents(m.events.slice(drained));
+		drained = m.events.length;
+		const applied = engine.apply(ops[step]!);
+		if (applied !== (ok ? 'applied' : 'skipped')) {
+			return { seed, step, message: `legality diverged: engine ${applied}, model ${ok ? 'applied' : 'skipped'}` };
+		}
+		const snap = JSON.stringify(engine.snapshot());
+		const expectedSnap = JSON.stringify(snapshotModel(m));
+		if (snap !== expectedSnap) {
+			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnap}` };
+		}
+		const eEvents = engine.drainEvents();
+		const mRest = JSON.stringify(mEvents.filter((e) => !DELIVERYISH.has(e.type)));
+		const eRest = JSON.stringify(eEvents.filter((e) => !DELIVERYISH.has(e.type)));
+		if (mRest !== eRest) {
+			return { seed, step, message: `events diverged:\nengine ${eRest}\nmodel  ${mRest}` };
+		}
+		for (const [key, n] of deliveryKeyCounts(mEvents)) modelPool.set(key, (modelPool.get(key) ?? 0) + n);
+		for (const [key, n] of deliveryKeyCounts(eEvents)) {
+			const used = (engineUsed.get(key) ?? 0) + n;
+			engineUsed.set(key, used);
+			if (used > (modelPool.get(key) ?? 0)) {
+				return {
+					seed, step,
+					message: `delivery decisions exceeded the union-conservative bound: ${key} engine ×${used} vs model ×${modelPool.get(key) ?? 0}`,
+				};
+			}
+		}
+	}
+	return undefined;
 }

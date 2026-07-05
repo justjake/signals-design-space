@@ -21,7 +21,11 @@ if (PART !== 'retain') {
 }
 if (PART !== 'truncate') {
 	console.log('== soak (events retained; reference-build liability, n=2) ==');
-	r = await medianOfProcesses(`${DIR}/spkk1-logged.mjs`, { EVENTS: 'retain', DURATION_MS }, 2, 200_000);
+	// P1 methodology note: at post-P1 throughput (~100x reference frames/s)
+	// an unbounded retained event stream exceeds the heap well inside 60s —
+	// the liability row runs a shorter soak and extrapolates per hour.
+	const RETAIN_MS = process.env.RETAIN_MS ?? String(Math.min(Number(DURATION_MS), 10_000));
+	r = await medianOfProcesses(`${DIR}/spkk1-logged.mjs`, { EVENTS: 'retain', DURATION_MS: RETAIN_MS }, 2, 200_000);
 }
 
 const g = (m) => t?.byMetric.get(m) ?? [NaN];

@@ -70,6 +70,14 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		const d1 = all(tr, 'delivery')[0]!;
 		expect(d1.data).toEqual({ watcher: 'W', token: k.id, slot: 0, seq, mode: 'fresh' });
 		expect(d1.cause).toBe(w1.id); // §5.9 delivery provoked by its write
+
+		// Perf-pass mechanics (SPK-N1): the flip's newest topology (c now
+		// reads a) is discovered at evaluation sites, not by an eager
+		// per-write refresh — pull once so the a→c edge is recorded (§5.5
+		// edge-add; the retroactive replay is silent here: W's dedup bit is
+		// already armed) and the staged writes below walk the same cone the
+		// oracle's union-conservative narrative assumed.
+		b.newestValue(c);
 	});
 
 	it('dedup suppression: second write into the armed (watcher, slot) suppresses with a reason', () => {
@@ -247,10 +255,14 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('nested world evaluations record post-order with depth', () => {
-		const cc = b.computed('cc', (read) => (read(c) as number) + 1);
+		// Perf-pass mechanics (SPK-R): `c`'s newest memo is valid here, so a
+		// chain over it would serve the cache without an inner eval record —
+		// nest through a FRESH inner node so both evaluations genuinely run.
+		const cn = b.computed('cn', (read) => (read(a) as number) + 1);
+		const cc = b.computed('cc', (read) => (read(cn) as number) + 1);
 		b.newestValue(cc);
 		const evals = all(tr, 'eval').filter((e) => e.data['world'] === 'newest');
-		const iC = evals.findIndex((e) => e.data['node'] === 'c' && e.data['depth'] === 1);
+		const iC = evals.findIndex((e) => e.data['node'] === 'cn' && e.data['depth'] === 1);
 		const iCC = evals.findIndex((e) => e.data['node'] === 'cc' && e.data['depth'] === 0);
 		expect(iC).toBeGreaterThanOrEqual(0);
 		expect(iCC).toBeGreaterThan(iC); // inner evaluation ends (and records) first

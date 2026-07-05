@@ -499,3 +499,109 @@ for the touched-word walk is already written into the SPK-N1 TODO note:
   count). Nothing under harness/, src/, vendor/, design-loop/ was
   modified.
 
+
+---
+
+## After perf pass P1 (2026-07-05)
+
+Same machine (loaded, non-idle: this is the working-session box, not the
+SPK-L-certified idle machine), same runners, same methodology. The pass
+implemented the three deferred TODO(gate) families in
+packages/cosignal/src/logged.ts plus the SPK-K1 sweep extension:
+
+- **SPK-W family:** int-packed receipt columns (per-atom `Tape` with parallel
+  number columns + one payload side column; start-offset window compaction —
+  the shrink-in-place form measured ~10µs/drop from V8 dictionary-mode decay,
+  the pool IS the arrays), per-token touched-atom lists (retirement stamps
+  scan only touched tapes), set/Object.is write fast paths, last-token cache.
+  Inline-2 receipts were NOT taken (the packed columns beat the projected
+  win; the residual bare floor is the event/op objects, not the receipt).
+- **SPK-N1 family:** touched-word marking walk (int32/node, bits 0–30 + taint
+  31, monotone frontier), per-slot touched lists + keep-the-dirt sweep at
+  re-intern, per-write value-blind delivery walk with the walk-generation
+  column, touched-list-scoped durable drains (plus committed-dirty-slot and
+  commit-re-staled tracking to match the referee's full-scan reconcile
+  timing), dedup bits as int words. `refreshEdgesAllWorlds()` is GONE from
+  the write path.
+- **SPK-R/L family:** §5.6 read routing (fast path = touched(n)==0 ∧ CT(n)),
+  §5.7 memo ladder (per-world memo planes on Pass/Root records + a newest
+  plane; slot-clock step 2, fingerprint step 3 with fp = max(visible seq,
+  baseSeq, retirementStamp); commitGen re-keys evict committed memos), atom
+  fold memos, §5.12 quiescence kernel-pull refresh with post-reset
+  re-recording (cone-carry), kernel-integrated-style routing words at the
+  table seam (module int + per-record registration bit; the Map probe left
+  the quiet write path). NOTE: newest-world computed caching lives in an
+  overlay memo plane, NOT in kernel `Computed` records — backing bridge
+  computeds with real kernel nodes creates stale cross-evaluation K0 link
+  cycles that the frozen kernel's unwatched-dispose walk cannot traverse
+  (measured hang; profile: `disposeAllDepsInReverse` 97%).
+- **SPK-K1 (re-scoped, flagged):** the pre-registered wording ("extend the
+  mid-episode sweep predicate — sampled reachability") now covers BOTH the
+  measured dominators and the original plane: dead token/pass record
+  reclamation (retired ∧ slot fully released ∧ no open mask ∧ no
+  un-compacted receipts ⇒ record drops; pass records drop at pass end),
+  event-stream cursor/ring (`eventCursor()`, `setEventCapacity()`; the
+  react shim marks with the cursor and caps at 64k), archive retention made
+  opt-in (`retainArchive`, on in test drivers only), AND the K1-edge sweep
+  itself (every 256 recorded edges: reverse reachability from
+  watcher/effect-holding nodes; edges to unreachable, live-bit-free,
+  taint-free targets drop; touched WORDS persist — keep-the-dirt).
+
+Verification state at these numbers: cosignal 163+1 (incl. 308-seed fuzz),
+oracle 74+1, cosignal-react 45, conformance 179/179 × {cosignal,
+cosignal-logged, arena}, tsc clean. Fuzz/twin comparators relaxed to the
+oracle README's documented delivery tolerance ONLY (see the P1 report).
+
+### Gate table (before → after)
+
+| gate | before (2026-07-05 pre-P1) | after P1 | pre-registered rule | verdict |
+|---|---|---|---|---|
+| SPK-W | 17.2×–40.4× DIRECT | bare **18.9×** (87.7ns; event+op-object floor), chain3 **4.9×** (367ns), fan8 **4.1×** (1023ns), watch1 **2.6×** (98.5ns) | ≤ 2× DIRECT write | **FAIL, 4–10× closer**; residual = per-write BridgeEvent/op allocation + eval-frame cost (see notes) |
+| SPK-N1 | 6.7×–34.9× grid; 80.7× held | **1.3×–3.2×** grid (B1 rows 1.3–2.2×, W64 rows 2.9–3.2×); held **2.9×** (tape 1950 by §5.3 design, degrade gone: last5/first5 ≈ 0.75); spurious ≤1 everywhere except the §5.9-mandated interleave 32 (unchanged) | propagate ≤ 2×; ≤1 spurious/(w,slot,cycle) | **PARTIAL** — B1 rows pass, W64 rows marginally exceed (per-write suppressed-event logging floor); spurious clause as before |
+| SPK-R core | 0.7–0.8× strict; 2.2×/4.4× +8w | **0.5×–1.1×** strict; **1.7×/2.5×** +8w | retirement engine ≤ 2× DIRECT batch() | **PASS** (strict; +8w rows improved, K24+8w 2.5× disclosed as before) |
+| SPK-R react | 1.26×/1.15× | **1.31×/1.20×** (coarse jsdom noise) | ≤ 2× useState render/commit | **PASS** |
+| SPK-G8 | cost ∝ whole graph × worlds × tape (3.4→40.9µs by G; held tax 2.2–7.6×; typeahead 31.9µs/key) | **~170ns/write FLAT across G4/G16/G64**, held tax **0.98–1.04×**, typeahead **2.4µs/key**; retention unchanged by design (1281 held receipts; 1/keystroke prefix) | cost ∝ flagged region | **PASS** (evals/write 0 — the write pays only its marked cone) |
+| SPK-K1 | 2710 MB/h; +73.9%/min walk degradation, unbounded | fit says **150 MB/h** — but the trace is a bounded SAWTOOTH: floors flat ~35–40MB, peaks = the §5.3 pin-blocked holder window (tape/tokens spike then compact+reclaim at rotation); tokens/passes steady 1–2 outside windows; K1 edges steady ~250 (swept); walk **plateaus at 334ns** (+60% over the first window incl. JIT ramp; NO growth after t≈30s). RETAIN liability now ~360GB/h at 123k frames/s (was 7.4GB/h at 1.3k frames/s) — cured by `setEventCapacity`, which the shim applies | ≤1 MB/h steady growth AND ≤5% walk degradation | **FAIL by metric letter, structurally bounded** — residual is the pin-blocked-window sawtooth (spec-mandated retention) aliasing the sampler, plus the plateaued walk tax; see notes |
+| SPK-L | +11.8%–54.2% | readPoll **+14.9%**, deepPropagate **+25.4%**, broadIsolate **+34.4%**, diamond **+8.6%** | ≤2% (O19 renegotiable ≤3%) | **FAIL** — the routing-word check landed but the seam still pays a closure call frame per op around `inner.read/write`; the 2.4–3.8% SPKHQ floor assumed the check compiled INTO the kernel table (a build-tier change, out of P1 scope) |
+| SP2 | resolved-by-construction | **REOPENED as scheduled** — the incremental walk landed; the CI fuzz gate now runs the documented delivery tolerance (engine ⊆ union-conservative cumulatively; exact snapshots/corrections/effects) | >10% dev overhead → sampled validation | tracked for v1.1 per the original disposition |
+
+### Notes and residuals
+
+1. **SPK-W bare floor.** Per-write remaining cost ≈ one BridgeEvent object
+   (the public, indexable diagnostic stream tests/benches/shim consume), the
+   caller-allocated op object (bench shape), the kernel apply, and packed
+   pushes. Getting bare to ≤2× (≈9ns) requires packing/lazifying the event
+   stream itself (a public-surface change: `events` is an indexed array the
+   fuzz harness, benches, and shim read) — a P2 decision.
+2. **SPK-N1 W64 rows.** At 64 writes/frame most writes hit armed dedup bits
+   and log a `suppressed` event per reached watcher per write (§5.9's priced
+   over-notification): the event allocation dominates (same floor as note 1).
+3. **SPK-K1 honest shape.** The old failure mode (unbounded token/pass/event
+   growth + linear walk decay) is gone; what remains is (a) the sampler
+   aliasing the §5.3-mandated pin-blocked window (a 2–5s sawtooth whose
+   amplitude is holder-period × write rate — receipts that MUST be retained
+   while the holder's first receipt is unretired), and (b) a walk-cost
+   plateau (+60% incl. warm-up) from the steady-state stale-edge population
+   between 256-edge sweeps and the larger token map inside blocked windows.
+   Bench methodology fixes (flagged): the truncate config caps the
+   diagnostic stream at 64k events (its stated intent — isolating the
+   retained planes — was drowned by inter-sample event backlogs at ~100×
+   the reference frame rate); the retain liability row runs 10s and
+   extrapolates (an unbounded stream OOMs inside 60s at this speed);
+   short-run guards for `samples[2]`. Runs here: PROCS=1, 120s gate soak,
+   HOLD_MS=2000.
+4. **§5.9 edge-add retroactive delivery replay is NOT implemented** (bit
+   propagation IS). The replay synthesizes deliveries the referee model
+   never produces anywhere, so it cannot be validated inside the documented
+   "⊆ union-conservative" tolerance; its only lost effect is catch-up lane
+   scheduling for late-discovered paths (required correctness is carried by
+   durable drains + pass folds — fuzz/battery/scars all green). Revisit with
+   the real fork's `runInBatch` (P2).
+5. **Delivery-decision timing** now follows evaluation-site edge discovery
+   (spec §5.5) instead of the model's eager per-write union refresh; the
+   twin/fuzz comparators implement the oracle README's documented tolerance
+   for exactly {delivery, suppressed, mount-corrective}: cumulative
+   multiset ⊆ the model's, keyed (type, watcher, token, slot); everything
+   else — legality, full snapshots, corrections, effect runs, counters —
+   stays exact per step. The §5.10 errata-2 audit (in-engine
+   BridgeInvariantViolation) enforces the corrective ⊇ floor on every mount.

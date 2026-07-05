@@ -88,8 +88,10 @@ export type Op =
  * §2 "receipt": {op, slot, seq} appended per write; retiredSeq stamped at the
  * batch's retirement. Receipts denormalize their slot at mint (§5.4 tenancy
  * lemma); the token is carried for invariants/event logs only.
- * TODO(gate:SPK-W): int-pack {slot, seq, retiredSeq} into parallel flat
- * columns; ops stay in one unknown[] side column.
+ * Gate SPK-W landed: receipts live int-packed in per-atom `Tape` columns
+ * ({kind, slot, seq, retiredSeq, token} parallel number columns + one
+ * unknown[] payload side column); this materialized object shape is the
+ * test/trace surface (`atom.tape` getter, trace `receipt` hook).
  */
 export type Receipt = {
 	op: Op;
@@ -99,27 +101,137 @@ export type Receipt = {
 	retiredSeq: number | undefined;
 };
 
+/** Op-kind tags for the packed column (SPK-W). */
+const OP_SET = 0;
+const OP_UPDATE = 1;
+const OP_DISPATCH = 2;
+
+/**
+ * SPK-W int-packed receipt columns. Plain number arrays stay SMI-packed and
+ * grow in place; `drop(cut)` compacts in place via copyWithin (tape pooling:
+ * the arrays themselves are the pool — no per-receipt objects ever exist on
+ * the hot path).
+ */
+export class Tape {
+	/** Live window: entries [start, n). Compaction advances `start`; the
+	 * arrays rebase (fresh packed slices) only when the dead prefix crosses
+	 * the amortization threshold — never a per-retirement memmove (SPK-W
+	 * tape pooling; shrink-in-place cycling drops V8 arrays to dictionary
+	 * elements and was measured at ~10µs per drop). */
+	start = 0;
+	n = 0;
+	kinds: number[] = [];
+	slots: number[] = [];
+	seqs: number[] = [];
+	/** 0 = unretired (sequences start at 1). */
+	retired: number[] = [];
+	tokens: number[] = [];
+	payloads: unknown[] = [];
+
+	get length(): number {
+		return this.n - this.start;
+	}
+
+	push(kind: number, slot: SlotId, seq: number, token: TokenId, payload: unknown): void {
+		this.kinds.push(kind);
+		this.slots.push(slot);
+		this.seqs.push(seq);
+		this.retired.push(0);
+		this.tokens.push(token);
+		this.payloads.push(payload);
+		this.n++;
+	}
+
+	opAt(i: number): Op {
+		const k = this.kinds[i]!;
+		if (k === OP_SET) return { kind: 'set', value: this.payloads[i] };
+		if (k === OP_UPDATE) return { kind: 'update', fn: this.payloads[i] as (prev: Value) => Value };
+		return { kind: 'dispatch', action: this.payloads[i] };
+	}
+
+	entryAt(i: number): Receipt {
+		const r = this.retired[i]!;
+		return { op: this.opAt(i), token: this.tokens[i]!, slot: this.slots[i]!, seq: this.seqs[i]!, retiredSeq: r === 0 ? undefined : r };
+	}
+
+	materialize(): Receipt[] {
+		const out: Receipt[] = [];
+		for (let i = this.start; i < this.n; i++) out.push(this.entryAt(i));
+		return out;
+	}
+
+	/** Drop the compacted prefix (advance the window; rebase amortized). */
+	drop(cut: number): void {
+		this.start += cut;
+		if (this.start >= 1024 && this.start >= this.n - this.start) {
+			const from = this.start;
+			this.kinds = this.kinds.slice(from);
+			this.slots = this.slots.slice(from);
+			this.seqs = this.seqs.slice(from);
+			this.retired = this.retired.slice(from);
+			this.tokens = this.tokens.slice(from);
+			this.payloads = this.payloads.slice(from);
+			this.n -= from;
+			this.start = 0;
+		} else if (this.start === this.n) {
+			// Empty window: reset cheaply (length-0 keeps the packed kind).
+			this.kinds.length = 0;
+			this.slots.length = 0;
+			this.seqs.length = 0;
+			this.retired.length = 0;
+			this.tokens.length = 0;
+			this.payloads.length = 0;
+			this.n = 0;
+			this.start = 0;
+		}
+	}
+}
+
 export type Equals = (a: Value, b: Value) => boolean;
 export type Reducer = (state: Value, action: Value) => Value;
 
-export type AtomNode = {
-	kind: 'atom';
-	id: NodeId;
+export class AtomNode {
+	readonly kind = 'atom' as const;
+	readonly id: NodeId;
 	name: string;
 	/** §2 "base": the folded floor of the tape (committed + compacted). */
 	base: Value;
-	baseSeq: number;
-	tape: Receipt[];
-	/** Full history for the retention invariant: compacted receipts move here. */
-	archive: Receipt[];
+	baseSeq = 0;
+	/** SPK-W packed receipt columns (the engine truth). */
+	tp = new Tape();
+	/** Full-history retention (invariant surface): materialized compacted receipts, kept only when `bridge.retainArchive`. */
+	archiveStore: Receipt[] = [];
 	origin: Value;
 	equals: Equals;
-	reducer: Reducer | undefined;
+	/** True iff `equals` is the default Object.is (write fast path). */
+	eqIsDefault: boolean;
+	reducer: Reducer | undefined = undefined;
 	/** §5.7 — per-atom retirement stamp, minted at every retirement fold touching it. */
-	retirementStamp: number;
+	retirementStamp = 0;
 	/** §5.2 — the kernel-backed newest-world storage this overlay rides. */
 	handle: Atom<Value>;
-};
+	/** Last token id that appended here (dedupe for token.atomsTouched). */
+	lastTouchToken = 0;
+
+	constructor(id: NodeId, name: string, initial: Value, equals: Equals, eqIsDefault: boolean, handle: Atom<Value>) {
+		this.id = id;
+		this.name = name;
+		this.base = initial;
+		this.origin = initial;
+		this.equals = equals;
+		this.eqIsDefault = eqIsDefault;
+		this.handle = handle;
+	}
+
+	/** Test/diagnostic surface: the tape as materialized Receipt objects. */
+	get tape(): Receipt[] {
+		return this.tp.materialize();
+	}
+
+	get archive(): Receipt[] {
+		return this.archiveStore;
+	}
+}
 
 export type Reader = (node: AnyNode) => Value;
 export type ComputedFn = (read: Reader, untracked: Reader) => Value;
@@ -142,8 +254,33 @@ export type Token = {
 	committedFlag: boolean | undefined;
 	slot: SlotId | undefined;
 	retiredSeq: number | undefined;
-	writeSeqs: number[];
+	/** Sequence of this token's last receipt (0 = none); §5.10 errata-1 clock conjunct. */
+	lastWriteSeq: number;
+	/** Atoms this token appended to (may hold benign duplicates; deduped at retirement). */
+	atomsTouched: AtomNode[];
+	/** Un-compacted receipts still on tapes (SPK-K1 reclamation gate). */
+	liveReceipts: number;
 	ambient: boolean;
+};
+
+/** §5.7 — one world memo: value + evaluation seq + per-atom-dep fingerprints. */
+export type WorldMemo = {
+	value: Value;
+	/** Evaluation/re-stamp sequence (ladder step 2 compares write clocks to it). */
+	seq: number;
+	/** Root commit generation at (re-)stamp (committed worlds only). */
+	gen: number;
+	epoch: number;
+	/** seq value at last validation (any state change mints a seq — cheap dedup). */
+	checkedOp: number;
+	/** Re-entrancy guard: stale cross-linked dep lists must refuse, not recurse. */
+	validating: boolean;
+	/** Direct atom deps (recorded during evaluation) + their fingerprints. */
+	atoms: AtomNode[];
+	fps: number[];
+	/** Direct computed deps + the values they had (identity revalidation). */
+	comps: ComputedNode[];
+	compValues: Value[];
 };
 
 /** §5.4 — one of the 31 interning-table entries. */
@@ -168,10 +305,17 @@ export type Pass = {
 	maskTokens: Set<TokenId>;
 	maskSlots: Set<SlotId>;
 	capturedCommittedSlots: Set<SlotId>;
+	/** Bit forms of the slot sets (SlotId < 31), fixed at pass start. */
+	maskBits: number;
+	includedBits: number;
 	state: PassState;
 	endKind: 'commit' | 'discard' | undefined;
 	mounted: WatcherId[];
 	rendered: Set<WatcherId>;
+	/** §5.7 pass-world memo plane — dies with the pass record. */
+	memos: Map<NodeId, WorldMemo>;
+	/** §5.9 edge-add deliveries discovered inside a render slice, queued to yield/end. */
+	pendingEdgeDeliveries: { nodeId: NodeId; bits: number }[];
 };
 
 export type RootState = {
@@ -179,6 +323,15 @@ export type RootState = {
 	/** §5.3 per-root lock-in rows: live tokens only (cleared at retirement). */
 	committedTokens: Set<TokenId>;
 	commitGen: number;
+	/** Bit form of committedSlotsNow (maintained at commit/retire). */
+	committedBits: number;
+	/** Member slots written since the last drain (§5.3 write-set closure: the
+	 * write is committed-visible immediately; the next durable drain must
+	 * reconcile its cone — the model's full scan catches it at any
+	 * retirement/commit). */
+	committedDirtySlots: number;
+	/** §5.7 committed-for-root memo plane (re-keyed by commitGen). */
+	memos: Map<NodeId, WorldMemo>;
 };
 
 /** §5.10 — the watcher's rendered-world snapshot w_r. */
@@ -190,17 +343,33 @@ export type WatcherSnapshot = {
 	rootCommitGen: number;
 };
 
-export type Watcher = {
-	id: WatcherId;
+export class Watcher {
+	readonly id: WatcherId;
 	name: string;
-	root: RootId;
-	node: NodeId;
-	live: boolean;
+	readonly root: RootId;
+	readonly node: NodeId;
+	live = false;
 	lastRenderedValue: Value;
 	snapshot: WatcherSnapshot;
-	/** §5.9 — per-(watcher, slot) delivery dedup bits. */
-	dedup: Set<SlotId>;
-};
+	/** §5.9 — per-(watcher, slot) delivery dedup bits, one int word. */
+	dedupBits = 0;
+
+	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, value: Value, snapshot: WatcherSnapshot) {
+		this.id = id;
+		this.name = name;
+		this.root = root;
+		this.node = node;
+		this.lastRenderedValue = value;
+		this.snapshot = snapshot;
+	}
+
+	/** Test surface: the dedup bits as a Set of slot ids. */
+	get dedup(): Set<SlotId> {
+		const out = new Set<SlotId>();
+		for (let s = 0; s < SLOT_COUNT; s++) if ((this.dedupBits >>> s) & 1) out.add(s);
+		return out;
+	}
+}
 
 export type ReactEffect = {
 	id: EffectId;
@@ -217,6 +386,8 @@ export type CoreEffect = {
 	node: NodeId;
 	lastValue: Value;
 	runs: number;
+	/** Delivery-walk enqueue dedup generation (§5.11). */
+	queuedWalk: number;
 };
 
 /** §2 "world" — one self-consistent assignment of values to all atoms. */
@@ -224,7 +395,13 @@ export type World =
 	| { kind: 'newest' }
 	| { kind: 'pass'; pass: Pass }
 	| { kind: 'committed'; root: RootId }
-	| { kind: 'mountFix'; maskSlots: Set<SlotId>; pin: number; root: RootId; excludeLiveTokens?: Set<TokenId> };
+	| { kind: 'mountFix'; maskSlots: Set<SlotId>; maskBits?: number; pin: number; root: RootId; excludeLiveTokens?: Set<TokenId> };
+
+/** The one newest-world singleton (hot paths never allocate world objects). */
+const NEWEST: World = { kind: 'newest' };
+/** Touched-word masks (§5.5): bits 0–30 slots, bit 31 taint. */
+const SLOT_MASK = 0x7fffffff;
+const TAINT = -2147483648; // 1 << 31
 
 /** The observable event stream (same shapes as the oracle's ModelEvent). */
 export type BridgeEvent =
@@ -313,6 +490,33 @@ let tableInstalled = false;
 /** The public registerReactBridge() has been consumed (spec §3.2: once). */
 let publiclyRegistered = false;
 
+// SPK-L routing words — the armed-quiet seam pays one module-int check per
+// read and one check + one bit test per write (the SPKHQ kernel-integrated
+// floor), instead of closure property loads + a Map probe per op.
+/**
+ * Read routing mode: 0 = quiet (straight kernel), 1 = an overlay world fold
+ * is on stack (registered reads serve the world fold), 2 = a bridge kernel
+ * evaluation is on stack (registered reads serve the kernel AND record the
+ * K0-acquired dep into K1 — the §5.5 mirror for raw-handle reads inside
+ * computed fns, which the bridge readers never see).
+ */
+let routeReads = 0;
+/** Nonzero when logged-mode write classification is armed (mode==='logged' && !bridgeApplying). */
+let routeWrites = 0;
+/** One bit per kernel record (id is a multiple of 8): 1 = registered atom. */
+let regBits = new Int32Array(64);
+
+function setRegistered(kernelId: number): void {
+	const idx = kernelId >>> 3;
+	const word = idx >>> 5;
+	if (word >= regBits.length) {
+		const grown = new Int32Array(Math.max(word + 1, regBits.length * 2));
+		grown.set(regBits);
+		regBits = grown;
+	}
+	regBits[word]! |= 1 << (idx & 31);
+}
+
 /**
  * The logged operation table: the DIRECT table plus (a) classification of
  * public writes to REGISTERED atoms into the ambient default batch (§3.5 —
@@ -334,28 +538,38 @@ function makeLoggedFactory(
 ): (records: number, carry?: Int32Array) => EngineTable {
 	return (records: number, carry?: Int32Array): EngineTable => {
 		const inner = direct(records, carry);
+		const innerRead = inner.read;
+		const innerWrite = inner.write;
 		return {
 			...inner,
 			read(s: number): unknown {
-				const b = activeBridge;
-				if (b !== undefined && b.activeWorld !== undefined) {
-					const la = b.byKernelId.get(s);
-					if (la !== undefined) {
-						return b.foldAtom(la, b.activeWorld);
+				if (routeReads !== 0) {
+					const idx = s >>> 3;
+					if ((regBits[idx >>> 5]! >>> (idx & 31)) & 1) {
+						const b = activeBridge;
+						if (b !== undefined && b.activeWorld !== undefined) {
+							const la = b.byKernelId.get(s);
+							if (la !== undefined) return b.routedRead(la);
+						}
 					}
 				}
-				return inner.read(s);
+				return innerRead(s);
 			},
 			write(s: number, value: unknown): boolean {
-				const b = activeBridge;
-				if (b !== undefined && !bridgeApplying && b.mode === 'logged') {
-					const la = b.byKernelId.get(s);
-					if (la !== undefined) {
-						b.bareWrite(la, { kind: 'set', value });
-						return false; // the bridge's own kernel apply already flushed
+				if (routeWrites !== 0) {
+					const idx = s >>> 3;
+					if ((regBits[idx >>> 5]! >>> (idx & 31)) & 1) {
+						const b = activeBridge;
+						if (b !== undefined) {
+							const la = b.byKernelId.get(s);
+							if (la !== undefined) {
+								b.bareWrite(la, { kind: 'set', value });
+								return false; // the bridge's own kernel apply already flushed
+							}
+						}
 					}
 				}
-				return inner.write(s, value);
+				return innerWrite(s, value);
 			},
 		};
 	};
@@ -430,14 +644,59 @@ export class CosignalBridge {
 	cas = 0;
 	/** §2 episode/epoch. */
 	epoch = 0;
+
+	// ---- §5.5 planes (SPK-N1): the K1 union graph + the touched word ----
+	/** K1 out-edge membership per dep node id (dedupe for recordEdge). */
+	private outSets: (Set<NodeId> | undefined)[] = [];
+	/** K1 out-edge adjacency (iteration order = record order). */
+	private outList: (NodeId[] | undefined)[] = [];
+	/** Reverse adjacency (mount-fixup dependency closures). */
+	private inList: (NodeId[] | undefined)[] = [];
+	/** The touched word: bits 0–30 = slots, bit 31 = taint (§5.5). */
+	private touched: number[] = [0];
+	/** Per-walk visited generation column (§5.9 walk termination). */
+	private lastWalk: number[] = [0];
+	private walkGen = 0;
+	/** Per-slot touched lists (node ids), reset at the keep-the-dirt sweep (§5.4). */
+	private slotTouched: NodeId[][] = [];
+	/** Nodes by id (dense array twin of `nodes`). */
+	private nodesArr: (AnyNode | undefined)[] = [undefined];
+	private watchersByNode: (Watcher[] | undefined)[] = [];
+	private reactEffectsByNode: (ReactEffect[] | undefined)[] = [];
+	private coreEffectsByNode: (CoreEffect[] | undefined)[] = [];
+	/** Per-write core-effect queue (§5.11: flush after the walk returns). */
+	private effectQueue: CoreEffect[] = [];
+	/** Atoms with a non-empty tape (compaction candidates). */
+	private dirtyAtoms = new Set<AtomNode>();
+	/** The one open (non-ended) pass per root (§4.1 fact 2). */
+	private openPassByRoot = new Map<RootId, Pass>();
+	private liveTokenCount = 0;
+	private parkedCount = 0;
+	/** Last-token cache (windowed writes hit one token repeatedly). */
+	private lastTokenId = 0;
+	private lastTokenRef: Token | undefined = undefined;
+	/** Kernel-eval frame taint accumulator (§5.5 taint input), valid while kernelEvalNode ≠ 0. */
+	private kernelEvalNode: NodeId = 0;
+	private kernelEvalTaint = false;
+	/** Retention-invariant archive (tests opt in; unbounded under soak otherwise — SPK-K1). */
+	retainArchive = false;
+	/** Event-stream base offset (SPK-K1 cursor/ring; 0 unless a capacity drops old events). */
+	private eventsBase = 0;
+	/** Optional event-stream capacity (SPK-K1): oldest events drop past ~2× this. */
+	private eventCapacity: number | undefined = undefined;
+
 	/**
-	 * §5.5 — the K1 union plane: dependency edges accumulated this episode
-	 * (dep → dependents), add-only, bulk-reset at quiescence. Kernel edge
-	 * drops need no mirror here because world evaluations re-record the
-	 * newest routing on every refresh (the fold-everything form; the
-	 * incremental K0-mirror + touched-word walk is TODO(gate:SPK-N1)).
+	 * §5.5 diagnostic surface: the K1 union plane as dep → dependents
+	 * (materialized from the adjacency columns; graphviz + soak metrics).
 	 */
-	episodeEdges = new Map<NodeId, Set<NodeId>>();
+	get episodeEdges(): Map<NodeId, Set<NodeId>> {
+		const out = new Map<NodeId, Set<NodeId>>();
+		for (let id = 0; id < this.outList.length; id++) {
+			const l = this.outList[id];
+			if (l !== undefined && l.length > 0) out.set(id, new Set(l));
+		}
+		return out;
+	}
 
 	/** Ambient default batch for bare (context-free) writes (§3.5). */
 	ambientToken: TokenId | undefined;
@@ -468,17 +727,47 @@ export class CosignalBridge {
 				carriedMaxRetiredSeq: 0,
 				releasePending: false,
 			});
+			this.slotTouched.push([]);
 		}
+	}
+
+	/** Central activeWorld setter — keeps the module routing word in sync (SPK-L). */
+	private setWorld(w: World | undefined): void {
+		this.activeWorld = w;
+		if (activeBridge === this) routeReads = w === undefined ? 0 : 1;
 	}
 
 	private log(e: BridgeEvent): void {
 		this.events.push(e);
+		const cap = this.eventCapacity;
+		if (cap !== undefined && this.events.length >= cap * 2) {
+			const drop = this.events.length - cap;
+			this.events.splice(0, drop);
+			this.eventsBase += drop;
+		}
 		const tr = this.trace;
 		if (tr !== undefined) tr.event(e);
 	}
 
 	private mintSeq(): number {
 		return ++this.seq;
+	}
+
+	// ---- SPK-K1 event-stream cursor/ring ----
+
+	/** Absolute cursor into the event stream (stable across ring drops). */
+	eventCursor(): number {
+		return this.eventsBase + this.events.length;
+	}
+
+	/**
+	 * Bound the retained event stream (§5.12 growth honesty): once set, the
+	 * oldest events drop in amortized batches past ~2× the capacity and
+	 * `eventCursor()`/`eventsSince()` marks stay stable. Unset by default —
+	 * tests and diagnostics see the full per-episode stream.
+	 */
+	setEventCapacity(cap: number | undefined): void {
+		this.eventCapacity = cap;
 	}
 
 	// ---------------------------------------------------------------- setup
@@ -492,18 +781,27 @@ export class CosignalBridge {
 		armTableOnce(); // asserts enterDepth === 0 and rebuilds E over the carried buffers
 		this.mode = 'logged';
 		activeBridge = this;
+		routeWrites = 1;
+		routeReads = this.activeWorld === undefined ? 0 : 1;
+	}
+
+	/** Registers a node id in the dense side columns. */
+	private indexNode(node: AnyNode): void {
+		const id = node.id;
+		this.nodes.set(id, node);
+		this.nodesArr[id] = node;
+		this.touched[id] = 0;
+		this.lastWalk[id] = 0;
+		this.evalMark[id] = 0;
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const eq = equals ?? Object.is;
 		const handle = new Atom<Value>(initial, equals === undefined ? undefined : { isEqual: equals });
-		const node: AtomNode = {
-			kind: 'atom', id: this.nextNode++, name,
-			base: initial, baseSeq: 0, tape: [], archive: [], origin: initial,
-			equals: eq, reducer: undefined, retirementStamp: 0, handle,
-		};
-		this.nodes.set(node.id, node);
+		const node = new AtomNode(this.nextNode++, name, initial, eq, equals === undefined, handle);
+		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
+		setRegistered(handle._id);
 		return node;
 	}
 
@@ -513,13 +811,10 @@ export class CosignalBridge {
 	 */
 	adoptAtom(name: string, handle: Atom<Value>, equals?: Equals): AtomNode {
 		const current = this.kernelValueOf(handle);
-		const node: AtomNode = {
-			kind: 'atom', id: this.nextNode++, name,
-			base: current, baseSeq: 0, tape: [], archive: [], origin: current,
-			equals: equals ?? Object.is, reducer: undefined, retirementStamp: 0, handle,
-		};
-		this.nodes.set(node.id, node);
+		const node = new AtomNode(this.nextNode++, name, current, equals ?? Object.is, equals === undefined, handle);
+		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
+		setRegistered(handle._id);
 		return node;
 	}
 
@@ -532,14 +827,14 @@ export class CosignalBridge {
 
 	computed(name: string, fn: ComputedFn): ComputedNode {
 		const node: ComputedNode = { kind: 'computed', id: this.nextNode++, name, fn };
-		this.nodes.set(node.id, node);
+		this.indexNode(node);
 		return node;
 	}
 
 	root(id: RootId): RootState {
 		let r = this.roots.get(id);
 		if (r === undefined) {
-			r = { id, committedTokens: new Set(), commitGen: 0 };
+			r = { id, committedTokens: new Set(), commitGen: 0, committedBits: 0, committedDirtySlots: 0, memos: new Map() };
 			this.roots.set(id, r);
 		}
 		return r;
@@ -616,22 +911,92 @@ export class CosignalBridge {
 
 	/**
 	 * §5.3 fold — replay visible entries over base in sequence order with
-	 * stepwise equality (an equal step keeps the old reference).
+	 * stepwise equality (an equal step keeps the old reference). Runs over
+	 * the packed columns (SPK-W); computes the §5.7 fingerprint
+	 * fp = max(newest visible entry seq, baseSeq, retirementStamp) into
+	 * `lastFoldFp` during the same scan.
 	 */
+	lastFoldFp = 0;
+
 	foldAtom(atom: AtomNode, world: World): Value {
+		const tp = atom.tp;
+		const n = tp.n;
 		let value = atom.base;
-		for (const e of atom.tape) { // tape is in seq order by construction
-			if (!this.visible(e, world)) continue;
-			const next = this.applyOp(atom, e.op, value);
-			if (!this.inCallback(() => atom.equals(next, value))) value = next;
+		let fp = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
+		const seqs = tp.seqs;
+		const retired = tp.retired;
+		const slots = tp.slots;
+		for (let i = tp.start; i < n; i++) {
+			if (!this.visibleAt(atom, i, world, seqs, retired, slots)) continue;
+			const s = seqs[i]!;
+			if (s > fp) fp = s;
+			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], value);
+			if (atom.eqIsDefault) {
+				if (!Object.is(next, value)) value = next;
+			} else if (!this.inCallback(() => atom.equals(next, value))) {
+				value = next;
+			}
 		}
+		this.lastFoldFp = fp;
 		return value;
+	}
+
+	/** The packed visibility predicate (§5.3 clauses; §5.10 w_fx clauses). */
+	private visibleAt(atom: AtomNode, i: number, world: World, seqs: number[], retired: number[], slots: number[]): boolean {
+		switch (world.kind) {
+			case 'newest':
+				return true;
+			case 'pass': {
+				const w = world.pass;
+				const r = retired[i]!;
+				if (r !== 0 && r <= w.pin) return true; // clause 1: retired by my pin
+				return ((w.includedBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= w.pin; // clause 2
+			}
+			case 'committed': {
+				if (retired[i]! !== 0) return true; // committed truth at now
+				// Membership consult materializes the root record (model parity:
+				// the naive committedSlotsNow() creates it on first consult).
+				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
+			}
+			case 'mountFix': {
+				if (world.maskBits !== undefined) {
+					if (((world.maskBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= world.pin) return true;
+				} else if (world.maskSlots.has(slots[i]!) && seqs[i]! <= world.pin) return true;
+				if (world.excludeLiveTokens?.has(atom.tp.tokens[i]!)) return false; // corrective-covered (errata 2 audit)
+				if (retired[i]! !== 0) return true; // committed truth at NOW
+				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
+			}
+		}
+	}
+
+	/** §5.7 fingerprint-only scan (memo revalidation without replaying ops). */
+	private scanFp(atom: AtomNode, world: World): number {
+		const tp = atom.tp;
+		const n = tp.n;
+		let fp = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
+		const seqs = tp.seqs;
+		const retired = tp.retired;
+		const slots = tp.slots;
+		for (let i = tp.start; i < n; i++) {
+			if (!this.visibleAt(atom, i, world, seqs, retired, slots)) continue;
+			const s = seqs[i]!;
+			if (s > fp) fp = s;
+		}
+		return fp;
+	}
+
+	private applyOpPacked(atom: AtomNode, kind: number, payload: unknown, prev: Value): Value {
+		if (kind === OP_SET) return payload;
+		if (kind === OP_UPDATE) return this.inCallback(() => (payload as (p: Value) => Value)(prev));
+		const reducer = atom.reducer;
+		if (reducer === undefined) throw new BridgeScheduleError(`dispatch on non-reducer atom ${atom.name}`);
+		return this.inCallback(() => reducer(prev, payload));
 	}
 
 	/** Retention-invariant helper: the same fold over the FULL history from origin. */
 	shadowFoldAtom(atom: AtomNode, world: World): Value {
 		let value = atom.origin;
-		for (const e of [...atom.archive, ...atom.tape]) {
+		for (const e of [...atom.archiveStore, ...atom.tp.materialize()]) {
 			if (e.retiredSeq === undefined && !this.visible(e, world)) continue;
 			if (!this.visible(e, world)) continue;
 			const next = this.applyOp(atom, e.op, value);
@@ -643,79 +1008,571 @@ export class CosignalBridge {
 	/** The kernel plane read for an atom's newest value (§5.2), hook-proof. */
 	private kernelValueOf(handle: Atom<Value>): Value {
 		const saved = this.activeWorld;
-		this.activeWorld = undefined; // never let the world router intercept a kernel-plane read
+		this.setWorld(undefined); // never let the world router intercept a kernel-plane read
 		try {
 			return handle.state;
 		} finally {
-			this.activeWorld = saved;
+			this.setWorld(saved);
 		}
 	}
 
 	/**
-	 * Evaluation of a node in a world. Newest-world atoms read straight off
-	 * the kernel plane (K0 holds the newest fold by the eager-apply
-	 * invariant); every other world folds the tape. Computeds evaluate
-	 * recursively — memo-free for non-newest worlds exactly like the oracle
-	 * (the §5.7 memo ladder is TODO(gate:SPK-R)). Tracked reads record real
-	 * K1 edges; untracked reads fold in-world, edge-free (§5.5). Reads inside
-	 * fold callbacks throw; per-world cycles throw (§3.6).
+	 * §5.6 newest-world evaluation plane. The newest world's computed values
+	 * live in their own memo plane validated by the same §5.7 ladder
+	 * (fingerprints ground at K0 atom state: fp(a, newest) is O(1) — the last
+	 * tape sequence / base sequence / retirement stamp). This IS the "kernel
+	 * cache + CT(n)" of §5.6 for overlay computeds: real kernel Computed
+	 * records are NOT used because stale cross-evaluation links from
+	 * dep-flipping fns form K0 link cycles the frozen kernel's
+	 * unwatched-dispose walk cannot traverse (measured hang; the overlay's
+	 * union plane is cycle-guarded, the kernel plane must stay acyclic).
+	 */
+	private newestMemos = new Map<NodeId, WorldMemo>();
+
+	/** Newest-eval taint accumulator (§5.5 taint input), per computed frame. */
+	private newestFrameTaint = false;
+
+
+	// ---- §5.7 memo frames: direct deps of the world evaluation in progress ----
+	private frame: WorldMemo | undefined = undefined;
+	/** The node id whose evaluation frame is open (raw-handle reads record to it). */
+	private currentSink: NodeId = 0;
+
+	private memoPlaneOf(world: World): Map<NodeId, WorldMemo> | undefined {
+		if (world.kind === 'newest') return this.newestMemos;
+		if (world.kind === 'pass') return world.pass.memos;
+		// Never CREATE the root record here — the model materializes roots only
+		// at passStart/mountReactEffect, and the observable snapshot iterates
+		// them. An unmaterialized root folds plain (empty committed set).
+		if (world.kind === 'committed') return this.roots.get(world.root)?.memos;
+		return undefined; // mountFix worlds are one-shot
+	}
+
+	/** §5.7 ladder step 2 for pass worlds: every included slot's clock ≤ memo.seq. */
+	private passClocksQuiet(pass: Pass, memoSeq: number): boolean {
+		let bits = pass.includedBits;
+		while (bits !== 0) {
+			const s = 31 - Math.clz32(bits & -bits);
+			if (this.slots[s]!.writeClock > memoSeq) return false;
+			bits &= bits - 1;
+		}
+		return true;
+	}
+
+	/** Step 2 for committed worlds: cas quiet AND member-slot clocks quiet. */
+	private committedClocksQuiet(root: RootState, memoSeq: number): boolean {
+		if (this.cas > memoSeq) return false;
+		let bits = root.committedBits;
+		while (bits !== 0) {
+			const s = 31 - Math.clz32(bits & -bits);
+			if (this.slots[s]!.writeClock > memoSeq) return false;
+			bits &= bits - 1;
+		}
+		return true;
+	}
+
+	/**
+	 * §5.7 — validate a memo through the ladder (steps 2–3). Returns true if
+	 * the memo may serve (re-stamped when step 3 carried it).
+	 */
+	private validateMemo(m: WorldMemo, world: World, stack: Set<NodeId> | undefined): boolean {
+		if (m.epoch !== this.epoch) return false;
+		if (m.checkedOp === this.seq) return true; // nothing minted since last validation ⇒ nothing changed
+		if (m.validating) return false; // stale dep lists can cross-link; refuse instead of recursing
+		m.validating = true;
+		try {
+			if (!this.validateMemoInner(m, world, stack)) return false;
+		} finally {
+			m.validating = false;
+		}
+		m.checkedOp = this.seq;
+		return true;
+	}
+
+	private validateMemoInner(m: WorldMemo, world: World, stack: Set<NodeId> | undefined): boolean {
+		let quiet = false;
+		if (world.kind === 'pass') {
+			quiet = this.passClocksQuiet(world.pass, m.seq);
+		} else if (world.kind === 'committed') {
+			// The root commit generation RE-KEYS committed memos (§5.7 change-
+			// source table): a gen mismatch is a dead worldKey — evict, never
+			// fp-rescue (a per-root commit is a visibility flip BELOW the
+			// visible max: fingerprints cannot see it).
+			const root = this.roots.get(world.root);
+			if (root === undefined || m.gen !== root.commitGen) return false;
+			quiet = this.committedClocksQuiet(root, m.seq);
+		}
+		if (!quiet) {
+			// step 3: fingerprint recheck per recorded atom dep; computed deps
+			// revalidate recursively by value identity (grounds at atoms).
+			for (let i = 0; i < m.atoms.length; i++) {
+				if (this.fpOf(m.atoms[i]!, world) !== m.fps[i]!) return false;
+			}
+			for (let i = 0; i < m.comps.length; i++) {
+				if (!Object.is(this.evaluate(m.comps[i]!, world, stack), m.compValues[i])) return false;
+			}
+			m.seq = this.seq; // re-stamp
+		}
+		return true;
+	}
+
+	/** fp(a, w) = max(newest w-visible entry seq, baseSeq, retirementStamp) (§5.7). */
+	private fpOf(atom: AtomNode, world: World): number {
+		if (world.kind === 'newest') {
+			// Every entry is newest-visible: O(1) off the packed tail.
+			const tp = atom.tp;
+			const last = tp.n === tp.start ? 0 : tp.seqs[tp.n - 1]!;
+			const floor = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
+			return last > floor ? last : floor;
+		}
+		return this.scanFp(atom, world);
+	}
+
+	/**
+	 * §5.5 raw-handle reads: a registered atom read reached the operation
+	 * table while an overlay evaluation frame was open. Record the edge to
+	 * the open frame's sink (the K0-mirror for topology the bridge readers
+	 * never see) and serve the world value.
+	 * @internal (called from the logged table wrapper)
+	 */
+	routedRead(atom: AtomNode): Value {
+		const sink = this.currentSink;
+		if (sink !== 0) this.recordEdge(atom.id, sink);
+		return this.atomValue(atom, this.activeWorld!);
+	}
+
+	/** Atom value in a world: kernel for newest, memoized fold otherwise (§5.3). */
+	private atomValue(atom: AtomNode, world: World): Value {
+		if (world.kind === 'newest') {
+			// K0 holds the newest fold by the eager-apply invariant (§5.2).
+			const v = this.kernelValueOf(atom.handle);
+			this.captureAtomDep(atom, this.fpOf(atom, world));
+			return v;
+		}
+		const plane = this.memoPlaneOf(world);
+		if (plane === undefined) {
+			const v = this.foldAtom(atom, world);
+			this.captureAtomDep(atom, this.lastFoldFp);
+			return v;
+		}
+		let m = plane.get(atom.id);
+		if (m !== undefined && this.validateMemo(m, world, undefined)) {
+			this.captureAtomDep(atom, m.fps[0]!);
+			return m.value;
+		}
+		const v = this.foldAtom(atom, world);
+		const fp = this.lastFoldFp;
+		if (m === undefined) {
+			m = {
+				value: v, seq: this.seq, gen: 0, epoch: this.epoch, checkedOp: this.seq, validating: false,
+				atoms: [atom], fps: [fp], comps: [], compValues: [],
+			};
+			plane.set(atom.id, m);
+		} else {
+			m.value = v;
+			m.seq = this.seq;
+			m.epoch = this.epoch;
+			m.checkedOp = this.seq;
+			m.fps[0] = fp;
+		}
+		if (world.kind === 'committed') m.gen = this.roots.get(world.root)?.commitGen ?? 0;
+		this.captureAtomDep(atom, fp);
+		return v;
+	}
+
+	private captureAtomDep(atom: AtomNode, fp: number): void {
+		const f = this.frame;
+		if (f !== undefined) {
+			f.atoms.push(atom);
+			f.fps.push(fp);
+		}
+	}
+
+	private captureCompDep(node: ComputedNode, value: Value): void {
+		const f = this.frame;
+		if (f !== undefined) {
+			f.comps.push(node);
+			f.compValues.push(value);
+		}
+	}
+
+	/**
+	 * Evaluation of a node in a world (§5.6 routing). Newest-world atoms read
+	 * straight off the kernel plane; newest-world computeds serve from the
+	 * newest memo plane (the overlay's K0 cache — "straight kernel pull,
+	 * donor semantics: recompute if stale"). Other worlds first try the fast
+	 * path (touched(n) == 0 ∧ CT(n): the newest cache is committed-only and
+	 * validates — serve it with zero fold), then the §5.7 memo ladder, then a
+	 * fresh world evaluation recording real K1 edges. Untracked reads fold
+	 * in-world, edge-free (§5.5). Reads inside fold callbacks throw;
+	 * per-world cycles throw (§3.6).
 	 */
 	evaluate(node: AnyNode, world: World, stack?: Set<NodeId>): Value {
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold (§3.1)');
-		if (node.kind === 'atom') {
-			return world.kind === 'newest' ? this.kernelValueOf(node.handle) : this.foldAtom(node, world);
+		if (node.kind === 'atom') return this.atomValue(node, world);
+		const plane = this.memoPlaneOf(world);
+		if (world.kind !== 'newest' && world.kind !== 'mountFix') {
+			// §5.6 fast path: no slot bits, no taint, valid newest cache.
+			const word = this.touched[node.id]!;
+			if (word === 0) {
+				const nm = this.newestMemos.get(node.id);
+				if (nm !== undefined && this.validateMemo(nm, NEWEST, stack)) {
+					this.captureCompDep(node, nm.value);
+					return nm.value;
+				}
+			}
 		}
-		const seen = stack ?? new Set<NodeId>();
-		if (seen.has(node.id)) throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world (§3.6)`);
-		seen.add(node.id);
+		// World path: §5.7 memo ladder.
+		if (plane !== undefined) {
+			const m = plane.get(node.id);
+			if (m !== undefined && this.validateMemo(m, world, stack)) {
+				this.captureCompDep(node, m.value);
+				return m.value;
+			}
+		}
+		// Per-world cycle detection via the mark column (§3.6): marks carry the
+		// current top-level evaluation generation; `stack` remains accepted for
+		// surface compat but the column is authoritative.
+		const marks = this.evalMark;
+		if (marks[node.id] === this.evalGen && this.evalDepth > 0) {
+			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world (§3.6)`);
+		}
+		if (this.evalDepth === 0) this.evalGen++;
+		marks[node.id] = this.evalGen;
 		this.evalDepth++;
 		const savedWorld = this.activeWorld;
-		this.activeWorld = world.kind === 'newest' ? undefined : world;
+		this.setWorld(world);
+		const savedSlice = this.renderSlicePass;
+		if (world.kind === 'pass') this.renderSlicePass = world.pass; // §5.9 edge-add queueing context
+		const savedFrame = this.frame;
+		const savedSink = this.currentSink;
+		const savedTaint = this.newestFrameTaint;
+		this.currentSink = node.id;
+		if (world.kind === 'newest') this.newestFrameTaint = false;
+		let myFrame: WorldMemo | undefined;
+		if (plane !== undefined) {
+			myFrame = {
+				value: undefined, seq: this.seq, gen: 0, epoch: this.epoch, checkedOp: this.seq, validating: false,
+				atoms: [], fps: [], comps: [], compValues: [],
+			};
+		}
+		this.frame = myFrame;
 		const tr = this.trace; // R11: paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, world);
 		try {
-			const read: Reader = (dep) => {
-				this.recordEdge(dep.id, node.id);
-				return this.evaluate(dep, world, seen);
-			};
-			const untrackedRead: Reader = (dep) => this.evaluate(dep, world, seen);
-			return node.fn(read, untrackedRead);
+			const value = node.fn(this.trackedReader, this.untrackedReader);
+			if (world.kind === 'newest') {
+				// §5.5 taint epilogue: derive bit 31 fresh from this evaluation.
+				const word = this.touched[node.id]!;
+				if (this.newestFrameTaint) {
+					if ((word & TAINT) === 0) this.propagateTaint(node.id);
+				} else if ((word & TAINT) !== 0) {
+					this.touched[node.id] = word & SLOT_MASK; // own-epilogue clear (§5.5)
+				}
+			}
+			if (myFrame !== undefined) {
+				myFrame.value = value;
+				myFrame.seq = this.seq;
+				if (world.kind === 'committed') myFrame.gen = this.roots.get(world.root)?.commitGen ?? 0;
+				plane!.set(node.id, myFrame);
+			}
+			// The frame captured MY deps; my caller captures me as a computed dep.
+			this.frame = savedFrame;
+			this.captureCompDep(node, value);
+			return value;
 		} finally {
-			this.activeWorld = savedWorld;
+			this.frame = savedFrame;
+			this.currentSink = savedSink;
+			this.newestFrameTaint = savedTaint;
+			this.renderSlicePass = savedSlice;
+			this.setWorld(savedWorld);
 			this.evalDepth--;
-			seen.delete(node.id);
+			marks[node.id] = 0;
 			if (tr !== undefined) tr.evalEnd();
 		}
 	}
 
-	private recordEdge(dep: NodeId, dependent: NodeId): void {
-		let outs = this.episodeEdges.get(dep);
-		if (outs === undefined) {
-			outs = new Set();
-			this.episodeEdges.set(dep, outs);
-		}
-		outs.add(dependent);
-	}
+	/** Mark column + generation for per-world cycle detection (no Set allocs). */
+	private evalMark: number[] = [0];
+	private evalGen = 0;
+
+	/** The persistent tracked reader (§5.5): edges to the open sink; world from the frame. */
+	private trackedReader: Reader = (dep) => {
+		const sink = this.currentSink;
+		this.recordEdge(dep.id, sink);
+		if ((this.touched[dep.id]! & TAINT) !== 0) this.newestFrameTaint = true; // §5.5(b): taint on a recorded dep
+		return this.evaluate(dep, this.activeWorld!);
+	};
 
 	/**
-	 * §5.3 step 4/§5.9 — delivery reachability over the episode-accumulated
-	 * K0∪K1 union. Refresh = evaluate every computed in every currently
-	 * relevant world, recording real edges (the oracle's normative
-	 * conservative semantics; over-notification is priced, never wrong).
-	 * TODO(gate:SPK-N1): replace with the touched-word marking walk over
-	 * kernel links + K1 records; relax the diff layer to the documented
-	 * "engine ⊇ required, ⊆ union-conservative" tolerance when landing it.
+	 * The persistent untracked reader: EDGE-free, not INPUT-free — the dep
+	 * still enters the open memo frame's fingerprint set (validation must
+	 * observe untracked movement or committed folds would serve stale values
+	 * the naive model computes fresh). No edge is recorded (currentSink
+	 * drops), so no notification will ever fire through it (§5.5); the WEAK
+	 * edge feeds durable-drain candidate collection only (§5.11).
 	 */
-	private refreshEdgesAllWorlds(): void {
-		const worlds: World[] = [{ kind: 'newest' }];
-		for (const p of this.passes.values()) {
-			if (p.state !== 'ended') worlds.push({ kind: 'pass', pass: p });
+	private untrackedReader: Reader = (dep) => {
+		const sink = this.currentSink;
+		this.recordWeakEdge(dep.id, sink);
+		const world = this.activeWorld!;
+		// §5.5 taint input (a): untracked read hit pending state (newest evals).
+		if (world.kind === 'newest') {
+			if (dep.kind === 'atom') {
+				if (dep.tp.n > dep.tp.start || (this.touched[dep.id]! & TAINT) !== 0) this.newestFrameTaint = true;
+			} else if (this.touched[dep.id]! !== 0) {
+				this.newestFrameTaint = true;
+			}
 		}
-		for (const r of this.roots.keys()) worlds.push({ kind: 'committed', root: r });
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'computed') continue;
-			for (const w of worlds) this.evaluate(n, w);
+		this.currentSink = 0;
+		try {
+			return this.evaluate(dep, world);
+		} finally {
+			this.currentSink = sink;
 		}
+	};
+
+	// ---- §5.5 the union plane + walks (SPK-N1) ----
+
+	private recordEdge(dep: NodeId, dependent: NodeId): void {
+		let s = this.outSets[dep];
+		if (s !== undefined && s.has(dependent)) return;
+		if (s === undefined) {
+			s = new Set();
+			this.outSets[dep] = s;
+			this.outList[dep] = [];
+		}
+		s.add(dependent);
+		this.outList[dep]!.push(dependent);
+		let ins = this.inList[dependent];
+		if (ins === undefined) {
+			ins = [];
+			this.inList[dependent] = ins;
+		}
+		ins.push(dep);
+		if (++this.edgeCount - this.lastSweepEdges >= 256) this.sweepK1();
+		// §5.5 edge-add propagation: the new edge inherits the source's bits...
+		const src = this.touched[dep]!;
+		const newBits = src & SLOT_MASK & ~this.touched[dependent]!;
+		if (newBits !== 0) this.propagateBits(dependent, newBits);
+		if ((src & TAINT) !== 0 && (this.touched[dependent]! & TAINT) === 0) this.propagateTaint(dependent);
+		// §5.9's edge-add retroactive delivery REPLAY (runInBatch per still-live
+		// slot through the new path) is deliberately NOT implemented in this
+		// pass: the oracle referee delivers only at writes, so replay events
+		// exceed the documented "⊆ union-conservative" tolerance and cannot be
+		// validated. The bit propagation above preserves all routing/drain
+		// correctness (fast-path refusal, touched-list coverage); the replay's
+		// only lost effect is catch-up lane scheduling, which the real fork
+		// wiring must revisit (flagged in the P1 report).
+	}
+
+	/** The pass whose render slice is evaluating (survives nested newest pulls). */
+	private renderSlicePass: Pass | undefined = undefined;
+
+	private edgeCount = 0;
+	private lastSweepEdges = 0;
+
+	/**
+	 * §5.12 K1 growth honesty — the bounded mid-episode sweep (the
+	 * pre-registered SPK-K1 remedy: sampled reachability). Collects only the
+	 * provably-safe subset: an edge dep→t drops iff t cannot reach any node
+	 * holding a committed watcher / effect-dep snapshot / core-effect
+	 * subscription (reverse reachability over K1) AND t carries no retained
+	 * touched bits for LIVE slots and no taint. Dirt on the WORDS persists
+	 * (keep-the-dirt, §5.4) — only the stranded routing records go. Runs
+	 * every 256 recorded edges (amortized O(V+E)).
+	 */
+	private sweepK1(): void {
+		this.lastSweepEdges = this.edgeCount;
+		const gen = ++this.walkGen;
+		const lastWalk = this.lastWalk;
+		const stack = this.walkStack;
+		let sp = 0;
+		for (let id = 0; id < this.nodesArr.length; id++) {
+			const ws = this.watchersByNode[id];
+			const re = this.reactEffectsByNode[id];
+			const ce = this.coreEffectsByNode[id];
+			if ((ws !== undefined && ws.length > 0) || (re !== undefined && re.length > 0) || (ce !== undefined && ce.length > 0)) {
+				if (lastWalk[id] !== gen) {
+					lastWalk[id] = gen;
+					stack[sp++] = id;
+				}
+			}
+		}
+		while (sp > 0) {
+			const cur = stack[--sp]!;
+			const ins = this.inList[cur];
+			if (ins === undefined) continue;
+			for (let i = 0; i < ins.length; i++) {
+				const dep = ins[i]!;
+				if (lastWalk[dep] !== gen) {
+					lastWalk[dep] = gen;
+					stack[sp++] = dep;
+				}
+			}
+		}
+		let liveBits = 0;
+		for (const slot of this.slots) {
+			if (slot.tenant !== undefined) {
+				const t = this.tokens.get(slot.tenant);
+				if (t !== undefined && t.state === 'live') liveBits |= 1 << slot.id;
+			}
+		}
+		const keepMask = liveBits | TAINT;
+		let kept = 0;
+		for (let dep = 0; dep < this.outList.length; dep++) {
+			const outs = this.outList[dep];
+			if (outs === undefined) continue;
+			let w = 0;
+			for (let i = 0; i < outs.length; i++) {
+				const t = outs[i]!;
+				if (lastWalk[t] === gen || (this.touched[t]! & keepMask) !== 0) {
+					outs[w++] = t;
+				} else {
+					this.outSets[dep]!.delete(t);
+					const ins = this.inList[t];
+					if (ins !== undefined) {
+						const j = ins.indexOf(dep);
+						if (j >= 0) ins.splice(j, 1);
+					}
+				}
+			}
+			if (w !== outs.length) outs.length = w;
+			kept += w;
+		}
+		this.edgeCount = kept;
+		this.lastSweepEdges = kept;
+	}
+
+	// §5.5/§5.11 — the WEAK plane: untracked reads record drain-only edges.
+	// Never traversed by marking or delivery walks ("no notification will
+	// ever fire" for untracked paths); durable drains expand over them so a
+	// committed-truth flip reaching a node only through untracked reads still
+	// reconcile-checks its observers (value-gated — the naive model's
+	// full-observer scan behavior, scoped).
+	private weakOutSets: (Set<NodeId> | undefined)[] = [];
+	private weakOutList: (NodeId[] | undefined)[] = [];
+
+	private recordWeakEdge(dep: NodeId, dependent: NodeId): void {
+		let s = this.weakOutSets[dep];
+		if (s !== undefined && s.has(dependent)) return;
+		if (s === undefined) {
+			s = new Set();
+			this.weakOutSets[dep] = s;
+			this.weakOutList[dep] = [];
+		}
+		s.add(dependent);
+		this.weakOutList[dep]!.push(dependent);
+	}
+
+	/** Monotone marking frontier: `newBits & ~touched(n)`, self-terminating (§5.5). */
+	private markStackN: number[] = [];
+	private markStackB: number[] = [];
+
+	private propagateBits(start: NodeId, startBits: number): void {
+		const stackN = this.markStackN;
+		const stackB = this.markStackB;
+		let sp = 0;
+		this.applyBits(start, startBits);
+		stackN[sp] = start;
+		stackB[sp++] = startBits;
+		while (sp > 0) {
+			const bitsIn = stackB[--sp]!;
+			const outs = this.outList[stackN[sp]!];
+			if (outs === undefined) continue;
+			for (let i = 0; i < outs.length; i++) {
+				const n = outs[i]!;
+				const nb = bitsIn & ~this.touched[n]!;
+				if (nb !== 0) {
+					this.applyBits(n, nb);
+					stackN[sp] = n;
+					stackB[sp++] = nb;
+				}
+			}
+		}
+	}
+
+	/** Set bits on a node and append it to each newly-set slot's touched list. */
+	private applyBits(node: NodeId, bits: number): void {
+		this.touched[node] = this.touched[node]! | bits;
+		let b = bits;
+		while (b !== 0) {
+			const s = 31 - Math.clz32(b & -b);
+			this.slotTouched[s]!.push(node);
+			b &= b - 1;
+		}
+	}
+
+	/** §5.5 taint 0→1 propagation over existing out-edges. */
+	private propagateTaint(start: NodeId): void {
+		const stack = this.markStackN;
+		let sp = 0;
+		this.touched[start] = this.touched[start]! | TAINT;
+		stack[sp++] = start;
+		while (sp > 0) {
+			const outs = this.outList[stack[--sp]!];
+			if (outs === undefined) continue;
+			for (let i = 0; i < outs.length; i++) {
+				const n = outs[i]!;
+				if ((this.touched[n]! & TAINT) === 0) {
+					this.touched[n] = this.touched[n]! | TAINT;
+					stack[sp++] = n;
+				}
+			}
+		}
+	}
+
+	/** Reused delivery-walk buffers (§5.9 walk atomicity: never re-entrant). */
+	private walkStack: number[] = [];
+	private walkWatchers: Watcher[] = [];
+
+	/**
+	 * §5.9 value-blind delivery walk over K0∪K1 with the per-walk visited
+	 * generation. Collects reached watchers (delivered in id order — the
+	 * naive model's map order) and enqueues reached core effects.
+	 */
+	private deliveryWalk(from: NodeId, token: Token, slot: SlotMeta, seq: number): void {
+		const gen = ++this.walkGen;
+		const lastWalk = this.lastWalk;
+		const stack = this.walkStack;
+		const found = this.walkWatchers;
+		found.length = 0;
+		let sp = 0;
+		stack[sp++] = from;
+		lastWalk[from] = gen;
+		while (sp > 0) {
+			const cur = stack[--sp]!;
+			const ws = this.watchersByNode[cur];
+			if (ws !== undefined) {
+				for (let i = 0; i < ws.length; i++) {
+					const w = ws[i]!;
+					if (w.live) found.push(w);
+				}
+			}
+			const ces = this.coreEffectsByNode[cur];
+			if (ces !== undefined) {
+				for (let i = 0; i < ces.length; i++) {
+					const e = ces[i]!;
+					if (e.queuedWalk !== gen) {
+						e.queuedWalk = gen;
+						this.effectQueue.push(e);
+					}
+				}
+			}
+			const outs = this.outList[cur];
+			if (outs !== undefined) {
+				for (let i = 0; i < outs.length; i++) {
+					const n = outs[i]!;
+					if (lastWalk[n] !== gen) {
+						lastWalk[n] = gen;
+						stack[sp++] = n;
+					}
+				}
+			}
+		}
+		if (found.length > 1) found.sort((a, b) => a.id - b.id);
+		for (let i = 0; i < found.length; i++) this.deliver(found[i]!, token, slot, seq);
+		found.length = 0;
 	}
 
 	/** Nodes reachable from `from` over the union graph (including `from`). */
@@ -724,7 +1581,9 @@ export class CosignalBridge {
 		const queue = [from];
 		while (queue.length > 0) {
 			const cur = queue.pop()!;
-			for (const next of this.episodeEdges.get(cur) ?? []) {
+			const outs = this.outList[cur];
+			if (outs === undefined) continue;
+			for (const next of outs) {
 				if (!reached.has(next)) {
 					reached.add(next);
 					queue.push(next);
@@ -742,29 +1601,34 @@ export class CosignalBridge {
 
 	livePins(): number[] {
 		const pins: number[] = [];
-		for (const p of this.passes.values()) if (p.state !== 'ended') pins.push(p.pin);
+		for (const p of this.openPassByRoot.values()) pins.push(p.pin);
 		return pins;
 	}
 
 	private minLivePin(): number {
-		const pins = this.livePins();
-		return pins.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...pins);
+		let min = Number.POSITIVE_INFINITY;
+		for (const p of this.openPassByRoot.values()) if (p.pin < min) min = p.pin;
+		return min;
 	}
 
 	/** §4.1 fact 1 — mint a batch token. At most 31 live (one per React lane). */
 	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
 		if (this.mode !== 'logged') throw new BridgeScheduleError('batches exist only in LOGGED mode (§5.1)');
-		if (this.liveTokens().length >= SLOT_COUNT) {
+		if (this.liveTokenCount >= SLOT_COUNT) {
 			throw new BridgeScheduleError('at most 31 live tokens (§4.1 fact 1 invariant)');
 		}
+		const parked = opts?.action ?? false;
 		const token: Token = {
 			id: this.nextToken++, priority,
 			action: opts?.action ?? false,
-			parked: opts?.action ?? false, // §4.1 fact 3: action tokens park until settlement
+			parked, // §4.1 fact 3: action tokens park until settlement
 			state: 'live', committedFlag: undefined, slot: undefined,
-			retiredSeq: undefined, writeSeqs: [], ambient: opts?.ambient ?? false,
+			retiredSeq: undefined, lastWriteSeq: 0, atomsTouched: [], liveReceipts: 0,
+			ambient: opts?.ambient ?? false,
 		};
 		this.tokens.set(token.id, token);
+		this.liveTokenCount++;
+		if (parked) this.parkedCount++;
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchOpen(token);
 		return token;
@@ -785,9 +1649,9 @@ export class CosignalBridge {
 	/**
 	 * §5.3 write step 1 — intern the token's slot, claiming a free one if new.
 	 * Claim housekeeping (§5.4): write clock zeroes; per-(watcher, slot) dedup
-	 * bits clear (§5.9); the dirt watermark carries forward (keep-the-dirt —
-	 * this build recomputes routing, so the watermark's only duty is §5.12
-	 * renumbering; the touched-bit sweep gated on it is TODO(gate:SPK-N1)).
+	 * bits clear (§5.9); the keep-the-dirt sweep clears bit s via the touched
+	 * list only when no excluding pin remains (min live pins ≥ the slot's
+	 * carried max retirement sequence).
 	 */
 	private internSlot(token: Token): SlotMeta {
 		if (token.slot !== undefined) return this.slots[token.slot]!;
@@ -808,12 +1672,29 @@ export class CosignalBridge {
 			this.releaseSlot(victim);
 			free = victim;
 		}
+		// §5.4 disposal at re-intern: if no excluding pin remains, sweep bit s
+		// via the touched list and reset it; otherwise inherit the dirt.
+		if (this.minLivePin() >= free.carriedMaxRetiredSeq) {
+			const list = this.slotTouched[free.id]!;
+			const clear = ~(1 << free.id);
+			for (let i = 0; i < list.length; i++) this.touched[list[i]!] = this.touched[list[i]!]! & clear;
+			list.length = 0;
+		}
 		free.tenant = token.id;
 		free.claimSeq = this.mintSeq(); // §5.4 tenancy: claim-after-release gets its own point on the line
 		free.writeClock = 0;
 		free.releasePending = false;
 		token.slot = free.id;
-		for (const w of this.watchers.values()) w.dedup.delete(free.id); // §5.9 dedup clear at re-intern
+		// §5.3 write-set closure: a committed-but-slotless token (ActionScope /
+		// late first write) interns here — its root's membership bits gain the
+		// slot NOW so the committed clause sees the coming receipts.
+		for (const r of this.roots.values()) {
+			if (r.committedTokens.has(token.id)) r.committedBits |= 1 << free.id;
+		}
+		{
+			const clear = ~(1 << free.id);
+			for (const w of this.watchers.values()) w.dedupBits &= clear; // §5.9 dedup clear at re-intern
+		}
 		this.log({ type: 'slot-claimed', slot: free.id, token: token.id });
 		return free;
 	}
@@ -827,6 +1708,7 @@ export class CosignalBridge {
 		}
 		slot.tenant = undefined;
 		slot.releasePending = false;
+		if (tenant !== undefined) this.maybeReclaimToken(tenant); // SPK-K1: identity gone, mask/receipt gates re-check
 	}
 
 	// ------------------------------------------------------ the write path
@@ -839,7 +1721,7 @@ export class CosignalBridge {
 			this.ambientToken = ambient.id;
 		}
 		// §3.5 dev warning heuristic: bare-context write while an action is pending.
-		if (this.liveTokens().some((t) => t.parked)) {
+		if (this.parkedCount > 0) {
 			this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope (§3.5)' });
 		}
 		this.write(ambient.id, node, op);
@@ -857,8 +1739,9 @@ export class CosignalBridge {
 	 * §5.3 — the write path (LOGGED). DIRECT writes mutate committed-only
 	 * state with no receipt (§5.1: pre-swap history is legal LOGGED state).
 	 * LOGGED steps, in order: classify (caller) → drop check → intern slot →
-	 * append receipt + write clock → apply to K0 with stepwise equality →
-	 * marking/delivery walk → core-effect flush after the walk returns.
+	 * append packed receipt + write clock → apply to K0 with stepwise
+	 * equality → marking walk → delivery walk → core-effect flush after the
+	 * walk returns.
 	 */
 	write(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render (§3.6)');
@@ -871,7 +1754,7 @@ export class CosignalBridge {
 				node.origin = next; // pre-LOGGED history is committed-only base state (§5.1)
 				this.applyToKernel(node, next);
 			}
-			this.flushCoreEffects();
+			this.directFlushCoreEffects();
 			const tr = this.trace;
 			if (tr !== undefined) tr.opEnd();
 			return;
@@ -880,50 +1763,85 @@ export class CosignalBridge {
 			this.bareWrite(node, op);
 			return;
 		}
-		const token = this.token(tokenId);
+		// Windowed writes hit one token repeatedly — one compare beats a Map probe.
+		let token: Token;
+		if (tokenId === this.lastTokenId && this.lastTokenRef !== undefined) {
+			token = this.lastTokenRef;
+		} else {
+			token = this.token(tokenId);
+			this.lastTokenId = tokenId;
+			this.lastTokenRef = token;
+		}
 		if (token.state !== 'live') throw new BridgeScheduleError(`write into retired token ${tokenId} (§4.1 fact 4 fallback is fork scope)`);
 
+		const tp = node.tp;
 		// §5.3 step 2 — drop check: empty tape AND op evaluates equal against base.
-		if (node.tape.length === 0) {
-			const evaluated = this.applyOp(node, op, node.base);
-			if (this.inCallback(() => node.equals(evaluated, node.base))) {
-				this.log({ type: 'write-dropped', node: node.name, token: tokenId });
-				const tr = this.trace;
-				if (tr !== undefined) tr.opEnd();
-				return;
+		if (tp.n === tp.start) {
+			if (op.kind === 'set' && node.eqIsDefault) {
+				if (Object.is(op.value, node.base)) {
+					this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+					const tr = this.trace;
+					if (tr !== undefined) tr.opEnd();
+					return;
+				}
+			} else {
+				const evaluated = this.applyOp(node, op, node.base);
+				if (this.inCallback(() => node.equals(evaluated, node.base))) {
+					this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+					const tr = this.trace;
+					if (tr !== undefined) tr.opEnd();
+					return;
+				}
 			}
 		}
 
 		// §5.3 steps 1/3 — intern slot, append receipt, bump the slot write clock.
-		const slot = this.internSlot(token);
+		const slot = token.slot !== undefined ? this.slots[token.slot]! : this.internSlot(token);
 		const seq = this.mintSeq();
-		const receipt: Receipt = { op, token: token.id, slot: slot.id, seq, retiredSeq: undefined };
-		node.tape.push(receipt);
-		token.writeSeqs.push(seq);
+		const kind = op.kind === 'set' ? OP_SET : op.kind === 'update' ? OP_UPDATE : OP_DISPATCH;
+		tp.push(kind, slot.id, seq, token.id, op.kind === 'set' ? op.value : op.kind === 'update' ? op.fn : op.action);
+		token.lastWriteSeq = seq;
+		token.liveReceipts++;
+		if (node.lastTouchToken !== token.id) {
+			node.lastTouchToken = token.id;
+			token.atomsTouched.push(node);
+		}
+		if (tp.n - tp.start === 1) this.dirtyAtoms.add(node);
 		slot.writeClock = seq;
+		if (this.roots.size !== 0) {
+			// §5.3 write-set closure: a write into a committed-member slot moves
+			// committed truth NOW; the next durable drain reconciles its cone.
+			const bit0 = 1 << slot.id;
+			for (const r of this.roots.values()) {
+				if ((r.committedBits & bit0) !== 0) r.committedDirtySlots |= bit0;
+			}
+		}
 		{
 			const tr = this.trace;
-			if (tr !== undefined) tr.receipt(node, receipt);
+			if (tr !== undefined) tr.receipt(node, tp.entryAt(tp.n - 1));
 		}
 		this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
 
 		// §5.2/§5.3 step 3 — apply to K0 eagerly with stepwise equality, so the
 		// newest world stays directly readable off the kernel plane.
-		const prevNewest = this.kernelValueOf(node.handle);
-		const nextNewest = this.applyOp(node, op, prevNewest);
-		if (!this.inCallback(() => node.equals(nextNewest, prevNewest))) {
-			this.applyToKernel(node, nextNewest);
+		if (kind === OP_SET && node.eqIsDefault) {
+			this.applyToKernel(node, (op as { kind: 'set'; value: Value }).value); // kernel stores + propagates only on change
+		} else {
+			const prevNewest = this.kernelValueOf(node.handle);
+			const nextNewest = this.applyOp(node, op, prevNewest);
+			if (!this.inCallback(() => node.equals(nextNewest, prevNewest))) {
+				this.applyToKernel(node, nextNewest);
+			}
 		}
 
-		// §5.3 steps 4–5 — marking + delivery over the K0∪K1 union, value-blind,
-		// in the writer's stack; then the core-effect flush drains.
-		this.refreshEdgesAllWorlds();
-		const reached = this.reachableFrom(node.id);
-		for (const w of this.watchers.values()) {
-			if (!w.live || !reached.has(w.node)) continue;
-			this.deliver(w, token, slot, seq);
-		}
-		this.flushCoreEffects(reached);
+		// §5.3 step 4 — the marking walk: propagate the slot's bit from the atom
+		// through K0∪K1 out-edges with the monotone frontier (§5.5).
+		const bit = 1 << slot.id;
+		if ((this.touched[node.id]! & bit) === 0) this.propagateBits(node.id, bit);
+		// §5.3 step 5 — the value-blind delivery walk (§5.9), in the writer's
+		// stack; core effects enqueue on the walk and flush after it returns.
+		this.deliveryWalk(node.id, token, slot, seq);
+		this.flushEffectQueue();
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 	}
@@ -931,11 +1849,14 @@ export class CosignalBridge {
 	/** The one K0 write site: routes through the public policy path (flush included). */
 	private applyToKernel(node: AtomNode, value: Value): void {
 		const saved = bridgeApplying;
+		const savedRoute = routeWrites;
 		bridgeApplying = true;
+		routeWrites = 0; // the wrapper must not re-classify the bridge's own kernel apply
 		try {
 			node.handle.set(value);
 		} finally {
 			bridgeApplying = saved;
+			routeWrites = savedRoute;
 		}
 	}
 
@@ -945,23 +1866,17 @@ export class CosignalBridge {
 	 * unstarted work will fold the write; otherwise deliver interleaved.
 	 */
 	private deliver(w: Watcher, token: Token, slot: SlotMeta, seq: number): void {
-		if (!w.dedup.has(slot.id)) {
-			w.dedup.add(slot.id);
+		const bit = 1 << slot.id;
+		if ((w.dedupBits & bit) === 0) {
+			w.dedupBits |= bit;
 			this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'fresh' });
 			return;
 		}
 		// Bit set: suppress iff NO started-and-uncommitted pass on W's root
 		// includes s (render mask) with pin < the write's sequence (§5.9).
-		let mustDeliver = false;
-		for (const p of this.passes.values()) {
-			if (p.state === 'ended') continue; // "open" includes yielded and completed-but-uncommitted
-			if (p.root !== w.root) continue;
-			if (p.maskSlots.has(slot.id) && p.pin < seq) {
-				mustDeliver = true;
-				break;
-			}
-		}
-		if (mustDeliver) {
+		// One open pass per root (§4.1 fact 2) ⇒ one registry load + two compares.
+		const p = this.openPassByRoot.get(w.root);
+		if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
 			this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'interleaved' });
 		} else {
 			this.log({ type: 'suppressed', watcher: w.name, token: token.id, slot: slot.id, seq });
@@ -969,10 +1884,26 @@ export class CosignalBridge {
 	}
 
 	/** §5.11 — core effects observe the newest world; flush after the walk returns. */
-	private flushCoreEffects(reached?: Set<NodeId>): void {
+	private flushEffectQueue(): void {
+		const q = this.effectQueue;
+		if (q.length === 0) return;
+		if (q.length > 1) q.sort((a, b) => a.id - b.id); // the model's map order
+		for (let i = 0; i < q.length; i++) {
+			const e = q[i]!;
+			const value = this.evaluate(this.nodeById(e.node), NEWEST);
+			if (!Object.is(value, e.lastValue)) {
+				e.lastValue = value;
+				e.runs++;
+				this.log({ type: 'core-effect-run', effect: e.name, value });
+			}
+		}
+		q.length = 0;
+	}
+
+	/** DIRECT-mode writes flush every core effect (no walk exists to scope them). */
+	private directFlushCoreEffects(): void {
 		for (const e of this.coreEffects.values()) {
-			if (reached !== undefined && !reached.has(e.node)) continue;
-			const value = this.evaluate(this.nodeById(e.node), { kind: 'newest' });
+			const value = this.evaluate(this.nodeById(e.node), NEWEST);
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
 				e.runs++;
@@ -989,28 +1920,35 @@ export class CosignalBridge {
 	 * pass per root (a same-root restart is a new pass).
 	 */
 	passStart(rootId: RootId, includeTokens: TokenId[]): Pass {
-		for (const p of this.passes.values()) {
-			if (p.state !== 'ended' && p.root === rootId) {
-				throw new BridgeScheduleError(`root ${rootId} already has an open pass (§4.1 fact 2)`);
-			}
+		if (this.openPassByRoot.has(rootId)) {
+			throw new BridgeScheduleError(`root ${rootId} already has an open pass (§4.1 fact 2)`);
 		}
 		const maskTokens = new Set<TokenId>();
 		const maskSlots = new Set<SlotId>();
+		let maskBits = 0;
 		for (const id of includeTokens) {
 			const t = this.token(id);
 			if (t.state !== 'live') throw new BridgeScheduleError('mask captures live tokens only (§5.4)');
 			maskTokens.add(id);
 			// A live token with no slot never wrote; later receipts postdate the
 			// pin and are clause-2-excluded anyway (§5.4 pin/seq-after-claim).
-			if (t.slot !== undefined) maskSlots.add(t.slot);
+			if (t.slot !== undefined) {
+				maskSlots.add(t.slot);
+				maskBits |= 1 << t.slot;
+			}
 		}
+		const capturedCommittedSlots = this.committedSlotsNow(rootId);
+		let includedBits = maskBits;
+		for (const s of capturedCommittedSlots) includedBits |= 1 << s;
 		const pass: Pass = {
 			id: this.nextPass++, root: rootId, pin: this.seq,
-			maskTokens, maskSlots,
-			capturedCommittedSlots: this.committedSlotsNow(rootId),
+			maskTokens, maskSlots, capturedCommittedSlots,
+			maskBits, includedBits,
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
+			memos: new Map(), pendingEdgeDeliveries: [],
 		};
 		this.passes.set(pass.id, pass);
+		this.openPassByRoot.set(rootId, pass);
 		const tr = this.trace;
 		if (tr !== undefined) {
 			tr.passStart(pass);
@@ -1053,19 +1991,19 @@ export class CosignalBridge {
 		const p = this.pass(passId);
 		if (p.state === 'ended') throw new BridgeScheduleError('mount requires an open pass');
 		const value = this.evaluate(node, { kind: 'pass', pass: p });
-		const watcher: Watcher = {
-			id: this.nextWatcher++, name, root: p.root, node: node.id,
-			live: false, // subscribes at layout, i.e. at this pass's commit (§5.11)
-			lastRenderedValue: value,
-			snapshot: {
-				passId: p.id, pin: p.pin,
-				maskSlots: new Set(p.maskSlots),
-				includedSlots: this.includedSet(p),
-				rootCommitGen: this.root(p.root).commitGen,
-			},
-			dedup: new Set(),
-		};
+		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, value, {
+			passId: p.id, pin: p.pin,
+			maskSlots: new Set(p.maskSlots),
+			includedSlots: this.includedSet(p),
+			rootCommitGen: this.root(p.root).commitGen,
+		});
 		this.watchers.set(watcher.id, watcher);
+		let byNode = this.watchersByNode[node.id];
+		if (byNode === undefined) {
+			byNode = [];
+			this.watchersByNode[node.id] = byNode;
+		}
+		byNode.push(watcher);
 		p.mounted.push(watcher.id);
 		p.rendered.add(watcher.id);
 		return watcher;
@@ -1103,8 +2041,20 @@ export class CosignalBridge {
 		const w = this.watchers.get(watcherId);
 		if (w === undefined || !w.live) throw new BridgeScheduleError('render targets a live watcher');
 		if (w.root !== p.root) throw new BridgeScheduleError('watcher belongs to another root');
-		w.dedup.clear();
+		w.dedupBits = 0;
 		p.rendered.add(watcherId);
+	}
+
+	/** Unlinks a watcher from the per-node index (discarded mounts). */
+	private dropWatcher(wid: WatcherId): void {
+		const w = this.watchers.get(wid);
+		if (w === undefined) return;
+		this.watchers.delete(wid);
+		const byNode = this.watchersByNode[w.node];
+		if (byNode !== undefined) {
+			const i = byNode.indexOf(w);
+			if (i >= 0) byNode.splice(i, 1);
+		}
 	}
 
 	/** §3.2 useSignalEffect — committed-for-root observer (§5.11). */
@@ -1116,6 +2066,12 @@ export class CosignalBridge {
 		};
 		this.root(rootId);
 		this.reactEffects.set(e.id, e);
+		let byNode = this.reactEffectsByNode[node.id];
+		if (byNode === undefined) {
+			byNode = [];
+			this.reactEffectsByNode[node.id] = byNode;
+		}
+		byNode.push(e);
 		return e;
 	}
 
@@ -1123,10 +2079,17 @@ export class CosignalBridge {
 	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
 		const e: CoreEffect = {
 			id: this.nextEffect++, name, node: node.id,
-			lastValue: this.evaluate(node, { kind: 'newest' }),
+			lastValue: this.evaluate(node, NEWEST),
 			runs: 0,
+			queuedWalk: 0,
 		};
 		this.coreEffects.set(e.id, e);
+		let byNode = this.coreEffectsByNode[node.id];
+		if (byNode === undefined) {
+			byNode = [];
+			this.coreEffectsByNode[node.id] = byNode;
+		}
+		byNode.push(e);
 		return e;
 	}
 
@@ -1154,8 +2117,15 @@ export class CosignalBridge {
 				}
 			}
 		}
+		// Resolve mask token records BEFORE any retirement can reclaim them
+		// (§5.10 errata 1 quantifies over mask TOKENS at commit time).
+		const maskTokenRecords: Token[] = [];
+		if (kind === 'commit') {
+			for (const tid of p.maskTokens) maskTokenRecords.push(this.token(tid));
+		}
 		p.state = 'ended';
 		p.endKind = kind;
+		this.openPassByRoot.delete(p.root);
 		{
 			// Trace-only pass-end: fires BEFORE the end's consequences (retirement
 			// folds, per-root commits, drains, fixups), unlike the pass-committed/
@@ -1164,9 +2134,10 @@ export class CosignalBridge {
 			if (tr !== undefined) tr.passEnd(p, kind);
 		}
 		if (kind === 'discard') {
-			for (const wid of p.mounted) this.watchers.delete(wid); // never subscribed; the tree died
+			for (const wid of p.mounted) this.dropWatcher(wid); // never subscribed; the tree died
 			this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
 			this.reevaluateDeferredReleases();
+			this.reclaimAfterPassEnd(p);
 			const tr = this.trace;
 			if (tr !== undefined) tr.opEnd();
 			return;
@@ -1188,17 +2159,22 @@ export class CosignalBridge {
 		// (2) retirement folds due at this commit; then the per-root commit
 		// (lock-in) of every still-live mask token (§5.3).
 		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.token(tid), true);
-		for (const tid of p.maskTokens) {
-			const t = this.token(tid);
+		for (const t of maskTokenRecords) {
 			if (t.state !== 'live') continue; // fully retired above: the retired clause subsumes membership
 			const root = this.root(p.root);
-			if (!root.committedTokens.has(tid)) {
-				root.committedTokens.add(tid);
+			if (!root.committedTokens.has(t.id)) {
+				root.committedTokens.add(t.id);
+				if (t.slot !== undefined) root.committedBits |= 1 << t.slot;
 				root.commitGen++;
 				this.cas = this.mintSeq(); // committed-advance (§2): every per-root commit bumps it
-				this.log({ type: 'per-root-commit', root: p.root, token: tid });
-				// (3) durable drain scoped to this root's committed observers (§5.3).
-				this.drainCommittedObservers(p.root, 'per-root-commit');
+				this.log({ type: 'per-root-commit', root: p.root, token: t.id });
+				// (3) durable drain: the advanced slot's touched list plus any
+				// member-slot write drift, scoped to this root's committed
+				// observers (§5.3/§5.11).
+				const bits = (t.slot !== undefined ? 1 << t.slot : 0) | root.committedDirtySlots;
+				root.committedDirtySlots = 0;
+				const re = this.restaled.get(p.root);
+				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(p.root, 'per-root-commit', bits);
 			}
 		}
 		// (4) layout: subscribe, then mount fixup (§5.10/§5.11 lifecycle order).
@@ -1206,12 +2182,37 @@ export class CosignalBridge {
 			const w = this.watchers.get(wid);
 			if (w === undefined) continue;
 			w.live = true;
-			this.mountFixup(w, p, baseline);
+			this.mountFixup(w, p, baseline, maskTokenRecords);
+		}
+		// Re-staled detection (§4.2): a re-rendered watcher whose committed
+		// value moved past its pin is stale again the moment its commit reset
+		// lastRenderedValue; the NEXT durable drain reconciles it (the naive
+		// model's full scan does the same, one drain later than the flip).
+		for (const wid of p.rendered) {
+			const w = this.watchers.get(wid);
+			if (w === undefined || !w.live) continue;
+			const committedNow = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: p.root });
+			if (!Object.is(committedNow, w.lastRenderedValue)) this.markRestaled(w);
 		}
 		this.log({ type: 'pass-committed', pass: p.id, root: p.root });
 		this.reevaluateDeferredReleases();
+		this.reclaimAfterPassEnd(p);
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
+	}
+
+	/**
+	 * SPK-K1 mid-episode reclamation, pass-end site: the ended pass record
+	 * drops (its memos and mask mappings die with it — nothing dead can
+	 * validate later, §5.12), and its mask tokens re-check reclaimability
+	 * (the mask retention just lapsed).
+	 */
+	private reclaimAfterPassEnd(p: Pass): void {
+		this.passes.delete(p.id);
+		for (const tid of p.maskTokens) {
+			const t = this.tokens.get(tid);
+			if (t !== undefined) this.maybeReclaimToken(t);
+		}
 	}
 
 	/** §5.4 — deferred releases re-evaluate at every pass end, commit and discard alike. */
@@ -1225,10 +2226,39 @@ export class CosignalBridge {
 	}
 
 	private slotRetainedByOpenMask(slot: SlotId): boolean {
-		for (const p of this.passes.values()) {
-			if (p.state !== 'ended' && p.maskSlots.has(slot)) return true;
+		for (const p of this.openPassByRoot.values()) {
+			if ((p.maskBits >>> slot) & 1) return true;
 		}
 		return false;
+	}
+
+	private tokenMaskedByOpenPass(id: TokenId): boolean {
+		for (const p of this.openPassByRoot.values()) {
+			if (p.maskTokens.has(id)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * SPK-K1 mid-episode reclamation (the §5.12 sweep-predicate extension,
+	 * re-scoped by measurement): a token record is reclaimable once it is
+	 * retired, its slot identity is fully released (not deferred), no open
+	 * pass's mask names it, and none of its receipts remain un-compacted
+	 * (tapes still reference it by id — the retention the tenancy lemma
+	 * leans on). Keep-the-dirt discipline: touched bits/lists are untouched
+	 * — they are tenant-agnostic conservative dirt (§5.4).
+	 */
+	private maybeReclaimToken(t: Token): void {
+		if (t.state !== 'retired') return;
+		if (t.slot !== undefined) return; // identity still held (deferred release keeps tenant)
+		if (t.liveReceipts > 0) return;
+		if (t.id === this.ambientToken) return;
+		if (this.tokenMaskedByOpenPass(t.id)) return;
+		this.tokens.delete(t.id);
+		if (this.lastTokenId === t.id) {
+			this.lastTokenId = 0;
+			this.lastTokenRef = undefined;
+		}
 	}
 
 	// ---------------------------------------------------------- retirement
@@ -1249,6 +2279,7 @@ export class CosignalBridge {
 		if (!t.action) throw new BridgeScheduleError('settle targets an action token');
 		if (!t.parked || t.state !== 'live') throw new BridgeScheduleError('action already settled');
 		t.parked = false;
+		this.parkedCount--;
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchSettle(t, committed);
 		this.retireInternal(t, committed);
@@ -1263,37 +2294,59 @@ export class CosignalBridge {
 	 * this same path — persistence never depends on subscription.
 	 */
 	private retireInternal(t: Token, committed: boolean): void {
+		if (t.state === 'live') {
+			this.liveTokenCount--;
+			if (t.parked) this.parkedCount--;
+		}
 		t.state = 'retired';
 		t.committedFlag = committed;
 		t.parked = false;
 		const retiredSeq = this.mintSeq(); // one retirement sequence per retirement event
 		t.retiredSeq = retiredSeq;
-		const touched: AtomNode[] = [];
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'atom') continue;
+		// Stamp only the atoms this token actually touched (SPK-W/SPK-N1: the
+		// per-token touch list replaces the all-nodes/all-receipts scan).
+		let touchedAny = false;
+		const touchedAtoms = t.atomsTouched;
+		for (let i = 0; i < touchedAtoms.length; i++) {
+			const n = touchedAtoms[i]!;
+			if (n.retirementStamp === retiredSeq) continue; // duplicate touch entry
+			const tp = n.tp;
+			const tokens = tp.tokens;
+			const retired = tp.retired;
 			let hit = false;
-			for (const e of n.tape) {
-				if (e.token === t.id) {
-					e.retiredSeq = retiredSeq;
+			for (let j = tp.start; j < tp.n; j++) {
+				if (tokens[j] === t.id && retired[j] === 0) {
+					retired[j] = retiredSeq;
 					hit = true;
 				}
 			}
-			if (hit) touched.push(n);
+			if (hit) {
+				// §5.3 step 3 — mint the retirement stamp per touched atom.
+				n.retirementStamp = retiredSeq;
+				touchedAny = true;
+			}
 		}
-		// §5.3 step 3 — mint the retirement stamp per touched atom; bump cas.
-		for (const n of touched) n.retirementStamp = retiredSeq;
-		if (touched.length > 0) this.cas = this.mintSeq();
+		if (touchedAny) this.cas = this.mintSeq();
 		// Fold/compaction (§5.3 step 2's compaction predicate, both clauses).
 		this.compactAll();
 		this.log({ type: 'retired', token: t.id, committed, retiredSeq });
-		// §5.3 step 4 — durable drains: reconcile watchers and revalidate
-		// effects against committed truth. TODO(gate:SPK-N1): enumerate the
-		// slot's touched list instead of every observer (value-gated either
-		// way, so the fired set is identical).
-		for (const rootId of this.roots.keys()) this.drainCommittedObservers(rootId, 'retirement');
+		// §5.3 step 4 — durable drains: enumerate the flipped slot's touched
+		// list (never only a consumable write-time queue) and reconcile/
+		// revalidate that cone against committed truth, for every root (§5.9).
+		{
+			const slotBit = t.slot !== undefined ? 1 << t.slot : 0;
+			for (const r of this.roots.values()) {
+				const bits = slotBit | r.committedDirtySlots;
+				r.committedDirtySlots = 0;
+				const re = this.restaled.get(r.id);
+				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(r.id, 'retirement', bits);
+			}
+		}
 		// §5.3 step 5 — clear per-root rows (subsumed by the retired clause),
 		// THEN release the slot unless an open render mask names it.
-		for (const r of this.roots.values()) r.committedTokens.delete(t.id);
+		for (const r of this.roots.values()) {
+			if (r.committedTokens.delete(t.id)) this.rebuildCommittedBits(r);
+		}
 		if (t.slot !== undefined) {
 			const slot = this.slots[t.slot]!;
 			if (this.slotRetainedByOpenMask(slot.id)) {
@@ -1305,59 +2358,193 @@ export class CosignalBridge {
 			}
 		}
 		if (this.ambientToken === t.id) this.ambientToken = undefined;
+		this.maybeReclaimToken(t);
+	}
+
+	private rebuildCommittedBits(r: RootState): void {
+		let bits = 0;
+		for (const tid of r.committedTokens) {
+			const tok = this.tokens.get(tid);
+			if (tok !== undefined && tok.slot !== undefined) bits |= 1 << tok.slot;
+		}
+		r.committedBits = bits;
 	}
 
 	/**
 	 * §5.3 — compaction consumes a sequence-order prefix of the tape: entry e
 	 * compacts iff every entry with seq ≤ e.seq is retired AND
 	 * e.retiredSeq ≤ min(live pins). Compacted entries fold into base (kept
-	 * in the archive for the retention invariant).
+	 * in the archive only when `retainArchive` — SPK-K1).
 	 */
 	private compactAll(): void {
-		for (const n of this.nodes.values()) {
-			if (n.kind === 'atom') this.compactAtom(n);
+		if (this.dirtyAtoms.size === 0) return;
+		const minPin = this.minLivePin();
+		for (const n of this.dirtyAtoms) {
+			this.compactAtom(n, minPin);
+			if (n.tp.n === n.tp.start) this.dirtyAtoms.delete(n);
 		}
 	}
 
-	private compactAtom(atom: AtomNode): void {
-		const minPin = this.minLivePin();
+	private compactAtom(atom: AtomNode, minPin: number): void {
+		const tp = atom.tp;
+		const n = tp.n;
+		const retired = tp.retired;
+		const from = tp.start;
 		let cut = 0;
-		for (const e of atom.tape) {
-			if (e.retiredSeq === undefined) break; // prefix clause: an unretired earlier entry blocks everything after
-			if (e.retiredSeq > minPin) break; // pin clause: every live pin already sees e via the retired clause
+		while (from + cut < n) {
+			const r = retired[from + cut]!;
+			if (r === 0) break; // prefix clause: an unretired earlier entry blocks everything after
+			if (r > minPin) break; // pin clause: every live pin already sees e via the retired clause
 			cut++;
 		}
 		if (cut === 0) return;
-		const folded = atom.tape.slice(0, cut);
-		for (const e of folded) {
-			const next = this.applyOp(atom, e.op, atom.base);
-			if (!this.inCallback(() => atom.equals(next, atom.base))) atom.base = next;
-			atom.baseSeq = e.seq;
-			atom.archive.push(e);
+		const keepArchive = this.retainArchive;
+		for (let k = 0; k < cut; k++) {
+			const i = from + k;
+			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], atom.base);
+			if (atom.eqIsDefault) {
+				if (!Object.is(next, atom.base)) atom.base = next;
+			} else if (!this.inCallback(() => atom.equals(next, atom.base))) {
+				atom.base = next;
+			}
+			atom.baseSeq = tp.seqs[i]!;
+			if (keepArchive) atom.archiveStore.push(tp.entryAt(i));
+			// SPK-K1: a compacted receipt stops pinning its token record.
+			const tok = this.tokens.get(tp.tokens[i]!);
+			if (tok !== undefined) {
+				tok.liveReceipts--;
+				if (tok.liveReceipts === 0) this.maybeReclaimToken(tok);
+			}
 		}
-		atom.tape = atom.tape.slice(cut);
+		tp.drop(cut);
 	}
 
 	/**
-	 * §5.3/§5.11 — durable drain at a committed-truth flip: reconcile-check
-	 * each live watcher (last rendered value vs committed-for-root NOW;
-	 * urgent pre-paint correction on real difference — this comparison is
-	 * against committed truth, which is legal; live-write delivery is never
-	 * value-gated), and revalidate committed effects (re-run on change).
+	 * §5.3/§5.11 — durable drain at a committed-truth flip: enumerate the
+	 * flipped slot's touched list (§5.9 durable drains; watcher sets resolve
+	 * at drain time), reconcile-check each listed live watcher (last rendered
+	 * value vs committed-for-root NOW; urgent pre-paint correction on real
+	 * difference — this comparison is against committed truth, which is
+	 * legal; live-write delivery is never value-gated), and revalidate the
+	 * listed committed effects (re-run on change). Candidates fire in id
+	 * order (the naive model's map order); the touched-list scoping is
+	 * value-gated-identical to a full observer scan by the §5.9 coverage
+	 * construction.
 	 */
-	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
+	private drainWatcherBuf: Watcher[] = [];
+	private drainEffectBuf: ReactEffect[] = [];
+
+	/**
+	 * Watchers re-staled by their own commit (§4.2): the commit reset
+	 * lastRenderedValue to the pass world's pin-old value while committed
+	 * truth had already moved past the pin. The naive model catches these at
+	 * its next full-scan drain; the engine keeps the precise set and folds it
+	 * into the next durable drain on the watcher's root.
+	 */
+	private restaled = new Map<RootId, Set<Watcher>>();
+
+	private markRestaled(w: Watcher): void {
+		let set = this.restaled.get(w.root);
+		if (set === undefined) {
+			set = new Set();
+			this.restaled.set(w.root, set);
+		}
+		set.add(w);
+	}
+
+	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit', slotBits: number): void {
 		const world: World = { kind: 'committed', root: rootId };
-		for (const w of this.watchers.values()) {
-			if (!w.live || w.root !== rootId) continue;
+		const gen = ++this.walkGen; // reuse the walk column for per-drain candidate dedup
+		const lastWalk = this.lastWalk;
+		const ws = this.drainWatcherBuf;
+		const es = this.drainEffectBuf;
+		ws.length = 0;
+		es.length = 0;
+		// Candidate collection: the flipped slots' touched lists, expanded over
+		// WEAK (untracked) out-edges — strong cones are already fully listed.
+		const stack = this.walkStack;
+		let sp = 0;
+		let sb = slotBits;
+		while (sb !== 0) {
+			const slot = 31 - Math.clz32(sb & -sb);
+			sb &= sb - 1;
+			const list = this.slotTouched[slot]!;
+			for (let i = 0; i < list.length; i++) {
+				const nid = list[i]!;
+				if (lastWalk[nid] === gen) continue;
+				lastWalk[nid] = gen;
+				stack[sp++] = nid;
+			}
+		}
+		const candidates: NodeId[] = [];
+		while (sp > 0) {
+			const nid = stack[--sp]!;
+			candidates.push(nid);
+			const weak = this.weakOutList[nid];
+			if (weak !== undefined) {
+				for (let i = 0; i < weak.length; i++) {
+					const wn = weak[i]!;
+					if (lastWalk[wn] !== gen) {
+						lastWalk[wn] = gen;
+						stack[sp++] = wn;
+					}
+				}
+			}
+			// A weak hop lands on a node whose STRONG dependents also embed it
+			// (tracked reads of an untracked-reading computed): expand strong
+			// outs past a weak hop too, so transitive observers reconcile.
+			const outs = this.outList[nid];
+			if (outs !== undefined) {
+				for (let i = 0; i < outs.length; i++) {
+					const on = outs[i]!;
+					if (lastWalk[on] !== gen) {
+						lastWalk[on] = gen;
+						stack[sp++] = on;
+					}
+				}
+			}
+		}
+		for (let c = 0; c < candidates.length; c++) {
+			const nid = candidates[c]!;
+			const nw = this.watchersByNode[nid];
+			if (nw !== undefined) {
+				for (let j = 0; j < nw.length; j++) {
+					const w = nw[j]!;
+					if (w.live && w.root === rootId) ws.push(w);
+				}
+			}
+			const ne = this.reactEffectsByNode[nid];
+			if (ne !== undefined) {
+				for (let j = 0; j < ne.length; j++) {
+					const e = ne[j]!;
+					if (e.root === rootId) es.push(e);
+				}
+			}
+		}
+		{
+			const re = this.restaled.get(rootId);
+			if (re !== undefined && re.size > 0) {
+				for (const w of re) {
+					if (!w.live) continue;
+					if (lastWalk[w.node] === gen) continue; // its node was already listed
+					ws.push(w);
+				}
+				re.clear();
+			}
+		}
+		if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
+		if (es.length > 1) es.sort((a, b) => a.id - b.id);
+		for (let i = 0; i < ws.length; i++) {
+			const w = ws[i]!;
 			const now = this.evaluate(this.nodeById(w.node), world);
 			if (!Object.is(now, w.lastRenderedValue)) {
 				this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
-				w.dedup.clear(); // dedup bits re-arm at the watcher's render (§5.9)
+				w.dedupBits = 0; // dedup bits re-arm at the watcher's render (§5.9)
 			}
 		}
-		for (const e of this.reactEffects.values()) {
-			if (e.root !== rootId) continue;
+		for (let i = 0; i < es.length; i++) {
+			const e = es[i]!;
 			const now = this.evaluate(this.nodeById(e.node), world);
 			if (!Object.is(now, e.lastValue)) {
 				e.lastValue = now;
@@ -1365,6 +2552,8 @@ export class CosignalBridge {
 				this.log({ type: 'react-effect-run', effect: e.name, root: rootId, value: now });
 			}
 		}
+		ws.length = 0;
+		es.length = 0;
 	}
 
 	// ---------------------------------------------------------- mount fixup
@@ -1380,9 +2569,8 @@ export class CosignalBridge {
 	 * suppressed divergence must be exactly corrective-covered (errata 2,
 	 * asserted on every mount).
 	 */
-	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: number; rootCommitGen: number }): void {
+	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: number; rootCommitGen: number }, maskTokenRecords: Token[]): void {
 		const node = this.nodeById(w.node);
-		this.refreshEdgesAllWorlds();
 		const closure = this.dependencyClosureOf(w.node);
 		// Per-token corrective loop: every LIVE written token that touched the
 		// node. A premise of the population argument, not an optimization
@@ -1396,7 +2584,7 @@ export class CosignalBridge {
 			if (w.snapshot.includedSlots.has(slot.id) && slot.writeClock <= w.snapshot.pin) continue;
 			this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
 			correctedLive.add(t.id);
-			w.dedup.add(slot.id); // the corrective is a scheduled setState in t's lane (fork.runInBatch)
+			w.dedupBits |= 1 << slot.id; // the corrective is a scheduled setState in t's lane (fork.runInBatch)
 		}
 		// The four-conjunct fast-out (§5.10). The clock conjunct checks the
 		// captured mask slots AND the committing pass's mask tokens at commit
@@ -1404,10 +2592,7 @@ export class CosignalBridge {
 		// invisible to the slot-quantified form).
 		const clocksQuiet =
 			[...w.snapshot.maskSlots].every((s) => this.slots[s]!.writeClock <= w.snapshot.pin) &&
-			[...committingPass.maskTokens].every((tid) => {
-				const t = this.token(tid);
-				return t.writeSeqs.length === 0 || t.writeSeqs[t.writeSeqs.length - 1]! <= w.snapshot.pin;
-			});
+			maskTokenRecords.every((t) => t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin);
 		const fastOut =
 			w.snapshot.passId === committingPass.id &&
 			baseline.cas <= w.snapshot.pin &&
@@ -1440,27 +2625,25 @@ export class CosignalBridge {
 		if (!Object.is(vFx, w.lastRenderedValue)) {
 			this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
 			w.lastRenderedValue = vFx; // urgent pre-paint correction
-			w.dedup.clear();
+			w.dedupBits = 0;
 			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctedLive.size);
 			return;
 		}
 		if (tr !== undefined) tr.mountFixup(w, 'compare-clean', correctedLive.size);
 	}
 
-	/** Transitive dependency closure feeding a node, over the union graph. */
+	/** Transitive dependency closure feeding a node (reverse BFS over K0∪K1). */
 	dependencyClosureOf(nodeId: NodeId): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
-		let grew = true;
-		while (grew) {
-			grew = false;
-			for (const [dep, outs] of this.episodeEdges) {
-				if (closure.has(dep)) continue;
-				for (const out of outs) {
-					if (closure.has(out)) {
-						closure.add(dep);
-						grew = true;
-						break;
-					}
+		const queue = [nodeId];
+		while (queue.length > 0) {
+			const cur = queue.pop()!;
+			const ins = this.inList[cur];
+			if (ins === undefined) continue;
+			for (const dep of ins) {
+				if (!closure.has(dep)) {
+					closure.add(dep);
+					queue.push(dep);
 				}
 			}
 		}
@@ -1468,9 +2651,9 @@ export class CosignalBridge {
 	}
 
 	private tokenTouches(t: Token, closure: Set<NodeId>): boolean {
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'atom' || !closure.has(n.id)) continue;
-			for (const e of n.tape) if (e.token === t.id) return true;
+		const atoms = t.atomsTouched;
+		for (let i = 0; i < atoms.length; i++) {
+			if (closure.has(atoms[i]!.id)) return true;
 		}
 		return false;
 	}
@@ -1479,34 +2662,54 @@ export class CosignalBridge {
 
 	/** §4.1 fact 2 — discardAllWip: synchronously abandons every WIP pass. */
 	discardAllWip(): void {
-		for (const p of this.passes.values()) {
-			if (p.state !== 'ended') this.passEnd(p.id, 'discard');
+		for (const p of [...this.openPassByRoot.values()]) {
+			this.passEnd(p.id, 'discard');
 		}
 	}
 
 	quiescent(): boolean {
-		return this.liveTokens().length === 0 && this.livePins().length === 0;
+		return this.liveTokenCount === 0 && this.openPassByRoot.size === 0;
 	}
 
 	/**
 	 * §5.12 — quiescence (no live tokens, no live pins, no parked actions):
-	 * the K1 union plane bulk-resets (epoch bump) and every retained counter
-	 * renumbers, order-preserving. Token/pass serials are a separate,
-	 * never-renumbered domain. The kernel plane needs no refresh here: K0
-	 * already holds every committed value by the eager-apply invariant, and
-	 * the fold-everything world path re-records edges on the next evaluation
-	 * (the kernel-pull refresh + cone carry is TODO(gate:SPK-R)).
+	 * the K1 union plane bulk-resets (epoch bump), every retained counter
+	 * renumbers (order-preserving), and every K1-touched node holding a
+	 * committed watcher or effect-dep snapshot refreshes by a forced kernel
+	 * pull into the NEW episode's K1 plane (the walks route over the K1
+	 * mirror, so coverage must be re-recorded — the cone-carry outcome).
 	 */
 	quiesce(): void {
 		if (!this.quiescent()) throw new BridgeScheduleError('quiescence requires no live tokens, pins, or parked actions (§5.12)');
 		// Residue check: with no live pins, the last retirement compacted every tape.
 		for (const n of this.nodes.values()) {
-			if (n.kind === 'atom' && n.tape.length > 0) {
-				throw new BridgeInvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.tape.length} receipts (§5.12)`);
+			if (n.kind === 'atom' && n.tp.n > n.tp.start) {
+				throw new BridgeInvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.tp.n - n.tp.start} receipts (§5.12)`);
 			}
 		}
-		this.episodeEdges.clear();
+		// Collect the §5.12 refresh targets BEFORE the reset: every K1-touched
+		// node holding a committed watcher or effect-dep snapshot.
+		const refreshTargets: ComputedNode[] = [];
+		for (let id = 0; id < this.nodesArr.length; id++) {
+			const n = this.nodesArr[id];
+			if (n === undefined || n.kind !== 'computed') continue;
+			if (this.outList[id] === undefined && this.inList[id] === undefined) continue; // not K1-touched
+			const ws = this.watchersByNode[id];
+			const es = this.reactEffectsByNode[id];
+			if ((ws === undefined || ws.length === 0) && (es === undefined || es.length === 0)) continue;
+			refreshTargets.push(n);
+		}
 		this.epoch++;
+		// K1 bulk-reset + plane watermark zeroes (§5.12).
+		this.outSets.length = 0;
+		this.outList.length = 0;
+		this.inList.length = 0;
+		this.edgeCount = 0;
+		this.lastSweepEdges = 0;
+		this.weakOutSets.length = 0;
+		this.weakOutList.length = 0;
+		for (let i = 0; i < this.touched.length; i++) this.touched[i] = 0;
+		for (const list of this.slotTouched) list.length = 0;
 		// Dead-episode records drop before renumbering (§5.12): nothing from a
 		// dead episode can validate in a live one; serial counters stay monotone.
 		for (const [id, p] of this.passes) {
@@ -1514,6 +2717,23 @@ export class CosignalBridge {
 		}
 		for (const [id, t] of this.tokens) {
 			if (t.state === 'retired') this.tokens.delete(id);
+		}
+		this.lastTokenId = 0;
+		this.lastTokenRef = undefined;
+		// Memo planes die by epoch; drop them eagerly (conservative refusal).
+		for (const r of this.roots.values()) r.memos.clear();
+		this.newestMemos.clear();
+		// §5.12 kernel-pull refresh, AFTER the reset: a fresh newest evaluation
+		// of each target re-records its cone into the NEW episode's K1 plane
+		// (the cone-carry outcome, supplementary walk §6). World evaluations
+		// reject writes, so the refresh cannot loop; a pull that throws keeps
+		// its sentinel and stays on the demand path.
+		for (const n of refreshTargets) {
+			try {
+				this.evaluate(n, NEWEST);
+			} catch {
+				// erroring getters keep their throw-on-demand behavior (§5.8)
+			}
 		}
 		this.renumber();
 		// Dead-episode bookkeeping zeroes (§5.4/§5.9: bulk-zero at episode reset).
@@ -1523,7 +2743,7 @@ export class CosignalBridge {
 			s.carriedMaxRetiredSeq = 0;
 			s.releasePending = false;
 		}
-		for (const w of this.watchers.values()) w.dedup.clear();
+		for (const w of this.watchers.values()) w.dedupBits = 0;
 		this.log({ type: 'epoch-reset', epoch: this.epoch });
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
@@ -1533,7 +2753,8 @@ export class CosignalBridge {
 	 * §5.12 renumber duty list — every retained sequence value rewritten in
 	 * an order-preserving pass: base sequences, retirement stamps, the
 	 * committed-advance counter, watcher snapshot pins. Tapes are empty at
-	 * quiescence; archives belong to the dead episode and clear.
+	 * quiescence; archives belong to the dead episode and clear; memo
+	 * planes were dropped (nothing retains a stale sequence).
 	 */
 	private renumber(): void {
 		const retained = new Set<number>([0]);
@@ -1552,7 +2773,7 @@ export class CosignalBridge {
 			if (n.kind !== 'atom') continue;
 			n.baseSeq = rw(n.baseSeq);
 			n.retirementStamp = rw(n.retirementStamp);
-			n.archive = []; // per-episode retention comparisons only
+			n.archiveStore = []; // per-episode retention comparisons only
 			n.origin = n.base;
 		}
 		this.cas = rw(this.cas);
@@ -1572,7 +2793,7 @@ export class CosignalBridge {
 	}
 
 	newestValue(node: AnyNode): Value {
-		return this.evaluate(node, { kind: 'newest' });
+		return this.evaluate(node, NEWEST);
 	}
 
 	passValue(node: AnyNode, pass: Pass): Value {
@@ -1583,9 +2804,9 @@ export class CosignalBridge {
 		return this.events.filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
 	}
 
-	/** Events appended after a caller-captured watermark (test surface). */
+	/** Events appended after a caller-captured watermark (absolute cursor; test/shim surface). */
 	eventsSince(mark: number): BridgeEvent[] {
-		return this.events.slice(mark);
+		return this.events.slice(Math.max(0, mark - this.eventsBase));
 	}
 }
 

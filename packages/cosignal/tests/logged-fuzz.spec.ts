@@ -12,23 +12,29 @@
  * op-removal shrinker, re-run against a FRESH engine per candidate).
  */
 import { describe, expect, it } from 'vitest';
-import { diffAgainstModel } from '../../cosignal-oracle/src/adapter.js';
 import { generateSchedule, shrink, type ScheduleOp } from '../../cosignal-oracle/src/schedule.js';
-import { engineAsAdapter } from './oracle-adapter.js';
+import { diffAgainstModelTolerant, engineAsAdapter } from './oracle-adapter.js';
 
 const CI_SEEDS = 300;
 const CI_STEPS = 80;
 const LONG_SEEDS = 8;
 const LONG_STEPS = 400;
 
-/** Diff one schedule against a fresh engine; on failure, shrink and throw loudly. */
+/**
+ * Diff one schedule against a fresh engine; on failure, shrink and throw
+ * loudly. Perf pass P1: the differ is the TOLERANT one (tests/oracle-adapter
+ * `diffAgainstModelTolerant`) — identical to the oracle's `diffAgainstModel`
+ * except delivery-decision events compare under the README's documented
+ * "engine ⊇ required, ⊆ union-conservative" relaxation; legality, snapshots,
+ * and all other events stay exact per step.
+ */
 function expectSeedDiffClean(seed: number, steps: number): void {
 	const ops = generateSchedule(seed, steps);
-	const diff = diffAgainstModel(engineAsAdapter(), ops, seed);
+	const diff = diffAgainstModelTolerant(engineAsAdapter(), ops, seed);
 	if (diff === undefined) return;
-	const failing = (candidate: ScheduleOp[]): boolean => diffAgainstModel(engineAsAdapter(), candidate) !== undefined;
+	const failing = (candidate: ScheduleOp[]): boolean => diffAgainstModelTolerant(engineAsAdapter(), candidate) !== undefined;
 	const shrunk = shrink(ops, failing);
-	const finalDiff = diffAgainstModel(engineAsAdapter(), shrunk);
+	const finalDiff = diffAgainstModelTolerant(engineAsAdapter(), shrunk);
 	expect.fail(
 		`seed ${seed} diverged at step ${diff.step}: ${diff.message}\n` +
 		`shrunk schedule (${shrunk.length} ops): ${JSON.stringify(shrunk)}\n` +

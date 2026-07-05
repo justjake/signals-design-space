@@ -31,6 +31,13 @@ const NC = envInt('NC', 64);
 const EVENTS = env('EVENTS', 'truncate');
 
 const b = registerReactBridge();
+// Perf pass P1 measurement-isolation fix (bench bug at post-P1 throughput):
+// the gate config's stated intent is "truncate bridge.events at each sample
+// so the heap slope isolates the retained planes" — at ~100x the reference
+// frame rate a 5s inter-sample backlog is hundreds of MB and drowns the
+// planes. Bound the diagnostic stream in the truncate config only; the
+// retain config still measures the unbounded-stream liability.
+if (EVENTS === 'truncate') b.setEventCapacity(65536);
 const atoms = [];
 for (let i = 0; i < NA; i++) atoms.push(b.atom(`a${i}`, 0));
 let phase = 0;
@@ -118,18 +125,19 @@ while (Date.now() - t0 < DURATION_MS) {
 }
 takeSample(Date.now());
 
-// linear-fit heap slope over samples (skip the first two: warmup/JIT)
-const fit = samples.slice(2);
+// linear-fit heap slope over samples (skip the first two: warmup/JIT;
+// short liability runs keep at least the last two samples — P1 bench fix)
+const fit = samples.length > 4 ? samples.slice(2) : samples.slice(-2);
 const n = fit.length;
 const mx = fit.reduce((s, p) => s + p.t, 0) / n;
 const my = fit.reduce((s, p) => s + p.heap, 0) / n;
 const slope = fit.reduce((s, p) => s + (p.t - mx) * (p.heap - my), 0) / fit.reduce((s, p) => s + (p.t - mx) ** 2, 0);
 const mbPerHour = (slope * 3600) / (1024 * 1024);
-const first = windowMedians[1] ?? windowMedians[0];
+const first = (windowMedians.length > 2 ? windowMedians[1] : windowMedians[0]) ?? windowMedians[0];
 const last = windowMedians[windowMedians.length - 1];
 const degradePct = ((last - first) / first) * 100;
 const end = samples[samples.length - 1];
-const start = samples[2];
+const start = samples.length > 4 ? samples[2] : samples[0];
 const perHour = (key) => ((end[key] - start[key]) / (end.t - start.t)) * 3600;
 
 const base = { gate: 'SPK-K1', config: `logged-${EVENTS}`, shape: `soak${Math.round(DURATION_MS / 1000)}s` };

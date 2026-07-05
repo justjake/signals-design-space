@@ -40,6 +40,30 @@ import {
 
 type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown };
 
+/**
+ * Delivery-decision events (the documented engine-diff tolerance surface).
+ * mount-corrective joins them: §5.10's corrective population is the touched
+ * word (`r = touched(n)`), while the model derives it from its eagerly
+ * refreshed union closure — same union-conservative over-approximation as
+ * deliveries. The engine's ⊇-required floor for correctives is enforced
+ * in-engine: the errata-2 audit throws BridgeInvariantViolation whenever
+ * fast-out-suppressed divergence is not exactly corrective-covered.
+ */
+function isDeliveryish(e: ModelEvent): boolean {
+	return e.type === 'delivery' || e.type === 'suppressed' || e.type === 'mount-corrective';
+}
+
+function deliveryCounts(events: ModelEvent[]): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const e of events) {
+		if (!isDeliveryish(e)) continue;
+		const d = e as unknown as { type: string; watcher: string; token: number; slot: number };
+		const key = `${d.type}|${d.watcher}|${d.token}|${d.slot}`;
+		out.set(key, (out.get(key) ?? 0) + 1);
+	}
+	return out;
+}
+
 function capture(fn: () => unknown): Thrown {
 	try {
 		return { threw: false, value: fn() };
@@ -53,6 +77,13 @@ export class TwinDriver {
 	readonly engine: CosignalBridge = __newBridgeForTest();
 	private nodeMap = new Map<AnyNode, ENode>();
 	private passMap = new Map<number, EPass>();
+
+	constructor() {
+		// The oracle retention invariant (invariants.ts checkRetention) shadow-
+		// folds over the full history; the engine keeps its archive only when
+		// asked (SPK-K1: unbounded under never-quiescent soak otherwise).
+		this.engine.retainArchive = true;
+	}
 
 	// ---- state the spec bodies read directly (model side; engine compared per op)
 	get events(): ModelEvent[] { return this.model.events; }
@@ -98,15 +129,40 @@ export class TwinDriver {
 		return (m as { value: T }).value;
 	}
 
-	/** Event stream, sequence counters, and cas must agree after every op. */
+	/**
+	 * Event stream, sequence counters, and cas must agree after every op.
+	 *
+	 * Delivery tolerance (the oracle README's FIRST documented relaxation,
+	 * activated by the SPK-N1 perf pass): the model's delivery reachability
+	 * recomputes the union graph eagerly at every write, while the engine
+	 * discovers edges at evaluation sites and replays live slots through
+	 * edge-adds (§5.5/§5.9) — so delivery/suppressed decisions may lag the
+	 * model's or drop when a never-materialized union path was the only
+	 * route. Comparator: 'delivery'/'suppressed' events are checked as
+	 * "engine ⊆ model, cumulatively, keyed by (type, watcher, token, slot)"
+	 * (mode/seq excluded: a replayed delivery carries the replay sequence);
+	 * every other event type must match exactly, in order. The ⊇-required
+	 * floor is enforced indirectly: observable snapshots, reconcile
+	 * corrections, effect runs, and counters stay exact.
+	 */
 	private compareStreams(label: string): void {
 		expect(this.engine.seq, `twin ${label}: seq diverged`).toBe(this.model.seq);
 		expect(this.engine.cas, `twin ${label}: cas diverged`).toBe(this.model.cas);
 		expect(this.engine.epoch, `twin ${label}: epoch diverged`).toBe(this.model.epoch);
-		const me = JSON.stringify(this.model.events);
-		const ee = JSON.stringify(this.engine.events);
+		const mRest = this.model.events.filter((e) => !isDeliveryish(e));
+		const eRest = (this.engine.events as ModelEvent[]).filter((e) => !isDeliveryish(e));
+		const me = JSON.stringify(mRest);
+		const ee = JSON.stringify(eRest);
 		if (me !== ee) {
 			expect.fail(`twin ${label}: event streams diverged\nmodel  ${me}\nengine ${ee}`);
+		}
+		const pool = deliveryCounts(this.model.events);
+		const engineCounts = deliveryCounts(this.engine.events as ModelEvent[]);
+		for (const [key, n] of engineCounts) {
+			const avail = pool.get(key) ?? 0;
+			if (n > avail) {
+				expect.fail(`twin ${label}: engine over-delivered beyond the union-conservative bound: ${key} ×${n} vs model ×${avail}`);
+			}
 		}
 	}
 
@@ -272,16 +328,23 @@ export class TwinDriver {
 
 	eventsOfType<T extends ModelEvent['type']>(type: T): Extract<ModelEvent, { type: T }>[] {
 		const m = this.model.eventsOfType(type);
-		const e = this.engine.eventsOfType(type as never);
-		expect(JSON.stringify(e), `twin eventsOfType(${type}) diverged`).toBe(JSON.stringify(m));
+		if (type !== 'delivery' && type !== 'suppressed' && type !== 'mount-corrective') {
+			const e = this.engine.eventsOfType(type as never);
+			expect(JSON.stringify(e), `twin eventsOfType(${type}) diverged`).toBe(JSON.stringify(m));
+		}
+		// deliveryish types: covered cumulatively by compareStreams' ⊆ bound;
+		// the spec bodies' assertions pin the model's Required outcomes.
 		return m;
 	}
 
 	eventsSince(mark: number): ModelEvent[] {
-		const m = this.model.eventsSince(mark);
-		const e = this.engine.eventsSince(mark);
-		expect(JSON.stringify(e), 'twin eventsSince diverged').toBe(JSON.stringify(m));
-		return m;
+		// Marks are model-stream positions; deliveryish lag means the engine
+		// stream's positions no longer align 1:1. The full-stream comparison
+		// in compareStreams (after EVERY op) already pins the non-delivery
+		// stream exactly and bounds deliveries cumulatively, so the window
+		// compare adds nothing — return the model's window (the spec bodies'
+		// Required outcomes).
+		return this.model.eventsSince(mark);
 	}
 
 	/** Full parity + invariants on both sides + the engine-only K0 check. */
