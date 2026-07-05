@@ -1,5 +1,20 @@
 # One Core convergence plan (2026-07-05)
 
+> **AMENDED after adversarial review + owner rulings (same day).**
+> Both reviews (codex, fable — see reviews/2026-07-05-one-core-plan-
+> review-*.md) converged: Phases 1–2 as originally specified routed
+> attempt-lifetime render artifacts through batch-lifetime machinery.
+> Owner rulings: **Phase 1 is DROPPED** — `useComputed` keeps
+> deps-keyed node recreation (React's own render-artifact lifecycle;
+> the stable-node design existed only to serve a suspense posture now
+> judged to exceed React). **Phase 2 is REDEFINED** below (per-key
+> cache on the living node; two-form `ctx.use`). **Phase 0 landed**
+> (f6a109b) with checkpoint 4 REVERTED by experiment — the mount fast
+> path is semantic, pinned as scar S43. **New Phase 1b added**: the
+> quiet-mode write short-circuit (owner-ratified sync-price
+> criterion). Phase 2's original text is superseded by the amendment
+> at the end of that section.
+
 Owner mandate: cosignal ships as **One Core** — a concurrency-ready
 signals library, sync by default, exactly React's own posture (one
 build; never using transitions means never paying for them beyond
@@ -118,6 +133,54 @@ lives across re-renders, so the same Promise instance is reused.
   identical to React's own uncached-promise story; apps that care use
   their data layer's cache (react-query/SWR/Relay compose inside
   computeds).
+
+## Phase 2 as amended (owner rulings, post-review)
+
+- `useComputed` recreation STAYS (Phase 1 dropped): React versions its
+  render artifacts per fiber and clears aborted ones; recreation
+  delegates function-version selection to that machinery instead of
+  duplicating it.
+- `ctx.use` becomes two forms, both exact React parity:
+  1. `ctx.use(promise)` — the caller cached the promise (in their data
+     layer or component state); we unwrap settled values and suspend on
+     pending ones. This is React's `use()` contract verbatim.
+  2. `ctx.use(key, factory)` — the batteries-included form: the node
+     keeps a per-key map for its own lifetime; same key ⇒ same
+     promise/value (safe across worlds — the key carries the
+     world-varying inputs, and a request cache is monotone), different
+     keys coexist. This is the "framework-provided cache" role React's
+     docs assign to frameworks, scoped to the living consumer exactly
+     as React requires ("the same Promise instance is reused across
+     re-renders").
+- The bare positional-factory form (no key) is DELETED — it is the
+  "uncached promise" footgun react.dev warns about, and the reviews
+  proved it world-unsound (one positional slot collides across worlds
+  asking different queries).
+- The adapter's capsule system deletes wholesale (String(fn) and
+  value-prefix identity included). The adapter's one suspense job:
+  translate the thrown not-ready marker to React.
+- Re-pin to parity: the mount-retry test (`fetches === 1` across a
+  discarded initial mount) changes to React's own behavior — a
+  discarded mount attempt may re-run the factory; apps that need
+  cross-death dedup cache the promise in their data layer and use
+  form 1.
+- Honest referee note: the reference model has no thenable vocabulary,
+  so this phase is policed by the engine suite + bindings battery, not
+  lockstep fuzz. Extending the model with a thenable op is follow-up
+  work, justified only if suspense schedules keep finding bugs.
+
+## Phase 1b (new) — quiet-mode writes (owner-ratified criterion)
+
+While no deferred batch is live and no render pass is open, a write to
+a registered atom folds directly (no receipt, no tape, no delivery
+walk, no event) — the concurrency pipeline arms only while something
+is actually pending, so a React app that never starts a transition
+pays raw-kernel prices plus one branch. Acceptance: a benchmark
+criterion (host-attached sync write within a small budget of the
+kernel write) plus fuzz/battery schedules covering transitions arming
+and disarming around quiet writes (a transition starting after quiet
+writes begins from committed base — there is no history to
+reconstruct).
 
 ## Phase 3 — One React Adapter
 
