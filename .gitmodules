@@ -38,3 +38,7 @@
 [submodule "packages/dalien-signals"]
 	path = packages/dalien-signals
 	url = https://github.com/justjake/alien-signals.git
+[submodule "vendor/react"]
+	path = vendor/react
+	url = https://github.com/justjake/react.git
+	branch = cosignal-fork

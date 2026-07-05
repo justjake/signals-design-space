@@ -6,6 +6,15 @@
 		"conformance": "pnpm -C harness conformance",
 		"bench": "pnpm -C harness bench",
 		"memory": "pnpm -C harness memory",
-		"typecheck": "pnpm -C harness typecheck"
+		"typecheck": "pnpm -C harness typecheck",
+		"fork:build": "fork/build-react.sh",
+		"fork:test": "cd vendor/react && yarn test --no-watchman ReactFiberBatchRegistry"
+	},
+	"pnpm": {
+		"overrides": {
+			"react": "link:vendor/react/build/oss-experimental/react",
+			"react-dom": "link:vendor/react/build/oss-experimental/react-dom",
+			"scheduler": "link:vendor/react/build/oss-experimental/scheduler"
+		}
 	}
 }
