@@ -1,11 +1,7 @@
-/**
- * SPK-L parent — LOGGED-quiet residual (O19). Pre-registered decision:
- * "G-Q's ≤2% vs the measured 2.4–3.8% branch floor: SPK-L (idle machine)
- * decides; pre-registered monitor renegotiation to ≤3% or the mitigation
- * ladder." Canonical SPK-L wants an IDLE machine; this run is best-effort
- * on a loaded machine (load disclosed in the results doc) — label results
- * accordingly. 7 processes per config for tighter medians.
- */
+// Measures the quiet residual of loading the concurrent engine: per-op ns of
+// plain (unregistered) signals with the logged build armed but idle, against
+// the base build on identical workloads. Best run on an idle machine; 7
+// processes per config for tighter medians.
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';

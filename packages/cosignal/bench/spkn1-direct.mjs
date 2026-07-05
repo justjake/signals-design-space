@@ -1,10 +1,8 @@
-/**
- * SPK-N1 child, DIRECT build comparator: F effects on c=a+1; W writes/frame
- * with the same alternating changed/equal value pattern (equal writes are
- * equality-suppressed in DIRECT — the value-gated baseline the value-blind
- * LOGGED walk is priced against). Batches (B) do not exist in DIRECT
- * propagation; writes are unbatched so propagate cost is per-write.
- */
+// Base-build comparator for the fan-out measurement: F effects on c=a+1,
+// W writes/frame alternating changed/equal values (the base build drops
+// writes equal to the current value — the value-gated baseline the logged
+// build's value-blind delivery is priced against). Writes are unbatched so
+// propagation cost is per-write.
 import { Atom, Computed, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 

@@ -1,7 +1,9 @@
 /**
- * Policy-layer contracts: custom equality (wrapper-returns-old-reference),
- * error sentinel boxes, ctx.previous, ReducerAtom, fold purity, configure
- * input validation.
+ * Policy-layer contracts of the base library — the behavior layered above
+ * the packed core, which itself compares only reference identity: custom
+ * equality (an equality cutoff returns the old reference), error sentinel
+ * boxes, the ctx.previous hint, ReducerAtom, updater/reducer purity, and
+ * configure() input validation.
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, ReducerAtom, configure, effect } from '../src/index';

@@ -1,11 +1,8 @@
-/**
- * SPK-L tier-0-STYLE shapes (written fresh for this gate — harness/bench/
- * shapes.ts is off-limits per the battery rules; these are small analogs of
- * the tier-0 read/isolate/propagate families, identical for both builds).
- * Each returns { run(n): number, checksum(): number } over injected
- * {Atom, Computed, effect} constructors so the DIRECT and LOGGED children
- * share exact workload code without sharing a process or an import graph.
- */
+// Workload shapes shared by the quiet-residual children: read polling, deep
+// propagation, broad isolated updates, and a diamond. Each returns
+// { run(n): number, checksum(): number } over injected {Atom, Computed,
+// effect} constructors so both children run identical workload code without
+// sharing a process or an import graph.
 export function makeShape(name, { Atom, Computed, effect }) {
 	if (name === 'readPoll') {
 		const a = new Atom(1);

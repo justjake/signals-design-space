@@ -1,35 +1,43 @@
 /**
- * cosignal v1 — R11 tracing (`cosignal/trace`), the lazily loaded diagnostics
- * entry. Spec anchors: requirements R11 ("lazily-loadable, zero-allocation
- * recorder (ring + lossless session modes), causality queries, Graphviz
- * renderers; untraced cost = one slot check per site") and the §5.13 pin ("a
- * lazily loadable recorder (ring + session modes, one slot check per site
- * when untraced) hooks the operation-table wrappers; orthogonal to
- * everything above"). The synthesized-spec §16 design is reused with one
- * architecture-forced adaptation, documented at CAUSALITY below.
+ * `cosignal/trace` — the lazily loaded diagnostics entry: a zero-allocation
+ * event recorder for the logged build (the concurrent engine). It answers
+ * "why did this component re-render / this effect run / this value change?"
+ * without perturbing the engine it observes. The disciplines it holds:
+ *
+ *  - when no tracer is attached, the engine's entire tracing cost is one
+ *    nullable-field check per event site (asserted over the source by
+ *    tests/trace-off.spec.ts);
+ *  - recording an event allocates nothing: fixed-size integer records are
+ *    written into preallocated buffers;
+ *  - two capture modes — a ring (flight recorder) and a session (lossless
+ *    capture up to a byte budget);
+ *  - every record names the event that provoked it, so causality is
+ *    queryable after the fact.
  *
  * ## Loading and cost
  * This module imports the engine as TYPES ONLY — its runtime module graph is
- * exactly {trace.ts}, and `./logged.ts` never imports it back. Until
- * `attachTracer(bridge)` runs, the engine's only tracing artifact is the
- * `bridge.trace` slot, `undefined` forever, checked once per emit site
- * (tests/trace-off.spec.ts asserts the discipline; the DIRECT entry has no
- * tracing instructions at all). `tracer.stop()` detaches at runtime;
- * attaching again later records a fresh capture.
+ * exactly {trace.ts}, and `./logged.ts` never imports it back, so neither
+ * entry pulls the other into a bundle. Until `attachTracer(bridge)` runs,
+ * the engine's only tracing artifact is the `bridge.trace` slot, `undefined`
+ * forever, checked once per emit site (tests/trace-off.spec.ts asserts the
+ * discipline; the base build, `cosignal`, contains no tracing instructions
+ * at all). `tracer.stop()` detaches at runtime; attaching again later
+ * records a fresh capture.
  *
  * ## The recorder
  * Trace events are fixed-size integer records (stride 8 × Int32Array):
  * `[KIND|flags, CAUSE, SUBJECT, WORLD, DT, ARG0, ARG1, ARG2]`. The emit path
  * performs integer stores plus one clock read — no per-event allocation —
- * so traces of this zero-allocation engine do not manufacture GC pressure.
- * Strings never enter records: labels (node/watcher/effect names, roots,
- * dev-warning messages) intern once into a label table; rare object payloads
- * (correction from/to values, effect values) go to a bounded ref-ring that
- * may extend object lifetimes until overwritten (capacity configurable,
- * 0 disables capture — events still record, payloads decode as REF_DROPPED).
- * Event ids are dense and monotonic from 0: an id names an event and locates
- * it (`id & (capacity-1)` in RING; `chunks[id >> log2(chunkSize)]` in
- * SESSION), so losslessness is provable, not promised (`verifyComplete()`).
+ * so tracing an engine that itself avoids allocation does not manufacture
+ * GC pressure on its behalf. Strings never enter records: labels
+ * (node/watcher/effect names, roots, dev-warning messages) intern once into
+ * a label table; rare object payloads (correction from/to values, effect
+ * values) go to a bounded ref-ring that may extend object lifetimes until
+ * overwritten (capacity configurable, 0 disables capture — events still
+ * record, payloads decode as REF_DROPPED). Event ids are dense and monotonic
+ * from 0: an id names an event and locates it (`id & (capacity-1)` in RING;
+ * `chunks[id >> log2(chunkSize)]` in SESSION), so losslessness is provable,
+ * not promised (`verifyComplete()`).
  *
  * Two modes, one emit path (the mode branch is taken only at chunk/ring
  * boundaries):
@@ -43,40 +51,56 @@
  *    a whole boot losslessly, attach before the engine's first operation.
  *
  * ## Event vocabulary (kind → decoded `data` fields, in format order)
- *  write                {node, op, token, slot, seq}         a receipt was minted (§5.3)
- *  write-dropped        {node, token}                        §5.3 step-2 drop
- *  batch-open           {token, priority, action, ambient}   §4.1 fact 1
- *  batch-settle         {token, committed}                   §3.5 action settlement
- *  batch-retire         {token, retiredSeq, committed}       §5.3 retirement
- *  slot-claim           {slot, token}                        §5.4 lifecycle…
+ * Terms as in the package README: a *receipt* records one write on the
+ * written atom's history; a *batch* (identified by a token) groups the
+ * writes of one UI update; a *slot* is one of 31 tracking entries a written
+ * batch occupies while its writes can still matter (mirroring React's lane
+ * count; slots are recycled); a *pass* is one render pass of one root,
+ * whose *pin* is the timeline position it froze at start; a *watcher* is
+ * one mounted UI subscription; *retirement* makes a batch's writes
+ * permanent history; a *world* is one self-consistent view of all values.
+ *
+ *  write                {node, op, token, slot, seq}         a write was recorded: a receipt joined the atom's history
+ *  write-dropped        {node, token}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
+ *  batch-open           {token, priority, action, ambient}   a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
+ *  batch-settle         {token, committed}                   an async action's promise settled; its retirement follows
+ *  batch-retire         {token, retiredSeq, committed}       the batch retired: its writes became permanent history visible to every world
+ *  slot-claim           {slot, token}                        a batch's first write claimed a slot
  *  slot-release         {slot, token}
- *  slot-release-deferred{slot, token}                        open mask names the slot
- *  slot-backstop-release{slot, token}                        §5.4 release-anyway backstop
- *  pass-start           {pass, root, pin, maskSize}          §4.1 fact 2 edges…
- *  pass-yield           {pass, root}
+ *  slot-release-deferred{slot, token}                        release waited: an open render's mask still names the slot
+ *  slot-backstop-release{slot, token}                        slot table full: the oldest deferred slot was released anyway, loudly
+ *  pass-start           {pass, root, pin, maskSize}          a render pass began; mask = the batches it may see
+ *  pass-yield           {pass, root}                         the pass paused (concurrent rendering runs in interruptible slices)
  *  pass-resume          {pass, root}
- *  pass-end             {pass, root, disposition}            fires before its consequences
- *  root-commit          {root, token, commitGen}             §5.3 per-root lock-in
- *  delivery             {watcher, token, slot, seq, mode}    §5.9 (fresh | interleaved)
- *  suppressed           {watcher, token, slot, seq, reason}  §5.9 dedup ('dedup-pending-fold')
- *  eval                 {node, world, durationUs, depth}     §5.5 world evaluation
- *  mount-corrective     {watcher, token, slot}               §5.10 per-token corrective
- *  mount-fixup          {watcher, root, disposition, correctives}  §5.10 outcome:
- *                       fast-out | fast-out-covered | compare-clean | corrected
- *  mount-correction     {watcher, from, to}                  §5.10 urgent pre-paint fix
- *  reconcile-correction {watcher, root, from, to, cause}     §5.3 durable drain
- *  core-effect-run      {effect, value}                      §5.11 newest-world
- *  react-effect-run     {effect, root, value}                §5.11 committed-for-root
+ *  pass-end             {pass, root, disposition}            commit | discard; fires before its consequences
+ *  root-commit          {root, token, commitGen}             the root locked in a batch: its committed world now includes those writes
+ *  delivery             {watcher, token, slot, seq, mode}    a write told this watcher to re-render (deliveries are value-blind; fresh | interleaved, see below)
+ *  suppressed           {watcher, token, slot, seq, reason}  delivery skipped: a scheduled-but-unstarted re-render will fold this write anyway ('dedup-pending-fold')
+ *  eval                 {node, world, durationUs, depth}     one computed evaluation in one world (newest | pass:N | committed:root | mount-fix:root)
+ *  mount-corrective     {watcher, token, slot}               at mount, a corrective re-render was scheduled for a live batch the mounting render did not include
+ *  mount-fixup          {watcher, root, disposition, correctives}  how the post-mount audit resolved:
+ *                       fast-out (provably nothing moved) | fast-out-covered (divergence exactly covered by
+ *                       scheduled correctives) | compare-clean (values agree) | corrected (urgent fix applied)
+ *  mount-correction     {watcher, from, to}                  the urgent pre-paint fix: committed truth moved while the mounting render was in flight
+ *  reconcile-correction {watcher, root, from, to, cause}     a retirement or root commit moved committed truth; this watcher's on-screen value had to follow
+ *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
+ *  react-effect-run     {effect, root, value}                a committed-world observer ran (it sees exactly what its root's UI shows)
  *  dev-warning          {message}
- *  epoch-reset          {epoch}                              §5.12 quiescence
+ *  epoch-reset          {epoch}                              quiescence: nothing in flight, so the engine reset its per-episode state and renumbered sequences
  *  clock-sync           {absoluteUs}                         emitted when DT saturates
  *  truncation           {boundaryId}                         SESSION budget crossed
  *
- * ## CAUSALITY (the §16 adaptation)
+ * A delivery is `interleaved` when a re-render for that (watcher, slot) was
+ * already pending but the root's in-progress render froze (pinned) before
+ * this write — that render's world cannot show the write, so the watcher
+ * must be told again; `suppressed` is the safe case where pending work will
+ * pick the write up.
+ *
+ * ## CAUSALITY
  * Every record's CAUSE names the event that provoked it (walk with
- * `causeChain`). §16 maintained a `currentCause` scalar inside a packed
- * kernel; this engine emits through hooks, so the tracer keeps the register
- * itself: provoking kinds (write, write-dropped, batch-settle, batch-retire,
+ * `causeChain`). The engine emits through hooks rather than tracking causes
+ * itself, so the tracer keeps the causality register: provoking kinds
+ * (write, write-dropped, batch-settle, batch-retire,
  * pass-start/yield/resume/end, root-commit, epoch-reset) record the old
  * register as their CAUSE and then claim it; consequence kinds (deliveries,
  * suppressions, slot transitions, evals, corrections, effect runs…) record
@@ -94,9 +118,9 @@
  * `whyDelivered(watcher)`, `whyEffectRan(effect)`, `effectRunCount(effect)`.
  * Renderers live in `cosignal/graphviz` (`traceToDot`,
  * `dependencyGraphToDot`) — that entry imports only types from this one.
- * Note: seq numbers renumber at quiescence (§5.12); trace records are a
- * chronicle, so seqs in records predating an `epoch-reset` read in that
- * dead episode's units.
+ * Note: sequence numbers renumber when the engine goes quiescent (the
+ * `epoch-reset` event); trace records are a chronicle, so seqs in records
+ * predating an `epoch-reset` read in that dead episode's units.
  */
 
 import type {

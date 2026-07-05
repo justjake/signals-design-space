@@ -1,14 +1,8 @@
-/**
- * SPK-W child, LOGGED-armed build. Mirrored shapes (bare/chain3/fan8/watch1).
- * A LOGGED-armed write = drop-check + slot intern + receipt append + K0 apply
- * + staging walk (refreshEdgesAllWorlds: this build has NO walkGen stamp —
- * the walk analog runs once per write) + union reachability + delivery
- * bookkeeping + core-effect flush + the always-allocated BridgeEvent append.
- * Writes run in windows of WINDOW per token, retired (committed) between
- * windows — retirement time excluded from `writeNs`, included in `amortNs`.
- * bridge.events is truncated between reps (public field) so a giant event
- * array from earlier reps cannot skew later reps.
- */
+// Measures per-write ns of the logged build (receipt append + eager core
+// apply + marking/delivery walks + effect flush) on the same shapes as the
+// base-build child; writes run in windows of WINDOW per batch, retired
+// between windows — retirement excluded from writeNs, included in amortNs.
+// bridge.events is truncated between reps so earlier reps cannot skew later ones.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 

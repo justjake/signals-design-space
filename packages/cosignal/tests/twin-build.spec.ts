@@ -1,16 +1,17 @@
 /**
- * The twin-build promise (spec §7, §5.1):
- *  - the DIRECT entry's module graph never reaches overlay code (its source
- *    is import-free — the graph is exactly {src/index.ts} — and the exports
- *    map gives bundlers two disjoint entries);
+ * The twin-build promise:
+ *  - the base entry's module graph never reaches concurrent-engine code
+ *    (its source is import-free — the graph is exactly {src/index.ts} —
+ *    and the exports map gives bundlers two disjoint entries);
  *  - arming the LOGGED table (registerReactBridge → __installTwinTable →
  *    closure rebuild over carried buffers) does not change public semantics
- *    while the bridge is quiet — the full 179-case conformance run of this
- *    gate lives in harness/ (FRAMEWORK=cosignal-logged); here we pin the
- *    core behaviors plus the armed-table routing that IS new: public writes
- *    to bridge-registered atoms classify into the ambient default batch
- *    (§3.5) with receipts, and public reads of registered atoms inside an
- *    overlay world evaluation serve that world's fold (§5.6 world path).
+ *    while the bridge is quiet — the full 179-case conformance suite also
+ *    runs against the logged build to pin that claim end to end (see the
+ *    README's Testing section); here we pin the core behaviors plus the
+ *    armed-table routing that IS new: public writes to bridge-registered
+ *    atoms classify into the ambient default batch and record receipts,
+ *    and public reads of registered atoms inside a world evaluation serve
+ *    that world's fold.
  *
  * NOTE: arming is process-wide and vitest isolates test FILES, so this file
  * arms once in the first test and stays armed for the rest.
@@ -89,7 +90,7 @@ describe('LOGGED armed but quiet: DIRECT semantics preserved through the swapped
 			a.set(10);
 			b.set(20);
 		});
-		expect(seen).toEqual([3, 30]); // one flush at batch close, donor semantics
+		expect(seen).toEqual([3, 30]); // one flush at batch close, exactly as in the base build
 		expect(untracked(() => sum.state)).toBe(30);
 		dispose();
 	});
@@ -110,8 +111,8 @@ describe('LOGGED armed but quiet: DIRECT semantics preserved through the swapped
 		const ambient = bridge.ambientToken;
 		expect(ambient).toBeDefined();
 		expect(la.tape[0]!.token).toBe(ambient);
-		expect(bridge.newestValue(la)).toBe(7); // K0 applied eagerly
-		expect(bridge.committedValue(la, 'A')).toBe(0); // not committed yet (§5.3)
+		expect(bridge.newestValue(la)).toBe(7); // writes apply to the kernel immediately
+		expect(bridge.committedValue(la, 'A')).toBe(0); // not committed yet: no root committed the batch and it has not retired
 		bridge.retire(ambient!, false);
 		expect(bridge.committedValue(la, 'A')).toBe(7); // persistence never depends on subscription
 		expect(la.tape).toHaveLength(0); // pin-free retirement compacts the prefix
@@ -133,7 +134,7 @@ describe('LOGGED armed but quiet: DIRECT semantics preserved through the swapped
 		bridge.write(t.id, la, { kind: 'set', value: 5 });
 		expect(bridge.newestValue(viaHandle)).toBe(5); // newest = kernel plane
 		const p = bridge.passStart('A', []); // t excluded
-		expect(bridge.passValue(viaHandle, p)).toBe(0); // §5.6: the world path routes the public read
+		expect(bridge.passValue(viaHandle, p)).toBe(0); // the world evaluation routes the public read: the excluded batch stays invisible
 		bridge.passEnd(p.id, 'discard');
 		bridge.retire(t.id, true);
 		expect(bridge.committedValue(viaHandle, 'A')).toBe(5);

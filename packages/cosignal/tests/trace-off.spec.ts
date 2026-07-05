@@ -1,9 +1,10 @@
 /**
- * R11 recorder mechanics and the zero-cost-when-off contract.
+ * Recorder mechanics and the zero-cost-when-off contract of cosignal/trace.
  *
- * Zero cost is asserted via the design, not micro-benchmarks (task pin):
- *  - DIRECT carries no tracing instructions (source assertion; twin-build's
- *    zero-import check further pins its module graph to {index.ts});
+ * Zero cost is asserted via the design, not micro-benchmarks:
+ *  - the base entry carries no tracing instructions (source assertion;
+ *    twin-build.spec.ts's zero-import check further pins its module graph
+ *    to {index.ts});
  *  - the LOGGED entry's only tracing state is ONE nullable slot, captured
  *    locally and checked once per site, and it never imports the trace
  *    module (lazy-loadability);
@@ -234,7 +235,7 @@ describe('R11 Graphviz renderers', () => {
 		const dot = dependencyGraphToDot(b);
 		expect(dot).toMatch(/^digraph cosignal \{/);
 		expect(dot).toContain(`n${flag.id} [shape=box`);
-		expect(dot).toContain(`n${flag.id} -> n${c.id};`); // recorded K1 edge
+		expect(dot).toContain(`n${flag.id} -> n${c.id};`); // the union edge the logged engine recorded
 		expect(dot).toContain('"W@A"');
 		expect(dot).toContain('CE runs:0');
 		expect(dot.trim().endsWith('}')).toBe(true);

@@ -1,13 +1,15 @@
 /**
- * Spec §6 acceptance battery at the React level (task 4c): every case whose
- * React semantics are exercisable outside the fork's internal harness, case
- * numbers cited in test names. Not exercisable here (documented):
+ * The engine's 17-case acceptance battery, re-run at the React level
+ * through the public bindings against a real protocol-v1 React build:
+ * every case whose React-visible semantics application code can exercise,
+ * case numbers cited in test names. Not exercisable here (documented):
  *  - case 7 (yield-gap writes) — needs deterministic time-slicing control;
- *    pinned by fork tests 7-10 and the engine conformance suite.
+ *    pinned by the patched React build's own tests and the engine suite.
  *  - case 9 rows c/d (foreign retirement / post-pin write IN the
  *    render→commit window) and case 10 races (i)/(ii) — sub-millisecond
- *    windows the public API cannot schedule; oracle + fork tests 22/24/25
- *    pin them. Rows a/e and the entanglement path are covered below.
+ *    windows the public API cannot schedule; the reference-model and
+ *    patched-React suites pin them. Rows a/e and the entanglement path are
+ *    covered below.
  *  - case 13 rows 6-9 (counter wrap/horizon) — engine counters; the
  *    quiescence/epoch half is smoke-tested below.
  */
@@ -143,7 +145,7 @@ describe('battery (spec §6) at React level', () => {
 		const a = new Atom(10, { isEqual: (x, y) => x === y });
 		const { container } = await h.mount(<Reader id="a" atom={a} />);
 		await act(async () => {
-			a.set(10); // equal against empty history: dropped (§5.3 step 2)
+			a.set(10); // equal write against an atom with no history: dropped entirely
 			a.set(11); // effective
 		});
 		expect(text(container)).toBe('a:11;');
@@ -194,9 +196,9 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {
 			React.startTransition(() => a.set(5)); // pending deferred receipt
 			// Equal to the PENDING newest value — but history is non-empty, so
-			// the receipt must be kept (drop check is empty-tape only, §5.3):
-			// without it the urgent world (which excludes the transition) would
-			// still show 0.
+			// the receipt must be kept (the equality drop applies only to an
+			// atom with an empty tape): without it the urgent world (which
+			// excludes the transition) would still show 0.
 			flushSync(() => a.set(5));
 			expect(text(container)).toBe('a:5;'); // the urgent receipt rendered
 		});
@@ -297,7 +299,7 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		expect(text(container)).toBe('r1:1;r2:1;');
 		const k = h.bridge.eventsOfType('write')[0]!.token;
-		// §4.1 fact 4: the corrective rode k's own lane — k committed exactly
+		// The corrective re-render rode k's own lane — k committed exactly
 		// once on this root (a fresh transition would have produced a second).
 		const kCommits = h.bridge.eventsOfType('per-root-commit').filter((e) => e.token === k);
 		expect(kCommits.length).toBe(1);
@@ -349,7 +351,7 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		expect(text(container)).toBe('a:2;');
 		expect(h.bridge.quiescent()).toBe(true); // everything retired
-		h.bridge.quiesce(); // §5.12: epoch bump + renumber
+		h.bridge.quiesce(); // bumps the epoch and renumbers the counters
 		expect(h.bridge.eventsOfType('epoch-reset').length).toBe(1);
 		await act(async () => {
 			a.set(3); // life continues in the new episode
@@ -416,7 +418,7 @@ describe('battery (spec §6) at React level', () => {
 		}
 		function App({ two }: { two: boolean }) {
 			// Read the query BEFORE ctx.use: pre-use reads form the capsule's
-			// validity prefix (§5.8); factory-internal reads run at mint only.
+			// validity prefix — reads made inside the factory run only at mint.
 			const data = useComputed<string>((ctx) => {
 				const query = q.state as string;
 				return ctx.use(() => fetchLike(query));

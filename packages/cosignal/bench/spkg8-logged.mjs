@@ -1,27 +1,13 @@
-/**
- * SPK-G8 child, LOGGED build — world-evaluation gate (held-open bursts +
- * typeahead restarts). No DIRECT comparator exists for world evaluation;
- * the pre-registered criterion is qualitative: "cost ∝ flagged region;
- * restart-heavy typeahead; prefix length".
- *
- * MODE=burst: G computeds (only c0 reads the burst-written atom — the
- * flagged region is ONE chain; the other G-1 read unrelated atoms), one
- * committed watcher on c0. HELD=1 holds a long-lived transition open: an
- * action token with one receipt + a YIELDED pass including it. Bursts of
- * W writes/frame land in fresh default tokens (retired per frame).
- * Measures per-write ns as G grows: proportional-to-flagged-region would
- * be FLAT in G; this build's refreshEdgesAllWorlds re-evaluates all G
- * computeds in every live world per write (per-interruption re-evaluation
- * cost, measured by eval counters).
- *
- * MODE=typeahead: restart-heavy shape — a parked action token T carries
- * the query; each keystroke writes T's atom, DISCARDS the open pass, and
- * starts+yields a fresh pass including T. T retires only at the end
- * (settleAction) => its receipts are retained the whole run: tape length
- * at end = the retention/prefix length every non-newest fold replays.
- * NOTE: this build has no evaluator-stamp vector (O21) — the I35 re-fold
- * revalidation cost IS the measured per-keystroke eval cost.
- */
+// Measures the logged build's world-evaluation cost, no base-build
+// comparator (worlds only exist in the logged build). MODE=burst: bursts of
+// writes into one atom among G computeds (only c0 depends on it; the others
+// read unrelated atoms), one committed watcher; HELD=1 keeps a yielded
+// render pass + unsettled action batch open so extra worlds stay live —
+// reports per-write ns and evals per write as G grows. MODE=typeahead:
+// each keystroke writes into a parked action batch, discards the open
+// render pass, and starts+yields a fresh one; the batch retires only at the
+// end, so its receipts accumulate — reports per-keystroke ns, evals per
+// keystroke, and the receipt-history length every replay must walk.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 

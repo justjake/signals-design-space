@@ -1,12 +1,16 @@
-// TWIN RUN — the oracle spec below runs VERBATIM against the LOGGED engine:
-// ./helpers.js here is the twin driver (model + engine fan-out; every read is
-// parity-asserted; selfCheck compares events/snapshots and runs the invariant
-// battery on BOTH sides). Source: packages/cosignal-oracle/tests/scars.spec.ts.
+// TWIN RUN — this spec runs against the reference model (`cosignal-oracle`)
+// AND the LOGGED engine at once: ./helpers.js here is the twin driver (model
+// + engine fan-out; every read is parity-asserted; selfCheck compares
+// events/snapshots and runs the invariant battery on BOTH sides). Kept in
+// lockstep with the reference model's own tests/scars.spec.ts.
 /**
- * Pinned scar schedules (design-loop/NOTES/SCARS.md): every dead approach's
- * killing schedule that is expressible at model level, asserting the CORRECT
- * outcome the scarred design got wrong. Scars needing the real React fork
- * are listed in tests/SKIPPED-FOR-FORK-SUITE.md with one line each.
+ * Pinned regression schedules ("scars"): each test replays the schedule
+ * under which some rejected design for this engine produced a wrong
+ * outcome — every one expressible at model level — and asserts the CORRECT
+ * outcome that design got wrong, so the failure can never return silently.
+ * The S-numbers are stable identifiers shared with the reference model's
+ * suite. Scars needing the real patched React build are listed in
+ * SKIPPED-FOR-FORK-SUITE.md alongside that suite, one line each.
  */
 import { describe, expect, it } from 'vitest';
 import { commitAndRetire, dispatch, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
@@ -197,7 +201,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.renderWatcher(pt.id, w.id); // T rendered (finished-uncommitted below)
 		m.passYield(pt.id);
 		const u = m.openBatch('urgent');
-		m.write(u.id, a, set(4)); // equal to CANONICAL (newest 4): k0Changed false in the dead design
+		m.write(u.id, a, set(4)); // equal to CANONICAL (newest 4): the dead design saw "kernel value unchanged" and gated invalidation on it
 		// delivery fires anyway — value-blind (interleaved for W: T's pass is open, pin < seq)
 		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === u.id)).toHaveLength(1);
 		commitAndRetire(m, 'B', u);
@@ -285,7 +289,8 @@ describe('pinned scars (model-expressible)', () => {
 		expect(w.lastRenderedValue).toBe(1);
 		const mark = m.events.length;
 		m.scopeWrite(t.id, a, set(2)); // post-await, post-commit scope write
-		// visible to A's committed world immediately (membership clause, §5.3)…
+		// visible to A's committed world immediately (the committed world closes
+		// over every write of a token the root committed)…
 		expect(m.committedValue(c, 'A')).toBe(2);
 		// …and the corrective (the value-blind delivery in T's own lane) is scheduled
 		const corr = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
@@ -304,11 +309,11 @@ describe('pinned scars (model-expressible)', () => {
 		const t = m.openBatch('deferred', { action: true });
 		m.write(t.id, a, set(1)); // sync prefix
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack
-		expect(m.eventsOfType('dev-warning')).toHaveLength(1); // the §3.5 lint
+		expect(m.eventsOfType('dev-warning')).toHaveLength(1); // the development warning for a bare write while an action is pending
 		const ambient = m.tokens.get(m.ambientToken!)!;
 		expect(ambient.priority).toBe('default');
 		m.retire(ambient.id, true);
-		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — React parity (C1 cut)
+		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — matching React's own async-action rule
 		m.settleAction(t.id, true);
 		expect(m.committedValue(a, 'A')).toBe(2); // write order wins at the fold
 		selfCheck(m);
@@ -491,7 +496,7 @@ describe('pinned scars (model-expressible)', () => {
 		const p = pass(m, 'A', [t]);
 		m.passYield(p.id);
 		expect(() => m.quiesce()).toThrow(/quiescence requires/); // a live pin forbids renumbering
-		m.discardAllWip(); // synchronous fork capability (fact 2)
+		m.discardAllWip(); // a synchronous capability of the external-runtime protocol
 		expect(m.livePins()).toHaveLength(0);
 		m.retire(t.id, true);
 		m.quiesce(); // discard-first, then rewrite: no post-wrap stamp can land below a live pin

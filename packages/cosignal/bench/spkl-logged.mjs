@@ -1,12 +1,9 @@
-/**
- * SPK-L child, LOGGED-ARMED-QUIET build: registerReactBridge() has swapped
- * the operation table (read wrapper: 1 activeWorld check; write wrapper:
- * mode check + byKernelId Map probe per write), one registered decoy atom
- * + computed exist (the "mounted" state), no batches/passes/receipts are
- * live during measurement — quiet React. The measured hot loops run on
- * UNREGISTERED plain signals through the armed table: exactly the O19
- * quiet-read/write residual. Same injected shape code as the DIRECT child.
- */
+// Quiet side of the residual measurement: registerReactBridge() has swapped
+// in the logged build's read/write wrappers and one registered decoy
+// atom + computed exist, but no batches, passes, or receipts are live during
+// measurement. The hot loops run on UNREGISTERED plain signals through the
+// armed wrappers — the cost an app pays for merely loading the concurrent
+// engine. Same injected shape code as the base-build child.
 import { Atom, Computed, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';

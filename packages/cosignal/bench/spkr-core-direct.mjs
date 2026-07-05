@@ -1,9 +1,7 @@
-/**
- * SPK-R core child, DIRECT build: the comparator side — `batch()` over the
- * identical write/effect graph. Graph: 4 atoms, 4 computeds (each reads two
- * atoms), 4 effects. One "batch" = M writes round-robin across atoms inside
- * batch() (effects flush at close). K batches per burst.
- */
+// Base-build comparator for the retirement measurement: `batch()` over the
+// identical write/effect graph (4 atoms, 4 computeds each reading two atoms,
+// 4 effects). One batch = M writes round-robin across atoms inside batch()
+// (effects flush at close); K batches per burst; reports ns per batch.
 import { Atom, Computed, batch, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 

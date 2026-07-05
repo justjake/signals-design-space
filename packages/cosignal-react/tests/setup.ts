@@ -1,7 +1,9 @@
 /**
- * Suite setup: assert the LINKED fork is what we run against (task rule 5) —
- * capabilities 511 means fork surface v1; anything else means someone needs
- * `pnpm fork:build`. Also arms React's act() environment.
+ * Suite setup: assert the React build we run against actually implements
+ * the cosignal external-runtime protocol — capabilities 511 means every
+ * version-1 capability is present; anything else means the patched React
+ * build is stale or missing (`pnpm fork:build` rebuilds it). Also arms
+ * React's act() environment.
  */
 import * as React from 'react';
 

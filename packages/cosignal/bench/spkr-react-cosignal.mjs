@@ -1,11 +1,9 @@
-/**
- * SPK-R react child, cosignal side. jsdom + the linked fork + cosignal-react
- * hooks (test-setup style, bench mode — timing at this level is COARSE).
- * N components useSignal(shared atom); one round = `await act(() => a.set(v))`
- * — the write's batch retires inside the round (verified: liveTokens 0, tape
- * compacted after each act). Metric: wall ms per round (render/commit for N
- * reached watchers), median across rounds, plus bridge-state steadiness.
- */
+// cosignal side of the React retirement measurement: jsdom + React + the
+// cosignal-react hooks (test-setup style; timing at this level is COARSE).
+// N components useSignal(shared atom); one round = `await act(() => a.set(v))`
+// — the write's batch retires inside the round (verified: no live batches,
+// history compacted after each act). Metric: wall ms per round (render/commit
+// for N reached watchers), median across rounds, plus bridge-state steadiness.
 import { createRequire } from 'node:module';
 const req = createRequire('/Users/jitl/src/alien-signals-opt/packages/cosignal-react/tests/helpers.tsx');
 const { JSDOM } = req('jsdom');

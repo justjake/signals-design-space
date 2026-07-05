@@ -1,38 +1,52 @@
 /**
- * cosignal-react — the fork shim (spec §4 consumed; fork/S4-REPORT.md
- * "Handoff notes" is the API contract). One Shim instance couples one
- * CosignalBridge to the linked React fork:
+ * cosignal-react — the protocol shim. One Shim instance couples one
+ * CosignalBridge (the concurrent engine from `cosignal/logged`) to a React
+ * build implementing the cosignal external-runtime protocol, version 1.
+ * Stock React never reveals when it starts, pauses, commits, or discards a
+ * render pass — which is exactly what an external store must know to stay
+ * tear-free — so a patched React build provides those events, and this shim
+ * is the adapter between them and the engine. Its jobs:
  *
- *  - handshake: assert protocol version 1 / capabilities 511 on both sides
- *    (S4 note 1); refuse stock or degraded React loudly.
- *  - fork listener -> bridge: onRenderPassStart(includedBatches, lineageId)
- *    -> passStart; yield/resume -> passYield/passResume; onRenderPassEnd
- *    (committed) -> passEnd('commit') AT the end(commit) edge — the pinned
- *    baseline-capture site (S4 note 4: it precedes the same commit's table
- *    update and folds); onRenderPassEnd(discarded) -> passEnd('discard');
- *    onBatchRetired -> retire/settleAction; onRootCommitted -> per-root
- *    re-report reconciliation (idempotent, S4 note 3 flush-split rule) +
- *    effect revalidation.
+ *  - handshake: assert protocol version 1 with every version-1 capability,
+ *    on React itself and on every renderer provider; refuse stock or
+ *    partially patched builds loudly at startup. Degrading silently would
+ *    reintroduce tearing (a single rendered frame mixing old and new
+ *    state) later, with no error pointing at the cause.
+ *  - protocol events -> bridge: onRenderPassStart(includedBatches,
+ *    lineageId) -> passStart; yield/resume -> passYield/passResume;
+ *    onRenderPassEnd(committed) -> passEnd('commit') at the moment the
+ *    pass commits — before that commit's per-root report and before any
+ *    retirement, which is what lets the bridge snapshot committed state as
+ *    the baseline for mount fixups; onRenderPassEnd(discarded) ->
+ *    passEnd('discard'); onBatchRetired -> retire (or settleAction for a
+ *    parked async action); onRootCommitted -> idempotent reconciliation of
+ *    the root's committed-batch table + effect re-checks.
  *  - bridge event log -> React: after every bridge call the shim drains the
  *    events it appended and translates deliveries / mount correctives /
- *    urgent corrections into setStates via unstable_runInBatch (value-blind
- *    entanglement in the write's own batch; retired/unknown tokens take the
- *    documented discrete-urgent fallback). Yield-edge and commit-listener
- *    delivery are pinned legal (S4 note 2).
- *  - write classification (§3.5: a write belongs to the batch context in
- *    which it executes): adopted atoms' set/update/dispatch route through
- *    bridge.write with WHOLE ops (replay fidelity — public Atom.update/
- *    dispatch reach the logged table pre-folded, so the shim intercepts at
- *    the method level), classified by unstable_getCurrentWriteBatch /
- *    unstable_isCurrentWriteDeferred; token 0 (no provider) falls back to
+ *    urgent corrections into setStates via unstable_runInBatch, so each
+ *    corrective re-render is scheduled in the lane of the batch that caused
+ *    it and the whole update renders and commits together. Deliveries are
+ *    value-blind: the bridge decides who must re-render, the shim only
+ *    schedules. Tokens with no live protocol counterpart take
+ *    unstable_runInBatch's discrete-urgent fallback. The protocol permits
+ *    scheduling updates from its yield and commit callbacks, so translating
+ *    at those points is legal (writes during render are not, and throw).
+ *  - write classification — the rule: a write belongs to the batch context
+ *    in which it executes. Adopted atoms' set/update/dispatch route through
+ *    bridge.write as WHOLE operations, because worlds replay receipts: the
+ *    public Atom.update/dispatch would fold a functional update against the
+ *    one current value before the engine ever saw it, so the shim
+ *    intercepts at the method level. The batch is read from the protocol's
+ *    write-context API (unstable_getCurrentWriteBatch /
+ *    unstable_isCurrentWriteDeferred); token 0 (no context) falls back to
  *    the bridge's ambient default batch.
- *  - Suspense capsules (§5.8 / battery case 15): ctx.use inside bound
- *    computeds keys thenables on (node × position) matched by value-prefix —
- *    a value-carried reading of the lineage rule (a retry under the same
- *    lineage folds the same values and reuses the capsule; a moved world
- *    refetches). Chosen over raw lineage-id buckets because this bridge
- *    evaluates every world (fold-everything, SPK-R deferred): world-blind
- *    value identity is what keeps canonical evaluations from re-fetching.
+ *  - Suspense capsules: ctx.use inside bound computeds keys thenables on
+ *    the computed's source and deps, matched by use-site position and by
+ *    the values read before that site — the same inputs resolve to the same
+ *    thenable in every world and across every render retry, while a world
+ *    that genuinely sees different inputs refetches. See the `capsules`
+ *    field for why value identity (not node identity, not a per-render
+ *    bucket) is the key.
  */
 
 import * as React from 'react';
@@ -55,8 +69,18 @@ import type {
 // ---- handshake -------------------------------------------------------------------
 
 export const REQUIRED_PROTOCOL_VERSION = 1;
-export const REQUIRED_CAPABILITIES = 511; // bits 0..8, fork/S4-REPORT.md
+export const REQUIRED_CAPABILITIES = 511; // every version-1 capability bit (bits 0..8) set
 
+/**
+ * Verifies the external-runtime handshake: React.unstable_externalRuntimeProtocol
+ * must report protocol version 1 with every version-1 capability, both on React
+ * itself and on at least one registered renderer provider (load react-dom/client
+ * before registering, or no provider exists yet). Throws on stock React or on a
+ * stale patched build. Failing fast is deliberate: without the full protocol the
+ * bindings could only fall back to a single current value, which is exactly the
+ * tearing this package exists to prevent — one descriptive startup error beats
+ * silently wrong frames later.
+ */
 export function assertForkProtocol(): void {
 	const proto = React.unstable_externalRuntimeProtocol;
 	if (proto === undefined) {
@@ -91,9 +115,9 @@ export type WatcherTarget = {
 type RootRec = {
 	id: RootId;
 	container: unknown;
-	/** The open bridge pass mirroring the fork's WIP pass frame, if any. */
+	/** The open bridge pass mirroring the protocol host's in-progress render pass, if any. */
 	pass: Pass | undefined;
-	/** Lineage id the open pass reported at passStart (fact 5). */
+	/** Lineage id reported at pass start (stable per root × included-batch set). */
 	lineageId: number;
 	/** Watcher ids minted during the current/most recent pass, for the orphan sweep. */
 	minted: Set<number>;
@@ -103,9 +127,9 @@ type RootRec = {
 type EffectRec = {
 	id: number;
 	root: RootId;
-	/** (node, committed-for-root fingerprint) pairs — §5.11 effect snapshot. */
+	/** (node, value) pairs read during the last run, in the committed world of the effect's root. */
 	deps: Array<{ node: AnyNode; value: Value }>;
-	/** Snapshot header {root commit generation} (§5.11). */
+	/** The root's commit generation when the snapshot was taken. */
 	rootCommitGen: number;
 	/** Re-fires the user effect (cleanup + run + re-track). */
 	refire: () => void;
@@ -114,7 +138,7 @@ type EffectRec = {
 
 type Capsule = {
 	thenable: PromiseLike<unknown>;
-	/** Stable sentinel: background walks fold a pending capsule to THIS object. */
+	/** Stable sentinel: background evaluations fold a pending capsule to THIS one object, so every world and retry sees a single "still pending" identity. */
 	sr: SuspendedRead;
 	state: 'pending' | 'fulfilled' | 'rejected';
 	value: unknown;
@@ -123,11 +147,11 @@ type Capsule = {
 	position: number;
 	/** The owning useComputed's deps at mint (closure-input identity). */
 	deps: readonly unknown[];
-	/** (nodeId, value) pairs read before the use() site at mint (§5.8 prefix). */
+	/** (nodeId, value) pairs read before the use() site at mint — the world-identity prefix. */
 	prefix: Array<[number, unknown]>;
 };
 
-/** Per bridge-evaluation frame bookkeeping for reads + ctx.use (§5.8). */
+/** Bookkeeping for one bound-computed evaluation: read routing plus ctx.use state. */
 type EvalFrame = {
 	read: Reader;
 	untracked: Reader;
@@ -140,7 +164,7 @@ type EvalFrame = {
 };
 
 const BOUND: unique symbol = Symbol('cosignal-react.bound');
-/** Marks the shim's un-routed twin handles (the bridge's kernel-apply path). */
+/** Marks the shim's un-routed twin handles — the private handles the bridge uses to apply folded values to the kernel, which must bypass prototype routing. */
 const TWIN: unique symbol = Symbol('cosignal-react.twin');
 type BoundState = { shim: Shim; node: AtomNode };
 type PatchableAtom = Atom<unknown> & { [BOUND]?: BoundState; [TWIN]?: boolean };
@@ -165,10 +189,11 @@ export function getActiveShim(): Shim | undefined {
 }
 
 /**
- * Prototype-level routing (installed once at module load — importing
- * cosignal-react opts the process into LOGGED bindings; the DIRECT entry's
- * module graph never reaches this file, so the twin-build promise holds).
- * With no active shim, or on twin handles, every member is the original.
+ * Prototype-level routing, installed once at module load: importing
+ * cosignal-react opts the process into the logged build's bindings. The
+ * plain `cosignal` entry's module graph never reaches this file, so apps
+ * that skip this package still carry zero concurrency code. With no active
+ * shim, or on twin handles, every member falls through to the original.
  */
 function installPrototypeRouting(): void {
 	Object.defineProperty(Atom.prototype, 'state', {
@@ -221,15 +246,18 @@ export class Shim {
 	/**
 	 * ctx.use capsules keyed by the computed's SOURCE (fn text + deps), matched
 	 * by (position, value-prefix): the same inputs serve the same thenable in
-	 * EVERY world and across every retry (§5.8 / battery case 15 rows 2/3/5).
-	 * Node identity is deliberately NOT the key — a suspended MOUNT discards
-	 * hook state, so the retry re-creates the node (§3.3 pass-owned churn), and
-	 * node-keyed capsules refetch forever (the pinned livelock scar). The
-	 * world's identity is carried by the values its fold produced: a retry
-	 * under the same lineage folds the same values and reuses the capsule; a
-	 * rebased or retirement-moved world folds different values and refetches.
-	 * Content-neutral flips REUSE rather than refetch — v1 accepts duplicate
-	 * fetches, never stale data, and value matching is strictly tighter.
+	 * EVERY world and across every retry. Node identity is deliberately NOT
+	 * the key — when a mount suspends, React discards the in-progress
+	 * component and retries it from scratch, so the retry re-creates the hook
+	 * state and with it the computed node; node-keyed capsules would miss on
+	 * every retry and refetch forever, never settling. Instead a world's
+	 * identity is carried by the values its replay produced: a retry of the
+	 * same render replays the same values and reuses the capsule; a world
+	 * moved by a retirement or a different batch set replays different values
+	 * and refetches. Two worlds that replay identical inputs share one
+	 * capsule rather than refetching — sound, because worlds are pure replays,
+	 * so identical inputs mean observationally identical evaluations. The
+	 * trade: an occasional duplicate fetch is accepted; stale data never is.
 	 */
 	private capsules = new Map<string, Capsule[]>();
 	/** The bridge evaluation frames opened by bound computeds (innermost last). */
@@ -239,10 +267,11 @@ export class Shim {
 
 	constructor(bridge: CosignalBridge) {
 		this.bridge = bridge;
-		// SPK-K1 coordination: the shim drains the event stream per operation
-		// through absolute cursors, so the bridge may bound the retained
-		// stream — without a cap it grows for the whole episode (§5.12 growth
-		// honesty). 64k events comfortably exceeds any single op's appends.
+		// The shim drains the bridge's event stream after every operation,
+		// addressing it with absolute cursors — so the bridge can keep the
+		// retained stream bounded (a ring) instead of letting it grow for the
+		// life of the process. 64k events comfortably exceeds what any single
+		// operation appends before the next drain.
 		this.bridge.setEventCapacity(65536);
 		assertForkProtocol();
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
@@ -311,13 +340,15 @@ export class Shim {
 		return rec;
 	}
 
-	/** Bridge token mirroring a fork token (minted on first sight). */
+	/** The bridge batch token mirroring a protocol batch token (minted on first sight). */
 	bridgeTokenFor(forkToken: number, opts?: { action?: boolean }): TokenId {
 		const existing = this.bridgeTokenByFork.get(forkToken);
 		if (existing !== undefined) {
 			if (opts?.action === true) {
-				// Same-event transitions share one fork token (S4 item 4): upgrade
-				// the shared token to action semantics (parks until settlement).
+				// Every transition started inside one event shares one protocol
+				// batch token, so the token may already exist when an action
+				// starts: upgrade it in place to action semantics (parked — kept
+				// pending — until the action settles).
 				const t = this.bridge.tokens.get(existing);
 				if (t !== undefined && t.state === 'live') {
 					t.action = true;
@@ -339,28 +370,30 @@ export class Shim {
 		return this.forkTokenByBridge.get(bridgeToken);
 	}
 
-	/** The shim's view of the pass currently rendering (per callstack, fact 2). */
+	/** The root whose pass is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
 	renderingRoot(): RootRec | undefined {
 		const ctx = React.unstable_getRenderContext();
 		if (ctx === null) return undefined;
 		return this.rootsByContainer.get(ctx.container);
 	}
 
-	// ---- fork listener -> bridge ----------------------------------------------
+	// ---- protocol listener -> bridge --------------------------------------------
 
 	private handlePassStart(container: unknown, includedBatches: readonly number[], lineageId: number): void {
 		const rec = this.rootRec(container);
 		if (rec.pass !== undefined && rec.pass.state !== 'ended') {
-			// Defensive: the fork ends frames before restarting them; a stale open
-			// pass here is a seam desync — discard it loudly via the error log.
+			// Defensive: the protocol host ends a pass frame before restarting it,
+			// so a still-open pass here means the two sides desynced — discard it
+			// and record the failure loudly in the error log.
 			this.bridge.passEnd(rec.pass.id, 'discard');
 			this.errors.push(new Error(`cosignal-react: stale open pass on ${rec.id} at passStart`));
 		}
 		const known: TokenId[] = [];
 		for (const forkToken of includedBatches) {
-			// Only fork batches carrying cosignal writes have bridge tokens; a
-			// pure-React batch has no receipts, so excluding it from the mask
-			// cannot change any fold (§5.3 visibility is receipt-driven).
+			// Only protocol batches carrying cosignal writes have bridge tokens.
+			// A pure-React batch contributed no receipts, and a world is computed
+			// purely by replaying receipts, so leaving that batch out of the
+			// pass's batch set cannot change any value the pass observes.
 			const mapped = this.bridgeTokenByFork.get(forkToken);
 			if (mapped !== undefined && this.bridge.tokens.get(mapped)?.state === 'live') known.push(mapped);
 		}
@@ -395,24 +428,31 @@ export class Shim {
 			rec.pass = undefined;
 			return;
 		}
-		// end(commit) IS the baseline-capture site (S4 note 4): bridge.passEnd
-		// snapshots {cas, rootCommitGen} at entry, before its own lock-ins and
-		// before the fork's onRootCommitted/onBatchRetired arrive. Mount fixups
-		// (§5.10) run inside; their correctives translate below via withBridge.
+		// The end(commit) event is where the bridge captures its baseline:
+		// bridge.passEnd snapshots committed state and the root's commit
+		// generation on entry — before it locks this pass's batches into the
+		// root's committed table, and before the protocol's onRootCommitted /
+		// onBatchRetired events for the same commit arrive. The mount fixup
+		// for watchers minted this pass runs inside passEnd; the corrective
+		// re-renders it emits are translated into setStates by withBridge.
 		this.withBridge(() => this.bridge.passEnd(pass.id, 'commit'));
 		rec.pass = undefined;
-		// ctx.previous cells hold the last COMMITTED value (§3.4): update from
-		// every watcher this commit rendered or mounted.
+		// ctx.previous cells must hold the last COMMITTED value — a pending
+		// render's value must never leak into the hint, because a pending
+		// transition may still be discarded — so update the cells from every
+		// watcher this commit rendered or mounted.
 		for (const wid of [...pass.rendered, ...pass.mounted]) {
 			const w = this.bridge.watchers.get(wid);
 			if (w !== undefined && !(w.lastRenderedValue instanceof SuspendedRead)) {
 				this.previousCell(w.node).value = w.lastRenderedValue;
 			}
 		}
-		// Orphan sweep (StrictMode replay / render-phase double-invoke): watchers
-		// minted by this pass that no committed layout effect claims are dead by
-		// the time microtasks run (React's layout effects run before microtasks
-		// can be interleaved with user events).
+		// Orphan sweep. In development StrictMode React invokes render twice to
+		// surface impure renders, so even a committed pass can mint watchers
+		// whose hook instance was thrown away and will never be claimed. Layout
+		// effects run synchronously inside the commit, so by the time this
+		// microtask runs every claim has happened — any watcher minted by this
+		// pass and still unclaimed is dead.
 		const minted = rec.minted;
 		rec.minted = new Set();
 		queueMicrotask(() => {
@@ -435,21 +475,24 @@ export class Shim {
 		const t = this.bridge.tokens.get(mapped);
 		if (t === undefined || t.state !== 'live') return;
 		this.withBridge(() => {
-			if (t.parked) this.bridge.settleAction(mapped, committed); // §3.5 settlement
-			else this.bridge.retire(mapped, committed); // §4.1 fact 3
+			if (t.parked) this.bridge.settleAction(mapped, committed); // async action reached settlement
+			else this.bridge.retire(mapped, committed); // batch done everywhere: its writes become permanent history
 		});
 		this.bridgeTokenByFork.delete(forkToken);
 		this.forkTokenByBridge.delete(mapped);
-		this.revalidateEffects(); // §5.11 retirement + settlement re-checks
+		this.revalidateEffects(); // retirement/settlement can move committed values: re-check effects
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], generation: number): void {
 		const rec = this.rootRec(container);
 		rec.lastCommitGeneration = generation;
-		// The bridge already locked in the committing pass's mask tokens at
-		// passEnd(commit); the fork's delta re-report (flush-split, S4 note 3)
-		// is idempotent set semantics. Reconcile any delta member the mask sweep
-		// missed (defensive — mask ⊇ delta for mapped tokens by construction).
+		// The bridge already locked the committing pass's batch set into the
+		// root's committed table at passEnd(commit). The protocol's per-root
+		// commit report is a delta (one batch's work can reach the screen
+		// across more than one flush), and re-reporting a batch is defined as
+		// idempotent set-add — so reconcile any reported batch the passEnd
+		// sweep missed. Defensive: for batches with bridge tokens the pass's
+		// set already covers the delta by construction.
 		this.withBridge(() => {
 			const root = this.bridge.root(rec.id);
 			for (const forkToken of committedBatches) {
@@ -461,8 +504,8 @@ export class Shim {
 				root.commitGen++;
 			}
 		});
-		// §5.11: every root commit is an effect flush trigger (the durable drain
-		// runs at each report — the re-report case is value-gated to a no-op).
+		// Every root commit is an effect re-check trigger. The re-check compares
+		// values, so a commit that moved nothing an effect read is a no-op.
 		this.revalidateEffects(rec.id);
 	}
 
@@ -470,7 +513,7 @@ export class Shim {
 
 	/** Runs a bridge operation, then translates the events it appended. */
 	withBridge<T>(fn: () => T): T {
-		const mark = this.bridge.eventCursor(); // absolute — stable across ring drops (SPK-K1)
+		const mark = this.bridge.eventCursor(); // absolute — stays valid when the bounded stream drops old events
 		try {
 			return fn();
 		} finally {
@@ -481,15 +524,15 @@ export class Shim {
 	private translate(events: BridgeEvent[]): void {
 		for (const e of events) {
 			switch (e.type) {
-				case 'delivery': // §5.9 value-blind, in the write's own batch
-				case 'mount-corrective': { // §5.10 per-token corrective loop
+				case 'delivery': // a subscribed value changed: re-render in the write's own batch
+				case 'mount-corrective': { // mount fixup: join a still-live batch this mount's render missed
 					const w = this.watcherByName(e.watcher);
 					if (w === undefined) break;
 					this.bumpInBatch(w.id, e.token);
 					break;
 				}
-				case 'mount-urgent-correction': // §5.10 urgent pre-paint compare fix
-				case 'reconcile-correction': { // §4.2 step 3 durable drain correction
+				case 'mount-urgent-correction': // mount fixup: committed state moved during the mount window — fix before paint
+				case 'reconcile-correction': { // commit-report reconciliation found a stale watcher — fix urgently
 					const w = this.watcherByName(e.watcher);
 					if (w === undefined) break;
 					this.bumpInBatch(w.id, undefined); // discrete-urgent fallback lane
@@ -512,9 +555,12 @@ export class Shim {
 	}
 
 	/**
-	 * setState in the batch's own lane via unstable_runInBatch; bridge tokens
-	 * without a live fork counterpart (bridge-ambient, retired) take the
-	 * documented discrete-urgent fallback (runInBatch with an unknown token).
+	 * Schedules a re-render (a setState bump) in the batch's own lane via
+	 * unstable_runInBatch, so the re-render renders and commits together with
+	 * the batch that caused it. Bridge tokens without a live protocol
+	 * counterpart (the bridge's ambient default batch, or an already-retired
+	 * batch) pass token 0, which unstable_runInBatch defines as a
+	 * discrete-urgent fallback.
 	 */
 	private bumpInBatch(watcherId: number, bridgeToken: TokenId | undefined): void {
 		const target = this.targets.get(watcherId);
@@ -523,9 +569,9 @@ export class Shim {
 		React.unstable_runInBatch(forkToken, () => target.bump());
 	}
 
-	// ---- write classification (§3.5) --------------------------------------------
+	// ---- write classification -----------------------------------------------------
 
-	/** The one write entry for adopted atoms: whole ops, batch-context classified. */
+	/** The single write entry for adopted atoms: records the WHOLE operation, classified into the batch context the write executes in. */
 	classifyWrite(node: AtomNode, op: Op): void {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render (§3.6 — write from an event handler or effect instead)');
@@ -536,11 +582,16 @@ export class Shim {
 				this.bridge.bareWrite(node, op); // pre-provider / non-React context
 			} else {
 				const tokenId = this.bridgeTokenFor(forkToken);
-				// §3.5 dev-warning heuristic: a non-deferred (bare-context-shaped)
-				// write while an action is parked. The shipped protocol bit cannot
-				// distinguish a discrete handler's token from a timer's ambient
-				// default token, so this lint can over-trigger on handler writes
-				// during someone's action — documented heuristic imprecision.
+				// Dev-warning heuristic. After an await, code runs on a fresh call
+				// stack with no ambient transition context, so a bare write lands
+				// urgent — while an async action is pending that is usually a bug
+				// (the author meant the write to join the action; the fix is the
+				// action scope or a fresh startTransition). Warn on a non-deferred
+				// write while any action is parked. The protocol exposes only one
+				// bit (deferred or not), which cannot distinguish a discrete
+				// handler's token from a timer's ambient token, so this lint can
+				// over-trigger on genuine handler writes during someone else's
+				// action — accepted imprecision for a dev-only warning.
 				const t = this.bridge.tokens.get(tokenId);
 				if (
 					t !== undefined &&
@@ -553,9 +604,11 @@ export class Shim {
 				this.bridge.write(tokenId, node, op);
 			}
 		});
-		// §5.11: a write into a token already locked into some root's committed
-		// table flips committed-for-root truth immediately (membership clause) —
-		// no fork event will follow until much later, so revalidate now.
+		// A write into a batch already locked into some root's committed table
+		// changes that root's committed world immediately: committed state is
+		// "replay every committed batch's receipts", and this batch just gained
+		// a receipt. No protocol event will announce it (the batch already
+		// committed), so re-check effects now.
 		const mapped = forkToken === 0 ? undefined : this.bridgeTokenByFork.get(forkToken);
 		if (mapped !== undefined) {
 			for (const [rootId, root] of this.bridge.roots) {
@@ -564,7 +617,7 @@ export class Shim {
 		}
 	}
 
-	/** ActionScope writes (§3.2): classify into the action's token from anywhere. */
+	/** Action-scope writes: classify into the action's batch explicitly, from anywhere — including after an await. */
 	scopeWrite(bridgeToken: TokenId, node: AtomNode, op: Op): void {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render (§3.6)');
@@ -575,7 +628,7 @@ export class Shim {
 		}
 	}
 
-	// ---- useSignalEffect machinery (§5.11) ---------------------------------------
+	// ---- useSignalEffect machinery -------------------------------------------------
 
 	registerEffect(root: RootId, refire: () => void): number {
 		const id = nextEffectSerial++;
@@ -612,7 +665,7 @@ export class Shim {
 		return value;
 	}
 
-	/** §5.11 flush: revalidate fingerprints (value-compared; re-run on change). */
+	/** Re-checks effect snapshots against the committed world of each effect's root (value-compared; re-fires on change). */
 	revalidateEffects(rootId?: RootId): void {
 		for (const rec of [...this.effects.values()]) {
 			if (!rec.live || (rootId !== undefined && rec.root !== rootId)) continue;
@@ -632,7 +685,7 @@ export class Shim {
 					break;
 				}
 			}
-			if (genMoved) rec.rootCommitGen = gen; // header revalidated (value-gated)
+			if (genMoved) rec.rootCommitGen = gen; // generation caught up; re-firing stays value-gated
 			if (changed && rec.live) rec.refire();
 		}
 	}
@@ -649,10 +702,12 @@ export class Shim {
 			patchable[BOUND] = { shim: this, node: existing };
 			return existing;
 		}
-		// Adopt through a TWIN handle (prototype routing skips it) so the
-		// bridge's own kernel applies (applyToKernel -> handle.set) and kernel
-		// reads (kernelValueOf -> handle.state) take the original paths and the
-		// logged table's bridgeApplying route — no classify recursion.
+		// Adopt through a TWIN handle, which prototype routing skips: when the
+		// bridge itself applies a folded value to the kernel (applyToKernel ->
+		// handle.set) or reads the kernel (kernelValueOf -> handle.state),
+		// those calls must take the original paths and the logged build's
+		// bridge-applying route — routing them through classifyWrite would
+		// recurse.
 		const twin = Object.create(Atom.prototype) as PatchableAtom;
 		Object.defineProperty(twin, '_id', { value: atom._id });
 		Object.defineProperty(twin, '_isEqual', { value: atom._isEqual });
@@ -670,7 +725,8 @@ export class Shim {
 	 * Prototype-routed `.state` read: adopted atoms route through the world
 	 * ladder; un-adopted atoms adopt on demand when a routing context (bound
 	 * evaluation frame, effect capture, tracked render pass) is active, and
-	 * otherwise stay on the original kernel path (LOGGED-quiet).
+	 * otherwise stay on the original kernel path — so plain reads outside any
+	 * React context cost nothing extra.
 	 */
 	readState(atom: PatchableAtom): unknown {
 		const bound = atom[BOUND];
@@ -683,11 +739,13 @@ export class Shim {
 	}
 
 	/**
-	 * Read routing for a patched atom's `.state` (§5.6's world path, at the
-	 * binding level): inside a bound-computed evaluation -> the frame's tracked
-	 * reader (K1 edge + world fold); inside an effect fire -> committed-for-root
-	 * capture; during a tracked render pass -> the pass's world (§3.2 "routes
-	 * the read through the current pass's world"); otherwise the kernel path.
+	 * Read routing for a patched atom's `.state` — every read resolves in the
+	 * world of whatever is asking: inside a bound-computed evaluation -> the
+	 * frame's tracked reader (registers a dependency edge in the kernel and
+	 * folds the value in the evaluating world); inside an effect fire ->
+	 * committed-for-root capture; during a tracked render pass -> the pass's
+	 * world, so a component reads the view of the render it is part of;
+	 * otherwise -> the plain kernel path.
 	 */
 	routeRead(node: AtomNode, atom: Atom<unknown>): unknown {
 		const frame = this.evalStack[this.evalStack.length - 1];
@@ -704,9 +762,9 @@ export class Shim {
 		return originalStateGet.call(atom);
 	}
 
-	// ---- bound computeds + ctx.use capsules (§3.3/§3.4/§5.8) ----------------------
+	// ---- bound computeds + ctx.use capsules -----------------------------------------
 
-	/** ctx.previous cells: one per node, last COMMITTED value (§3.4, best-effort). */
+	/** ctx.previous cells: one per node, holding the last COMMITTED value (a best-effort hint; may be stale or undefined). */
 	previousCells = new Map<number, { value: unknown }>();
 	/** >0 while a hook-initiated evaluation may legally suspend the render. */
 	private suspendDepth = 0;
@@ -723,11 +781,14 @@ export class Shim {
 	/**
 	 * Mints a bridge computed whose evaluations open a shim frame: patched-atom
 	 * and bound-computed reads inside `fn` route through the frame's tracked
-	 * reader (K1 edges + world fold), ctx.previous reads the node's committed
-	 * cell, and ctx.use keys capsules on the frame's lineage bucket. In
-	 * background walks a pending suspension folds to the capsule's stable
-	 * SuspendedRead sentinel instead of unwinding (sentinels are cached values,
-	 * §5.8); hook-initiated evaluations rethrow so React can suspend.
+	 * reader (dependency edges in the kernel, values folded in the evaluating
+	 * world), ctx.previous reads the node's last-committed cell, and ctx.use
+	 * resolves capsules against the frame's identity (source, deps, use-site
+	 * position, value prefix). When the engine evaluates the node in the
+	 * background — no component rendering — a pending suspension folds to the
+	 * capsule's stable SuspendedRead sentinel instead of unwinding, so "still
+	 * pending" caches like any other value; hook-initiated evaluations rethrow
+	 * it so React can suspend the component.
 	 */
 	makeComputedNode<T>(label: string, fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[] = []): ComputedNode {
 		const shim = this;
@@ -756,7 +817,7 @@ export class Shim {
 		return node;
 	}
 
-	/** §5.8 — positional capsule with value-prefix identity + revalidation. */
+	/** ctx.use: capsule lookup by (source, deps, use-site position, value prefix); mints a capsule and suspends on miss. */
 	private ctxUse(frame: EvalFrame, source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): unknown {
 		const position = frame.useIndex++;
 		let entries = this.capsules.get(frame.fnSrc);
@@ -776,12 +837,14 @@ export class Shim {
 			if (existing.state === 'rejected') throw existing.reason;
 			throw existing.sr; // stable per capsule: retries and folds see one identity
 		}
-		// Mint (a prefix moved by a retirement/rebase refetches from the moved
-		// world — v1 accepts duplicate fetches, never stale data; case 15 row 5).
-		// The prefix is the reads BEFORE the use() site (§5.8): capture it before
-		// the factory runs, and truncate the factory's own reads from the log —
-		// they happen at mint only (the factory is skipped on replay), so they
-		// can never participate in capsule identity. Read inputs before ctx.use.
+		// Miss: mint a fresh capsule. A prefix moved by a retirement or a
+		// changed batch set means this world genuinely sees different inputs,
+		// so it refetches (a duplicate fetch is acceptable; stale data is not).
+		// The identity prefix is the reads BEFORE the use() site: capture it
+		// before the factory runs, then truncate the factory's own reads from
+		// the log — the factory runs at mint only (an evaluation that matches
+		// an existing capsule never re-runs it), so reads inside it can never
+		// participate in capsule identity. Read your inputs before ctx.use.
 		const prefix = frame.readLog.slice();
 		const mark = frame.readLog.length;
 		const thenable = typeof source === 'function' ? source() : source;
@@ -860,16 +923,17 @@ export class Shim {
 		rootRec.minted.add(watcherId);
 	}
 
-	// ---- watcher claim / unsubscribe (§5.11 lifecycle) -----------------------------
+	// ---- watcher claim / unsubscribe ------------------------------------------------
 
 	/** Layout-effect claim: the committed hook instance owns this watcher. */
 	claimWatcher(rec: { node: AnyNode; watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean; root: RootId | undefined; lastValue: unknown }): void {
 		rec.pendingUnsub = false;
 		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
-			// Reveal without a re-render (bailout) or a swept subscription: mint a
-			// fresh watcher outside any React pass and take §5.10's conservative
-			// reveal path — a value compare against committed truth, pre-paint.
+			// Reveal without a re-render (React bailed out) or a swept
+			// subscription: mint a fresh watcher outside any React pass and take
+			// the conservative reveal path — compare what the committed DOM shows
+			// against committed truth, and fix urgently, before paint.
 			this.resubscribeAtLayout(rec);
 			return;
 		}
@@ -896,7 +960,7 @@ export class Shim {
 		this.claimed.add(minted.id);
 		rec.target.live = true;
 		this.targets.set(minted.id, rec.target);
-		// Conservative reveal compare (§5.10 fall-through population).
+		// Conservative reveal compare: fix any drift urgently, pre-paint.
 		const now = this.bridge.committedValue(rec.node, root);
 		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(minted.id, undefined);
 	}
@@ -919,10 +983,10 @@ export class Shim {
 	}
 }
 
-/** The evaluation context bound computeds receive (§3.1/§3.4/§5.8 subset). */
+/** The evaluation context bound computed functions receive. */
 export type BoundCtx<T> = {
-	/** Last committed value of this node — a hint only (§3.4). */
+	/** Last committed value of this node — a hint only: it may be stale or undefined, and the function must be correct without it. */
 	readonly previous: T | undefined;
-	/** Reads a thenable; pending suspends via a lineage-keyed capsule (§5.8). */
+	/** Reads a thenable; while pending the read suspends via a capsule keyed to this evaluation's inputs, and settlement re-evaluates. */
 	use<V>(source: PromiseLike<V> | (() => PromiseLike<V>)): V;
 };

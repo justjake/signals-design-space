@@ -1,13 +1,15 @@
 /**
- * Twin-driver helpers: the oracle's battery/scars/flags specs run VERBATIM
- * against `logged()` from this module — every call fans out to the naive
- * model AND the LOGGED engine, legality decisions must agree, every value
- * read is asserted equal on both sides, and the full event stream + counters
- * are compared after every mutation. The spec bodies' own `expect`s therefore
- * assert the model's Required outcomes while the twin asserts engine ≡ model
- * at every step. `selfCheck` additionally runs the oracle's invariant battery
- * on BOTH sides (the bridge is structurally invariant-compatible) plus the
- * engine-only K0 check: kernel newest value ≡ fold(base, receipts).
+ * Twin-driver helpers: the battery/scars/flags specs in this directory run
+ * VERBATIM against `logged()` from this module — every call fans out to the
+ * reference model (`cosignal-oracle`) AND the LOGGED engine, legality
+ * decisions must agree, every value read is asserted equal on both sides,
+ * and the full event stream + counters are compared after every mutation.
+ * The test bodies' own `expect`s therefore assert the reference model's
+ * required outcomes while the twin asserts engine ≡ model at every step.
+ * `selfCheck` additionally runs the reference model's invariant battery on
+ * BOTH sides (the bridge is structurally invariant-compatible) plus one
+ * engine-only check ("K0 parity"): the kernel's newest value must equal
+ * folding the atom's base value through its receipts.
  */
 import { expect } from 'vitest';
 import { snapshotModel } from '../../cosignal-oracle/src/adapter.js';
@@ -42,12 +44,13 @@ type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown }
 
 /**
  * Delivery-decision events (the documented engine-diff tolerance surface).
- * mount-corrective joins them: §5.10's corrective population is the touched
- * word (`r = touched(n)`), while the model derives it from its eagerly
- * refreshed union closure — same union-conservative over-approximation as
- * deliveries. The engine's ⊇-required floor for correctives is enforced
- * in-engine: the errata-2 audit throws BridgeInvariantViolation whenever
- * fast-out-suppressed divergence is not exactly corrective-covered.
+ * mount-corrective joins them: the engine draws the corrective population
+ * from the per-node touched set, while the model derives it from its
+ * eagerly refreshed union closure — the same union-conservative
+ * over-approximation as deliveries. The "at least what correctness
+ * requires" floor for correctives is enforced in-engine: an internal audit
+ * throws BridgeInvariantViolation whenever divergence hidden by the mount
+ * fast-out is not exactly covered by a corrective.
  */
 function isDeliveryish(e: ModelEvent): boolean {
 	return e.type === 'delivery' || e.type === 'suppressed' || e.type === 'mount-corrective';
@@ -79,13 +82,14 @@ export class TwinDriver {
 	private passMap = new Map<number, EPass>();
 
 	constructor() {
-		// The oracle retention invariant (invariants.ts checkRetention) shadow-
-		// folds over the full history; the engine keeps its archive only when
-		// asked (SPK-K1: unbounded under never-quiescent soak otherwise).
+		// The reference model's retention invariant (checkRetention in
+		// invariants.ts) shadow-folds over the full history; the engine keeps
+		// its archive only when asked — retaining it unconditionally would
+		// grow memory without bound under a workload that never quiesces.
 		this.engine.retainArchive = true;
 	}
 
-	// ---- state the spec bodies read directly (model side; engine compared per op)
+	// ---- state the test bodies read directly (model side; engine compared per op)
 	get events(): ModelEvent[] { return this.model.events; }
 	get tokens(): CosignalModel['tokens'] { return this.model.tokens; }
 	get slots(): CosignalModel['slots'] { return this.model.slots; }
@@ -132,18 +136,19 @@ export class TwinDriver {
 	/**
 	 * Event stream, sequence counters, and cas must agree after every op.
 	 *
-	 * Delivery tolerance (the oracle README's FIRST documented relaxation,
-	 * activated by the SPK-N1 perf pass): the model's delivery reachability
-	 * recomputes the union graph eagerly at every write, while the engine
-	 * discovers edges at evaluation sites and replays live slots through
-	 * edge-adds (§5.5/§5.9) — so delivery/suppressed decisions may lag the
-	 * model's or drop when a never-materialized union path was the only
+	 * Delivery tolerance (the relaxation documented in the reference
+	 * model's README, `cosignal-oracle`): the model's delivery reachability
+	 * recomputes the union graph eagerly at every write, while the engine —
+	 * for speed — discovers edges at evaluation sites and replays live
+	 * slots when an edge is added, so delivery/suppressed decisions may lag
+	 * the model's or drop when a never-materialized union path was the only
 	 * route. Comparator: 'delivery'/'suppressed' events are checked as
 	 * "engine ⊆ model, cumulatively, keyed by (type, watcher, token, slot)"
 	 * (mode/seq excluded: a replayed delivery carries the replay sequence);
-	 * every other event type must match exactly, in order. The ⊇-required
-	 * floor is enforced indirectly: observable snapshots, reconcile
-	 * corrections, effect runs, and counters stay exact.
+	 * every other event type must match exactly, in order. The "at least
+	 * what correctness requires" floor is enforced indirectly: observable
+	 * snapshots, reconcile corrections, effect runs, and counters stay
+	 * exact.
 	 */
 	private compareStreams(label: string): void {
 		expect(this.engine.seq, `twin ${label}: seq diverged`).toBe(this.model.seq);
@@ -333,7 +338,7 @@ export class TwinDriver {
 			expect(JSON.stringify(e), `twin eventsOfType(${type}) diverged`).toBe(JSON.stringify(m));
 		}
 		// deliveryish types: covered cumulatively by compareStreams' ⊆ bound;
-		// the spec bodies' assertions pin the model's Required outcomes.
+		// the test bodies' assertions pin the reference model's required outcomes.
 		return m;
 	}
 
@@ -342,19 +347,20 @@ export class TwinDriver {
 		// stream's positions no longer align 1:1. The full-stream comparison
 		// in compareStreams (after EVERY op) already pins the non-delivery
 		// stream exactly and bounds deliveries cumulatively, so the window
-		// compare adds nothing — return the model's window (the spec bodies'
-		// Required outcomes).
+		// compare adds nothing — return the model's window (the required
+		// outcomes the test bodies assert).
 		return this.model.eventsSince(mark);
 	}
 
-	/** Full parity + invariants on both sides + the engine-only K0 check. */
+	/** Full parity + invariants on both sides + the engine-only "K0 parity" check. */
 	verify(): void {
 		this.compareStreams('verify');
 		expect(JSON.stringify(snapshotModel(this.engine as unknown as CosignalModel)), 'twin observable snapshots diverged')
 			.toBe(JSON.stringify(snapshotModel(this.model)));
 		checkInvariants(this.model);
 		checkInvariants(this.engine as unknown as CosignalModel);
-		// §5.2 eager-apply invariant: the kernel plane holds the newest fold.
+		// Eager-apply invariant: writes land in the kernel immediately, so the
+		// kernel's newest value must equal replaying the receipts over the base.
 		for (const n of this.engine.nodes.values()) {
 			if (n.kind !== 'atom') continue;
 			const folded = this.engine.foldAtom(n, { kind: 'newest' } as EWorld);
@@ -364,7 +370,7 @@ export class TwinDriver {
 	}
 }
 
-/** A LOGGED-mode twin (bridge registered during setup, §3.2). */
+/** A twin with the bridge registered on both sides during setup (logged mode). */
 export function logged(): TwinDriver {
 	const t = new TwinDriver();
 	t.registerBridge();

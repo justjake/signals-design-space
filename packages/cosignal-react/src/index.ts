@@ -1,9 +1,10 @@
 /**
- * cosignal-react — public surface (spec §3.2). The bindings ride the LOGGED
- * engine (`cosignal/logged`) and the linked React fork's external-runtime
- * protocol; `registerCosignalReact()` activates both. The DIRECT entry
- * (`cosignal`) is never imported here — the twin-build promise (§7) holds:
- * apps that skip this package carry zero concurrency instructions.
+ * cosignal-react — public surface. The bindings ride the logged build's
+ * concurrent engine (`cosignal/logged`) and the external-runtime protocol,
+ * version 1, of a patched React build; `registerCosignalReact()` activates
+ * both. The plain `cosignal` entry is never imported here, preserving the
+ * base library's isolation promise: apps that skip this package carry zero
+ * concurrency code.
  */
 
 export {

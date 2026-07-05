@@ -1,9 +1,10 @@
 /**
- * R11 semantics coverage: every traced event class fires with correct
- * payloads on a representative schedule (a staged narrative over one traced
- * bridge, then a fuzz sweep cross-checking the trace stream against the
- * engine's oracle-shaped BridgeEvent stream). Causality (CAUSE edges +
- * queries) and the stable human format are asserted here too.
+ * Trace semantics coverage for cosignal/trace: every traced event class
+ * fires with correct payloads on a representative schedule (a staged
+ * narrative over one traced bridge, then a fuzz sweep cross-checking the
+ * trace stream against the engine's BridgeEvent stream — the same event
+ * vocabulary the reference model emits). Causality (CAUSE edges + queries)
+ * and the stable human format are asserted here too.
  */
 import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
@@ -49,7 +50,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		// world evaluations recorded: the mount render evaluated c in p1's world
 		const evals = all(tr, 'eval');
 		expect(evals.some((e) => e.data['node'] === 'c' && e.data['world'] === `pass:${p1.id}`)).toBe(true);
-		// the fixup evaluated c in the fast-forwarded mount-fix world (§5.10)
+		// the fixup evaluated c in the fast-forwarded mount-fix world
 		expect(evals.some((e) => e.data['node'] === 'c' && e.data['world'] === 'mount-fix:A')).toBe(true);
 		// clean mount on a quiet root: fast-out, zero correctives; provoked by the commit
 		const fx = all(tr, 'mount-fixup')[0]!;
@@ -63,20 +64,20 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 		expect(all(tr, 'batch-open')[0]!.data).toEqual({ token: k.id, priority: 'deferred', action: false, ambient: false });
 		expect(all(tr, 'slot-claim')[0]!.data).toEqual({ slot: 0, token: k.id });
-		const seq = b.eventsOfType('write')[0]!.seq; // the claim minted its own seq first (§5.4)
+		const seq = b.eventsOfType('write')[0]!.seq; // the slot claim minted its own seq before the write's
 		const w1 = all(tr, 'write')[0]!;
 		expect(w1.data).toEqual({ node: 'flag', op: 'set', token: k.id, slot: 0, seq });
 		expect(w1.cause).toBeUndefined(); // operation root
 		const d1 = all(tr, 'delivery')[0]!;
 		expect(d1.data).toEqual({ watcher: 'W', token: k.id, slot: 0, seq, mode: 'fresh' });
-		expect(d1.cause).toBe(w1.id); // §5.9 delivery provoked by its write
+		expect(d1.cause).toBe(w1.id); // the delivery is provoked by its write
 
-		// Perf-pass mechanics (SPK-N1): the flip's newest topology (c now
-		// reads a) is discovered at evaluation sites, not by an eager
-		// per-write refresh — pull once so the a→c edge is recorded (§5.5
-		// edge-add; the retroactive replay is silent here: W's dedup bit is
-		// already armed) and the staged writes below walk the same cone the
-		// oracle's union-conservative narrative assumed.
+		// Engine mechanics: the flip's newest topology (c now reads a) is
+		// discovered at evaluation sites, not by an eager per-write refresh —
+		// pull once so the a→c edge is recorded (the retroactive replay on
+		// the edge-add is silent here: W's dedup bit is already armed) and
+		// the staged writes below walk the same dependency cone this
+		// narrative assumes.
 		b.newestValue(c);
 	});
 
@@ -211,7 +212,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 	it('mount fixup: corrected (urgent pre-paint fix) when committed truth moved under the open pass', () => {
 		// retire the straggler tokens (ambient, t2): live written batches would
-		// (correctly) draw §5.10 correctives on every mount below
+		// (correctly) draw mount correctives on every mount below
 		for (const t of b.liveTokens()) b.retire(t.id, true);
 		const p5 = b.passStart('A', []);
 		b.mountWatcher(p5.id, c, 'W2'); // renders committed-at-pin: c = 42
@@ -255,9 +256,10 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('nested world evaluations record post-order with depth', () => {
-		// Perf-pass mechanics (SPK-R): `c`'s newest memo is valid here, so a
-		// chain over it would serve the cache without an inner eval record —
-		// nest through a FRESH inner node so both evaluations genuinely run.
+		// Engine mechanics: newest-world evaluations are memoized and `c`'s
+		// memo is valid here, so a chain over it would serve the cache without
+		// an inner eval record — nest through a FRESH inner node so both
+		// evaluations genuinely run.
 		const cn = b.computed('cn', (read) => (read(a) as number) + 1);
 		const cc = b.computed('cc', (read) => (read(cn) as number) + 1);
 		b.newestValue(cc);
@@ -296,7 +298,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 });
 
-// ---- trace stream ≡ BridgeEvent stream (the oracle-shaped cross-check) -----------
+// ---- trace stream ≡ BridgeEvent stream (cross-checked on generated schedules) ----
 
 /** BridgeEvent → the trace record it must map to ('write' maps to the receipt-borne kind). */
 function expectedTraceOf(e: BridgeEvent): { kind: TraceKind; data: Record<string, unknown> } | undefined {

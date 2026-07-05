@@ -1,10 +1,7 @@
-/**
- * SPK-N1 parent — value-blind fan-out gate.
- * Pre-registered rule (spec §7 "Fan-out"; OPEN.md SPK-N1): propagate > 2x
- * DIRECT OR > 1 spurious render per (watcher, batch) => fallback =
- * per-slot-mark dedup (D13) — which per O24 may NOT be adopted without its
- * own walked schedule; on failure REPORT ONLY.
- */
+// Measures delivery fan-out: the logged build's per-write propagation cost
+// and delivered/spurious re-render counts as watcher fan-out, batches per
+// frame, and writes per frame grow — against the base build's per-write
+// cost on the same graph (where equal writes are value-gated away).
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';

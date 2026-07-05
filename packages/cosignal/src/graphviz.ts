@@ -1,15 +1,16 @@
 /**
- * cosignal v1 — R11 Graphviz renderers (`cosignal/graphviz`). Emits DOT
- * source (render with `dot -Tsvg`). Layering is strict per the reference
- * design: `cosignal/trace` records without importing any visualizer, and
- * this entry imports ONLY TYPES from the trace/logged entries — its runtime
- * module graph is exactly {graphviz.ts}; either entry loads without the
- * other.
+ * `cosignal/graphviz` — the DOT renderers of the diagnostics story. Both
+ * functions emit DOT source (render with `dot -Tsvg`). Layering is strict:
+ * `cosignal/trace` records without importing any visualizer, and this entry
+ * imports ONLY TYPES from the trace and engine modules — its runtime module
+ * graph is exactly {graphviz.ts}; either diagnostics entry loads without
+ * the other.
  *
- *  - `dependencyGraphToDot(bridge)` — a snapshot of the live overlay graph:
- *    atoms (with live-tape depth), computeds, this episode's K1 union edges,
- *    live watchers and effects with their observation edges. Diffing two
- *    dumps is the workhorse for wiring bugs.
+ *  - `dependencyGraphToDot(bridge)` — a snapshot of the live dependency
+ *    graph: atoms (annotated with how many receipts their history currently
+ *    holds), computeds, the dependency edges the engine has recorded since
+ *    its last quiescent reset, and live watchers and effects with their
+ *    observation edges. Diffing two dumps is the workhorse for wiring bugs.
  *  - `traceToDot(events, filter?)` — the causal graph of a decoded trace
  *    (CAUSE edges: write → delivery → correction chains), one node per
  *    event, clustered by nothing (time flows top to bottom).
@@ -22,7 +23,7 @@ function q(s: string): string {
 	return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-/** Snapshot of the live dependency plane (nodes, K1 union edges, observers). */
+/** Snapshot of the live dependency graph: nodes, recorded dependency edges, observers. */
 export function dependencyGraphToDot(bridge: CosignalBridge): string {
 	const lines: string[] = ['digraph cosignal {', '\trankdir=LR;', '\tnode [fontname="monospace"];'];
 	for (const n of bridge.nodes.values()) {
@@ -53,7 +54,7 @@ export function dependencyGraphToDot(bridge: CosignalBridge): string {
 	return lines.join('\n');
 }
 
-/** The causal graph of a decoded trace slice; `filter` keeps matching kinds only. */
+/** The causal graph of a decoded trace slice; `filter` keeps matching events only. */
 export function traceToDot(events: TraceEvent[], filter?: (e: TraceEvent) => boolean): string {
 	const kept = filter === undefined ? events : events.filter(filter);
 	const ids = new Set(kept.map((e) => e.id));

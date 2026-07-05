@@ -1,15 +1,18 @@
-// TWIN RUN — the oracle spec below runs VERBATIM against the LOGGED engine:
-// ./helpers.js here is the twin driver (model + engine fan-out; every read is
-// parity-asserted; selfCheck compares events/snapshots and runs the invariant
-// battery on BOTH sides). Source: packages/cosignal-oracle/tests/battery.spec.ts.
+// TWIN RUN — this spec runs against the reference model (`cosignal-oracle`)
+// AND the LOGGED engine at once: ./helpers.js here is the twin driver (model
+// + engine fan-out; every read is parity-asserted; selfCheck compares
+// events/snapshots and runs the invariant battery on BOTH sides). Kept in
+// lockstep with the reference model's own tests/battery.spec.ts.
 // One deliberate deviation: case 14's "render-phase writes throw" drives the
 // ENGINE directly — a fan-out write inside one side's evaluation would corrupt
-// the other side by construction (the model half runs in the oracle's suite).
+// the other side by construction (the model half of that case runs in the
+// reference model's own suite).
 import { __newBridgeForTest } from '../src/logged.js';
 /**
- * The 17-case acceptance battery (spec §6), as deterministic named tests
- * asserting the spec's Required outcomes at model level. Aspects that need
- * the real React fork are listed in tests/SKIPPED-FOR-FORK-SUITE.md.
+ * The 17-case acceptance battery of the behavioral contract, as
+ * deterministic named tests asserting the required outcomes at model level.
+ * Aspects that need the real patched React build are listed in
+ * SKIPPED-FOR-FORK-SUITE.md alongside the reference model's own suite.
  */
 import { describe, expect, it } from 'vitest';
 import { commitAndRetire, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
@@ -56,7 +59,8 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		m.write(k.id, a, set(1));
 		m.write(k.id, b, set(9)); // k-world c takes the a-path; the walk still reaches W value-blind.
 		// (W, k) is already armed and no pass has started: the scheduled render will
-		// fold a=1 and b=9, so §5.9 suppresses both follow-ups — a decision, never an equality test.
+		// fold a=1 and b=9, so dedup suppresses both follow-ups — a scheduling
+		// decision, never an equality test on values.
 		expect(m.eventsOfType('suppressed').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(2);
 		const pk = pass(m, 'A', [k]);
 		expect(m.passValue(c, pk)).toBe(1); // value unchanged by b in k's world
@@ -146,7 +150,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		m.passYield(p.id);
 		const u = m.openBatch('urgent'); // gap click
 		m.write(u.id, a, set(1));
-		expect(ce.lastValue).toBe(11); // core effect reads NEWEST (documented core contract §5.11)
+		expect(ce.lastValue).toBe(11); // core effects always observe the newest values — the core contract
 		m.retire(u.id, true); // entries stamped; pin blocks compaction; slot releases immediately
 		expect(m.eventsOfType('slot-released').some((e) => e.token === u.id)).toBe(true);
 		m.passResume(p.id);
@@ -225,7 +229,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		const c2 = m.computed('c2', (read) => (read(a) as number) * 10);
 		expect(m.newestValue(c1)).toBe(2);
 		expect(m.newestValue(c2)).toBe(10);
-		expect(c1.fn).not.toBe(c2.fn); // no machinery anywhere swaps a live node's evaluator (§3.3)
+		expect(c1.fn).not.toBe(c2.fn); // no machinery anywhere swaps a live node's evaluator — it is immutable for the node's life
 		selfCheck(m);
 	});
 });
@@ -239,7 +243,7 @@ describe('case 2 — flushSync excludes a pending default batch (why always-log)
 		const d = m.openBatch('default');
 		m.write(d.id, a, set(1)); // ALWAYS logged — urgency never skips history
 		expect(m.eventsOfType('write')).toHaveLength(1);
-		expect(m.newestValue(a)).toBe(1); // K0 applied eagerly
+		expect(m.newestValue(a)).toBe(1); // writes apply to the kernel immediately
 		const sync = pass(m, 'A', []); // flushSync renders SyncLane only: D excluded
 		expect(m.passValue(a, sync)).toBe(0);
 		expect(m.passValue(c, sync)).toBe(10); // BOTH old — no torn frame
@@ -371,7 +375,7 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(5));
 		const p = pass(m, 'A', [t]);
-		m.passYield(p.id); // fork passYield ⇒ per-callstack truth: not-in-render
+		m.passYield(p.id); // after passYield this callstack is outside the render — truth is per-callstack
 		expect(m.newestValue(a)).toBe(5); // handler read: the newest world (includes T's applied write)
 		const u = m.openBatch('urgent');
 		m.write(u.id, a, set(9)); // no throw; classifies into the click's batch U
@@ -517,13 +521,15 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit'); // k live: lock-in, no retirement
 		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(1);
-		// Spec discrepancy (recorded in tests/FLAGS.md under flag 5): case 9 row 8's
-		// parenthetical claims "the compare comes out equal — no false urgent" when k
-		// stays live. But the commit's own table update precedes layout (§4.2), so
-		// committed-for-A includes k's post-pin write via the membership clause
-		// (§5.3 write-set closure), and w_fx's uncapped committed clause folds s2:
-		// the compare fires — a value-TRUE urgent correction, sound by §5.10's own
-		// "over-firing is impossible to make unsound".
+		// A deliberate, documented subtlety (the "flag 5" family — see
+		// logged-flags.spec.ts): one might expect the mount compare to come out
+		// equal here — no false urgent — when k stays live. But the commit updates
+		// the root's committed-token table before layout effects run, and a root's
+		// committed world closes over EVERY write of a token it has committed, so
+		// committed-for-A already includes k's post-pin write and the fixup's
+		// committed clause folds s2: the compare fires — a value-TRUE urgent
+		// correction. Over-firing here cannot be unsound: the correction writes
+		// exactly the committed truth.
 		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(2);
 		expect(m.committedValue(a, 'A')).toBe(2); // the correction matches committed truth — not false
@@ -624,7 +630,7 @@ describe('case 11 — multiple roots (declared scope: degraded multi-root)', () 
 		const uB = pass(m, 'B', []);
 		expect(m.passValue(c, uB)).toBe(0); // but B is self-consistent
 		m.passEnd(uB.id, 'commit');
-		// B commits k: now committed everywhere ⇒ the fork retires it EXACTLY ONCE
+		// B commits k: now committed everywhere ⇒ the host React build retires it EXACTLY ONCE
 		const pB = pass(m, 'B', [k]);
 		m.renderWatcher(pB.id, wB.id);
 		m.passEnd(pB.id, 'commit', { retireAtCommit: [k.id] });
@@ -676,7 +682,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		expect(m.committedValue(a, 'A')).toBe(0); // not before settlement
 		m.settleAction(t.id, true);
 		expect(m.committedValue(a, 'A')).toBe(2);
-		expect(() => m.scopeWrite(t.id, a, set(3))).toThrow(/ActionScope closed/); // §3.6
+		expect(() => m.scopeWrite(t.id, a, set(3))).toThrow(/ActionScope closed/); // a settled action's scope is closed: its methods throw
 		selfCheck(m);
 	});
 });

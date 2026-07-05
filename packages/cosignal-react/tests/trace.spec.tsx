@@ -1,5 +1,5 @@
 /**
- * Trace smoke (task 4d): attachTracer over the bridge, drive a real React
+ * Trace smoke test: attachTracer over the bridge, drive a real React
  * scenario through the bindings, and assert the semantic event classes appear
  * — proving the bindings route through the bridge (no bypass): writes, pass
  * lifecycle, per-root commits, deliveries, and the mount-fixup disposition.

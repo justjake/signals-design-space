@@ -1,5 +1,5 @@
 /**
- * cosignal v1 — DIRECT build (spec/cosignal-v1.md).
+ * cosignal — the base build (the `cosignal` entry).
  *
  * This file has four layers, top to bottom:
  *
@@ -9,11 +9,16 @@
  *   2. The evaluation context — the ONE `ctx` object every computed function
  *      receives (`ctx.previous`, `ctx.use`), delegating to hoisted policy
  *      functions so the kernel can pass it with zero per-recompute setup.
- *   3. K0, the kernel — the proven donor arena copied from libs/arena
- *      (alien-signals v3.2.1 on interleaved Int32Array records; 179/179
- *      conformance). Its walk structure, flag ladder, link/linkInsert split,
- *      closure-const buffers, scratch-stack discipline, and growth machinery
- *      are preserved verbatim. Deltas from the donor are enumerated below.
+ *   3. The kernel — an arena-style core: alien-signals v3.2.1's push-pull
+ *      algorithm transliterated onto interleaved Int32Array records, with
+ *      nodes and dependency links as fixed-stride packed records sharing one
+ *      plane. Upstream's walk structure and flag ladder are preserved (plus a
+ *      link/linkInsert hot/slow split); buffers are closure constants, walks
+ *      use persistent scratch stacks, and capacity grows by closure rebuild
+ *      over doubled buffers at operation boundaries. Validated against a
+ *      179-case conformance suite (179/179) for alien-signals-compatible
+ *      semantics. Deviations from a plain packed-array transliteration of
+ *      upstream are enumerated below (D1–D7).
  *   4. The policy layer — Atom / ReducerAtom / Computed classes, effect(),
  *      batch(), untracked(), configure(); custom equality by
  *      wrapper-returns-old-reference; errors/suspensions as sentinel boxes;
@@ -22,69 +27,80 @@
  *
  * ─── THE OPERATION-TABLE SEAM ────────────────────────────────────────────────
  *
- * The `Engine` record returned by `createEngine` IS the operation table of
- * spec §5.1: every public operation routes through the module-level binding
+ * The `Engine` record returned by `createEngine` IS the engine's operation
+ * table: every public operation routes through the module-level binding
  * `E` (`E.read`, `E.write`, `E.computedRead`, …), and `E` is only ever
- * replaced at an operation boundary via closure rebuild — exactly the donor's
- * growth mechanism (`boundaryWork` → `engineFactory(records, carry)`).
+ * replaced at an operation boundary via closure rebuild — the same
+ * closure-rebuild mechanism growth uses (`boundaryWork` →
+ * `engineFactory(records, carry)`).
  *
- * In this DIRECT build the table is statically wired: `engineFactory` is a
- * `const` bound to `createEngine` (the donor/DIRECT table), no other table
- * exists, and no overlay code is imported — a bundle of this file contains
- * zero concurrency instructions (the spec's CI symbol diff has nothing to
- * find). The LOGGED build is the twin bundle of spec §7: it shares these
- * kernel bytes but binds `engineFactory` as a `let` initialized to
- * `createEngine`, and its `registerReactBridge()` — a separate entry point,
- * never imported here — asserts `enterDepth === 0` (no open evaluation/fold/
- * walk frame, spec §3.6), re-points `engineFactory` at the logged factory
- * (same `Engine` shape; `write`/`read`/`computedRead` additionally append
- * receipts, run the marking and delivery walks, and route non-newest reads),
- * then rebuilds `E` exactly once over the carried buffers. Growth thereafter
- * rebuilds through the same binding, so the swap is one assignment plus one
- * closure rebuild at an operation boundary — the donor's own growth pattern.
+ * In the base build the table is statically wired: `engineFactory` is
+ * initialized to `createEngine` (the base table), nothing in this module
+ * ever reassigns it, no other table exists, and no concurrency code is
+ * imported — a bundle of this entry contains zero concurrency instructions
+ * (the build-isolation test, tests/twin-build.spec.ts, asserts a base-build
+ * bundle contains none). The logged build (`cosignal/logged`) shares these
+ * kernel bytes: its `registerReactBridge()` — a separate entry point, never
+ * imported here — asserts `enterDepth === 0` (no open evaluation/fold/walk
+ * frame, i.e. an operation boundary), re-points `engineFactory` at the
+ * logged factory (same `Engine` shape; `write`/`read`/`computedRead`
+ * additionally append receipts, run the marking and delivery walks, and
+ * route non-newest reads), then rebuilds `E` exactly once over the carried
+ * buffers. Growth thereafter rebuilds through the same binding, so the swap
+ * is one assignment plus one closure rebuild at an operation boundary — the
+ * same pattern growth uses.
  * All shared mutable state a rebuilt table needs (scalar heads, side columns,
  * queue, scratch stacks) already lives at module level for exactly this
  * reason; nothing else in the kernel or the policy layer is table-aware.
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Kernel deltas vs libs/arena/src/index.ts (each is policy plumbing at a cold
- * site; the hot walks are untouched — measured ≈parity on tier-0 shapes):
+ * Kernel deviations from a plain packed-array transliteration of upstream
+ * alien-signals (each is policy plumbing at a cold site; the hot walks are
+ * untouched — measured ≈parity on benchmark workloads):
  *
- *   D1. Node field 6 (spare in the donor) is `C.LIFECYCLE`: a 0/1 flag set at
- *       creation for atoms carrying an observed-lifecycle effect. Checked
- *       only in linkInsert's first-subscriber branch and in unwatched()'s
- *       signal branch; cleared in freeNode.
- *   D2. computedRead throws CycleError when the computed is re-entered during
- *       its own evaluation (spec §3.6 per-world cycle detection; one flags
- *       test on the already-loaded flags word).
+ *   D1. Node field 6 (otherwise a spare pad field) is `C.LIFECYCLE`: a 0/1
+ *       flag set at creation for atoms carrying an observed-lifecycle
+ *       effect, so the kernel's own liveness transitions can drive the
+ *       observed-lifecycle option (AtomOptions.effect). Checked only in
+ *       linkInsert's first-subscriber branch and in unwatched()'s signal
+ *       branch; cleared in freeNode.
+ *   D2. computedRead throws CycleError when the computed is re-entered
+ *       during its own evaluation: reading a computed while its own
+ *       evaluation frame is open is a dependency cycle, and throwing beats
+ *       silently serving the stale cache (upstream alien-signals serves the
+ *       stale value). Cost: one test on the already-loaded flags word.
  *   D3. Computed getters in `fns` take the policy evaluation context as their
- *       one argument (the donor passed `previousValue`; `ctx.previous` now
+ *       one argument (upstream passes `previousValue`; `ctx.previous` now
  *       reads the cache live via `activeSub`, so plain computeds pay ZERO
  *       policy instructions per recompute), and the two kernel eval sites
  *       (updateComputed, computedRead's first-eval branch) box exceptions via
  *       the cold `boxThrown` catch hook — a throwing getter never corrupts
  *       graph state, and the kernel value slot then holds a SentinelBox
  *       (flagged HAS_BOX; unboxed by the cold boxedRead read tail).
- *       computedRead is split hot/slow like the donor's link/linkInsert: the
+ *       computedRead is split hot/slow the same way link/linkInsert is: the
  *       D2+D3 additions pushed the monolith past V8's 460-byte inline cliff,
- *       and the outlined form measures FASTER than the donor on read shapes.
- *   D4. A computed's aux value slot — `values[(id >> 2) + 1]`, the donor's
- *       "signal pending value OR effect cleanup" column, unused for
- *       computeds — holds the owning `Computed` instance (policy state for
- *       boxes and ctx.use slots; same packed side column, no extra map).
- *   D5. Engine gains cold policy ops: invalidateComputed (settlement-
- *       invalidate), markLifecycle (D1), activeIsComputed (the
- *       forbidWritesInComputeds check).
- *   D6. Env var is COSIGNAL_INITIAL_RECORDS; configure({initialRecords})
+ *       and the outlined form measures FASTER than the un-split form on
+ *       read-heavy workloads.
+ *   D4. A computed's aux value slot — `values[(id >> 2) + 1]`, the "signal
+ *       pending value OR effect cleanup" column, unused for computeds —
+ *       holds the owning `Computed` instance (policy state for boxes and
+ *       ctx.use slots; same packed side column, no extra map).
+ *   D5. Engine gains cold policy ops the policy layer needs:
+ *       invalidateComputed (settlement-invalidate), markLifecycle (D1),
+ *       activeIsComputed (backs the forbidWritesInComputeds check).
+ *   D6. Capacity is configurable: the COSIGNAL_INITIAL_RECORDS env var sizes
+ *       the plane before first import, and configure({initialRecords})
  *       feeds the same growth machinery through `desiredRecords`.
- *   D7. The donor's closure-handle public API (signal()/computed()) is
- *       replaced by the class layer; effect/effectScope/batch/untracked keep
- *       the donor wrappers.
+ *   D7. The public API is the class layer (Atom/Computed) rather than
+ *       upstream's closure handles (signal()/computed());
+ *       effect/effectScope/batch/untracked stay thin function wrappers over
+ *       the kernel ops.
  *
  * Everything else — GROWTH (closure rebuild over doubled buffers, swap at
  * operation boundaries only) and RECLAMATION (deferred free of disposed
  * effect/scope records; signal/computed records are owned by their handles
- * and are not reclaimed) — is donor behavior, documented in libs/arena.
+ * and are not reclaimed) — is kernel-wide behavior shared by both builds,
+ * documented at its implementation sites below.
  */
 
 // ---- sentinels ----------------------------------------------------------------
@@ -92,8 +108,9 @@
 /**
  * Thrown when a read observes a pending suspension: by `ctx.use` inside a
  * computed evaluation, and by read sites whose computed's cached result is a
- * suspended box. Carries the pending thenable. (Future React bindings catch
- * it at render read sites and forward to Suspense.)
+ * suspended box. Carries the pending thenable. (The React bindings
+ * (`cosignal-react`) catch it at render read sites and forward it to
+ * Suspense.)
  */
 export class SuspendedRead {
 	readonly thenable: PromiseLike<unknown>;
@@ -102,7 +119,11 @@ export class SuspendedRead {
 	}
 }
 
-/** Thrown on per-world cycle detection (spec §3.6). */
+/**
+ * Thrown when a computed is read while its own evaluation frame is open —
+ * that read is a dependency cycle. cosignal fails loudly instead of serving
+ * the stale cached value (which is what upstream alien-signals does).
+ */
 export class CycleError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -137,7 +158,7 @@ class SentinelBox {
 
 /**
  * Box detection never uses `instanceof` on a hot path (measured ~9ns per
- * `instanceof` there — 2.4× on read-heavy shapes). Reads route on the
+ * `instanceof` there — 2.4× on read-heavy workloads). Reads route on the
  * kernel's HAS_BOX flag; the policy-side compares (ctx.previous, the isEqual
  * wrapper, boxThrown's identity check) are single pointer compares against
  * the Computed's `_box` mirror, where NO_BOX (a sentinel no evaluation ever
@@ -153,10 +174,10 @@ const NO_BOX = new SentinelBox(BOX_ERROR, undefined);
 
 export type ComputedCtx<T> = {
 	/**
-	 * The computed's last committed value (a hint; spec §3.4: no identity,
-	 * recency, or per-world determinism is guaranteed — the function must be
-	 * correct if `previous` were arbitrarily stale or undefined). In DIRECT
-	 * mode: the cached value, read live; undefined on first evaluation and
+	 * The computed's last committed value — a hint only: no identity,
+	 * recency, or determinism is guaranteed, and the function must be
+	 * correct if `previous` were arbitrarily stale or undefined. In the base
+	 * build: the cached value, read live; undefined on first evaluation and
 	 * while the cache holds an error/suspension sentinel.
 	 */
 	readonly previous: T | undefined;
@@ -191,10 +212,10 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 // the values as literals. Rationale: esbuild BUNDLING demotes module-scope
 // `const` to mutable `var` (lazy-init/scope-merge hoisting), which costs
 // TurboFan its constant-folding of these hot numbers — measured +15-21% on
-// kairo workloads through the harness's bundled child. Same-file const enum
-// members are inlined as numeric literals by esbuild (transform AND bundle
-// modes), tsx, vitest, and tsc alike, so the codegen no longer depends on how
-// the library is packaged. (See RESEARCH.md §7b bundling investigation.)
+// benchmark workloads when bundled. Same-file const enum members are inlined
+// as numeric literals by esbuild (transform AND bundle modes), tsx, vitest,
+// and tsc alike, so the codegen no longer depends on how the library is
+// packaged.
 const enum C {
 	// Node fields (M plane, stride 8; ids are pre-multiplied: id = record * 8).
 	FLAGS = 0,
@@ -237,17 +258,17 @@ const enum C {
 	HAS_BOX = 2048,
 
 	// Min free records guaranteed at each op boundary. Nodes and links draw
-	// from one shared pool; the old split-plane budget (256 node + 1024 link
-	// records) is preserved as its sum, so any allocation pattern that fit the
-	// old per-plane slack still fits the merged slack.
+	// from one shared pool; the slack is the sum of per-kind floors (256 node
+	// + 1024 link records), so any allocation pattern that fit those floors
+	// separately still fits the merged slack.
 	REC_SLACK = 1280,
 }
 
 // ---- shared mutable state (survives engine rebuilds) ------------------------
 // Scalar heads/counters live at module level so a rebuilt engine resumes
 // exactly where the old one stopped; only the buffer bindings live in the
-// engine closure. (This is also what lets the LOGGED table rebuild at the
-// seam without copying anything but the plane.)
+// engine closure. (This is also what lets the logged build's table rebuild
+// at the seam without copying anything but the plane.)
 let recNext = 8; // bump pointer, shared by nodes and links (record 0 burned)
 let nodeFreeHead = 0; // free list threaded through M[id + C.DEPS]
 let linkFreeHead = 0; // free list threaded through M[id + C.NEXT_DEP]
@@ -965,8 +986,8 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 	}
 
 	// computedOper — clean-read fast path. Split from the recompute ladder the
-	// same way link/linkInsert is split: the donor's monolithic body plus the
-	// D2/D3 deltas sits at 448+ bytecodes, past V8's 460-byte inline cliff
+	// same way link/linkInsert is split: the monolithic body plus the D2/D3
+	// additions sits at 448+ bytecodes, past V8's 460-byte inline cliff
 	// (measured: falling off costs ~2.5ns on every clean read). One combined
 	// mask test routes every non-trivial case — mid-evaluation re-entry (D2),
 	// dirty/pending revalidation, first evaluation, boxed cache (D3) — to the
@@ -985,11 +1006,11 @@ function createEngine(records: number, carry?: Int32Array): Engine {
 		return vals[c >> 2];
 	}
 
-	// The donor computedRead ladder, out of line (recompute/first-eval/boxed).
+	// The full computedRead ladder, out of line (recompute/first-eval/boxed).
 	function computedReadSlow(c: number, flags: number): unknown {
-		// D2: per-world cycle detection (spec §3.6) — reading a computed while
-		// its own evaluation frame is open is a dependency cycle. (The donor
-		// returned the stale cached value here, alien-signals style.)
+		// D2: reading a computed while its own evaluation frame is open is a
+		// dependency cycle — throw instead of serving the stale cache
+		// (upstream alien-signals returns the stale cached value here).
 		if (flags & C.RECURSED_CHECK) {
 			throw new CycleError('cosignal: computed read during its own evaluation (dependency cycle).');
 		}
@@ -1071,10 +1092,10 @@ const initialRecords = (() => {
 let desiredRecords = initialRecords * 3;
 
 // THE SEAM (see the header): the operation-table factory. Initialized to the
-// DIRECT table; nothing in THIS module ever reassigns it (a DIRECT bundle
-// const-folds it). The LOGGED twin re-points it exactly once through
-// `__installTwinTable` below, then every operation — growth included —
-// routes through the logged table.
+// base table; nothing in THIS module ever reassigns it (a base-build bundle
+// const-folds it). The logged build (`cosignal/logged`) re-points it exactly
+// once through `__installTwinTable` below, then every operation — growth
+// included — routes through the logged table.
 let engineFactory: (records: number, carry?: Int32Array) => Engine = createEngine;
 
 /**
@@ -1083,7 +1104,8 @@ let engineFactory: (records: number, carry?: Int32Array) => Engine = createEngin
  * its OWN object shape, distinct from createEngine's: the real engine must
  * stay the only live instance of its hidden class so V8 keeps its function
  * fields constant and inlines `E.op` call targets (sharing one map between
- * the two tables measurably killed that: +15-25% on recompute/read shapes).
+ * the two tables measurably killed that: +15-25% on recompute/read-heavy
+ * benchmark workloads).
  * Legal code never dispatches through POISON — only fold-purity violations
  * reach it, and those throw — so the polymorphism it could introduce at
  * `E.op` sites is confined to code that is already erroring.
@@ -1108,19 +1130,21 @@ const POISON: Engine = {
 	activeIsComputed: foldPoisonOp as never,
 };
 
-// Footprint parity with the old split planes (initialRecords node records +
-// 2x initialRecords link records): 3x initialRecords shared records.
+// Plane capacity: 3x initialRecords shared records, budgeted as
+// initialRecords node records + 2x initialRecords link records in one plane.
 let E: Engine = engineFactory(initialRecords * 3);
 
 /**
- * THE TWIN ATTACHMENT POINT (header: "re-points `engineFactory` at the logged
- * factory, then rebuilds `E` exactly once over the carried buffers"). Called
- * only by the LOGGED entry's `registerReactBridge()` — never from this module,
- * so a DIRECT bundle never reaches overlay code through it. Asserts the
- * operation-boundary precondition (spec §3.6/§5.1): no live engine frame may
- * hold the old table's buffers. `wrap` receives the DIRECT factory and must
- * return a factory producing tables of the same `Engine` shape; growth
- * thereafter rebuilds through the swapped binding — the donor's own pattern.
+ * THE LOGGED-TABLE ATTACHMENT POINT (header: "re-points `engineFactory` at
+ * the logged factory, then rebuilds `E` exactly once over the carried
+ * buffers"). Called only by the logged build's (`cosignal/logged`)
+ * `registerReactBridge()` — never from this module, so a base-build bundle
+ * never reaches concurrency code through it. Asserts the operation-boundary
+ * precondition: no live evaluation/fold/walk frame may hold the old table's
+ * buffers, i.e. the swap may happen only at an operation boundary. `wrap`
+ * receives the base factory and must return a factory producing tables of
+ * the same `Engine` shape; growth thereafter rebuilds through the swapped
+ * binding — the same pattern growth uses.
  * @internal
  */
 export function __installTwinTable(
@@ -1133,7 +1157,7 @@ export function __installTwinTable(
 	E = engineFactory(E.records, E.buffer());
 }
 
-/** The operation-table shape the twin factory must produce. @internal */
+/** The operation-table shape the logged build's factory must produce. @internal */
 export type { Engine as EngineTable };
 
 function maybeBoundary(): void {
@@ -1169,7 +1193,7 @@ function flush(): void {
 	// sound), and (b) the watermark guarantees >= C.REC_SLACK (1280) free records
 	// at flush start while cascade re-runs re-track through the link() fast
 	// path / free lists (net new records per flush audited at ~tens across the
-	// conformance suite and shapes workloads; a pathological cascade that
+	// conformance suite and benchmark workloads; a pathological cascade that
 	// out-allocates the whole remaining plane throws in the allocator rather
 	// than corrupting in-flight walks).
 	maybeBoundary();
@@ -1296,20 +1320,23 @@ function lifecycleUnwatched(id: number): void {
 // ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
 
 function writeAtom(id: number, isEqual: ((a: unknown, b: unknown) => boolean) | undefined, value: unknown): void {
-	// Writes-in-computeds: tolerated by default (donor/alien semantics,
-	// conformance-pinned — a write that feeds the evaluating computed simply
-	// marks it pending again through the kernel's RECURSED ladder and settles
-	// by lazy revalidation). Evaluation *cycles* — re-entrant reads — throw in
-	// computedRead (D2). The configure flag rejects every in-evaluation write.
-	// (Known pinhole, documented: a write wrapped in untracked() clears the
-	// kernel's activeSub, so the flag cannot see it.)
+	// Writes-in-computeds: tolerated by default (upstream alien-signals
+	// semantics, conformance-pinned — a write that feeds the evaluating
+	// computed simply marks it pending again through the kernel's RECURSED
+	// ladder and settles by lazy revalidation). Evaluation *cycles* —
+	// re-entrant reads — throw in computedRead (D2). The configure flag
+	// rejects every in-evaluation write. (Known pinhole: a write wrapped in
+	// untracked() clears the kernel's activeSub, so the flag cannot see it.)
 	if (forbidWritesInComputeds && E.activeIsComputed()) {
 		throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
 	}
-	// Empty-history equality drop (spec §5.3 step 2): in DIRECT mode every
-	// atom's tape is always empty, so the plain equality short-circuit is the
-	// whole rule. Policy equality against the newest (pending) value here; the
-	// kernel's own identity compare covers the default.
+	// Equality drop: in the base build an atom's write history is always
+	// empty, so a write equal to the current pending value is simply dropped —
+	// this short-circuit is the whole rule. (In the logged build the same drop
+	// applies only while the atom has no un-retired receipts: once history
+	// exists, different worlds may fold different values.) Policy equality
+	// against the newest (pending) value here; the kernel's own identity
+	// compare covers the default.
 	if (isEqual !== undefined && isEqual(values[(id >> 2) + 1], value)) {
 		return;
 	}
@@ -1320,13 +1347,15 @@ function writeAtom(id: number, isEqual: ((a: unknown, b: unknown) => boolean) | 
 }
 
 /**
- * Runs a reducer/updater under the fold-purity guard (spec §3.1: signal reads
- * and writes inside throw, in all builds). Mechanism: the operation table is
- * swapped to the POISON table for the duration, so every read/write/creation
- * the fold attempts throws at the dispatch site — and the hot read/write
- * paths carry zero fold instructions. Folds are synchronous and never open
- * kernel frames of their own; open outer frames hold the real table's
- * buffers as closure constants and are unaffected by the swap.
+ * Runs a reducer/updater under the fold-purity guard. The rule: updaters and
+ * reducers must be pure — the logged build stores and replays them per
+ * world — so signal reads and writes inside them throw, in all builds.
+ * Mechanism: the operation table is swapped to the POISON table for the
+ * duration, so every read/write/creation the fold attempts throws at the
+ * dispatch site — and the hot read/write paths carry zero fold instructions.
+ * Folds are synchronous and never open kernel frames of their own; open
+ * outer frames hold the real table's buffers as closure constants and are
+ * unaffected by the swap.
  */
 function runFold<T>(fn: () => T): T {
 	const saved = E;
@@ -1353,7 +1382,7 @@ type InstrumentedThenable = PromiseLike<unknown> & {
  * kernel's activeSub; its value slot still holds the previous cached value
  * during the evaluation (updateComputed assigns after the getter returns).
  * Boxes read as undefined. Leaked-ctx calls outside a computed evaluation
- * fall under the "arbitrarily stale or undefined" license of spec §3.4.
+ * fall under `previous`'s license to be arbitrarily stale or undefined.
  */
 function ctxPrevious(): unknown {
 	const c = activeSub;
@@ -1383,10 +1412,10 @@ function ctxPrevious(): unknown {
  * attempt — settled slots are dropped (changed inputs refetch; at worst a
  * duplicate fetch) while still-pending slots survive for identity stability.
  * The suspense evaluation prologue (installed on first use, see
- * suspenseEvalFn) applies that hygiene per evaluation. Known v1 corner
- * (documented; the LOGGED build's capsule prefixes refine it): a dependency
- * change landing while a slot is pending dedupes into the in-flight work
- * rather than refetching.
+ * suspenseEvalFn) applies that hygiene per evaluation. Known corner (the
+ * logged build refines this behavior per world): a dependency change landing
+ * while a slot is pending dedupes into the in-flight work rather than
+ * refetching.
  */
 function ctxUse(source: PromiseLike<unknown> | (() => PromiseLike<unknown>)): unknown {
 	const c = activeSub;
@@ -1500,8 +1529,8 @@ function boxThrown(c: number, e: unknown, oldValue: unknown): SentinelBox {
  * Settlement-invalidate: when the pending thenable of a suspended box
  * settles, mark the computed stale and propagate so watchers re-run and
  * readers recompute. Guarded by reference identity — the box must still be
- * the node's cached value AND still carry this exact thenable (spec §5.8's
- * settlement rule), so out-of-order settlement of superseded work is inert.
+ * the node's cached value AND still carry this exact thenable — so
+ * out-of-order settlement of superseded work is inert.
  */
 function attachSettle(owner: Computed<unknown>, box: SentinelBox, t: InstrumentedThenable): void {
 	const id = owner._id;
@@ -1582,9 +1611,10 @@ export type AtomOptions<T> = {
 	effect?: (ctx: AtomCtx<T>) => void | (() => void);
 	/**
 	 * Policy equality for writes: an incoming value equal to the newest value
-	 * is dropped (the empty-history equality drop — in DIRECT mode history is
-	 * always empty). The kernel itself compares reference identity only; keep
-	 * values reference-stable rather than relying on deep equality.
+	 * is dropped (in the base build unconditionally; in the logged build only
+	 * while the atom's write history holds no un-retired receipts). The
+	 * kernel itself compares reference identity only; keep values
+	 * reference-stable rather than relying on deep equality.
 	 */
 	isEqual?: (a: T, b: T) => boolean;
 	/** Debug label. */
@@ -1604,7 +1634,7 @@ export type ComputedOptions<T> = {
 
 /** A writable signal. `.state` reads (tracked inside evaluations), `.set` writes. */
 export class Atom<T> {
-	/** Kernel record id; consumed by the (future) React bindings. @internal */
+	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
 	readonly _id: number;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
@@ -1657,9 +1687,9 @@ export class Atom<T> {
 
 	/**
 	 * Functional update. `fn` must be pure: it runs under the fold-purity
-	 * guard, so signal reads and writes inside it throw (spec §3.1 — read
-	 * before dispatch instead). In the future LOGGED build the updater is
-	 * stored and replayed per world; in DIRECT mode it applies immediately.
+	 * guard, so signal reads and writes inside it throw — read what you need
+	 * first, then update. In the logged build the updater is stored and
+	 * replayed per world; in the base build it applies immediately.
 	 */
 	update(fn: (current: T) => T): void {
 		const id = this._id;
@@ -1672,8 +1702,8 @@ export type ReducerAtomOptions<S> = AtomOptions<S>;
 
 /**
  * An atom whose writes go through a reducer. The reducer is fixed at
- * creation (spec §3.1); it must be pure — it runs under the fold-purity
- * guard, and in the LOGGED build dispatched actions are replayed through it
+ * creation and must be pure — it runs under the fold-purity guard, and in
+ * the logged build dispatched actions are stored and replayed through it
  * per world.
  */
 export class ReducerAtom<S, A> extends Atom<S> {
@@ -1694,7 +1724,7 @@ export class ReducerAtom<S, A> extends Atom<S> {
 
 /** A derived signal. `.state` reads; the function re-runs on demand. */
 export class Computed<T> {
-	/** Kernel record id; consumed by the (future) React bindings. @internal */
+	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
 	readonly _id: number;
 	/** ctx.use slot cache (per node, lazily created). @internal */
 	_slots: unknown[] | undefined;
@@ -1750,8 +1780,8 @@ export type Signal<T> = Atom<T> | Computed<T>;
 
 /**
  * Runs `fn` immediately with dependency tracking and re-runs it when tracked
- * signals change. Core-effect contract (spec §3.1): observes the newest
- * world — in DIRECT mode, simply the current values. `fn` may return a
+ * signals change. Effects always observe the newest world (every write
+ * applied) — in the base build, simply the current values. `fn` may return a
  * cleanup run before each re-run and at dispose. Returns a disposer.
  */
 export function effect(fn: () => void | (() => void)): () => void {
@@ -1782,8 +1812,8 @@ export function effectScope(fn: () => void): () => void {
 }
 
 /**
- * Defers core-effect flushing to the batch's close. Nothing else (spec §3.1):
- * no implicit grouping of any kind exists anywhere in the engine.
+ * Defers effect flushing to the batch's close. Nothing else: no implicit
+ * grouping of any kind exists anywhere in the engine.
  */
 export function batch<T>(fn: () => T): T {
 	++batchDepth;
@@ -1829,10 +1859,10 @@ export type ConfigureOptions = {
 	forbidWritesInComputeds?: boolean;
 	/**
 	 * Capacity floor, in records (one signal/computed/effect node or one
-	 * dependency link each; the plane holds 3× this number, donor parity).
-	 * Raising it triggers growth at the next operation boundary; it never
-	 * shrinks. Also settable via the COSIGNAL_INITIAL_RECORDS env var before
-	 * first import.
+	 * dependency link each; the plane holds 3× this number — budgeted as one
+	 * node plus two links per unit). Raising it triggers growth at the next
+	 * operation boundary; it never shrinks. Also settable via the
+	 * COSIGNAL_INITIAL_RECORDS env var before first import.
 	 */
 	initialRecords?: number;
 };

@@ -1,10 +1,7 @@
-/**
- * SPK-R parent, core half — dense retirement vs DIRECT batch().
- * Pre-registered rule (spec §7 "Retirement (engine)", repaired SPLIT
- * comparator): "retirement engine overhead ≤ 2× a DIRECT batch() on the
- * identical write/effect graph; user callback time reported separately".
- * The old render-relative gate was DELETED (zero denominator) — not used.
- */
+// Measures dense retirement in the engine: ns to retire K committed batches
+// of M writes each in the logged build, against a base-build batch() over
+// the identical write/effect graph; watcher rows add committed watchers so
+// retirement also reconciles them.
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';

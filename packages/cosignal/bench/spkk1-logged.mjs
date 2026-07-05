@@ -1,24 +1,13 @@
-/**
- * SPK-K1 child, LOGGED build — never-quiescent growth soak (O25/G9).
- * DURATION_MS (default 60s) of continuous traffic with NO quiescence:
- *  - two overlapping holder tokens keep liveTokens >= 1 forever (holders
- *    rotate every HOLD_MS; each writes once, so a holder receipt blocks
- *    its atom's compaction prefix while held);
- *  - dependency topology ROTATES every ROTATE_MS: NC computeds read
- *    atoms[(i+phase)%NA] and atoms[(i*7+phase)%NA]; K1 episode edges are
- *    add-only until quiescence, so every rotation strands old edges;
- *  - frame loop: token -> 4 writes (rotating atoms) -> every 16th frame a
- *    render pass over 4 watchers (commit) -> retire. Retired tokens and
- *    ended passes are only reclaimed AT quiescence (§5.12), so their
- *    records accumulate — the declared-gap surface this soak measures.
- * EVENTS=truncate (default): bridge.events zeroed at each sample so the
- * heap slope isolates the retained planes (K1 + receipts + token/pass
- * records + dedup); EVENTS=retain leaves the always-allocated BridgeEvent
- * stream in place (the reference build's own unbounded growth — reported
- * separately). Samples every SAMPLE_MS: heapUsed after gc(), K1 edge
- * count, tape/archive totals, tokens/passes map sizes, event counts,
- * write latency window medians (walk degradation = last window / first).
- */
+// Measures the logged build's growth under a never-quiescent soak: two
+// overlapping holder batches keep at least one batch live forever (blocking
+// full history compaction), the dependency topology rotates periodically so
+// stale recorded edges accumulate, and a frame loop of writes + periodic
+// committed render passes runs for DURATION_MS. Samples heap after gc(),
+// recorded-edge counts, receipt-history totals, token/pass map sizes, event
+// counts, and write-latency window medians (degradation = last/first).
+// EVENTS=truncate zeroes the diagnostic event stream at each sample to
+// isolate the engine's retained state; EVENTS=retain leaves it in place to
+// measure the unbounded stream itself.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
@@ -31,12 +20,12 @@ const NC = envInt('NC', 64);
 const EVENTS = env('EVENTS', 'truncate');
 
 const b = registerReactBridge();
-// Perf pass P1 measurement-isolation fix (bench bug at post-P1 throughput):
-// the gate config's stated intent is "truncate bridge.events at each sample
-// so the heap slope isolates the retained planes" — at ~100x the reference
-// frame rate a 5s inter-sample backlog is hundreds of MB and drowns the
-// planes. Bound the diagnostic stream in the truncate config only; the
-// retain config still measures the unbounded-stream liability.
+// Measurement isolation: the truncate config's intent is "truncate
+// bridge.events at each sample so the heap slope isolates the engine's
+// retained state" — but at this frame rate a 5s inter-sample event backlog
+// is hundreds of MB and drowns that signal. Bound the diagnostic stream in
+// the truncate config only; the retain config still measures the
+// unbounded-stream liability.
 if (EVENTS === 'truncate') b.setEventCapacity(65536);
 const atoms = [];
 for (let i = 0; i < NA; i++) atoms.push(b.atom(`a${i}`, 0));
@@ -126,7 +115,7 @@ while (Date.now() - t0 < DURATION_MS) {
 takeSample(Date.now());
 
 // linear-fit heap slope over samples (skip the first two: warmup/JIT;
-// short liability runs keep at least the last two samples — P1 bench fix)
+// short liability runs keep at least the last two samples)
 const fit = samples.length > 4 ? samples.slice(2) : samples.slice(-2);
 const n = fit.length;
 const mx = fit.reduce((s, p) => s + p.t, 0) / n;

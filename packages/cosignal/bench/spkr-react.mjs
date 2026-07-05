@@ -1,7 +1,6 @@
-/**
- * SPK-R parent, react half — "Retirement (React)": reconciliation ≤ 2× the
- * equivalent useState render/commit for reached watchers. COARSE (jsdom+act).
- */
+// Measures retirement as React sees it: wall ms per committed update round
+// for N components reading one shared atom through cosignal-react, against
+// the same components on plain useState. COARSE timing (jsdom + act).
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';

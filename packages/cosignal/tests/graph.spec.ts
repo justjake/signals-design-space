@@ -1,7 +1,8 @@
 /**
- * Graph disciplines: the observed lifecycle (flap damping on the liveness
- * bit), writes-in-computeds (tolerated / cycle / forbidden), cycle rejection,
- * batch/untracked contracts, and the donor's dispose/reclamation paths.
+ * Graph disciplines of the base library: the observed lifecycle (flap
+ * damping on the liveness bit), writes during computed evaluation
+ * (tolerated / cycle / forbidden), cycle rejection, the batch/untracked
+ * contracts, and the core's dispose/reclamation paths.
  */
 import { describe, expect, test } from 'vitest';
 import {

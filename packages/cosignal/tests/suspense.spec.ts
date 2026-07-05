@@ -1,8 +1,10 @@
 /**
- * ctx.use — the canonical thenable protocol in DIRECT mode: pending →
- * reference-stable suspended box; settlement invalidates; identity stable
- * across re-evaluation; per-slot idempotence (pending previous work wins);
- * lazy factory form; rejection → error box; read-site self-heal.
+ * ctx.use — reading async values inside a computed, in the base build:
+ * while the thenable is pending, reads throw a reference-stable
+ * SuspendedRead box; settlement invalidates and re-evaluates; the box's
+ * identity is stable across re-evaluation; per-slot idempotence (pending
+ * previous work wins); the lazy factory form; rejection → error box; and
+ * read-site self-heal.
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, SuspendedRead, effect } from '../src/index';

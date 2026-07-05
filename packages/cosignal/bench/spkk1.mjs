@@ -1,11 +1,8 @@
-/**
- * SPK-K1 parent — growth soak gate. Pre-registered rule (spec §7
- * "World-graph growth" / OPEN.md SPK-K1): ">1 MB/h steady growth or >5%
- * walk degradation on soak → extend sweep predicate (sampled reachability),
- * else G9 stands documented". Main config truncates the diagnostic event
- * stream at samples (gate planes only); the retain config reports the
- * reference build's own event-stream growth separately (n=2, supplementary).
- */
+// Measures long-run growth of the logged build under continuous,
+// never-quiescent traffic: steady-state heap growth (MB/h) and write-latency
+// degradation. The main config truncates the diagnostic event stream at each
+// sample to isolate the engine's own retained state; the retain config
+// reports the unbounded event stream's growth separately (n=2, supplementary).
 import { medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';
@@ -21,9 +18,9 @@ if (PART !== 'retain') {
 }
 if (PART !== 'truncate') {
 	console.log('== soak (events retained; reference-build liability, n=2) ==');
-	// P1 methodology note: at post-P1 throughput (~100x reference frames/s)
-	// an unbounded retained event stream exceeds the heap well inside 60s —
-	// the liability row runs a shorter soak and extrapolates per hour.
+	// Methodology note: at this build's throughput an unbounded retained
+	// event stream exceeds the heap well inside 60s — the liability row runs
+	// a shorter soak and extrapolates per hour.
 	const RETAIN_MS = process.env.RETAIN_MS ?? String(Math.min(Number(DURATION_MS), 10_000));
 	r = await medianOfProcesses(`${DIR}/spkk1-logged.mjs`, { EVENTS: 'retain', DURATION_MS: RETAIN_MS }, 2, 200_000);
 }

@@ -1,16 +1,13 @@
-/**
- * SPK-N1 child, LOGGED build. Grid cell: F watchers on c=a+1 (one root), B
- * fresh batch tokens per frame, W writes/frame round-robin across them,
- * alternating changed/equal values (equal writes exercise value-blindness:
- * LOGGED logs + delivers them; DIRECT equality-suppresses them).
- * Frame = writes -> render pass (renders all watchers, commits) -> retire
- * the frame's tokens. HELD=1 adds a held batch token (opened at rep start,
- * one changing write per frame, never retired until rep end) whose
- * unretired first receipt blocks tape compaction behind it.
- * Metrics: propagate ns/write (write-call time only), frame ns, deliveries
- * and spurious renders per (watcher, batch, cycle), held-row tape growth +
- * first/last frame write-time degradation.
- */
+// Measures the logged build's delivery fan-out: F watchers on c=a+1 (one
+// root), B fresh batches per frame, W writes/frame round-robin across them,
+// alternating changed/equal values (equal writes exercise value-blindness:
+// the logged build records and delivers them; the base build drops them).
+// Frame = writes -> render pass (renders all watchers, commits) -> retire
+// the frame's batches. HELD=1 adds a batch held open for the whole rep,
+// whose unretired receipt blocks history compaction behind it. Metrics:
+// propagate ns/write (write-call time only), frame ns, deliveries and
+// spurious renders per (watcher, batch, cycle), held-row history growth +
+// first/last frame write-time degradation.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
@@ -20,10 +17,11 @@ const W = envInt('W', 8); // writes per frame
 const FRAMES = envInt('FRAMES', 30);
 const HELD = envInt('HELD', 0) === 1;
 /**
- * INTERLEAVE=1: the pinned-open-pass schedule (§5.9 scar) — the frame's
- * writes land while the render pass is YIELDED with the written slot in its
- * mask and pin < seq, so pass-aware suppression MUST deliver interleaved.
- * Equal-value interleaved deliveries are the spurious-render exposure.
+ * INTERLEAVE=1: the frame's writes land while the render pass is YIELDED
+ * with the written slot in its mask and its pin predating the writes, so
+ * pass-aware suppression MUST deliver interleaved (that render's frozen
+ * world cannot show the writes). Equal-value interleaved deliveries are the
+ * spurious-render exposure.
  */
 const INTERLEAVE = envInt('INTERLEAVE', 0) === 1;
 const REPS = envInt('REPS', 5);

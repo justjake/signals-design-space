@@ -1,9 +1,6 @@
-/**
- * SPK-W parent — logged-write price gate.
- * Pre-registered rule (spec §7 "Logged write", OPEN.md SPK-W): LOGGED write
- * > 2x DIRECT write => fallback = inline-2 receipts / tape pooling (REPORT
- * ONLY, never implemented here).
- */
+// Measures the price of a logged-build write: per-write ns of the logged
+// build (receipt append + delivery walk) against the base build on the same
+// graph shapes, plus evals/events/deliveries per write.
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';

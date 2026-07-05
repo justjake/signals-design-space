@@ -1,17 +1,19 @@
 /**
- * The oracle's EngineAdapter implemented over the LOGGED bridge
- * (packages/cosignal-oracle/src/adapter.ts — "a future engine plugs into the
- * fuzz harness by implementing this surface"). The oracle package is imported
- * by relative path: it is a dev-side referee, deliberately NOT a package
- * dependency of cosignal (no lockfile entry; the shipped entries never
- * reference it).
+ * The adapter that drives the LOGGED engine and the reference model
+ * (`cosignal-oracle`) in lockstep: it implements the reference model's
+ * `EngineAdapter` surface (its adapter.ts — "an engine plugs into the fuzz
+ * harness by implementing this surface") over the bridge, so the model's
+ * differ can replay one schedule into both and compare every observable
+ * after every step. The reference model package is imported by relative
+ * path: it is a dev-side referee, deliberately NOT a package dependency of
+ * cosignal (no lockfile entry; the shipped entries never reference it).
  *
- * `applyEngineOp` mirrors the oracle's `applyOneOp` op-for-op — including the
- * entity indexing (creation order over the live maps), the write-kind
- * coercions, and the `${events}.${seq}.${epoch}` uniq naming — but resolves
- * everything against the ENGINE's state and treats `BridgeScheduleError` as
- * the skip signal, so legality decisions are computed independently on each
- * side and then diffed.
+ * `applyEngineOp` mirrors the reference model's `applyOneOp` op-for-op —
+ * including the entity indexing (creation order over the live maps), the
+ * write-kind coercions, and the `${events}.${seq}.${epoch}` uniq naming —
+ * but resolves everything against the ENGINE's state and treats
+ * `BridgeScheduleError` as the skip signal, so legality decisions are
+ * computed independently on each side and then diffed.
  */
 
 import {
@@ -30,7 +32,7 @@ import {
 import { CosignalModel, type ModelEvent } from '../../cosignal-oracle/src/model.js';
 import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
 
-/** The oracle's fixed fuzz topology (schedule.ts buildTopology), on the engine. */
+/** The reference model's fixed fuzz topology (buildTopology in its schedule.ts), rebuilt on the engine. */
 export function buildEngineTopology(b: CosignalBridge) {
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 0);
@@ -50,9 +52,10 @@ export function buildEngineTopology(b: CosignalBridge) {
 /**
  * Adapter-side entity registries. The MODEL retains dead token/pass records
  * until quiescence, and schedule ops resolve entities by index over those
- * maps; the engine now reclaims dead records mid-episode (SPK-K1), so the
- * adapter mirrors the model's population itself to keep op resolution
- * identical on both sides. Purely an indexing-fidelity shim — no tolerance.
+ * maps; the engine reclaims dead records mid-episode (keeping them all
+ * would grow memory with the episode), so the adapter mirrors the model's
+ * population itself to keep op resolution identical on both sides. Purely
+ * an indexing-fidelity shim — no tolerance.
  */
 type EntityRegistry = { tokens: number[]; passes: number[] };
 
@@ -157,11 +160,12 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 }
 
 /**
- * A fresh LOGGED engine presented through the oracle's EngineAdapter surface
- * (the `modelAsEngine` template with the model replaced by the real engine).
- * The bridge is structurally snapshot-compatible with the model, so the
- * oracle's own `snapshotModel` reads the engine's observables — engine
- * internals (kernel plane, union edges, memos) are never compared.
+ * A fresh LOGGED engine presented through the reference model's
+ * EngineAdapter surface (its `modelAsEngine` template with the model
+ * replaced by the real engine). The bridge is structurally
+ * snapshot-compatible with the model, so the reference model's own
+ * `snapshotModel` reads the engine's observables — engine internals
+ * (kernel plane, union edges, memos) are never compared.
  */
 export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 	const b = __newBridgeForTest();
@@ -180,14 +184,15 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 	};
 }
 
-// ---- the tolerant differ (perf pass P1) -------------------------------------
+// ---- the tolerant differ ----------------------------------------------------
 //
-// The oracle's own `diffAgainstModel` compares the comparable event stream
-// EXACTLY per step. The SPK-N1 machinery discovers union edges at evaluation
-// sites and replays live slots at edge-adds (§5.5/§5.9), so delivery-decision
-// timing may lag the model's eager per-write union refresh — the oracle
-// README's documented engine-diff tolerance ("engine ⊇ required, ⊆
-// union-conservative"). This differ keeps every other comparison EXACT:
+// The reference model's own `diffAgainstModel` compares the comparable event
+// stream EXACTLY per step. The engine — for speed — discovers union edges at
+// evaluation sites and replays live slots when an edge is added, so
+// delivery-decision timing may lag the model's eager per-write union
+// refresh; this is the engine-diff tolerance documented in the reference
+// model's README ("engine ⊇ required, ⊆ union-conservative"). This differ
+// keeps every other comparison EXACT:
 //   - op legality per step (exact);
 //   - the full observable snapshot per step (exact — values never relax);
 //   - non-delivery comparable events per step (exact, in order);
@@ -195,8 +200,9 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 //     cumulative multiset ⊆ the model's, keyed (type, watcher, token, slot)
 //     — mode/seq excluded (an edge-add replay carries the replay sequence).
 // The ⊇-required floor is enforced indirectly: exact snapshots, exact
-// value-gated corrections/effect-runs, and the engine's in-engine §5.10
-// errata-2 audit (BridgeInvariantViolation on uncovered fast-outs).
+// value-gated corrections/effect-runs, and an audit inside the engine that
+// throws BridgeInvariantViolation whenever divergence hidden by a mount
+// fast-out is not covered by correctives.
 
 const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);
 

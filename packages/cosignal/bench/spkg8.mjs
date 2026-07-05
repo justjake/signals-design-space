@@ -1,9 +1,7 @@
-/**
- * SPK-G8 parent — world-evaluation gate (spec §7 "World evaluation": "cost
- * ∝ flagged region; restart-heavy typeahead; prefix length"). Fallbacks on
- * failure (pre-named, NOT implemented): pinless-frontier hybrid (O18);
- * whole-mask clock vector (O21).
- */
+// Measures world-evaluation cost of the logged build: per-write ns of burst
+// writes as the computed population grows (with and without a held-open
+// transition batch), and per-keystroke ns of a restart-heavy typeahead
+// schedule, with eval counts and receipt-history length reported.
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';

@@ -1,11 +1,7 @@
-/**
- * Shared helpers for the cosignal gate battery (research/experiments/cosignal-gates.md).
- * Methodology (pre-registered): ONE measurement config per CHILD PROCESS,
- * median of >=5 process runs, medians AND ranges reported, checksums printed
- * to defeat dead-code elimination. Children run under `node --expose-gc
- * --import tsx` with cwd=harness/ (tsx 4.23.0 resolves there); imports inside
- * children are absolute file paths, so cwd is only a loader concern.
- */
+// Shared bench helpers. Methodology: one measurement config per child process
+// (spawned under `node --expose-gc --import tsx`; children import by absolute
+// path, so cwd is only a loader concern), medians AND ranges reported across
+// processes, checksums printed to defeat dead-code elimination.
 import { spawn } from 'node:child_process';
 
 export const HARNESS_CWD = '/Users/jitl/src/alien-signals-opt/harness';

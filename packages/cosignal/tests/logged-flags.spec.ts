@@ -1,10 +1,13 @@
-// TWIN RUN — the oracle spec below runs VERBATIM against the LOGGED engine:
-// ./helpers.js here is the twin driver (model + engine fan-out; every read is
-// parity-asserted; selfCheck compares events/snapshots and runs the invariant
-// battery on BOTH sides). Source: packages/cosignal-oracle/tests/flags.spec.ts.
+// TWIN RUN — this spec runs against the reference model (`cosignal-oracle`)
+// AND the LOGGED engine at once: ./helpers.js here is the twin driver (model
+// + engine fan-out; every read is parity-asserted; selfCheck compares
+// events/snapshots and runs the invariant battery on BOTH sides). Kept in
+// lockstep with the reference model's own tests/flags.spec.ts.
 /**
- * Appendix B editorial flags — the model-checkable ones (3, 4, 5, 7), each
- * as a targeted test. Findings and discrepancies: tests/FLAGS.md.
+ * Four subtle rules of the behavioral contract that are easy to get wrong
+ * in an engine — the ones checkable at model level, each as a targeted
+ * test. Their stable ids (flag 3, 4, 5, 7) and full write-ups live in
+ * FLAGS.md alongside the reference model's own suite.
  */
 import { describe, expect, it } from 'vitest';
 import { logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
@@ -21,13 +24,13 @@ describe('flag 3 — write-set closure at commit (ActionScope late-write surface
 		m.passEnd(pA.id, 'commit'); // A commits t; t parks on (live)
 		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(true);
 		m.scopeWrite(t.id, a, set(2)); // the surviving late-write surface
-		expect(m.committedValue(a, 'A')).toBe(2); // visible immediately via the membership clause (§5.3)
+		expect(m.committedValue(a, 'A')).toBe(2); // visible immediately: a root's committed world closes over every write of a token it committed
 		// the corrective rides the batch's own lanes (value-blind delivery to A's watchers)
 		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === t.id).length).toBeGreaterThanOrEqual(1);
 		// slot-lifecycle side is clean: a committed-but-live token cannot release its slot
 		expect(m.tokens.get(t.id)!.slot).toBeDefined();
 		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(0);
-		m.settleAction(t.id, true); // rows clear at retirement, before release (§5.3 step 5)
+		m.settleAction(t.id, true); // committed-token rows clear at retirement, before the slot releases
 		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(false);
 		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(1);
 		selfCheck(m);
@@ -47,8 +50,9 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 		m.passYield(p2.id);
 		m.scopeWrite(t.id, a, set(9)); // committed-member write AFTER p2's pin
 		m.passResume(p2.id);
-		// WITHOUT the editorial pin cap, clause 2 would admit seq > pin and the
-		// yielded pass's world would drift mid-render. With it: stable.
+		// WITHOUT the pin cap on the membership clause, a committed-member write
+		// with seq > pin would be admitted and the yielded pass's world would
+		// drift mid-render. With it: stable.
 		expect(m.passValue(a, p2)).toBe(1);
 		// the write is not lost: it is committed-visible at now and at the next pin
 		expect(m.committedValue(a, 'A')).toBe(9);

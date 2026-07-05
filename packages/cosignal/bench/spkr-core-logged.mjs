@@ -1,15 +1,11 @@
-/**
- * SPK-R core child, LOGGED build: dense retirement. Same write/effect graph
- * as the DIRECT comparator (4 atoms, 4 computeds, 4 core effects); WATCHERS
- * env adds N committed watchers on one root — the advance-drain reconcile
- * surface (LOGGED-only; disclosed). Burst = open K tokens, M writes each
- * (round-robin atoms, always-changing values), then retire all K
- * (committed). retireNs isolates the retirement engine: receipt stamping,
- * compaction folds (this build's stand-in for the promotion walk — there
- * are no version chains to promote; folds recompute), durable drains
- * (watcher reconcile + committed-effect revalidation), per-root row clears,
- * slot release.
- */
+// Measures the logged build's retirement cost on the same write/effect
+// graph as the base-build comparator (4 atoms, 4 computeds, 4 core
+// effects); WATCHERS adds N committed watchers on one root, which
+// retirement must also reconcile (logged-only surface). Burst = open K
+// batches, M writes each (round-robin atoms, always-changing values), then
+// retire all K as committed. retireNs isolates retirement itself: stamping
+// receipts, folding them into base values, reconciling committed watchers
+// and effects, clearing per-root bookkeeping, releasing slots.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
 import { envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 

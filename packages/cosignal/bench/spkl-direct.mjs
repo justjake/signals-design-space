@@ -1,8 +1,6 @@
-/**
- * SPK-L child, DIRECT build (imports index.ts ONLY): the baseline side of
- * the LOGGED-quiet residual measurement. Hot loops on plain public-API
- * signals; per-op ns via within-process median of REPS timed reps.
- */
+// Baseline side of the quiet-residual measurement: the base build only
+// (imports the base entry), hot loops on plain public-API signals; per-op ns
+// via within-process median of REPS timed reps.
 import { Atom, Computed, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 import { makeShape, SHAPE_OPS } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/spkl-shapes.mjs';

@@ -1,9 +1,6 @@
-/**
- * SPK-W child, DIRECT build (imports index.ts ONLY — twin purity).
- * Shapes: bare (atom only), chain3 (a -> c1 -> c2 -> c3 -> effect),
- * fan8 (a -> 8 computeds -> 8 effects), watch1 (a -> c1 -> 1 effect).
- * Metric: per-write ns for `a.set(i)` including synchronous propagation.
- */
+// Measures per-write ns of the base build (imports the base entry only) for
+// `a.set(i)` including synchronous propagation, over four small graph shapes
+// (bare atom, 3-deep chain, 8-wide fan, one watched computed).
 import { Atom, Computed, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 

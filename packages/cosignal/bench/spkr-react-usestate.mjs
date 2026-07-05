@@ -1,10 +1,8 @@
-/**
- * SPK-R react child, plain-useState comparator (same fork react build, NO
- * bridge/shim registered). N components each hold useState and register
- * their setter in a shared list; one round = one act() calling every setter
- * with the same new value — the equivalent useState render/commit for N
- * reached watchers. COARSE timing, same protocol as the cosignal child.
- */
+// Plain-useState comparator for the React retirement measurement (same
+// React build, no cosignal registered). N components each hold useState and
+// register their setter in a shared list; one round = one act() calling
+// every setter with the same new value — the equivalent render/commit for N
+// reached watchers. COARSE timing, same protocol as the cosignal child.
 import { createRequire } from 'node:module';
 const req = createRequire('/Users/jitl/src/alien-signals-opt/packages/cosignal-react/tests/helpers.tsx');
 const { JSDOM } = req('jsdom');

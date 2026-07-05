@@ -1,7 +1,8 @@
 /**
- * Hook behavior unit tests (task 4a): render/update/unmount, StrictMode,
- * deps-keyed recreation (§3.3), ctx.previous hint (§3.4), useReducerAtom
- * parity scope, useSignalEffect committed-world contract (§5.11).
+ * Hook behavior unit tests: render/update/unmount, StrictMode double-mount
+ * netting, deps-keyed recreation of useComputed nodes, the ctx.previous
+ * hint, useReducerAtom's useReducer parity, and useSignalEffect's
+ * committed-world contract.
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
@@ -40,7 +41,8 @@ describe('useSignal', () => {
 			a.update((n) => n + 5);
 		});
 		expect(text(container)).toBe('15');
-		// The receipt holds the updater, not a folded value (§5.3 / logged.ts note).
+		// The receipt holds the updater function itself, not a pre-folded value,
+		// so each world can replay it against its own view.
 		const node = h.bridge.byKernelId.get(a._id)!;
 		const ops = [...node.tape, ...node.archive].map((r) => r.op.kind);
 		expect(ops).toContain('update');

@@ -1,10 +1,12 @@
 /**
- * The react-concurrent-store 14-scenario harness, adapted to cosignal-react
- * (task 4b). SOURCE NOTE: vendor/react/packages contains NO
- * react-concurrent-store package at this checkout (56178d8c13), so the 14
- * scenarios are DERIVED from the spec's battery cases (§6) + the S4 handoff,
- * numbered R1-R14. R6 is the mid-transition-suspense case — the package's
- * KNOWN BUG that this design fixes (spec case 15 row 2) — and must PASS.
+ * Fourteen concurrency scenarios, numbered R1-R14 in the test names,
+ * covering the ground of React's experimental external-store work (hence
+ * the react-concurrent-store label): subscription, grouped handler writes,
+ * pending transitions, urgent writes mid-transition, tearing, mounts and
+ * unmounts, StrictMode, multi-root, late subscription, async actions,
+ * flushSync, and selectors. R6 is the mid-transition mount with suspended
+ * pending state — the known failure mode of a naive external store,
+ * described in the README, that this package exists to fix — and must PASS.
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
@@ -191,16 +193,17 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		});
 		expect(text(container)).toBe('r1:0;s:0;'); // pending, no fallback, no leak
 
-		// A NEW component mounts mid-transition (urgent). react-concurrent-store's
-		// known bug: the fresh mount reads the mutated store (1) and tears against
-		// its committed siblings. Here the mount reads the COMMITTED world (0).
+		// A NEW component mounts mid-transition (urgent). The known failure mode:
+		// a naive store hands the fresh mount the mutated value (1) and it tears
+		// against its committed siblings. Here the mount reads the COMMITTED
+		// world (0).
 		await act(async () => {
 			root.render(<App extra />);
 		});
 		expect(text(container)).toBe('r1:0;s:0;r2:0;');
 		expect(text(container)).not.toContain(':1'); // the design's raison d'être
 
-		// The mount fixup entangled r2 with the live transition batch (§5.10):
+		// The mount fixup entangled r2 with the live transition batch:
 		// a value-blind corrective was scheduled in the batch's own lane.
 		expect(h.bridge.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
 
@@ -353,7 +356,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:1;b:2;c:3;');
-		// The raw post-await write was dev-warned as outside the action (§3.5).
+		// The raw post-await write was dev-warned as landing outside the action.
 		expect(h.handle.shim.devWarnings.some((m) => m.includes('outside the action'))).toBe(true);
 	});
 
@@ -404,9 +407,10 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		await act(async () => {
 			user.set({ name: 'ada', age: 37 }); // same selected value
 		});
-		// Delivery is value-blind by design (§5.9 — equality cutoffs on delivery
-		// are pinned dead); the re-render is priced, never wrong: the selected
-		// value and the DOM stay stable.
+		// Delivery is value-blind by design — the engine never equality-tests a
+		// value to decide whether to notify (designs that did are pinned dead by
+		// the regression schedules); the re-render is priced, never wrong: the
+		// selected value and the DOM stay stable.
 		expect(text(container)).toBe('ada');
 		expect(rendered.every((v) => v === 'ada')).toBe(true);
 		await act(async () => {

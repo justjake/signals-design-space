@@ -22,8 +22,8 @@ export type Harness = {
 
 export function makeHarness(): Harness {
 	const bridge = __newBridgeForTest();
-	// Perf pass P1 (SPK-K1): compacted receipts move to the archive only on
-	// request — these tests inspect full receipt history (tape + archive).
+	// The engine moves compacted receipts to its archive only on request —
+	// these tests inspect full receipt history (tape + archive).
 	bridge.retainArchive = true;
 	const handle = registerCosignalReact({ bridge });
 	const roots: Root[] = [];

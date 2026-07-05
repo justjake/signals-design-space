@@ -1,16 +1,17 @@
 /**
- * cosignal-react — the v1 hook surface (spec §3.2/§3.3/§3.4/§3.5):
- * useSignal, useComputed (deps-keyed recreation, cut C3), useReducerAtom,
- * useSignalEffect (committed-for-root, §5.11), startSignalTransition
- * (ActionScope, §3.5), plus registerCosignalReact — the binding activation
- * that arms the LOGGED engine and couples it to the fork via the Shim.
+ * cosignal-react — the hook surface: useSignal, useComputed, useReducerAtom,
+ * useSignalEffect, startSignalTransition, plus registerCosignalReact — the
+ * activation call that arms the logged engine (`cosignal/logged`) and
+ * couples it to a protocol-v1 React build via the Shim.
  *
- * Watcher lifecycle (§5.10/§5.11): render mints/tracks the watcher in the
- * current pass's world (rendered-world read); the layout effect claims the
- * subscription (StrictMode double-mount nets to one via microtask-debounced
- * unsubscription); the mount fixup itself runs bridge-side at the commit's
- * pass end — the pinned baseline site — and its correctives/urgent
- * corrections arrive as pre-paint setStates through the shim.
+ * Watcher lifecycle, shared by the subscription hooks: render mints (or
+ * re-tracks) a watcher in the current pass's world, so the component reads
+ * the view of the render it is part of; the layout effect claims the
+ * subscription after commit (StrictMode's double-mount nets to one live
+ * watcher via microtask-debounced unsubscription); the mount fixup itself
+ * runs inside the bridge at the commit edge, and its corrective re-renders
+ * and urgent corrections reach React as pre-paint setStates through the
+ * shim.
  */
 
 import * as React from 'react';
@@ -27,11 +28,13 @@ export type CosignalReactHandle = {
 };
 
 /**
- * Activates the bindings (spec §3.2 `registerReactBridge(fork)` spelling):
- * arms the LOGGED engine (once per process via cosignal's public rule) and
- * subscribes the fork shim. Call during app setup, after importing
- * react-dom/client, before rendering any root. `opts.bridge` injects a
- * pre-built bridge (tests use `__newBridgeForTest()` instances).
+ * Activates the bindings: arms the logged engine's write recording (once
+ * per process) and subscribes the shim to the external-runtime protocol
+ * events. Call during app setup, after importing react-dom/client (the
+ * renderer must have registered its protocol provider first), before
+ * rendering any root; throws on stock React — see assertForkProtocol.
+ * `opts.bridge` injects a pre-built bridge (tests use
+ * `__newBridgeForTest()` instances).
  */
 export function registerCosignalReact(opts?: { bridge?: CosignalBridge }): CosignalReactHandle {
 	if (getActiveShim() !== undefined) {
@@ -59,7 +62,7 @@ export function requireShim(): Shim {
 	return shim;
 }
 
-// ---- bound computed handle (§3.3) ---------------------------------------------------
+// ---- bound computed handle ------------------------------------------------------------
 
 /** The handle useComputed returns: a world-routed readable signal. */
 export class BoundComputed<T> {
@@ -91,7 +94,7 @@ function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyNode {
 	);
 }
 
-// ---- useSignal (§3.2, §5.10, §5.11) --------------------------------------------------
+// ---- useSignal --------------------------------------------------------------------------
 
 type SignalRec = {
 	node: AnyNode;
@@ -115,7 +118,7 @@ function makeRec(node: AnyNode, bump: () => void): SignalRec {
 	};
 }
 
-/** Throws the capsule thenable so React suspends (§5.8 render-read tail). */
+/** Unwraps a pending read's SuspendedRead carrier into its thenable and throws that, so React suspends the component. */
 function readSuspending(fn: () => unknown): unknown {
 	try {
 		return fn();
@@ -126,8 +129,26 @@ function readSuspending(fn: () => unknown): unknown {
 }
 
 /**
- * Subscribe + rendered-world read + mount fixup wiring (§5.10 with the
- * oracle errata — the fixup itself runs bridge-side at the commit edge).
+ * Subscribes the component to an atom (or a useComputed result) and returns
+ * its value in the world of the render the component is part of: a
+ * transition render sees the transition's pending value, an urgent render
+ * sees committed state, and every component in one render pass sees the
+ * same frozen view — no frame can mix old and new state. The component
+ * re-renders whenever the value changes in some batch's world, and that
+ * re-render is scheduled in the batch's own lane, so it stays part of the
+ * update that caused it.
+ *
+ * Mounting is the subtle case. A component can mount while other updates
+ * are in flight, and its subscription only activates at commit — so writes
+ * could slip by unobserved between its render and its commit. The layout
+ * effect below claims the subscription, and the bridge's mount fixup (run
+ * at the commit edge) closes the window: for every still-live batch that
+ * touched relevant state but was not part of this component's render, a
+ * corrective re-render is scheduled into that batch's own lane via the
+ * protocol's unstable_runInBatch — the component joins the pending update
+ * instead of revealing it early or missing it — and one comparison against
+ * committed-state-as-of-now catches anything that committed or retired
+ * during the window, fixed urgently before paint.
  */
 export function useSignal<T>(signal: SignalSource<T>): T {
 	const shim = requireShim();
@@ -137,8 +158,8 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 	if (ref.current === null) ref.current = { current: null, retired: [] };
 	const state = ref.current;
 
-	// Signal identity changed across renders: retire the old subscription (it
-	// finalizes at the next layout effect) and mint a fresh one.
+	// Signal identity changed across renders: queue the old subscription for
+	// teardown (finalized at the next layout effect) and mint a fresh one.
 	if (state.current !== null && state.current.node !== node) {
 		state.retired.push(state.current);
 		state.current = null;
@@ -154,7 +175,8 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 		rec.root = rendering.id;
 		const w = rec.watcherId === undefined ? undefined : bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
-			// Mount: mint the watcher in this pass's world (§5.10 render capture).
+			// Mount: mint the watcher in this pass's world; the value it renders
+			// is captured so the commit-edge fixup can compare against it.
 			value = readSuspending(() =>
 				shim.evaluateSuspending(() => {
 					const minted = bridge.mountWatcher(pass.id, node, 'w?');
@@ -166,12 +188,15 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 				}),
 			);
 		} else if (w.live) {
-			// Re-render: dedup bits re-arm; value = this pass's world (§5.9/§5.3).
+			// Re-render: re-arm the watcher's delivery dedup and read this pass's world.
 			bridge.renderWatcher(pass.id, w.id);
 			value = readSuspending(() => shim.evaluateSuspending(() => bridge.passValue(node, pass)));
 		} else {
-			// Reveal-shaped re-render (Offscreen/Activity): adopt into this pass —
-			// its commit runs the fixup with a failing pass-id conjunct (§5.10).
+			// Reveal-shaped re-render (previously hidden content shown again, e.g.
+			// React Activity/Offscreen): adopt the dormant watcher into this pass
+			// so the commit-edge mount fixup reconciles it — against batches this
+			// render did not include, and against committed state — as if it were
+			// a fresh mount.
 			bridge.adoptMount(pass.id, w.id);
 			shim.noteMinted(rendering, w.id);
 			value = readSuspending(() => shim.evaluateSuspending(() => bridge.passValue(node, pass)));
@@ -186,8 +211,12 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 		shim.claimWatcher(rec);
 		for (const old of state.retired.splice(0)) shim.finalizeUnsub(old);
 		return () => {
-			// Microtask-debounced unsubscribe: StrictMode's double-mount and
-			// Activity hide/reveal net out before the debounce fires (§5.11).
+			// Microtask-debounced unsubscribe. In development StrictMode React
+			// mounts, unmounts, and remounts each component to surface unsafe
+			// effects; the unmount's cleanup and the remount's claim both run
+			// synchronously inside the commit, before this microtask fires, so
+			// the pair nets out to one live subscription instead of a teardown
+			// plus a fresh subscribe. Activity hide/reveal cancels the same way.
 			rec.pendingUnsub = true;
 			queueMicrotask(() => {
 				if (rec.pendingUnsub) shim.finalizeUnsub(rec);
@@ -198,35 +227,49 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 	return value as T;
 }
 
-// ---- useComputed (§3.3 — deps-keyed recreation, cut C3) ------------------------------
+// ---- useComputed ------------------------------------------------------------------------
 
 let nextComputedSerial = 1;
 
 /**
- * useMemo semantics applied to node identity: equal deps return the existing
- * node (nothing minted); changed deps create a fresh node capturing the new
- * closure in WIP hook state — commit adopts it, discard drops it. The node's
- * evaluating function is immutable for its whole life.
+ * A derived value scoped to the component, with useMemo semantics applied to
+ * node identity: while `deps` are equal you keep the same node (nothing is
+ * minted); when `deps` change, a fresh node capturing the new closure is
+ * created in work-in-progress hook state — adopted if the render commits,
+ * dropped if the render is discarded. Returns a handle whose `.state` reads
+ * in the current render's world.
+ *
+ * Recreating instead of swapping the function in place is deliberate: a
+ * node's evaluating function must stay immutable for the node's whole life,
+ * because pending worlds replay evaluation — if a live node's function
+ * could change, one world could observe another closure's output. A changed
+ * function therefore only takes effect through changed deps (the useMemo
+ * rule). Inside `fn`, ctx.previous is a hint carrying the last committed
+ * value (possibly stale or undefined) and ctx.use(thenable) reads async
+ * data, suspending the component via React Suspense while pending.
  */
 export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[]): BoundComputed<T> {
 	const shim = requireShim();
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	return React.useMemo(
 		() => new BoundComputed<T>(shim.makeComputedNode(`useComputed#${nextComputedSerial++}`, fn, deps), shim),
-		// The user's deps ARE the memo key (cut C3): fn changes ride deps.
+		// The user's deps ARE the memo key: a changed fn takes effect only with changed deps.
 		[shim, ...deps],
 	);
 }
 
-// ---- useReducerAtom (§3.2) -----------------------------------------------------------
+// ---- useReducerAtom -----------------------------------------------------------------------
 
 let warnedReducerSwap = false;
 
 /**
- * Creates the reducer atom once for the component's lifetime; the reducer is
- * fixed at creation (§3.1) — a render passing a different reducer function
- * does not swap it (dev-warns once). Returns [value, dispatch] with
- * useReducer parity scoped to stable reducers.
+ * [value, dispatch] with useReducer parity, backed by an atom created once
+ * for the component's lifetime. The reducer is fixed at creation and must
+ * be pure: dispatched actions are stored and replayed to compute each
+ * world's value, so an impure or swapped reducer would let worlds disagree
+ * about the same history. A render passing a different reducer function
+ * does not swap it (warns once in development; remount with a `key` to
+ * change reducers).
  */
 export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initial: S): [S, (action: A) => void] {
 	const [record] = React.useState(() => ({ atom: new ReducerAtom<S, A>(reducer, initial), reducer }));
@@ -240,14 +283,18 @@ export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initia
 	return [value, dispatch];
 }
 
-// ---- useSignalEffect (§3.2 / §5.11) ---------------------------------------------------
+// ---- useSignalEffect ----------------------------------------------------------------------
 
 /**
- * Observes committed-for-root state only: the effect body's signal reads
- * resolve in the committed world of the component's root, and the effect
- * re-fires when a durable flip (retirement, per-root commit, settlement,
- * root commit) moves any of its (node, fingerprint) snapshot pairs. Deps
- * changes ride React's native effect re-fire.
+ * An effect whose signal reads resolve in the committed world of the
+ * component's root — never pending state. Effects perform side effects
+ * (network, imperative DOM, logging), and side effects must track what the
+ * user actually sees: a pending transition may still be discarded, and a
+ * side effect cannot be un-run. The effect re-fires (cleanup, then run)
+ * when a durable change moves any value it read during its last run — the
+ * root committing UI that includes a batch, a batch retiring, an async
+ * action settling. `deps` changes re-run it through React's own useEffect
+ * machinery, exactly like useEffect.
  */
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
 	const shim = requireShim();
@@ -278,20 +325,27 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	}, deps === undefined ? undefined : [shim, ...deps]);
 }
 
-// ---- startSignalTransition (§3.5) ------------------------------------------------------
+// ---- startSignalTransition ------------------------------------------------------------------
 
 export type ActionScope = {
-	/** Classifies the write into the action's token, from anywhere (§3.2). */
+	/** Classifies the write into the action's batch, from anywhere — including after an await. Throws once the action has settled. */
 	set<T>(atom: Atom<T>, value: T): void;
 	dispatch<S, A>(atom: ReducerAtom<S, A>, action: A): void;
 };
 
 /**
- * Starts a transition action with React parity (§3.5): writes in the
- * synchronous prefix classify into the action's token; the returned thenable
- * parks the token until settlement (the fork retires it then); raw post-await
- * writes are ambient (React parity); scope writes classify explicitly and
- * throw once the action settles.
+ * Starts a transition action with the exact rule React's own startTransition
+ * has. (A transition marks an update as non-urgent: React renders it in the
+ * background while urgent updates keep landing and committing in between.)
+ * Writes in the synchronous part of `fn` classify into the transition's
+ * batch and render as one pending update. Returning a promise parks the
+ * batch until it settles (React async-action semantics), so pending state
+ * stays pending across the whole action. Writes after an `await` are
+ * urgent/ambient unless re-wrapped, because the async continuation runs on
+ * a fresh call stack with no ambient transition context — the same rule,
+ * for the same reason, as React's own transitions; use the ActionScope
+ * passed to `fn` (`scope.set` / `scope.dispatch`) to classify them into the
+ * action's batch explicitly. Scope methods throw once the action settles.
  */
 export function startSignalTransition(fn: (scope: ActionScope) => unknown): void {
 	const shim = requireShim();
@@ -308,8 +362,9 @@ export function startSignalTransition(fn: (scope: ActionScope) => unknown): void
 				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as unknown as Atom<unknown>), { kind: 'dispatch', action });
 			},
 		};
-		// Returning fn's thenable parks the transition lane (React async action);
-		// the fork then retires the token at settlement (§4.1 fact 3).
+		// Returning fn's thenable keeps the transition pending until it settles
+		// (React async-action semantics); the protocol host retires the batch
+		// at settlement, which is when its writes become permanent history.
 		return fn(scope) as undefined;
 	});
 }
