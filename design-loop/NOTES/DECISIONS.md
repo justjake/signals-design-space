@@ -235,3 +235,10 @@ preference. Curated by the monitor only.
   accepted against a ≤3% budget; the idle-machine measurement (SPK-L) is
   demoted to informational, and the mitigation ladder ships only if a clean
   idle number exceeds 3%.
+- **D27. BASELINE ACCEPTED, IMPLEMENTATION GREEN-LIT (Jake, 2026-07-05:
+  "go").** The round-5 champion with cuts C1–C6 (as amended by D24/D25) is
+  THE spec; design phase closed; future changes are evidence-backed
+  amendments only. All four exit-case decisions now resolved. Step 1 (merge
+  into one document at spec/cosignal-v1.md) begins immediately; then
+  oracle + fork tests; spike gates per the exit case with D26's 3% idle
+  budget.
