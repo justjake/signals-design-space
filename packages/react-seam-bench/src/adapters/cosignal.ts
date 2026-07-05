@@ -10,7 +10,8 @@
  * import: a process benchmarking any other contender must never load it.
  */
 import 'react-dom/client';
-import { Atom, batch, registerCosignalReact, useSignal } from 'cosignal-react';
+import { Atom, batch } from 'cosignal';
+import { registerCosignalReact, useSignal } from 'cosignal-react';
 import { startTransition } from 'react';
 import type { Contender } from './types.js';
 

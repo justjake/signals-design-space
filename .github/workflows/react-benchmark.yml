@@ -108,7 +108,7 @@ jobs:
         with:
           node-version: 24
 
-      - run: npm install -g pnpm
+      - run: npm install -g pnpm@10
 
       # Root install links the workspace packages (react-seam-bench,
       # cosignal, cosignal-react) and resolves react/react-dom/scheduler
@@ -233,7 +233,7 @@ jobs:
         with:
           node-version: 24
 
-      - run: npm install -g pnpm
+      - run: npm install -g pnpm@10
 
       - name: Build upstream alien-signals (esm/ is a local build artifact)
         working-directory: upstream-alien-signals
@@ -255,6 +255,12 @@ jobs:
       # stock libraries' react@^18 peer ranges; the fork pins ajv@^8 in its
       # devDependencies so webpack's schema-utils survives the resulting
       # hoisting.
+      # The contender pages bundle packages/cosignal-react from raw TS; its
+      # own imports (react, cosignal) resolve through the workspace links
+      # that only exist after a root install.
+      - name: Install workspace
+        run: pnpm install --no-frozen-lockfile
+
       - name: Install benchmark
         working-directory: daishi-concurrent-benchmark
         run: npm install --legacy-peer-deps

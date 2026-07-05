@@ -75,7 +75,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         if: matrix.runtime == 'bun'
 
-      - run: npm install -g pnpm
+      - run: npm install -g pnpm@10
 
       - name: Build upstream alien-signals (esm/ is a local build artifact)
         working-directory: upstream-alien-signals
