@@ -242,3 +242,19 @@ preference. Curated by the monitor only.
   into one document at spec/cosignal-v1.md) begins immediately; then
   oracle + fork tests; spike gates per the exit case with D26's 3% idle
   budget.
+- **D25 amendment (verified form, 2026-07-05).** Verification verdict:
+  SOUND-WITH-AMENDMENTS (design-loop/monitor-checks/
+  c5-slot-release-verification.md). The slot-claim-epoch guard is DROPPED
+  (unnecessary per the Monotone Tenancy Lemma — stamp-before-release,
+  claim-after-release, pin/seq-after-claim — and a latent renumber hazard
+  if kept). Final rule: retired slot IDENTITY releases immediately unless
+  named by an open pass's mask; slot BOOKKEEPING keeps its pin-gated
+  lifetime as tenant-agnostic conservative dirt (deletes the
+  per-pass world-path-flag machinery). Required amendments: dedup-bit
+  clear at re-intern (or seq-based dedup); retirement ordering
+  stamp→fold→drain→clear-locks→release with re-evaluation at every pass
+  end incl. discards, parked tokens never release; per-slot unswept-entry
+  counts and their gate DELETED. Corrected bound: live-batch bound +
+  open-mask retention, with a release-anyway backstop (safe given version
+  entries denormalize their token at mint). Net: two additional machinery
+  deletions beyond the original claim.
