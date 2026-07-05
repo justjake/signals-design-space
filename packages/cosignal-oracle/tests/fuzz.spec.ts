@@ -1,5 +1,5 @@
 /**
- * The randomized referee run (spec §8 "oracle first"):
+ * The randomized referee run:
  *  - N seeded schedules, self-check invariants after EVERY applied step;
  *  - per-seed determinism: the same schedule replayed twice must produce a
  *    byte-identical observable fingerprint (events + all world values);

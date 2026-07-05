@@ -1,18 +1,21 @@
 /**
- * The engine adapter interface (spec §8 "every engine milestone diffs
- * against it"). A future engine plugs into the fuzz harness by implementing
- * this surface; the harness replays the same schedule into the engine and
- * the naive model and diffs every observable after every step.
+ * The engine adapter interface — how a real engine runs in lockstep with
+ * the reference model. An engine plugs into the fuzz harness by
+ * implementing this surface; the harness replays the same schedule into
+ * the engine and the naive model and diffs every observable after every
+ * step, so any divergence is caught at the exact step it appears.
  *
  * The comparable surface is deliberately the OBSERVABLE one:
  *   - values: read(node, world) for the newest world, every open pass world,
  *     and committed-for-root(r) for every root;
- *   - deliveries: the value-blind watcher setState decisions, in order, with
- *     their {watcher, token, slot} attribution (§5.9);
- *   - corrections: reconcile / mount correctives / urgent fixups (§5.3, §5.10);
+ *   - deliveries: the value-blind decisions to schedule a watcher
+ *     re-render, in order, with their {watcher, token, slot} attribution;
+ *   - corrections: committed-truth reconciliations, mount correctives, and
+ *     urgent pre-paint mount corrections;
  *   - committed values at quiescence.
- * Engine internals (memos, touched words, K1 records) are never compared —
- * they are free to be clever as long as the observables agree.
+ * Engine internals (memo tables, dirty marking, packed storage) are never
+ * compared — an engine is free to be clever as long as the observables
+ * agree.
  */
 
 import { CosignalModel, type ModelEvent, type Value } from './model.js';

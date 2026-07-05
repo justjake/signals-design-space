@@ -1,7 +1,35 @@
 /**
- * The 17-case acceptance battery (spec §6), as deterministic named tests
- * asserting the spec's Required outcomes at model level. Aspects that need
- * the real React fork are listed in tests/SKIPPED-FOR-FORK-SUITE.md.
+ * The 17-case acceptance battery: the behavioral contract's required
+ * outcomes (README.md states the contract) as deterministic named tests at
+ * model level. The case numbers are stable identifiers shared with the
+ * engine's own suites. Aspects that need a real React host are listed in
+ * tests/SKIPPED-FOR-FORK-SUITE.md.
+ *
+ * The cases, in plain language:
+ *   1  a computed whose dependencies differ between worlds (flag-flip) —
+ *      the shape naive stores tear on; plus its taint/retention/storm/
+ *      cycle/recreation family members
+ *   2  a synchronous render excluding a pending default batch sees only
+ *      old values — never a half-applied frame
+ *   3  functional updates replay in write order over the pre-batch base
+ *      (React updater-queue arithmetic: 2 then 4, never 3)
+ *   4  two batches writing the same atom: the second still delivers, in
+ *      its own lane
+ *   5  delivery is value-blind; re-rendering re-arms it
+ *   6  no implicit grouping: each write delivers in its own batch context
+ *   7  writes and reads during a paused render (the pinned world never
+ *      drifts; gap code reads newest)
+ *   8  equality drops never lose receipts (only an empty-tape no-op drops)
+ *   9  mounting mid-transition (own pass, foreign retirement, own-commit
+ *      late write, stayed-live variant, hidden-then-revealed subtree)
+ *  10  a late subscriber joins the pending batch it missed
+ *  11  multiple roots: per-root self-consistency with visible skew
+ *  12  store-only batches persist; async actions match React's rules
+ *  13  counter/identity lifecycle (renumbering, slot recycling)
+ *  14  replayed/StrictMode renders are idempotent; render-phase writes throw
+ *  15  Suspense across worlds (host-only; skipped here)
+ *  16  committed-state effects see only committed values, re-run on flips
+ *  17  optimistic rollback is deliberately absent (history is append-only)
  */
 import { describe, expect, it } from 'vitest';
 import { commitAndRetire, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
@@ -48,7 +76,8 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		m.write(k.id, a, set(1));
 		m.write(k.id, b, set(9)); // k-world c takes the a-path; the walk still reaches W value-blind.
 		// (W, k) is already armed and no pass has started: the scheduled render will
-		// fold a=1 and b=9, so §5.9 suppresses both follow-ups — a decision, never an equality test.
+		// fold a=1 and b=9, so the dedup rule suppresses both follow-ups — a
+		// scheduling decision, never an equality test on values.
 		expect(m.eventsOfType('suppressed').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(2);
 		const pk = pass(m, 'A', [k]);
 		expect(m.passValue(c, pk)).toBe(1); // value unchanged by b in k's world
@@ -90,7 +119,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		expect(m.slots[kSlot]!.writeClock).toBeGreaterThan(0); // fresh clock started from zero at claim
 		// held pass (pinned before k's retirement): excludes BOTH tenants
 		expect(m.passValue(a, held)).toBe(0);
-		// a fresh pass including V folds k via the retired clause then V via clause 2, in seq order
+		// a fresh pass including V folds k via the retired-history clause, then V via the included-up-to-pin clause, in seq order
 		const q = pass(m, 'A', [v]);
 		expect(m.passValue(a, q)).toBe(2);
 		expect(m.committedValue(c, 'A')).toBe(0); // c reads b committed; a=1 folded but flag never flipped
@@ -138,11 +167,11 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		m.passYield(p.id);
 		const u = m.openBatch('urgent'); // gap click
 		m.write(u.id, a, set(1));
-		expect(ce.lastValue).toBe(11); // core effect reads NEWEST (documented core contract §5.11)
+		expect(ce.lastValue).toBe(11); // core effects read the NEWEST world — their documented contract
 		m.retire(u.id, true); // entries stamped; pin blocks compaction; slot releases immediately
 		expect(m.eventsOfType('slot-released').some((e) => e.token === u.id)).toBe(true);
 		m.passResume(p.id);
-		expect(m.passValue(n, p)).toBe(15); // clause 1 fails (rs > pin), clause 2 has only T: a=5 → 15; U invisible
+		expect(m.passValue(n, p)).toBe(15); // U retired after the pin (not history yet) and only T is included: a=5 → 15; U invisible
 		const uTape = m.nodes.get(a.id);
 		expect(uTape).toBeDefined();
 		expect(a.tape.length).toBeGreaterThan(0); // pin-blocked from compaction
@@ -217,7 +246,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		const c2 = m.computed('c2', (read) => (read(a) as number) * 10);
 		expect(m.newestValue(c1)).toBe(2);
 		expect(m.newestValue(c2)).toBe(10);
-		expect(c1.fn).not.toBe(c2.fn); // no machinery anywhere swaps a live node's evaluator (§3.3)
+		expect(c1.fn).not.toBe(c2.fn); // no machinery anywhere swaps a live node's evaluating function
 		selfCheck(m);
 	});
 });
@@ -231,7 +260,7 @@ describe('case 2 — flushSync excludes a pending default batch (why always-log)
 		const d = m.openBatch('default');
 		m.write(d.id, a, set(1)); // ALWAYS logged — urgency never skips history
 		expect(m.eventsOfType('write')).toHaveLength(1);
-		expect(m.newestValue(a)).toBe(1); // K0 applied eagerly
+		expect(m.newestValue(a)).toBe(1); // the newest world applies writes eagerly
 		const sync = pass(m, 'A', []); // flushSync renders SyncLane only: D excluded
 		expect(m.passValue(a, sync)).toBe(0);
 		expect(m.passValue(c, sync)).toBe(10); // BOTH old — no torn frame
@@ -379,7 +408,7 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 		const m = logged();
 		const b = m.atom('b', 0);
 		const t = m.openBatch('deferred');
-		m.write(t.id, b, set(7)); // @95, before P pins
+		m.write(t.id, b, set(7)); // written before P pins
 		const p = pass(m, 'A', [t]);
 		m.passYield(p.id);
 		m.write(t.id, b, set(9)); // post-pin T-attributed write: stays excluded
@@ -387,7 +416,7 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 		const slot = m.tokens.get(t.id)!.slot;
 		expect(slot).toBeDefined(); // release BLOCKED: P's mask names it
 		expect(m.slots[slot!]!.releasePending).toBe(true);
-		expect(m.passValue(b, p)).toBe(7); // clause 1 fails (rs > pin); clause 2: mask ∋ T ∧ 95 ≤ pin
+		expect(m.passValue(b, p)).toBe(7); // T retired after the pin, so the pre-pin write is admitted by inclusion (T in mask, written pre-pin)
 		m.passResume(p.id);
 		m.passEnd(p.id, 'discard'); // commit and discard alike re-evaluate the deferred release
 		expect(m.eventsOfType('slot-released').some((e) => e.token === t.id)).toBe(true);
@@ -451,7 +480,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		expect(w.lastRenderedValue).toBe(5); // the k-world value on the FIRST render — no canonical leak
 		m.passEnd(pk.id, 'commit');
 		expect(m.eventsOfType('mount-corrective')).toHaveLength(0); // inclusion+clock skip — never value equality
-		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(0); // fast-out: zero evaluations
+		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(0); // fast path taken: the quiet window needs zero comparisons
 		m.retire(k.id, true);
 		selfCheck(m);
 	});
@@ -470,7 +499,9 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		m.retire(d.id, false);
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit');
-		// fast-out fails (baseline.cas > pin) ⇒ v_fx (retired-at-now ∋ D) ≠ v_r ⇒ urgent pre-paint setState
+		// fast path fails (committed truth advanced after the pin) ⇒ the fast-forwarded
+		// value (which folds D's retired write) differs from the rendered value ⇒
+		// urgent pre-paint correction
 		const fix = m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W');
 		expect(fix).toHaveLength(1);
 		expect(fix[0]!.to).toBe(4);
@@ -492,7 +523,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit', { retireAtCommit: [k.id] }); // k retires AT P_k's commit
 		const fix = m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W');
-		expect(fix).toHaveLength(1); // wc[k] > pin ⇒ fast-out falls through; v_fx folds s2
+		expect(fix).toHaveLength(1); // k wrote after the pin ⇒ fast path falls through; the compare folds the late write
 		expect(w.lastRenderedValue).toBe(2);
 		selfCheck(m);
 	});
@@ -509,13 +540,15 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit'); // k live: lock-in, no retirement
 		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(1);
-		// Spec discrepancy (recorded in tests/FLAGS.md under flag 5): case 9 row 8's
-		// parenthetical claims "the compare comes out equal — no false urgent" when k
-		// stays live. But the commit's own table update precedes layout (§4.2), so
-		// committed-for-A includes k's post-pin write via the membership clause
-		// (§5.3 write-set closure), and w_fx's uncapped committed clause folds s2:
-		// the compare fires — a value-TRUE urgent correction, sound by §5.10's own
-		// "over-firing is impossible to make unsound".
+		// Corrected expectation (recorded in tests/FLAGS.md under flag 5, finding 1):
+		// an earlier design walk claimed that when k stays live, the corrective loop
+		// alone covers it and the final compare comes out equal — no urgent
+		// correction. But the commit's own lock-in precedes layout, so
+		// committed-for-A already includes k's post-pin write via membership, and
+		// the fast-forwarded world's committed clause (uncapped by the pin) folds
+		// it: the compare fires — a value-TRUE urgent correction. Sound, because
+		// committed truth really did move before paint; over-correcting toward
+		// committed truth can never tear.
 		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(2);
 		expect(m.committedValue(a, 'A')).toBe(2); // the correction matches committed truth — not false
@@ -538,7 +571,8 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		const pu = pass(m, 'A', [u]);
 		m.adoptMount(pu.id, w.id); // W's layout effects fire inside u's commit
 		m.passEnd(pu.id, 'commit', { retireAtCommit: [u.id] });
-		// pass-id conjunct FAILS ⇒ conservative fall-through ⇒ w_fx compare corrects pre-paint
+		// the same-pass condition FAILS (mounted by an older pass) ⇒ conservative
+		// fall-through ⇒ the fast-forwarded compare corrects pre-paint
 		const fix = m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W');
 		expect(fix).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(7);
@@ -555,7 +589,7 @@ describe('case 10 — late subscription joins the pending batch (entanglement)',
 		const k = m.openBatch('deferred');
 		m.write(k.id, a, set(5)); // W not yet mounted: no watcher record, no delivery
 		expect(m.eventsOfType('delivery')).toHaveLength(0);
-		const urgent = pass(m, 'A', []); // urgent pass mounts W; w_r excludes k
+		const urgent = pass(m, 'A', []); // urgent pass mounts W; its rendered world excludes k
 		const w = m.mountWatcher(urgent.id, c, 'W');
 		expect(w.lastRenderedValue).toBe(0); // committed value rendered
 		m.passEnd(urgent.id, 'commit');
@@ -582,7 +616,8 @@ describe('case 10 — late subscription joins the pending batch (entanglement)',
 		m.retire(k.id, true); // k retires in the window
 		m.passResume(urgent.id);
 		m.passEnd(urgent.id, 'commit');
-		// loop sees no live k; fast-out fails (cas moved past the baseline) ⇒ v_fx ∋ k (retired) ≠ v_r
+		// the corrective loop sees no live k; the fast path fails (committed truth
+		// advanced) ⇒ the fast-forwarded value folds k's retired write ≠ rendered
 		expect(m.eventsOfType('mount-corrective')).toHaveLength(0);
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(5);
@@ -668,7 +703,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		expect(m.committedValue(a, 'A')).toBe(0); // not before settlement
 		m.settleAction(t.id, true);
 		expect(m.committedValue(a, 'A')).toBe(2);
-		expect(() => m.scopeWrite(t.id, a, set(3))).toThrow(/ActionScope closed/); // §3.6
+		expect(() => m.scopeWrite(t.id, a, set(3))).toThrow(/ActionScope closed/); // the scope dies with the action
 		selfCheck(m);
 	});
 });

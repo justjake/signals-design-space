@@ -1,56 +1,225 @@
 # cosignal-react
 
-React bindings for `cosignal`'s LOGGED engine, driven by the cosignal
-React fork's external-runtime seam. This is the layer where signals
-become concurrent-React-correct: pending transitions see their own
-world, committed truth never tears, and the react-concurrent-store
-known bug (a mid-transition mount of a suspending pending read) is
-fixed — pinned by scenario test R6.
+React bindings for [`cosignal`](https://www.npmjs.com/package/cosignal)'s
+concurrent engine: signals that stay correct under React's concurrent
+rendering. Pending transitions see their own view of the state, the
+committed UI never shows a mixture of old and new values, and components
+that mount in the middle of an in-flight update reconcile against
+committed state before the browser paints.
+
+## The problem this package solves
+
+React's **concurrent rendering** splits work by urgency. A **transition**
+(`startTransition`) marks an update as non-urgent: React renders it in
+the background over several interruptible slices ("time-slicing"), while
+urgent updates — typing, clicks — keep landing and committing in between.
+React may also throw a partially rendered transition away and restart it.
+
+This is safe for React's own `useState`, because React keeps one value
+per pending update internally. An external store has one current value,
+which breaks in two ways:
+
+- **Tearing.** A torn frame is a single rendered frame showing a mixture
+  of old and new state. If the store changes while a render is paused,
+  components read at two different moments and disagree within one
+  frame. Equally bad: an urgent render can observe a value that only a
+  pending transition should have been able to see.
+- **Lost pending state.** If the store refuses to change until commit
+  (the `useSyncExternalStore` approach), transitions degrade: every
+  store change forces a synchronous de-opt and the "render the next
+  screen in the background while the current one stays interactive"
+  behavior is lost.
+
+cosignal's engine solves this by recording every write as a **receipt** —
+a compact record of the operation, the **batch** it belongs to (the group
+of writes making up one UI update), and its position on one global
+timeline. Each view of the state (a **world**) is computed by replaying
+exactly the receipts that view is allowed to see: a pending render's
+world (its batches plus committed state, frozen when the render started),
+the committed world of a root (what is on screen), and the newest world
+(everything). This package wires those worlds to React: every component
+reads the world of the render it is part of, so no frame can mix views.
+
+Example — the known failure mode this package exists to fix: a transition
+writes the store and its render suspends on data; while it is pending, an
+urgent update mounts a brand-new component that reads the same store. A
+naive store hands the new component the mutated value and it tears
+against its committed siblings. Here the new component reads the
+committed world and matches its siblings; the pending value appears only
+when the transition itself commits. (This exact scenario is pinned in the
+test suite.)
 
 ## Requirements
 
-React must be the cosignal fork (`vendor/react`, branch `cosignal-fork`)
-built via `fork/build-react.sh`; the workspace's pnpm overrides link
-`react`/`react-dom`/`scheduler` to the built artifacts. The bindings
-verify the versioned handshake at startup:
-`React.unstable_externalRuntimeProtocol` must report protocol v1 with
-all v1 capability bits (511). A stale or stock React build fails loudly
-(fork error codes 602/603).
+React itself does not expose when it starts, pauses, or commits a render
+pass — so these bindings require a React build implementing the
+**cosignal external-runtime protocol, version 1**: a patched React that
+emits batch, render-pass, and commit events to an external store and
+provides an API to schedule updates into a specific batch. Concretely the
+build exposes:
 
-## Surface
+- `React.unstable_externalRuntimeProtocol` — the handshake object;
+- render-pass events (start with the included batches, yield, resume,
+  end with committed/discarded disposition), per-root commit events, and
+  batch retirement events;
+- a write-context API (which batch is the code currently executing on
+  behalf of?) and `unstable_runInBatch` (schedule a state update so it
+  renders and commits with a specific batch).
 
-- `registerCosignalReact()` — arms the bridge and subscribes to the
-  fork's external-runtime events (pass start/yield/resume/end with
-  dispositions, per-root commits with generations, batch retirements,
-  the mutation window). Call once at app startup, before the first
-  render.
-- `useSignal(atom)` — subscribe a component to an atom in its rendered
-  world; publication and the §5.10 mount fixup (fast-out conjuncts,
-  corrective loop, urgent pre-paint correction) run in a layout effect.
-- `useComputed(fn, deps)` — derived value with useMemo semantics: the
-  node is recreated when deps change (ratified cut C3). `ctx.previous`
-  is a committed-value hint (cut C4); `ctx.use` provides Suspense
-  capsules.
-- `useReducerAtom(atom)` — `[value, dispatch]`, useReducer parity.
-- `useSignalEffect(fn)` — effects over committed-for-root truth with
-  the §5.11 flush triggers (every root commit and per-root advance,
-  retirements, settlement re-checks), fingerprint-validated.
-- `startSignalTransition(scope)` — transition/async-action integration
-  (ActionScope): writes inside the synchronous prefix join the parked
-  batch; post-await writes are ambient unless re-wrapped — exactly
-  React's own transition contract (cut C1).
+`registerCosignalReact()` verifies the handshake at startup — protocol
+version 1 with every version-1 capability, and at least one renderer
+provider (load `react-dom/client` first). On a stock React or a stale
+build it throws immediately with a descriptive error rather than tearing
+silently later.
 
-Library writes are classified by the fork's write-context API into
-ambient default, discrete urgent, transition, or action batches;
-deliveries and corrective updates ride `unstable_runInBatch` so they
-land in the right lanes.
+## Setup
 
-## Tests
+```tsx
+import { createRoot } from 'react-dom/client';
+import { Atom } from 'cosignal/logged';
+import { registerCosignalReact, useSignal } from 'cosignal-react';
 
-`pnpm -C packages/cosignal-react test` — 45 tests: hook behavior
-(StrictMode, deps-keyed recreation, op-replay fidelity), 14 concurrency
-scenarios (R1–R14, including the R6 known-bug fix), the spec's 17-case
-correctness battery at React level (non-exercisable rows are documented
-in the spec files and pinned at engine/fork level instead), and a
-tracer smoke test. The suite runs against the real fork build via
-jsdom + `react-dom/client`.
+registerCosignalReact(); // once, after importing react-dom/client,
+                         // before rendering any root
+
+const count = new Atom(0);
+
+function Counter() {
+  const value = useSignal(count);
+  return <button onClick={() => count.set(value + 1)}>{value}</button>;
+}
+
+createRoot(document.getElementById('root')!).render(<Counter />);
+```
+
+`registerCosignalReact()` arms the engine's write recording and
+subscribes to the protocol events. It returns a handle
+(`{ bridge, shim, dispose }`); `dispose()` unhooks everything (mainly for
+tests).
+
+This package re-exports the full `cosignal/logged` surface, so
+applications can import `Atom`, `ReducerAtom`, `effect`, `batch`, … from
+`cosignal-react` directly.
+
+## Hooks
+
+### `useSignal(signal)`
+
+Subscribes the component to an atom (or a `useComputed` result) and
+returns its value **in the world of the render the component is part
+of** — a transition render sees the transition's pending value, an urgent
+render sees committed state, and every component in one render pass sees
+the same frozen view.
+
+Mounting is the subtle case. A component can mount while other updates
+are in flight, and its subscription only activates at commit — so writes
+could slip by unobserved between its render and its commit. `useSignal`
+closes that window in a layout effect (after commit, before paint):
+
+- for every still-live batch that touched relevant state but was not
+  part of this component's render, a corrective re-render is scheduled
+  *into that batch's own lane* (a lane is React's internal unit of
+  scheduling priority; work in one lane renders and commits together) —
+  so the component joins the pending update instead of revealing it
+  early or missing it;
+- one comparison against committed-state-as-of-now catches anything that
+  committed or retired during the window, and fixes it urgently before
+  paint.
+
+Net effect: a newly mounted component never paints a frame that
+disagrees with its siblings, and never leaks a pending value into a
+committed frame.
+
+### `useComputed(fn, deps)`
+
+A derived value scoped to the component — same mental model as `useMemo`:
+while `deps` are equal, you keep the same node; when `deps` change, a
+fresh node is created with the new closure (adopted if the render
+commits, dropped if it is discarded). Returns a handle whose `.state`
+reads in the current render's world.
+
+Why recreate instead of swapping the function in place: a computed's
+function must stay immutable for the node's whole life, because pending
+worlds *replay* evaluation — if a live node's function could change, one
+world could observe another closure's output mid-flight.
+
+Inside `fn`, `ctx.previous` is a hint carrying the last committed value
+(it may be stale or `undefined`; the function must be correct without
+it), and `ctx.use(thenable)` reads async data — while pending, the
+component suspends via React Suspense; settlement re-evaluates.
+
+### `useReducerAtom(reducer, initial)`
+
+`[value, dispatch]` with `useReducer` parity, backed by an atom. The
+reducer is fixed at creation and must be pure: dispatched actions are
+stored and replayed to compute each world's value, so an impure or
+swapped reducer would make worlds disagree. Passing a different reducer
+on a later render warns in development and keeps the original (remount
+with a `key` to change reducers).
+
+### `useSignalEffect(fn, deps?)`
+
+An effect whose signal reads resolve **in the committed world of the
+component's root** — never pending state. Rationale: effects perform side
+effects (network, imperative DOM, logging), and side effects must track
+what the user actually sees; a pending transition may still be discarded.
+
+It re-fires when a durable change moves any value it read: a root
+committing UI that includes a batch, a batch retiring, an async action
+settling. Cleanup-then-run ordering and `deps` behave like `useEffect`.
+
+### `startSignalTransition(fn)`
+
+Transition integration with the exact rule React's own `startTransition`
+has. `fn` receives an **action scope**:
+
+```ts
+startSignalTransition(async (scope) => {
+  filter.set(draft);            // synchronous part: joins the transition batch
+  const data = await fetchResults(draft);
+  scope.set(results, data);     // after await: use the scope to stay in the batch
+});
+```
+
+- Writes in the **synchronous part** of `fn` are classified into the
+  transition's batch — they render at transition priority as one pending
+  update.
+- Writes **after an `await`** are urgent/ambient unless re-wrapped,
+  because the async continuation runs on a fresh call stack with no
+  ambient transition context — the same rule and the same reason as
+  React's own transitions. The library warns in development when a bare
+  write lands while an async action is pending.
+- `scope.set(atom, value)` / `scope.dispatch(reducerAtom, action)`
+  classify a write into the action's batch explicitly, from anywhere —
+  including after `await`. Once the action settles, the scope is closed
+  and its methods throw.
+
+Returning a promise from `fn` parks the transition until it settles
+(React async-action semantics), so the pending state stays pending across
+the whole action.
+
+## How writes are classified
+
+Every `atom.set` / `atom.update` / `reducerAtom.dispatch` is attributed
+to the batch context in which it executes, via the protocol's
+write-context API: an event handler's discrete urgent batch, a
+transition or async-action batch, or the ambient default batch when no
+context exists. Functional updates and reducer actions are recorded
+whole — not pre-folded — so each world replays them against its own view.
+Corrective re-renders and deliveries are scheduled with
+`unstable_runInBatch`, so they render and commit in the lanes of the
+batch that caused them.
+
+## Testing
+
+The suite runs against a real protocol-v1 React build (via jsdom and
+`react-dom/client`), not mocks: hook behavior (StrictMode double-mount
+netting, deps-keyed recreation, replay fidelity of functional updates),
+fourteen concurrency scenarios — subscription, interleaved urgent writes
+mid-transition, the mid-transition mount with suspended pending state
+described above, multi-root skew, async actions — plus a React-level run
+of the engine's correctness battery and a tracer smoke test.
+
+## License
+
+MIT

@@ -1,6 +1,15 @@
 /**
- * Appendix B editorial flags — the model-checkable ones (3, 4, 5, 7), each
- * as a targeted test. Findings and discrepancies: tests/FLAGS.md.
+ * Targeted tests for the subtle behavioral rules documented in
+ * tests/FLAGS.md — the model-checkable ones. The ids (flag 3, flag 4,
+ * flag 5, flag 7) are stable identifiers shared with that document; the
+ * numbering is historical. In one line each:
+ *   flag 3  a committed-but-still-live async action's late write is
+ *           committed-visible immediately and corrected in its own lane
+ *   flag 4  a pass world admits included-batch writes only up to its pin,
+ *           so a paused render never drifts
+ *   flag 5  the mount-reconciliation fast path: when it may skip the
+ *           comparison, and why it is sound only with the corrective loop
+ *   flag 7  a forced release of a retained slot changes no world's answer
  */
 import { describe, expect, it } from 'vitest';
 import { logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
@@ -17,13 +26,13 @@ describe('flag 3 — write-set closure at commit (ActionScope late-write surface
 		m.passEnd(pA.id, 'commit'); // A commits t; t parks on (live)
 		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(true);
 		m.scopeWrite(t.id, a, set(2)); // the surviving late-write surface
-		expect(m.committedValue(a, 'A')).toBe(2); // visible immediately via the membership clause (§5.3)
+		expect(m.committedValue(a, 'A')).toBe(2); // visible immediately via membership (A committed t)
 		// the corrective rides the batch's own lanes (value-blind delivery to A's watchers)
 		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === t.id).length).toBeGreaterThanOrEqual(1);
 		// slot-lifecycle side is clean: a committed-but-live token cannot release its slot
 		expect(m.tokens.get(t.id)!.slot).toBeDefined();
 		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(0);
-		m.settleAction(t.id, true); // rows clear at retirement, before release (§5.3 step 5)
+		m.settleAction(t.id, true); // membership rows clear at retirement, strictly before slot release
 		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(false);
 		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(1);
 		selfCheck(m);
@@ -59,8 +68,9 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 
 describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gate)', () => {
 	// The soundness half is asserted INSIDE the model: mountFixup throws
-	// InvariantViolation whenever the four conjuncts hold but v_fx ≠ v_r.
-	// Every battery/scars/fuzz mount exercises that assert.
+	// InvariantViolation whenever the fast path's four conditions hold but
+	// the fast-forwarded value differs from the rendered value without being
+	// corrective-covered. Every battery/scars/fuzz mount exercises that assert.
 	it('quiet in-pass mount takes the fast-out: zero corrections, zero drift', () => {
 		const m = logged();
 		const a = m.atom('a', 0);
@@ -69,7 +79,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		m.write(k.id, a, set(4));
 		const pk = pass(m, 'A', [k]);
 		const w = m.mountWatcher(pk.id, c, 'W');
-		m.passEnd(pk.id, 'commit'); // all four conjuncts hold
+		m.passEnd(pk.id, 'commit'); // all four fast-path conditions hold
 		expect(m.eventsOfType('mount-corrective')).toHaveLength(0);
 		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(0);
 		expect(w.lastRenderedValue).toBe(5);
@@ -89,7 +99,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		m.retire(d.id, false);
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit');
-		// conjunct 1 (baseline.cas ≤ pin) fails ⇒ compare ⇒ value-true correction
+		// the no-committed-advance condition fails ⇒ compare ⇒ value-true correction
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(3);
 		m.retire(k.id, false);
@@ -114,8 +124,8 @@ describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', (
 			m.write(u.id, a, set(100 + i)); // 27th claim forces the backstop
 		}
 		expect(m.eventsOfType('slot-backstop-released')).toHaveLength(1);
-		// flag-free safety: the victim's receipts keep their slot field and stay
-		// clause-2 visible below the held pin; the new tenant's sequences postdate it
+		// the safety argument: the victim's receipts keep their slot field and stay
+		// visible by inclusion below the held pin; the new tenant's sequences postdate it
 		expect(m.passValue(a, held)).toBe(5);
 		// and the new tenant's own world folds the recycled slot's history in seq order
 		const lastLive = m.tokens.get(live[live.length - 1]!)!;

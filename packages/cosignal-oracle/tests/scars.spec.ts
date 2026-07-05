@@ -1,8 +1,13 @@
 /**
- * Pinned scar schedules (design-loop/NOTES/SCARS.md): every dead approach's
- * killing schedule that is expressible at model level, asserting the CORRECT
- * outcome the scarred design got wrong. Scars needing the real React fork
- * are listed in tests/SKIPPED-FOR-FORK-SUITE.md with one line each.
+ * Pinned regression schedules ("scars"). During this design's development,
+ * many plausible engine approaches died to one specific interleaving each —
+ * a schedule on which the approach tears, loses a write, or serves a stale
+ * value. Every such schedule that is expressible at model level is pinned
+ * here, asserting the CORRECT outcome the dead approach got wrong; each
+ * test name states, in one line, the dead idea and the correct behavior.
+ * The S-numbers are stable identifiers shared with the engine's own
+ * suites. Schedules that need a real React host are listed in
+ * tests/SKIPPED-FOR-FORK-SUITE.md with one line each.
  */
 import { describe, expect, it } from 'vitest';
 import { commitAndRetire, dispatch, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
@@ -77,7 +82,7 @@ describe('pinned scars (model-expressible)', () => {
 		void m;
 		const m2 = new (Object.getPrototypeOf(m).constructor)() as typeof m;
 		const a = m2.atom('a', 0);
-		m2.write(undefined, a, set(1)); // DIRECT write: no receipt (bridge not registered)
+		m2.write(undefined, a, set(1)); // direct-mode write: no receipt (bridge not registered)
 		expect(a.tape).toHaveLength(0);
 		expect(a.base).toBe(1);
 		m2.registerBridge(); // activation is monotonic on registration, not on first watcher
@@ -281,7 +286,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(w.lastRenderedValue).toBe(1);
 		const mark = m.events.length;
 		m.scopeWrite(t.id, a, set(2)); // post-await, post-commit scope write
-		// visible to A's committed world immediately (membership clause, §5.3)…
+		// visible to A's committed world immediately (membership: A committed T)…
 		expect(m.committedValue(c, 'A')).toBe(2);
 		// …and the corrective (the value-blind delivery in T's own lane) is scheduled
 		const corr = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
@@ -300,11 +305,11 @@ describe('pinned scars (model-expressible)', () => {
 		const t = m.openBatch('deferred', { action: true });
 		m.write(t.id, a, set(1)); // sync prefix
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack
-		expect(m.eventsOfType('dev-warning')).toHaveLength(1); // the §3.5 lint
+		expect(m.eventsOfType('dev-warning')).toHaveLength(1); // the post-await bare-write warning
 		const ambient = m.tokens.get(m.ambientToken!)!;
 		expect(ambient.priority).toBe('default');
 		m.retire(ambient.id, true);
-		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — React parity (C1 cut)
+		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — exactly React's own transition rule
 		m.settleAction(t.id, true);
 		expect(m.committedValue(a, 'A')).toBe(2); // write order wins at the fold
 		selfCheck(m);
@@ -399,7 +404,7 @@ describe('pinned scars (model-expressible)', () => {
 			m.write(u.id, a, set(i));
 		}
 		expect(m.eventsOfType('slot-backstop-released')).toHaveLength(1); // loud
-		// safe: the retained pass's receipts keep their slot fields and stay clause-2 visible below its pin
+		// safe: the retained pass's receipts keep their slot fields and stay visible by inclusion below its pin
 		expect(m.passValue(a, held)).toBe(heldBefore);
 		m.passResume(held.id);
 		m.passEnd(held.id, 'discard');
@@ -487,7 +492,7 @@ describe('pinned scars (model-expressible)', () => {
 		const p = pass(m, 'A', [t]);
 		m.passYield(p.id);
 		expect(() => m.quiesce()).toThrow(/quiescence requires/); // a live pin forbids renumbering
-		m.discardAllWip(); // synchronous fork capability (fact 2)
+		m.discardAllWip(); // the host can abandon all work-in-progress synchronously
 		expect(m.livePins()).toHaveLength(0);
 		m.retire(t.id, true);
 		m.quiesce(); // discard-first, then rewrite: no post-wrap stamp can land below a live pin
@@ -508,8 +513,9 @@ describe('pinned scars (model-expressible)', () => {
 		const pu = pass(m, 'A', [u]); // u's render bails on the pre-rendered W (not re-rendered)
 		m.adoptMount(pu.id, w.id);
 		m.passEnd(pu.id, 'commit', { retireAtCommit: [u.id] }); // u's commit folds u post-baseline
-		// without conjunct 0 the fast-out returns and V paints f(1) beside W's f(0);
-		// the pass-id gate forces the compare, which corrects pre-paint
+		// without the same-pass condition the fast path would return and this commit
+		// would paint f(1) beside W's stale f(0); the condition forces the compare,
+		// which corrects pre-paint
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(1);
 		selfCheck(m);

@@ -1,18 +1,28 @@
 /**
- * Self-check assertions, run after every schedule step (spec §8 "oracle").
+ * Self-check assertions, run after every step of every schedule. Each backs
+ * one clause of the behavioral contract (stated in README.md):
  *
- * 1. fold determinism — same schedule prefix ⇒ same world answers (folds and
- *    evaluations are pure; evaluating twice must agree).
- * 2. tenancy orderings (§5.4): stamp-before-release, claim-after-release,
- *    pin/seq-after-claim.
- * 3. monotone seq/pin relations (§2/§5.3).
+ * 1. fold determinism — evaluating any node twice in the same world agrees:
+ *    folds and evaluations are pure, so a world's answer is a function of
+ *    the schedule prefix, never of when you ask.
+ * 2. tenancy orderings — the three sequence orderings that make slot
+ *    recycling safe: an un-retired receipt bearing a slot belongs to the
+ *    slot's current tenant (stamp-before-release), every previous tenant's
+ *    retirement precedes the current claim (claim-after-release), and the
+ *    current tenant's receipts and pins postdate the claim
+ *    (pin/seq-after-claim). Together they let folds tell tenants apart by
+ *    sequence alone.
+ * 3. monotone sequence relations — tapes strictly increase, nothing exceeds
+ *    the global counter, retirement stamps follow the writes they stamp.
  * 4. receipt-retention soundness — a pinned pass can always reconstruct its
- *    world: base+tape folds equal full-history (origin+archive+tape) folds
- *    for every live world (compaction predicate soundness, §5.3).
- * 5. quiescence residue is zero (checked at quiesce(); here: whenever no
- *    live pins/tokens exist, every tape has fully compacted).
- * 6. structural: ≤31 live slots, slot↔token binding coherent, per-root rows
- *    never name retired tokens (§5.3 step 5), one open pass per root.
+ *    world: the base+tape fold equals the full-history
+ *    (origin+archive+tape) fold for every live world, i.e. compaction never
+ *    changed any live world's answer.
+ * 5. quiescence residue is zero — whenever no live pins/tokens exist, every
+ *    tape has fully compacted into its base.
+ * 6. structural coherence — at most 31 live batches, slot↔token bindings
+ *    agree both ways, per-root commit rows never name retired tokens (rows
+ *    clear at retirement, before slot release), one open pass per root.
  */
 
 import {
@@ -71,7 +81,7 @@ function checkFoldDeterminism(m: CosignalModel): void {
 	}
 }
 
-/** Invariant 2 — the tenancy orderings (§5.4). */
+/** Invariant 2 — the tenancy orderings that make slot recycling safe. */
 function checkTenancy(m: CosignalModel): void {
 	for (const slot of m.slots) {
 		const tenant = slot.tenant;

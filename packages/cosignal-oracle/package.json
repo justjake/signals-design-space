@@ -3,7 +3,7 @@
 	"private": true,
 	"version": "0.0.0",
 	"type": "module",
-	"description": "Naive, obviously-correct reference model + randomized referee harness for cosignal v1 (spec/cosignal-v1.md).",
+	"description": "Naive, obviously-correct executable reference model and randomized referee harness for cosignal's concurrent semantics.",
 	"scripts": {
 		"test": "vitest run",
 		"typecheck": "tsc -p tsconfig.json"

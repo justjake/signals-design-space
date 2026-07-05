@@ -1,8 +1,8 @@
-/** Shared shorthand for battery/scars tests. */
+/** Shared shorthand for the acceptance-battery and regression-schedule tests. */
 import { CosignalModel, type AnyNode, type Pass, type Token, type Watcher } from '../src/model.js';
 import { checkInvariants } from '../src/invariants.js';
 
-/** A LOGGED-mode model (bridge registered during setup, §3.2). */
+/** A model in logged (concurrent) mode — the bridge is registered during setup. */
 export function logged(): CosignalModel {
 	const m = new CosignalModel();
 	m.registerBridge();

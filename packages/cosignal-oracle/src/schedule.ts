@@ -1,8 +1,10 @@
 /**
- * Seeded random schedule generator + runner (spec §8: "driven by randomized
- * schedules — interleaved batches, yields, retirements, mounts, forced-small
- * counters"). Hand-rolled PRNG with explicit seed logging; shrinking by
- * op-removal replay.
+ * Seeded random schedule generator + runner: randomized interleavings of
+ * batches, writes, render passes, yields, retirements, and mounts — the
+ * schedules concurrent rendering can actually produce, including the ones
+ * no hand-written test would think of. Hand-rolled PRNG with explicit seed
+ * logging (a failure is reproducible from its seed alone); shrinking by
+ * op-removal replay reduces a failure to a minimal schedule.
  *
  * Ops reference entities by creation index, so a shrunk op list replays
  * meaningfully: an op whose referent is missing or illegal at replay time is
@@ -55,8 +57,10 @@ export type ScheduleOp =
 const ROOTS = ['A', 'B'];
 
 /**
- * The fixed topology every schedule runs over: the world-divergent flag-flip
- * family (§6 case 1), a diamond, a chain, an untracked mix, and a reducer.
+ * The fixed topology every schedule runs over: a flag-flip computed whose
+ * dependency set differs between worlds (the shape most likely to expose
+ * cross-world bugs — acceptance scenario case 1), a diamond, a chain, an
+ * untracked-read mix, and a reducer atom.
  */
 export function buildTopology(m: CosignalModel) {
 	const flag = m.atom('flag', 0);
@@ -196,7 +200,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			const token = pick(34);
 			ops.push({ t: 'write', token, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 			// same-token bursts exercise the per-(watcher, slot) dedup and the
-			// pass-aware suppression rule (§5.9) far more often than uniform picks
+			// pass-aware suppression rule far more often than uniform picks
 			while (bool(0.4)) ops.push({ t: 'write', token, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		}
 		else if (roll < 0.38) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
@@ -207,8 +211,9 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			const include: number[] = [];
 			const n = pick(3);
 			for (let k = 0; k < n; k++) include.push(pick(34));
-			// the interleaved-delivery shape (§5.9): arm the (watcher, slot) bit
-			// pre-pin, open a pass including that slot, then write post-pin
+			// the interleaved-delivery shape: arm the (watcher, slot) dedup bit
+			// pre-pin, open a pass including that slot, then write post-pin —
+			// the started render cannot fold the write, so it must re-deliver
 			if (include.length > 0 && bool(0.5)) {
 				ops.push({ t: 'write', token: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
 				ops.push({ t: 'passStart', root: ROOTS[pick(2)]!, include });
