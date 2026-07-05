@@ -1,7 +1,7 @@
 /**
  * cosignal-react — the hook surface: useSignal, useComputed, useReducerAtom,
  * useSignalEffect, startSignalTransition, plus registerCosignalReact — the
- * activation call that arms the logged engine (`cosignal/logged`) and
+ * activation call that arms the logged engine (`cosignal`) and
  * couples it to a protocol-v1 React build via the Shim.
  *
  * Watcher lifecycle, shared by the subscription hooks (a watcher is the
@@ -17,8 +17,8 @@
  */
 
 import * as React from 'react';
-import { Atom, ReducerAtom, SuspendedRead, registerReactBridge } from 'cosignal/logged';
-import type { AnyNode, AtomNode, ComputedNode, CosignalBridge, RootId } from 'cosignal/logged';
+import { Atom, ReducerAtom, SuspendedRead, registerReactBridge } from 'cosignal';
+import type { AnyNode, AtomNode, ComputedNode, CosignalBridge, RootId } from 'cosignal';
 import { Shim, getActiveShim, setActiveShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------

@@ -1,15 +1,17 @@
 /**
- * Adapter for the cosignal LOGGED twin entry with the bridge ARMED but QUIET
- * (spec §7 twin-build gate; task gate "LOGGED quiet"): `registerReactBridge()`
- * swaps the operation table to the logged one at load, no fork events are ever
- * fed, and no atoms are bridge-registered — so the 179-case conformance suite
- * must observe exactly DIRECT semantics through the swapped table. Routes
- * through the same public class API as the `cosignal` adapter.
+ * Adapter for cosignal with a HOST ATTACHED and IDLE (One Core gate):
+ * `registerReactBridge()` attaches the concurrent engine's bridge at load —
+ * arming the host write/read seams in the public methods — but no protocol
+ * events are ever fed, no batches are opened, and no atoms are
+ * bridge-registered. The gate: "host attached, zero batches" semantics must
+ * be exactly sync semantics — the 179-case conformance suite must observe
+ * DIRECT behavior through the armed seams. Routes through the same public
+ * class API as the `cosignal` adapter.
  */
-import * as lib from 'cosignal/logged';
+import * as lib from 'cosignal';
 import type { FrameworkAdapter } from './types';
 
-lib.registerReactBridge(); // arm the table; the bridge stays quiet forever
+lib.registerReactBridge(); // attach the host; it stays idle forever
 
 const adapter: FrameworkAdapter = {
 	name: 'cosignal-logged',

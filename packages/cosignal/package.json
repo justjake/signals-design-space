@@ -3,12 +3,11 @@
 	"private": true,
 	"version": "0.1.0",
 	"license": "MIT",
-	"description": "Reactive signals on a packed typed-array kernel: writable atoms, lazy computed values, and effects with alien-signals-compatible semantics, plus an optional concurrent engine entry (cosignal/logged) that records writes as batches and serves consistent per-render views, and a zero-allocation trace recorder (cosignal/trace).",
+	"description": "One concurrency-ready signals library, sync by default: writable atoms, lazy computed values, and effects with alien-signals-compatible semantics on a packed typed-array kernel; registering the React bridge (registerReactBridge) turns on write recording as batches and consistent per-render world views — never used, never paid for beyond one predictable branch. Includes a zero-allocation trace recorder (cosignal/trace).",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./logged": "./src/logged.ts",
 		"./trace": "./src/trace.ts",
 		"./graphviz": "./src/graphviz.ts"
 	},

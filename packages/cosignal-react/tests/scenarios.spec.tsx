@@ -11,7 +11,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom } from 'cosignal/logged';
+import { Atom } from 'cosignal';
 import { useSignal, useComputed, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
 
@@ -391,6 +391,47 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 			gate.resolve();
 		});
 		expect(text(container)).toBe('a:9;b:1;s:9;');
+	});
+
+	test('R15: raw reads outside any render resolve NEWEST while a pass is pending (world routing is stack-accurate)', async () => {
+		h = makeHarness();
+		const a = new Atom(10); // transition-written; its pending pass pins BEFORE b's write
+		const b = new Atom(0); // urgent-written after the pin
+		const gate = deferred<void>();
+		function Suspender() {
+			const v = useSignal(a);
+			if (v !== 10 && gate.settled !== true) throw gate.promise;
+			return <span>s:{v};</span>;
+		}
+		const { container } = await h.mount(
+			<>
+				<Reader id="b" atom={b} />
+				<React.Suspense fallback={null}>
+					<Suspender />
+				</React.Suspense>
+			</>,
+		);
+		await act(async () => {
+			React.startTransition(() => a.set(20)); // renders 20 and suspends: pass work done, commit pending
+		});
+		expect(text(container)).toBe('b:0;s:10;'); // committed DOM unchanged
+		await act(async () => {
+			b.set(1); // urgent write lands mid-pending-transition, after the pass pinned
+		});
+		// A timer-context read — no render on the current stack. It must see the
+		// NEWEST world (b=1, a=20), never the pending pass's frozen world (which
+		// pinned before b's write and would fold b=0): "pass started but not
+		// committed" is NOT "in render", so ambient routing may only answer from
+		// the live render context.
+		const seen = await new Promise<{ a: number; b: number }>((resolve) => {
+			setTimeout(() => resolve({ a: a.state, b: b.state }), 0);
+		});
+		expect(seen).toEqual({ a: 20, b: 1 });
+		gate.settled = true;
+		await act(async () => {
+			gate.resolve();
+		});
+		expect(text(container)).toBe('b:1;s:20;'); // the transition still lands intact
 	});
 
 	test('R14: selectors stay value-correct under value-blind delivery (§5.9 pin)', async () => {

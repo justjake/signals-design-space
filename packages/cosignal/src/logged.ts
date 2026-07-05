@@ -1,7 +1,6 @@
 /**
- * cosignal — the logged build (`cosignal/logged`): the concurrent-worlds
- * engine riding the base KERNEL. The kernel is the base build's
- * dependency-tracking engine (index.ts, whose header defines its terms): it
+ * cosignal — the concurrent-worlds engine riding the KERNEL. The kernel is
+ * the dependency-tracking engine (index.ts, whose header defines its terms): it
  * stores every signal, computed, effect, and dependency edge as fixed-size
  * integer records in shared arrays — and it holds exactly ONE current value
  * per atom. React's concurrent rendering needs several views of the state
@@ -10,13 +9,15 @@
  * full story), so this module records every write and reconstructs the
  * other views on demand.
  *
- * This module is the base build's twin: it is never imported by
- * `./index.ts` (a base-build bundle's module graph stops at index.ts —
- * asserted by tests/twin-build.spec.ts), and it attaches through the one
- * seam index.ts anticipates: `__installTwinTable` re-points the factory
- * that builds the kernel's operation table (the object holding the
- * kernel's operations as function fields; see index.ts) at the logged
- * wrapper, rebuilding the table exactly once over the carried buffers.
+ * ONE CORE: this module is internal machinery of the single `cosignal`
+ * entry — index.ts imports and re-exports it, and nothing here runs until
+ * `registerReactBridge()` attaches the bridge to the kernel through the
+ * HOST SEAMS index.ts defines (`__setHostWrite` / `__setHostRead`): the
+ * public Atom methods branch to the hooks below when (and only when) a
+ * bridge is registered and, for reads, a routing context is live. A
+ * never-registered process keeps the hooks undefined and this module inert
+ * (tests/one-core.spec.ts asserts zero receipts/tokens/worlds/events under
+ * heavy sync-only traffic).
  *
  * Vocabulary, in reading order (see also the package README):
  *
@@ -145,7 +146,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, __installTwinTable, type EngineTable } from './index.js';
+import { Atom, __assertHostWritable, __hostRunFold, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -253,6 +254,7 @@ export class Tape {
 	}
 
 	push(kind: OpKind, slot: SlotId, seq: Seq, token: TokenId, payload: unknown): void {
+		probeReceipts++; // One Core probe (referee surface)
 		this.kinds.push(kind);
 		this.slots.push(slot);
 		this.seqs.push(seq);
@@ -637,118 +639,70 @@ const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and sl
 
 // ---- module state + the logged operation table ----------------------------------
 
-/** The bridge whose registered atoms the logged table routes for (one active). */
+/** The bridge whose registered atoms the host hooks route for (one active). */
 let activeBridge: CosignalBridge | undefined;
-/** True while the bridge itself is applying a logged write to the kernel. */
+/** True while the bridge itself is applying a logged write to the kernel
+ * (the host write hook's recursion guard: the apply re-enters `Atom.set`). */
 let bridgeApplying = false;
-/** The seam swap happened (module-once; separate from the public once-rule). */
-let tableInstalled = false;
 /** The public registerReactBridge() has been consumed (it may run only once). */
 let publiclyRegistered = false;
 
-// Routing words — while the bridge is armed but no world evaluation is on
-// stack, the seam costs one module-int check per read and one check + one
-// bit test per write, instead of closure property loads + a Map probe per op.
-/**
- * Read routing mode: 0 = quiet (straight kernel), 1 = an overlay world fold
- * is on stack (registered reads serve the world fold).
- */
-let routeReads = 0;
-/** Nonzero when logged-mode write classification is armed (mode==='logged' && !bridgeApplying). */
-let routeWrites = 0;
-/** regBits bitmap geometry — one bit per kernel record, addressed from the
- * record's premultiplied kernel id. Same-file const enum (inlines as literals). */
-const enum RegBit {
-	/** kernelId >>> ID_TO_ORDINAL_SHIFT: premultiplied kernel id (record stride 8) → dense record ordinal. */
-	ID_TO_ORDINAL_SHIFT = 3,
-	/** ordinal >>> ORDINAL_TO_WORD_SHIFT: record ordinal → index of its 32-bit bitmap word. */
-	ORDINAL_TO_WORD_SHIFT = 5,
-	/** ordinal & BIT_IN_WORD_MASK: the ordinal's bit position within its bitmap word. */
-	BIT_IN_WORD_MASK = 31,
-	/** (word >>> pos) & LOW_BIT isolates the addressed registration bit. */
-	LOW_BIT = 1,
+// ---- One Core probes (referee surface) --------------------------------------------
+// Module-wide counters proving the zero-cost promise behaviorally: with no
+// bridge registered, heavy signal traffic must leave every one of these at
+// its baseline (tests/one-core.spec.ts). Engine logic never reads them.
+let probeReceipts = 0;
+let probeTokens = 0;
+let probeWorldEvals = 0;
+let probeBridgeEvents = 0;
+let probeBridges = 0;
+
+/** Referee surface — cheap engine-activity counters for the zero-cost test. @internal */
+export function __coreProbes(): { receipts: number; tokens: number; worldEvals: number; bridgeEvents: number; bridges: number } {
+	return { receipts: probeReceipts, tokens: probeTokens, worldEvals: probeWorldEvals, bridgeEvents: probeBridgeEvents, bridges: probeBridges };
 }
 
-/** One bit per kernel record (id is a multiple of 8): 1 = registered atom. */
-let regBits = new Int32Array(64);
+// ---- the host-hook implementations (installed into index.ts's public methods) -----
 
-function setRegistered(kernelId: KernelId): void {
-	const idx = kernelId >>> RegBit.ID_TO_ORDINAL_SHIFT;
-	const word = idx >>> RegBit.ORDINAL_TO_WORD_SHIFT;
-	if (word >= regBits.length) {
-		const grown = new Int32Array(Math.max(word + 1, regBits.length * 2));
-		grown.set(regBits);
-		regBits = grown;
-	}
-	regBits[word]! |= 1 << (idx & RegBit.BIT_IN_WORD_MASK);
+/** Rebuild an Op from the public method's scalar (kind, payload) pair. */
+function opOf(kind: HostOpKind, payload: unknown): Op {
+	if (kind === 0) return { kind: 'set', value: payload };
+	if (kind === 1) return { kind: 'update', fn: payload as (prev: Value) => Value };
+	return { kind: 'dispatch', action: payload };
 }
 
 /**
- * The logged operation table: the base table plus (a) classification of
- * public writes to REGISTERED atoms into the ambient default batch (a write
- * belongs to the batch context in which it executes; at this seam no React
- * context is visible, so ambient is the only classification — the bindings
- * layer supplies richer context via `bridge.write`), and (b) world routing
- * for public reads of registered atoms while an overlay world evaluation is
- * on stack. TODO(perf): serve routed reads from the kernel cache when the
- * node's touched word is clean (no pending batch touched it, no taint)
- * instead of entering the world-fold machinery; do this if registered-read
- * cost shows up in render profiles. Unregistered nodes take the base paths
- * untouched, so an armed-but-quiet bridge costs plain code near nothing.
- *
- * NOTE for the bindings stage: public `Atom.update`/`dispatch` reach this
- * table with the updater already folded (index.ts computes the value under
- * the fold guard), so ambient receipts minted HERE carry `set(value)` ops.
- * Bindings must route update/dispatch through `bridge.write` (op-preserving)
- * for replay fidelity; the bridge surface already takes whole ops.
+ * The host write interceptor: a public write is attributable to a batch when
+ * a bridge is registered and the write is not the bridge's own kernel apply.
+ * The bindings' classifier (when installed) owns classification — batch
+ * context, adoption-on-first-write, render guard; without bindings, writes to
+ * REGISTERED atoms classify into the ambient default batch and everything
+ * else takes the plain kernel path.
  */
-function makeLoggedFactory(
-	direct: (records: number, carry?: Int32Array) => EngineTable,
-): (records: number, carry?: Int32Array) => EngineTable {
-	return (records: number, carry?: Int32Array): EngineTable => {
-		const inner = direct(records, carry);
-		const innerRead = inner.read;
-		const innerWrite = inner.write;
-		return {
-			...inner,
-			read(s: KernelId): unknown {
-				if (routeReads !== 0) {
-					const idx = s >>> RegBit.ID_TO_ORDINAL_SHIFT;
-					if ((regBits[idx >>> RegBit.ORDINAL_TO_WORD_SHIFT]! >>> (idx & RegBit.BIT_IN_WORD_MASK)) & RegBit.LOW_BIT) {
-						const b = activeBridge;
-						if (b !== undefined && b.activeWorld !== undefined) {
-							const la = b.byKernelId.get(s);
-							if (la !== undefined) return b.routedRead(la);
-						}
-					}
-				}
-				return innerRead(s);
-			},
-			write(s: KernelId, value: unknown): boolean {
-				if (routeWrites !== 0) {
-					const idx = s >>> RegBit.ID_TO_ORDINAL_SHIFT;
-					if ((regBits[idx >>> RegBit.ORDINAL_TO_WORD_SHIFT]! >>> (idx & RegBit.BIT_IN_WORD_MASK)) & RegBit.LOW_BIT) {
-						const b = activeBridge;
-						if (b !== undefined) {
-							const la = b.byKernelId.get(s);
-							if (la !== undefined) {
-								b.bareWrite(la, { kind: 'set', value });
-								return false; // the bridge's own kernel apply already flushed
-							}
-						}
-					}
-				}
-				return innerWrite(s, value);
-			},
-		};
-	};
+function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown): boolean {
+	const b = activeBridge;
+	if (b === undefined || bridgeApplying) {
+		return false; // no host / the host's own kernel apply: plain path
+	}
+	// Policy first, capture second: a write the policy layer rejects
+	// (forbidWritesInComputeds) must throw BEFORE any receipt can land.
+	__assertHostWritable();
+	const classify = b.writeClassifier;
+	if (classify !== undefined) {
+		classify(atom, kind, payload);
+		return true;
+	}
+	const node = b.byKernelId.get(atom._id);
+	if (node === undefined) {
+		return false; // unregistered and no adopter: exactly base semantics
+	}
+	b.bareWrite(node, opOf(kind, payload));
+	return true;
 }
 
-function armTableOnce(): void {
-	if (!tableInstalled) {
-		__installTwinTable(makeLoggedFactory);
-		tableInstalled = true;
-	}
+/** The host read router (armed only while a routing context is live). */
+function hostReadImpl(atom: Atom<unknown>): unknown {
+	return activeBridge === undefined ? __HOST_MISS : activeBridge.hostRead(atom);
 }
 
 /**
@@ -775,7 +729,9 @@ export function registerReactBridge(): CosignalBridge {
  * records of abandoned bridges are inert). @internal
  */
 export function __newBridgeForTest(): CosignalBridge {
-	return new CosignalBridge();
+	const b = new CosignalBridge();
+	b.setRetainEvents(true); // the referee/tests read the event log; production bridges keep it off
+	return b;
 }
 
 // ---- the bridge -----------------------------------------------------------------
@@ -810,9 +766,102 @@ export class CosignalBridge {
 	/**
 	 * The trace recorder slot. `undefined` (the permanent state unless
 	 * `cosignal/trace` attaches): every site pays one check, nothing else.
-	 * Assigned only by `attachTracer`/`Tracer.stop` over there.
+	 * Assigned only by `attachTracer`/`Tracer.stop` over there; the accessor
+	 * keeps `eventsOn` in sync (a live tracer consumes the event stream, so
+	 * events must mint while one is attached).
 	 */
-	trace: TraceHooks | undefined = undefined;
+	private _trace: TraceHooks | undefined = undefined;
+	get trace(): TraceHooks | undefined {
+		return this._trace;
+	}
+	set trace(v: TraceHooks | undefined) {
+		this._trace = v;
+		this.eventsOn = this._retainEvents || v !== undefined;
+	}
+
+	/**
+	 * EVENT MINTING GATE. The BridgeEvent log is the referee/tracing surface
+	 * (oracle lockstep comparisons, tests, devtools); the bindings consume
+	 * direct listeners instead (below). Nothing consuming the log means no
+	 * event objects mint at all — this was the measured one-object-per-write
+	 * allocation floor. True while a referee retains events or a tracer is
+	 * attached; every `log()` call site is gated on it.
+	 */
+	eventsOn = false;
+	private _retainEvents = false;
+
+	/** Referee surface — retain the BridgeEvent log (tests/diagnostics). */
+	setRetainEvents(on: boolean): void {
+		this._retainEvents = on;
+		this.eventsOn = on || this._trace !== undefined;
+	}
+
+	// ---- direct listeners (the bindings' consumption surface; no allocation) ----
+	// Listener callbacks are DELIVERED AT THE OPERATION BOUNDARY — queued into
+	// reusable columns during the walk and invoked after the public operation's
+	// own mutations complete (the same timing the bindings' old post-op event
+	// drain had), so a listener can never re-enter a half-finished operation.
+	/** A value-blind delivery reached a live watcher (fresh or interleaved). */
+	onDelivery: ((w: Watcher, token: Token, slot: SlotId) => void) | undefined;
+	/** Mount fixup scheduled a corrective re-render into a live batch's lane. */
+	onMountCorrective: ((w: Watcher, token: Token, slot: SlotId) => void) | undefined;
+	/** An urgent pre-paint correction (mount window / committed-truth drift). */
+	onCorrection: ((w: Watcher) => void) | undefined;
+	/** A dev-warning heuristic fired. */
+	onDevWarning: ((message: string) => void) | undefined;
+
+	// Queued-notification columns (reused across operations; no per-notify objects).
+	private notifyKinds: number[] = []; // 0 delivery, 1 mount-corrective, 2 correction, 3 dev-warning
+	private notifyWs: (Watcher | undefined)[] = [];
+	private notifyTs: (Token | undefined)[] = [];
+	private notifySlots: SlotId[] = [];
+	private notifyMsgs: (string | undefined)[] = [];
+	private notifyN = 0;
+	private notifyFlushing = false;
+
+	private queueNotify(kind: number, w: Watcher | undefined, t: Token | undefined, slot: SlotId, msg: string | undefined): void {
+		const i = this.notifyN++;
+		this.notifyKinds[i] = kind;
+		this.notifyWs[i] = w;
+		this.notifyTs[i] = t;
+		this.notifySlots[i] = slot;
+		this.notifyMsgs[i] = msg;
+	}
+
+	/** Invokes queued listeners at the end of the public operation. A nested
+	 * public operation started BY a listener appends behind the live bound
+	 * and drains in the same sweep (the flushing flag stops nested sweeps). */
+	private flushNotify(): void {
+		if (this.notifyN === 0 || this.notifyFlushing) return;
+		this.notifyFlushing = true;
+		try {
+			for (let i = 0; i < this.notifyN; i++) {
+				const kind = this.notifyKinds[i]!;
+				const w = this.notifyWs[i];
+				const t = this.notifyTs[i];
+				const msg = this.notifyMsgs[i];
+				this.notifyWs[i] = undefined; // release object refs eagerly
+				this.notifyTs[i] = undefined;
+				this.notifyMsgs[i] = undefined;
+				if (kind === 0) {
+					const l = this.onDelivery;
+					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
+				} else if (kind === 1) {
+					const l = this.onMountCorrective;
+					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
+				} else if (kind === 2) {
+					const l = this.onCorrection;
+					if (l !== undefined) l(w!);
+				} else {
+					const l = this.onDevWarning;
+					if (l !== undefined) l(msg!);
+				}
+			}
+		} finally {
+			this.notifyN = 0;
+			this.notifyFlushing = false;
+		}
+	}
 
 	/** Direct (base-like) until registerBridge(); direct writes leave no receipts. */
 	mode: 'direct' | 'logged' = 'direct';
@@ -891,6 +940,37 @@ export class CosignalBridge {
 	byKernelId = new Map<KernelId, AtomNode>();
 	/** The world an overlay evaluation frame is folding in (logged-table read routing). */
 	activeWorld: World | undefined;
+	/**
+	 * The bindings' ambient-world provider: consulted per routed read when no
+	 * evaluation world is on stack, and answers from the LIVE call context —
+	 * the pass world of the render actually running on the current stack, the
+	 * committed world of an effect fire — or undefined for "route newest".
+	 * A callback (not a start-to-end flag) deliberately: a pass that has
+	 * COMPLETED but not yet committed is not "in render" (the protocol's
+	 * render context is null there), so outside-render reads in that window
+	 * must resolve newest, and interleaved multi-root renders must each see
+	 * their own pass.
+	 */
+	private worldProvider: (() => World | undefined) | undefined;
+
+	/** Installs/clears the ambient-world provider (bindings seam). */
+	setWorldProvider(provider: (() => World | undefined) | undefined): void {
+		this.worldProvider = provider;
+		this.syncReadRouting();
+	}
+
+	// ---- bindings seams (ordinary public slots the React shim assigns) ----
+	/**
+	 * Write classification for host-attributable public writes. When set, it
+	 * owns the WHOLE op (adoption on first write, batch context, render
+	 * guard); when unset, registered atoms classify into the ambient batch.
+	 */
+	writeClassifier: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => void) | undefined;
+	/** Adopt-on-demand for routed reads of not-yet-registered atoms. */
+	readAdopter: ((atom: Atom<unknown>) => AtomNode) | undefined;
+	/** Observes every routed public read (node, world value) — the bindings
+	 * feed evaluation read-logs / effect dependency snapshots from it. */
+	readObserver: ((node: AtomNode, value: Value) => void) | undefined;
 
 	private nextNode = 1;
 	private nextToken = 1;
@@ -904,6 +984,7 @@ export class CosignalBridge {
 	inFoldCallback = false;
 
 	constructor() {
+		probeBridges++; // One Core probe (referee surface)
 		for (let i = 0; i < SLOT_COUNT; i++) {
 			this.slots.push({
 				id: i,
@@ -917,13 +998,58 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Central activeWorld setter — keeps the module routing word in sync. */
+	/** Central activeWorld setter — keeps the read-routing seams in sync. */
 	private setWorld(w: World | undefined): void {
 		this.activeWorld = w;
-		if (activeBridge === this) routeReads = w === undefined ? 0 : 1;
+		this.syncReadRouting();
+	}
+
+	/** Arms/disarms the core's host read hook: armed while an evaluation
+	 * world is on stack OR a provider could answer — so a provider-less
+	 * quiet host costs reads exactly one undefined-check. */
+	private syncReadRouting(): void {
+		if (activeBridge !== this) return;
+		const armed = this.activeWorld !== undefined || this.worldProvider !== undefined;
+		__setHostRead(armed ? hostReadImpl : undefined);
+	}
+
+	/** The world a routed read resolves in RIGHT NOW: the evaluation world on
+	 * stack, else whatever the provider derives from the live call context. */
+	private effectiveWorld(): World | undefined {
+		if (this.activeWorld !== undefined) return this.activeWorld;
+		const p = this.worldProvider;
+		return p === undefined ? undefined : p();
+	}
+
+	/**
+	 * The host read hook's target: route a public read to the effective
+	 * world, adopting unregistered atoms on demand when the bindings provided
+	 * an adopter. Returns __HOST_MISS to take the plain kernel path.
+	 * @internal (reached only through index.ts's `Atom.state`)
+	 */
+	hostRead(atom: Atom<unknown>): unknown {
+		// Fold purity: replayed updaters/reducers (and equals callbacks) must
+		// not read signals — world routing would otherwise serve them silently.
+		if (this.inFoldCallback) {
+			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+		}
+		const world = this.effectiveWorld();
+		if (world === undefined) {
+			return __HOST_MISS;
+		}
+		let node = this.byKernelId.get(atom._id);
+		if (node === undefined) {
+			const adopt = this.readAdopter;
+			if (adopt === undefined) {
+				return __HOST_MISS;
+			}
+			node = adopt(atom);
+		}
+		return this.routedRead(node, world);
 	}
 
 	private log(e: BridgeEvent): void {
+		probeBridgeEvents++; // One Core probe (referee surface)
 		this.events.push(e);
 		const cap = this.eventCapacity;
 		if (cap !== undefined && this.events.length >= cap * 2) {
@@ -965,11 +1091,10 @@ export class CosignalBridge {
 			throw new BridgeScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
 		if (this.mode === 'logged') throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
-		armTableOnce(); // asserts enterDepth === 0 and rebuilds E over the carried buffers
 		this.mode = 'logged';
 		activeBridge = this;
-		routeWrites = 1;
-		routeReads = this.activeWorld === undefined ? 0 : 1;
+		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
+		this.syncReadRouting();
 	}
 
 	/** Registers a node id in the dense side columns. */
@@ -988,7 +1113,6 @@ export class CosignalBridge {
 		const node = new AtomNode(this.nextNode++, name, initial, eq, equals === undefined, handle);
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
-		setRegistered(handle._id);
 		return node;
 	}
 
@@ -1003,7 +1127,6 @@ export class CosignalBridge {
 		const node = new AtomNode(this.nextNode++, name, current, equals ?? Object.is, equals === undefined, handle);
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
-		setRegistered(handle._id);
 		return node;
 	}
 
@@ -1103,11 +1226,14 @@ export class CosignalBridge {
 			case 'set':
 				return op.value;
 			case 'update':
-				return this.inCallback(() => op.fn(prev));
+				// Replayed updaters run under BOTH fold guards: the bridge's
+				// (bridge reads throw) and the kernel's POISON table (raw
+				// public reads/writes throw exactly as in the unhosted path).
+				return this.inCallback(() => __hostRunFold(() => op.fn(prev)));
 			case 'dispatch': {
 				const reducer = atom.reducer;
 				if (reducer === undefined) throw new BridgeScheduleError(`dispatch on non-reducer atom ${atom.name}`);
-				return this.inCallback(() => reducer(prev, op.action));
+				return this.inCallback(() => __hostRunFold(() => reducer(prev, op.action)));
 			}
 		}
 	}
@@ -1189,10 +1315,10 @@ export class CosignalBridge {
 
 	private applyOpPacked(atom: AtomNode, kind: OpKind, payload: unknown, prev: Value): Value {
 		if (kind === OpKind.SET) return payload;
-		if (kind === OpKind.UPDATE) return this.inCallback(() => (payload as (p: Value) => Value)(prev));
+		if (kind === OpKind.UPDATE) return this.inCallback(() => __hostRunFold(() => (payload as (p: Value) => Value)(prev)));
 		const reducer = atom.reducer;
 		if (reducer === undefined) throw new BridgeScheduleError(`dispatch on non-reducer atom ${atom.name}`);
-		return this.inCallback(() => reducer(prev, payload));
+		return this.inCallback(() => __hostRunFold(() => reducer(prev, payload)));
 	}
 
 	/** Referee surface — called only by the oracle's `checkInvariants` (via the
@@ -1213,10 +1339,13 @@ export class CosignalBridge {
 	 * to be intercepted by the world-routing read hook. */
 	private kernelValueOf(handle: Atom<Value>): Value {
 		const saved = this.activeWorld;
+		const savedProvider = this.worldProvider;
+		this.worldProvider = undefined;
 		this.setWorld(undefined); // never let the world router intercept a kernel-plane read
 		try {
 			return handle.state;
 		} finally {
+			this.worldProvider = savedProvider;
 			this.setWorld(saved);
 		}
 	}
@@ -1345,10 +1474,13 @@ export class CosignalBridge {
 	 * never see) and serve the world value.
 	 * @internal (called from the logged table wrapper)
 	 */
-	routedRead(atom: AtomNode): Value {
+	routedRead(atom: AtomNode, world: World): Value {
 		const sink = this.currentSink;
 		if (sink !== 0) this.recordEdge(atom.id, sink);
-		return this.atomValue(atom, this.activeWorld!);
+		const v = this.atomValue(atom, world);
+		const ro = this.readObserver;
+		if (ro !== undefined) ro(atom, v);
+		return v;
 	}
 
 	/** Atom value in a world: kernel for newest, memoized fold otherwise. */
@@ -1419,6 +1551,7 @@ export class CosignalBridge {
 	 * be pure); per-world cycles throw instead of recursing.
 	 */
 	evaluate(node: AnyNode, world: World): Value {
+		probeWorldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		if (node.kind === 'atom') return this.atomValue(node, world);
 		const plane = this.memoPlaneOf(world);
@@ -1818,6 +1951,7 @@ export class CosignalBridge {
 			throw new BridgeScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
 		const parked = opts?.action ?? false;
+		probeTokens++; // One Core probe (referee surface)
 		const token: Token = {
 			id: this.nextToken++, priority,
 			action: opts?.action ?? false,
@@ -1872,7 +2006,7 @@ export class CosignalBridge {
 				return ra - rb;
 			});
 			const victim = candidates[0]!;
-			this.log({ type: 'slot-backstop-released', slot: victim.id, token: victim.tenant! });
+			if (this.eventsOn) this.log({ type: 'slot-backstop-released', slot: victim.id, token: victim.tenant! });
 			this.releaseSlot(victim);
 			free = victim;
 		}
@@ -1899,7 +2033,7 @@ export class CosignalBridge {
 			const clear = ~(1 << free.id);
 			for (const w of this.watchers.values()) w.dedupBits &= clear; // dedup clear at re-intern
 		}
-		this.log({ type: 'slot-claimed', slot: free.id, token: token.id });
+		if (this.eventsOn) this.log({ type: 'slot-claimed', slot: free.id, token: token.id });
 		return free;
 	}
 
@@ -1908,7 +2042,7 @@ export class CosignalBridge {
 		if (tenant !== undefined) {
 			slot.carriedMaxRetiredSeq = Math.max(slot.carriedMaxRetiredSeq, tenant.retiredSeq ?? 0);
 			tenant.slot = undefined; // identity release; receipts keep their denormalized slot
-			this.log({ type: 'slot-released', slot: slot.id, token: tenant.id });
+			if (this.eventsOn) this.log({ type: 'slot-released', slot: slot.id, token: tenant.id });
 		}
 		slot.tenant = undefined;
 		slot.releasePending = false;
@@ -1929,7 +2063,8 @@ export class CosignalBridge {
 		// pending usually means a post-await write that lost its transition
 		// context (an async continuation runs on a fresh call stack).
 		if (this.parkedCount > 0) {
-			this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope' });
+			if (this.eventsOn) this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope' });
+			if (this.onDevWarning !== undefined) this.queueNotify(3, undefined, undefined, 0, 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
 		}
 		this.write(ambient.id, node, op);
 	}
@@ -1965,6 +2100,7 @@ export class CosignalBridge {
 			this.directFlushCoreEffects();
 			const tr = this.trace;
 			if (tr !== undefined) tr.opEnd();
+			this.flushNotify();
 			return;
 		}
 		if (tokenId === undefined) {
@@ -1989,17 +2125,19 @@ export class CosignalBridge {
 		if (tp.n === tp.start) {
 			if (op.kind === 'set' && node.eqIsDefault) {
 				if (Object.is(op.value, node.base)) {
-					this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+					if (this.eventsOn) this.log({ type: 'write-dropped', node: node.name, token: tokenId });
 					const tr = this.trace;
 					if (tr !== undefined) tr.opEnd();
+					this.flushNotify();
 					return;
 				}
 			} else {
 				const evaluated = this.applyOp(node, op, node.base);
 				if (this.inCallback(() => node.equals(evaluated, node.base))) {
-					this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+					if (this.eventsOn) this.log({ type: 'write-dropped', node: node.name, token: tokenId });
 					const tr = this.trace;
 					if (tr !== undefined) tr.opEnd();
+					this.flushNotify();
 					return;
 				}
 			}
@@ -2030,7 +2168,7 @@ export class CosignalBridge {
 			const tr = this.trace;
 			if (tr !== undefined) tr.receipt(node, tp.entryAt(tp.n - 1));
 		}
-		this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
+		if (this.eventsOn) this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
 
 		// Apply to the kernel eagerly with stepwise equality, so the newest
 		// world stays directly readable off the kernel plane.
@@ -2054,20 +2192,19 @@ export class CosignalBridge {
 		this.flushEffectQueue();
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
+		this.flushNotify();
 	}
 
-	/** The one K0 write site: routes through the base build's public write
-	 * path (index.ts's policy layer), so equality drop and effect flush apply. */
+	/** The one K0 write site: routes through the core's public write path
+	 * (index.ts's policy layer), so equality drop and effect flush apply; the
+	 * bridgeApplying guard makes the host write hook wave it through. */
 	private applyToKernel(node: AtomNode, value: Value): void {
 		const saved = bridgeApplying;
-		const savedRoute = routeWrites;
 		bridgeApplying = true;
-		routeWrites = 0; // the wrapper must not re-classify the bridge's own kernel apply
 		try {
 			node.handle.set(value);
 		} finally {
 			bridgeApplying = saved;
-			routeWrites = savedRoute;
 		}
 	}
 
@@ -2081,7 +2218,8 @@ export class CosignalBridge {
 		const bit = 1 << slot.id;
 		if ((w.dedupBits & bit) === 0) {
 			w.dedupBits |= bit;
-			this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'fresh' });
+			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'fresh' });
+			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id, undefined);
 			return;
 		}
 		// Bit set: suppress iff NO started-and-uncommitted pass on the
@@ -2091,9 +2229,10 @@ export class CosignalBridge {
 		// One open pass per root ⇒ one registry load + two compares.
 		const p = this.openPassByRoot.get(w.root);
 		if (p !== undefined && ((p.maskBits >>> slot.id) & SlotBits.LOW_BIT) === 1 && p.pin < seq) {
-			this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'interleaved' });
+			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'interleaved' });
+			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id, undefined);
 		} else {
-			this.log({ type: 'suppressed', watcher: w.name, token: token.id, slot: slot.id, seq });
+			if (this.eventsOn) this.log({ type: 'suppressed', watcher: w.name, token: token.id, slot: slot.id, seq });
 		}
 	}
 
@@ -2108,7 +2247,7 @@ export class CosignalBridge {
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
 				e.runs++;
-				this.log({ type: 'core-effect-run', effect: e.name, value });
+				if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
 			}
 		}
 		q.length = 0;
@@ -2121,7 +2260,7 @@ export class CosignalBridge {
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
 				e.runs++;
-				this.log({ type: 'core-effect-run', effect: e.name, value });
+				if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
 			}
 		}
 	}
@@ -2363,11 +2502,12 @@ export class CosignalBridge {
 		}
 		if (kind === 'discard') {
 			for (const wid of p.mounted) this.dropWatcher(wid); // never subscribed; the tree died
-			this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
+			if (this.eventsOn) this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
 			this.reevaluateDeferredReleases();
 			this.reclaimAfterPassEnd(p);
 			const tr = this.trace;
 			if (tr !== undefined) tr.opEnd();
+			this.flushNotify();
 			return;
 		}
 		// (1) Baseline capture at the commit's committed-side entry.
@@ -2397,7 +2537,7 @@ export class CosignalBridge {
 				if (t.slot !== undefined) root.committedBits |= 1 << t.slot;
 				root.commitGen++;
 				this.cas = this.mintSeq(); // committed-advance: every per-root commit bumps it
-				this.log({ type: 'per-root-commit', root: p.root, token: t.id });
+				if (this.eventsOn) this.log({ type: 'per-root-commit', root: p.root, token: t.id });
 				// (3) durable drain: the advanced slot's touched list plus any
 				// member-slot write drift, scoped to this root's committed
 				// observers.
@@ -2426,11 +2566,12 @@ export class CosignalBridge {
 			const committedNow = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: p.root });
 			if (!Object.is(committedNow, w.lastRenderedValue)) this.markRestaled(w);
 		}
-		this.log({ type: 'pass-committed', pass: p.id, root: p.root });
+		if (this.eventsOn) this.log({ type: 'pass-committed', pass: p.id, root: p.root });
 		this.reevaluateDeferredReleases();
 		this.reclaimAfterPassEnd(p);
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
+		this.flushNotify();
 	}
 
 	/**
@@ -2503,6 +2644,7 @@ export class CosignalBridge {
 		this.retireInternal(t, committed);
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
+		this.flushNotify();
 	}
 
 	/** The async action's promise settled; the protocol host then retires the token. */
@@ -2516,6 +2658,7 @@ export class CosignalBridge {
 		if (tr !== undefined) tr.batchSettle(t, committed);
 		this.retireInternal(t, committed);
 		if (tr !== undefined) tr.opEnd();
+		this.flushNotify();
 	}
 
 	/**
@@ -2564,7 +2707,7 @@ export class CosignalBridge {
 		if (touchedAny) this.cas = this.mintSeq();
 		// Fold/compaction (see compactAll for the two-clause predicate).
 		this.compactAll();
-		this.log({ type: 'retired', token: t.id, committed, retiredSeq });
+		if (this.eventsOn) this.log({ type: 'retired', token: t.id, committed, retiredSeq });
 		// Durable drains: enumerate the flipped slot's touched list (never
 		// only a consumable write-time queue — entries must survive until a
 		// drain actually reconciles them) and reconcile/revalidate that cone
@@ -2778,9 +2921,10 @@ export class CosignalBridge {
 			const w = ws[i]!;
 			const now = this.evaluate(this.nodeById(w.node), world);
 			if (!Object.is(now, w.lastRenderedValue)) {
-				this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
+				if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
+				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0, undefined);
 			}
 		}
 		for (let i = 0; i < es.length; i++) {
@@ -2789,7 +2933,7 @@ export class CosignalBridge {
 			if (!Object.is(now, e.lastValue)) {
 				e.lastValue = now;
 				e.runs++;
-				this.log({ type: 'react-effect-run', effect: e.name, root: rootId, value: now });
+				if (this.eventsOn) this.log({ type: 'react-effect-run', effect: e.name, root: rootId, value: now });
 			}
 		}
 		ws.length = 0;
@@ -2832,9 +2976,10 @@ export class CosignalBridge {
 			const slot = this.slots[t.slot]!;
 			// Fully included (slot ∈ includedSet ∧ no post-pin write): skip — never by value.
 			if (w.snapshot.includedSlots.has(slot.id) && slot.writeClock <= w.snapshot.pin) continue;
-			this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
+			if (this.eventsOn) this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
 			correctedLive.add(t.id);
 			w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into t's lane (the protocol's runInBatch)
+			if (this.onMountCorrective !== undefined) this.queueNotify(1, w, t, slot.id, undefined);
 		}
 		// The four-conjunct fast-out: same pass, no committed-truth advance,
 		// no per-root commit, clocks quiet. The clock conjunct checks the
@@ -2877,9 +3022,10 @@ export class CosignalBridge {
 			return; // zero corrections — value-neutral modulo scheduled correctives
 		}
 		if (!Object.is(vFx, w.lastRenderedValue)) {
-			this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
+			if (this.eventsOn) this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
 			w.lastRenderedValue = vFx; // urgent pre-paint correction
 			w.dedupBits = 0;
+			if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0, undefined);
 			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctedLive.size);
 			return;
 		}
@@ -2999,9 +3145,10 @@ export class CosignalBridge {
 			s.releasePending = false;
 		}
 		for (const w of this.watchers.values()) w.dedupBits = 0;
-		this.log({ type: 'epoch-reset', epoch: this.epoch });
+		if (this.eventsOn) this.log({ type: 'epoch-reset', epoch: this.epoch });
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
+		this.flushNotify();
 	}
 
 	/**
@@ -3068,10 +3215,6 @@ export class CosignalBridge {
 	}
 }
 
-// ---- the twin public surface -----------------------------------------------------
-// The logged entry re-exports the entire base API: application code imports
-// one path or the other, never both; only this entry can arm the bridge.
-// `registerReactBridge`, the bridge class, and the bridge-surface types are
-// the additions.
-
-export * from './index.js';
+// One Core: this module is internal machinery of the single `cosignal` entry
+// (src/index.ts imports and re-exports it). It adds `registerReactBridge`,
+// the bridge class, and the bridge-surface types to the base API.

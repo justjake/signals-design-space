@@ -96,33 +96,28 @@
  *      microtask flap damping; the fold-purity and writes-in-computeds
  *      disciplines.
  *
- * ─── THE OPERATION-TABLE SEAM ────────────────────────────────────────────────
+ * ─── ONE CORE, ONE ENTRY ─────────────────────────────────────────────────────
  *
  * The `Engine` record returned by `createEngine` is the engine's OPERATION
  * TABLE: the one object whose function fields are the kernel's operations.
  * Every public operation routes through the module-level binding `E`
  * (`E.read`, `E.write`, `E.computedRead`, …), and `E` is only ever replaced
- * at an operation boundary via closure rebuild — the same mechanism growth
- * uses (`boundaryWork` → `engineFactory(records, carry)`).
+ * at an operation boundary via closure rebuild — growth (`boundaryWork` →
+ * `createEngine(records, carry)`) and nothing else. All shared mutable state
+ * a rebuilt table needs (scalar heads, side columns, queue, scratch stacks)
+ * lives at module level for exactly this reason.
  *
- * In the base build the table is statically wired: `engineFactory` is
- * initialized to `createEngine` (the base table), nothing in this module
- * ever reassigns it, no other table exists, and no concurrency code is
- * imported — a bundle of this entry contains zero concurrency instructions
- * (the build-isolation test, tests/twin-build.spec.ts, asserts a base-build
- * bundle contains none). The logged build (`cosignal/logged`) shares these
- * kernel bytes: its `registerReactBridge()` — a separate entry point, never
- * imported here — asserts `enterDepth === 0` (no open evaluation/fold/walk
- * frame, i.e. an operation boundary), re-points `engineFactory` at the
- * logged factory (same `Engine` shape; `write`/`read`/`computedRead`
- * additionally append receipts, run the marking and delivery walks, and
- * route non-newest reads), then rebuilds `E` exactly once over the carried
- * buffers. Growth thereafter rebuilds through the same binding, so the swap
- * is one assignment plus one closure rebuild at an operation boundary — the
- * same pattern growth uses.
- * All shared mutable state a rebuilt table needs (scalar heads, side columns,
- * queue, scratch stacks) already lives at module level for exactly this
- * reason; nothing else in the kernel or the policy layer is table-aware.
+ * There is exactly ONE build of this library. The concurrent-worlds engine
+ * (`./logged.ts`, re-exported at the bottom of this file: `registerReactBridge`,
+ * `CosignalBridge`, the bridge types) attaches to this kernel through the
+ * HOST SEAMS — two nullable module hooks consulted FIRST in the public
+ * read/write methods (see "the host seams" section below). Sync-only apps
+ * that never register a bridge keep both hooks undefined forever: the whole
+ * concurrency feature costs one predictable `!== undefined` branch per
+ * public read/write, and zero receipts, tokens, worlds, or bridge events are
+ * ever created (tests/one-core.spec.ts asserts this behaviorally with engine
+ * probes). The only other swapped table is POISON (fold purity, below) —
+ * reachable exclusively by erroring code.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Kernel deviations from a plain transliteration of upstream alien-signals
@@ -1211,13 +1206,6 @@ const initialRecords = (() => {
 // D6: configure({initialRecords}) raises this floor; the growth loop honors it.
 let desiredRecords: RecordCount = initialRecords * Plane.RECORDS_PER_UNIT;
 
-// THE SEAM (see the header): the operation-table factory. Initialized to the
-// base table; nothing in THIS module ever reassigns it (a base-build bundle
-// const-folds it). The logged build (`cosignal/logged`) re-points it exactly
-// once through `__installTwinTable` below, then every operation — growth
-// included — routes through the logged table.
-let engineFactory: (records: RecordCount, carry?: Int32Array) => Engine = createEngine;
-
 /**
  * The fold-purity table (see runFold): every operation throws the fold error
  * (requeueAbort no-ops so flush()'s finally can never mask one). Deliberately
@@ -1253,33 +1241,71 @@ const POISON: Engine = {
 
 // Plane capacity: 3x initialRecords shared records, budgeted as
 // initialRecords node records + 2x initialRecords link records in one plane.
-let E: Engine = engineFactory(initialRecords * Plane.RECORDS_PER_UNIT);
+let E: Engine = createEngine(initialRecords * Plane.RECORDS_PER_UNIT);
+
+// ---- the host seams -------------------------------------------------------------
+// ONE CORE: there is exactly one engine and one write/read path. The
+// concurrent-worlds machinery (`./logged.ts`, re-exported at the bottom of
+// this file) is the HOST: it needs whole operations — set(value) vs
+// update(fn) vs dispatch(action) — because worlds replay recorded writes, and
+// it needs world-routed reads while a world evaluation (or a host-declared
+// ambient world, e.g. a render pass) is on stack. Both needs attach HERE, in
+// the public methods, through two nullable module hooks: undefined until a
+// bridge registers (and, for reads, only while a routing context is live), so
+// an app that never attaches a host pays exactly one `!== undefined` test per
+// public read/write — the empty-state short-circuit is the FIRST test on each
+// path — and zero receipt/world work ever runs (asserted behaviorally by
+// tests/one-core.spec.ts).
+
+/** Declined-read sentinel: the host read hook returns it to mean "not mine —
+ * take the plain kernel path". @internal */
+export const __HOST_MISS: { readonly hostMiss: true } = { hostMiss: true };
+
+/** Whole-op codes for the host write hook (0 = set, 1 = update, 2 = dispatch). @internal */
+export type HostOpKind = 0 | 1 | 2;
 
 /**
- * THE LOGGED-TABLE ATTACHMENT POINT (header: "re-points `engineFactory` at
- * the logged factory, then rebuilds `E` exactly once over the carried
- * buffers"). Called only by the logged build's (`cosignal/logged`)
- * `registerReactBridge()` — never from this module, so a base-build bundle
- * never reaches concurrency code through it. Asserts the operation-boundary
- * precondition: no live evaluation/fold/walk frame may hold the old table's
- * buffers, i.e. the swap may happen only at an operation boundary. `wrap`
- * receives the base factory and must return a factory producing tables of
- * the same `Engine` shape; growth thereafter rebuilds through the swapped
- * binding — the same pattern growth uses.
- * @internal
+ * Host write interceptor. Returns true iff the host consumed the write (the
+ * kernel apply then happens through the host's own machinery, re-entering the
+ * public method with the hook's recursion guard down). @internal
  */
-export function __installTwinTable(
-	wrap: (direct: (records: RecordCount, carry?: Int32Array) => Engine) => (records: RecordCount, carry?: Int32Array) => Engine,
-): void {
-	if (enterDepth !== 0) {
-		throw new Error('cosignal: registerReactBridge was called inside an open evaluation/fold/walk frame; it may only run at an operation boundary.');
-	}
-	engineFactory = wrap(createEngine);
-	E = engineFactory(E.records, E.buffer());
+let hostWrite: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => boolean) | undefined;
+
+/**
+ * Host read router. Armed (non-undefined) only while the host has a live
+ * routing context — a world evaluation or an ambient world; returns
+ * __HOST_MISS to decline. @internal
+ */
+let hostRead: ((atom: Atom<unknown>) => unknown) | undefined;
+
+/** @internal */
+export function __setHostWrite(fn: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => boolean) | undefined): void {
+	hostWrite = fn;
 }
 
-/** The operation-table shape the logged build's factory must produce. @internal */
-export type { Engine as EngineTable };
+/** @internal */
+export function __setHostRead(fn: ((atom: Atom<unknown>) => unknown) | undefined): void {
+	hostRead = fn;
+}
+
+/**
+ * The host's fold guard: runs a host-side updater/reducer replay under the
+ * same POISON table the base `update()`/`dispatch()` use, so raw kernel
+ * reads/writes inside a replayed op throw identically in every mode. @internal
+ */
+export function __hostRunFold<T>(fn: () => T): T {
+	return runFold(fn);
+}
+
+/**
+ * Policy checks a host must run BEFORE recording a write (a receipt must
+ * never land for a write the policy layer would have rejected). @internal
+ */
+export function __assertHostWritable(): void {
+	if (forbidWritesInComputeds && E.activeIsComputed()) {
+		throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
+	}
+}
 
 function maybeBoundary(): void {
 	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
@@ -1302,7 +1328,7 @@ function boundaryWork(): void {
 			records *= 2;
 		}
 		if (records !== E.records) {
-			E = engineFactory(records, E.buffer());
+			E = createEngine(records, E.buffer());
 		}
 	}
 }
@@ -1772,6 +1798,7 @@ export class Atom<T> {
 		if (effect !== undefined) {
 			E.markLifecycle(id);
 			const isEqual = this._isEqual;
+			const self = this as Atom<unknown>;
 			lifecycleStates.set(id, {
 				effect: effect as (ctx: AtomCtx<unknown>) => void | (() => void),
 				ctx: {
@@ -1779,9 +1806,15 @@ export class Atom<T> {
 						return untracked(() => E.read(id));
 					},
 					set(value: unknown): void {
+						if (hostWrite !== undefined && hostWrite(self, 0, value)) {
+							return;
+						}
 						writeAtom(id, isEqual, value);
 					},
 					update(fn: (current: unknown) => unknown): void {
+						if (hostWrite !== undefined && hostWrite(self, 1, fn)) {
+							return;
+						}
 						const next = runFold(() => fn(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET]));
 						writeAtom(id, isEqual, next);
 					},
@@ -1796,24 +1829,40 @@ export class Atom<T> {
 
 	/**
 	 * The atom's current value (registers a dependency inside evaluations).
-	 * Inside a fold frame the dispatch itself throws (POISON table).
+	 * With a host routing context live (world evaluation / ambient world),
+	 * the host serves the value of the world doing the asking. Inside a fold
+	 * frame the dispatch itself throws (POISON table).
 	 */
 	get state(): T {
+		const hr = hostRead;
+		if (hr !== undefined) {
+			const v = hr(this as Atom<unknown>);
+			if (v !== __HOST_MISS) {
+				return v as T;
+			}
+		}
 		return E.read(this._id) as T;
 	}
 
-	/** Replaces the atom's value. */
+	/** Replaces the atom's value. A host-attributable write is recorded whole. */
 	set(value: T): void {
+		if (hostWrite !== undefined && hostWrite(this as Atom<unknown>, 0, value)) {
+			return;
+		}
 		writeAtom(this._id, this._isEqual, value);
 	}
 
 	/**
 	 * Functional update. `fn` must be pure: it runs under the fold-purity
 	 * guard, so signal reads and writes inside it throw — read what you need
-	 * first, then update. In the logged build the updater is stored and
-	 * replayed per world; in the base build it applies immediately.
+	 * first, then update. A host-attributable update records the WHOLE op
+	 * (the updater itself, replayed per world); otherwise it applies
+	 * immediately.
 	 */
 	update(fn: (current: T) => T): void {
+		if (hostWrite !== undefined && hostWrite(this as Atom<unknown>, 1, fn)) {
+			return;
+		}
 		const id = this._id;
 		const next = runFold(() => fn(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as T));
 		writeAtom(id, this._isEqual, next);
@@ -1837,6 +1886,9 @@ export class ReducerAtom<S, A> extends Atom<S> {
 	}
 
 	dispatch(action: A): void {
+		if (hostWrite !== undefined && hostWrite(this as unknown as Atom<unknown>, 2, action)) {
+			return;
+		}
 		const id = this._id;
 		const reduce = this.reduce;
 		const next = runFold(() => reduce(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as S, action));
@@ -2007,3 +2059,11 @@ export function configure(options: ConfigureOptions): void {
 		}
 	}
 }
+
+// ---- the concurrent-worlds engine (the host) --------------------------------------
+// ONE public entry: the batch/world machinery lives in ./logged.ts and is
+// re-exported here — `registerReactBridge()`, `CosignalBridge`, the bridge
+// surface types (Seq, SlotSet, Receipt, BridgeEvent, …). Until
+// registerReactBridge() runs, none of it executes: the host seams above stay
+// undefined and every read/write short-circuits into the plain kernel path.
+export * from './logged.js';

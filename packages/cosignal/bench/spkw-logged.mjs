@@ -3,7 +3,7 @@
 // base-build child; writes run in windows of WINDOW per batch, retired
 // between windows — retirement excluded from writeNs, included in amortNs.
 // bridge.events is truncated between reps so earlier reps cannot skew later ones.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
+import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
 const SHAPE = env('SHAPE', 'bare');

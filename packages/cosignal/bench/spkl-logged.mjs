@@ -5,7 +5,7 @@
 // armed wrappers — the cost an app pays for merely loading the concurrent
 // engine. Same injected shape code as the base-build child.
 import { Atom, Computed, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
+import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 import { makeShape, SHAPE_OPS } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/spkl-shapes.mjs';
 

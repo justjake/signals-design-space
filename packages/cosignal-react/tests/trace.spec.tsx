@@ -7,7 +7,7 @@
 import { expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom } from 'cosignal/logged';
+import { Atom } from 'cosignal';
 import { attachTracer } from 'cosignal/trace';
 import { useSignal } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';

@@ -1,6 +1,6 @@
 /**
  * cosignal-react — the protocol shim. One Shim instance couples one
- * CosignalBridge (the concurrent engine from `cosignal/logged`) to a React
+ * CosignalBridge (the concurrent engine of `cosignal`) to a React
  * build implementing the cosignal external-runtime protocol, version 1.
  * Stock React never reveals when it starts, pauses, commits, or discards a
  * render pass — which is exactly what an external store must know to stay
@@ -24,26 +24,33 @@
  *    one kept pending until its promise settles); onRootCommitted ->
  *    idempotent reconciliation of the root's committed-batch table +
  *    effect re-checks.
- *  - bridge event log -> React: after every bridge call the shim drains the
- *    events it appended and translates deliveries / mount correctives /
- *    urgent corrections into setStates via unstable_runInBatch, so each
- *    corrective re-render is scheduled in the lane of the batch that caused
- *    it and the whole update renders and commits together. Deliveries are
- *    value-blind: the bridge decides who must re-render, the shim only
+ *  - bridge listeners -> React: the shim registers direct listeners on the
+ *    bridge (onDelivery / onMountCorrective / onCorrection / onDevWarning);
+ *    the bridge invokes them at each operation's end, and the shim turns
+ *    deliveries and mount correctives into setStates via unstable_runInBatch,
+ *    so each corrective re-render is scheduled in the lane of the batch that
+ *    caused it and the whole update renders and commits together. Deliveries
+ *    are value-blind: the bridge decides who must re-render, the shim only
  *    schedules. Tokens with no live protocol counterpart take
  *    unstable_runInBatch's discrete-urgent fallback. The protocol permits
- *    scheduling updates from its yield and commit callbacks, so translating
+ *    scheduling updates from its yield and commit callbacks, so listening
  *    at those points is legal (writes during render are not, and throw).
+ *    The bridge's BridgeEvent LOG is a referee/tracing surface only: it does
+ *    not mint unless a referee retains it or a tracer attaches.
  *  - write classification — the rule: a write belongs to the batch context
- *    in which it executes. Adopted atoms' set/update/dispatch route through
- *    bridge.write as WHOLE operations, because worlds replay receipts: the
- *    public Atom.update/dispatch would fold a functional update against the
- *    one current value before the engine ever saw it, so the shim
- *    intercepts at the method level. The batch is read from the protocol's
+ *    in which it executes. The CORE's public Atom.set/update/dispatch
+ *    capture host-attributable writes as WHOLE operations (worlds replay
+ *    receipts, so a functional update must reach the engine unfolded) and
+ *    hand them to the classifier this shim installs on the bridge
+ *    (`bridge.writeClassifier`). The batch is read from the protocol's
  *    write-context API (unstable_getCurrentWriteBatch /
  *    unstable_isCurrentWriteDeferred); token 0 (no context) falls back to
  *    the bridge's ambient default batch (the engine-opened batch that
- *    adopts writes made outside any explicit batch).
+ *    adopts writes made outside any explicit batch). Raw `.state` reads
+ *    route through the core's host read hook into the bridge's effective
+ *    world (evaluation world, else the ambient world this shim maintains
+ *    around render passes and effect fires) — no prototype patching
+ *    anywhere.
  *  - Suspense capsules: a capsule is the shim's cache record for one
  *    ctx.use call — the thenable plus the inputs that produced it, so the
  *    same async work is reused instead of refetched. ctx.use inside bound
@@ -56,11 +63,10 @@
  */
 
 import * as React from 'react';
-import { Atom, ReducerAtom, SuspendedRead } from 'cosignal/logged';
+import { Atom, ReducerAtom, SuspendedRead } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
-	BridgeEvent,
 	ComputedNode,
 	CosignalBridge,
 	Op,
@@ -70,7 +76,7 @@ import type {
 	TokenId,
 	Value,
 	Watcher,
-} from 'cosignal/logged';
+} from 'cosignal';
 
 // ---- handshake -------------------------------------------------------------------
 
@@ -172,18 +178,17 @@ type EvalFrame = {
 };
 
 const BOUND: unique symbol = Symbol('cosignal-react.bound');
-/** Marks the shim's un-routed twin handles — the private handles the bridge
- * uses to apply folded values to the kernel (cosignal's core engine, which
- * holds the single newest value of every atom); those applies must bypass
- * prototype routing. */
-const TWIN: unique symbol = Symbol('cosignal-react.twin');
 type BoundState = { shim: Shim; node: AtomNode };
-type PatchableAtom = Atom<unknown> & { [BOUND]?: BoundState; [TWIN]?: boolean };
+type BindableAtom = Atom<unknown> & { [BOUND]?: BoundState };
 
-const originalStateGet = Object.getOwnPropertyDescriptor(Atom.prototype, 'state')!.get as (this: unknown) => unknown;
-const originalSet = Atom.prototype.set;
-const originalUpdate = Atom.prototype.update;
-const originalDispatch = ReducerAtom.prototype.dispatch;
+/** Whole-op codes shared with the engine's host write seam. */
+type HostOpKind = 0 | 1 | 2;
+
+function opOf(kind: HostOpKind, payload: unknown): Op {
+	if (kind === 0) return { kind: 'set', value: payload };
+	if (kind === 1) return { kind: 'update', fn: payload as (prev: Value) => Value };
+	return { kind: 'dispatch', action: payload };
+}
 
 let nextRootSerial = 1;
 let nextEffectSerial = 1;
@@ -198,40 +203,6 @@ export function setActiveShim(shim: Shim | undefined): void {
 export function getActiveShim(): Shim | undefined {
 	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined;
 }
-
-/**
- * Prototype-level routing, installed once at module load: importing
- * cosignal-react opts the process into the logged build's bindings. The
- * plain `cosignal` entry's module graph never reaches this file, so apps
- * that skip this package still carry zero concurrency code. With no active
- * shim, or on twin handles, every member falls through to the original.
- */
-function installPrototypeRouting(): void {
-	Object.defineProperty(Atom.prototype, 'state', {
-		configurable: true,
-		get(this: PatchableAtom): unknown {
-			const shim = this[TWIN] === true ? undefined : getActiveShim();
-			if (shim === undefined) return originalStateGet.call(this);
-			return shim.readState(this);
-		},
-	});
-	Atom.prototype.set = function (this: PatchableAtom, value: unknown): void {
-		const shim = this[TWIN] === true ? undefined : getActiveShim();
-		if (shim === undefined) originalSet.call(this, value);
-		else shim.classifyWrite(shim.nodeForAtom(this), { kind: 'set', value });
-	};
-	Atom.prototype.update = function (this: PatchableAtom, fn: (v: unknown) => unknown): void {
-		const shim = this[TWIN] === true ? undefined : getActiveShim();
-		if (shim === undefined) originalUpdate.call(this, fn);
-		else shim.classifyWrite(shim.nodeForAtom(this), { kind: 'update', fn });
-	};
-	ReducerAtom.prototype.dispatch = function (this: PatchableAtom, action: unknown): void {
-		const shim = this[TWIN] === true ? undefined : getActiveShim();
-		if (shim === undefined) originalDispatch.call(this as ReducerAtom<unknown, unknown>, action);
-		else shim.classifyWrite(shim.nodeForAtom(this), { kind: 'dispatch', action });
-	};
-}
-installPrototypeRouting();
 
 // ---- the shim --------------------------------------------------------------------
 
@@ -278,13 +249,71 @@ export class Shim {
 
 	constructor(bridge: CosignalBridge) {
 		this.bridge = bridge;
-		// The shim drains the bridge's event stream after every operation,
-		// addressing it with absolute cursors — so the bridge can keep the
-		// retained stream bounded (a ring) instead of letting it grow for the
-		// life of the process. 64k events comfortably exceeds what any single
-		// operation appends before the next drain.
-		this.bridge.setEventCapacity(65536);
 		assertForkProtocol();
+		// The engine's host seams: the core's public Atom methods route
+		// host-attributable writes (whole ops) to the classifier, and routed
+		// reads to the effective world; the observer feeds evaluation read
+		// logs (capsule identity) and effect dependency snapshots.
+		bridge.writeClassifier = (atom, kind, payload) => {
+			this.classifyWrite(this.nodeForAtom(atom), opOf(kind as HostOpKind, payload));
+		};
+		bridge.readAdopter = (atom) => this.nodeForAtom(atom);
+		// The ambient-world provider answers from the LIVE call context, per
+		// read: an effect fire resolves committed-for-root; a render resolves
+		// its own pass's world via the protocol's render context (stack-
+		// accurate — a COMPLETED-but-uncommitted pass is not "in render", and
+		// interleaved roots each see their own pass); anything else resolves
+		// newest (undefined).
+		bridge.setWorldProvider(() => {
+			const cap = this.effectCapture;
+			if (cap !== undefined) return { kind: 'committed', root: cap.root };
+			const rendering = this.renderingRoot();
+			if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
+				return { kind: 'pass', pass: rendering.pass };
+			}
+			return undefined;
+		});
+		bridge.readObserver = (node, value) => {
+			const frame = this.evalStack[this.evalStack.length - 1];
+			if (frame !== undefined) {
+				frame.readLog.push([node.id, value]);
+				return;
+			}
+			this.effectCapture?.deps.push({ node, value });
+		};
+		// Direct listeners — the load-bearing consumption surface. The bridge's
+		// event LOG stays a referee/tracing artifact (it does not mint unless a
+		// referee retains it or a tracer attaches); scheduling decisions arrive
+		// here as live objects, allocation-free. Listener bodies must never
+		// throw into the engine mid-operation: failures are recorded.
+		bridge.onDelivery = (w, token) => {
+			try {
+				this.bumpInBatch(w.id, token.id); // re-render in the write's own batch
+			} catch (error) {
+				this.errors.push(error);
+			}
+		};
+		bridge.onMountCorrective = (w, token) => {
+			try {
+				this.bumpInBatch(w.id, token.id); // join a still-live batch this mount's render missed
+			} catch (error) {
+				this.errors.push(error);
+			}
+		};
+		bridge.onCorrection = (w) => {
+			try {
+				this.bumpInBatch(w.id, undefined); // urgent pre-paint fix: discrete-urgent fallback lane
+			} catch (error) {
+				this.errors.push(error);
+			}
+		};
+		bridge.onDevWarning = (message) => {
+			try {
+				this.devWarn(message);
+			} catch (error) {
+				this.errors.push(error);
+			}
+		};
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches, lineageId) =>
 				this.guard(() => this.handlePassStart(container, includedBatches, lineageId)),
@@ -300,6 +329,14 @@ export class Shim {
 	dispose(): void {
 		this.disposed = true;
 		this.unsubscribe();
+		this.bridge.writeClassifier = undefined;
+		this.bridge.readAdopter = undefined;
+		this.bridge.readObserver = undefined;
+		this.bridge.onDelivery = undefined;
+		this.bridge.onMountCorrective = undefined;
+		this.bridge.onCorrection = undefined;
+		this.bridge.onDevWarning = undefined;
+		this.bridge.setWorldProvider(undefined);
 		this.targets.clear();
 		this.effects.clear();
 		this.capsules.clear();
@@ -416,13 +453,13 @@ export class Shim {
 	private handleYield(container: unknown): void {
 		const rec = this.rootsByContainer.get(container);
 		if (rec?.pass === undefined || rec.pass.state === 'ended') return;
-		this.withBridge(() => this.bridge.passYield(rec.pass!.id));
+		this.bridge.passYield(rec.pass.id);
 	}
 
 	private handleResume(container: unknown): void {
 		const rec = this.rootsByContainer.get(container);
 		if (rec?.pass === undefined || rec.pass.state === 'ended') return;
-		this.withBridge(() => this.bridge.passResume(rec.pass!.id));
+		this.bridge.passResume(rec.pass.id);
 	}
 
 	private handlePassEnd(container: unknown, committed: boolean): void {
@@ -431,7 +468,7 @@ export class Shim {
 		const pass = rec.pass;
 		if (!committed) {
 			// Discard: pass-owned mounts die in the bridge; drop their targets too.
-			this.withBridge(() => this.bridge.passEnd(pass.id, 'discard'));
+			this.bridge.passEnd(pass.id, 'discard');
 			for (const wid of rec.minted) {
 				if (!this.claimed.has(wid)) this.targets.delete(wid);
 			}
@@ -445,8 +482,9 @@ export class Shim {
 		// root's committed table, and before the protocol's onRootCommitted /
 		// onBatchRetired events for the same commit arrive. The mount fixup
 		// for watchers minted this pass runs inside passEnd; the corrective
-		// re-renders it emits are translated into setStates by withBridge.
-		this.withBridge(() => this.bridge.passEnd(pass.id, 'commit'));
+		// re-renders it emits reach React through the direct listeners
+		// (delivered at the operation boundary, inside this call).
+		this.bridge.passEnd(pass.id, 'commit');
 		rec.pass = undefined;
 		// ctx.previous cells must hold the last COMMITTED value — a pending
 		// render's value must never leak into the hint, because a pending
@@ -485,10 +523,8 @@ export class Shim {
 		if (mapped === undefined) return; // no cosignal writes rode this batch
 		const t = this.bridge.tokens.get(mapped);
 		if (t === undefined || t.state !== 'live') return;
-		this.withBridge(() => {
-			if (t.parked) this.bridge.settleAction(mapped, committed); // async action reached settlement
-			else this.bridge.retire(mapped, committed); // batch done everywhere: its writes become permanent history
-		});
+		if (t.parked) this.bridge.settleAction(mapped, committed); // async action reached settlement
+		else this.bridge.retire(mapped, committed); // batch done everywhere: its writes become permanent history
 		this.bridgeTokenByFork.delete(forkToken);
 		this.forkTokenByBridge.delete(mapped);
 		this.revalidateEffects(); // retirement/settlement can move committed values: re-check effects
@@ -504,66 +540,26 @@ export class Shim {
 		// idempotent set-add — so reconcile any reported batch the passEnd
 		// sweep missed. Defensive: for batches with bridge tokens the pass's
 		// set already covers the delta by construction.
-		this.withBridge(() => {
-			const root = this.bridge.root(rec.id);
-			for (const forkToken of committedBatches) {
-				const mapped = this.bridgeTokenByFork.get(forkToken);
-				if (mapped === undefined) continue;
-				const t = this.bridge.tokens.get(mapped);
-				if (t === undefined || t.state !== 'live' || root.committedTokens.has(mapped)) continue;
-				root.committedTokens.add(mapped);
-				root.commitGen++;
-			}
-		});
+		const root = this.bridge.root(rec.id);
+		for (const forkToken of committedBatches) {
+			const mapped = this.bridgeTokenByFork.get(forkToken);
+			if (mapped === undefined) continue;
+			const t = this.bridge.tokens.get(mapped);
+			if (t === undefined || t.state !== 'live' || root.committedTokens.has(mapped)) continue;
+			root.committedTokens.add(mapped);
+			root.commitGen++;
+		}
 		// Every root commit is an effect re-check trigger. The re-check compares
 		// values, so a commit that moved nothing an effect read is a no-op.
 		this.revalidateEffects(rec.id);
 	}
 
-	// ---- bridge event log -> React ---------------------------------------------
-
-	/** Runs a bridge operation, then translates the events it appended. */
-	withBridge<T>(fn: () => T): T {
-		const mark = this.bridge.eventCursor(); // absolute — stays valid when the bounded stream drops old events
-		try {
-			return fn();
-		} finally {
-			this.translate(this.bridge.eventsSince(mark));
-		}
-	}
-
-	private translate(events: BridgeEvent[]): void {
-		for (const e of events) {
-			switch (e.type) {
-				case 'delivery': // a subscribed value changed: re-render in the write's own batch
-				case 'mount-corrective': { // mount fixup: join a still-live batch this mount's render missed
-					const w = this.watcherByName(e.watcher);
-					if (w === undefined) break;
-					this.bumpInBatch(w.id, e.token);
-					break;
-				}
-				case 'mount-urgent-correction': // mount fixup: committed state moved during the mount window — fix before paint
-				case 'reconcile-correction': { // commit-report reconciliation found a stale watcher — fix urgently
-					const w = this.watcherByName(e.watcher);
-					if (w === undefined) break;
-					this.bumpInBatch(w.id, undefined); // discrete-urgent fallback lane
-					break;
-				}
-				case 'dev-warning': {
-					this.devWarn(e.message);
-					break;
-				}
-				default:
-					break;
-			}
-		}
-	}
-
-	private watcherByName(name: string): Watcher | undefined {
-		// Watcher names are minted as `w${id}` by the hooks (one map probe).
-		const id = Number(name.slice(1));
-		return this.bridge.watchers.get(id);
-	}
+	// ---- direct listeners -> React ---------------------------------------------
+	// (Registered in the constructor: deliveries and mount correctives bump in
+	// the causing batch's lane; urgent/reconcile corrections take the
+	// discrete-urgent fallback; dev warnings surface once per message. The
+	// bridge delivers them at the end of each engine operation — the same
+	// timing the old post-op event drain had.)
 
 	/**
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
@@ -588,33 +584,31 @@ export class Shim {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
 		const forkToken = React.unstable_getCurrentWriteBatch();
-		this.withBridge(() => {
-			if (forkToken === 0) {
-				this.bridge.bareWrite(node, op); // pre-provider / non-React context
-			} else {
-				const tokenId = this.bridgeTokenFor(forkToken);
-				// Dev-warning heuristic. After an await, code runs on a fresh call
-				// stack with no ambient transition context, so a bare write lands
-				// urgent — while an async action is pending that is usually a bug
-				// (the author meant the write to join the action; the fix is the
-				// action scope or a fresh startTransition). Warn on a non-deferred
-				// write while any action is parked. The protocol exposes only one
-				// bit (deferred or not), which cannot distinguish a discrete
-				// handler's token from a timer's ambient token, so this lint can
-				// over-trigger on genuine handler writes during someone else's
-				// action — accepted imprecision for a dev-only warning.
-				const t = this.bridge.tokens.get(tokenId);
-				if (
-					t !== undefined &&
-					!t.action &&
-					(forkToken & 1) === 0 &&
-					this.bridge.liveTokens().some((lt) => lt.parked)
-				) {
-					this.devWarn('a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
-				}
-				this.bridge.write(tokenId, node, op);
+		if (forkToken === 0) {
+			this.bridge.bareWrite(node, op); // pre-provider / non-React context
+		} else {
+			const tokenId = this.bridgeTokenFor(forkToken);
+			// Dev-warning heuristic. After an await, code runs on a fresh call
+			// stack with no ambient transition context, so a bare write lands
+			// urgent — while an async action is pending that is usually a bug
+			// (the author meant the write to join the action; the fix is the
+			// action scope or a fresh startTransition). Warn on a non-deferred
+			// write while any action is parked. The protocol exposes only one
+			// bit (deferred or not), which cannot distinguish a discrete
+			// handler's token from a timer's ambient token, so this lint can
+			// over-trigger on genuine handler writes during someone else's
+			// action — accepted imprecision for a dev-only warning.
+			const t = this.bridge.tokens.get(tokenId);
+			if (
+				t !== undefined &&
+				!t.action &&
+				(forkToken & 1) === 0 &&
+				this.bridge.liveTokens().some((lt) => lt.parked)
+			) {
+				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
 			}
-		});
+			this.bridge.write(tokenId, node, op);
+		}
 		// A write into a batch already locked into some root's committed table
 		// changes that root's committed world immediately: committed state is
 		// "replay every committed batch's receipts", and this batch just gained
@@ -633,7 +627,7 @@ export class Shim {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
-		this.withBridge(() => this.bridge.scopeWrite(bridgeToken, node, op));
+		this.bridge.scopeWrite(bridgeToken, node, op);
 		for (const [rootId, root] of this.bridge.roots) {
 			if (root.committedTokens.has(bridgeToken)) this.revalidateEffects(rootId);
 		}
@@ -658,6 +652,8 @@ export class Shim {
 		const rec = this.effects.get(id);
 		if (rec === undefined) return;
 		const saved = this.effectCapture;
+		// While set, the world provider resolves raw atom reads committed-for-
+		// root, and the read observer lands them in the dependency snapshot.
 		this.effectCapture = { root: rec.root, deps: [] };
 		try {
 			body();
@@ -703,74 +699,28 @@ export class Shim {
 
 	// ---- adoption + instance patching ---------------------------------------------
 
-	/** The bridge node for a public Atom/ReducerAtom, adopting on first use. */
+	/**
+	 * The bridge node for a public Atom/ReducerAtom, adopting on first use.
+	 * The original handle IS the bridge's kernel handle: the engine's own
+	 * kernel applies/reads re-enter the public methods with the host hooks'
+	 * recursion guard down, so no shadow handle is needed.
+	 */
 	nodeForAtom(atom: Atom<unknown>): AtomNode {
-		const patchable = atom as PatchableAtom;
-		const bound = patchable[BOUND];
+		const bindable = atom as BindableAtom;
+		const bound = bindable[BOUND];
 		if (bound !== undefined && bound.shim === this) return bound.node;
 		const existing = this.bridge.byKernelId.get(atom._id);
 		if (existing !== undefined) {
-			patchable[BOUND] = { shim: this, node: existing };
+			bindable[BOUND] = { shim: this, node: existing };
 			return existing;
 		}
-		// Adopt through a TWIN handle, which prototype routing skips: when the
-		// bridge itself applies a folded value to the kernel (applyToKernel ->
-		// handle.set) or reads the kernel (kernelValueOf -> handle.state),
-		// those calls must take the original paths and the logged build's
-		// bridge-applying route — routing them through classifyWrite would
-		// recurse.
-		const twin = Object.create(Atom.prototype) as PatchableAtom;
-		Object.defineProperty(twin, '_id', { value: atom._id });
-		Object.defineProperty(twin, '_isEqual', { value: atom._isEqual });
-		twin[TWIN] = true;
 		const label = atom.label ?? `atom#${atom._id}`;
-		const node = this.bridge.adoptAtom(label, twin, atom._isEqual);
+		const node = this.bridge.adoptAtom(label, atom as Atom<Value>, atom._isEqual);
 		if (atom instanceof ReducerAtom) {
 			node.reducer = (state, action) => (atom.reduce as (s: unknown, a: unknown) => unknown)(state, action);
 		}
-		patchable[BOUND] = { shim: this, node };
+		bindable[BOUND] = { shim: this, node };
 		return node;
-	}
-
-	/**
-	 * Prototype-routed `.state` read: adopted atoms route through the
-	 * world-routing order below (routeRead); un-adopted atoms adopt on demand when a routing context (bound
-	 * evaluation frame, effect capture, tracked render pass) is active, and
-	 * otherwise stay on the original kernel path — so plain reads outside any
-	 * React context cost nothing extra.
-	 */
-	readState(atom: PatchableAtom): unknown {
-		const bound = atom[BOUND];
-		if (bound !== undefined && bound.shim === this) return this.routeRead(bound.node, atom);
-		if (this.bridge.byKernelId.has(atom._id)) return this.routeRead(this.nodeForAtom(atom), atom);
-		const inContext =
-			this.evalStack.length > 0 || this.effectCapture !== undefined || this.renderingRoot()?.pass !== undefined;
-		if (!inContext) return originalStateGet.call(atom);
-		return this.routeRead(this.nodeForAtom(atom), atom);
-	}
-
-	/**
-	 * Read routing for a patched atom's `.state` — every read resolves in the
-	 * world of whatever is asking: inside a bound-computed evaluation -> the
-	 * frame's tracked reader (registers a dependency edge in the kernel and
-	 * folds the value in the evaluating world); inside an effect fire ->
-	 * committed-for-root capture; during a tracked render pass -> the pass's
-	 * world, so a component reads the view of the render it is part of;
-	 * otherwise -> the plain kernel path.
-	 */
-	routeRead(node: AtomNode, atom: Atom<unknown>): unknown {
-		const frame = this.evalStack[this.evalStack.length - 1];
-		if (frame !== undefined) {
-			const value = frame.read(node);
-			frame.readLog.push([node.id, value]);
-			return value;
-		}
-		if (this.effectCapture !== undefined) return this.effectRead(node);
-		const rendering = this.renderingRoot();
-		if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
-			return this.bridge.passValue(node, rendering.pass);
-		}
-		return originalStateGet.call(atom);
 	}
 
 	// ---- bound computeds + ctx.use capsules -----------------------------------------

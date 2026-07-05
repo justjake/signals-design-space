@@ -1,6 +1,6 @@
 /**
  * cosignal-react — public surface. The bindings ride the logged build's
- * concurrent engine (`cosignal/logged`) and the external-runtime protocol,
+ * concurrent engine (`cosignal`) and the external-runtime protocol,
  * version 1, of a patched React build; `registerCosignalReact()` activates
  * both. The plain `cosignal` entry is never imported here, preserving the
  * base library's isolation promise: apps that skip this package carry zero
@@ -29,7 +29,7 @@ export { Shim, assertForkProtocol, REQUIRED_CAPABILITIES, REQUIRED_PROTOCOL_VERS
 // and the types those signatures mention (`CosignalReactHandle.bridge` is a
 // `CosignalBridge`). Bridge internals (`CosignalBridge` the value, `Tape`,
 // `Watcher`, `BridgeEvent`, node/receipt types, …) stay available on the
-// power-user path: import them from 'cosignal/logged'.
+// power-user path: import them from 'cosignal'.
 export {
 	Atom,
 	ReducerAtom,
@@ -42,4 +42,4 @@ export {
 	type AtomCtx,
 	type ReducerAtomOptions,
 	type CosignalBridge,
-} from 'cosignal/logged';
+} from 'cosignal';

@@ -8,7 +8,7 @@
 // render pass, and starts+yields a fresh one; the batch retires only at the
 // end, so its receipts accumulate — reports per-keystroke ns, evals per
 // keystroke, and the receipt-history length every replay must walk.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
+import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
 const MODE = env('MODE', 'burst');

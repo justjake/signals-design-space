@@ -16,7 +16,7 @@ const React = req('react');
 const { createRoot } = req('react-dom/client');
 const { act } = React;
 
-const { __newBridgeForTest, Atom } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts');
+const { __newBridgeForTest, Atom } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts');
 const { registerCosignalReact, useSignal } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal-react/src/index.ts');
 const { envInt, row } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs');
 

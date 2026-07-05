@@ -8,7 +8,7 @@
 // propagate ns/write (write-call time only), frame ns, deliveries and
 // spurious renders per (watcher, batch, cycle), held-row history growth +
 // first/last frame write-time degradation.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
+import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
 const F = envInt('F', 8); // watchers

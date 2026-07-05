@@ -87,12 +87,12 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		}
 	});
 
-	it('package.json exposes ./trace and ./graphviz without touching the twin entries', () => {
+	it('package.json exposes ./trace and ./graphviz beside the ONE library entry', () => {
 		const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as { exports: Record<string, string> };
 		expect(pkg.exports['./trace']).toBe('./src/trace.ts');
 		expect(pkg.exports['./graphviz']).toBe('./src/graphviz.ts');
 		expect(pkg.exports['.']).toBe('./src/index.ts');
-		expect(pkg.exports['./logged']).toBe('./src/logged.ts');
+		expect(pkg.exports['./logged']).toBeUndefined(); // One Core: no second entry
 	});
 });
 

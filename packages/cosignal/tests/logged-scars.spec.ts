@@ -504,6 +504,32 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
+	it('S43 — corrective-covered divergence with a FAILING fast-out still corrects urgently (the covered check may not become the rule)', () => {
+		// The mount fixup's ordinary compare corrects to committed-now even when
+		// the divergence is "covered" by a scheduled corrective in the batch's
+		// own lane: root A LOCKED the batch at this very commit, so its
+		// committed truth already shows the post-pin write — painting the
+		// pin-old value until the transition lane commits later would tear
+		// against the root's own committed world. Pins the reviewer-contested
+		// schedule that makes "always use the covered check instead of the
+		// compare" observably WRONG (the covered value equals the rendered
+		// value here, so a covered-check rule would suppress the correction).
+		const m = logged();
+		const a = m.atom('a', 0);
+		const k = m.openBatch('deferred', { action: true }); // spanning transition, stays live
+		m.scopeWrite(k.id, a, set(1)); // pre-pin
+		const p = pass(m, 'A', [k]);
+		const w = m.mountWatcher(p.id, a, 'W'); // renders the pass world: 1
+		expect(w.lastRenderedValue).toBe(1);
+		m.scopeWrite(k.id, a, set(2)); // post-pin write in the SAME rendered batch
+		m.passEnd(p.id, 'commit'); // locks k into A: committed-now folds a=2; the fast-out's clocks are loud
+		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
+		expect(w.lastRenderedValue).toBe(2); // urgent pre-paint correction to committed-now
+		expect(m.committedValue(a, 'A')).toBe(2);
+		m.settleAction(k.id, true);
+		selfCheck(m);
+	});
+
 	it('S42 — own-commit-neutral fast-outs need the population gate: reveal mounts take the compare', () => {
 		const m = logged();
 		const a = m.atom('a', 0);

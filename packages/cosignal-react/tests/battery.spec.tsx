@@ -17,7 +17,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom, ReducerAtom, effect } from 'cosignal/logged';
+import { Atom, ReducerAtom, effect } from 'cosignal';
 import * as CosignalReact from '../src/index.js';
 import { useSignal, useComputed, useSignalEffect, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';

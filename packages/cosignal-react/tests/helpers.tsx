@@ -6,7 +6,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __newBridgeForTest, type CosignalBridge } from 'cosignal/logged';
+import { __newBridgeForTest, type CosignalBridge } from 'cosignal';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 export type Harness = {

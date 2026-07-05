@@ -6,7 +6,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom } from 'cosignal/logged';
+import { Atom, ReducerAtom } from 'cosignal';
 import { useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 

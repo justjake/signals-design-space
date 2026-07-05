@@ -8,7 +8,7 @@
 // EVENTS=truncate zeroes the diagnostic event stream at each sample to
 // isolate the engine's retained state; EVENTS=retain leaves it in place to
 // measure the unbounded stream itself.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/logged.ts';
+import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
 const DURATION_MS = envInt('DURATION_MS', 60_000);
