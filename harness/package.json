@@ -15,7 +15,8 @@
 		"@lab/arrayd": "workspace:*",
 		"@lab/control": "workspace:*",
 		"@lab/sweep": "workspace:*",
-		"alien-signals": "file:../upstream-alien-signals"
+		"alien-signals": "file:../upstream-alien-signals",
+		"cosignal": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/node": "24.13.2",

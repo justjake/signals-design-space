@@ -1,0 +1,21 @@
+{
+	"name": "cosignal",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "cosignal v1 DIRECT build: the donor arena kernel plus the policy layer (Atom/ReducerAtom/Computed, sentinel boxes, observed lifecycle). Zero concurrency instructions; the LOGGED overlay attaches at the documented operation-table seam.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}
