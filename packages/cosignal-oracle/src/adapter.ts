@@ -32,6 +32,7 @@ const COMPARED_EVENTS: ModelEvent['type'][] = [
 	'retired',
 	'core-effect-run',
 	'react-effect-run',
+	'react-effect-cleanup',
 ];
 
 export type ObservableSnapshot = {

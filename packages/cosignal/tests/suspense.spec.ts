@@ -19,7 +19,7 @@
  * self-heal (a read after settlement recomputes instead of throwing stale).
  */
 import { describe, expect, test } from 'vitest';
-import { Atom, Computed, SuspendedRead, effect } from '../src/index';
+import { Atom, Computed, SuspendedRead, effect, __newBridgeForTest } from '../src/index';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
 	let resolve!: (v: T) => void;
@@ -283,5 +283,59 @@ describe('ctx.use', () => {
 		await d.promise;
 		await tick();
 		expect(outer.state).toBe(5);
+	});
+});
+
+// Battery 16d at the ENGINE level (the adapter rule promoted verbatim into
+// the committed-subscription boundary scan): a dep whose committed re-read is
+// a still-pending suspension is NOT a flip. Engine-direct — the reference
+// model deliberately models no suspense (declared in the oracle README).
+describe('committed-subscription dep snapshots under suspension (battery 16d)', () => {
+	test('a stable pending sentinel VALUE is not a flip; the settled value is', () => {
+		const b = __newBridgeForTest();
+		b.registerBridge();
+		const d = deferred<string>();
+		const sentinel = new SuspendedRead(d.promise);
+		const gate = b.atom('gate', 0);
+		let settled: string | undefined;
+		// The shim's background translation shape: pending folds to its STABLE
+		// sentinel as a value (hook-initiated evaluations rethrow instead).
+		const c = b.computed('c', (read) => {
+			read(gate);
+			return settled === undefined ? sentinel : settled;
+		});
+		const e = b.mountReactEffect('A', c, 'E'); // snapshot: (c, sentinel)
+		expect(e.lastValue).toBe(sentinel);
+		const t1 = b.openBatch();
+		b.write(t1.id, gate, { kind: 'set', value: 1 });
+		b.retire(t1.id, true); // boundary: re-read is the SAME sentinel — still pending, no flip
+		expect(e.runs).toBe(0);
+		settled = 'DATA';
+		const t2 = b.openBatch();
+		b.write(t2.id, gate, { kind: 'set', value: 2 });
+		b.retire(t2.id, true); // boundary: the settled value replaced the sentinel — a real flip
+		expect(e.runs).toBe(1);
+		expect(e.lastValue).toBe('DATA');
+	});
+
+	test('a dep whose committed re-read THROWS a still-pending suspension is skipped, not a crash and not a flip', () => {
+		const b = __newBridgeForTest();
+		b.registerBridge();
+		const d = deferred<string>();
+		const sentinel = new SuspendedRead(d.promise);
+		const gate = b.atom('gate', 0);
+		let pending = false;
+		const c = b.computed('c', (read) => {
+			read(gate);
+			if (pending) throw sentinel; // hook-shaped rethrow on re-evaluation
+			return 'v0';
+		});
+		const e = b.mountReactEffect('A', c, 'E'); // snapshot: (c, 'v0')
+		pending = true;
+		const t = b.openBatch();
+		b.write(t.id, gate, { kind: 'set', value: 1 });
+		b.retire(t.id, true); // boundary: the re-read suspends — not a flip (and not an error)
+		expect(e.runs).toBe(0);
+		expect(e.lastValue).toBe('v0');
 	});
 });

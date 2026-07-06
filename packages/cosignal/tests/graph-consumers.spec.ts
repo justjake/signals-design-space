@@ -29,7 +29,7 @@
  * 20  episodeEdges/graphviz snapshot                   | K1                       | K1-ONLY diagnostics (documented: edges recorded since idle) | graphviz docstring; not behavior-bearing
  * 21  shim liveness flips (claim/orphan/finalize)      | K1 via one setter        | UNION + both stores (delegates to Watcher.live + removeWatcher) | cosignal-react hooks.spec StrictMode netting + graph-consumers.spec.tsx
  * 22  useSignal render branches (watchers.get/w.live)  | K1                       | K1-ONLY: bridge watcher records are the one source | cosignal-react battery/hooks.spec
- * 23  shim revalidateEffects dep snapshots             | committed VALUES         | value-compare, no edge store | cosignal-react hooks.spec useSignalEffect
+ * 23  committed-subscription dep snapshots (captureRun) | committed VALUES + obs union + subDepRefs | value-gated per EF2 boundary, no edge store; snapshot nodes retain OL1 and seed sweep/quiesce coverage | logged-battery case 16, observe-union.spec, cosignal-react hooks.spec useSignalEffect
  *
  * §2 DUAL-REPRESENTATION AGREEMENTS ─ pair | enforcement
  *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel plane, the model folds; logged-fuzz.spec 'diff clean' + logged-battery

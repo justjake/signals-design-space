@@ -163,10 +163,21 @@ sound only together with the corrective loop; the subtle cases live in
 
 Effects come in two kinds. Core effects (`effect()`) observe the newest
 world and flush after a write's notification walk. React-level effects
-(`useSignalEffect`) observe the committed world of their root and re-run
-at every durable flip — per-root commits, retirements, settlements —
-because side effects must track what the user actually sees, never
-pending speculation.
+(`useSignalEffect`) are committed-for-root **dep-snapshot observers**
+(the engine's promoted production mechanism, modeled 1:1): each run
+executes the effect's BODY under committed-for-root read capture — the
+body re-chooses its dependencies causally, so a flag-flip body reads
+different atoms on different runs — and the `(node, value)` snapshot it
+captured is the value-gated re-check surface. Re-check timing is
+RCC-EF2's amended BOUNDARY semantics (2026-07-06): once per boundary
+OPERATION — a per-root commit, a retirement (write-free ones included:
+retirement and settlement are guaranteed flush points), a settlement —
+at the boundary value (member writes coalesce; one pass locking in two
+tokens re-checks once), and never while the effect's own root has an
+open render-pass frame (the deferred flip flushes when that frame
+closes, commit or discard). Cleanup runs before every re-fire and at
+removal; nothing runs after removal. StrictMode-style replay is an
+explicit op (cleanup + unconditional re-run + recapture).
 
 ### Quiescence
 
@@ -253,3 +264,25 @@ contract grants it no semantics a test could pin. Where the engine
 implements an optimization plus its safety argument, the model
 implements only the semantics the optimization must preserve — that is
 what makes it an oracle.
+
+Declared gaps of the committed-observer (useSignalEffect) model — each
+refereed elsewhere, named here so the coverage boundary is explicit
+(effects unification, 2026-07-06):
+
+- **Suspense in dep snapshots.** The model has no thenables, so battery
+  16d's rule — a dep whose committed re-read is a still-pending
+  suspension is NOT a flip — is pinned engine-direct
+  (`cosignal/tests/suspense.spec.ts`) and at the React battery, not in
+  lockstep.
+- **Host refire phase.** The model runs a re-fire at the boundary
+  operation's end. The React adapter additionally defers refires queued
+  by a COMMIT's boundary to the root-commit report (React captures its
+  re-pend classification before pass-end) — a host-phase shell with no
+  protocol counterpart here; the React suite referees it.
+- **Observation liveness.** Effect dep snapshots retain the RCC-OL1
+  observation union engine-side (like watchers, whose lifecycle the
+  model also deliberately omits); pinned by
+  `cosignal/tests/observe-union.spec.ts` and the React suite.
+- **StrictMode.** React's double-invoke is modeled only as the explicit
+  `replayReactEffect` op (cleanup + unconditional re-run), not as host
+  double-registration; the React hooks suite referees the real shape.

@@ -300,6 +300,34 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		return { atom, log };
 	}
 
+	test('useSignalEffect-only subscriber counts toward the union: observe after the first run, unobserve after unmount (OL1 re-pin, effects unification)', async () => {
+		// Before the unification an atom observed ONLY by a useSignalEffect
+		// never triggered its observe lifecycle — the incident-I3-shaped
+		// asymmetry OL1 forbids ("ALL consumer kinds"). The promoted
+		// subscription's dep snapshot now holds one retain per node.
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(0);
+		function View() {
+			useSignalEffect(() => {
+				void (a.state as number);
+			}, []);
+			return <span>x</span>;
+		}
+		const { root } = await h.mount(<View />);
+		await act(async () => {}); // observation delivery is microtask-coalesced
+		expect(log).toEqual(['observe']); // an effect-only consumer observes
+		await act(async () => {
+			a.set(1); // re-fire re-captures the same dep: no flap
+		});
+		await act(async () => {});
+		expect(log).toEqual(['observe']);
+		await act(async () => {
+			root.render(<div />);
+		});
+		await act(async () => {}); // teardown releases the snapshot's retains
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
 	test('useSignal-only subscriber: observe after mount, unobserve after unmount', async () => {
 		h = makeHarness();
 		const { atom: a, log } = observedAtom(0);

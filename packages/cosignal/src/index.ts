@@ -2214,8 +2214,7 @@ export type {
 	RootState,
 	SlotMeta,
 	WatcherSnapshot,
-	ReactEffect,
-	CoreEffect,
+	Subscription,
 	// operations and worlds (the tracing hook types stay on the
 	// `cosignal/trace` side of the seam; this entry never names them)
 	Op,

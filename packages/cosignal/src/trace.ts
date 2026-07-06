@@ -457,6 +457,7 @@ export class Tracer implements TraceHooks {
 			case 'write':
 			case 'pass-committed':
 			case 'pass-discarded':
+			case 'react-effect-cleanup': // the paired react-effect-run carries the causality
 				return;
 			case 'write-dropped':
 				this.rec(K.writeDropped, this.label(e.node), e.token, 0, 0, 0);

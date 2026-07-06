@@ -43,13 +43,14 @@ export function dependencyGraphToDot(bridge: CosignalBridge): string {
 		lines.push(`\tw${w.id} [shape=house, label=${q(`${w.name}@${w.root}`)}];`);
 		lines.push(`\tn${w.node} -> w${w.id} [style=dashed];`);
 	}
-	for (const e of bridge.reactEffects.values()) {
-		lines.push(`\te${e.id} [shape=cds, label=${q(`${e.name}@${e.root} runs:${e.runs}`)}];`);
-		lines.push(`\tn${e.node} -> e${e.id} [style=dotted];`);
-	}
-	for (const e of bridge.coreEffects.values()) {
-		lines.push(`\tce${e.id} [shape=cds, label=${q(`${e.name} runs:${e.runs}`)}];`);
-		lines.push(`\tn${e.node} -> ce${e.id} [style=dotted];`);
+	for (const e of bridge.subs.values()) {
+		if (e.policy === 'committed') {
+			lines.push(`\te${e.id} [shape=cds, label=${q(`${e.name}@${e.root} runs:${e.runs}`)}];`);
+			for (const d of e.deps) lines.push(`\tn${d.node.id} -> e${e.id} [style=dotted];`);
+		} else {
+			lines.push(`\tce${e.id} [shape=cds, label=${q(`${e.name} runs:${e.runs}`)}];`);
+			lines.push(`\tn${e.node} -> ce${e.id} [style=dotted];`);
+		}
 	}
 	lines.push('}');
 	return lines.join('\n');

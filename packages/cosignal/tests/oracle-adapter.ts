@@ -84,6 +84,16 @@ function watcherAt(b: CosignalBridge, index: number): number {
 	return ids[index % ids.length]!;
 }
 
+/** Mirrors the model's `effectAt`: index over react-effect ids in creation
+ * order (the engine's one subs store holds both policies; the committed
+ * filter yields exactly the model's reactEffects key sequence). */
+function effectAt(b: CosignalBridge, index: number): number {
+	const ids: number[] = [];
+	for (const s of b.subs.values()) if (s.policy === 'committed') ids.push(s.id);
+	if (ids.length === 0) throw new BridgeScheduleError('no react effects yet');
+	return ids[index % ids.length]!;
+}
+
 /** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin). */
 export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 	const allNodes = [...b.nodes.values()];
@@ -134,6 +144,15 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 			case 'mount': b.mountWatcher(passAt(b, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
 			case 'render': b.renderWatcher(passAt(b, op.pass), watcherAt(b, op.watcher)); break;
 			case 'reactEffect': b.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
+			case 'reactEffectPick':
+				b.mountReactEffectPick(
+					op.root,
+					nodes[op.sel % nodes.length]!, nodes[op.a % nodes.length]!, nodes[op.b % nodes.length]!,
+					`E${uniq}`,
+				);
+				break;
+			case 'removeReactEffect': b.removeSubscription(effectAt(b, op.effect)); break;
+			case 'replayReactEffect': b.replayReactEffect(effectAt(b, op.effect)); break;
 			case 'coreEffect': b.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`); break;
 			case 'discardAllWip': b.discardAllWip(); break;
 			case 'quiesce':

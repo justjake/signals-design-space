@@ -192,4 +192,32 @@ describe('observation union at the bridge plane', () => {
 		expect(minted.filter((t) => /observe|lifecycle/i.test(t))).toEqual([]);
 		expect(minted).toEqual(['pass-committed']); // pass bookkeeping only
 	});
+
+	// RCC-OL1 re-pin (effects unification, 2026-07-06): committed
+	// subscriptions (the promoted useSignalEffect mechanism) COUNT toward the
+	// observation union — OL1's "anything that subscribes" — via one retain
+	// per dep-snapshot node, re-pointed per run. Before the unification an
+	// atom observed ONLY by a useSignalEffect never triggered its observe
+	// lifecycle (the incident-I3-shaped asymmetry the plan closed).
+	it('an atom observed ONLY by a committed subscription observes; removal unobserves; a dep flip moves the retain', async () => {
+		const b = bridge();
+		const { atom, log } = observedAtom(0);
+		const { atom: atomB, log: logB } = observedAtom(0);
+		const nodeA = b.adoptAtom('a', atom as Atom<unknown>);
+		const nodeB = b.adoptAtom('b', atomB as Atom<unknown>);
+		const flag = b.atom('flag', 0);
+		const e = b.mountReactEffectPick('A', flag, nodeA, nodeB, 'E'); // flag=0 → snapshot {flag, b}
+		await tick();
+		expect(log).toEqual([]); // a is not in the snapshot
+		expect(logB).toEqual(['observe']); // b holds one union retain via the dep snapshot
+		const t = b.openBatch();
+		b.write(t.id, flag, { kind: 'set', value: 1 });
+		b.retire(t.id, true); // boundary: the body re-chooses a; the retains re-point
+		await tick();
+		expect(log).toEqual(['observe']);
+		expect(logB).toEqual(['observe', 'unobserve']);
+		b.removeSubscription(e.id); // teardown releases the snapshot's retains
+		await tick();
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
 });

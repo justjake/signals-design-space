@@ -829,6 +829,161 @@ describe('case 16 — effects observe committed state only', () => {
 		expect(e.runs).toBe(1); // full retirement changes nothing further for A (value equal)
 		selfCheck(m);
 	});
+
+	// The EF2 boundary re-pin (amended 2026-07-06): the three killing
+	// schedules from the unification plan reviews, pinned mutation-style —
+	// the OLD immediate member-write revalidation and the naive
+	// next-drain-only deferral each fail at least one of these.
+
+	it('16b — a committed-member write NEVER re-fires under an open same-root frame; the flip flushes at the frame close (kills immediate revalidation — codex finding 2)', () => {
+		const m = logged();
+		const a = m.atom('a', 0);
+		const t = m.openBatch('deferred', { action: true }); // parked action exposes its scope
+		m.scopeWrite(t.id, a, set(1));
+		const p0 = pass(m, 'A', [t]);
+		m.passEnd(p0.id, 'commit'); // t locks into A (still live, parked)
+		const e = m.mountReactEffect('A', a, 'E'); // snapshot: a@1
+		expect(e.lastValue).toBe(1);
+		const p1 = pass(m, 'A', []); // A opens a new frame pinned at a=1…
+		m.passYield(p1.id);
+		m.scopeWrite(t.id, a, set(2)); // …and committed truth for A moves NOW (membership clause)
+		expect(e.runs).toBe(0); // the effect must NOT run ahead of A's own open frame (EF1/CR4)
+		const x = m.openBatch('urgent');
+		m.write(x.id, m.atom('other', 0), set(1));
+		m.retire(x.id, true); // a boundary — but A's frame is still open: deferred
+		expect(e.runs).toBe(0);
+		m.passResume(p1.id);
+		m.passEnd(p1.id, 'discard'); // the frame close is the deferred flush point
+		expect(e.runs).toBe(1);
+		expect(e.lastValue).toBe(2);
+		m.settleAction(t.id, true);
+		expect(e.runs).toBe(1); // value unchanged at settlement: the gate holds
+		selfCheck(m);
+	});
+
+	it('16c — member writes COALESCE: N writes before one boundary produce ONE cleanup+run at the boundary value', () => {
+		const m = logged();
+		const a = m.atom('a', 0);
+		const t = m.openBatch('deferred', { action: true });
+		m.scopeWrite(t.id, a, set(1));
+		const p = pass(m, 'A', [t]);
+		m.passEnd(p.id, 'commit'); // t committed into A
+		const e = m.mountReactEffect('A', a, 'E'); // snapshot a@1
+		m.scopeWrite(t.id, a, set(2));
+		m.scopeWrite(t.id, a, set(3));
+		m.scopeWrite(t.id, a, set(4)); // three member writes, no boundary between
+		expect(e.runs).toBe(0); // never mid-write (the old adapter fired here, three times)
+		m.settleAction(t.id, true); // ONE boundary
+		expect(e.runs).toBe(1); // ONE cleanup+run…
+		expect(e.cleanups).toBe(1);
+		expect(e.lastValue).toBe(4); // …at the boundary value (2 and 3 were never observed)
+		selfCheck(m);
+	});
+
+	it('16d — unmount before the boundary runs cleanup and nothing after teardown (a make-up fire is not owed — fable M3 re-walked under the ruling)', () => {
+		const m = logged();
+		const a = m.atom('a', 0);
+		const t = m.openBatch('deferred', { action: true });
+		m.scopeWrite(t.id, a, set(1));
+		const p = pass(m, 'A', [t]);
+		m.passEnd(p.id, 'commit');
+		const e = m.mountReactEffect('A', a, 'E'); // snapshot a@1
+		m.scopeWrite(t.id, a, set(2)); // a durable flip while the effect is live…
+		m.removeReactEffect(e.id); // …but the effect unmounts before any boundary
+		expect(e.cleanups).toBe(1); // cleanup is GUARANTEED at unmount
+		const runsBefore = m.eventsOfType('react-effect-run').length;
+		m.settleAction(t.id, true); // the boundary arrives after teardown
+		expect(m.eventsOfType('react-effect-run')).toHaveLength(runsBefore); // no fire after teardown (RCC-OL2)
+		expect(e.runs).toBe(0);
+		selfCheck(m);
+	});
+
+	it('16e — a dep-choosing body re-tracks CAUSALLY: writes to the un-chosen arm stop firing after the flip', () => {
+		const m = logged();
+		const flag = m.atom('flag', 0);
+		const a = m.atom('a', 10);
+		const b = m.atom('b', 20);
+		const e = m.mountReactEffectPick('A', flag, a, b, 'E'); // flag=0 → reads b
+		expect(e.deps.map((d) => d.node.name)).toEqual(['flag', 'b']);
+		const t1 = m.openBatch('urgent');
+		m.write(t1.id, b, set(21));
+		m.retire(t1.id, true); // b is in the snapshot → re-fire + recapture
+		expect(e.runs).toBe(1);
+		expect(e.lastValue).toBe(21);
+		const t2 = m.openBatch('urgent');
+		m.write(t2.id, a, set(11));
+		m.retire(t2.id, true); // a is NOT in the snapshot: no fire
+		expect(e.runs).toBe(1);
+		const t3 = m.openBatch('urgent');
+		m.write(t3.id, flag, set(1));
+		m.retire(t3.id, true); // the flip fires; the body re-chooses its deps
+		expect(e.runs).toBe(2);
+		expect(e.lastValue).toBe(11);
+		expect(e.deps.map((d) => d.node.name)).toEqual(['flag', 'a']);
+		const t4 = m.openBatch('urgent');
+		m.write(t4.id, b, set(99));
+		m.retire(t4.id, true); // b is no longer read: no fire
+		expect(e.runs).toBe(2);
+		const t5 = m.openBatch('urgent');
+		m.write(t5.id, a, set(12));
+		m.retire(t5.id, true); // the re-chosen arm fires
+		expect(e.runs).toBe(3);
+		selfCheck(m);
+	});
+
+	it('16f — a WRITE-FREE retirement still flushes a pending member-write flip (retirement/settlement are guaranteed flush points; kills bits-gated deferral)', () => {
+		const m = logged();
+		const a = m.atom('a', 0);
+		const t = m.openBatch('deferred', { action: true });
+		m.scopeWrite(t.id, a, set(1));
+		const p = pass(m, 'A', [t]);
+		m.passEnd(p.id, 'commit');
+		const e = m.mountReactEffect('A', a, 'E');
+		m.scopeWrite(t.id, a, set(2)); // pending flip, no boundary yet
+		const y = m.openBatch('urgent'); // never writes
+		m.retire(y.id, true); // write-free retirement: STILL a boundary
+		expect(e.runs).toBe(1);
+		expect(e.lastValue).toBe(2);
+		const z = m.openBatch('urgent');
+		m.retire(z.id, true); // and value-gated: a second one fires nothing
+		expect(e.runs).toBe(1);
+		m.settleAction(t.id, true);
+		expect(e.runs).toBe(1);
+		selfCheck(m);
+	});
+
+	it('16g — StrictMode-style replay: cleanup + unconditional re-run + recapture; boundaries stay value-gated after', () => {
+		const m = logged();
+		const a = m.atom('a', 5);
+		const e = m.mountReactEffect('A', a, 'E');
+		m.replayReactEffect(e.id); // cleanup + re-run at the same values
+		expect(e.cleanups).toBe(1);
+		expect(e.runs).toBe(1);
+		expect(e.lastValue).toBe(5);
+		const x = m.openBatch('urgent');
+		m.write(x.id, m.atom('other', 0), set(1));
+		m.retire(x.id, true); // unrelated boundary: the value gate holds
+		expect(e.runs).toBe(1);
+		selfCheck(m);
+	});
+
+	it('16h — one pass locking in TWO tokens re-checks once, at the boundary value (one re-check per boundary, not per token)', () => {
+		const m = logged();
+		const a = m.atom('a', 0);
+		const e = m.mountReactEffect('A', a, 'E');
+		const t1 = m.openBatch('deferred');
+		m.write(t1.id, a, update((x) => (x as number) + 1)); // +1
+		const t2 = m.openBatch('deferred');
+		m.write(t2.id, a, update((x) => (x as number) * 10)); // ×10
+		const p = pass(m, 'A', [t1, t2]);
+		m.passEnd(p.id, 'commit'); // BOTH lock in at one commit
+		expect(e.runs).toBe(1); // one re-check per boundary…
+		expect(e.lastValue).toBe(10); // …at the boundary value (0+1)×10 — the intermediate 1 is never observed
+		m.retire(t1.id, true);
+		m.retire(t2.id, true);
+		expect(e.runs).toBe(1); // retirements move nothing further
+		selfCheck(m);
+	});
 });
 
 describe('case 17 — optimistic rollback: the feature is deleted', () => {

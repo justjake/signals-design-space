@@ -125,12 +125,17 @@
  *     invisible to the earlier-captured slot set), and any divergence the
  *     fast path suppresses must be exactly covered by the scheduled
  *     corrective re-renders (asserted on every mount).
- *   - effects: core effects observe the newest world and flush after the
- *     write's walk returns; committed observers (the useSignalEffect shape)
- *     evaluate in committed-for-root and revalidate at every DURABLE flip —
- *     durable meaning a change to committed truth itself (a per-root
- *     commit, a retirement, an async-action settlement), as opposed to a
- *     pending write that could still be discarded.
+ *   - subscriptions (see the Subscription type): ONE core record for both
+ *     `run`-action consumer kinds. Newest-policy subscriptions observe the
+ *     newest world and flush after the write's walk returns. Committed
+ *     subscriptions — the PROMOTED production useSignalEffect mechanism —
+ *     hold a dep snapshot captured by `captureRun` under committed-for-root
+ *     and re-check value-gated at RCC-EF2's amended BOUNDARIES (per-root
+ *     commit, retirement, settlement, quiet fold): once per boundary
+ *     operation, at the boundary value, never while the subscription's own
+ *     root has an open render-pass frame; cleanup guaranteed at removal.
+ *     Their dep snapshots also join the RCC-OL1 observation union (one
+ *     retain per snapshot node through the obsShift plane).
  *   - episodes / quiescence (epoch reset), as defined above.
  *
  * The bridge surface consumes the external-runtime protocol's event shapes
@@ -148,7 +153,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, SuspendedRead, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -521,35 +526,55 @@ export class Watcher {
 	}
 }
 
-/** Referee surface — the bridge-level committed-world observer record
- * (twin tests and the lockstep corpus drive it via `mountReactEffect`);
- * production committed effects live in the React adapter (cosignal-react's
- * useSignalEffect machinery over `committedValue`). The fate of this
- * bridge-level pair (ReactEffect/CoreEffect) is owned by the
- * effects-unification design (plans/, drafted concurrently) — do not
- * extend it; do not delete it here. */
-export type ReactEffect = {
+/**
+ * The ONE core `run`-action subscription record (effects unification by
+ * promotion, plans/2026-07-06). A subscription is a registration saying WHO
+ * is notified and IN WHICH WORLD its reads resolve; `deliver`-action
+ * consumers (component re-renders) remain `Watcher` structurally — their
+ * state is untouched, the unification is of the firing machinery — so this
+ * record carries the two `run` configurations:
+ *
+ *  - policy 'committed' — the PROMOTED production `useSignalEffect`
+ *    mechanism (previously the adapter's EffectRec): `deps` is the
+ *    (node, value) snapshot `captureRun` recorded under the committed world
+ *    of the subscription's root; re-checks are value-gated over it and fire
+ *    at RCC-EF2's amended BOUNDARIES (per-root commit, retirement,
+ *    settlement, quiet fold; one re-check per boundary operation, at the
+ *    boundary value, never while the subscription's own root has an open
+ *    render-pass frame — deferred flips flush at that frame's close).
+ *    `refire` (adapter-registered) rides the operation-boundary notification
+ *    queue; referee-configured subscriptions (`mountReactEffect`/
+ *    `mountReactEffectPick`) store a `body` and re-run it inline through the
+ *    SAME capture frame, so lockstep referees the real mechanism.
+ *  - policy 'newest' — the absorbed core-effect configuration: one `node`,
+ *    value-gated on its newest value, enqueued by the delivery walk and
+ *    flushed after the walk returns.
+ */
+export type Subscription = {
 	id: EffectId;
 	name: string;
+	policy: 'committed' | 'newest';
+	/** Owning root (committed policy; '' for newest). */
 	root: RootId;
+	/** Subscribed node (newest policy; 0 for committed — `deps` carry nodes). */
 	node: NodeId;
+	/** Dep snapshot: the routed reads of the last run, in read order. */
+	deps: { node: AnyNode; value: Value }[];
+	/** Adapter-owned refire (cleanup + body scheduling), queued at the
+	 * operation boundary; undefined for referee-configured subscriptions. */
+	refire: (() => void) | undefined;
+	/** Referee-configured body (re-run inline through the capture frame). */
+	body: (() => void) | undefined;
+	/** Last captured value (committed: the last dep read; newest: the node). */
 	lastValue: Value;
 	runs: number;
-};
-
-/** Referee surface — the bridge-level newest-world observer record
- * (twin tests and the lockstep corpus drive it via `mountCoreEffect`);
- * production newest-world effects are the kernel's own `effect()`
- * (index.ts), which needs no bridge record. Fate owned by the
- * effects-unification design (plans/) — see ReactEffect's note. */
-export type CoreEffect = {
-	id: EffectId;
-	name: string;
-	node: NodeId;
-	lastValue: Value;
-	runs: number;
-	/** Delivery-walk enqueue dedup generation (one run per walk at most). */
+	cleanups: number;
+	/** Delivery-walk enqueue dedup generation (newest policy). */
 	queuedWalk: WalkGen;
+	live: boolean;
+	/** RCC-OL1: snapshot nodes currently holding observation retains
+	 * (re-pointed per run exactly like watcher obsDeps; see obsShift). */
+	obsDeps: Set<NodeId> | undefined;
 };
 
 /** A world: one self-consistent assignment of values to all atoms, computed
@@ -584,7 +609,8 @@ export type BridgeEvent =
 	| { type: 'delivery'; watcher: string; token: TokenId; slot: SlotId; seq: Seq; mode: 'fresh' | 'interleaved' }
 	| { type: 'suppressed'; watcher: string; token: TokenId; slot: SlotId; seq: Seq }
 	| { type: 'core-effect-run'; effect: string; value: Value }
-	| { type: 'react-effect-run'; effect: string; root: RootId; value: Value }
+	| { type: 'react-effect-run'; effect: string; root: RootId; value: Value; values: Value[] }
+	| { type: 'react-effect-cleanup'; effect: string; root: RootId }
 	| { type: 'reconcile-correction'; watcher: string; root: RootId; from: Value; to: Value; cause: 'retirement' | 'per-root-commit' }
 	| { type: 'mount-corrective'; watcher: string; token: TokenId; slot: SlotId }
 	| { type: 'mount-urgent-correction'; watcher: string; from: Value; to: Value }
@@ -782,8 +808,9 @@ export class CosignalBridge {
 	passes = new Map<PassId, Pass>();
 	roots = new Map<RootId, RootState>();
 	watchers = new Map<WatcherId, Watcher>();
-	reactEffects = new Map<EffectId, ReactEffect>();
-	coreEffects = new Map<EffectId, CoreEffect>();
+	/** ONE subscription store for both `run` policies (committed committed-
+	 * observer scans filter by policy; newest ones also live in subsByNode). */
+	subs = new Map<EffectId, Subscription>();
 	/** The retained BridgeEvent log. Populated only while a referee retains
 	 * events (`setRetainEvents(true)`); a tracer attached without a referee
 	 * mints events but consumes them live at the `log()` waist, retaining
@@ -840,19 +867,21 @@ export class CosignalBridge {
 	onCorrection: ((w: Watcher) => void) | undefined;
 
 	// Queued-notification columns (reused across operations; no per-notify objects).
-	private notifyKinds: number[] = []; // 0 delivery, 1 mount-corrective, 2 correction
+	private notifyKinds: number[] = []; // 0 delivery, 1 mount-corrective, 2 correction, 3 subscription refire
 	private notifyWs: (Watcher | undefined)[] = [];
 	private notifyTs: (Token | undefined)[] = [];
 	private notifySlots: SlotId[] = [];
+	private notifySubs: (Subscription | undefined)[] = [];
 	private notifyN = 0;
 	private notifyFlushing = false;
 
-	private queueNotify(kind: number, w: Watcher | undefined, t: Token | undefined, slot: SlotId): void {
+	private queueNotify(kind: number, w: Watcher | undefined, t: Token | undefined, slot: SlotId, sub?: Subscription): void {
 		const i = this.notifyN++;
 		this.notifyKinds[i] = kind;
 		this.notifyWs[i] = w;
 		this.notifyTs[i] = t;
 		this.notifySlots[i] = slot;
+		this.notifySubs[i] = sub;
 	}
 
 	/** Invokes queued listeners at the end of the public operation. A nested
@@ -866,17 +895,27 @@ export class CosignalBridge {
 				const kind = this.notifyKinds[i]!;
 				const w = this.notifyWs[i];
 				const t = this.notifyTs[i];
+				const s = this.notifySubs[i];
 				this.notifyWs[i] = undefined; // release object refs eagerly
 				this.notifyTs[i] = undefined;
+				this.notifySubs[i] = undefined;
 				if (kind === 0) {
 					const l = this.onDelivery;
 					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
 				} else if (kind === 1) {
 					const l = this.onMountCorrective;
 					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
-				} else {
+				} else if (kind === 2) {
 					const l = this.onCorrection;
 					if (l !== undefined) l(w!);
+				} else if (s !== undefined && s.live) {
+					// Subscription refire (adapter-registered): the value gate
+					// already passed at the boundary scan; the adapter owns the
+					// body run (cleanup + fire + re-capture) and any React-phase
+					// deferral. Removal flips `live`, so nothing runs after
+					// teardown (RCC-OL2).
+					const r = s.refire;
+					if (r !== undefined) r();
 				}
 			}
 		} finally {
@@ -946,10 +985,27 @@ export class CosignalBridge {
 	/** The watcher liveness seam (one closure per bridge; Watcher._obs). */
 	private watcherObs = (node: NodeId, delta: 1 | -1): void => this.obsShift(node, delta);
 	private watchersByNode: (Watcher[] | undefined)[] = [];
-	private reactEffectsByNode: (ReactEffect[] | undefined)[] = [];
-	private coreEffectsByNode: (CoreEffect[] | undefined)[] = [];
-	/** Per-write core-effect queue (flushed after the delivery walk returns). */
-	private effectQueue: CoreEffect[] = [];
+	/** Per-node index of NEWEST-policy subscriptions (delivery-walk collection).
+	 * Committed-policy subscriptions have no single index key — their re-check
+	 * is a per-root value-gated full scan (v1 = production semantics), so the
+	 * collection structures are honestly: this index + the `subs` store
+	 * scanned per root (plan review M4's restatement). */
+	private subsByNode: (Subscription[] | undefined)[] = [];
+	/** Per-node count of committed-subscription dep snapshots holding the
+	 * node: K1 sweep reachability seeds and quiescence refresh targets — the
+	 * snapshot re-check evaluates through the memo ladder, whose touched-word
+	 * fast path relies on marks reaching these nodes. */
+	private subDepRefs: number[] = [0];
+	/** Live counts per policy (fast bails on the write/quiet paths). */
+	private committedSubCount = 0;
+	private newestSubCount = 0;
+	/** The core capture frame `captureRun` opens: while set (and no evaluation
+	 * world is on stack) routed reads resolve committed-for-root and append to
+	 * the dep snapshot. Replaces the adapter's effectCapture + readObserver
+	 * seam + the world provider's committed arm (plan §2.2.2). */
+	private captureFrame: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined = undefined;
+	/** Per-write newest-subscription queue (flushed after the delivery walk returns). */
+	private effectQueue: Subscription[] = [];
 	/** Atoms with a non-empty tape (compaction candidates). */
 	private dirtyAtoms = new Set<AtomNode>();
 	/** The one open (non-ended) pass per root — React renders one tree per
@@ -1067,9 +1123,6 @@ export class CosignalBridge {
 	writeClassifier: ((atom: Atom<unknown>, op: Op) => void) | undefined;
 	/** Adopt-on-demand for routed reads of not-yet-registered atoms. */
 	readAdopter: ((atom: Atom<unknown>) => AtomNode) | undefined;
-	/** Observes every routed public read (node, world value) — the bindings
-	 * feed evaluation read-logs / effect dependency snapshots from it. */
-	readObserver: ((node: AtomNode, value: Value) => void) | undefined;
 
 	private nextNode = 1;
 	private nextToken = 1;
@@ -1108,7 +1161,7 @@ export class CosignalBridge {
 	 * quiet host costs reads exactly one undefined-check. */
 	private syncReadRouting(): void {
 		if (activeBridge !== this) return;
-		const armed = this.activeWorld !== undefined || this.worldProvider !== undefined;
+		const armed = this.activeWorld !== undefined || this.worldProvider !== undefined || this.captureFrame !== undefined;
 		__setHostRead(armed ? hostReadImpl : undefined);
 	}
 
@@ -1132,7 +1185,22 @@ export class CosignalBridge {
 		if (this.inFoldCallback) {
 			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		}
-		const world = this.effectiveWorld();
+		// World resolution order: the evaluation world on stack (reads inside a
+		// computed's evaluation are the COMPUTED's dependencies — the capture
+		// frame never sees them: the suppression rule of plan §2.2.2), then the
+		// open capture frame (committed-for-root + dep capture), then the
+		// host's ambient provider.
+		let world = this.activeWorld;
+		let cap: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined;
+		if (world === undefined) {
+			cap = this.captureFrame;
+			if (cap !== undefined) {
+				world = { kind: 'committed', root: cap.sub.root };
+			} else {
+				const p = this.worldProvider;
+				world = p === undefined ? undefined : p();
+			}
+		}
 		if (world === undefined) {
 			return __HOST_MISS;
 		}
@@ -1144,7 +1212,9 @@ export class CosignalBridge {
 			}
 			node = adopt(atom);
 		}
-		return this.routedRead(node, world);
+		const v = this.routedRead(node, world);
+		if (cap !== undefined) cap.deps.push({ node, value: v });
+		return v;
 	}
 
 	private log(e: BridgeEvent): void {
@@ -1217,6 +1287,7 @@ export class CosignalBridge {
 		this.lastWalk[id] = 0;
 		this.evalMark[id] = 0;
 		this.obsRefs[id] = 0;
+		this.subDepRefs[id] = 0;
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
@@ -1552,10 +1623,7 @@ export class CosignalBridge {
 	routedRead(atom: AtomNode, world: World): Value {
 		const sink = this.currentSink;
 		if (sink !== 0) this.recordEdge(atom.id, sink);
-		const v = this.atomValue(atom, world);
-		const ro = this.readObserver;
-		if (ro !== undefined) ro(atom, v);
-		return v;
+		return this.atomValue(atom, world);
 	}
 
 	/** Atom value in a world: kernel for newest, memoized fold otherwise. */
@@ -1886,6 +1954,35 @@ export class CosignalBridge {
 	}
 
 	/**
+	 * A committed subscription's run just installed a new dep snapshot:
+	 * re-point its observation retains (RCC-OL1 — effect dep snapshots count
+	 * toward the observation union exactly like watcher closures: one retain
+	 * per snapshot node through the obsShift plane; an atom retains its
+	 * kernel lifecycle, an observed computed retains its current strong deps
+	 * transitively) and its routing-coverage counts (subDepRefs: K1 sweep
+	 * seeds + quiescence refresh targets). Retain-new before release-old;
+	 * same-tick flaps coalesce in the kernel's microtask flush.
+	 */
+	private syncSubObs(e: Subscription): void {
+		const prev = e.obsDeps;
+		const next = new Set<NodeId>();
+		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node.id);
+		e.obsDeps = next;
+		for (const dep of next) {
+			if (prev === undefined || !prev.delete(dep)) {
+				this.subDepRefs[dep] = this.subDepRefs[dep]! + 1;
+				this.obsShift(dep, 1);
+			}
+		}
+		if (prev !== undefined) {
+			for (const dep of prev) {
+				this.subDepRefs[dep] = this.subDepRefs[dep]! - 1;
+				this.obsShift(dep, -1);
+			}
+		}
+	}
+
+	/**
 	 * Bounded mid-episode sweep so K1 cannot grow without limit between
 	 * quiescence points. Collects only the provably-safe subset: an edge
 	 * dep→t drops iff t cannot reach any node holding a committed watcher /
@@ -1904,9 +2001,8 @@ export class CosignalBridge {
 		let sp = 0;
 		for (let id = 0; id < this.nodesArr.length; id++) {
 			const ws = this.watchersByNode[id];
-			const re = this.reactEffectsByNode[id];
-			const ce = this.coreEffectsByNode[id];
-			if ((ws !== undefined && ws.length > 0) || (re !== undefined && re.length > 0) || (ce !== undefined && ce.length > 0)) {
+			const ns = this.subsByNode[id];
+			if ((ws !== undefined && ws.length > 0) || (ns !== undefined && ns.length > 0) || this.subDepRefs[id]! > 0) {
 				if (lastWalk[id] !== gen) {
 					lastWalk[id] = gen;
 					stack[sp++] = id;
@@ -2070,7 +2166,7 @@ export class CosignalBridge {
 					if (w.live) found.push(w);
 				}
 			}
-			const ces = this.coreEffectsByNode[cur];
+			const ces = this.subsByNode[cur];
 			if (ces !== undefined) {
 				for (let i = 0; i < ces.length; i++) {
 					const e = ces[i]!;
@@ -2248,15 +2344,19 @@ export class CosignalBridge {
 		// Direct kernel apply: the plain write tail, no public-method re-entry
 		// (the host seam already ran — policy checked, op folded).
 		__hostApplySet(node.handle, next);
-		if (this.watchers.size !== 0 || this.reactEffects.size !== 0) this.quietDrain();
-		if (this.coreEffects.size !== 0) this.directFlushCoreEffects();
+		if (this.watchers.size !== 0) this.quietDrain();
+		// A quiet fold moves committed truth for every root — an EF2 boundary
+		// (quiet ⇔ no open passes, so no frame can defer the re-check).
+		if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
+		if (this.newestSubCount !== 0) this.directFlushCoreEffects();
 		if (this.notifyN !== 0) this.flushNotify();
 	}
 
-	/** Value-gated observer reconciliation for a quiet fold: committed truth
+	/** Value-gated watcher reconciliation for a quiet fold: committed truth
 	 * moved for every root, and no slot/walk state exists to scope candidates,
-	 * so every live watcher and committed React effect re-checks directly —
-	 * the same compare-and-correct blocks as drainCommittedObservers. */
+	 * so every live watcher re-checks directly — the same compare-and-correct
+	 * block as drainCommittedObservers. (Committed subscriptions re-check via
+	 * revalidateCommittedSubs at the same boundary.) */
 	private quietDrain(): void {
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
@@ -2265,13 +2365,6 @@ export class CosignalBridge {
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
 				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
-			}
-		}
-		for (const e of this.reactEffects.values()) {
-			const now = this.evaluate(this.nodeById(e.node), { kind: 'committed', root: e.root });
-			if (!Object.is(now, e.lastValue)) {
-				e.lastValue = now;
-				e.runs++;
 			}
 		}
 	}
@@ -2465,7 +2558,7 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Core effects observe the newest world; flush after the walk returns. */
+	/** Newest-policy subscriptions observe the newest world; flush after the walk returns. */
 	private flushEffectQueue(): void {
 		const q = this.effectQueue;
 		if (q.length === 0) return;
@@ -2482,9 +2575,10 @@ export class CosignalBridge {
 		q.length = 0;
 	}
 
-	/** Direct-mode writes flush every core effect (no walk exists to scope them). */
+	/** Direct-mode/quiet writes flush every newest subscription (no walk exists to scope them). */
 	private directFlushCoreEffects(): void {
-		for (const e of this.coreEffects.values()) {
+		for (const e of this.subs.values()) {
+			if (e.policy !== 'newest') continue;
 			const value = this.evaluate(this.nodeById(e.node), NEWEST);
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
@@ -2671,48 +2765,235 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Referee surface — a committed-for-root observer (the useSignalEffect
-	 * shape): evaluates in the root's committed world, because side effects
-	 * must track what the user actually sees — a pending batch may still be
-	 * discarded. Driven by twin tests and the lockstep corpus; the shipped
-	 * bindings implement committed effects adapter-side. Fate owned by the
-	 * effects-unification design (plans/). */
-	mountReactEffect(rootId: RootId, node: AnyNode, name: string): ReactEffect {
-		const e: ReactEffect = {
-			id: this.nextEffect++, name, root: rootId, node: node.id,
-			lastValue: this.evaluate(node, { kind: 'committed', root: rootId }),
-			runs: 0,
+	// ------------------------------------------ the subscription mechanism
+	// (effects unification by promotion — the adapter's EffectRec, moved into
+	// core as THE committed-observer mechanism; see the Subscription type.)
+
+	/**
+	 * Register a committed observer (the production `useSignalEffect`
+	 * surface). Registration is illegal inside an open evaluation frame —
+	 * the record is committed-consumer state; it must never exist for a
+	 * discarded render attempt (contract §2 L3; the render-stack half of the
+	 * guard is adapter-enforced, since "on a render call stack" is a host
+	 * predicate). The caller then runs `captureRun` from the host's effect
+	 * phase to take the first dep snapshot.
+	 */
+	mountCommittedObserver(rootId: RootId, name: string, refire?: () => void): Subscription {
+		if (this.evalDepth > 0 || this.inFoldCallback) {
+			throw new BridgeScheduleError('effect registration is illegal inside an open evaluation/fold frame');
+		}
+		const e: Subscription = {
+			id: this.nextEffect++, name, policy: 'committed', root: rootId, node: 0,
+			deps: [], refire, body: undefined, lastValue: undefined,
+			runs: 0, cleanups: 0, queuedWalk: 0, live: true, obsDeps: undefined,
 		};
 		this.root(rootId);
-		this.reactEffects.set(e.id, e);
-		let byNode = this.reactEffectsByNode[node.id];
+		this.subs.set(e.id, e);
+		this.committedSubCount++;
+		return e;
+	}
+
+	/** Referee configuration — a single-node body over the REAL mechanism
+	 * (twin tests and the lockstep corpus referee the promoted machinery
+	 * through this constructor; production uses mountCommittedObserver). */
+	mountReactEffect(rootId: RootId, node: AnyNode, name: string): Subscription {
+		const e = this.mountCommittedObserver(rootId, name);
+		e.body = () => void this.captureRead(node);
+		this.captureRun(e.id, e.body);
+		return e;
+	}
+
+	/** Referee configuration — a body that re-chooses deps CAUSALLY:
+	 * captureRead(sel) ? captureRead(a) : captureRead(b). */
+	mountReactEffectPick(rootId: RootId, sel: AnyNode, a: AnyNode, b: AnyNode, name: string): Subscription {
+		const e = this.mountCommittedObserver(rootId, name);
+		e.body = () => void (this.captureRead(sel) ? this.captureRead(a) : this.captureRead(b));
+		this.captureRun(e.id, e.body);
+		return e;
+	}
+
+	/** Newest-policy configuration (the absorbed core-effect referee shape):
+	 * one node, value-gated on its newest value, flushed post-delivery-walk. */
+	mountCoreEffect(node: AnyNode, name: string): Subscription {
+		const e: Subscription = {
+			id: this.nextEffect++, name, policy: 'newest', root: '', node: node.id,
+			deps: [], refire: undefined, body: undefined,
+			lastValue: this.evaluate(node, NEWEST),
+			runs: 0, cleanups: 0, queuedWalk: 0, live: true, obsDeps: undefined,
+		};
+		this.subs.set(e.id, e);
+		this.newestSubCount++;
+		let byNode = this.subsByNode[node.id];
 		if (byNode === undefined) {
 			byNode = [];
-			this.reactEffectsByNode[node.id] = byNode;
+			this.subsByNode[node.id] = byNode;
 		}
 		byNode.push(e);
 		return e;
 	}
 
-	/** Referee surface — a core effect() observer: always observes the
-	 * newest world. Driven by twin tests and the lockstep corpus; production
-	 * newest-world effects are the kernel's own `effect()`. Fate owned by
-	 * the effects-unification design (plans/). */
-	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
-		const e: CoreEffect = {
-			id: this.nextEffect++, name, node: node.id,
-			lastValue: this.evaluate(node, NEWEST),
-			runs: 0,
-			queuedWalk: 0,
-		};
-		this.coreEffects.set(e.id, e);
-		let byNode = this.coreEffectsByNode[node.id];
-		if (byNode === undefined) {
-			byNode = [];
-			this.coreEffectsByNode[node.id] = byNode;
+	/**
+	 * Runs a subscription body under the core capture frame: the effective
+	 * world becomes committed-for-root, every routed read (raw atom reads
+	 * through the host read hook, bound/overlay computed reads through
+	 * `captureRead`) appends to the dep snapshot, and reads INSIDE a
+	 * computed's own evaluation stay the computed's (the evaluation world on
+	 * stack outranks the frame — the promoted suppression rule). A mid-body
+	 * throw installs the partial snapshot: the deps read before the throw are
+	 * real dependencies. After the frame closes, the snapshot's observation
+	 * retains re-point (RCC-OL1: effect deps count toward the union exactly
+	 * like watcher closures — the obsShift plane).
+	 */
+	captureRun(id: EffectId, body: () => void): void {
+		const e = this.subs.get(id);
+		if (e === undefined || e.policy !== 'committed') throw new BridgeScheduleError(`unknown committed subscription ${id}`);
+		if (this.captureFrame !== undefined) throw new BridgeScheduleError('captureRun frames do not nest — one effect body runs at a time');
+		if (this.evalDepth > 0) throw new BridgeScheduleError('captureRun is illegal inside an open evaluation frame');
+		const frame = { sub: e, deps: [] as { node: AnyNode; value: Value }[] };
+		this.captureFrame = frame;
+		this.syncReadRouting();
+		try {
+			body();
+		} finally {
+			this.captureFrame = undefined;
+			this.syncReadRouting();
+			e.deps = frame.deps;
+			e.lastValue = frame.deps.length === 0 ? undefined : frame.deps[frame.deps.length - 1]!.value;
+			// Observation re-point AFTER the frame closes, so discovery
+			// evaluations run on a clean frame stack (same rule as obsSyncDeps).
+			this.syncSubObs(e);
 		}
-		byNode.push(e);
-		return e;
+	}
+
+	/** A routed read inside an open capture frame (overlay-node form: the
+	 * bindings' BoundComputed reads and referee bodies land here; raw kernel
+	 * atom reads route through the host read hook instead). */
+	captureRead(node: AnyNode): Value {
+		const frame = this.captureFrame;
+		if (frame === undefined) throw new BridgeScheduleError('captureRead requires an open captureRun frame');
+		const v = this.evaluate(node, { kind: 'committed', root: frame.sub.root });
+		frame.deps.push({ node, value: v });
+		return v;
+	}
+
+	/** True while a captureRun frame is open (bindings' read-routing check). */
+	captureActive(): boolean {
+		return this.captureFrame !== undefined;
+	}
+
+	/**
+	 * Remove a subscription (unmount / teardown). Cleanup invocation is the
+	 * REGISTRAR's job (the adapter runs the user cleanup; referee
+	 * configurations count it here) — guaranteed at unmount, while a make-up
+	 * fire is not (RCC-EF2 amended; RCC-OL2 forbids anything after teardown:
+	 * `live` flips so queued refires no-op).
+	 */
+	removeSubscription(id: EffectId): void {
+		const e = this.subs.get(id);
+		if (e === undefined) throw new BridgeScheduleError(`unknown subscription ${id}`);
+		e.live = false;
+		this.subs.delete(id);
+		if (e.policy === 'newest') {
+			this.newestSubCount--;
+			const byNode = this.subsByNode[e.node];
+			if (byNode !== undefined) {
+				const i = byNode.indexOf(e);
+				if (i >= 0) byNode.splice(i, 1);
+			}
+			return;
+		}
+		this.committedSubCount--;
+		e.cleanups++;
+		if (this.eventsOn) this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
+		// Release the snapshot's observation retains + routing-coverage counts.
+		const held = e.obsDeps;
+		if (held !== undefined) {
+			e.obsDeps = undefined;
+			for (const dep of held) {
+				this.subDepRefs[dep] = this.subDepRefs[dep]! - 1;
+				this.obsShift(dep, -1);
+			}
+		}
+	}
+
+	/** Referee surface — StrictMode-style replay: cleanup + unconditional
+	 * re-run + recapture. Illegal while the subscription's root has an open
+	 * pass frame (React double-invokes effects post-commit, never mid-render). */
+	replayReactEffect(id: EffectId): void {
+		const e = this.subs.get(id);
+		if (e === undefined || e.policy !== 'committed') throw new BridgeScheduleError(`unknown react effect ${id}`);
+		if (this.openPassByRoot.has(e.root)) {
+			throw new BridgeScheduleError('replay requires the effect root to have no open pass frame');
+		}
+		this.runCommittedSub(e);
+		this.flushNotify();
+	}
+
+	/** The referee re-fire: cleanup + body re-run through the REAL capture
+	 * frame + events (adapter-registered subscriptions instead queue their
+	 * refire to the operation boundary — the adapter owns the body run). */
+	private runCommittedSub(e: Subscription): void {
+		if (e.refire !== undefined) {
+			this.queueNotify(3, undefined, undefined, 0, e);
+			return;
+		}
+		e.cleanups++;
+		if (this.eventsOn) this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
+		if (e.body !== undefined) this.captureRun(e.id, e.body);
+		e.runs++;
+		if (this.eventsOn) {
+			this.log({
+				type: 'react-effect-run', effect: e.name, root: e.root,
+				value: e.lastValue, values: e.deps.map((d) => d.value),
+			});
+		}
+	}
+
+	/**
+	 * The RCC-EF2 boundary re-check (amended, 2026-07-06): once per boundary
+	 * OPERATION — per-root commit, retirement, settlement, quiet fold —
+	 * value-gated over each subscription's dep snapshot, at the boundary
+	 * value (multiple member writes coalesce), and NEVER while the
+	 * subscription's own root has an open render-pass frame (the deferred
+	 * flip flushes at that frame's close — commit or discard). A retirement
+	 * re-checks every root (a write-free retirement still flushes pending
+	 * member-write flips); a plain commit re-checks its own root. Runs at the
+	 * END of the boundary operation, after every committed-side mutation of
+	 * the boundary has landed (ordering joint, plan amendment 6).
+	 */
+	/** Host-initiated boundary re-check (public form of the scan below): the
+	 * bindings call it when THEY advance a root's committed table out of band
+	 * (the root-commit report's defensive delta reconciliation) — an advance
+	 * the engine's own boundary sites never saw. */
+	revalidateCommittedObservers(rootId: RootId): void {
+		this.revalidateCommittedSubs(rootId);
+		this.flushNotify();
+	}
+
+	private revalidateCommittedSubs(rootFilter: RootId | undefined): void {
+		if (this.committedSubCount === 0) return;
+		for (const e of [...this.subs.values()]) {
+			if (e.policy !== 'committed' || !e.live) continue;
+			if (rootFilter !== undefined && e.root !== rootFilter) continue;
+			if (this.openPassByRoot.has(e.root)) continue; // deferred to the frame's close
+			const world: World = { kind: 'committed', root: e.root };
+			let changed = false;
+			for (let i = 0; i < e.deps.length; i++) {
+				const d = e.deps[i]!;
+				let now: Value;
+				try {
+					now = this.evaluate(d.node, world);
+				} catch (err) {
+					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (battery 16d)
+					throw err;
+				}
+				if (!Object.is(now, d.value)) {
+					changed = true;
+					break;
+				}
+			}
+			if (changed) this.runCommittedSub(e);
+		}
 	}
 
 	/**
@@ -2768,6 +3049,10 @@ export class CosignalBridge {
 			this.reevaluateDeferredReleases();
 			this.reclaimAfterPassEnd(p);
 			this.recomputeQuiet(); // pass closed (and its pin unblocked compaction): quiet may re-arm
+			// EF2: the frame close is the deferred flush point for boundaries
+			// that occurred while this root's frame was open (the discard
+			// itself advances nothing; committed truth may already have moved).
+			this.revalidateCommittedSubs(p.root);
 			const tr = this.trace;
 			if (tr !== undefined) tr.opEnd();
 			this.flushNotify();
@@ -2833,6 +3118,12 @@ export class CosignalBridge {
 		this.reevaluateDeferredReleases();
 		this.reclaimAfterPassEnd(p);
 		this.recomputeQuiet(); // pass closed (and its pin unblocked compaction): quiet may re-arm
+		// EF2 boundary: ONE committed-subscription re-check per commit
+		// operation, at the boundary value — a pass locking in two tokens
+		// re-checks once, not per token (plan amendment 4's dedup rule).
+		// Retirements folded into this commit moved committed truth for every
+		// root, so the scan widens (each root still open-frame-deferred).
+		this.revalidateCommittedSubs((opts?.retireAtCommit ?? []).length > 0 ? undefined : p.root);
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
@@ -2906,6 +3197,9 @@ export class CosignalBridge {
 		if (t.state === 'retired') throw new BridgeScheduleError('retirement fires exactly once per token');
 		if (t.parked) throw new BridgeScheduleError('parked action tokens retire only at settlement');
 		this.retireInternal(t, committed);
+		// EF2 boundary: retirement is a guaranteed flush point for every root
+		// (a write-free retirement still flushes pending member-write flips).
+		this.revalidateCommittedSubs(undefined);
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
@@ -2920,6 +3214,7 @@ export class CosignalBridge {
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchSettle(t, committed);
 		this.retireInternal(t, committed);
+		this.revalidateCommittedSubs(undefined); // EF2 boundary: settlement is a guaranteed flush point
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
 	}
@@ -3070,15 +3365,16 @@ export class CosignalBridge {
 	 * (last rendered value vs committed-for-root NOW; urgent pre-paint
 	 * correction on real difference — comparing values is legal here
 	 * because both sides are committed truth, whereas live-write delivery
-	 * must stay value-blind), and revalidate the listed committed effects
-	 * (re-run on change). Candidates fire in id order (the reference
+	 * must stay value-blind). Candidates fire in id order (the reference
 	 * model's map order); the touched lists conservatively contain every
 	 * node a slot's writes could reach, so scoping to them reaches every
 	 * observer a full scan would, and the value gate makes the outcomes
-	 * identical.
+	 * identical. Committed SUBSCRIPTIONS do not drain here: their re-check
+	 * is once per boundary operation (revalidateCommittedSubs) — RCC-EF2's
+	 * amended boundary semantics — and needs no candidate collection at all
+	 * (per-root full scan, v1 = production cost).
 	 */
 	private drainWatcherBuf: Watcher[] = [];
-	private drainEffectBuf: ReactEffect[] = [];
 
 	/**
 	 * Watchers re-staled by their own commit: the commit reset
@@ -3103,9 +3399,7 @@ export class CosignalBridge {
 		const gen = ++this.walkGen; // reuse the walk column for per-drain candidate dedup
 		const lastWalk = this.lastWalk;
 		const ws = this.drainWatcherBuf;
-		const es = this.drainEffectBuf;
 		ws.length = 0;
-		es.length = 0;
 		// Candidate collection: the flipped slots' touched lists, expanded over
 		// WEAK (untracked) out-edges — strong cones are already fully listed.
 		const stack = this.walkStack;
@@ -3159,13 +3453,6 @@ export class CosignalBridge {
 					if (w.live && w.root === rootId) ws.push(w);
 				}
 			}
-			const ne = this.reactEffectsByNode[nid];
-			if (ne !== undefined) {
-				for (let j = 0; j < ne.length; j++) {
-					const e = ne[j]!;
-					if (e.root === rootId) es.push(e);
-				}
-			}
 		}
 		{
 			const re = this.restaled.get(rootId);
@@ -3179,7 +3466,6 @@ export class CosignalBridge {
 			}
 		}
 		if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
-		if (es.length > 1) es.sort((a, b) => a.id - b.id);
 		for (let i = 0; i < ws.length; i++) {
 			const w = ws[i]!;
 			const now = this.evaluate(this.nodeById(w.node), world);
@@ -3190,17 +3476,7 @@ export class CosignalBridge {
 				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
 			}
 		}
-		for (let i = 0; i < es.length; i++) {
-			const e = es[i]!;
-			const now = this.evaluate(this.nodeById(e.node), world);
-			if (!Object.is(now, e.lastValue)) {
-				e.lastValue = now;
-				e.runs++;
-				if (this.eventsOn) this.log({ type: 'react-effect-run', effect: e.name, root: rootId, value: now });
-			}
-		}
 		ws.length = 0;
-		es.length = 0;
 	}
 
 	// ---------------------------------------------------------- mount fixup
@@ -3372,8 +3648,7 @@ export class CosignalBridge {
 			if (n === undefined || n.kind !== 'computed') continue;
 			if (this.outList[id] === undefined && this.inList[id] === undefined) continue; // not K1-touched
 			const ws = this.watchersByNode[id];
-			const es = this.reactEffectsByNode[id];
-			if ((ws === undefined || ws.length === 0) && (es === undefined || es.length === 0)) continue;
+			if ((ws === undefined || ws.length === 0) && this.subDepRefs[id]! === 0) continue;
 			refreshTargets.push(n);
 		}
 		this.epoch++;

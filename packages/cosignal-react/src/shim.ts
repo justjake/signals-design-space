@@ -119,27 +119,14 @@ type RootRec = {
 	lastCommitGeneration: number;
 };
 
-type EffectRec = {
-	id: number;
-	root: RootId;
-	/** (node, value) pairs read during the last run, in the committed world of the effect's root. */
-	deps: Array<{ node: AnyNode; value: Value }>;
-	/** The root's commit generation when the snapshot was taken. */
-	rootCommitGen: number;
-	/** Re-fires the user effect (cleanup + run + re-track). */
-	refire: () => void;
-	live: boolean;
-};
-
 /** Bookkeeping for one bound-computed evaluation: read routing for nested
- * bound-computed reads (and a marker that suppresses effect-capture inside
- * the evaluation). */
+ * bound-computed reads (the engine's capture frame suppresses effect-capture
+ * inside evaluations on its own — the evaluation world outranks the frame). */
 type EvalFrame = {
 	read: Reader;
 };
 
 let nextRootSerial = 1;
-let nextEffectSerial = 1;
 
 /** The one active shim (module registry; hooks.ts manages activation). */
 let activeShim: Shim | undefined;
@@ -172,11 +159,23 @@ export class Shim {
 	targets = new Map<number, WatcherTarget>();
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
 	claimed = new Set<number>();
-	effects = new Map<number, EffectRec>();
 	/** The bridge evaluation frames opened by bound computeds (innermost last). */
 	private evalStack: EvalFrame[] = [];
-	/** Set while an effect fire is tracking committed-for-root reads. */
-	private effectCapture: { root: RootId; deps: Array<{ node: AnyNode; value: Value }> } | undefined;
+	/**
+	 * The React effect-timing shell (the ONE piece of effect machinery that
+	 * stays adapter-side): user refire bodies queued by the engine's
+	 * per-root-commit boundary scan must NOT run inside onRenderPassEnd —
+	 * React captures its re-pend classification before emitting pass end, so
+	 * a body write there could desync lock-in accounting (plan amendment 2;
+	 * codex review finding 1). While `holdingRefires` is set (around
+	 * bridge.passEnd for a COMMIT), refires park here and flush at the
+	 * root-commit report (`onRootCommitted` — CR5 orders it right after the
+	 * frame close, with no user code in between, so the boundary values are
+	 * unchanged). Retirement/settlement refires run at their own operation
+	 * boundary, exactly like today's post-`bridge.retire` revalidation did.
+	 */
+	private holdingRefires = false;
+	private heldRefires: (() => void)[] = [];
 
 	constructor(bridge: CosignalBridge) {
 		this.bridge = bridge;
@@ -190,26 +189,20 @@ export class Shim {
 		};
 		bridge.readAdopter = (atom) => this.nodeForAtom(atom);
 		// The ambient-world provider answers from the LIVE call context, per
-		// read: an effect fire resolves committed-for-root; a render resolves
-		// its own pass's world via the protocol's render context (stack-
-		// accurate — a COMPLETED-but-uncommitted pass is not "in render", and
-		// interleaved roots each see their own pass); anything else resolves
-		// newest (undefined).
+		// read: a render resolves its own pass's world via the protocol's
+		// render context (stack-accurate — a COMPLETED-but-uncommitted pass is
+		// not "in render", and interleaved roots each see their own pass);
+		// anything else resolves newest (undefined). Effect fires need no arm
+		// here: the ENGINE's captureRun frame owns committed-for-root routing
+		// and dependency capture (the promoted mechanism), and the engine
+		// consults its own frame before this provider.
 		bridge.setWorldProvider(() => {
-			const cap = this.effectCapture;
-			if (cap !== undefined) return { kind: 'committed', root: cap.root };
 			const rendering = this.renderingRoot();
 			if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
 				return { kind: 'pass', pass: rendering.pass };
 			}
 			return undefined;
 		});
-		bridge.readObserver = (node, value) => {
-			// Reads inside a bound-computed evaluation are the computed's own
-			// dependencies (tracked by the bridge frame), not the effect's.
-			if (this.evalStack.length !== 0) return;
-			this.effectCapture?.deps.push({ node, value });
-		};
 		// Direct listeners — the load-bearing consumption surface. The bridge's
 		// event LOG stays a referee/tracing artifact (it does not mint unless a
 		// referee retains it or a tracer attaches); scheduling decisions arrive
@@ -253,13 +246,12 @@ export class Shim {
 		this.unsubscribe();
 		this.bridge.writeClassifier = undefined;
 		this.bridge.readAdopter = undefined;
-		this.bridge.readObserver = undefined;
 		this.bridge.onDelivery = undefined;
 		this.bridge.onMountCorrective = undefined;
 		this.bridge.onCorrection = undefined;
 		this.bridge.setWorldProvider(undefined);
 		this.targets.clear();
-		this.effects.clear();
+		this.heldRefires.length = 0;
 	}
 
 	/** Listener bodies never throw across React's commit; failures are recorded. */
@@ -403,8 +395,16 @@ export class Shim {
 		// onBatchRetired events for the same commit arrive. The mount fixup
 		// for watchers minted this pass runs inside passEnd; the corrective
 		// re-renders it emits reach React through the direct listeners
-		// (delivered at the operation boundary, inside this call).
-		this.bridge.passEnd(pass.id, 'commit');
+		// (delivered at the operation boundary, inside this call). Effect
+		// REFIRES the commit's boundary scan queues are HELD here and flushed
+		// at the root-commit report (see holdingRefires) — pass-end precedes
+		// React's re-pend classification, the report follows it.
+		this.holdingRefires = true;
+		try {
+			this.bridge.passEnd(pass.id, 'commit');
+		} finally {
+			this.holdingRefires = false;
+		}
 		rec.pass = undefined;
 		this.maybeRetireAmbient(); // the closing pass may have been the last thing keeping ambient pending
 		// ctx.previous cells must hold the last COMMITTED value — a pending
@@ -440,16 +440,20 @@ export class Shim {
 	}
 
 	private handleBatchRetired(forkToken: number, committed: boolean): void {
+		this.flushHeldRefires(); // defensive: nothing stays parked past its commit's own events
 		const mapped = this.bridgeTokenByFork.get(forkToken);
 		if (mapped === undefined) return; // no cosignal writes rode this batch
 		const t = this.bridge.tokens.get(mapped);
 		if (t === undefined || t.state !== 'live') return;
+		// Retirement/settlement ARE effect boundaries now (RCC-EF2 amended):
+		// the engine's boundary scan runs inside retire/settleAction and
+		// queued refires fire at the operation boundary, inside this call —
+		// the same observable point as the old post-retire revalidation.
 		if (t.parked) this.bridge.settleAction(mapped, committed); // async action reached settlement
 		else this.bridge.retire(mapped, committed); // batch done everywhere: its writes become permanent history
 		this.bridgeTokenByFork.delete(forkToken);
 		this.forkTokenByBridge.delete(mapped);
 		this.maybeRetireAmbient(); // the last protocol retirement may close the ambient batch's pending window
-		this.revalidateEffects(); // retirement/settlement can move committed values: re-check effects
 	}
 
 	/**
@@ -490,6 +494,7 @@ export class Shim {
 		// sweep missed. Defensive: for batches with bridge tokens the pass's
 		// set already covers the delta by construction.
 		const root = this.bridge.root(rec.id);
+		let reconciled = false;
 		for (const forkToken of committedBatches) {
 			const mapped = this.bridgeTokenByFork.get(forkToken);
 			if (mapped === undefined) continue;
@@ -497,10 +502,29 @@ export class Shim {
 			if (t === undefined || t.state !== 'live' || root.committedTokens.has(mapped)) continue;
 			root.committedTokens.add(mapped);
 			root.commitGen++;
+			reconciled = true;
 		}
-		// Every root commit is an effect re-check trigger. The re-check compares
-		// values, so a commit that moved nothing an effect read is a no-op.
-		this.revalidateEffects(rec.id);
+		// The root-commit REPORT is where the commit's effect refires run
+		// (React's re-pend classification is behind us; CR5 puts no user code
+		// between the frame close and this report, so the boundary values are
+		// unchanged). The defensive reconciliation above is itself a
+		// committed-truth advance the engine's own boundary scan never saw —
+		// re-check that root if it actually added anything.
+		this.flushHeldRefires();
+		if (reconciled) this.bridge.revalidateCommittedObservers(rec.id);
+	}
+
+	/** Runs commit-held effect refires (see holdingRefires). */
+	private flushHeldRefires(): void {
+		if (this.heldRefires.length === 0) return;
+		const held = this.heldRefires.splice(0);
+		for (const run of held) {
+			try {
+				run();
+			} catch (error) {
+				this.errors.push(error);
+			}
+		}
 	}
 
 	// ---- direct listeners -> React ---------------------------------------------
@@ -571,16 +595,12 @@ export class Shim {
 			this.bridge.write(tokenId, node, op);
 		}
 		// A write into a batch already locked into some root's committed table
-		// changes that root's committed world immediately: committed state is
-		// "replay every committed batch's receipts", and this batch just gained
-		// a receipt. No protocol event will announce it (the batch already
-		// committed), so re-check effects now.
-		const mapped = forkToken === 0 ? undefined : this.bridgeTokenByFork.get(forkToken);
-		if (mapped !== undefined) {
-			for (const [rootId, root] of this.bridge.roots) {
-				if (root.committedTokens.has(mapped)) this.revalidateEffects(rootId);
-			}
-		}
+		// moves that root's committed world immediately — but effects are
+		// BOUNDARY consumers (RCC-EF2 amended, 2026-07-06): they never re-run
+		// mid-write. The engine re-checks their snapshots at the next boundary
+		// (retirement, settlement, per-root commit — or this root's frame
+		// close if one is open), coalescing every member write before it to
+		// one run at the boundary value. Nothing to do here.
 	}
 
 	/** Action-scope writes: classify into the action's batch explicitly, from anywhere — including after an await. */
@@ -588,74 +608,39 @@ export class Shim {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
+		// Member-write effect timing: see classifyWrite — boundary semantics.
 		this.bridge.scopeWrite(bridgeToken, node, op);
-		for (const [rootId, root] of this.bridge.roots) {
-			if (root.committedTokens.has(bridgeToken)) this.revalidateEffects(rootId);
-		}
 	}
 
-	// ---- useSignalEffect machinery -------------------------------------------------
+	// ---- useSignalEffect timing shell -------------------------------------------------
+	// The MECHANISM (registration, capture frame, dep snapshots, value-gated
+	// boundary re-checks, observation retains) lives in the engine
+	// (mountCommittedObserver / captureRun / removeSubscription). What stays
+	// here is exactly the React-phase knowledge: refires queued during a
+	// COMMIT's pass-end hold until the root-commit report (holdingRefires).
 
 	registerEffect(root: RootId, refire: () => void): number {
-		const id = nextEffectSerial++;
-		this.effects.set(id, { id, root, deps: [], rootCommitGen: this.bridge.root(root).commitGen, refire, live: true });
-		return id;
+		this.bridge.root(root); // materialize the per-root committed table (as before)
+		const sub = this.bridge.mountCommittedObserver(root, `effect@${root}`, () => {
+			// Invoked by the engine at the boundary operation's end. Inside a
+			// commit's pass-end: park until the root-commit report. Everywhere
+			// else (retirement, settlement, quiet fold, frame-close flush of a
+			// deferred flip): run now — the engine op has fully completed.
+			if (this.holdingRefires) this.heldRefires.push(refire);
+			else refire();
+		});
+		return sub.id;
 	}
 
 	unregisterEffect(id: number): void {
-		const rec = this.effects.get(id);
-		if (rec !== undefined) rec.live = false;
-		this.effects.delete(id);
+		if (this.bridge.subs.has(id)) this.bridge.removeSubscription(id);
 	}
 
-	/** Runs an effect body with committed-for-root read capture; stores the snapshot. */
+	/** Runs an effect body under the ENGINE's committed-for-root capture
+	 * frame (the promoted mechanism); the engine stores the dep snapshot. */
 	captureEffectRun(id: number, body: () => void): void {
-		const rec = this.effects.get(id);
-		if (rec === undefined) return;
-		const saved = this.effectCapture;
-		// While set, the world provider resolves raw atom reads committed-for-
-		// root, and the read observer lands them in the dependency snapshot.
-		this.effectCapture = { root: rec.root, deps: [] };
-		try {
-			body();
-		} finally {
-			rec.deps = this.effectCapture.deps;
-			rec.rootCommitGen = this.bridge.root(rec.root).commitGen;
-			this.effectCapture = saved;
-		}
-	}
-
-	/** Committed-for-root read during an effect fire (records the dep). */
-	private effectRead(node: AnyNode): Value {
-		const cap = this.effectCapture!;
-		const value = this.bridge.committedValue(node, cap.root);
-		cap.deps.push({ node, value });
-		return value;
-	}
-
-	/** Re-checks effect snapshots against the committed world of each effect's root (value-compared; re-fires on change). */
-	revalidateEffects(rootId?: RootId): void {
-		for (const rec of [...this.effects.values()]) {
-			if (!rec.live || (rootId !== undefined && rec.root !== rootId)) continue;
-			const gen = this.bridge.root(rec.root).commitGen;
-			const genMoved = gen !== rec.rootCommitGen;
-			let changed = false;
-			for (const dep of rec.deps) {
-				let now: Value;
-				try {
-					now = this.bridge.committedValue(dep.node, rec.root);
-				} catch (err) {
-					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip
-					throw err;
-				}
-				if (!Object.is(now, dep.value)) {
-					changed = true;
-					break;
-				}
-			}
-			if (genMoved) rec.rootCommitGen = gen; // generation caught up; re-firing stays value-gated
-			if (changed && rec.live) rec.refire();
-		}
+		if (!this.bridge.subs.has(id)) return; // torn down between queue and run
+		this.bridge.captureRun(id, body);
 	}
 
 	// ---- adoption -------------------------------------------------------------------
@@ -752,7 +737,9 @@ export class Shim {
 		if (frame !== undefined) {
 			return frame.read(node);
 		}
-		if (this.effectCapture !== undefined) return this.effectRead(node);
+		// An open engine capture frame (an effect body running): committed-
+		// for-root read, recorded into the dep snapshot by the engine.
+		if (this.bridge.captureActive()) return this.bridge.captureRead(node);
 		const rendering = this.renderingRoot();
 		if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
 			return this.evaluateSuspending(() => this.bridge.passValue(node, rendering.pass!));

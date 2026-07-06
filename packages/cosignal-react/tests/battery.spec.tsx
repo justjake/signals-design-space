@@ -17,7 +17,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom, ReducerAtom, effect } from 'cosignal';
+import { Atom, ReducerAtom, SuspendedRead, effect } from 'cosignal';
 import * as CosignalReact from '../src/index.js';
 import { useSignal, useComputed, useSignalEffect, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
@@ -678,5 +678,149 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		expect(h.bridge.quiet).toBe(true); // quiet re-armed — compaction and re-arming no longer blocked
 		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // ambient content is committed truth
 		expect(text(container)).toBe('a:1;');
+	});
+});
+
+describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — effects-unification re-pin)', () => {
+	// Production originally revalidated effects IMMEDIATELY at writes into a
+	// batch some root had already committed (the member-write trigger). The
+	// amended EF2 rules those BOUNDARY semantics: never mid-write, coalesced
+	// to one run at the boundary value. These pins are mutation-style: the
+	// old immediate revalidation fails them.
+
+	test('member writes coalesce: no mid-write fire, ONE cleanup+run at the settlement boundary value', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const b = new Atom(0);
+		const runs: number[] = [];
+		const cleans: number[] = [];
+		function View() {
+			// NOTE: no component subscribes to `a` — the member writes below
+			// schedule no re-render, so no commit boundary lands before the
+			// settlement; the window stays open for the assertions.
+			useSignalEffect(() => {
+				const v = a.state as number;
+				runs.push(v);
+				return () => cleans.push(v);
+			}, []);
+			return <span>b:{useSignal(b)};</span>;
+		}
+		await h.mount(<View />);
+		expect(runs).toEqual([0]);
+		const gate = deferred<void>();
+		const wrote = deferred<void>();
+		const hold = deferred<void>();
+		await act(async () => {
+			startSignalTransition(async (scope) => {
+				scope.set(b, 1); // sync part: the transition renders + commits (locks in) while parked
+				await gate.promise;
+				scope.set(a, 1); // member writes: committed truth moves at each…
+				scope.set(a, 2);
+				scope.set(a, 3);
+				wrote.resolve();
+				await hold.promise; // …but the action stays parked past the assertion
+			});
+		});
+		expect(runs).toEqual([0]); // b's lock-in commit: value gate holds (a unchanged)
+		await act(async () => {
+			gate.resolve();
+			await wrote.promise;
+		});
+		expect(runs).toEqual([0]); // NEVER mid-write (the old adapter fired here at 1, 2, and 3)
+		expect(cleans).toEqual([]);
+		await act(async () => {
+			hold.resolve();
+		});
+		await act(async () => {});
+		expect(runs).toEqual([0, 3]); // ONE re-fire at the settlement boundary, at the boundary value
+		expect(cleans).toEqual([0]); // exactly one cleanup before it — 1 and 2 were never observed
+	});
+
+	test('unmount before the boundary: cleanup is guaranteed; the boundary after teardown fires nothing (OL2 — a make-up fire is not owed)', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const b = new Atom(0);
+		const runs: number[] = [];
+		const cleans: number[] = [];
+		function Eff() {
+			useSignalEffect(() => {
+				const v = a.state as number;
+				runs.push(v);
+				return () => cleans.push(v);
+			}, []);
+			return null;
+		}
+		function View({ on }: { on: boolean }) {
+			return (
+				<div>
+					b:{useSignal(b)};{on ? <Eff /> : null}
+				</div>
+			);
+		}
+		const { root } = await h.mount(<View on={true} />);
+		expect(runs).toEqual([0]);
+		const gate = deferred<void>();
+		const wrote = deferred<void>();
+		const hold = deferred<void>();
+		await act(async () => {
+			startSignalTransition(async (scope) => {
+				scope.set(b, 1);
+				await gate.promise;
+				scope.set(a, 7); // the write lands while the effect is live…
+				wrote.resolve();
+				await hold.promise; // …but its durable flip is the settlement, later
+			});
+		});
+		await act(async () => {
+			gate.resolve();
+			await wrote.promise;
+		});
+		expect(runs).toEqual([0]); // no boundary has exposed a=7 yet
+		await act(async () => {
+			root.render(<View on={false} />); // unmount the effect before the boundary
+		});
+		expect(cleans).toEqual([0]); // cleanup is GUARANTEED at unmount
+		await act(async () => {
+			hold.resolve(); // the settlement boundary arrives AFTER teardown
+		});
+		await act(async () => {});
+		expect(runs).toEqual([0]); // nothing runs after teardown (RCC-OL2); a make-up fire is not owed
+		expect(cleans).toEqual([0]);
+	});
+
+	test('16d — a still-pending suspended dep is not a flip; the first boundary after settlement re-fires with the settled value', async () => {
+		h = makeHarness();
+		const gate = deferred<string>();
+		const kick = new Atom(0);
+		const seen: unknown[] = [];
+		function View() {
+			const data = useComputed<string>((ctx) => {
+				void (kick.state as number); // the request's key input (a tracked dep)
+				return ctx.use('k', () => gate.promise);
+			}, []);
+			useSignalEffect(() => {
+				seen.push(data.state); // background read: pending folds to its stable sentinel
+			}, [data]);
+			return <span>k:{useSignal(kick)};</span>;
+		}
+		await h.mount(<View />);
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toBeInstanceOf(SuspendedRead); // the snapshot holds the stable sentinel
+		await act(async () => {
+			kick.set(1); // a boundary while the dep is still pending
+		});
+		expect(seen).toHaveLength(1); // still-pending is NOT a flip (battery 16d)
+		await act(async () => {
+			gate.resolve('DATA');
+		});
+		// Thenable settlement is a data-layer event, not a batch boundary:
+		// no re-fire until committed truth next moves (EF2 names commits,
+		// retirements, and action settlements — not resource settlement).
+		expect(seen).toHaveLength(1);
+		await act(async () => {
+			kick.set(2); // the first boundary after settlement
+		});
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toBe('DATA'); // re-fired with the settled value
 	});
 });

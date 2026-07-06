@@ -176,17 +176,32 @@ export type Watcher = {
 };
 
 /**
- * A useSignalEffect-shaped observer: it sees committed-for-root state only.
- * Side effects must track what the user actually sees; a pending update may
- * still be discarded.
+ * A useSignalEffect-shaped observer: a committed-for-root dep-snapshot
+ * subscription (the promoted production mechanism — effects unification,
+ * 2026-07-06). Side effects must track what the user actually sees; a
+ * pending update may still be discarded. The BODY is the real thing being
+ * modeled: each run re-reads under committed-for-root capture and re-chooses
+ * its dependencies causally (a flag-flip body reads different atoms on
+ * different runs); `deps` is the (node, value) snapshot of the last run, and
+ * re-checks are value-gated over it. Re-check timing is RCC-EF2's amended
+ * BOUNDARY semantics: once per boundary operation (per-root commit,
+ * retirement, settlement), at the boundary value, never while the effect's
+ * own root has an open render-pass frame (deferred to that frame's close);
+ * cleanup runs before every re-fire and at removal, and nothing runs after
+ * removal (RCC-OL2).
  */
 export type ReactEffect = {
 	id: EffectId;
 	name: string;
 	root: RootId;
-	node: NodeId;
+	/** The effect body: run under committed-for-root read capture. */
+	body: (read: Reader) => void;
+	/** Dep snapshot: (node, value) pairs the last run captured, in read order. */
+	deps: { node: AnyNode; value: Value }[];
+	/** Convenience comparand (tests): the last captured value of the last run. */
 	lastValue: Value;
 	runs: number;
+	cleanups: number;
 };
 
 /** A core effect() observer: it sees the newest world (every write applied). */
@@ -221,7 +236,8 @@ export type ModelEvent =
 	| { type: 'delivery'; watcher: string; token: TokenId; slot: SlotId; seq: number; mode: 'fresh' | 'interleaved' }
 	| { type: 'suppressed'; watcher: string; token: TokenId; slot: SlotId; seq: number }
 	| { type: 'core-effect-run'; effect: string; value: Value }
-	| { type: 'react-effect-run'; effect: string; root: RootId; value: Value }
+	| { type: 'react-effect-run'; effect: string; root: RootId; value: Value; values: Value[] }
+	| { type: 'react-effect-cleanup'; effect: string; root: RootId }
 	| { type: 'reconcile-correction'; watcher: string; root: RootId; from: Value; to: Value; cause: 'retirement' | 'per-root-commit' }
 	| { type: 'mount-corrective'; watcher: string; token: TokenId; slot: SlotId }
 	| { type: 'mount-urgent-correction'; watcher: string; from: Value; to: Value }
@@ -878,16 +894,116 @@ export class CosignalModel {
 		p.rendered.add(watcherId);
 	}
 
-	/** Mount a useSignalEffect-shaped observer: it reads committed-for-root state only. */
+	/** Mount a useSignalEffect-shaped observer with a single-node body. */
 	mountReactEffect(rootId: RootId, node: AnyNode, name: string): ReactEffect {
+		return this.mountCommittedObserver(rootId, name, (read) => void read(node));
+	}
+
+	/** Mount a committed observer whose body re-chooses deps CAUSALLY: it
+	 * reads `sel` and, on its truthiness, reads `a` or `b` — the dep-flip
+	 * family where snapshot mechanisms rot (plan amendment 4). */
+	mountReactEffectPick(rootId: RootId, sel: AnyNode, a: AnyNode, b: AnyNode, name: string): ReactEffect {
+		return this.mountCommittedObserver(rootId, name, (read) => void (read(sel) ? read(a) : read(b)));
+	}
+
+	/** The registration surface the constructors above configure. The initial
+	 * run captures the first dep snapshot (runs stays 0 — the mount run is
+	 * React's own effect invocation, not a re-fire). */
+	mountCommittedObserver(rootId: RootId, name: string, body: (read: Reader) => void): ReactEffect {
+		if (this.evalDepth > 0 || this.inFoldCallback) {
+			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame');
+		}
 		const e: ReactEffect = {
-			id: this.nextEffect++, name, root: rootId, node: node.id,
-			lastValue: this.evaluate(node, { kind: 'committed', root: rootId }),
-			runs: 0,
+			id: this.nextEffect++, name, root: rootId, body,
+			deps: [], lastValue: undefined, runs: 0, cleanups: 0,
 		};
 		this.root(rootId);
+		this.captureReactEffectRun(e);
 		this.reactEffects.set(e.id, e);
 		return e;
+	}
+
+	/** Removal (unmount): cleanup is GUARANTEED; nothing runs after (RCC-OL2). */
+	removeReactEffect(id: EffectId): void {
+		const e = this.reactEffects.get(id);
+		if (e === undefined) throw new ScheduleError(`unknown react effect ${id}`);
+		e.cleanups++;
+		this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
+		this.reactEffects.delete(id);
+	}
+
+	/** StrictMode-style replay: cleanup + unconditional re-run (not value-
+	 * gated), recapturing deps. Illegal while the effect's root has an open
+	 * pass frame (React double-invokes effects post-commit, never mid-render). */
+	replayReactEffect(id: EffectId): void {
+		const e = this.reactEffects.get(id);
+		if (e === undefined) throw new ScheduleError(`unknown react effect ${id}`);
+		for (const p of this.passes.values()) {
+			if (p.state !== 'ended' && p.root === e.root) {
+				throw new ScheduleError('replay requires the effect root to have no open pass frame');
+			}
+		}
+		this.runReactEffect(e);
+	}
+
+	/** Runs the body under committed-for-root read capture; installs the new
+	 * dep snapshot. Reads inside a computed's own evaluation belong to the
+	 * computed, not the effect (suppression is by construction: only the
+	 * body's TOP-LEVEL reads reach this reader). */
+	private captureReactEffectRun(e: ReactEffect): void {
+		const deps: { node: AnyNode; value: Value }[] = [];
+		const read: Reader = (n) => {
+			const v = this.evaluate(n, { kind: 'committed', root: e.root });
+			deps.push({ node: n, value: v });
+			return v;
+		};
+		try {
+			e.body(read);
+		} finally {
+			// A mid-body throw keeps the partial snapshot (the deps read before
+			// the throw are real dependencies — same rule as the engine frame).
+			e.deps = deps;
+			e.lastValue = deps.length === 0 ? undefined : deps[deps.length - 1]!.value;
+		}
+	}
+
+	/** Cleanup + re-run + recapture (the re-fire): logs both halves. */
+	private runReactEffect(e: ReactEffect): void {
+		e.cleanups++;
+		this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
+		this.captureReactEffectRun(e);
+		e.runs++;
+		this.log({
+			type: 'react-effect-run', effect: e.name, root: e.root,
+			value: e.lastValue, values: e.deps.map((d) => d.value),
+		});
+	}
+
+	/**
+	 * The EF2 boundary re-check: once per boundary OPERATION (never per
+	 * locked-in token — one pass committing two batches re-checks once, at
+	 * the boundary value), value-gated over each effect's dep snapshot,
+	 * SKIPPING effects whose root has an open pass frame (an effect never
+	 * runs ahead of its own root's screen; the deferred flip flushes when
+	 * that frame closes). Runs at the END of the boundary operation.
+	 */
+	private revalidateReactEffects(rootFilter?: RootId): void {
+		for (const e of [...this.reactEffects.values()]) {
+			if (rootFilter !== undefined && e.root !== rootFilter) continue;
+			let open = false;
+			for (const p of this.passes.values()) {
+				if (p.state !== 'ended' && p.root === e.root) { open = true; break; }
+			}
+			if (open) continue; // deferred to the frame's close
+			let changed = false;
+			for (const d of e.deps) {
+				if (!Object.is(this.evaluate(d.node, { kind: 'committed', root: e.root }), d.value)) {
+					changed = true;
+					break;
+				}
+			}
+			if (changed) this.runReactEffect(e);
+		}
 	}
 
 	/** Mount a core effect() observer: it reads the newest world. */
@@ -931,6 +1047,11 @@ export class CosignalModel {
 			for (const wid of p.mounted) this.watchers.delete(wid); // never subscribed; the tree died
 			this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
 			this.reevaluateDeferredReleases();
+			// EF2: the frame close is the deferred flush point for boundaries
+			// that occurred while this root's frame was open (committed truth
+			// may already have moved via member writes / retirements the open
+			// frame deferred) — the discard itself advances nothing.
+			this.revalidateReactEffects(p.root);
 			return;
 		}
 		// (1) Baseline capture at the commit's committed-side entry: the mount
@@ -980,6 +1101,12 @@ export class CosignalModel {
 		}
 		this.log({ type: 'pass-committed', pass: p.id, root: p.root });
 		this.reevaluateDeferredReleases();
+		// EF2 boundary: ONE effect re-check per commit operation, at the
+		// boundary value — a pass locking in two tokens re-checks once, not
+		// per token (amendment 4's dedup rule). With retirements folded into
+		// this commit, committed truth moved for every root, so the scan
+		// widens to all roots (each still open-frame-deferred individually).
+		this.revalidateReactEffects((opts?.retireAtCommit ?? []).length > 0 ? undefined : p.root);
 	}
 
 	/** A deferred slot release re-evaluates at every pass end, commit and discard alike. */
@@ -1007,6 +1134,9 @@ export class CosignalModel {
 		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per token');
 		if (t.parked) throw new ScheduleError('parked action tokens retire only at settlement');
 		this.retireInternal(t, committed);
+		// EF2 boundary: retirement is a guaranteed flush point for every root
+		// (a write-free retirement still flushes pending member-write flips).
+		this.revalidateReactEffects();
 	}
 
 	/** The async action's thenable settles; the host then retires the token. */
@@ -1016,6 +1146,7 @@ export class CosignalModel {
 		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled');
 		t.parked = false;
 		this.retireInternal(t, committed);
+		this.revalidateReactEffects(); // EF2 boundary: settlement is a guaranteed flush point
 	}
 
 	/**
@@ -1112,8 +1243,10 @@ export class CosignalModel {
 	 * committed-for-root NOW and correct urgently, pre-paint, on a real
 	 * difference. Comparing values is legal HERE — both sides are committed
 	 * truth, one world — unlike live-write delivery, which is never
-	 * value-gated because it would compare across worlds. Committed effects
-	 * revalidate the same way (re-run on change).
+	 * value-gated because it would compare across worlds. Committed EFFECTS
+	 * do NOT drain here: their re-check is once per boundary operation
+	 * (revalidateReactEffects), not per flip — RCC-EF2's amended boundary
+	 * semantics.
 	 */
 	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		const world: World = { kind: 'committed', root: rootId };
@@ -1124,15 +1257,6 @@ export class CosignalModel {
 				this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedup.clear(); // dedup bits re-arm at the watcher's render
-			}
-		}
-		for (const e of this.reactEffects.values()) {
-			if (e.root !== rootId) continue;
-			const now = this.evaluate(this.nodeById(e.node), world);
-			if (!Object.is(now, e.lastValue)) {
-				e.lastValue = now;
-				e.runs++;
-				this.log({ type: 'react-effect-run', effect: e.name, root: rootId, value: now });
 			}
 		}
 	}

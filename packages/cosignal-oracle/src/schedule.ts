@@ -50,6 +50,12 @@ export type ScheduleOp =
 	| { t: 'mount'; pass: number; node: number }
 	| { t: 'render'; pass: number; watcher: number }
 	| { t: 'reactEffect'; root: string; node: number }
+	/** A committed observer whose body re-chooses deps CAUSALLY:
+	 * read(sel) ? read(a) : read(b) — the dep-flip family. */
+	| { t: 'reactEffectPick'; root: string; sel: number; a: number; b: number }
+	| { t: 'removeReactEffect'; effect: number }
+	/** StrictMode-style replay: cleanup + unconditional re-run + recapture. */
+	| { t: 'replayReactEffect'; effect: number }
 	| { t: 'coreEffect'; node: number }
 	| { t: 'discardAllWip' }
 	| { t: 'quiesce' };
@@ -128,6 +134,15 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'mount': m.mountWatcher(passAt(m, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
 			case 'render': m.renderWatcher(passAt(m, op.pass), watcherAt(m, op.watcher)); break;
 			case 'reactEffect': m.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
+			case 'reactEffectPick':
+				m.mountReactEffectPick(
+					op.root,
+					nodes[op.sel % nodes.length]!, nodes[op.a % nodes.length]!, nodes[op.b % nodes.length]!,
+					`E${uniq}`,
+				);
+				break;
+			case 'removeReactEffect': m.removeReactEffect(effectAt(m, op.effect)); break;
+			case 'replayReactEffect': m.replayReactEffect(effectAt(m, op.effect)); break;
 			case 'coreEffect': m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`); break;
 			case 'discardAllWip': m.discardAllWip(); break;
 			case 'quiesce': m.quiesce(); break;
@@ -174,6 +189,12 @@ function passAt(m: CosignalModel, index: number): number {
 function watcherAt(m: CosignalModel, index: number): number {
 	const ids = [...m.watchers.keys()];
 	if (ids.length === 0) throw new ScheduleError('no watchers yet');
+	return ids[index % ids.length]!;
+}
+
+function effectAt(m: CosignalModel, index: number): number {
+	const ids = [...m.reactEffects.keys()];
+	if (ids.length === 0) throw new ScheduleError('no react effects yet');
 	return ids[index % ids.length]!;
 }
 
@@ -224,7 +245,15 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			if (bool(0.5)) ops.push({ t: 'render', pass: pick(20), watcher: pick(10) });
 		}
 		else if (roll < 0.91) ops.push({ t: 'render', pass: pick(20), watcher: pick(10) });
-		else if (roll < 0.94) ops.push({ t: 'reactEffect', root: ROOTS[pick(2)]!, node: pick(8) });
+		else if (roll < 0.94) {
+			// Committed observers: single-node bodies and causally dep-choosing
+			// (pick) bodies, with occasional removal / StrictMode replay so the
+			// snapshot lifecycle (recapture, cleanup, OL2 no-run-after-removal)
+			// fuzzes under every interleaving.
+			if (bool(0.5)) ops.push({ t: 'reactEffect', root: ROOTS[pick(2)]!, node: pick(8) });
+			else ops.push({ t: 'reactEffectPick', root: ROOTS[pick(2)]!, sel: pick(8), a: pick(8), b: pick(8) });
+			if (bool(0.25)) ops.push({ t: bool(0.5) ? 'removeReactEffect' : 'replayReactEffect', effect: pick(10) });
+		}
 		else if (roll < 0.96) ops.push({ t: 'coreEffect', node: pick(8) });
 		else if (roll < 0.98) ops.push({ t: 'discardAllWip' });
 		else ops.push({ t: 'quiesce' });

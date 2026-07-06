@@ -291,6 +291,22 @@ export class TwinDriver {
 			this.engine.mountReactEffect(root, this.toEngine(node), name));
 	}
 
+	mountReactEffectPick(root: string, sel: AnyNode, a: AnyNode, b: AnyNode, name: string): ReactEffect {
+		return this.both('mountReactEffectPick',
+			() => this.model.mountReactEffectPick(root, sel, a, b, name),
+			() => this.engine.mountReactEffectPick(root, this.toEngine(sel), this.toEngine(a), this.toEngine(b), name));
+	}
+
+	removeReactEffect(id: number): void {
+		this.both('removeReactEffect', () => this.model.removeReactEffect(id), () =>
+			this.engine.removeSubscription(id));
+	}
+
+	replayReactEffect(id: number): void {
+		this.both('replayReactEffect', () => this.model.replayReactEffect(id), () =>
+			this.engine.replayReactEffect(id));
+	}
+
 	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
 		return this.both('mountCoreEffect', () => this.model.mountCoreEffect(node, name), () =>
 			this.engine.mountCoreEffect(this.toEngine(node), name));
