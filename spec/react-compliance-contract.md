@@ -105,7 +105,12 @@ RUL-5): the rule governs application and history state — anything whose
 content a consumer could ever observe. Mechanism infrastructure (object
 pools, notification plumbing, per-node policy columns) is outside the
 taxonomy but must still carry per-row documentation of its actual
-lifetime and reclamation.* [ruling 2026-07-06: RUL-5] The adversarial reviews of 2026-07-05 found
+lifetime and reclamation. Clarified same day: a CACHE whose content
+re-derives entirely from already-classified state (a committed-view
+arena rebuildable from L1/L2 history, a memo) is mechanism — the
+observable content is governed where it is classified; the cache's
+lifetime is documented per row, and discarding it must never lose
+observable state.* [ruling 2026-07-06: RUL-5] The adversarial reviews of 2026-07-05 found
 that every design failure in this project's history was a lifetime
 misclassification — state filed under machinery built for a different
 lifetime (the codex review's closing diagnosis: the failed plan
