@@ -15,7 +15,9 @@ declare module 'react' {
 		onRenderPassResume?: (container: unknown) => void;
 		/** The pass frame closed, exactly once per open; committed=true fires inside the commit, BEFORE the same commit's onRootCommitted — the point where an external store can still snapshot committed state as a baseline. */
 		onRenderPassEnd?: (container: unknown, committed: boolean) => void;
+		/** Part of the host protocol (fires just before a commit starts mutating the host tree); planned — not yet wired by these bindings. */
 		onBeforeMutation?: (container: unknown) => void;
+		/** Part of the host protocol (fires once a commit is done mutating the host tree); planned — not yet wired by these bindings. */
 		onAfterMutation?: (container: unknown) => void;
 		/** The batch is done everywhere; fires exactly once per token. committed=false only for batches that produced no React work. */
 		onBatchRetired?: (token: number, committed: boolean) => void;

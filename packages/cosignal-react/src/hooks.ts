@@ -19,7 +19,7 @@
 import * as React from 'react';
 import { Atom, Computed, ReducerAtom, registerReactBridge } from 'cosignal';
 import type { AnyNode, CosignalBridge, RootId } from 'cosignal';
-import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, type BoundCtx, type WatcherTarget } from './shim.js';
+import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------
 
@@ -51,7 +51,7 @@ export function registerCosignalReact(opts?: { bridge?: CosignalBridge }): Cosig
 		shim,
 		dispose: () => {
 			shim.dispose();
-			if (getActiveShim() === undefined) setActiveShim(undefined);
+			unregisterShim(shim); // clears the slot only if it still points at this shim — never a successor's registration
 		},
 	};
 }

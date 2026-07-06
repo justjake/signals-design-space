@@ -6,8 +6,8 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom, type AtomNode } from 'cosignal';
-import { useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
+import { Atom, ReducerAtom, __newBridgeForTest, type AtomNode } from 'cosignal';
+import { registerCosignalReact, requireShim, useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
 let h: Harness;
@@ -542,5 +542,29 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		await act(async () => {});
 		expect(log).toEqual(['observe', 'unobserve']);
 		expect(h.bridge.quiet).toBe(true);
+	});
+});
+
+describe('registration lifecycle (module active-shim slot)', () => {
+	test('disposing an old shim after a new one has registered must not unregister the new one', async () => {
+		h = makeHarness(); // registration A (afterEach re-disposes it; that late dispose must stay slot-neutral too)
+		const handleA = h.handle;
+		// A's shim goes dead without its handle's dispose having run, so the
+		// slot still points at the disposed shim; registration B must get past
+		// the liveness-filtered guard.
+		handleA.shim.dispose();
+		const handleB = registerCosignalReact({ bridge: __newBridgeForTest() });
+		try {
+			expect(requireShim()).toBe(handleB.shim);
+			// The old handle's dispose arrives AFTER the successor registered:
+			// it may clear only its own registration, never B's.
+			handleA.dispose();
+			expect(requireShim()).toBe(handleB.shim);
+			expect(() => registerCosignalReact({ bridge: __newBridgeForTest() })).toThrow(/already registered/);
+		} finally {
+			handleB.dispose();
+		}
+		// B's own dispose (the slot points at B) does clear the slot.
+		expect(() => requireShim()).toThrow(/registerCosignalReact/);
 	});
 });

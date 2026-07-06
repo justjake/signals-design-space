@@ -122,10 +122,20 @@ let nextRootSerial = 1;
 /** The one active shim (module registry; hooks.ts manages activation). */
 let activeShim: Shim | undefined;
 
-export function setActiveShim(shim: Shim | undefined): void {
+export function setActiveShim(shim: Shim): void {
 	activeShim = shim;
 }
 
+/** Clears the active-shim slot only if it still points at `shim` — a
+ * disposed predecessor's late unregister must never clobber a successor's
+ * registration. */
+export function unregisterShim(shim: Shim): void {
+	if (activeShim === shim) activeShim = undefined;
+}
+
+/** The active shim if it is still live. (A shim disposed directly — without
+ * its handle's dispose, which unregisters it — can linger in the slot; the
+ * liveness filter keeps it from being served or from blocking re-registration.) */
 export function getActiveShim(): Shim | undefined {
 	return activeShim !== undefined && !activeShim.disposed ? activeShim : undefined;
 }
