@@ -24,7 +24,7 @@
  *    idempotent reconciliation of the root's committed-batch table +
  *    effect re-checks.
  *  - bridge listeners -> React: the shim registers direct listeners on the
- *    bridge (onDelivery / onMountCorrective / onCorrection / onDevWarning);
+ *    bridge (onDelivery / onMountCorrective / onCorrection);
  *    the bridge invokes them at each operation's end, and the shim turns
  *    deliveries and mount correctives into setStates via unstable_runInBatch,
  *    so each corrective re-render is scheduled in the lane of the batch that
@@ -37,9 +37,10 @@
  *    The bridge's BridgeEvent LOG is a referee/tracing surface only: it does
  *    not mint unless a referee retains it or a tracer attaches.
  *  - write classification — the rule: a write belongs to the batch context
- *    in which it executes. The CORE's public Atom.set/update/dispatch
- *    capture host-attributable writes as WHOLE operations (worlds replay
- *    receipts, so a functional update must reach the engine unfolded) and
+ *    in which it executes. The CORE's public Atom.set/update (dispatch is a
+ *    thin layer over update) capture host-attributable writes as WHOLE
+ *    operations (worlds replay receipts, so a functional update must reach
+ *    the engine unfolded) and
  *    hand them to the classifier this shim installs on the bridge
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
  *    write-context API (unstable_getCurrentWriteBatch, whose low bit is
@@ -158,7 +159,7 @@ export class Shim {
 	disposed = false;
 	/** Listener/translation errors (recorded, not thrown across React's commit). */
 	errors: unknown[] = [];
-	/** Dev warnings surfaced (shim heuristics + bridge events; once per message). */
+	/** Dev warnings surfaced (shim-local heuristics; console-warned once per message). */
 	devWarnings: string[] = [];
 	private warned = new Set<string>();
 
@@ -235,13 +236,6 @@ export class Shim {
 				this.errors.push(error);
 			}
 		};
-		bridge.onDevWarning = (message) => {
-			try {
-				this.devWarn(message);
-			} catch (error) {
-				this.errors.push(error);
-			}
-		};
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches, lineageId) =>
 				this.guard(() => this.handlePassStart(container, includedBatches, lineageId)),
@@ -263,7 +257,6 @@ export class Shim {
 		this.bridge.onDelivery = undefined;
 		this.bridge.onMountCorrective = undefined;
 		this.bridge.onCorrection = undefined;
-		this.bridge.onDevWarning = undefined;
 		this.bridge.setWorldProvider(undefined);
 		this.targets.clear();
 		this.effects.clear();
@@ -513,9 +506,10 @@ export class Shim {
 	// ---- direct listeners -> React ---------------------------------------------
 	// (Registered in the constructor: deliveries and mount correctives bump in
 	// the causing batch's lane; urgent/reconcile corrections take the
-	// discrete-urgent fallback; dev warnings surface once per message. The
-	// bridge delivers them at the end of each engine operation — the same
-	// timing the old post-op event drain had.)
+	// discrete-urgent fallback. The bridge delivers them at the end of each
+	// engine operation — the same timing the old post-op event drain had.
+	// Dev warnings are shim-local: the post-await lint lives HERE only, in
+	// classifyWrite — the engine and the reference model emit no dev events.)
 
 	/**
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
@@ -673,8 +667,8 @@ export class Shim {
 	 * only adds adopt-on-miss. The original handle IS the bridge's kernel
 	 * handle: the engine's own kernel applies/reads re-enter the public
 	 * methods with the host hooks' recursion guard down, so no shadow handle
-	 * is needed. Adoption itself (including ReducerAtom reducer wiring) is
-	 * entirely the engine's job.
+	 * is needed. Adoption itself is entirely the engine's job (a ReducerAtom
+	 * needs no wiring: its dispatch records as an update closure).
 	 */
 	nodeForAtom(atom: Atom<unknown>): AtomNode {
 		return (

@@ -3,7 +3,7 @@
  *  - N seeded schedules, self-check invariants after EVERY applied step;
  *  - per-seed determinism: the same schedule replayed twice must produce a
  *    byte-identical observable fingerprint (events + all world values);
- *  - long walks for episode-lifecycle churn (quiescence, renumber, recycling).
+ *  - long walks for episode-lifecycle churn (quiescence, epoch reset, recycling).
  *
  * Every failure prints its seed and a shrunk schedule (see expectSeedClean).
  * Reproduce locally with: `fuzzSeed(<seed>, <steps>)` — see README.md.
@@ -25,7 +25,7 @@ describe('randomized schedules against the naive model', () => {
 		}
 	});
 
-	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, renumber, backstop)`, () => {
+	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop)`, () => {
 		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) {
 			expectSeedClean(seed, LONG_STEPS);
 		}
@@ -51,7 +51,7 @@ describe('randomized schedules against the naive model', () => {
 	it('coverage: the generated corpus actually exercises the interesting machinery', () => {
 		const totals = {
 			deliveries: 0, interleaved: 0, suppressed: 0, corrective: 0, urgentFix: 0,
-			reconcile: 0, retires: 0, perRoot: 0, epochs: 0, drops: 0, devWarnings: 0,
+			reconcile: 0, retires: 0, perRoot: 0, epochs: 0, drops: 0,
 			released: 0, claimed: 0,
 		};
 		for (let seed = 1; seed <= 60; seed++) {
@@ -67,7 +67,6 @@ describe('randomized schedules against the naive model', () => {
 			totals.perRoot += m.eventsOfType('per-root-commit').length;
 			totals.epochs += m.eventsOfType('epoch-reset').length;
 			totals.drops += m.eventsOfType('write-dropped').length;
-			totals.devWarnings += m.eventsOfType('dev-warning').length;
 			totals.released += m.eventsOfType('slot-released').length;
 			totals.claimed += m.eventsOfType('slot-claimed').length;
 		}

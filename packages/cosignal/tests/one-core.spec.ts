@@ -11,7 +11,7 @@
  *  - ATTACHED BUT QUIET ≡ SYNC: registering the bridge preserves direct
  *    semantics for everything not bridge-registered, while public writes to
  *    REGISTERED atoms classify into the ambient default batch as WHOLE ops
- *    (set/update/dispatch — replay fidelity), and public reads of registered
+ *    (set/update — replay fidelity), and public reads of registered
  *    atoms inside a world evaluation serve that world's fold.
  *
  * NOTE: attaching is process-wide and vitest isolates test FILES, so the
@@ -210,7 +210,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		});
 		const rHandle = new ReducerAtom<number, number>((s, a) => s + a, 0);
 		const r = bridge.adoptAtom('regReducer', rHandle as unknown as Atom<number>);
-		r.reducer = (s, a) => (s as number) + (a as number); // registered reducer (as the bindings' adoption does)
+		// No reducer wiring: dispatch records as an update whose closure carries the reducer.
 		const before = __coreProbes();
 		let sink = 0;
 		for (let round = 0; round < 50; round++) {

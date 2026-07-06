@@ -1275,7 +1275,7 @@ let E: Engine = createEngine(initialRecords * Plane.RECORDS_PER_UNIT);
 // ONE CORE: there is exactly one engine and one write/read path. The
 // concurrent-worlds machinery (`./logged.ts`, re-exported at the bottom of
 // this file) is the HOST: it needs whole operations — set(value) vs
-// update(fn) vs dispatch(action) — because worlds replay recorded writes, and
+// update(fn) — because worlds replay recorded writes, and
 // it needs world-routed reads while a world evaluation (or a host-declared
 // ambient world, e.g. a render pass) is on stack. Both needs attach HERE, in
 // the public methods, through two nullable module hooks: undefined until a
@@ -1289,8 +1289,8 @@ let E: Engine = createEngine(initialRecords * Plane.RECORDS_PER_UNIT);
  * take the plain kernel path". @internal */
 export const __HOST_MISS: { readonly hostMiss: true } = { hostMiss: true };
 
-/** Whole-op codes for the host write hook (0 = set, 1 = update, 2 = dispatch). @internal */
-export type HostOpKind = 0 | 1 | 2;
+/** Whole-op codes for the host write hook (0 = set, 1 = update). @internal */
+export type HostOpKind = 0 | 1;
 
 /**
  * Host write interceptor. Returns true iff the host consumed the write (the
@@ -2001,9 +2001,11 @@ export type ReducerAtomOptions<S> = AtomOptions<S>;
 
 /**
  * An atom whose writes go through a reducer. The reducer is fixed at
- * creation and must be pure — it runs under the fold-purity guard, and
- * with a bridge registered dispatched actions are stored and replayed
- * through it per world.
+ * creation and must be pure — it runs under the fold-purity guard.
+ * A thin layer over `update`: dispatch(action) is exactly
+ * `update(s => reduce(s, action))`, so with a bridge registered the
+ * recorded op is an UPDATE whose closure carries the reducer and the
+ * action — replayed per world like any other updater.
  */
 export class ReducerAtom<S, A> extends Atom<S> {
 	readonly reduce: (state: S, action: A) => S;
@@ -2014,13 +2016,8 @@ export class ReducerAtom<S, A> extends Atom<S> {
 	}
 
 	dispatch(action: A): void {
-		if (hostWrite !== undefined && hostWrite(this as unknown as Atom<unknown>, 2, action)) {
-			return;
-		}
-		const id = this._id;
 		const reduce = this.reduce;
-		const next = runFold(() => reduce(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as S, action));
-		writeAtom(id, this._isEqual, next);
+		this.update((s) => reduce(s, action));
 	}
 }
 
@@ -2228,7 +2225,6 @@ export type {
 	Reader,
 	ComputedFn,
 	Equals,
-	Reducer,
 	// scalar brands
 	Value,
 	NodeId,

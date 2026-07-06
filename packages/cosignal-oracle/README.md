@@ -44,7 +44,8 @@ must reproduce. Terms are defined as they appear.
   occupies a **slot** in a 31-entry recycling table, and visibility
   bookkeeping is per-slot.
 - A **receipt** records one write: the operation (set / functional
-  update / reducer action), the writing batch's token and slot, and a
+  update — a reducer-style write records as an update whose closure
+  captures the action), the writing batch's token and slot, and a
   position (**seq**) on one global timeline. Receipts append to the
   written atom's **tape**; older receipts eventually fold into the
   atom's **base** value (compaction).
@@ -171,9 +172,10 @@ pending speculation.
 
 When nothing is live (no batches, no passes, no parked actions), every
 tape has fully compacted. The model then resets per-episode dependency
-bookkeeping and renumbers every retained timeline value
-order-preserving, so counters stay small in a long-lived app. Batch
-tokens are a separate, never-renumbered domain.
+bookkeeping (epoch bump, dead-record drop, slot bookkeeping zeroes).
+Timeline values are never rewritten: sequence counters are plain JS
+numbers, exact to 2^53, only ever compared, so they simply keep
+climbing across episodes. Batch tokens are likewise monotone forever.
 
 ## How an engine plugs in
 

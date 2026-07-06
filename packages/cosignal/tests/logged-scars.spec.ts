@@ -13,7 +13,7 @@
  * SKIPPED-FOR-FORK-SUITE.md alongside that suite, one line each.
  */
 import { describe, expect, it } from 'vitest';
-import { commitAndRetire, dispatch, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
+import { commitAndRetire, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
 
 describe('pinned scars (model-expressible)', () => {
 	it('S1 — no-log urgent writes: urgent ×2 over pending +1 commits 2 then 4, never 3', () => {
@@ -303,13 +303,12 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S21/S25 — ambient classification after await: the raw write is default-batched, dev-warned, and commits first', () => {
+	it('S21/S25 — ambient classification after await: the raw write is default-batched and commits first', () => {
 		const m = logged();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.write(t.id, a, set(1)); // sync prefix
-		m.bareWrite(a, set(2)); // timer/continuation on a bare stack
-		expect(m.eventsOfType('dev-warning')).toHaveLength(1); // the development warning for a bare write while an action is pending
+		m.bareWrite(a, set(2)); // timer/continuation on a bare stack (the post-await lint is adapter-only)
 		const ambient = m.tokens.get(m.ambientToken!)!;
 		expect(ambient.priority).toBe('default');
 		m.retire(ambient.id, true);
@@ -354,16 +353,20 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S27 — empty-tape drops with immutable evaluators: identity dispatch drops; real dispatch appends', () => {
+	it('S27 — empty-tape drops with immutable evaluators: identity update drops; real update appends', () => {
+		// Re-pinned for the shrunk op vocabulary: a ReducerAtom dispatch records
+		// as an update whose closure captures the action, so the drop/append
+		// rules are exercised through the closure form.
+		const reduce = (s: unknown, act: string) => (act === 'inc' ? (s as number) + 1 : s);
 		const m = logged();
-		const r = m.reducerAtom('r', (s, act) => (act === 'inc' ? (s as number) + 1 : s), 0);
+		const r = m.atom('r', 0);
 		const t = m.openBatch('deferred');
-		m.write(t.id, r, dispatch('noop')); // evaluates equal against base with THE one reducer → legal drop
+		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // evaluates equal against base → legal drop
 		expect(m.eventsOfType('write-dropped')).toHaveLength(1);
 		expect(r.tape).toHaveLength(0);
-		m.write(t.id, r, dispatch('inc')); // 1 ≠ 0 → append
+		m.write(t.id, r, update((s) => reduce(s, 'inc'))); // 1 ≠ 0 → append
 		expect(r.tape).toHaveLength(1);
-		m.write(t.id, r, dispatch('noop')); // tape non-empty → ALWAYS append (equality lives at fold time)
+		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // tape non-empty → ALWAYS append (equality lives at fold time)
 		expect(r.tape).toHaveLength(2);
 		commitAndRetire(m, 'A', t);
 		expect(m.committedValue(r, 'A')).toBe(1);
@@ -425,7 +428,7 @@ describe('pinned scars (model-expressible)', () => {
 		const t0 = m.openBatch('deferred');
 		m.write(t0.id, x, set(1));
 		commitAndRetire(m, 'A', t0, [watcher]);
-		m.quiesce(); // episode reset: edges cleared, counters renumbered
+		m.quiesce(); // episode reset: edges cleared, counters keep climbing
 		const k = m.openBatch('deferred');
 		const mark = m.events.length;
 		m.write(k.id, x, set(2)); // next episode's write must reach the watcher through x→u→w
@@ -488,18 +491,18 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S38/S43 — renumbering requires synchronous WIP discard first; folds survive the rewrite', () => {
+	it('S38/S43 — quiescence requires synchronous WIP discard first; folds survive the episode reset', () => {
 		const m = logged();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(3));
 		const p = pass(m, 'A', [t]);
 		m.passYield(p.id);
-		expect(() => m.quiesce()).toThrow(/quiescence requires/); // a live pin forbids renumbering
+		expect(() => m.quiesce()).toThrow(/quiescence requires/); // a live pin forbids the episode reset
 		m.discardAllWip(); // a synchronous capability of the external-runtime protocol
 		expect(m.livePins()).toHaveLength(0);
 		m.retire(t.id, true);
-		m.quiesce(); // discard-first, then rewrite: no post-wrap stamp can land below a live pin
+		m.quiesce(); // discard-first, then reset: no post-reset stamp can land below a live pin
 		expect(m.committedValue(a, 'A')).toBe(3);
 		selfCheck(m);
 	});

@@ -26,7 +26,7 @@
  *  10  a late subscriber joins the pending batch it missed
  *  11  multiple roots: per-root self-consistency with visible skew
  *  12  store-only batches persist; async actions match React's rules
- *  13  counter/identity lifecycle (renumbering, slot recycling)
+ *  13  counter/identity lifecycle (episode reset, slot recycling)
  *  14  replayed/StrictMode renders are idempotent; render-phase writes throw
  *  15  Suspense across worlds (host-only; skipped here)
  *  16  committed-state effects see only committed values, re-run on flips
@@ -683,8 +683,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		const t = m.openBatch('deferred', { action: true }); // action T
 		m.write(t.id, a, set(1)); // synchronous prefix: classifies into T; T parks
 		expect(() => m.retire(t.id, true)).toThrow(); // parked tokens retire only at settlement
-		m.bareWrite(a, set(2)); // continuation runs bare ⇒ ambient default D + dev warning
-		expect(m.eventsOfType('dev-warning')).toHaveLength(1);
+		m.bareWrite(a, set(2)); // continuation runs bare ⇒ ambient default D (the post-await lint is adapter-only)
 		const d = m.tokens.get(m.ambientToken!)!;
 		m.retire(d.id, true); // D retires on its own schedule
 		expect(m.committedValue(a, 'A')).toBe(2); // BEFORE the action settles — React parity
@@ -710,7 +709,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 });
 
 describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => {
-	it('quiescence → episode reset: renumber preserves committed folds; epoch bumps; serials never reused', () => {
+	it('quiescence → episode reset: folds preserved; epoch bumps; counters stay monotone (never renumbered)', () => {
 		const m = logged();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
@@ -722,10 +721,10 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 		const seqBefore = m.seq;
 		m.quiesce();
 		expect(m.epoch).toBe(1);
-		expect(m.seq).toBeLessThan(seqBefore); // counters renumbered small
-		expect(m.committedValue(a, 'A')).toBe(42); // folds unchanged across renumber
+		expect(m.seq).toBeGreaterThanOrEqual(seqBefore); // counters are NEVER rewritten (exact to 2^53; renumbering deleted)
+		expect(m.committedValue(a, 'A')).toBe(42); // folds unchanged across the episode reset
 		expect(m.newestValue(a)).toBe(42);
-		// new episode: everything still works, token serials keep climbing (never renumbered)
+		// new episode: everything still works, token serials keep climbing
 		const t2 = m.openBatch('urgent');
 		expect(t2.id).toBeGreaterThan(lastToken);
 		m.write(t2.id, a, set(1));
@@ -862,7 +861,7 @@ describe('case 17 — optimistic rollback: the feature is deleted', () => {
 		for (const forbidden of ['truncate', 'rollback', 'revert', 'undo']) {
 			expect(surface.filter((s) => s.includes(forbidden))).toHaveLength(0);
 		}
-		// receipts cannot be un-appended: the op vocabulary is set/update/dispatch only
+		// receipts cannot be un-appended: the op vocabulary is set/update only
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(1));

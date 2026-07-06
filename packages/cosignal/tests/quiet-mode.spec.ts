@@ -165,10 +165,10 @@ describe('quiet-mode writes', () => {
 		expect(b.committedValue(a, 'A')).toBe(1);
 		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.quiet).toBe(true); // the rejected write disturbed nothing
-		// Reducers: registered dispatch folds once over base.
+		// Reducers: registered dispatch folds once over base (the recorded op
+		// is an update whose closure carries the reducer and the action).
 		const rHandle = new ReducerAtom<number, string>((s, act) => (act === 'inc' ? s + 1 : s), 10);
 		const r = b.adoptAtom('r', rHandle as unknown as Atom<number>);
-		r.reducer = (s, act) => (act === 'inc' ? (s as number) + 1 : s);
 		rHandle.dispatch('inc');
 		expect(b.newestValue(r)).toBe(11);
 		expect(b.committedValue(r, 'A')).toBe(11);
@@ -218,7 +218,7 @@ describe('quiet-mode writes', () => {
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(41); // quiet fold
 		expect(b.quiescent()).toBe(true);
-		b.quiesce(); // renumbers sequences, bumps the epoch
+		b.quiesce(); // episode reset: bumps the epoch (sequences keep climbing)
 		expect(b.quiet).toBe(true);
 		(a.handle as Atom<number>).set(42); // folds fine in the new episode
 		expect(b.newestValue(a)).toBe(42);

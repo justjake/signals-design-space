@@ -37,11 +37,7 @@ export function buildEngineTopology(b: CosignalBridge) {
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 0);
 	const bb = b.atom('b', 0);
-	const r = b.reducerAtom('r', (s, act) => {
-		if (act === 'inc') return (s as number) + 1;
-		if (act === 'noop') return s;
-		return (s as number) * 2;
-	}, 0);
+	const r = b.atom('r', 0);
 	const cFlip = b.computed('cFlip', (read) => (read(flag) ? read(a) : read(bb)));
 	const cSum = b.computed('cSum', (read) => (read(a) as number) + (read(bb) as number) + (read(r) as number));
 	const cChain = b.computed('cChain', (read) => (read(cFlip) as number) + 10);
@@ -99,7 +95,6 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 			case 'inc': return { kind: 'update', fn: (p) => (p as number) + 1 };
 			case 'double': return { kind: 'update', fn: (p) => (p as number) * 2 };
 			case 'equalNewest': return { kind: 'set', value: b.newestValue(atoms[atomIdx]!) };
-			case 'dispatch': return { kind: 'dispatch', action: value % 2 === 0 ? 'inc' : 'noop' };
 		}
 	};
 	const uniq = `${b.events.length}.${b.seq}.${b.epoch}`;
@@ -116,21 +111,18 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 			case 'open': reg.tokens.push(b.openBatch({ action: op.action }).id); break; // op.priority is model-side only
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
-				const kind: WriteKind = atom.reducer !== undefined && op.kind !== 'equalNewest' ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;
-				b.write(tokenAt(b, op.token), atom, writeOp(kind, op.value, op.atom % atoms.length));
+				b.write(tokenAt(b, op.token), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
 			case 'bareWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				const kind: WriteKind = atom.reducer !== undefined ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;
-				b.bareWrite(atom, writeOp(kind, op.value, op.atom % atoms.length));
+				b.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length));
 				syncAmbient();
 				break;
 			}
 			case 'scopeWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				const o: Op = atom.reducer !== undefined ? { kind: 'dispatch', action: 'inc' } : { kind: 'set', value: op.value };
-				b.scopeWrite(tokenAt(b, op.token)!, atom, o);
+				b.scopeWrite(tokenAt(b, op.token)!, atom, { kind: 'set', value: op.value });
 				break;
 			}
 			case 'settle': b.settleAction(tokenAt(b, op.token)!, op.committed); break;

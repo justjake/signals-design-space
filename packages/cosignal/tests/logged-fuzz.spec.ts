@@ -54,7 +54,7 @@ describe('LOGGED engine vs oracle (diffAgainstModel, step-by-step)', () => {
 		for (let seed = 1; seed <= CI_SEEDS; seed++) expectSeedDiffClean(seed, CI_STEPS);
 	});
 
-	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, renumber, backstop)`, () => {
+	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop)`, () => {
 		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) expectSeedDiffClean(seed, LONG_STEPS);
 	});
 

@@ -175,19 +175,18 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(ret.cause).toBe(settle.id);
 	});
 
-	it('ambient classification and op kinds: dispatch and update receipts; dev-warning while an action is parked', () => {
-		const r = b.reducerAtom('r', (s) => (s as number) + 1, 0);
-		b.bareWrite(r, { kind: 'dispatch', action: 'inc' });
+	it('ambient classification and op kinds: update receipts (reducer-style closures included); bare writes stay lint-free', () => {
+		const r = b.atom('r', 0);
+		b.bareWrite(r, { kind: 'update', fn: (s) => (s as number) + 1 }); // the closure form a ReducerAtom dispatch records
 		expect(last(tr, 'batch-open').data).toMatchObject({ ambient: true });
-		expect(last(tr, 'write').data).toMatchObject({ node: 'r', op: 'dispatch' });
+		expect(last(tr, 'write').data).toMatchObject({ node: 'r', op: 'update' });
 
 		b.write(undefined, a, { kind: 'update', fn: (p) => (p as number) + 1 }); // a: 8 → 9
 		expect(last(tr, 'write').data).toMatchObject({ node: 'a', op: 'update' });
 
 		const act2 = b.openBatch({ action: true }); // parked
-		b.bareWrite(a, { kind: 'set', value: 99 });
-		const warn = last(tr, 'dev-warning');
-		expect(warn.data['message']).toMatch(/outside the action/);
+		b.bareWrite(a, { kind: 'set', value: 99 }); // classifies ambient; the post-await lint is adapter-only (no trace event)
+		expect(last(tr, 'write').data).toMatchObject({ node: 'a', op: 'set' });
 		b.settleAction(act2.id, false);
 		expect(last(tr, 'batch-settle').data).toEqual({ token: act2.id, committed: false });
 	});
@@ -317,7 +316,6 @@ function expectedTraceOf(e: BridgeEvent): { kind: TraceKind; data: Record<string
 		case 'slot-claimed': return { kind: 'slot-claim', data: { slot: e.slot, token: e.token } };
 		case 'slot-released': return { kind: 'slot-release', data: { slot: e.slot, token: e.token } };
 		case 'slot-backstop-released': return { kind: 'slot-backstop-release', data: { slot: e.slot, token: e.token } };
-		case 'dev-warning': return { kind: 'dev-warning', data: { message: e.message } };
 		case 'epoch-reset': return { kind: 'epoch-reset', data: { epoch: e.epoch } };
 		case 'pass-committed':
 		case 'pass-discarded':
@@ -328,7 +326,7 @@ function expectedTraceOf(e: BridgeEvent): { kind: TraceKind; data: Record<string
 const MIRRORED = new Set<TraceKind>([
 	'write', 'write-dropped', 'delivery', 'suppressed', 'core-effect-run', 'react-effect-run',
 	'reconcile-correction', 'mount-corrective', 'mount-correction', 'root-commit', 'batch-retire',
-	'slot-claim', 'slot-release', 'slot-backstop-release', 'dev-warning', 'epoch-reset',
+	'slot-claim', 'slot-release', 'slot-backstop-release', 'epoch-reset',
 ]);
 
 describe('R11 fuzz cross-check: trace stream ≡ engine event stream (oracle schedules)', () => {

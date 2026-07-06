@@ -415,7 +415,9 @@ rationale is section 4). Identifiers are stable: cite them as
   updates after any async requests in another startTransition to mark
   them as Transitions" [react.dev: startTransition]. The library
   provides an explicit re-entry affordance (an action scope) and MAY
-  warn in development on bare post-await writes. [ruling 2026-07-05:
+  warn in development on bare post-await writes (the lint is
+  implemented adapter-only, in cosignal-react's shim; the engine and
+  the reference model emit no dev events). [ruling 2026-07-05:
   the async-transition cut — parity, not gold-plating; plan Principles
   §2], [battery case 12], [scenario R12].
 - **AT3 (MUST).** A re-wrapped continuation rejoins the SAME batch as

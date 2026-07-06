@@ -26,7 +26,6 @@ import {
 	type Pass,
 	type Priority,
 	type ReactEffect,
-	type Reducer,
 	type Token,
 	type Value,
 	type Watcher,
@@ -194,15 +193,6 @@ export class TwinDriver {
 		return mNode;
 	}
 
-	reducerAtom(name: string, reducer: Reducer, initial: Value): AtomNode {
-		const mNode = this.model.reducerAtom(name, reducer, initial);
-		const eNode = this.engine.reducerAtom(name, reducer, initial);
-		expect(eNode.id).toBe(mNode.id);
-		this.nodeMap.set(mNode, eNode);
-		this.mirror.setOrigin(eNode as EAtomNode, initial);
-		return mNode;
-	}
-
 	computed(name: string, fn: (read: (n: AnyNode) => Value, untracked: (n: AnyNode) => Value) => Value) {
 		const mNode = this.model.computed(name, fn);
 		const eNode = this.engine.computed(name, (read, untracked) =>
@@ -312,7 +302,7 @@ export class TwinDriver {
 
 	quiesce(): void {
 		this.both('quiesce', () => this.model.quiesce(), () => this.engine.quiesce());
-		// Mirror the model's renumber: archives belong to the dead episode;
+		// Mirror the model's episode reset: archives belong to the dead episode;
 		// origins reset to base (engine-side the view folds from these).
 		this.mirror.clearArchives();
 		this.mirror.originsFromBase(this.engine);
@@ -426,8 +416,4 @@ export function set(value: unknown): { kind: 'set'; value: unknown } {
 
 export function update(fn: (p: unknown) => unknown): { kind: 'update'; fn: (p: unknown) => unknown } {
 	return { kind: 'update', fn };
-}
-
-export function dispatch(action: unknown): { kind: 'dispatch'; action: unknown } {
-	return { kind: 'dispatch', action };
 }

@@ -38,14 +38,14 @@ export class RefereeMirror {
 		this.origins.set(atom, value);
 	}
 
-	/** Direct-mode writes and quiescence renumbering reset origin to base. */
+	/** Direct-mode writes and the quiescence episode reset set origin to base. */
 	originsFromBase(engine: CosignalBridge): void {
 		for (const n of engine.nodes.values()) {
 			if (n.kind === 'atom') this.origins.set(n, n.base);
 		}
 	}
 
-	/** Quiescence: archives belong to the dead episode (as in the model's renumber). */
+	/** Quiescence: archives belong to the dead episode (as in the model's episode reset). */
 	clearArchives(): void {
 		this.archives.clear();
 	}
@@ -113,11 +113,6 @@ function applyOp(atom: AtomNode, op: Op, prev: Value): Value {
 			return op.value;
 		case 'update':
 			return op.fn(prev);
-		case 'dispatch': {
-			const reducer = atom.reducer;
-			if (reducer === undefined) throw new Error(`dispatch on non-reducer atom ${atom.name}`);
-			return reducer(prev, op.action);
-		}
 	}
 }
 

@@ -34,7 +34,7 @@ export function rng(seed: number): () => number {
 	};
 }
 
-export type WriteKind = 'set' | 'inc' | 'double' | 'equalNewest' | 'dispatch';
+export type WriteKind = 'set' | 'inc' | 'double' | 'equalNewest';
 
 export type ScheduleOp =
 	| { t: 'open'; priority: Priority; action: boolean }
@@ -59,18 +59,14 @@ const ROOTS = ['A', 'B'];
 /**
  * The fixed topology every schedule runs over: a flag-flip computed whose
  * dependency set differs between worlds (the shape most likely to expose
- * cross-world bugs — acceptance scenario case 1), a diamond, a chain, an
- * untracked-read mix, and a reducer atom.
+ * cross-world bugs — acceptance scenario case 1), a diamond, a chain, and
+ * an untracked-read mix.
  */
 export function buildTopology(m: CosignalModel) {
 	const flag = m.atom('flag', 0);
 	const a = m.atom('a', 0);
 	const b = m.atom('b', 0);
-	const r = m.reducerAtom('r', (s, act) => {
-		if (act === 'inc') return (s as number) + 1;
-		if (act === 'noop') return s;
-		return (s as number) * 2;
-	}, 0);
+	const r = m.atom('r', 0);
 	const cFlip = m.computed('cFlip', (read) => (read(flag) ? read(a) : read(b)));
 	const cSum = m.computed('cSum', (read) => (read(a) as number) + (read(b) as number) + (read(r) as number));
 	const cChain = m.computed('cChain', (read) => (read(cFlip) as number) + 10);
@@ -102,7 +98,6 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'inc': return { kind: 'update', fn: (p) => (p as number) + 1 };
 			case 'double': return { kind: 'update', fn: (p) => (p as number) * 2 };
 			case 'equalNewest': return { kind: 'set', value: m.newestValue(atoms[atomIdx]!) };
-			case 'dispatch': return { kind: 'dispatch', action: value % 2 === 0 ? 'inc' : 'noop' };
 		}
 	};
 	const uniq = `${m.events.length}.${m.seq}.${m.epoch}`;
@@ -111,20 +106,17 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'open': m.openBatch(op.priority, { action: op.action }); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
-				const kind: WriteKind = atom.reducer !== undefined && op.kind !== 'equalNewest' ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;
-				m.write(tokenAt(m, op.token), atom, writeOp(kind, op.value, op.atom % atoms.length));
+				m.write(tokenAt(m, op.token), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
 			case 'bareWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				const kind: WriteKind = atom.reducer !== undefined ? 'dispatch' : op.kind === 'dispatch' ? 'set' : op.kind;
-				m.bareWrite(atom, writeOp(kind, op.value, op.atom % atoms.length));
+				m.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
 			case 'scopeWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				const o: Op = atom.reducer !== undefined ? { kind: 'dispatch', action: 'inc' } : { kind: 'set', value: op.value };
-				m.scopeWrite(tokenAt(m, op.token)!, atom, o);
+				m.scopeWrite(tokenAt(m, op.token)!, atom, { kind: 'set', value: op.value });
 				break;
 			}
 			case 'settle': m.settleAction(tokenAt(m, op.token)!, op.committed); break;
@@ -192,7 +184,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 	const bool = (p: number) => rand() < p;
 	const ops: ScheduleOp[] = [];
 	const priorities: Priority[] = ['urgent', 'default', 'deferred'];
-	const kinds: WriteKind[] = ['set', 'set', 'inc', 'double', 'equalNewest', 'dispatch'];
+	const kinds: WriteKind[] = ['set', 'set', 'inc', 'double', 'equalNewest'];
 	for (let i = 0; i < steps; i++) {
 		const roll = rand();
 		if (roll < 0.08) ops.push({ t: 'open', priority: priorities[pick(3)]!, action: bool(0.25) });
@@ -237,7 +229,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		else if (roll < 0.98) ops.push({ t: 'discardAllWip' });
 		else ops.push({ t: 'quiesce' });
 	}
-	// Close out: retire everything then quiesce, so residue/renumber rules run on most seeds.
+	// Close out: retire everything then quiesce, so residue/epoch-reset rules run on most seeds.
 	for (let tokenIdx = 0; tokenIdx < 34; tokenIdx++) {
 		ops.push({ t: 'discardAllWip' });
 		ops.push({ t: 'settle', token: tokenIdx, committed: true });

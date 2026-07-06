@@ -27,11 +27,11 @@ export type EffectId = number;
 
 export type Priority = 'urgent' | 'default' | 'deferred';
 
-/** The write vocabulary: set/update on plain atoms, dispatch on reducer atoms. */
+/** The write vocabulary: set/update. A reducer-style write records as an
+ * update whose closure captures the reducer and the action. */
 export type Op =
 	| { kind: 'set'; value: Value }
-	| { kind: 'update'; fn: (prev: Value) => Value }
-	| { kind: 'dispatch'; action: Value };
+	| { kind: 'update'; fn: (prev: Value) => Value };
 
 /**
  * A receipt records one write: {op, slot, seq} appended to the written
@@ -51,7 +51,6 @@ export type Receipt = {
 };
 
 export type Equals = (a: Value, b: Value) => boolean;
-export type Reducer = (state: Value, action: Value) => Value;
 
 export type AtomNode = {
 	kind: 'atom';
@@ -66,8 +65,6 @@ export type AtomNode = {
 	/** The value the atom was created with (shadow-fold origin). */
 	origin: Value;
 	equals: Equals;
-	/** Fixed at creation (dispatched actions replay through it per world); undefined for plain atoms. */
-	reducer: Reducer | undefined;
 	/** Per-atom retirement stamp, minted at every retirement that touched this atom. */
 	retirementStamp: number;
 };
@@ -118,7 +115,7 @@ export type SlotMeta = {
 	claimSeq: number;
 	/** Write clock: seq of the slot's last write. Zeroed when a new tenant claims the slot. */
 	writeClock: number;
-	/** Carried max retirement sequence across tenants (a watermark; rewritten at renumbering). */
+	/** Carried max retirement sequence across tenants (a watermark; zeroed at the episode reset). */
 	carriedMaxRetiredSeq: number;
 	/** Retirement done but release deferred because an open pass's render mask names the slot. */
 	releasePending: boolean;
@@ -235,7 +232,6 @@ export type ModelEvent =
 	| { type: 'slot-backstop-released'; slot: SlotId; token: TokenId }
 	| { type: 'pass-committed'; pass: PassId; root: RootId }
 	| { type: 'pass-discarded'; pass: PassId; root: RootId }
-	| { type: 'dev-warning'; message: string }
 	| { type: 'epoch-reset'; epoch: number };
 
 /** An op the schedule proposed that is illegal in the current state (generator skips these). */
@@ -322,16 +318,9 @@ export class CosignalModel {
 		const node: AtomNode = {
 			kind: 'atom', id: this.nextNode++, name,
 			base: initial, baseSeq: 0, tape: [], archive: [], origin: initial,
-			equals: equals ?? Object.is, reducer: undefined, retirementStamp: 0,
+			equals: equals ?? Object.is, retirementStamp: 0,
 		};
 		this.nodes.set(node.id, node);
-		return node;
-	}
-
-	/** A reducer atom: the reducer is fixed at creation, because worlds replay its actions. */
-	reducerAtom(name: string, reducer: Reducer, initial: Value): AtomNode {
-		const node = this.atom(name, initial);
-		node.reducer = reducer;
 		return node;
 	}
 
@@ -426,12 +415,9 @@ export class CosignalModel {
 			case 'set':
 				return op.value;
 			case 'update':
+				// Reducer-style writes arrive here too: the closure carries
+				// the reducer and the captured action.
 				return this.inCallback(() => op.fn(prev));
-			case 'dispatch': {
-				const reducer = atom.reducer;
-				if (reducer === undefined) throw new ScheduleError(`dispatch on non-reducer atom ${atom.name}`);
-				return this.inCallback(() => reducer(prev, op.action));
-			}
 		}
 	}
 
@@ -592,9 +578,9 @@ export class CosignalModel {
 	 * housekeeping: the write clock zeroes and every per-(watcher, slot)
 	 * dedup bit clears, so nothing from the previous tenant can suppress or
 	 * satisfy the new tenant's deliveries; the retirement watermark carries
-	 * forward (the model has no cached routing state to preserve — it
-	 * recomputes routing — but the watermark is kept because renumbering at
-	 * quiescence must rewrite it).
+	 * forward across tenants within an episode (the model has no cached
+	 * routing state to preserve — it recomputes routing) and zeroes at the
+	 * episode reset.
 	 */
 	private internSlot(token: Token): SlotMeta {
 		if (token.slot !== undefined) return this.slots[token.slot]!;
@@ -651,12 +637,8 @@ export class CosignalModel {
 			ambient = this.openBatch('default', { ambient: true });
 			this.ambientToken = ambient.id;
 		}
-		// Dev-warning heuristic: a bare-context write while an async action is
-		// pending usually means a post-await write the author expected to join
-		// the action — warn so they re-wrap it or use the action scope.
-		if (this.liveTokens().some((t) => t.parked)) {
-			this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope' });
-		}
+		// The post-await dev-warning heuristic is adapter-only (cosignal-react's
+		// shim) — the model, like the engine, emits no dev events.
 		this.write(ambient.id, node, op);
 	}
 
@@ -1280,7 +1262,7 @@ export class CosignalModel {
 		return false;
 	}
 
-	// ------------------------------------------- episodes and renumbering
+	// ------------------------------------------- episodes and quiescence
 
 	/** Synchronously abandons every work-in-progress pass on every root (a host capability). */
 	discardAllWip(): void {
@@ -1295,10 +1277,12 @@ export class CosignalModel {
 
 	/**
 	 * Quiescence (no live tokens, no live pins, no parked actions): the
-	 * per-episode dependency edges bulk-reset (epoch bump) and every
-	 * retained sequence value renumbers order-preserving, so counters stay
-	 * small in a long-lived app instead of growing toward overflow. Token
-	 * serials are a separate, never-renumbered domain. The model has no
+	 * per-episode dependency edges bulk-reset (epoch bump). Retained
+	 * sequence values are NOT rewritten — sequences are plain JS numbers,
+	 * exact to 2^53, and only ever compared, so the counter simply keeps
+	 * climbing across episodes (renumbering was measured within noise on
+	 * tape-heavy shapes and deleted; grind batch 4, item C). Token serials
+	 * were always a separate, never-renumbered domain. The model has no
 	 * caches to refresh afterward — delivery reachability is recomputed from
 	 * scratch at every write, which is the refreshed state by construction.
 	 */
@@ -1312,18 +1296,23 @@ export class CosignalModel {
 		}
 		this.episodeEdges.clear();
 		this.epoch++;
-		// Dead-episode records drop before renumbering: ended passes and
-		// retired tokens hold the only remaining stale sequence values, and
-		// nothing from a dead episode may validate anything in a live one.
-		// Token serials are a separate, never-renumbered domain — the id
-		// counter stays monotone across episodes.
+		// Dead-episode records drop at the reset: ended passes and retired
+		// tokens belong to the dead episode, and nothing from a dead episode
+		// may validate anything in a live one. Id counters stay monotone
+		// across episodes.
 		for (const [id, p] of this.passes) {
 			if (p.state === 'ended') this.passes.delete(id);
 		}
 		for (const [id, t] of this.tokens) {
 			if (t.state === 'retired') this.tokens.delete(id);
 		}
-		this.renumber();
+		for (const n of this.nodes.values()) {
+			if (n.kind !== 'atom') continue;
+			// The archive belongs to the dead episode; it exists only for the
+			// retention invariant, whose comparisons are per-episode. Clear it.
+			n.archive = [];
+			n.origin = n.base;
+		}
 		// Dead-episode bookkeeping bulk-zeroes at the episode reset.
 		for (const s of this.slots) {
 			s.writeClock = 0;
@@ -1333,41 +1322,6 @@ export class CosignalModel {
 		}
 		for (const w of this.watchers.values()) w.dedup.clear();
 		this.log({ type: 'epoch-reset', epoch: this.epoch });
-	}
-
-	/**
-	 * The renumber duty list — every retained sequence value rewritten in
-	 * one order-preserving pass: base sequences, retirement stamps, the
-	 * committed-advance counter, slot watermarks/claims. (Tape entries need
-	 * no rewriting because tapes are empty at quiescence, and the model
-	 * holds no memo sequences. Watcher snapshot pins belong to dead passes
-	 * and are rewritten too, so no stale sequence survives anywhere.)
-	 */
-	private renumber(): void {
-		const retained = new Set<number>([0]);
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'atom') continue;
-			retained.add(n.baseSeq);
-			retained.add(n.retirementStamp);
-		}
-		retained.add(this.cas);
-		for (const w of this.watchers.values()) retained.add(w.snapshot.pin);
-		const sorted = [...retained].sort((a, b) => a - b);
-		const map = new Map<number, number>();
-		sorted.forEach((v, i) => map.set(v, i));
-		const rw = (v: number): number => map.get(v)!;
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'atom') continue;
-			n.baseSeq = rw(n.baseSeq);
-			n.retirementStamp = rw(n.retirementStamp);
-			// The archive belongs to the dead episode; it exists only for the
-			// retention invariant, whose comparisons are per-episode. Clear it.
-			n.archive = [];
-			n.origin = n.base;
-		}
-		this.cas = rw(this.cas);
-		for (const w of this.watchers.values()) w.snapshot.pin = rw(w.snapshot.pin);
-		this.seq = sorted.length; // restart the counter above the rewritten range
 	}
 
 	// ------------------------------------------------------------ helpers

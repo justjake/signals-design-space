@@ -216,7 +216,7 @@ describe('useReducerAtom (§3.2)', () => {
 		expect(text(container)).toBe('1');
 	});
 
-	test('standalone ReducerAtom dispatch classifies with a whole dispatch op', async () => {
+	test('standalone ReducerAtom dispatch classifies as a whole update op (the closure carries the action)', async () => {
 		h = makeHarness();
 		const r = new ReducerAtom((s: number, a: number) => s + a, 100);
 		function View() {
@@ -229,7 +229,7 @@ describe('useReducerAtom (§3.2)', () => {
 		expect(text(container)).toBe('107');
 		const node = h.bridge.byKernelId.get(r._id)!;
 		const kinds = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
-		expect(kinds).toContain('dispatch');
+		expect(kinds).toContain('update'); // re-pinned: dispatch → update(s => reduce(s, action))
 	});
 });
 

@@ -54,8 +54,11 @@ suites.
 
 (**S43** is split: its counter horizon/reserve arithmetic is engine
 scope, but its precondition — work-in-progress must be discarded
-synchronously before counters renumber — is pinned at model level inside
-the S38/S43 test in `tests/scars.spec.ts`.)
+synchronously before the episode resets — is pinned at model level
+inside the S38/S43 test in `tests/scars.spec.ts`. Sequence renumbering
+itself was deleted — grind batch 4, item C: counters are exact to 2^53
+and the SMI effect measured within noise — so quiescence is a pure
+episode reset.)
 
 ## Acceptance-scenario aspects (host-only halves of cases otherwise pinned)
 
@@ -68,7 +71,7 @@ the S38/S43 test in `tests/scars.spec.ts`.)
 - **Case 13, counter-overflow halves** — wrap-around of internal walk
   and cache generation counters, reserve arithmetic for live counter
   horizons, recycling of node identities: engine counters the model does
-  not carry. The model pins the renumbering-at-quiescence and
+  not carry. The model pins the episode-reset-at-quiescence and
   slot-recycling halves.
 - **Case 14** — StrictMode's double-mount netting to one subscription,
   and `useComputed` hook-state reuse: needs real React hooks. The model

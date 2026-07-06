@@ -30,7 +30,7 @@
  * performs integer stores plus one clock read — no per-event allocation —
  * so tracing an engine that itself avoids allocation does not manufacture
  * GC pressure on its behalf. Strings never enter records: labels
- * (node/watcher/effect names, roots, dev-warning messages) intern once into
+ * (node/watcher/effect names, roots) intern once into
  * a label table; rare object payloads (correction from/to values, effect
  * values) go to a bounded ref-ring that may extend object lifetimes until
  * overwritten (capacity configurable, 0 disables capture — events still
@@ -86,8 +86,7 @@
  *  reconcile-correction {watcher, root, from, to, cause}     a retirement or root commit moved committed truth; this watcher's on-screen value had to follow
  *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
  *  react-effect-run     {effect, root, value}                a committed-world observer ran (it sees exactly what its root's UI shows)
- *  dev-warning          {message}
- *  epoch-reset          {epoch}                              quiescence: nothing in flight, so the engine reset its per-episode state and renumbered sequences
+ *  epoch-reset          {epoch}                              quiescence: nothing in flight, so the engine reset its per-episode state
  *  clock-sync           {absoluteUs}                         emitted when DT saturates
  *  truncation           {boundaryId}                         SESSION budget crossed
  *
@@ -120,9 +119,10 @@
  * `whyDelivered(watcher)`, `whyEffectRan(effect)`, `effectRunCount(effect)`.
  * Renderers live in `cosignal/graphviz` (`traceToDot`,
  * `dependencyGraphToDot`) — that entry imports only types from this one.
- * Note: sequence numbers renumber when the engine goes quiescent (the
- * `epoch-reset` event); trace records are a chronicle, so seqs in records
- * predating an `epoch-reset` read in that dead episode's units.
+ * Note: engine sequence numbers are never rewritten (they climb for the
+ * process's life, exact to 2^53), but trace records pack them into Int32
+ * fields — so seq fields in records decode faithfully only below 2^31-1
+ * minted sequences. A diagnostics-fidelity bound, not an engine one.
  */
 
 import type {
@@ -208,8 +208,8 @@ const K = {
 	passStart: 10, passYield: 11, passResume: 12, passEnd: 13,
 	rootCommit: 14, delivery: 15, suppressed: 16, evalDone: 17,
 	mountCorrective: 18, mountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
-	coreEffectRun: 22, reactEffectRun: 23, devWarning: 24, epochReset: 25,
-	clockSync: 26, truncation: 27,
+	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
+	clockSync: 25, truncation: 26,
 } as const;
 
 const KIND_NAMES = [
@@ -218,7 +218,7 @@ const KIND_NAMES = [
 	'pass-start', 'pass-yield', 'pass-resume', 'pass-end',
 	'root-commit', 'delivery', 'suppressed', 'eval',
 	'mount-corrective', 'mount-fixup', 'mount-correction', 'reconcile-correction',
-	'core-effect-run', 'react-effect-run', 'dev-warning', 'epoch-reset',
+	'core-effect-run', 'react-effect-run', 'epoch-reset',
 	'clock-sync', 'truncation',
 ] as const;
 
@@ -230,7 +230,7 @@ const CAUSE_SETTING = new Set<TraceKindCode>([
 	K.passStart, K.passYield, K.passResume, K.passEnd, K.rootCommit, K.epochReset,
 ]);
 
-const OP_NAMES = ['set', 'update', 'dispatch'] as const;
+const OP_NAMES = ['set', 'update'] as const;
 const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const;
 
 /** Decoded payload placeholder for a ref-ring value that was overwritten (or capture disabled). */
@@ -506,9 +506,6 @@ export class Tracer implements TraceHooks {
 			case 'slot-backstop-released':
 				this.rec(K.slotBackstop, e.slot, e.token, 0, 0, 0);
 				return;
-			case 'dev-warning':
-				this.rec(K.devWarning, this.label(e.message), 0, 0, 0, 0);
-				return;
 			case 'epoch-reset':
 				this.rec(K.epochReset, e.epoch, 0, 0, 0, 0);
 				return;
@@ -516,7 +513,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	receipt(node: AtomNode, r: Receipt): void {
-		const op = r.op.kind === 'set' ? 0 : r.op.kind === 'update' ? 1 : 2;
+		const op = r.op.kind === 'set' ? 0 : 1;
 		this.rec(K.write, this.label(node.name), r.token, r.slot, r.seq, op);
 	}
 
@@ -701,9 +698,6 @@ export class Tracer implements TraceHooks {
 				break;
 			case K.reactEffectRun:
 				data = { effect: this.labelOf(subject), root: this.labelOf(world), value: this.refValue(a0) };
-				break;
-			case K.devWarning:
-				data = { message: this.labelOf(subject) };
 				break;
 			case K.epochReset:
 				data = { epoch: subject };

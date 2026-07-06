@@ -21,8 +21,9 @@
  *
  * Vocabulary, in reading order (see also the package README):
  *
- *   - A RECEIPT records one write: the operation (set / functional update /
- *     reducer action), the batch it belongs to, and its position (`seq`) on
+ *   - A RECEIPT records one write: the operation (set / functional update —
+ *     a ReducerAtom dispatch records as an update whose closure captures
+ *     the action), the batch it belongs to, and its position (`seq`) on
  *     one global timeline. Receipts append to the written atom's TAPE — the
  *     per-atom receipt log (class `Tape`). A FOLD replays, in timeline
  *     order, the receipts a given view may see over the atom's BASE (the
@@ -78,9 +79,10 @@
  *   - An EPISODE is the stretch between QUIESCENCE points — moments when
  *     nothing is in flight (no live batches, no open passes, no PARKED
  *     actions — async actions kept pending until their promise settles).
- *     At quiescence the K1 overlay bulk-resets and every retained
- *     sequence value renumbers, so counters and edge logs never grow
- *     without bound.
+ *     At quiescence the K1 overlay bulk-resets, so edge logs never grow
+ *     without bound. Sequence values are NEVER rewritten: the global
+ *     counter climbs monotonically for the process's life (exact to
+ *     2^53 — see the bound note at `quiesce`).
  *
  * What lives here (full stories at the implementation sites):
  *   - receipts: every write appends {op, slot, seq, retiredSeq} to the
@@ -129,7 +131,7 @@
  *     durable meaning a change to committed truth itself (a per-root
  *     commit, a retirement, an async-action settlement), as opposed to a
  *     pending write that could still be discarded.
- *   - episodes / quiescence / renumbering, as defined above.
+ *   - episodes / quiescence (epoch reset), as defined above.
  *
  * The bridge surface consumes the external-runtime protocol's event shapes
  * (batch open/retire, pass begin/yield/resume/end with per-root commits,
@@ -146,7 +148,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, ReducerAtom, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -191,11 +193,11 @@ type WalkGen = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
 
-/** A write operation: set/update on atoms, dispatch on reducer atoms. */
+/** A write operation: set/update on atoms. A ReducerAtom dispatch records
+ * as an update whose closure captures the reducer and the action. */
 export type Op =
 	| { kind: 'set'; value: Value }
-	| { kind: 'update'; fn: (prev: Value) => Value }
-	| { kind: 'dispatch'; action: Value };
+	| { kind: 'update'; fn: (prev: Value) => Value };
 
 /**
  * A receipt: one recorded write — {op, slot, seq} appended at the write,
@@ -221,7 +223,6 @@ export type Receipt = {
 const enum OpKind {
 	SET = 0,
 	UPDATE = 1,
-	DISPATCH = 2,
 }
 
 /**
@@ -265,8 +266,7 @@ export class Tape {
 	opAt(i: number): Op {
 		const k = this.kinds[i]!;
 		if (k === OpKind.SET) return { kind: 'set', value: this.payloads[i] };
-		if (k === OpKind.UPDATE) return { kind: 'update', fn: this.payloads[i] as (prev: Value) => Value };
-		return { kind: 'dispatch', action: this.payloads[i] };
+		return { kind: 'update', fn: this.payloads[i] as (prev: Value) => Value };
 	}
 
 	entryAt(i: number): Receipt {
@@ -308,7 +308,6 @@ export class Tape {
 }
 
 export type Equals = (a: Value, b: Value) => boolean;
-export type Reducer = (state: Value, action: Value) => Value;
 
 export class AtomNode {
 	readonly kind = 'atom' as const;
@@ -324,7 +323,6 @@ export class AtomNode {
 	equals: Equals;
 	/** True iff `equals` is the default Object.is (write fast path). */
 	eqIsDefault: boolean;
-	reducer: Reducer | undefined = undefined;
 	/** Per-atom retirement stamp, minted at every retirement fold touching it
 	 * (a retirement changes visibility without minting new receipts, so memo
 	 * fingerprints must incorporate it). */
@@ -523,6 +521,13 @@ export class Watcher {
 	}
 }
 
+/** Referee surface — the bridge-level committed-world observer record
+ * (twin tests and the lockstep corpus drive it via `mountReactEffect`);
+ * production committed effects live in the React adapter (cosignal-react's
+ * useSignalEffect machinery over `committedValue`). The fate of this
+ * bridge-level pair (ReactEffect/CoreEffect) is owned by the
+ * effects-unification design (plans/, drafted concurrently) — do not
+ * extend it; do not delete it here. */
 export type ReactEffect = {
 	id: EffectId;
 	name: string;
@@ -532,6 +537,11 @@ export type ReactEffect = {
 	runs: number;
 };
 
+/** Referee surface — the bridge-level newest-world observer record
+ * (twin tests and the lockstep corpus drive it via `mountCoreEffect`);
+ * production newest-world effects are the kernel's own `effect()`
+ * (index.ts), which needs no bridge record. Fate owned by the
+ * effects-unification design (plans/) — see ReactEffect's note. */
 export type CoreEffect = {
 	id: EffectId;
 	name: string;
@@ -585,7 +595,6 @@ export type BridgeEvent =
 	| { type: 'slot-backstop-released'; slot: SlotId; token: TokenId }
 	| { type: 'pass-committed'; pass: PassId; root: RootId }
 	| { type: 'pass-discarded'; pass: PassId; root: RootId }
-	| { type: 'dev-warning'; message: string }
 	| { type: 'epoch-reset'; epoch: Epoch };
 
 /**
@@ -669,8 +678,7 @@ export function __coreProbes(): { receipts: number; tokens: number; worldEvals: 
 /** Rebuild an Op from the public method's scalar (kind, payload) pair. */
 function opOf(kind: HostOpKind, payload: unknown): Op {
 	if (kind === 0) return { kind: 'set', value: payload };
-	if (kind === 1) return { kind: 'update', fn: payload as (prev: Value) => Value };
-	return { kind: 'dispatch', action: payload };
+	return { kind: 'update', fn: payload as (prev: Value) => Value };
 }
 
 /**
@@ -701,7 +709,7 @@ function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown):
 	if (b.quiet) {
 		// Quiet mode: nothing is pending, so the whole write is one fold —
 		// no Op object, no ambient batch, no receipt, no walk (Phase 1b).
-		// HostOpKind and OpKind share the 0/1/2 encoding by construction.
+		// HostOpKind and OpKind share the 0/1 encoding by construction.
 		b.__quietWrite(node, kind as number as OpKind, payload);
 		return true;
 	}
@@ -830,25 +838,21 @@ export class CosignalBridge {
 	onMountCorrective: ((w: Watcher, token: Token, slot: SlotId) => void) | undefined;
 	/** An urgent pre-paint correction (mount window / committed-truth drift). */
 	onCorrection: ((w: Watcher) => void) | undefined;
-	/** A dev-warning heuristic fired. */
-	onDevWarning: ((message: string) => void) | undefined;
 
 	// Queued-notification columns (reused across operations; no per-notify objects).
-	private notifyKinds: number[] = []; // 0 delivery, 1 mount-corrective, 2 correction, 3 dev-warning
+	private notifyKinds: number[] = []; // 0 delivery, 1 mount-corrective, 2 correction
 	private notifyWs: (Watcher | undefined)[] = [];
 	private notifyTs: (Token | undefined)[] = [];
 	private notifySlots: SlotId[] = [];
-	private notifyMsgs: (string | undefined)[] = [];
 	private notifyN = 0;
 	private notifyFlushing = false;
 
-	private queueNotify(kind: number, w: Watcher | undefined, t: Token | undefined, slot: SlotId, msg: string | undefined): void {
+	private queueNotify(kind: number, w: Watcher | undefined, t: Token | undefined, slot: SlotId): void {
 		const i = this.notifyN++;
 		this.notifyKinds[i] = kind;
 		this.notifyWs[i] = w;
 		this.notifyTs[i] = t;
 		this.notifySlots[i] = slot;
-		this.notifyMsgs[i] = msg;
 	}
 
 	/** Invokes queued listeners at the end of the public operation. A nested
@@ -862,22 +866,17 @@ export class CosignalBridge {
 				const kind = this.notifyKinds[i]!;
 				const w = this.notifyWs[i];
 				const t = this.notifyTs[i];
-				const msg = this.notifyMsgs[i];
 				this.notifyWs[i] = undefined; // release object refs eagerly
 				this.notifyTs[i] = undefined;
-				this.notifyMsgs[i] = undefined;
 				if (kind === 0) {
 					const l = this.onDelivery;
 					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
 				} else if (kind === 1) {
 					const l = this.onMountCorrective;
 					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
-				} else if (kind === 2) {
+				} else {
 					const l = this.onCorrection;
 					if (l !== undefined) l(w!);
-				} else {
-					const l = this.onDevWarning;
-					if (l !== undefined) l(msg!);
 				}
 			}
 		} finally {
@@ -957,7 +956,6 @@ export class CosignalBridge {
 	 * root at a time; a same-root restart is a new pass. */
 	private openPassByRoot = new Map<RootId, Pass>();
 	private liveTokenCount = 0;
-	private parkedCount = 0;
 	/** Last-token cache (windowed writes hit one token repeatedly). */
 	private lastTokenId = 0;
 	private lastTokenRef: Token | undefined = undefined;
@@ -1260,20 +1258,6 @@ export class CosignalBridge {
 		this.indexNode(node);
 		this.byKernelId.set(handle._id, node);
 		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
-		if (handle instanceof ReducerAtom) {
-			// Adoption must carry the reducer: worlds replay `dispatch` receipts
-			// through node.reducer, so an adopted ReducerAtom without it would
-			// break every fold. Engine-owned so no host can forget it.
-			node.reducer = handle.reduce as Reducer;
-		}
-		return node;
-	}
-
-	/** The reducer is fixed at creation: dispatched actions are replayed
-	 * through it per world, so a swappable reducer would make worlds disagree. */
-	reducerAtom(name: string, reducer: Reducer, initial: Value): AtomNode {
-		const node = this.atom(name, initial);
-		node.reducer = reducer;
 		return node;
 	}
 
@@ -1331,12 +1315,9 @@ export class CosignalBridge {
 				// Replayed updaters run under BOTH fold guards: the bridge's
 				// (bridge reads throw) and the kernel's POISON table (raw
 				// public reads/writes throw exactly as in the unhosted path).
+				// ReducerAtom dispatches arrive here too: the closure carries
+				// the reducer and the captured action.
 				return this.inCallback(() => __hostRunFold(() => op.fn(prev)));
-			case 'dispatch': {
-				const reducer = atom.reducer;
-				if (reducer === undefined) throw new BridgeScheduleError(`dispatch on non-reducer atom ${atom.name}`);
-				return this.inCallback(() => __hostRunFold(() => reducer(prev, op.action)));
-			}
 		}
 	}
 
@@ -1434,10 +1415,7 @@ export class CosignalBridge {
 
 	private applyOpPacked(atom: AtomNode, kind: OpKind, payload: unknown, prev: Value): Value {
 		if (kind === OpKind.SET) return payload;
-		if (kind === OpKind.UPDATE) return this.inCallback(() => __hostRunFold(() => (payload as (p: Value) => Value)(prev)));
-		const reducer = atom.reducer;
-		if (reducer === undefined) throw new BridgeScheduleError(`dispatch on non-reducer atom ${atom.name}`);
-		return this.inCallback(() => __hostRunFold(() => reducer(prev, payload)));
+		return this.inCallback(() => __hostRunFold(() => (payload as (p: Value) => Value)(prev)));
 	}
 
 	/** Reads an atom's newest value straight from the kernel — the core's
@@ -2152,7 +2130,6 @@ export class CosignalBridge {
 		this.tokens.set(token.id, token);
 		this.liveTokenCount++;
 		this.quiet = false; // a live batch: the pipeline is armed until the last retirement
-		if (parked) this.parkedCount++;
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchOpen(token);
 		return token;
@@ -2287,7 +2264,7 @@ export class CosignalBridge {
 			if (!Object.is(now, w.lastRenderedValue)) {
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
-				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0, undefined);
+				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
 			}
 		}
 		for (const e of this.reactEffects.values()) {
@@ -2307,8 +2284,8 @@ export class CosignalBridge {
 		if (this.quiet) {
 			this.__quietWrite(
 				node,
-				op.kind === 'set' ? OpKind.SET : op.kind === 'update' ? OpKind.UPDATE : OpKind.DISPATCH,
-				op.kind === 'set' ? op.value : op.kind === 'update' ? op.fn : op.action,
+				op.kind === 'set' ? OpKind.SET : OpKind.UPDATE,
+				op.kind === 'set' ? op.value : op.fn,
 			);
 			return;
 		}
@@ -2317,13 +2294,8 @@ export class CosignalBridge {
 			ambient = this.openBatch({ ambient: true });
 			this.ambientToken = ambient.id;
 		}
-		// Dev warning heuristic: a bare-context write while an async action is
-		// pending usually means a post-await write that lost its transition
-		// context (an async continuation runs on a fresh call stack).
-		if (this.parkedCount > 0) {
-			if (this.eventsOn) this.log({ type: 'dev-warning', message: 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope' });
-			if (this.onDevWarning !== undefined) this.queueNotify(3, undefined, undefined, 0, 'a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
-		}
+		// The post-await dev-warning heuristic lives adapter-side only
+		// (cosignal-react's shim classifyWrite) — the engine stays lint-free.
 		this.write(ambient.id, node, op);
 	}
 
@@ -2403,8 +2375,8 @@ export class CosignalBridge {
 		// Intern slot, append receipt, bump the slot write clock.
 		const slot = token.slot !== undefined ? this.slots[token.slot]! : this.internSlot(token);
 		const seq = this.mintSeq();
-		const kind = op.kind === 'set' ? OpKind.SET : op.kind === 'update' ? OpKind.UPDATE : OpKind.DISPATCH;
-		tp.push(kind, slot.id, seq, token.id, op.kind === 'set' ? op.value : op.kind === 'update' ? op.fn : op.action);
+		const kind = op.kind === 'set' ? OpKind.SET : OpKind.UPDATE;
+		tp.push(kind, slot.id, seq, token.id, op.kind === 'set' ? op.value : op.fn);
 		token.lastWriteSeq = seq;
 		token.liveReceipts++;
 		if (node.lastTouchToken !== token.id) {
@@ -2476,7 +2448,7 @@ export class CosignalBridge {
 		if ((w.dedupBits & bit) === 0) {
 			w.dedupBits |= bit;
 			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'fresh' });
-			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id, undefined);
+			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id);
 			return;
 		}
 		// Bit set: suppress iff NO started-and-uncommitted pass on the
@@ -2487,7 +2459,7 @@ export class CosignalBridge {
 		const p = this.openPassByRoot.get(w.root);
 		if (p !== undefined && ((p.maskBits >>> slot.id) & SlotBits.LOW_BIT) === 1 && p.pin < seq) {
 			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'interleaved' });
-			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id, undefined);
+			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id);
 		} else {
 			if (this.eventsOn) this.log({ type: 'suppressed', watcher: w.name, token: token.id, slot: slot.id, seq });
 		}
@@ -2699,9 +2671,12 @@ export class CosignalBridge {
 		}
 	}
 
-	/** A committed-for-root observer (the useSignalEffect shape): evaluates
-	 * in the root's committed world, because side effects must track what
-	 * the user actually sees — a pending batch may still be discarded. */
+	/** Referee surface — a committed-for-root observer (the useSignalEffect
+	 * shape): evaluates in the root's committed world, because side effects
+	 * must track what the user actually sees — a pending batch may still be
+	 * discarded. Driven by twin tests and the lockstep corpus; the shipped
+	 * bindings implement committed effects adapter-side. Fate owned by the
+	 * effects-unification design (plans/). */
 	mountReactEffect(rootId: RootId, node: AnyNode, name: string): ReactEffect {
 		const e: ReactEffect = {
 			id: this.nextEffect++, name, root: rootId, node: node.id,
@@ -2719,7 +2694,10 @@ export class CosignalBridge {
 		return e;
 	}
 
-	/** A core effect() observer: always observes the newest world. */
+	/** Referee surface — a core effect() observer: always observes the
+	 * newest world. Driven by twin tests and the lockstep corpus; production
+	 * newest-world effects are the kernel's own `effect()`. Fate owned by
+	 * the effects-unification design (plans/). */
 	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
 		const e: CoreEffect = {
 			id: this.nextEffect++, name, node: node.id,
@@ -2939,7 +2917,6 @@ export class CosignalBridge {
 		if (!t.action) throw new BridgeScheduleError('settle targets an action token');
 		if (!t.parked || t.state !== 'live') throw new BridgeScheduleError('action already settled');
 		t.parked = false;
-		this.parkedCount--;
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchSettle(t, committed);
 		this.retireInternal(t, committed);
@@ -2959,7 +2936,6 @@ export class CosignalBridge {
 	private retireInternal(t: Token, committed: boolean): void {
 		if (t.state === 'live') {
 			this.liveTokenCount--;
-			if (t.parked) this.parkedCount--;
 		}
 		t.state = 'retired';
 		t.committedFlag = committed;
@@ -3211,7 +3187,7 @@ export class CosignalBridge {
 				if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
-				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0, undefined);
+				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
 			}
 		}
 		for (let i = 0; i < es.length; i++) {
@@ -3266,7 +3242,7 @@ export class CosignalBridge {
 			if (this.eventsOn) this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
 			correctedLive.add(t.id);
 			w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into t's lane (the protocol's runInBatch)
-			if (this.onMountCorrective !== undefined) this.queueNotify(1, w, t, slot.id, undefined);
+			if (this.onMountCorrective !== undefined) this.queueNotify(1, w, t, slot.id);
 		}
 		// The four-conjunct fast-out: same pass, no committed-truth advance,
 		// no per-root commit, clocks quiet. The clock conjunct checks the
@@ -3312,7 +3288,7 @@ export class CosignalBridge {
 			if (this.eventsOn) this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
 			w.lastRenderedValue = vFx; // urgent pre-paint correction
 			w.dedupBits = 0;
-			if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0, undefined);
+			if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
 			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctedLive.size);
 			return;
 		}
@@ -3345,7 +3321,7 @@ export class CosignalBridge {
 		return false;
 	}
 
-	// ------------------------------------------- episodes and renumbering
+	// ------------------------------------------- episodes and quiescence
 
 	/** Synchronously abandons every work-in-progress pass. */
 	discardAllWip(): void {
@@ -3360,12 +3336,25 @@ export class CosignalBridge {
 
 	/**
 	 * Quiescence (no live tokens, no live pins, no parked actions): the K1
-	 * union plane bulk-resets (epoch bump), every retained sequence value
-	 * renumbers (order-preserving), and every K1-touched node holding a
-	 * committed watcher or effect-dep snapshot refreshes by a forced kernel
+	 * union plane bulk-resets (epoch bump), and every K1-touched node holding
+	 * a committed watcher or effect-dep snapshot refreshes by a forced kernel
 	 * pull into the NEW episode's K1 plane — the walks route over K1, so
 	 * the coverage those observers rely on must be re-recorded, not lost
 	 * with the old plane.
+	 *
+	 * SEQUENCE-WIDTH BOUND (where renumbering used to live). Retained
+	 * sequence values (baseSeq, retirement stamps, cas, watcher snapshot
+	 * pins) are NOT rewritten at quiescence: sequences are plain JS numbers,
+	 * exact for integers to 2^53, they are only ever compared (<, <=, max —
+	 * never bit-twiddled), and every storage site is a scalar field or a
+	 * plain number array, so the engine stays correct until 2^53 mints —
+	 * about 28 years at a sustained 10M writes/sec. Renumbering was measured
+	 * (grind batch 4, item C): forcing every seq past SMI range (2^35) on
+	 * tape-heavy shapes moved fold/write throughput by ~1% — within noise,
+	 * below the 2% keep threshold — so the machinery was deleted. One
+	 * diagnostics caveat: `cosignal/trace` packs seqs into Int32 records,
+	 * so trace decode fidelity (not engine correctness) degrades past
+	 * 2^31-1 minted sequences.
 	 */
 	quiesce(): void {
 		if (!this.quiescent()) throw new BridgeScheduleError('quiescence requires no live tokens, pins, or parked actions');
@@ -3398,7 +3387,7 @@ export class CosignalBridge {
 		this.weakOutList.length = 0;
 		for (let i = 0; i < this.touched.length; i++) this.touched[i] = 0;
 		for (const list of this.slotTouched) list.length = 0;
-		// Dead-episode records drop before renumbering: nothing from a dead
+		// Dead-episode records drop at the reset: nothing from a dead
 		// episode can validate in a live one; serial counters stay monotone.
 		for (const [id, p] of this.passes) {
 			if (p.state === 'ended') this.passes.delete(id);
@@ -3423,7 +3412,6 @@ export class CosignalBridge {
 				// erroring getters keep their throw-on-demand behavior
 			}
 		}
-		this.renumber();
 		// Dead-episode bookkeeping zeroes (bulk-zero at episode reset).
 		for (const s of this.slots) {
 			s.writeClock = 0;
@@ -3437,37 +3425,6 @@ export class CosignalBridge {
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
-	}
-
-	/**
-	 * The renumber duty list — every retained sequence value rewritten in
-	 * an order-preserving pass so the global counter can restart low: base
-	 * sequences, retirement stamps, the committed-advance counter, watcher
-	 * snapshot pins. Tapes are empty at quiescence; memo planes were dropped
-	 * (nothing retains a stale sequence); referee mirrors (archives/origins)
-	 * live test-side and reset themselves on the quiesce op.
-	 */
-	private renumber(): void {
-		const retained = new Set<Seq>([0]);
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'atom') continue;
-			retained.add(n.baseSeq);
-			retained.add(n.retirementStamp);
-		}
-		retained.add(this.cas);
-		for (const w of this.watchers.values()) retained.add(w.snapshot.pin);
-		const sorted = [...retained].sort((a, b) => a - b);
-		const map = new Map<Seq, Seq>();
-		sorted.forEach((v, i) => map.set(v, i));
-		const rw = (v: Seq): Seq => map.get(v)!;
-		for (const n of this.nodes.values()) {
-			if (n.kind !== 'atom') continue;
-			n.baseSeq = rw(n.baseSeq);
-			n.retirementStamp = rw(n.retirementStamp);
-		}
-		this.cas = rw(this.cas);
-		for (const w of this.watchers.values()) w.snapshot.pin = rw(w.snapshot.pin);
-		this.seq = sorted.length; // restart the counter above the rewritten range
 	}
 
 	// ------------------------------------------------------------ helpers

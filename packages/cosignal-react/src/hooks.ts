@@ -366,7 +366,9 @@ export function startSignalTransition(fn: (scope: ActionScope) => unknown): void
 			},
 			dispatch: (atom, action) => {
 				if (tokenId === undefined) throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
-				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as unknown as Atom<unknown>), { kind: 'dispatch', action });
+				// The closure form dispatch records everywhere: update(s => reduce(s, action)).
+				const reduce = atom.reduce as (state: unknown, a: unknown) => unknown;
+				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as unknown as Atom<unknown>), { kind: 'update', fn: (s) => reduce(s, action) });
 			},
 		};
 		// Returning fn's thenable keeps the transition pending until it settles

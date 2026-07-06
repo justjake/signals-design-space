@@ -41,7 +41,3 @@ export function set(value: unknown): { kind: 'set'; value: unknown } {
 export function update(fn: (p: unknown) => unknown): { kind: 'update'; fn: (p: unknown) => unknown } {
 	return { kind: 'update', fn };
 }
-
-export function dispatch(action: unknown): { kind: 'dispatch'; action: unknown } {
-	return { kind: 'dispatch', action };
-}
