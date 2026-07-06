@@ -442,6 +442,22 @@ rationale is section 4). Identifiers are stable: cite them as
   retirement, an async settlement — including flips where an OLDER
   write becomes visible beneath a newer one (visibility changes, not
   just value writes). [battery case 16].
+  **Amended 2026-07-06 (owner ruling, derived from parity + EF1 +
+  CR4):** these are BOUNDARY semantics — an effect never re-runs
+  mid-write, and never while the same root has an open render-pass
+  frame (CR4 makes a boundary under an open frame impossible);
+  multiple member writes before one boundary COALESCE to a single
+  re-run at the boundary value (React's own model: several setState
+  calls in one handler produce one render and one effect fire —
+  [react.dev: useEffect/commit timing]); cleanup is GUARANTEED at
+  unmount (a make-up fire is not — matching React). Retirement,
+  settlement, and unmount are guaranteed flush points, so deferral is
+  never indefinite. History: production originally revalidated
+  immediately at committed-member writes; the 2026-07-06 plan reviews
+  proved immediate violates EF1/CR4 (effect ahead of the screen under
+  an open frame) and naive next-drain deferral loses unmount-adjacent
+  fires — both schedules are pinned. [ruling 2026-07-06: EF2 boundary
+  semantics].
 - **EF3 (MUST).** Library-level effects created outside React
   (`effect()`) observe newest state and re-run after a write's
   notification, batching permitted. [oracle: contract — effects],
@@ -611,6 +627,13 @@ Neither is part of the contract; nothing in section 3 depends on them.
   abandon-with-attempt-scoped-writes); the I1 walked schedules
   (reviews/2026-07-05-one-core-plan-review-fable.md F1 schedules A/A′;
   codex findings 1/5/6) become pinned regression tests.
+- **NF2 status (2026-07-06): QUEUED by owner ruling** — the owner
+  explicitly queued NF2 productionization ("I want to queue up the NF2
+  design as well"), which is the owner-evidence entry criterion; the
+  2026-07-06 plan's Program 2 was reviewed adversarially and sent back
+  for one design revision (untracked-read coverage, committed-plane
+  lifecycle, settlement fanout, per-world equality, lifetime
+  classification) before staged implementation.
 - **NF2 spike result (2026-07-05,
   `research/experiments/world-tagged-links-spike.md`): MIXED.** Faster
   holds where it matters (world evaluation 2.5×–29× vs the shipped memo

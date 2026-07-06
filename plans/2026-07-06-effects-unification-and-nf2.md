@@ -1,5 +1,41 @@
 # Effects unification by promotion + NF2 productionization (2026-07-06)
 
+> **AMENDED 2026-07-06 after adversarial review + owner rulings.**
+> Reviews: `reviews/2026-07-06-unification-nf2-plan-review-{codex,fable}.md`
+> (converged: Program 1 sound-with-amendments; Program 2 unsound as
+> specified, sent back for design revision). Binding amendments:
+> 1. **EF2 ruled** (owner, 2026-07-06; recorded in the contract):
+>    boundary semantics — effects re-fire only at boundaries where the
+>    root's committed truth legally advances (commit report,
+>    retirement, settlement), coalesced to the boundary value, cleanup
+>    guaranteed at unmount, never under an open same-root frame.
+>    Production's immediate revalidation is RE-PINNED to this; the
+>    three killing schedules (codex 2's open-frame run-ahead; fable
+>    M3's unmount-loss; coalescing) become pins.
+> 2. **Timing layer fixed** (codex 1): effect revalidation stays at the
+>    root-commit report, NOT pass-end — pass-end precedes React's
+>    re-pend classification.
+> 3. **RUL-2 dissolved**: contract OL1 already rules — effects COUNT
+>    toward observation liveness. Not optional.
+> 4. **Oracle co-evolution enlarged** (codex 8 / fable M5): schedule
+>    ops must model real dependency capture (bodies that re-choose deps
+>    causally), effect removal, cleanup, StrictMode-style replay, and
+>    the dedup rule when one pass locks in two tokens (one re-check per
+>    boundary, not per token) — or declare each gap explicitly.
+> 5. **obsCapture placement constraint** (codex 9): observation capture
+>    feeds from every dependency read BEFORE any reuse/dedup check —
+>    never from link insertion.
+> 6. **Ordering joint defined** (codex 9): committed-side fanout/marks
+>    land before the member-write effect scan at the same boundary.
+> 7. **Program 2 sections (§3–§4, and §6 risks as they concern P2) are
+>    SUPERSEDED pending a design revision** addressing: untracked-read
+>    coverage (weak edges are load-bearing at HEAD — codex 3/fable B1),
+>    committed-plane lifecycle (one consistent story — fable B2),
+>    suspense settlement fanout per plane (codex 5/fable M2), per-world
+>    equality policy (codex 6), S-A executability (codex 7), and the
+>    mandatory lifetime classification for planes/marks/boxes. The
+>    revision gets a focused re-review before any stage runs.
+
 > **STATUS: DRAFT — plan only, no code has changed.** Written for
 > adversarial review (codex + a fresh no-priors reviewer) before any
 > implementation, per this repo's process. Every mechanism, invariant,
