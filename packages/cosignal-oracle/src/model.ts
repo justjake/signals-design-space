@@ -253,6 +253,62 @@ export class InvariantViolation extends Error {}
 
 const SLOT_COUNT = 31; // At most 31 live batches — one per React priority lane (React tracks lanes as bits of a 31-bit mask).
 
+/**
+ * What the visibility rule reads from its host: the two set-valued lookups
+ * the pass and committed clauses are defined over. `CosignalModel` is its
+ * own host (its `visible` method); an engine-side adapter that answers the
+ * same two lookups can host the rule too, instead of restating it.
+ */
+export type VisibilityHost = {
+	/** The pass's included set: the batches it renders plus the root's committed set at its start. */
+	includedSet(pass: Pass): Set<SlotId>;
+	/** The root's CURRENT committed-slot set (live committed tokens' slots). */
+	committedSlotsNow(root: RootId): Set<SlotId>;
+};
+
+/**
+ * THE visibility rule: which receipts each kind of world replays.
+ *
+ * - Pass world, two clauses: (1) receipts whose batch retired at or
+ *   before the pass's pin — already permanent history when the render
+ *   started; (2) receipts of included batches (rendered or already
+ *   committed into the root at pass start), up to the pin. The pin cap
+ *   is what keeps a paused-and-resumed render from drifting.
+ * - Committed-for-root: every retired receipt, plus receipts of batches
+ *   currently committed into the root (membership) — a root must keep
+ *   agreeing with UI it already committed, even before those batches
+ *   retire globally.
+ * - Newest: everything (the engine applies writes to its core eagerly).
+ * - Mount reconciliation: the mounting render's own inclusions at its
+ *   pin, plus committed truth as of NOW — the mount's view
+ *   fast-forwarded to what actually committed during its mount window.
+ *
+ * Exported standalone so the rule has exactly one Receipt-shaped statement:
+ * the model folds through it, and an engine's test-side model view may call
+ * it directly rather than keeping a copy.
+ */
+export function visible(host: VisibilityHost, e: Receipt, world: World): boolean {
+	switch (world.kind) {
+		case 'newest':
+			return true;
+		case 'pass': {
+			const w = world.pass;
+			if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) return true; // clause 1: retired by my pin
+			return host.includedSet(w).has(e.slot) && e.seq <= w.pin; // clause 2: included, up to my pin
+		}
+		case 'committed': {
+			if (e.retiredSeq !== undefined) return true; // committed truth at now
+			return host.committedSlotsNow(world.root).has(e.slot); // membership
+		}
+		case 'mountFix': {
+			if (world.maskSlots.has(e.slot) && e.seq <= world.pin) return true; // the render's own inclusions, at its pin
+			if (world.excludeLiveTokens?.has(e.token)) return false; // corrective-covered live divergence (audit only)
+			if (e.retiredSeq !== undefined) return true; // committed truth at NOW
+			return host.committedSlotsNow(world.root).has(e.slot); // the root's CURRENT committed set
+		}
+	}
+}
+
 export class CosignalModel {
 	nodes = new Map<NodeId, AnyNode>();
 	tokens = new Map<TokenId, Token>();
@@ -389,43 +445,9 @@ export class CosignalModel {
 		return out;
 	}
 
-	/**
-	 * THE visibility rule: which receipts each kind of world replays.
-	 *
-	 * - Pass world, two clauses: (1) receipts whose batch retired at or
-	 *   before the pass's pin — already permanent history when the render
-	 *   started; (2) receipts of included batches (rendered or already
-	 *   committed into the root at pass start), up to the pin. The pin cap
-	 *   is what keeps a paused-and-resumed render from drifting.
-	 * - Committed-for-root: every retired receipt, plus receipts of batches
-	 *   currently committed into the root (membership) — a root must keep
-	 *   agreeing with UI it already committed, even before those batches
-	 *   retire globally.
-	 * - Newest: everything (the engine applies writes to its core eagerly).
-	 * - Mount reconciliation: the mounting render's own inclusions at its
-	 *   pin, plus committed truth as of NOW — the mount's view
-	 *   fast-forwarded to what actually committed during its mount window.
-	 */
+	/** THE visibility rule (the exported `visible`, above), with this model as its host. */
 	visible(e: Receipt, world: World): boolean {
-		switch (world.kind) {
-			case 'newest':
-				return true;
-			case 'pass': {
-				const w = world.pass;
-				if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) return true; // clause 1: retired by my pin
-				return this.includedSet(w).has(e.slot) && e.seq <= w.pin; // clause 2: included, up to my pin
-			}
-			case 'committed': {
-				if (e.retiredSeq !== undefined) return true; // committed truth at now
-				return this.committedSlotsNow(world.root).has(e.slot); // membership
-			}
-			case 'mountFix': {
-				if (world.maskSlots.has(e.slot) && e.seq <= world.pin) return true; // the render's own inclusions, at its pin
-				if (world.excludeLiveTokens?.has(e.token)) return false; // corrective-covered live divergence (audit only)
-				if (e.retiredSeq !== undefined) return true; // committed truth at NOW
-				return this.committedSlotsNow(world.root).has(e.slot); // the root's CURRENT committed set
-			}
-		}
+		return visible(this, e, world);
 	}
 
 	/**

@@ -8,10 +8,13 @@
  * thing packed state cannot answer — the FULL history behind compaction —
  * which a driver-side mirror retains: per-atom archives fed by the engine's
  * `onCompact` hook and per-atom origins maintained at the ops that move them
- * (creation, direct-mode writes, quiesce). The visibility rule and the
- * shadow fold reimplement the model's Receipt-shaped forms; the engine keeps
- * only the packed forms (`visibleAt`, `foldAtom`).
+ * (creation, direct-mode writes, quiesce). The shadow fold reimplements the
+ * model's Receipt-shaped fold over that full history, replaying the oracle's
+ * exported `visible` rule (imported — the one Receipt-shaped statement of
+ * receipt visibility, not a copy); the engine keeps only the packed forms
+ * (`visibleAt`, `foldAtom`).
  */
+import { visible } from '../../cosignal-oracle/src/model.js';
 import type {
 	AnyNode as ENode,
 	AtomNode,
@@ -79,30 +82,6 @@ type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: ENode };
 function unwrap(n: unknown): ENode {
 	const e = (n as { __engine?: ENode }).__engine;
 	return e !== undefined ? e : (n as ENode);
-}
-
-/** The model's Receipt-shaped visibility rule (mirrors the engine's packed
- * `visibleAt` clauses; see the doc there). */
-function visible(engine: CosignalBridge, e: Receipt, world: World): boolean {
-	switch (world.kind) {
-		case 'newest':
-			return true;
-		case 'pass': {
-			const w = world.pass;
-			if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) return true; // clause 1: retired by my pin
-			return engine.includedSet(w).has(e.slot) && e.seq <= w.pin; // clause 2: included, up to my pin
-		}
-		case 'committed': {
-			if (e.retiredSeq !== undefined) return true; // committed truth at now
-			return engine.committedSlotsNow(world.root).has(e.slot); // membership
-		}
-		case 'mountFix': {
-			if (world.maskSlots.has(e.slot) && e.seq <= world.pin) return true;
-			if (world.excludeLiveTokens?.has(e.token)) return false;
-			if (e.retiredSeq !== undefined) return true;
-			return engine.committedSlotsNow(world.root).has(e.slot);
-		}
-	}
 }
 
 /** Pure op application for the shadow fold (test-side: the corpus's updaters/
