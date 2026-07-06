@@ -1946,10 +1946,24 @@ export class Atom<T> {
 	 * With a host routing context live (world evaluation / ambient world),
 	 * the host serves the value of the world doing the asking. Inside a fold
 	 * frame the dispatch itself throws (POISON table).
+	 *
+	 * KERNEL-FRAME READS ARE NEVER WORLD-ROUTED (`activeSub === 0` guards the
+	 * seam): a read inside an open kernel evaluation (a `Computed` getter, an
+	 * `effect()` body) creates a K0 dependency link and its result lands in a
+	 * K0 cache slot, and K0 state is newest-world state by the eager-apply
+	 * invariant — serving a world-folded value there would poison the kernel
+	 * cache (a later newest read of the computed would serve another world's
+	 * value with no invalidation: tearing). World routing belongs to overlay
+	 * evaluations and render/effect call contexts, all of which run with no
+	 * kernel frame open. (Known pinhole, same shape as the documented
+	 * forbidWritesInComputeds one: `untracked()` inside a kernel getter
+	 * clears activeSub, so a routed read there can still reach the getter's
+	 * return value; untracked reads leave no K0 link, but the cache slot
+	 * still absorbs the result.) Pinned by tests/graph-consumers.spec.ts.
 	 */
 	get state(): T {
 		const hr = hostRead;
-		if (hr !== undefined) {
+		if (hr !== undefined && activeSub === 0) {
 			const v = hr(this as Atom<unknown>);
 			if (v !== __HOST_MISS) {
 				return v as T;

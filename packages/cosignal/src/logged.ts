@@ -2536,6 +2536,27 @@ export class CosignalBridge {
 		p.rendered.add(watcherId);
 	}
 
+	/**
+	 * Full watcher removal — the bindings' unsubscribe surface (debounce-
+	 * finalized unsubscription, StrictMode orphan sweeps). The engine keeps
+	 * watchers in TWO stores — the `watchers` id map and the `watchersByNode`
+	 * per-node index the walks read (delivery, drains, the K1 sweep's
+	 * reachability seeds, quiescence refresh targets) — and this is the one
+	 * public operation that retires a watcher from BOTH, plus any open pass's
+	 * mounted list (a dead watcher must not be revived by a later commit's
+	 * layout loop). Deleting from the public map alone strands the per-node
+	 * entry: dead watchers then seed sweep reachability and quiescence
+	 * refreshes forever (pinned by tests/graph-consumers.spec.ts). The
+	 * liveness setter inside releases the observation-union retain.
+	 */
+	removeWatcher(watcherId: WatcherId): void {
+		for (const p of this.passes.values()) {
+			const i = p.mounted.indexOf(watcherId);
+			if (i >= 0) p.mounted.splice(i, 1);
+		}
+		this.dropWatcher(watcherId);
+	}
+
 	/** Unlinks a watcher from the per-node index (discarded mounts). */
 	private dropWatcher(wid: WatcherId): void {
 		const w = this.watchers.get(wid);

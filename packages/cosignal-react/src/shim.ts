@@ -456,11 +456,11 @@ export class Shim {
 			if (this.disposed) return;
 			for (const wid of minted) {
 				if (this.claimed.has(wid)) continue;
-				const w = this.bridge.watchers.get(wid);
-				if (w !== undefined) {
-					w.live = false;
-					this.bridge.watchers.delete(wid);
-				}
+				// removeWatcher, never a bare watchers.delete: the engine keeps a
+				// per-node watcher index next to the id map, and a map-only delete
+				// strands the index entry (dead watchers then seed the engine's
+				// sweeps and quiescence refreshes forever).
+				this.bridge.removeWatcher(wid);
 				this.targets.delete(wid);
 			}
 		});
@@ -842,12 +842,10 @@ export class Shim {
 		rec.watcherId = undefined;
 		this.claimed.delete(wid);
 		this.targets.delete(wid);
-		const w = this.bridge.watchers.get(wid);
-		if (w !== undefined) {
-			w.live = false;
-			this.bridge.deferMount(wid); // drop from any open pass's mounted list
-			this.bridge.watchers.delete(wid);
-		}
+		// One engine call retires the watcher from EVERY store it lives in
+		// (liveness/observation retain, id map, per-node walk index, open
+		// mounted lists) — see CosignalBridge.removeWatcher.
+		this.bridge.removeWatcher(wid);
 	}
 }
 
