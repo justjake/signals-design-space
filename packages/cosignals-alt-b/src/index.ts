@@ -5,6 +5,8 @@ export {
 	effect,
 	effectScope,
 	batch,
+	startBatch,
+	endBatch,
 	untracked,
 	startSignalTransition,
 	configure,

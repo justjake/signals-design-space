@@ -3504,6 +3504,21 @@ export function batch<T>(fn: () => T): T {
 	}
 }
 
+/** Low-level batch surface (adapter/bindings plumbing; prefer batch()). */
+export function startBatch(): void {
+	++batchDepth;
+}
+
+export function endBatch(): void {
+	if (--batchDepth === 0) {
+		enter(() => {
+			E.flush();
+			E.drainAll();
+		});
+		boundary();
+	}
+}
+
 export function untracked<T>(fn: () => T): T {
 	const prevSub = activeSub;
 	activeSub = 0;

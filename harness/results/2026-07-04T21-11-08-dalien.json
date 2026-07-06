@@ -1,0 +1,73 @@
+{
+  "kind": "bench",
+  "framework": "dalien",
+  "suites": [
+    "kairo"
+  ],
+  "timestamp": "2026-07-04T21-11-08",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    3.24560546875,
+    3.8955078125,
+    4.1611328125
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "avoidablePropagation",
+      "time": 111.06499999999997
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "broadPropagation",
+      "time": 83.19120799999996
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "deepPropagation",
+      "time": 33.7052920000001
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "diamond",
+      "time": 79.00916600000028
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "mux",
+      "time": 72.38120899999967
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "repeatedObservers",
+      "time": 18.46337499999936
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "triangle",
+      "time": 24.27837499999987
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "unstable",
+      "time": 20.05687500000022
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "molBench",
+      "time": 13.73425000000043
+    }
+  ]
+}

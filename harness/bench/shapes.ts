@@ -268,6 +268,12 @@ async function runChild(): Promise<void> {
 			const t0 = performance.now();
 			checksum = shape(adapter, scale);
 			times.push(performance.now() - t0);
+			// Yield to the macrotask queue between reps (outside the timed
+			// window) so engine-scheduled work — FinalizationRegistry cleanup,
+			// background GC finalization — runs as it would in a real app's
+			// event loop. A fully synchronous rep loop systematically
+			// overstates retention costs for finalizer-based reclamation.
+			await new Promise<void>((res) => setImmediate(res));
 		}
 		pending.push({ shape: shapeName, times, checksum, window: [w0, performance.now()] });
 	}

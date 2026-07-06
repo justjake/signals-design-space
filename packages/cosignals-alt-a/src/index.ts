@@ -63,6 +63,9 @@ export const Computed = defaultAPI.Computed;
 export const effect = defaultAPI.effect;
 export const effectScope = defaultAPI.effectScope;
 export const batch = defaultAPI.batch;
+/** Low-level batch surface (adapter/bindings plumbing; prefer batch()). */
+export const startBatch = defaultEngine.startBatch;
+export const endBatch = defaultEngine.endBatch;
 export const untracked = defaultAPI.untracked;
 export const configure = defaultAPI.configure;
 

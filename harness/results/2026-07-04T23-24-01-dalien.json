@@ -1,0 +1,25 @@
+{
+  "kind": "bench",
+  "framework": "dalien",
+  "suites": [
+    "sbench"
+  ],
+  "timestamp": "2026-07-04T23-24-01",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    2.53515625,
+    3.23681640625,
+    3.3603515625
+  ],
+  "ok": false,
+  "error": "sbench: exit code 1",
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "createSignals",
+      "time": 2.634916000000004
+    }
+  ]
+}

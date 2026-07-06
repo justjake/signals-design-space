@@ -1,0 +1,7 @@
+framework,suite,test,time
+arena-spkq,dynamic,2-10x5 - lazy80%,130.48620899999992
+arena-spkq,dynamic,6-10x10 - dyn25% - lazy80%,96.49387499999989
+arena-spkq,dynamic,4-1000x12 - dyn5%,255.32399999999961
+arena-spkq,dynamic,25-1000x5,287.1730829999997
+arena-spkq,dynamic,3-5x500,69.01729200000045
+arena-spkq,dynamic,6-100x15 - dyn50%,149.40599999999995

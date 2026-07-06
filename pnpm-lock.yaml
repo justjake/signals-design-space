@@ -36,6 +36,12 @@ importers:
       cosignal:
         specifier: workspace:*
         version: link:../packages/cosignal
+      cosignals-alt-a:
+        specifier: workspace:*
+        version: link:../packages/cosignals-alt-a
+      cosignals-alt-b:
+        specifier: workspace:*
+        version: link:../packages/cosignals-alt-b
     devDependencies:
       '@types/node':
         specifier: 24.13.2

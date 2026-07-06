@@ -1,0 +1,55 @@
+{
+  "kind": "bench",
+  "framework": "arena-spkh",
+  "suites": [
+    "dynamic"
+  ],
+  "timestamp": "2026-07-04T13-02-08",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    3.02197265625,
+    2.77734375,
+    2.98486328125
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "dynamic",
+      "framework": "arena-spkh",
+      "test": "2-10x5 - lazy80%",
+      "time": 129.67037500000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-spkh",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 95.90641700000015
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-spkh",
+      "test": "4-1000x12 - dyn5%",
+      "time": 250.07524999999987
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-spkh",
+      "test": "25-1000x5",
+      "time": 283.56645799999933
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-spkh",
+      "test": "3-5x500",
+      "time": 70.15416600000026
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-spkh",
+      "test": "6-100x15 - dyn50%",
+      "time": 145.21837500000038
+    }
+  ]
+}

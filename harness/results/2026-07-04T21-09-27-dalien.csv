@@ -1,0 +1,10 @@
+framework,suite,test,time
+dalien,kairo,avoidablePropagation,102.53424999999999
+dalien,kairo,broadPropagation,83.9089590000001
+dalien,kairo,deepPropagation,35.46791600000006
+dalien,kairo,diamond,80.92941599999995
+dalien,kairo,mux,73.68991700000015
+dalien,kairo,repeatedObservers,18.285167
+dalien,kairo,triangle,23.776208999999653
+dalien,kairo,unstable,19.67108300000018
+dalien,kairo,molBench,13.206749999999374

@@ -2945,6 +2945,17 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 	}
 
+	/** Low-level batch surface (adapter/bindings plumbing; prefer batch()). */
+	function startBatch(): void {
+		++batchDepth;
+	}
+
+	function endBatch(): void {
+		if (--batchDepth === 0) {
+			topLevelSettle(); // grouped drain at batch close (§9.8)
+		}
+	}
+
 	function untracked<T>(fn: () => T): T {
 		const prevSub = activeSub;
 		activeSub = 0;
@@ -3228,6 +3239,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 		effect,
 		effectScope,
 		batch,
+		startBatch,
+		endBatch,
 		untracked,
 		readCommitted,
 		truncateBatch,

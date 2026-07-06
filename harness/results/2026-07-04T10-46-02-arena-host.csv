@@ -1,0 +1,7 @@
+framework,suite,test,time
+arena-host,dynamic,2-10x5 - lazy80%,141.08791600000018
+arena-host,dynamic,6-10x10 - dyn25% - lazy80%,102.681333
+arena-host,dynamic,4-1000x12 - dyn5%,294.1118339999998
+arena-host,dynamic,25-1000x5,302.2399169999999
+arena-host,dynamic,3-5x500,72.51354099999935
+arena-host,dynamic,6-100x15 - dyn50%,162.13337499999943

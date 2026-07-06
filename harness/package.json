@@ -16,7 +16,9 @@
 		"@lab/control": "workspace:*",
 		"@lab/sweep": "workspace:*",
 		"alien-signals": "file:../upstream-alien-signals",
-		"cosignal": "workspace:*"
+		"cosignal": "workspace:*",
+		"cosignals-alt-a": "workspace:*",
+		"cosignals-alt-b": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/node": "24.13.2",
