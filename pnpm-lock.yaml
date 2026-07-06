@@ -132,6 +132,9 @@ importers:
       '@lab/arena':
         specifier: workspace:*
         version: link:../../libs/arena
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       reactive-framework-test-suite:
         specifier: 0.0.2
         version: 0.0.2

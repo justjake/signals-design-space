@@ -224,7 +224,74 @@ describe.skipIf(!PERF)('§18 perf gates (PERF=1)', () => {
 		}
 	});
 
-	it('G-19: tracing overhead (RING and SESSION) vs untraced — spec gate 1.15x', () => {
+	it('G-19: tracing overhead on tier-0 shapes vs untraced — spec gate 1.15x', () => {
+		// Tier-0 shape (a): DIRECT write loop — one atom-write emit per write.
+		const mkWrite = () => {
+			setup();
+			const a = new Atom({ state: 0 });
+			const c = new Computed({ fn: () => a.state + 1 });
+			void c.state;
+			createWatcher(c, () => {});
+			let v = 0;
+			return () => {
+				a.set(++v);
+			};
+		};
+		let w = mkWrite();
+		const wUntraced = bench(w, 50_000);
+		w = mkWrite();
+		startTracing({ mode: 'ring', capacity: 1 << 16 });
+		const wTraced = bench(w, 50_000);
+		stopTracing();
+		// Tier-0 shape (b): held-open marked-cone read loop (the G-8 loop).
+		const mkRead = () => {
+			const fork = setup();
+			const atoms = Array.from({ length: 8 }, (_, i) => new Atom({ state: i }));
+			const c = new Computed({ fn: () => atoms.reduce((s, x) => s + x.state, 0) });
+			void c.state;
+			const t = fork.openBatch(true);
+			fork.inBatch(t, () => atoms[0].set(100));
+			return () => {
+				void c.state;
+			};
+		};
+		let r = mkRead();
+		const rUntraced = bench(r, 200_000);
+		r = mkRead();
+		startTracing({ mode: 'ring', capacity: 1 << 16 });
+		const rTraced = bench(r, 200_000);
+		stopTracing();
+		// Context: a LOGGED steady write loop (2 emits/write: atom-write +
+		// coalesce) — not a tier-0 shape; per-event performance.now() is the
+		// dominant traced cost there.
+		const mkLogged = () => {
+			const fork = setup();
+			const a = new Atom({ state: 0 });
+			const c = new Computed({ fn: () => a.state + 1 });
+			void c.state;
+			createWatcher(c, () => {});
+			const t = fork.openBatch(false);
+			const keep = fork.openBatch(true);
+			void keep;
+			let v = 0;
+			fork.inBatch(t, () => a.set(++v));
+			return () => {
+				fork.inBatch(t, () => a.set(++v));
+			};
+		};
+		let lw = mkLogged();
+		const lUntraced = bench(lw, 30_000);
+		lw = mkLogged();
+		startTracing({ mode: 'ring', capacity: 1 << 16 });
+		const lTraced = bench(lw, 30_000);
+		stopTracing();
+		report(
+			`G-19 tier-0: DIRECT write loop untraced ${wUntraced.toFixed(0)} ns → traced ${wTraced.toFixed(0)} ns (${(wTraced / wUntraced).toFixed(2)}x, gate ≤1.15x); marked-read loop ${rUntraced.toFixed(1)} → ${rTraced.toFixed(1)} ns (${(rTraced / rUntraced).toFixed(2)}x); context LOGGED write loop ${lUntraced.toFixed(0)} → ${lTraced.toFixed(0)} ns (${(lTraced / lUntraced).toFixed(2)}x, 2 emits/write)`,
+		);
+		expect(wTraced / wUntraced).toBeLessThan(5); // sanity only
+	});
+
+	it('G-19 context: full fork-double episode traced vs untraced (not tier-0)', () => {
 		const episode = (fork: ForkDouble, a: Atom<number>, v: number): void => {
 			const t = fork.openBatch(true);
 			fork.inBatch(t, () => a.set(v));

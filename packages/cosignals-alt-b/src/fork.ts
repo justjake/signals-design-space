@@ -70,6 +70,9 @@ export class ForkDouble {
 	private serial = 0;
 	private lineageSerial = 0;
 	private batches = new Map<number, BatchState>();
+	/** Live (unretired) tokens — O(1) liveness bookkeeping so long sessions
+	 * do not degrade quadratically scanning every batch ever created. */
+	private live = new Set<number>();
 	/** Batch context stack for write attribution (innermost wins, §6.5). */
 	private contextStack: number[] = [];
 	/** Lazily-minted urgent token for writes outside any scripted batch. */
@@ -145,14 +148,10 @@ export class ForkDouble {
 
 	/** Claim + mint a batch token (§6.2). Emits the onBatchOpened gate edge. */
 	openBatch(deferred: boolean): number {
-		let live = 0;
-		for (const b of this.batches.values()) {
-			if (!b.retired) {
-				++live;
-			}
-		}
-		if (live >= this.maxLiveTokens) {
-			throw new Error(`ForkDouble: ${live} live tokens; §6.2 caps at ${this.maxLiveTokens}`);
+		if (this.live.size >= this.maxLiveTokens) {
+			throw new Error(
+				`ForkDouble: ${this.live.size} live tokens; §6.2 caps at ${this.maxLiveTokens}`,
+			);
 		}
 		const token = ((++this.serial) << 1) | (deferred ? 1 : 0);
 		this.batches.set(token, {
@@ -161,6 +160,7 @@ export class ForkDouble {
 			retired: false,
 			committedRoots: new Set(),
 		});
+		this.live.add(token);
 		this.emit((l) => l.onBatchOpened?.(token));
 		return token;
 	}
@@ -285,6 +285,7 @@ export class ForkDouble {
 			this.commitBatchOnRoot(finalRoot, token);
 		}
 		b.retired = true;
+		this.live.delete(token);
 		const wasCommitted = committed ?? b.committedRoots.size > 0;
 		this.emit((l) => l.onBatchRetired?.(token, wasCommitted));
 	}
@@ -303,15 +304,7 @@ export class ForkDouble {
 
 	/** Full React quiescence per §9.1: no live (unretired) batches, no open pass. */
 	isQuiescent(): boolean {
-		if (this.pass !== undefined) {
-			return false;
-		}
-		for (const b of this.batches.values()) {
-			if (!b.retired) {
-				return false;
-			}
-		}
-		return true;
+		return this.pass === undefined && this.live.size === 0;
 	}
 
 	isBatchLive(token: number): boolean {
@@ -320,13 +313,7 @@ export class ForkDouble {
 	}
 
 	liveTokens(): number[] {
-		const out: number[] = [];
-		for (const b of this.batches.values()) {
-			if (!b.retired) {
-				out.push(b.token);
-			}
-		}
-		return out;
+		return [...this.live];
 	}
 
 	// ---- internals ---------------------------------------------------------------

@@ -206,6 +206,22 @@ let metaCol: (NodeMeta | undefined)[] = [undefined];
 let memoHeads: number[] = [0];
 let logVals: unknown[] = [undefined];
 let memoVals: unknown[] = [];
+// Certificate validation cache (parallel to memoVals): the tapeStamp value at
+// the memo's last successful validation. tapeStamp increments on EVERY tape
+// mutation anywhere (create/append/coalesce/sweep/truncate); if it has not
+// moved since a memo's last validation, no certificate pair can have moved
+// either, so the scan is skipped — this is the whole cost of a hot read loop
+// over a marked cone while a transition is merely HELD OPEN (G-8).
+let memoStamp: number[] = [];
+let tapeStamp = 1;
+// Fused world-state stamp: increments with EVERY tape mutation AND every
+// overlayEpoch bump. A NEWEST-world memo validated at worldStamp X stays the
+// right answer while worldStamp === X (nothing that could change any world's
+// value has happened). newestStamp[c >> 3] records a computed's last such
+// validation; the validated value is cached in the computed's (unused)
+// second value slot — one load + one compare + one load for the G-8 loop.
+let worldStamp = 1;
+let newestStamp: number[] = [0];
 
 let propStack = new Int32Array(4096);
 let propSp = 0;
@@ -254,6 +270,7 @@ let loggedAtoms: number[] = [];
 let nodeIds: number[] = [];
 let broadcastQueue: number[] = []; // stride-2 (watcherId, token)
 let broadcastLen = 0;
+let bcScratch: number[] = []; // drain-local copy (persistent, alloc-free)
 let pendingWalks: number[] = []; // stride-2 (atomId, token)
 let drainUrgent = false;
 let drainDirtySlots = 0;
@@ -421,6 +438,9 @@ function allocNode(flags: number): number {
 	while (memoHeads.length <= r) {
 		memoHeads.push(0);
 	}
+	while (newestStamp.length <= r) {
+		newestStamp.push(0);
+	}
 	return id;
 }
 
@@ -438,6 +458,7 @@ function freeNode(id: number): void {
 	fns[id >> 3] = undefined;
 	metaCol[id >> 3] = undefined;
 	memoHeads[id >> 3] = 0;
+	newestStamp[id >> 3] = 0;
 	M[id + C.DEPS] = nodeFreeHead;
 	nodeFreeHead = id;
 }
@@ -1225,6 +1246,8 @@ function createTape(a: number): void {
 	M[a + C.LOG_HEAD] = base;
 	M[a + C.LOG_TAIL] = base;
 	M[a + C.FLAGS] |= C.LOGGED;
+	++tapeStamp;
+	++worldStamp;
 	loggedAtoms.push(a);
 	++loggedAtomCount;
 	// Mark-only walk, unconditionally, whatever the write's classification.
@@ -1249,6 +1272,8 @@ function appendLogRec(a: number, op: number, slot: number, payload: unknown, app
 	const tail = M[a + C.LOG_TAIL];
 	G[tail + C.L_NEXT] = rec;
 	M[a + C.LOG_TAIL] = rec;
+	++tapeStamp;
+	++worldStamp;
 	if (slot >= 0) {
 		++batchEntryCount[slot];
 		if (!applied) {
@@ -1544,17 +1569,24 @@ function memoLookup(c: number, key: number): number {
 	return 0;
 }
 
-/** Certificate scan (§10.5): every pair must still hold. */
+/** Certificate scan (§10.5): every pair must still hold. The tapeStamp cache
+ * skips the scan entirely when no tape anywhere has mutated since this
+ * record's last successful validation (see memoStamp above). */
 function certValid(rec: number): boolean {
+	const vi = W[rec + C.W_VAL];
+	if (memoStamp[vi] === tapeStamp) {
+		return true;
+	}
 	const n = W[rec + C.W_NDEPS];
-	const base = W[rec + C.W_CERT];
-	for (let i = 0; i < n; ++i) {
-		const aid = CERT[base + i * 2];
-		const s = CERT[base + i * 2 + 1];
-		if (atomTailSeqOrZero(aid) !== s) {
+	const end = W[rec + C.W_CERT] + n * 2;
+	for (let p = W[rec + C.W_CERT]; p < end; p += 2) {
+		const aid = CERT[p];
+		const seq = M[aid + C.FLAGS] & C.LOGGED ? G[M[aid + C.LOG_TAIL] + C.L_SEQ] : 0;
+		if (seq !== CERT[p + 1]) {
 			return false;
 		}
 	}
+	memoStamp[vi] = tapeStamp;
 	return true;
 }
 
@@ -1591,6 +1623,7 @@ function writeMemoRecord(c: number, world: World, val: unknown, certBase: number
 		if (certNext > WM_CERT) {
 			growPending = true;
 		}
+		memoStamp[W[old + C.W_VAL]] = tapeStamp;
 		M[c + C.MEMO_KEY] = world.key;
 		// Late slot-chain link: the record may have been created while the
 		// token had NO slot yet (a write-less batch — e.g. watcher-creation
@@ -1611,6 +1644,7 @@ function writeMemoRecord(c: number, world: World, val: unknown, certBase: number
 	W[rec + C.W_NODE] = c;
 	const vi = memoVals.length;
 	memoVals.push(val);
+	memoStamp.push(tapeStamp);
 	W[rec + C.W_VAL] = vi;
 	W[rec + C.W_NDEPS] = nPairs;
 	W[rec + C.W_CERT] = certNext;
@@ -1638,19 +1672,53 @@ function writeMemoRecord(c: number, world: World, val: unknown, certBase: number
 /** §10.5 — overlay evaluation of computed `c` in `world`, memoized. */
 function overlayEvaluate(c: number, world: World): unknown {
 	if (world.key !== -1) {
-		const rec = memoLookup(c, world.key);
+		// Fused head-hit fast path: the hot shape is one world reading one
+		// node repeatedly, so the wanted record is the chain head. One guard
+		// chain, W_VAL loaded once, the tapeStamp compare instead of the
+		// certificate scan (G-8's inner loop).
+		const head = memoHeads[c >> 3];
 		if (
-			rec !== 0
-			&& W[rec + C.W_EPOCH] === overlayEpoch
-			&& (world.kind === WK.PASS || certValid(rec))
+			head !== 0
+			&& head < wNext
+			&& W[head + C.W_NODE] === c
+			&& W[head + C.W_KEY] === world.key
+			&& W[head + C.W_EPOCH] === overlayEpoch
 		) {
-			if (ovDepth !== 0) {
-				copyCertRun(rec); // memo hit inside a collection frame flattens
+			const vi = W[head + C.W_VAL];
+			if (world.kind === WK.PASS || memoStamp[vi] === tapeStamp || certValid(head)) {
+				if (ovDepth !== 0) {
+					copyCertRun(head); // memo hit inside a collection frame flattens
+				}
+				if (tracer !== undefined) {
+					tracer.emit(TK.COMPUTED_EVAL, currentCause, c, world.key, 1, 0, 0);
+				}
+				const hv = memoVals[vi];
+				if (world.key === 0) {
+					newestStamp[c >> 3] = worldStamp;
+					values[(c >> 2) + 1] = hv;
+				}
+				return hv;
 			}
-			if (tracer !== undefined) {
-				tracer.emit(TK.COMPUTED_EVAL, currentCause, c, world.key, 1, 0, 0);
+		} else {
+			const rec = memoLookup(c, world.key);
+			if (
+				rec !== 0
+				&& W[rec + C.W_EPOCH] === overlayEpoch
+				&& (world.kind === WK.PASS || certValid(rec))
+			) {
+				if (ovDepth !== 0) {
+					copyCertRun(rec); // memo hit inside a collection frame flattens
+				}
+				if (tracer !== undefined) {
+					tracer.emit(TK.COMPUTED_EVAL, currentCause, c, world.key, 1, 0, 0);
+				}
+				const rv = memoVals[W[rec + C.W_VAL]];
+				if (world.key === 0) {
+					newestStamp[c >> 3] = worldStamp;
+					values[(c >> 2) + 1] = rv;
+				}
+				return rv;
 			}
-			return memoVals[W[rec + C.W_VAL]];
 		}
 	}
 	const certBase = certSp;
@@ -1680,6 +1748,10 @@ function overlayEvaluate(c: number, world: World): unknown {
 	}
 	if (world.key !== -1) {
 		writeMemoRecord(c, world, val, certBase);
+		if (world.key === 0) {
+			newestStamp[c >> 3] = worldStamp;
+			values[(c >> 2) + 1] = val;
+		}
 	}
 	if (ovDepth === 0) {
 		certSp = 0;
@@ -1702,8 +1774,13 @@ function resolveComputed(c: number, world: World, track: boolean): unknown {
 		}
 		return v;
 	}
-	if (world.kind === WK.NEWEST && unappliedEntries === 0) {
-		return kernelComputedRead(c, track);
+	if (world.kind === WK.NEWEST) {
+		if (unappliedEntries === 0) {
+			return kernelComputedRead(c, track);
+		}
+		if (newestStamp[c >> 3] === worldStamp) {
+			return values[(c >> 2) + 1]; // validated this world-state (see above)
+		}
 	}
 	return overlayEvaluate(c, world);
 }
@@ -1747,6 +1824,7 @@ function onThenableSettled(t: PromiseLike<unknown>, st: ThenableState): void {
 	// (nothing else would invalidate a writer's-world memo holding the box).
 	if (loggedAtomCount !== 0) {
 		++overlayEpoch;
+	++worldStamp;
 	}
 	for (const c of st.waiters) {
 		const cached = values[c >> 2];
@@ -1852,9 +1930,11 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 		if (isEqualPolicy(a, cur, next)) {
 			return;
 		}
-		if (tracer !== undefined) {
-			currentCause = tracer.emit(TK.ATOM_WRITE, 0, a, 0, op, 1, 0);
-		}
+		// No emit here: DIRECT writes are the pure kernel path, and the
+		// production kernel carries zero tracing instructions (§16.5) — the
+		// tracer's choke points are tape append and overlay read resolution
+		// (§16.2), which do not exist in DIRECT mode. Kernel-internal detail
+		// belongs to the traced-kernel stamp, not per-site checks.
 		kernelWrite(a, next);
 		if (batchDepth === 0) {
 			flush();
@@ -1907,6 +1987,8 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 				logVals[tail >> 2] = payload;
 				G[tail + C.L_SEQ] = ticket();
 				G[tail + C.L_META] = (tmeta & ~C.OP_MASK) | C.OP_SET;
+				++tapeStamp;
+	++worldStamp;
 				coalesced = true;
 				if (tracer !== undefined) {
 					tracer.emit(TK.LOG_COALESCE, currentCause, a, slot, tail, 0, 0);
@@ -1942,6 +2024,8 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 					};
 					G[tail + C.L_SEQ] = ticket();
 					G[tail + C.L_META] = (tmeta & ~C.OP_MASK) | C.OP_UPDATE;
+					++tapeStamp;
+	++worldStamp;
 					coalesced = true;
 					if (tracer !== undefined) {
 						tracer.emit(TK.LOG_COALESCE, currentCause, a, slot, tail, 1, 0);
@@ -2018,19 +2102,36 @@ function drainAll(): void {
 			if (pendingWalks.length !== 0) {
 				const walks = pendingWalks;
 				pendingWalks = [];
-				const byToken = new Map<number, number[]>();
-				for (let i = 0; i < walks.length; i += 2) {
-					let atoms = byToken.get(walks[i + 1]);
-					if (atoms === undefined) {
-						atoms = [];
-						byToken.set(walks[i + 1], atoms);
+				// Fast path: one token for the whole group (the overwhelmingly
+				// common drain shape) — no Map, one ticket.
+				let uniform = true;
+				const t0 = walks[1];
+				for (let i = 3; i < walks.length; i += 2) {
+					if (walks[i] !== t0) {
+						uniform = false;
+						break;
 					}
-					atoms.push(walks[i]);
 				}
-				for (const [token, atoms] of byToken) {
+				if (uniform) {
 					const t = ++walkCounter;
-					for (const a of atoms) {
-						notifyWalk(a, t, token, true);
+					for (let i = 0; i < walks.length; i += 2) {
+						notifyWalk(walks[i], t, t0, true);
+					}
+				} else {
+					const byToken = new Map<number, number[]>();
+					for (let i = 0; i < walks.length; i += 2) {
+						let atoms = byToken.get(walks[i + 1]);
+						if (atoms === undefined) {
+							atoms = [];
+							byToken.set(walks[i + 1], atoms);
+						}
+						atoms.push(walks[i]);
+					}
+					for (const [token, atoms] of byToken) {
+						const t = ++walkCounter;
+						for (const a of atoms) {
+							notifyWalk(a, t, token, true);
+						}
 					}
 				}
 			}
@@ -2067,24 +2168,28 @@ function processBroadcasts(): void {
 		return;
 	}
 	const n = broadcastLen;
-	const items = broadcastQueue.slice(0, n);
+	// Copy into a persistent scratch (re-entrant pushes go to the live queue).
+	if (bcScratch.length < n) {
+		bcScratch.length = n;
+	}
+	for (let i = 0; i < n; ++i) {
+		bcScratch[i] = broadcastQueue[i];
+	}
 	broadcastLen = 0;
-	const seen = new Set<string>();
+	// Group by token; dedup (w, token) by a linear scan of the (short) group —
+	// no string keys, no Set allocation.
 	const groups = new Map<number, number[]>();
 	for (let i = 0; i < n; i += 2) {
-		const w = items[i];
-		const t = items[i + 1];
-		const key = w + ':' + t;
-		if (seen.has(key)) {
-			continue;
-		}
-		seen.add(key);
+		const w = bcScratch[i];
+		const t = bcScratch[i + 1];
 		let g = groups.get(t);
 		if (g === undefined) {
 			g = [];
 			groups.set(t, g);
 		}
-		g.push(w);
+		if (!g.includes(w)) {
+			g.push(w);
+		}
 	}
 	for (const [token, ws] of groups) {
 		if (token !== 0 && (token & 1) === 1 && fork !== undefined) {
@@ -2141,7 +2246,13 @@ function broadcastDecide(w: number, token: number): void {
 		return;
 	}
 	const node = m.watched;
-	const world = token === 0 ? WORLD_W0 : writerWorld(token);
+	// A writer's world for a token with NO slot (a write-less batch) is
+	// exactly RETIRED|APPLIED = W0: decide through the kernel path instead of
+	// spinning up an overlay evaluation whose memo can never diverge.
+	let world = token === 0 ? WORLD_W0 : writerWorld(token);
+	if (world.kind === WK.WRITER && world.slot < 0) {
+		world = WORLD_W0;
+	}
 	const key = token === 0 ? 0 : (token << 2) | 2;
 	const v = resolveNode(node, world);
 	// Default for a world this watcher has never decided in: the node's
@@ -2238,7 +2349,8 @@ function onRetired(token: number): void {
 	if (tracer !== undefined) {
 		currentCause = tracer.emit(TK.BATCH_RETIRED, 0, 0, token, slot, 0, 0);
 	}
-	++overlayEpoch; // §10.5: retirement changes world values without moving tails
+	++overlayEpoch;
+	++worldStamp; // §10.5: retirement changes world values without moving tails
 	if (slot >= 0) {
 		slotRetired[slot] = 1;
 		const rseq = ticket();
@@ -2310,6 +2422,8 @@ function anyUnretiredSlot(): boolean {
 /** §9.6 — fold each tape's leading run of dead entries into its base record;
  * free base-only tapes once no live batch could still write. */
 function sweepTapes(): void {
+	++tapeStamp;
+	++worldStamp; // folds move base seqs and can free tapes (clearing LOGGED)
 	const minPin = passOpen !== 0 ? passPin : 0x7fffffff;
 	const pendingBatches = anyUnretiredSlot();
 	for (let i = loggedAtoms.length - 1; i >= 0; --i) {
@@ -2360,6 +2474,9 @@ function sweepTapes(): void {
  * that lane's UI stale until an unrelated drain exposed it). */
 function truncateBatchBySlot(s: number): void {
 	++overlayEpoch;
+	++worldStamp;
+	++tapeStamp;
+	++worldStamp;
 	const token = batchTokenTab[s];
 	if (tracer !== undefined) {
 		currentCause = tracer.emit(TK.TRUNCATE, 0, 0, token, s, 0, 0);
@@ -2435,9 +2552,11 @@ function maybeQuiesce(): void {
 	wNext = 8;
 	certNext = 0;
 	memoVals = [];
+	memoStamp = [];
 	slotMemoHead.fill(0);
 	eraFloor = walkCounter; // every mark goes stale in O(1)
-	++overlayEpoch; // cross-era invalidator (seqs repeat across eras)
+	++overlayEpoch;
+	++worldStamp; // cross-era invalidator (seqs repeat across eras)
 	seqCounter = 1;
 	if (walkCounter > 1 << 30) {
 		// Safety valve: zero every node's OVERLAY_STAMP at an idle moment.
@@ -2822,6 +2941,12 @@ function finalizeRecord(held: { id: number; gen: number }): void {
 			// SSR install: an ordinary kernel SET before hydration (§13.8).
 			const cur = kernelAtomValue(id);
 			if (!isEqualPolicy(id, cur, value)) {
+				if (loggedAtomCount !== 0) {
+					// Bypasses the tape machinery: wholesale-invalidate any
+					// live memos that read this (unlogged) atom's value.
+					++overlayEpoch;
+	++worldStamp;
+				}
 				kernelWrite(id, value);
 				flush();
 				drainAll();
@@ -3043,6 +3168,10 @@ export function __resetEngineForTests(options?: {
 	memoHeads = [0];
 	logVals = [undefined];
 	memoVals = [];
+	memoStamp = [];
+	tapeStamp = 1;
+	worldStamp = 1;
+	newestStamp = [0];
 	propStack = new Int32Array(4096);
 	propSp = 0;
 	checkStack = new Int32Array(4096);
@@ -3076,6 +3205,7 @@ export function __resetEngineForTests(options?: {
 	loggedAtoms = [];
 	broadcastQueue = [];
 	broadcastLen = 0;
+	bcScratch = [];
 	pendingWalks = [];
 	drainUrgent = false;
 	drainDirtySlots = 0;
