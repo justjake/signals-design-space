@@ -609,6 +609,18 @@ Neither is part of the contract; nothing in section 3 depends on them.
   abandon-with-attempt-scoped-writes); the I1 walked schedules
   (reviews/2026-07-05-one-core-plan-review-fable.md F1 schedules A/A′;
   codex findings 1/5/6) become pinned regression tests.
+- **NF2 spike result (2026-07-05,
+  `research/experiments/world-tagged-links-spike.md`): MIXED.** Faster
+  holds where it matters (world evaluation 2.5×–29× vs the shipped memo
+  approach; sync path neutral except one +0.5ns computed-read seam;
+  discard churn at parity via segregated per-world planes with bulk
+  abandonment — the O(edges) teardown concern dissolved). Simpler does
+  NOT hold net (~350 lines of duplicated walk specializations; per-world
+  policy state unbuilt). Owner-facing recommendation recorded: pursue as
+  a performance mechanism with the one-computed-API prize, gated on
+  world-read cost appearing in real profiles. The hang schedule is
+  pinned green in the prototype
+  (`research/experiments/world-tagged-links-spike-code/`).
 - **NF2 — World-tagged kernel links** (the unification door for the
   two-computed-APIs question). The library currently ships two derived-
   value representations: the plain library's computed and the
