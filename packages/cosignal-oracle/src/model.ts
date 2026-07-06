@@ -269,7 +269,7 @@ export class CosignalModel {
 	events: ModelEvent[] = [];
 
 	/** Plain ("direct") until registerBridge(); direct writes mutate the base and leave no receipts. */
-	mode: 'direct' | 'logged' = 'direct';
+	mode: 'direct' | 'concurrent' = 'direct';
 	/** The one global sequence line every receipt, pin, and stamp lives on. */
 	seq = 0;
 	/** Committed-advance counter, in sequence units: seq of the last change to any committed view. */
@@ -343,13 +343,13 @@ export class CosignalModel {
 
 	// ---------------------------------------------------------------- setup
 
-	/** Activates logged (concurrent) mode: once, monotonically; illegal inside open evaluation frames. */
+	/** Activates concurrent mode: once, monotonically; illegal inside open evaluation frames. */
 	registerBridge(): void {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new ScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this.mode === 'logged') throw new ScheduleError('bridge already registered — registration happens exactly once');
-		this.mode = 'logged';
+		if (this.mode === 'concurrent') throw new ScheduleError('bridge already registered — registration happens exactly once');
+		this.mode = 'concurrent';
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
@@ -584,7 +584,7 @@ export class CosignalModel {
 
 	/** Mint a batch token. At most 31 live at once — one per React priority lane. */
 	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
-		if (this.mode !== 'logged') throw new ScheduleError('batches exist only in logged mode — register the React bridge first');
+		if (this.mode !== 'concurrent') throw new ScheduleError('batches exist only in concurrent mode — register the React bridge first');
 		if (this.liveTokens().length >= SLOT_COUNT) {
 			throw new ScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
@@ -689,7 +689,7 @@ export class CosignalModel {
 	}
 
 	/**
-	 * The write path (logged mode). Direct-mode writes mutate the base with
+	 * The write path (concurrent mode). Direct-mode writes mutate the base with
 	 * no receipt — pre-activation state is simply committed-only state, so
 	 * arming the concurrent machinery mid-life is safe.
 	 */

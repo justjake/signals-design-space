@@ -74,8 +74,11 @@ const BUDGETS: Record<string, number> = {
 	aAllocLink: 90, // 71
 	aFreeLink: 50, // 37: threads a.linkFree through L_VER (row 2 twin)
 	shadowFor: 310, // 261
-	foldAtom: 420, // 358
-	aUpdateShadow: 230, // 188
+	foldAtom: 350, // 290: S-D deleted the lastFoldFp fingerprint scan (its
+	// last reader died with the memo ladder at S-C) — budget tightened with it
+	aUpdateShadow: 230, // 185 (S-D: the readClock bump routed through aBumpReadClock)
+	aBumpReadClock: 60, // 31: S-D Int32 wrap guard on the consumption bump path
+	aBumpCycle: 60, // 33: S-D Int32 wrap guard on the evaluation-cycle bump
 	aCheckDirty: 100, // 68: B2 split — entry wrapper owning the aCheckSp restore
 	// (was the 567 walk monolith pinned below)
 	aCheckDirtyLoop: 450, // 407: the general arena walk, out of line
@@ -93,9 +96,10 @@ const BUDGETS: Record<string, number> = {
 // limit gets pinned here (deliberately, justified in the PR); a pin that
 // drops back under it moves into BUDGETS.
 const OVER_LIMIT_PINS: Record<string, number> = {
-	aUpdateComputed: 530, // 495 (re-checked at S-C: the dead newest-memo frame
-	// save/restore left; the §4.5.3 comparator arg joined — still over the
-	// 460 inline limit, so the pin STANDS, not promoted): S-B made the
+	aUpdateComputed: 530, // 486 (re-checked at S-D: the wrap-guarded aBumpCycle
+	// call replaced the inline cycle increment, -9; items 1-2's other shaves
+	// landed in foldAtom, not here — still over the 460 inline limit, so the
+	// pin STANDS, not promoted): S-B made the
 	// arenas the serving authority —
 	// the refold wrapper gained the M6 observed-capture open (obsRefs probe)
 	// and the paired world-eval trace hooks. Deliberate: the wrapper brackets

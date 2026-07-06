@@ -776,7 +776,7 @@ export function registerReactBridge(): CosignalBridge {
 		throw new Error('cosignal: registerReactBridge may only be called once per process.');
 	}
 	const bridge = new CosignalBridge();
-	bridge.registerBridge(); // arms the seam + flips the bridge to LOGGED
+	bridge.registerBridge(); // arms the seam + flips the bridge to CONCURRENT mode
 	publiclyRegistered = true;
 	return bridge;
 }
@@ -881,10 +881,13 @@ const EMPTY_I32 = new Int32Array(0);
 /**
  * One world's shadow arena: packed records (spike plane layout), a value
  * side column, a per-shadow suspended-list index column, a dirty list, and
- * the read clock. Pooled: buffers return to the pool at release with the
- * claim generation bumped, so dead-tenancy residue can never validate.
+ * the read clock. Pooled: buffers return to the pool at release, where the
+ * FULL SCRUB (releaseArena: written prefix + every side column zeroed) is
+ * what makes dead-tenancy residue unable to validate; `claimGen` is the
+ * tenancy diagnostic (bumped at claim AND release, monotone per shell —
+ * a float64 counter, exact to 2^53, so it has no wrap surface).
  */
-class ShadowArena {
+export class ShadowArena {
 	kind: 'pass' | 'committed';
 	/** Owning world (pass object or committed root) — folds cite it. */
 	world: World;
@@ -933,6 +936,60 @@ class ShadowArena {
 		this.root = root;
 		this.W = buf;
 	}
+}
+
+/**
+ * Int32 stamp ceiling (S-D pooling hardening): `readClock` and `cycle` are
+ * JS numbers, but their stamps store into Int32Array fields (`AF.MARK`,
+ * `AF.L_VER`) which truncate past 2^31-1 — a wrapped store could collide
+ * with a live stamp and dedup FALSE-POSITIVE (a skipped propagation or a
+ * dropped link: the dangerous direction). The bump helpers below renumber
+ * BEFORE any store can wrap: stamps reset to 0 (= stale), the clock
+ * restarts, and the next walk re-marks — at most one conservative re-walk
+ * per record per 2^31 events, amortized zero. (Margin under 2^31-1 is
+ * cosmetic headroom; bumps route through the helpers, so the clocks never
+ * reach the ceiling.)
+ */
+const A_CLOCK_LIMIT = 0x7fff0000;
+
+/** Renumber the read clock: MARK → 0 on every live shadow record, clock
+ * restarts at 0 — the exact quiesce-duty state (§4.5.7), where "marks 0 /
+ * clock 0" is proven sound: a dedup hit in that state claims an
+ * already-marked cone whose PENDING flags persist, and any intervening
+ * consumption bumps the clock away from 0. Link records are skipped by the
+ * byNode round-trip guard (their slot 7 is L_MODE, not MARK). */
+function aRenumberMarks(a: ShadowArena): void {
+	for (let sh = A_STRIDE; sh < a.next; sh += A_STRIDE) {
+		if ((a.W[sh + AF.NODE] ?? 0) !== 0 && a.byNode[a.W[sh + AF.NODE]!] === sh) a.W[sh + AF.MARK] = 0;
+	}
+	a.readClock = 0;
+}
+
+function aBumpReadClock(a: ShadowArena): void {
+	if (a.readClock >= A_CLOCK_LIMIT) aRenumberMarks(a);
+	a.readClock++;
+}
+
+/** Renumber evaluation-cycle stamps: L_VER → 0 on every LIVE link (each
+ * lives on exactly one deps chain), cycle restarts at 0. L_VER is only
+ * compared for SAME-evaluation link dedup, so a zeroed stamp just reads as
+ * "stale from an old evaluation" — the normal case. Freed links are never
+ * touched: their L_VER aliases the free-list thread (L_FREE_NEXT). An open
+ * outer frame keeps stamping its saved (≥ limit) cycle, which post-renumber
+ * cycles can never reach again before the next renumber — no collision. */
+function aRenumberLinkVersions(a: ShadowArena): void {
+	const W = a.W;
+	for (let sh = A_STRIDE; sh < a.next; sh += A_STRIDE) {
+		if ((W[sh + AF.NODE] ?? 0) !== 0 && a.byNode[W[sh + AF.NODE]!] === sh) {
+			for (let l = W[sh + AF.DEPS]!; l !== 0; l = W[l + AF.L_NEXT_DEP]!) W[l + AF.L_VER] = 0;
+		}
+	}
+	a.cycle = 0;
+}
+
+function aBumpCycle(a: ShadowArena): number {
+	if (a.cycle >= A_CLOCK_LIMIT) aRenumberLinkVersions(a);
+	return ++a.cycle;
 }
 
 function aGrow(a: ShadowArena, need: number): void {
@@ -1417,7 +1474,7 @@ export class CosignalBridge {
 	}
 
 	/** Direct (base-like) until registerBridge(); direct writes leave no receipts. */
-	mode: 'direct' | 'logged' = 'direct';
+	mode: 'direct' | 'concurrent' = 'direct';
 	/** The one global sequence line every receipt/pin/stamp is a point on. */
 	seq: Seq = 0;
 	/** Committed-advance counter, in sequence units: bumped whenever committed
@@ -1527,7 +1584,7 @@ export class CosignalBridge {
 	private recomputeQuiet(): void {
 		this.quiet =
 			this.quietWrites
-			&& this.mode === 'logged'
+			&& this.mode === 'concurrent'
 			&& this.liveTokenCount === 0
 			&& this.openPassByRoot.size === 0
 			&& this.dirtyAtoms.size === 0
@@ -1817,8 +1874,8 @@ export class CosignalBridge {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new BridgeScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this.mode === 'logged') throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
-		this.mode = 'logged';
+		if (this.mode === 'concurrent') throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
+		this.mode = 'concurrent';
 		activeBridge = this;
 		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
 		// NF2 S-A: arm the settlement tap (ONE closure; consulted at FIRE
@@ -2159,25 +2216,18 @@ export class CosignalBridge {
 	/**
 	 * The fold — replay visible entries over base in sequence order with
 	 * stepwise equality (an equal step keeps the old reference). Runs over
-	 * the packed columns; computes the memo fingerprint
-	 * fp = max(newest visible entry seq, baseSeq, retirementStamp) into
-	 * `lastFoldFp` during the same scan (the fingerprint is the version
-	 * stamp memo validation compares against).
+	 * the packed columns. (The memo-fingerprint side channel `lastFoldFp`
+	 * died at S-D: S-C deleted the memo ladder — its last reader.)
 	 */
-	lastFoldFp: Seq = 0;
-
 	foldAtom(atom: AtomNode, world: World): Value {
 		const tp = atom.tp;
 		const n = tp.n;
 		let value = atom.base;
-		let fp = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
 		const seqs = tp.seqs;
 		const retired = tp.retired;
 		const slots = tp.slots;
 		for (let i = tp.start; i < n; i++) {
 			if (!this.visibleAt(atom, i, world, seqs, retired, slots)) continue;
-			const s = seqs[i]!;
-			if (s > fp) fp = s;
 			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], value);
 			if (atom.eqIsDefault) {
 				if (!Object.is(next, value)) value = next;
@@ -2185,7 +2235,6 @@ export class CosignalBridge {
 				value = next;
 			}
 		}
-		this.lastFoldFp = fp;
 		return value;
 	}
 
@@ -2626,7 +2675,7 @@ export class CosignalBridge {
 		const W = a.W;
 		const flags = W[sh + AF.FLAGS]!;
 		const vi = sh >> A_SHIFT;
-		a.readClock++;
+		aBumpReadClock(a);
 		if (err instanceof SuspendedRead) {
 			a.vals[vi] = err;
 			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN;
@@ -2719,14 +2768,14 @@ export class CosignalBridge {
 		if ((flags & AFlag.K_COMPUTED) !== 0) return this.aUpdateComputed(a, sh);
 		const nid = a.W[sh + AF.NODE]!;
 		const atom = this.nodesArr[nid] as AtomNode;
-		// §4.2 (iii): marked ⇒ REFOLD unconditionally — no fp consulted (the
-		// verbatim fold still computes `lastFoldFp`, dead weight until S-D).
+		// §4.2 (iii): marked ⇒ REFOLD unconditionally — no fingerprint
+		// consulted (the fp side channel was deleted at S-D).
 		const next = this.foldAtom(atom, a.world);
 		const vi = sh >> A_SHIFT;
 		const prev = a.vals[vi];
 		const prevValid = (flags & AFlag.VALID) !== 0;
 		a.W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID;
-		a.readClock++;
+		aBumpReadClock(a);
 		// The shadow column ALWAYS stores the fold's own output (dual
 		// bookkeeping requires arena value ≡ fold, bit for bit); the
 		// comparator gates PROPAGATION only. Reference preservation for
@@ -2754,7 +2803,7 @@ export class CosignalBridge {
 		const savedObsCapture = this.obsCapture;
 		this.aFrameArena = a;
 		this.aFrameShadow = sh;
-		this.aFrameCycle = ++a.cycle;
+		this.aFrameCycle = aBumpCycle(a);
 		this.aOnly = a;
 		this.currentSink = 0;
 		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined;
@@ -2780,7 +2829,7 @@ export class CosignalBridge {
 			this.aFrameCycle = savedFrameCycle;
 			a.W[sh + AF.FLAGS] = a.W[sh + AF.FLAGS]! & ~AFlag.RECURSED_CHECK;
 			aPurgeDeps(a, sh);
-			a.readClock++;
+			aBumpReadClock(a);
 			if (obsCaptured !== undefined) this.aSyncObsAfterRefold(nid, obsCaptured);
 		}
 	}
@@ -3151,7 +3200,7 @@ export class CosignalBridge {
 							// for the frame's close.
 							if (a.kind === 'committed') touchedRoots.add(a.root);
 						}
-						if (matched) a.readClock++;
+						if (matched) aBumpReadClock(a);
 					});
 					// (Newest suspensions need no eviction here since S-C: the
 					// kernel's own attachSettle listener invalidates kernel-cached
@@ -3220,12 +3269,7 @@ export class CosignalBridge {
 				this.releaseArena(a);
 			}
 		}
-		for (const a of this.arenaByRoot.values()) {
-			a.readClock = 0;
-			for (let sh = A_STRIDE; sh < a.next; sh += A_STRIDE) {
-				if ((a.W[sh + AF.NODE] ?? 0) !== 0 && a.byNode[a.W[sh + AF.NODE]!] === sh) a.W[sh + AF.MARK] = 0;
-			}
-		}
+		for (const a of this.arenaByRoot.values()) aRenumberMarks(a);
 	}
 
 	/** Structural validator (§4.9.1, promoted from the spike): link-list
@@ -3287,6 +3331,19 @@ export class CosignalBridge {
 	/** Arms/disarms the S-A dual-bookkeeping divergence check. @internal */
 	__setArenaCheck(on: boolean): void {
 		this.arenaCheckOn = on;
+	}
+
+	/** Test seam: the root's committed arena shell, if materialized — the
+	 * S-D pool/wrap pins read shell state (claimGen, buffer identity,
+	 * column capacities) and force the clocks toward the Int32 ceiling.
+	 * @internal */
+	__arenaForTest(rootId: RootId): ShadowArena | undefined {
+		return this.arenaByRoot.get(rootId);
+	}
+
+	/** Test seam: pooled arena shells (S-D pool reuse/cap pins). @internal */
+	__arenaPoolForTest(): ShadowArena[] {
+		return this.arenaPool;
 	}
 
 	/** Test seam: force an id-tenancy generation bump (§4.5.3 GEN pin). @internal */
@@ -3690,7 +3747,7 @@ export class CosignalBridge {
 	 * lane/priority itself stays React's: the engine never consults it —
 	 * scheduling decisions ride the shim's forkToken map.) */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
-		if (this.mode !== 'logged') throw new BridgeScheduleError('batches exist only in logged mode — register the React bridge first');
+		if (this.mode !== 'concurrent') throw new BridgeScheduleError('batches exist only in concurrent mode — register the React bridge first');
 		if (this.liveTokenCount >= SLOT_COUNT) {
 			throw new BridgeScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
@@ -4051,7 +4108,7 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * Newest-policy subscription flush at a logged write (§4.4.1: newest
+	 * Newest-policy subscription flush at a concurrent-mode write (§4.4.1: newest
 	 * subscriptions keep STRONG-structure-only reach — untracked deps
 	 * invalidate no newest value and never notify [ruling 2026-07-06],
 	 * matching the reference model's strong-edge reachability): reach walks

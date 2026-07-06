@@ -15,7 +15,7 @@
  *  3  unwatched() computed branch (lazy re-track)      | K0                       | K0-ONLY: kernel liveness is kernel memory mgmt; overlay computeds hold no kernel records | conformance 179, T3
  *  4  unwatched()/dispose() effect+scope auto-dispose  | K0                       | K0-ONLY: scope nesting is a kernel structure | conformance, graph.spec, T4
  *  5  notify() parent-chain SUBS read (outer-first)    | K0                       | K0-ONLY: effect nesting is kernel-only | conformance ordering cases
- *  6  kernel propagate/shallowPropagate seeds          | K0                       | K0-ONLY BY DESIGN: kernel flush serves K0 subscribers; arena consumers get the delivery walk; union = the SUM of both paths | logged-scars S2/S3, T5
+ *  6  kernel propagate/shallowPropagate seeds          | K0                       | K0-ONLY BY DESIGN: kernel flush serves K0 subscribers; arena consumers get the delivery walk; union = the SUM of both paths | concurrent-scars S2/S3, T5
  *  7  invalidateComputed (suspense settle)             | K0                       | K0-ONLY: boxes live on kernel computeds; overlay folds SuspendedRead as a value | suspense.spec
  *  8  Atom.state host seam (index.ts)                  | K0 or world              | ROUTE-BY-FRAME: world routing only with NO kernel frame open; a kernel-frame read makes a K0 link + fills a K0 cache, so it must serve K0 (newest) — FIXED (was: world-routed → kernel cache poisoned = torn newest arena) | T6 (new), one-core 'overlay world evaluation' pins the routed side
  *  9  Computed.state (no host seam)                    | K0                       | K0-ONLY: standalone computeds are not world-routable (bindings reject via resolveNode) | T6, hooks.ts resolveNode error
@@ -32,10 +32,10 @@
  * 20  dependencyEdges/graphviz snapshot                | arenas (both lists)      | ARENA-ONLY diagnostics (current structure; persists with the arenas) | graphviz docstring; not behavior-bearing
  * 21  shim liveness flips (claim/orphan/finalize)      | via one setter           | UNION + both stores (delegates to Watcher.live + removeWatcher) | cosignal-react hooks.spec StrictMode netting + graph-consumers.spec.tsx
  * 22  useSignal render branches (watchers.get/w.live)  | bridge watchers          | bridge watcher records are the one source | cosignal-react battery/hooks.spec
- * 23  committed-subscription dep snapshots (captureRun) | committed VALUES + obs union | value-gated per EF2 boundary, no edge store; the capture's committed evaluations POPULATE the root's arena, whose marks the re-checks validate through (subDepRefs dissolved at S-B, §4.0) | logged-battery case 16, observe-union.spec, cosignal-react hooks.spec useSignalEffect
+ * 23  committed-subscription dep snapshots (captureRun) | committed VALUES + obs union | value-gated per EF2 boundary, no edge store; the capture's committed evaluations POPULATE the root's arena, whose marks the re-checks validate through (subDepRefs dissolved at S-B, §4.0) | concurrent-battery case 16, observe-union.spec, cosignal-react hooks.spec useSignalEffect
  *
  * §2 DUAL-REPRESENTATION AGREEMENTS ─ pair | enforcement
- *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; logged-fuzz.spec 'diff clean' + logged-battery
+ *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
  *  A2 newest memo fingerprints ≡ tapes (+retirement stamps) | lockstep values; scars S5 pins receipt-after-read invalidation
  *  A3 quiet flag ≡ pending state (tokens/passes/tapes) | quiet-mode.spec arming/disarming battery
  *  A4 adoption stamp ≡ byKernelId registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node

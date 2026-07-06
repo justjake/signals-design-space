@@ -1,5 +1,5 @@
 /**
- * The adapter that drives the LOGGED engine and the reference model
+ * The adapter that drives the CONCURRENT engine and the reference model
  * (`cosignal-oracle`) in lockstep: it implements the reference model's
  * `EngineAdapter` surface (its adapter.ts — "an engine plugs into the fuzz
  * harness by implementing this surface") over the bridge, so the model's
@@ -176,7 +176,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 }
 
 /**
- * A fresh LOGGED engine presented through the reference model's
+ * A fresh CONCURRENT engine presented through the reference model's
  * EngineAdapter surface (its `modelAsEngine` template with the model
  * replaced by the real engine). The bridge is structurally
  * snapshot-compatible with the model, so the reference model's own

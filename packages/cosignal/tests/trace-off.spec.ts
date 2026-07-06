@@ -5,7 +5,7 @@
  *  - the base entry carries no tracing instructions (source assertion;
  *    twin-build.spec.ts's zero-import check further pins its module graph
  *    to {index.ts});
- *  - the LOGGED entry's only tracing state is ONE nullable slot, captured
+ *  - the CONCURRENT-engine entry's only tracing state is ONE nullable slot, captured
  *    locally and checked once per site, and it never imports the trace
  *    module (lazy-loadability);
  *  - the trace/graphviz entries are runtime-import-free (type-only imports),
@@ -52,12 +52,12 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		expect(direct).not.toMatch(/TraceHooks|attachTracer|\btracer\b|\.trace\b/);
 	});
 
-	it('LOGGED never imports the trace or graphviz entries (lazy-loadability)', () => {
-		const logged = src('src/concurrent.ts');
-		expect(logged).not.toMatch(/from '\.\/trace\.js'|from '\.\/graphviz\.js'/);
+	it('the engine module never imports the trace or graphviz entries (lazy-loadability)', () => {
+		const engineSrc = src('src/concurrent.ts');
+		expect(engineSrc).not.toMatch(/from '\.\/trace\.js'|from '\.\/graphviz\.js'/);
 	});
 
-	it("LOGGED's only tracing state is the one nullable slot, captured locally", () => {
+	it("the engine's only tracing state is the one nullable slot, captured locally", () => {
 		const lines = src('src/concurrent.ts').split('\n');
 		for (const line of lines) {
 			if (!line.includes('this.trace')) continue;

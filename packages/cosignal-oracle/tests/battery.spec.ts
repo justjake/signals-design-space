@@ -33,11 +33,11 @@
  *  17  optimistic rollback is deliberately absent (history is append-only)
  */
 import { describe, expect, it } from 'vitest';
-import { commitAndRetire, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
+import { commitAndRetire, concurrent, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
 
 describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	function setup() {
-		const m = logged();
+		const m = concurrent();
 		const flag = m.atom('flag', 0);
 		const a = m.atom('a', 0);
 		const b = m.atom('b', 0);
@@ -132,7 +132,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	});
 
 	it('taint member: untracked reads never notify and fold in-world', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const b = m.atom('b', 0);
 		const c = m.computed('c', (read, untracked) => (read(b) as number) + (untracked(a) as number) + 1);
@@ -158,7 +158,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	});
 
 	it('retention member: paused pass across a foreign retirement (release rule at work)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const n = m.computed('n', (read) => (read(a) as number) + 10);
 		const ce = m.mountCoreEffect(n, 'core-n');
@@ -189,7 +189,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	});
 
 	it('storm member: slot demand collapses to live + mask-retained; receipts all survive', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, update((x) => (x as number) + 100));
@@ -214,7 +214,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	});
 
 	it('union-cycle member: per-world acyclic, union cyclic — walks terminate, evals fine', () => {
-		const m = logged();
+		const m = concurrent();
 		const f = m.atom('f', 1);
 		const a = m.atom('a', 7);
 		const b = m.atom('b', 3);
@@ -240,7 +240,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	});
 
 	it('recreation member: changed deps mean a fresh node; evaluators never swap', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 1);
 		const c1 = m.computed('c1', (read) => (read(a) as number) * 2);
 		// a "deps change" recreates: same hook, new node with the new closure
@@ -254,7 +254,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 
 describe('case 2 — flushSync excludes a pending default batch (why always-log)', () => {
 	it('the excluding sync render sees BOTH old values; D folds later; watcher reconciles', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) + 10);
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -279,7 +279,7 @@ describe('case 2 — flushSync excludes a pending default batch (why always-log)
 
 describe('case 3 — rebase parity (React updater-queue arithmetic)', () => {
 	it('replay-in-write-order over the pre-batch base: urgent commits 2, T commits 4 (never 3)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 1);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, update((x) => (x as number) + 1)); // append (2 ≠ 1)
@@ -301,7 +301,7 @@ describe('case 3 — rebase parity (React updater-queue arithmetic)', () => {
 	});
 
 	it('plain-set variant: +1 then set-5 commits 5, not 6', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 1);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, update((x) => (x as number) + 1));
@@ -320,7 +320,7 @@ describe('case 3 — rebase parity (React updater-queue arithmetic)', () => {
 
 describe('case 4 — two-batch write into an already-stale region (re-notify)', () => {
 	it('dedup is per-(watcher, slot): the second batch delivers in ITS lane', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -341,7 +341,7 @@ describe('case 4 — two-batch write into an already-stale region (re-notify)', 
 
 describe('case 5 — cutoff-suppressed first write, effective second write (same batch)', () => {
 	it('delivery is value-blind; a re-rendered watcher re-arms; folds always see the newest slot state', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const b = m.atom('b', 0);
 		const c = m.computed('c', (read) => (read(a) as number) * 0 + (read(b) as number));
@@ -365,7 +365,7 @@ describe('case 5 — cutoff-suppressed first write, effective second write (same
 
 describe('case 6 — lane attribution under grouped notification', () => {
 	it('no implicit grouping: each write delivers NOW in its own context', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const b = m.atom('b', 0);
 		const ca = m.computed('ca', (read) => read(a));
@@ -388,7 +388,7 @@ describe('case 6 — lane attribution under grouped notification', () => {
 
 describe('case 7 — writes and reads during a yielded render pass', () => {
 	it('yield-gap handlers read NEWEST and write into their own batch; the pinned world never drifts', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(5));
@@ -406,7 +406,7 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 	});
 
 	it('included-batch mid-pass retirement: release blocked; clause 2 load-bearing; freed at pass end', () => {
-		const m = logged();
+		const m = concurrent();
 		const b = m.atom('b', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, b, set(7)); // written before P pins
@@ -428,7 +428,7 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 
 describe('case 8 — equality drops must not lose receipts', () => {
 	it('equal-to-newest writes append; abandonment folds; only the empty-tape equal drop is legal', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(1)); // tape empty, 1 ≠ 0 ⇒ append
@@ -451,7 +451,7 @@ describe('case 8 — equality drops must not lose receipts', () => {
 	});
 
 	it('two overlapping transitions writing 1: both append; every world folds to 1', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t1 = m.openBatch('deferred');
 		const t2 = m.openBatch('deferred');
@@ -471,7 +471,7 @@ describe('case 8 — equality drops must not lose receipts', () => {
 
 describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 	it('(a) mount inside k\'s own pass: first render in the k-world, zero corrections', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
 		const k = m.openBatch('deferred');
@@ -487,7 +487,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 	});
 
 	it('(c) foreign retirement in the render→commit window fires the pre-paint correction', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
 		const k = m.openBatch('deferred'); // the transition being rendered
@@ -512,7 +512,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 	});
 
 	it('(d) own-commit fold of a post-pin included write falls through and fires', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const k = m.openBatch('deferred');
 		m.write(k.id, a, set(1));
@@ -530,7 +530,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 	});
 
 	it('(d\') if k stays live instead, the corrective loop covers it and no false urgent fires', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const k = m.openBatch('deferred');
 		m.write(k.id, a, set(1));
@@ -558,7 +558,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 	});
 
 	it('(e) reveal-shaped mount: pass-id conjunct fails, conservative compare corrects pre-paint', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
 		const hidden = pass(m, 'A', []); // Activity pre-renders W hidden (pin p1, mask ∅)
@@ -584,7 +584,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 
 describe('case 10 — late subscription joins the pending batch (entanglement)', () => {
 	it('normal path: the corrective joins k\'s OWN lanes; exactly one commit', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const k = m.openBatch('deferred');
@@ -606,7 +606,7 @@ describe('case 10 — late subscription joins the pending batch (entanglement)',
 	});
 
 	it('race (i): k retires in the render→layout window — the w_fx compare corrects pre-paint', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const k = m.openBatch('deferred');
@@ -628,7 +628,7 @@ describe('case 10 — late subscription joins the pending batch (entanglement)',
 
 describe('case 11 — multiple roots (declared scope: degraded multi-root)', () => {
 	it('per-root self-consistency; visible skew; exactly-once retirement; rows clear before release', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const wA = mountCommitted(m, 'A', c, 'WA');
@@ -667,7 +667,7 @@ describe('case 11 — multiple roots (declared scope: degraded multi-root)', () 
 
 describe('case 12 — store-only transitions persist; async is React parity', () => {
 	it('store-only committed=false batches fold: persistence never depends on subscription', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(5)); // no subscribers, no React work
@@ -678,7 +678,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 	});
 
 	it('raw post-await writes are ambient and commit before settlement; write order wins at settlement', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true }); // action T
 		m.write(t.id, a, set(1)); // synchronous prefix: classifies into T; T parks
@@ -695,7 +695,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 	});
 
 	it('scope variant: both writes carry T; fold lands only at settlement', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.scopeWrite(t.id, a, set(1));
@@ -710,7 +710,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 
 describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => {
 	it('quiescence → episode reset: folds preserved; epoch bumps; counters stay monotone (never renumbered)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, update((x) => (x as number) + 41));
@@ -736,7 +736,7 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 	});
 
 	it('mid-episode slot recycle: write clock and dedup bits reset at claim', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -759,7 +759,7 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 
 describe('case 14 — StrictMode and replayed renders (model-expressible half)', () => {
 	it('double-invoked world reads are idempotent: no graph mutation, same values', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 1);
 		const c = m.computed('c', (read) => (read(a) as number) * 3);
 		const k = m.openBatch('deferred');
@@ -777,7 +777,7 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 	});
 
 	it('render-phase writes throw in all builds', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('urgent');
 		let misbehave = true;
@@ -799,7 +799,7 @@ describe('case 15 — Suspense across worlds', () => {
 
 describe('case 16 — effects observe committed state only', () => {
 	it('useSignalEffect excludes applied-but-uncommitted writes; re-runs at commit and at flips', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const ce = m.mountCoreEffect(a, 'CE');
@@ -819,7 +819,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('an older entry becoming visible beneath a visible max re-runs the effect (retirement flip)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const t1 = m.openBatch('deferred');
@@ -835,7 +835,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('a per-root commit flips the root committed view and revalidates effects at the drain', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const k = m.openBatch('deferred');
@@ -856,7 +856,7 @@ describe('case 16 — effects observe committed state only', () => {
 	// next-drain-only deferral each fail at least one of these.
 
 	it('16b — a committed-member write NEVER re-fires under an open same-root frame; the flip flushes at the frame close (kills immediate revalidation — codex finding 2)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true }); // parked action exposes its scope
 		m.scopeWrite(t.id, a, set(1));
@@ -882,7 +882,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('16c — member writes COALESCE: N writes before one boundary produce ONE cleanup+run at the boundary value', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.scopeWrite(t.id, a, set(1));
@@ -901,7 +901,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('16d — unmount before the boundary runs cleanup and nothing after teardown (a make-up fire is not owed — fable M3 re-walked under the ruling)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.scopeWrite(t.id, a, set(1));
@@ -919,7 +919,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('16e — a dep-choosing body re-tracks CAUSALLY: writes to the un-chosen arm stop firing after the flip', () => {
-		const m = logged();
+		const m = concurrent();
 		const flag = m.atom('flag', 0);
 		const a = m.atom('a', 10);
 		const b = m.atom('b', 20);
@@ -952,7 +952,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('16f — a WRITE-FREE retirement still flushes a pending member-write flip (retirement/settlement are guaranteed flush points; kills bits-gated deferral)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.scopeWrite(t.id, a, set(1));
@@ -973,7 +973,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('16g — StrictMode-style replay: cleanup + unconditional re-run + recapture; boundaries stay value-gated after', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 5);
 		const e = m.mountReactEffect('A', a, 'E');
 		m.replayReactEffect(e.id); // cleanup + re-run at the same values
@@ -988,7 +988,7 @@ describe('case 16 — effects observe committed state only', () => {
 	});
 
 	it('16h — one pass locking in TWO tokens re-checks once, at the boundary value (one re-check per boundary, not per token)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const t1 = m.openBatch('deferred');
@@ -1008,7 +1008,7 @@ describe('case 16 — effects observe committed state only', () => {
 
 describe('case 17 — optimistic rollback: the feature is deleted', () => {
 	it('no truncation, rollback, or revert affordance exists on the public model surface', () => {
-		const m = logged();
+		const m = concurrent();
 		const surface = [
 			...Object.getOwnPropertyNames(Object.getPrototypeOf(m)),
 			...Object.keys(m),

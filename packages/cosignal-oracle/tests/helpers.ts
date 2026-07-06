@@ -2,8 +2,8 @@
 import { CosignalModel, type AnyNode, type Pass, type Token, type Watcher } from '../src/model.js';
 import { checkInvariants } from '../src/invariants.js';
 
-/** A model in logged (concurrent) mode — the bridge is registered during setup. */
-export function logged(): CosignalModel {
+/** A model in concurrent mode — the bridge is registered during setup. */
+export function concurrent(): CosignalModel {
 	const m = new CosignalModel();
 	m.registerBridge();
 	return m;

@@ -10,11 +10,11 @@
  * tests/SKIPPED-FOR-FORK-SUITE.md with one line each.
  */
 import { describe, expect, it } from 'vitest';
-import { commitAndRetire, logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
+import { commitAndRetire, concurrent, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
 
 describe('pinned scars (model-expressible)', () => {
 	it('S1 — no-log urgent writes: urgent ×2 over pending +1 commits 2 then 4, never 3', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 1);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, update((x) => (x as number) + 1));
@@ -28,7 +28,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S2/S3 — kernel-topology-only marking/notify misses the divergent dep: the real k-edge delivers', () => {
-		const m = logged();
+		const m = concurrent();
 		const flag = m.atom('flag', 0);
 		const a = m.atom('a', 0);
 		const b = m.atom('b', 0);
@@ -51,7 +51,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S4 — drop-on-abort retirement: committed=false batches fold; writes never silently revert', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(5)); // no subscriber → no React work → committed=false
@@ -61,7 +61,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S5 — eval-time-only validity: an atom acquiring its first receipt AFTER a world read still invalidates', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0); // unlogged when world-k first reads it
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
 		const k = m.openBatch('deferred');
@@ -78,7 +78,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S6 — machinery keyed to watcher count: pre-bridge writes are committed-only state', () => {
-		const m = logged(); // fresh model, then simulate the pre-bridge era on a second model
+		const m = concurrent(); // fresh model, then simulate the pre-bridge era on a second model
 		void m;
 		const m2 = new (Object.getPrototypeOf(m).constructor)() as typeof m;
 		const a = m2.atom('a', 0);
@@ -96,7 +96,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S7 — wall-clock render scopes: a yield-gap write neither throws nor lands in the pass', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(1));
@@ -114,7 +114,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S8 — equality-gating writes against newest: U set(1) after T set(1) still appends', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(1));
@@ -129,7 +129,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S9 — unflagged ⇒ serve-anything routing: a never-evaluated node cannot leak pending state', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		// quiesce-fresh model; c has never been evaluated anywhere (no edges, no marks)
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
@@ -143,7 +143,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S10 — equality-filtered late-join correction: subset divergence needs value-blind correctives', () => {
-		const m = logged();
+		const m = concurrent();
 		const x1 = m.atom('x1', 0);
 		const x2 = m.atom('x2', 0);
 		const c = m.computed('c', (read) => ((read(x1) as number) && (read(x2) as number)) as number);
@@ -168,7 +168,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S11/S12 — mid-pass retirement on another root: the resumed pass folds at its pin, always', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const n = m.computed('n', (read) => (read(a) as number) + 10);
 		const t = m.openBatch('deferred');
@@ -188,7 +188,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S14 — canonical-equal write gating cross-world invalidation: delivery and worlds still move', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 3);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -212,7 +212,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S16 — value-based delivery suppression: a T-segment write returning c to committed still delivers', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -235,7 +235,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S17 — shared per-node walk stamps: interleaved batches never prune each other\'s deliveries', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -255,7 +255,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S18 — pinless shared world memos: two live pins always get their own answers', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) * 10);
 		const t = m.openBatch('deferred');
@@ -274,7 +274,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S19a — late write on a committed-but-live action: membership-visible plus a corrective, urgent-bounded', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -300,7 +300,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S21/S25 — ambient classification after await: the raw write is default-batched and commits first', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.write(t.id, a, set(1)); // sync prefix
@@ -315,7 +315,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S23 — evaluator identity: fresh nodes per closure; a pass world never sees another closure\'s output', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 1);
 		const cOld = m.computed('cOld', (read) => (read(a) as number) + 100);
 		const cNew = m.computed('cNew', (read) => (read(a) as number) + 200); // deps-keyed recreation
@@ -332,7 +332,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S26 — consumable queues: a later advance re-runs the effect even after earlier unrelated drains', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const k = m.openBatch('deferred', { action: true }); // parked
@@ -354,7 +354,7 @@ describe('pinned scars (model-expressible)', () => {
 		// as an update whose closure captures the action, so the drop/append
 		// rules are exercised through the closure form.
 		const reduce = (s: unknown, act: string) => (act === 'inc' ? (s as number) + 1 : s);
-		const m = logged();
+		const m = concurrent();
 		const r = m.atom('r', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // evaluates equal against base → legal drop
@@ -370,7 +370,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S29a — retirement-time mark clearing: the resumed pass reads ONE world (computed and atom agree)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const n = m.computed('n', (read) => (read(a) as number) + 11);
 		const t = m.openBatch('deferred');
@@ -389,7 +389,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S29b — the dual (unbounded retention) and the full-table backstop corner, loud and safe', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		// a yielded pass whose mask names 5 batches that all retire mid-pass
 		const retained = Array.from({ length: 5 }, () => m.openBatch('deferred'));
@@ -416,7 +416,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S30 — transitive-chain delivery still works after episode reset (cone-carry outcome)', () => {
-		const m = logged();
+		const m = concurrent();
 		const x = m.atom('x', 0);
 		const u = m.computed('u', (read) => (read(x) as number) + 1);
 		const wNode = m.computed('w', (read) => (read(u) as number) + 1);
@@ -435,7 +435,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S33 — dedup re-armed only at render: the pass-aware rule delivers the post-pin same-slot write', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
@@ -461,7 +461,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S35/S36 — reconcile at per-root advances (not just retirements), surviving slot release', () => {
-		const m = logged();
+		const m = concurrent();
 		const flag = m.atom('flag', 0);
 		const a = m.atom('a', 0);
 		const b = m.atom('b', 0);
@@ -488,7 +488,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S38/S43 — quiescence requires synchronous WIP discard first; folds survive the episode reset', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
 		m.write(t.id, a, set(3));
@@ -504,7 +504,7 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S42 — own-commit-neutral fast-outs need the population gate: reveal mounts take the compare', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const f = m.computed('f', (read) => read(a));
 		const hidden = pass(m, 'A', []); // Activity pre-renders hidden W (pin p1, mask ∅)

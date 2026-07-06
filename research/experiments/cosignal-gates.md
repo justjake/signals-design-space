@@ -727,4 +727,192 @@ file is the concurrency engine), and the harness adapter
 invoked as `FRAMEWORK=cosignal-concurrent` from here on. The run notes
 and tables above predate the rename and keep the old names verbatim;
 `cosignal-logged` in any historical "conformance 179/179 × {…}" line is
-the same gate as today's `cosignal-concurrent`.
+the same gate as today's `cosignal-concurrent`. (S-D extended the rename
+to the runtime mode value: `bridge.mode` is now `'direct' | 'concurrent'`;
+the bench `config: 'logged'` labels in child @@ROW output are file-name
+tags, not the mode value, and keep their names.)
+
+## NF2 final numbers (2026-07-06)
+
+The NF2 closing battery at P2.S-D (working tree: S-C @70c6eb3 + the S-D
+items — `lastFoldFp` deleted, pool/wrap hardening + clock-wrap guards,
+mode rename) vs the **pre-NF2-transfer anchor 981491c** (the last commit
+before S-B moved routing authority to the arenas; S-A's dual bookkeeping
+is INSIDE the anchor, so these deltas price S-B + S-C + S-D end to end).
+Anchor ran from a `git archive` export at /tmp/cosignal-prenf2 with the
+benches' absolute import paths rewritten to the export (same runners,
+same harness cwd/tsx/node_modules). Interleaved A/B: HEAD then ANCHOR
+back-to-back per gate within one sitting (13:14–13:18), world gates ×3
+alternated runs per side; medians + [min..max] across processes (PROCS 7
+for SPK-L, 5 elsewhere, 3 for the spkg8 re-check); checksums equal
+across trees everywhere compared (world gates 716400/388800/14821200;
+spkw chain3 115203; spkn1 F8xB4xW64 5769).
+
+**Machine load disclosure:** the working-session M4 Max, NOT idle — load
+averages 3.2–6.2 (1-min) across the battery (claude CLI + editors
+resident); node v24.16.0. Both sides saw the same load regime; treat ±5%
+as noise. The spkg8 burst regression was re-confirmed with two extra
+tightly-interleaved rounds (PROCS 3) on a 3.2-load window.
+
+### World-evaluation gates (COSIGNAL_ROOT two-tree; medians of 3, ≤1.4× required)
+
+| gate | metric | anchor 981491c | NF2 final | ratio |
+|---|---|---|---|---|
+| cold-pass (N=200) | perComputedColdReadNs | 712.9 [681.7..757.5] | 381.5 [378.8..410.4] | **0.54×** |
+| wide-mask lock-in (W=200) | commitDrainUs | 196.6 [188.5..231.3] | 150.4 [143.7..195.6] | **0.76×** |
+| untracked-fan (K=100×R=4) | writeStormNsPerWrite | 167.9 [150.1..168.2] | 181.1 [171.6..207.3] | 1.08× |
+
+All three ≤ 1.4× — PASS. (Cold-pass 0.54× vs this anchor confirms the
+stage-composed ~0.60× vs the original pre-S-A anchor from the S-C
+report; S-D added nothing measurable on top, as intended.)
+
+### SPK-L — armed-idle residual (per-op ns, unregistered signals)
+
+| shape | anchor direct | anchor residual | NF2 direct | NF2 residual |
+|---|---|---|---|---|
+| readPoll | 2.51 [2.33..2.75] | −0.19% | 2.53 [2.36..2.71] | −1.77% |
+| deepPropagate | 705.4 [693.1..722.2] | +3.12% | 709.9 [704.7..719.9] | +0.15% |
+| broadIsolate | 44.8 [44.1..46.0] | +16.85% | 44.9 [43.9..45.6] | +16.48% |
+| diamond | 117.9 [110.9..120.1] | +2.27% | 128.2 [116.0..133.9] | +5.26% |
+
+No new idle tax from S-B/S-C/S-D. The broadIsolate ~16–17% armed-idle
+residual predates NF2 (One Core era: ~18%) and is unchanged.
+
+### SPK-W — armed windowed write price (per-write ns; W=64 windows, eager cone evals included)
+
+| shape | anchor loggedNs | NF2 loggedNs | Δ | anchor amortNs | NF2 amortNs |
+|---|---|---|---|---|---|
+| bare | 89.4 [73.0..91.2] | 79.4 [72.8..89.0] | −11.2% (ranges overlap) | 110.9 | 99.0 |
+| chain3 | 380.3 [376.2..390.4] | 214.0 [205.8..227.0] | **−43.7%** | 400.2 | 233.6 |
+| fan8 | 1020.3 [1000.7..1055.0] | 521.4 [519.9..541.1] | **−48.9%** | 1040.4 | 542.7 |
+| watch1 | 110.6 [106.4..112.0] | 119.7 [116.7..136.6] | **+8.2%** | 157.4 | 172.9 |
+
+Direct baselines matched across trees (±2%). evalsPerWrite identical
+(chain3 3.00, fan8 8.00 both sides): the same work, roughly half the
+price on computed-cone shapes — the arena serving/refold path vs the
+anchor's memo ladder.
+
+### SPK-W-quiet — quiet-mode registered write (per-write ns)
+
+| shape | anchor quiet | NF2 quiet | anchor overhead vs direct | NF2 overhead |
+|---|---|---|---|---|
+| bare | 12.80 [12.71..15.26] | 15.00 [12.72..16.91] | +160.7% | +199.9% |
+| chain3 | 84.4 [80.3..88.2] | 85.1 [83.9..86.3] | +19.6% | +14.0% |
+| fan8 | 243.1 [242.2..250.3] | 248.2 [247.9..253.2] | +1.5% | +3.1% |
+| watch1 | 44.2 [43.2..45.0] | 44.4 [43.9..48.1] | +18.7% | +22.8% |
+
+Quiet writes are NF2-neutral: chain3/fan8/watch1 within noise; bare's
+median moved +2.2 ns on overlapping ranges (the seam's fixed cost over a
+5 ns write — the known Phase-1b ratio artifact, not an NF2 change).
+
+### SPK-N1 — delivery fan-out (loggedPropNs, per write)
+
+| cell | anchor | NF2 final | Δ |
+|---|---|---|---|
+| F1xB1xW8 | 449.7 [435.1..598.9] | 473.9 [452.5..716.3] | +5.4% (overlap) |
+| F8xB1xW8 | 784.0 [759.7..885.1] | 751.7 [717.2..832.8] | −4.1% (overlap) |
+| F64xB1xW8 | 1680.7 [1570.5..1757.7] | 1618.6 [1606.4..1676.1] | −3.7% (overlap) |
+| F8xB4xW8 | 637.7 [618.5..960.6] | 655.3 [637.3..690.3] | +2.8% (overlap) |
+| F8xB4xW64 | 393.9 [377.3..445.9] | 474.4 [467.5..479.1] | **+20.4%** |
+| F64xB4xW64 | 1183.0 [1137.7..1234.8] | 1202.3 [1181.7..1205.8] | +1.6% (overlap) |
+| F8xB2xW64+held | 354.1 [343.2..389.6] | 440.1 [422.9..487.1] | **+24.3%** |
+| F8xB2xW64+inter | 381.8 [371.3..386.1] | 455.4 [443.0..465.5] | **+19.3%** |
+
+tapeLenEnd 1950 on the held row, both sides (§5.3 retention unchanged).
+
+### SPK-R — dense retirement (per-token ns)
+
+| cell | anchor retire | NF2 retire | Δ | anchor total | NF2 total | Δ |
+|---|---|---|---|---|---|---|
+| K1xM8 | 18375 | 15917 | −13.4% (overlap) | 78834 | 73792 | −6.4% |
+| K8xM8 | 3339 | 3510 | +5.1% (overlap) | 18948 | 17099 | −9.8% |
+| K24xM8 | 1481 | 1637 | +10.5% (overlap) | 10160 | 8675 | −14.6% |
+| K8xM8+8w | 12500 [11896..14250] | 17849 [16672..18891] | **+42.8%** | 32510 | 41542 | **+27.8%** |
+| K24xM8+8w | 9078 | 8332 | −8.2% | 19545 | 19967 | +2.2% (overlap) |
+
+Watcher-less retirement is flat-to-better. The +8w rows are
+NON-MONOTONIC: K8+8w regressed +43% on retire (non-overlapping ranges)
+while K24+8w improved −8% on the same machine minutes apart — the
+K8-watcher reconcile shape hits some arena-drain cost the K24 shape
+amortizes; recorded as a residual, not explained away.
+
+### SPK-G8 — held-open bursts / typeahead (per-write / per-key ns)
+
+| row | anchor | NF2 final | Δ |
+|---|---|---|---|
+| burst G4 | 183 [177..199] | 221 [212..235] | **+20.8%** |
+| burst G4+held | 183 (tax 1.00) | 237 (tax 1.07) | **+29.5%** |
+| burst G16 | 186 [181..214] | 216 [215..238] | **+16.1%** |
+| burst G16+held | 186 (tax 1.00) | 233 (tax 1.08) | **+25.3%** |
+| burst G64 | 181 [170..184] | 225 [213..242] | **+24.3%** |
+| burst G64+held | 175 (tax 0.97) | 230 (tax 1.02) | **+31.4%** |
+| typeahead G16xK50 (per key) | 2954 [2776..3024] | 3022 [2979..3091] | +2.3% (overlap) |
+
+Re-confirmed ×2 interleaved rounds (G16: 213–215 vs 179–184, +17%).
+
+### Plain-language summary
+
+**What NF2 bought** (vs 981491c, i.e. S-B + S-C + S-D composed):
+
+- **World evaluation is the headline**: cold-pass 0.54× (nearly 2×
+  faster per cold computed read), wide-mask commit+drain 0.76×. The
+  stage-composed cold-pass vs the ORIGINAL pre-S-A anchor is ~0.60× —
+  NF2 ends cheaper than the tree it started from, with the §4.4.8
+  fast-path deletion and the memo ladder gone.
+- **Armed writes with computed cones ~2× cheaper**: spkw chain3 −44%,
+  fan8 −49% per write at identical eval counts — the arena
+  serving/refold path replacing memo validation.
+- **Watcher-less retirement flat-to-better** (totals −6..−15%).
+- **No new idle or quiet tax**: spkl residuals and quiet-mode overheads
+  unchanged within noise.
+- **ONE computed API** (kernel `Computed` under any world, F5 split
+  dead), the historical hang fixed at its root, `lastFoldFp` and the
+  memo machinery deleted — the architectural point of NF2; the numbers
+  above say it was bought without paying on the headline shapes.
+
+**What it cost** (residuals, disclosed):
+
+- **High-writes-per-frame fan-out marking**: spkn1 W64 cells +19..24%,
+  spkg8 bursts +16..31% (held rows worst; heldTax 1.02–1.08 vs ~1.00).
+  The per-write site-(a) fanout now marks every committed arena on
+  every write; at W=64 writes per frame the anchor's cheaper
+  invalidation amortized better. Typeahead (restart-heavy, the shape
+  these bursts feed) stays within noise — the tax is per-write marking,
+  not end-to-end latency on the composed schedule.
+- **spkw watch1 +8%** (watcher delivery on a bare atom write).
+- **spkr-core K8xM8+8w +43% retire** (non-monotonic — K24+8w improved;
+  see the table note).
+- **untracked-fan 1.08×** (weak-link visits on the storm walk; gate
+  headroom 1.4×).
+
+### S-D B5 insurance notes (dalien rows 4/9, audit level)
+
+- **keepNames bench-harness audit — NO-OP CONFIRMED.** The bench
+  children run `node --import tsx`; probe (tsx-compiled module source +
+  `effect()` disposers): no `__name` helper injected, disposers stay
+  anonymous (`.name === ""`), no `defineProperty(fn,'name')` wrap —
+  the ~120 ns named-closure tax does not apply to this toolchain.
+  (Full `effect()` create+dispose measures ~102 ns — that is the mount/
+  teardown lifecycle, not a naming tax.)
+- **Monomorphic-array spot check — new S-B/S-C arrays all clean.**
+  Element-kinds probe after real traffic (200 committed writes over a
+  40-atom/41-computed mixed strong/weak cone): `suspIdx`, `walk`,
+  `weakSubs`, `weakSubsTail`, `byNode`, `dirty`, `suspended`,
+  `nodeGen`, `obsRefs` are PACKED_SMI; `vals`/`nodesArr` PACKED
+  object-elements (they hold values/objects by design). One PRE-NF2
+  (P1-era) table is HOLEY: `watchersByNode` (sparse `[node.id] =`
+  writes at mount). It sits on warm paths (decay consult, consumer
+  count, settlement cone drain), not the read/write hot path; the
+  densify is a one-liner at `indexNode` (mirror `nodeGen`'s dense
+  fill) — left un-touched here because it predates NF2's scope and the
+  battery above prices the tree as it stands. Recorded for the next
+  perf pass.
+
+Verification state at these numbers: cosignal 303+1 skipped (incl. the
+new S-D pool/wrap + stale-loading-wart pins), oracle 81+1, cosignal-react
+62, bytecode budgets 45/45 (aUpdateComputed pinned 486 > the 460 inline
+limit — the pin stands), conformance 179/179 × {cosignal,
+cosignal-concurrent, arena}, armed fold-truth corpus zero diffs, three
+package tscs clean. Mode value renamed: `bridge.mode` `'logged'` →
+`'concurrent'` engine+oracle in lockstep; `tests/logged-*.spec.ts` →
+`concurrent-*.spec.ts`.

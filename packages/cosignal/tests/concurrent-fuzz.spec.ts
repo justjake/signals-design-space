@@ -1,5 +1,5 @@
 /**
- * Differential fuzzing of the LOGGED engine against the reference model
+ * Differential fuzzing of the CONCURRENT engine against the reference model
  * (`cosignal-oracle`); the required outcome is zero diffs over the full
  * corpus. Identical seeded schedules replay into the engine and the model
  * side by side, comparing — after EVERY step — op legality, the full
@@ -45,7 +45,7 @@ function expectSeedDiffClean(seed: number, steps: number): void {
 	);
 }
 
-describe('LOGGED engine vs oracle (diffAgainstModel, step-by-step)', () => {
+describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 	it('smoke: seeds 1..5 diff clean', () => {
 		for (let seed = 1; seed <= 5; seed++) expectSeedDiffClean(seed, CI_STEPS);
 	});
@@ -60,7 +60,7 @@ describe('LOGGED engine vs oracle (diffAgainstModel, step-by-step)', () => {
 
 	it('the flag-5 finding seeds (29, 97, 173) diff clean', () => {
 		// The schedules that first exposed the mount-fixup fast-out corner covered
-		// by the "flag 5" tests (logged-flags.spec.ts) — pinned so it can never
+		// by the "flag 5" tests (concurrent-flags.spec.ts) — pinned so it can never
 		// silently regress.
 		for (const seed of [29, 97, 173]) expectSeedDiffClean(seed, CI_STEPS);
 	});

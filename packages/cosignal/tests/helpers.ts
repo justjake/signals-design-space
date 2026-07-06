@@ -1,7 +1,7 @@
 /**
  * Twin-driver helpers: the battery/scars/flags specs in this directory run
- * VERBATIM against `logged()` from this module — every call fans out to the
- * reference model (`cosignal-oracle`) AND the LOGGED engine, legality
+ * VERBATIM against `concurrent()` from this module — every call fans out to the
+ * reference model (`cosignal-oracle`) AND the CONCURRENT engine, legality
  * decisions must agree, every value read is asserted equal on both sides,
  * and the full event stream + counters are compared after every mutation.
  * The test bodies' own `expect`s therefore assert the reference model's
@@ -407,8 +407,8 @@ export class TwinDriver {
 	}
 }
 
-/** A twin with the bridge registered on both sides during setup (logged mode). */
-export function logged(): TwinDriver {
+/** A twin with the bridge registered on both sides during setup (concurrent mode). */
+export function concurrent(): TwinDriver {
 	const t = new TwinDriver();
 	t.registerBridge();
 	return t;

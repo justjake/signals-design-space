@@ -43,7 +43,7 @@ export function registerCosignalReact(opts?: { bridge?: CosignalBridge }): Cosig
 		throw new Error('cosignal-react: already registered (dispose the previous registration first).');
 	}
 	const bridge = opts?.bridge ?? registerReactBridge();
-	if (bridge.mode !== 'logged') bridge.registerBridge();
+	if (bridge.mode !== 'concurrent') bridge.registerBridge();
 	const shim = new Shim(bridge);
 	setActiveShim(shim);
 	return {

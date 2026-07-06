@@ -78,7 +78,7 @@ describe('battery (spec §6) at React level', () => {
 		// they render together (React calls this lane "entanglement"; unified
 		// sync lane), so a DEFAULT batch cannot stay pending across flushSync at the
 		// React level — verified empirically; the default-priority exclusion
-		// schedule is pinned engine-side (cosignal logged-battery). The
+		// schedule is pinned engine-side (cosignal concurrent-battery). The
 		// React-reachable exclusion window is a DEFERRED batch, exercised here
 		// with case 2's real payload: the excluded write is logged (a receipt
 		// exists despite producing no React work yet) and folds later.

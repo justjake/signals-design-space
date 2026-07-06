@@ -12,11 +12,11 @@
  *   flag 7  a forced release of a retained slot changes no world's answer
  */
 import { describe, expect, it } from 'vitest';
-import { logged, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
+import { concurrent, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
 
 describe('flag 3 — write-set closure at commit (ActionScope late-write surface)', () => {
 	it('a late scope write on a committed, live token is membership-visible, corrected, and lifecycle-clean', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const w = mountCommitted(m, 'A', a, 'W');
 		const t = m.openBatch('deferred', { action: true });
@@ -41,7 +41,7 @@ describe('flag 3 — write-set closure at commit (ActionScope late-write surface
 
 describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted ∧ seq ≤ pin)', () => {
 	it('a committed-member token writing post-pin cannot drift a yielded pass\'s world', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.scopeWrite(t.id, a, set(1));
@@ -72,7 +72,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 	// the fast-forwarded value differs from the rendered value without being
 	// corrective-covered. Every battery/scars/fuzz mount exercises that assert.
 	it('quiet in-pass mount takes the fast-out: zero corrections, zero drift', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
 		const k = m.openBatch('deferred');
@@ -88,7 +88,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 	});
 
 	it('each dropped conjunct admits a counterexample: foreign cas motion falls through and fires', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const k = m.openBatch('deferred');
 		const pk = pass(m, 'A', [k]);
@@ -109,7 +109,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 
 describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', () => {
 	it('after a forced release, the retained pass still folds its world exactly (receipts carry slots)', () => {
-		const m = logged();
+		const m = concurrent();
 		const a = m.atom('a', 0);
 		const retained = Array.from({ length: 5 }, () => m.openBatch('deferred'));
 		for (const t of retained) m.write(t.id, a, update((x) => (x as number) + 1));
