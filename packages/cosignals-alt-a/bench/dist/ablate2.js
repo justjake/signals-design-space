@@ -606,11 +606,7 @@ function createCosignalEngine(options) {
         flags = 0;
       }
       if (flags & 2 /* WATCHING */) {
-        if (M[sub + 0 /* FLAGS */] & 256 /* IMMEDIATE */) {
-          kernelBroadcasts.push(sub);
-        } else {
-          notify(sub);
-        }
+        notify(sub);
       }
       if (flags & 1 /* MUTABLE */) {
         const subSubs = M[sub + 3 /* SUBS */];
@@ -2198,15 +2194,6 @@ function createCosignalEngine(options) {
     };
   }
   function readAtomPublic(a) {
-    if (frameWorlds.length === 0 && (M[a + 0 /* FLAGS */] & (128 /* LOGGED */ | 16 /* DIRTY */)) === 0 && (canonicalEvalDepth > 0 || readCtx !== 2 /* CTX_RENDER */)) {
-      if (activeSub !== 0) {
-        link(a, activeSub, cycle);
-      }
-      return values[a >> 2];
-    }
-    return readAtomSlow(a);
-  }
-  function readAtomSlow(a) {
     if (canonicalEvalDepth > 0) {
       return kernelReadAtom(a);
     }
@@ -2223,14 +2210,14 @@ function createCosignalEngine(options) {
     return v;
   }
   function readComputedPublic(c) {
-    if (frameWorlds.length === 0 && (canonicalEvalDepth > 0 || loggedAtomCount === 0 && readCtx !== 2 /* CTX_RENDER */)) {
+    if (canonicalEvalDepth > 0) {
       return kernelComputedRead(c);
     }
-    return readComputedSlow(c);
-  }
-  function readComputedSlow(c) {
     if (frameWorlds.length > 0) {
       return overlayEvaluate(c, frameWorlds[frameWorlds.length - 1]);
+    }
+    if (loggedAtomCount === 0 && readCtx !== 2 /* CTX_RENDER */) {
+      return kernelComputedRead(c);
     }
     const v = resolveComputedInWorld(c, ambientWorld());
     if (activeSub !== 0 && readCtx !== 2 /* CTX_RENDER */) {

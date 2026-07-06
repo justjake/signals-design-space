@@ -606,11 +606,7 @@ function createCosignalEngine(options) {
         flags = 0;
       }
       if (flags & 2 /* WATCHING */) {
-        if (M[sub + 0 /* FLAGS */] & 256 /* IMMEDIATE */) {
-          kernelBroadcasts.push(sub);
-        } else {
-          notify(sub);
-        }
+        notify(sub);
       }
       if (flags & 1 /* MUTABLE */) {
         const subSubs = M[sub + 3 /* SUBS */];
@@ -718,11 +714,7 @@ function createCosignalEngine(options) {
       if ((flags & (32 /* PENDING */ | 16 /* DIRTY */)) === 32 /* PENDING */) {
         M[sub + 0 /* FLAGS */] = flags | 16 /* DIRTY */;
         if ((flags & (2 /* WATCHING */ | 4 /* RECURSED_CHECK */)) === 2 /* WATCHING */) {
-          if (flags & 256 /* IMMEDIATE */) {
-            kernelBroadcasts.push(sub);
-          } else {
-            notify(sub);
-          }
+          notify(sub);
         }
       }
     } while ((cur = M[cur + 4 /* NEXT_SUB */]) !== 0);
@@ -756,7 +748,7 @@ function createCosignalEngine(options) {
       M[e + 0 /* FLAGS */] &= ~2 /* WATCHING */;
       const subs = M[e + 3 /* SUBS */];
       e = subs !== 0 ? M[subs + 2 /* SUB */] : 0;
-      if (e === 0 || !(M[e + 0 /* FLAGS */] & 2 /* WATCHING */) || M[e + 0 /* FLAGS */] & 256 /* IMMEDIATE */) {
+      if (e === 0 || !(M[e + 0 /* FLAGS */] & 2 /* WATCHING */)) {
         break;
       }
     } while (true);
@@ -795,20 +787,17 @@ function createCosignalEngine(options) {
     if (M[c + 0 /* FLAGS */] & 64 /* HAS_CHILD_EFFECT */) {
       unlinkChildEffects(c);
     }
-    const keep = M[c + 0 /* FLAGS */] & 512 /* LIVE */;
     M[c + 2 /* DEPS_TAIL */] = 0;
-    M[c + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 4 /* RECURSED_CHECK */ | keep;
+    M[c + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 4 /* RECURSED_CHECK */;
     const prevSub = activeSub;
     activeSub = c;
     ++enterDepth;
-    ++canonicalEvalDepth;
     try {
       ++cycle;
       const v = c >> 2;
       const oldValue = values[v];
       return oldValue !== (values[v] = fns[c >> 3](oldValue));
     } finally {
-      --canonicalEvalDepth;
       --enterDepth;
       activeSub = prevSub;
       M[c + 0 /* FLAGS */] &= ~4 /* RECURSED_CHECK */;
@@ -816,7 +805,7 @@ function createCosignalEngine(options) {
     }
   }
   function updateAtom(s) {
-    M[s + 0 /* FLAGS */] = M[s + 0 /* FLAGS */] & (128 /* LOGGED */ | 512 /* LIVE */) | 1024 /* K_ATOM */ | 1 /* MUTABLE */;
+    M[s + 0 /* FLAGS */] = 1024 /* K_ATOM */ | 1 /* MUTABLE */;
     const v = s >> 2;
     return values[v] !== (values[v] = values[v + 1]);
   }
@@ -834,7 +823,7 @@ function createCosignalEngine(options) {
         }
       }
       M[e + 2 /* DEPS_TAIL */] = 0;
-      M[e + 0 /* FLAGS */] = 4096 /* K_EFFECT */ | 2 /* WATCHING */ | 4 /* RECURSED_CHECK */ | 512 /* LIVE */;
+      M[e + 0 /* FLAGS */] = 4096 /* K_EFFECT */ | 2 /* WATCHING */ | 4 /* RECURSED_CHECK */;
       const prevSub = activeSub;
       activeSub = e;
       ++enterDepth;

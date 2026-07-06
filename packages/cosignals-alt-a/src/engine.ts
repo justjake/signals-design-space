@@ -740,9 +740,17 @@ export function createCosignalEngine(options?: EngineOptions) {
 		} else if ((M[dep + C.SUBS] = nextSub) === 0) {
 			unwatched(dep);
 		}
-		// §8.6: removing a subscriber may clear the producer's liveness.
+		// §8.6: removing a subscriber may clear the producer's liveness — but
+		// only a LIVE subscriber's departure can move the boundary, and only
+		// when no remaining FIRST subscriber is LIVE (the overwhelmingly
+		// common steady case for dynamic-dep churn, kairo `unstable`).
 		if ((M[dep + C.FLAGS] & C.LIVE) !== 0) {
-			recheckLive(dep);
+			// (No sub-side gate: dispose() zeroes the departing node's flags
+			// before unlinking, so the departed sub's LIVE bit is unreadable.)
+			const first = M[dep + C.SUBS];
+			if (first === 0 || (M[M[first + C.SUB] + C.FLAGS] & C.LIVE) === 0) {
+				recheckLive(dep);
+			}
 		}
 		return nextDep;
 	}
@@ -2695,12 +2703,34 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	// ---- public reads -----------------------------------------------------------------
+	// The hot read is deliberately tiny (inline-budget shaped, §18.3): the
+	// accessor-call layers were ~20% of the kairo-broad tick because the
+	// public dispatchers were too big to inline into the handle getters.
 	function readAtomPublic(a: number): unknown {
+		// Canonical-eval reads (W0) and untainted non-render reads share this
+		// exact shape: resolve DIRTY if pending, link if tracked.
+		if (
+			frameWorlds.length === 0
+			&& (M[a + C.FLAGS] & (C.LOGGED | C.DIRTY)) === 0
+			&& (canonicalEvalDepth > 0 || readCtx !== C.CTX_RENDER)
+		) {
+			if (activeSub !== 0) {
+				link(a, activeSub, cycle);
+			}
+			return values[a >> 2];
+		}
+		return readAtomSlow(a);
+	}
+
+	function readAtomSlow(a: number): unknown {
 		if (canonicalEvalDepth > 0) {
 			return kernelReadAtom(a); // kernel-internal context: W0 by construction
 		}
 		if (frameWorlds.length > 0) {
 			return overlayReadAtom(a);
+		}
+		if ((M[a + C.FLAGS] & C.LOGGED) === 0 && readCtx !== C.CTX_RENDER) {
+			return kernelReadAtom(a);
 		}
 		const v = resolveAtomInWorld(a, ambientWorld());
 		if (activeSub !== 0 && readCtx !== C.CTX_RENDER) {
@@ -2710,12 +2740,22 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function readComputedPublic(c: number): unknown {
-		if (canonicalEvalDepth > 0) {
+		// Inline-budget fast dispatch; one real call in the common case.
+		if (
+			frameWorlds.length === 0
+			&& (canonicalEvalDepth > 0 || (loggedAtomCount === 0 && readCtx !== C.CTX_RENDER))
+		) {
 			return kernelComputedRead(c);
 		}
+		return readComputedSlow(c);
+	}
+
+	function readComputedSlow(c: number): unknown {
 		if (frameWorlds.length > 0) {
 			// Resolution 5: inside an overlay frame, ALWAYS recurse via
-			// overlayEvaluate — never the kernel path.
+			// overlayEvaluate — never the kernel path (unless canonical
+			// evaluation is live above the frame, which cannot happen: frames
+			// never invoke kernel evaluation).
 			return overlayEvaluate(c, frameWorlds[frameWorlds.length - 1]);
 		}
 		const v = resolveComputedInWorld(c, ambientWorld());
@@ -2855,19 +2895,32 @@ export function createCosignalEngine(options?: EngineOptions) {
 		return handle as ReducerAtomHandle<S, A>;
 	}
 
-	function computed<T>(fn: () => T, opts?: { isEqual?: Equality<T>; label?: string }): ComputedHandle<T> {
+	function computed<T>(
+		fn: () => T,
+		opts?: {
+			isEqual?: Equality<T>;
+			label?: string;
+			/** Policy-supplied fused kernel wrapper (§11.2): receives the
+			 * previous cached value and owns equality/box stability itself —
+			 * saves a call frame per recomputation. `fn` remains the raw
+			 * overlay-evaluation function. */
+			kernelFn?: (prev?: unknown) => unknown;
+		},
+	): ComputedHandle<T> {
 		maybeBoundary();
 		const id = allocNode(C.K_COMPUTED);
 		const isEqual = opts?.isEqual as Equality<unknown> | undefined;
 		metas[id >> 3] = { isEqual, label: opts?.label, rawFn: fn as () => unknown };
 		// Kernel wrapper (§11.2): custom equality returns the previous
 		// reference so the kernel's identity compare reports "unchanged".
-		fns[id >> 3] = isEqual === undefined
-			? (fn as (prev?: unknown) => unknown)
-			: (prev?: unknown): unknown => {
-				const next = (fn as () => unknown)();
-				return prev !== undefined && isEqual(prev, next) ? prev : next;
-			};
+		fns[id >> 3] = opts?.kernelFn !== undefined
+			? opts.kernelFn
+			: isEqual === undefined
+				? (fn as (prev?: unknown) => unknown)
+				: (prev?: unknown): unknown => {
+					const next = (fn as () => unknown)();
+					return prev !== undefined && isEqual(prev, next) ? prev : next;
+				};
 		const handle = {
 			kind: 'computed',
 			id,
@@ -3246,6 +3299,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 		truncateBatch,
 		attachFork,
 		configure,
+		// Flat by-id reads for the policy classes: the class getter → handle
+		// getter chain was ~28% of the effect-heavy kairo tick.
+		readAtomById: readAtomPublic,
+		readComputedById: readComputedPublic,
 		trackCommitted,
 		committedEffect,
 		subscribeWithFixup,

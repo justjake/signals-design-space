@@ -205,6 +205,42 @@ workloads.w3d = (iters) => {
 	return { untraced, traced, ratio: traced / untraced };
 };
 
+workloads.kdeep = (iters) => {
+	// kairo deepPropagation through the CLASS API (the product surface).
+	const { Atom, Computed, effect, batch } = lib.createServerEngineLike?.() ?? lib;
+	const head = new Atom({ state: 0 });
+	let current = new Computed({ fn: () => head.state + 1 });
+	for (let i = 0; i < 49; ++i) {
+		const c = current;
+		current = new Computed({ fn: () => c.state + 1 });
+	}
+	let calls = 0;
+	effect(() => {
+		current.state;
+		++calls;
+	});
+	let x = 0;
+	const ns = fastestOf(() => {
+		batch(() => head.set(++x));
+		if (current.state !== 50 + x) throw new Error('bad value');
+	}, iters);
+	if (calls < iters) throw new Error('effect did not run');
+	return ns;
+};
+workloads.kbroad = (iters) => {
+	const { Atom, Computed, effect, batch } = lib;
+	const head = new Atom({ state: 0 });
+	const disposers = [];
+	for (let i = 0; i < 50; ++i) {
+		const c = new Computed({ fn: () => head.state + i });
+		disposers.push(effect(() => { c.state; }));
+	}
+	let x = 0;
+	return fastestOf(() => {
+		batch(() => head.set(++x));
+	}, iters);
+};
+
 const name = process.argv[2] ?? 'w1';
 const iters = Number(process.argv[3] ?? (name === 'deep' ? 20000 : name.startsWith('d2') || name.startsWith('w2') || name.startsWith('r2') ? 200000 : 50000));
 const result = workloads[name](iters);

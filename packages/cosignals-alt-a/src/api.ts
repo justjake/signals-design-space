@@ -20,6 +20,11 @@ const BOX = Symbol('cosignal.box');
 
 type Boxed = (ErrorBox | SuspendedBox) & { [BOX]: true };
 
+/** One brand check for the hot read path (unboxing discriminates after). */
+function isBox(v: unknown): v is Boxed {
+	return typeof v === 'object' && v !== null && (v as Boxed)[BOX] === true;
+}
+
 export function isErrorBox(v: unknown): v is ErrorBox {
 	return typeof v === 'object' && v !== null && (v as Boxed)[BOX] === true && (v as ErrorBox).kind === 'error';
 }
@@ -44,6 +49,28 @@ type TrackedThenable<T> = PromiseLike<T> & {
 };
 
 const SUSPEND = Symbol('cosignal.suspend');
+
+// Module-level default equality for boxed computeds (no per-instance
+// closure): identity semantics + §11.3 box reference rules. The `create`
+// shape showed the per-computed closure bundle in GC attribution.
+function defaultBoxedEq(a: unknown, b: unknown): boolean {
+	const ab = isBox(a);
+	const bb = isBox(b);
+	if (ab || bb) {
+		if (!ab || !bb) {
+			return false;
+		}
+		const ba = a as Boxed;
+		const bx = b as Boxed;
+		if (ba.kind !== bx.kind) {
+			return false;
+		}
+		return ba.kind === 'error'
+			? Object.is((ba as ErrorBox).error, (bx as ErrorBox).error)
+			: Object.is((ba as SuspendedBox).thenable, (bx as SuspendedBox).thenable);
+	}
+	return Object.is(a, b);
+}
 
 // ---- public option/ctx types (§4) ---------------------------------------------------
 export type AtomCtx<T> = {
@@ -80,8 +107,12 @@ export type ComputedOptions<T> = {
 export type CosignalAPI = ReturnType<typeof createAPI>;
 
 export function createAPI(engine: CosignalEngine) {
+	const readAtomById = engine.readAtomById;
+	const readComputedById = engine.readComputedById;
+
 	class Atom<T> {
 		readonly handle;
+		private readonly id: number;
 		constructor(options: AtomOptions<T>) {
 			this.handle = engine.atom<T>(options.state, {
 				isEqual: options.isEqual,
@@ -96,9 +127,10 @@ export function createAPI(engine: CosignalEngine) {
 							})
 						: undefined,
 			});
+			this.id = this.handle.id;
 		}
 		get state(): T {
-			return this.handle.state;
+			return readAtomById(this.id) as T;
 		}
 		set(next: T): void {
 			this.handle.set(next);
@@ -110,14 +142,16 @@ export function createAPI(engine: CosignalEngine) {
 
 	class ReducerAtom<S, A> {
 		readonly handle;
+		private readonly id: number;
 		constructor(options: ReducerAtomOptions<S, A>) {
 			this.handle = engine.reducerAtom<S, A>(options.state, options.reducer, {
 				isEqual: options.isEqual,
 				label: options.label,
 			});
+			this.id = this.handle.id;
 		}
 		get state(): S {
-			return this.handle.state;
+			return readAtomById(this.id) as S;
 		}
 		dispatch(action: A): void {
 			this.handle.dispatch(action);
@@ -126,92 +160,154 @@ export function createAPI(engine: CosignalEngine) {
 
 	class Computed<T> {
 		readonly handle;
-		// §12.3 positional identity cache: cacheKey 0 = canonical (and every
-		// non-pass world — writer's-world broadcast evaluations never initiate
-		// speculative fetches, they reuse the canonical positions); pass-world
-		// evaluations key on the render lineage so Suspense retries converge.
-		private thenableCache = new Map<number, TrackedThenable<unknown>[]>();
+		private readonly id: number;
+		// §12.3: ONE reused ctx object per computed ("reused ctx object in
+		// meta") — the previous per-evaluation ctx/closure allocations were
+		// 58% of the kairo-deep tick and most of its GC. Per-eval state lives
+		// in instance fields, reset at evaluation entry.
+		private thenableCache: Map<number, TrackedThenable<unknown>[]> | undefined;
+		private useIndex = 0;
+		private suspended: PromiseLike<unknown> | undefined;
+		private ctxLazy: ComputedCtx<T> | undefined;
+
+		private get ctx(): ComputedCtx<T> {
+			const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
+			return (this.ctxLazy ??= {
+				get previous(): T | undefined {
+					const prev = engine.policy.canonicalValue(self.handle);
+					return isBox(prev) ? undefined : (prev as T | undefined);
+				},
+				use<U>(thenable: PromiseLike<U>): U {
+					return self.useThenable(thenable);
+				},
+			});
+		}
 
 		constructor(options: ComputedOptions<T>) {
 			const userEq = options.isEqual;
-			const eq: Equality<unknown> = (a, b) => {
-				const ab = isErrorBox(a) || isSuspendedBox(a);
-				const bb = isErrorBox(b) || isSuspendedBox(b);
-				if (ab || bb) {
-					if (!ab || !bb) {
-						return false;
+			const eq: Equality<unknown> = userEq === undefined
+				? defaultBoxedEq
+				: (a, b) => {
+					const ab = isBox(a);
+					const bb = isBox(b);
+					if (ab || bb) {
+						return defaultBoxedEq(a, b);
 					}
-					if (isErrorBox(a) && isErrorBox(b)) {
-						return Object.is(a.error, b.error);
-					}
-					if (isSuspendedBox(a) && isSuspendedBox(b)) {
-						return Object.is(a.thenable, b.thenable);
-					}
-					return false;
-				}
-				return userEq !== undefined ? userEq(a as T, b as T) : Object.is(a, b);
-			};
+					return userEq(a as T, b as T);
+				};
 
 			const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
+			const fn = options.fn;
+			// Raw overlay-evaluation fn (§10.5): box stability via the canonical
+			// cache (overlay evaluations carry no kernel prev).
 			const evalFn = (): unknown => {
-				let useIndex = 0;
-				let suspended: PromiseLike<unknown> | undefined;
-				const ctx: ComputedCtx<T> = {
-					get previous(): T | undefined {
-						const prev = engine.policy.canonicalValue(self.handle);
-						return isErrorBox(prev) || isSuspendedBox(prev) ? undefined : (prev as T | undefined);
-					},
-					use<U>(thenable: PromiseLike<U>): U {
-						const kind = engine.policy.evalWorldKind();
-						const key = kind === 'pass' ? engine.policy.passLineage() : 0;
-						let slots = self.thenableCache.get(key);
-						if (slots === undefined) {
-							self.thenableCache.set(key, (slots = []));
-						}
-						const i = useIndex++;
-						if (slots[i] === undefined) {
-							slots[i] = thenable as TrackedThenable<unknown>;
-						}
-						const th = slots[i] as TrackedThenable<U>;
-						if (th.status === undefined) {
-							th.status = 'pending';
-							th.then(
-								(v) => {
-									th.status = 'fulfilled';
-									th.value = v;
-									self.onSettle(th);
-								},
-								(r) => {
-									th.status = 'rejected';
-									th.reason = r;
-									self.onSettle(th);
-								},
-							);
-						}
-						if (th.status === 'fulfilled') {
-							return th.value as U;
-						}
-						if (th.status === 'rejected') {
-							throw th.reason;
-						}
-						suspended = th;
-						throw SUSPEND; // abort the rest of the body (§12.3)
-					},
-				};
-				const prevBox = engine.policy.canonicalValue(self.handle);
+				self.useIndex = 0;
+				self.suspended = undefined;
 				try {
-					return options.fn(ctx);
+					return fn(self.ctx);
 				} catch (e) {
-					if (e === SUSPEND && suspended !== undefined) {
-						return isSuspendedBox(prevBox) && Object.is(prevBox.thenable, suspended)
+					const prevBox = engine.policy.canonicalValue(self.handle);
+					const susp = self.suspended;
+					if (e === SUSPEND && susp !== undefined) {
+						return isSuspendedBox(prevBox) && Object.is(prevBox.thenable, susp)
 							? prevBox
-							: suspendedBox(suspended);
+							: suspendedBox(susp);
 					}
 					return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
 				}
 			};
+			// Slim specialization for the overwhelmingly common computed: a
+			// (also skips the ctx object entirely — a 0-arity fn cannot see it)
+			// zero-arity fn (cannot reach ctx.use/previous) with no custom
+			// equality. The kernel's identity compare IS the §11.2 contract
+			// then; only §11.3 error boxing remains — and only on the throw
+			// path. Saves two stores + an equality call per recomputation
+			// (kairo deep/repeatedObservers are recompute-dense).
+			if (options.fn.length === 0 && userEq === undefined) {
+				const plainFn = options.fn as unknown as () => unknown;
+				const slimKernelFn = (prev?: unknown): unknown => {
+					try {
+						return plainFn();
+					} catch (e) {
+						return isErrorBox(prev) && Object.is(prev.error, e) ? prev : errorBox(e);
+					}
+				};
+				const slimEvalFn = (): unknown => {
+					try {
+						return plainFn();
+					} catch (e) {
+						const prevBox = engine.policy.canonicalValue(self.handle);
+						return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
+					}
+				};
+				this.handle = engine.computed<unknown>(slimEvalFn, {
+					isEqual: eq,
+					label: options.label,
+					kernelFn: slimKernelFn,
+				});
+				this.id = this.handle.id;
+				return;
+			}
+			// Fused kernel wrapper: one frame per recomputation (kernel prev in
+			// hand gives box reference-stability directly, §11.2/§11.3).
+			const kernelFn = (prev?: unknown): unknown => {
+				self.useIndex = 0;
+				self.suspended = undefined;
+				let next: unknown;
+				try {
+					next = fn(self.ctx);
+				} catch (e) {
+					const susp = self.suspended;
+					if (e === SUSPEND && susp !== undefined) {
+						return isSuspendedBox(prev) && Object.is(prev.thenable, susp)
+							? prev
+							: suspendedBox(susp);
+					}
+					return isErrorBox(prev) && Object.is(prev.error, e) ? prev : errorBox(e);
+				}
+				return prev !== undefined && eq(prev, next) ? prev : next;
+			};
 
-			this.handle = engine.computed<unknown>(evalFn, { isEqual: eq, label: options.label });
+			this.handle = engine.computed<unknown>(evalFn, { isEqual: eq, label: options.label, kernelFn });
+			this.id = this.handle.id;
+		}
+
+		private useThenable<U>(thenable: PromiseLike<U>): U {
+			const kind = engine.policy.evalWorldKind();
+			const key = kind === 'pass' ? engine.policy.passLineage() : 0;
+			const cache = (this.thenableCache ??= new Map());
+			let slots = cache.get(key);
+			if (slots === undefined) {
+				cache.set(key, (slots = []));
+			}
+			const i = this.useIndex++;
+			if (slots[i] === undefined) {
+				slots[i] = thenable as TrackedThenable<unknown>;
+			}
+			const th = slots[i] as TrackedThenable<U>;
+			if (th.status === undefined) {
+				th.status = 'pending';
+				th.then(
+					(v) => {
+						th.status = 'fulfilled';
+						th.value = v;
+						this.onSettle(th);
+					},
+					(r) => {
+						th.status = 'rejected';
+						th.reason = r;
+						this.onSettle(th);
+					},
+				);
+			}
+			if (th.status === 'fulfilled') {
+				return th.value as U;
+			}
+			if (th.status === 'rejected') {
+				throw th.reason;
+			}
+			this.suspended = th;
+			throw SUSPEND; // abort the rest of the body (§12.3)
 		}
 
 		private onSettle(th: PromiseLike<unknown>): void {
@@ -226,18 +322,15 @@ export function createAPI(engine: CosignalEngine) {
 				// A settlement moves no atom's tape: bump the overlay epoch so
 				// writer's-world memos holding the suspended box re-validate.
 				engine.policy.bumpOverlayEpoch();
-				// Canonical entry drops once the computed settles to a
-				// non-suspended value on next evaluation; keep positions stable
-				// until then (React's `use` protocol).
 			});
 		}
 
 		get state(): T {
-			const v = this.handle.state;
-			if (isErrorBox(v)) {
-				throw v.error;
-			}
-			if (isSuspendedBox(v)) {
+			const v = readComputedById(this.id);
+			if (isBox(v)) {
+				if (v.kind === 'error') {
+					throw v.error;
+				}
 				throw v.thenable; // read sites suspend (React convention)
 			}
 			return v as T;
@@ -245,12 +338,12 @@ export function createAPI(engine: CosignalEngine) {
 
 		/** Non-throwing read: the value or its §11.3 box. */
 		get boxed(): T | ErrorBox | SuspendedBox {
-			return this.handle.state as T | ErrorBox | SuspendedBox;
+			return readComputedById(this.id) as T | ErrorBox | SuspendedBox;
 		}
 
 		/** Drop a retired render lineage's thenable positions (§12.3). */
 		dropLineage(lineage: number): void {
-			this.thenableCache.delete(lineage);
+			this.thenableCache?.delete(lineage);
 		}
 	}
 

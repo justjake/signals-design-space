@@ -301,22 +301,22 @@ function createCosignalEngine(options) {
   function growM() {
     const bigger = new Int32Array(M.length * 2);
     bigger.set(M);
-    throw new Error('const-variant: M cannot grow — preallocate');
+    throw new Error('const-variant: M cannot grow');
   }
   function growG() {
     const bigger = new Int32Array(G.length * 2);
     bigger.set(G);
-    throw new Error('const-variant: G cannot grow — preallocate');
+    throw new Error('const-variant: G cannot grow');
   }
   function growW() {
     const bigger = new Int32Array(W.length * 2);
     bigger.set(W);
-    throw new Error('const-variant: W cannot grow — preallocate');
+    throw new Error('const-variant: W cannot grow');
   }
   function growWC() {
     const bigger = new Int32Array(WC.length * 2);
     bigger.set(WC);
-    throw new Error('const-variant: WC cannot grow — preallocate');
+    throw new Error('const-variant: WC cannot grow');
   }
   function growCertStack() {
     const bigger = new Int32Array(certStack.length * 2);
@@ -1952,14 +1952,15 @@ function createCosignalEngine(options) {
     }
     retiredSlotMask |= 1 << slot;
     liveDeferredMask &= ~(1 << slot);
-    for (const view of rootViews.values()) {
-      if ((view.mask >> slot & 1) !== 0) {
-        view.mask &= ~(1 << slot);
-        if (view.pin < rt) {
-          view.pin = rt;
+    if (rootViews.size !== 0)
+      for (const view of rootViews.values()) {
+        if ((view.mask >> slot & 1) !== 0) {
+          view.mask &= ~(1 << slot);
+          if (view.pin < rt) {
+            view.pin = rt;
+          }
         }
       }
-    }
     releaseSlotIfDone(slot);
     sweepNeeded = true;
     drainAll(true);
@@ -2203,6 +2204,9 @@ function createCosignalEngine(options) {
     if (frameWorlds.length > 0) {
       return overlayReadAtom(a);
     }
+    if ((M[a + 0 /* FLAGS */] & 128 /* LOGGED */) === 0 && readCtx !== 2 /* CTX_RENDER */) {
+      return kernelReadAtom(a);
+    }
     const v = resolveAtomInWorld(a, ambientWorld());
     if (activeSub !== 0 && readCtx !== 2 /* CTX_RENDER */) {
       link(a, activeSub, cycle);
@@ -2215,6 +2219,9 @@ function createCosignalEngine(options) {
     }
     if (frameWorlds.length > 0) {
       return overlayEvaluate(c, frameWorlds[frameWorlds.length - 1]);
+    }
+    if (loggedAtomCount === 0 && readCtx !== 2 /* CTX_RENDER */) {
+      return kernelComputedRead(c);
     }
     const v = resolveComputedInWorld(c, ambientWorld());
     if (activeSub !== 0 && readCtx !== 2 /* CTX_RENDER */) {
@@ -2336,7 +2343,7 @@ function createCosignalEngine(options) {
     const id = allocNode(2048 /* K_COMPUTED */);
     const isEqual = opts?.isEqual;
     metas[id >> 3] = { isEqual, label: opts?.label, rawFn: fn };
-    fns[id >> 3] = isEqual === void 0 ? fn : (prev) => {
+    fns[id >> 3] = opts?.kernelFn !== void 0 ? opts.kernelFn : isEqual === void 0 ? fn : (prev) => {
       const next = fn();
       return prev !== void 0 && isEqual(prev, next) ? prev : next;
     };
@@ -2406,6 +2413,14 @@ function createCosignalEngine(options) {
       if (--batchDepth === 0) {
         topLevelSettle();
       }
+    }
+  }
+  function startBatch2() {
+    ++batchDepth;
+  }
+  function endBatch2() {
+    if (--batchDepth === 0) {
+      topLevelSettle();
     }
   }
   function untracked2(fn) {
@@ -2638,11 +2653,17 @@ function createCosignalEngine(options) {
     effect: effect2,
     effectScope: effectScope2,
     batch: batch2,
+    startBatch: startBatch2,
+    endBatch: endBatch2,
     untracked: untracked2,
     readCommitted,
     truncateBatch,
     attachFork,
     configure: configure2,
+    // Flat by-id reads for the policy classes: the class getter → handle
+    // getter chain was ~28% of the effect-heavy kairo tick.
+    readAtomById: readAtomPublic,
+    readComputedById: readComputedPublic,
     trackCommitted,
     committedEffect,
     subscribeWithFixup,
@@ -2993,6 +3014,9 @@ function createForkDouble() {
 
 // src/api.ts
 var BOX = /* @__PURE__ */ Symbol("cosignal.box");
+function isBox(v) {
+  return typeof v === "object" && v !== null && v[BOX] === true;
+}
 function isErrorBox(v) {
   return typeof v === "object" && v !== null && v[BOX] === true && v.kind === "error";
 }
@@ -3007,8 +3031,11 @@ function suspendedBox(thenable) {
 }
 var SUSPEND = /* @__PURE__ */ Symbol("cosignal.suspend");
 function createAPI(engine) {
+  const readAtomById = engine.readAtomById;
+  const readComputedById = engine.readComputedById;
   class Atom2 {
     handle;
+    id;
     constructor(options) {
       this.handle = engine.atom(options.state, {
         isEqual: options.isEqual,
@@ -3019,9 +3046,10 @@ function createAPI(engine) {
           update: (f) => ctx.update(f)
         }) : void 0
       });
+      this.id = this.handle.id;
     }
     get state() {
-      return this.handle.state;
+      return readAtomById(this.id);
     }
     set(next) {
       this.handle.set(next);
@@ -3032,14 +3060,16 @@ function createAPI(engine) {
   }
   class ReducerAtom2 {
     handle;
+    id;
     constructor(options) {
       this.handle = engine.reducerAtom(options.state, options.reducer, {
         isEqual: options.isEqual,
         label: options.label
       });
+      this.id = this.handle.id;
     }
     get state() {
-      return this.handle.state;
+      return readAtomById(this.id);
     }
     dispatch(action) {
       this.handle.dispatch(action);
@@ -3047,11 +3077,15 @@ function createAPI(engine) {
   }
   class Computed2 {
     handle;
-    // §12.3 positional identity cache: cacheKey 0 = canonical (and every
-    // non-pass world — writer's-world broadcast evaluations never initiate
-    // speculative fetches, they reuse the canonical positions); pass-world
-    // evaluations key on the render lineage so Suspense retries converge.
-    thenableCache = /* @__PURE__ */ new Map();
+    id;
+    // §12.3: ONE reused ctx object per computed ("reused ctx object in
+    // meta") — the previous per-evaluation ctx/closure allocations were
+    // 58% of the kairo-deep tick and most of its GC. Per-eval state lives
+    // in instance fields, reset at evaluation entry.
+    thenableCache;
+    useIndex = 0;
+    suspended;
+    ctx;
     constructor(options) {
       const userEq = options.isEqual;
       const eq = (a, b) => {
@@ -3072,62 +3106,84 @@ function createAPI(engine) {
         return userEq !== void 0 ? userEq(a, b) : Object.is(a, b);
       };
       const self = this;
+      this.ctx = {
+        get previous() {
+          const prev = engine.policy.canonicalValue(self.handle);
+          return isErrorBox(prev) || isSuspendedBox(prev) ? void 0 : prev;
+        },
+        use(thenable) {
+          return self.useThenable(thenable);
+        }
+      };
+      const fn = options.fn;
       const evalFn = () => {
-        let useIndex = 0;
-        let suspended;
-        const ctx = {
-          get previous() {
-            const prev = engine.policy.canonicalValue(self.handle);
-            return isErrorBox(prev) || isSuspendedBox(prev) ? void 0 : prev;
-          },
-          use(thenable) {
-            const kind = engine.policy.evalWorldKind();
-            const key = kind === "pass" ? engine.policy.passLineage() : 0;
-            let slots = self.thenableCache.get(key);
-            if (slots === void 0) {
-              self.thenableCache.set(key, slots = []);
-            }
-            const i = useIndex++;
-            if (slots[i] === void 0) {
-              slots[i] = thenable;
-            }
-            const th = slots[i];
-            if (th.status === void 0) {
-              th.status = "pending";
-              th.then(
-                (v) => {
-                  th.status = "fulfilled";
-                  th.value = v;
-                  self.onSettle(th);
-                },
-                (r) => {
-                  th.status = "rejected";
-                  th.reason = r;
-                  self.onSettle(th);
-                }
-              );
-            }
-            if (th.status === "fulfilled") {
-              return th.value;
-            }
-            if (th.status === "rejected") {
-              throw th.reason;
-            }
-            suspended = th;
-            throw SUSPEND;
-          }
-        };
-        const prevBox = engine.policy.canonicalValue(self.handle);
+        self.useIndex = 0;
+        self.suspended = void 0;
         try {
-          return options.fn(ctx);
+          return fn(self.ctx);
         } catch (e) {
-          if (e === SUSPEND && suspended !== void 0) {
-            return isSuspendedBox(prevBox) && Object.is(prevBox.thenable, suspended) ? prevBox : suspendedBox(suspended);
+          const prevBox = engine.policy.canonicalValue(self.handle);
+          const susp = self.suspended;
+          if (e === SUSPEND && susp !== void 0) {
+            return isSuspendedBox(prevBox) && Object.is(prevBox.thenable, susp) ? prevBox : suspendedBox(susp);
           }
           return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
         }
       };
-      this.handle = engine.computed(evalFn, { isEqual: eq, label: options.label });
+      const kernelFn = (prev) => {
+        self.useIndex = 0;
+        self.suspended = void 0;
+        let next;
+        try {
+          next = fn(self.ctx);
+        } catch (e) {
+          const susp = self.suspended;
+          if (e === SUSPEND && susp !== void 0) {
+            return isSuspendedBox(prev) && Object.is(prev.thenable, susp) ? prev : suspendedBox(susp);
+          }
+          return isErrorBox(prev) && Object.is(prev.error, e) ? prev : errorBox(e);
+        }
+        return prev !== void 0 && eq(prev, next) ? prev : next;
+      };
+      this.handle = engine.computed(evalFn, { isEqual: eq, label: options.label, kernelFn });
+      this.id = this.handle.id;
+    }
+    useThenable(thenable) {
+      const kind = engine.policy.evalWorldKind();
+      const key = kind === "pass" ? engine.policy.passLineage() : 0;
+      const cache = this.thenableCache ??= /* @__PURE__ */ new Map();
+      let slots = cache.get(key);
+      if (slots === void 0) {
+        cache.set(key, slots = []);
+      }
+      const i = this.useIndex++;
+      if (slots[i] === void 0) {
+        slots[i] = thenable;
+      }
+      const th = slots[i];
+      if (th.status === void 0) {
+        th.status = "pending";
+        th.then(
+          (v) => {
+            th.status = "fulfilled";
+            th.value = v;
+            this.onSettle(th);
+          },
+          (r) => {
+            th.status = "rejected";
+            th.reason = r;
+            this.onSettle(th);
+          }
+        );
+      }
+      if (th.status === "fulfilled") {
+        return th.value;
+      }
+      if (th.status === "rejected") {
+        throw th.reason;
+      }
+      this.suspended = th;
+      throw SUSPEND;
     }
     onSettle(th) {
       queueMicrotask(() => {
@@ -3139,22 +3195,22 @@ function createAPI(engine) {
       });
     }
     get state() {
-      const v = this.handle.state;
-      if (isErrorBox(v)) {
-        throw v.error;
-      }
-      if (isSuspendedBox(v)) {
+      const v = readComputedById(this.id);
+      if (isBox(v)) {
+        if (v.kind === "error") {
+          throw v.error;
+        }
         throw v.thenable;
       }
       return v;
     }
     /** Non-throwing read: the value or its §11.3 box. */
     get boxed() {
-      return this.handle.state;
+      return readComputedById(this.id);
     }
     /** Drop a retired render lineage's thenable positions (§12.3). */
     dropLineage(lineage) {
-      this.thenableCache.delete(lineage);
+      this.thenableCache?.delete(lineage);
     }
   }
   const handleOf = (x) => "handle" in x ? x.handle : x;
@@ -3203,6 +3259,8 @@ var Computed = defaultAPI.Computed;
 var effect = defaultAPI.effect;
 var effectScope = defaultAPI.effectScope;
 var batch = defaultAPI.batch;
+var startBatch = defaultEngine.startBatch;
+var endBatch = defaultEngine.endBatch;
 var untracked = defaultAPI.untracked;
 var configure = defaultAPI.configure;
 function createServerEngine(options) {
@@ -3224,7 +3282,9 @@ export {
   defaultEngine,
   effect,
   effectScope,
+  endBatch,
   isErrorBox,
   isSuspendedBox,
+  startBatch,
   untracked
 };
