@@ -8,10 +8,11 @@
  *
  *  - `dependencyGraphToDot(bridge)` — a snapshot of the live dependency
  *    graph: atoms (annotated with how many receipts their history currently
- *    holds), computeds, the dependency edges the engine has recorded since
- *    it last went idle and reset them (the engine clears recorded edges
- *    when no update is in flight), and live watchers and effects with their
- *    observation edges. Diffing two dumps is the workhorse for wiring bugs.
+ *    holds), computeds, the dependency edges the live per-world arenas
+ *    currently hold (the structure the routing walks consult — links follow
+ *    each world's latest evaluations and persist with their arenas), and
+ *    live watchers and effects with their observation edges. Diffing two
+ *    dumps is the workhorse for wiring bugs.
  *  - `traceToDot(events, filter?)` — the causal graph of a decoded trace
  *    (CAUSE edges: write → delivery → correction chains), one node per
  *    event, clustered by nothing (time flows top to bottom).
@@ -35,7 +36,7 @@ export function dependencyGraphToDot(bridge: CosignalBridge): string {
 			lines.push(`\tn${n.id} [shape=ellipse, label=${q(`${n.name}#${n.id}`)}];`);
 		}
 	}
-	for (const [dep, outs] of bridge.episodeEdges) {
+	for (const [dep, outs] of bridge.dependencyEdges) {
 		for (const out of outs) lines.push(`\tn${dep} -> n${out};`);
 	}
 	for (const w of bridge.watchers.values()) {

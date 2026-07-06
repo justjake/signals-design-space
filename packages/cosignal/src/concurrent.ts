@@ -60,28 +60,31 @@
  *     re-check every observer the change could reach against committed
  *     state and correct the stale ones.
  *   - The engine keeps two dependency graphs. K0 is the kernel's own graph
- *     (the packed records in index.ts), which only knows newest values. K1
- *     is this module's overlay: a log of the dependency edges world
- *     evaluations ACTUALLY took, recorded as they are observed.
- *     Notification walks run over the K0∪K1 union. Per node, a TOUCHED word
- *     (one SlotSet) remembers which slots' live writes can reach it; bit 31
- *     is the TAINT bit — set when an untracked read observed pending state,
- *     conservatively poisoning the node's fast paths (untracked reads leave
- *     no edge, so the bit is the only trace).
- *   - A MEMO caches one node's value in one world, together with
- *     FINGERPRINTS — per-dependency version stamps (the highest receipt
- *     sequence the world can see for that dependency) — that tell whether
- *     the memo is still current. Each world keeps its memos in its own map,
- *     called that world's MEMO TABLE. The MEMO LADDER is
- *     evaluate()'s ordered chain of attempts, cheapest first: untouched
- *     fast path, then memo validation, then a fresh fold.
+ *     (the packed records in index.ts), which only knows newest values. The
+ *     other is the per-world SHADOW ARENAS (NF2, plans/2026-07-06 §4): one
+ *     packed record plane per pass world and per committed-for-root world,
+ *     holding a SHADOW (value + flags) per consumed node and the strong and
+ *     weak-flagged LINKS the world's own evaluations actually took. Arenas
+ *     are the routing AND serving authority for pass/committed worlds:
+ *     write-time deliveries walk arena strong links, durable drains seed
+ *     from arena dirty lists, and world reads serve from arena walks.
+ *     Committed-truth flips FAN OUT marks into the arenas at four sites
+ *     (§4.3): retirement, per-root lock-in, committed-member write, and
+ *     quiet fold — plus L4 resource settlement.
+ *   - A MEMO caches a NEWEST computed's value, together with FINGERPRINTS —
+ *     per-dependency version stamps (the highest receipt sequence for that
+ *     dependency) — that tell whether the memo is still current. The
+ *     newest MEMO TABLE is the ladder's surviving arm (`newestMemos`;
+ *     kernel computeds absorb it at S-C): kernel atoms serve newest
+ *     directly, overlay computeds memo-validate, everything else folds.
  *   - An EPISODE is the stretch between QUIESCENCE points — moments when
  *     nothing is in flight (no live batches, no open passes, no PARKED
  *     actions — async actions kept pending until their promise settles).
- *     At quiescence the K1 overlay bulk-resets, so edge logs never grow
- *     without bound. Sequence values are NEVER rewritten: the global
- *     counter climbs monotonically for the process's life (exact to
- *     2^53 — see the bound note at `quiesce`).
+ *     At quiescence the memo tables reset by epoch and zero-consumer
+ *     committed arenas reclaim; populated arenas PERSIST — their links are
+ *     current structure, not an episode log (§4.1). Sequence values are
+ *     NEVER rewritten: the global counter climbs monotonically for the
+ *     process's life (exact to 2^53 — see the bound note at `quiesce`).
  *
  * What lives here (full stories at the implementation sites):
  *   - receipts: every write appends {op, slot, seq, retiredSeq} to the
@@ -92,11 +95,13 @@
  *     kernel-backed `Atom` handles, and the newest world is read straight
  *     off the kernel. The engine-vs-reference-model diff verifies kernel
  *     value ≡ fold(base, receipts) at every step of the test corpus.
- *   - the K1 edge log: add-only within an episode, bulk-reset at
- *     quiescence. Delivery reachability runs over the episode-accumulated
- *     K0∪K1 union — deliveries are deliberately conservative (a superset is
- *     safe; deliveries are value-blind and the receiving render folds its
- *     own world).
+ *   - arena routing (NF2 S-B): write-time delivery reachability runs from
+ *     the written atom over every live arena's STRONG links (weak links are
+ *     tested and skipped — untracked reads never notify); kernel (K0)
+ *     subscribers are served by the eager kernel apply. Deliveries stay
+ *     value-blind and may be FEWER than the model's union-conservative set
+ *     (never more): a cone reachable only through structure no live arena
+ *     holds lane-degrades to a drain correction (§4.4.5, pinned S-NF2-D1).
  *   - worlds as pure folds with the two-clause visibility rule (see
  *     `visible`), the committed-for-root world, and the fast-forwarded
  *     mount-fixup world (see `mountFixup`).
@@ -145,11 +150,13 @@
  * model (`cosignal-oracle`).
  *
  * Deliberately deferred, marked at each site:
- *   TODO(perf): route non-newest reads through a kernel fast path keyed on
- *     the touched word (serve the kernel cache when no pending batch touched
- *     anything feeding the node), instead of always consulting the memo
- *     ladder first; worth doing if world-read cost shows up in profiles of
- *     transition-heavy apps.
+ *   TODO(perf): a "provably quiet" world-read fast path (serve a shared
+ *     cache instead of the arena walk when nothing pending can reach the
+ *     node). CORRECTNESS CONSTRAINT (fable N-4, §4.4.8): the cold in-arena
+ *     fn run is what RECORDS the strong and weak links the whole routing
+ *     coverage argument stands on — a re-entry may value-serve ONLY when
+ *     the arena already holds the node's links; structure recording may
+ *     never be skipped. The B1 read-before-pending pin is the tripwire.
  */
 
 import { Atom, SuspendedRead, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type HostOpKind } from './index.js';
@@ -184,8 +191,7 @@ export type Seq = number;
 export type Epoch = number;
 /** A root's commit generation (bumped at every per-root commit). */
 export type CommitGen = number;
-/** A 31-bit slot set: bit i = slot i. In per-node touched words bit 31 is
- * the taint bit (see SlotBits). */
+/** A 31-bit slot set: bit i = slot i (mask/included/committed/dedup words). */
 export type SlotSet = number;
 /** A premultiplied kernel record id — already multiplied by the kernel's
  * record stride so it indexes the kernel's arrays directly (index.ts
@@ -379,24 +385,30 @@ export type Token = {
 	ambient: boolean;
 };
 
-/** One world memo: value + evaluation seq + per-atom-dep fingerprints. */
+/** One newest-world memo: value + evaluation seq + per-atom-dep
+ * fingerprints. (Pass/committed worlds serve from their arenas since S-B;
+ * this record dies with the ladder's newest arm at S-C.) */
 export type WorldMemo = {
 	value: Value;
-	/** Evaluation/re-stamp sequence (ladder step 2 compares write clocks to it). */
+	/** Evaluation/re-stamp sequence. */
 	seq: Seq;
-	/** Root commit generation at (re-)stamp (committed worlds only). */
-	gen: CommitGen;
 	epoch: Epoch;
 	/** seq value at last validation (any state change mints a seq — cheap dedup). */
 	checkedOp: Seq;
 	/** Re-entrancy guard: stale cross-linked dep lists must refuse, not recurse. */
 	validating: boolean;
-	/** Direct atom deps (recorded during evaluation) + their fingerprints. */
+	/** Direct atom deps (recorded during evaluation) + their fingerprints.
+	 * `atomsStrong[i]` = the dep was TRACKED-read (§4.4.1's notification
+	 * rule: untracked deps invalidate VALUES — they stay in the fp set — but
+	 * never carry notifications; the newest-subscription flush walks strong
+	 * deps only). */
 	atoms: AtomNode[];
 	fps: Seq[];
+	atomsStrong: boolean[];
 	/** Direct computed deps + the values they had (identity revalidation). */
 	comps: ComputedNode[];
 	compValues: Value[];
+	compsStrong: boolean[];
 };
 
 /** One entry of the 31-slot recycling table a written batch occupies (see
@@ -411,11 +423,9 @@ export type SlotMeta = {
 	 * through the test-side model view. */
 	claimSeq: Seq;
 	/** Sequence of the last write under this slot; zeroed when a new tenant
-	 * claims it (memo validation compares it against evaluation stamps). */
+	 * claims it (the mount fixup's clock conjunct compares it against
+	 * snapshot pins). */
 	writeClock: Seq;
-	/** Dirt watermark carried across tenants: touched bits for this slot may
-	 * only be cleared once every live pin postdates this retirement. */
-	carriedMaxRetiredSeq: Seq;
 	releasePending: boolean;
 };
 
@@ -438,10 +448,9 @@ export type Pass = {
 	endKind: 'commit' | 'discard' | undefined;
 	mounted: WatcherId[];
 	rendered: Set<WatcherId>;
-	/** Pass-world memo table — dies with the pass record. */
-	memos: Map<NodeId, WorldMemo>;
-	/** NF2 S-A: the pass world's shadow arena (claimed at passStart, dropped
-	 * in reclaimAfterPassEnd — engine-side only; the oracle has no twin). */
+	/** NF2: the pass world's shadow arena — its value+invalidation+routing
+	 * layer (claimed at passStart, dropped in reclaimAfterPassEnd —
+	 * engine-side only; the oracle has no twin). */
 	arena?: ShadowArena;
 };
 
@@ -460,8 +469,6 @@ export type RootState = {
 	 * reference model's full observer scan catches this at any
 	 * retirement/commit; the engine keeps the precise dirty set instead). */
 	committedDirtySlots: SlotSet;
-	/** Committed-for-root memo table (re-keyed by commitGen). */
-	memos: Map<NodeId, WorldMemo>;
 };
 
 /** The watcher's rendered-world snapshot: what the mounting render saw. */
@@ -571,8 +578,6 @@ export type Subscription = {
 	lastValue: Value;
 	runs: number;
 	cleanups: number;
-	/** Delivery-walk enqueue dedup generation (newest policy). */
-	queuedWalk: WalkGen;
 	live: boolean;
 	/** RCC-OL1: snapshot nodes currently holding observation retains
 	 * (re-pointed per run exactly like watcher obsDeps; see obsShift). */
@@ -589,18 +594,11 @@ export type World =
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
-/** Bit constants for slot bit-sets (mask/included/committed/dedup words) and
- * per-node touched words: bit i (0–30) = slot i; in touched words bit 31 is
- * the taint bit. Same-file const enum so the masks inline as literals. */
+/** Bit constants for slot bit-sets (mask/included/committed/dedup words):
+ * bit i (0–30) = slot i. Same-file const enum so the masks inline as literals. */
 const enum SlotBits {
-	/** Mask of all 31 slot bits (bits 0–30): strips the taint bit from a touched word. */
-	SLOT_MASK = 0x7fffffff,
-	/** The taint bit (bit 31): an untracked read of pending state poisoned the node. */
-	TAINT = -2147483648, // 1 << 31
 	/** (bits >>> slot) & LOW_BIT isolates the addressed slot's bit. */
 	LOW_BIT = 1,
-	/** MSB_INDEX − clz32(isolated bit) = the bit's index (31 = an int32's top bit position). */
-	MSB_INDEX = 31,
 }
 
 /** The observable event stream (same shapes as the reference model's events,
@@ -791,17 +789,21 @@ export function __newBridgeForTest(): CosignalBridge {
 	return b;
 }
 
-// ---- NF2 S-A: per-world shadow arenas (plans/2026-07-06 §4) -----------------------
-// DUAL BOOKKEEPING stage: K1 + the memo ladder remain the routing/serving
-// authority for every delivery, drain, and world read; the arena machinery
-// below runs BESIDE them — shadow records + strong/weak links recorded by the
-// existing fn-reader, folds into value columns at the same evaluations,
-// fanout marks at the four committed-truth flip sites, sentinel boxes +
-// settlement, and consumer-refcount reclamation at quiesce. Behind a test
-// flag (`__setArenaCheck`), every public operation's epilogue serves each
-// live arena's shadows FROM THE ARENA (its own transliterated walks) and
-// compares against the memo-served value — ANY divergence throws. Layouts
-// and walks are adapted from the spike prototype
+// ---- NF2: per-world shadow arenas (plans/2026-07-06 §4) ---------------------------
+// S-B (routing-authority transfer): the arenas are the value, invalidation,
+// AND routing layer for pass and committed worlds — shadow records +
+// strong/weak links recorded by the arena fn-readers, folds into value
+// columns, fanout marks at the four committed-truth flip sites, sentinel
+// boxes + settlement, consumer-refcount reclamation at quiesce, write-time
+// delivery over strong links, drain candidates off the dirty lists, and the
+// mount-fixup closure over reverse (deps) links. The K1 episode edge log,
+// its touched-word machinery, and the separate weak-edge table are DELETED
+// (§4.8 S-B); `newestMemos` remains the newest world's temporary
+// representation until S-C. Behind a test flag (`__setArenaCheck`), every
+// public operation's epilogue serves each live arena's shadows FROM THE
+// ARENA (its own transliterated walks) and compares against FOLD-TRUTH — a
+// naive cache-free re-fold — ANY divergence throws. Layouts and walks are
+// adapted from the spike prototype
 // (research/experiments/world-tagged-links-spike-code/), record stride and
 // flag values mirroring the kernel's (index.ts NodeField/NodeFlag — const
 // enums are not exported; values are asserted stable by the suite).
@@ -852,6 +854,13 @@ const enum AFlag {
 	HAS_BOX = 2048,
 	/** Refines HAS_BOX: payload is the thenable's stable SuspendedRead. */
 	BOX_SUSPENDED = 4096,
+	/** Refines HAS_BOX: the payload was THROWN by the fn (render-path
+	 * suspension or plain error) — serves rethrow the cached payload,
+	 * boxedRead-style (§4.5.3; arenas serve real reads at S-B). Clear means
+	 * a RETURNED sentinel (the shim wrapper folds background suspensions to
+	 * the sentinel VALUE), which serves as a value. Arena-local bit — not a
+	 * kernel NodeFlag mirror (the kernel encodes the split differently). */
+	BOX_THROWN = 16384,
 }
 
 const A_STRIDE = 8;
@@ -877,6 +886,22 @@ class ShadowArena {
 	/** Per-record suspended-list slot + 1 (0 = not suspended) — §4.5.4 step-0
 	 * compaction: the field IS the set bit and stores the dense index. */
 	suspIdx: number[] = [];
+	/** Per-record walk-generation stamps (S-B routing walks: delivery reach,
+	 * drain candidate collection, fixup closure) — termination + O(V+E)
+	 * without allocation, per §4.4.3. Compared against the bridge's global
+	 * walk generation; scrubbed at release like the other side columns. */
+	walk: number[] = [];
+	/** THE SEGREGATED WEAK SUBS LIST (§4.4.1's recorded fallback, DECIDED BY
+	 * THE UNTRACKED-FAN GATE at S-B: the combined-list walk measured 4.9× the
+	 * head-bridge anchor on the K=100 × R=4 write-storm shape — every write
+	 * visited-and-skipped 400 weak links). Weak-flagged links live on a
+	 * per-shadow SECOND subs list (head + tail side columns, record ids;
+	 * same link-record layout): the delivery walk traverses the STRONG list
+	 * (AF.SUBS) only and never sees a weak link; mark propagation and drain
+	 * candidate collection walk both. §4.4.1's mode transitions (first-
+	 * occurrence reset, strong-dominates) MOVE a link between the lists. */
+	weakSubs: number[] = [];
+	weakSubsTail: number[] = [];
 	next = A_STRIDE; // bump pointer (record 0 burned: 0 = null)
 	linkFree = 0;
 	links = 0;
@@ -929,6 +954,9 @@ function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number
 	while (a.vals.length <= v) {
 		a.vals.push(undefined);
 		a.suspIdx.push(0);
+		a.walk.push(0);
+		a.weakSubs.push(0);
+		a.weakSubsTail.push(0);
 	}
 	while (a.byNode.length <= nodeId) a.byNode.push(0); // stay packed, never holey
 	a.byNode[nodeId] = id;
@@ -954,27 +982,73 @@ function aFreeLink(a: ShadowArena, id: number): void {
 	a.links--;
 }
 
+/** Detach a link from its dep's subs list (the MODE-matching one). Fixes
+ * neighbors and the head/tail columns only — the link's OWN prev/next stay
+ * stale (row-2 discipline: mid-walk readers must keep seeing former
+ * neighbors; movers rewrite them in aSubsAppend, and freed links never
+ * revalidate). */
+function aSubsDetach(a: ShadowArena, id: number): void {
+	const W = a.W;
+	const dep = W[id + AF.L_DEP]!;
+	const nextSub = W[id + AF.L_NEXT_SUB]!;
+	const prevSub = W[id + AF.L_PREV_SUB]!;
+	const weak = (W[id + AF.L_MODE]! & 1) !== 0;
+	if (nextSub !== 0) W[nextSub + AF.L_PREV_SUB] = prevSub;
+	else if (weak) a.weakSubsTail[dep >> A_SHIFT] = prevSub;
+	else W[dep + AF.SUBS_TAIL] = prevSub;
+	if (prevSub !== 0) W[prevSub + AF.L_NEXT_SUB] = nextSub;
+	else if (weak) a.weakSubs[dep >> A_SHIFT] = nextSub;
+	else W[dep + AF.SUBS] = nextSub;
+}
+
+/** Append a link to its dep's MODE-matching subs list tail (sets the
+ * link's own prev/next and mode). */
+function aSubsAppend(a: ShadowArena, id: number, weak: boolean): void {
+	const W = a.W;
+	const dep = W[id + AF.L_DEP]!;
+	const vi = dep >> A_SHIFT;
+	const tail = weak ? a.weakSubsTail[vi]! : W[dep + AF.SUBS_TAIL]!;
+	W[id + AF.L_MODE] = weak ? 1 : 0;
+	W[id + AF.L_PREV_SUB] = tail;
+	W[id + AF.L_NEXT_SUB] = 0;
+	if (tail !== 0) W[tail + AF.L_NEXT_SUB] = id;
+	else if (weak) a.weakSubs[vi] = id;
+	else W[dep + AF.SUBS] = id;
+	if (weak) a.weakSubsTail[vi] = id;
+	else W[dep + AF.SUBS_TAIL] = id;
+}
+
+/** Set a live link's mode; a change MOVES it between the dep's two subs
+ * lists (§4.4.1's transitions under the segregated-list fallback). */
+function aSetMode(a: ShadowArena, id: number, weak: boolean): void {
+	if (((a.W[id + AF.L_MODE]! & 1) !== 0) === weak) return;
+	aSubsDetach(a, id);
+	aSubsAppend(a, id, weak);
+}
+
 /**
  * Link maintenance (spike `wLink`, transliterated) PLUS §4.4.1's mode
  * discipline, which the spike form lacked and may not be transplanted bare:
  * the FIRST occurrence of a dep in an evaluation SETS the link's mode from
  * that occurrence's read kind (fresh and REUSED links alike — the in-place
  * and tail fast paths below perform the write); a LATER occurrence may only
- * upgrade weak→strong, never downgrade.
+ * upgrade weak→strong, never downgrade. Mode writes route through aSetMode:
+ * under the segregated-list fallback a mode change moves the link between
+ * the dep's strong and weak subs lists.
  */
 function aLink(a: ShadowArena, dep: number, sub: number, version: number, weak: boolean): void {
 	const W = a.W;
 	const prevDep = W[sub + AF.DEPS_TAIL]!;
 	if (prevDep !== 0 && W[prevDep + AF.L_DEP] === dep) {
 		// Duplicate occurrence within this evaluation: strong dominates.
-		if (!weak) W[prevDep + AF.L_MODE] = W[prevDep + AF.L_MODE]! & ~1;
+		if (!weak) aSetMode(a, prevDep, false);
 		return;
 	}
 	const nextDep = prevDep !== 0 ? W[prevDep + AF.L_NEXT_DEP]! : W[sub + AF.DEPS]!;
 	if (nextDep !== 0 && W[nextDep + AF.L_DEP] === dep) {
 		// In-place reuse: first occurrence this evaluation — reset the mode.
 		W[nextDep + AF.L_VER] = version;
-		W[nextDep + AF.L_MODE] = weak ? 1 : 0;
+		aSetMode(a, nextDep, weak);
 		W[sub + AF.DEPS_TAIL] = nextDep;
 		return;
 	}
@@ -982,28 +1056,29 @@ function aLink(a: ShadowArena, dep: number, sub: number, version: number, weak: 
 }
 
 function aLinkInsert(a: ShadowArena, dep: number, sub: number, version: number, weak: boolean, prevDep: number, nextDep: number): void {
-	const prevSub = a.W[dep + AF.SUBS_TAIL]!;
-	if (prevSub !== 0 && a.W[prevSub + AF.L_VER] === version && a.W[prevSub + AF.L_SUB] === sub) {
-		if (!weak) a.W[prevSub + AF.L_MODE] = a.W[prevSub + AF.L_MODE]! & ~1; // strong dominates
+	// Same-evaluation duplicate arriving via the insert path (nonadjacent
+	// re-read): probe BOTH mode tails; strong dominates.
+	const sTail = a.W[dep + AF.SUBS_TAIL]!;
+	if (sTail !== 0 && a.W[sTail + AF.L_VER] === version && a.W[sTail + AF.L_SUB] === sub) {
+		return; // already strong this evaluation
+	}
+	const wTail = a.weakSubsTail[dep >> A_SHIFT]!;
+	if (wTail !== 0 && a.W[wTail + AF.L_VER] === version && a.W[wTail + AF.L_SUB] === sub) {
+		if (!weak) aSetMode(a, wTail, false); // upgrade weak→strong
 		return;
 	}
 	const newLink = aAllocLink(a); // may grow the arena: re-load W after
 	const W = a.W;
 	W[sub + AF.DEPS_TAIL] = newLink;
-	W[dep + AF.SUBS_TAIL] = newLink;
 	W[newLink + AF.L_VER] = version;
 	W[newLink + AF.L_DEP] = dep;
 	W[newLink + AF.L_SUB] = sub;
 	W[newLink + AF.L_PREV_DEP] = prevDep;
 	W[newLink + AF.L_NEXT_DEP] = nextDep;
-	W[newLink + AF.L_PREV_SUB] = prevSub;
-	W[newLink + AF.L_NEXT_SUB] = 0;
-	W[newLink + AF.L_MODE] = weak ? 1 : 0;
 	if (nextDep !== 0) W[nextDep + AF.L_PREV_DEP] = newLink;
 	if (prevDep !== 0) W[prevDep + AF.L_NEXT_DEP] = newLink;
 	else W[sub + AF.DEPS] = newLink;
-	if (prevSub !== 0) W[prevSub + AF.L_NEXT_SUB] = newLink;
-	else W[dep + AF.SUBS] = newLink;
+	aSubsAppend(a, newLink, weak); // subs-side wiring + mode, on the matching list
 }
 
 function aUnlink(a: ShadowArena, id: number, sub: number = a.W[id + AF.L_SUB]!): number {
@@ -1011,20 +1086,16 @@ function aUnlink(a: ShadowArena, id: number, sub: number = a.W[id + AF.L_SUB]!):
 	const dep = W[id + AF.L_DEP]!;
 	const prevDep = W[id + AF.L_PREV_DEP]!;
 	const nextDep = W[id + AF.L_NEXT_DEP]!;
-	const nextSub = W[id + AF.L_NEXT_SUB]!;
-	const prevSub = W[id + AF.L_PREV_SUB]!;
 	if (nextDep !== 0) W[nextDep + AF.L_PREV_DEP] = prevDep;
 	else W[sub + AF.DEPS_TAIL] = prevDep;
 	if (prevDep !== 0) W[prevDep + AF.L_NEXT_DEP] = nextDep;
 	else W[sub + AF.DEPS] = nextDep;
-	if (nextSub !== 0) W[nextSub + AF.L_PREV_SUB] = prevSub;
-	else W[dep + AF.SUBS_TAIL] = prevSub;
+	aSubsDetach(a, id); // mode-matching subs list; the freed link keeps stale pointers (row 2)
 	aFreeLink(a, id);
-	if (prevSub !== 0) {
-		W[prevSub + AF.L_NEXT_SUB] = nextSub;
-	} else if ((W[dep + AF.SUBS] = nextSub) === 0 && (W[dep + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0) {
-		// Unwatched computed shadow: mark stale, tear down its own deps
-		// (in-world cascade — per-view acyclicity makes this terminate).
+	if (W[dep + AF.SUBS] === 0 && a.weakSubs[dep >> A_SHIFT] === 0 && (W[dep + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0) {
+		// Unwatched computed shadow (BOTH subs lists empty): mark stale, tear
+		// down its own deps (in-world cascade — per-view acyclicity makes
+		// this terminate).
 		if (W[dep + AF.DEPS_TAIL] !== 0) {
 			// Dirty-LIST append on the mark's 0→1 edge (the a.dirty contract;
 			// aValidate enforces DIRTY ⇒ listed, and decay drops the torn
@@ -1061,15 +1132,25 @@ function aPurgeDeps(a: ShadowArena, sub: number): void {
 	}
 }
 
-// Arena-walk scratch stacks (never shared with K1's walk buffers).
+// Arena-walk scratch stacks (module-owned; the routing walks use the
+// bridge's own buffers instead).
 let aPropStack = new Int32Array(4096);
 let aPropSp = 0;
 let aCheckStack = new Int32Array(4096);
 let aCheckSp = 0;
 
+/** Out-of-line cycle-cap thrower (keeps the walk arms' inline bytecode
+ * free of the message-building code — cold by definition). */
+function aWalkCycle(site: string, cur: number): never {
+	throw new BridgeInvariantViolation(`${site}: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+}
+
 /** Propagate PENDING over strong AND weak links (spike `wPropagate`;
- * §4.4.1: weak links participate in mark propagation and drains — they are
- * excluded only from write-time delivery, which stays K1's job until S-B). */
+ * §4.4.1: weak links participate in mark propagation and drains — only the
+ * write-time delivery walk skips them). Under the segregated-list fallback
+ * each descended sub contributes TWO chains: the strong list is walked
+ * first and the weak head is pushed as a pending continuation (the same
+ * stack mechanism that holds sibling continuations). */
 function aPropagate(a: ShadowArena, startLink: number): void {
 	const W = a.W; // never allocates: safe to cache
 	let cur = startLink;
@@ -1077,7 +1158,7 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 	const stackBase = aPropSp;
 	let guard = 0;
 	top: do {
-		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aPropagate: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+		if (++guard > 1_000_000) aWalkCycle('aPropagate', cur);
 		const sub = W[cur + AF.L_SUB]!;
 		let flags = W[sub + AF.FLAGS]!;
 		if (!(flags & (AFlag.RECURSED_CHECK | AFlag.RECURSED | AFlag.DIRTY | AFlag.PENDING))) {
@@ -1093,18 +1174,27 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 			flags = 0;
 		}
 		if (flags & AFlag.MUTABLE) {
-			const subSubs = W[sub + AF.SUBS]!;
+			let subSubs = W[sub + AF.SUBS]!;
+			const subWeak = a.weakSubs[sub >> A_SHIFT]!;
+			let park = 0; // the weak head, parked when both lists are populated
+			if (subWeak !== 0) {
+				if (subSubs === 0) subSubs = subWeak; // only weak dependents: descend into them
+				else park = subWeak;
+			}
 			if (subSubs !== 0) {
 				cur = subSubs;
 				const nextSub = W[cur + AF.L_NEXT_SUB]!;
-				if (nextSub !== 0) {
-					if (aPropSp === aPropStack.length) {
+				if (nextSub !== 0 || park !== 0) {
+					if (aPropSp + 2 > aPropStack.length) {
 						const bigger = new Int32Array(aPropStack.length * 2);
 						bigger.set(aPropStack);
 						aPropStack = bigger;
 					}
-					aPropStack[aPropSp++] = next;
-					next = nextSub;
+					if (park !== 0) aPropStack[aPropSp++] = park;
+					if (nextSub !== 0) {
+						aPropStack[aPropSp++] = next;
+						next = nextSub;
+					}
 				}
 				continue;
 			}
@@ -1124,6 +1214,14 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 	} while (true);
 }
 
+/** Seed aPropagate over BOTH of a shadow's subs lists (fanout sites). */
+function aPropagateBoth(a: ShadowArena, sh: number): void {
+	const subs = a.W[sh + AF.SUBS]!;
+	if (subs !== 0) aPropagate(a, subs);
+	const weak = a.weakSubs[sh >> A_SHIFT]!;
+	if (weak !== 0) aPropagate(a, weak);
+}
+
 function aShallowPropagate(a: ShadowArena, startLink: number): void {
 	const W = a.W;
 	let cur = startLink;
@@ -1134,8 +1232,23 @@ function aShallowPropagate(a: ShadowArena, startLink: number): void {
 		const flags = W[sub + AF.FLAGS]!;
 		if ((flags & (AFlag.PENDING | AFlag.DIRTY)) === AFlag.PENDING) {
 			W[sub + AF.FLAGS] = flags | AFlag.DIRTY;
+			// Dirty-LIST append on the DIRTY 0→1 edge (the a.dirty contract:
+			// DIRTY ⇒ listed — decay and drain seeding both stand on it). At
+			// S-A this site's upgrades were always consumed within the same
+			// checker pass; S-B serves arenas mid-operation, so an upgraded
+			// shadow can reach a boundary unconsumed and MUST be listed.
+			a.dirty.push(sub);
 		}
 	} while ((cur = W[cur + AF.L_NEXT_SUB]!) !== 0);
+}
+
+/** Shallow-propagate over BOTH of a shadow's subs lists (weak dependents
+ * take the PENDING→DIRTY upgrade too — validation coverage, §4.4.1). */
+function aShallowBoth(a: ShadowArena, sh: number): void {
+	const subs = a.W[sh + AF.SUBS]!;
+	if (subs !== 0) aShallowPropagate(a, subs);
+	const weak = a.weakSubs[sh >> A_SHIFT]!;
+	if (weak !== 0) aShallowPropagate(a, weak);
 }
 
 function aIsValidLink(a: ShadowArena, checkLink: number, sub: number): boolean {
@@ -1302,26 +1415,14 @@ export class CosignalBridge {
 	/** Episode counter; bumped at quiescence when the overlay tables bulk-reset. */
 	epoch: Epoch = 0;
 
-	// ---- the K1 union graph + the touched word ----
-	/** K1 out-edge membership per dep node id (dedupe for recordEdge). */
-	private outSets: (Set<NodeId> | undefined)[] = [];
-	/** K1 out-edge adjacency (iteration order = record order). */
-	private outList: (NodeId[] | undefined)[] = [];
-	/** Reverse adjacency (mount-fixup dependency closures). */
-	private inList: (NodeId[] | undefined)[] = [];
-	/** The touched word per node: bits 0–30 = "a live write in this slot can
-	 * reach this node", bit 31 = taint (an untracked read of pending state —
-	 * conservatively poisons the fast paths). */
-	private touched: SlotSet[] = [0];
-	/** Per-walk visited generation column (walk termination without Sets). */
+	// ---- routing walk scratch (arena walks + collection dedup) ----
+	/** Per-NODE visited/collection generation column: one stamp per overlay
+	 * node id, shared by the routing walks (delivery collection dedup across
+	 * arenas, drain candidate dedup) — arena TRAVERSAL termination uses the
+	 * per-arena `walk` side column instead, because the same node's cone
+	 * differs per arena and must be walked in each. */
 	private lastWalk: WalkGen[] = [0];
 	private walkGen: WalkGen = 0;
-	/** Per-slot touched lists (node ids). "Dirt" = a slot's conservative
-	 * touched bits and lists; the KEEP-THE-DIRT discipline (referenced
-	 * wherever dirt could be cleared): dirt may only be cleared once it is
-	 * provably irrelevant to every live pin — some paused render may still
-	 * depend on the conservative coverage. */
-	private slotTouched: NodeId[][] = [];
 	/** Nodes by id (dense array twin of `nodes`). */
 	private nodesArr: (AnyNode | undefined)[] = [undefined];
 	// ---- the observed closure (transitive observation retains) ----
@@ -1332,14 +1433,13 @@ export class CosignalBridge {
 	// lifecycleShift is a Map-miss no-op for atoms without the option, and
 	// these shifts fire only at closure-membership EDGES (never per
 	// evaluation), so routing every closure atom through it costs nothing
-	// measurable and needs no second has-lifecycle registry here. Unlike the
-	// K1 edge log (add-only within an episode, bulk-reset at quiescence),
-	// obsDeps snapshots follow the CURRENT edge set — each fn re-run of an
-	// observed computed re-points its retains (dep flips move them; the
-	// kernel's microtask flush coalesces same-tick flaps) — and the observation index
-	// deliberately survives quiescence: the closure is a property of live
-	// watchers, not of the episode, so an observed atom sees no
-	// unobserve/reobserve flap across the K1 bulk-reset.
+	// measurable and needs no second has-lifecycle registry here. obsDeps
+	// snapshots follow the CURRENT edge set — each fn re-run of an observed
+	// computed (overlay newest runs AND arena world refolds — §4.7/M6 carry
+	// the capture into the arena walks) re-points its retains (dep flips
+	// move them; the kernel's microtask flush coalesces same-tick flaps) —
+	// and the observation index deliberately survives quiescence: the
+	// closure is a property of live watchers, not of the episode.
 	/** Observed-consumer refcount per node id: +1 per live watcher on the
 	 * node, +1 per observed computed currently holding it in obsDeps. */
 	private obsRefs: number[] = [0];
@@ -1353,17 +1453,6 @@ export class CosignalBridge {
 	/** The watcher liveness seam (one closure per bridge; Watcher._obs). */
 	private watcherObs = (node: NodeId, delta: 1 | -1): void => this.obsShift(node, delta);
 	private watchersByNode: (Watcher[] | undefined)[] = [];
-	/** Per-node index of NEWEST-policy subscriptions (delivery-walk collection).
-	 * Committed-policy subscriptions have no single index key — their re-check
-	 * is a per-root value-gated full scan (v1 = production semantics), so the
-	 * collection structures are honestly: this index + the `subs` store
-	 * scanned per root (plan review M4's restatement). */
-	private subsByNode: (Subscription[] | undefined)[] = [];
-	/** Per-node count of committed-subscription dep snapshots holding the
-	 * node: K1 sweep reachability seeds and quiescence refresh targets — the
-	 * snapshot re-check evaluates through the memo ladder, whose touched-word
-	 * fast path relies on marks reaching these nodes. */
-	private subDepRefs: number[] = [0];
 	/** Live counts per policy (fast bails on the write/quiet paths). */
 	private committedSubCount = 0;
 	private newestSubCount = 0;
@@ -1372,8 +1461,6 @@ export class CosignalBridge {
 	 * the dep snapshot. Replaces the adapter's effectCapture + readObserver
 	 * seam + the world provider's committed arm (plan §2.2.2). */
 	private captureFrame: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined = undefined;
-	/** Per-write newest-subscription queue (flushed after the delivery walk returns). */
-	private effectQueue: Subscription[] = [];
 	/** Atoms with a non-empty tape (compaction candidates). */
 	private dirtyAtoms = new Set<AtomNode>();
 	/** The one open (non-ended) pass per root — React renders one tree per
@@ -1441,16 +1528,35 @@ export class CosignalBridge {
 	private eventCapacity: number | undefined = undefined;
 
 	/**
-	 * Referee surface — not consulted by engine logic. The K1 union table as
-	 * dep → dependents, materialized from the adjacency columns; read by:
-	 * graphviz, twin tests, soak metrics.
+	 * Referee surface — not consulted by engine logic. The recorded
+	 * dependency edges as dep → dependents (overlay node ids), materialized
+	 * as the union of every live arena's links (strong AND weak-flagged —
+	 * the current structure the routing walks consult); read by: graphviz,
+	 * twin tests, soak metrics. (Replaced the K1 episode-edge snapshot at
+	 * S-B; arena links persist across quiescence with their arenas.)
 	 */
-	get episodeEdges(): Map<NodeId, Set<NodeId>> {
+	get dependencyEdges(): Map<NodeId, Set<NodeId>> {
 		const out = new Map<NodeId, Set<NodeId>>();
-		for (let id = 0; id < this.outList.length; id++) {
-			const l = this.outList[id];
-			if (l !== undefined && l.length > 0) out.set(id, new Set(l));
-		}
+		this.eachArena((a) => {
+			const W = a.W;
+			for (let nid = 0; nid < a.byNode.length; nid++) {
+				const sh = a.byNode[nid]!;
+				if (sh === 0) continue;
+				for (let list = 0; list < 2; list++) {
+					let l = list === 0 ? W[sh + AF.SUBS]! : a.weakSubs[sh >> A_SHIFT]!;
+					while (l !== 0) {
+						const sub = W[l + AF.L_SUB]!;
+						let s = out.get(nid);
+						if (s === undefined) {
+							s = new Set();
+							out.set(nid, s);
+						}
+						s.add(W[sub + AF.NODE]!);
+						l = W[l + AF.L_NEXT_SUB]!;
+					}
+				}
+			}
+		});
 		return out;
 	}
 
@@ -1511,10 +1617,8 @@ export class CosignalBridge {
 				tenant: undefined,
 				claimSeq: 0,
 				writeClock: 0,
-				carriedMaxRetiredSeq: 0,
 				releasePending: false,
 			});
-			this.slotTouched.push([]);
 		}
 	}
 
@@ -1654,11 +1758,9 @@ export class CosignalBridge {
 		const id = node.id;
 		this.nodes.set(id, node);
 		this.nodesArr[id] = node;
-		this.touched[id] = 0;
 		this.lastWalk[id] = 0;
 		this.evalMark[id] = 0;
 		this.obsRefs[id] = 0;
-		this.subDepRefs[id] = 0;
 		this.nodeGen[id] = this.nodeGen[id] ?? 0; // dense: shadowFor loads it in-bounds on every probe
 	}
 
@@ -1713,7 +1815,7 @@ export class CosignalBridge {
 	root(id: RootId): RootState {
 		let r = this.roots.get(id);
 		if (r === undefined) {
-			r = { id, committedTokens: new Set(), commitGen: 0, committedBits: 0, committedDirtySlots: 0, memos: new Map() };
+			r = { id, committedTokens: new Set(), commitGen: 0, committedBits: 0, committedDirtySlots: 0 };
 			this.roots.set(id, r);
 		}
 		return r;
@@ -1840,22 +1942,6 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Fingerprint-only scan (memo revalidation without replaying ops). */
-	private scanFp(atom: AtomNode, world: World): Seq {
-		const tp = atom.tp;
-		const n = tp.n;
-		let fp = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
-		const seqs = tp.seqs;
-		const retired = tp.retired;
-		const slots = tp.slots;
-		for (let i = tp.start; i < n; i++) {
-			if (!this.visibleAt(atom, i, world, seqs, retired, slots)) continue;
-			const s = seqs[i]!;
-			if (s > fp) fp = s;
-		}
-		return fp;
-	}
-
 	private applyOpPacked(atom: AtomNode, kind: OpKind, payload: unknown, prev: Value): Value {
 		if (kind === OpKind.SET) return payload;
 		return this.inCallback(() => __hostRunFold(() => (payload as (p: Value) => Value)(prev)));
@@ -1882,62 +1968,31 @@ export class CosignalBridge {
 	 */
 	private newestMemos = new Map<NodeId, WorldMemo>();
 
-	/** Newest-eval taint accumulator, per computed frame. */
-	private newestFrameTaint = false;
-
-
-	// ---- memo frames: direct deps of the world evaluation in progress ----
+	// ---- memo frames: direct deps of the newest evaluation in progress ----
 	private frame: WorldMemo | undefined = undefined;
 	/** The node id whose evaluation frame is open (raw-handle reads record to it). */
 	private currentSink: NodeId = 0;
 
-	private memoTableOf(world: World): Map<NodeId, WorldMemo> | undefined {
-		if (world.kind === 'newest') return this.newestMemos;
-		if (world.kind === 'pass') return world.pass.memos;
-		// Never CREATE the root record here — the reference model materializes roots only
-		// at passStart/mountReactEffect, and the observable snapshot iterates
-		// them. An unmaterialized root folds plain (empty committed set).
-		if (world.kind === 'committed') return this.roots.get(world.root)?.memos;
-		return undefined; // mountFix worlds are one-shot
-	}
-
-	/** Quiet check for pass worlds: every included slot's write clock ≤
-	 * memo.seq means nothing this world can see was written since the memo. */
-	private passClocksQuiet(pass: Pass, memoSeq: Seq): boolean {
-		let bits = pass.includedBits;
-		while (bits !== 0) {
-			const s = SlotBits.MSB_INDEX - Math.clz32(bits & -bits);
-			if (this.slots[s]!.writeClock > memoSeq) return false;
-			bits &= bits - 1;
-		}
-		return true;
-	}
-
-	/** Quiet check for committed worlds: no committed-truth advance AND no
-	 * member-slot write since the memo was stamped. */
-	private committedClocksQuiet(root: RootState, memoSeq: Seq): boolean {
-		if (this.cas > memoSeq) return false;
-		let bits = root.committedBits;
-		while (bits !== 0) {
-			const s = SlotBits.MSB_INDEX - Math.clz32(bits & -bits);
-			if (this.slots[s]!.writeClock > memoSeq) return false;
-			bits &= bits - 1;
-		}
-		return true;
-	}
-
 	/**
-	 * Validate a memo through the ladder: cheap world-clock quiet checks
-	 * first, then per-dependency fingerprint rechecks. Returns true if the
-	 * memo may serve (re-stamped when the fingerprint step carried it).
+	 * Validate a newest memo: per-dependency fingerprint rechecks (atoms
+	 * ground at O(1) tape tails; computed deps revalidate recursively by
+	 * value identity). Returns true if the memo may serve (re-stamped when
+	 * the fingerprint step carried it). The ladder's pass/committed arms
+	 * died at S-B — those worlds serve from their arenas.
 	 */
-	private validateMemo(m: WorldMemo, world: World): boolean {
+	private validateMemo(m: WorldMemo): boolean {
 		if (m.epoch !== this.epoch) return false;
 		if (m.checkedOp === this.seq) return true; // nothing minted since last validation ⇒ nothing changed
 		if (m.validating) return false; // stale dep lists can cross-link; refuse instead of recursing
 		m.validating = true;
 		try {
-			if (!this.validateMemoInner(m, world)) return false;
+			for (let i = 0; i < m.atoms.length; i++) {
+				if (this.fpOf(m.atoms[i]!) !== m.fps[i]!) return false;
+			}
+			for (let i = 0; i < m.comps.length; i++) {
+				if (!Object.is(this.evaluate(m.comps[i]!, NEWEST), m.compValues[i])) return false;
+			}
+			m.seq = this.seq; // re-stamp
 		} finally {
 			m.validating = false;
 		}
@@ -1945,159 +2000,114 @@ export class CosignalBridge {
 		return true;
 	}
 
-	private validateMemoInner(m: WorldMemo, world: World): boolean {
-		let quiet = false;
-		if (world.kind === 'pass') {
-			quiet = this.passClocksQuiet(world.pass, m.seq);
-		} else if (world.kind === 'committed') {
-			// The root commit generation RE-KEYS committed memos: a gen
-			// mismatch means the memo belongs to a dead world — evict, never
-			// fingerprint-rescue. Why: a per-root commit flips visibility of
-			// receipts BELOW the visible maximum sequence, and fingerprints
-			// only track that maximum, so they cannot detect the flip.
-			const root = this.roots.get(world.root);
-			if (root === undefined || m.gen !== root.commitGen) return false;
-			quiet = this.committedClocksQuiet(root, m.seq);
-		}
-		if (!quiet) {
-			// Fingerprint recheck per recorded atom dep; computed deps
-			// revalidate recursively by value identity (grounds at atoms).
-			for (let i = 0; i < m.atoms.length; i++) {
-				if (this.fpOf(m.atoms[i]!, world) !== m.fps[i]!) return false;
-			}
-			for (let i = 0; i < m.comps.length; i++) {
-				if (!Object.is(this.evaluate(m.comps[i]!, world), m.compValues[i])) return false;
-			}
-			m.seq = this.seq; // re-stamp
-		}
-		return true;
-	}
-
-	/** fp(a, w) = max(newest w-visible entry seq, baseSeq, retirementStamp). */
-	private fpOf(atom: AtomNode, world: World): Seq {
-		if (world.kind === 'newest') {
-			// Every entry is newest-visible: O(1) off the packed tail.
-			const tp = atom.tp;
-			const last = tp.n === tp.start ? 0 : tp.seqs[tp.n - 1]!;
-			const floor = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
-			return last > floor ? last : floor;
-		}
-		return this.scanFp(atom, world);
+	/** fp(a, newest) = max(last entry seq, baseSeq, retirementStamp) —
+	 * every entry is newest-visible: O(1) off the packed tail. */
+	private fpOf(atom: AtomNode): Seq {
+		const tp = atom.tp;
+		const last = tp.n === tp.start ? 0 : tp.seqs[tp.n - 1]!;
+		const floor = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
+		return last > floor ? last : floor;
 	}
 
 	/**
 	 * Raw-handle reads: a registered atom read reached the operation table
-	 * while an overlay evaluation frame was open. Record the edge to the
-	 * open frame's sink (mirroring into K1 the topology the bridge readers
-	 * never see) and serve the world value.
+	 * while an overlay evaluation frame was open (newest/mountFix — arena
+	 * fn runs route through `aOnly` inside atomValue and link at `aServe`).
+	 * The open frame's sink gates the observation capture — recordEdge's
+	 * surviving half (§4.8 S-B): the pre-dedup capture rides the tracked
+	 * read path.
 	 * @internal (called from the concurrent table wrapper)
 	 */
 	routedRead(atom: AtomNode, world: World): Value {
-		const sink = this.currentSink;
-		if (sink !== 0) {
-			this.recordEdge(atom.id, sink);
-			this.aRecordDep(atom, false); // NF2 S-A: mirror the K1 edge into the evaluating arena
+		if (this.currentSink !== 0) {
+			const oc = this.obsCapture;
+			if (oc !== undefined) oc.push(atom.id);
 		}
 		return this.atomValue(atom, world);
 	}
 
-	/** Atom value in a world: kernel for newest, memoized fold otherwise. */
+	/** Atom value in a world: kernel for newest, the world's arena for
+	 * pass/committed, a plain fold for mountFix and unmaterialized roots. */
 	private atomValue(atom: AtomNode, world: World): Value {
-		if (this.aOnly !== undefined) return this.aServe(this.aOnly, atom); // NF2 S-A: arena-only routing override
+		if (this.aOnly !== undefined) return this.aServe(this.aOnly, atom); // arena-refold routing override
+		if (this.naiveFold !== undefined) return this.foldAtom(atom, world); // fold-truth reads (armed checker)
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
 			const v = this.kernelValueOf(atom.handle);
-			this.captureAtomDep(atom, this.fpOf(atom, world));
+			this.captureAtomDep(atom, this.fpOf(atom));
 			return v;
 		}
-		const table = this.memoTableOf(world);
-		if (table === undefined) {
-			const v = this.foldAtom(atom, world);
-			this.captureAtomDep(atom, this.lastFoldFp);
-			this.aNoteAtom(atom, world, v, true); // NF2 S-A: this fold IS the world's fold — reuse it
-			return v;
-		}
-		let m = table.get(atom.id);
-		if (m !== undefined && this.validateMemo(m, world)) {
-			this.captureAtomDep(atom, m.fps[0]!);
-			this.aNoteAtom(atom, world, undefined, false); // NF2 S-A: memo-served — a marked/cold shadow refolds, never copies (§4.2)
-			return m.value;
+		if (world.kind === 'pass' || world.kind === 'committed') {
+			const a = this.arenaOf(world);
+			if (a !== undefined) return this.aServe(a, atom);
+			// Unmaterialized root (no record): fold plain — mirrors the old
+			// memo-table rule (never CREATE the root record on a read).
 		}
 		const v = this.foldAtom(atom, world);
-		const fp = this.lastFoldFp;
-		if (m === undefined) {
-			m = {
-				value: v, seq: this.seq, gen: 0, epoch: this.epoch, checkedOp: this.seq, validating: false,
-				atoms: [atom], fps: [fp], comps: [], compValues: [],
-			};
-			table.set(atom.id, m);
-		} else {
-			m.value = v;
-			m.seq = this.seq;
-			m.epoch = this.epoch;
-			m.checkedOp = this.seq;
-			m.fps[0] = fp;
-		}
-		if (world.kind === 'committed') m.gen = this.roots.get(world.root)?.commitGen ?? 0;
-		this.captureAtomDep(atom, fp);
-		this.aNoteAtom(atom, world, v, true); // NF2 S-A: fresh fold — reuse it for the shadow column
+		this.captureAtomDep(atom, this.lastFoldFp);
 		return v;
 	}
 
+	/** Frame capture, atom half. Mode rides `currentSink`: an untracked
+	 * read cleared it around the dep's evaluation, so sink 0 ⇔ weak. */
 	private captureAtomDep(atom: AtomNode, fp: Seq): void {
 		const f = this.frame;
 		if (f !== undefined) {
 			f.atoms.push(atom);
 			f.fps.push(fp);
+			f.atomsStrong.push(this.currentSink !== 0);
 		}
 	}
 
-	private captureCompDep(node: ComputedNode, value: Value): void {
+	/** Frame capture, computed half; the caller passes the mode (the sink
+	 * observed at the dep evaluation's ENTRY — evaluate's own frame has
+	 * already re-pointed currentSink by its tail). */
+	private captureCompDep(node: ComputedNode, value: Value, strong: boolean): void {
 		const f = this.frame;
 		if (f !== undefined) {
 			f.comps.push(node);
 			f.compValues.push(value);
+			f.compsStrong.push(strong);
 		}
 	}
 
 	/**
-	 * Evaluation of a node in a world. Newest-world atoms read straight off
-	 * the kernel arena; newest-world computeds serve from the newest memo
-	 * table (recompute if stale, plain signals semantics). Other worlds
-	 * first try the fast path — when the node's touched word is 0, no
-	 * receipt from any live batch can reach it, so its newest cache is
-	 * committed-only state that every world agrees on: serve it with zero
-	 * fold once it validates. Then the memo ladder, then a fresh world
-	 * evaluation recording real K1 edges. Untracked reads fold in-world,
-	 * edge-free. Reads inside fold callbacks throw (updaters/reducers must
-	 * be pure); per-world cycles throw instead of recursing.
+	 * Evaluation of a node in a world. Pass/committed worlds are
+	 * ARENA-SERVED (NF2 S-B): values, invalidation, and routing structure
+	 * live in the world's arena, and `aServe` refolds through the arena's
+	 * own walks when marks or cold bases demand it — the cold in-arena fn
+	 * run is what RECORDS the strong and weak links the routing coverage
+	 * argument stands on (fable N-4; the cold-pass bench gate priced it).
+	 * An unmaterialized root has no arena and folds plain. Newest-world
+	 * atoms read straight off the kernel arena; newest-world computeds
+	 * serve from the newest memo table (recompute if stale, plain signals
+	 * semantics — the ladder's surviving arm until S-C). mountFix worlds
+	 * are one-shot fold-throughs. Reads inside fold callbacks throw
+	 * (updaters/reducers must be pure); per-world cycles throw instead of
+	 * recursing.
 	 */
 	evaluate(node: AnyNode, world: World): Value {
 		probes.worldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
-		if (this.aOnly !== undefined) return this.aServe(this.aOnly, node); // NF2 S-A: arena-only routing override
+		if (this.aOnly !== undefined) return this.aServe(this.aOnly, node); // arena-refold routing override
+		if (world.kind === 'pass' || world.kind === 'committed') {
+			const a = this.arenaOf(world);
+			if (a !== undefined) return this.aServe(a, node);
+		}
 		if (node.kind === 'atom') return this.atomValue(node, world);
-		const table = this.memoTableOf(world);
-		// NF2 S-A (§4.4.8): the world-read fast path — "touched word 0 ⇒ serve
-		// the validated newest memo to any world" — is DELETED at this stage:
-		// world reads must run in-world so the fn-reader RECORDS the arena's
-		// strong and weak links (the §4.4.1/§4.4.2 coverage argument stands on
-		// those cold in-arena runs; structure recording may never be skipped —
-		// fable N-4's constraint). The cold-pass bench gate (§4.9.6, ≤1.4×
-		// the head-bridge anchor) prices exactly this deletion.
-		// World path: the memo ladder.
+		const table = world.kind === 'newest' ? this.newestMemos : undefined;
 		if (table !== undefined) {
 			const m = table.get(node.id);
-			if (m !== undefined && this.validateMemo(m, world)) {
-				// NF2 S-A read-site self-heal (§4.5.4 pull half; mirrored at
-				// `aServe` and the kernel's `boxedRead`): a background
-				// suspension memoized the SENTINEL AS A VALUE, whose atom
-				// fingerprints never move at settlement — probe the thenable's
-				// status exactly as `boxedRead` does and re-run when settled,
-				// so a read after `await` is deterministic even before the
-				// settle listener's microtask runs (RCC-SU5).
+			if (m !== undefined && this.validateMemo(m)) {
+				// Read-site self-heal (§4.5.4 pull half; mirrored at `aServe`
+				// and the kernel's `boxedRead`): a background suspension
+				// memoized the SENTINEL AS A VALUE, whose atom fingerprints
+				// never move at settlement — probe the thenable's status
+				// exactly as `boxedRead` does and re-run when settled, so a
+				// read after `await` is deterministic even before the settle
+				// listener's microtask runs (RCC-SU5).
 				if (!(m.value instanceof SuspendedRead) || !this.sentinelSettled(m.value)) {
-					this.captureCompDep(node, m.value);
+					this.captureCompDep(node, m.value, this.currentSink !== 0);
 					return m.value;
 				}
 				table.delete(node.id);
@@ -2116,86 +2126,37 @@ export class CosignalBridge {
 		this.setWorld(world);
 		const savedFrame = this.frame;
 		const savedSink = this.currentSink;
-		const savedTaint = this.newestFrameTaint;
 		const savedObsCapture = this.obsCapture;
-		// Observed nodes capture the strong deps of this run (recordEdge
-		// pushes); everyone else pays this one check.
+		// Observed nodes capture the strong deps of this run (the readers
+		// push); everyone else pays this one check.
 		this.obsCapture = this.obsRefs[node.id]! > 0 ? [] : undefined;
 		this.currentSink = node.id;
-		if (world.kind === 'newest') this.newestFrameTaint = false;
 		let myFrame: WorldMemo | undefined;
 		if (table !== undefined) {
 			myFrame = {
-				value: undefined, seq: this.seq, gen: 0, epoch: this.epoch, checkedOp: this.seq, validating: false,
-				atoms: [], fps: [], comps: [], compValues: [],
+				value: undefined, seq: this.seq, epoch: this.epoch, checkedOp: this.seq, validating: false,
+				atoms: [], fps: [], atomsStrong: [], comps: [], compValues: [], compsStrong: [],
 			};
 		}
 		this.frame = myFrame;
-		// NF2 S-A: open the arena frame — the fn-reader records strong/weak
-		// links into the active world's arena IN ADDITION to K1 (§4.8 S-A),
-		// and the epilogue writes the shadow value column (§4.5.3).
-		const savedAFrameArena = this.aFrameArena;
-		const savedAFrameShadow = this.aFrameShadow;
-		const savedAFrameCycle = this.aFrameCycle;
-		let aArena: ShadowArena | undefined;
-		let aShadow = 0;
-		if (world.kind === 'pass' || world.kind === 'committed') {
-			aArena = this.arenaOf(world);
-			if (aArena !== undefined) {
-				aShadow = this.shadowFor(aArena, node.id, AFlag.K_COMPUTED);
-				aArena.W[aShadow + AF.DEPS_TAIL] = 0; // re-track from scratch (kernel discipline)
-				aArena.W[aShadow + AF.FLAGS] = aArena.W[aShadow + AF.FLAGS]! | AFlag.MUTABLE;
-				this.aFrameArena = aArena;
-				this.aFrameShadow = aShadow;
-				this.aFrameCycle = ++aArena.cycle;
-			} else {
-				this.aFrameArena = undefined;
-			}
-		} else {
-			this.aFrameArena = undefined;
-		}
 		const tr = this.trace; // paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, world);
 		try {
 			const value = node.fn(this.trackedReader, this.untrackedReader);
-			if (aShadow !== 0) this.aNoteOutcome(aArena!, aShadow, value);
-			if (world.kind === 'newest') {
-				// Taint epilogue: derive bit 31 fresh from this evaluation —
-				// a node stays tainted only while its own evaluation still
-				// touches pending state through untracked reads.
-				const word = this.touched[node.id]!;
-				if (this.newestFrameTaint) {
-					if ((word & SlotBits.TAINT) === 0) this.propagateTaint(node.id);
-				} else if ((word & SlotBits.TAINT) !== 0) {
-					this.touched[node.id] = word & SlotBits.SLOT_MASK; // own-epilogue clear
-				}
-			}
 			if (myFrame !== undefined) {
 				myFrame.value = value;
 				myFrame.seq = this.seq;
-				if (world.kind === 'committed') myFrame.gen = this.roots.get(world.root)?.commitGen ?? 0;
 				table!.set(node.id, myFrame);
 			}
 			// The frame captured MY deps; my caller captures me as a computed dep.
 			this.frame = savedFrame;
-			this.captureCompDep(node, value);
+			this.captureCompDep(node, value, savedSink !== 0);
 			return value;
-		} catch (err) {
-			// NF2 S-A: exceptional outcomes cache into the shadow (per-shadow
-			// has-box / box-suspended bits, §4.5.3) — a render-path suspension
-			// rethrows here while the arena still records the sentinel.
-			if (aShadow !== 0) this.aNoteThrow(aArena!, aShadow, err);
-			throw err;
 		} finally {
-			if (aShadow !== 0) aPurgeDeps(aArena!, aShadow); // drop links this evaluation did not re-track
-			this.aFrameArena = savedAFrameArena;
-			this.aFrameShadow = savedAFrameShadow;
-			this.aFrameCycle = savedAFrameCycle;
 			const obsCaptured = this.obsCapture;
 			this.obsCapture = savedObsCapture;
 			this.frame = savedFrame;
 			this.currentSink = savedSink;
-			this.newestFrameTaint = savedTaint;
 			this.setWorld(savedWorld);
 			this.evalDepth--;
 			marks[node.id] = 0;
@@ -2219,47 +2180,36 @@ export class CosignalBridge {
 		return t.status !== undefined && t.status !== 'pending';
 	}
 
-	/** The persistent tracked reader: edges to the open sink; world from the frame. */
+	/** The persistent tracked reader (newest/mountFix/plain-fold frames —
+	 * arena fn runs use aTrackedReader): the pre-dedup observation capture
+	 * rides the tracked read path (recordEdge's surviving half, §4.8 S-B),
+	 * then the dep evaluates in the frame's world. */
 	private trackedReader: Reader = (dep) => {
-		const sink = this.currentSink;
-		this.recordEdge(dep.id, sink);
-		this.aRecordDep(dep, false); // NF2 S-A: strong arena link beside K1 (§4.8 S-A)
-		if ((this.touched[dep.id]! & SlotBits.TAINT) !== 0) this.newestFrameTaint = true; // taint flows through recorded deps
+		const oc = this.obsCapture;
+		if (oc !== undefined) oc.push(dep.id);
 		return this.evaluate(dep, this.activeWorld!);
 	};
 
 	/**
-	 * The persistent untracked reader: EDGE-free, not INPUT-free — the dep
-	 * still enters the open memo frame's fingerprint set (validation must
-	 * observe untracked movement, or committed folds would serve stale
-	 * values that the reference model computes fresh). No strong edge is
-	 * recorded (currentSink drops), so no notification will ever fire
-	 * through it; the WEAK edge feeds durable-drain candidate collection
-	 * only.
+	 * The persistent untracked reader: CAPTURE-free, not INPUT-free — the
+	 * dep still enters the open memo frame's fingerprint set (validation
+	 * must observe untracked movement), but it never joins the observation
+	 * capture (OL1 is strong-only, §4.4.1) and — in arena worlds, where
+	 * aUntrackedReader is the analog — records only a weak link, so no
+	 * notification ever fires through it.
 	 */
 	private untrackedReader: Reader = (dep) => {
 		const sink = this.currentSink;
-		this.recordWeakEdge(dep.id, sink);
-		this.aRecordDep(dep, true); // NF2 S-A: weak arena link (§4.4.1 — unconditional, exactly as HEAD's weak table)
-		const world = this.activeWorld!;
-		// Taint input: an untracked read hit pending state (newest evals).
-		if (world.kind === 'newest') {
-			if (dep.kind === 'atom') {
-				if (dep.tp.n > dep.tp.start || (this.touched[dep.id]! & SlotBits.TAINT) !== 0) this.newestFrameTaint = true;
-			} else if (this.touched[dep.id]! !== 0) {
-				this.newestFrameTaint = true;
-			}
-		}
 		this.currentSink = 0;
 		try {
-			return this.evaluate(dep, world);
+			return this.evaluate(dep, this.activeWorld!);
 		} finally {
 			this.currentSink = sink;
 		}
 	};
 
-	// ---- NF2 S-A: arena state + evaluation (dual bookkeeping) ----
-	// K1 stays the routing authority; see the module-level header above AF.
+	// ---- NF2: arena state + evaluation (the pass/committed authority) ----
+	// See the module-level S-B header above AF.
 
 	/** Committed arenas, by root (consumer-populated life — §4.1/§4.5.8). */
 	private arenaByRoot = new Map<RootId, ShadowArena>();
@@ -2279,9 +2229,12 @@ export class CosignalBridge {
 	private aFrameCycle = 0;
 	/** Arena-only routing override: raw-handle reads serve from this arena. */
 	private aOnly: ShadowArena | undefined = undefined;
+	/** Fold-truth override (the armed checker's naive reads): while set,
+	 * atom reads fold plain in this world — no arenas, no memos, no caches. */
+	private naiveFold: World | undefined = undefined;
 	/** Global count of box-suspended shadows (tap fast-out). */
 	private suspendedCount = 0;
-	/** S-A divergence check flag (test-enabled; STOP on any mismatch). */
+	/** The armed divergence-check flag (test-enabled; STOP on any mismatch). */
 	private arenaCheckOn = false;
 	private inArenaCheck = false;
 
@@ -2308,7 +2261,6 @@ export class CosignalBridge {
 	 * dropped (payload release), dirty + suspended lists discarded (§4.5.8 —
 	 * safe by the evict-don't-serve argument; nobody observes those cones). */
 	private releaseArena(a: ShadowArena): void {
-		if (this.aNotedArena === a) this.aNotedNid = -1; // probe-fusion cache: dead tenancy
 		for (let i = 0; i < a.suspended.length; i++) this.suspendedCount--;
 		a.alive = false;
 		a.claimGen++;
@@ -2322,6 +2274,9 @@ export class CosignalBridge {
 		a.byNode.fill(0);
 		a.vals.fill(undefined);
 		a.suspIdx.fill(0);
+		a.walk.fill(0);
+		a.weakSubs.fill(0);
+		a.weakSubsTail.fill(0);
 		a.dirty.length = 0;
 		a.suspended.length = 0;
 		// Scrub the written record prefix so pooled buffers re-claim ALL-ZERO
@@ -2372,14 +2327,21 @@ export class CosignalBridge {
 		const gen = this.nodeGen[nid]!; // dense (indexNode) — no OOB/?? probe on the hot path
 		if (sh !== 0) {
 			if (a.W[sh + AF.GEN] === gen) return sh;
-			// Dead tenancy: evict, purge links (both directions), refold under
-			// the new tenant — never serve the dead node's value or fn.
+			// Dead tenancy: evict, purge links (both directions, both subs
+			// lists), refold under the new tenant — never serve the dead
+			// node's value or fn.
 			aDisposeAllDepsInReverse(a, sh);
 			let sl = a.W[sh + AF.SUBS]!;
 			while (sl !== 0) {
 				const next = a.W[sl + AF.L_NEXT_SUB]!;
 				aUnlink(a, sl);
 				sl = next;
+			}
+			let wl = a.weakSubs[sh >> A_SHIFT]!;
+			while (wl !== 0) {
+				const next = a.W[wl + AF.L_NEXT_SUB]!;
+				aUnlink(a, wl);
+				wl = next;
 			}
 			if ((a.W[sh + AF.FLAGS]! & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
 			a.W[sh + AF.FLAGS] = kindFlags;
@@ -2392,37 +2354,22 @@ export class CosignalBridge {
 		return sh;
 	}
 
-	/** Arena dep recording (fn-reader hook): first-occurrence mode reset +
-	 * strong-dominates ride inside aLink (§4.4.1). */
+	/** Arena dep recording (arena fn-reader hook): first-occurrence mode
+	 * reset + strong-dominates ride inside aLink (§4.4.1). The pre-dedup
+	 * observation capture rides the STRONG arm only (§4.7/M6 — the
+	 * discipline carried into the walks; OL1 is strong-only). */
 	private aRecordDep(dep: AnyNode, weak: boolean): void {
 		const a = this.aFrameArena;
 		if (a === undefined) return;
-		if (dep.kind === 'atom') {
-			// shadowFor probe fusion (S-A cold-pass shave): both fn-readers
-			// call aRecordDep(atom) immediately before the evaluate→atomValue
-			// →aNoteAtom epilogue for the SAME atom, and nothing between the
-			// two calls can re-tenant the shadow (nodeGen moves only via the
-			// test seam, which clears this cache; releaseArena clears it too,
-			// so a pool-reused arena identity can never revalidate a stale
-			// id). Stash the just-validated shadow so aNoteAtom skips its
-			// probe (GEN tenancy validation + dense lookups) on every read.
-			const sh = this.shadowFor(a, dep.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
-			this.aNotedArena = a;
-			this.aNotedNid = dep.id;
-			this.aNotedSh = sh;
-			aLink(a, sh, this.aFrameShadow, this.aFrameCycle, weak);
-			return;
+		if (!weak) {
+			const oc = this.obsCapture;
+			if (oc !== undefined) oc.push(dep.id);
 		}
-		const sh = this.shadowFor(a, dep.id, AFlag.K_COMPUTED);
+		const sh = dep.kind === 'atom'
+			? this.shadowFor(a, dep.id, AFlag.K_SIGNAL | AFlag.MUTABLE)
+			: this.shadowFor(a, dep.id, AFlag.K_COMPUTED);
 		aLink(a, sh, this.aFrameShadow, this.aFrameCycle, weak);
 	}
-
-	/** shadowFor probe-fusion cache: the shadow aRecordDep just validated for
-	 * the atom whose aNoteAtom epilogue is about to run (consume-once; see
-	 * aRecordDep for the safety argument and the clearing sites). */
-	private aNotedArena: ShadowArena | undefined = undefined;
-	private aNotedNid: NodeId = -1;
-	private aNotedSh = 0;
 
 	/** The arena atom-propagation gate is Object.is over FOLD OUTPUTS: the
 	 * atom's own `equals` already participated in the fold's stepwise
@@ -2434,37 +2381,6 @@ export class CosignalBridge {
 	 * COMPUTED record, which lands with kernel computeds at S-C. */
 	private aEqAtom(_atom: AtomNode, prev: Value, next: Value): boolean {
 		return Object.is(prev, next);
-	}
-
-	/** Fn-reader epilogue, atom half: refresh the evaluating arena's shadow of
-	 * a read atom. `fresh` carries the value when the overlay path just ran
-	 * the fold itself (reused — it IS this world's fold); a memo-SERVED value
-	 * is never copied in — a marked/cold shadow refolds instead (§4.2's no-fp
-	 * consumption rule; copying a validated memo would import the fp gate the
-	 * arena exists to delete). */
-	private aNoteAtom(atom: AtomNode, world: World, fresh: Value, haveFresh: boolean): void {
-		const a = this.aFrameArena;
-		if (a === undefined) return;
-		let sh: number;
-		if (this.aNotedArena === a && this.aNotedNid === atom.id) {
-			sh = this.aNotedSh; // probe fusion: validated by aRecordDep just now
-			this.aNotedNid = -1; // consume once
-		} else {
-			sh = this.shadowFor(a, atom.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
-		}
-		const W = a.W;
-		const flags = W[sh + AF.FLAGS]!;
-		if ((flags & AFlag.VALID) !== 0 && (flags & AFlag.DIRTY) === 0) return; // current
-		const next = haveFresh ? fresh : this.foldAtom(atom, world);
-		const vi = sh >> A_SHIFT;
-		const changed = (flags & AFlag.VALID) === 0 || !this.aEqAtom(atom, a.vals[vi], next);
-		a.vals[vi] = next; // ALWAYS the fold's output (see aUpdateShadow); equality gates propagation only
-		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID;
-		a.readClock++; // consumption: re-arm the fanout dedup clock
-		if (changed) {
-			const subs = W[sh + AF.SUBS]!;
-			if (subs !== 0) aPropagate(a, subs);
-		}
 	}
 
 	/** Suspended-list append on the box-suspended bit's 0→1; the per-shadow
@@ -2492,41 +2408,10 @@ export class CosignalBridge {
 		this.suspendedCount--;
 	}
 
-	/** Fn-reader epilogue, computed half: write the evaluating world's shadow
-	 * value column with the evaluation's outcome — value, sentinel (the shim
-	 * wrapper folds background suspensions to the sentinel VALUE), or thrown
-	 * payload (exceptional-outcome bits, §4.5.3). */
-	private aNoteOutcome(a: ShadowArena, sh: number, value: Value): void {
-		const W = a.W;
-		const flags = W[sh + AF.FLAGS]!;
-		const vi = sh >> A_SHIFT;
-		a.readClock++;
-		if (value instanceof SuspendedRead) {
-			const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && a.vals[vi] === value;
-			a.vals[vi] = value;
-			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
-			this.aSuspend(a, sh);
-			// box→same-box by sentinel identity is UNCHANGED (battery 16d's
-			// still-pending rule, arena twin); any other transition propagates.
-			if (!same) {
-				const subs = W[sh + AF.SUBS]!;
-				if (subs !== 0) aShallowPropagate(a, subs);
-			}
-			return;
-		}
-		const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
-		// Overlay computed cutoff is Object.is (their memo-compare semantics
-		// today — §4.5.3); equality never bridges an exceptional boundary.
-		const changed = !(prevValid && Object.is(a.vals[vi], value));
-		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
-		if (changed) a.vals[vi] = value;
-		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED)) | AFlag.VALID;
-		if (changed) {
-			const subs = W[sh + AF.SUBS]!;
-			if (subs !== 0) aShallowPropagate(a, subs);
-		}
-	}
-
+	/** Exceptional outcome of an arena fn run (aUpdateComputed's catch):
+	 * cache the thrown payload into the shadow with the THROWN bit — later
+	 * serves rethrow it boxedRead-style (a thrown suspension re-runs once
+	 * its thenable settles: the serve-site probe marks it DIRTY). */
 	private aNoteThrow(a: ShadowArena, sh: number, err: unknown): void {
 		const W = a.W;
 		const flags = W[sh + AF.FLAGS]!;
@@ -2534,20 +2419,22 @@ export class CosignalBridge {
 		a.readClock++;
 		if (err instanceof SuspendedRead) {
 			a.vals[vi] = err;
-			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
+			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN;
 			this.aSuspend(a, sh);
 			return;
 		}
 		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
 		a.vals[vi] = err;
-		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING | AFlag.BOX_SUSPENDED)) | AFlag.VALID | AFlag.HAS_BOX;
+		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING | AFlag.BOX_SUSPENDED)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_THROWN;
 	}
 
-	// ---- NF2 S-A: arena-authoritative serving (checks, settlement refolds) ----
+	// ---- NF2: arena serving (world reads, checks, settlement refolds) ----
 
-	/** Serve a node from an arena, refolding through the arena's OWN walks —
-	 * never the memo ladder. Runs under the arena-only routing override so
-	 * raw-handle reads inside fns resolve to arena values too. */
+	/** Serve a node from an arena — THE pass/committed read path since S-B —
+	 * refolding through the arena's own walks when marks or cold bases
+	 * demand it. Refolds run under the arena-only routing override so
+	 * raw-handle reads inside fns resolve to arena values too; frame-link
+	 * sites feed the observation capture (raw reads have no reader hook). */
 	private aServe(a: ShadowArena, node: AnyNode): Value {
 		if (node.kind === 'atom') {
 			const sh = this.shadowFor(a, node.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
@@ -2555,13 +2442,15 @@ export class CosignalBridge {
 			const flags = W[sh + AF.FLAGS]!;
 			if ((flags & AFlag.VALID) === 0 || (flags & AFlag.DIRTY) !== 0) {
 				// Spike wAtomRead: a changed refold upgrades PENDING dependents
-				// to DIRTY (shallow propagate) so their re-check refolds them.
-				if (this.aUpdateShadow(a, sh)) {
-					const subs = a.W[sh + AF.SUBS]!;
-					if (subs !== 0) aShallowPropagate(a, subs);
-				}
+				// to DIRTY (shallow propagate, both subs lists) so their
+				// re-check refolds them.
+				if (this.aUpdateShadow(a, sh)) aShallowBoth(a, sh);
 			}
-			if (this.aFrameArena === a) aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+			if (this.aFrameArena === a) {
+				aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+				const oc = this.obsCapture;
+				if (oc !== undefined) oc.push(node.id);
+			}
 			return a.vals[sh >> A_SHIFT];
 		}
 		const sh = this.shadowFor(a, node.id, AFlag.K_COMPUTED);
@@ -2592,23 +2481,24 @@ export class CosignalBridge {
 			|| (flags & AFlag.VALID) === 0
 			|| ((flags & AFlag.PENDING) !== 0 && this.aCheckDirty(a, a.W[sh + AF.DEPS]!, sh))
 		) {
-			if (this.aUpdateComputed(a, sh)) {
-				const subs = a.W[sh + AF.SUBS]!;
-				if (subs !== 0) aShallowPropagate(a, subs);
-			}
+			if (this.aUpdateComputed(a, sh)) aShallowBoth(a, sh);
 		} else if ((flags & AFlag.PENDING) !== 0) {
 			a.W[sh + AF.FLAGS] = flags & ~AFlag.PENDING;
 		}
-		if (this.aFrameArena === a) aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
-		const outFlags = a.W[sh + AF.FLAGS]!;
-		if ((outFlags & AFlag.HAS_BOX) !== 0 && (outFlags & AFlag.BOX_SUSPENDED) === 0) {
-			throw a.vals[sh >> A_SHIFT]; // cached thrown payload (exceptional-outcome bits)
+		if (this.aFrameArena === a) {
+			aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+			const oc = this.obsCapture;
+			if (oc !== undefined) oc.push(node.id);
 		}
-		// A box-suspended shadow serves its sentinel AS A VALUE at S-A: the
-		// overlay path (shim wrapper) folds background suspensions to the
-		// sentinel value too, so the dual-bookkeeping compare is by identity.
-		// The rethrow discipline (`boxedRead`-style) lands when arenas SERVE
-		// real reads (S-B/S-C).
+		const outFlags = a.W[sh + AF.FLAGS]!;
+		// The boxedRead-style rethrow discipline (arenas serve real reads at
+		// S-B): a THROWN payload — plain error, or a still-pending render-path
+		// suspension — rethrows from the cache; a RETURNED sentinel (the shim
+		// wrapper folds background suspensions to the sentinel VALUE) serves
+		// as a value, compared by identity (battery 16d's still-pending rule).
+		if ((outFlags & AFlag.HAS_BOX) !== 0 && ((outFlags & AFlag.BOX_SUSPENDED) === 0 || (outFlags & AFlag.BOX_THROWN) !== 0)) {
+			throw a.vals[sh >> A_SHIFT];
+		}
 		return a.vals[sh >> A_SHIFT];
 	}
 
@@ -2635,9 +2525,11 @@ export class CosignalBridge {
 		return !(prevValid && this.aEqAtom(atom, prev, next));
 	}
 
-	/** Arena-only computed refold: the fn runs with the ARENA readers and the
-	 * arena-only routing override — no K1 edges, no memo writes, no obs
-	 * capture. The evaluating world is set so raw-handle reads route. */
+	/** Arena computed refold: the fn runs with the ARENA readers and the
+	 * arena-only routing override — no memo writes. The evaluating world is
+	 * set so raw-handle reads route. OBSERVED nodes capture the strong deps
+	 * of this run and re-point their retains afterward (§4.7/M6: the
+	 * world-path retain re-point, carried into the arena walks at S-B). */
 	private aUpdateComputed(a: ShadowArena, sh: number): boolean {
 		const nid = a.W[sh + AF.NODE]!;
 		const node = this.nodesArr[nid] as ComputedNode;
@@ -2656,16 +2548,20 @@ export class CosignalBridge {
 		this.aFrameCycle = ++a.cycle;
 		this.aOnly = a;
 		this.currentSink = 0;
-		this.obsCapture = undefined;
+		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined;
 		this.frame = undefined;
 		this.setWorld(a.world);
 		this.evalDepth++;
+		const tr = this.trace; // paired eval hooks; end fires on throw too
+		if (tr !== undefined) tr.evalStart(node, a.world);
 		try {
 			return this.aFoldOutcome(a, sh, node.fn(this.aTrackedReader, this.aUntrackedReader));
 		} catch (err) {
 			this.aNoteThrow(a, sh, err);
 			throw err;
 		} finally {
+			if (tr !== undefined) tr.evalEnd();
+			const obsCaptured = this.obsCapture;
 			this.evalDepth--;
 			this.setWorld(savedWorld);
 			this.frame = savedMemoFrame;
@@ -2678,6 +2574,23 @@ export class CosignalBridge {
 			a.W[sh + AF.FLAGS] = a.W[sh + AF.FLAGS]! & ~AFlag.RECURSED_CHECK;
 			aPurgeDeps(a, sh);
 			a.readClock++;
+			if (obsCaptured !== undefined) this.aSyncObsAfterRefold(nid, obsCaptured);
+		}
+	}
+
+	/** Observed-closure sync after an arena refold, out of line (keeps
+	 * aUpdateComputed under the V8 inline budget; observed nodes only) —
+	 * after every restore, so discovery evaluations run on a clean frame
+	 * stack. A NESTED refold (inside an outer walk) has aOnly restored to
+	 * the OUTER arena; clear it around the sync so discovery's newest
+	 * evaluations route newest. */
+	private aSyncObsAfterRefold(nid: NodeId, captured: NodeId[]): void {
+		const so = this.aOnly;
+		this.aOnly = undefined;
+		try {
+			this.obsSyncDeps(nid, captured);
+		} finally {
+			this.aOnly = so;
 		}
 	}
 
@@ -2685,16 +2598,17 @@ export class CosignalBridge {
 	 * aUpdateComputed (B2 split — the frame save/restore wrapper stays under
 	 * V8's 460-bytecode inline budget): classify the fn's outcome —
 	 * suspension sentinel or plain value — into the shadow's value column
-	 * and outcome bits; returns the §4.2 value cutoff. Same ladder as
-	 * aNoteOutcome minus its DIRTY/PENDING clear and propagation: the caller
-	 * cleared those bits at entry, and its call sites own propagation. */
+	 * and outcome bits; returns the §4.2 value cutoff. The caller cleared
+	 * DIRTY/PENDING at entry, and its call sites own propagation. A RETURNED
+	 * sentinel clears the THROWN bit (it serves as a value; box→same-box by
+	 * sentinel identity is UNCHANGED — battery 16d's still-pending rule). */
 	private aFoldOutcome(a: ShadowArena, sh: number, value: Value): boolean {
 		const vi = sh >> A_SHIFT;
 		const flags = a.W[sh + AF.FLAGS]!;
 		if (value instanceof SuspendedRead) {
-			const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && a.vals[vi] === value;
+			const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && (flags & AFlag.BOX_THROWN) === 0 && a.vals[vi] === value;
 			a.vals[vi] = value;
-			a.W[sh + AF.FLAGS] = flags | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
+			a.W[sh + AF.FLAGS] = (flags & ~AFlag.BOX_THROWN) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
 			this.aSuspend(a, sh);
 			return !same;
 		}
@@ -2702,7 +2616,7 @@ export class CosignalBridge {
 		const changed = !(prevValid && Object.is(a.vals[vi], value));
 		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
 		if (changed) a.vals[vi] = value;
-		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED)) | AFlag.VALID;
+		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN)) | AFlag.VALID;
 		return changed;
 	}
 
@@ -2738,13 +2652,22 @@ export class CosignalBridge {
 	}
 
 	/** aUpdateShadow + sibling Pending->Dirty upgrade, shared by the descend
-	 * and unwind arms of aCheckDirtyLoop. `subs` is captured BEFORE the
-	 * refold runs (it can rebuild the list), as in the kernel's
-	 * updateAndShallow; a.W re-loads after (growth). */
+	 * and unwind arms of aCheckDirtyLoop. Heads are captured BEFORE the
+	 * refold runs (it can rebuild the lists), as in the kernel's
+	 * updateAndShallow; BOTH subs lists take the upgrade (§4.4.1). The
+	 * kernel's single-sub skip ("the only sub is the walker itself") is
+	 * UNSOUND under the segregated lists — a validation walk can arrive via
+	 * the OTHER list, leaving a lone strong sub PENDING with no refold due
+	 * (found by the fuzz corpus, seed 40: a weak-side validation refolded
+	 * the shared dep and the strong-side consumer stale-served) — so both
+	 * lists propagate unconditionally; the walker's own re-upgrade is a
+	 * flag-guarded no-op. */
 	private aUpdateAndShallow(a: ShadowArena, node: number): boolean {
 		const subs = a.W[node + AF.SUBS]!;
+		const weak = a.weakSubs[node >> A_SHIFT]!;
 		if (this.aUpdateShadow(a, node)) {
-			if (a.W[subs + AF.L_NEXT_SUB] !== 0) aShallowPropagate(a, subs);
+			if (subs !== 0) aShallowPropagate(a, subs);
+			if (weak !== 0) aShallowPropagate(a, weak);
 			return true;
 		}
 		return false;
@@ -2842,8 +2765,7 @@ export class CosignalBridge {
 				a.dirty.push(sh); // dirty-LIST append on the mark's 0→1 edge
 			}
 			W[sh + AF.MARK] = a.readClock;
-			const subs = W[sh + AF.SUBS]!;
-			if (subs !== 0) aPropagate(a, subs);
+			aPropagateBoth(a, sh); // strong AND weak (§4.4.1)
 		}
 	}
 
@@ -2892,7 +2814,7 @@ export class CosignalBridge {
 				// Drop-to-cold: evict the cached value, clear the mark; links and
 				// MUTABLE stay so routing coverage survives (§4.1's point).
 				if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
-				W[sh + AF.FLAGS] = flags & ~(AFlag.DIRTY | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED);
+				W[sh + AF.FLAGS] = flags & ~(AFlag.DIRTY | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN);
 				a.vals[sh >> A_SHIFT] = undefined;
 			}
 		}
@@ -2998,22 +2920,13 @@ export class CosignalBridge {
 								a.dirty.push(sh);
 							}
 							W[sh + AF.MARK] = a.readClock;
-							const subs = W[sh + AF.SUBS]!;
-							if (subs !== 0) aPropagate(a, subs); // strong AND weak; pin-exempt for pass arenas (§4.3)
+							aPropagateBoth(a, sh); // strong AND weak; pin-exempt for pass arenas (§4.3)
 							matched = true;
-							// Dual bookkeeping: the memo layer is still the serving
-							// authority, and a background suspension memoizes the
-							// SENTINEL AS A VALUE whose fingerprints never move at
-							// settlement — evict it (evict-don't-serve, §4.2) so the
-							// boundary's re-checks re-run the fn and observe the
-							// settled outcome.
-							const nid = W[sh + AF.NODE]!;
-							if (a.kind === 'committed') {
-								this.roots.get(a.root)?.memos.delete(nid);
-								touchedRoots.add(a.root);
-							} else if (a.world.kind === 'pass') {
-								a.world.pass.memos.delete(nid); // open-pass roots: marks stay for the frame's close
-							}
+							// The marks above ARE the invalidation (arenas serve
+							// world reads since S-B); committed roots also join the
+							// cone drain below. Open-pass arenas keep their marks
+							// for the frame's close.
+							if (a.kind === 'committed') touchedRoots.add(a.root);
 						}
 						if (matched) a.readClock++;
 					});
@@ -3024,9 +2937,10 @@ export class CosignalBridge {
 						if (m.value === sr) this.newestMemos.delete(nid);
 					}
 				}
-				// Cone drain, K1-authority form: value-gated committed re-checks
-				// of the touched roots' live watchers (the durable-drain compare),
-				// deferred for roots with an open render frame (their close flushes).
+				// Cone drain: value-gated committed re-checks of the touched
+				// roots' live watchers (the durable-drain compare; the marks
+				// fanned above drive the arena refolds), deferred for roots
+				// with an open render frame (their close flushes).
 				for (const rootId of touchedRoots) {
 					if (this.openPassByRoot.has(rootId)) continue;
 					for (const w of this.watchers.values()) {
@@ -3127,7 +3041,10 @@ export class CosignalBridge {
 				if (W[cur + AF.L_SUB] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
 				if (W[cur + AF.L_PREV_DEP] !== prev) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
 				const dep = W[cur + AF.L_DEP]!;
-				let s = W[dep + AF.SUBS]!;
+				// Weak symmetry: the link must sit on its MODE's subs list —
+				// a weak-flagged link on the strong list (or vice versa) makes
+				// this search miss and throw (the segregated-list invariant).
+				let s = (W[cur + AF.L_MODE]! & 1) !== 0 ? a.weakSubs[dep >> A_SHIFT]! : W[dep + AF.SUBS]!;
 				let found = false;
 				let ssteps = 0;
 				while (s !== 0) {
@@ -3154,7 +3071,6 @@ export class CosignalBridge {
 	/** Test seam: force an id-tenancy generation bump (§4.5.3 GEN pin). @internal */
 	__bumpNodeGenForTest(id: NodeId): void {
 		this.nodeGen[id] = (this.nodeGen[id] ?? 0) + 1;
-		this.aNotedNid = -1; // probe-fusion cache: the stamp it validated moved
 	}
 
 	/** Arena stats (tests/bench). @internal */
@@ -3215,11 +3131,17 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * THE S-A DIVERGENCE CHECK: for every live arena, serve every shadow FROM
-	 * THE ARENA (its own walks — the arena side runs FIRST so a stale shadow
-	 * cannot be refreshed by the overlay epilogue) and compare against the
-	 * K1/memo-served value for the same world. ANY divergence throws — a
-	 * lockstep test failure, the stage's STOP condition. @internal
+	 * THE ARMED DIVERGENCE CHECK, S-B form (the routing/serving authority
+	 * flipped, so the comparison target changed — §4.8): for every live
+	 * arena, serve every shadow FROM THE ARENA (its own walks — the arena
+	 * side runs FIRST, pinning the discipline that a stale shadow must not
+	 * be refreshed by the reference side) and compare against FOLD-TRUTH — a
+	 * naive, cache-free re-derivation of the same node in the same world
+	 * (atoms fold their tapes; computed fns re-run over naive readers;
+	 * memoized per check pass, since fold-truth depends only on tape/
+	 * membership state the serves never mutate). ANY divergence throws — a
+	 * lockstep test failure, the stage's STOP condition. The newest world is
+	 * pinned separately (K0 parity in the twin's verify). @internal
 	 */
 	__checkArenas(): void {
 		if (this.inArenaCheck || this.evalDepth > 0 || this.inFoldCallback) return;
@@ -3228,6 +3150,7 @@ export class CosignalBridge {
 		try {
 			this.eachArena((a) => {
 				this.aValidate(a);
+				const naiveMemo = new Map<NodeId, { threw: boolean; v: Value }>();
 				for (let nid = 0; nid < a.byNode.length; nid++) {
 					const sh = a.byNode[nid] ?? 0;
 					if (sh === 0) continue;
@@ -3246,26 +3169,31 @@ export class CosignalBridge {
 					let mThrew: unknown;
 					let mDidThrow = false;
 					try {
-						mVal = this.evaluate(node, a.world);
+						mVal = this.naiveValue(node, a.world, naiveMemo);
 					} catch (err) {
 						mDidThrow = true;
 						mThrew = err;
 					}
 					if (aDidThrow !== mDidThrow) {
 						throw new BridgeInvariantViolation(
-							`S-A divergence: ${node.name} in ${a.kind} world of ${a.root}: arena ${aDidThrow ? `threw ${String(aThrew)}` : `served ${String(aVal!)}`} but memo path ${mDidThrow ? `threw ${String(mThrew)}` : `served ${String(mVal!)}`}`,
+							`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena ${aDidThrow ? `threw ${String(aThrew)}` : `served ${String(aVal!)}`} but fold-truth ${mDidThrow ? `threw ${String(mThrew)}` : `served ${String(mVal!)}`}`,
 						);
 					}
 					if (aDidThrow) {
 						if (String(aThrew) !== String(mThrew)) {
-							throw new BridgeInvariantViolation(`S-A divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but memo path threw ${String(mThrew)}`);
+							throw new BridgeInvariantViolation(`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but fold-truth threw ${String(mThrew)}`);
 						}
 					} else if (!Object.is(aVal!, mVal!)) {
 						throw new BridgeInvariantViolation(
-							`S-A divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ memo-served ${String(mVal!)}`,
+							`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
 						);
 					}
 				}
+				// Deliberately NO list compaction here: consumed entries stay
+				// listed until the next boundary's decay — the drain's seed
+				// coverage stands on that persistence (compacting at the armed
+				// epilogue was tried and cost a drain its candidates: the
+				// armed corpus caught the missed correction, seed 173).
 			});
 		} finally {
 			this.opDepth--;
@@ -3273,47 +3201,57 @@ export class CosignalBridge {
 		}
 	}
 
-	// ---- the union table + walks ----
+	/** Fold-truth (the armed checker's reference side): a naive, cache-free
+	 * evaluation — atoms replay their tapes; computed fns re-run with naive
+	 * readers (tracked ≡ untracked: structure is not being recorded). Runs
+	 * under `naiveFold` so raw-handle reads inside fns fold plain too, and
+	 * with `aOnly` cleared so nothing routes back into the arena under
+	 * check. Thrown outcomes memoize and rethrow (identity-stable). */
+	private naiveStack = new Set<NodeId>();
 
-	private recordEdge(dep: NodeId, dependent: NodeId): void {
-		// Observed-closure capture, BEFORE the episode dedup below: K1 edges
-		// record once per episode, but an observed re-evaluation must capture
-		// its full current dep list (that list is what moves the retains).
-		const oc = this.obsCapture;
-		if (oc !== undefined) oc.push(dep);
-		let s = this.outSets[dep];
-		if (s !== undefined && s.has(dependent)) return;
-		if (s === undefined) {
-			s = new Set();
-			this.outSets[dep] = s;
-			this.outList[dep] = [];
+	private naiveValue(node: AnyNode, world: World, memo: Map<NodeId, { threw: boolean; v: Value }>): Value {
+		if (node.kind === 'atom') return this.foldAtom(node, world);
+		const hit = memo.get(node.id);
+		if (hit !== undefined) {
+			if (hit.threw) throw hit.v;
+			return hit.v;
 		}
-		s.add(dependent);
-		this.outList[dep]!.push(dependent);
-		let ins = this.inList[dependent];
-		if (ins === undefined) {
-			ins = [];
-			this.inList[dependent] = ins;
+		if (this.naiveStack.has(node.id)) {
+			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
 		}
-		ins.push(dep);
-		if (++this.edgeCount - this.lastSweepEdges >= 256) this.sweepK1();
-		// Edge-add propagation: the new edge inherits the source's bits...
-		const src = this.touched[dep]!;
-		const newBits = src & SlotBits.SLOT_MASK & ~this.touched[dependent]!;
-		if (newBits !== 0) this.propagateBits(dependent, newBits);
-		if ((src & SlotBits.TAINT) !== 0 && (this.touched[dependent]! & SlotBits.TAINT) === 0) this.propagateTaint(dependent);
-		// Retroactive delivery REPLAY through a newly added edge (scheduling a
-		// re-render per still-live slot whose past writes can now reach a
-		// watcher via this path) is deliberately NOT implemented: the
-		// reference model delivers only at writes, so replay events could not
-		// be validated against it. The bit propagation above preserves all
-		// routing/drain correctness (fast-path refusal, touched-list
-		// coverage); the replay's only lost effect is catch-up lane
-		// scheduling, which the React-runtime wiring must revisit.
+		this.naiveStack.add(node.id);
+		const savedWorld = this.activeWorld;
+		const savedOnly = this.aOnly;
+		const savedNaive = this.naiveFold;
+		const savedFrame = this.frame;
+		const savedSink = this.currentSink;
+		const savedObsCapture = this.obsCapture;
+		this.setWorld(world);
+		this.aOnly = undefined;
+		this.naiveFold = world;
+		this.frame = undefined;
+		this.currentSink = 0;
+		this.obsCapture = undefined;
+		this.evalDepth++;
+		const reader: Reader = (dep) => this.naiveValue(dep, world, memo);
+		try {
+			const v = node.fn(reader, reader);
+			memo.set(node.id, { threw: false, v });
+			return v;
+		} catch (err) {
+			memo.set(node.id, { threw: true, v: err });
+			throw err;
+		} finally {
+			this.evalDepth--;
+			this.obsCapture = savedObsCapture;
+			this.currentSink = savedSink;
+			this.frame = savedFrame;
+			this.naiveFold = savedNaive;
+			this.aOnly = savedOnly;
+			this.setWorld(savedWorld);
+			this.naiveStack.delete(node.id);
+		}
 	}
-
-	private edgeCount = 0;
-	private lastSweepEdges = 0;
 
 	// ---- observed-closure maintenance (see the observation index's fields above) ----
 
@@ -3336,8 +3274,7 @@ export class CosignalBridge {
 	 * evaluation — dropping the newest memo guarantees the fn runs and the
 	 * evaluate epilogue records and retains the dep set. A getter that
 	 * throws keeps its throw-on-demand behavior; the deps it read before
-	 * throwing ARE retained (their K1 edges are recorded, so deliveries
-	 * reach this node's watchers through them — they have live consumers).
+	 * throwing ARE retained (they have live consumers).
 	 */
 	private obsEnter(id: NodeId): void {
 		const node = this.nodesArr[id]!;
@@ -3403,9 +3340,11 @@ export class CosignalBridge {
 	 * toward the observation union exactly like watcher closures: one retain
 	 * per snapshot node through the obsShift observation index; an atom retains its
 	 * kernel lifecycle, an observed computed retains its current strong deps
-	 * transitively) and its routing-coverage counts (subDepRefs: K1 sweep
-	 * seeds + quiescence refresh targets). Retain-new before release-old;
-	 * same-tick flaps coalesce in the kernel's microtask flush.
+	 * transitively). Retain-new before release-old; same-tick flaps coalesce
+	 * in the kernel's microtask flush. (The snapshot's routing coverage
+	 * needs no counts since S-B: the capture's committed evaluations
+	 * populate the root's arena, whose marks the re-checks validate
+	 * through — §4.0's subDepRefs dissolution.)
 	 */
 	private syncSubObs(e: Subscription): void {
 		const prev = e.obsDeps;
@@ -3413,227 +3352,96 @@ export class CosignalBridge {
 		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node.id);
 		e.obsDeps = next;
 		for (const dep of next) {
-			if (prev === undefined || !prev.delete(dep)) {
-				this.subDepRefs[dep] = this.subDepRefs[dep]! + 1;
-				this.obsShift(dep, 1);
-			}
+			if (prev === undefined || !prev.delete(dep)) this.obsShift(dep, 1);
 		}
 		if (prev !== undefined) {
-			for (const dep of prev) {
-				this.subDepRefs[dep] = this.subDepRefs[dep]! - 1;
-				this.obsShift(dep, -1);
-			}
+			for (const dep of prev) this.obsShift(dep, -1);
 		}
 	}
 
-	/**
-	 * Bounded mid-episode sweep so K1 cannot grow without limit between
-	 * quiescence points. Collects only the provably-safe subset: an edge
-	 * dep→t drops iff t cannot reach any node holding a committed watcher /
-	 * effect-dep snapshot / core-effect subscription (reverse reachability
-	 * over K1) AND t carries no retained touched bits for LIVE slots and no
-	 * taint. Dirt on the touched WORDS persists (keep-the-dirt: conservative
-	 * bits may only clear when provably irrelevant to every live pin) — only
-	 * the stranded routing records go. Runs every 256 recorded edges
-	 * (amortized O(V+E)).
-	 */
-	private sweepK1(): void {
-		this.lastSweepEdges = this.edgeCount;
-		const gen = ++this.walkGen;
-		const lastWalk = this.lastWalk;
-		const stack = this.walkStack;
-		let sp = 0;
-		for (let id = 0; id < this.nodesArr.length; id++) {
-			const ws = this.watchersByNode[id];
-			const ns = this.subsByNode[id];
-			if ((ws !== undefined && ws.length > 0) || (ns !== undefined && ns.length > 0) || this.subDepRefs[id]! > 0) {
-				if (lastWalk[id] !== gen) {
-					lastWalk[id] = gen;
-					stack[sp++] = id;
-				}
-			}
-		}
-		while (sp > 0) {
-			const cur = stack[--sp]!;
-			const ins = this.inList[cur];
-			if (ins === undefined) continue;
-			for (let i = 0; i < ins.length; i++) {
-				const dep = ins[i]!;
-				if (lastWalk[dep] !== gen) {
-					lastWalk[dep] = gen;
-					stack[sp++] = dep;
-				}
-			}
-		}
-		let liveBits = 0;
-		for (const slot of this.slots) {
-			if (slot.tenant !== undefined) {
-				const t = this.tokens.get(slot.tenant);
-				if (t !== undefined && t.state === 'live') liveBits |= 1 << slot.id;
-			}
-		}
-		const keepMask = liveBits | SlotBits.TAINT;
-		let kept = 0;
-		for (let dep = 0; dep < this.outList.length; dep++) {
-			const outs = this.outList[dep];
-			if (outs === undefined) continue;
-			let w = 0;
-			for (let i = 0; i < outs.length; i++) {
-				const t = outs[i]!;
-				if (lastWalk[t] === gen || (this.touched[t]! & keepMask) !== 0) {
-					outs[w++] = t;
-				} else {
-					this.outSets[dep]!.delete(t);
-					const ins = this.inList[t];
-					if (ins !== undefined) {
-						const j = ins.indexOf(dep);
-						if (j >= 0) ins.splice(j, 1);
-					}
-				}
-			}
-			if (w !== outs.length) outs.length = w;
-			kept += w;
-		}
-		this.edgeCount = kept;
-		this.lastSweepEdges = kept;
-	}
+	// ---- the routing walks (S-B: arenas route; §4.4.3/§4.4.6/§4.4.7) ----
 
-	// The WEAK table: untracked reads record drain-only edges. Never
-	// traversed by marking or delivery walks (untracked paths never fire
-	// notifications); durable drains expand over them so a committed-truth
-	// flip reaching a node only through untracked reads still
-	// reconcile-checks its observers (value-gated — the reference model's
-	// full-observer scan behavior, scoped to the affected CONE: the set of
-	// nodes reachable downstream of the change. "Cone" below always means
-	// that downstream reachable set).
-	private weakOutSets: (Set<NodeId> | undefined)[] = [];
-	private weakOutList: (NodeId[] | undefined)[] = [];
-
-	private recordWeakEdge(dep: NodeId, dependent: NodeId): void {
-		let s = this.weakOutSets[dep];
-		if (s !== undefined && s.has(dependent)) return;
-		if (s === undefined) {
-			s = new Set();
-			this.weakOutSets[dep] = s;
-			this.weakOutList[dep] = [];
-		}
-		s.add(dependent);
-		this.weakOutList[dep]!.push(dependent);
-	}
-
-	/** Marking walk scratch. The walk visits a node only for bits it does not
-	 * already have (`newBits & ~touched(n)`); bits only ever turn on within an
-	 * episode (monotone), so the walk terminates without a visited set. */
-	private markStackN: NodeId[] = [];
-	private markStackB: SlotSet[] = [];
-
-	private propagateBits(start: NodeId, startBits: SlotSet): void {
-		const stackN = this.markStackN;
-		const stackB = this.markStackB;
-		let sp = 0;
-		this.applyBits(start, startBits);
-		stackN[sp] = start;
-		stackB[sp++] = startBits;
-		while (sp > 0) {
-			const bitsIn = stackB[--sp]!;
-			const outs = this.outList[stackN[sp]!];
-			if (outs === undefined) continue;
-			for (let i = 0; i < outs.length; i++) {
-				const n = outs[i]!;
-				const nb = bitsIn & ~this.touched[n]!;
-				if (nb !== 0) {
-					this.applyBits(n, nb);
-					stackN[sp] = n;
-					stackB[sp++] = nb;
-				}
-			}
-		}
-	}
-
-	/** Set bits on a node and append it to each newly-set slot's touched list. */
-	private applyBits(node: NodeId, bits: SlotSet): void {
-		this.touched[node] = this.touched[node]! | bits;
-		let b = bits;
-		while (b !== 0) {
-			const s = SlotBits.MSB_INDEX - Math.clz32(b & -b);
-			this.slotTouched[s]!.push(node);
-			b &= b - 1;
-		}
-	}
-
-	/** Taint 0→1 propagation over existing out-edges. */
-	private propagateTaint(start: NodeId): void {
-		const stack = this.markStackN;
-		let sp = 0;
-		this.touched[start] = this.touched[start]! | SlotBits.TAINT;
-		stack[sp++] = start;
-		while (sp > 0) {
-			const outs = this.outList[stack[--sp]!];
-			if (outs === undefined) continue;
-			for (let i = 0; i < outs.length; i++) {
-				const n = outs[i]!;
-				if ((this.touched[n]! & SlotBits.TAINT) === 0) {
-					this.touched[n] = this.touched[n]! | SlotBits.TAINT;
-					stack[sp++] = n;
-				}
-			}
-		}
-	}
-
-	/** Reused delivery-walk buffers (walks are never re-entrant). */
+	/** Reused routing-walk buffers (walks are never re-entrant; the stack
+	 * holds arena shadow RECORD ids during arena walks). */
 	private walkStack: NodeId[] = [];
 	private walkWatchers: Watcher[] = [];
 
+	/** Collect the live watchers subscribed on one node (delivery walk). */
+	private collectWatchersAt(nid: NodeId, found: Watcher[]): void {
+		const ws = this.watchersByNode[nid];
+		if (ws !== undefined) {
+			for (let i = 0; i < ws.length; i++) {
+				const w = ws[i]!;
+				if (w.live) found.push(w);
+			}
+		}
+	}
+
 	/**
-	 * The value-blind delivery walk over K0∪K1 with the per-walk visited
-	 * generation. Value-blind: a delivery announces "a write in this batch
-	 * may affect you", never a value — the receiving render folds its own
-	 * world, so over-delivery is safe and no fold runs on the write path.
-	 * Collects reached watchers (delivered in id order — the reference
-	 * model's map order) and enqueues reached core effects.
+	 * The value-blind delivery walk (§4.4.3): reachability from the written
+	 * atom over EVERY live arena's STRONG links — pass arenas included; the
+	 * walk visits structure, never values or marks, so the §4.3 pin
+	 * invariant is untouched. The weak bit is tested and weak links are
+	 * never traversed (untracked reads never notify — §4.4.1; the bit test
+	 * is the cost the untracked-fan gate prices). Kernel (K0) subscribers
+	 * are served by the eager kernel apply, not this walk. Value-blind: a
+	 * delivery announces "a write in this batch may affect you", never a
+	 * value — the receiving render folds its own world. Collected watchers
+	 * dedup globally per node (lastWalk) across arenas and deliver in id
+	 * order (the reference model's map order). Deliveries may be FEWER than
+	 * the model's union-conservative set, never more (the ⊆ bound): a cone
+	 * held by no live arena lane-degrades to a drain correction (§4.4.5,
+	 * S-NF2-D1). Newest-policy subscriptions flush value-gated after the
+	 * walk returns (see writeInner).
 	 */
 	private deliveryWalk(from: NodeId, token: Token, slot: SlotMeta, seq: Seq): void {
 		const gen = ++this.walkGen;
-		const lastWalk = this.lastWalk;
-		const stack = this.walkStack;
 		const found = this.walkWatchers;
 		found.length = 0;
-		let sp = 0;
-		stack[sp++] = from;
-		lastWalk[from] = gen;
-		while (sp > 0) {
-			const cur = stack[--sp]!;
-			const ws = this.watchersByNode[cur];
-			if (ws !== undefined) {
-				for (let i = 0; i < ws.length; i++) {
-					const w = ws[i]!;
-					if (w.live) found.push(w);
-				}
-			}
-			const ces = this.subsByNode[cur];
-			if (ces !== undefined) {
-				for (let i = 0; i < ces.length; i++) {
-					const e = ces[i]!;
-					if (e.queuedWalk !== gen) {
-						e.queuedWalk = gen;
-						this.effectQueue.push(e);
-					}
-				}
-			}
-			const outs = this.outList[cur];
-			if (outs !== undefined) {
-				for (let i = 0; i < outs.length; i++) {
-					const n = outs[i]!;
-					if (lastWalk[n] !== gen) {
-						lastWalk[n] = gen;
-						stack[sp++] = n;
-					}
-				}
-			}
+		this.lastWalk[from] = gen;
+		this.collectWatchersAt(from, found);
+		for (const a of this.arenaByRoot.values()) this.walkArenaStrong(a, from, gen, found);
+		for (const p of this.openPassByRoot.values()) {
+			if (p.arena !== undefined) this.walkArenaStrong(p.arena, from, gen, found);
 		}
 		if (found.length > 1) found.sort((a, b) => a.id - b.id);
 		for (let i = 0; i < found.length; i++) this.deliver(found[i]!, token, slot, seq);
 		found.length = 0;
+	}
+
+	/** One arena's half of the delivery walk: DFS over the STRONG subs lists
+	 * (the segregated weak lists are never visited — the untracked-fan
+	 * gate's prize) with per-arena shadow stamps for traversal termination
+	 * and the global per-node stamps for collection dedup. Dead-GEN residue
+	 * never routes (§4.5.3). Never allocates or folds: a.W/a.walk stable. */
+	private walkArenaStrong(a: ShadowArena, from: NodeId, gen: WalkGen, found: Watcher[]): void {
+		const start = from < a.byNode.length ? a.byNode[from]! : 0;
+		if (start === 0) return;
+		if (a.W[start + AF.GEN] !== this.nodeGen[from]!) return;
+		const W = a.W;
+		const walk = a.walk;
+		const lastWalk = this.lastWalk;
+		const stack = this.walkStack;
+		let sp = 0;
+		walk[start >> A_SHIFT] = gen;
+		stack[sp++] = start;
+		while (sp > 0) {
+			const sh = stack[--sp]!;
+			let l = W[sh + AF.SUBS]!;
+			while (l !== 0) {
+				const sub = W[l + AF.L_SUB]!;
+				if (walk[sub >> A_SHIFT] !== gen) {
+					walk[sub >> A_SHIFT] = gen;
+					stack[sp++] = sub;
+					const nid = W[sub + AF.NODE]!;
+					if (lastWalk[nid] !== gen) {
+						lastWalk[nid] = gen;
+						this.collectWatchersAt(nid, found);
+					}
+				}
+				l = W[l + AF.L_NEXT_SUB]!;
+			}
+		}
 	}
 
 	// -------------------------------------------------- batches and slots
@@ -3690,11 +3498,7 @@ export class CosignalBridge {
 	/**
 	 * Intern the token's slot, claiming a free one on its first write.
 	 * Claim housekeeping: the write clock zeroes; per-(watcher, slot) dedup
-	 * bits clear (the bit now means a different batch); the keep-the-dirt
-	 * sweep clears the slot's touched bits via its touched list only when no
-	 * excluding pin remains (min live pins ≥ the slot's carried max
-	 * retirement sequence) — earlier, some paused render could still need
-	 * the conservative dirt.
+	 * bits clear (the bit now means a different batch).
 	 */
 	private internSlot(token: Token): SlotMeta {
 		if (token.slot !== undefined) return this.slots[token.slot]!;
@@ -3716,14 +3520,6 @@ export class CosignalBridge {
 			if (this.eventsOn) this.log({ type: 'slot-backstop-released', slot: victim.id, token: victim.tenant! });
 			this.releaseSlot(victim);
 			free = victim;
-		}
-		// Disposal at re-intern: if no excluding pin remains, sweep the slot's
-		// bit via its touched list and reset it; otherwise inherit the dirt.
-		if (this.minLivePin() >= free.carriedMaxRetiredSeq) {
-			const list = this.slotTouched[free.id]!;
-			const clear = ~(1 << free.id);
-			for (let i = 0; i < list.length; i++) this.touched[list[i]!] = this.touched[list[i]!]! & clear;
-			list.length = 0;
 		}
 		free.tenant = token.id;
 		free.claimSeq = this.mintSeq(); // claim-after-release gets its own point on the timeline
@@ -3747,7 +3543,6 @@ export class CosignalBridge {
 	private releaseSlot(slot: SlotMeta): void {
 		const tenant = slot.tenant === undefined ? undefined : this.token(slot.tenant);
 		if (tenant !== undefined) {
-			slot.carriedMaxRetiredSeq = Math.max(slot.carriedMaxRetiredSeq, tenant.retiredSeq ?? 0);
 			tenant.slot = undefined; // identity release; receipts keep their denormalized slot
 			if (this.eventsOn) this.log({ type: 'slot-released', slot: slot.id, token: tenant.id });
 		}
@@ -3855,9 +3650,9 @@ export class CosignalBridge {
 	 * The write path. Direct-mode writes mutate committed-only state with no
 	 * receipt (pre-registration history is visible to every world by
 	 * construction). Logged steps, in order: classify (caller) → drop check
-	 * → intern slot → append packed receipt + write clock → apply to the
-	 * kernel with stepwise equality → marking walk → delivery walk →
-	 * core-effect flush after the walk returns.
+	 * → intern slot → append packed receipt + write clock → member-slot
+	 * fanout → apply to the kernel with stepwise equality → arena delivery
+	 * walk → newest-subscription flush after the walk returns.
 	 */
 	write(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
@@ -3974,14 +3769,11 @@ export class CosignalBridge {
 			}
 		}
 
-		// The marking walk: propagate the slot's bit from the atom through
-		// K0∪K1 out-edges with the monotone frontier.
-		const bit = 1 << slot.id;
-		if ((this.touched[node.id]! & bit) === 0) this.propagateBits(node.id, bit);
-		// The value-blind delivery walk, synchronously in the writer's stack;
-		// core effects enqueue on the walk and flush after it returns.
+		// The value-blind delivery walk (arena strong links), synchronously in
+		// the writer's stack; newest-policy subscriptions flush after it
+		// returns, reached over the newest world's strong structure.
 		this.deliveryWalk(node.id, token, slot, seq);
-		this.flushEffectQueue();
+		this.flushNewestSubs(node.id);
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
@@ -4028,13 +3820,25 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Newest-policy subscriptions observe the newest world; flush after the walk returns. */
-	private flushEffectQueue(): void {
-		const q = this.effectQueue;
-		if (q.length === 0) return;
-		if (q.length > 1) q.sort((a, b) => a.id - b.id); // the reference model's map order
-		for (let i = 0; i < q.length; i++) {
-			const e = q[i]!;
+	/**
+	 * Newest-policy subscription flush at a logged write (§4.4.1: newest
+	 * subscriptions keep STRONG-structure-only reach — untracked deps
+	 * invalidate values but never notify, matching the reference model's
+	 * strong-edge reachability): reach walks the newest memos' strong dep
+	 * records — the newest world's only structure until S-C gives overlay
+	 * computeds kernel links — re-derived by evaluation when a memo is
+	 * missing (post-quiesce, post-settlement-eviction). Reach lags
+	 * evaluations exactly as HEAD's episode edge log did: a cone re-tracked
+	 * since its last evaluation reaches through the OLD dep set (the
+	 * discriminant edge covers the flip-causing write), and the value gate
+	 * keeps extra reach silent. Fires in id order (the model's map order).
+	 */
+	private flushNewestSubs(written: NodeId): void {
+		if (this.newestSubCount === 0) return;
+		for (const e of this.subs.values()) {
+			if (e.policy !== 'newest' || !e.live) continue;
+			this.newestReachSeen.clear();
+			if (!this.newestReaches(e.node, written)) continue;
 			const value = this.evaluate(this.nodeById(e.node), NEWEST);
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
@@ -4042,10 +3846,41 @@ export class CosignalBridge {
 				if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
 			}
 		}
-		q.length = 0;
 	}
 
-	/** Direct-mode/quiet writes flush every newest subscription (no walk exists to scope them). */
+	private newestReachSeen = new Set<NodeId>();
+
+	/** Does `target` (a written atom) feed `nid` through TRACKED newest
+	 * deps? Walks the memoized strong dep records depth-first. */
+	private newestReaches(nid: NodeId, target: NodeId): boolean {
+		if (nid === target) return true;
+		if (this.newestReachSeen.has(nid)) return false;
+		this.newestReachSeen.add(nid);
+		const node = this.nodesArr[nid];
+		if (node === undefined || node.kind === 'atom') return false;
+		let m = this.newestMemos.get(nid);
+		if (m === undefined) {
+			this.evaluate(node, NEWEST); // derive current structure (mints no events; a throw propagates as a reached-eval throw would)
+			m = this.newestMemos.get(nid);
+			if (m === undefined) return false;
+		}
+		const atoms = m.atoms;
+		const aStrong = m.atomsStrong;
+		for (let i = 0; i < atoms.length; i++) {
+			if (aStrong[i]! && atoms[i]!.id === target) return true;
+		}
+		const comps = m.comps;
+		const cStrong = m.compsStrong;
+		for (let i = 0; i < comps.length; i++) {
+			if (cStrong[i]! && this.newestReaches(comps[i]!.id, target)) return true;
+		}
+		return false;
+	}
+
+	/** Newest-policy subscription full-scan flush, value-gated — the
+	 * reach-free boundaries' form (direct-mode writes, quiet folds,
+	 * settlement drains), matching the reference model's un-scoped flush at
+	 * the same boundaries; iteration order is id order (its map order). */
 	private directFlushCoreEffects(): void {
 		for (const e of this.subs.values()) {
 			if (e.policy !== 'newest') continue;
@@ -4093,9 +3928,9 @@ export class CosignalBridge {
 			maskTokens, maskSlots, capturedCommittedSlots,
 			maskBits, includedBits,
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
-			memos: new Map(),
 		};
-		// NF2 S-A: claim the pass world's arena from the pool (§4.1).
+		// NF2: claim the pass world's arena from the pool (§4.1) — the pass
+		// world's value+invalidation+routing layer.
 		pass.arena = this.claimArena('pass', { kind: 'pass', pass }, rootId);
 		this.passes.set(pass.id, pass);
 		this.openPassByRoot.set(rootId, pass);
@@ -4203,14 +4038,13 @@ export class CosignalBridge {
 	 * Full watcher removal — the bindings' unsubscribe surface (debounce-
 	 * finalized unsubscription, StrictMode orphan sweeps). The engine keeps
 	 * watchers in TWO stores — the `watchers` id map and the `watchersByNode`
-	 * per-node index the walks read (delivery, drains, the K1 sweep's
-	 * reachability seeds, quiescence refresh targets) — and this is the one
-	 * public operation that retires a watcher from BOTH, plus any open pass's
+	 * per-node index the routing walks read (delivery collection, drain
+	 * candidate collection, arena mark decay) — and this is the one public
+	 * operation that retires a watcher from BOTH, plus any open pass's
 	 * mounted list (a dead watcher must not be revived by a later commit's
 	 * layout loop). Deleting from the public map alone strands the per-node
-	 * entry: dead watchers then seed sweep reachability and quiescence
-	 * refreshes forever (pinned by tests/graph-consumers.spec.ts). The
-	 * liveness setter inside releases the observation-union retain.
+	 * entry (pinned by tests/graph-consumers.spec.ts). The liveness setter
+	 * inside releases the observation-union retain.
 	 */
 	removeWatcher(watcherId: WatcherId): void {
 		for (const p of this.passes.values()) {
@@ -4257,7 +4091,7 @@ export class CosignalBridge {
 		const e: Subscription = {
 			id: this.nextEffect++, name, policy: 'committed', root: rootId, node: 0,
 			deps: [], refire, body: undefined, lastValue: undefined,
-			runs: 0, cleanups: 0, queuedWalk: 0, live: true, obsDeps: undefined,
+			runs: 0, cleanups: 0, live: true, obsDeps: undefined,
 		};
 		this.root(rootId);
 		this.subs.set(e.id, e);
@@ -4291,16 +4125,10 @@ export class CosignalBridge {
 			id: this.nextEffect++, name, policy: 'newest', root: '', node: node.id,
 			deps: [], refire: undefined, body: undefined,
 			lastValue: this.evaluate(node, NEWEST),
-			runs: 0, cleanups: 0, queuedWalk: 0, live: true, obsDeps: undefined,
+			runs: 0, cleanups: 0, live: true, obsDeps: undefined,
 		};
 		this.subs.set(e.id, e);
 		this.newestSubCount++;
-		let byNode = this.subsByNode[node.id];
-		if (byNode === undefined) {
-			byNode = [];
-			this.subsByNode[node.id] = byNode;
-		}
-		byNode.push(e);
 		return e;
 	}
 
@@ -4367,24 +4195,16 @@ export class CosignalBridge {
 		this.subs.delete(id);
 		if (e.policy === 'newest') {
 			this.newestSubCount--;
-			const byNode = this.subsByNode[e.node];
-			if (byNode !== undefined) {
-				const i = byNode.indexOf(e);
-				if (i >= 0) byNode.splice(i, 1);
-			}
 			return;
 		}
 		this.committedSubCount--;
 		e.cleanups++;
 		if (this.eventsOn) this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
-		// Release the snapshot's observation retains + routing-coverage counts.
+		// Release the snapshot's observation retains.
 		const held = e.obsDeps;
 		if (held !== undefined) {
 			e.obsDeps = undefined;
-			for (const dep of held) {
-				this.subDepRefs[dep] = this.subDepRefs[dep]! - 1;
-				this.obsShift(dep, -1);
-			}
+			for (const dep of held) this.obsShift(dep, -1);
 		}
 	}
 
@@ -4576,13 +4396,14 @@ export class CosignalBridge {
 					if (ra !== undefined) this.fanAtomsToArena(ra, t.atomsTouched, false);
 				}
 				if (this.eventsOn) this.log({ type: 'per-root-commit', root: p.root, token: t.id });
-				// (3) durable drain: the advanced slot's touched list plus any
-				// member-slot write drift, scoped to this root's committed
-				// observers.
+				// (3) durable drain, gated exactly as before: an advanced slot
+				// or member-slot write drift (or restaled leftovers) means the
+				// root's committed truth moved — candidates come from the
+				// arena's dirty list, which site-(b)/(c) fanout just fed.
 				const bits = (t.slot !== undefined ? 1 << t.slot : 0) | root.committedDirtySlots;
 				root.committedDirtySlots = 0;
 				const re = this.restaled.get(p.root);
-				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(p.root, 'per-root-commit', bits);
+				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(p.root, 'per-root-commit');
 			}
 		}
 		// (4) layout: subscribe, then mount fixup (matching React's layout-
@@ -4597,12 +4418,29 @@ export class CosignalBridge {
 		// moved past its pin is stale again the moment its commit reset
 		// lastRenderedValue; the NEXT durable drain reconciles it (the
 		// reference model's full scan does the same, one drain later than
-		// the flip).
+		// the flip). This loop is DECLARED LOAD-BEARING FOR ROUTING (§4.4.2,
+		// M1): its committed evaluations populate the root's arena with every
+		// rendered watcher's full committed dep cone (strong + weak) before
+		// passEnd returns — i.e., before any post-commit write needs routing.
 		for (const wid of p.rendered) {
 			const w = this.watchers.get(wid);
 			if (w === undefined || !w.live) continue;
 			const committedNow = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: p.root });
 			if (!Object.is(committedNow, w.lastRenderedValue)) this.markRestaled(w);
+		}
+		// §4.4.2's population dev assert: after a commit of pass P, every
+		// live rendered watcher has a shadow for its node in the root's
+		// committed arena (the populator above ran; a miss here means a
+		// future re-ordering broke the routing coverage argument).
+		{
+			const ra = this.arenaByRoot.get(p.root);
+			for (const wid of p.rendered) {
+				const w = this.watchers.get(wid);
+				if (w === undefined || !w.live) continue;
+				if (ra === undefined || (w.node < ra.byNode.length ? ra.byNode[w.node]! : 0) === 0) {
+					throw new BridgeInvariantViolation(`population rule (§4.4.2): watcher ${w.name} has no shadow in root ${p.root}'s committed arena after commit`);
+				}
+			}
 		}
 		if (this.eventsOn) this.log({ type: 'pass-committed', pass: p.id, root: p.root });
 		{
@@ -4782,17 +4620,18 @@ export class CosignalBridge {
 		// fan the retiring token's touched atoms into EVERY committed arena.
 		if (touchedAny) this.fanAtomsToCommittedArenas(t.atomsTouched);
 		if (this.eventsOn) this.log({ type: 'retired', token: t.id, committed, retiredSeq });
-		// Durable drains: enumerate the flipped slot's touched list (never
-		// only a consumable write-time queue — entries must survive until a
-		// drain actually reconciles them) and reconcile/revalidate that cone
-		// against committed truth, for every root.
+		// Durable drains, per root, gated exactly as before (flipped slot or
+		// member-write drift or restaled leftovers): candidates come from
+		// each root arena's dirty list — the site-(a) fanout above marked
+		// them, and list entries persist until a drain-then-decay boundary
+		// consumes them (never a consumable write-time queue).
 		{
 			const slotBit = t.slot !== undefined ? 1 << t.slot : 0;
 			for (const r of this.roots.values()) {
 				const bits = slotBit | r.committedDirtySlots;
 				r.committedDirtySlots = 0;
 				const re = this.restaled.get(r.id);
-				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(r.id, 'retirement', bits);
+				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(r.id, 'retirement');
 			}
 			// NF2 S-A: boundary mark decay — unconsumed marks on unwatched
 			// nodes drop to cold instead of re-appending forever (§4.3).
@@ -4880,19 +4719,22 @@ export class CosignalBridge {
 
 	/**
 	 * Durable drain at a committed-truth flip (a retirement or per-root
-	 * commit): enumerate the flipped slot's touched list (watcher sets
-	 * resolve at drain time), reconcile-check each listed live watcher
-	 * (last rendered value vs committed-for-root NOW; urgent pre-paint
-	 * correction on real difference — comparing values is legal here
-	 * because both sides are committed truth, whereas live-write delivery
-	 * must stay value-blind). Candidates fire in id order (the reference
-	 * model's map order); the touched lists conservatively contain every
-	 * node a slot's writes could reach, so scoping to them reaches every
-	 * observer a full scan would, and the value gate makes the outcomes
-	 * identical. Committed SUBSCRIPTIONS do not drain here: their re-check
-	 * is once per boundary operation (revalidateCommittedSubs) — RCC-EF2's
-	 * amended boundary semantics — and needs no candidate collection at all
-	 * (per-root full scan, v1 = production cost).
+	 * commit), §4.4.6: the candidate set is the root arena's DIRTY LIST —
+	 * the fanout sites' marks, whose cones the marks' PENDING propagation
+	 * already covers — expanded over ALL arena links, strong AND weak
+	 * (§4.4.1: drains expand over both; a weak hop's strong dependents
+	 * expand past it too, since the walk keeps going), collecting live
+	 * same-root watchers on visited nodes, unioned with the `restaled` set.
+	 * Reconcile-check each candidate (last rendered value vs
+	 * committed-for-root NOW; urgent pre-paint correction on real
+	 * difference — comparing values is legal here because both sides are
+	 * committed truth, whereas live-write delivery must stay value-blind).
+	 * Candidates fire in id order (the reference model's map order). List
+	 * entries persist until decay drops them, and consumed marks still seed
+	 * conservatively — extras are value-gated no-ops, exactly as the old
+	 * slot touched lists were. Committed SUBSCRIPTIONS do not drain here:
+	 * their re-check is once per boundary operation
+	 * (revalidateCommittedSubs) — RCC-EF2's amended boundary semantics.
 	 */
 	private drainWatcherBuf: Watcher[] = [];
 
@@ -4914,63 +4756,62 @@ export class CosignalBridge {
 		set.add(w);
 	}
 
-	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit', slotBits: SlotSet): void {
+	/** Collect the live same-root watchers subscribed on one node (drains). */
+	private collectRootWatchersAt(nid: NodeId, rootId: RootId, ws: Watcher[]): void {
+		const nw = this.watchersByNode[nid];
+		if (nw !== undefined) {
+			for (let j = 0; j < nw.length; j++) {
+				const w = nw[j]!;
+				if (w.live && w.root === rootId) ws.push(w);
+			}
+		}
+	}
+
+	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		const world: World = { kind: 'committed', root: rootId };
-		const gen = ++this.walkGen; // reuse the walk column for per-drain candidate dedup
+		const gen = ++this.walkGen; // per-node collection dedup + per-arena traversal stamps
 		const lastWalk = this.lastWalk;
 		const ws = this.drainWatcherBuf;
 		ws.length = 0;
-		// Candidate collection: the flipped slots' touched lists, expanded over
-		// WEAK (untracked) out-edges — strong cones are already fully listed.
-		const stack = this.walkStack;
-		let sp = 0;
-		let sb = slotBits;
-		while (sb !== 0) {
-			const slot = SlotBits.MSB_INDEX - Math.clz32(sb & -sb);
-			sb &= sb - 1;
-			const list = this.slotTouched[slot]!;
+		// Candidate collection (§4.4.6): the root arena's dirty list seeds a
+		// walk over ALL arena links — weak included. No folds or allocations
+		// run inside the walk, so a.W/a.walk are stable to cache.
+		const a = this.arenaByRoot.get(rootId);
+		if (a !== undefined && a.dirty.length !== 0) {
+			const W = a.W;
+			const walk = a.walk;
+			const stack = this.walkStack;
+			let sp = 0;
+			const list = a.dirty;
 			for (let i = 0; i < list.length; i++) {
-				const nid = list[i]!;
-				if (lastWalk[nid] === gen) continue;
-				lastWalk[nid] = gen;
-				stack[sp++] = nid;
-			}
-		}
-		const candidates: NodeId[] = [];
-		while (sp > 0) {
-			const nid = stack[--sp]!;
-			candidates.push(nid);
-			const weak = this.weakOutList[nid];
-			if (weak !== undefined) {
-				for (let i = 0; i < weak.length; i++) {
-					const wn = weak[i]!;
-					if (lastWalk[wn] !== gen) {
-						lastWalk[wn] = gen;
-						stack[sp++] = wn;
-					}
+				const sh = list[i]!;
+				if (walk[sh >> A_SHIFT] === gen) continue;
+				walk[sh >> A_SHIFT] = gen;
+				stack[sp++] = sh;
+				const nid = W[sh + AF.NODE]!;
+				if (lastWalk[nid] !== gen) {
+					lastWalk[nid] = gen;
+					this.collectRootWatchersAt(nid, rootId, ws);
 				}
 			}
-			// A weak hop lands on a node whose STRONG dependents also embed it
-			// (tracked reads of an untracked-reading computed): expand strong
-			// outs past a weak hop too, so transitive observers reconcile.
-			const outs = this.outList[nid];
-			if (outs !== undefined) {
-				for (let i = 0; i < outs.length; i++) {
-					const on = outs[i]!;
-					if (lastWalk[on] !== gen) {
-						lastWalk[on] = gen;
-						stack[sp++] = on;
+			while (sp > 0) {
+				const sh = stack[--sp]!;
+				// BOTH subs lists: drains expand over weak links too (§4.4.1).
+				for (let list = 0; list < 2; list++) {
+					let l = list === 0 ? W[sh + AF.SUBS]! : a.weakSubs[sh >> A_SHIFT]!;
+					while (l !== 0) {
+						const sub = W[l + AF.L_SUB]!;
+						if (walk[sub >> A_SHIFT] !== gen) {
+							walk[sub >> A_SHIFT] = gen;
+							stack[sp++] = sub;
+							const nid = W[sub + AF.NODE]!;
+							if (lastWalk[nid] !== gen) {
+								lastWalk[nid] = gen;
+								this.collectRootWatchersAt(nid, rootId, ws);
+							}
+						}
+						l = W[l + AF.L_NEXT_SUB]!;
 					}
-				}
-			}
-		}
-		for (let c = 0; c < candidates.length; c++) {
-			const nid = candidates[c]!;
-			const nw = this.watchersByNode[nid];
-			if (nw !== undefined) {
-				for (let j = 0; j < nw.length; j++) {
-					const w = nw[j]!;
-					if (w.live && w.root === rootId) ws.push(w);
 				}
 			}
 		}
@@ -5024,7 +4865,7 @@ export class CosignalBridge {
 	 */
 	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: Seq; rootCommitGen: CommitGen }, maskTokenRecords: Token[]): void {
 		const node = this.nodeById(w.node);
-		const closure = this.dependencyClosureOf(w.node);
+		const closure = this.dependencyClosureOf(w.node, committingPass);
 		// Per-token corrective loop: every LIVE written token that touched the
 		// node. A premise of the fast path's soundness, not an optimization:
 		// it covers exactly the divergence the fast-out suppresses.
@@ -5091,22 +4932,83 @@ export class CosignalBridge {
 		if (tr !== undefined) tr.mountFixup(w, 'compare-clean', correctedLive.size);
 	}
 
-	/** Transitive dependency closure feeding a node (reverse BFS over K0∪K1). */
-	dependencyClosureOf(nodeId: NodeId): Set<NodeId> {
+	/** Transitive dependency closure feeding a node — §4.4.7's triple: three
+	 * reverse (deps-direction) walks over kernel ∪ the mounting pass's arena
+	 * ∪ the root's committed arena. Overlay computeds hold no kernel links
+	 * until S-C, so the kernel leg's stand-in is the NEWEST MEMOS' strong
+	 * dep records (the ladder's surviving arm is the temporary newest
+	 * representation — §4.8/codex 7; real kernel links replace it at S-C).
+	 * STRONG links only (weak deps never joined the closure — they can't
+	 * deliver, so correctives never target their batches). The pass arena is
+	 * alive here by m2's ordering (fixup runs before reclaimAfterPassEnd);
+	 * dead foreign cones are excluded by the discriminant argument, audited
+	 * at runtime by the fast-out audit below. The corrective population this
+	 * closure feeds arms the per-(watcher, slot) dedup bits, so it must
+	 * cover every cone the delivery walk can later route — pass + committed
+	 * arenas + the newest structure — or a suppression would degrade into an
+	 * over-delivery (the ⊆ bound polices exactly this). */
+	dependencyClosureOf(nodeId: NodeId, pass?: Pass): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
-		const queue = [nodeId];
-		while (queue.length > 0) {
-			const cur = queue.pop()!;
-			const ins = this.inList[cur];
-			if (ins === undefined) continue;
-			for (const dep of ins) {
-				if (!closure.has(dep)) {
-					closure.add(dep);
-					queue.push(dep);
-				}
+		const pa = pass?.arena;
+		if (pa !== undefined) this.closureOverArena(pa, nodeId, closure);
+		if (pass !== undefined) {
+			const ca = this.arenaByRoot.get(pass.root);
+			if (ca !== undefined) this.closureOverArena(ca, nodeId, closure);
+		}
+		this.closureOverNewestMemos(nodeId, closure, new Set());
+		return closure;
+	}
+
+	/** The kernel-leg stand-in of the fixup closure (until S-C): reverse
+	 * walk over the newest memos' strong dep records, evaluation-lagged
+	 * exactly like every other recorded structure. */
+	private closureOverNewestMemos(nid: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
+		if (seen.has(nid)) return;
+		seen.add(nid);
+		const m = this.newestMemos.get(nid);
+		if (m === undefined) return;
+		const atoms = m.atoms;
+		const aStrong = m.atomsStrong;
+		for (let i = 0; i < atoms.length; i++) {
+			if (aStrong[i]!) closure.add(atoms[i]!.id);
+		}
+		const comps = m.comps;
+		const cStrong = m.compsStrong;
+		for (let i = 0; i < comps.length; i++) {
+			if (cStrong[i]!) {
+				closure.add(comps[i]!.id);
+				this.closureOverNewestMemos(comps[i]!.id, closure, seen);
 			}
 		}
-		return closure;
+	}
+
+	/** One arena's reverse-deps half of the fixup closure (strong links). */
+	private closureOverArena(a: ShadowArena, nodeId: NodeId, closure: Set<NodeId>): void {
+		const start = nodeId < a.byNode.length ? a.byNode[nodeId]! : 0;
+		if (start === 0) return;
+		if (a.W[start + AF.GEN] !== this.nodeGen[nodeId]!) return; // dead-tenancy residue never routes
+		const gen = ++this.walkGen;
+		const W = a.W;
+		const walk = a.walk;
+		const stack = this.walkStack;
+		let sp = 0;
+		walk[start >> A_SHIFT] = gen;
+		stack[sp++] = start;
+		while (sp > 0) {
+			const sh = stack[--sp]!;
+			let l = W[sh + AF.DEPS]!;
+			while (l !== 0) {
+				if ((W[l + AF.L_MODE]! & 1) === 0) {
+					const dep = W[l + AF.L_DEP]!;
+					if (walk[dep >> A_SHIFT] !== gen) {
+						walk[dep >> A_SHIFT] = gen;
+						closure.add(W[dep + AF.NODE]!);
+						stack[sp++] = dep;
+					}
+				}
+				l = W[l + AF.L_NEXT_DEP]!;
+			}
+		}
 	}
 
 	private tokenTouches(t: Token, closure: Set<NodeId>): boolean {
@@ -5131,12 +5033,15 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * Quiescence (no live tokens, no live pins, no parked actions): the K1
-	 * union table bulk-resets (epoch bump), and every K1-touched node holding
-	 * a committed watcher or effect-dep snapshot refreshes by a forced kernel
-	 * pull into the NEW episode's K1 table — the walks route over K1, so
-	 * the coverage those observers rely on must be re-recorded, not lost
-	 * with the old table.
+	 * Quiescence (no live tokens, no live pins, no parked actions): the
+	 * epoch bumps (newest memos die by it), dead episode records drop, and
+	 * the ARENAS PERSIST — their links are current structure, not an
+	 * episode log (§4.1), so the routing coverage committed observers rely
+	 * on survives by persistence (the old K1 bulk-reset + kernel-pull
+	 * refresh dissolved with K1 at S-B; nothing re-records because nothing
+	 * was lost). Two arena duties run, in order: the zero-consumer
+	 * reclamation sweep, then the read-clock renumber over the survivors
+	 * only (§4.5.8, §4.5.7).
 	 *
 	 * SEQUENCE-WIDTH BOUND (where renumbering used to live). Retained
 	 * sequence values (baseSeq, retirement stamps, cas, watcher snapshot
@@ -5160,28 +5065,7 @@ export class CosignalBridge {
 				throw new BridgeInvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.tp.n - n.tp.start} receipts`);
 			}
 		}
-		// Collect the refresh targets BEFORE the reset: every K1-touched
-		// node holding a committed watcher or effect-dep snapshot.
-		const refreshTargets: ComputedNode[] = [];
-		for (let id = 0; id < this.nodesArr.length; id++) {
-			const n = this.nodesArr[id];
-			if (n === undefined || n.kind !== 'computed') continue;
-			if (this.outList[id] === undefined && this.inList[id] === undefined) continue; // not K1-touched
-			const ws = this.watchersByNode[id];
-			if ((ws === undefined || ws.length === 0) && this.subDepRefs[id]! === 0) continue;
-			refreshTargets.push(n);
-		}
 		this.epoch++;
-		// K1 bulk-reset + table watermark zeroes.
-		this.outSets.length = 0;
-		this.outList.length = 0;
-		this.inList.length = 0;
-		this.edgeCount = 0;
-		this.lastSweepEdges = 0;
-		this.weakOutSets.length = 0;
-		this.weakOutList.length = 0;
-		for (let i = 0; i < this.touched.length; i++) this.touched[i] = 0;
-		for (const list of this.slotTouched) list.length = 0;
 		// Dead-episode records drop at the reset: nothing from a dead
 		// episode can validate in a live one; serial counters stay monotone.
 		for (const [id, p] of this.passes) {
@@ -5192,31 +5076,15 @@ export class CosignalBridge {
 		}
 		this.lastTokenId = 0;
 		this.lastTokenRef = undefined;
-		// Memo tables die by epoch; drop them eagerly (conservative refusal).
-		for (const r of this.roots.values()) r.memos.clear();
+		// Newest memos die by epoch; drop them eagerly (conservative refusal).
 		this.newestMemos.clear();
-		// NF2 S-A: arenas PERSIST across quiescence (their links are current
-		// structure, not an episode log — §4.1); the two new duties, in order:
-		// the zero-consumer reclamation sweep, then the read-clock renumber
-		// over the survivors only (§4.5.8, §4.5.7).
+		// Arena duties (§4.5.8 then §4.5.7): reclamation sweep, then the
+		// read-clock renumber over surviving consumer-populated arenas.
 		this.arenaQuiesceSweep();
-		// Kernel-pull refresh, AFTER the reset: a fresh newest evaluation of
-		// each target re-records its dependency cone into the NEW episode's
-		// K1 table. World evaluations reject writes, so the refresh cannot
-		// loop; a pull that throws keeps its sentinel and stays on the
-		// demand path.
-		for (const n of refreshTargets) {
-			try {
-				this.evaluate(n, NEWEST);
-			} catch {
-				// erroring getters keep their throw-on-demand behavior
-			}
-		}
 		// Dead-episode bookkeeping zeroes (bulk-zero at episode reset).
 		for (const s of this.slots) {
 			s.writeClock = 0;
 			s.claimSeq = 0;
-			s.carriedMaxRetiredSeq = 0;
 			s.releasePending = false;
 		}
 		for (const w of this.watchers.values()) w.dedupBits = 0;

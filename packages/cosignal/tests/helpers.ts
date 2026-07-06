@@ -57,12 +57,19 @@ function isDeliveryish(e: ModelEvent): boolean {
 	return e.type === 'delivery' || e.type === 'suppressed' || e.type === 'mount-corrective';
 }
 
+/** Delivery-DECISION counts, pooled across the family's three modes per
+ * (watcher, token, slot): "fewer decisions, never more" (plan §4.8 S-B).
+ * Current-structure routing shifts modes WITHIN the family — a mount join
+ * the accumulated model schedules as a corrective (arming its dedup, so
+ * its later write logs 'suppressed') may not exist in any live arena; the
+ * engine's write-time walk is then the FIRST notification and logs
+ * 'delivery'. One notification either way. */
 function deliveryCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>();
 	for (const e of events) {
 		if (!isDeliveryish(e)) continue;
-		const d = e as unknown as { type: string; watcher: string; token: number; slot: number };
-		const key = `${d.type}|${d.watcher}|${d.token}|${d.slot}`;
+		const d = e as unknown as { watcher: string; token: number; slot: number };
+		const key = `${d.watcher}|${d.token}|${d.slot}`;
 		out.set(key, (out.get(key) ?? 0) + 1);
 	}
 	return out;

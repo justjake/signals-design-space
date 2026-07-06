@@ -94,8 +94,13 @@ function effectAt(b: CosignalBridge, index: number): number {
 	return ids[index % ids.length]!;
 }
 
-/** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin). */
-export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
+/** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin).
+ * `namingEvents` (when given) replaces the engine's own event count in the
+ * `${events}.${seq}.${epoch}` uniq: the model mints names off ITS stream
+ * length, and since S-B the engine legitimately delivers FEWER deliveryish
+ * events (the ⊆ bound — lane degradation is a correction, not a delivery),
+ * so name parity requires the MODEL's count — the differ supplies it. */
+export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: number): boolean {
 	const allNodes = [...b.nodes.values()];
 	const atoms = allNodes.filter((n): n is AtomNode => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
@@ -107,7 +112,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
 			case 'equalNewest': return { kind: 'set', value: b.newestValue(atoms[atomIdx]!) };
 		}
 	};
-	const uniq = `${b.events.length}.${b.seq}.${b.epoch}`;
+	const uniq = `${namingEvents ?? b.events.length}.${b.seq}.${b.epoch}`;
 	const reg = registryOf(b);
 	/** bareWrite may mint the ambient token — mirror the model's map growth. */
 	const syncAmbient = (): void => {
@@ -178,18 +183,29 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
  * `snapshotModel` reads the engine's observables — engine internals
  * (kernel arena, union edges, memos) are never compared.
  */
-export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
+export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __syncNamingEvents(n: number): void } {
 	const b = __newBridgeForTest();
 	// Referee mode: the model has always-receipt semantics — the engine's
 	// quiet-mode short-circuit stays DISABLED for lockstep (production
 	// defaults it ON; tests/quiet-mode.spec.ts polices the short-circuit).
 	b.setQuietWrites(false); // explicit, though __newBridgeForTest already defaults it off
+	// ARMED S-B divergence check: every public operation's epilogue serves
+	// every live arena's shadows from the arena's own walks and compares
+	// against fold-truth (plus the structural validator) — the corpus runs
+	// with the referee that owns the stage's STOP condition.
+	b.__setArenaCheck(true);
 	buildEngineTopology(b);
 	b.registerBridge();
 	let drained = 0;
+	let namingEvents: number | undefined;
 	return {
 		bridge: b,
-		apply: (op) => (applyEngineOp(b, op) ? 'applied' : 'skipped'),
+		/** Name parity under the ⊆ delivery bound: the differ reports the
+		 * model's pre-op event count so `${events}.…` names match its. */
+		__syncNamingEvents(n: number): void {
+			namingEvents = n;
+		},
+		apply: (op) => (applyEngineOp(b, op, namingEvents) ? 'applied' : 'skipped'),
 		snapshot: () => snapshotModel(b as unknown as CosignalModel),
 		drainEvents() {
 			const out = comparableEvents(b.events.slice(drained) as ModelEvent[]);
@@ -221,12 +237,20 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 
 const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);
 
+/** Delivery-DECISION counts, pooled across the family's three modes per
+ * (watcher, token, slot). The bound is "fewer decisions, never more"
+ * (plan §4.8 S-B): current-structure routing legitimately shifts modes
+ * WITHIN the family — a mount join the accumulated model schedules as a
+ * corrective (arming its dedup, so its write logs 'suppressed') may not
+ * exist in any live arena, in which case the engine's write-time walk is
+ * the FIRST notification and logs 'delivery'. One notification either way;
+ * pooling keys the invariant on the decision, not its mode. */
 function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>();
 	for (const e of events) {
 		if (!DELIVERYISH.has(e.type)) continue;
-		const d = e as unknown as { type: string; watcher: string; token: number; slot: number };
-		const key = `${d.type}|${d.watcher}|${d.token}|${d.slot}`;
+		const d = e as unknown as { watcher: string; token: number; slot: number };
+		const key = `${d.watcher}|${d.token}|${d.slot}`;
 		out.set(key, (out.get(key) ?? 0) + 1);
 	}
 	return out;
@@ -243,10 +267,15 @@ export function diffAgainstModelTolerant(
 	let drained = 0;
 	const modelPool = new Map<string, number>();
 	const engineUsed = new Map<string, number>();
+	const namedEngine = engine as EngineAdapter & { __syncNamingEvents?(n: number): void; bridge?: CosignalBridge };
+	const dpc = namedEngine.bridge !== undefined ? new DeliveryPrecedesCorrection(namedEngine.bridge) : undefined;
 	for (let step = 0; step < ops.length; step++) {
+		const namingEvents = m.events.length; // the model's pre-op count — its uniq naming input
 		const ok = applyOneOp(m, ops[step]!);
 		const mEvents = comparableEvents(m.events.slice(drained));
 		drained = m.events.length;
+		namedEngine.__syncNamingEvents?.(namingEvents);
+		dpc?.beforeOp(ops[step]!);
 		const applied = engine.apply(ops[step]!);
 		if (applied !== (ok ? 'applied' : 'skipped')) {
 			return { seed, step, message: `legality diverged: engine ${applied}, model ${ok ? 'applied' : 'skipped'}` };
@@ -273,6 +302,116 @@ export function diffAgainstModelTolerant(
 				};
 			}
 		}
+		const dpcFail = dpc?.afterOp(ops[step]!, eEvents);
+		if (dpcFail !== undefined) return { seed, step, message: dpcFail };
 	}
 	return undefined;
+}
+
+// ---- the m3-scoped delivery-precedes-correction fuzz invariant ---------------
+//
+// Plan §4.4.6/§4.9.3: a reconcile-correction caused by member-slot writes
+// NEWER than the watcher's last render must have been PRECEDED by a
+// notification (delivery / suppression / mount-corrective) since that
+// render — otherwise S-B's routing silently stopped notifying. Scoped per
+// m3 to the class it can police, excluding its counterexamples:
+//   - quiet-mode corrections (referee bridges run quiet OFF — vacuous);
+//   - mount-window repairs ('mount-urgent-correction' is a different type);
+//   - older-write visibility flips (the causing token's lastWriteSeq must
+//     POSTDATE the watcher's window for the assert to arm);
+//   - the S-NF2-D1 family (any discard, parked token, or second boundary
+//     inside the window disarms the assert — dead-arena lane degradation
+//     is legal and pinned separately in arena-sb.spec.ts);
+//   - §4.4.1's designed no-notification class (untracked-only reach):
+//     watchers on the topology's untracked consumer (cMix) are excluded —
+//     weak links never notify, BY DESIGN, so their corrections arrive bare.
+// Windows reset at render/mount/commit/discard/quiesce boundaries (renders
+// re-arm dedup; commits re-baseline lastRenderedValue) and after each
+// correction (which also resets the engine's dedup bits).
+
+type DpcMark = { seq: number; notified: boolean; disarmed: boolean; boundaries: number };
+
+class DeliveryPrecedesCorrection {
+	private marks = new Map<string, DpcMark>();
+	private preOpTokenWriteSeq = 0;
+
+	constructor(private bridge: CosignalBridge) {}
+
+	private resetAll(): void {
+		this.marks.clear();
+	}
+
+	private markOf(name: string): DpcMark {
+		let mk = this.marks.get(name);
+		if (mk === undefined) {
+			mk = { seq: this.bridge.seq, notified: false, disarmed: false, boundaries: 0 };
+			this.marks.set(name, mk);
+		}
+		return mk;
+	}
+
+	/** Resolve the retiring token's last write seq BEFORE the op applies
+	 * (retirement can reclaim the record). */
+	beforeOp(op: ScheduleOp): void {
+		this.preOpTokenWriteSeq = 0;
+		if (op.t === 'retire' || op.t === 'settle') {
+			try {
+				const id = tokenAt(this.bridge, op.token);
+				this.preOpTokenWriteSeq = (id !== undefined ? this.bridge.tokens.get(id)?.lastWriteSeq : 0) ?? 0;
+			} catch {
+				// no tokens yet: the op will skip
+			}
+		}
+	}
+
+	afterOp(op: ScheduleOp, events: ModelEvent[]): string | undefined {
+		const b = this.bridge;
+		const singleBoundary = op.t === 'retire' || op.t === 'settle';
+		for (const e of events) {
+			const t = e.type;
+			if (t === 'delivery' || t === 'suppressed' || t === 'mount-corrective') {
+				this.markOf((e as unknown as { watcher: string }).watcher).notified = true;
+			} else if (t === 'reconcile-correction') {
+				const name = (e as unknown as { watcher: string }).watcher;
+				const mk = this.marks.get(name);
+				if (mk === undefined) {
+					this.markOf(name); // unknown window: initialize, skip
+					continue;
+				}
+				const w = [...b.watchers.values()].find((x) => x.name === name);
+				const node = w !== undefined ? b.nodes.get(w.node) : undefined;
+				const untrackedConsumer = node !== undefined && node.name === 'cMix';
+				if (
+					singleBoundary &&
+					!mk.disarmed &&
+					mk.boundaries === 0 &&
+					!untrackedConsumer &&
+					this.preOpTokenWriteSeq > mk.seq &&
+					!mk.notified
+				) {
+					return `delivery-precedes-correction violated: ${name} corrected at ${op.t} (token wrote at seq ${this.preOpTokenWriteSeq} > window ${mk.seq}) with no delivery/suppression/corrective since its window opened`;
+				}
+				// A correction resets the engine's dedup bits: fresh window.
+				this.marks.set(name, { seq: b.seq, notified: false, disarmed: false, boundaries: 0 });
+			}
+		}
+		// Window maintenance from the op stream.
+		if (op.t === 'end' || op.t === 'discardAllWip' || op.t === 'quiesce' || op.t === 'mount' || op.t === 'render') {
+			this.resetAll(); // commits/discards re-baseline; renders re-arm dedup; conservative wholesale reset
+		} else if (singleBoundary) {
+			for (const mk of this.marks.values()) mk.boundaries++;
+		}
+		// A live parked token anywhere in the window disarms (D1 exclusion).
+		let parked = false;
+		for (const tok of b.tokens.values()) {
+			if (tok.parked) {
+				parked = true;
+				break;
+			}
+		}
+		if (parked) {
+			for (const mk of this.marks.values()) mk.disarmed = true;
+		}
+		return undefined;
+	}
 }

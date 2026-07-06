@@ -139,9 +139,14 @@ describe('S-A mark decay (§4.3) + growth (§4.5.9) + GEN tenancy (§4.5.3)', ()
 		w.live = false; // the cone is now unwatched (arena persists until quiesce)
 		for (let i = 2; i <= 8; i++) commitWrite(b, a, i); // write-storm
 		// Each boundary's decay dropped the unconsumed marks to cold: the
-		// dirty lists stay bounded instead of growing with the storm.
-		expect(b.__arenaStats().dirty).toBe(0);
+		// dirty lists stay CONE-bounded instead of growing with the storm.
+		// (Since S-B the armed epilogue's own serves consume the final
+		// boundary's marks, and consumed entries stay listed until the NEXT
+		// decay — drain seeding stands on that persistence — so the bound is
+		// the cone size, never the storm length.)
+		expect(b.__arenaStats().dirty).toBeLessThanOrEqual(2);
 		const w2 = mount(b, 'R', c, 'W2'); // remount ⇒ cold refold serves fresh values
+		expect(b.__arenaStats().dirty).toBe(0); // the commit's decay dropped the consumed leftovers
 		expect(w2.lastRenderedValue).toBe(8);
 	});
 

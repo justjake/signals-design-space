@@ -72,12 +72,12 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(d1.data).toEqual({ watcher: 'W', token: k.id, slot: 0, seq, mode: 'fresh' });
 		expect(d1.cause).toBe(w1.id); // the delivery is provoked by its write
 
-		// Engine mechanics: the flip's newest topology (c now reads a) is
-		// discovered at evaluation sites, not by an eager per-write refresh —
-		// pull once so the a→c edge is recorded (the retroactive replay on
-		// the edge-add is silent here: W's dedup bit is already armed) and
-		// the staged writes below walk the same dependency cone this
-		// narrative assumes.
+		// Engine mechanics: the flip's topology (c now reads a) is discovered
+		// at evaluation sites. Routing structure lives in the per-world
+		// arenas (S-B): the newest pull below feeds the newest memo (core
+		// effects, stage below), and the NEXT stage's pass read records the
+		// a→c link in its own arena — the structure its interleaved
+		// delivery walks.
 		b.newestValue(c);
 	});
 
@@ -93,6 +93,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 	it('pass yield/resume edges; post-pin write delivers interleaved (§5.9)', () => {
 		const p2 = b.passStart('A', [1]);
+		b.passValue(c, p2); // the render reads c: p2's arena records flag→c, a→c (the routing structure the write below walks)
 		b.passYield(p2.id);
 		b.passResume(p2.id);
 		expect(all(tr, 'pass-start')[1]!.data).toEqual({ pass: p2.id, root: 'A', pin: p2.pin, maskSize: 1 });

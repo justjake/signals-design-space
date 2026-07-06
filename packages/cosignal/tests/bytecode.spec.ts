@@ -63,24 +63,23 @@ const BUDGETS: Record<string, number> = {
 	aLink: 230, // 189
 	aLinkInsert: 380, // 325
 	aUnlink: 380, // 321
-	aPropagate: 450, // 384
+	aPropagate: 460, // 453: S-B segregated-list interleave — each descended sub
+	// contributes its weak head as a parked continuation (one shared grow
+	// block; the cycle-cap thrower moved out of line) — AT the inline limit,
+	// exactly like checkDirtyLoop; watch it
 	aShallowPropagate: 140, // 112
 	aPurgeDeps: 170, // 137
 	aAllocLink: 90, // 71
 	aFreeLink: 50, // 37: threads a.linkFree through L_VER (row 2 twin)
 	shadowFor: 310, // 261
-	aNoteAtom: 300, // 262: +41 for the probe-fusion consume branch (B1 cold-pass
-	// shave — skips a full shadowFor per tracked atom read; pair-guard loads
-	// are the price of stale-safety). Still 160+ under the inline limit.
 	foldAtom: 420, // 358
 	aUpdateShadow: 230, // 188
 	aCheckDirty: 100, // 68: B2 split — entry wrapper owning the aCheckSp restore
 	// (was the 567 walk monolith pinned below)
 	aCheckDirtyLoop: 450, // 407: the general arena walk, out of line
 	aUpdateAndShallow: 110, // 59: refold + sibling Pending->Dirty upgrade
-	aUpdateComputed: 450, // 422: B2 split — frame save/restore wrapper (was the
-	// 714 fold monolith pinned below; the outcome ladder moved to aFoldOutcome)
 	aFoldOutcome: 300, // 265: fold-outcome classification, out of line
+	aSyncObsAfterRefold: 130, // 92: S-B out-of-line obs epilogue (observed nodes only)
 };
 
 // Functions over the V8 inline budget, pinned at current size — B2 emptied
@@ -88,7 +87,15 @@ const BUDGETS: Record<string, number> = {
 // 10 and moved into BUDGETS above). A function that outgrows the inline
 // limit gets pinned here (deliberately, justified in the PR); a pin that
 // drops back under it moves into BUDGETS.
-const OVER_LIMIT_PINS: Record<string, number> = {};
+const OVER_LIMIT_PINS: Record<string, number> = {
+	aUpdateComputed: 530, // 511: S-B made the arenas the serving authority —
+	// the refold wrapper gained the M6 observed-capture open (obsRefs probe)
+	// and the paired world-eval trace hooks. Deliberate: the wrapper brackets
+	// a DYNAMIC user-fn call, so inlining the wrapper is not load-bearing
+	// (B2's exit criterion tracked the WALK ARMS — aCheckDirty/-Loop,
+	// aUpdateShadow, aUpdateAndShallow — which all stay inside the budget);
+	// the obs sync epilogue is already out of line (aSyncObsAfterRefold).
+};
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const smoke = path.join(pkgRoot, 'tests', 'fixtures', 'bytecodeSmoke.ts');

@@ -48,7 +48,7 @@ let holderA = b.openBatch();
 b.write(holderA.id, atoms[0], { kind: 'set', value: 1 });
 let holderB;
 
-const k1EdgeCount = () => { let n = 0; for (const s of b.episodeEdges.values()) n += s.size; return n; };
+const k1EdgeCount = () => { let n = 0; for (const s of b.dependencyEdges.values()) n += s.size; return n; };
 const tapeTotal = () => { let n = 0; for (const nd of b.nodes.values()) if (nd.kind === 'atom') n += nd.tp.length; return n; };
 
 const samples = [];
@@ -70,7 +70,7 @@ function takeSample(now) {
 	windowMedians.push(wMed);
 	samples.push({
 		t: (now - t0) / 1000, heap,
-		k1: k1EdgeCount(), k1Keys: b.episodeEdges.size,
+		k1: k1EdgeCount(), k1Keys: b.dependencyEdges.size,
 		tape: tapeTotal(),
 		tokens: b.tokens.size, passes: b.passes.size,
 		events: b.events.length, eventsRate: eventsSinceSample,
