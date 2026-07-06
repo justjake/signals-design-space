@@ -161,6 +161,8 @@ type NodeMeta = {
 	isEqual?: (a: unknown, b: unknown) => boolean;
 	reducer?: (s: unknown, a: unknown) => unknown;
 	rawFn?: (ctx: ComputedCtxImpl) => unknown;
+	/** fn declares a ctx parameter (arity > 0): build the ComputedCtx. */
+	wantsCtx?: boolean;
 	thenableCache?: Map<number, PromiseLike<unknown>[]>;
 	// atom observed-lifecycle (§12.4):
 	observeEffect?: (ctx: AtomCtx<unknown>) => (() => void) | void;
@@ -222,6 +224,14 @@ let tapeStamp = 1;
 // second value slot — one load + one compare + one load for the G-8 loop.
 let worldStamp = 1;
 let newestStamp: number[] = [0];
+// Per-atom count of UNAPPLIED tape entries (id >> 3), maintained alongside
+// the global unappliedEntries; per-node walk-ticket stamp meaning "an atom
+// with unapplied entries is below me" (fresh iff > eraFloor). Newest-world
+// reads of a cone with NO unapplied entries below keep the kernel's
+// exact-pull-count path — the §17.5(b) invisibility property: an unrelated
+// live deferred batch must not change this cone's evaluation counts.
+let unappliedCount: number[] = [0];
+let unappliedStamp: number[] = [0];
 
 let propStack = new Int32Array(4096);
 let propSp = 0;
@@ -441,6 +451,12 @@ function allocNode(flags: number): number {
 	while (newestStamp.length <= r) {
 		newestStamp.push(0);
 	}
+	while (unappliedCount.length <= r) {
+		unappliedCount.push(0);
+	}
+	while (unappliedStamp.length <= r) {
+		unappliedStamp.push(0);
+	}
 	return id;
 }
 
@@ -459,6 +475,8 @@ function freeNode(id: number): void {
 	metaCol[id >> 3] = undefined;
 	memoHeads[id >> 3] = 0;
 	newestStamp[id >> 3] = 0;
+	unappliedCount[id >> 3] = 0;
+	unappliedStamp[id >> 3] = 0;
 	M[id + C.DEPS] = nodeFreeHead;
 	nodeFreeHead = id;
 }
@@ -604,69 +622,93 @@ function linkInsert(dep: number, sub: number, version: number, prevDep: number, 
 	// walk ticket so the mark invariant holds for mid-era new edges.
 	if (loggedAtomCount !== 0) {
 		const depFlags = M[dep + C.FLAGS];
+		const isAtom = (depFlags & C.K_ATOM) !== 0;
 		const depMarked =
-			(depFlags & C.LOGGED) !== 0
-			|| ((depFlags & C.K_ATOM) === 0 && M[dep + C.OVERLAY_STAMP] > eraFloor);
-		if (depMarked && M[sub + C.OVERLAY_STAMP] <= eraFloor) {
-			markCone(sub, walkCounter === eraFloor ? ++walkCounter : walkCounter);
+			(depFlags & C.LOGGED) !== 0 || (!isAtom && M[dep + C.OVERLAY_STAMP] > eraFloor);
+		const depUnapplied = isAtom
+			? unappliedCount[dep >> 3] > 0
+			: unappliedStamp[dep >> 3] > eraFloor;
+		if (
+			(depMarked && M[sub + C.OVERLAY_STAMP] <= eraFloor)
+			|| (depUnapplied && unappliedStamp[sub >> 3] <= eraFloor)
+		) {
+			markCone(
+				sub,
+				walkCounter === eraFloor ? ++walkCounter : walkCounter,
+				depUnapplied,
+			);
 		}
 	}
 }
 
-/** §8.6 — flow the LIVE bit down a producer's dependency list (iterative). */
+/** §8.6 — flow the LIVE bit down a producer's dependency list (iterative,
+ * persistent scratch with saved base — this runs on every liveness-boundary
+ * move, e.g. each branch flip of a watched dynamic computed). */
 function setLiveDown(start: number): void {
-	const stack: number[] = [start];
-	while (stack.length !== 0) {
-		const n = stack.pop()!;
-		if ((M[n + C.FLAGS] & C.LIVE) !== 0 || (M[n + C.FLAGS] & C.KIND_MASK) === 0) {
-			continue;
-		}
-		M[n + C.FLAGS] |= C.LIVE;
-		onLiveChanged(n);
-		let l = M[n + C.DEPS];
-		while (l !== 0) {
-			const dep = M[l + C.DEP];
-			if ((M[dep + C.FLAGS] & C.LIVE) === 0) {
-				stack.push(dep);
+	const stackBase = propSp;
+	let n = start;
+	do {
+		if ((M[n + C.FLAGS] & (C.LIVE | C.KIND_MASK)) !== 0 && (M[n + C.FLAGS] & C.LIVE) === 0) {
+			M[n + C.FLAGS] |= C.LIVE;
+			onLiveChanged(n);
+			let l = M[n + C.DEPS];
+			while (l !== 0) {
+				const dep = M[l + C.DEP];
+				if ((M[dep + C.FLAGS] & C.LIVE) === 0) {
+					if (propSp === propStack.length) {
+						const bigger = new Int32Array(propStack.length * 2);
+						bigger.set(propStack);
+						propStack = bigger;
+					}
+					propStack[propSp++] = dep;
+				}
+				l = M[l + C.NEXT_DEP];
 			}
-			l = M[l + C.NEXT_DEP];
 		}
-	}
+		n = propSp > stackBase ? propStack[--propSp] : 0;
+	} while (n !== 0);
+	propSp = stackBase;
 }
 
 /** §8.6 — clear LIVE when the last LIVE subscriber detaches, flowing down. */
 function maybeClearLive(start: number): void {
-	const stack: number[] = [start];
-	while (stack.length !== 0) {
-		const n = stack.pop()!;
+	const stackBase = propSp;
+	let n = start;
+	do {
 		const flags = M[n + C.FLAGS];
-		if ((flags & C.LIVE) === 0 || (flags & C.KIND_MASK) === 0) {
-			continue;
-		}
-		// Effects/scopes/watchers are born LIVE and stay LIVE.
-		if ((flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0) {
-			continue;
-		}
-		let l = M[n + C.SUBS];
-		let anyLive = false;
-		while (l !== 0) {
-			if ((M[M[l + C.SUB] + C.FLAGS] & C.LIVE) !== 0) {
-				anyLive = true;
-				break;
+		if (
+			(flags & C.LIVE) !== 0
+			&& (flags & C.KIND_MASK) !== 0
+			// Effects/scopes/watchers are born LIVE and stay LIVE.
+			&& (flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) === 0
+		) {
+			let l = M[n + C.SUBS];
+			let anyLive = false;
+			while (l !== 0) {
+				if ((M[M[l + C.SUB] + C.FLAGS] & C.LIVE) !== 0) {
+					anyLive = true;
+					break;
+				}
+				l = M[l + C.NEXT_SUB];
 			}
-			l = M[l + C.NEXT_SUB];
+			if (!anyLive) {
+				M[n + C.FLAGS] = flags & ~C.LIVE;
+				onLiveChanged(n);
+				let d = M[n + C.DEPS];
+				while (d !== 0) {
+					if (propSp === propStack.length) {
+						const bigger = new Int32Array(propStack.length * 2);
+						bigger.set(propStack);
+						propStack = bigger;
+					}
+					propStack[propSp++] = M[d + C.DEP];
+					d = M[d + C.NEXT_DEP];
+				}
+			}
 		}
-		if (anyLive) {
-			continue;
-		}
-		M[n + C.FLAGS] = flags & ~C.LIVE;
-		onLiveChanged(n);
-		let d = M[n + C.DEPS];
-		while (d !== 0) {
-			stack.push(M[d + C.DEP]);
-			d = M[d + C.NEXT_DEP];
-		}
-	}
+		n = propSp > stackBase ? propStack[--propSp] : 0;
+	} while (n !== 0);
+	propSp = stackBase;
 }
 
 /** §12.4 — atom observed-lifecycle: LIVE transitions on atoms carrying an
@@ -679,13 +721,21 @@ function onLiveChanged(node: number): void {
 	}
 }
 
-/** Stamp `node` and its transitive subscribers with `ticket` (mark-only). */
-function markCone(node: number, ticket: number): void {
+/** Stamp `node` and its transitive subscribers with `ticket` (mark-only);
+ * optionally flow the unapplied-cone stamp too (§17.5(b) precision). */
+function markCone(node: number, ticket: number, unapplied = false): void {
 	const stackBase = propSp;
 	let cur = node;
 	do {
-		if (M[cur + C.OVERLAY_STAMP] !== ticket && (M[cur + C.FLAGS] & C.K_ATOM) === 0) {
+		if (
+			(M[cur + C.OVERLAY_STAMP] !== ticket
+				|| (unapplied && unappliedStamp[cur >> 3] !== ticket))
+			&& (M[cur + C.FLAGS] & C.K_ATOM) === 0
+		) {
 			M[cur + C.OVERLAY_STAMP] = ticket;
+			if (unapplied) {
+				unappliedStamp[cur >> 3] = ticket;
+			}
 			let l = M[cur + C.SUBS];
 			while (l !== 0) {
 				if (propSp === propStack.length) {
@@ -924,6 +974,9 @@ function notifyWalk(atom: number, ticket: number, token: number, collect: boolea
 	if (tracer !== undefined) {
 		tracer.emit(TK.NOTIFY_WALK, currentCause, atom, token, ticket, collect ? 1 : 0, 0);
 	}
+	// Deferred (unapplied) writes additionally stamp the unapplied-cone mark:
+	// only cones below unapplied entries need overlay resolution for NEWEST.
+	const unapplied = (token & 1) === 1;
 	const stackBase = propSp;
 	let l = M[atom + C.SUBS];
 	while (l !== 0) {
@@ -937,10 +990,13 @@ function notifyWalk(atom: number, ticket: number, token: number, collect: boolea
 	}
 	while (propSp > stackBase) {
 		const node = propStack[--propSp];
-		if (M[node + C.OVERLAY_STAMP] === ticket) {
+		if (M[node + C.OVERLAY_STAMP] === ticket && (!unapplied || unappliedStamp[node >> 3] === ticket)) {
 			continue; // already visited by THIS walk (diamond dedup)
 		}
 		M[node + C.OVERLAY_STAMP] = ticket;
+		if (unapplied) {
+			unappliedStamp[node >> 3] = ticket;
+		}
 		const flags = M[node + C.FLAGS];
 		if (collect && flags & C.IMMEDIATE) {
 			pushBroadcast(node, token);
@@ -1033,12 +1089,14 @@ function updateComputed(c: number): boolean {
 	M[c + C.OVERLAY_STAMP] = stamp;
 	const prevSub = activeSub;
 	activeSub = c;
+	++enterDepth; // user fn below: no closure rebuild while this frame lives
 	try {
 		++cycle;
 		const v = c >> 2;
 		const oldValue = values[v];
 		return oldValue !== (values[v] = (fns[c >> 3] as (previousValue?: unknown) => unknown)(oldValue));
 	} finally {
+		--enterDepth;
 		activeSub = prevSub;
 		M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
 		purgeDeps(c);
@@ -1071,11 +1129,13 @@ function run(e: number): void {
 		M[e + C.OVERLAY_STAMP] = stamp;
 		const prevSub = activeSub;
 		activeSub = e;
+		++enterDepth;
 		try {
 			++cycle;
 			++runDepth;
 			values[cv] = (fns[e >> 3] as () => (() => void) | void)();
 		} finally {
+			--enterDepth;
 			--runDepth;
 			activeSub = prevSub;
 			M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
@@ -1098,9 +1158,11 @@ function runCleanup(e: number): void {
 	values[cv] = undefined;
 	const prevSub = activeSub;
 	activeSub = 0;
+	++enterDepth;
 	try {
 		cleanup();
 	} finally {
+		--enterDepth;
 		activeSub = prevSub;
 	}
 }
@@ -1235,14 +1297,15 @@ function releaseSlot(s: number): void {
 	}
 }
 
-/** §9.3 — first entry: create the tape (base record) and mark the cone. */
-function createTape(a: number): void {
+/** §9.3 — first entry: create the tape (base record) and mark the cone,
+ * flowing the unapplied-cone stamp when the creating write is deferred. */
+function createTape(a: number, unapplied: boolean): void {
 	const base = allocLog();
 	const t = ticket();
 	G[base + C.L_META] = C.OP_BASE | C.F_RETIRED;
 	G[base + C.L_SEQ] = t;
 	G[base + C.L_RETIRED_SEQ] = t;
-	logVals[base >> 2] = kernelAtomValue(a); // snapshot canonical value
+	logVals[base >> 2] = pendingAtomValue(a); // snapshot newest kernel value (no promotion)
 	M[a + C.LOG_HEAD] = base;
 	M[a + C.LOG_TAIL] = base;
 	M[a + C.FLAGS] |= C.LOGGED;
@@ -1250,8 +1313,9 @@ function createTape(a: number): void {
 	++worldStamp;
 	loggedAtoms.push(a);
 	++loggedAtomCount;
-	// Mark-only walk, unconditionally, whatever the write's classification.
-	notifyWalk(a, ++walkCounter, 0, false);
+	// Mark-only walk, unconditionally, whatever the write's classification;
+	// token bit 0 carries the unapplied flow (no collection either way).
+	notifyWalk(a, ++walkCounter, unapplied ? 1 : 0, false);
 }
 
 function appendLogRec(a: number, op: number, slot: number, payload: unknown, applied: boolean): number {
@@ -1278,6 +1342,7 @@ function appendLogRec(a: number, op: number, slot: number, payload: unknown, app
 		++batchEntryCount[slot];
 		if (!applied) {
 			++unappliedEntries;
+			++unappliedCount[a >> 3];
 		}
 	}
 	if (tracer !== undefined) {
@@ -1297,6 +1362,7 @@ function applyOp(a: number, op: number, payload: unknown, acc: unknown): unknown
 	// whatever world happens to be live at replay time. Debug builds trip on
 	// any read inside this window (see readAtomPublic / readComputedPublic).
 	++replayDepth;
+	++enterDepth;
 	try {
 		if (op === C.OP_UPDATE) {
 			return (payload as (v: unknown) => unknown)(acc);
@@ -1309,6 +1375,7 @@ function applyOp(a: number, op: number, payload: unknown, acc: unknown): unknown
 		return reducer(acc, payload);
 	} finally {
 		--replayDepth;
+		--enterDepth;
 	}
 }
 
@@ -1325,6 +1392,16 @@ function isEqualPolicy(node: number, x: unknown, y: unknown): boolean {
 }
 
 // ---- kernel value access ----------------------------------------------------------
+
+/** The atom's newest kernel value WITHOUT promoting it: the pending slot is
+ * authoritative after any unflushed write. Write paths must use this, never
+ * kernelAtomValue — promotion mid-batch runs updateAtom + shallowPropagate,
+ * which upgrades subscribers to DIRTY and destroys the donor's settle-back
+ * cutoff (batch { set(5); set(0) } must recompute NOTHING — conformance
+ * #123/#132/#147). */
+function pendingAtomValue(a: number): unknown {
+	return values[(a >> 2) + 1];
+}
 
 /** Canonical atom value (promotes a pending kernel write), no tracking. */
 function kernelAtomValue(a: number): unknown {
@@ -1383,10 +1460,12 @@ function firstEvalComputed(c: number): void {
 	M[c + C.OVERLAY_STAMP] = stamp;
 	const prevSub = activeSub;
 	activeSub = c;
+	++enterDepth;
 	try {
 		++cycle;
 		values[c >> 2] = (fns[c >> 3] as (prev?: unknown) => unknown)(undefined);
 	} finally {
+		--enterDepth;
 		activeSub = prevSub;
 		M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
 	}
@@ -1770,6 +1849,13 @@ function resolveComputed(c: number, world: World, track: boolean): unknown {
 		if (worldSensitive && M[c + C.OVERLAY_STAMP] > eraFloor) {
 			// Post-eval re-check: this evaluation's own linking just marked c
 			// (fresh node, or a new branch into a logged atom, §10.4).
+			if (world.kind === WK.NEWEST && unappliedStamp[c >> 3] <= eraFloor) {
+				// Marked mid-eval, but nothing unapplied below: the kernel
+				// value IS the newest value (Wn(c) ≡ W0(c)); re-evaluating
+				// through the overlay would double-run side-effecting fns
+				// (conformance #179).
+				return v;
+			}
 			return overlayEvaluate(c, world);
 		}
 		return v;
@@ -1780,6 +1866,17 @@ function resolveComputed(c: number, world: World, track: boolean): unknown {
 		}
 		if (newestStamp[c >> 3] === worldStamp) {
 			return values[(c >> 2) + 1]; // validated this world-state (see above)
+		}
+		if (unappliedStamp[c >> 3] <= eraFloor) {
+			// No unapplied entry below this node: Wn(c) ≡ W0(c). Keep the
+			// kernel's exact-pull-count path — an unrelated live deferred
+			// batch must be invisible to this cone (§17.5(b)); re-check the
+			// stamp after evaluation (a new edge may have flowed it, §10.4).
+			const v = kernelComputedRead(c, track);
+			if (unappliedStamp[c >> 3] > eraFloor) {
+				return overlayEvaluate(c, world);
+			}
+			return v;
 		}
 	}
 	return overlayEvaluate(c, world);
@@ -1845,6 +1942,32 @@ function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
 	if (rawFn === undefined) {
 		throw new Error('cosignals-alt-b: computed has no fn');
 	}
+	if (m!.wantsCtx !== true) {
+		// Zero-allocation evaluation for ctx-less fns (no suspense possible).
+		let next: unknown;
+		++enterDepth;
+		try {
+			next = (rawFn as unknown as () => unknown)();
+		} catch (e) {
+			if (isErrorBox(prev) && Object.is(prev.error, e)) {
+				return prev;
+			}
+			return { kind: 'error', error: e } as ErrorBox;
+		} finally {
+			--enterDepth;
+		}
+		if (
+			prev !== undefined
+			&& !isErrorBox(prev)
+			&& !isSuspendedBox(prev)
+			&& !isErrorBox(next)
+			&& !isSuspendedBox(next)
+			&& isEqualPolicy(c, prev, next)
+		) {
+			return prev;
+		}
+		return next;
+	}
 	let useIndex = 0;
 	let suspended: PromiseLike<unknown> | undefined;
 	const ctx: ComputedCtxImpl = {
@@ -1873,6 +1996,7 @@ function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
 		},
 	};
 	let next: unknown;
+	++enterDepth;
 	try {
 		next = rawFn(ctx);
 	} catch (e) {
@@ -1886,6 +2010,8 @@ function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
 			return prev;
 		}
 		return { kind: 'error', error: e } as ErrorBox;
+	} finally {
+		--enterDepth;
 	}
 	if (
 		prev !== undefined
@@ -1925,7 +2051,7 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 	}
 	if (writeMode === Mode.DIRECT) {
 		// DIRECT: the proven kernel write, zero overlay instructions (§9.1).
-		const cur = kernelAtomValue(a);
+		const cur = pendingAtomValue(a);
 		const next = applyOp(a, op, payload, cur);
 		if (isEqualPolicy(a, cur, next)) {
 			return;
@@ -1935,8 +2061,10 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 		// tracer's choke points are tape append and overlay read resolution
 		// (§16.2), which do not exist in DIRECT mode. Kernel-internal detail
 		// belongs to the traced-kernel stamp, not per-site checks.
-		kernelWrite(a, next);
-		if (batchDepth === 0) {
+		// Donor discipline: flush/drain only when the write actually
+		// propagated (kernelWrite returns false for subscriber-less atoms —
+		// the unobserved-write fast path).
+		if (kernelWrite(a, next) && batchDepth === 0) {
 			flush();
 			drainAll();
 		}
@@ -1957,13 +2085,13 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 	let coalesced = false;
 	if (M[a + C.LOG_HEAD] === 0) {
 		// Equality drop — provably safe only while tapeless (§9.3): evaluate
-		// once against the base-to-be value.
-		const cur = kernelAtomValue(a);
+		// once against the base-to-be value (the pending slot: no promotion).
+		const cur = pendingAtomValue(a);
 		const next = applyOp(a, op, payload, cur);
 		if (isEqualPolicy(a, cur, next)) {
 			return;
 		}
-		createTape(a);
+		createTape(a, !applied);
 	} else if (passOpen === 0 && slot >= 0 && metaCol[a >> 3]?.isEqual === undefined) {
 		// Same-batch coalescing (§9.3): only when no render pass is open (a
 		// pass may be pinned between the writes) AND the atom uses identity
@@ -2039,7 +2167,7 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 	}
 	if (applied) {
 		// Urgent: logged AND applied through the kernel (§9.4).
-		const cur = kernelAtomValue(a);
+		const cur = pendingAtomValue(a);
 		const next = applyOp(a, op, payload, cur);
 		if (!isEqualPolicy(a, cur, next)) {
 			kernelWrite(a, next);
@@ -2058,6 +2186,13 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 		pendingWalks.push(a, token);
 		if (slot >= 0) {
 			drainDirtySlots |= 1 << slot;
+		}
+		if (batchDepth !== 0 || drainDepth !== 0) {
+			// The collecting walk is deferred to the drain (§9.8 grouping),
+			// but user code inside this batch/drain can read NEWEST before
+			// then: flow the unapplied-cone stamp immediately (mark-only) so
+			// those reads route through the overlay and see this entry.
+			notifyWalk(a, ++walkCounter, 1, false);
 		}
 	}
 	if (batchDepth === 0) {
@@ -2271,7 +2406,12 @@ function broadcastDecide(w: number, token: number): void {
 	}
 	if (changed) {
 		m.lastBroadcast!.set(key, v);
-		m.cb!(token);
+		++enterDepth;
+		try {
+			m.cb!(token);
+		} finally {
+			--enterDepth;
+		}
 	}
 }
 
@@ -2374,6 +2514,7 @@ function onRetired(token: number): void {
 						G[rec + C.L_RETIRED_SEQ] = rseq;
 						if ((meta & C.F_APPLIED) === 0) {
 							--unappliedEntries;
+							--unappliedCount[a >> 3];
 						}
 						touched = true;
 					}
@@ -2383,7 +2524,7 @@ function onRetired(token: number): void {
 					// Absorb (§9.5): replay the W0 fold; committed=false batches
 					// fold identically (the writes are real).
 					const fold = foldTape(a, WORLD_W0);
-					const cur = kernelAtomValue(a);
+					const cur = pendingAtomValue(a);
 					const changed = !isEqualPolicy(a, cur, fold);
 					if (changed) {
 						kernelWrite(a, fold);
@@ -2499,6 +2640,7 @@ function truncateBatchBySlot(s: number): void {
 				}
 				if ((meta & C.F_APPLIED) === 0) {
 					--unappliedEntries;
+					--unappliedCount[a >> 3];
 				} else {
 					touched = true;
 				}
@@ -2521,7 +2663,7 @@ function truncateBatchBySlot(s: number): void {
 	// Truncating applied entries moves W0: restore the invariant.
 	for (const a of touchedApplied) {
 		const fold = foldTape(a, WORLD_W0);
-		const cur = kernelAtomValue(a);
+		const cur = pendingAtomValue(a);
 		if (!isEqualPolicy(a, cur, fold)) {
 			kernelWrite(a, fold);
 		}
@@ -2582,16 +2724,8 @@ function maybeQuiesce(): void {
 // ---- public read paths ---------------------------------------------------------------
 
 function readAtomPublic(a: number): unknown {
-	if (replayDepth !== 0 && debugChecks) {
-		throw new Error(
-			'cosignals-alt-b: signal read inside an updater/reducer replay — updaters must be pure functions of their arguments (§12.2; capture values before the write instead)',
-		);
-	}
-	if (captureList !== undefined) {
-		captureList.push(a);
-	}
-	if (ovDepth !== 0) {
-		return overlayReadAtom(a); // overlay evaluation: world fold + certificate
+	if ((replayDepth | ovDepth) !== 0 || captureList !== undefined) {
+		return readAtomCold(a);
 	}
 	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
 		// Canonical evaluation reads W0 by construction (§10.1) and tracks.
@@ -2613,7 +2747,54 @@ function readAtomPublic(a: number): unknown {
 	return foldTape(a, worldOfCtx(currentCtx));
 }
 
+function readAtomCold(a: number): unknown {
+	if (replayDepth !== 0 && debugChecks) {
+		throw new Error(
+			'cosignals-alt-b: signal read inside an updater/reducer replay — updaters must be pure functions of their arguments (§12.2; capture values before the write instead)',
+		);
+	}
+	if (captureList !== undefined) {
+		captureList.push(a);
+	}
+	if (ovDepth !== 0) {
+		return overlayReadAtom(a); // overlay evaluation: world fold + certificate
+	}
+	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
+		const v = kernelAtomValue(a);
+		link(a, activeSub, cycle);
+		return v;
+	}
+	const flags = M[a + C.FLAGS];
+	if ((flags & C.LOGGED) === 0) {
+		const v = kernelAtomValue(a);
+		if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+			link(a, activeSub, cycle);
+		}
+		return v;
+	}
+	if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+		link(a, activeSub, cycle);
+	}
+	return foldTape(a, worldOfCtx(currentCtx));
+}
+
 function readComputedPublic(c: number): unknown {
+	// One fused guard for the three cold dispatches (replay trap, capture,
+	// overlay recursion): all zero/undefined on the hot path.
+	if ((replayDepth | ovDepth) !== 0 || captureList !== undefined) {
+		return readComputedCold(c);
+	}
+	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
+		return kernelComputedRead(c, true); // canonical nesting: W0
+	}
+	if (loggedAtomCount === 0 && currentCtx === Ctx.NEWEST) {
+		return kernelComputedRead(c, true);
+	}
+	const track = currentCtx !== Ctx.RENDER;
+	return resolveComputed(c, worldOfCtx(currentCtx), track);
+}
+
+function readComputedCold(c: number): unknown {
 	if (replayDepth !== 0 && debugChecks) {
 		throw new Error(
 			'cosignals-alt-b: signal read inside an updater/reducer replay — updaters must be pure functions of their arguments (§12.2; capture values before the write instead)',
@@ -2631,6 +2812,9 @@ function readComputedPublic(c: number): unknown {
 	}
 	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
 		return kernelComputedRead(c, true); // canonical nesting: W0
+	}
+	if (loggedAtomCount === 0 && currentCtx === Ctx.NEWEST) {
+		return kernelComputedRead(c, true); // quiescent fast path (the read gate)
 	}
 	const track = currentCtx !== Ctx.RENDER; // render never mutates topology (§10.3)
 	return resolveComputed(c, worldOfCtx(currentCtx), track);
@@ -2832,10 +3016,12 @@ function makeEffect(fn: () => void | (() => void)): { id: number; gen: number } 
 		link(e, prevSub, 0);
 		M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
 	}
+	++enterDepth;
 	try {
 		++runDepth;
 		values[(e >> 2) + 1] = fn();
 	} finally {
+		--enterDepth;
 		--runDepth;
 		activeSub = prevSub;
 		M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
@@ -2851,9 +3037,11 @@ function makeScope(fn: () => void): { id: number; gen: number } {
 		link(e, prevSub, 0);
 		M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
 	}
+	++enterDepth;
 	try {
 		fn();
 	} finally {
+		--enterDepth;
 		activeSub = prevSub;
 	}
 	return { id: e, gen: M[e + C.GEN] };
@@ -2939,7 +3127,7 @@ function finalizeRecord(held: { id: number; gen: number }): void {
 		kernelAtomValue,
 		kernelSet: (id: number, value: unknown) => {
 			// SSR install: an ordinary kernel SET before hydration (§13.8).
-			const cur = kernelAtomValue(id);
+			const cur = pendingAtomValue(id);
 			if (!isEqualPolicy(id, cur, value)) {
 				if (loggedAtomCount !== 0) {
 					// Bypasses the tape machinery: wholesale-invalidate any
@@ -2974,6 +3162,17 @@ type EngineCore = ReturnType<typeof createEngineCore>;
 // ---- §14.1 boundary machinery and late-bound entry wrappers ------------------------
 
 let E: EngineCore = createEngineCore(...createBuffers());
+// Hot-path function refs hoisted out of the E object (one var load instead of
+// a method-property load per read/write); rebound at every rebuild.
+let hotReadAtom = E.readAtomPublic;
+let hotReadComputed = E.readComputedPublic;
+let hotAtomWrite = E.atomWrite;
+
+function rebindHotPaths(): void {
+	hotReadAtom = E.readAtomPublic;
+	hotReadComputed = E.readComputedPublic;
+	hotAtomWrite = E.atomWrite;
+}
 
 function createBuffers(): [Int32Array, Int32Array, Int32Array, Int32Array] {
 	return [
@@ -3009,6 +3208,7 @@ function boundaryWork(): void {
 	const cert = growBuf(b.cert, certNext, 4096);
 	if (m !== b.m || g !== b.g || w !== b.w || cert !== b.cert) {
 		E = createEngineCore(m, g, w, cert);
+		rebindHotPaths();
 	}
 }
 
@@ -3027,47 +3227,31 @@ function enter<T>(fn: () => T): T {
 	}
 }
 
+// The enterDepth growth guard lives INSIDE the engine core at every site
+// that invokes user code (updateComputed/run/makeEffect/applyOp/...): only
+// frames that can reach a constructor's boundary() need guarding, so these
+// entry wrappers stay call-free on the hot path (donor discipline).
 function atomWriteEntry(node: number, op: number, payload: unknown): void {
 	boundary();
-	++enterDepth;
-	try {
-		E.atomWrite(node, op, payload);
-	} finally {
-		--enterDepth;
-	}
+	hotAtomWrite(node, op, payload);
 	boundary();
 }
 
 function readEntryAtom(node: number): unknown {
-	++enterDepth;
-	try {
-		return E.readAtomPublic(node);
-	} finally {
-		--enterDepth;
-	}
+	return hotReadAtom(node);
 }
 
 function readEntryComputed(node: number): unknown {
-	++enterDepth;
-	try {
-		return E.readComputedPublic(node);
-	} finally {
-		--enterDepth;
-	}
+	return hotReadComputed(node);
 }
 
 function peekEntry(node: number): unknown {
-	++enterDepth;
+	const prevSub = activeSub;
+	activeSub = 0;
 	try {
-		const prevSub = activeSub;
-		activeSub = 0;
-		try {
-			return E.readAtomPublic(node);
-		} finally {
-			activeSub = prevSub;
-		}
+		return hotReadAtom(node);
 	} finally {
-		--enterDepth;
+		activeSub = prevSub;
 	}
 }
 
@@ -3172,6 +3356,8 @@ export function __resetEngineForTests(options?: {
 	tapeStamp = 1;
 	worldStamp = 1;
 	newestStamp = [0];
+	unappliedCount = [0];
+	unappliedStamp = [0];
 	propStack = new Int32Array(4096);
 	propSp = 0;
 	checkStack = new Int32Array(4096);
@@ -3217,6 +3403,7 @@ export function __resetEngineForTests(options?: {
 	rootCommittedMask = 0;
 	captureList = undefined;
 	E = createEngineCore(...createBuffers());
+	rebindHotPaths();
 }
 // ---- the bridge (§13 preamble, driven by the fork double) --------------------------
 
@@ -3443,11 +3630,36 @@ export class Computed<T> {
 		this.id = id;
 		metaCol[id >> 3] = {
 			rawFn: options.fn as unknown as (ctx: ComputedCtxImpl) => unknown,
+			// Arity-gated ctx: fns that do not declare a ctx parameter (the
+			// overwhelmingly common case) evaluate with zero per-run
+			// allocation — no ctx object, no `use` closure.
+			wantsCtx: options.fn.length > 0,
 			isEqual: options.isEqual as ((a: unknown, b: unknown) => boolean) | undefined,
 			label: options.label,
 		};
-		// Late-bound through E so the closure survives engine rebuilds.
-		fns[id >> 3] = (prev: unknown) => E.runComputedFn(id, prev, 0);
+		if (options.fn.length === 0 && options.isEqual === undefined) {
+			// Specialized kernel wrapper for the hot case (no ctx, identity
+			// equality): one call frame over the user fn, box-stable errors.
+			// Touches no plane buffers, so it is rebuild-safe by construction.
+			const raw = options.fn as unknown as () => unknown;
+			fns[id >> 3] = (prev: unknown): unknown => {
+				++enterDepth;
+				try {
+					const next = raw();
+					return prev !== undefined && Object.is(prev, next) ? prev : next;
+				} catch (e) {
+					if (isErrorBox(prev) && Object.is(prev.error, e)) {
+						return prev;
+					}
+					return { kind: 'error', error: e } as ErrorBox;
+				} finally {
+					--enterDepth;
+				}
+			};
+		} else {
+			// Late-bound through E so the closure survives engine rebuilds.
+			fns[id >> 3] = (prev: unknown) => E.runComputedFn(id, prev, 0);
+		}
 		E.registerHandle(this, id);
 	}
 	/** Rethrows cached errors; throws the thenable while suspended (§11.3). */
@@ -3466,24 +3678,24 @@ export class Computed<T> {
 /** Synchronous reactive effect over canonical state (§4.4). */
 export function effect(fn: () => void | (() => void)): () => void {
 	boundary();
-	const h = enter(() => E.makeEffect(fn));
+	const h = E.makeEffect(fn);
 	return () => {
 		if (E.gen(h.id) !== h.gen) {
 			return;
 		}
-		enter(() => E.dispose(h.id));
+		E.dispose(h.id);
 		boundary();
 	};
 }
 
 export function effectScope(fn: () => void): () => void {
 	boundary();
-	const h = enter(() => E.makeScope(fn));
+	const h = E.makeScope(fn);
 	return () => {
 		if (E.gen(h.id) !== h.gen) {
 			return;
 		}
-		enter(() => E.dispose(h.id));
+		E.dispose(h.id);
 		boundary();
 	};
 }
@@ -3495,10 +3707,8 @@ export function batch<T>(fn: () => T): T {
 		return fn();
 	} finally {
 		if (--batchDepth === 0) {
-			enter(() => {
-				E.flush();
-				E.drainAll();
-			});
+			E.flush();
+			E.drainAll();
 			boundary();
 		}
 	}
@@ -3511,10 +3721,8 @@ export function startBatch(): void {
 
 export function endBatch(): void {
 	if (--batchDepth === 0) {
-		enter(() => {
-			E.flush();
-			E.drainAll();
-		});
+		E.flush();
+		E.drainAll();
 		boundary();
 	}
 }
@@ -3564,14 +3772,14 @@ export type WatcherHandle = {
  */
 export function createWatcher(signal: SignalLike, cb: (token: number) => void): WatcherHandle {
 	boundary();
-	const h = enter(() => E.makeWatcher(signal.id, cb));
+	const h = E.makeWatcher(signal.id, cb);
 	return {
 		id: h.id,
 		dispose() {
 			if (E.gen(h.id) !== h.gen) {
 				return;
 			}
-			enter(() => E.dispose(h.id));
+			E.dispose(h.id);
 			boundary();
 		},
 	};

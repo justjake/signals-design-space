@@ -156,6 +156,9 @@ importers:
       '@types/node':
         specifier: 24.13.2
         version: 24.13.2
+      reactive-framework-test-suite:
+        specifier: 0.0.2
+        version: 0.0.2
       typescript:
         specifier: 6.0.3
         version: 6.0.3
