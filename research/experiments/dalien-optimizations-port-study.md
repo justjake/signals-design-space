@@ -175,3 +175,19 @@ outrank raw ns.
 - **Parked:** row 3 FR lifecycle (memory feature, D4 anchor conflict, no speed win);
   row 2's shadow-arena freelist twin lands with B1's concurrent.ts work if its
   mini-audit confirms reachability (it is the same pattern, so default-assume yes).
+
+## B3 outcome (2026-07-06): quiet-epoch port REJECTED BY MEASUREMENT
+
+Ported completely (three subtleties pinned + mutation-tested; full
+battery green; 290+1 tests) and measured net-negative on EVERY gate
+shape: reads +3.1% (the designated 0.67x winner!), isolate +9.2%,
+write +1.5%, deepPropagate +7.9%. Structural root cause: a stamp hit
+can only occur when flags are also clean, so the stamp is a strictly
+redundant second certificate over cosignal one-load flags fast path —
+the D3 hot/cold split already banked the win dalien bought with its
+heavier pre-stamp ladder (retired check, getter carry, FN_INSTALLED).
+Ceiling argument: even the record-0 epoch-slot lever caps at ~parity
+on the winners. Reverted per gate discipline; port + pins archived at
+research/experiments/b3-quiet-epoch-rejected/ (383-line patch +
+222-line spec). Do not retry without invalidating the ceiling
+argument.

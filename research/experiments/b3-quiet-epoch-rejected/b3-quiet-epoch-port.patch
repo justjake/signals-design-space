@@ -1,0 +1,383 @@
+diff --git a/packages/cosignal/src/index.ts b/packages/cosignal/src/index.ts
+index bb4549d..4783e7c 100644
+--- a/packages/cosignal/src/index.ts
++++ b/packages/cosignal/src/index.ts
+@@ -127,14 +127,15 @@
+  * paths, reached rarely; the hot walks are untouched — measured ≈parity on
+  * benchmark workloads):
+  *
+- *   D1. Node field 6 (otherwise a spare pad field) is `NodeField.LIFECYCLE`: a 0/1
+- *       flag set at creation for atoms carrying an observed-lifecycle
+- *       effect, so the kernel's own liveness transitions can feed the
+- *       observed-lifecycle option (AtomOptions.effect) — one consumer kind
+- *       of the observation union (bridge watchers are the other; see the
+- *       observed-lifecycle section). Checked only in linkInsert's
+- *       first-subscriber branch and in unwatched()'s signal branch; cleared
+- *       in freeNode.
++ *   D1. `NodeFlag.LIFECYCLE`: a flag bit set at creation for atoms carrying
++ *       an observed-lifecycle effect, so the kernel's own liveness
++ *       transitions can feed the observed-lifecycle option
++ *       (AtomOptions.effect) — one consumer kind of the observation union
++ *       (bridge watchers are the other; see the observed-lifecycle
++ *       section). Checked only in linkInsert's first-subscriber branch and
++ *       in unwatched()'s signal branch; cleared with the rest of the flags
++ *       word in freeNode. (It lived in node field 6 until the quiet-epoch
++ *       stamp — see D8 — took node fields 6-7.)
+  *   D2. computedRead throws CycleError when the computed is re-entered
+  *       during its own evaluation: reading a computed while its own
+  *       evaluation frame is open is a dependency cycle, and throwing beats
+@@ -167,6 +168,19 @@
+  *       upstream's closure handles (signal()/computed());
+  *       effect/effectScope/batch/untracked stay thin function wrappers over
+  *       the kernel ops.
++ *   D8. Quiet-epoch clean-read fast path (dalien port): a global write
++ *       epoch (module scalar, bumped only on OBSERVED writes and observed
++ *       settlement-invalidations) plus a per-computed verification stamp in
++ *       node fields 6-7 (one f64 through the D view). computedRead's first
++ *       test is stamp == epoch: a hit returns the cached value in 1-2
++ *       compares, skipping the whole flags ladder. Correctness pins:
++ *       stamps are written with the ENTRY-captured epoch (an inner write
++ *       mid-getter can only force a miss, never a lie); stamps are cleared
++ *       wherever a node is marked stale WITHOUT a write (unwatched,
++ *       invalidateComputed, freeNode) and at updateComputed's eval start
++ *       (D2: a re-entrant read must reach the CycleError, not a fast hit);
++ *       HAS_BOX outcomes are never stamped (D3's boxed tail must keep
++ *       re-probing). See tests/quiet-epoch.spec.ts.
+  *
+  * Everything else — GROWTH (closure rebuild over doubled buffers, swap at
+  * operation boundaries only) and RECLAMATION (deferred free of disposed
+@@ -315,8 +329,15 @@ const enum NodeField {
+ 	SUBS = 3,
+ 	SUBS_TAIL = 4,
+ 	GEN = 5, // bumped on free; disposers capture it to defuse stale ids
+-	LIFECYCLE = 6, // D1: 1 iff the node is an atom with an observed-lifecycle effect
+-	// field 7 spare (pad to one cache line per record)
++	// Quiet-epoch verification stamp (dalien port study row 1): slots 6-7
++	// hold ONE float64 — the write epoch at which this computed was last
++	// verified clean — read/written through the D Float64Array view over the
++	// same buffer (one load + one compare on the read fast path). Same cache
++	// line as FLAGS. The f64 index is (id >> Arena.ID_TO_STAMP_SHIFT) +
++	// Arena.STAMP_OFFSET: records are 32 bytes and the stamp sits at byte
++	// offset 24, so 8-byte alignment holds. Only computeds are ever stamped.
++	VSTAMP_HI = 6,
++	VSTAMP_LO = 7,
+ }
+ 
+ /** Field offsets within a LINK record (link records share the arena, stride,
+@@ -366,6 +387,19 @@ const enum NodeFlag {
+ 	/** Refines HAS_BOX (never set without it): the payload is a pending
+ 	 * thenable, not a thrown error. */
+ 	BOX_SUSPENDED = 4096,
++	/** D1: set iff the node is an atom with an observed-lifecycle effect
++	 * (was node field 6 before the quiet-epoch stamp took slots 6-7).
++	 * Checked only in linkInsert's first-subscriber branch and unwatched()'s
++	 * signal branch; set by markLifecycle (cold, Atom construction). Signal
++	 * flag rewrites (write/updateSignal) must PRESERVE it — they use |=/&=,
++	 * which is exactly equivalent for signals: a signal's flags are only
++	 * ever touched by newSignal/markLifecycle/write/updateSignal/freeNode
++	 * (propagate/shallowPropagate mark SUBSCRIBERS, and a signal is never a
++	 * subscriber). Value note: 8192 is deliberately skipped — the shadow
++	 * arenas (./concurrent.ts AFlag) mirror kernel flag values and use 8192
++	 * for their own VALID bit; keeping the namespaces disjoint keeps every
++	 * flags-word dump unambiguous. */
++	LIFECYCLE = 16384,
+ }
+ 
+ /** Arena geometry: the strides, shifts, and offsets that address a record's
+@@ -379,6 +413,11 @@ const enum Arena {
+ 	/** id >> ID_TO_FN_SHIFT: premultiplied id → the record's index in the
+ 	 * `fns` side column (one fn slot per record: 8 / 8 = 1). */
+ 	ID_TO_FN_SHIFT = 3,
++	/** (id >> ID_TO_STAMP_SHIFT) + STAMP_OFFSET: premultiplied id → the
++	 * record's quiet-epoch stamp index in the D Float64Array view (i32
++	 * fields 6-7 = f64 slot 3 of the 4-slot record). */
++	ID_TO_STAMP_SHIFT = 1,
++	STAMP_OFFSET = 3,
+ 	/** valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
+ 	 * signal's pending value, an effect's cleanup fn, or the computed's
+ 	 * owning Computed instance (D4). */
+@@ -406,6 +445,18 @@ let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.FRE
+ let growPending = false;
+ 
+ let cycle: Version = 0;
++// Global write epoch (quiet-epoch clean-read fast path, dalien port study
++// row 1): a computed whose VSTAMP equals the current epoch is provably
++// current — nothing observed has been written since it was last verified —
++// so computedRead skips the flags ladder entirely. Bumped ONLY where a
++// stamped node could go stale: observed signal writes (write()'s subs
++// branch — an unobserved write can invalidate no stamp, because a stamped
++// node has/had dep links and would have been propagated to) and observed
++// settlement-invalidations (invalidateComputed's subs branch). A float64
++// epoch never wraps (2^53 writes = decades at 10ns/write). Module-level so
++// closure rebuilds resume where the old engine stopped (stamps ride the
++// carried buffer).
++let epoch = 1;
+ let runDepth = 0;
+ let batchDepth = 0;
+ let notifyIndex = 0;
+@@ -461,6 +512,12 @@ interface Engine {
+ 
+ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 	const M = new Int32Array(records * Arena.STRIDE);
++	// Float64 view over the same buffer for the one-slot quiet-epoch stamps
++	// (NodeField.VSTAMP_HI/LO): one f64 load + compare on the read fast path
++	// instead of two i32 loads. Growth carries the stamps with the records
++	// (M.set(carry) below copies bytes; epoch is module-level), so stamps
++	// stay valid across a closure rebuild.
++	const D = new Float64Array(M.buffer);
+ 	// Bundler-proof aliases for the module-level side arrays: esbuild
+ 	// bundling demotes module-scope `const` to mutable `var`, so TurboFan
+ 	// loses their constant-folding at module scope; a function-scope const
+@@ -499,7 +556,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 		sweepPendingFree,
+ 		invalidateComputed,
+ 		markLifecycle: (id) => {
+-			M[id + NodeField.LIFECYCLE] = 1;
++			M[id + NodeField.FLAGS] |= NodeFlag.LIFECYCLE;
+ 		},
+ 		activeIsComputed: () => activeSub !== 0 && (M[activeSub + NodeField.FLAGS] & NodeFlag.K_COMPUTED) !== 0,
+ 	};
+@@ -534,11 +591,15 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 	}
+ 
+ 	function freeNode(id: NodeId): void {
++		// Quiet-epoch subtlety 2 (invalidate at free): a recycled record must
++		// never inherit the previous tenant's stamp — a fresh computed reusing
++		// this id would otherwise fast-hit before its first evaluation. (The
++		// FLAGS zeroing below also clears the D1 LIFECYCLE bit.)
++		D[(id >> Arena.ID_TO_STAMP_SHIFT) + Arena.STAMP_OFFSET] = 0;
+ 		M[id + NodeField.FLAGS] = 0;
+ 		M[id + NodeField.DEPS_TAIL] = 0;
+ 		M[id + NodeField.SUBS] = 0;
+ 		M[id + NodeField.SUBS_TAIL] = 0;
+-		M[id + NodeField.LIFECYCLE] = 0; // D1
+ 		++M[id + NodeField.GEN];
+ 		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
+ 		vals[v] = undefined;
+@@ -626,7 +687,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 		} else {
+ 			M[dep + NodeField.SUBS] = newLink;
+ 			// D1: first subscriber attached — the liveness bit flips 0→1.
+-			if (M[dep + NodeField.LIFECYCLE] !== 0) {
++			if (M[dep + NodeField.FLAGS] & NodeFlag.LIFECYCLE) {
+ 				lifecycleWatched(dep);
+ 			}
+ 		}
+@@ -1007,13 +1068,19 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 	function unwatched(node: NodeId): void {
+ 		const flags = M[node + NodeField.FLAGS];
+ 		if (flags & NodeFlag.K_COMPUTED) {
++			// Quiet-epoch subtlety 2 (invalidate at unwatched): alien
++			// recomputes an unwatched computed on its next read — it is
++			// marked Dirty here WITHOUT any write, so no epoch bump makes the
++			// stamp stale. Drop it so the fast path cannot skip that
++			// recompute (pull-count exactness vs alien; conformance polices).
++			D[(node >> Arena.ID_TO_STAMP_SHIFT) + Arena.STAMP_OFFSET] = 0;
+ 			if (M[node + NodeField.DEPS_TAIL] !== 0) {
+ 				M[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY;
+ 				disposeAllDepsInReverse(node);
+ 			}
+ 		} else if (flags & NodeFlag.K_SIGNAL) {
+ 			// D1: last subscriber detached — the liveness bit flips 1→0.
+-			if (M[node + NodeField.LIFECYCLE] !== 0) {
++			if (flags & NodeFlag.LIFECYCLE) {
+ 				lifecycleUnwatched(node);
+ 			}
+ 		} else if (flags & (NodeFlag.K_EFFECT | NodeFlag.K_SCOPE)) {
+@@ -1040,6 +1107,16 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 		if (oldFlags & NodeFlag.HAS_CHILD_EFFECT) {
+ 			unlinkChildEffects(c);
+ 		}
++		// Quiet-epoch × D2: drop the stamp for the whole evaluation. A
++		// re-entrant read mid-walk can verify-and-stamp this node at the
++		// CURRENT epoch just before an outer walk re-updates it (tolerated
++		// writes-in-computeds reach that interleaving); with a live stamp, a
++		// re-entrant read during THIS evaluation would fast-hit the stale
++		// cache instead of reaching the RECURSED_CHECK CycleError throw. The
++		// clear also guarantees a boxed outcome (storeThrown in the catch)
++		// can never sit behind a matching stamp — the read tails additionally
++		// never stamp HAS_BOX results.
++		D[(c >> Arena.ID_TO_STAMP_SHIFT) + Arena.STAMP_OFFSET] = 0;
+ 		M[c + NodeField.DEPS_TAIL] = 0;
+ 		// D3: the eval-start rewrite PRESERVES the exceptional bits — while the
+ 		// getter runs, the value slot still holds the PREVIOUS outcome, and
+@@ -1079,7 +1156,9 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 	}
+ 
+ 	function updateSignal(s: NodeId): boolean {
+-		M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE;
++		// &= (not the upstream wholesale store) preserves the D1 LIFECYCLE
++		// bit; equivalent otherwise — see NodeFlag.LIFECYCLE.
++		M[s + NodeField.FLAGS] &= ~NodeFlag.DIRTY;
+ 		const v: ValueIndex = s >> Arena.ID_TO_VALUE_SHIFT;
+ 		return vals[v] !== (vals[v] = vals[v + Arena.AUX_VALUE_OFFSET]);
+ 	}
+@@ -1259,9 +1338,19 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 	function write(s: NodeId, value: unknown): boolean {
+ 		const p: ValueIndex = (s >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
+ 		if (vals[p] !== (vals[p] = value)) {
+-			M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE | NodeFlag.DIRTY;
++			// |= (not the upstream wholesale store) preserves the D1
++			// LIFECYCLE bit; equivalent otherwise — see NodeFlag.LIFECYCLE.
++			M[s + NodeField.FLAGS] |= NodeFlag.DIRTY;
+ 			const subs = M[s + NodeField.SUBS];
+ 			if (subs !== 0) {
++				// Quiet-epoch subtlety 3: bump ONLY on OBSERVED writes. A
++				// stamped computed has (or had, until unwatched cleared its
++				// stamp) dep links, so a write it could observe lands here;
++				// an unobserved write can stale no stamp — unobserved write
++				// throughput keeps its exact shape. Quiet-mode bridge writes
++				// funnel through this same path (__hostApplySet → writeAtom →
++				// E.write), so they bump iff the kernel node is observed.
++				++epoch;
+ 				propagate(subs, runDepth !== 0);
+ 				return true;
+ 			}
+@@ -1276,13 +1365,34 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 	// mask test routes every non-trivial case — mid-evaluation re-entry (D2),
+ 	// dirty/pending revalidation, first evaluation, boxed cache (D3) — to the
+ 	// out-of-line slow path.
++	//
++	// Quiet-epoch fast path FIRST (dalien port study row 1): stamp == epoch
++	// proves the cached value current — nothing observed was written since
++	// this node was last verified — skipping even the flags load. It can
++	// never hit for a node that must take the slow path: every DIRTY/PENDING
++	// mark arrives via an epoch bump (observed write / observed settlement)
++	// or an explicit stamp clear (unwatched, invalidateComputed, freeNode);
++	// RECURSED_CHECK evaluations run with the stamp cleared (updateComputed)
++	// and boxed outcomes are never stamped; a never-evaluated node's stamp is
++	// 0 and the epoch starts at 1. The tracked-read link is identical to the
++	// slow tail's, so a first subscription arriving through this path wires
++	// lifecycle exactly the same way (cosignal getters are installed
++	// permanently at newComputed — no borrow step exists to miss).
+ 	function computedRead(c: NodeId): unknown {
+-		const flags = M[c + NodeField.FLAGS];
+-		if (
+-			flags & (NodeFlag.RECURSED_CHECK | NodeFlag.DIRTY | NodeFlag.PENDING | NodeFlag.HAS_BOX)
+-			|| flags === NodeFlag.K_COMPUTED
+-		) {
+-			return computedReadSlow(c, flags);
++		const st = (c >> Arena.ID_TO_STAMP_SHIFT) + Arena.STAMP_OFFSET;
++		if (D[st] !== epoch) {
++			const flags = M[c + NodeField.FLAGS];
++			if (
++				flags & (NodeFlag.RECURSED_CHECK | NodeFlag.DIRTY | NodeFlag.PENDING | NodeFlag.HAS_BOX)
++				|| flags === NodeFlag.K_COMPUTED
++			) {
++				return computedReadSlow(c, flags);
++			}
++			// Stamp the verified-clean read so the next same-epoch read
++			// fast-hits. No user code has run in this frame (the link below
++			// only queues lifecycle microtasks), so the live epoch IS the
++			// entry epoch.
++			D[st] = epoch;
+ 		}
+ 		if (activeSub !== 0) {
+ 			link(c, activeSub, cycle);
+@@ -1298,6 +1408,18 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 		if (flags & NodeFlag.RECURSED_CHECK) {
+ 			throw new CycleError('cosignal: computed read during its own evaluation (dependency cycle).');
+ 		}
++		// Quiet-epoch subtlety 1: stamp with the epoch captured at ENTRY,
++		// before any user code. checkDirty/updateComputed below run getters;
++		// a write inside one (tolerated writes-in-computeds) bumps the epoch
++		// and can leave this node Pending again — stamping the CURRENT epoch
++		// at the tail would then serve that stale value forever. The entry
++		// epoch makes such a stamp an automatic miss: it can only ever
++		// re-verify, never lie. Tracked reads are stamped too — during a
++		// flush the epoch is stable (the triggering write already bumped it),
++		// so every node the flush verifies becomes a same-epoch fast hit for
++		// the rest of the flush (diamond re-reads) and for reads before the
++		// next write.
++		const entryEpoch = epoch;
+ 		if (
+ 			flags & NodeFlag.DIRTY
+ 			|| (
+@@ -1339,8 +1461,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 		// the subscription, so recovery re-notifies whoever observed the throw.
+ 		const f = M[c + NodeField.FLAGS];
+ 		if (f & NodeFlag.HAS_BOX) {
++			// NEVER stamp a boxed outcome: exceptional values must keep
++			// re-probing this tail — the suspense self-heal (a settled
++			// thenable invalidates and recomputes on the next read) and the
++			// raw-payload unwrap both live here, and a stamp hit would return
++			// the RAW payload as if it were the value.
+ 			return boxedRead(c, f);
+ 		}
++		D[(c >> Arena.ID_TO_STAMP_SHIFT) + Arena.STAMP_OFFSET] = entryEpoch;
+ 		return vals[c >> Arena.ID_TO_VALUE_SHIFT];
+ 	}
+ 
+@@ -1353,9 +1481,17 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
+ 		if (!(flags & NodeFlag.K_COMPUTED)) {
+ 			return false;
+ 		}
++		// Quiet-epoch subtlety-2 family: settlement marks Dirty WITHOUT a
++		// kernel write. Drop the node's own stamp (else a fast-hit would skip
++		// the recompute this invalidation exists to force)…
++		D[(c >> Arena.ID_TO_STAMP_SHIFT) + Arena.STAMP_OFFSET] = 0;
+ 		M[c + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
+ 		const subs = M[c + NodeField.SUBS];
+ 		if (subs !== 0) {
++			// …and move the epoch for its subscribers, whose stamps predate
++			// the Pending marks this propagate is about to deliver (observed
++			// invalidation = the same rule as an observed write).
++			++epoch;
+ 			propagate(subs, runDepth !== 0);
+ 			return true;
+ 		}
+@@ -1498,6 +1634,15 @@ export function __hostReadNewest(atom: Atom<unknown>): unknown {
+ 	return E.read(atom._id);
+ }
+ 
++/**
++ * The current quiet-epoch value — a TEST SEAM ONLY (tests/quiet-epoch.spec.ts
++ * pins the observed-writes-only bump rule, which is invisible to public
++ * behavior by design). Never consult this from product code. @internal
++ */
++export function __epochProbe(): number {
++	return epoch;
++}
++
+ function maybeBoundary(): void {
+ 	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
+ 		boundaryWork();
+@@ -1581,7 +1726,7 @@ function foldNoop(): void {}
+ // consumer kinds. Two kinds feed the refcount:
+ //   - the kernel liveness bit, contributing exactly 0/1: linkInsert's
+ //     first-subscriber branch and unwatched()'s signal branch call the two
+-//     hooks below (guarded by the node's NodeField.LIFECYCLE field, D1);
++//     hooks below (guarded by the node's NodeFlag.LIFECYCLE bit, D1);
+ //   - bridge watchers (the engine's record of one subscribed React
+ //     component), one ref per live watcher: the watcher liveness setter in
+ //     ./concurrent.ts calls __lifecycleRetain/__lifecycleRelease.
+@@ -1590,8 +1735,8 @@ function foldNoop(): void {}
+ // tick coalesce to nothing REGARDLESS of which consumer kind produced them
+ // (StrictMode double-mount netting, watcher claim/debounced-unsub, remount
+ // handoffs). Atoms without the effect option never enter this map, and the
+-// kernel hot paths stay gated on the LIFECYCLE field — the unregistered path
+-// pays nothing.
++// kernel hot paths stay gated on the LIFECYCLE flag bit — the unregistered
++// path pays nothing.
+ 
+ type LifecycleState = {
+ 	effect: (ctx: AtomCtx<unknown>) => void | (() => void);
+diff --git a/packages/cosignal/tests/bytecode.spec.ts b/packages/cosignal/tests/bytecode.spec.ts
+index 43a9bb3..b33deb8 100644
+--- a/packages/cosignal/tests/bytecode.spec.ts
++++ b/packages/cosignal/tests/bytecode.spec.ts
+@@ -55,7 +55,13 @@ const BUDGETS: Record<string, number> = {
+ 	// public read/write paths
+ 	read: 120, // 98
+ 	write: 180, // 152
+-	computedRead: 110, // 86: hot/cold split entry
++	computedRead: 150, // 126: hot/cold split entry — was 86 before the
++	// quiet-epoch fast path (B3, port study row 1); the +40 is one f64
++	// stamp load+compare heading the function and one f64 stamp store on
++	// the verified-clean tail (shared stamp index, shared link/return tail).
++	// Still 300+ under the inline limit, so the entry keeps inlining into
++	// Computed.get state / bound-read callers; the compares it ADDS are
++	// exactly what the stamp-hit path SAVES over the flags ladder.
+ 	computedReadSlow: 460, // 410: the out-of-line ladder — near the limit
+ 	writeAtom: 120, // 100
+ 	flush: 170, // 139
