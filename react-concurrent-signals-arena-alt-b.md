@@ -2,6 +2,13 @@
 
 **Status: final design specification, approved for implementation.**
 
+**Variant B of two:** this document specifies the **quiescence-gate**
+write-mode design — DIRECT while React is fully idle, with a documented
+loose contract for idle-time writes plus a `strictLanes` opt-in for exact
+parity. Variant A (`react-concurrent-signals-arena-alt-a.md`) shares every
+other design decision but adopts monotonic gate activation at first React
+root registration, giving exact React lane parity unconditionally.
+
 This document specifies `cosignal-arena` — a from-scratch signals library for
 TypeScript whose entire hot state lives in flat integer arrays ("arenas"), and
 which integrates with concurrent React with no compromises: no

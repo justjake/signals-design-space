@@ -2,6 +2,13 @@
 
 **Status: final design specification, approved for implementation.**
 
+**Variant A of two:** this document specifies the **monotonic-activation**
+write-mode design — the gate flips DIRECT→LOGGED permanently at first React
+root registration, giving exact React lane parity unconditionally. Variant B
+(`react-concurrent-signals-arena-alt-b.md`) shares every other design
+decision but adopts a quiescence-gated write mode with a documented loose
+contract for idle-time writes plus a `strictLanes` opt-in.
+
 This document specifies `cosignal-arena` — a from-scratch signals library for
 TypeScript whose entire hot state lives in flat integer arrays ("arenas"), and
 which integrates with concurrent React with no compromises: no
@@ -266,7 +273,7 @@ Terms defined once, used everywhere. Plain-English first.
 | **slot memo chain** | Per batch slot, the chain of that slot's writer's-world memo records, threaded through the memo records themselves. The drain walks it to find nodes whose pending-world values a new write may have changed — including nodes reached only through world-divergent dependencies (section 9.8). |
 | **render lineage** | A stable integer the fork assigns to one logical piece of render work on a root (one lane set's work-in-progress), redelivered across that work's restarts and Suspense retries. The key for per-world suspense caches (sections 6.3, 12.3). |
 | **committed view (per root)** | What "committed" means for one root: entries retired at or below that root's last-commit ticket, plus entries of batches the root has committed while they remain pending elsewhere (sections 10.2, 13.4). |
-| **quiescence** | The state of having no live logs, no live batches, and no open render pass — and, from the fork's perspective, no open or pending React work at all. The overlay resets itself to zero cost at quiescence, and the write gate returns to DIRECT there (section 9.1). |
+| **quiescence** | The state of having no live logs, no live batches, and no open render pass — and, from the fork's perspective, no open or pending React work at all. The overlay resets itself to zero cost at quiescence. The write gate is unaffected: activation is monotonic (section 9.1). |
 | **handle** | The user-facing object (`Atom`, `Computed`, …) wrapping a node id. Handles are ordinary objects; the arena records behind them are reclaimed when handles are garbage-collected or deterministically disposed. |
 | **oracle** | The deliberately naive reference implementation of the overlay (plain per-atom arrays, replay-everything reads, memo-free computeds) that the real engine must agree with on every read across randomized schedules (section 17.2). |
 | **frozen kernel artifact** | The donor arena engine, built without any overlay support, kept as a reference build. The contract suite (section 17.5) proves the shipping kernel is behaviorally identical to it whenever the overlay is empty. |
@@ -393,12 +400,6 @@ function configure(options: {
    * Default false: such writes are allowed unless they create a cycle
    * (cycles always throw). */
   forbidWritesInComputeds?: boolean
-  /** Exact React lane parity for writes made while React is fully idle.
-   * Default false: such writes commit immediately and are visible to every
-   * subsequent render (the documented loose contract, section 9.1). True:
-   * every write is logged once React bindings are active, buying exact
-   * flushSync/lane parity for idle-time writes at a per-write logging cost. */
-  strictLanes?: boolean
   /** Initial main-plane record count (default 8192), log-plane record
    * count (default 1024), and world-memo-plane record count (default 1024);
    * all grow by doubling. */
@@ -504,16 +505,16 @@ Three layers, two gates.
 
 The two gates that keep the fast path fast:
 
-- **Write gate** — one module-scalar comparison. `writeMode` is `LOGGED`
-  whenever React has open or pending work (any live batch token, any
-  unretired batch, any render pass — the fork signals every one of these
-  boundaries) and `DIRECT` only at full React quiescence; section 9.1 states
-  the exact rule and the deliberate contract it implies. In DIRECT mode a
-  write is exactly the proven kernel write: compare, set pending value,
-  propagate staleness, flush effects. Pure-core users, servers, and the
-  benchmark never execute a single overlay instruction. (Whether this gate is
-  a scalar branch or a closure swap is a pre-registered experiment with the
-  branch as the safe default — section 18.4.)
+- **Write gate** — one module-scalar comparison. `writeMode` is `DIRECT`
+  until the first React root registers with the fork, then `LOGGED` —
+  permanently. The flip is monotonic: it never reverts, not at quiescence,
+  not on unmount; section 9.1 states the rule and why one mode is the whole
+  contract. In DIRECT mode a write is exactly the proven kernel write:
+  compare, set pending value, propagate staleness, flush effects. Pure-core
+  users, servers (no client root ever registers there), and the benchmark
+  never execute a single overlay instruction. (Whether the flip is a scalar
+  branch or a one-time closure swap is a pre-registered experiment —
+  section 18.4.)
 - **Read gate** — one branch per read. For atoms it is folded into the flags
   word the read loads anyway (`FLAG_LOGGED`); for computeds it is
   `loggedAtomCount !== 0 && M[c + OVERLAY_STAMP] > eraFloor` — when the
@@ -606,6 +607,10 @@ Design constraints, in order:
 type Container = unknown  // e.g. the DOM element passed to createRoot
 
 type ExternalRuntimeListener = {
+  /** A root was registered on `container` (createRoot/hydrateRoot), before
+   * any of its render work can be scheduled. Fired once per root. The write
+   * gate's activation edge (9.1); servers never fire it. */
+  onRootRegistered?: (container: Container) => void
   /** A render pass began on `container`. `includedBatches` are the tokens of
    * every live batch this pass renders. `lineage` is a stable integer naming
    * this piece of render work across its restarts and Suspense retries (6.3).
@@ -1053,7 +1058,7 @@ The index arithmetic works because ids are pre-multiplied: main-plane
   retirement, truncation, overlay-relevant promise settlement, and the
   quiescence reset — the events that change world values *without* moving
   any tape tail; world memos carry it, section 10.5), `writeMode`
-  (DIRECT/LOGGED per the quiescence gate, 9.1), and the pass set:
+  (DIRECT until activation, then LOGGED permanently, 9.1), and the pass set:
   `passOpen`, `passExecuting` (flipped by yield/resume, 10.1), `passSerial`,
   `passPin`, `passIncludeMask`, `passContainer`, `passLineage`.
 - `loggedAtoms: number[]` — ids of atoms with live logs (absorption and
@@ -1271,88 +1276,88 @@ append-only (until swept) chain of log records describing recent writes, from
 which the value *as of any world* can be reconstructed. This section covers
 the tape's lifecycle; section 10 covers how reads use it.
 
-### 9.1 When logging happens at all: the quiescence gate
+### 9.1 When logging happens at all: monotonic activation
 
-`writeMode` is `LOGGED` whenever React is **nonquiescent** — any live batch
-token, any pending (unretired) batch, or any render pass in flight — and
-`DIRECT` only at full React quiescence. Both flips ride fork-signaled
-boundaries, so the gate can never race a write: DIRECT→LOGGED happens when a
-batch opens or a pass starts (edges that precede any write those could
-affect), and LOGGED→DIRECT happens only at the quiescence boundary where the
-overlay's O(1) bulk reset already runs (9.7). In DIRECT mode, writes are
-pure kernel — the benchmark path, the server path, boot before React
-schedules anything, and every idle-time write from timers, sockets, and
-stores while React has nothing in flight. Zero overlay instructions.
+`writeMode` is `DIRECT` until the first React root registers with the fork
+(`onRootRegistered`, 6.1), and `LOGGED` from that moment on — permanently.
+One flip per process, never reversed: not at quiescence, not when the last
+component unmounts, not when a root is disposed. The rule has three
+properties worth naming:
 
-In `LOGGED` mode, **every write is logged** — urgent or deferred, watcher or
-no watcher. This mirrors React exactly: a `setState` always enqueues an
-update object; our log record is that update, externalized into an arena
-(and cheaper to allocate). Trying to be cleverer — skipping the log for
-urgent writes when "nothing could tell the difference" — is unsound. The
-proof case: an event handler does an urgent `atom.set(x)` while a
-default-priority batch from earlier in the same event is still pending, and
-then calls `flushSync`. React renders the flushSync work *without* the
-default-priority batch — a legitimate render of a world in which the urgent
-write has happened but the earlier batch has not. If the urgent write had
-skipped the log and gone straight to the canonical value, nothing could
-reconstruct that older world; only a log entry lets the flushSync render
-answer correctly. Note that this write is inside an open batch, so the
-quiescence gate logs it. Two structurally cheaper gates were considered and
-rejected as unsound; their counterexamples are permanent tests (below).
+- **It cannot race a write.** Root registration (`createRoot`/`hydrateRoot`)
+  strictly precedes any React work being scheduled on that root, and
+  therefore precedes any batch a write could ever need to be excluded from.
+  A write before activation is causally prior to *all* React work — by the
+  time any render pass exists, that write is simply committed history,
+  visible to every pass including `flushSync`, and no schedule can
+  distinguish "it was never logged" from "it was logged and absorbed."
+  Boot-time initialization, module-level setup, tests without React, and
+  benchmarks all live here, at zero overlay cost.
+- **Servers never activate.** Server rendering imports the bindings but
+  registers no client root (`renderToString`/streaming SSR never call
+  `createRoot`), so SSR stays DIRECT for the life of the process — the
+  overlay costs nothing where concurrency cannot exist (13.8).
+- **After activation there is exactly one contract.** Every write in a live
+  React app is logged — urgent or deferred, watcher or no watcher, busy or
+  idle. No secondary mode, no configuration flag, no documented deviation:
+  React lane parity holds unconditionally, and the rest of this document
+  never has to qualify a guarantee with "unless the write happened while
+  idle."
 
-**The loose contract (the default, documented plainly).** A write made while
-React is *fully quiescent* commits immediately: it is applied to canonical
-state with no receipt, and it is visible to every subsequent render pass —
-including a later `flushSync` — because by the time any pass exists, the
-write is simply part of committed history. What such a write does **not** do
-is inherit the lane of the notification it triggers. Concretely, the case
-this gives up: a `setTimeout` fires while React is idle and writes an atom;
-the write commits (DIRECT); the watcher broadcast it triggers schedules
-default-priority React work; then, in the same task, something calls
-`flushSync` — and React renders the flushSync work *without* that
-default-priority batch. React's own `useState` in this schedule would hide
-the timer's value from the flushSync render (its update sits in the excluded
-lane's queue); our signal shows it (it is committed state, and there is no
-receipt from which to reconstruct the pre-write world). This is a deliberate
-deviation from exact React parity, and its shape is bounded: **no write is
-ever lost, and every component converges to the same final state** — the
-worst case is a one-frame window in which a signal-driven component can show
-the newer value while a React-state-driven component shows the older one,
-and that frame can paint. We accept it because the alternative taxes every
-imperative write in every React app forever, for a case that requires an
-idle-time write, a same-task flushSync, and a lane-excluded default batch to
-line up. The exact schedule above is a **contract-documentation test**
-(17.6): it asserts this loose behavior on purpose, so any change to it is a
-deliberate decision, not an accident.
+In `LOGGED` mode, **every write is logged**. This mirrors React exactly: a
+`setState` always enqueues an update object; our log record is that update,
+externalized into an arena (and cheaper to allocate). Trying to be cleverer —
+skipping the log for urgent writes when "nothing could tell the difference" —
+is unsound. The proof case: an event handler does an urgent `atom.set(x)`
+while a default-priority batch from earlier in the same event is still
+pending, and then calls `flushSync`. React renders the flushSync work
+*without* the default-priority batch — a legitimate render of a world in
+which the urgent write has happened but the earlier batch has not. If the
+urgent write had skipped the log and gone straight to the canonical value,
+nothing could reconstruct that older world; only a log entry lets the
+flushSync render answer correctly. The same shape reaches even *idle-time*
+writes: a `setTimeout` fires while React has nothing in flight, writes an
+atom, and the watcher broadcast it triggers schedules default-priority
+work — if something then calls `flushSync` in the same task, that render
+legitimately excludes the default batch, and only the write's receipt lets
+the excluded world read the pre-write value the way React's own `useState`
+would. The write and the update it schedules are one causal event split
+across lanes; "no React work was in flight when the write happened" does not
+exempt it. That is why activation is pinned to root registration rather
+than to any measure of React busyness.
 
-**Exact parity when it matters: `configure({ strictLanes: true })`.** Some
-applications (or test suites) want React-identical lane semantics for
-idle-time writes too. The `strictLanes` option pins the gate to LOGGED
-permanently once the React bindings register — a one-line change to the gate
-predicate, no new machinery, because LOGGED mode's always-log rule already
-provides exact semantics; the quiescence gate exists purely to avoid its
-cost while idle. Under `strictLanes`, the setTimeout/flushSync schedule
-above behaves exactly like `useState`. The same test family runs in both
-configurations, asserting the loose default's documented behavior in one and
-exact parity in the other.
+**The price, and the pre-registered escape hatch.** The cost of one
+unconditional mode is that timer, socket, and store writes in an idle React
+app pay the logging tax forever: append, tape-creation mark walk on first
+touch, sweep at the next boundary. This document treats that price as a
+number, not a fear — steady logged writes are gated at ≤2× a DIRECT write
+(the entry is ~6 Int32 stores plus one side-array store), tape creation is
+priced per cone size, and LOGGED-idle steady state must hold tier-0 within
+2% (18.2). If those measurements — specifically the tape-creation pricing
+(G-6a) run on a streaming-store workload, sustained external writes with
+React idle — show the tax matters in practice, the pre-registered
+alternative is a *quiescence-gated* write mode (experiment E4, 18.4):
+DIRECT while React has no open or pending work, LOGGED otherwise. That
+design is strictly weaker than this one — the idle-write flushSync schedule
+above becomes unanswerable without a receipt, so a quiescence gate must
+*document* a loose contract (idle writes don't inherit the lane of the
+notification they trigger; a bounded, convergent, one-frame cross-component
+mismatch can paint) rather than claim parity. It is therefore an opt-in
+trade to be made with measurements in hand, not a default.
 
-**The two rejected gates, kept as gatekeepers.** (a) *Watcher-count gating*
-("log only once a watcher is mounted") is unsound: the app's first
+**Rejected gates, kept as gatekeepers.** (a) *Watcher-count gating* ("log
+only once a watcher is mounted") is unsound: the app's first
 `startTransition(() => { atom.set(1); setShow(true) })` writes before any
-watcher exists, goes DIRECT, and leaves no receipt — so the component that
-mounts *during* that transition's render (13.2's marquee case) has no older
-world to read, and urgent renders leak the transition's value. (b)
-*Quiescence-only gating presented as exact parity* fails on the
-setTimeout/flushSync schedule above — the write and the update it schedules
-are one causal event split across lanes, and "causally prior to all future
-work" does not hold for it. Both counterexamples are permanent tests: any
-future write-mode-gate optimization must be pre-registered and pass both —
-one asserting the loose default's documented observable behavior, one
-asserting strict-mode parity (17.6).
-
-Either way, the cost story is unchanged: the log entry is cheap (~6 Int32
-stores plus one side-array store), gated at ≤2× a DIRECT write for steady
-logged writes and priced separately for tape-creating writes (18.2).
+watcher exists, would go DIRECT, and would leave no receipt — so the
+component that mounts *during* that transition's render (13.2's marquee
+case) has no older world to read, and urgent renders leak the transition's
+value. Under monotonic activation this schedule is covered by construction:
+the root registered before the transition could exist, so the write is
+logged. (b) *Quiescence gating presented as exact parity* fails on the
+idle-write flushSync schedule above. Both counterexamples are permanent
+tests (17.6): the E4 experiment — or any future write-mode-gate change —
+must pass the first outright and must either pass the second or replace it
+with an explicitly documented loose contract.
 
 ### 9.2 Batch slot interning
 
@@ -1557,10 +1562,11 @@ When `loggedAtomCount` reaches 0 with no open pass and no live slots:
   forced-counter test (17.2) pin it;
 - `seqCounter` resets to 1 — pins and retire stamps from the previous era are
   all dead, so tickets can restart, making 31-bit seq overflow unreachable in
-  practice (an era would need 2^31 logged writes with no quiescent moment);
-- and, when the fork also reports full React quiescence (no live or pending
-  batches anywhere), `writeMode` returns to `DIRECT` — the LOGGED→DIRECT
-  flip lives here and only here (9.1).
+  practice (an era would need 2^31 logged writes with no quiescent moment).
+
+`writeMode` is untouched by all of this: activation is monotonic (9.1), so
+the overlay returns to zero *residue* at quiescence while staying armed —
+the next write simply starts a new era's first tape.
 
 `walkCounter` does **not** reset — stale stamps larger than a reset counter
 would read as freshly marked. It only grows, which gives it a real (if
@@ -2306,11 +2312,13 @@ rejects writes (10.8).
 All bindings share one module-level singleton: the **bridge**. At first
 import it subscribes to the external runtime (6.1) and wires the callbacks:
 
+- `onRootRegistered(container)` → flip `writeMode` to `LOGGED`, permanently
+  (the activation edge, 9.1); subsequent registrations are no-ops for the
+  gate.
 - `onRenderPassStart(container, tokens, lineage)` → `passOpen = 1;
   passSerial++; passPin = seqCounter; passIncludeMask = internAll(tokens);
   passContainer = container; passLineage = lineage` — and switch the read
-  context to `RENDER`. Batch-open edges also flip `writeMode` to `LOGGED`
-  if it was not already (9.1).
+  context to `RENDER`.
 - `onRenderPassYield(container)` / `onRenderPassResume(container)` → flip
   the read context `RENDER ↔ NEWEST`; the pass set persists (10.1).
 - `onRenderPassEnd(container)` → close the pass, restore `NEWEST`, run a
@@ -2318,8 +2326,7 @@ import it subscribes to the external runtime (6.1) and wires the callbacks:
 - `onBatchCommitted(container, token)` → update the container's committed
   view (13.4) and flush that root's `useSignalEffect` watchers in a
   microtask, filtered by that view.
-- `onBatchRetired(token, committed)` → retirement + absorption (9.5); the
-  quiescence check may then revert `writeMode` to `DIRECT` (9.7).
+- `onBatchRetired(token, committed)` → retirement + absorption (9.5).
 - `onBeforeMutation`/`onAfterMutation` → re-emitted verbatim on
   `cosignal/react`'s own tiny event surface for app code (MutationObserver
   users); the signals engine ignores them.
@@ -2479,8 +2486,10 @@ the token retires everywhere; the engine just applies the mask it is given.
 
 Server rendering uses `COMMITTED` context reads with no subscriptions and no
 observed-lifecycle mounting (watcher creation is a layout-effect concern, and
-layout effects don't run on the server). On the server the write gate never
-leaves DIRECT (no fork activity), so SSR pays zero overlay cost. No
+layout effects don't run on the server). The write gate never activates on
+the server — activation rides client root registration (9.1), and server
+rendering registers none — so SSR stays DIRECT for the process's life and
+pays zero overlay cost. No
 `getServerSnapshot` analogue exists because reads are plain values. Flight/
 RSC is out of scope for v1.
 
@@ -3159,9 +3168,10 @@ and fold), `committed = false` folds (the writes are real), sweep
 correctness under multiple pinned passes, truncation, slot-exhaustion
 fallback, coalescing legality (never across an open pass; coalesced writes
 still notify), quiescence resets (era floor, seq, planes G and W, slot memo
-heads, the epoch bump), the write-gate boundary matrix (DIRECT at
-quiescence, LOGGED from the first batch-open edge, DIRECT again only at
-full quiescence; `strictLanes` pinning), the mark invariant under
+heads, the epoch bump), the write-gate activation matrix (DIRECT before the
+first root registers; LOGGED permanently from the activation edge, never
+reverting across quiescence, unmounts, or root disposal; second root
+registration a no-op), the mark invariant under
 tape-creation walks (urgent and deferred) and new-edge repair (8.7.3), the
 post-eval stamp re-check shapes (fresh node mid-pass; new branch into a
 logged atom), world-memo validity across appends/coalesces/absorptions/
@@ -3281,17 +3291,23 @@ Plus, from this design's specifics:
   watchers re-render in the transition's lane and commit with the
   transition (one commit, no torn frame), even though the drain ran after
   the transition scope closed;
-- **the write-gate contract family (9.1):** (i) loose default — while React
-  is fully idle, a `setTimeout` writes an atom, the broadcast schedules
-  default-lane work, and a same-task `flushSync` runs: assert the documented
-  loose behavior (the signal's new value is visible in the flushSync render;
-  the schedule converges; nothing is lost); (ii) the same schedule under
-  `strictLanes: true`: assert exact `useState` parity (the flushSync render
-  excludes the idle write); (iii) the watcher-count counterexample: the
-  app's *first* transition writes a signal before any watcher exists, a
-  subscriber mounts mid-transition, and both the pending and committed
-  worlds read correctly (the quiescence gate logged the write). Any future
-  gate change must pass all three;
+- **the write-gate contract family (9.1):** (i) exact parity for idle
+  writes — while React is fully idle (post-activation), a `setTimeout`
+  writes an atom, the broadcast schedules default-lane work, and a same-task
+  `flushSync` runs: assert `useState`-identical behavior (the flushSync
+  render excludes the idle write's default batch and reads the pre-write
+  value from the receipt); (ii) activation monotonicity — writes before the
+  first root registers commit DIRECT and are visible to every later pass;
+  from registration on, every write is logged, and the gate stays LOGGED
+  across full quiescence, unmount of every component, and root disposal;
+  (iii) the watcher-count counterexample: the app's *first* transition
+  writes a signal before any watcher exists, a subscriber mounts
+  mid-transition, and both the pending and committed worlds read correctly
+  (activation preceded the transition, so the write was logged). These three
+  are also the permanent gatekeepers for the pre-registered idle-write
+  experiment (E4, 18.4): any alternative gate must pass (ii) and (iii)
+  outright, and must either pass (i) or replace it with an explicitly
+  documented loose contract;
 - **the entanglement test (13.2):** hold a transition open, mount a late
   subscriber to a signal the transition wrote, and assert exactly **one**
   commit containing both the transition's updates and the corrective
@@ -3326,8 +3342,10 @@ Plus, from this design's specifics:
 
 The fork's own test suite (inherited and extended): batch-token registry
 edges (claim/mint/pending/backfill/finish/close), async-action parking,
-per-root commit lock-in and `onBatchCommitted` delivery (exactly once per
-(token, root), before retirement on the last root), pass start/end pairing
+`onRootRegistered` delivery (once per root, before any work can be scheduled
+on it; never on server renderers), per-root commit lock-in and
+`onBatchCommitted` delivery (exactly once per (token, root), before
+retirement on the last root), pass start/end pairing
 across yields and restarts, **yield/resume pairing** (strict alternation
 between one start and its end; edges fire on the should-yield exit and on
 resumption; none for synchronous passes), **render-lineage stability** (same
@@ -3381,9 +3399,9 @@ non-conformant build is not a result.
 | G-1 | core DIRECT, every tier-0 shape | alien-signals v3 | ≤1.0× each (donor reference points: deep 0.90, broad 0.84–0.88, diamond 0.89, reads 0.74–0.87, create 0.96) | gate, M1 |
 | G-2 | core DIRECT, steady parity | frozen kernel artifact | ≤1.03× each tier-0 shape (the dormant-overlay tax must be one branch) | gate, M1, re-run every later milestone |
 | G-3 | kairo suite, GC-inclusive, bundled child | alien-signals v3 | ≤1.4× every test (the measured current reality — an honest ceiling, not an aspiration); ratchet reviews at each milestone may only lower it; ≤1.25× is the M7 target via pre-registered ledger experiments, and if unmet, M7 exits with the ratcheted number adopted and published in its place | gate (1.4×) + ratchet |
-| G-4 | mounted-but-quiet (watchers exist, React idle), tier-0 — measured twice: loose default (gate at DIRECT) and `strictLanes` (LOGGED idle) | core DIRECT | loose: identical within noise (the quiescence gate's whole point); strictLanes: ≤2% regression | gate, M2 |
+| G-4 | mounted-but-quiet (watchers exist, React idle — LOGGED, the steady state after activation), tier-0; includes the streaming-store idle-write workload that arms E4 | core DIRECT | ≤2% regression | gate, M2 |
 | G-5 | LOGGED read of an unmarked node | DIRECT read | ≤1.1× | gate, M2 |
-| G-6a | **first** logged write to an atom (tape creation + mark-only cone walk, 9.3), measured across cone sizes 10/100/1000 | DIRECT write | ≤N×; N measured and pre-registered at M2 per cone size (once per atom per era — an amortized event, priced so its cone-proportional cost is a number, not a surprise) | gate, M2 |
+| G-6a | **first** logged write to an atom (tape creation + mark-only cone walk, 9.3), measured across cone sizes 10/100/1000 — and on the streaming-store workload (sustained external writes, React idle), the measurement that decides whether experiment E4 is ever built (9.1, 18.4) | DIRECT write | ≤N×; N measured and pre-registered at M2 per cone size (once per atom per era — an amortized event, priced so its cone-proportional cost is a number, not a surprise) | gate, M2 |
 | G-6b | **steady** logged urgent write (append + apply + broadcast bookkeeping; tape already exists) | DIRECT write | ≤2× | gate, M2 (priced on day one of the tape milestone) |
 | G-7 | logged **deferred** write, drain-amortized (notify walk + writer's-world broadcast evaluations + slot-chain re-validation), fan-out shapes 1 atom → 10/100/1000 watchers **crossed with** registered-node counts 0/10/100 on the slot chain (9.8) | DIRECT write | ≤N×; N measured and pre-registered at M2 with provisional ceiling 3×; breaking the ceiling triggers the pre-registered fallbacks (always-broadcast mode for evaluations, the edge-plane escalation for chain scans, 9.8) | gate, M2 |
 | G-8 | held-open transition, hot NEWEST read loop over the marked cone (the world-memo gate; the inner loop is the packed certificate scan, 10.5, measured at certificate lengths 1/4/16) | DIRECT read of same cone | ≤1.5× while a batch is live | gate, M3 |
@@ -3445,17 +3463,16 @@ so budgets are declared and enforced:
 
 Registered before implementation so the results can't be argued with after:
 
-- **E1 — DIRECT/LOGGED write gate: scalar branch vs closure swap.** The
-  branch is the safe default: closure rebuild is proven for *monotonic*
-  swaps (growth — O(log n) events, feedback re-stabilizes), but the
-  quiescence gate oscillates per interaction burst (LOGGED while React has
-  work, DIRECT at every idle gap), and a call site that has seen two closure
-  identities keeps polymorphic feedback — risking the measured +34–43%
-  mutable-binding cost class on every handle call site. The swap wins only
-  if steady regression stays under the branch's **and** feedback stays
-  specialized across 1,000 mode oscillations, checked with `--trace-deopt`.
-  (`strictLanes` builds never oscillate, but the default must be measured
-  as the default behaves.)
+- **E1 — DIRECT/LOGGED write gate: scalar branch vs one-time closure swap.**
+  The gate flips exactly once per process (monotonic activation, 9.1) —
+  precisely the shape closure rebuild is proven for (growth: feedback
+  re-stabilizes after a monotonic swap). The swap therefore promises a
+  branch-free LOGGED steady state and is the favored candidate; the branch
+  is the conservative default until the swap demonstrates, under
+  `--trace-deopt`, that no handle call site retains polymorphic feedback
+  after activation (the measured +34–43% mutable-binding cost class is what
+  a failed swap looks like), and that pre-activation DIRECT performance is
+  unaffected.
 - **E2 — broadcast-cost fallback threshold.** If G-7's measured N exceeds
   3×, compare the memoized-cutoff broadcast against always-broadcast
   (render-time bailout) on the same fan-out shapes before choosing the
@@ -3463,6 +3480,22 @@ Registered before implementation so the results can't be argued with after:
 - **E3 — log-plane locality.** If kairo-scale transition profiles show
   cache misses on interleaved tapes, test per-batch segment allocation
   against the global bump pointer.
+- **E4 — quiescence-gated write mode (the idle-write escape hatch).** Built
+  only if the G-6a streaming-store measurement (sustained external writes
+  while React is idle) shows the always-log tax is material in practice —
+  otherwise this experiment never runs. Design under test: `writeMode`
+  LOGGED only while React has open or pending work (batch tokens, unretired
+  batches, passes), DIRECT at full idle, flipping on fork-signaled
+  boundaries. Known, non-negotiable consequence to be documented if adopted:
+  a fully-idle write cannot inherit the lane of the notification it
+  triggers, so the idle-write flushSync schedule (9.1) deviates from
+  `useState` — a bounded, convergent, one-frame cross-component mismatch
+  that can paint. Adoption criteria: the measured idle-write saving must
+  exceed the gate's own oscillation cost (re-running E1's polymorphic-
+  feedback check under per-burst mode flips), and the write-gate contract
+  family (17.6) must pass — activation monotonicity and the
+  mount-mid-transition case outright, and the exact-parity case replaced by
+  an explicitly documented loose contract, never silently.
 
 ### 18.5 Benchmark matrix
 
@@ -3499,8 +3532,8 @@ batch entanglement (6.5), per-root commit notification (`onBatchCommitted`,
 that are expensive to discover missing later, because every milestone above
 builds on section 6 as frozen. *Exit:* reconciler suite 17.7 green,
 including the entanglement tests (with the drain-shaped usage),
-yield/resume pairing, lineage stability, per-root commit delivery, and
-token-encoding edge cases.
+yield/resume pairing, lineage stability, root-registration and per-root
+commit delivery, and token-encoding edge cases.
 
 **M1 — Kernel with dormant overlay.** Port the donor kernel onto the schema
 (15.2); add the five overlay-support mechanisms (8.7), present but dormant
@@ -3512,18 +3545,19 @@ suite green (behavioral identity with the frozen artifact, overlay empty);
 G-1 (≤1.0× alien-signals) and G-2 (≤1.03× frozen artifact) on every tier-0
 shape; budgets green.
 
-**M2 — Tape mechanics, priced on day one.** The quiescence write gate
+**M2 — Tape mechanics, priced on day one.** The monotonic activation gate
 (9.1), batch-slot interning (9.2), `appendLog` with mark-on-creation and
 the equality/receipt rule (9.3), applied/unapplied writes (9.4), the notify
 walk and token-grouped drain (9.8, without memo machinery yet), driven by
 the simulated fork. *First deliverable:* the measurements this
 architecture's viability rests on — the tape-creation cost across cone
-sizes (G-6a), the steady logged write tax (G-6b, ≤2×), and the
-deferred-write drain cost (G-7, N registered, provisional ≤3×) — plus
-mounted-quiet in both gate configurations (G-4) and the unmarked-read gate
-(G-5, ≤1.1×). Run experiment E1 (18.4) and fix the write-gate mechanism.
-*Exit:* those gates green with numbers recorded; the write-gate boundary
-matrix (17.3) green; standing rules.
+sizes plus the streaming-store idle-write workload that decides E4's fate
+(G-6a), the steady logged write tax (G-6b, ≤2×), and the deferred-write
+drain cost (G-7, N registered, provisional ≤3×) — plus LOGGED-idle
+mounted-quiet (G-4, ≤2%) and the unmarked-read gate (G-5, ≤1.1×). Run
+experiment E1 (18.4) and fix the write-gate mechanism. *Exit:* those gates
+green with numbers recorded; the write-gate activation matrix (17.3) green;
+standing rules.
 
 **M3 — Worlds, oracle-first.** Build the naive model and schedule generator
 (17.2) **before** the machinery — with the oracle's watcher decisions
@@ -3543,7 +3577,7 @@ G-10, G-16 green; standing rules.
 **M4 — Policy layer.** Atom/ReducerAtom/Computed, wrappers and boxes (11.2–
 11.3), the updater/reducer purity contract with its debug assertion (12.2),
 promise protocol with lineage-keyed caches and settlement epoch bumps
-(12.3), observed lifecycle (12.4), `configure` (including `strictLanes`),
+(12.3), observed lifecycle (12.4), `configure`,
 FinalizationRegistry (14.2). *Exit:* full core API tests; suspense unit
 tests; standing rules.
 
@@ -3553,8 +3587,9 @@ post-subscribe fixup with entanglement (13.2), transitions helpers, SSR
 (per-request engines, serialize/initialize helpers, 13.8). *Exit:* the
 React integration suite 17.6 — the 14-scenario bar, the known-bug
 mount-mid-transition case, the yield-gap test, the grouped-drain lane test,
-the write-gate contract family (loose, strict, and the watcher-count
-counterexample), the entanglement single-commit test with its
+the write-gate contract family (exact parity, activation monotonicity, and
+the watcher-count counterexample), the entanglement single-commit test with
+its
 no-false-positive variant, the two-batch re-notify test, the divergent-dep
 notify test, the per-root committed test, the ReducerAtom/useReducer
 differential, the flushSync exclusion with its one-computed-downstream
@@ -3615,15 +3650,17 @@ one exists, its gate.
    writes); if a real workload breaks it, absorption can incrementalize
    (absorb per-atom across microtasks) at the cost of a more complex W0
    invariant — flagged, not designed.
-4. **The loose write-gate contract is a real, documented parity deviation.**
-   An idle-time write does not inherit the lane of the notification it
-   triggers, and the setTimeout/flushSync schedule can paint a one-frame
-   cross-component mismatch (9.1). Risk: an application depends on exact
-   lane semantics for idle writes without realizing it. Mitigations: the
-   contract is documented where users will read it (9.1 and the `configure`
-   doc comment), `strictLanes` restores exact parity with one option, and
-   the contract-documentation tests (17.6) make the behavior a pinned,
-   deliberate fact rather than an emergent one.
+4. **Every write in an activated app pays the logging tax, even while React
+   is idle.** The gate never reverts (9.1), so timer, socket, and store
+   writes in an idle app are logged, marked on first touch, and swept like
+   any other — a cost class a quiescence-gated design would avoid. This is
+   priced, not presumed: G-4 (LOGGED-idle tier-0 ≤2%), G-6b (steady logged
+   write ≤2×), and G-6a's streaming-store idle-write workload, measured at
+   M2 and re-checked at M7. If those numbers show the tax is material in
+   real workloads, the pre-registered quiescence-gate experiment (E4, 18.4)
+   is the escape hatch — behind the write-gate contract family (17.6) as
+   permanent gatekeepers, and carrying its own documented loose contract if
+   ever adopted.
 5. **The flushSync-excludes-default case is load-bearing for the always-log
    rule inside LOGGED mode (9.1).** If React's behavior around entangled
    default lanes shifts, the rule could relax; conversely any future "skip
@@ -3729,21 +3766,24 @@ document discusses roads not taken; everything above it is the road taken.
    template-stamping codegen with regenerate-and-diff CI (15.2) all
    originated in the three rejected designs. Their architectures died; their
    engineering hygiene is most of sections 15–19.
-8. **The write-mode gate was decided in three rounds, and the loose
-   contract is a chosen trade, not an oversight.** *Watcher-count gating*
-   ("log once someone subscribes") was rejected as unsound — the app's
-   first transition writes before any watcher exists and leaves no receipt
-   for the component that mounts mid-transition. *Permanent logging from
-   bridge activation* was rejected as the default because it taxes every
-   imperative write in every React app forever, including idle-time timer
-   and socket writes React never sees. The adopted *quiescence gate* logs
-   exactly the writes any future render could need to exclude — everything
-   concurrent with open or pending React work — and knowingly gives up lane
-   inheritance for writes made while React is fully idle: the documented
-   loose contract (9.1), bounded to a convergent one-frame mismatch, with
-   `configure({ strictLanes: true })` restoring exact parity for
-   applications that want it and both rejected gates' counterexamples kept
-   as permanent gatekeeper tests (17.6).
+8. **The write-mode gate was decided in three rounds, ending in monotonic
+   activation.** *Watcher-count gating* ("log once someone subscribes") was
+   rejected as unsound — the app's first transition writes before any
+   watcher exists and leaves no receipt for the component that mounts
+   mid-transition. A *quiescence gate* (log only while React has open or
+   pending work) was argued next and rejected as the default because it
+   cannot deliver exact parity: a fully-idle write whose own broadcast
+   schedules default-lane work is one causal event split across lanes, and
+   a same-task flushSync excluding that lane has no receipt to reconstruct
+   the pre-write world — honesty would force documenting a loose contract.
+   The adopted rule — DIRECT until the first React root registers, LOGGED
+   permanently thereafter — buys unconditional React lane parity and a
+   one-sentence contract, at the price of logging idle-time writes; this
+   document treats that price as a set of numbers (G-4, G-6a/b) rather than
+   a fear, and keeps the quiescence gate alive as a pre-registered
+   experiment (E4) that is built only if the numbers say the tax matters,
+   gated behind both rejected designs' counterexamples as permanent tests
+   (17.6).
 9. **Everything else rejected was rejected on measurement or premise, with
    the numbers kept.** The object-graph implementation (a
    previous-generation engine with per-atom object logs supplied this
