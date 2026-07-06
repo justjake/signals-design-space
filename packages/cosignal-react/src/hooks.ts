@@ -17,9 +17,9 @@
  */
 
 import * as React from 'react';
-import { Atom, Computed, ReducerAtom, SuspendedRead, registerReactBridge } from 'cosignal';
+import { Atom, Computed, ReducerAtom, registerReactBridge } from 'cosignal';
 import type { AnyNode, CosignalBridge, RootId } from 'cosignal';
-import { Shim, getActiveShim, setActiveShim, type BoundCtx, type WatcherTarget } from './shim.js';
+import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------
 
@@ -102,16 +102,6 @@ function makeRec(node: AnyNode, bump: () => void): SignalRec {
 	};
 }
 
-/** Unwraps a pending read's SuspendedRead carrier into its thenable and throws that, so React suspends the component. */
-function readSuspending(fn: () => unknown): unknown {
-	try {
-		return fn();
-	} catch (err) {
-		if (err instanceof SuspendedRead) throw err.thenable;
-		throw err;
-	}
-}
-
 /**
  * Subscribes the component to an atom (or a useComputed result) and returns
  * its value in the world of the render the component is part of: a
@@ -161,20 +151,18 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 		if (w === undefined) {
 			// Mount: mint the watcher in this pass's world; the value it renders
 			// is captured so the commit-edge fixup can compare against it.
-			value = readSuspending(() =>
-				shim.evaluateSuspending(() => {
-					const minted = bridge.mountWatcher(pass.id, node, 'w?');
-					minted.name = `w${minted.id}`;
-					rec.watcherId = minted.id;
-					shim.targets.set(minted.id, rec.target);
-					shim.noteMinted(rendering, minted.id);
-					return minted.lastRenderedValue;
-				}),
-			);
+			value = shim.hookRead(() => {
+				const minted = bridge.mountWatcher(pass.id, node, 'w?');
+				minted.name = `w${minted.id}`;
+				rec.watcherId = minted.id;
+				shim.targets.set(minted.id, rec.target);
+				shim.noteMinted(rendering, minted.id);
+				return minted.lastRenderedValue;
+			});
 		} else if (w.live) {
 			// Re-render: re-arm the watcher's delivery dedup and read this pass's world.
 			bridge.renderWatcher(pass.id, w.id);
-			value = readSuspending(() => shim.evaluateSuspending(() => bridge.passValue(node, pass)));
+			value = shim.hookRead(() => bridge.passValue(node, pass));
 		} else {
 			// Reveal-shaped re-render (previously hidden content shown again, e.g.
 			// React Activity/Offscreen): adopt the dormant watcher into this pass
@@ -183,11 +171,11 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 			// a fresh mount.
 			bridge.adoptMount(pass.id, w.id);
 			shim.noteMinted(rendering, w.id);
-			value = readSuspending(() => shim.evaluateSuspending(() => bridge.passValue(node, pass)));
+			value = shim.hookRead(() => bridge.passValue(node, pass));
 		}
 	} else {
 		// Render outside a tracked pass (defensive): unrouted newest read.
-		value = readSuspending(() => shim.evaluateSuspending(() => bridge.newestValue(node)));
+		value = shim.hookRead(() => bridge.newestValue(node));
 	}
 	rec.lastValue = value;
 
@@ -312,7 +300,7 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	if (rendering !== undefined) rootRef.current = rendering.id; // idempotent render capture
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	React.useEffect(() => {
-		const root = rootRef.current ?? 'root-unknown';
+		const root = rootRef.current ?? ROOT_UNKNOWN;
 		let cleanup: void | (() => void);
 		let disposed = false;
 		const id = shim.registerEffect(root, () => {

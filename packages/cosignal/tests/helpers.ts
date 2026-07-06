@@ -24,7 +24,6 @@ import {
 	type ModelEvent,
 	type Op,
 	type Pass,
-	type Priority,
 	type ReactEffect,
 	type Token,
 	type Value,
@@ -37,9 +36,16 @@ import {
 	type AtomNode as EAtomNode,
 	type CosignalBridge,
 	type Pass as EPass,
+	type Subscription as ESubscription,
 	type World as EWorld,
 } from '../src/concurrent.js';
 import { modelView, RefereeMirror } from './model-view.js';
+
+/** Scenario annotation only: the specs name each batch's React lane priority
+ * for the reader; neither the engine nor the model consults it (the model's
+ * Priority dimension was deleted — the annotation survives so the ~230
+ * transcribed scenarios keep reading like the React schedules they mirror). */
+type Priority = 'urgent' | 'default' | 'deferred';
 
 type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown };
 
@@ -81,6 +87,28 @@ function capture(fn: () => unknown): Thrown {
 	} catch (error) {
 		return { threw: true, error };
 	}
+}
+
+// ---- referee effect constructors (test-side compositions over the REAL
+// mechanism: mountCommittedObserver + a `body` + captureRun; the body path is
+// the engine's inline-run + event-mint machinery lockstep compares) ----------
+
+/** Referee configuration — a single-node body (the engine twin of the
+ * model's mountReactEffect). */
+export function mountEngineReactEffect(b: CosignalBridge, rootId: string, node: ENode, name: string): ESubscription {
+	const e = b.mountCommittedObserver(rootId, name);
+	e.body = () => void b.captureRead(node);
+	b.captureRun(e.id, e.body);
+	return e;
+}
+
+/** Referee configuration — a body that re-chooses deps CAUSALLY:
+ * captureRead(sel) ? captureRead(a) : captureRead(b). */
+export function mountEngineReactEffectPick(b: CosignalBridge, rootId: string, sel: ENode, a: ENode, bb: ENode, name: string): ESubscription {
+	const e = b.mountCommittedObserver(rootId, name);
+	e.body = () => void (b.captureRead(sel) ? b.captureRead(a) : b.captureRead(bb));
+	b.captureRun(e.id, e.body);
+	return e;
 }
 
 export class TwinDriver {
@@ -216,10 +244,10 @@ export class TwinDriver {
 		return mNode;
 	}
 
-	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
+	openBatch(_priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
 		let eId: number | undefined;
-		const t = this.both('openBatch', () => this.model.openBatch(priority, opts), () => {
-			eId = this.engine.openBatch(opts).id; // the engine mints no priority — scheduling stays React's (the model still records one)
+		const t = this.both('openBatch', () => this.model.openBatch(opts), () => {
+			eId = this.engine.openBatch(opts).id; // neither side mints a priority — scheduling stays React's (see the Priority annotation type)
 		});
 		expect(eId, 'twin openBatch: token ids diverged').toBe(t.id);
 		return t;
@@ -301,13 +329,13 @@ export class TwinDriver {
 
 	mountReactEffect(root: string, node: AnyNode, name: string): ReactEffect {
 		return this.both('mountReactEffect', () => this.model.mountReactEffect(root, node, name), () =>
-			this.engine.mountReactEffect(root, this.toEngine(node), name));
+			mountEngineReactEffect(this.engine, root, this.toEngine(node), name));
 	}
 
 	mountReactEffectPick(root: string, sel: AnyNode, a: AnyNode, b: AnyNode, name: string): ReactEffect {
 		return this.both('mountReactEffectPick',
 			() => this.model.mountReactEffectPick(root, sel, a, b, name),
-			() => this.engine.mountReactEffectPick(root, this.toEngine(sel), this.toEngine(a), this.toEngine(b), name));
+			() => mountEngineReactEffectPick(this.engine, root, this.toEngine(sel), this.toEngine(a), this.toEngine(b), name));
 	}
 
 	removeReactEffect(id: number): void {

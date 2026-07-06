@@ -7,6 +7,7 @@
  * and the stable human format are asserted here too.
  */
 import { describe, expect, it } from 'vitest';
+import { mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
 import { __newBridgeForTest, type BridgeEvent, type CosignalBridge } from '../src/concurrent.js';
 import { attachTracer, formatTrace, formatTraceEvent, Tracer, type TraceEvent, type TraceKind } from '../src/trace.js';
@@ -122,7 +123,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('per-root commit with generation; react effect run caused by it', () => {
-		b.mountReactEffect('A', c, 'RE'); // committed c = 5
+		mountEngineReactEffect(b, 'A', c, 'RE'); // committed c = 5
 		const t2 = b.openBatch();
 		b.write(t2.id, a, { kind: 'set', value: 7 });
 		const p3 = b.passStart('A', [t2.id]);

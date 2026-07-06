@@ -18,7 +18,6 @@ import {
 	ScheduleError,
 	type AtomNode,
 	type Op,
-	type Priority,
 	type Value,
 } from './model.js';
 
@@ -37,7 +36,7 @@ export function rng(seed: number): () => number {
 export type WriteKind = 'set' | 'inc' | 'double' | 'equalNewest';
 
 export type ScheduleOp =
-	| { t: 'open'; priority: Priority; action: boolean }
+	| { t: 'open'; action: boolean }
 	| { t: 'write'; token: number; atom: number; kind: WriteKind; value: number }
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
 	| { t: 'scopeWrite'; token: number; atom: number; value: number }
@@ -109,7 +108,7 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 	const uniq = `${m.events.length}.${m.seq}.${m.epoch}`;
 	try {
 		switch (op.t) {
-			case 'open': m.openBatch(op.priority, { action: op.action }); break;
+			case 'open': m.openBatch({ action: op.action }); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
 				m.write(tokenAt(m, op.token), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
@@ -122,15 +121,15 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			}
 			case 'scopeWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				m.scopeWrite(tokenAt(m, op.token)!, atom, { kind: 'set', value: op.value });
+				m.scopeWrite(tokenAt(m, op.token), atom, { kind: 'set', value: op.value });
 				break;
 			}
-			case 'settle': m.settleAction(tokenAt(m, op.token)!, op.committed); break;
-			case 'retire': m.retire(tokenAt(m, op.token)!, op.committed); break;
-			case 'passStart': m.passStart(op.root, op.include.map((i) => tokenAt(m, i)!)); break;
+			case 'settle': m.settleAction(tokenAt(m, op.token), op.committed); break;
+			case 'retire': m.retire(tokenAt(m, op.token), op.committed); break;
+			case 'passStart': m.passStart(op.root, op.include.map((i) => tokenAt(m, i))); break;
 			case 'yield': m.passYield(passAt(m, op.pass)); break;
 			case 'resume': m.passResume(passAt(m, op.pass)); break;
-			case 'end': m.passEnd(passAt(m, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => tokenAt(m, i)!) }); break;
+			case 'end': m.passEnd(passAt(m, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => tokenAt(m, i)) }); break;
 			case 'mount': m.mountWatcher(passAt(m, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
 			case 'render': m.renderWatcher(passAt(m, op.pass), watcherAt(m, op.watcher)); break;
 			case 'reactEffect': m.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
@@ -174,29 +173,18 @@ export function runSchedule(ops: ScheduleOp[], check: boolean): RunResult {
 	return { model: m, applied, failure: undefined };
 }
 
-function tokenAt(m: CosignalModel, index: number): number | undefined {
-	const ids = [...m.tokens.keys()];
-	if (ids.length === 0) throw new ScheduleError('no tokens yet');
-	return ids[index % ids.length];
-}
-
-function passAt(m: CosignalModel, index: number): number {
-	const ids = [...m.passes.keys()];
-	if (ids.length === 0) throw new ScheduleError('no passes yet');
+/** Pick the index-th entity id (mod population) from a model map, or throw
+ * the skip signal — the one lookup shape every entity kind shares. */
+function pickId<K>(map: Map<K, unknown>, index: number, what: string): K {
+	const ids = [...map.keys()];
+	if (ids.length === 0) throw new ScheduleError(`no ${what} yet`);
 	return ids[index % ids.length]!;
 }
 
-function watcherAt(m: CosignalModel, index: number): number {
-	const ids = [...m.watchers.keys()];
-	if (ids.length === 0) throw new ScheduleError('no watchers yet');
-	return ids[index % ids.length]!;
-}
-
-function effectAt(m: CosignalModel, index: number): number {
-	const ids = [...m.reactEffects.keys()];
-	if (ids.length === 0) throw new ScheduleError('no react effects yet');
-	return ids[index % ids.length]!;
-}
+const tokenAt = (m: CosignalModel, index: number): number => pickId(m.tokens, index, 'tokens');
+const passAt = (m: CosignalModel, index: number): number => pickId(m.passes, index, 'passes');
+const watcherAt = (m: CosignalModel, index: number): number => pickId(m.watchers, index, 'watchers');
+const effectAt = (m: CosignalModel, index: number): number => pickId(m.reactEffects, index, 'react effects');
 
 /** Generate a schedule for a seed. Purely a function of (seed, steps). */
 export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
@@ -204,11 +192,13 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 	const pick = (n: number) => Math.floor(rand() * n);
 	const bool = (p: number) => rand() < p;
 	const ops: ScheduleOp[] = [];
-	const priorities: Priority[] = ['urgent', 'default', 'deferred'];
 	const kinds: WriteKind[] = ['set', 'set', 'inc', 'double', 'equalNewest'];
 	for (let i = 0; i < steps; i++) {
 		const roll = rand();
-		if (roll < 0.08) ops.push({ t: 'open', priority: priorities[pick(3)]!, action: bool(0.25) });
+		if (roll < 0.08) {
+			pick(3); // discarded draw — preserves the historical seed stream byte-for-byte (the Priority dimension it fed is deleted; the model never consulted it)
+			ops.push({ t: 'open', action: bool(0.25) });
+		}
 		else if (roll < 0.34) {
 			const token = pick(34);
 			ops.push({ t: 'write', token, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });

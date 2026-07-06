@@ -14,6 +14,7 @@
  * below are pinned directly instead.
  */
 import { describe, expect, it } from 'vitest';
+import { mountEngineReactEffect } from './helpers.js';
 import {
 	__coreProbes,
 	__newBridgeForTest,
@@ -134,7 +135,7 @@ describe('quiet-mode writes', () => {
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(a) as number) * 2);
 		const ce = b.mountCoreEffect(c, 'ce');
-		const re = b.mountReactEffect('A', c, 're');
+		const re = mountEngineReactEffect(b, 'A', c, 're');
 		const ceRuns = ce.runs;
 		const reRuns = re.runs;
 		(a.handle as Atom<number>).set(3); // quiet fold

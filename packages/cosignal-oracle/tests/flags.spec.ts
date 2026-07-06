@@ -19,7 +19,7 @@ describe('flag 3 — write-set closure at commit (ActionScope late-write surface
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const w = mountCommitted(m, 'A', a, 'W');
-		const t = m.openBatch('deferred', { action: true });
+		const t = m.openBatch({ action: true });
 		m.scopeWrite(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.renderWatcher(pA.id, w.id);
@@ -43,7 +43,7 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 	it('a committed-member token writing post-pin cannot drift a yielded pass\'s world', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred', { action: true });
+		const t = m.openBatch({ action: true });
 		m.scopeWrite(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.passEnd(pA.id, 'commit'); // A's committed set now holds t (still live, parked)
@@ -75,7 +75,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
-		const k = m.openBatch('deferred');
+		const k = m.openBatch();
 		m.write(k.id, a, set(4));
 		const pk = pass(m, 'A', [k]);
 		const w = m.mountWatcher(pk.id, c, 'W');
@@ -90,11 +90,11 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 	it('each dropped conjunct admits a counterexample: foreign cas motion falls through and fires', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const k = m.openBatch('deferred');
+		const k = m.openBatch();
 		const pk = pass(m, 'A', [k]);
 		const w = m.mountWatcher(pk.id, a, 'W');
 		m.passYield(pk.id);
-		const d = m.openBatch('default'); // foreign committed-side motion in the window
+		const d = m.openBatch(); // foreign committed-side motion in the window
 		m.write(d.id, a, set(3));
 		m.retire(d.id, false);
 		m.passResume(pk.id);
@@ -111,7 +111,7 @@ describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', (
 	it('after a forced release, the retained pass still folds its world exactly (receipts carry slots)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const retained = Array.from({ length: 5 }, () => m.openBatch('deferred'));
+		const retained = Array.from({ length: 5 }, () => m.openBatch());
 		for (const t of retained) m.write(t.id, a, update((x) => (x as number) + 1));
 		const held = pass(m, 'B', retained); // mask names all five
 		m.passYield(held.id);
@@ -119,7 +119,7 @@ describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', (
 		for (const t of retained) m.retire(t.id, true); // all retire mid-pass; releases defer
 		const live: number[] = [];
 		for (let i = 0; i < 27; i++) {
-			const u = m.openBatch('urgent');
+			const u = m.openBatch();
 			live.push(u.id);
 			m.write(u.id, a, set(100 + i)); // 27th claim forces the backstop
 		}

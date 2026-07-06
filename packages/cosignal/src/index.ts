@@ -598,6 +598,15 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	// ---- system.ts transliteration -------------------------------------------
+	// TWINNING OBLIGATION: the shadow arenas in concurrent.ts re-state these
+	// walks over their own layout (aLink/aUnlink/aPropagate/aShallowPropagate/
+	// aIsValidLink/aCheckDirty*, deliberately — see the header there). Any
+	// semantic change to {link, linkInsert, unlink, propagate, checkDirty*,
+	// chainCheck, shallowPropagate, isValidLink, purgeDeps} must be re-derived
+	// in the `a`-prefixed twin (and vice versa); the twins diverge for real,
+	// argued reasons (weak-subs second list, VALID/BOX bits, guard counters),
+	// so port the RULE, not the text. Drift here has already produced a real
+	// bug caught only by fuzz seed 40 (aUpdateAndShallow's comment).
 
 	function link(dep: NodeId, sub: NodeId, version: Version): void {
 		const prevDep = M[sub + NodeField.DEPS_TAIL];
@@ -2243,26 +2252,21 @@ export class Atom<T> {
 		const effect = options?.effect;
 		if (effect !== undefined) {
 			E.markLifecycle(id);
-			const isEqual = this._isEqual;
 			const self = this as Atom<unknown>;
 			lifecycleStates.set(id, {
 				effect: effect as (ctx: AtomCtx<unknown>) => void | (() => void),
+				// ctx.set/update delegate to the public methods — they ARE the
+				// one write path (host-seam interception, fold-purity guard and
+				// equality policy live there, never re-implemented here).
 				ctx: {
 					get state(): unknown {
 						return untracked(() => E.read(id));
 					},
 					set(value: unknown): void {
-						if (hostWrite !== undefined && hostWrite(self, 0, value)) {
-							return;
-						}
-						writeAtom(id, isEqual, value);
+						self.set(value);
 					},
 					update(fn: (current: unknown) => unknown): void {
-						if (hostWrite !== undefined && hostWrite(self, 1, fn)) {
-							return;
-						}
-						const next = runFold(() => fn(values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET]));
-						writeAtom(id, isEqual, next);
+						self.update(fn);
 					},
 				},
 				cleanup: undefined,

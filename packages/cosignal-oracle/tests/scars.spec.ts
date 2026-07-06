@@ -16,9 +16,9 @@ describe('pinned scars (model-expressible)', () => {
 	it('S1 — no-log urgent writes: urgent ×2 over pending +1 commits 2 then 4, never 3', () => {
 		const m = concurrent();
 		const a = m.atom('a', 1);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, update((x) => (x as number) + 1));
-		const u = m.openBatch('urgent');
+		const u = m.openBatch();
 		m.write(u.id, a, update((x) => (x as number) * 2)); // logged although urgent
 		commitAndRetire(m, 'A', u);
 		expect(m.committedValue(a, 'A')).toBe(2); // not 4, not 3: replay over the pre-batch base
@@ -34,7 +34,7 @@ describe('pinned scars (model-expressible)', () => {
 		const b = m.atom('b', 0);
 		const c = m.computed('c', (read) => (read(flag) ? read(a) : read(b)));
 		mountCommitted(m, 'A', c, 'W');
-		const k = m.openBatch('deferred');
+		const k = m.openBatch();
 		m.write(k.id, flag, set(1));
 		const pk = pass(m, 'A', [k]);
 		expect(m.passValue(c, pk)).toBe(0); // the k-world evaluation records the REAL dep a→c
@@ -53,7 +53,7 @@ describe('pinned scars (model-expressible)', () => {
 	it('S4 — drop-on-abort retirement: committed=false batches fold; writes never silently revert', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(5)); // no subscriber → no React work → committed=false
 		m.retire(t.id, false);
 		expect(m.committedValue(a, 'A')).toBe(5); // persistence must never depend on subscription
@@ -64,7 +64,7 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0); // unlogged when world-k first reads it
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
-		const k = m.openBatch('deferred');
+		const k = m.openBatch();
 		m.write(k.id, m.atom('warm', 0), set(1)); // k exists with unrelated state
 		const pk = pass(m, 'A', [k]);
 		expect(m.passValue(c, pk)).toBe(1); // first read: a has no tape
@@ -98,11 +98,11 @@ describe('pinned scars (model-expressible)', () => {
 	it('S7 — wall-clock render scopes: a yield-gap write neither throws nor lands in the pass', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(1));
 		const p = pass(m, 'A', [t]);
 		m.passYield(p.id);
-		const u = m.openBatch('urgent');
+		const u = m.openBatch();
 		expect(() => m.write(u.id, a, set(2))).not.toThrow(); // per-callstack truth: not in render
 		expect(m.newestValue(a)).toBe(2); // gap reads resolve NEWEST, not the pin
 		m.passResume(p.id);
@@ -116,9 +116,9 @@ describe('pinned scars (model-expressible)', () => {
 	it('S8 — equality-gating writes against newest: U set(1) after T set(1) still appends', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(1));
-		const u = m.openBatch('urgent');
+		const u = m.openBatch();
 		m.write(u.id, a, set(1)); // equal to newest — the scarred design dropped it
 		const pu = pass(m, 'A', [u]);
 		expect(m.passValue(a, pu)).toBe(1); // U's render excludes T and must still show 1, not 0
@@ -133,7 +133,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		// quiesce-fresh model; c has never been evaluated anywhere (no edges, no marks)
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
-		const k = m.openBatch('deferred');
+		const k = m.openBatch();
 		m.write(k.id, a, set(9)); // write to an atom with no out-edges yet
 		const sync = pass(m, 'A', []); // urgent pass reads the never-evaluated node
 		expect(m.passValue(c, sync)).toBe(1); // committed world, never 10 (a torn urgent frame)
@@ -147,8 +147,8 @@ describe('pinned scars (model-expressible)', () => {
 		const x1 = m.atom('x1', 0);
 		const x2 = m.atom('x2', 0);
 		const c = m.computed('c', (read) => ((read(x1) as number) && (read(x2) as number)) as number);
-		const t1 = m.openBatch('deferred');
-		const t2 = m.openBatch('deferred');
+		const t1 = m.openBatch();
+		const t2 = m.openBatch();
 		m.write(t1.id, x1, set(1)); // per-token projection: 1&&0 = 0 == committed
 		m.write(t2.id, x2, set(1)); // per-token projection: 0&&1 = 0 == committed
 		const p = pass(m, 'A', []); // mount excludes both
@@ -171,11 +171,11 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const n = m.computed('n', (read) => (read(a) as number) + 10);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(1));
 		const p = pass(m, 'B', [t]); // pass on root B
 		m.passYield(p.id);
-		const d = m.openBatch('default');
+		const d = m.openBatch();
 		m.write(d.id, a, set(7));
 		m.retire(d.id, true); // retires mid-yield (work on another root / store-only)
 		m.passResume(p.id);
@@ -192,12 +192,12 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 3);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, update((x) => (x as number) + 1)); // T-world 4, newest 4
 		const pt = pass(m, 'A', [t]);
 		m.renderWatcher(pt.id, w.id); // T rendered (finished-uncommitted below)
 		m.passYield(pt.id);
-		const u = m.openBatch('urgent');
+		const u = m.openBatch();
 		m.write(u.id, a, set(4)); // equal to CANONICAL (newest 4): k0Changed false in the dead design
 		// delivery fires anyway — value-blind (interleaved for W: T's pass is open, pin < seq)
 		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === u.id)).toHaveLength(1);
@@ -216,7 +216,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(1)); // T renders c=1
 		const pt = pass(m, 'A', [t]);
 		m.renderWatcher(pt.id, w.id);
@@ -239,8 +239,8 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
-		const k = m.openBatch('deferred');
-		const j = m.openBatch('deferred');
+		const k = m.openBatch();
+		const j = m.openBatch();
 		m.write(k.id, a, set(1)); // k delivers through c
 		const pk = pass(m, 'A', [k]);
 		m.renderWatcher(pk.id, w.id); // W re-arms k
@@ -258,7 +258,7 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => (read(a) as number) * 10);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(1));
 		const pIn = pass(m, 'A', [t]); // includes T
 		const pOut = pass(m, 'B', []); // excludes T, different pin
@@ -278,7 +278,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
-		const t = m.openBatch('deferred', { action: true });
+		const t = m.openBatch({ action: true });
 		m.scopeWrite(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.renderWatcher(pA.id, w.id);
@@ -302,11 +302,11 @@ describe('pinned scars (model-expressible)', () => {
 	it('S21/S25 — ambient classification after await: the raw write is default-batched and commits first', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred', { action: true });
+		const t = m.openBatch({ action: true });
 		m.write(t.id, a, set(1)); // sync prefix
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack (the post-await lint is adapter-only)
 		const ambient = m.tokens.get(m.ambientToken!)!;
-		expect(ambient.priority).toBe('default');
+		expect(ambient.ambient).toBe(true); // the auto-minted ambient default batch
 		m.retire(ambient.id, true);
 		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — exactly React's own transition rule
 		m.settleAction(t.id, true);
@@ -319,7 +319,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 1);
 		const cOld = m.computed('cOld', (read) => (read(a) as number) + 100);
 		const cNew = m.computed('cNew', (read) => (read(a) as number) + 200); // deps-keyed recreation
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(2));
 		const pIn = pass(m, 'A', [t]); // the pass holding the NEW node via its hook state
 		const pOut = pass(m, 'B', []); // committed pass holds the OLD node
@@ -335,9 +335,9 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
-		const k = m.openBatch('deferred', { action: true }); // parked
+		const k = m.openBatch({ action: true }); // parked
 		m.scopeWrite(k.id, a, set(1));
-		const x = m.openBatch('urgent');
+		const x = m.openBatch();
 		m.write(x.id, m.atom('unrelated', 0), set(1));
 		m.retire(x.id, true); // an earlier unrelated retirement "consumes the queue entry"
 		expect(e.runs).toBe(0); // k invisible to committed-for-A: correctly no run yet
@@ -356,7 +356,7 @@ describe('pinned scars (model-expressible)', () => {
 		const reduce = (s: unknown, act: string) => (act === 'inc' ? (s as number) + 1 : s);
 		const m = concurrent();
 		const r = m.atom('r', 0);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // evaluates equal against base → legal drop
 		expect(m.eventsOfType('write-dropped')).toHaveLength(1);
 		expect(r.tape).toHaveLength(0);
@@ -373,11 +373,11 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const n = m.computed('n', (read) => (read(a) as number) + 11);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(100)); // T so the pass has a mask
 		const p = pass(m, 'B', [t]);
 		m.passYield(p.id);
-		const u = m.openBatch('urgent');
+		const u = m.openBatch();
 		m.write(u.id, a, set(1));
 		m.retire(u.id, true); // clears-at-retire designs then serve kernel n=12 beside folded a=100
 		m.passResume(p.id);
@@ -392,7 +392,7 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		// a yielded pass whose mask names 5 batches that all retire mid-pass
-		const retained = Array.from({ length: 5 }, () => m.openBatch('deferred'));
+		const retained = Array.from({ length: 5 }, () => m.openBatch());
 		for (const [i, t] of retained.entries()) m.write(t.id, a, update((x) => (x as number) + 10 ** 0 * (i + 1)));
 		const held = pass(m, 'B', retained);
 		m.passYield(held.id);
@@ -402,7 +402,7 @@ describe('pinned scars (model-expressible)', () => {
 		// fresh live batches demand slots: 26 free + 5 retained = table full at the 27th claim
 		const live: number[] = [];
 		for (let i = 0; i < 27; i++) {
-			const u = m.openBatch('urgent');
+			const u = m.openBatch();
 			live.push(u.id);
 			m.write(u.id, a, set(i));
 		}
@@ -421,11 +421,11 @@ describe('pinned scars (model-expressible)', () => {
 		const u = m.computed('u', (read) => (read(x) as number) + 1);
 		const wNode = m.computed('w', (read) => (read(u) as number) + 1);
 		const watcher = mountCommitted(m, 'A', wNode, 'W');
-		const t0 = m.openBatch('deferred');
+		const t0 = m.openBatch();
 		m.write(t0.id, x, set(1));
 		commitAndRetire(m, 'A', t0, [watcher]);
 		m.quiesce(); // episode reset: edges cleared, counters keep climbing
-		const k = m.openBatch('deferred');
+		const k = m.openBatch();
 		const mark = m.events.length;
 		m.write(k.id, x, set(2)); // next episode's write must reach the watcher through x→u→w
 		const d = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W');
@@ -439,7 +439,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
-		const t = m.openBatch('deferred', { action: true });
+		const t = m.openBatch({ action: true });
 		m.scopeWrite(t.id, a, set(1)); // bit set, setState delivered
 		expect(w.dedup.size).toBe(1);
 		const pt = pass(m, 'A', [t]); // T's pass pins and yields BEFORE the watcher renders
@@ -467,12 +467,12 @@ describe('pinned scars (model-expressible)', () => {
 		const b = m.atom('b', 0);
 		const c = m.computed('c', (read) => (read(flag) ? read(a) : read(b)));
 		const w = mountCommitted(m, 'A', c, 'W');
-		const k = m.openBatch('deferred', { action: true }); // parked K
+		const k = m.openBatch({ action: true }); // parked K
 		m.scopeWrite(k.id, flag, set(1)); // walk reaches W
 		const pk = pass(m, 'A', [k]); // K's pass pins…
 		m.renderWatcher(pk.id, w.id);
 		m.passYield(pk.id); // …and yields
-		const d = m.openBatch('default');
+		const d = m.openBatch();
 		m.write(d.id, a, set(1)); // store-only default writes a (no committed edge a→c yet)
 		m.retire(d.id, false); // and retires; its slot releases immediately (S36's freed-slot half)
 		expect(m.eventsOfType('slot-released').some((e) => e.token === d.id)).toBe(true);
@@ -490,7 +490,7 @@ describe('pinned scars (model-expressible)', () => {
 	it('S38/S43 — quiescence requires synchronous WIP discard first; folds survive the episode reset', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred');
+		const t = m.openBatch();
 		m.write(t.id, a, set(3));
 		const p = pass(m, 'A', [t]);
 		m.passYield(p.id);
@@ -511,7 +511,7 @@ describe('pinned scars (model-expressible)', () => {
 		const w = m.mountWatcher(hidden.id, f, 'W');
 		m.deferMount(w.id); // effects deferred
 		m.passEnd(hidden.id, 'commit');
-		const u = m.openBatch('urgent');
+		const u = m.openBatch();
 		m.write(u.id, a, set(1)); // one event writes a@s2 > p1 and reveals
 		const pu = pass(m, 'A', [u]); // u's render bails on the pre-rendered W (not re-rendered)
 		m.adoptMount(pu.id, w.id);

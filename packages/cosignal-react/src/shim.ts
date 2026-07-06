@@ -63,7 +63,7 @@
  */
 
 import * as React from 'react';
-import { Atom, type ComputedCtx } from 'cosignal';
+import { Atom, SuspendedRead, type ComputedCtx } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
@@ -107,15 +107,15 @@ export type WatcherTarget = {
 
 type RootRec = {
 	id: RootId;
-	container: unknown;
 	/** The open bridge pass mirroring the protocol host's in-progress render pass, if any. */
 	pass: Pass | undefined;
-	/** Lineage id reported at pass start (stable per root × included-batch set). */
-	lineageId: number;
 	/** Watcher ids minted during the current/most recent pass, for the orphan sweep. */
 	minted: Set<number>;
-	lastCommitGeneration: number;
 };
+
+/** Fallback root id for effects/watchers minted outside any tracked render
+ * pass (defensive paths; both packages name it through this one constant). */
+export const ROOT_UNKNOWN: RootId = 'root-unknown';
 
 let nextRootSerial = 1;
 
@@ -143,7 +143,6 @@ export class Shim {
 
 	private unsubscribe: () => void;
 	private rootsByContainer = new Map<unknown, RootRec>();
-	private rootsById = new Map<RootId, RootRec>();
 	private bridgeTokenByFork = new Map<number, TokenId>();
 	private forkTokenByBridge = new Map<TokenId, number>();
 	/** watcher id -> delivery target (registered at render, claimed at layout). */
@@ -197,27 +196,13 @@ export class Shim {
 		// referee retains it or a tracer attaches); scheduling decisions arrive
 		// here as live objects, allocation-free. Listener bodies must never
 		// throw into the engine mid-operation: failures are recorded.
-		bridge.onDelivery = (w, token) => {
-			try {
-				this.bumpInBatch(w.id, token.id); // re-render in the write's own batch
-			} catch (error) {
-				this.errors.push(error);
-			}
-		};
-		bridge.onMountCorrective = (w, token) => {
-			try {
-				this.bumpInBatch(w.id, token.id); // join a still-live batch this mount's render missed
-			} catch (error) {
-				this.errors.push(error);
-			}
-		};
-		bridge.onCorrection = (w) => {
-			try {
-				this.bumpInBatch(w.id, undefined); // urgent pre-paint fix: discrete-urgent fallback lane
-			} catch (error) {
-				this.errors.push(error);
-			}
-		};
+		// One listener error policy: guard() — which also closes the disposed
+		// window the hand-rolled try/catch these replaced lacked (post-dispose
+		// bridge callbacks are now no-ops instead of relying on the cleared
+		// `targets` map to degrade safely).
+		bridge.onDelivery = (w, token) => this.guard(() => this.bumpInBatch(w.id, token.id)); // re-render in the write's own batch
+		bridge.onMountCorrective = (w, token) => this.guard(() => this.bumpInBatch(w.id, token.id)); // join a still-live batch this mount's render missed
+		bridge.onCorrection = (w) => this.guard(() => this.bumpInBatch(w.id, undefined)); // urgent pre-paint fix: discrete-urgent fallback lane
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches, lineageId) =>
 				this.guard(() => this.handlePassStart(container, includedBatches, lineageId)),
@@ -276,14 +261,10 @@ export class Shim {
 		if (rec === undefined) {
 			rec = {
 				id: `root-${nextRootSerial++}`,
-				container,
 				pass: undefined,
-				lineageId: 0,
 				minted: new Set(),
-				lastCommitGeneration: 0,
 			};
 			this.rootsByContainer.set(container, rec);
-			this.rootsById.set(rec.id, rec);
 			this.bridge.root(rec.id); // materialize the per-root committed table
 		}
 		return rec;
@@ -327,7 +308,7 @@ export class Shim {
 
 	// ---- protocol listener -> bridge --------------------------------------------
 
-	private handlePassStart(container: unknown, includedBatches: readonly number[], lineageId: number): void {
+	private handlePassStart(container: unknown, includedBatches: readonly number[], _lineageId: number): void {
 		const rec = this.rootRec(container);
 		if (rec.pass !== undefined && rec.pass.state !== 'ended') {
 			// Defensive: the protocol host ends a pass frame before restarting it,
@@ -346,7 +327,6 @@ export class Shim {
 			if (mapped !== undefined && this.bridge.tokens.get(mapped)?.state === 'live') known.push(mapped);
 		}
 		rec.pass = this.bridge.passStart(rec.id, known);
-		rec.lineageId = lineageId;
 		rec.minted = new Set();
 	}
 
@@ -464,9 +444,8 @@ export class Shim {
 		b.retire(ambientId, true); // sync-committed content locks into every committed world
 	}
 
-	private handleRootCommitted(container: unknown, committedBatches: readonly number[], generation: number): void {
+	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {
 		const rec = this.rootRec(container);
-		rec.lastCommitGeneration = generation;
 		// The bridge already locked the committing pass's batch set into the
 		// root's committed table at passEnd(commit). The protocol's per-root
 		// commit report is a delta (one batch's work can reach the screen
@@ -651,13 +630,18 @@ export class Shim {
 	// background-suspension fold. What stays here is exactly the React-phase
 	// knowledge: hook-initiated evaluations may legally suspend the render.)
 
-	/** Hook-initiated evaluation: SuspendedRead propagates (React will
-	 * suspend); the engine's ctx adapter and newest read tail consult the
-	 * bridge counter to rethrow instead of folding to a sentinel value. */
-	evaluateSuspending(fn: () => Value): Value {
+	/** Hook-initiated evaluation — the ONE "a hook read may legally suspend"
+	 * translation (both halves): the bridge counter tells the engine's ctx
+	 * adapter and newest read tail to RETHROW a pending suspension instead of
+	 * folding it to a sentinel value, and a SuspendedRead carrier unwraps to
+	 * its thenable so React suspends the component. */
+	hookRead(fn: () => Value): Value {
 		this.bridge.suspendDepth++;
 		try {
 			return fn();
+		} catch (err) {
+			if (err instanceof SuspendedRead) throw err.thenable;
+			throw err;
 		} finally {
 			this.bridge.suspendDepth--;
 		}
@@ -688,7 +672,7 @@ export class Shim {
 	}
 
 	private resubscribeAtLayout(rec: { node: AnyNode; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
-		const root = rec.root ?? 'root-unknown';
+		const root = rec.root ?? ROOT_UNKNOWN;
 		const pass = this.bridge.passStart(root, []);
 		let minted: Watcher | undefined;
 		try {

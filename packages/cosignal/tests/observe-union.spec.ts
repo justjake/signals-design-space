@@ -14,6 +14,7 @@
  * debounce-finalized unsubscribe / orphan sweep shape.
  */
 import { describe, expect, it } from 'vitest';
+import { mountEngineReactEffectPick } from './helpers.js';
 import { __newBridgeForTest, Atom, effect, type CosignalBridge } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
@@ -206,7 +207,7 @@ describe('observation union at the bridge', () => {
 		const nodeA = b.adoptAtom('a', atom as Atom<unknown>);
 		const nodeB = b.adoptAtom('b', atomB as Atom<unknown>);
 		const flag = b.atom('flag', 0);
-		const e = b.mountReactEffectPick('A', flag, nodeA, nodeB, 'E'); // flag=0 → snapshot {flag, b}
+		const e = mountEngineReactEffectPick(b, 'A', flag, nodeA, nodeB, 'E'); // flag=0 → snapshot {flag, b}
 		await tick();
 		expect(log).toEqual([]); // a is not in the snapshot
 		expect(logB).toEqual(['observe']); // b holds one union retain via the dep snapshot

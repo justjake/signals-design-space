@@ -336,9 +336,9 @@ export class AtomNode {
 	equals: Equals;
 	/** True iff `equals` is the default Object.is (write fast path). */
 	eqIsDefault: boolean;
-	/** Per-atom retirement stamp, minted at every retirement fold touching it
-	 * (a retirement changes visibility without minting new receipts, so memo
-	 * fingerprints must incorporate it). */
+	/** Per-atom retirement stamp, minted at every retirement fold touching it.
+	 * Sole remaining consumer: retireInternal's duplicate-touch dedup (the
+	 * memo ladder that read it as a fingerprint clock is deleted — S-C/S-D). */
 	retirementStamp: Seq = 0;
 	/** The kernel-backed newest-world storage this overlay rides. */
 	handle: Atom<Value>;
@@ -398,7 +398,6 @@ export type Token = {
 	action: boolean;
 	parked: boolean;
 	state: 'live' | 'retired';
-	committedFlag: boolean | undefined;
 	slot: SlotId | undefined;
 	retiredSeq: Seq | undefined;
 	/** Sequence of this token's last receipt (0 = none). The mount fixup's
@@ -555,9 +554,9 @@ export class Watcher {
  *    boundary value, never while the subscription's own root has an open
  *    render-pass frame — deferred flips flush at that frame's close).
  *    `refire` (adapter-registered) rides the operation-boundary notification
- *    queue; referee-configured subscriptions (`mountReactEffect`/
- *    `mountReactEffectPick`) store a `body` and re-run it inline through the
- *    SAME capture frame, so lockstep referees the real mechanism.
+ *    queue; referee-configured subscriptions (tests/helpers.ts's
+ *    mountEngineReactEffect/-Pick) store a `body` and re-run it inline
+ *    through the SAME capture frame, so lockstep referees the real mechanism.
  *  - policy 'newest' — the absorbed core-effect configuration: one `node`,
  *    value-gated on its newest value, enqueued by the delivery walk and
  *    flushed after the walk returns.
@@ -597,12 +596,6 @@ export type World =
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
-/** Bit constants for slot bit-sets (mask/included/committed/dedup words):
- * bit i (0–30) = slot i. Same-file const enum so the masks inline as literals. */
-const enum SlotBits {
-	/** (bits >>> slot) & LOW_BIT isolates the addressed slot's bit. */
-	LOW_BIT = 1,
-}
 
 /** The observable event stream (same shapes as the reference model's events,
  * so the two can be compared entry by entry). */
@@ -1115,6 +1108,11 @@ function aSetMode(a: ShadowArena, id: number, weak: boolean): void {
 }
 
 /**
+ * TWINNING OBLIGATION (the other half of the note above index.ts's
+ * "system.ts transliteration" section): these `a`-prefixed walks re-state
+ * the kernel's push-pull algorithms over the arena layout. A semantic
+ * change on either side must be re-derived — not copied — on the other.
+ *
  * Link maintenance (spike `wLink`, transliterated) PLUS §4.4.1's mode
  * discipline, which the spike form lacked and may not be transplanted bare:
  * the FIRST occurrence of a dep in an evaluation SETS the link's mode from
@@ -1300,6 +1298,14 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 		}
 		break;
 	} while (true);
+}
+
+/** Head of a shadow's subs list by index: 0 = strong (arena links), 1 = weak
+ * (the side column) — the one place the `for (list 0..1)` walk sites learn
+ * where the two lists live. (aPropagateBoth/aShallowBoth below read the
+ * heads directly: they are the write-fanout hot path.) */
+function aSubsHead(a: ShadowArena, sh: number, list: number): number {
+	return list === 0 ? a.W[sh + AF.SUBS]! : a.weakSubs[sh >> A_SHIFT]!;
 }
 
 /** Seed aPropagate over BOTH of a shadow's subs lists (fanout sites). */
@@ -1631,7 +1637,7 @@ export class CosignalBridge {
 				const sh = a.byNode[nid]!;
 				if (sh === 0) continue;
 				for (let list = 0; list < 2; list++) {
-					let l = list === 0 ? W[sh + AF.SUBS]! : a.weakSubs[sh >> A_SHIFT]!;
+					let l = aSubsHead(a, sh, list);
 					while (l !== 0) {
 						const sub = W[l + AF.L_SUB]!;
 						let s = out.get(nid);
@@ -1730,10 +1736,34 @@ export class CosignalBridge {
 		__setHostComputedRead(armed ? hostComputedReadImpl : undefined);
 	}
 
-	/** The world a routed read resolves in RIGHT NOW: the evaluation world on
-	 * stack, else whatever the provider derives from the live call context. */
-	private effectiveWorld(): World | undefined {
-		if (this.activeWorld !== undefined) return this.activeWorld;
+	/** Capture frame that answered the LAST resolveRoutedWorld call (scratch,
+	 * consumed immediately by the two host read hooks — a field instead of a
+	 * tuple return so routed reads allocate nothing on the provider path). */
+	private routedCap: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined;
+
+	/**
+	 * THE read-routing resolution order, one copy (both host read hooks used
+	 * to carry it separately): fold-purity throw, then the evaluation world
+	 * on stack (reads inside a computed's evaluation are the COMPUTED's
+	 * dependencies — the capture frame never sees them: the suppression rule
+	 * of plan §2.2.2), then the open capture frame (committed-for-root; the
+	 * frame lands in `routedCap` for the caller's dep capture), then the
+	 * host's ambient provider.
+	 */
+	private resolveRoutedWorld(): World | undefined {
+		// Fold purity: replayed updaters/reducers (and equals callbacks) must
+		// not read signals — world routing would otherwise serve them silently.
+		if (this.inFoldCallback) {
+			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+		}
+		this.routedCap = undefined;
+		const world = this.activeWorld;
+		if (world !== undefined) return world;
+		const cap = this.captureFrame;
+		if (cap !== undefined) {
+			this.routedCap = cap;
+			return { kind: 'committed', root: cap.sub.root };
+		}
 		const p = this.worldProvider;
 		return p === undefined ? undefined : p();
 	}
@@ -1745,30 +1775,11 @@ export class CosignalBridge {
 	 * @internal (reached only through index.ts's `Atom.state`)
 	 */
 	hostRead(atom: Atom<unknown>): unknown {
-		// Fold purity: replayed updaters/reducers (and equals callbacks) must
-		// not read signals — world routing would otherwise serve them silently.
-		if (this.inFoldCallback) {
-			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
-		}
-		// World resolution order: the evaluation world on stack (reads inside a
-		// computed's evaluation are the COMPUTED's dependencies — the capture
-		// frame never sees them: the suppression rule of plan §2.2.2), then the
-		// open capture frame (committed-for-root + dep capture), then the
-		// host's ambient provider.
-		let world = this.activeWorld;
-		let cap: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined;
-		if (world === undefined) {
-			cap = this.captureFrame;
-			if (cap !== undefined) {
-				world = { kind: 'committed', root: cap.sub.root };
-			} else {
-				const p = this.worldProvider;
-				world = p === undefined ? undefined : p();
-			}
-		}
+		const world = this.resolveRoutedWorld();
 		if (world === undefined) {
 			return __HOST_MISS;
 		}
+		const cap = this.routedCap;
 		let node = this.byKernelId.get(atom._id);
 		if (node === undefined) {
 			const adopt = this.readAdopter;
@@ -1793,23 +1804,11 @@ export class CosignalBridge {
 	 * @internal (reached only through index.ts's `Computed.state`)
 	 */
 	hostComputedRead(c: Computed<unknown>): unknown {
-		if (this.inFoldCallback) {
-			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
-		}
-		let world = this.activeWorld;
-		let cap: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined;
-		if (world === undefined) {
-			cap = this.captureFrame;
-			if (cap !== undefined) {
-				world = { kind: 'committed', root: cap.sub.root };
-			} else {
-				const p = this.worldProvider;
-				world = p === undefined ? undefined : p();
-			}
-		}
+		const world = this.resolveRoutedWorld();
 		if (world === undefined || world.kind === 'newest') {
 			return __HOST_MISS; // the plain kernel path is newest serving
 		}
+		const cap = this.routedCap;
 		const node = this.nodeForComputed(c);
 		// The pre-dedup observation capture rides tracked reads (§4.7/M6);
 		// raw handle reads inside world evaluations have no reader hook, so
@@ -1825,20 +1824,30 @@ export class CosignalBridge {
 
 	/**
 	 * Resolve a public Computed handle to its registered node, adopting on
-	 * first sight — the ONE stamp-validate + registry-probe rule (nodeFor's
-	 * computed twin). Kernel id reuse can never serve a dead tenant here:
-	 * `disposeComputed` clears the stamp and the byKernelId row, so a reused
-	 * id's new handle adopts fresh (§4.5.3 id tenancy).
+	 * first sight — `resolveStamped`'s computed face.
 	 */
 	nodeForComputed(c: Computed<unknown>): ComputedNode {
-		const stamp = c._hostStamp;
-		if (stamp !== undefined && stamp.b === this) return stamp.n as ComputedNode;
-		const hit = this.byKernelId.get(c._id);
-		if (hit !== undefined && hit.kind === 'computed') {
-			c._hostStamp = { b: this, n: hit }; // re-stamp after a bridge swap
-			return hit;
-		}
-		return this.adoptComputed(c.label ?? `computed#${c._id}`, c);
+		return (this.resolveStamped(c, 'computed') as ComputedNode | undefined)
+			?? this.adoptComputed(c.label ?? `computed#${c._id}`, c);
+	}
+
+	/**
+	 * The ONE stamp-validate + registry-probe + re-stamp rule behind handle
+	 * resolution (`nodeFor` and `nodeForComputed` are its two kind-typed
+	 * faces). Adoption stamps `{b, n}` on the handle, so the steady state is
+	 * one property load + identity compare; the Map probe runs only for
+	 * un-stamped handles (or a stamp from a replaced bridge — test drivers
+	 * swap bridges; the stamp validates against THIS bridge and re-stamps on
+	 * a registry hit). Kernel id reuse can never serve a dead tenant:
+	 * disposal clears the stamp and the byKernelId row (§4.5.3 id tenancy).
+	 */
+	private resolveStamped(handle: Atom<unknown> | Computed<unknown>, kind: 'atom' | 'computed'): AnyNode | undefined {
+		const stamp = handle._hostStamp;
+		if (stamp !== undefined && stamp.b === this) return stamp.n as AnyNode;
+		const hit = this.byKernelId.get(handle._id);
+		if (hit === undefined || hit.kind !== kind) return undefined;
+		handle._hostStamp = { b: this, n: hit }; // re-stamp after a bridge swap
+		return hit;
 	}
 
 	private log(e: BridgeEvent): void {
@@ -1927,21 +1936,12 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * Resolve a public handle to its registered node — the ONE
-	 * stamp-validate + registry-probe rule, shared by the host write seam and
-	 * the bindings' handle resolution. Adoption stamps `{b, n}` on the
-	 * handle, so the steady state is one property load + identity compare;
-	 * the Map probe runs only for un-stamped handles (or a stamp from a
-	 * replaced bridge — test drivers swap bridges; the stamp validates
-	 * against THIS bridge and re-stamps on a registry hit).
+	 * Resolve a public handle to its registered node — `resolveStamped`'s
+	 * atom face, shared by the host write seam and the bindings' handle
+	 * resolution.
 	 */
 	nodeFor(atom: Atom<unknown>): AtomNode | undefined {
-		const stamp = atom._hostStamp;
-		if (stamp !== undefined && stamp.b === this) return stamp.n as AtomNode;
-		const node = this.byKernelId.get(atom._id);
-		if (node === undefined || node.kind !== 'atom') return undefined;
-		atom._hostStamp = { b: this, n: node }; // re-stamp after a bridge swap
-		return node;
+		return this.resolveStamped(atom, 'atom') as AtomNode | undefined;
 	}
 
 	/**
@@ -2132,38 +2132,39 @@ export class CosignalBridge {
 		};
 	}
 
-	/** Kernel-frame tracked reader (bridge-created computeds' newest runs):
-	 * the plain kernel read paths — E.read/E.computedRead link the dep to
-	 * the open kernel frame — plus the pre-dedup observation capture. */
-	private kernelTrackedReader: Reader = (dep) => {
-		const oc = this.obsCapture;
-		if (oc !== undefined) oc.push(dep.id);
+	/** The bridge's ONE cross-world cycle error (every construction site
+	 * builds it here so the surface message can never fork). */
+	private cycleError(name: string): BridgeScheduleError {
+		return new BridgeScheduleError(`cyclic evaluation of ${name} within one world — a computed may not depend on itself`);
+	}
+
+	/** The kernel-way dep read both kernel-frame readers share: atoms off the
+	 * kernel arena, computeds via the plain kernel computed read (E.read/
+	 * E.computedRead link the dep to any open kernel frame), kernel
+	 * CycleErrors translated to the bridge's. */
+	private kernelReadOf(dep: AnyNode): Value {
 		if (dep.kind === 'atom') return this.kernelValueOf(dep.handle);
 		try {
 			return __kernelComputedRead(dep.handle);
 		} catch (err) {
-			if (err instanceof CycleError) {
-				throw new BridgeScheduleError(`cyclic evaluation of ${dep.name} within one world — a computed may not depend on itself`);
-			}
+			if (err instanceof CycleError) throw this.cycleError(dep.name);
 			throw err;
 		}
+	}
+
+	/** Kernel-frame tracked reader (bridge-created computeds' newest runs):
+	 * the shared kernel read plus the pre-dedup observation capture. */
+	private kernelTrackedReader: Reader = (dep) => {
+		const oc = this.obsCapture;
+		if (oc !== undefined) oc.push(dep.id);
+		return this.kernelReadOf(dep);
 	};
 
 	/** Kernel-frame untracked reader: kernel `untracked()` clears the frame,
 	 * so the dep's own serving still runs (recompute-if-stale) but no link —
 	 * and therefore no notification, and no invalidation of this computed —
 	 * is ever recorded (§4.4.1's value face, the ruling's sampling rule). */
-	private kernelUntrackedReader: Reader = (dep) => untracked(() => {
-		if (dep.kind === 'atom') return this.kernelValueOf(dep.handle);
-		try {
-			return __kernelComputedRead(dep.handle);
-		} catch (err) {
-			if (err instanceof CycleError) {
-				throw new BridgeScheduleError(`cyclic evaluation of ${dep.name} within one world — a computed may not depend on itself`);
-			}
-			throw err;
-		}
-	});
+	private kernelUntrackedReader: Reader = (dep) => untracked(() => this.kernelReadOf(dep));
 
 	/** Observation re-point after a KERNEL re-run, inside the still-open
 	 * kernel frame: discovery evaluations (obsEnter forcing dep reads) must
@@ -2293,19 +2294,19 @@ export class CosignalBridge {
 				const w = world.pass;
 				const r = retired[i]!;
 				if (r !== 0 && r <= w.pin) return true; // clause 1: retired by my pin
-				return ((w.includedBits >>> slots[i]!) & SlotBits.LOW_BIT) === 1 && seqs[i]! <= w.pin; // clause 2
+				return ((w.includedBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= w.pin; // clause 2
 			}
 			case 'committed': {
 				if (retired[i]! !== 0) return true; // committed truth at now
 				// Membership consult materializes the root record (reference-model
 				// parity: the plain committedSlotsNow() creates it on first consult).
-				return ((this.root(world.root).committedBits >>> slots[i]!) & SlotBits.LOW_BIT) === 1;
+				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
 			}
 			case 'mountFix': {
 				if (world.maskSlots.has(slots[i]!) && seqs[i]! <= world.pin) return true;
 				if (world.excludeLiveTokens?.has(atom.tp.tokens[i]!)) return false; // corrective-covered (audit form)
 				if (retired[i]! !== 0) return true; // committed truth at NOW
-				return ((this.root(world.root).committedBits >>> slots[i]!) & SlotBits.LOW_BIT) === 1;
+				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
 			}
 		}
 	}
@@ -2394,7 +2395,7 @@ export class CosignalBridge {
 		// current top-level evaluation generation.
 		const marks = this.evalMark;
 		if (marks[node.id] === this.evalGen && this.evalDepth > 0) {
-			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+			throw this.cycleError(node.name);
 		}
 		if (this.evalDepth === 0) this.evalGen++;
 		marks[node.id] = this.evalGen;
@@ -2447,7 +2448,7 @@ export class CosignalBridge {
 			return __kernelComputedRead(node.handle);
 		} catch (err) {
 			if (err instanceof CycleError) {
-				throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+				throw this.cycleError(node.name);
 			}
 			if (err instanceof SuspendedRead && this.suspendDepth === 0 && node.ctxShaped) {
 				return err; // adopted ctx fn, background read: the sentinel serves as a value
@@ -2627,17 +2628,13 @@ export class CosignalBridge {
 	 * dead-tenancy re-key (§4.5.3) and disposeComputed's eager purge. */
 	private aEvictShadow(a: ShadowArena, sh: number): void {
 		aDisposeAllDepsInReverse(a, sh);
-		let sl = a.W[sh + AF.SUBS]!;
-		while (sl !== 0) {
-			const next = a.W[sl + AF.L_NEXT_SUB]!;
-			aUnlink(a, sl);
-			sl = next;
-		}
-		let wl = a.weakSubs[sh >> A_SHIFT]!;
-		while (wl !== 0) {
-			const next = a.W[wl + AF.L_NEXT_SUB]!;
-			aUnlink(a, wl);
-			wl = next;
+		for (let list = 0; list < 2; list++) {
+			let sl = aSubsHead(a, sh, list);
+			while (sl !== 0) {
+				const next = a.W[sl + AF.L_NEXT_SUB]!;
+				aUnlink(a, sl);
+				sl = next;
+			}
 		}
 		if ((a.W[sh + AF.FLAGS]! & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
 		a.vals[sh >> A_SHIFT] = undefined;
@@ -2668,7 +2665,7 @@ export class CosignalBridge {
 	 * §4.5.3 comparator-order mandate — HEAD's `isEqual(prev, next)`,
 	 * mirroring the kernel's `writeAtom` compare — binds the CUSTOM-EQUALITY
 	 * COMPUTED record (aFoldOutcome's comparator arm, landed at S-C). */
-	private aEqAtom(_atom: AtomNode, prev: Value, next: Value): boolean {
+	private aEqAtom(prev: Value, next: Value): boolean {
 		return Object.is(prev, next);
 	}
 
@@ -2746,7 +2743,7 @@ export class CosignalBridge {
 		const W = a.W;
 		let flags = W[sh + AF.FLAGS]!;
 		if ((flags & AFlag.RECURSED_CHECK) !== 0) {
-			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+			throw this.cycleError(node.name);
 		}
 		// Read-site self-heal probe (§4.5.4 pull half; mirrored at the memo
 		// serve and the kernel's boxedRead): a settled-but-not-yet-invalidated
@@ -2811,7 +2808,7 @@ export class CosignalBridge {
 		// comparator gates PROPAGATION only. Reference preservation for
 		// custom-equality COMPUTEDS lives in aFoldOutcome (§4.5.3, S-C).
 		a.vals[vi] = next;
-		return !(prevValid && this.aEqAtom(atom, prev, next));
+		return !(prevValid && this.aEqAtom(prev, next));
 	}
 
 	/** Arena computed refold: the fn runs with the ARENA readers and the
@@ -3245,13 +3242,7 @@ export class CosignalBridge {
 					for (const w of this.watchers.values()) {
 						if (!w.live || w.root !== rootId) continue;
 						const wNode = this.nodeById(w.node);
-						const now = this.evaluate(wNode, { kind: 'committed', root: rootId });
-						if (this.changedValue(wNode, w.lastRenderedValue, now)) {
-							if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause: 'retirement' });
-							w.lastRenderedValue = now;
-							w.dedupBits = 0;
-							if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
-						}
+						this.correctWatcher(w, wNode, this.evaluate(wNode, { kind: 'committed', root: rootId }), 'retirement');
 					}
 				}
 				// Boundary subscription scan + the flush the loop OWNS.
@@ -3537,7 +3528,7 @@ export class CosignalBridge {
 			return hit.v;
 		}
 		if (this.naiveStack.has(node.id)) {
-			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+			throw this.cycleError(node.name);
 		}
 		this.naiveStack.add(node.id);
 		const savedWorld = this.activeWorld;
@@ -3787,7 +3778,7 @@ export class CosignalBridge {
 			id: this.nextToken++,
 			action: opts?.action ?? false,
 			parked, // async-action tokens park (cannot retire) until their promise settles
-			state: 'live', committedFlag: undefined, slot: undefined,
+			state: 'live', slot: undefined,
 			retiredSeq: undefined, lastWriteSeq: 0, atomsTouched: [], liveReceipts: 0,
 			ambient: opts?.ambient ?? false,
 		};
@@ -3799,16 +3790,19 @@ export class CosignalBridge {
 		return token;
 	}
 
+	/** Look up an id or throw the schedule error every resolver shares. */
+	private mustGet<K, V>(map: Map<K, V>, id: K, what: string): V {
+		const v = map.get(id);
+		if (v === undefined) throw new BridgeScheduleError(`unknown ${what} ${id}`);
+		return v;
+	}
+
 	private token(id: TokenId): Token {
-		const t = this.tokens.get(id);
-		if (t === undefined) throw new BridgeScheduleError(`unknown token ${id}`);
-		return t;
+		return this.mustGet(this.tokens, id, 'token');
 	}
 
 	nodeById(id: NodeId): AnyNode {
-		const n = this.nodes.get(id);
-		if (n === undefined) throw new BridgeScheduleError(`unknown node ${id}`);
-		return n;
+		return this.mustGet(this.nodes, id, 'node');
 	}
 
 	/**
@@ -3877,9 +3871,9 @@ export class CosignalBridge {
 	 * advances base and the kernel TOGETHER — the invariant while
 	 * quiet is base ≡ kernel newest ≡ every world's value, so a batch opened
 	 * later starts from a base that already contains the quiet history.
-	 * Memo coherence: the fold mints one sequence and stamps it into the
-	 * atom's baseSeq and the committed-advance clock (cas), so every memo
-	 * table revalidates instead of serving pre-fold values. Observers: no
+	 * Clock coherence: the fold mints one sequence and stamps it into the
+	 * atom's baseSeq (compaction + the referee's model view read it) and the
+	 * committed-advance clock (cas), so baseline/fast-out checks see the fold. Observers: no
 	 * walk machinery is armed, so the small live-observer population is
 	 * reconciled value-gated, exactly like a durable drain (corrections for
 	 * watchers, re-runs for committed React effects, newest evaluations for
@@ -3895,7 +3889,7 @@ export class CosignalBridge {
 			return; // equality drop against base — the tape is empty by the quiet invariant
 		}
 		node.base = next;
-		node.baseSeq = this.cas = ++this.seq; // move the memo clocks: fingerprint + committed-advance (mintSeq, inlined)
+		node.baseSeq = this.cas = ++this.seq; // advance the base + committed-advance clocks together (mintSeq, inlined)
 		// Direct kernel apply: the plain write tail, no public-method re-entry
 		// (the host seam already ran — policy checked, op folded).
 		__hostApplySet(node.handle, next);
@@ -3922,12 +3916,7 @@ export class CosignalBridge {
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
 			const wNode = this.nodeById(w.node);
-			const now = this.evaluate(wNode, { kind: 'committed', root: w.root });
-			if (this.changedValue(wNode, w.lastRenderedValue, now)) {
-				w.lastRenderedValue = now; // the urgent pre-paint re-render
-				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
-				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
-			}
+			this.correctWatcher(w, wNode, this.evaluate(wNode, { kind: 'committed', root: w.root }), 'quiet');
 		}
 	}
 
@@ -3952,6 +3941,16 @@ export class CosignalBridge {
 		// The post-await dev-warning heuristic lives adapter-side only
 		// (cosignal-react's shim classifyWrite) — the engine stays lint-free.
 		this.write(ambient.id, node, op);
+	}
+
+	/** The compound-operation tail every public exit owes, in order: the
+	 * trace's opEnd mark (scopes causality), then the queued-notification
+	 * flush. One copy — an exit that forgets either desyncs trace causality
+	 * or strands queued notifies, so every exit calls this instead. */
+	private endOp(): void {
+		const tr = this.trace;
+		if (tr !== undefined) tr.opEnd();
+		this.flushNotify();
 	}
 
 	/** Action-scope write: classifies into the action's batch explicitly
@@ -3995,9 +3994,7 @@ export class CosignalBridge {
 				this.applyToKernel(node, next);
 			}
 			this.directFlushCoreEffects();
-			const tr = this.trace;
-			if (tr !== undefined) tr.opEnd();
-			this.flushNotify();
+			this.endOp();
 			return;
 		}
 		if (tokenId === undefined) {
@@ -4023,18 +4020,14 @@ export class CosignalBridge {
 			if (op.kind === 'set' && node.eqIsDefault) {
 				if (Object.is(op.value, node.base)) {
 					if (this.eventsOn) this.log({ type: 'write-dropped', node: node.name, token: tokenId });
-					const tr = this.trace;
-					if (tr !== undefined) tr.opEnd();
-					this.flushNotify();
+					this.endOp();
 					return;
 				}
 			} else {
 				const evaluated = this.applyOp(node, op, node.base);
 				if (this.inCallback(() => node.equals(evaluated, node.base))) {
 					if (this.eventsOn) this.log({ type: 'write-dropped', node: node.name, token: tokenId });
-					const tr = this.trace;
-					if (tr !== undefined) tr.opEnd();
-					this.flushNotify();
+					this.endOp();
 					return;
 				}
 			}
@@ -4091,9 +4084,7 @@ export class CosignalBridge {
 		// returns, reached over the newest world's strong structure.
 		this.deliveryWalk(node.id, token, slot, seq);
 		this.flushNewestSubs(node.id);
-		const tr = this.trace;
-		if (tr !== undefined) tr.opEnd();
-		this.flushNotify();
+		this.endOp();
 	}
 
 	/** The one K0 write site: routes through the core's public write path
@@ -4129,7 +4120,7 @@ export class CosignalBridge {
 		// fold without it and a fresh delivery is still required.
 		// One open pass per root ⇒ one registry load + two compares.
 		const p = this.openPassByRoot.get(w.root);
-		if (p !== undefined && ((p.maskBits >>> slot.id) & SlotBits.LOW_BIT) === 1 && p.pin < seq) {
+		if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
 			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'interleaved' });
 			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id);
 		} else {
@@ -4160,12 +4151,18 @@ export class CosignalBridge {
 			const subNode = this.nodeById(e.node);
 			this.newestReachSeen.clear();
 			if (!this.newestReaches(subNode.handle._id, targetKid)) continue;
-			const value = this.evaluate(subNode, NEWEST);
-			if (!Object.is(value, e.lastValue)) {
-				e.lastValue = value;
-				e.runs++;
-				if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
-			}
+			this.runNewestSub(e, subNode);
+		}
+	}
+
+	/** The ONE newest-subscription firing body (both flush forms share it):
+	 * evaluate newest, value-gate on the last flushed value, count + log. */
+	private runNewestSub(e: Subscription, subNode: AnyNode): void {
+		const value = this.evaluate(subNode, NEWEST);
+		if (!Object.is(value, e.lastValue)) {
+			e.lastValue = value;
+			e.runs++;
+			if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
 		}
 	}
 
@@ -4197,12 +4194,7 @@ export class CosignalBridge {
 	private directFlushCoreEffects(): void {
 		for (const e of this.subs.values()) {
 			if (e.policy !== 'newest') continue;
-			const value = this.evaluate(this.nodeById(e.node), NEWEST);
-			if (!Object.is(value, e.lastValue)) {
-				e.lastValue = value;
-				e.runs++;
-				if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
-			}
+			this.runNewestSub(e, this.nodeById(e.node));
 		}
 	}
 
@@ -4257,9 +4249,7 @@ export class CosignalBridge {
 	}
 
 	private pass(id: PassId): Pass {
-		const p = this.passes.get(id);
-		if (p === undefined) throw new BridgeScheduleError(`unknown pass ${id}`);
-		return p;
+		return this.mustGet(this.passes, id, 'pass');
 	}
 
 	/** Yield/resume edges: while yielded, code that runs in the gap (event
@@ -4325,8 +4315,7 @@ export class CosignalBridge {
 	adoptMount(passId: PassId, watcherId: WatcherId): void {
 		const adopter = this.pass(passId);
 		if (adopter.state === 'ended') throw new BridgeScheduleError('adopting pass must be open');
-		const w = this.watchers.get(watcherId);
-		if (w === undefined) throw new BridgeScheduleError('unknown watcher');
+		const w = this.mustGet(this.watchers, watcherId, 'watcher');
 		if (w.root !== adopter.root) throw new BridgeScheduleError('reveal stays on the watcher root');
 		for (const p of this.passes.values()) {
 			const i = p.mounted.indexOf(watcherId);
@@ -4412,24 +4401,11 @@ export class CosignalBridge {
 		return e;
 	}
 
-	/** Referee configuration — a single-node body over the REAL mechanism
-	 * (twin tests and the lockstep corpus referee the promoted machinery
-	 * through this constructor; production uses mountCommittedObserver). */
-	mountReactEffect(rootId: RootId, node: AnyNode, name: string): Subscription {
-		const e = this.mountCommittedObserver(rootId, name);
-		e.body = () => void this.captureRead(node);
-		this.captureRun(e.id, e.body);
-		return e;
-	}
-
-	/** Referee configuration — a body that re-chooses deps CAUSALLY:
-	 * captureRead(sel) ? captureRead(a) : captureRead(b). */
-	mountReactEffectPick(rootId: RootId, sel: AnyNode, a: AnyNode, b: AnyNode, name: string): Subscription {
-		const e = this.mountCommittedObserver(rootId, name);
-		e.body = () => void (this.captureRead(sel) ? this.captureRead(a) : this.captureRead(b));
-		this.captureRun(e.id, e.body);
-		return e;
-	}
+	// (The referee convenience constructors mountReactEffect /
+	// mountReactEffectPick — 4-line compositions of mountCommittedObserver +
+	// a `body` + captureRun — live test-side now: tests/helpers.ts. The
+	// `body` mechanism itself stays here: it is the inline-run + event-mint
+	// path the lockstep referee compares.)
 
 	/** Newest-policy configuration (the absorbed core-effect referee shape):
 	 * one node, value-gated on its newest value, flushed post-delivery-walk. */
@@ -4502,8 +4478,7 @@ export class CosignalBridge {
 	 * `live` flips so queued refires no-op).
 	 */
 	removeSubscription(id: EffectId): void {
-		const e = this.subs.get(id);
-		if (e === undefined) throw new BridgeScheduleError(`unknown subscription ${id}`);
+		const e = this.mustGet(this.subs, id, 'subscription');
 		e.live = false;
 		this.subs.delete(id);
 		if (e.policy === 'newest') {
@@ -4668,9 +4643,7 @@ export class CosignalBridge {
 			// that occurred while this root's frame was open (the discard
 			// itself advances nothing; committed truth may already have moved).
 			this.revalidateCommittedSubs(p.root);
-			const tr = this.trace;
-			if (tr !== undefined) tr.opEnd();
-			this.flushNotify();
+			this.endOp();
 			return;
 		}
 		// (1) Baseline capture at the commit's committed-side entry.
@@ -4781,9 +4754,7 @@ export class CosignalBridge {
 		// Retirements folded into this commit moved committed truth for every
 		// root, so the scan widens (each root still open-frame-deferred).
 		this.revalidateCommittedSubs((opts?.retireAtCommit ?? []).length > 0 ? undefined : p.root);
-		const tr = this.trace;
-		if (tr !== undefined) tr.opEnd();
-		this.flushNotify();
+		this.endOp();
 	}
 
 	/**
@@ -4819,7 +4790,7 @@ export class CosignalBridge {
 
 	private slotRetainedByOpenMask(slot: SlotId): boolean {
 		for (const p of this.openPassByRoot.values()) {
-			if ((p.maskBits >>> slot) & SlotBits.LOW_BIT) return true;
+			if ((p.maskBits >>> slot) & 1) return true;
 		}
 		return false;
 	}
@@ -4866,9 +4837,7 @@ export class CosignalBridge {
 			// EF2 boundary: retirement is a guaranteed flush point for every root
 			// (a write-free retirement still flushes pending member-write flips).
 			this.revalidateCommittedSubs(undefined);
-			const tr = this.trace;
-			if (tr !== undefined) tr.opEnd();
-			this.flushNotify();
+			this.endOp();
 		} finally {
 			this.opDepth--;
 		}
@@ -4887,8 +4856,7 @@ export class CosignalBridge {
 			if (tr !== undefined) tr.batchSettle(t, committed);
 			this.retireInternal(t, committed);
 			this.revalidateCommittedSubs(undefined); // EF2 boundary: settlement is a guaranteed flush point
-			if (tr !== undefined) tr.opEnd();
-			this.flushNotify();
+			this.endOp();
 		} finally {
 			this.opDepth--;
 		}
@@ -4909,7 +4877,6 @@ export class CosignalBridge {
 			this.liveTokenCount--;
 		}
 		t.state = 'retired';
-		t.committedFlag = committed;
 		t.parked = false;
 		const retiredSeq = this.mintSeq(); // one retirement sequence per retirement event
 		t.retiredSeq = retiredSeq;
@@ -5092,6 +5059,26 @@ export class CosignalBridge {
 		}
 	}
 
+	/** The ONE urgent pre-paint watcher correction (compare → event → resets →
+	 * notify). A correction must move `lastRenderedValue` AND re-arm the dedup
+	 * bits AND queue the kind-2 notify together — all four correction sites
+	 * (settlement drain, quiet drain, durable drain, mount fixup) share this
+	 * body so the triple can never drift. Events by cause: drains log
+	 * 'reconcile-correction'; mounts log 'mount-urgent-correction'; quiet
+	 * folds log nothing (quiet ⇒ events off, kept explicit here). Returns
+	 * true iff a correction fired. */
+	private correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
+		if (!this.changedValue(wNode, w.lastRenderedValue, now)) return false;
+		if (this.eventsOn && cause !== 'quiet') {
+			if (cause === 'mount') this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: now });
+			else this.log({ type: 'reconcile-correction', watcher: w.name, root: w.root, from: w.lastRenderedValue, to: now, cause });
+		}
+		w.lastRenderedValue = now; // the urgent pre-paint re-render
+		w.dedupBits = 0; // dedup bits re-arm at the watcher's render
+		if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
+		return true;
+	}
+
 	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		const world: World = { kind: 'committed', root: rootId };
 		const gen = ++this.walkGen; // per-node collection dedup + per-arena traversal stamps
@@ -5123,7 +5110,7 @@ export class CosignalBridge {
 				const sh = stack[--sp]!;
 				// BOTH subs lists: drains expand over weak links too (§4.4.1).
 				for (let list = 0; list < 2; list++) {
-					let l = list === 0 ? W[sh + AF.SUBS]! : a.weakSubs[sh >> A_SHIFT]!;
+					let l = aSubsHead(a, sh, list);
 					while (l !== 0) {
 						const sub = W[l + AF.L_SUB]!;
 						if (walk[sub >> A_SHIFT] !== gen) {
@@ -5155,13 +5142,7 @@ export class CosignalBridge {
 		for (let i = 0; i < ws.length; i++) {
 			const w = ws[i]!;
 			const wNode = this.nodeById(w.node);
-			const now = this.evaluate(wNode, world);
-			if (this.changedValue(wNode, w.lastRenderedValue, now)) {
-				if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
-				w.lastRenderedValue = now; // the urgent pre-paint re-render
-				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
-				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
-			}
+			this.correctWatcher(w, wNode, this.evaluate(wNode, world), cause);
 		}
 		ws.length = 0;
 	}
@@ -5247,11 +5228,7 @@ export class CosignalBridge {
 			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctedLive.size);
 			return; // zero corrections — value-neutral modulo scheduled correctives
 		}
-		if (this.changedValue(node, w.lastRenderedValue, vFx)) {
-			if (this.eventsOn) this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
-			w.lastRenderedValue = vFx; // urgent pre-paint correction
-			w.dedupBits = 0;
-			if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
+		if (this.correctWatcher(w, node, vFx, 'mount')) {
 			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctedLive.size);
 			return;
 		}
@@ -5431,9 +5408,7 @@ export class CosignalBridge {
 		for (const w of this.watchers.values()) w.dedupBits = 0;
 		if (this.eventsOn) this.log({ type: 'epoch-reset', epoch: this.epoch });
 		this.recomputeQuiet(); // quiescent by definition; re-derive from the new episode's state
-		const tr = this.trace;
-		if (tr !== undefined) tr.opEnd();
-		this.flushNotify();
+		this.endOp();
 		this.arenaOpEpilogue();
 	}
 

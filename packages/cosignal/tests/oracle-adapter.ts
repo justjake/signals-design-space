@@ -20,6 +20,7 @@ import {
 	__newBridgeForTest,
 	BridgeScheduleError,
 	type AtomNode,
+	type BridgeEvent,
 	type CosignalBridge,
 	type Op,
 } from '../src/concurrent.js';
@@ -31,6 +32,20 @@ import {
 } from '../../cosignal-oracle/src/adapter.js';
 import { CosignalModel, type ModelEvent } from '../../cosignal-oracle/src/model.js';
 import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
+import { mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
+
+// ---- BridgeEvent ≡ ModelEvent pin -------------------------------------------
+// The two unions are maintained BY HAND in two deliberately-independent
+// packages (importing would weaken the oracle as a referee) and the lockstep
+// differ compares them by JSON — so drift used to surface only as a fuzz
+// diff. This converts it into a typecheck failure. Non-distributive form on
+// purpose: the WHOLE union must assign in both directions.
+type _EventStreamPin = [
+	[BridgeEvent] extends [ModelEvent] ? true : never,
+	[ModelEvent] extends [BridgeEvent] ? true : never,
+];
+const _eventStreamPin: _EventStreamPin = [true, true];
+void _eventStreamPin;
 
 /** The reference model's fixed fuzz topology (buildTopology in its schedule.ts), rebuilt on the engine. */
 export function buildEngineTopology(b: CosignalBridge) {
@@ -123,7 +138,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 	};
 	try {
 		switch (op.t) {
-			case 'open': reg.tokens.push(b.openBatch({ action: op.action }).id); break; // op.priority is model-side only
+			case 'open': reg.tokens.push(b.openBatch({ action: op.action }).id); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
 				b.write(tokenAt(b, op.token), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
@@ -148,10 +163,10 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'end': b.passEnd(passAt(b, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => tokenAt(b, i)!) }); break;
 			case 'mount': b.mountWatcher(passAt(b, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
 			case 'render': b.renderWatcher(passAt(b, op.pass), watcherAt(b, op.watcher)); break;
-			case 'reactEffect': b.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
+			case 'reactEffect': mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
 			case 'reactEffectPick':
-				b.mountReactEffectPick(
-					op.root,
+				mountEngineReactEffectPick(
+					b, op.root,
 					nodes[op.sel % nodes.length]!, nodes[op.a % nodes.length]!, nodes[op.b % nodes.length]!,
 					`E${uniq}`,
 				);

@@ -310,7 +310,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.write(t.id, a, set(1)); // sync prefix
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack (the post-await lint is adapter-only)
 		const ambient = m.tokens.get(m.ambientToken!)!;
-		expect(ambient.priority).toBe('default');
+		expect(ambient.ambient).toBe(true); // the auto-minted ambient default batch
 		m.retire(ambient.id, true);
 		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — matching React's own async-action rule
 		m.settleAction(t.id, true);

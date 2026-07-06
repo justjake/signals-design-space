@@ -19,6 +19,7 @@
  * self-heal (a read after settlement recomputes instead of throwing stale).
  */
 import { describe, expect, test } from 'vitest';
+import { mountEngineReactEffect } from './helpers.js';
 import { Atom, Computed, SuspendedRead, effect, __newBridgeForTest } from '../src/index';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
@@ -304,7 +305,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 			read(gate);
 			return settled === undefined ? sentinel : settled;
 		});
-		const e = b.mountReactEffect('A', c, 'E'); // snapshot: (c, sentinel)
+		const e = mountEngineReactEffect(b, 'A', c, 'E'); // snapshot: (c, sentinel)
 		expect(e.lastValue).toBe(sentinel);
 		const t1 = b.openBatch();
 		b.write(t1.id, gate, { kind: 'set', value: 1 });
@@ -330,7 +331,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 			if (pending) throw sentinel; // hook-shaped rethrow on re-evaluation
 			return 'v0';
 		});
-		const e = b.mountReactEffect('A', c, 'E'); // snapshot: (c, 'v0')
+		const e = mountEngineReactEffect(b, 'A', c, 'E'); // snapshot: (c, 'v0')
 		pending = true;
 		const t = b.openBatch();
 		b.write(t.id, gate, { kind: 'set', value: 1 });

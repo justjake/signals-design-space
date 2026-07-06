@@ -25,7 +25,6 @@ export type PassId = number;
 export type WatcherId = number;
 export type EffectId = number;
 
-export type Priority = 'urgent' | 'default' | 'deferred';
 
 /** The write vocabulary: set/update. A reducer-style write records as an
  * update whose closure captures the reducer and the action. */
@@ -89,16 +88,15 @@ export type AnyNode = AtomNode | ComputedNode;
 
 export type Token = {
 	id: TokenId;
-	priority: Priority;
 	/** Async action: the token parks and retires only when the action settles. */
 	action: boolean;
 	parked: boolean;
 	state: 'live' | 'retired';
-	committedFlag: boolean | undefined;
 	slot: SlotId | undefined;
 	retiredSeq: number | undefined;
-	/** seqs of receipts minted by this token (tenancy invariants). */
-	writeSeqs: number[];
+	/** Sequence of this token's last receipt (0 = none) — the mount fixup's
+	 * fast-path clock check reads it (the engine twin is the same scalar). */
+	lastWriteSeq: number;
 	/** True for the model's auto-minted ambient default batch (home of context-free writes). */
 	ambient: boolean;
 };
@@ -115,8 +113,6 @@ export type SlotMeta = {
 	claimSeq: number;
 	/** Write clock: seq of the slot's last write. Zeroed when a new tenant claims the slot. */
 	writeClock: number;
-	/** Carried max retirement sequence across tenants (a watermark; zeroed at the episode reset). */
-	carriedMaxRetiredSeq: number;
 	/** Retirement done but release deferred because an open pass's render mask names the slot. */
 	releasePending: boolean;
 };
@@ -327,7 +323,6 @@ export class CosignalModel {
 				tenant: undefined,
 				claimSeq: 0,
 				writeClock: 0,
-				carriedMaxRetiredSeq: 0,
 				releasePending: false,
 			});
 		}
@@ -582,33 +577,40 @@ export class CosignalModel {
 		return pins.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...pins);
 	}
 
-	/** Mint a batch token. At most 31 live at once — one per React priority lane. */
-	openBatch(priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
+	/** Mint a batch token. At most 31 live at once — one per React priority
+	 * lane. (Lane priority itself stays React's: neither the model nor the
+	 * engine ever consults it — the Priority dimension was deleted.) */
+	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
 		if (this.mode !== 'concurrent') throw new ScheduleError('batches exist only in concurrent mode — register the React bridge first');
 		if (this.liveTokens().length >= SLOT_COUNT) {
 			throw new ScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
 		const token: Token = {
-			id: this.nextToken++, priority,
+			id: this.nextToken++,
 			action: opts?.action ?? false,
 			parked: opts?.action ?? false, // action tokens park until their async action settles
-			state: 'live', committedFlag: undefined, slot: undefined,
-			retiredSeq: undefined, writeSeqs: [], ambient: opts?.ambient ?? false,
+			state: 'live', slot: undefined,
+			retiredSeq: undefined, lastWriteSeq: 0, ambient: opts?.ambient ?? false,
 		};
 		this.tokens.set(token.id, token);
 		return token;
 	}
 
+	/** Look up an id or throw the schedule error every resolver shares (the
+	 * same hygiene fix as the engine's mustGet — applied independently; the
+	 * two implementations stay unshared by design). */
+	private mustGet<K, V>(map: Map<K, V>, id: K, what: string): V {
+		const v = map.get(id);
+		if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`);
+		return v;
+	}
+
 	private token(id: TokenId): Token {
-		const t = this.tokens.get(id);
-		if (t === undefined) throw new ScheduleError(`unknown token ${id}`);
-		return t;
+		return this.mustGet(this.tokens, id, 'token');
 	}
 
 	nodeById(id: NodeId): AnyNode {
-		const n = this.nodes.get(id);
-		if (n === undefined) throw new ScheduleError(`unknown node ${id}`);
-		return n;
+		return this.mustGet(this.nodes, id, 'node');
 	}
 
 	/**
@@ -653,7 +655,6 @@ export class CosignalModel {
 	private releaseSlot(slot: SlotMeta): void {
 		const tenant = slot.tenant === undefined ? undefined : this.token(slot.tenant);
 		if (tenant !== undefined) {
-			slot.carriedMaxRetiredSeq = Math.max(slot.carriedMaxRetiredSeq, tenant.retiredSeq ?? 0);
 			tenant.slot = undefined; // identity release only; receipts keep their denormalized slot field forever
 			this.log({ type: 'slot-released', slot: slot.id, token: tenant.id });
 		}
@@ -672,7 +673,7 @@ export class CosignalModel {
 	bareWrite(node: AtomNode, op: Op): void {
 		let ambient = this.ambientToken === undefined ? undefined : this.tokens.get(this.ambientToken);
 		if (ambient === undefined || ambient.state !== 'live') {
-			ambient = this.openBatch('default', { ambient: true });
+			ambient = this.openBatch({ ambient: true });
 			this.ambientToken = ambient.id;
 		}
 		// The post-await dev-warning heuristic is adapter-only (cosignal-react's
@@ -728,7 +729,7 @@ export class CosignalModel {
 		const slot = this.internSlot(token);
 		const seq = this.mintSeq();
 		node.tape.push({ op, token: token.id, slot: slot.id, seq, retiredSeq: undefined });
-		token.writeSeqs.push(seq);
+		token.lastWriteSeq = seq;
 		slot.writeClock = seq;
 		this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
 
@@ -831,9 +832,7 @@ export class CosignalModel {
 	}
 
 	private pass(id: PassId): Pass {
-		const p = this.passes.get(id);
-		if (p === undefined) throw new ScheduleError(`unknown pass ${id}`);
-		return p;
+		return this.mustGet(this.passes, id, 'pass');
 	}
 
 	/**
@@ -898,8 +897,7 @@ export class CosignalModel {
 	adoptMount(passId: PassId, watcherId: WatcherId): void {
 		const adopter = this.pass(passId);
 		if (adopter.state === 'ended') throw new ScheduleError('adopting pass must be open');
-		const w = this.watchers.get(watcherId);
-		if (w === undefined) throw new ScheduleError('unknown watcher');
+		const w = this.mustGet(this.watchers, watcherId, 'watcher');
 		if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root');
 		for (const p of this.passes.values()) {
 			const i = p.mounted.indexOf(watcherId);
@@ -950,8 +948,7 @@ export class CosignalModel {
 
 	/** Removal (unmount): cleanup is GUARANTEED; nothing runs after (RCC-OL2). */
 	removeReactEffect(id: EffectId): void {
-		const e = this.reactEffects.get(id);
-		if (e === undefined) throw new ScheduleError(`unknown react effect ${id}`);
+		const e = this.mustGet(this.reactEffects, id, 'react effect');
 		e.cleanups++;
 		this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
 		this.reactEffects.delete(id);
@@ -961,8 +958,7 @@ export class CosignalModel {
 	 * gated), recapturing deps. Illegal while the effect's root has an open
 	 * pass frame (React double-invokes effects post-commit, never mid-render). */
 	replayReactEffect(id: EffectId): void {
-		const e = this.reactEffects.get(id);
-		if (e === undefined) throw new ScheduleError(`unknown react effect ${id}`);
+		const e = this.mustGet(this.reactEffects, id, 'react effect');
 		for (const p of this.passes.values()) {
 			if (p.state !== 'ended' && p.root === e.root) {
 				throw new ScheduleError('replay requires the effect root to have no open pass frame');
@@ -1187,7 +1183,6 @@ export class CosignalModel {
 	 */
 	private retireInternal(t: Token, committed: boolean): void {
 		t.state = 'retired';
-		t.committedFlag = committed;
 		t.parked = false;
 		const retiredSeq = this.mintSeq(); // one retirement sequence per retirement event
 		t.retiredSeq = retiredSeq;
@@ -1337,7 +1332,7 @@ export class CosignalModel {
 			[...w.snapshot.maskSlots].every((s) => this.slots[s]!.writeClock <= w.snapshot.pin) &&
 			[...committingPass.maskTokens].every((tid) => {
 				const t = this.token(tid);
-				return t.writeSeqs.length === 0 || t.writeSeqs[t.writeSeqs.length - 1]! <= w.snapshot.pin;
+				return t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin;
 			});
 		const fastOut =
 			w.snapshot.passId === committingPass.id &&
@@ -1467,7 +1462,6 @@ export class CosignalModel {
 		for (const s of this.slots) {
 			s.writeClock = 0;
 			s.claimSeq = 0;
-			s.carriedMaxRetiredSeq = 0;
 			s.releasePending = false;
 		}
 		for (const w of this.watchers.values()) w.dedup.clear();
