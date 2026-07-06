@@ -638,11 +638,25 @@ A world's atom value is `foldAtom(atom, world)` — the existing packed
 fold under the existing two-clause visibility rule — computed lazily at
 the atom's first read in that arena and stored in the arena's value
 column. **The second pass's per-arena atom fingerprint column is
-STRUCK — no fp is stored, recomputed, or consulted at mark
-consumption** (the resolution of codex new-blocker 2, below). What dies
-is every PER-COMPUTED fingerprint too, as before: computeds validate
-structurally (shadow flags + `wCheckDirty` + the §4.5.3 value cutoff),
-never by per-dep fp scans.
+STRUCK — no per-arena fp column is built, and no fingerprint is
+CONSULTED at mark consumption** (the resolution of codex new-blocker 2,
+below). What dies is every PER-COMPUTED fingerprint too, as before:
+computeds validate structurally (shadow flags + `wCheckDirty` + the
+§4.5.3 value cutoff), never by per-dep fp scans.
+**The ledger, made exact (fourth pass 2026-07-06 — the verifier caught
+the overclaim):** what is deleted is the fp GATING; the fold's fp
+STORE is retained until S-D. S-A reuses `foldAtom` VERBATIM, and
+HEAD's fold computes `fp = max(...)` into `lastFoldFp` during every
+scan (`logged.ts` `foldAtom` — "computes the memo fingerprint … into
+`lastFoldFp` during the same scan"), arena folds included. That scalar
+max-tracking stays as written: it is load-bearing for the ladder's
+surviving newest arm through S-B (§4.8's temporary-newest rule), and
+for arena folds it is a few instructions of dead weight, carried
+knowingly. It is removed at S-D cleanup as a named line item (§4.8
+S-D) once S-C has deleted the ladder's last arm — its only reader. No
+arena code READS a fingerprint at any stage; every "fp work deleted"
+claim in this plan means exactly this: fp gating deleted, fold fp
+store retained until S-D.
 
 **The consumption-side representation, CHOSEN (codex new-blocker 2).**
 The two re-reviews read the second pass's split-by-site fp rule
@@ -705,7 +719,9 @@ either way). **The wide-mask lock-in shape is an S-A bench gate**
 (§4.9.6): one commit locking in a token with W≈200 `atomsTouched`
 against a committed arena shadowing all of them, measuring the
 commit-phase fan+mark cost and the drain's refold burst vs the
-head-bridge anchor.
+head-bridge anchor — *fourth pass 2026-07-06: the gate now carries a
+number and a failure disposition, §4.9.6 (≤ 1.4× the anchor; breach =
+mid-stage STOP before S-B).*
 
 This is also the honest form of the first pass's "lock-in fanout
 replaces commit-generation re-keying": re-keying evicted the whole
@@ -1135,8 +1151,17 @@ schedule effort is allocated by that map.
    ONE identity per thenable, minted lazily by the kernel) in the
    evaluating arena's value column with the box-suspended bit, and
    appends the shadow id to that arena's **suspended list** (the
-   dirty list's sibling; entry dropped when the bit clears) so
-   settlement scans are O(suspensions), not O(shadows). Render-path
+   dirty list's sibling) so settlement scans are O(suspensions), not
+   O(shadows). **The list invariant (fourth pass 2026-07-06 —
+   verifier major 2): append is gated on the per-shadow box-suspended
+   bit's 0→1 transition, per (computed, arena).** The bit makes the
+   list a SET: a repeat pending evaluation of an already-suspended
+   shadow (same or different thenable — the value column just swaps
+   sentinels) appends nothing; the entry drops when the bit clears
+   (refold to a value, eviction, arena reclamation). Scanning is
+   therefore O(current suspensions), never O(suspending evaluations),
+   and idempotent marks never depend on list dedup — the list is
+   deduped structurally by the bit. Render-path
    evaluations rethrow; the `suspendDepth` discipline stays
    adapter-side, unchanged. **Serving a box-suspended shadow
    RETHROWS the sentinel, `boxedRead`-style, after the self-heal
@@ -1153,7 +1178,24 @@ schedule effort is allocated by that map.
      installs exactly once per thenable to instrument
      `status`/`value`/`reason` — gains one call to a
      bridge-registered settle tap, `settleTap(t)`, after the status
-     write.** Distinct-thenable dedup IS the kernel's instrument-once
+     write.** **Sentinel minting — ONE rule, mint-on-tap (fourth pass
+     2026-07-06, verifier major 2):** the tap's first act is the
+     kernel's own lazy-mint expression, `t.sr ??= new
+     SuspendedRead(t)` — create or look up. This is load-bearing for
+     synchronous custom thenables: `unwrapThenable`'s default arm
+     calls `t.then(listener)` BEFORE the `throw (t.sr ??= …)`
+     statement runs, so a thenable that invokes its callbacks
+     synchronously fires the tap while `t.sr` does not yet exist.
+     Mint-on-tap closes the window with no second code path: the tap
+     always holds THE sentinel identity, the later throw's `??=`
+     reuses that same instance, and the suspending evaluation caches
+     it — so the queued sentinel and the cached sentinel are one
+     object and the epilogue scan (below) matches it by identity. (In
+     that synchronous case no arena holds the sentinel at tap time —
+     the throw hasn't been caught yet — which is harmless: the tap
+     defers mid-evaluation by the firing rule below, and the
+     operation's epilogue scan runs after the arena has cached it.)
+     Distinct-thenable dedup IS the kernel's instrument-once
      discipline (one shared listener per thenable, by construction);
      distinct-computed dedup needs no listener bookkeeping because
      the tap's action is idempotent marking — the same computed
@@ -1193,25 +1235,83 @@ schedule effort is allocated by that map.
      custom thenables settled before instrumentation — a window HEAD
      does not have and RCC-SU5 forbids.
 
-   **The firing context (fable N-3) — the kernel's dual-mode
-   discipline, adopted.** `invalidateComputed` branches on the open
-   run (`propagate(subs, runDepth !== 0)`); the tap and the
-   self-heal can likewise fire synchronously mid-flight — a custom
-   thenable's `t.then` may invoke the shared listener in the same
-   stack as an open evaluation, and the self-heal probe runs inside
-   drain compares. The arena rule: **if any evaluation frame or
-   arena walk is open (`evalDepth > 0`, or a bridge operation is in
-   flight), the re-mark DEFERS — the sentinel goes onto a pending-
-   settlement queue (dedup via a queued bit on the sentinel; marks
-   are idempotent, so a duplicate is harmless) drained in the
-   CURRENT PUBLIC OPERATION's epilogue, after the operation's own
-   mutations complete and BEFORE `revalidateCommittedSubs` →
-   `flushNotify`** (§4.3's ordering joint: the same boundary's scans
-   see the marks; keep-the-dirt carries any unconsumed remainder
-   forward). At rest — no open operation, the plain-microtask case —
-   the re-mark runs immediately, mirroring the kernel's
-   `runDepth === 0` arm. No arena flag column or dirty list is ever
-   mutated under a mid-flight walk.
+   **The firing context (fable N-3) — REWRITTEN fourth pass
+   2026-07-06 (verifier blocker: the third pass's "before
+   `revalidateCommittedSubs`" was one insertion point, not a
+   boundary; marking without an executable drain leaves a
+   background-only suspended effect dirty until an unrelated
+   operation, contrary to RCC-SU5).** The discipline is a
+   transliteration of what the kernel's OWN settle listener already
+   does — `attachSettle` does not merely invalidate, it invalidates
+   and then runs the flush to completion when at rest
+   (`E.invalidateComputed(c); if (batchDepth === 0) flush()`), and
+   defers to the enclosing batch otherwise. Arena settlement adopts
+   the same two modes plus an explicit fixed point, mirrored comment
+   at the `attachSettle` site:
+   - **At rest** (no evaluation frame, no arena walk, no bridge
+     operation in flight — the plain-microtask case, the kernel's
+     `batchDepth === 0` arm): `settleTap(t)` marks AND runs the
+     **settlement drain** immediately. The drain IS the EF2
+     settlement boundary (settlement is one of the ruled
+     committed-truth-advance boundaries, §2.4): (1) scan every live
+     arena's suspended list (pass AND committed) for shadows whose
+     box payload is `t.sr` by identity — mark DIRTY + propagate over
+     strong and weak links; (2) drain the marked cones through the
+     same durable-drain path every boundary uses (arena dirty lists +
+     `restaled`; open-pass roots keep their marks for the frame's
+     close, HEAD's own `openPassByRoot` deferral); (3)
+     `revalidateCommittedSubs` (the boundary subscription scan); (4)
+     `flushNotify`. A background-only suspended watcher or effect
+     therefore refires FROM the settlement event itself — no
+     unrelated operation is ever needed.
+   - **Mid-operation** (any evaluation frame, arena walk, drain
+     compare, or `revalidateCommittedSubs` scan open): the tap
+     ENQUEUES the sentinel on the pending-settlement queue (dedup via
+     a queued bit on the sentinel; marks are idempotent, so a
+     duplicate landing is harmless). No arena flag column or dirty
+     list is ever mutated under a mid-flight walk.
+   - **The epilogue is a FIXED POINT — the executable outermost
+     boundary.** EVERY public operation's epilogue, after the
+     operation's own mutations complete, drains the queue TO EMPTY:
+     `while (queue nonempty) { take the queued sentinels; run their
+     suspended-list scans + marks; drain the marked cones;
+     revalidateCommittedSubs }` — then `flushNotify`. The LOOP, not
+     any single insertion point, is what closes the windows the
+     verifier named: a settlement landing DURING a watcher drain or
+     DURING `revalidateCommittedSubs` enqueues and gets its OWN scan
+     on the next loop iteration; the epilogue never returns with a
+     queued settlement unscanned. Termination: settlements are
+     finite external events — each thenable settles at most once,
+     each landing enqueues its sentinel at most once (queued bit) —
+     so the loop runs at most once per settled thenable; marks are
+     idempotent and refolds value-gated, so iterations generate no
+     new queue entries except from genuinely new external
+     settlements. §4.3's ordering joint is preserved per iteration
+     (scans see the marks; keep-the-dirt carries unconsumed
+     remainder forward).
+   - **Standalone reads need no epilogue.** `committedValue`/
+     `passValue` and every other epilogue-less read surface stay
+     covered by the read-site status probe (the pull half, third
+     pass N-2): a settled-but-unscanned sentinel self-heals AT THE
+     READ. The two halves partition the surfaces exactly: operations
+     drain, reads probe.
+
+   **The verifier's background-only schedule, walked green (fourth
+   pass 2026-07-06):** committed watcher's dep `C` suspends on
+   thenable `T` in R's arena (sentinel cached, suspended list gains
+   `C` on the bit's 0→1) → the app goes fully at rest — no operation
+   open, no further writes → `T` settles → the shared listener
+   writes status → `settleTap(T)`: no frame open ⇒ the settlement
+   drain runs NOW — suspended-list scan matches `t.sr`, marks +
+   propagates; the cone drain refolds `C` (sentinel→value IS a flip,
+   §4.5.3); `revalidateCommittedSubs` re-checks R's subscriptions;
+   `flushNotify` delivers the correction/refire. SU5 holds with no
+   unrelated operation. Variant, mid-operation: `T` settles inside
+   an unrelated write's watcher drain ⇒ enqueue ⇒ that operation's
+   epilogue, iteration 1: scan + mark + cone drain +
+   `revalidateCommittedSubs` ⇒ queue empty ⇒ `flushNotify`. A
+   settlement landing during THAT scan gets iteration 2. Pinned
+   below as the at-rest background-settlement pin.
 
    **Codex's key-A/key-B schedule, walked green:** committed R
    evaluates `C` with world key A → `ctx.use` tracks thenable A (the
@@ -1222,8 +1322,10 @@ schedule effort is allocated by that map.
    (it is attached to thenable A itself, independent of kernel `C`'s
    cache state or any stale guard) → status write → `settleTap(A)` →
    the suspended-list scan finds R's shadow of `C` holding
-   sentinel-A → mark + propagate (deferred iff mid-op) → the next
-   drain/boundary re-check refolds `C` in R → `ctx.use(keyA)` now
+   sentinel-A → mark + propagate (deferred iff mid-op) → the
+   settlement drain — run immediately at rest, or by the ENCLOSING
+   operation's own epilogue fixed point, never a later unrelated
+   operation (fourth pass 2026-07-06) — refolds `C` in R → `ctx.use(keyA)` now
    hits the settled L4 entry → sentinel→value IS a flip (§4.5.3) →
    correction/refire. No stranded clean sentinel. Fable M2's
    schedule stays green — the tap strictly subsumes the old hook's
@@ -1239,8 +1341,15 @@ schedule effort is allocated by that map.
    `await` the key, read `committedValue` in the continuation —
    deterministically settled, N-2); the firing-context pin (a
    synchronously-settling custom thenable settling inside a drain
-   compare — deferred marks land at the op epilogue, structural
-   validator green, N-3); the React-battery background-settlement
+   compare — deferred marks land at the op epilogue's drain-to-empty
+   loop, structural validator green, N-3); **the at-rest
+   background-settlement pin (fourth pass 2026-07-06 — the verifier's
+   blocker schedule, verbatim: suspend a committed watcher's dep in
+   the background, go fully at rest, settle — assert the
+   correction/refire arrives from the settlement drain itself, with
+   NO subsequent operation; plus the mid-drain variant asserting the
+   epilogue fixed point consumes a settlement that lands during a
+   watcher drain)**; the React-battery background-settlement
    case (the coverage fable M2 showed the battery lacks); RCC-SU5
    cited in all.
 5. **`ctx.use`** — unchanged L4 semantics: ONE per-key cache scoped to
@@ -1347,47 +1456,66 @@ carries EXACTLY one of L1/L2/L3/L4** — the second pass's "L1-derived",
 "same lifetime as their arena", and "node lifetime" hybrids are
 expanded — **except the three genuinely-infrastructure rows, which are
 NOT forced into invented categories and instead sit under the owner
-block at the table's foot.**
+block at the table's foot.** **Fourth pass 2026-07-06 (verifier
+verdict 5, under the now-GRANTED RUL-5):** the third pass's remaining
+L1 labels were still not semantically exact — L1 state "must survive
+everything" (contract §2), while committed arenas, their marks, and
+their cached outcomes are destroyed at zero-consumer quiescence
+(§4.5.8). The ruling's letter resolves this without force: the
+four-lifetime rule is scoped to application and history state —
+content a consumer could observe that is not rebuildable from
+classified state — and these rows are REBUILDABLE CACHES of
+classified content. They are re-labeled below as
+**mechanism: cache of L1 (or L3/L4) content**, each carrying the
+exemption's mandatory actual-lifetime + reclamation documentation in
+its created/destroyed columns.
 
 | state | lifetime | derived of | created | destroyed | teeth (what the classification forbids) |
 |---|---|---|---|---|---|
 | pass arena (shadows, strong+weak links, value columns, marks, walk/read-clock stamps) | **L3** per-attempt | the pass world's frozen view | `passStart` (pool claim) | `reclaimAfterPassEnd` (pool release; after fixup + re-staled loop, m2) | never consulted by fold/visibility machinery; nothing in it survives the pass — no value/link migration to any other arena (§4.4.2's rejection); settlement re-mark may INVALIDATE entries, never persist them |
-| committed arena (same columns, per root) | **L1** — a re-creatable CACHE of committed truth; the obligation it inherits from L1 is never-serve-what-tapes-don't-support, not immortality (droppable and re-derivable by construction) | `foldAtom` over tapes/base per the visibility rule | lazily at the root's first committed evaluation; rematerialized the same way (§4.5.8) | zero-consumer quiescence reclamation (§4.5.8) or bridge dispose — **no root-teardown event exists** (fable N-7; RUL-6 records the fallback) | never a source of truth (tapes+base are); serves only through the §4.2/§4.3 mark discipline; holds no receipt, stamp, or payload the tape doesn't; a shadow with a dead kernel GEN never serves (§4.5.3 id tenancy) |
-| fanout marks + per-arena dirty/suspended lists | **L3** in a pass arena; **L1** in a committed arena (exactly the owning arena's row — the "same lifetime as" indirection expanded, codex blocker 5) | pending invalidation/settlement facts about that arena | flip sites (a)–(d), settlement (§4.5.4) | consumed by evaluation, decayed by eviction (§4.3, fable N-5), or with the arena (§4.5.8) | a mark may never clear without its refold having run OR its value having been evicted (the §4.3 decay rule); marks never cross arenas |
-| per-arena cached evaluation outcomes: values, `SuspendedRead` sentinels, error boxes, outcome bits, arena-local previous values (§4.5.3–4) | **L3** in a pass arena; **L1** in a committed arena (same expansion) | one world's last evaluation outcome | that arena's evaluation | with the arena, overwritten by refold, or evicted to cold (§4.3 decay / §4.5.8 value sweep) | a sentinel cached here is an OUTCOME record, not the resource: it must be invalidatable without touching the L4 entry (§4.5.4, both halves) and must never gate another world's read |
+| committed arena (same columns, per root) | **mechanism: cache of L1 content** (RUL-5 exemption regime — fourth pass 2026-07-06; not itself L1: consumers observe committed truth THROUGH it, never state existing only in it. Actual lifetime + reclamation, per the exemption's mandate: destroyed at zero-consumer quiescence, rebuilt lazily on the next consumer; content re-derives from L1/L2 history via `foldAtom` over tapes/base, so reclamation loses no observable state. Obligation inherited from the L1 content it mirrors: never-serve-what-tapes-don't-support) | `foldAtom` over tapes/base per the visibility rule | lazily at the root's first committed evaluation; rematerialized the same way (§4.5.8) | zero-consumer quiescence reclamation (§4.5.8) or bridge dispose — **no root-teardown event exists** (fable N-7; RUL-6 records the fallback) | never a source of truth (tapes+base are); serves only through the §4.2/§4.3 mark discipline; holds no receipt, stamp, or payload the tape doesn't; a shadow with a dead kernel GEN never serves (§4.5.3 id tenancy) |
+| fanout marks + per-arena dirty/suspended lists | **mechanism: cache-maintenance state of its owning arena's content — L3 content (pass) / L1 content (committed)** (RUL-5 exemption regime — fourth pass 2026-07-06. Actual lifetime + reclamation: consumed by evaluation, decayed by eviction, discarded with the arena at zero-consumer quiescence; a discarded mark's work is re-derived by the refold the §4.3 decay rule licenses, so no observable state is lost) | pending invalidation/settlement facts about that arena | flip sites (a)–(d), settlement (§4.5.4) | consumed by evaluation, decayed by eviction (§4.3, fable N-5), or with the arena (§4.5.8) | a mark may never clear without its refold having run OR its value having been evicted (the §4.3 decay rule); marks never cross arenas |
+| per-arena cached evaluation outcomes: values, `SuspendedRead` sentinels, error boxes, outcome bits, arena-local previous values (§4.5.3–4) | **mechanism: cache of one world's evaluation outcome — L3 content (pass) / L1-or-L4-derived content (committed)** (RUL-5 exemption regime — fourth pass 2026-07-06. Actual lifetime + reclamation: overwritten by refold, evicted to cold, destroyed at zero-consumer quiescence; rebuilt lazily by re-evaluation — content derives from L1/L2 history (folds) or the L4 entry (sentinels/settled payloads), so no observable state is lost) | one world's last evaluation outcome | that arena's evaluation | with the arena, overwritten by refold, or evicted to cold (§4.3 decay / §4.5.8 value sweep) | a sentinel cached here is an OUTCOME record, not the resource: it must be invalidatable without touching the L4 entry (§4.5.4, both halves) and must never gate another world's read |
 | the `ctx.use` per-key entry (thenable, settled value) | **L4** (unchanged, pre-existing) | the request | first read of the key | with the living node (WP3) | keyed by request, never by consumer or arena; monotone; shared across worlds by design |
 | arena POOL (free Int32Array buffers) | **foot block** (infrastructure) | — | bridge init / growth | bridge dispose | holds NO tenant state between claims; each tenancy stamps a claim generation; the validator rejects any record citing a dead generation (no I4-shaped immortal residue) |
-| the settlement tap + pending-settlement queue (§4.5.4) | **foot block** (infrastructure) | — | `registerReactBridge` | bridge dispose | one closure + one small queue per bridge; holds the bridge only; retains no thenables (queue entries are sentinels with a queued bit; marks idempotent); arenas looked up at fire time |
+| the settlement tap + pending-settlement queue (§4.5.4) | **foot block** (infrastructure) | — | `registerReactBridge` | bridge dispose | one closure + one small queue per bridge; holds the bridge only; **queued-entry lifetime, stated truly (fourth pass 2026-07-06 — the third pass's "retains no thenables" was FALSE: a queue entry is a `SuspendedRead`, which strongly holds its thenable, `index.ts` `readonly thenable`):** the queue retains each settled thenable exactly from tap landing to the next drain — released at the at-rest settlement drain or the next operation epilogue's drain-to-empty, so retention is bounded by the §4.5.4 fixed point, never open-ended; marks idempotent; arenas looked up at fire time |
 | per-kernel-id rawFn/equals side column (§4.5.3) | **foot block** (infrastructure) | the authored computed | node registration | node disposal | policy lookup only; never consulted by folds; every entry GEN-stamped — a dead-GEN entry never serves (§4.5.3 id tenancy, S-C entry gate) |
 
-> **OWNER RULING NEEDED: infrastructure exemption (RUL-5 — third pass
-> 2026-07-06).** The last three rows — the arena pool, the settlement
-> tap/queue, and the rawFn/equals policy columns — are MECHANISM
-> state: machinery about the engine, not application or history
-> state, and the four lifetimes were written for application state
-> ("every new feature must classify each piece of STATE it
-> introduces", contract §2). Per codex blocker 5 this plan does NOT
-> invent categories for them. The owner decides between: **(a) exact
-> classification anyway** (nearest fits: pool and tap/queue as
-> bridge-lifetime records; side columns as node-registration
-> records — each fit strains the L1–L4 definitions it lands in), or
-> **(b) a one-line contract amendment** defining mechanism-state as
-> outside the four-lifetime rule. The per-row teeth above are
-> mandatory under either outcome. **Blocking for S-A's §4.6 sign-off
-> (§5 gate ii).**
+> **RUL-5 GRANTED (owner ruling 2026-07-06, recorded as the contract
+> §2 scope amendment; foot block updated fourth pass 2026-07-06).**
+> The ruling took option (b): the four-lifetime rule governs
+> application and history state — anything whose content a consumer
+> could ever observe and which is not rebuildable from classified
+> state; mechanism infrastructure sits outside the taxonomy but MUST
+> document its actual lifetime and reclamation per row. That letter
+> covers the three foot rows (pool, tap/queue, policy columns) — and,
+> per the third-pass verifier's verdict 5, it is also what makes the
+> arena/marks/outcomes rows above exact: they are rebuildable caches
+> whose observable content is L1 (or L3/L4) content served THROUGH
+> them — destroyed at zero-consumer quiescence, rebuilt lazily,
+> re-derivable from tapes/base — so an L1 label falsely promised the
+> survive-everything immortality §4.5.8's reclamation deliberately
+> breaks. Re-labeled above as mechanism-caches under the exemption,
+> each with the mandatory lifetime+reclamation documentation. The
+> per-row teeth are unchanged and mandatory. **No longer blocks S-A's
+> §4.6 sign-off (§5 gate ii — RUL-5 is answered).**
 
 No new L2 state exists: Program 2 writes no receipts and touches no
 retirement machinery (§3 item 8). The P1 subscription record's
 classification (§2.3) is unchanged. Resistance check (contract §6),
-re-run for the third pass: every application-state row now holds
-exactly one lifetime without force — the committed arena is L1 cache
-of committed truth (surviving episodes like the observation index
-does, dying at consumer-zero quiescence per §4.5.8); marks and
-outcomes take their owning arena's L3 or L1 explicitly; a cached
-sentinel is an arena-lifetime OUTCOME of reading an L4 entry, not the
-entry. The three rows that still resist are exactly the ones the
-contract's rule was not written about — surfaced to the owner rather
-than forced (RUL-5).
+re-run for the fourth pass 2026-07-06: the rows that still carry a
+lifetime carry it without force — the pass arena IS L3 (it dies with
+its attempt, exactly what L3 demands, at `reclaimAfterPassEnd`); the
+`ctx.use` entry IS L4. The rows that resisted in the third pass —
+labeled L1 while §4.5.8 destroys them at zero-consumer quiescence,
+the exact contradiction verdict 5 named against the contract's
+"survive everything" — no longer resist because they are no longer
+forced: they are mechanism-caches of classified content under
+RUL-5's granted letter, documented with their true lifetime and
+reclamation. Nothing observable rides on them (a cached sentinel is
+an arena-lifetime OUTCOME of reading an L4 entry, not the entry;
+arena values re-derive from tapes/base), which is precisely why the
+exemption covers them.
 
 ### 4.7 The ~300 lines of walk specializations — and the two disciplines they must carry
 
@@ -1438,9 +1566,12 @@ divergence rule:
   `untrackedReader` record into the active world's arena in addition
   to K1), including §4.4.1's weak-mode maintenance (third pass);
   folds into value columns under §4.2's no-fp consumption rule (the
-  fp column is never built); ALL FOUR flip sites + BOTH settlement
-  halves with the pending-settlement queue and suspended lists
-  (§4.3, §4.5.4) — mandatory in this stage, since with
+  fp column is never built; `foldAtom` reused verbatim, its
+  `lastFoldFp` store retained — §4.2 fourth pass 2026-07-06); ALL
+  FOUR flip sites + BOTH settlement halves with the pending-settlement
+  queue, suspended lists, AND the operation-epilogue drain-to-empty
+  fixed point + at-rest settlement drain (§4.3, §4.5.4 fourth pass
+  2026-07-06) — mandatory in this stage, since with
   `validateMemoInner`'s pass/committed arms deleted, arena values
   are correct ONLY under complete fanout; §4.3's mark decay rule;
   the §4.5.3 equality record with HEAD's comparator order; the
@@ -1468,8 +1599,9 @@ divergence rule:
   this stage performs, §4.4.8); the wide-mask lock-in shape (§4.2 /
   §4.9.6, codex major 7). **Test-first additions this stage**
   (red-first where the mechanism doesn't exist yet, §5 gate iii):
-  the key-A/key-B world-only settlement, read-after-await, and
-  firing-context pins (§4.5.4); the mixed-mode strong/weak schedule
+  the key-A/key-B world-only settlement, read-after-await,
+  firing-context, and at-rest background-settlement pins (§4.5.4,
+  fourth pass 2026-07-06); the mixed-mode strong/weak schedule
   + OL1 capture pin (§4.4.1); the fp-100/seq-50 walk under no-fp
   (§4.2); the root-churn retention + rematerialization pins
   (§4.5.8); the grown-then-shrunk decay pin (§4.3); the
@@ -1509,7 +1641,11 @@ divergence rule:
   during S-A).
 - **P2.S-D — perf closure.** Arena pooling hardened, wrap tests,
   full bench battery (§4.9.5), spike benches ported under real names
-  (F7 hygiene), README/API docs for the unified computed story.
+  (F7 hygiene), README/API docs for the unified computed story;
+  **named line item (fourth pass 2026-07-06, §4.2):** remove
+  `foldAtom`'s `lastFoldFp` store — dead weight since S-C deleted the
+  ladder's newest arm, its last reader; kept verbatim through
+  S-A/S-B/S-C by §4.2's reuse-verbatim choice.
 
 Each stage remains its own verified commit series with a revert story
 (additive until the stage's deletion commit, which lands last).
@@ -1530,10 +1666,13 @@ Each stage remains its own verified commit series with a revert story
    B3's seq-50-under-100 lock-in shape, re-walked under the no-fp
    rule (§4.2); M1's population schedule + the post-commit population
    assert (§4.4.2); S-NF2-D1 ×3 interleavings with documented
-   degraded-but-correct outcomes (§4.4.5); **the settlement trio
-   (§4.5.4): the key-A/key-B world-only settlement pin, the
-   read-after-await self-heal pin, and the firing-context
-   settle-inside-a-drain pin** + the React-battery
+   degraded-but-correct outcomes (§4.4.5); **the settlement quartet
+   (§4.5.4; trio extended fourth pass 2026-07-06): the key-A/key-B
+   world-only settlement pin, the read-after-await self-heal pin,
+   the firing-context settle-inside-a-drain pin, and the at-rest
+   background-settlement pin (settle with no operation open ⇒ the
+   settlement drain itself delivers; mid-drain variant ⇒ the
+   epilogue fixed point consumes it)** + the React-battery
    background-settlement case (RCC-SU5); **the mixed-mode
    strong/weak transition schedule + the OL1 strong-only capture pin
    (§4.4.1)**; codex 6's reference-preservation shape ×3 arenas +
@@ -1570,8 +1709,19 @@ Each stage remains its own verified commit series with a revert story
    - the **wide-mask lock-in shape** (codex major 7 / fable N-11):
      one commit locking in a token with W≈200 `atomsTouched` against
      a committed arena shadowing all of them — commit-phase fan+mark
-     plus the drain's refold burst vs the head-bridge anchor; **S-A
-     gate**;
+     plus the drain's refold burst vs the head-bridge anchor; **an
+     S-A gate WITH a number and a disposition (fourth pass
+     2026-07-06, mirroring the cold-pass gate's form):** end-to-end
+     commit+drain cost on the shape ≤ 1.4× the head-bridge anchor —
+     the threshold reuses the spike's worst published delta (+39%,
+     none-dirty revalidation 12.0 → 16.7 ns, rounded up), which is
+     the regime a wide mark fan lands in when most refolds come back
+     value-unchanged (a marked-but-unchanged consumption IS a
+     none-dirty revalidation), while the spike's published dirty-fold
+     advantage (2.5×/5.5×) prices the genuinely-changed remainder;
+     **breach is a mid-stage STOP before S-B**, forcing the §4.2
+     representation re-decision (sticky force-refold bit or an
+     fp-gate restoration) before any routing re-home;
    - the **untracked-fan shape** (codex major 6): one hot atom,
      K≈100 weak-only dependents in each of R=4 committed arenas,
      write-storm delivery cost vs the head-bridge anchor; **S-B
@@ -1640,10 +1790,12 @@ rather than a recommendation — restated honestly per fable M4:
 revision passes its focused re-review (amendment 7's condition);
 (ii) RUL-3 AND RUL-5 (§7) are answered — the
 landing-without-profile-evidence question and the §4.6
-infrastructure-exemption ruling both block S-A; (iii) S-A's
+infrastructure-exemption ruling both block S-A *(fourth pass
+2026-07-06: RUL-5 is now GRANTED and applied in §4.6; RUL-3 remains
+the open half of this gate)*; (iii) S-A's
 test-first artifacts (hang-schedule port, acyclicity fuzz ops, the
 §4.9.3 pin list written red-first where the mechanism doesn't exist
-yet — including the third pass's settlement trio, mode-transition,
+yet — including the settlement quartet (fourth pass), mode-transition,
 reclamation, decay, and comparator-order pins) precede S-A engine
 code, and S-A's two bench gates (cold-pass with its threshold;
 wide-mask) run inside the stage; (iv) the M6 pin AND the
@@ -1779,14 +1931,16 @@ Ruling ids are `RUL-n` (distinct from the risk ids `R1–R10` in §6).
    mechanism); confirm the README/API posture and whether
    `BoundComputed` survives as a deprecated alias for one release of
    the internal consumers.
-5. **RUL-5 — lifetime-taxonomy exemption for mechanism state (blocks
-   P2.S-A; third pass 2026-07-06)** — §4.6's foot block: the arena
-   pool, the settlement tap + pending-settlement queue, and the
-   per-kernel-id rawFn/equals side columns are mechanism state that
-   resists L1–L4 (codex blocker 5's contract stop). Decide: exact
-   classification anyway, or a one-line contract amendment scoping
-   the four-lifetime rule to application/history state. The per-row
-   teeth stand either way.
+5. **RUL-5 — RESOLVED 2026-07-06 (fourth pass): exemption GRANTED**
+   as the contract §2 scope amendment — the four-lifetime rule
+   governs application and history state (content a consumer could
+   observe, not rebuildable from classified state); mechanism
+   infrastructure sits outside the taxonomy with mandatory per-row
+   lifetime+reclamation documentation. §4.6 applies it: the three
+   foot rows, AND (per the third-pass verifier's verdict 5) the
+   committed-arena / marks / cached-outcome rows re-labeled as
+   mechanism-caches of L1 (or L3/L4) content. The per-row teeth
+   stand. No longer blocks S-A.
 6. **RUL-6 — fork-protocol root-destroy event (recorded OPEN;
    non-blocking; third pass 2026-07-06)** — §4.5.8's fallback if the
    watcher-population refcount proves insufficient (the known holes:
@@ -1804,7 +1958,13 @@ conformance ×3 (179 cases per configuration); the React scenarios; the
 hang schedule (ported at P2.S-A, pinned green from S-C when kernel
 computeds evaluate under worlds) and the structural validator (from
 P2.S-A); the
-bench battery with published numbers at P1.S4 and P2.S-D (sync shapes +
-head-bridge anchor, discard churn, world evaluation, idle-world scaling,
-quiet-mode probes). Any stage that surfaces a contract question stops
+bench battery — *staging corrected fourth pass 2026-07-06 to match
+§4.8/§4.9.6:* published numbers at P1.S4 and P2.S-D as before, but S-D
+is the FULL battery, not the first bench point — the staged P2 bench
+GATES run inside their stages, each with its threshold and STOP
+disposition: cold-pass (≤ 1.4× anchor) and wide-mask lock-in (≤ 1.4×
+anchor) inside S-A, untracked-fan inside S-B (sync shapes +
+head-bridge anchor, discard churn, world evaluation, idle-world
+scaling, cycling, grown-then-shrunk, quiet-mode probes). Any stage
+that surfaces a contract question stops
 for an owner ruling rather than inventing semantics.
