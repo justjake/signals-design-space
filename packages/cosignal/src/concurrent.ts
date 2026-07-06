@@ -810,7 +810,7 @@ export function __newBridgeForTest(): CosignalBridge {
 const enum AF {
 	// shadow node record
 	FLAGS = 0,
-	DEPS = 1, // doubles as the free-list next pointer for freed link records
+	DEPS = 1,
 	DEPS_TAIL = 2,
 	SUBS = 3,
 	SUBS_TAIL = 4,
@@ -824,8 +824,17 @@ const enum AF {
 	L_PREV_SUB = 3,
 	L_NEXT_SUB = 4,
 	L_PREV_DEP = 5,
-	L_NEXT_DEP = 6, // doubles as the free-list next pointer
+	L_NEXT_DEP = 6,
 	L_MODE = 7, // bit 0: 1 = weak (untracked-read) link — §4.4.1
+	/** The free list threads through the VERSION field (aliases L_VER):
+	 * kernel row-2 discipline — a freed link must keep every field a walk
+	 * still reads intact. aCheckDirty reads L_NEXT_DEP (and aShallowPropagate
+	 * L_NEXT_SUB) off links a mid-walk purge freed, so those must keep naming
+	 * former neighbors, never the free list. L_VER is genuinely dead on freed
+	 * links: it is only written at link mint/reuse (aLink/aLinkInsert) and
+	 * only read off LIVE links (the subs-tail dedup probe); every allocation
+	 * path rewrites it before any read. Pinned by tests/arena-freelist.spec.ts. */
+	L_FREE_NEXT = 0,
 }
 
 /** Shadow flag bits (kernel NodeFlag values, mirrored — see header note). */
@@ -932,7 +941,7 @@ function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number
 function aAllocLink(a: ShadowArena): number {
 	let id = a.linkFree;
 	if (id !== 0) {
-		a.linkFree = a.W[id + AF.L_NEXT_DEP]!;
+		a.linkFree = a.W[id + AF.L_FREE_NEXT]!;
 	} else {
 		id = a.next;
 		aGrow(a, id + A_STRIDE);
@@ -943,7 +952,7 @@ function aAllocLink(a: ShadowArena): number {
 }
 
 function aFreeLink(a: ShadowArena, id: number): void {
-	a.W[id + AF.L_NEXT_DEP] = a.linkFree;
+	a.W[id + AF.L_FREE_NEXT] = a.linkFree;
 	a.linkFree = id;
 	a.links--;
 }
@@ -1020,6 +1029,14 @@ function aUnlink(a: ShadowArena, id: number, sub: number = a.W[id + AF.L_SUB]!):
 		// Unwatched computed shadow: mark stale, tear down its own deps
 		// (in-world cascade — per-view acyclicity makes this terminate).
 		if (W[dep + AF.DEPS_TAIL] !== 0) {
+			// Dirty-LIST append on the mark's 0→1 edge (the a.dirty contract;
+			// aValidate enforces DIRTY ⇒ listed, and decay drops the torn
+			// shadow to cold from the list). This was the one DIRTY-setting
+			// site that skipped the append — the armed validator catches it
+			// the first time a last-sub unlink tears a computed with deps.
+			if ((W[dep + AF.FLAGS]! & AFlag.DIRTY) === 0) {
+				a.dirty.push(dep);
+			}
 			W[dep + AF.FLAGS] = W[dep + AF.FLAGS]! | AFlag.DIRTY;
 			aDisposeAllDepsInReverse(a, dep);
 		}
@@ -2527,7 +2544,15 @@ export class CosignalBridge {
 		}
 		if ((flags & AFlag.MUTABLE) === 0) {
 			this.aUpdateComputed(a, sh); // never evaluated in this arena: cold fold
-		} else if ((flags & AFlag.DIRTY) !== 0 || ((flags & AFlag.PENDING) !== 0 && this.aCheckDirty(a, a.W[sh + AF.DEPS]!, sh))) {
+		} else if (
+			(flags & AFlag.DIRTY) !== 0
+			// Evicted-to-cold residue (decay §4.3 / torn-cone dirt): VALID is
+			// the "value column holds a folded value" bit — with it clear the
+			// slot is evicted and must refold on consult, exactly as the atom
+			// branch above does. MUTABLE alone only says "evaluated once".
+			|| (flags & AFlag.VALID) === 0
+			|| ((flags & AFlag.PENDING) !== 0 && this.aCheckDirty(a, a.W[sh + AF.DEPS]!, sh))
+		) {
 			if (this.aUpdateComputed(a, sh)) {
 				const subs = a.W[sh + AF.SUBS]!;
 				if (subs !== 0) aShallowPropagate(a, subs);
@@ -3084,6 +3109,34 @@ export class CosignalBridge {
 			cur = a.W[cur + AF.L_NEXT_DEP]!;
 		}
 		return undefined;
+	}
+
+	/** Test seam: a committed arena's live (dep → sub) link record id, or 0
+	 * when no link exists (freelist-discipline pins capture ids before a
+	 * teardown). @internal */
+	__arenaLinkIdForTest(rootId: RootId, dep: AnyNode, sub: AnyNode): number {
+		const a = this.arenaByRoot.get(rootId);
+		if (a === undefined) return 0;
+		const depSh = a.byNode[dep.id] ?? 0;
+		const subSh = a.byNode[sub.id] ?? 0;
+		if (depSh === 0 || subSh === 0) return 0;
+		let cur = a.W[subSh + AF.DEPS]!;
+		while (cur !== 0) {
+			if (a.W[cur + AF.L_DEP] === depSh) return cur;
+			cur = a.W[cur + AF.L_NEXT_DEP]!;
+		}
+		return 0;
+	}
+
+	/** Test seam: raw L_NEXT_DEP field of an arena link record BY ID — valid
+	 * on freed links too. The freelist-discipline regression pin (dalien row
+	 * 2 twin) asserts a freed link's stale nextDep still names its former
+	 * neighbor, never the free list: aCheckDirty reads L_NEXT_DEP off links
+	 * a mid-walk purge freed. @internal */
+	__arenaLinkNextDepForTest(rootId: RootId, linkId: number): number {
+		const a = this.arenaByRoot.get(rootId);
+		if (a === undefined) return -1;
+		return a.W[linkId + AF.L_NEXT_DEP] ?? -1;
 	}
 
 	/**

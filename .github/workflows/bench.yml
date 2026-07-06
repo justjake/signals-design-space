@@ -1,0 +1,257 @@
+# Family-B gate benches (dalien port study §2.2): the packages/cosignal/bench
+# spawn-per-config drivers, one runner per gate family, plus a rounds-sharded
+# suite/conformance job. Complements benchmark.yml (family A: milomg suite).
+#
+# Methodology guards (research/experiments/dalien-optimizations-port-study.md):
+#   - never shard a family across runners: each family job is a same-machine
+#     block; the meaningful numbers are ratios WITHIN one job (direct vs
+#     logged configs are interleaved by one parent; HEAD vs anchor runs on
+#     the same runner sequentially).
+#   - HEAD-vs-anchor A/B is dual-tree: both refs checked out on the same
+#     runner. spka-sa-gates speaks the COSIGNAL_ROOT protocol natively; the
+#     other families run each tree's own parent script behind the canonical
+#     /Users/jitl/src/alien-signals-opt symlink (bench children import by
+#     absolute path by design — the symlink is retargeted between runs).
+#   - medians + [min..max] come from the parents themselves (util.mjs);
+#     PASS/FAIL is flagged only on same-runner ratio gates (S-A <= 1.4x),
+#     report-only here while the S-A stage gate is under design-loop review.
+#   - hosted-runner weather: treat <~5% run-over-run as noise; summaries are
+#     annotated with arch + node version; vars.BENCH_RUNNER selects a
+#     quieter self-hosted fleet when configured.
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      anchor_ref:
+        description: 'Anchor ref for the dual-tree A/B'
+        required: false
+        default: 'main'
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: bench-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ANCHOR_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.anchor_ref || 'main' }}
+  CANON: /Users/jitl/src/alien-signals-opt
+
+jobs:
+  gates:
+    # PR runs only when the `bench` label is applied.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'bench'
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [spkl, spkw, spkw-quiet, spkn1, spkr-core, spkg8, spka-sa-gates]
+    name: gates-${{ matrix.family }}
+    runs-on: ${{ vars.BENCH_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ANCHOR_REF }}
+          path: anchor-tree
+
+      # The lockfile carries workspace importers for packages/dalien-signals;
+      # the harness carries a file: dep on upstream-alien-signals. Init both
+      # (no builds needed: family B imports only cosignal TS source via tsx).
+      - name: Init submodules (both trees)
+        run: |
+          git submodule update --init packages/dalien-signals upstream-alien-signals
+          git -C anchor-tree submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # bytecode/bench budgets are V8-version-sensitive: keep pinned
+
+      - run: npm install -g pnpm@10
+
+      - name: Install harness deps (both trees, filtered — no react link materialization)
+        run: |
+          pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..."
+          cd anchor-tree
+          pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..." || \
+            pnpm install --no-frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..."
+
+      # Bench parents and children reference the repo by its canonical
+      # absolute path (children import by absolute path so cwd stays a
+      # loader-only concern). Point that path at the tree under test.
+      - name: Mount canonical path -> HEAD
+        run: |
+          sudo mkdir -p "$(dirname "$CANON")"
+          sudo ln -sfn "$GITHUB_WORKSPACE" "$CANON"
+          mkdir -p out
+
+      - name: Run ${{ matrix.family }} (HEAD, then anchor; same runner)
+        if: matrix.family != 'spka-sa-gates'
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          set -o pipefail
+          node "packages/cosignal/bench/$FAMILY.mjs" 2>&1 | tee "out/$FAMILY-head.log"
+          sudo ln -sfn "$GITHUB_WORKSPACE/anchor-tree" "$CANON"
+          if [ -f "anchor-tree/packages/cosignal/bench/$FAMILY.mjs" ]; then
+            node "anchor-tree/packages/cosignal/bench/$FAMILY.mjs" 2>&1 | tee "out/$FAMILY-anchor.log"
+          else
+            echo "anchor ref has no $FAMILY.mjs — skipping anchor leg" | tee "out/$FAMILY-anchor.log"
+          fi
+          sudo ln -sfn "$GITHUB_WORKSPACE" "$CANON"
+
+      - name: Run spka-sa-gates (dual-tree COSIGNAL_ROOT protocol)
+        if: matrix.family == 'spka-sa-gates'
+        working-directory: harness
+        run: |
+          set -o pipefail
+          COSIGNAL_ROOT="$GITHUB_WORKSPACE/anchor-tree" node --expose-gc --import tsx \
+            "$GITHUB_WORKSPACE/packages/cosignal/bench/spka-sa-gates.mjs" 2>&1 | tee "$GITHUB_WORKSPACE/out/spka-sa-gates-anchor.log"
+          COSIGNAL_ROOT="$GITHUB_WORKSPACE" node --expose-gc --import tsx \
+            "$GITHUB_WORKSPACE/packages/cosignal/bench/spka-sa-gates.mjs" 2>&1 | tee "$GITHUB_WORKSPACE/out/spka-sa-gates-head.log"
+
+      # Parents end by printing a JSON table; @@ROW jsonl lines carry the raw
+      # per-config rows. Extract both into artifacts the collate job merges.
+      - name: Extract JSON + jsonl artifacts
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          # shellcheck disable=SC2016  # the node script must not shell-expand
+          node -e '
+            const fs = require("fs");
+            for (const leg of ["head", "anchor"]) {
+              const p = `out/${process.env.FAMILY}-${leg}.log`;
+              if (!fs.existsSync(p)) continue;
+              const log = fs.readFileSync(p, "utf8");
+              const rows = log.split("\n").filter((l) => l.includes("@@ROW ")).map((l) => l.slice(l.indexOf("@@ROW ") + 6));
+              fs.writeFileSync(`out/${process.env.FAMILY}-${leg}.jsonl`, rows.join("\n"));
+              const starts = [...log.matchAll(/^[\[{]/gm)].map((m) => m.index).reverse();
+              for (const s of starts) {
+                try {
+                  const v = JSON.parse(log.slice(s).trim());
+                  fs.writeFileSync(`out/${process.env.FAMILY}-${leg}.json`, JSON.stringify(v, null, 1));
+                  break;
+                } catch {}
+              }
+            }
+          '
+
+      - name: Gate table -> job summary
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          {
+            echo "### $FAMILY ($(uname -m), $(node --version), anchor: $ANCHOR_REF)"
+            echo ""
+            if [ "$FAMILY" = "spka-sa-gates" ]; then
+              # shellcheck disable=SC2016  # the node script must not shell-expand
+              node -e '
+                const fs = require("fs");
+                const read = (leg) => fs.readFileSync(`out/spka-sa-gates-${leg}.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+                const head = read("head"); const anchor = read("anchor");
+                console.log("| gate shape | HEAD | anchor | ratio | budget | verdict |");
+                console.log("| --- | ---: | ---: | ---: | ---: | --- |");
+                for (const h of head) {
+                  const a = anchor.find((r) => r.shape === h.shape);
+                  const ratio = a ? h.value / a.value : NaN;
+                  const verdict = ratio <= 1.4 ? "PASS" : "BREACH (report-only)";
+                  console.log(`| ${h.shape} (${h.metric}) | ${h.value.toFixed(1)} | ${a ? a.value.toFixed(1) : "?"} | ${ratio.toFixed(3)}x | <=1.4x | ${verdict} |`);
+                }
+              '
+            else
+              for leg in head anchor; do
+                if [ -f "out/$FAMILY-$leg.json" ]; then
+                  echo "<details><summary>$leg tree (medians and [min..max] from the parent)</summary>"
+                  echo ""
+                  echo '```json'
+                  cat "out/$FAMILY-$leg.json"
+                  echo '```'
+                  echo "</details>"
+                fi
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.family }}-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+
+  suites:
+    # Rounds-sharded correctness pass: each round is a COMPLETE suite +
+    # conformance run on one runner (rounds catch flake; frameworks and
+    # suites are never sharded across machines). cosignal-react is excluded
+    # here: it needs the vendor/react fork build (react-benchmark.yml owns
+    # that toolchain).
+    if: github.event_name != 'pull_request' || github.event.label.name == 'bench'
+    strategy:
+      fail-fast: false
+      matrix:
+        round: [1, 2]
+    name: suites-round-${{ matrix.round }}
+    runs-on: ${{ vars.BENCH_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init submodules
+        run: git submodule update --init packages/dalien-signals upstream-alien-signals
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm install -g pnpm@10
+
+      - name: Install (filtered)
+        run: pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..."
+
+      - name: cosignal package suite (incl. bytecode budgets, round ${{ matrix.round }})
+        working-directory: packages/cosignal
+        run: npx vitest run
+
+      - name: cosignal-oracle suite
+        working-directory: packages/cosignal-oracle
+        run: npx vitest run
+
+      - name: Conformance (cosignal, cosignal-concurrent, arena)
+        working-directory: harness
+        run: |
+          FRAMEWORK=cosignal npx vitest run
+          FRAMEWORK=cosignal-concurrent npx vitest run
+          FRAMEWORK=arena npx vitest run
+
+  collate:
+    needs: [gates, suites]
+    if: always() && (github.event_name != 'pull_request' || github.event.label.name == 'bench')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bench-*
+
+      - name: Merge gate outputs -> cosignal-gates-${{ github.sha }}.md
+        run: |
+          {
+            echo "# cosignal gate benches @ ${{ github.sha }}"
+            echo ""
+            echo "anchor: $ANCHOR_REF | gates: ${{ needs.gates.result }} | suites: ${{ needs.suites.result }}"
+            echo ""
+            find artifacts -name '*.json' -o -name '*.jsonl' | sort | while read -r f; do
+              echo "## $(basename "$f")"
+              echo '```'
+              cat "$f"
+              echo '```'
+            done
+          } > "cosignal-gates-${{ github.sha }}.md"
+          cat "cosignal-gates-${{ github.sha }}.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cosignal-gates-${{ github.sha }}
+          path: cosignal-gates-${{ github.sha }}.md

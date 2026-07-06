@@ -328,8 +328,14 @@ const enum LinkField {
 	PREV_SUB = 3,
 	NEXT_SUB = 4,
 	PREV_DEP = 5,
-	NEXT_DEP = 6, // doubles as the free-list next pointer for freed links
-	// field 7 spare
+	NEXT_DEP = 6,
+	// The free list threads through the SPARE field so a freed link keeps
+	// every real field intact: upstream's walks deliberately read stale
+	// nextDep/nextSub off links unlinked earlier in the same walk
+	// (conformance #203 exercises this; tests/freelist.spec.ts pins it with
+	// a primed free list), and those stale pointers must name former
+	// neighbors — never the free list.
+	FREE_NEXT = 7,
 }
 
 /** Bit values of a node's FLAGS field (upstream ReactiveFlags + HasChildEffect
@@ -396,7 +402,7 @@ const enum Arena {
 // engine closure.
 let recNext: RecordId = Arena.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
 let nodeFreeHead: NodeId = 0; // free list threaded through M[id + NodeField.DEPS]
-let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.NEXT_DEP]
+let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.FREE_NEXT] (spare field 7: freed links keep NEXT_DEP/NEXT_SUB intact for mid-walk stale reads)
 let growPending = false;
 
 let cycle: Version = 0;
@@ -553,7 +559,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		let id: LinkId;
 		if (linkFreeHead !== 0) {
 			id = linkFreeHead;
-			linkFreeHead = M[id + LinkField.NEXT_DEP];
+			linkFreeHead = M[id + LinkField.FREE_NEXT];
 		} else {
 			id = recNext;
 			if (id >= M.length) {
@@ -568,7 +574,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function freeLink(id: LinkId): void {
-		M[id + LinkField.NEXT_DEP] = linkFreeHead;
+		M[id + LinkField.FREE_NEXT] = linkFreeHead;
 		linkFreeHead = id;
 	}
 
