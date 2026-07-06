@@ -914,25 +914,22 @@ function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number
 	aGrow(a, id + A_STRIDE);
 	a.next = id + A_STRIDE;
 	const W = a.W;
+	// Fresh-record invariant (B1 cold-pass shave): W[a.next..] is ALL ZERO —
+	// a fresh Int32Array is zeroed, aGrow's replacement buffer is zeroed past
+	// the copied prefix, and releaseArena scrubs the dead tenancy's whole
+	// written prefix [0, next) before the buffer pools. So the list heads
+	// (DEPS/DEPS_TAIL/SUBS/SUBS_TAIL) and MARK are already 0 here, and the
+	// bump allocator never re-issues a record id mid-tenancy — only the
+	// tenant fields need stores. (The freelist re-issues LINK records, whose
+	// mint paths write every field — tests/arena-freelist.spec.ts.)
 	W[id + AF.FLAGS] = flags;
-	// Zero the list heads explicitly: pooled buffers are NOT scrubbed at
-	// release, so a reused record can hold the dead tenancy's residue (a
-	// fresh Int32Array is zeroed; pool reuse is the claim-generation case).
-	W[id + AF.DEPS] = 0;
-	W[id + AF.DEPS_TAIL] = 0;
-	W[id + AF.SUBS] = 0;
-	W[id + AF.SUBS_TAIL] = 0;
 	W[id + AF.NODE] = nodeId;
 	W[id + AF.GEN] = gen;
-	W[id + AF.MARK] = 0;
 	const v = id >> A_SHIFT;
 	while (a.vals.length <= v) {
 		a.vals.push(undefined);
 		a.suspIdx.push(0);
 	}
-	// Pooled-buffer reuse can also leave stale value/susp residue at this slot.
-	a.vals[v] = undefined;
-	a.suspIdx[v] = 0;
 	while (a.byNode.length <= nodeId) a.byNode.push(0); // stay packed, never holey
 	a.byNode[nodeId] = id;
 	return id;
@@ -1662,6 +1659,7 @@ export class CosignalBridge {
 		this.evalMark[id] = 0;
 		this.obsRefs[id] = 0;
 		this.subDepRefs[id] = 0;
+		this.nodeGen[id] = this.nodeGen[id] ?? 0; // dense: shadowFor loads it in-bounds on every probe
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
@@ -2310,14 +2308,27 @@ export class CosignalBridge {
 	 * dropped (payload release), dirty + suspended lists discarded (§4.5.8 —
 	 * safe by the evict-don't-serve argument; nobody observes those cones). */
 	private releaseArena(a: ShadowArena): void {
+		if (this.aNotedArena === a) this.aNotedNid = -1; // probe-fusion cache: dead tenancy
 		for (let i = 0; i < a.suspended.length; i++) this.suspendedCount--;
 		a.alive = false;
 		a.claimGen++;
-		a.byNode.length = 0;
-		a.vals.length = 0;
-		a.suspIdx.length = 0;
+		// Keep the side columns' CAPACITY across pool tenancies (B1 cold-pass
+		// shave): truncating to 0 forced claimArena + aAllocShadow to re-push
+		// every element on every claim (~2k pushes per cold pass). fill()
+		// scrubs the residue the truncation used to drop — value refs are
+		// released (no pooled-arena leak), byNode reads 0 (= none), suspIdx
+		// reads 0 (= not suspended) — while the packed length persists, so
+		// the next tenancy's growth loops are no-ops up to this watermark.
+		a.byNode.fill(0);
+		a.vals.fill(undefined);
+		a.suspIdx.fill(0);
 		a.dirty.length = 0;
 		a.suspended.length = 0;
+		// Scrub the written record prefix so pooled buffers re-claim ALL-ZERO
+		// past the burned record — aAllocShadow's fresh-record invariant (one
+		// vectorized fill here beats per-field zeroing on every cold alloc,
+		// and closes the pooled-residue class wholesale: nothing survives).
+		a.W.fill(0, 0, a.next);
 		a.next = A_STRIDE;
 		a.linkFree = 0;
 		a.links = 0;
@@ -2358,7 +2369,7 @@ export class CosignalBridge {
 	 * dead-GEN shadow never serves — it is reset cold and re-tenanted. */
 	private shadowFor(a: ShadowArena, nid: NodeId, kindFlags: number): number {
 		let sh = nid < a.byNode.length ? a.byNode[nid]! : 0;
-		const gen = this.nodeGen[nid] ?? 0;
+		const gen = this.nodeGen[nid]!; // dense (indexNode) — no OOB/?? probe on the hot path
 		if (sh !== 0) {
 			if (a.W[sh + AF.GEN] === gen) return sh;
 			// Dead tenancy: evict, purge links (both directions), refold under
@@ -2386,10 +2397,32 @@ export class CosignalBridge {
 	private aRecordDep(dep: AnyNode, weak: boolean): void {
 		const a = this.aFrameArena;
 		if (a === undefined) return;
-		const kindFlags = dep.kind === 'atom' ? (AFlag.K_SIGNAL | AFlag.MUTABLE) : AFlag.K_COMPUTED;
-		const sh = this.shadowFor(a, dep.id, kindFlags);
+		if (dep.kind === 'atom') {
+			// shadowFor probe fusion (S-A cold-pass shave): both fn-readers
+			// call aRecordDep(atom) immediately before the evaluate→atomValue
+			// →aNoteAtom epilogue for the SAME atom, and nothing between the
+			// two calls can re-tenant the shadow (nodeGen moves only via the
+			// test seam, which clears this cache; releaseArena clears it too,
+			// so a pool-reused arena identity can never revalidate a stale
+			// id). Stash the just-validated shadow so aNoteAtom skips its
+			// probe (GEN tenancy validation + dense lookups) on every read.
+			const sh = this.shadowFor(a, dep.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
+			this.aNotedArena = a;
+			this.aNotedNid = dep.id;
+			this.aNotedSh = sh;
+			aLink(a, sh, this.aFrameShadow, this.aFrameCycle, weak);
+			return;
+		}
+		const sh = this.shadowFor(a, dep.id, AFlag.K_COMPUTED);
 		aLink(a, sh, this.aFrameShadow, this.aFrameCycle, weak);
 	}
+
+	/** shadowFor probe-fusion cache: the shadow aRecordDep just validated for
+	 * the atom whose aNoteAtom epilogue is about to run (consume-once; see
+	 * aRecordDep for the safety argument and the clearing sites). */
+	private aNotedArena: ShadowArena | undefined = undefined;
+	private aNotedNid: NodeId = -1;
+	private aNotedSh = 0;
 
 	/** The arena atom-propagation gate is Object.is over FOLD OUTPUTS: the
 	 * atom's own `equals` already participated in the fold's stepwise
@@ -2412,7 +2445,13 @@ export class CosignalBridge {
 	private aNoteAtom(atom: AtomNode, world: World, fresh: Value, haveFresh: boolean): void {
 		const a = this.aFrameArena;
 		if (a === undefined) return;
-		const sh = this.shadowFor(a, atom.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
+		let sh: number;
+		if (this.aNotedArena === a && this.aNotedNid === atom.id) {
+			sh = this.aNotedSh; // probe fusion: validated by aRecordDep just now
+			this.aNotedNid = -1; // consume once
+		} else {
+			sh = this.shadowFor(a, atom.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
+		}
 		const W = a.W;
 		const flags = W[sh + AF.FLAGS]!;
 		if ((flags & AFlag.VALID) !== 0 && (flags & AFlag.DIRTY) === 0) return; // current
@@ -3080,6 +3119,7 @@ export class CosignalBridge {
 	/** Test seam: force an id-tenancy generation bump (§4.5.3 GEN pin). @internal */
 	__bumpNodeGenForTest(id: NodeId): void {
 		this.nodeGen[id] = (this.nodeGen[id] ?? 0) + 1;
+		this.aNotedNid = -1; // probe-fusion cache: the stamp it validated moved
 	}
 
 	/** Arena stats (tests/bench). @internal */

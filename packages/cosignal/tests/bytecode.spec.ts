@@ -63,7 +63,9 @@ const BUDGETS: Record<string, number> = {
 	aAllocLink: 90, // 71
 	aFreeLink: 50, // 37: threads a.linkFree through L_VER (row 2 twin)
 	shadowFor: 310, // 261
-	aNoteAtom: 260, // 221
+	aNoteAtom: 300, // 262: +41 for the probe-fusion consume branch (B1 cold-pass
+	// shave — skips a full shadowFor per tracked atom read; pair-guard loads
+	// are the price of stale-safety). Still 160+ under the inline limit.
 	foldAtom: 420, // 358
 	aUpdateShadow: 230, // 188
 };
