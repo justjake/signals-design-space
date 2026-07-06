@@ -320,8 +320,12 @@ export class CosignalModel {
 	coreEffects = new Map<EffectId, CoreEffect>();
 	events: ModelEvent[] = [];
 
-	/** Plain ("direct") until registerBridge(); direct writes mutate the base and leave no receipts. */
-	mode: 'direct' | 'concurrent' = 'direct';
+	/** Flipped once by registerBridge(). There is no pre-registration write
+	 * mode: in the real system, writes reach a bridge only through the kernel
+	 * write hook, which arms at registration — earlier writes are plain
+	 * kernel state that never involves a bridge, so the model cannot express
+	 * them (they throw, mirroring the engine). */
+	private registered = false;
 	/** The one global sequence line every receipt, pin, and stamp lives on. */
 	seq = 0;
 	/** Committed-advance counter, in sequence units: seq of the last change to any committed view. */
@@ -394,13 +398,13 @@ export class CosignalModel {
 
 	// ---------------------------------------------------------------- setup
 
-	/** Activates concurrent mode: once, monotonically; illegal inside open evaluation frames. */
+	/** Activates the bridge: once, monotonically; illegal inside open evaluation frames. */
 	registerBridge(): void {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new ScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this.mode === 'concurrent') throw new ScheduleError('bridge already registered — registration happens exactly once');
-		this.mode = 'concurrent';
+		if (this.registered) throw new ScheduleError('bridge already registered — registration happens exactly once');
+		this.registered = true;
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
@@ -603,7 +607,7 @@ export class CosignalModel {
 	 * lane. (Lane priority itself stays React's: neither the model nor the
 	 * engine ever consults it — the Priority dimension was deleted.) */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
-		if (this.mode !== 'concurrent') throw new ScheduleError('batches exist only in concurrent mode — register the React bridge first');
+		if (!this.registered) throw new ScheduleError('batches require a registered bridge — register the React bridge first');
 		if (this.liveTokens().length >= SLOT_COUNT) {
 			throw new ScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
@@ -712,23 +716,15 @@ export class CosignalModel {
 	}
 
 	/**
-	 * The write path (concurrent mode). Direct-mode writes mutate the base with
-	 * no receipt — pre-activation state is simply committed-only state, so
-	 * arming the concurrent machinery mid-life is safe.
+	 * The write path (registered bridges only — an unregistered model
+	 * throws, mirroring the engine: pre-registration writes are plain kernel
+	 * state that never reaches a bridge, so they cannot be expressed here).
 	 */
 	write(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
 		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		if (node.kind !== 'atom') throw new ScheduleError('writes target atoms');
-		if (this.mode === 'direct') {
-			const next = this.applyOp(node, op, node.base);
-			if (!this.inCallback(() => node.equals(next, node.base))) {
-				node.base = next;
-				node.origin = next; // pre-activation history is the base case: committed-only state
-			}
-			this.flushCoreEffects();
-			return;
-		}
+		if (!this.registered) throw new ScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
 		if (tokenId === undefined) {
 			this.bareWrite(node, op);
 			return;

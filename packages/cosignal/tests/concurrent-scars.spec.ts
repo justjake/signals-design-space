@@ -13,7 +13,8 @@
  * SKIPPED-FOR-FORK-SUITE.md alongside that suite, one line each.
  */
 import { describe, expect, it } from 'vitest';
-import { commitAndRetire, concurrent, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
+import { Atom } from '../src/index.js';
+import { commitAndRetire, concurrent, mountCommitted, pass, selfCheck, set, TwinDriver, update } from './helpers.js';
 
 describe('pinned scars (model-expressible)', () => {
 	it('S1 — no-log urgent writes: urgent ×2 over pending +1 commits 2 then 4, never 3', () => {
@@ -81,21 +82,33 @@ describe('pinned scars (model-expressible)', () => {
 	});
 
 	it('S6 — machinery keyed to watcher count: pre-bridge writes are committed-only state', () => {
-		const m = concurrent(); // fresh model, then simulate the pre-bridge era on a second model
-		void m;
-		const m2 = new (Object.getPrototypeOf(m).constructor)() as typeof m;
-		const a = m2.atom('a', 0);
-		m2.write(undefined, a, set(1)); // DIRECT write: no receipt (bridge not registered)
-		expect(a.tape).toHaveLength(0);
-		expect(a.base).toBe(1);
-		m2.registerBridge(); // activation is monotonic on registration, not on first watcher
-		const c = m2.computed('c', (read) => read(a));
-		const w = mountCommitted(m2, 'A', c, 'W');
+		// Re-pinned at SYSTEM level: there is no bridge-level "pre-registration
+		// era" — the kernel write hook arms only at registration, so writes
+		// made before then are plain KERNEL writes that never involve a bridge.
+		// The truth this scar protects: that history joins as committed-only
+		// base state — adopted with an empty tape, no receipts, no tokens, no
+		// events — and activation is monotonic on registration, not on first
+		// watcher (a bridge write path is illegal until registration; see the
+		// oracle suite's S6 for the model-level face of the same claim).
+		const handle = new Atom<unknown>(0);
+		handle.set(1); // REAL kernel write through the public atom API — no bridge involved
+		const m = new TwinDriver(); // only now does the bridge/model pair exist
+		m.registerBridge();
+		const a = m.adoptAtom('a', handle); // joins with its kernel-current value
+		expect(a.base).toBe(1); // pre-bridge history is committed-only base state
+		expect(a.tape).toHaveLength(0); // ...with no receipts
+		expect(m.events).toHaveLength(0); // ...no bridge events
+		expect(m.tokens.size).toBe(0); // ...and no tokens
+		const eNode = m.engine.nodeFor(handle)!; // engine face of the same emptiness
+		expect(eNode.base).toBe(1);
+		expect(eNode.tp.materialize()).toHaveLength(0);
+		const c = m.computed('c', (read) => read(a));
+		const w = mountCommitted(m, 'A', c, 'W');
 		expect(w.lastRenderedValue).toBe(1); // committed-only value; urgent renders cannot leak a "transition"
-		const sync = pass(m2, 'A', []);
-		expect(m2.passValue(c, sync)).toBe(1);
-		m2.passEnd(sync.id, 'commit');
-		selfCheck(m2);
+		const sync = pass(m, 'A', []);
+		expect(m.passValue(c, sync)).toBe(1);
+		m.passEnd(sync.id, 'commit');
+		selfCheck(m);
 	});
 
 	it('S7 — wall-clock render scopes: a yield-gap write neither throws nor lands in the pass', () => {

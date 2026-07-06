@@ -89,7 +89,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 
 	it('registerReactBridge attaches exactly once (constructs the one bridge)', () => {
 		bridge = registerReactBridge();
-		expect(bridge.mode).toBe('concurrent');
+		expect(() => bridge.registerBridge()).toThrow(/already registered/); // the returned bridge IS registered
 		expect(__coreProbes().bridges).toBe(1);
 		expect(() => registerReactBridge()).toThrow(/only be called once/);
 	});

@@ -8,7 +8,7 @@
  * thing packed state cannot answer — the FULL history behind compaction —
  * which a driver-side mirror retains: per-atom archives fed by the engine's
  * `onCompact` hook and per-atom origins maintained at the ops that move them
- * (creation, direct-mode writes, quiesce). The shadow fold reimplements the
+ * (creation, adoption, quiesce). The shadow fold reimplements the
  * model's Receipt-shaped fold over that full history, replaying the oracle's
  * exported `visible` rule (imported — the one Receipt-shaped statement of
  * receipt visibility, not a copy); the engine keeps only the packed forms
@@ -52,7 +52,7 @@ export class RefereeMirror {
 		this.origins.set(atom, value);
 	}
 
-	/** Direct-mode writes and the quiescence episode reset set origin to base. */
+	/** The quiescence episode reset sets origin to base (the model's episode reset twin). */
 	originsFromBase(engine: CosignalBridge): void {
 		for (const n of engine.nodes.values()) {
 			if (n.kind === 'atom') this.origins.set(n, n.base);

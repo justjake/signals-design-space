@@ -788,7 +788,7 @@ export function registerReactBridge(options?: BridgeOptions): CosignalBridge {
 		throw new Error('cosignal: registerReactBridge may only be called once per process.');
 	}
 	const bridge = new CosignalBridge(options);
-	bridge.registerBridge(); // arms the seam + flips the bridge to CONCURRENT mode
+	bridge.registerBridge(); // arms the seam + marks the bridge registered
 	publiclyRegistered = true;
 	return bridge;
 }
@@ -1518,8 +1518,12 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Direct (base-like) until registerBridge(); direct writes leave no receipts. */
-	mode: 'direct' | 'concurrent' = 'direct';
+	/** Flipped once by registerBridge(). There is no bridge-level
+	 * pre-registration era: production writes reach a bridge only through the
+	 * kernel write hook, which arms at registration — anything earlier is
+	 * plain kernel state that never involves a bridge. The referee-only write
+	 * surface therefore throws on an unregistered bridge (fail fast, never limp). */
+	private registered = false;
 	/** The one global sequence line every receipt/pin/stamp is a point on. */
 	seq: Seq = 0;
 	/** Committed-advance counter, in sequence units: bumped whenever committed
@@ -1627,9 +1631,12 @@ export class CosignalBridge {
 	}
 
 	private recomputeQuiet(): void {
+		// The registered clause is load-bearing: event-retention/tracer/
+		// quietWrites toggles recompute BEFORE registration, and quiet must
+		// never arm on an unregistered test bridge (its write path throws).
 		this.quiet =
 			this.quietWrites
-			&& this.mode === 'concurrent'
+			&& this.registered
 			&& this.liveTokenCount === 0
 			&& this.openPassByRoot.size === 0
 			&& this.dirtyAtoms.size === 0
@@ -1923,8 +1930,8 @@ export class CosignalBridge {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new BridgeScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this.mode === 'concurrent') throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
-		this.mode = 'concurrent';
+		if (this.registered) throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
+		this.registered = true;
 		activeBridge = this;
 		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
 		// NF2 S-A: arm the settlement tap (ONE closure; consulted at FIRE
@@ -3773,7 +3780,7 @@ export class CosignalBridge {
 	 * lane/priority itself stays React's: the engine never consults it —
 	 * scheduling decisions ride the shim's forkToken map.) */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
-		if (this.mode !== 'concurrent') throw new BridgeScheduleError('batches exist only in concurrent mode — register the React bridge first');
+		if (!this.registered) throw new BridgeScheduleError('batches require a registered bridge — register the React bridge first');
 		if (this.liveTokenCount >= SLOT_COUNT) {
 			throw new BridgeScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
@@ -3968,9 +3975,11 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * The write path. Direct-mode writes mutate committed-only state with no
-	 * receipt (pre-registration history is visible to every world by
-	 * construction). Logged steps, in order: classify (caller) → drop check
+	 * The write path (registered bridges only — an unregistered bridge
+	 * throws: production writes reach a bridge only through the kernel write
+	 * hook, which arms at registration, so anything earlier is plain kernel
+	 * state that never involves a bridge; see adoptAtom for how such state
+	 * joins). Logged steps, in order: classify (caller) → drop check
 	 * → intern slot → append packed receipt + write clock → member-slot
 	 * fanout → apply to the kernel with stepwise equality → arena delivery
 	 * walk → newest-subscription flush after the walk returns.
@@ -3992,16 +4001,7 @@ export class CosignalBridge {
 	}
 
 	private writeInner(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
-		if (this.mode === 'direct') {
-			const next = this.applyOp(node, op, node.base);
-			if (!this.inCallback(() => node.equals(next, node.base))) {
-				node.base = next; // pre-registration history is committed-only base state
-				this.applyToKernel(node, next);
-			}
-			this.directFlushCoreEffects();
-			this.endOp();
-			return;
-		}
+		if (!this.registered) throw new BridgeScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
 		if (tokenId === undefined) {
 			this.bareWrite(node, op);
 			return;
@@ -4193,9 +4193,9 @@ export class CosignalBridge {
 	}
 
 	/** Newest-policy subscription full-scan flush, value-gated — the
-	 * reach-free boundaries' form (direct-mode writes, quiet folds,
-	 * settlement drains), matching the reference model's un-scoped flush at
-	 * the same boundaries; iteration order is id order (its map order). */
+	 * reach-free boundaries' form (quiet folds, settlement drains), matching
+	 * the reference model's un-scoped flush at the same boundaries; iteration
+	 * order is id order (its map order). */
 	private directFlushCoreEffects(): void {
 		for (const e of this.subs.values()) {
 			if (e.policy !== 'newest') continue;

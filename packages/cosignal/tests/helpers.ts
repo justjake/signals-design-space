@@ -39,6 +39,7 @@ import {
 	type Subscription as ESubscription,
 	type World as EWorld,
 } from '../src/concurrent.js';
+import type { Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';
 
 /** Scenario annotation only: the specs name each batch's React lane priority
@@ -234,6 +235,23 @@ export class TwinDriver {
 		return mNode;
 	}
 
+	/**
+	 * Adopt a pre-existing PUBLIC kernel atom on both sides. The engine reads
+	 * the kernel-current value (adoptAtom — pre-registration history is
+	 * committed-only base state by construction); the model, which has no
+	 * kernel, mirrors adoption as construction-time seeding with that same
+	 * value. Neither side mints a receipt, token, or event.
+	 */
+	adoptAtom(name: string, handle: Atom<unknown>): AtomNode {
+		const eNode = this.engine.adoptAtom(name, handle);
+		const mNode = this.model.atom(name, eNode.base);
+		expect(eNode.id, 'twin adoptAtom: node ids diverged').toBe(mNode.id);
+		expect(Object.is(mNode.base, eNode.base), 'twin adoptAtom: seeded base diverged').toBe(true);
+		this.nodeMap.set(mNode, eNode);
+		this.mirror.setOrigin(eNode, eNode.base);
+		return mNode;
+	}
+
 	computed(name: string, fn: (read: (n: AnyNode) => Value, untracked: (n: AnyNode) => Value) => Value) {
 		const mNode = this.model.computed(name, fn);
 		const eNode = this.engine.computed(name, (read, untracked) =>
@@ -256,8 +274,6 @@ export class TwinDriver {
 	write(tokenId: number | undefined, node: AtomNode, op: Op): void {
 		this.both('write', () => this.model.write(tokenId, node, op), () =>
 			this.engine.write(tokenId, this.toEngine(node) as never, op));
-		// Direct-mode writes are committed-only base state: origin rides base.
-		if (this.engine.mode === 'direct') this.mirror.originsFromBase(this.engine);
 	}
 
 	bareWrite(node: AtomNode, op: Op): void {
@@ -435,7 +451,7 @@ export class TwinDriver {
 	}
 }
 
-/** A twin with the bridge registered on both sides during setup (concurrent mode). */
+/** A twin with the bridge registered on both sides during setup. */
 export function concurrent(): TwinDriver {
 	const t = new TwinDriver();
 	t.registerBridge();
