@@ -12,21 +12,31 @@ import {
 	batch,
 	createWatcher,
 } from '../src/index';
-import { Oracle } from './oracle';
+import { Oracle, UPDATE_FNS } from './oracle';
 import type { NodeDef } from './oracle';
 
 // ---- op vocabulary (concrete, replayable, shrinkable) --------------------------
 
-export type WriteSpec = { batch: number; node: number; op: 'set' | 'update' | 'dispatch'; v: number };
+export type WriteSpec = {
+	batch: number;
+	node: number;
+	op: 'set' | 'update' | 'dispatch';
+	v: number;
+	/** indexed pure update fn (UPDATE_FNS) instead of (+v) */
+	uf?: number;
+};
 
 export type Op =
 	| { t: 'atom'; v: number }
 	| { t: 'reducer'; v: number }
 	| { t: 'sum'; deps: number[] }
 	| { t: 'branch'; cond: number; ifTrue: number; ifFalse: number }
+	| { t: 'chain'; dep: number }
 	| { t: 'watcher'; node: number }
 	| { t: 'open'; deferred: boolean }
 	| { t: 'write'; w: WriteSpec } // w.batch === -1 → DIRECT (quiescent only)
+	| { t: 'urgentWrite'; w: Omit<WriteSpec, 'batch'> } // ambient urgent event batch
+	| { t: 'closeEvent' } // retire the ambient urgent batch (§6.2 close edge)
 	| { t: 'group'; writes: WriteSpec[] }
 	| { t: 'retire'; batch: number; committed: boolean }
 	| { t: 'truncate'; batch: number }
@@ -59,6 +69,8 @@ type RunState = {
 	handles: Handle[];
 	defs: NodeDef[];
 	batches: Array<{ token: number; deferred: boolean; retired: boolean }>;
+	/** index into batches of the ambient urgent event batch; -1 = none live */
+	ambient: number;
 	pass: { yielded: boolean; pin: number; tokens: number[] } | undefined;
 	engineNotifs: Array<[number, number]>;
 	watcherCount: number;
@@ -149,6 +161,49 @@ function applyOp(s: RunState, op: Op): boolean {
 			);
 			return true;
 		}
+		case 'chain': {
+			if (op.dep >= s.handles.length) {
+				return false;
+			}
+			const dep = op.dep;
+			s.defs.push({ type: 'chain', dep });
+			o.addNode({ type: 'chain', dep });
+			const handles = s.handles;
+			s.handles.push(
+				new Computed<number>({
+					fn: () => (handles[dep] as { state: number }).state + 1,
+				}),
+			);
+			return true;
+		}
+		case 'urgentWrite': {
+			if (
+				passExecuting(s)
+				|| op.w.node >= s.handles.length
+				|| !isAtomNode(s.defs[op.w.node])
+				|| !opMatchesNode(s.defs[op.w.node], op.w.op)
+			) {
+				return false;
+			}
+			if (s.ambient === -1 || s.batches[s.ambient].retired) {
+				const token = s.fork.openBatch(false);
+				s.batches.push({ token, deferred: false, retired: false });
+				s.ambient = s.batches.length - 1;
+			}
+			const w: WriteSpec = { ...op.w, batch: s.ambient };
+			engineWrite(s, w);
+			o.loggedWrite(w.node, w.op, w.v, s.batches[w.batch].token, w.uf);
+			checkBroadcasts(s, affectedFor(s, [w]));
+			return true;
+		}
+		case 'closeEvent': {
+			if (s.ambient === -1 || s.batches[s.ambient].retired) {
+				return false;
+			}
+			const bi = s.ambient;
+			s.ambient = -1;
+			return applyOp(s, { t: 'retire', batch: bi, committed: false });
+		}
 		case 'watcher': {
 			if (op.node >= s.handles.length || passExecuting(s)) {
 				return false;
@@ -189,7 +244,7 @@ function applyOp(s: RunState, op: Op): boolean {
 				}
 			});
 			for (const w of valid) {
-				o.loggedWrite(w.node, w.op, w.v, s.batches[w.batch].token);
+				o.loggedWrite(w.node, w.op, w.v, s.batches[w.batch].token, w.uf);
 			}
 			checkBroadcasts(s, affectedFor(s, valid));
 			return true;
@@ -352,8 +407,12 @@ function engineWrite(s: RunState, w: WriteSpec): void {
 		if (w.op === 'set') {
 			(h as Atom<number>).set(w.v);
 		} else if (w.op === 'update') {
-			const d = w.v;
-			(h as Atom<number>).update((x) => x + d);
+			if (w.uf !== undefined) {
+				(h as Atom<number>).update(UPDATE_FNS[w.uf]);
+			} else {
+				const d = w.v;
+				(h as Atom<number>).update((x) => x + d);
+			}
 		} else {
 			(h as ReducerAtom<number, number>).dispatch(w.v);
 		}
@@ -377,12 +436,16 @@ function applyWrites(s: RunState, writes: WriteSpec[]): boolean {
 		if (w.op === 'set') {
 			(h as Atom<number>).set(w.v);
 		} else if (w.op === 'update') {
-			const d = w.v;
-			(h as Atom<number>).update((x) => x + d);
+			if (w.uf !== undefined) {
+				(h as Atom<number>).update(UPDATE_FNS[w.uf]);
+			} else {
+				const d = w.v;
+				(h as Atom<number>).update((x) => x + d);
+			}
 		} else {
 			(h as ReducerAtom<number, number>).dispatch(w.v);
 		}
-		s.oracle.directWrite(w.node, w.op, w.v);
+		s.oracle.directWrite(w.node, w.op, w.v, w.uf);
 		checkBroadcasts(s, [0]);
 		return true;
 	}
@@ -390,7 +453,7 @@ function applyWrites(s: RunState, writes: WriteSpec[]): boolean {
 		return false;
 	}
 	engineWrite(s, w);
-	s.oracle.loggedWrite(w.node, w.op, w.v, s.batches[w.batch].token);
+	s.oracle.loggedWrite(w.node, w.op, w.v, s.batches[w.batch].token, w.uf);
 	checkBroadcasts(s, affectedFor(s, [w]));
 	return true;
 }
@@ -446,8 +509,19 @@ function maybeAssertQuiescent(s: RunState): void {
 	}
 }
 
+// FUZZ_TINY=1 runs every schedule over minimal planes, forcing closure-rebuild
+// growth on every doubling path mid-schedule, including with a pass held open
+// (§17.2 growth events).
+const tinyPlanes =
+	(globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+		?.FUZZ_TINY === '1';
+
 export function runScript(script: Op[]): { failed: false } | { failed: true; error: unknown; atOp: number } {
-	__resetEngineForTests();
+	if (tinyPlanes) {
+		__resetEngineForTests({ initialRecords: 8, initialLogRecords: 4, initialMemoRecords: 4 });
+	} else {
+		__resetEngineForTests();
+	}
 	const fork = new ForkDouble();
 	attachFork(fork);
 	const s: RunState = {
@@ -456,6 +530,7 @@ export function runScript(script: Op[]): { failed: false } | { failed: true; err
 		handles: [],
 		defs: [],
 		batches: [],
+		ambient: -1,
 		pass: undefined,
 		engineNotifs: [],
 		watcherCount: 0,
@@ -519,7 +594,10 @@ export function genScript(seed: number, steps: number): Op[] {
 			}
 		} else if (r < 0.14) {
 			// computed: branch shapes are the divergence workhorse
-			if (rnd() < 0.5 && nodes.length >= 1) {
+			const shape = rnd();
+			if (shape < 0.15) {
+				script.push({ t: 'chain', dep: pick(nodes.length) });
+			} else if (shape < 0.5 && nodes.length >= 1) {
 				const deps = [pick(nodes.length)];
 				if (rnd() < 0.6) {
 					deps.push(pick(nodes.length));
@@ -542,14 +620,28 @@ export function genScript(seed: number, steps: number): Op[] {
 			script.push({ t: 'open', deferred });
 			batches.push({ deferred, retired: false });
 		} else if (r < 0.48 && !(passOpen && !yielded)) {
-			const w = writeSpec();
-			if (w !== undefined) {
-				script.push({ t: 'write', w });
-			} else if (batches.every((b) => b.retired) && !passOpen && atomIndices().length > 0) {
+			const eventish = rnd();
+			if (eventish < 0.18 && atomIndices().length > 0) {
+				// event-scoped urgent write (ambient batch; §6.2 mint edge)
 				const atoms = atomIndices();
 				const node = atoms[pick(atoms.length)];
-				const op = nodes[node] === 'reducer' ? 'dispatch' : 'set';
-				script.push({ t: 'write', w: { batch: -1, node, op, v: pick(10) } });
+				const op = nodes[node] === 'reducer' ? ('dispatch' as const) : ('set' as const);
+				script.push({ t: 'urgentWrite', w: { node, op, v: pick(10) } });
+			} else if (eventish < 0.24) {
+				script.push({ t: 'closeEvent' });
+			} else {
+				const w = writeSpec();
+				if (w !== undefined) {
+					if (w.op === 'update' && rnd() < 0.4) {
+						w.uf = pick(4); // indexed pure fns, incl. identity (cutoffs)
+					}
+					script.push({ t: 'write', w });
+				} else if (batches.every((b) => b.retired) && !passOpen && atomIndices().length > 0) {
+					const atoms = atomIndices();
+					const node = atoms[pick(atoms.length)];
+					const op = nodes[node] === 'reducer' ? ('dispatch' as const) : ('set' as const);
+					script.push({ t: 'write', w: { batch: -1, node, op, v: pick(10) } });
+				}
 			}
 		} else if (r < 0.53 && !(passOpen && !yielded)) {
 			const writes: WriteSpec[] = [];
@@ -616,6 +708,7 @@ export function genScript(seed: number, steps: number): Op[] {
 	if (passOpen) {
 		script.push({ t: 'endPass' });
 	}
+	script.push({ t: 'closeEvent' });
 	for (let bi = 0; bi < batches.length; ++bi) {
 		if (!batches[bi].retired) {
 			script.push({ t: 'retire', batch: bi, committed: true });

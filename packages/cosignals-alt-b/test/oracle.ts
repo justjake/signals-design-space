@@ -20,7 +20,16 @@ export type NodeDef =
 	| { type: 'atom'; initial: number }
 	| { type: 'reducer'; initial: number } // reducer: (s, a) => s + a
 	| { type: 'sum'; deps: number[] } // sum of node values
-	| { type: 'branch'; cond: number; ifTrue: number; ifFalse: number }; // cond odd?
+	| { type: 'branch'; cond: number; ifTrue: number; ifFalse: number } // cond odd?
+	| { type: 'chain'; dep: number }; // dep + 1
+
+/** Indexed pure update functions (shared with alt-a's pinned cases). */
+export const UPDATE_FNS: ReadonlyArray<(x: number) => number> = [
+	(x) => x + 1,
+	(x) => (x * 2) % 1000,
+	(x) => x,
+	(x) => x - 3,
+];
 
 export type OracleWorld =
 	| { kind: 'newest' }
@@ -33,6 +42,8 @@ type Entry = {
 	seq: number;
 	op: 'set' | 'update' | 'dispatch';
 	payload: number;
+	/** when set, UPDATE applies UPDATE_FNS[uf] instead of (+payload) */
+	uf?: number;
 	token: number;
 	applied: boolean;
 	retiredSeq: number; // 0 = pending
@@ -76,17 +87,20 @@ export class Oracle {
 		return this.watchers.length - 1;
 	}
 
-	directWrite(idx: number, op: Entry['op'], payload: number): void {
+	directWrite(idx: number, op: Entry['op'], payload: number, uf?: number): void {
 		const t = this.tick();
-		this.entries.get(idx)!.push({ seq: t, op, payload, token: 0, applied: true, retiredSeq: t });
+		this.entries
+			.get(idx)!
+			.push({ seq: t, op, payload, uf, token: 0, applied: true, retiredSeq: t });
 	}
 
-	loggedWrite(idx: number, op: Entry['op'], payload: number, token: number): void {
+	loggedWrite(idx: number, op: Entry['op'], payload: number, token: number, uf?: number): void {
 		const t = this.tick();
 		this.entries.get(idx)!.push({
 			seq: t,
 			op,
 			payload,
+			uf,
 			token,
 			applied: (token & 1) === 0, // urgent writes are applied (§9.4)
 			retiredSeq: 0,
@@ -145,7 +159,7 @@ export class Oracle {
 					if (e.op === 'set') {
 						acc = e.payload;
 					} else if (e.op === 'update') {
-						acc = acc + e.payload;
+						acc = e.uf !== undefined ? UPDATE_FNS[e.uf](acc) : acc + e.payload;
 					} else {
 						acc = acc + e.payload; // reducer: (s, a) => s + a
 					}
@@ -163,6 +177,8 @@ export class Oracle {
 				return this.value(def.cond, world) % 2 === 1
 					? this.value(def.ifTrue, world)
 					: this.value(def.ifFalse, world);
+			case 'chain':
+				return this.value(def.dep, world) + 1;
 		}
 	}
 

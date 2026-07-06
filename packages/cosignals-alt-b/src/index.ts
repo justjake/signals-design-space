@@ -6,6 +6,7 @@ export {
 	effectScope,
 	batch,
 	untracked,
+	startSignalTransition,
 	configure,
 	attachFork,
 	detachFork,
@@ -17,6 +18,7 @@ export {
 } from './engine';
 export type {
 	AtomOptions,
+	AtomCtx,
 	ReducerAtomOptions,
 	ComputedOptions,
 	ComputedCtx,
