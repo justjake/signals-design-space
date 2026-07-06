@@ -2763,7 +2763,17 @@ export class CosignalBridge {
 			const depFlags = W[dep + AF.FLAGS]!;
 			if ((W[sub + AF.FLAGS]! & AFlag.DIRTY) !== 0) {
 				dirty = true;
-			} else if ((depFlags & (AFlag.MUTABLE | AFlag.DIRTY)) === (AFlag.MUTABLE | AFlag.DIRTY)) {
+			} else if (
+				(depFlags & (AFlag.MUTABLE | AFlag.DIRTY)) === (AFlag.MUTABLE | AFlag.DIRTY)
+				// Cold base (decay §4.3 evicted the value: MUTABLE kept, VALID
+				// cleared, column dropped) — the walk's twin of aServe's
+				// evicted-to-cold arm: with no folded value there is nothing to
+				// validate against, so a cold dep IS dirt and must refold on
+				// consult. Without this arm a cold base is invisible (neither
+				// DIRTY nor PENDING) and a top-first serve stale-serves its
+				// cone (the B2-documented S-A bug; pinned in arena-sa3).
+				|| (depFlags & (AFlag.MUTABLE | AFlag.VALID)) === AFlag.MUTABLE
+			) {
 				if (this.aUpdateAndShallow(a, dep)) {
 					dirty = true;
 				}
