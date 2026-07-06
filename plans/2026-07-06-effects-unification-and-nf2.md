@@ -36,6 +36,16 @@
 >    mandatory lifetime classification for arenas/marks/boxes. The
 >    revision gets a focused re-review before any stage runs.
 
+> **RULINGS RESOLVED (owner, 2026-07-06): RUL-5** — infrastructure
+> exemption GRANTED; the contract's four-lifetime rule is now scoped to
+> application/history state (amendment recorded in the contract §2);
+> the pool / settlement tap+queue / policy columns stay outside the
+> taxonomy with mandatory per-row lifetime+reclamation documentation.
+> **RUL-6** — the consumer-refcount reclamation ships; the
+> fork-protocol root-destroy event is PRE-AUTHORIZED as the fallback if
+> refcounting proves insufficient. S-A's ruling gate is CLEAR pending
+> the third-pass verifier.
+
 > **STATUS: DRAFT — plan only, no code has changed.** Written for
 > adversarial review (codex + a fresh no-priors reviewer) before any
 > implementation, per this repo's process. Every mechanism, invariant,

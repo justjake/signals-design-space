@@ -100,7 +100,12 @@ Every requirement line carries at least one provenance tag:
 
 **The classification rule: every new feature must classify each piece of
 state it introduces into exactly one of these four lifetimes BEFORE any
-data structure is chosen.** The adversarial reviews of 2026-07-05 found
+data structure is chosen.** *Scope (amended by owner ruling 2026-07-06,
+RUL-5): the rule governs application and history state — anything whose
+content a consumer could ever observe. Mechanism infrastructure (object
+pools, notification plumbing, per-node policy columns) is outside the
+taxonomy but must still carry per-row documentation of its actual
+lifetime and reclamation.* [ruling 2026-07-06: RUL-5] The adversarial reviews of 2026-07-05 found
 that every design failure in this project's history was a lifetime
 misclassification — state filed under machinery built for a different
 lifetime (the codex review's closing diagnosis: the failed plan
