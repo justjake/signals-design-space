@@ -520,8 +520,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 
 	test('quiet-mode interplay: observation transitions need no armed pipeline and leave none armed', async () => {
 		h = makeHarness();
-		h.bridge.setRetainEvents(false); // production posture: no event consumer…
-		h.bridge.setQuietWrites(true); // …and the quiet short-circuit armed
+		h.bridge.setRetainEvents(false); // production posture: no event consumer (quiet derives on its own)
 		const { atom: a, log } = observedAtom(0);
 		expect(h.bridge.quiet).toBe(true);
 		function View() {

@@ -119,7 +119,9 @@ describe('R11 runtime enable/disable', () => {
 		expect(tr.attached).toBe(false);
 		b.bareWrite(a, { kind: 'set', value: 3 });
 		expect(tr.stats().recorded).toBe(recorded); // capture frozen, still decodable
-		expect(tr.events('write').length).toBeGreaterThan(0);
+		// The bridge was at rest for every write above, so the captured records
+		// are quiet folds (the production default write path), not receipts.
+		expect(tr.events('quiet-write').length).toBeGreaterThan(0);
 
 		const tr2 = attachTracer(b); // a later session starts fresh
 		b.bareWrite(a, { kind: 'set', value: 4 });

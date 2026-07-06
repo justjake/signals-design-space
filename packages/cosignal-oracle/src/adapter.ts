@@ -21,8 +21,12 @@
 import { CosignalModel, type ModelEvent, type Value } from './model.js';
 import { applyOneOp, buildTopology, type ScheduleOp } from './schedule.js';
 
-/** Event kinds an engine must reproduce 1:1, in order. Others are model-internal. */
+/** Event kinds an engine must reproduce 1:1, in order. Others are model-internal.
+ * 'quiet-write' is compared so the harness referees the quiet-vs-receipt
+ * write-path decision itself: an engine that folds where the model appends a
+ * receipt (or vice versa) diverges at the exact step, not just downstream. */
 const COMPARED_EVENTS: ModelEvent['type'][] = [
+	'quiet-write',
 	'delivery',
 	'suppressed',
 	'reconcile-correction',

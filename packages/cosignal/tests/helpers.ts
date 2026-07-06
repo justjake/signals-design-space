@@ -35,6 +35,7 @@ import {
 	type AnyNode as ENode,
 	type AtomNode as EAtomNode,
 	type CosignalBridge,
+	type Op as EOp,
 	type Pass as EPass,
 	type Subscription as ESubscription,
 	type World as EWorld,
@@ -333,13 +334,32 @@ export class TwinDriver {
 	}
 
 	write(tokenId: number | undefined, node: AtomNode, op: Op): void {
+		const mark = this.model.events.length;
 		this.both('write', () => this.model.write(tokenId, node, op), () =>
 			this.engine.write(tokenId, this.toEngine(node) as never, op));
+		if (tokenId === undefined) this.mirrorQuietFold(node, op, mark);
 	}
 
 	bareWrite(node: AtomNode, op: Op): void {
+		const mark = this.model.events.length;
 		this.both('bareWrite', () => this.model.bareWrite(node, op), () =>
 			this.engine.bareWrite(this.toEngine(node) as never, op));
+		this.mirrorQuietFold(node, op, mark);
+	}
+
+	/** A quiet fold advances the engine's base with no receipt and no
+	 * compaction, so the mirror's `onCompact` feed never sees it. The driver
+	 * appends the fold's ledger entry to the mirror archive itself — exactly
+	 * what the model's quietWrite does to ITS archive — so the view's
+	 * full-history shadow fold (retention invariant) keeps reconstructing
+	 * every world. Detection is by the model's own 'quiet-write' event
+	 * (compareStreams already proved the engine minted the same one). */
+	private mirrorQuietFold(node: AtomNode, op: Op, mark: number): void {
+		for (const e of this.model.events.slice(mark)) {
+			if (e.type !== 'quiet-write') continue;
+			const eNode = this.toEngine(node) as EAtomNode;
+			this.mirror.archiveOf(eNode).push({ op: op as EOp, token: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
+		}
 	}
 
 	scopeWrite(tokenId: number, node: AtomNode, op: Op): void {

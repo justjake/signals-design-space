@@ -30,7 +30,8 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log };
 }
 
-/** A fresh registered bridge in referee posture (events retained, quiet off). */
+/** A fresh registered bridge in referee posture (events retained; retention
+ * observes only — quiet arming follows the production derivation). */
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
@@ -156,8 +157,7 @@ describe('observation union at the bridge', () => {
 
 	it('quiet mode: observation transitions need no armed pipeline (production posture)', async () => {
 		const b = __newBridgeForTest();
-		b.setRetainEvents(false); // no event consumer…
-		b.setQuietWrites(true); // …quiet short-circuit armed (production defaults)
+		b.setRetainEvents(false); // production posture (quiet arms by derivation alone)
 		b.registerBridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);

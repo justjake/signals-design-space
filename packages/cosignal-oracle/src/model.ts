@@ -62,7 +62,11 @@ export type AtomNode = {
 	base: Value;
 	baseSeq: number;
 	tape: Receipt[];
-	/** Full history for invariant 4 (receipt-retention soundness): compacted receipts move here. */
+	/** Full history for invariant 4 (receipt-retention soundness): compacted
+	 * receipts move here, and quiet folds append their receipt-shaped ledger
+	 * entries here directly (see quietWrite — the fold IS already-retired
+	 * history the moment it lands, and every tape is empty at that moment,
+	 * so appending keeps the archive in sequence order). */
 	archive: Receipt[];
 	/** The value the atom was created with (shadow-fold origin). */
 	origin: Value;
@@ -256,6 +260,10 @@ export type World =
 export type ModelEvent =
 	| { type: 'write'; node: string; token: TokenId; slot: SlotId; seq: number }
 	| { type: 'write-dropped'; node: string; token: TokenId }
+	/** A quiet-mode fold: a bare write while nothing was pending folded
+	 * straight into base — no token, no receipt, no slot; `seq` is the
+	 * fold's minted sequence (the atom's new baseSeq and the cas clock). */
+	| { type: 'quiet-write'; node: string; seq: number }
 	| { type: 'delivery'; watcher: string; token: TokenId; slot: SlotId; seq: number; mode: 'fresh' | 'interleaved' }
 	| { type: 'suppressed'; watcher: string; token: TokenId; slot: SlotId; seq: number }
 	| { type: 'core-effect-run'; effect: string; value: Value }
@@ -703,12 +711,85 @@ export class CosignalModel {
 	// ------------------------------------------------------ the write path
 
 	/**
+	 * The quiet state, derived on demand (the model recomputes everything;
+	 * the engine keeps the same four-condition derivation as a recomputed
+	 * boolean): registered AND zero live tokens AND zero open passes AND
+	 * every tape compacted. While quiet, a bare write is one direct fold —
+	 * see quietWrite.
+	 */
+	private quietNow(): boolean {
+		if (!this.registered) return false;
+		if (this.liveTokens().length > 0) return false;
+		if (this.livePins().length > 0) return false;
+		for (const n of this.nodes.values()) {
+			if (n.kind === 'atom' && n.tape.length > 0) return false;
+		}
+		return true;
+	}
+
+	/**
+	 * The quiet-mode fold (mirrors the engine's __quietWrite): while NOTHING
+	 * is pending, a bare write folds directly into base — no token, no
+	 * receipt, no delivery walk. The op folds over base under the fold-purity
+	 * guards, the same equality drop as the write path's empty-tape drop
+	 * applies (silently — there is no token to attribute a drop to), and an
+	 * accepted fold advances base, baseSeq, and the committed-advance clock
+	 * together on one minted sequence, then emits ONE 'quiet-write' event.
+	 * Observers reconcile value-gated at the fold (it is a committed-truth
+	 * boundary for every root): core effects flush over the refreshed union
+	 * reachability, live watchers correct SILENTLY (the engine's quiet
+	 * corrections mint no event either), and committed effects re-check once,
+	 * as at any boundary operation. The fold also appends a receipt-shaped
+	 * entry to the atom's ARCHIVE (retiredSeq = seq: the fold is permanent
+	 * history the moment it lands) so invariant 4's full-history shadow fold
+	 * keeps reconstructing every world; token/slot carry the reserved 0/-1 —
+	 * archived retired history resolves visibility through retiredSeq alone.
+	 */
+	private quietWrite(node: AtomNode, op: Op): void {
+		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
+		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
+		const prev = node.base;
+		const next = this.applyOp(node, op, prev);
+		if (this.inCallback(() => node.equals(next, prev))) {
+			return; // equality drop against base — the tape is empty by the quiet invariant
+		}
+		node.base = next;
+		node.baseSeq = this.cas = this.mintSeq();
+		node.archive.push({ op, token: 0, slot: -1, seq: node.baseSeq, retiredSeq: node.baseSeq });
+		this.log({ type: 'quiet-write', node: node.name, seq: node.baseSeq });
+		// Core effects observe the newest world, which the fold just advanced;
+		// same union-reachability flush as the write path's.
+		this.refreshEdgesAllWorlds();
+		this.flushCoreEffects(this.reachableFrom(node.id));
+		// Value-gated watcher reconciliation against committed truth (which
+		// the fold moved for every root). Silent by exact mirroring: the
+		// engine's quiet corrections mint no event.
+		for (const w of this.watchers.values()) {
+			if (!w.live) continue;
+			const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: w.root });
+			if (!Object.is(now, w.lastRenderedValue)) {
+				w.lastRenderedValue = now; // the urgent pre-paint re-render
+				w.dedup.clear(); // dedup bits re-arm at the watcher's render
+			}
+		}
+		// EF2 boundary: a quiet fold moves committed truth for every root
+		// (quiet ⇔ no open passes, so no frame can defer the re-check).
+		this.revalidateReactEffects();
+	}
+
+	/**
 	 * A write belongs to the batch context in which it executes; a bare
-	 * (context-free) write goes to the ambient default batch. This is the
-	 * same rule React's own transitions have — an async continuation runs on
+	 * (context-free) write goes to the ambient default batch — unless the
+	 * model is QUIET, in which case the write folds directly (no ambient
+	 * batch is minted while nothing is pending). This is the same rule
+	 * React's own transitions have — an async continuation runs on
 	 * a fresh stack with no ambient transition context.
 	 */
 	bareWrite(node: AtomNode, op: Op): void {
+		if (this.quietNow()) {
+			this.quietWrite(node, op);
+			return;
+		}
 		let ambient = this.ambientToken === undefined ? undefined : this.tokens.get(this.ambientToken);
 		if (ambient === undefined || ambient.state !== 'live') {
 			ambient = this.openBatch({ ambient: true });

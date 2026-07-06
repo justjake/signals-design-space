@@ -202,10 +202,10 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
  */
 export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __syncNamingEvents(n: number): void } {
 	const b = __newBridgeForTest();
-	// Referee mode: the model has always-receipt semantics — the engine's
-	// quiet-mode short-circuit stays DISABLED for lockstep (production
-	// defaults it ON; tests/quiet-mode.spec.ts polices the short-circuit).
-	b.setQuietWrites(false); // explicit, though __newBridgeForTest already defaults it off
+	// PRODUCTION write semantics: the bridge quiet-folds bare writes at rest
+	// and the model mirrors the same derivation and fold, so the corpus
+	// referees the real default write path ('quiet-write' is a compared
+	// event; tests/quiet-mode.spec.ts pins the arming schedules by hand).
 	// ARMED S-B divergence check: every public operation's epilogue serves
 	// every live arena's shadows from the arena's own walks and compares
 	// against fold-truth (plus the structural validator) — the corpus runs
@@ -375,7 +375,10 @@ export function diffAgainstModelTolerant(
 // notification (delivery / suppression / mount-corrective) since that
 // render — otherwise S-B's routing silently stopped notifying. Scoped per
 // m3 to the class it can police, excluding its counterexamples:
-//   - quiet-mode corrections (referee bridges run quiet OFF — vacuous);
+//   - quiet-mode corrections (a quiet fold's corrections mint no
+//     'reconcile-correction' event — the fold's own 'quiet-write' event is
+//     its whole stream — so DPC never sees them; and quiet requires zero
+//     live tokens, so no retire/settle boundary observes a quiet window);
 //   - mount-window repairs ('mount-urgent-correction' is a different type);
 //   - older-write visibility flips (the causing token's lastWriteSeq must
 //     POSTDATE the watcher's window for the assert to arm);

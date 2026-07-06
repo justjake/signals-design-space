@@ -1,17 +1,17 @@
 /**
  * Quiet-mode writes (Phase 1b) — the owner-ratified short-circuit: while
  * NOTHING is pending (no live batch token, no open render pass, every tape
- * compacted, no event consumer), an unclassified write to a REGISTERED atom
- * folds directly — committed base and the kernel advance together; no
- * receipt, no tape append, no batch token (the ambient batch is NOT minted),
- * no delivery walk, no bridge event. The pipeline arms while anything is
- * pending and re-arms at the last retirement / pass close.
+ * compacted), an unclassified write to a REGISTERED atom folds directly —
+ * committed base and the kernel advance together; no receipt, no tape
+ * append, no batch token (the ambient batch is NOT minted), no delivery
+ * walk. The pipeline arms while anything is pending and re-arms at the last
+ * retirement / pass close. Observation never perturbs the derivation: an
+ * event consumer (retained log, attached tracer) gets ONE 'quiet-write'
+ * event per accepted fold and the write path stays the quiet one.
  *
- * This file is the quiet-mode referee: the oracle models always-receipt
- * semantics, so the lockstep corpus runs the engine with the short-circuit
- * DISABLED (referee mode — `__newBridgeForTest` defaults `setQuietWrites(false)`,
- * and retained events disarm quiet anyway); the arming/disarming schedules
- * below are pinned directly instead.
+ * The oracle mirrors the same derivation and fold, so the lockstep corpus
+ * referees quiet semantics directly ('quiet-write' is a compared event);
+ * this file pins the arming/disarming schedules by hand.
  */
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
@@ -25,11 +25,11 @@ import {
 	type CosignalBridge,
 } from '../src/index.js';
 
-/** A fresh bridge in PRODUCTION posture: quiet ON, no event retention. */
+/** A fresh bridge in PRODUCTION posture: no event retention (quiet arms by
+ * derivation alone — there is no semantic switch to flip). */
 function quietBridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.setRetainEvents(false);
-	b.setQuietWrites(true);
 	b.registerBridge();
 	return b;
 }
@@ -202,16 +202,30 @@ describe('quiet-mode writes', () => {
 		expect(b.newestValue(a)).toBe(3);
 	});
 
-	it('referee interlock: an event consumer keeps always-receipt semantics even with quietWrites enabled', () => {
+	it('event retention does not disarm quiet: writes still fold quietly AND their events appear', () => {
 		const b = __newBridgeForTest(); // events retained (referee posture)
-		b.setQuietWrites(true); // the semantic switch alone must not fold past a referee
 		b.registerBridge();
-		expect(b.quiet).toBe(false); // eventsOn disarms quiet
+		expect(b.quiet).toBe(true); // observation never changes which write path executes
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(1);
-		expect(b.ambientToken).toBeDefined(); // ambient batch minted: full pipeline
-		expect(a.tp.materialize()).toHaveLength(1);
+		expect(b.ambientToken).toBeUndefined(); // NO ambient batch: the quiet fold ran
+		expect(a.tp.materialize()).toHaveLength(0); // no receipt
+		expect(b.eventsOfType('write').length).toBe(0);
+		expect(b.eventsOfType('quiet-write')).toEqual([{ type: 'quiet-write', node: 'a', seq: a.baseSeq }]);
+		expect(b.newestValue(a)).toBe(1);
+		expect(b.committedValue(a, 'A')).toBe(1); // base advanced WITH the kernel
+		// The equality drop stays silent — no token exists to attribute a drop to.
+		(a.handle as Atom<number>).set(1);
+		expect(b.eventsOfType('quiet-write')).toHaveLength(1);
+		expect(b.eventsOfType('write-dropped')).toHaveLength(0);
+		// Armed semantics still mint receipts + 'write' events past the same consumer.
+		const t = b.openBatch();
+		expect(b.quiet).toBe(false);
+		(a.handle as Atom<number>).set(2);
 		expect(b.eventsOfType('write').length).toBe(1);
+		b.retire(b.ambientToken!, true);
+		b.retire(t.id, true);
+		expect(b.quiet).toBe(true); // and quiet re-arms with the consumer still attached
 	});
 
 	it('quiesce() interoperates: epoch reset preserves quiet arming and folds keep working', () => {

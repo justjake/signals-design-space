@@ -601,6 +601,10 @@ const NEWEST: World = { kind: 'newest' };
 export type BridgeEvent =
 	| { type: 'write'; node: string; token: TokenId; slot: SlotId; seq: Seq }
 	| { type: 'write-dropped'; node: string; token: TokenId }
+	/** A quiet-mode fold: the whole write while nothing was pending — no
+	 * token, no receipt, no slot; `seq` is the fold's minted sequence (the
+	 * atom's new baseSeq and the committed-advance clock). */
+	| { type: 'quiet-write'; node: string; seq: Seq }
 	| { type: 'delivery'; watcher: string; token: TokenId; slot: SlotId; seq: Seq; mode: 'fresh' | 'interleaved' }
 	| { type: 'suppressed'; watcher: string; token: TokenId; slot: SlotId; seq: Seq }
 	| { type: 'core-effect-run'; effect: string; value: Value }
@@ -797,11 +801,9 @@ export function registerReactBridge(options?: BridgeOptions): CosignalBridge {
 export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
 	const b = new CosignalBridge(options);
 	b.setRetainEvents(true); // the referee/tests read the event log; production bridges keep it off
-	// REFEREE MODE: the oracle models always-receipt semantics, so test/lockstep
-	// bridges run with the quiet-mode short-circuit disabled (production
-	// bridges from registerReactBridge() default it ON). The dedicated
-	// quiet-mode suite re-enables it explicitly.
-	b.setQuietWrites(false);
+	// Retention observes; it does not perturb: the bridge keeps PRODUCTION
+	// write semantics (quiet folds while nothing is pending), and the oracle
+	// mirrors them — lockstep referees the real default write path.
 	return b;
 }
 
@@ -1422,7 +1424,8 @@ export class CosignalBridge {
 	set trace(v: TraceHooks | undefined) {
 		this._trace = v;
 		this.eventsOn = this._retainEvents || v !== undefined;
-		this.recomputeQuiet(); // an event consumer (dis)arms quiet mode
+		// Deliberately NO quiet recompute: attaching a tracer (or retaining
+		// events) observes the write path, it never changes which one runs.
 	}
 
 	/**
@@ -1436,11 +1439,13 @@ export class CosignalBridge {
 	eventsOn = false;
 	private _retainEvents = false;
 
-	/** Referee surface — retain the BridgeEvent log (tests/diagnostics). */
+	/** Referee surface — retain the BridgeEvent log (tests/diagnostics).
+	 * Retention does NOT disarm quiet mode: quiet folds mint 'quiet-write'
+	 * events for whoever is listening, so the stream stays complete while
+	 * the write path stays the production one. */
 	setRetainEvents(on: boolean): void {
 		this._retainEvents = on;
 		this.eventsOn = on || this._trace !== undefined;
-		this.recomputeQuiet(); // an event consumer (dis)arms quiet mode
 	}
 
 	// ---- direct listeners (the bindings' consumption surface; no allocation) ----
@@ -1518,7 +1523,12 @@ export class CosignalBridge {
 	 * kernel write hook, which arms at registration — anything earlier is
 	 * plain kernel state that never involves a bridge. The referee-only write
 	 * surface therefore throws on an unregistered bridge (fail fast, never limp). */
-	private registered = false;
+	private _registered = false;
+	/** Has a concurrent host registered this bridge yet? (Read-only; adapters
+	 * use it to register an injected bridge exactly once.) */
+	get registered(): boolean {
+		return this._registered;
+	}
 	/** The one global sequence line every receipt/pin/stamp is a point on. */
 	seq: Seq = 0;
 	/** Committed-advance counter, in sequence units: bumped whenever committed
@@ -1591,50 +1601,34 @@ export class CosignalBridge {
 
 	// ---- quiet mode (Phase 1b) --------------------------------------------------
 	/**
-	 * The quiet-mode SEMANTIC switch (production default ON). While the
-	 * bridge is QUIET — nothing pending: no live batch token, no open render
-	 * pass, every tape compacted — an unclassified write to a registered atom
-	 * FOLDS DIRECTLY: committed base and the kernel advance together and no
-	 * receipt, tape append, token, delivery walk, or bridge event is minted.
-	 * The concurrency pipeline arms only while something is actually pending;
-	 * a transition that starts later begins from committed base, which the
-	 * folds already advanced — there is no history to reconstruct.
-	 *
-	 * Referee surface: the oracle models always-receipt semantics, so
-	 * lockstep/twin drivers run the engine with this OFF (see
-	 * `__newBridgeForTest`) and the dedicated quiet-mode suite polices the
-	 * short-circuit directly (tests/quiet-mode.spec.ts).
-	 */
-	quietWrites = true;
-	/**
 	 * The ARMED quiet state — the one boolean the write path branches on,
 	 * recomputed only at state transitions (batch open/retire, pass
-	 * start/end, registration, event-retention/tracer changes): quiet ⇔
-	 * quietWrites AND bridge registered AND zero live tokens AND zero open passes AND
-	 * every tape compacted AND no event consumer. Event consumers (a referee
-	 * retaining the log, an attached tracer) disarm quiet so their streams
-	 * stay complete — production apps have neither.
+	 * start/end, registration): quiet ⇔ bridge registered AND zero live
+	 * tokens AND zero open passes AND every tape compacted. While QUIET, an
+	 * unclassified write to a registered atom FOLDS DIRECTLY: committed base
+	 * and the kernel advance together and no receipt, tape append, token, or
+	 * delivery walk is minted (a listening event consumer still gets one
+	 * 'quiet-write' event — observation never changes which write path
+	 * executes). The concurrency pipeline arms only while something is
+	 * actually pending; a transition that starts later begins from committed
+	 * base, which the folds already advanced — there is no history to
+	 * reconstruct.
+	 *
+	 * This is the production default write path; the oracle mirrors the same
+	 * derivation and fold, so lockstep/twin drivers referee it directly
+	 * (tests/quiet-mode.spec.ts pins the arming schedules by hand).
 	 * @internal — read by the module-level host write hook; treat as private.
 	 */
 	quiet = false;
 
-	/** Referee surface — disables/enables the quiet-mode short-circuit (production defaults ON; lockstep drivers run with it OFF). */
-	setQuietWrites(on: boolean): void {
-		this.quietWrites = on;
-		this.recomputeQuiet();
-	}
-
 	private recomputeQuiet(): void {
-		// The registered clause is load-bearing: event-retention/tracer/
-		// quietWrites toggles recompute BEFORE registration, and quiet must
-		// never arm on an unregistered test bridge (its write path throws).
+		// The registered clause is load-bearing: quiet must never arm on an
+		// unregistered test bridge (its write path throws).
 		this.quiet =
-			this.quietWrites
-			&& this.registered
+			this._registered
 			&& this.liveTokenCount === 0
 			&& this.openPassByRoot.size === 0
-			&& this.dirtyAtoms.size === 0
-			&& !this.eventsOn;
+			&& this.dirtyAtoms.size === 0;
 	}
 	/** Event-stream base offset (0 unless a capacity cap drops old events). */
 	private eventsBase = 0;
@@ -1924,8 +1918,8 @@ export class CosignalBridge {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new BridgeScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this.registered) throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
-		this.registered = true;
+		if (this._registered) throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
+		this._registered = true;
 		activeBridge = this;
 		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
 		// NF2 S-A: arm the settlement tap (ONE closure; consulted at FIRE
@@ -3772,7 +3766,7 @@ export class CosignalBridge {
 	 * lane/priority itself stays React's: the engine never consults it —
 	 * scheduling decisions ride the shim's forkToken map.) */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Token {
-		if (!this.registered) throw new BridgeScheduleError('batches require a registered bridge — register the React bridge first');
+		if (!this._registered) throw new BridgeScheduleError('batches require a registered bridge — register the React bridge first');
 		if (this.liveTokenCount >= SLOT_COUNT) {
 			throw new BridgeScheduleError('at most 31 batch tokens may be live at once (one per React lane)');
 		}
@@ -3882,8 +3876,12 @@ export class CosignalBridge {
 	 * reconciled value-gated, exactly like a durable drain (corrections for
 	 * watchers, re-runs for committed React effects; core effect()s are
 	 * kernel subscribers — the direct kernel apply itself flushes them).
-	 * No receipt, no token, no tape append, no delivery walk,
-	 * no bridge event (event consumers disarm quiet). @internal
+	 * No receipt, no token, no tape append, no delivery walk. Observation:
+	 * when an event consumer is listening (a referee retaining the log, an
+	 * attached tracer) the accepted fold mints ONE 'quiet-write' event
+	 * through the log() waist — with no consumer that is one dead branch,
+	 * and observation never changes which write path executes (equality
+	 * drops stay silent: there is no token to attribute a drop to). @internal
 	 */
 	__quietWrite(node: AtomNode, kind: OpKind, payload: unknown): void {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
@@ -3895,6 +3893,7 @@ export class CosignalBridge {
 		}
 		node.base = next;
 		node.baseSeq = this.cas = ++this.seq; // advance the base + committed-advance clocks together (mintSeq, inlined)
+		if (this.eventsOn) this.log({ type: 'quiet-write', node: node.name, seq: node.baseSeq });
 		// Direct kernel apply: the plain write tail, no public-method re-entry
 		// (the host seam already ran — policy checked, op folded).
 		__hostApplySet(node.handle, next);
@@ -3993,7 +3992,7 @@ export class CosignalBridge {
 	}
 
 	private writeInner(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
-		if (!this.registered) throw new BridgeScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
+		if (!this._registered) throw new BridgeScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
 		if (tokenId === undefined) {
 			this.bareWrite(node, op);
 			return;
@@ -4982,7 +4981,9 @@ export class CosignalBridge {
 	 * (settlement drain, quiet drain, durable drain, mount fixup) share this
 	 * body so the triple can never drift. Events by cause: drains log
 	 * 'reconcile-correction'; mounts log 'mount-urgent-correction'; quiet
-	 * folds log nothing (quiet ⇒ events off, kept explicit here). Returns
+	 * folds log nothing here — the fold's own 'quiet-write' event is the
+	 * whole quiet stream, and the oracle's mirrored quiet corrections are
+	 * silent too, so the streams stay comparable. Returns
 	 * true iff a correction fired. */
 	private correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
 		if (!this.changedValue(wNode, w.lastRenderedValue, now)) return false;

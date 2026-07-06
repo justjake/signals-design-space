@@ -53,7 +53,7 @@ import { Atom, Computed, effect, effectScope, __newBridgeForTest, type CosignalB
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
-/** Fresh registered bridge in referee posture (events retained, quiet off). */
+/** Fresh registered bridge in referee posture (events retained; quiet arms by the production derivation). */
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
@@ -258,7 +258,11 @@ describe('§2 A4 — adoption stamp vs registry', () => {
 		expect(b1.nodeFor(handle as Atom<unknown>)).toBe(n1); // registry probe backstops the foreign stamp
 		expect(b2.nodeFor(handle as Atom<unknown>)).toBe(n2); // (and re-stamps per bridge)
 		handle.set(1); // public write → the ACTIVE bridge's node, whatever the stamp said last
-		expect(n2.tp.length).toBe(1);
+		// b2 is at rest, so the write is a quiet fold: base advances on the
+		// ACTIVE bridge's node (no receipt is minted while nothing is pending).
+		expect(n2.base).toBe(1);
+		expect(n2.tp.length).toBe(0);
+		expect(n1.base).toBe(0); // the foreign bridge's node saw nothing
 		expect(n1.tp.length).toBe(0);
 	});
 });

@@ -62,6 +62,7 @@
  * permanent history; a *world* is one self-consistent view of all values.
  *
  *  write                {node, op, token, slot, seq}         a write was recorded: a receipt joined the atom's history
+ *  quiet-write          {node, seq}                          a quiet-mode fold: nothing was pending, so the write folded straight into committed state (no batch, no receipt)
  *  write-dropped        {node, token}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
  *  batch-open           {token, action, ambient}             a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
  *  batch-settle         {token, committed}                   an async action's promise settled; its retirement follows
@@ -209,7 +210,7 @@ const K = {
 	rootCommit: 14, delivery: 15, suppressed: 16, evalDone: 17,
 	mountCorrective: 18, mountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
 	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
-	clockSync: 25, truncation: 26,
+	clockSync: 25, truncation: 26, quietWrite: 27,
 } as const;
 
 const KIND_NAMES = [
@@ -219,7 +220,7 @@ const KIND_NAMES = [
 	'root-commit', 'delivery', 'suppressed', 'eval',
 	'mount-corrective', 'mount-fixup', 'mount-correction', 'reconcile-correction',
 	'core-effect-run', 'react-effect-run', 'epoch-reset',
-	'clock-sync', 'truncation',
+	'clock-sync', 'truncation', 'quiet-write',
 ] as const;
 
 export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>;
@@ -462,6 +463,14 @@ export class Tracer implements TraceHooks {
 			case 'write-dropped':
 				this.rec(K.writeDropped, this.label(e.node), e.token, 0, 0, 0);
 				return;
+			case 'quiet-write':
+				// Packed like a write, minus the batch attribution a quiet fold
+				// does not have. Deliberately NOT a cause-claiming kind yet: the
+				// quiet fold's operation does not emit an opEnd, so claiming the
+				// register here would chain unrelated later operations to it
+				// (causality for quiet folds lands with the trace rewrite).
+				this.rec(K.quietWrite, this.label(e.node), 0, e.seq, 0, 0);
+				return;
 			case 'delivery':
 				this.rec(
 					K.delivery | (e.mode === 'interleaved' ? KindBits.FLAG_A : 0),
@@ -640,6 +649,9 @@ export class Tracer implements TraceHooks {
 				break;
 			case K.writeDropped:
 				data = { node: this.labelOf(subject), token: world };
+				break;
+			case K.quietWrite:
+				data = { node: this.labelOf(subject), seq: a0 };
 				break;
 			case K.batchOpen:
 				data = { token: subject, action: a, ambient: b };

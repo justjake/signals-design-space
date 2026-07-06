@@ -32,7 +32,7 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log };
 }
 
-/** A fresh registered bridge in referee posture (events retained, quiet off). */
+/** A fresh registered bridge in referee posture (events retained; quiet arms by the production derivation). */
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();

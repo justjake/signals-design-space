@@ -596,8 +596,7 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		// call stack — with a guaranteed close edge. So no write in the React
 		// path ever reaches bareWrite, and no ambient batch is ever minted.
 		h = makeHarness();
-		h.bridge.setRetainEvents(false); // production posture: no event consumer…
-		h.bridge.setQuietWrites(true); // …and the quiet short-circuit armed
+		h.bridge.setRetainEvents(false); // production posture: no event consumer (quiet derives on its own)
 		const a = new Atom(0);
 		const flag = new Atom(0); // written outside any React context; observed by no component
 		const io = deferred<void>();
@@ -644,7 +643,6 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		// pass remain (checked at bare writes, batch retirements, pass ends).
 		h = makeHarness();
 		h.bridge.setRetainEvents(false);
-		h.bridge.setQuietWrites(true);
 		const a = new Atom(0);
 		const flag = new Atom(0);
 		const io = deferred<void>();
