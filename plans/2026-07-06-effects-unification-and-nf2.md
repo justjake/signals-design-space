@@ -700,8 +700,11 @@ seq 100 visible on atom `A` (R's committed arena holds the fold at
 100); live token T holds seq 50 on `A`; `passEnd(commit)` locks T in →
 site-(b) fanout marks `A`'s shadow in R's arena (mark + dedup only,
 O(1)) → the same boundary's per-token drain (or any later committed
-evaluation) consumes the mark: refold UNCONDITIONAL — no fp consulted,
-none stored — the fold's visible set now includes T's seq-50 receipt
+evaluation) consumes the mark: refold UNCONDITIONAL — no fp consulted;
+the verbatim fold still computes its `lastFoldFp` scalar, dead weight
+per this section's ledger (S-A step 0, 2026-07-06 — was "none
+stored", stale against the verbatim-`foldAtom` choice) — the fold's
+visible set now includes T's seq-50 receipt
 by membership → value flips to T's write → value-compare says changed →
 PENDING propagates → the watcher's compare corrects. Green with no
 reliance on any fingerprint motion; **pinned engine test** (§4.9.3):
@@ -1157,11 +1160,19 @@ schedule effort is allocated by that map.
    bit's 0→1 transition, per (computed, arena).** The bit makes the
    list a SET: a repeat pending evaluation of an already-suspended
    shadow (same or different thenable — the value column just swaps
-   sentinels) appends nothing; the entry drops when the bit clears
-   (refold to a value, eviction, arena reclamation). Scanning is
+   sentinels) appends nothing. **Compaction (S-A step 0, 2026-07-06 —
+   the fourth-pass verifier's missing removal mechanism): the
+   per-shadow suspended field stores the LIST INDEX, not a bare bit**
+   (a sentinel value means not-suspended; non-sentinel IS the set
+   bit). On the 1→0 clear (refold to a value, eviction, arena
+   reclamation) the entry is removed by **swap-remove at that index**:
+   the list's last entry moves into the hole, the moved shadow's
+   stored index is updated, the list pops. The list is therefore a
+   DENSE set at all times — clear→re-suspend appends exactly one
+   fresh entry, never a duplicate. Scanning is
    therefore O(current suspensions), never O(suspending evaluations),
    and idempotent marks never depend on list dedup — the list is
-   deduped structurally by the bit. Render-path
+   deduped structurally by the index field. Render-path
    evaluations rethrow; the `suspendDepth` discipline stays
    adapter-side, unchanged. **Serving a box-suspended shadow
    RETHROWS the sentinel, `boxedRead`-style, after the self-heal
@@ -1248,53 +1259,77 @@ schedule effort is allocated by that map.
    defers to the enclosing batch otherwise. Arena settlement adopts
    the same two modes plus an explicit fixed point, mirrored comment
    at the `attachSettle` site:
-   - **At rest** (no evaluation frame, no arena walk, no bridge
-     operation in flight — the plain-microtask case, the kernel's
-     `batchDepth === 0` arm): `settleTap(t)` marks AND runs the
-     **settlement drain** immediately. The drain IS the EF2
-     settlement boundary (settlement is one of the ruled
-     committed-truth-advance boundaries, §2.4): (1) scan every live
-     arena's suspended list (pass AND committed) for shadows whose
-     box payload is `t.sr` by identity — mark DIRTY + propagate over
-     strong and weak links; (2) drain the marked cones through the
+   - **ONE drain shape, and it OWNS the notification flush (S-A
+     step 0, 2026-07-06 — the fourth-pass verifier's outermost-
+     boundary gap).** The **settlement drain** is a single queue-
+     owning loop, the only consumer of the pending-settlement queue,
+     identical at every drain site:
+     `do { take the queued sentinels; scan every live arena's
+     suspended list (pass AND committed) for shadows whose box
+     payload is a taken sentinel by identity — mark DIRTY + propagate
+     over strong and weak links; drain the marked cones through the
      same durable-drain path every boundary uses (arena dirty lists +
      `restaled`; open-pass roots keep their marks for the frame's
-     close, HEAD's own `openPassByRoot` deferral); (3)
-     `revalidateCommittedSubs` (the boundary subscription scan); (4)
-     `flushNotify`. A background-only suspended watcher or effect
-     therefore refires FROM the settlement event itself — no
-     unrelated operation is ever needed.
-   - **Mid-operation** (any evaluation frame, arena walk, drain
-     compare, or `revalidateCommittedSubs` scan open): the tap
-     ENQUEUES the sentinel on the pending-settlement queue (dedup via
-     a queued bit on the sentinel; marks are idempotent, so a
-     duplicate landing is harmless). No arena flag column or dirty
-     list is ever mutated under a mid-flight walk.
-   - **The epilogue is a FIXED POINT — the executable outermost
-     boundary.** EVERY public operation's epilogue, after the
-     operation's own mutations complete, drains the queue TO EMPTY:
-     `while (queue nonempty) { take the queued sentinels; run their
-     suspended-list scans + marks; drain the marked cones;
-     revalidateCommittedSubs }` — then `flushNotify`. The LOOP, not
-     any single insertion point, is what closes the windows the
-     verifier named: a settlement landing DURING a watcher drain or
-     DURING `revalidateCommittedSubs` enqueues and gets its OWN scan
-     on the next loop iteration; the epilogue never returns with a
-     queued settlement unscanned. Termination: settlements are
-     finite external events — each thenable settles at most once,
-     each landing enqueues its sentinel at most once (queued bit) —
-     so the loop runs at most once per settled thenable; marks are
-     idempotent and refolds value-gated, so iterations generate no
-     new queue entries except from genuinely new external
-     settlements. §4.3's ordering joint is preserved per iteration
-     (scans see the marks; keep-the-dirt carries unconsumed
+     close, HEAD's own `openPassByRoot` deferral);
+     revalidateCommittedSubs; flushNotify } while (queue nonempty)`.
+     `flushNotify` is INSIDE the loop: HEAD invokes refire callbacks
+     synchronously during `flushNotify`, and a callback that
+     synchronously settles another custom thenable fires the tap
+     mid-drain — its sentinel lands in the queue and gets the NEXT
+     iteration. The drain never returns with a queued settlement
+     unscanned OR unflushed. The drain IS the EF2 settlement boundary
+     (settlement is one of the ruled committed-truth-advance
+     boundaries, §2.4); §4.3's ordering joint is preserved per
+     iteration (scans see the marks; keep-the-dirt carries unconsumed
      remainder forward).
-   - **Standalone reads need no epilogue.** `committedValue`/
-     `passValue` and every other epilogue-less read surface stay
-     covered by the read-site status probe (the pull half, third
-     pass N-2): a settled-but-unscanned sentinel self-heals AT THE
-     READ. The two halves partition the surfaces exactly: operations
-     drain, reads probe.
+   - **At rest** (no evaluation frame, no arena walk, no bridge
+     operation in flight — the plain-microtask case, the kernel's
+     `batchDepth === 0` arm): `settleTap(t)` enqueues the sentinel
+     and runs the settlement drain NOW. A background-only suspended
+     watcher or effect therefore refires FROM the settlement event
+     itself — no unrelated operation is ever needed.
+   - **Mid-operation** (any evaluation frame, arena walk, drain
+     compare, `revalidateCommittedSubs` scan, or the settlement
+     drain itself open): the tap ENQUEUES the sentinel on the
+     pending-settlement queue (dedup via a queued bit on the
+     sentinel, cleared when the drain takes it; marks are idempotent,
+     so a duplicate landing is harmless). No arena flag column or
+     dirty list is ever mutated under a mid-flight walk. EVERY public
+     operation's epilogue, after the operation's own mutations
+     complete, runs the settlement drain (the loop above; a no-op on
+     an empty queue) — the LOOP, not any single insertion point, is
+     what closes the windows the verifier named: a settlement landing
+     DURING a watcher drain, DURING `revalidateCommittedSubs`, or
+     DURING the drain's own `flushNotify` gets its OWN iteration.
+   - **Read-context settlements (S-A step 0, 2026-07-06 — the
+     stranded-entry fix).** Standalone `committedValue`/`passValue`
+     and every other epilogue-less read surface keep the read-site
+     status probe (the pull half, third pass N-2) for synchronous
+     determinism — but a synchronous custom thenable can settle
+     DURING such a read's evaluation frame, queueing its minted
+     sentinel with no epilogue to consume it. **Enqueueing while no
+     public operation (hence no epilogue) is in flight schedules a
+     microtask drain — the kernel's own `attachSettle` discipline
+     (`queueMicrotask`) — guarded by ONE scheduled-drain flag so
+     multiple settlements coalesce into one drain.** The microtask
+     runs the same settlement drain (no-op if an interleaving
+     operation's epilogue already emptied the queue). The two halves
+     partition exactly: operations drain at their epilogue, reads
+     probe synchronously and the scheduled drain consumes the queue —
+     no queued sentinel is ever stranded (retention bounded), no
+     refire waits for an unrelated operation.
+   - **Termination (S-A step 0, 2026-07-06 — replacing the fourth
+     pass's at-most-once-per-thenable argument, which distinct
+     thenables defeat).** The loop adopts the engine's existing
+     flush bound discipline verbatim: settlements taken per iteration
+     are finite; a chain of user callbacks that synchronously settles
+     ever-new thenables extends the loop exactly like an effect that
+     endlessly re-notifies extends `flushNotify` — that is USER
+     feedback, not a system obligation. The loop carries an
+     **iteration cap with a dev diagnostic on breach**
+     (`BridgeInvariantViolation` naming the settlement chain), the
+     same posture as the structural validator's cycle caps: bound the
+     damage, name the user bug, never mask it as progress.
 
    **The verifier's background-only schedule, walked green (fourth
    pass 2026-07-06):** committed watcher's dep `C` suspends on
@@ -1349,7 +1384,21 @@ schedule effort is allocated by that map.
    correction/refire arrives from the settlement drain itself, with
    NO subsequent operation; plus the mid-drain variant asserting the
    epilogue fixed point consumes a settlement that lands during a
-   watcher drain)**; the React-battery background-settlement
+   watcher drain)**; **the step-0 quartet (S-A step 0, 2026-07-06):
+   the reentrant settle-during-flush pin (a refire callback invoked
+   by the drain's `flushNotify` synchronously settles another
+   thenable — the NEXT loop iteration delivers it before the
+   operation returns); the read-context microtask drain pin (a
+   synchronous custom thenable settles during a standalone
+   `committedValue` — the coalesced `queueMicrotask` drain consumes
+   the queued sentinel; nothing stranded, refire arrives with no
+   subsequent operation); the termination-cap pin (a settlement
+   chain that mints ever-new synchronously-settling thenables trips
+   the iteration cap's dev diagnostic instead of hanging); the
+   list-compaction pin (suspend → clear → re-suspend leaves ONE
+   dense suspended-list entry; swap-remove keeps every stored index
+   valid under interleaved clears)**; the React-battery
+   background-settlement
    case (the coverage fable M2 showed the battery lacks); RCC-SU5
    cited in all.
 5. **`ctx.use`** — unchanged L4 semantics: ONE per-key cache scoped to
@@ -1666,13 +1715,23 @@ Each stage remains its own verified commit series with a revert story
    B3's seq-50-under-100 lock-in shape, re-walked under the no-fp
    rule (§4.2); M1's population schedule + the post-commit population
    assert (§4.4.2); S-NF2-D1 ×3 interleavings with documented
-   degraded-but-correct outcomes (§4.4.5); **the settlement quartet
-   (§4.5.4; trio extended fourth pass 2026-07-06): the key-A/key-B
+   degraded-but-correct outcomes (§4.4.5); **the settlement octet
+   (§4.5.4; trio extended fourth pass 2026-07-06; quartet extended
+   S-A step 0, 2026-07-06): the key-A/key-B
    world-only settlement pin, the read-after-await self-heal pin,
-   the firing-context settle-inside-a-drain pin, and the at-rest
+   the firing-context settle-inside-a-drain pin, the at-rest
    background-settlement pin (settle with no operation open ⇒ the
    settlement drain itself delivers; mid-drain variant ⇒ the
-   epilogue fixed point consumes it)** + the React-battery
+   epilogue fixed point consumes it), the reentrant
+   settle-during-flush pin (a refire callback settles another
+   thenable ⇒ the next drain iteration delivers it), the
+   read-context microtask drain pin (settle during standalone
+   `committedValue` ⇒ the coalesced `queueMicrotask` drain consumes
+   the queued sentinel), the termination-cap pin (a
+   self-perpetuating settlement chain ⇒ dev diagnostic at the
+   iteration cap), and the suspended-list compaction pin
+   (clear→re-suspend ⇒ one dense entry; swap-remove index
+   integrity)** + the React-battery
    background-settlement case (RCC-SU5); **the mixed-mode
    strong/weak transition schedule + the OL1 strong-only capture pin
    (§4.4.1)**; codex 6's reference-preservation shape ×3 arenas +
@@ -1724,8 +1783,13 @@ Each stage remains its own verified commit series with a revert story
      fp-gate restoration) before any routing re-home;
    - the **untracked-fan shape** (codex major 6): one hot atom,
      K≈100 weak-only dependents in each of R=4 committed arenas,
-     write-storm delivery cost vs the head-bridge anchor; **S-B
-     gate**, deciding the §4.4.1 segregated-list fallback;
+     write-storm delivery cost vs the head-bridge anchor; **an S-B
+     gate WITH a number and a disposition (S-A step 0, 2026-07-06 —
+     the last gate without a numeric form, given the same form as
+     the others): write-storm delivery cost on the shape ≤ 1.4× the
+     head-bridge anchor; breach is a mid-stage STOP before S-C**,
+     forcing the §4.4.1 segregated-list fallback decision before any
+     further stage lands;
    - a grown-then-shrunk long-session shape exercising §4.3's decay
      + §4.5.8's reclamation (fable N-5's bench alternative, kept
      alongside the decay rule).
@@ -1963,7 +2027,8 @@ bench battery — *staging corrected fourth pass 2026-07-06 to match
 is the FULL battery, not the first bench point — the staged P2 bench
 GATES run inside their stages, each with its threshold and STOP
 disposition: cold-pass (≤ 1.4× anchor) and wide-mask lock-in (≤ 1.4×
-anchor) inside S-A, untracked-fan inside S-B (sync shapes +
+anchor) inside S-A, untracked-fan (≤ 1.4× anchor; breach = STOP —
+S-A step 0, 2026-07-06) inside S-B (sync shapes +
 head-bridge anchor, discard churn, world evaluation, idle-world
 scaling, cycling, grown-then-shrunk, quiet-mode probes). Any stage
 that surfaces a contract question stops

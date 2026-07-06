@@ -152,7 +152,7 @@
  *     transition-heavy apps.
  */
 
-import { Atom, SuspendedRead, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, SuspendedRead, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -440,6 +440,9 @@ export type Pass = {
 	rendered: Set<WatcherId>;
 	/** Pass-world memo table — dies with the pass record. */
 	memos: Map<NodeId, WorldMemo>;
+	/** NF2 S-A: the pass world's shadow arena (claimed at passStart, dropped
+	 * in reclaimAfterPassEnd — engine-side only; the oracle has no twin). */
+	arena?: ShadowArena;
 };
 
 export type RootState = {
@@ -747,6 +750,13 @@ function hostReadImpl(atom: Atom<unknown>): unknown {
 	return activeBridge === undefined ? __HOST_MISS : activeBridge.hostRead(atom);
 }
 
+/** NF2 S-A: the settle-tap router (ONE closure per process; the kernel's
+ * shared listener consults it at fire time — §4.5.4). */
+function settleTapImpl(t: PromiseLike<unknown>): void {
+	const b = activeBridge;
+	if (b !== undefined) b.__settleTap(t);
+}
+
 /**
  * Activates the concurrent engine: arms the kernel's host seams
  * (`__setHostWrite` / read routing), exactly once per process, and returns
@@ -779,6 +789,351 @@ export function __newBridgeForTest(): CosignalBridge {
 	// quiet-mode suite re-enables it explicitly.
 	b.setQuietWrites(false);
 	return b;
+}
+
+// ---- NF2 S-A: per-world shadow arenas (plans/2026-07-06 §4) -----------------------
+// DUAL BOOKKEEPING stage: K1 + the memo ladder remain the routing/serving
+// authority for every delivery, drain, and world read; the arena machinery
+// below runs BESIDE them — shadow records + strong/weak links recorded by the
+// existing fn-reader, folds into value columns at the same evaluations,
+// fanout marks at the four committed-truth flip sites, sentinel boxes +
+// settlement, and consumer-refcount reclamation at quiesce. Behind a test
+// flag (`__setArenaCheck`), every public operation's epilogue serves each
+// live arena's shadows FROM THE ARENA (its own transliterated walks) and
+// compares against the memo-served value — ANY divergence throws. Layouts
+// and walks are adapted from the spike prototype
+// (research/experiments/world-tagged-links-spike-code/), record stride and
+// flag values mirroring the kernel's (index.ts NodeField/NodeFlag — const
+// enums are not exported; values are asserted stable by the suite).
+
+/** Arena record fields (stride 8; node-shadow and link records share the pool). */
+const enum AF {
+	// shadow node record
+	FLAGS = 0,
+	DEPS = 1, // doubles as the free-list next pointer for freed link records
+	DEPS_TAIL = 2,
+	SUBS = 3,
+	SUBS_TAIL = 4,
+	NODE = 5, // the overlay NodeId this shadows
+	GEN = 6, // id-tenancy stamp: bridge nodeGen[NODE] observed at recording (§4.5.3)
+	MARK = 7, // fanout read-clock dedup stamp (§4.3)
+	// link record
+	L_VER = 0,
+	L_DEP = 1,
+	L_SUB = 2,
+	L_PREV_SUB = 3,
+	L_NEXT_SUB = 4,
+	L_PREV_DEP = 5,
+	L_NEXT_DEP = 6, // doubles as the free-list next pointer
+	L_MODE = 7, // bit 0: 1 = weak (untracked-read) link — §4.4.1
+}
+
+/** Shadow flag bits (kernel NodeFlag values, mirrored — see header note). */
+const enum AFlag {
+	MUTABLE = 1,
+	RECURSED_CHECK = 4,
+	RECURSED = 8,
+	DIRTY = 16,
+	PENDING = 32,
+	K_SIGNAL = 128,
+	K_COMPUTED = 256,
+	/** The value column holds a folded value (cold shadow when unset). */
+	VALID = 8192,
+	/** Value column holds an exceptional payload (thrown error, or sentinel). */
+	HAS_BOX = 2048,
+	/** Refines HAS_BOX: payload is the thenable's stable SuspendedRead. */
+	BOX_SUSPENDED = 4096,
+}
+
+const A_STRIDE = 8;
+const A_SHIFT = 3; // record id >> A_SHIFT = value/susp column index
+const EMPTY_I32 = new Int32Array(0);
+
+/**
+ * One world's shadow arena: packed records (spike plane layout), a value
+ * side column, a per-shadow suspended-list index column, a dirty list, and
+ * the read clock. Pooled: buffers return to the pool at release with the
+ * claim generation bumped, so dead-tenancy residue can never validate.
+ */
+class ShadowArena {
+	kind: 'pass' | 'committed';
+	/** Owning world (pass object or committed root) — folds cite it. */
+	world: World;
+	root: RootId; // committed: the root id; pass: the pass's root (diagnostics)
+	alive = true;
+	/** Pool claim generation (bumped at claim AND release). */
+	claimGen = 0;
+	W: Int32Array;
+	vals: Value[] = [];
+	/** Per-record suspended-list slot + 1 (0 = not suspended) — §4.5.4 step-0
+	 * compaction: the field IS the set bit and stores the dense index. */
+	suspIdx: number[] = [];
+	next = A_STRIDE; // bump pointer (record 0 burned: 0 = null)
+	linkFree = 0;
+	links = 0;
+	/** overlay NodeId → shadow record id (0 = none). */
+	byNode: number[] = [];
+	/** Marked-shadow list (record ids; appended on the DIRTY 0→1 edge). */
+	dirty: number[] = [];
+	/** Suspended-shadow list (record ids; dense — swap-remove compaction). */
+	suspended: number[] = [];
+	/** Fanout dedup clock: bumped on every arena consumption (§4.3). */
+	readClock = 0;
+	/** Per-arena evaluation cycle (link VERSION stamps). */
+	cycle = 0;
+
+	constructor(kind: 'pass' | 'committed', world: World, root: RootId, buf: Int32Array) {
+		this.kind = kind;
+		this.world = world;
+		this.root = root;
+		this.W = buf;
+	}
+}
+
+function aGrow(a: ShadowArena, need: number): void {
+	let len = a.W.length;
+	while (len < need) len *= 2;
+	if (len !== a.W.length) {
+		const bigger = new Int32Array(len);
+		bigger.set(a.W);
+		a.W = bigger; // growth-mid-op: every allocating call site re-loads a.W (§4.5.9)
+	}
+}
+
+function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number): number {
+	const id = a.next;
+	aGrow(a, id + A_STRIDE);
+	a.next = id + A_STRIDE;
+	const W = a.W;
+	W[id + AF.FLAGS] = flags;
+	// Zero the list heads explicitly: pooled buffers are NOT scrubbed at
+	// release, so a reused record can hold the dead tenancy's residue (a
+	// fresh Int32Array is zeroed; pool reuse is the claim-generation case).
+	W[id + AF.DEPS] = 0;
+	W[id + AF.DEPS_TAIL] = 0;
+	W[id + AF.SUBS] = 0;
+	W[id + AF.SUBS_TAIL] = 0;
+	W[id + AF.NODE] = nodeId;
+	W[id + AF.GEN] = gen;
+	W[id + AF.MARK] = 0;
+	const v = id >> A_SHIFT;
+	while (a.vals.length <= v) {
+		a.vals.push(undefined);
+		a.suspIdx.push(0);
+	}
+	// Pooled-buffer reuse can also leave stale value/susp residue at this slot.
+	a.vals[v] = undefined;
+	a.suspIdx[v] = 0;
+	while (a.byNode.length <= nodeId) a.byNode.push(0); // stay packed, never holey
+	a.byNode[nodeId] = id;
+	return id;
+}
+
+function aAllocLink(a: ShadowArena): number {
+	let id = a.linkFree;
+	if (id !== 0) {
+		a.linkFree = a.W[id + AF.L_NEXT_DEP]!;
+	} else {
+		id = a.next;
+		aGrow(a, id + A_STRIDE);
+		a.next = id + A_STRIDE;
+	}
+	a.links++;
+	return id;
+}
+
+function aFreeLink(a: ShadowArena, id: number): void {
+	a.W[id + AF.L_NEXT_DEP] = a.linkFree;
+	a.linkFree = id;
+	a.links--;
+}
+
+/**
+ * Link maintenance (spike `wLink`, transliterated) PLUS §4.4.1's mode
+ * discipline, which the spike form lacked and may not be transplanted bare:
+ * the FIRST occurrence of a dep in an evaluation SETS the link's mode from
+ * that occurrence's read kind (fresh and REUSED links alike — the in-place
+ * and tail fast paths below perform the write); a LATER occurrence may only
+ * upgrade weak→strong, never downgrade.
+ */
+function aLink(a: ShadowArena, dep: number, sub: number, version: number, weak: boolean): void {
+	const W = a.W;
+	const prevDep = W[sub + AF.DEPS_TAIL]!;
+	if (prevDep !== 0 && W[prevDep + AF.L_DEP] === dep) {
+		// Duplicate occurrence within this evaluation: strong dominates.
+		if (!weak) W[prevDep + AF.L_MODE] = W[prevDep + AF.L_MODE]! & ~1;
+		return;
+	}
+	const nextDep = prevDep !== 0 ? W[prevDep + AF.L_NEXT_DEP]! : W[sub + AF.DEPS]!;
+	if (nextDep !== 0 && W[nextDep + AF.L_DEP] === dep) {
+		// In-place reuse: first occurrence this evaluation — reset the mode.
+		W[nextDep + AF.L_VER] = version;
+		W[nextDep + AF.L_MODE] = weak ? 1 : 0;
+		W[sub + AF.DEPS_TAIL] = nextDep;
+		return;
+	}
+	aLinkInsert(a, dep, sub, version, weak, prevDep, nextDep);
+}
+
+function aLinkInsert(a: ShadowArena, dep: number, sub: number, version: number, weak: boolean, prevDep: number, nextDep: number): void {
+	const prevSub = a.W[dep + AF.SUBS_TAIL]!;
+	if (prevSub !== 0 && a.W[prevSub + AF.L_VER] === version && a.W[prevSub + AF.L_SUB] === sub) {
+		if (!weak) a.W[prevSub + AF.L_MODE] = a.W[prevSub + AF.L_MODE]! & ~1; // strong dominates
+		return;
+	}
+	const newLink = aAllocLink(a); // may grow the arena: re-load W after
+	const W = a.W;
+	W[sub + AF.DEPS_TAIL] = newLink;
+	W[dep + AF.SUBS_TAIL] = newLink;
+	W[newLink + AF.L_VER] = version;
+	W[newLink + AF.L_DEP] = dep;
+	W[newLink + AF.L_SUB] = sub;
+	W[newLink + AF.L_PREV_DEP] = prevDep;
+	W[newLink + AF.L_NEXT_DEP] = nextDep;
+	W[newLink + AF.L_PREV_SUB] = prevSub;
+	W[newLink + AF.L_NEXT_SUB] = 0;
+	W[newLink + AF.L_MODE] = weak ? 1 : 0;
+	if (nextDep !== 0) W[nextDep + AF.L_PREV_DEP] = newLink;
+	if (prevDep !== 0) W[prevDep + AF.L_NEXT_DEP] = newLink;
+	else W[sub + AF.DEPS] = newLink;
+	if (prevSub !== 0) W[prevSub + AF.L_NEXT_SUB] = newLink;
+	else W[dep + AF.SUBS] = newLink;
+}
+
+function aUnlink(a: ShadowArena, id: number, sub: number = a.W[id + AF.L_SUB]!): number {
+	const W = a.W;
+	const dep = W[id + AF.L_DEP]!;
+	const prevDep = W[id + AF.L_PREV_DEP]!;
+	const nextDep = W[id + AF.L_NEXT_DEP]!;
+	const nextSub = W[id + AF.L_NEXT_SUB]!;
+	const prevSub = W[id + AF.L_PREV_SUB]!;
+	if (nextDep !== 0) W[nextDep + AF.L_PREV_DEP] = prevDep;
+	else W[sub + AF.DEPS_TAIL] = prevDep;
+	if (prevDep !== 0) W[prevDep + AF.L_NEXT_DEP] = nextDep;
+	else W[sub + AF.DEPS] = nextDep;
+	if (nextSub !== 0) W[nextSub + AF.L_PREV_SUB] = prevSub;
+	else W[dep + AF.SUBS_TAIL] = prevSub;
+	aFreeLink(a, id);
+	if (prevSub !== 0) {
+		W[prevSub + AF.L_NEXT_SUB] = nextSub;
+	} else if ((W[dep + AF.SUBS] = nextSub) === 0 && (W[dep + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0) {
+		// Unwatched computed shadow: mark stale, tear down its own deps
+		// (in-world cascade — per-view acyclicity makes this terminate).
+		if (W[dep + AF.DEPS_TAIL] !== 0) {
+			W[dep + AF.FLAGS] = W[dep + AF.FLAGS]! | AFlag.DIRTY;
+			aDisposeAllDepsInReverse(a, dep);
+		}
+	}
+	return nextDep;
+}
+
+function aDisposeAllDepsInReverse(a: ShadowArena, sub: number): void {
+	let cur = a.W[sub + AF.DEPS_TAIL]!;
+	while (cur !== 0) {
+		const prev = a.W[cur + AF.L_PREV_DEP]!;
+		aUnlink(a, cur, sub);
+		cur = prev;
+	}
+}
+
+/** Purge links not re-tracked by the current evaluation (kernel discipline). */
+function aPurgeDeps(a: ShadowArena, sub: number): void {
+	const depsTail = a.W[sub + AF.DEPS_TAIL]!;
+	let dep = depsTail !== 0 ? a.W[depsTail + AF.L_NEXT_DEP]! : a.W[sub + AF.DEPS]!;
+	let guard = 0;
+	while (dep !== 0) {
+		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
+		dep = aUnlink(a, dep, sub);
+	}
+}
+
+// Arena-walk scratch stacks (never shared with K1's walk buffers).
+let aPropStack = new Int32Array(4096);
+let aPropSp = 0;
+let aCheckStack = new Int32Array(4096);
+let aCheckSp = 0;
+
+/** Propagate PENDING over strong AND weak links (spike `wPropagate`;
+ * §4.4.1: weak links participate in mark propagation and drains — they are
+ * excluded only from write-time delivery, which stays K1's job until S-B). */
+function aPropagate(a: ShadowArena, startLink: number): void {
+	const W = a.W; // never allocates: safe to cache
+	let cur = startLink;
+	let next = W[cur + AF.L_NEXT_SUB]!;
+	const stackBase = aPropSp;
+	let guard = 0;
+	top: do {
+		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aPropagate: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+		const sub = W[cur + AF.L_SUB]!;
+		let flags = W[sub + AF.FLAGS]!;
+		if (!(flags & (AFlag.RECURSED_CHECK | AFlag.RECURSED | AFlag.DIRTY | AFlag.PENDING))) {
+			W[sub + AF.FLAGS] = flags | AFlag.PENDING;
+		} else if (!(flags & (AFlag.RECURSED_CHECK | AFlag.RECURSED))) {
+			flags = 0;
+		} else if (!(flags & AFlag.RECURSED_CHECK)) {
+			W[sub + AF.FLAGS] = (flags & ~AFlag.RECURSED) | AFlag.PENDING;
+		} else if (!(flags & (AFlag.DIRTY | AFlag.PENDING)) && aIsValidLink(a, cur, sub)) {
+			W[sub + AF.FLAGS] = flags | (AFlag.RECURSED | AFlag.PENDING);
+			flags &= AFlag.MUTABLE;
+		} else {
+			flags = 0;
+		}
+		if (flags & AFlag.MUTABLE) {
+			const subSubs = W[sub + AF.SUBS]!;
+			if (subSubs !== 0) {
+				cur = subSubs;
+				const nextSub = W[cur + AF.L_NEXT_SUB]!;
+				if (nextSub !== 0) {
+					if (aPropSp === aPropStack.length) {
+						const bigger = new Int32Array(aPropStack.length * 2);
+						bigger.set(aPropStack);
+						aPropStack = bigger;
+					}
+					aPropStack[aPropSp++] = next;
+					next = nextSub;
+				}
+				continue;
+			}
+		}
+		if ((cur = next) !== 0) {
+			next = W[cur + AF.L_NEXT_SUB]!;
+			continue;
+		}
+		while (aPropSp > stackBase) {
+			cur = aPropStack[--aPropSp]!;
+			if (cur !== 0) {
+				next = W[cur + AF.L_NEXT_SUB]!;
+				continue top;
+			}
+		}
+		break;
+	} while (true);
+}
+
+function aShallowPropagate(a: ShadowArena, startLink: number): void {
+	const W = a.W;
+	let cur = startLink;
+	let guard = 0;
+	do {
+		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aShallowPropagate: subs chain cycle at link ${cur}`);
+		const sub = W[cur + AF.L_SUB]!;
+		const flags = W[sub + AF.FLAGS]!;
+		if ((flags & (AFlag.PENDING | AFlag.DIRTY)) === AFlag.PENDING) {
+			W[sub + AF.FLAGS] = flags | AFlag.DIRTY;
+		}
+	} while ((cur = W[cur + AF.L_NEXT_SUB]!) !== 0);
+}
+
+function aIsValidLink(a: ShadowArena, checkLink: number, sub: number): boolean {
+	const W = a.W;
+	let cur = W[sub + AF.DEPS_TAIL]!;
+	let guard = 0;
+	while (cur !== 0) {
+		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aIsValidLink: prev-dep chain cycle at link ${cur}`);
+		if (cur === checkLink) return true;
+		cur = W[cur + AF.L_PREV_DEP]!;
+	}
+	return false;
 }
 
 // ---- the bridge -----------------------------------------------------------------
@@ -1273,6 +1628,9 @@ export class CosignalBridge {
 		this.mode = 'logged';
 		activeBridge = this;
 		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
+		// NF2 S-A: arm the settlement tap (ONE closure; consulted at FIRE
+		// time, routed to the active bridge — §4.5.4 push half).
+		__setSettleTap(settleTapImpl);
 		this.syncReadRouting();
 		this.recomputeQuiet(); // logged + nothing pending: quiet arms here
 	}
@@ -1621,12 +1979,16 @@ export class CosignalBridge {
 	 */
 	routedRead(atom: AtomNode, world: World): Value {
 		const sink = this.currentSink;
-		if (sink !== 0) this.recordEdge(atom.id, sink);
+		if (sink !== 0) {
+			this.recordEdge(atom.id, sink);
+			this.aRecordDep(atom, false); // NF2 S-A: mirror the K1 edge into the evaluating arena
+		}
 		return this.atomValue(atom, world);
 	}
 
 	/** Atom value in a world: kernel for newest, memoized fold otherwise. */
 	private atomValue(atom: AtomNode, world: World): Value {
+		if (this.aOnly !== undefined) return this.aServe(this.aOnly, atom); // NF2 S-A: arena-only routing override
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
 			const v = this.kernelValueOf(atom.handle);
@@ -1637,11 +1999,13 @@ export class CosignalBridge {
 		if (table === undefined) {
 			const v = this.foldAtom(atom, world);
 			this.captureAtomDep(atom, this.lastFoldFp);
+			this.aNoteAtom(atom, world, v, true); // NF2 S-A: this fold IS the world's fold — reuse it
 			return v;
 		}
 		let m = table.get(atom.id);
 		if (m !== undefined && this.validateMemo(m, world)) {
 			this.captureAtomDep(atom, m.fps[0]!);
+			this.aNoteAtom(atom, world, undefined, false); // NF2 S-A: memo-served — a marked/cold shadow refolds, never copies (§4.2)
 			return m.value;
 		}
 		const v = this.foldAtom(atom, world);
@@ -1661,6 +2025,7 @@ export class CosignalBridge {
 		}
 		if (world.kind === 'committed') m.gen = this.roots.get(world.root)?.commitGen ?? 0;
 		this.captureAtomDep(atom, fp);
+		this.aNoteAtom(atom, world, v, true); // NF2 S-A: fresh fold — reuse it for the shadow column
 		return v;
 	}
 
@@ -1695,25 +2060,32 @@ export class CosignalBridge {
 	evaluate(node: AnyNode, world: World): Value {
 		probes.worldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+		if (this.aOnly !== undefined) return this.aServe(this.aOnly, node); // NF2 S-A: arena-only routing override
 		if (node.kind === 'atom') return this.atomValue(node, world);
 		const table = this.memoTableOf(world);
-		if (world.kind !== 'newest' && world.kind !== 'mountFix') {
-			// Fast path: no slot bits, no taint, valid newest cache.
-			const word = this.touched[node.id]!;
-			if (word === 0) {
-				const nm = this.newestMemos.get(node.id);
-				if (nm !== undefined && this.validateMemo(nm, NEWEST)) {
-					this.captureCompDep(node, nm.value);
-					return nm.value;
-				}
-			}
-		}
+		// NF2 S-A (§4.4.8): the world-read fast path — "touched word 0 ⇒ serve
+		// the validated newest memo to any world" — is DELETED at this stage:
+		// world reads must run in-world so the fn-reader RECORDS the arena's
+		// strong and weak links (the §4.4.1/§4.4.2 coverage argument stands on
+		// those cold in-arena runs; structure recording may never be skipped —
+		// fable N-4's constraint). The cold-pass bench gate (§4.9.6, ≤1.4×
+		// the head-bridge anchor) prices exactly this deletion.
 		// World path: the memo ladder.
 		if (table !== undefined) {
 			const m = table.get(node.id);
 			if (m !== undefined && this.validateMemo(m, world)) {
-				this.captureCompDep(node, m.value);
-				return m.value;
+				// NF2 S-A read-site self-heal (§4.5.4 pull half; mirrored at
+				// `aServe` and the kernel's `boxedRead`): a background
+				// suspension memoized the SENTINEL AS A VALUE, whose atom
+				// fingerprints never move at settlement — probe the thenable's
+				// status exactly as `boxedRead` does and re-run when settled,
+				// so a read after `await` is deterministic even before the
+				// settle listener's microtask runs (RCC-SU5).
+				if (!(m.value instanceof SuspendedRead) || !this.sentinelSettled(m.value)) {
+					this.captureCompDep(node, m.value);
+					return m.value;
+				}
+				table.delete(node.id);
 			}
 		}
 		// Per-world cycle detection via the mark column: marks carry the
@@ -1744,10 +2116,34 @@ export class CosignalBridge {
 			};
 		}
 		this.frame = myFrame;
+		// NF2 S-A: open the arena frame — the fn-reader records strong/weak
+		// links into the active world's arena IN ADDITION to K1 (§4.8 S-A),
+		// and the epilogue writes the shadow value column (§4.5.3).
+		const savedAFrameArena = this.aFrameArena;
+		const savedAFrameShadow = this.aFrameShadow;
+		const savedAFrameCycle = this.aFrameCycle;
+		let aArena: ShadowArena | undefined;
+		let aShadow = 0;
+		if (world.kind === 'pass' || world.kind === 'committed') {
+			aArena = this.arenaOf(world);
+			if (aArena !== undefined) {
+				aShadow = this.shadowFor(aArena, node.id, AFlag.K_COMPUTED);
+				aArena.W[aShadow + AF.DEPS_TAIL] = 0; // re-track from scratch (kernel discipline)
+				aArena.W[aShadow + AF.FLAGS] = aArena.W[aShadow + AF.FLAGS]! | AFlag.MUTABLE;
+				this.aFrameArena = aArena;
+				this.aFrameShadow = aShadow;
+				this.aFrameCycle = ++aArena.cycle;
+			} else {
+				this.aFrameArena = undefined;
+			}
+		} else {
+			this.aFrameArena = undefined;
+		}
 		const tr = this.trace; // paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, world);
 		try {
 			const value = node.fn(this.trackedReader, this.untrackedReader);
+			if (aShadow !== 0) this.aNoteOutcome(aArena!, aShadow, value);
 			if (world.kind === 'newest') {
 				// Taint epilogue: derive bit 31 fresh from this evaluation —
 				// a node stays tainted only while its own evaluation still
@@ -1769,7 +2165,17 @@ export class CosignalBridge {
 			this.frame = savedFrame;
 			this.captureCompDep(node, value);
 			return value;
+		} catch (err) {
+			// NF2 S-A: exceptional outcomes cache into the shadow (per-shadow
+			// has-box / box-suspended bits, §4.5.3) — a render-path suspension
+			// rethrows here while the arena still records the sentinel.
+			if (aShadow !== 0) this.aNoteThrow(aArena!, aShadow, err);
+			throw err;
 		} finally {
+			if (aShadow !== 0) aPurgeDeps(aArena!, aShadow); // drop links this evaluation did not re-track
+			this.aFrameArena = savedAFrameArena;
+			this.aFrameShadow = savedAFrameShadow;
+			this.aFrameCycle = savedAFrameCycle;
 			const obsCaptured = this.obsCapture;
 			this.obsCapture = savedObsCapture;
 			this.frame = savedFrame;
@@ -1791,10 +2197,18 @@ export class CosignalBridge {
 	private evalMark: EvalGen[] = [0];
 	private evalGen: EvalGen = 0;
 
+	/** NF2 S-A: the kernel `boxedRead` status probe, shared by both self-heal
+	 * sites (`t.status === undefined || t.status === 'pending'` ⇒ pending). */
+	private sentinelSettled(sr: SuspendedRead): boolean {
+		const t = sr.thenable as { status?: string };
+		return t.status !== undefined && t.status !== 'pending';
+	}
+
 	/** The persistent tracked reader: edges to the open sink; world from the frame. */
 	private trackedReader: Reader = (dep) => {
 		const sink = this.currentSink;
 		this.recordEdge(dep.id, sink);
+		this.aRecordDep(dep, false); // NF2 S-A: strong arena link beside K1 (§4.8 S-A)
 		if ((this.touched[dep.id]! & SlotBits.TAINT) !== 0) this.newestFrameTaint = true; // taint flows through recorded deps
 		return this.evaluate(dep, this.activeWorld!);
 	};
@@ -1811,6 +2225,7 @@ export class CosignalBridge {
 	private untrackedReader: Reader = (dep) => {
 		const sink = this.currentSink;
 		this.recordWeakEdge(dep.id, sink);
+		this.aRecordDep(dep, true); // NF2 S-A: weak arena link (§4.4.1 — unconditional, exactly as HEAD's weak table)
 		const world = this.activeWorld!;
 		// Taint input: an untracked read hit pending state (newest evals).
 		if (world.kind === 'newest') {
@@ -1827,6 +2242,908 @@ export class CosignalBridge {
 			this.currentSink = sink;
 		}
 	};
+
+	// ---- NF2 S-A: arena state + evaluation (dual bookkeeping) ----
+	// K1 stays the routing authority; see the module-level header above AF.
+
+	/** Committed arenas, by root (consumer-populated life — §4.1/§4.5.8). */
+	private arenaByRoot = new Map<RootId, ShadowArena>();
+	/** Pooled released arena shells (buffers reused; claimGen bumped per tenancy). */
+	private arenaPool: ShadowArena[] = [];
+	/** Initial arena size in ints (tests shrink it to force mid-op growth — §4.5.9). */
+	arenaInitInts = 8192;
+	/** Overlay node id-tenancy generations (§4.5.3: overlay ids are never freed
+	 * pre-S-C, so these move only via the test seam; shadows stamp + validate). */
+	private nodeGen: number[] = [0];
+	/** Open arena evaluation frame (piggybacked on the overlay evaluation OR
+	 * an arena-only refold): links record into aFrameArena at aFrameCycle.
+	 * Flattened to scalars — one object per evaluation showed up in the
+	 * cold-pass gate. undefined arena ⇔ no frame. */
+	private aFrameArena: ShadowArena | undefined = undefined;
+	private aFrameShadow = 0;
+	private aFrameCycle = 0;
+	/** Arena-only routing override: raw-handle reads serve from this arena. */
+	private aOnly: ShadowArena | undefined = undefined;
+	/** Global count of box-suspended shadows (tap fast-out). */
+	private suspendedCount = 0;
+	/** S-A divergence check flag (test-enabled; STOP on any mismatch). */
+	private arenaCheckOn = false;
+	private inArenaCheck = false;
+
+	private claimArena(kind: 'pass' | 'committed', world: World, root: RootId): ShadowArena {
+		let a = this.arenaPool.pop();
+		if (a === undefined) {
+			a = new ShadowArena(kind, world, root, new Int32Array(this.arenaInitInts));
+		} else {
+			a.kind = kind;
+			a.world = world;
+			a.root = root;
+		}
+		a.alive = true;
+		a.claimGen++;
+		// Dense byNode: pre-size to the node population and keep it PACKED
+		// (holey reads cost on the cold-read hot path; shadowFor probes this
+		// per read). aAllocShadow grows it densely past this watermark.
+		const n = this.nodesArr.length;
+		for (let i = a.byNode.length; i < n; i++) a.byNode.push(0);
+		return a;
+	}
+
+	/** Release an arena: buffer to the pool, claim generation bumped, columns
+	 * dropped (payload release), dirty + suspended lists discarded (§4.5.8 —
+	 * safe by the evict-don't-serve argument; nobody observes those cones). */
+	private releaseArena(a: ShadowArena): void {
+		for (let i = 0; i < a.suspended.length; i++) this.suspendedCount--;
+		a.alive = false;
+		a.claimGen++;
+		a.byNode.length = 0;
+		a.vals.length = 0;
+		a.suspIdx.length = 0;
+		a.dirty.length = 0;
+		a.suspended.length = 0;
+		a.next = A_STRIDE;
+		a.linkFree = 0;
+		a.links = 0;
+		a.readClock = 0;
+		a.cycle = 0;
+		if (this.arenaPool.length < 8) this.arenaPool.push(a);
+	}
+
+	/** The arena of a world: pass arenas ride the pass record (claimed at
+	 * passStart, m2's dev assert on dropped-arena touch); committed arenas
+	 * materialize lazily at the root's first committed evaluation and persist
+	 * for the root's consumer-populated life (§4.1). */
+	private arenaOf(world: World): ShadowArena | undefined {
+		if (world.kind === 'pass') {
+			const a = world.pass.arena;
+			if (a !== undefined && !a.alive) throw new BridgeInvariantViolation(`arena of pass ${world.pass.id} was reclaimed while still reachable (m2)`);
+			return a;
+		}
+		if (world.kind !== 'committed') return undefined;
+		let a = this.arenaByRoot.get(world.root);
+		if (a === undefined) {
+			// Mirror memoTableOf's rule: never CREATE the root record here.
+			if (!this.roots.has(world.root)) return undefined;
+			a = this.claimArena('committed', { kind: 'committed', root: world.root }, world.root);
+			this.arenaByRoot.set(world.root, a);
+		}
+		return a;
+	}
+
+	private eachArena(fn: (a: ShadowArena) => void): void {
+		for (const a of this.arenaByRoot.values()) fn(a);
+		for (const p of this.openPassByRoot.values()) {
+			if (p.arena !== undefined) fn(p.arena);
+		}
+	}
+
+	/** Shadow lookup/create with the §4.5.3 GEN id-tenancy validation: a
+	 * dead-GEN shadow never serves — it is reset cold and re-tenanted. */
+	private shadowFor(a: ShadowArena, nid: NodeId, kindFlags: number): number {
+		let sh = nid < a.byNode.length ? a.byNode[nid]! : 0;
+		const gen = this.nodeGen[nid] ?? 0;
+		if (sh !== 0) {
+			if (a.W[sh + AF.GEN] === gen) return sh;
+			// Dead tenancy: evict, purge links (both directions), refold under
+			// the new tenant — never serve the dead node's value or fn.
+			aDisposeAllDepsInReverse(a, sh);
+			let sl = a.W[sh + AF.SUBS]!;
+			while (sl !== 0) {
+				const next = a.W[sl + AF.L_NEXT_SUB]!;
+				aUnlink(a, sl);
+				sl = next;
+			}
+			if ((a.W[sh + AF.FLAGS]! & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+			a.W[sh + AF.FLAGS] = kindFlags;
+			a.W[sh + AF.GEN] = gen;
+			a.W[sh + AF.MARK] = 0;
+			a.vals[sh >> A_SHIFT] = undefined;
+			return sh;
+		}
+		sh = aAllocShadow(a, nid, kindFlags, gen);
+		return sh;
+	}
+
+	/** Arena dep recording (fn-reader hook): first-occurrence mode reset +
+	 * strong-dominates ride inside aLink (§4.4.1). */
+	private aRecordDep(dep: AnyNode, weak: boolean): void {
+		const a = this.aFrameArena;
+		if (a === undefined) return;
+		const kindFlags = dep.kind === 'atom' ? (AFlag.K_SIGNAL | AFlag.MUTABLE) : AFlag.K_COMPUTED;
+		const sh = this.shadowFor(a, dep.id, kindFlags);
+		aLink(a, sh, this.aFrameShadow, this.aFrameCycle, weak);
+	}
+
+	/** The arena atom-propagation gate is Object.is over FOLD OUTPUTS: the
+	 * atom's own `equals` already participated in the fold's stepwise
+	 * equality, and the memo ladder re-derives consumers on any fold-output
+	 * motion — a custom comparator here could suppress propagation the memo
+	 * path performs (dual-bookkeeping divergence by construction). The
+	 * §4.5.3 comparator-order mandate — HEAD's `isEqual(prev, next)`,
+	 * mirroring the kernel's `writeAtom` compare — binds the CUSTOM-EQUALITY
+	 * COMPUTED record, which lands with kernel computeds at S-C. */
+	private aEqAtom(_atom: AtomNode, prev: Value, next: Value): boolean {
+		return Object.is(prev, next);
+	}
+
+	/** Fn-reader epilogue, atom half: refresh the evaluating arena's shadow of
+	 * a read atom. `fresh` carries the value when the overlay path just ran
+	 * the fold itself (reused — it IS this world's fold); a memo-SERVED value
+	 * is never copied in — a marked/cold shadow refolds instead (§4.2's no-fp
+	 * consumption rule; copying a validated memo would import the fp gate the
+	 * arena exists to delete). */
+	private aNoteAtom(atom: AtomNode, world: World, fresh: Value, haveFresh: boolean): void {
+		const a = this.aFrameArena;
+		if (a === undefined) return;
+		const sh = this.shadowFor(a, atom.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
+		const W = a.W;
+		const flags = W[sh + AF.FLAGS]!;
+		if ((flags & AFlag.VALID) !== 0 && (flags & AFlag.DIRTY) === 0) return; // current
+		const next = haveFresh ? fresh : this.foldAtom(atom, world);
+		const vi = sh >> A_SHIFT;
+		const changed = (flags & AFlag.VALID) === 0 || !this.aEqAtom(atom, a.vals[vi], next);
+		a.vals[vi] = next; // ALWAYS the fold's output (see aUpdateShadow); equality gates propagation only
+		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID;
+		a.readClock++; // consumption: re-arm the fanout dedup clock
+		if (changed) {
+			const subs = W[sh + AF.SUBS]!;
+			if (subs !== 0) aPropagate(a, subs);
+		}
+	}
+
+	/** Suspended-list append on the box-suspended bit's 0→1; the per-shadow
+	 * field stores the dense index (S-A step 0 compaction — §4.5.4). */
+	private aSuspend(a: ShadowArena, sh: number): void {
+		const vi = sh >> A_SHIFT;
+		if (a.suspIdx[vi] !== 0) return; // already a member (value column just swaps sentinels)
+		a.suspended.push(sh);
+		a.suspIdx[vi] = a.suspended.length; // index + 1
+		this.suspendedCount++;
+	}
+
+	/** Swap-remove at the stored index on the 1→0 clear: the list stays a
+	 * DENSE set; the moved entry's stored index is updated (S-A step 0). */
+	private aUnsuspend(a: ShadowArena, sh: number): void {
+		const vi = sh >> A_SHIFT;
+		const slot = a.suspIdx[vi]!;
+		if (slot === 0) return;
+		const last = a.suspended.length - 1;
+		const moved = a.suspended[last]!;
+		a.suspended[slot - 1] = moved;
+		a.suspIdx[moved >> A_SHIFT] = slot;
+		a.suspended.pop();
+		a.suspIdx[vi] = 0;
+		this.suspendedCount--;
+	}
+
+	/** Fn-reader epilogue, computed half: write the evaluating world's shadow
+	 * value column with the evaluation's outcome — value, sentinel (the shim
+	 * wrapper folds background suspensions to the sentinel VALUE), or thrown
+	 * payload (exceptional-outcome bits, §4.5.3). */
+	private aNoteOutcome(a: ShadowArena, sh: number, value: Value): void {
+		const W = a.W;
+		const flags = W[sh + AF.FLAGS]!;
+		const vi = sh >> A_SHIFT;
+		a.readClock++;
+		if (value instanceof SuspendedRead) {
+			const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && a.vals[vi] === value;
+			a.vals[vi] = value;
+			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
+			this.aSuspend(a, sh);
+			// box→same-box by sentinel identity is UNCHANGED (battery 16d's
+			// still-pending rule, arena twin); any other transition propagates.
+			if (!same) {
+				const subs = W[sh + AF.SUBS]!;
+				if (subs !== 0) aShallowPropagate(a, subs);
+			}
+			return;
+		}
+		const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
+		// Overlay computed cutoff is Object.is (their memo-compare semantics
+		// today — §4.5.3); equality never bridges an exceptional boundary.
+		const changed = !(prevValid && Object.is(a.vals[vi], value));
+		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+		if (changed) a.vals[vi] = value;
+		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED)) | AFlag.VALID;
+		if (changed) {
+			const subs = W[sh + AF.SUBS]!;
+			if (subs !== 0) aShallowPropagate(a, subs);
+		}
+	}
+
+	private aNoteThrow(a: ShadowArena, sh: number, err: unknown): void {
+		const W = a.W;
+		const flags = W[sh + AF.FLAGS]!;
+		const vi = sh >> A_SHIFT;
+		a.readClock++;
+		if (err instanceof SuspendedRead) {
+			a.vals[vi] = err;
+			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
+			this.aSuspend(a, sh);
+			return;
+		}
+		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+		a.vals[vi] = err;
+		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING | AFlag.BOX_SUSPENDED)) | AFlag.VALID | AFlag.HAS_BOX;
+	}
+
+	// ---- NF2 S-A: arena-authoritative serving (checks, settlement refolds) ----
+
+	/** Serve a node from an arena, refolding through the arena's OWN walks —
+	 * never the memo ladder. Runs under the arena-only routing override so
+	 * raw-handle reads inside fns resolve to arena values too. */
+	private aServe(a: ShadowArena, node: AnyNode): Value {
+		if (node.kind === 'atom') {
+			const sh = this.shadowFor(a, node.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
+			const W = a.W;
+			const flags = W[sh + AF.FLAGS]!;
+			if ((flags & AFlag.VALID) === 0 || (flags & AFlag.DIRTY) !== 0) {
+				// Spike wAtomRead: a changed refold upgrades PENDING dependents
+				// to DIRTY (shallow propagate) so their re-check refolds them.
+				if (this.aUpdateShadow(a, sh)) {
+					const subs = a.W[sh + AF.SUBS]!;
+					if (subs !== 0) aShallowPropagate(a, subs);
+				}
+			}
+			if (this.aFrameArena === a) aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+			return a.vals[sh >> A_SHIFT];
+		}
+		const sh = this.shadowFor(a, node.id, AFlag.K_COMPUTED);
+		const W = a.W;
+		let flags = W[sh + AF.FLAGS]!;
+		if ((flags & AFlag.RECURSED_CHECK) !== 0) {
+			throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+		}
+		// Read-site self-heal probe (§4.5.4 pull half; mirrored at the memo
+		// serve and the kernel's boxedRead): a settled-but-not-yet-invalidated
+		// suspension self-invalidates AT THE READ, so a read after `await` is
+		// deterministic even before the settle listener's microtask runs.
+		if ((flags & AFlag.BOX_SUSPENDED) !== 0) {
+			const t = (a.vals[sh >> A_SHIFT] as SuspendedRead).thenable as { status?: string };
+			if (t.status !== undefined && t.status !== 'pending') {
+				W[sh + AF.FLAGS] = flags | AFlag.DIRTY;
+				flags = W[sh + AF.FLAGS]!;
+			}
+		}
+		if ((flags & AFlag.MUTABLE) === 0) {
+			this.aUpdateComputed(a, sh); // never evaluated in this arena: cold fold
+		} else if ((flags & AFlag.DIRTY) !== 0 || ((flags & AFlag.PENDING) !== 0 && this.aCheckDirty(a, a.W[sh + AF.DEPS]!, sh))) {
+			if (this.aUpdateComputed(a, sh)) {
+				const subs = a.W[sh + AF.SUBS]!;
+				if (subs !== 0) aShallowPropagate(a, subs);
+			}
+		} else if ((flags & AFlag.PENDING) !== 0) {
+			a.W[sh + AF.FLAGS] = flags & ~AFlag.PENDING;
+		}
+		if (this.aFrameArena === a) aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+		const outFlags = a.W[sh + AF.FLAGS]!;
+		if ((outFlags & AFlag.HAS_BOX) !== 0 && (outFlags & AFlag.BOX_SUSPENDED) === 0) {
+			throw a.vals[sh >> A_SHIFT]; // cached thrown payload (exceptional-outcome bits)
+		}
+		// A box-suspended shadow serves its sentinel AS A VALUE at S-A: the
+		// overlay path (shim wrapper) folds background suspensions to the
+		// sentinel value too, so the dual-bookkeeping compare is by identity.
+		// The rethrow discipline (`boxedRead`-style) lands when arenas SERVE
+		// real reads (S-B/S-C).
+		return a.vals[sh >> A_SHIFT];
+	}
+
+	/** Spike `wUpdate`: refold a shadow (atom fold or computed fn run);
+	 * returns whether the world's value changed (the §4.2 value cutoff). */
+	private aUpdateShadow(a: ShadowArena, sh: number): boolean {
+		const flags = a.W[sh + AF.FLAGS]!;
+		if ((flags & AFlag.K_COMPUTED) !== 0) return this.aUpdateComputed(a, sh);
+		const nid = a.W[sh + AF.NODE]!;
+		const atom = this.nodesArr[nid] as AtomNode;
+		// §4.2 (iii): marked ⇒ REFOLD unconditionally — no fp consulted (the
+		// verbatim fold still computes `lastFoldFp`, dead weight until S-D).
+		const next = this.foldAtom(atom, a.world);
+		const vi = sh >> A_SHIFT;
+		const prev = a.vals[vi];
+		const prevValid = (flags & AFlag.VALID) !== 0;
+		a.W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID;
+		a.readClock++;
+		// The shadow column ALWAYS stores the fold's own output (dual
+		// bookkeeping requires arena value ≡ fold ≡ memo-served value bit
+		// for bit); the comparator gates PROPAGATION only. Reference
+		// preservation for custom-equality computeds is §4.5.3's S-C story.
+		a.vals[vi] = next;
+		return !(prevValid && this.aEqAtom(atom, prev, next));
+	}
+
+	/** Arena-only computed refold: the fn runs with the ARENA readers and the
+	 * arena-only routing override — no K1 edges, no memo writes, no obs
+	 * capture. The evaluating world is set so raw-handle reads route. */
+	private aUpdateComputed(a: ShadowArena, sh: number): boolean {
+		const nid = a.W[sh + AF.NODE]!;
+		const node = this.nodesArr[nid] as ComputedNode;
+		a.W[sh + AF.DEPS_TAIL] = 0;
+		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! | AFlag.MUTABLE | AFlag.RECURSED_CHECK) & ~(AFlag.RECURSED | AFlag.DIRTY | AFlag.PENDING);
+		const savedFrameArena = this.aFrameArena;
+		const savedFrameShadow = this.aFrameShadow;
+		const savedFrameCycle = this.aFrameCycle;
+		const savedOnly = this.aOnly;
+		const savedWorld = this.activeWorld;
+		const savedSink = this.currentSink;
+		const savedObsCapture = this.obsCapture;
+		const savedMemoFrame = this.frame;
+		this.aFrameArena = a;
+		this.aFrameShadow = sh;
+		this.aFrameCycle = ++a.cycle;
+		this.aOnly = a;
+		this.currentSink = 0;
+		this.obsCapture = undefined;
+		this.frame = undefined;
+		this.setWorld(a.world);
+		this.evalDepth++;
+		try {
+			const value = node.fn(this.aTrackedReader, this.aUntrackedReader);
+			const vi = sh >> A_SHIFT;
+			const flags = a.W[sh + AF.FLAGS]!;
+			if (value instanceof SuspendedRead) {
+				const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && a.vals[vi] === value;
+				a.vals[vi] = value;
+				a.W[sh + AF.FLAGS] = flags | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
+				this.aSuspend(a, sh);
+				return !same;
+			}
+			const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
+			const changed = !(prevValid && Object.is(a.vals[vi], value));
+			if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+			if (changed) a.vals[vi] = value;
+			a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED)) | AFlag.VALID;
+			return changed;
+		} catch (err) {
+			this.aNoteThrow(a, sh, err);
+			throw err;
+		} finally {
+			this.evalDepth--;
+			this.setWorld(savedWorld);
+			this.frame = savedMemoFrame;
+			this.obsCapture = savedObsCapture;
+			this.currentSink = savedSink;
+			this.aOnly = savedOnly;
+			this.aFrameArena = savedFrameArena;
+			this.aFrameShadow = savedFrameShadow;
+			this.aFrameCycle = savedFrameCycle;
+			a.W[sh + AF.FLAGS] = a.W[sh + AF.FLAGS]! & ~AFlag.RECURSED_CHECK;
+			aPurgeDeps(a, sh);
+			a.readClock++;
+		}
+	}
+
+	private aTrackedReader: Reader = (dep) => {
+		this.aRecordDep(dep, false);
+		return this.aServe(this.aFrameArena!, dep);
+	};
+
+	private aUntrackedReader: Reader = (dep) => {
+		this.aRecordDep(dep, true);
+		const a = this.aFrameArena;
+		this.aFrameArena = undefined; // untracked: dep's own reads link nowhere new
+		try {
+			return this.aServe(a!, dep);
+		} finally {
+			this.aFrameArena = a;
+		}
+	};
+
+	/** Spike `wCheckDirty` transliteration (aUpdateShadow can run getters —
+	 * allocations, arena growth — so a.W re-loads after every update call). */
+	private aCheckDirty(a: ShadowArena, startLink: number, startSub: number): boolean {
+		let cur = startLink;
+		let sub = startSub;
+		const stackBase = aCheckSp;
+		let checkDepth = 0;
+		let dirty = false;
+		if (cur === 0) return false;
+		let guard = 0;
+		try {
+			top: do {
+				if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aCheckDirty: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+				let W = a.W;
+				const dep = W[cur + AF.L_DEP]!;
+				const depFlags = W[dep + AF.FLAGS]!;
+				if ((W[sub + AF.FLAGS]! & AFlag.DIRTY) !== 0) {
+					dirty = true;
+				} else if ((depFlags & (AFlag.MUTABLE | AFlag.DIRTY)) === (AFlag.MUTABLE | AFlag.DIRTY)) {
+					const depSubs = W[dep + AF.SUBS]!;
+					if (this.aUpdateShadow(a, dep)) {
+						W = a.W;
+						if (W[depSubs + AF.L_NEXT_SUB] !== 0) aShallowPropagate(a, depSubs);
+						dirty = true;
+					}
+				} else if ((depFlags & (AFlag.MUTABLE | AFlag.PENDING)) === (AFlag.MUTABLE | AFlag.PENDING)) {
+					if (aCheckSp === aCheckStack.length) {
+						const bigger = new Int32Array(aCheckStack.length * 2);
+						bigger.set(aCheckStack);
+						aCheckStack = bigger;
+					}
+					aCheckStack[aCheckSp++] = cur;
+					cur = W[dep + AF.DEPS]!;
+					sub = dep;
+					++checkDepth;
+					continue;
+				}
+				if (!dirty) {
+					const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
+					if (nextDep !== 0) {
+						cur = nextDep;
+						continue;
+					}
+				}
+				while (checkDepth--) {
+					cur = aCheckStack[--aCheckSp]!;
+					if (dirty) {
+						const subSubs = a.W[sub + AF.SUBS]!;
+						if (this.aUpdateShadow(a, sub)) {
+							if (a.W[subSubs + AF.L_NEXT_SUB] !== 0) aShallowPropagate(a, subSubs);
+							sub = a.W[cur + AF.L_SUB]!;
+							continue;
+						}
+						dirty = false;
+					} else {
+						a.W[sub + AF.FLAGS] = a.W[sub + AF.FLAGS]! & ~AFlag.PENDING;
+					}
+					sub = a.W[cur + AF.L_SUB]!;
+					const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
+					if (nextDep !== 0) {
+						cur = nextDep;
+						continue top;
+					}
+				}
+				return dirty;
+			} while (true);
+		} finally {
+			aCheckSp = stackBase;
+		}
+	}
+
+	// ---- NF2 S-A: fanout at the four flip sites + mark decay (§4.3) ----
+
+	/** Mark the flipped atoms' shadows in one arena and propagate PENDING over
+	 * strong AND weak links, with the read-clock dedup: a still-DIRTY shadow
+	 * whose MARK stamp equals the arena's clock has an already-marked cone
+	 * that nothing re-validated since — re-propagation would be a no-op walk.
+	 * Pass arenas receive NO receipt-driven fanout, ever (the pin proof,
+	 * §4.3) — dev-asserted here; the one pin-exempt mark source is L4
+	 * resource settlement (`fromSettlement`). */
+	private fanAtomsToArena(a: ShadowArena, atoms: AtomNode[], fromSettlement: boolean): void {
+		if (a.kind === 'pass' && !fromSettlement) {
+			throw new BridgeInvariantViolation('receipt-flip fanout reached a pass arena — pass-world values are pin-frozen (§4.3)');
+		}
+		const W = a.W;
+		for (let i = 0; i < atoms.length; i++) {
+			const sh = a.byNode[atoms[i]!.id] ?? 0;
+			if (sh === 0) continue; // no shadow: nothing consumes this atom here
+			const flags = W[sh + AF.FLAGS]!;
+			if ((flags & AFlag.DIRTY) !== 0 && W[sh + AF.MARK] === a.readClock) continue; // dedup
+			if ((flags & AFlag.DIRTY) === 0) {
+				W[sh + AF.FLAGS] = flags | AFlag.DIRTY;
+				a.dirty.push(sh); // dirty-LIST append on the mark's 0→1 edge
+			}
+			W[sh + AF.MARK] = a.readClock;
+			const subs = W[sh + AF.SUBS]!;
+			if (subs !== 0) aPropagate(a, subs);
+		}
+	}
+
+	/** Reused single-atom buffer for site (c)/(d) fanout (no per-write alloc). */
+	private oneAtom: AtomNode[] = [];
+	private oneAtomBuf(atom: AtomNode): AtomNode[] {
+		this.oneAtom[0] = atom;
+		return this.oneAtom;
+	}
+
+	/** Site (a)/(d) helper: fan into EVERY live committed arena. */
+	private fanAtomsToCommittedArenas(atoms: AtomNode[]): void {
+		if (this.arenaByRoot.size === 0) return; // the one scalar check quiet writes pay (§4.1.2)
+		for (const a of this.arenaByRoot.values()) this.fanAtomsToArena(a, atoms, false);
+	}
+
+	/** §4.3 decay-by-eviction: swap the dirty list; an entry no evaluation
+	 * consumed whose node has no live same-root watcher MAY drop to cold
+	 * (evict the value, clear the mark) instead of re-appending — the dirty
+	 * list stays bounded by live consumers' cones. A mark never clears
+	 * without its refold having run OR its value having been evicted. */
+	private arenaDecay(a: ShadowArena): void {
+		if (a.dirty.length === 0) return;
+		const list = a.dirty;
+		a.dirty = [];
+		const W = a.W;
+		for (let i = 0; i < list.length; i++) {
+			const sh = list[i]!;
+			const flags = W[sh + AF.FLAGS]!;
+			if ((flags & AFlag.DIRTY) === 0) continue; // consumed by an evaluation: drop the entry
+			const nid = W[sh + AF.NODE]!;
+			const ws = this.watchersByNode[nid];
+			let watched = false;
+			if (ws !== undefined) {
+				for (let j = 0; j < ws.length; j++) {
+					const w = ws[j]!;
+					if (w.live && w.root === a.root) {
+						watched = true;
+						break;
+					}
+				}
+			}
+			if (watched) {
+				a.dirty.push(sh); // keep-the-dirt: unconsumed marks survive to the next boundary
+			} else {
+				// Drop-to-cold: evict the cached value, clear the mark; links and
+				// MUTABLE stay so routing coverage survives (§4.1's point).
+				if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+				W[sh + AF.FLAGS] = flags & ~(AFlag.DIRTY | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED);
+				a.vals[sh >> A_SHIFT] = undefined;
+			}
+		}
+	}
+
+	// ---- NF2 S-A: settlement tap + queue + drain (§4.5.4, step-0 shapes) ----
+
+	/** Pending-settlement queue + the sentinel queued bit (identity dedup). */
+	private pendingSettle: SuspendedRead[] = [];
+	private pendingSettleSet = new Set<SuspendedRead>();
+	private settleDraining = false;
+	private settleDrainScheduled = false;
+	/** Public-operation nesting (the settlement firing-context discriminant). */
+	private opDepth = 0;
+	/** Step-0 termination: the settlement drain adopts the engine's flush
+	 * bound discipline — an iteration cap with a diagnostic on breach; a
+	 * chain of callbacks that synchronously settles ever-new thenables is
+	 * USER feedback, the effect-loop equivalent. */
+	private settleCap = 10_000;
+
+	/** Test seam: shrink the settlement-drain iteration cap. @internal */
+	__setSettleCapForTest(n: number): void {
+		this.settleCap = n;
+	}
+
+	/**
+	 * The settle tap (§4.5.4 push half): called by the kernel's per-thenable
+	 * shared listener after the status write. Mint-on-tap is the FIRST act —
+	 * the kernel's own lazy-mint expression — so a synchronous custom
+	 * thenable (whose callbacks fire before `unwrapThenable`'s throw mints
+	 * `t.sr`) still yields ONE sentinel identity shared with the later throw.
+	 */
+	__settleTap(t: PromiseLike<unknown>): void {
+		const th = t as PromiseLike<unknown> & { sr?: SuspendedRead };
+		const sr = (th.sr ??= new SuspendedRead(t));
+		if (this.suspendedCount === 0 && this.pendingSettle.length === 0) return; // no arena suspensions anywhere
+		if (this.pendingSettleSet.has(sr)) return; // queued bit
+		this.pendingSettleSet.add(sr);
+		this.pendingSettle.push(sr);
+		if (this.settleDraining || this.notifyFlushing || this.opDepth !== 0 || this.evalDepth !== 0 || this.inFoldCallback) {
+			// Mid-operation: the enclosing operation's epilogue (or the drain's
+			// own next iteration) consumes it. Read-context settlement (S-A
+			// step 0): an epilogue-less read frame — standalone committedValue/
+			// passValue — has no epilogue, so ALSO schedule ONE coalesced
+			// microtask drain, the kernel's own attachSettle discipline
+			// (queueMicrotask); it no-ops when an epilogue got there first.
+			if (!this.settleDrainScheduled) {
+				this.settleDrainScheduled = true;
+				queueMicrotask(() => {
+					this.settleDrainScheduled = false;
+					if (this.pendingSettle.length !== 0 && this.opDepth === 0 && this.evalDepth === 0 && !this.settleDraining && !this.notifyFlushing) {
+						this.settlementDrain();
+					}
+				});
+			}
+			return;
+		}
+		// At rest (the kernel's batchDepth === 0 arm): drain NOW — a
+		// background-only suspended watcher or effect refires FROM the
+		// settlement event itself; no unrelated operation is ever needed.
+		this.settlementDrain();
+	}
+
+	/**
+	 * The settlement drain — ONE queue-owning loop, the only consumer of the
+	 * pending-settlement queue, identical at every drain site, and it OWNS
+	 * the notification flush (S-A step 0): `flushNotify` is INSIDE the loop,
+	 * so a refire callback that synchronously settles another thenable lands
+	 * its sentinel in the queue and gets the NEXT iteration. The drain IS the
+	 * EF2 settlement boundary; it never returns with a queued settlement
+	 * unscanned or unflushed.
+	 */
+	private settlementDrain(): void {
+		if (this.settleDraining) return;
+		this.settleDraining = true;
+		this.opDepth++; // taps landing mid-drain enqueue (next iteration)
+		try {
+			let iter = 0;
+			while (this.pendingSettle.length !== 0) {
+				if (++iter > this.settleCap) {
+					throw new BridgeInvariantViolation(
+						`settlement drain exceeded ${this.settleCap} iterations — a settlement chain is synchronously settling ever-new thenables (user feedback, the effect-loop equivalent)`,
+					);
+				}
+				const taken = this.pendingSettle;
+				this.pendingSettle = [];
+				for (let i = 0; i < taken.length; i++) this.pendingSettleSet.delete(taken[i]!);
+				const touchedRoots = new Set<RootId>();
+				for (let i = 0; i < taken.length; i++) {
+					const sr = taken[i]!;
+					this.eachArena((a) => {
+						// Scan the suspended list (dense — O(current suspensions),
+						// §4.5.4) for shadows whose box payload IS this sentinel.
+						const list = a.suspended;
+						const W = a.W;
+						let matched = false;
+						for (let j = 0; j < list.length; j++) {
+							const sh = list[j]!;
+							if (a.vals[sh >> A_SHIFT] !== sr) continue;
+							const flags = W[sh + AF.FLAGS]!;
+							if ((flags & AFlag.DIRTY) === 0) {
+								W[sh + AF.FLAGS] = flags | AFlag.DIRTY;
+								a.dirty.push(sh);
+							}
+							W[sh + AF.MARK] = a.readClock;
+							const subs = W[sh + AF.SUBS]!;
+							if (subs !== 0) aPropagate(a, subs); // strong AND weak; pin-exempt for pass arenas (§4.3)
+							matched = true;
+							// Dual bookkeeping: the memo layer is still the serving
+							// authority, and a background suspension memoizes the
+							// SENTINEL AS A VALUE whose fingerprints never move at
+							// settlement — evict it (evict-don't-serve, §4.2) so the
+							// boundary's re-checks re-run the fn and observe the
+							// settled outcome.
+							const nid = W[sh + AF.NODE]!;
+							if (a.kind === 'committed') {
+								this.roots.get(a.root)?.memos.delete(nid);
+								touchedRoots.add(a.root);
+							} else if (a.world.kind === 'pass') {
+								a.world.pass.memos.delete(nid); // open-pass roots: marks stay for the frame's close
+							}
+						}
+						if (matched) a.readClock++;
+					});
+					// The newest world's memo can hold the same sentinel-as-value
+					// (kernel atoms' fps do not move at settlement): evict by scan —
+					// suspension populations are tiny and the scan is settlement-only.
+					for (const [nid, m] of this.newestMemos) {
+						if (m.value === sr) this.newestMemos.delete(nid);
+					}
+				}
+				// Cone drain, K1-authority form: value-gated committed re-checks
+				// of the touched roots' live watchers (the durable-drain compare),
+				// deferred for roots with an open render frame (their close flushes).
+				for (const rootId of touchedRoots) {
+					if (this.openPassByRoot.has(rootId)) continue;
+					for (const w of this.watchers.values()) {
+						if (!w.live || w.root !== rootId) continue;
+						const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: rootId });
+						if (!Object.is(now, w.lastRenderedValue)) {
+							if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause: 'retirement' });
+							w.lastRenderedValue = now;
+							w.dedupBits = 0;
+							if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
+						}
+					}
+				}
+				// Boundary subscription scan + the flush the loop OWNS.
+				if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
+				if (this.newestSubCount !== 0) this.directFlushCoreEffects();
+				this.flushNotify();
+			}
+		} finally {
+			this.opDepth--;
+			this.settleDraining = false;
+		}
+	}
+
+	/** Public-operation epilogue (S-A): drain queued settlements to empty
+	 * (the fixed point), then the divergence check when armed. */
+	private arenaOpEpilogue(): void {
+		if (this.pendingSettle.length !== 0 && !this.settleDraining && this.opDepth === 0) this.settlementDrain();
+		if (this.arenaCheckOn) this.__checkArenas();
+	}
+
+	// ---- NF2 S-A: reclamation (§4.5.8), divergence check + validator (§4.9) ----
+
+	/** The watcher-population refcount, derived (dev-assertable) form: live
+	 * watchers of the root + live committed subscriptions of the root. */
+	private consumerCount(rootId: RootId): number {
+		let n = 0;
+		for (const w of this.watchers.values()) {
+			if (w.live && w.root === rootId) n++;
+		}
+		for (const e of this.subs.values()) {
+			if (e.live && e.policy === 'committed' && e.root === rootId) n++;
+		}
+		return n;
+	}
+
+	/** Quiesce duty 1 (§4.5.8): release committed arenas whose consumer
+	 * population is zero — buffer to the pool (claim gen bumped), columns
+	 * dropped, lists discarded; the root RECORD stays (no teardown event
+	 * exists — RUL-6 records the fallback). Then duty 2 (§4.5.7): per-arena
+	 * read-clock renumber over the SURVIVORS only. */
+	private arenaQuiesceSweep(): void {
+		for (const [rootId, a] of this.arenaByRoot) {
+			if (this.consumerCount(rootId) === 0) {
+				this.arenaByRoot.delete(rootId);
+				this.releaseArena(a);
+			}
+		}
+		for (const a of this.arenaByRoot.values()) {
+			a.readClock = 0;
+			for (let sh = A_STRIDE; sh < a.next; sh += A_STRIDE) {
+				if ((a.W[sh + AF.NODE] ?? 0) !== 0 && a.byNode[a.W[sh + AF.NODE]!] === sh) a.W[sh + AF.MARK] = 0;
+			}
+		}
+	}
+
+	/** Structural validator (§4.9.1, promoted from the spike): link-list
+	 * symmetry, suspended-list density/index integrity, dirty-list coverage,
+	 * GEN tenancy, cycle caps. Throws on corruption. */
+	private aValidate(a: ShadowArena): void {
+		const W = a.W;
+		const CAP = 100_000;
+		let suspSeen = 0;
+		for (let nid = 0; nid < a.byNode.length; nid++) {
+			const sh = a.byNode[nid] ?? 0;
+			if (sh === 0) continue;
+			if (W[sh + AF.NODE] !== nid) throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
+			// A dead-GEN shadow is legal COLD residue (§4.5.3): the invariant is
+			// that it never SERVES — enforced at shadowFor (re-tenant on consult),
+			// which every serve/link path routes through. No assert here.
+			const flags = W[sh + AF.FLAGS]!;
+			if ((flags & AFlag.BOX_SUSPENDED) !== 0) {
+				const slot = a.suspIdx[sh >> A_SHIFT]!;
+				if (slot === 0 || a.suspended[slot - 1] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`);
+				suspSeen++;
+			} else if ((a.suspIdx[sh >> A_SHIFT] ?? 0) !== 0) {
+				throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} holds a suspended index without the bit`);
+			}
+			if ((flags & AFlag.DIRTY) !== 0 && !a.dirty.includes(sh)) {
+				throw new BridgeInvariantViolation(`arena ${a.root}: DIRTY shadow ${sh} missing from the dirty list`);
+			}
+			// deps list symmetry
+			let cur = W[sh + AF.DEPS]!;
+			let prev = 0;
+			let steps = 0;
+			while (cur !== 0) {
+				if (++steps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: deps list of shadow ${sh} exceeds ${CAP} steps (cycle)`);
+				if (W[cur + AF.L_SUB] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
+				if (W[cur + AF.L_PREV_DEP] !== prev) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
+				const dep = W[cur + AF.L_DEP]!;
+				let s = W[dep + AF.SUBS]!;
+				let found = false;
+				let ssteps = 0;
+				while (s !== 0) {
+					if (++ssteps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: subs list of shadow ${dep} exceeds ${CAP} steps (cycle)`);
+					if (s === cur) {
+						found = true;
+						break;
+					}
+					s = W[s + AF.L_NEXT_SUB]!;
+				}
+				if (!found) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} missing from dep subs list (asymmetry)`);
+				prev = cur;
+				cur = W[cur + AF.L_NEXT_DEP]!;
+			}
+		}
+		if (suspSeen !== a.suspended.length) throw new BridgeInvariantViolation(`arena ${a.root}: suspended list holds ${a.suspended.length} entries but ${suspSeen} shadows carry the bit`);
+	}
+
+	/** Arms/disarms the S-A dual-bookkeeping divergence check. @internal */
+	__setArenaCheck(on: boolean): void {
+		this.arenaCheckOn = on;
+	}
+
+	/** Test seam: force an id-tenancy generation bump (§4.5.3 GEN pin). @internal */
+	__bumpNodeGenForTest(id: NodeId): void {
+		this.nodeGen[id] = (this.nodeGen[id] ?? 0) + 1;
+	}
+
+	/** Arena stats (tests/bench). @internal */
+	__arenaStats(): { committed: number; pass: number; pooled: number; suspended: number; pendingSettlements: number; dirty: number } {
+		let pass = 0;
+		let dirty = 0;
+		for (const p of this.openPassByRoot.values()) {
+			if (p.arena !== undefined) pass++;
+		}
+		this.eachArena((a) => {
+			dirty += a.dirty.length;
+		});
+		return { committed: this.arenaByRoot.size, pass, pooled: this.arenaPool.length, suspended: this.suspendedCount, pendingSettlements: this.pendingSettle.length, dirty };
+	}
+
+	/** Test seam: a committed arena's (dep → sub) link mode, or undefined
+	 * when no link exists (§4.4.1 mode-transition pin). @internal */
+	__arenaLinkMode(rootId: RootId, dep: AnyNode, sub: AnyNode): 'strong' | 'weak' | undefined {
+		const a = this.arenaByRoot.get(rootId);
+		if (a === undefined) return undefined;
+		const depSh = a.byNode[dep.id] ?? 0;
+		const subSh = a.byNode[sub.id] ?? 0;
+		if (depSh === 0 || subSh === 0) return undefined;
+		let cur = a.W[subSh + AF.DEPS]!;
+		while (cur !== 0) {
+			if (a.W[cur + AF.L_DEP] === depSh) return (a.W[cur + AF.L_MODE]! & 1) !== 0 ? 'weak' : 'strong';
+			cur = a.W[cur + AF.L_NEXT_DEP]!;
+		}
+		return undefined;
+	}
+
+	/**
+	 * THE S-A DIVERGENCE CHECK: for every live arena, serve every shadow FROM
+	 * THE ARENA (its own walks — the arena side runs FIRST so a stale shadow
+	 * cannot be refreshed by the overlay epilogue) and compare against the
+	 * K1/memo-served value for the same world. ANY divergence throws — a
+	 * lockstep test failure, the stage's STOP condition. @internal
+	 */
+	__checkArenas(): void {
+		if (this.inArenaCheck || this.evalDepth > 0 || this.inFoldCallback) return;
+		this.inArenaCheck = true;
+		this.opDepth++;
+		try {
+			this.eachArena((a) => {
+				this.aValidate(a);
+				for (let nid = 0; nid < a.byNode.length; nid++) {
+					const sh = a.byNode[nid] ?? 0;
+					if (sh === 0) continue;
+					const node = this.nodesArr[nid];
+					if (node === undefined) continue;
+					let aVal: Value;
+					let aThrew: unknown;
+					let aDidThrow = false;
+					try {
+						aVal = this.aServe(a, node);
+					} catch (err) {
+						aDidThrow = true;
+						aThrew = err;
+					}
+					let mVal: Value;
+					let mThrew: unknown;
+					let mDidThrow = false;
+					try {
+						mVal = this.evaluate(node, a.world);
+					} catch (err) {
+						mDidThrow = true;
+						mThrew = err;
+					}
+					if (aDidThrow !== mDidThrow) {
+						throw new BridgeInvariantViolation(
+							`S-A divergence: ${node.name} in ${a.kind} world of ${a.root}: arena ${aDidThrow ? `threw ${String(aThrew)}` : `served ${String(aVal!)}`} but memo path ${mDidThrow ? `threw ${String(mThrew)}` : `served ${String(mVal!)}`}`,
+						);
+					}
+					if (aDidThrow) {
+						if (String(aThrew) !== String(mThrew)) {
+							throw new BridgeInvariantViolation(`S-A divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but memo path threw ${String(mThrew)}`);
+						}
+					} else if (!Object.is(aVal!, mVal!)) {
+						throw new BridgeInvariantViolation(
+							`S-A divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ memo-served ${String(mVal!)}`,
+						);
+					}
+				}
+			});
+		} finally {
+			this.opDepth--;
+			this.inArenaCheck = false;
+		}
+	}
 
 	// ---- the union table + walks ----
 
@@ -2343,12 +3660,18 @@ export class CosignalBridge {
 		// Direct kernel apply: the plain write tail, no public-method re-entry
 		// (the host seam already ran — policy checked, op folded).
 		__hostApplySet(node.handle, next);
+		// NF2 S-A flip site (d): quiet fold — after the base/cas advance,
+		// before quietDrain and the sub scan (§4.1.2; the arenaByRoot.size
+		// check is the one scalar branch PR1's ledger documents).
+		this.fanAtomsToCommittedArenas(this.oneAtomBuf(node));
 		if (this.watchers.size !== 0) this.quietDrain();
 		// A quiet fold moves committed truth for every root — an EF2 boundary
 		// (quiet ⇔ no open passes, so no frame can defer the re-check).
 		if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
 		if (this.newestSubCount !== 0) this.directFlushCoreEffects();
+		for (const a of this.arenaByRoot.values()) this.arenaDecay(a); // NF2 S-A boundary decay
 		if (this.notifyN !== 0) this.flushNotify();
+		this.arenaOpEpilogue();
 	}
 
 	/** Value-gated watcher reconciliation for a quiet fold: committed truth
@@ -2412,6 +3735,19 @@ export class CosignalBridge {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		if (node.kind !== 'atom') throw new BridgeScheduleError('writes target atoms');
+		// NF2 S-A: public-operation frame — settlements landing anywhere
+		// inside (walks, effect bodies, notify callbacks) enqueue and the
+		// epilogue drains to empty (§4.5.4's fixed point).
+		this.opDepth++;
+		try {
+			this.writeInner(tokenId, node, op);
+		} finally {
+			this.opDepth--;
+		}
+		this.arenaOpEpilogue();
+	}
+
+	private writeInner(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
 		if (this.mode === 'direct') {
 			const next = this.applyOp(node, op, node.base);
 			if (!this.inCallback(() => node.equals(next, node.base))) {
@@ -2482,7 +3818,14 @@ export class CosignalBridge {
 			// the next durable drain must reconcile its cone.
 			const bit0 = 1 << slot.id;
 			for (const r of this.roots.values()) {
-				if ((r.committedBits & bit0) !== 0) r.committedDirtySlots |= bit0;
+				if ((r.committedBits & bit0) !== 0) {
+					r.committedDirtySlots |= bit0;
+					// NF2 S-A flip site (c): committed-member write — fan the ONE
+					// written atom into the member root's arena. Marks only; the
+					// effect scan stays at the next boundary (EF2 as amended, §4.0).
+					const ra = this.arenaByRoot.get(r.id);
+					if (ra !== undefined) this.fanAtomsToArena(ra, this.oneAtomBuf(node), false);
+				}
 			}
 		}
 		{
@@ -2624,6 +3967,8 @@ export class CosignalBridge {
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
 			memos: new Map(),
 		};
+		// NF2 S-A: claim the pass world's arena from the pool (§4.1).
+		pass.arena = this.claimArena('pass', { kind: 'pass', pass }, rootId);
 		this.passes.set(pass.id, pass);
 		this.openPassByRoot.set(rootId, pass);
 		this.quiet = false; // an open render pass: the pipeline is armed until it closes
@@ -3006,6 +4351,16 @@ export class CosignalBridge {
 	 * may just have closed).
 	 */
 	passEnd(id: PassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: TokenId[] }): void {
+		this.opDepth++; // NF2 S-A: public-operation frame (see write)
+		try {
+			this.passEndInner(id, kind, opts);
+		} finally {
+			this.opDepth--;
+		}
+		this.arenaOpEpilogue();
+	}
+
+	private passEndInner(id: PassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: TokenId[] }): void {
 		const p = this.pass(id);
 		if (p.state === 'ended') throw new BridgeScheduleError('pass already ended');
 		if (kind === 'commit') {
@@ -3084,6 +4439,14 @@ export class CosignalBridge {
 				if (t.slot !== undefined) root.committedBits |= 1 << t.slot;
 				root.commitGen++;
 				this.cas = this.mintSeq(); // committed-advance: every per-root commit bumps it
+				// NF2 S-A flip site (b): per-root lock-in — inside the per-token
+				// loop (m4: commits lock in SETS of tokens), immediately after
+				// the membership/gen/cas mutation and before this token's drain,
+				// fan THAT token's touched atoms into THIS root's arena.
+				{
+					const ra = this.arenaByRoot.get(p.root);
+					if (ra !== undefined) this.fanAtomsToArena(ra, t.atomsTouched, false);
+				}
 				if (this.eventsOn) this.log({ type: 'per-root-commit', root: p.root, token: t.id });
 				// (3) durable drain: the advanced slot's touched list plus any
 				// member-slot write drift, scoped to this root's committed
@@ -3114,6 +4477,10 @@ export class CosignalBridge {
 			if (!Object.is(committedNow, w.lastRenderedValue)) this.markRestaled(w);
 		}
 		if (this.eventsOn) this.log({ type: 'pass-committed', pass: p.id, root: p.root });
+		{
+			const ra = this.arenaByRoot.get(p.root);
+			if (ra !== undefined) this.arenaDecay(ra); // NF2 S-A boundary decay
+		}
 		this.reevaluateDeferredReleases();
 		this.reclaimAfterPassEnd(p);
 		this.recomputeQuiet(); // pass closed (and its pin unblocked compaction): quiet may re-arm
@@ -3136,6 +4503,13 @@ export class CosignalBridge {
 	 */
 	private reclaimAfterPassEnd(p: Pass): void {
 		this.passes.delete(p.id);
+		// NF2 S-A: drop the pass arena (commit and discard drop identically;
+		// this site already runs AFTER mount fixup and the re-staled loop —
+		// m2's ordering — so both saw the arena; touching it later throws).
+		if (p.arena !== undefined) {
+			this.releaseArena(p.arena);
+			p.arena = undefined;
+		}
 		for (const tid of p.maskTokens) {
 			const t = this.tokens.get(tid);
 			if (t !== undefined) this.maybeReclaimToken(t);
@@ -3195,13 +4569,19 @@ export class CosignalBridge {
 		const t = this.token(tokenId);
 		if (t.state === 'retired') throw new BridgeScheduleError('retirement fires exactly once per token');
 		if (t.parked) throw new BridgeScheduleError('parked action tokens retire only at settlement');
-		this.retireInternal(t, committed);
-		// EF2 boundary: retirement is a guaranteed flush point for every root
-		// (a write-free retirement still flushes pending member-write flips).
-		this.revalidateCommittedSubs(undefined);
-		const tr = this.trace;
-		if (tr !== undefined) tr.opEnd();
-		this.flushNotify();
+		this.opDepth++; // NF2 S-A: public-operation frame (see write)
+		try {
+			this.retireInternal(t, committed);
+			// EF2 boundary: retirement is a guaranteed flush point for every root
+			// (a write-free retirement still flushes pending member-write flips).
+			this.revalidateCommittedSubs(undefined);
+			const tr = this.trace;
+			if (tr !== undefined) tr.opEnd();
+			this.flushNotify();
+		} finally {
+			this.opDepth--;
+		}
+		this.arenaOpEpilogue();
 	}
 
 	/** The async action's promise settled; the protocol host then retires the token. */
@@ -3209,13 +4589,19 @@ export class CosignalBridge {
 		const t = this.token(tokenId);
 		if (!t.action) throw new BridgeScheduleError('settle targets an action token');
 		if (!t.parked || t.state !== 'live') throw new BridgeScheduleError('action already settled');
-		t.parked = false;
-		const tr = this.trace;
-		if (tr !== undefined) tr.batchSettle(t, committed);
-		this.retireInternal(t, committed);
-		this.revalidateCommittedSubs(undefined); // EF2 boundary: settlement is a guaranteed flush point
-		if (tr !== undefined) tr.opEnd();
-		this.flushNotify();
+		this.opDepth++; // NF2 S-A: public-operation frame (see write)
+		try {
+			t.parked = false;
+			const tr = this.trace;
+			if (tr !== undefined) tr.batchSettle(t, committed);
+			this.retireInternal(t, committed);
+			this.revalidateCommittedSubs(undefined); // EF2 boundary: settlement is a guaranteed flush point
+			if (tr !== undefined) tr.opEnd();
+			this.flushNotify();
+		} finally {
+			this.opDepth--;
+		}
+		this.arenaOpEpilogue();
 	}
 
 	/**
@@ -3263,6 +4649,10 @@ export class CosignalBridge {
 		if (touchedAny) this.cas = this.mintSeq();
 		// Fold/compaction (see compactAll for the two-clause predicate).
 		this.compactAll();
+		// NF2 S-A flip site (a): retirement — after stamps + cas + compaction,
+		// BEFORE the drain loop (§4.3's ordering joint: mutate → fan → drain),
+		// fan the retiring token's touched atoms into EVERY committed arena.
+		if (touchedAny) this.fanAtomsToCommittedArenas(t.atomsTouched);
 		if (this.eventsOn) this.log({ type: 'retired', token: t.id, committed, retiredSeq });
 		// Durable drains: enumerate the flipped slot's touched list (never
 		// only a consumable write-time queue — entries must survive until a
@@ -3276,6 +4666,9 @@ export class CosignalBridge {
 				const re = this.restaled.get(r.id);
 				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(r.id, 'retirement', bits);
 			}
+			// NF2 S-A: boundary mark decay — unconsumed marks on unwatched
+			// nodes drop to cold instead of re-appending forever (§4.3).
+			for (const a of this.arenaByRoot.values()) this.arenaDecay(a);
 		}
 		// Clear per-root rows (the retired clause subsumes membership now),
 		// THEN release the slot unless an open render mask names it.
@@ -3674,6 +5067,11 @@ export class CosignalBridge {
 		// Memo tables die by epoch; drop them eagerly (conservative refusal).
 		for (const r of this.roots.values()) r.memos.clear();
 		this.newestMemos.clear();
+		// NF2 S-A: arenas PERSIST across quiescence (their links are current
+		// structure, not an episode log — §4.1); the two new duties, in order:
+		// the zero-consumer reclamation sweep, then the read-clock renumber
+		// over the survivors only (§4.5.8, §4.5.7).
+		this.arenaQuiesceSweep();
 		// Kernel-pull refresh, AFTER the reset: a fresh newest evaluation of
 		// each target re-records its dependency cone into the NEW episode's
 		// K1 table. World evaluations reject writes, so the refresh cannot
@@ -3699,6 +5097,7 @@ export class CosignalBridge {
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
+		this.arenaOpEpilogue();
 	}
 
 	// ------------------------------------------------------------ helpers

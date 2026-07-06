@@ -1653,18 +1653,41 @@ function unwrapThenable(t: InstrumentedThenable): unknown {
 					if (t.status === 'pending') {
 						t.status = 'fulfilled';
 						t.value = v;
+						// NF2 S-A settle tap: consulted at FIRE time (a thenable
+						// instrumented before the bridge existed still notifies).
+						const tap = settleTap;
+						if (tap !== undefined) tap(t);
 					}
 				},
 				(e: unknown) => {
 					if (t.status === 'pending') {
 						t.status = 'rejected';
 						t.reason = e;
+						const tap = settleTap;
+						if (tap !== undefined) tap(t);
 					}
 				},
 			);
 			throw (t.sr ??= new SuspendedRead(t));
 		}
 	}
+}
+
+/**
+ * NF2 S-A (plans/2026-07-06 §4.5.4): the bridge-registered settle tap. The
+ * kernel's per-thenable shared listener — the pair `unwrapThenable` installs
+ * exactly once per thenable — calls it after the status write, so world-only
+ * suspensions (arena-cached sentinels the kernel never cached) are notified
+ * AT the settlement event itself. ONE closure per bridge registration;
+ * distinct-thenable dedup IS the instrument-once discipline. The kernel-
+ * cached path (`attachSettle` → stale-guarded `invalidateComputed`) is
+ * untouched and keeps handling KERNEL suspensions precisely.
+ */
+let settleTap: ((t: PromiseLike<unknown>) => void) | undefined;
+
+/** Registers/clears the settle tap (bridge seam). @internal */
+export function __setSettleTap(fn: ((t: PromiseLike<unknown>) => void) | undefined): void {
+	settleTap = fn;
 }
 
 /**

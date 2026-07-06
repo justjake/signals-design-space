@@ -94,6 +94,11 @@ export class TwinDriver {
 		// folds it out (retaining in-engine would grow without bound under a
 		// workload that never quiesces).
 		this.mirror.attach(this.engine);
+		// NF2 S-A dual bookkeeping: after every twin op, the engine serves
+		// every live arena's shadows FROM THE ARENA and compares against the
+		// memo-served values (plus the structural validator). ANY divergence
+		// throws — the stage's STOP condition.
+		this.engine.__setArenaCheck(true);
 	}
 
 	// ---- state the test bodies read directly (model side; engine compared per op)
@@ -158,6 +163,7 @@ export class TwinDriver {
 	 * exact.
 	 */
 	private compareStreams(label: string): void {
+		this.engine.__checkArenas(); // NF2 S-A divergence check (throws on ANY arena↔memo mismatch)
 		expect(this.engine.seq, `twin ${label}: seq diverged`).toBe(this.model.seq);
 		expect(this.engine.cas, `twin ${label}: cas diverged`).toBe(this.model.cas);
 		expect(this.engine.epoch, `twin ${label}: epoch diverged`).toBe(this.model.epoch);

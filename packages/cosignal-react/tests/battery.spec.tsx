@@ -788,7 +788,7 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		expect(cleans).toEqual([0]);
 	});
 
-	test('16d — a still-pending suspended dep is not a flip; the first boundary after settlement re-fires with the settled value', async () => {
+	test('16d — a still-pending suspended dep is not a flip; the SETTLEMENT DRAIN re-fires with the settled value (amended P2.S-A 2026-07-06)', async () => {
 		h = makeHarness();
 		const gate = deferred<string>();
 		const kick = new Atom(0);
@@ -813,14 +813,19 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		await act(async () => {
 			gate.resolve('DATA');
 		});
-		// Thenable settlement is a data-layer event, not a batch boundary:
-		// no re-fire until committed truth next moves (EF2 names commits,
-		// retirements, and action settlements — not resource settlement).
-		expect(seen).toHaveLength(1);
+		// AMENDED P2.S-A (plans/2026-07-06 §4.5.4, fourth pass; RCC-SU5 MUST:
+		// "settlement re-evaluates the consumers that suspended"): thenable
+		// settlement IS the EF2 settlement boundary — the settle tap's drain
+		// re-checks the suspended consumer FROM the settlement event itself,
+		// with NO unrelated operation (the background-settlement coverage
+		// fable M2 showed this battery lacked). The pre-P2 pin ("not a batch
+		// boundary; no re-fire until committed truth next moves") described
+		// the engine's GAP, not the contract.
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toBe('DATA'); // re-fired with the settled value, from the drain
 		await act(async () => {
-			kick.set(2); // the first boundary after settlement
+			kick.set(2); // the next boundary re-checks value-gated: no extra fire
 		});
 		expect(seen).toHaveLength(2);
-		expect(seen[1]).toBe('DATA'); // re-fired with the settled value
 	});
 });

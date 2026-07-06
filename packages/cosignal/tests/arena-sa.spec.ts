@@ -1,0 +1,253 @@
+/**
+ * NF2 P2.S-A pins (plans/2026-07-06-effects-unification-and-nf2.md §4.9.3,
+ * incl. the S-A step-0 quartet): the settlement octet, mixed-mode link
+ * modes, the fp-100/seq-50 lock-in walk, root-churn retention +
+ * rematerialization, grown-then-shrunk mark decay, and GEN id-tenancy.
+ * Every bridge here runs with the S-A divergence check ARMED — each public
+ * operation's epilogue serves every live arena's shadows from the arena's
+ * own walks and compares against the memo-served values; any mismatch (or
+ * structural-validator breach) throws. RCC-SU5 is the settlement pins'
+ * contract cite: "settlement re-evaluates the consumers that suspended."
+ */
+import { describe, expect, it } from 'vitest';
+import { __ctxUse, SuspendedRead } from '../src/index.js';
+import { __newBridgeForTest, BridgeInvariantViolation, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/logged.js';
+
+const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
+
+function bridge(): CosignalBridge {
+	const b = __newBridgeForTest();
+	b.registerBridge();
+	b.__setArenaCheck(true);
+	return b;
+}
+
+/** The shim-wrapper analog (`makeComputedNode`): a background suspension
+ * folds to the thenable's stable sentinel VALUE instead of unwinding. */
+function suspending(b: CosignalBridge, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
+	return b.computed(name, (read, untracked) => {
+		try {
+			return fn(read, untracked);
+		} catch (err) {
+			if (err instanceof SuspendedRead) return err;
+			throw err;
+		}
+	});
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+	let resolve!: (v: T) => void;
+	const promise = new Promise<T>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
+}
+
+/** A manually-settled thenable whose callbacks fire SYNCHRONOUSLY at
+ * settle() — the custom-thenable shape the step-0 pins need. */
+function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
+	const cbs: ((v: T) => void)[] = [];
+	const t: PromiseLike<T> = {
+		then(onF): PromiseLike<never> {
+			if (onF) cbs.push(onF as (v: T) => void);
+			return undefined as never;
+		},
+	} as PromiseLike<T>;
+	return { t, settle: (v: T) => { for (const cb of cbs) cb(v); } };
+}
+
+/** Mount a live committed watcher on `node` via a clean commit. */
+function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+	const p = b.passStart(root, []);
+	const w = b.mountWatcher(p.id, node, name);
+	b.passEnd(p.id, 'commit');
+	return w;
+}
+
+function corrections(b: CosignalBridge, watcher: string): number {
+	return b.eventsOfType('reconcile-correction').filter((e) => (e as { watcher: string }).watcher === watcher).length;
+}
+
+describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
+	it('at-rest background settlement: the drain itself delivers the correction — NO subsequent operation', async () => {
+		const b = bridge();
+		const gate = deferred<string>();
+		const holder = { _useCache: undefined };
+		const c = suspending(b, 'c', () => __ctxUse(holder, 'k', () => gate.promise));
+		const w = mount(b, 'R', c, 'W');
+		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead); // sentinel cached (arena box-suspended)
+		expect(b.__arenaStats().suspended).toBe(1);
+		gate.resolve('DATA'); // fully at rest: no operation open, ever again
+		await tick();
+		// The settle tap's drain scanned the suspended list, refolded the
+		// cone, revalidated, and FLUSHED — the correction arrived from the
+		// settlement event itself.
+		expect(corrections(b, 'W')).toBe(1);
+		expect(w.lastRenderedValue).toBe('DATA');
+		expect(b.__arenaStats().suspended).toBe(0);
+		expect(b.committedValue(c, 'R')).toBe('DATA');
+	});
+
+	it('mid-operation settlement: the enclosing operation\'s epilogue fixed point consumes it', async () => {
+		const b = bridge();
+		const m1 = manual<string>();
+		const holder = { _useCache: undefined };
+		const key = b.atom('key', 0);
+		const c = suspending(b, 'c', (read) => {
+			read(key);
+			return __ctxUse(holder, 'k', () => m1.t);
+		});
+		const w = mount(b, 'R', c, 'W');
+		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
+		// Settle DURING a watcher drain: hook the correction of an unrelated
+		// watcher that drains first (id order) — here simpler: settle inside
+		// the write operation via an updater is illegal (fold purity), so use
+		// onCorrection of a sibling cone.
+		const kick = b.atom('kick', 0);
+		const d = b.computed('d', (read) => read(kick));
+		mount(b, 'R', d, 'WD');
+		let settled = false;
+		b.onCorrection = () => {
+			if (!settled) {
+				settled = true;
+				m1.settle('MID'); // lands mid-flushNotify → queued → next drain iteration
+			}
+		};
+		const t = b.openBatch();
+		b.write(t.id, kick, { kind: 'set', value: 1 });
+		b.retire(t.id, true); // WD corrects → callback settles m1 mid-flush
+		// The SAME operation's epilogue drained the queued settlement:
+		expect(settled).toBe(true);
+		expect(w.lastRenderedValue).toBe('MID');
+		expect(b.__arenaStats().pendingSettlements).toBe(0);
+		expect(b.committedValue(c, 'R')).toBe('MID');
+	});
+
+	it('reentrant settle-during-flush (step 0): a correction callback settles another thenable — the NEXT loop iteration delivers it before the drain returns', async () => {
+		const b = bridge();
+		const g1 = deferred<string>();
+		const m2 = manual<string>();
+		const h1 = { _useCache: undefined };
+		const h2 = { _useCache: undefined };
+		const c1 = suspending(b, 'c1', () => __ctxUse(h1, 'k1', () => g1.promise));
+		const c2 = suspending(b, 'c2', () => __ctxUse(h2, 'k2', () => m2.t));
+		const w1 = mount(b, 'R', c1, 'W1');
+		const w2 = mount(b, 'R', c2, 'W2');
+		expect(b.__arenaStats().suspended).toBe(2);
+		let reentered = false;
+		b.onCorrection = (w) => {
+			if (w.name === 'W1' && !reentered) {
+				reentered = true;
+				m2.settle('CHAIN'); // synchronous settle INSIDE the drain's flushNotify
+			}
+		};
+		g1.resolve('FIRST'); // at-rest settlement → drain iteration 1 heals c1
+		await tick();
+		// Iteration 1's flushNotify ran the W1 correction, whose callback
+		// settled m2 → queued → iteration 2 healed c2 and flushed W2's
+		// correction — all inside ONE drain, no subsequent operation.
+		expect(w1.lastRenderedValue).toBe('FIRST');
+		expect(w2.lastRenderedValue).toBe('CHAIN');
+		expect(corrections(b, 'W2')).toBe(1);
+		expect(b.__arenaStats().suspended).toBe(0);
+		expect(b.__arenaStats().pendingSettlements).toBe(0);
+	});
+
+	it('read-context microtask drain (step 0): a sync thenable settling during standalone committedValue strands nothing — the coalesced queueMicrotask drain consumes it', async () => {
+		const b = bridge();
+		const m1 = manual<string>();
+		const holder = { _useCache: undefined };
+		const c = suspending(b, 'c', () => __ctxUse(holder, 'k', () => m1.t));
+		const w = mount(b, 'R', c, 'W');
+		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
+		// Settle synchronously while ONLY a read frame is open: no public
+		// operation, hence no epilogue — the tap schedules the microtask.
+		const during = b.computed('probe', () => {
+			m1.settle('SYNC');
+			return 0;
+		});
+		b.committedValue(during, 'R'); // read context: evalDepth > 0 at the tap
+		expect(b.__arenaStats().pendingSettlements).toBe(1); // queued, not stranded forever…
+		await tick();
+		// …the microtask drain consumed it: refire arrived with NO operation.
+		expect(b.__arenaStats().pendingSettlements).toBe(0);
+		expect(w.lastRenderedValue).toBe('SYNC');
+		expect(corrections(b, 'W')).toBe(1);
+	});
+
+	it('read-after-await self-heal (pull half): committedValue observes the settled outcome deterministically, before any drain', async () => {
+		const b = bridge();
+		const gate = deferred<string>();
+		const holder = { _useCache: undefined };
+		const c = suspending(b, 'c', () => __ctxUse(holder, 'k', () => gate.promise));
+		mount(b, 'R', c, 'W');
+		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
+		gate.resolve('HEALED');
+		await gate.promise; // the continuation may run BEFORE the settle listener's microtask
+		// The read-site status probe (boxedRead-style) self-heals AT THE READ.
+		expect(b.committedValue(c, 'R')).toBe('HEALED');
+	});
+
+	it('key-A/key-B world-only settlement: the kernel never cached A; the tap + suspended-list scan still heal the committed world', async () => {
+		const b = bridge();
+		const gateA = deferred<string>();
+		const holder = { _useCache: undefined };
+		const kick = b.atom('kick', 0);
+		const c = suspending(b, 'c', (read) => {
+			const key = (read(kick) as number) === 0 ? 'A' : 'B';
+			return __ctxUse(holder, key, () => (key === 'A' ? gateA.promise : ({ then: () => undefined as never, status: 'fulfilled', value: 'B!' } as PromiseLike<string>)));
+		});
+		const w = mount(b, 'R', c, 'W'); // committed world: key A → suspends, sentinel cached
+		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
+		const t = b.openBatch();
+		b.write(t.id, kick, { kind: 'set', value: 1 });
+		expect(b.newestValue(c)).toBe('B!'); // newest asks key B: pre-settled, no listener needed
+		gateA.resolve('A!'); // world-only settlement: no kernel cache ever held A
+		await tick();
+		expect(w.lastRenderedValue).toBe('A!'); // healed FROM the settlement drain
+		b.retire(t.id, false);
+	});
+
+	it('termination cap (step 0): a self-perpetuating settlement chain trips the dev diagnostic instead of hanging', async () => {
+		const b = bridge();
+		b.__setSettleCapForTest(8);
+		const K = 12; // chain length > cap
+		const gates = Array.from({ length: K }, () => manual<string>());
+		const watchers = gates.map((g, i) => {
+			const h = { _useCache: undefined };
+			const c = suspending(b, `c${i}`, () => __ctxUse(h, `k${i}`, () => g.t));
+			return mount(b, 'R', c, `W${i}`);
+		});
+		expect(b.__arenaStats().suspended).toBe(K);
+		let chain = 0;
+		b.onCorrection = () => {
+			if (++chain < K) gates[chain]!.settle(`v${chain}`); // each iteration mints the next settlement
+		};
+		expect(() => gates[0]!.settle('v0')).toThrow(BridgeInvariantViolation);
+		expect(chain).toBeGreaterThanOrEqual(8); // the loop made real progress up to the cap
+		expect(watchers[0]!.lastRenderedValue).toBe('v0');
+	});
+
+	it('suspended-list compaction (step 0): clear → re-suspend keeps the list a dense set; swap-remove preserves every stored index', async () => {
+		const b = bridge();
+		const gs = [deferred<string>(), deferred<string>(), deferred<string>()];
+		const keyAtom = b.atom('key', 0);
+		const holders = gs.map(() => ({ _useCache: undefined }));
+		const cs = gs.map((g, i) =>
+			suspending(b, `c${i}`, (read) => {
+				const gen = read(keyAtom) as number;
+				return __ctxUse(holders[i]!, `k${i}-${gen}`, () => (gen === 0 ? g.promise : deferred<string>().promise));
+			}));
+		for (let i = 0; i < 3; i++) mount(b, 'R', cs[i]!, `W${i}`);
+		expect(b.__arenaStats().suspended).toBe(3);
+		gs[1]!.resolve('MID'); // clear the MIDDLE entry: swap-remove moves the tail into its slot
+		await tick();
+		expect(b.__arenaStats().suspended).toBe(2); // dense; validator checked index integrity at the epilogue
+		// Re-suspend all three on fresh keys (new pending thenables):
+		const t = b.openBatch();
+		b.write(t.id, keyAtom, { kind: 'set', value: 1 });
+		b.retire(t.id, true);
+		expect(b.__arenaStats().suspended).toBe(3); // exactly one dense entry per shadow — never a duplicate
+		expect(b.__arenaStats().pendingSettlements).toBe(0);
+	});
+});
