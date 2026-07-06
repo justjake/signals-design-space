@@ -244,8 +244,14 @@ export type EngineOptions = {
 	initialLogRecords?: number; // log-plane records (default 1024)
 	initialMemoRecords?: number; // memo-plane records (default 1024)
 	/** §14.2: register atom/computed handles with a FinalizationRegistry that
-	 * reclaims their records when the handles are garbage-collected. Off by
-	 * default (flag-gated this pass). */
+	 * reclaims their records when the handles are garbage-collected.
+	 * ON BY DEFAULT ("we should never leak"). Pass `false` to opt out for
+	 * zero FR overhead, accepting the bounded leak: each dropped unwatched
+	 * handle then pins exactly its own record + side slots, forever.
+	 * CAVEAT (inherent to JS, both modes): a computed whose fn closure was
+	 * created in a scope that also captures the handle keeps the handle
+	 * reachable through the shared closure context — create the fn in its
+	 * own scope (e.g. a factory function) if you rely on GC reclamation. */
 	finalization?: boolean;
 };
 
@@ -448,15 +454,43 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 	}
 
-	const finalizationEnabled = options?.finalization === true;
+	// §14.2 — ON BY DEFAULT ("we should never leak"): dropped atom/computed
+	// handles are reclaimed via FinalizationRegistry. Pass
+	// `finalization: false` to opt out (zero FR overhead, accepting the
+	// bounded per-record leak for dropped never-watched handles).
+	const finalizationEnabled = options?.finalization !== false;
 	const finalizer = finalizationEnabled && typeof FinalizationRegistry !== 'undefined'
-		? new FinalizationRegistry<{ id: number; gen: number }>((held) => {
-			reclaimNode(held.id, held.gen, true);
+		? new FinalizationRegistry<number | { id: number; gen: number }>((held) => {
+			// Packed number heldValue: gen * 2^32 + id — exact while
+			// gen < 2^21; the (allocating) object form is the overflow
+			// fallback, so correctness never rides on the packing range.
+			if (typeof held === 'number') {
+				reclaimNode(held % 0x100000000, Math.floor(held / 0x100000000), true);
+			} else {
+				reclaimNode(held.id, held.gen, true);
+			}
 		})
 		: undefined;
 
-	function registerHandle(handle: object, id: number): void {
-		finalizer?.register(handle, { id, gen: M[id + C.GEN] });
+	// Register a tiny token object OWNED by the handle instead of the handle
+	// itself: the token dies in the same GC cycle as its handle (the handle
+	// holds the token's only strong reference), and registering a slot-free
+	// {} is much cheaper than registering the closure-rich handle — V8's
+	// weak-target processing of a dying registered object scales with the
+	// target's shape (measured: +41ns/handle direct vs +16.5ns via token,
+	// token allocation included). The token rides in the handle literal so
+	// handle shapes stay monomorphic.
+	function newFinToken(id: number): object | undefined {
+		if (finalizer === undefined) {
+			return undefined;
+		}
+		const token = {};
+		const gen = M[id + C.GEN];
+		// SMI heldValue for fresh records (gen 0, the common case) — a packed
+		// HeapNumber (and the rare {id, gen} overflow form) costs an extra
+		// young-gen allocation per registration.
+		finalizer.register(token, gen === 0 ? id : gen < 0x200000 ? gen * 0x100000000 + id : { id, gen });
+		return token;
 	}
 
 	// Fork wiring.
@@ -2963,6 +2997,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		const handle = {
 			kind: 'atom',
 			id,
+			fin: newFinToken(id), // §14.2 reclamation token, dies with the handle
 			get state(): T {
 				return readAtomPublic(id) as T;
 			},
@@ -2982,7 +3017,6 @@ export function createCosignalEngine(options?: EngineOptions) {
 				writeOp(id, C.OP_UPDATE, fn);
 			},
 		} as const;
-		registerHandle(handle, id);
 		return handle as AtomHandle<T>;
 	}
 
@@ -3004,6 +3038,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		const handle = {
 			kind: 'reducerAtom',
 			id,
+			fin: newFinToken(id), // §14.2 reclamation token, dies with the handle
 			get state(): S {
 				return readAtomPublic(id) as S;
 			},
@@ -3020,7 +3055,6 @@ export function createCosignalEngine(options?: EngineOptions) {
 				writeOp(id, C.OP_DISPATCH, action);
 			},
 		} as const;
-		registerHandle(handle, id);
 		return handle as ReducerAtomHandle<S, A>;
 	}
 
@@ -3053,11 +3087,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 		const handle = {
 			kind: 'computed',
 			id,
+			fin: newFinToken(id), // §14.2 reclamation token, dies with the handle
 			get state(): T {
 				return readComputedPublic(id) as T;
 			},
 		} as const;
-		registerHandle(handle, id);
 		return handle as ComputedHandle<T>;
 	}
 

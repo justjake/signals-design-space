@@ -135,11 +135,13 @@ describe('lifecycle (d): dynamic dep churn reuses link records', () => {
 	});
 });
 
-// ---- (b)/(c) dropped handles: documented default leak, reclaimed with the flag --
+// ---- (b)/(c) dropped handles: reclaimed by DEFAULT; bounded leak on opt-out ----
 
 describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
-	it('DOCUMENTED LEAK (finalization off, the default): dropped handles retain their records — bounded at one record + its own slots each, linear growth only', () => {
-		const e = createCosignalEngine();
+	it('DOCUMENTED LEAK (finalization: false, the explicit opt-out): dropped handles retain their records — bounded at one record + its own slots each, linear growth only', () => {
+		// The opt-out contract: zero FinalizationRegistry overhead, and each
+		// dropped unwatched handle pins exactly its own record, forever.
+		const e = createCosignalEngine({ finalization: false });
 		const base = e.debug.stats().recNext;
 		for (let i = 0; i < 100; ++i) {
 			e.atom(i); // handle dropped immediately
@@ -156,9 +158,9 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 	});
 
 	it.runIf(hasGC)(
-		'finalization: true — GC reclaims dropped never-watched atoms/computeds (arena plateaus)',
+		'DEFAULT config: GC reclaims dropped never-watched atoms/computeds (arena plateaus)',
 		async () => {
-			const e = createCosignalEngine({ finalization: true });
+			const e = createCosignalEngine(); // finalization is ON by default
 			const makeGarbage = (n: number): void => {
 				for (let i = 0; i < n; ++i) {
 					e.atom(i);
@@ -180,9 +182,9 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 	);
 
 	it.runIf(hasGC)(
-		'finalization: true — watched→unwatched computeds reclaim after handles drop',
+		'DEFAULT config: watched→unwatched computeds reclaim after handles drop',
 		async () => {
-			const e = createCosignalEngine({ finalization: true });
+			const e = createCosignalEngine(); // finalization is ON by default
 			const src = e.atom(0);
 			// NOTE (documented limitation, inherent to JS closures): the
 			// computed's fn must be created in a scope that does NOT also
@@ -215,7 +217,7 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 
 describe('finalization retry (fixed leak): a guarded skip must not leak forever', () => {
 	it('retries when the last subscriber unlinks (watcher held the atom)', () => {
-		const e = createCosignalEngine({ finalization: true });
+		const e = createCosignalEngine(); // finalization is ON by default
 		const a = e.atom(1);
 		const w = e.watch(a, () => {});
 		// GC decides the atom handle is unreachable while the watcher still
@@ -231,7 +233,7 @@ describe('finalization retry (fixed leak): a guarded skip must not leak forever'
 	});
 
 	it('retries when the live tape sweeps away (LOGGED guard)', () => {
-		const e = createCosignalEngine({ finalization: true });
+		const e = createCosignalEngine(); // finalization is ON by default
 		const fork = createForkDouble();
 		e.attachFork(fork);
 		fork.registerRoot('root');

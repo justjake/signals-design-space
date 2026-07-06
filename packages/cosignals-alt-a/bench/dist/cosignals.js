@@ -266,6 +266,8 @@ function createCosignalEngine(options) {
   const kernelBroadcasts = [];
   let drainDepth = 0;
   const broadcastLog = [];
+  const BROADCAST_LOG_CAP = 16384;
+  let broadcastLogDropped = 0;
   let forbidWritesInComputeds = false;
   const lifecyclePending = /* @__PURE__ */ new Map();
   const lifecycleDelivered = /* @__PURE__ */ new Map();
@@ -273,24 +275,57 @@ function createCosignalEngine(options) {
   const rootViews = /* @__PURE__ */ new Map();
   const commitListeners = /* @__PURE__ */ new Set();
   let tracer;
-  function reclaimNode(id, gen) {
+  function reclaimNode(id, gen, fromFinalizer = false) {
     if (M[id + 5 /* GEN */] !== gen || (M[id + 0 /* FLAGS */] & (1024 /* K_ATOM */ | 2048 /* K_COMPUTED */)) === 0) {
+      finalizeSkipped.delete(id);
       return;
     }
     if (M[id + 3 /* SUBS */] !== 0 || (M[id + 0 /* FLAGS */] & 128 /* LOGGED */) !== 0) {
+      if (fromFinalizer) {
+        finalizeSkipped.set(id, gen);
+      }
       return;
     }
+    finalizeSkipped.delete(id);
     disposeAllDepsInReverse(id);
     M[id + 0 /* FLAGS */] = 0;
     pendingFree.push(id);
     maybeBoundary();
   }
-  const finalizationEnabled = options?.finalization === true;
+  const finalizeSkipped = /* @__PURE__ */ new Map();
+  const finalizeRetry = [];
+  function noteReclaimRetry(id) {
+    if (finalizeSkipped.size !== 0 && finalizeSkipped.has(id)) {
+      finalizeRetry.push(id);
+    }
+  }
+  function processFinalizeRetries() {
+    while (finalizeRetry.length !== 0) {
+      const batch3 = finalizeRetry.splice(0, finalizeRetry.length);
+      for (const id of batch3) {
+        const gen = finalizeSkipped.get(id);
+        if (gen !== void 0) {
+          reclaimNode(id, gen, true);
+        }
+      }
+    }
+  }
+  const finalizationEnabled = options?.finalization !== false;
   const finalizer = finalizationEnabled && typeof FinalizationRegistry !== "undefined" ? new FinalizationRegistry((held) => {
-    reclaimNode(held.id, held.gen);
+    if (typeof held === "number") {
+      reclaimNode(held % 4294967296, Math.floor(held / 4294967296), true);
+    } else {
+      reclaimNode(held.id, held.gen, true);
+    }
   }) : void 0;
-  function registerHandle(handle, id) {
-    finalizer?.register(handle, { id, gen: M[id + 5 /* GEN */] });
+  function newFinToken(id) {
+    if (finalizer === void 0) {
+      return void 0;
+    }
+    const token = {};
+    const gen = M[id + 5 /* GEN */];
+    finalizer.register(token, gen === 0 ? id : gen < 2097152 ? gen * 4294967296 + id : { id, gen });
+    return token;
   }
   let fork;
   let unsubscribeFork;
@@ -363,8 +398,19 @@ function createCosignalEngine(options) {
     values[v] = void 0;
     values[v + 1] = void 0;
     fns[id >> 3] = void 0;
+    let mrec = memos[id >> 3];
+    while (mrec !== 0 && mrec < wNext && W[mrec + 2 /* W_NODE */] === id) {
+      W[mrec + 1 /* W_EPOCH */] = 0;
+      memoVals[W[mrec + 3 /* W_VAL */]] = void 0;
+      mrec = W[mrec + 4 /* W_NEXT_MEMO */];
+    }
     memos[id >> 3] = 0;
     metas[id >> 3] = void 0;
+    unappliedStamp[id >> 3] = 0;
+    newestValidAt[id >> 3] = 0;
+    if (finalizeSkipped.size !== 0) {
+      finalizeSkipped.delete(id);
+    }
     M[id + 1 /* DEPS */] = nodeFreeHead;
     nodeFreeHead = id;
   }
@@ -579,7 +625,10 @@ function createCosignalEngine(options) {
       unwatched(dep);
     }
     if ((M[dep + 0 /* FLAGS */] & 512 /* LIVE */) !== 0) {
-      recheckLive(dep);
+      const first = M[dep + 3 /* SUBS */];
+      if (first === 0 || (M[M[first + 2 /* SUB */] + 0 /* FLAGS */] & 512 /* LIVE */) === 0) {
+        recheckLive(dep);
+      }
     }
     return nextDep;
   }
@@ -775,7 +824,9 @@ function createCosignalEngine(options) {
         M[node + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 16 /* DIRTY */ | flags & (512 /* LIVE */ | 128 /* LOGGED */);
         disposeAllDepsInReverse(node);
       }
+      noteReclaimRetry(node);
     } else if (flags & 1024 /* K_ATOM */) {
+      noteReclaimRetry(node);
     } else if (flags & (4096 /* K_EFFECT */ | 8192 /* K_SCOPE */ | 16384 /* K_WATCHER */)) {
       dispose(node);
     }
@@ -877,6 +928,9 @@ function createCosignalEngine(options) {
     if (!(flags & 31744 /* KIND_MASK */)) {
       return;
     }
+    if (flags & 16384 /* K_WATCHER */) {
+      liveWatchers.delete(e);
+    }
     M[e + 0 /* FLAGS */] = 0;
     disposeAllDepsInReverse(e);
     const sub = M[e + 3 /* SUBS */];
@@ -904,8 +958,13 @@ function createCosignalEngine(options) {
     }
   }
   function maybeBoundary() {
-    if (enterDepth === 0 && pendingFree.length !== 0 && queuedLength === 0) {
-      sweepPendingFree();
+    if (enterDepth === 0 && queuedLength === 0) {
+      if (finalizeRetry.length !== 0 && drainDepth === 0) {
+        processFinalizeRetries();
+      }
+      if (pendingFree.length !== 0) {
+        sweepPendingFree();
+      }
     }
   }
   function flush() {
@@ -1113,6 +1172,14 @@ function createCosignalEngine(options) {
   }
   function releaseSlotIfDone(slot) {
     if ((retiredSlotMask >> slot & 1) !== 0 && batchEntryCount[slot] === 0) {
+      let rec = slotMemoHead[slot];
+      while (rec > 0) {
+        const next = W[rec + 5 /* W_SLOT_NEXT */];
+        W[rec + 1 /* W_EPOCH */] = 0;
+        memoVals[W[rec + 3 /* W_VAL */]] = void 0;
+        W[rec + 5 /* W_SLOT_NEXT */] = -1;
+        rec = next;
+      }
       batchToken[slot] = 0;
       slotOccupiedMask &= ~(1 << slot);
       liveSlotMask &= ~(1 << slot);
@@ -1435,21 +1502,26 @@ function createCosignalEngine(options) {
       v = prev;
     }
     if (world.key >= 0) {
-      const pairs = certSp - frameBase >> 1;
-      while (certNext + pairs * 2 > WC.length) {
-        growWC();
-      }
-      const off = certNext;
-      for (let i = 0; i < pairs * 2; ++i) {
-        WC[off + i] = certStack[frameBase + i];
-      }
-      certNext = off + pairs * 2;
       let rec = 0;
       for (let old = memoHeadOf(c); old !== 0; old = W[old + 4 /* W_NEXT_MEMO */]) {
         if (W[old + 0 /* W_KEY */] === world.key) {
           rec = old;
           break;
         }
+      }
+      const pairs = certSp - frameBase >> 1;
+      let off;
+      if (rec !== 0 && pairs <= W[rec + 6 /* W_NDEPS */]) {
+        off = W[rec + 7 /* W_CERT */];
+      } else {
+        while (certNext + pairs * 2 > WC.length) {
+          growWC();
+        }
+        off = certNext;
+        certNext = off + pairs * 2;
+      }
+      for (let i = 0; i < pairs * 2; ++i) {
+        WC[off + i] = certStack[frameBase + i];
       }
       if (rec !== 0) {
         W[rec + 1 /* W_EPOCH */] = overlayEpoch;
@@ -1539,6 +1611,23 @@ function createCosignalEngine(options) {
   function requestWalk(atom2, token) {
     pendingWalks.push(atom2, token);
   }
+  const liveWatchers = /* @__PURE__ */ new Set();
+  function pruneWatcherBaselines() {
+    if (liveWatchers.size === 0) {
+      return;
+    }
+    for (const w of liveWatchers) {
+      const lb = metas[w >> 3]?.lastBroadcast;
+      if (lb === void 0 || lb.size <= 1) {
+        continue;
+      }
+      for (const key of lb.keys()) {
+        if (key !== 0 && findLiveSlot(key) < 0) {
+          lb.delete(key);
+        }
+      }
+    }
+  }
   function decide(w, token, entangled) {
     const meta = metas[w >> 3];
     if (meta === void 0 || meta.watchedId === void 0 || (M[w + 0 /* FLAGS */] & 16384 /* K_WATCHER */) === 0) {
@@ -1559,6 +1648,10 @@ function createCosignalEngine(options) {
       };
       if (tracer !== void 0) {
         tracer.emit(9 /* BROADCAST */, w, token);
+      }
+      if (broadcastLog.length >= BROADCAST_LOG_CAP) {
+        broadcastLogDropped += broadcastLog.length >> 1;
+        broadcastLog.splice(0, broadcastLog.length >> 1);
       }
       broadcastLog.push(ev);
       meta.onBroadcast?.(ev);
@@ -1965,7 +2058,9 @@ function createCosignalEngine(options) {
     sweepNeeded = true;
     drainAll(true);
     sweepLogs();
+    pruneWatcherBaselines();
     tryQuiescence();
+    maybeBoundary();
   }
   function truncateBatch(token) {
     const slot = findLiveSlot(token);
@@ -2022,6 +2117,7 @@ function createCosignalEngine(options) {
       sweepLogs();
       tryQuiescence();
     }
+    maybeBoundary();
   }
   function sweepLogs() {
     let moved = false;
@@ -2064,6 +2160,7 @@ function createCosignalEngine(options) {
         loggedAtoms[i] = loggedAtoms[loggedAtoms.length - 1];
         loggedAtoms.pop();
         --loggedAtomCount;
+        noteReclaimRetry(a);
         moved = true;
       }
     }
@@ -2098,6 +2195,7 @@ function createCosignalEngine(options) {
     seqCounter = 1;
     ++certGen;
     ++quiescenceCount;
+    pruneWatcherBaselines();
     if (tracer !== void 0) {
       tracer.emit(13 /* QUIESCENCE */, 0, 0, quiescenceCount);
     }
@@ -2292,6 +2390,8 @@ function createCosignalEngine(options) {
     const handle = {
       kind: "atom",
       id,
+      fin: newFinToken(id),
+      // §14.2 reclamation token, dies with the handle
       get state() {
         return readAtomPublic(id);
       },
@@ -2311,7 +2411,6 @@ function createCosignalEngine(options) {
         writeOp(id, 2 /* OP_UPDATE */, fn);
       }
     };
-    registerHandle(handle, id);
     return handle;
   }
   function reducerAtom(initial, reducer, opts) {
@@ -2328,6 +2427,8 @@ function createCosignalEngine(options) {
     const handle = {
       kind: "reducerAtom",
       id,
+      fin: newFinToken(id),
+      // §14.2 reclamation token, dies with the handle
       get state() {
         return readAtomPublic(id);
       },
@@ -2344,7 +2445,6 @@ function createCosignalEngine(options) {
         writeOp(id, 3 /* OP_DISPATCH */, action);
       }
     };
-    registerHandle(handle, id);
     return handle;
   }
   function computed(fn, opts) {
@@ -2359,11 +2459,12 @@ function createCosignalEngine(options) {
     const handle = {
       kind: "computed",
       id,
+      fin: newFinToken(id),
+      // §14.2 reclamation token, dies with the handle
       get state() {
         return readComputedPublic(id);
       }
     };
-    registerHandle(handle, id);
     return handle;
   }
   function watch(target, onBroadcast) {
@@ -2372,6 +2473,7 @@ function createCosignalEngine(options) {
     const w = allocNode(16384 /* K_WATCHER */ | 2 /* WATCHING */ | 256 /* IMMEDIATE */ | 512 /* LIVE */);
     const meta = { watchedId: targetId, lastBroadcast: /* @__PURE__ */ new Map(), onBroadcast };
     metas[w >> 3] = meta;
+    liveWatchers.add(w);
     link(targetId, w, 0);
     meta.lastBroadcast.set(0, worldValueOf(targetId, W0_WORLD));
     for (const t of liveDeferredTokens()) {
@@ -2748,6 +2850,15 @@ function createCosignalEngine(options) {
       forceSeqCounter: (n) => {
         seqCounter = n;
       },
+      /** Run the GC finalization path for a handle's record — the same
+       * call the FinalizationRegistry makes (deterministic stand-in for
+       * GC timing; a guarded skip registers the reclaim retry). */
+      simulateFinalize: (h) => {
+        reclaimNode(h.id, M[h.id + 5 /* GEN */], true);
+      },
+      /** Number of per-world baseline entries a watcher holds (leak
+       * tests: must not grow with retired batches). */
+      watcherBaselineCount: (h) => metas[h.id >> 3]?.lastBroadcast?.size ?? 0,
       stats: () => ({
         recNext,
         gNext,
@@ -2762,7 +2873,13 @@ function createCosignalEngine(options) {
         overlayEpoch,
         seqCounter,
         passOpen,
-        unappliedEntries
+        unappliedEntries,
+        broadcastLogSize: broadcastLog.length,
+        broadcastLogDropped,
+        finalizePending: finalizeSkipped.size,
+        liveWatcherCount: liveWatchers.size,
+        memoValsLen: memoVals.length,
+        pendingFreeLen: pendingFree.length
       })
     }
   };
@@ -3039,6 +3156,22 @@ function suspendedBox(thenable) {
   return { [BOX]: true, kind: "suspended", thenable };
 }
 var SUSPEND = /* @__PURE__ */ Symbol("cosignal.suspend");
+function defaultBoxedEq(a, b) {
+  const ab = isBox(a);
+  const bb = isBox(b);
+  if (ab || bb) {
+    if (!ab || !bb) {
+      return false;
+    }
+    const ba = a;
+    const bx = b;
+    if (ba.kind !== bx.kind) {
+      return false;
+    }
+    return ba.kind === "error" ? Object.is(ba.error, bx.error) : Object.is(ba.thenable, bx.thenable);
+  }
+  return Object.is(a, b);
+}
 function createAPI(engine) {
   const readAtomById = engine.readAtomById;
   const readComputedById = engine.readComputedById;
@@ -3094,36 +3227,30 @@ function createAPI(engine) {
     thenableCache;
     useIndex = 0;
     suspended;
-    ctx;
-    constructor(options) {
-      const userEq = options.isEqual;
-      const eq = (a, b) => {
-        const ab = isErrorBox(a) || isSuspendedBox(a);
-        const bb = isErrorBox(b) || isSuspendedBox(b);
-        if (ab || bb) {
-          if (!ab || !bb) {
-            return false;
-          }
-          if (isErrorBox(a) && isErrorBox(b)) {
-            return Object.is(a.error, b.error);
-          }
-          if (isSuspendedBox(a) && isSuspendedBox(b)) {
-            return Object.is(a.thenable, b.thenable);
-          }
-          return false;
-        }
-        return userEq !== void 0 ? userEq(a, b) : Object.is(a, b);
-      };
+    ctxLazy;
+    get ctx() {
       const self = this;
-      this.ctx = {
+      return this.ctxLazy ??= {
         get previous() {
           const prev = engine.policy.canonicalValue(self.handle);
-          return isErrorBox(prev) || isSuspendedBox(prev) ? void 0 : prev;
+          return isBox(prev) ? void 0 : prev;
         },
         use(thenable) {
           return self.useThenable(thenable);
         }
       };
+    }
+    constructor(options) {
+      const userEq = options.isEqual;
+      const eq = userEq === void 0 ? defaultBoxedEq : (a, b) => {
+        const ab = isBox(a);
+        const bb = isBox(b);
+        if (ab || bb) {
+          return defaultBoxedEq(a, b);
+        }
+        return userEq(a, b);
+      };
+      const self = this;
       const fn = options.fn;
       const evalFn = () => {
         self.useIndex = 0;
@@ -3139,6 +3266,31 @@ function createAPI(engine) {
           return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
         }
       };
+      if (options.fn.length === 0 && userEq === void 0) {
+        const plainFn = options.fn;
+        const slimKernelFn = (prev) => {
+          try {
+            return plainFn();
+          } catch (e) {
+            return isErrorBox(prev) && Object.is(prev.error, e) ? prev : errorBox(e);
+          }
+        };
+        const slimEvalFn = () => {
+          try {
+            return plainFn();
+          } catch (e) {
+            const prevBox = engine.policy.canonicalValue(self.handle);
+            return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
+          }
+        };
+        this.handle = engine.computed(slimEvalFn, {
+          isEqual: eq,
+          label: options.label,
+          kernelFn: slimKernelFn
+        });
+        this.id = this.handle.id;
+        return;
+      }
       const kernelFn = (prev) => {
         self.useIndex = 0;
         self.suspended = void 0;

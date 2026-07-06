@@ -375,9 +375,14 @@ let forbidWritesInComputeds = false;
 // trip on any signal read inside that window.
 let replayDepth = 0;
 let debugChecks = true;
-// §14.2 FinalizationRegistry (behind a flag; reclamation is GC-driven).
-let finalizationEnabled = false;
-let finalizationRegistry: FinalizationRegistry<{ id: number; gen: number }> | undefined;
+// §14.2 FinalizationRegistry — ON BY DEFAULT ("we should never leak"):
+// dropped atom/computed handles are reclaimed once GC proves them
+// unreachable. configure({ finalization: false }) opts out (zero FR
+// overhead, accepting the bounded per-record leak for dropped handles).
+// heldValue is the packed number gen * 2^32 + id (exact while gen < 2^21);
+// the allocating {id, gen} form is the overflow fallback.
+let finalizationEnabled = true;
+let finalizationRegistry: FinalizationRegistry<number | { id: number; gen: number }> | undefined;
 // GC-driven reclaims that hit a guard (live subscribers / live tape) are
 // recorded here and retried when the blocking reference drops — the
 // registry fires exactly once per handle, so a skipped callback would
@@ -3158,6 +3163,20 @@ function pruneWatcherBaselines(): void {
 	}
 }
 
+/** §14.2 registration. The handle instances here are LEAN (an id field;
+ * methods live on the prototype), so registering the instance directly is
+ * as cheap as V8 FR registration gets — V8's weak-target processing of a
+ * dying registered object scales with the target's shape (closure-rich
+ * targets cost ~2.5x more; alt-a registers a handle-owned token for that
+ * reason). heldValue: SMI `id` for fresh records (gen 0, the common case),
+ * packed gen * 2^32 + id while gen < 2^21, and the allocating {id, gen}
+ * form beyond — correctness never rides on the packing range.
+ *
+ * Registration is IMMEDIATE on purpose: deferring register calls into a
+ * batched microtask flush was measured SLOWER for create-and-drop bursts
+ * (+15ns vs +12.8ns per handle) — the queue's strong pin makes burst
+ * handles survive scavenges they would otherwise die young in, costing
+ * more than the saved register calls. */
 function registerHandle(handle: object, id: number): void {
 	if (!finalizationEnabled) {
 		return;
@@ -3165,7 +3184,11 @@ function registerHandle(handle: object, id: number): void {
 	if (finalizationRegistry === undefined) {
 		finalizationRegistry = new FinalizationRegistry(finalizeTrampoline);
 	}
-	finalizationRegistry.register(handle, { id, gen: M[id + C.GEN] });
+	const gen = M[id + C.GEN];
+	finalizationRegistry.register(
+		handle,
+		gen === 0 ? id : gen < 0x200000 ? gen * 0x100000000 + id : { id, gen },
+	);
 }
 
 /** Free a handle-owned record once its handle is unreachable. Skips records
@@ -3407,11 +3430,20 @@ function settleTrampoline(t: PromiseLike<unknown>, st: ThenableState): void {
 	boundary();
 }
 
-/** FinalizationRegistry callbacks fire at GC time: late-bind through E. */
-function finalizeTrampoline(held: { id: number; gen: number }): void {
+/** FinalizationRegistry callbacks fire at GC time: late-bind through E.
+ * held is the packed number gen * 2^32 + id (object form past the packing
+ * range — see registerToken). */
+function finalizeTrampoline(held: number | { id: number; gen: number }): void {
 	++enterDepth;
 	try {
-		E.finalizeRecord(held, true); // GC-driven: retry a guarded skip later
+		if (typeof held === 'number') {
+			E.finalizeRecord(
+				{ id: held % 0x100000000, gen: Math.floor(held / 0x100000000) },
+				true, // GC-driven: retry a guarded skip later
+			);
+		} else {
+			E.finalizeRecord(held, true);
+		}
 	} finally {
 		--enterDepth;
 	}
@@ -3464,7 +3496,7 @@ export function __resetEngineForTests(options?: {
 	forbidWritesInComputeds = false;
 	replayDepth = 0;
 	debugChecks = true;
-	finalizationEnabled = false;
+	finalizationEnabled = true; // the default: never leak dropped handles
 	finalizationRegistry = undefined;
 	finalizeSkipped.clear();
 	finalizeRetry.length = 0;
@@ -3640,7 +3672,14 @@ export function configure(options: {
 	/** Debug assertions (default true): the §12.2 replay-purity check. */
 	debugChecks?: boolean;
 	/** Reclaim Atom/Computed records when their handles are GC'd (§14.2).
-	 * Behind a flag: reclamation latency is GC-driven. */
+	 * ON BY DEFAULT ("we should never leak"); pass `false` to opt out for
+	 * zero FinalizationRegistry overhead, accepting the bounded leak: each
+	 * dropped unwatched handle then pins exactly its own record + side
+	 * slots, forever. Applies to handles created after the call.
+	 * CAVEAT (inherent to JS, both modes): a computed whose fn closure was
+	 * created in a scope that also captures the handle keeps the handle
+	 * reachable through the shared closure context — create the fn in its
+	 * own scope (e.g. a factory function) if you rely on GC reclamation. */
 	finalization?: boolean;
 	initialRecords?: number;
 	initialLogRecords?: number;

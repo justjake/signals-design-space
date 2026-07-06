@@ -152,10 +152,13 @@ describe('lifecycle (d): dynamic dep churn reuses link records', () => {
 	});
 });
 
-// ---- (b)/(c) dropped handles: documented default leak, reclaimed with the flag --
+// ---- (b)/(c) dropped handles: reclaimed by DEFAULT; bounded leak on opt-out ----
 
 describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
-	it('DOCUMENTED LEAK (finalization off, the default): dropped handles retain their records — bounded at one record + its own slots each, linear growth only', () => {
+	it('DOCUMENTED LEAK (finalization: false, the explicit opt-out): dropped handles retain their records — bounded at one record + its own slots each, linear growth only', () => {
+		// The opt-out contract: zero FinalizationRegistry overhead, and each
+		// dropped unwatched handle pins exactly its own record, forever.
+		configure({ finalization: false });
 		const base = __debug.stats().recNext;
 		for (let i = 0; i < 100; ++i) {
 			new Atom({ state: i }); // handle dropped immediately
@@ -172,9 +175,9 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 	});
 
 	it.runIf(hasGC)(
-		'finalization: true — GC reclaims dropped never-watched atoms/computeds (arena plateaus)',
+		'DEFAULT config: GC reclaims dropped never-watched atoms/computeds (arena plateaus)',
 		async () => {
-			configure({ finalization: true });
+			// finalization is ON by default — no configure() call.
 			const makeGarbage = (n: number): void => {
 				for (let i = 0; i < n; ++i) {
 					new Atom({ state: i });
@@ -196,9 +199,9 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 	);
 
 	it.runIf(hasGC)(
-		'finalization: true — watched→unwatched computeds reclaim after handles drop',
+		'DEFAULT config: watched→unwatched computeds reclaim after handles drop',
 		async () => {
-			configure({ finalization: true });
+			// finalization is ON by default — no configure() call.
 			const src = new Atom({ state: 0 });
 			// NOTE (documented limitation, inherent to JS closures): the
 			// computed's fn must be created in a scope that does NOT also
@@ -231,7 +234,7 @@ describe('lifecycle (b)/(c): dropped atom/computed handles', () => {
 
 describe('finalization retry (fixed leak): a guarded skip must not leak forever', () => {
 	it('retries when the last subscriber unlinks (watcher held the atom)', () => {
-		configure({ finalization: true });
+		// finalization is ON by default — no configure() call.
 		const a = new Atom({ state: 1 });
 		const w = createWatcher(a, () => {});
 		// GC decides the atom handle is unreachable while the watcher still
@@ -247,7 +250,7 @@ describe('finalization retry (fixed leak): a guarded skip must not leak forever'
 	});
 
 	it('retries when the live tape sweeps away (LOGGED guard)', () => {
-		configure({ finalization: true });
+		// finalization is ON by default — no configure() call.
 		const fork = new ForkDouble();
 		attachFork(fork);
 		const a = new Atom({ state: 1 });
@@ -265,7 +268,7 @@ describe('finalization retry (fixed leak): a guarded skip must not leak forever'
 	});
 
 	it('deterministic disposeSignal keeps its documented skip semantics (no retry)', () => {
-		configure({ finalization: true });
+		// finalization is ON by default — no configure() call.
 		const a = new Atom({ state: 1 });
 		const w = createWatcher(a, () => {});
 		// disposeSignal (via simulateFinalize's non-retry sibling) is exercised
