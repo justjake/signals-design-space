@@ -2661,22 +2661,7 @@ export class CosignalBridge {
 		this.setWorld(a.world);
 		this.evalDepth++;
 		try {
-			const value = node.fn(this.aTrackedReader, this.aUntrackedReader);
-			const vi = sh >> A_SHIFT;
-			const flags = a.W[sh + AF.FLAGS]!;
-			if (value instanceof SuspendedRead) {
-				const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && a.vals[vi] === value;
-				a.vals[vi] = value;
-				a.W[sh + AF.FLAGS] = flags | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
-				this.aSuspend(a, sh);
-				return !same;
-			}
-			const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
-			const changed = !(prevValid && Object.is(a.vals[vi], value));
-			if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
-			if (changed) a.vals[vi] = value;
-			a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED)) | AFlag.VALID;
-			return changed;
+			return this.aFoldOutcome(a, sh, node.fn(this.aTrackedReader, this.aUntrackedReader));
 		} catch (err) {
 			this.aNoteThrow(a, sh, err);
 			throw err;
@@ -2696,6 +2681,31 @@ export class CosignalBridge {
 		}
 	}
 
+	/** Fold epilogue of an arena computed refold, out of line from
+	 * aUpdateComputed (B2 split — the frame save/restore wrapper stays under
+	 * V8's 460-bytecode inline budget): classify the fn's outcome —
+	 * suspension sentinel or plain value — into the shadow's value column
+	 * and outcome bits; returns the §4.2 value cutoff. Same ladder as
+	 * aNoteOutcome minus its DIRTY/PENDING clear and propagation: the caller
+	 * cleared those bits at entry, and its call sites own propagation. */
+	private aFoldOutcome(a: ShadowArena, sh: number, value: Value): boolean {
+		const vi = sh >> A_SHIFT;
+		const flags = a.W[sh + AF.FLAGS]!;
+		if (value instanceof SuspendedRead) {
+			const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && a.vals[vi] === value;
+			a.vals[vi] = value;
+			a.W[sh + AF.FLAGS] = flags | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
+			this.aSuspend(a, sh);
+			return !same;
+		}
+		const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
+		const changed = !(prevValid && Object.is(a.vals[vi], value));
+		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+		if (changed) a.vals[vi] = value;
+		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED)) | AFlag.VALID;
+		return changed;
+	}
+
 	private aTrackedReader: Reader = (dep) => {
 		this.aRecordDep(dep, false);
 		return this.aServe(this.aFrameArena!, dep);
@@ -2713,74 +2723,89 @@ export class CosignalBridge {
 	};
 
 	/** Spike `wCheckDirty` transliteration (aUpdateShadow can run getters —
-	 * allocations, arena growth — so a.W re-loads after every update call). */
+	 * allocations, arena growth — so a.W re-loads after every update call).
+	 * Entry wrapper: owns the scratch-stack base restore around the
+	 * out-of-line walk so each piece stays under V8's 460-bytecode inline
+	 * budget (B2 — the arena twin of the kernel checkDirty split). */
 	private aCheckDirty(a: ShadowArena, startLink: number, startSub: number): boolean {
-		let cur = startLink;
-		let sub = startSub;
+		if (startLink === 0) return false;
 		const stackBase = aCheckSp;
-		let checkDepth = 0;
-		let dirty = false;
-		if (cur === 0) return false;
-		let guard = 0;
 		try {
-			top: do {
-				if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aCheckDirty: walk exceeded 1e6 steps (cycle) at link ${cur}`);
-				let W = a.W;
-				const dep = W[cur + AF.L_DEP]!;
-				const depFlags = W[dep + AF.FLAGS]!;
-				if ((W[sub + AF.FLAGS]! & AFlag.DIRTY) !== 0) {
-					dirty = true;
-				} else if ((depFlags & (AFlag.MUTABLE | AFlag.DIRTY)) === (AFlag.MUTABLE | AFlag.DIRTY)) {
-					const depSubs = W[dep + AF.SUBS]!;
-					if (this.aUpdateShadow(a, dep)) {
-						W = a.W;
-						if (W[depSubs + AF.L_NEXT_SUB] !== 0) aShallowPropagate(a, depSubs);
-						dirty = true;
-					}
-				} else if ((depFlags & (AFlag.MUTABLE | AFlag.PENDING)) === (AFlag.MUTABLE | AFlag.PENDING)) {
-					if (aCheckSp === aCheckStack.length) {
-						const bigger = new Int32Array(aCheckStack.length * 2);
-						bigger.set(aCheckStack);
-						aCheckStack = bigger;
-					}
-					aCheckStack[aCheckSp++] = cur;
-					cur = W[dep + AF.DEPS]!;
-					sub = dep;
-					++checkDepth;
-					continue;
-				}
-				if (!dirty) {
-					const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
-					if (nextDep !== 0) {
-						cur = nextDep;
-						continue;
-					}
-				}
-				while (checkDepth--) {
-					cur = aCheckStack[--aCheckSp]!;
-					if (dirty) {
-						const subSubs = a.W[sub + AF.SUBS]!;
-						if (this.aUpdateShadow(a, sub)) {
-							if (a.W[subSubs + AF.L_NEXT_SUB] !== 0) aShallowPropagate(a, subSubs);
-							sub = a.W[cur + AF.L_SUB]!;
-							continue;
-						}
-						dirty = false;
-					} else {
-						a.W[sub + AF.FLAGS] = a.W[sub + AF.FLAGS]! & ~AFlag.PENDING;
-					}
-					sub = a.W[cur + AF.L_SUB]!;
-					const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
-					if (nextDep !== 0) {
-						cur = nextDep;
-						continue top;
-					}
-				}
-				return dirty;
-			} while (true);
+			return this.aCheckDirtyLoop(a, startLink, startSub);
 		} finally {
 			aCheckSp = stackBase;
 		}
+	}
+
+	/** aUpdateShadow + sibling Pending->Dirty upgrade, shared by the descend
+	 * and unwind arms of aCheckDirtyLoop. `subs` is captured BEFORE the
+	 * refold runs (it can rebuild the list), as in the kernel's
+	 * updateAndShallow; a.W re-loads after (growth). */
+	private aUpdateAndShallow(a: ShadowArena, node: number): boolean {
+		const subs = a.W[node + AF.SUBS]!;
+		if (this.aUpdateShadow(a, node)) {
+			if (a.W[subs + AF.L_NEXT_SUB] !== 0) aShallowPropagate(a, subs);
+			return true;
+		}
+		return false;
+	}
+
+	/** The general arena walk, out of line (see aCheckDirty — the wrapper
+	 * owns the aCheckSp restore, so a throwing fold unwinds through it). */
+	private aCheckDirtyLoop(a: ShadowArena, cur: number, sub: number): boolean {
+		let checkDepth = 0;
+		let dirty = false;
+		let guard = 0;
+		top: do {
+			if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aCheckDirty: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+			const W = a.W;
+			const dep = W[cur + AF.L_DEP]!;
+			const depFlags = W[dep + AF.FLAGS]!;
+			if ((W[sub + AF.FLAGS]! & AFlag.DIRTY) !== 0) {
+				dirty = true;
+			} else if ((depFlags & (AFlag.MUTABLE | AFlag.DIRTY)) === (AFlag.MUTABLE | AFlag.DIRTY)) {
+				if (this.aUpdateAndShallow(a, dep)) {
+					dirty = true;
+				}
+			} else if ((depFlags & (AFlag.MUTABLE | AFlag.PENDING)) === (AFlag.MUTABLE | AFlag.PENDING)) {
+				if (aCheckSp === aCheckStack.length) {
+					const bigger = new Int32Array(aCheckStack.length * 2);
+					bigger.set(aCheckStack);
+					aCheckStack = bigger;
+				}
+				aCheckStack[aCheckSp++] = cur;
+				cur = W[dep + AF.DEPS]!;
+				sub = dep;
+				++checkDepth;
+				continue;
+			}
+			if (!dirty) {
+				const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
+				if (nextDep !== 0) {
+					cur = nextDep;
+					continue;
+				}
+			}
+			while (checkDepth--) {
+				cur = aCheckStack[--aCheckSp]!;
+				if (dirty) {
+					if (this.aUpdateAndShallow(a, sub)) {
+						sub = a.W[cur + AF.L_SUB]!;
+						continue;
+					}
+					dirty = false;
+				} else {
+					a.W[sub + AF.FLAGS] = a.W[sub + AF.FLAGS]! & ~AFlag.PENDING;
+				}
+				sub = a.W[cur + AF.L_SUB]!;
+				const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
+				if (nextDep !== 0) {
+					cur = nextDep;
+					continue top;
+				}
+			}
+			return dirty;
+		} while (true);
 	}
 
 	// ---- NF2 S-A: fanout at the four flip sites + mark decay (§4.3) ----

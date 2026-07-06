@@ -728,80 +728,215 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		} while (true);
 	}
 
+	// Entry wrapper (dalien port study row 10): owns the scratch-stack base
+	// restore (update() runs user getters, which can throw mid-walk) and the
+	// shallow/two-level/chain fast paths. Kept apart from the loop so each
+	// piece stays under V8's 460-bytecode inlining budget — try/finally
+	// plumbing plus the loop was 537 bytecodes, which barred checkDirty from
+	// inlining into run()/computedReadSlow() (the bytecode budget test pins
+	// this; dalien measured small cones 1.05-1.3x -> 0.9-1.1x vs upstream).
 	function checkDirty(startLink: LinkId, startSub: NodeId): boolean {
-		let cur = startLink;
-		let sub = startSub;
-		const stackBase = checkSp;
-		let checkDepth = 0;
-		let dirty = false;
-
-		try {
-			top: do {
-				const dep = M[cur + LinkField.DEP];
-				const depFlags = M[dep + NodeField.FLAGS];
-
-				if (M[sub + NodeField.FLAGS] & NodeFlag.DIRTY) {
-					dirty = true;
-				} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
-					const depSubs = M[dep + NodeField.SUBS];
-					if (update(dep)) {
-						if (M[depSubs + LinkField.NEXT_SUB] !== 0) {
-							shallowPropagate(depSubs);
+		// Shallow fast path mirroring checkDirtyLoop's first iteration: the
+		// sub is already dirty, or its first dep is a directly-dirty mutable
+		// — the shape of every effect sitting one link away from a written
+		// signal's computed. Resolving here skips the loop's stack machinery
+		// and the try/finally for the hottest walks; anything deeper falls
+		// through to the general loop unchanged.
+		if (M[startSub + NodeField.FLAGS] & NodeFlag.DIRTY) {
+			return true;
+		}
+		const dep = M[startLink + LinkField.DEP];
+		const depFlags = M[dep + NodeField.FLAGS];
+		let tryChain = true;
+		if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
+			if (updateAndShallow(dep, M[dep + NodeField.SUBS])) {
+				// Same disposed-sub guard as the loop's return: update() may
+				// run user code that disposes the sub mid-walk.
+				return M[startSub + NodeField.FLAGS] !== 0;
+			}
+			const nextDep = M[startLink + LinkField.NEXT_DEP];
+			if (nextDep === 0) {
+				return false;
+			}
+			startLink = nextDep;
+		} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) === (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
+			const innerLink = M[dep + NodeField.DEPS];
+			if (M[innerLink + LinkField.NEXT_DEP] !== 0) {
+				// Branching inner deps (a diamond join): neither the
+				// two-level fast path nor a chain can resolve this —
+				// chainCheck's first descend provably fails the same
+				// single-dep test — so skip straight to the general loop.
+				tryChain = false;
+			} else {
+				// Two-level degenerate case: the pending dep has exactly one
+				// dep of its own and it is directly dirty — the shape of
+				// every effect one computed away from a written signal. The
+				// sequence mirrors the loop's descend-then-unwind for this
+				// shape: update the inner node (subs captured first), then
+				// either recompute the pending dep or clear its Pending.
+				const inner = M[innerLink + LinkField.DEP];
+				if ((M[inner + NodeField.FLAGS] & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
+					if (updateAndShallow(inner, M[inner + NodeField.SUBS])) {
+						if (updateAndShallow(dep, M[dep + NodeField.SUBS])) {
+							return M[startSub + NodeField.FLAGS] !== 0;
 						}
-						dirty = true;
-					}
-				} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) === (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
-					if (checkSp === checkStack.length) {
-						const bigger = new Int32Array(checkStack.length * 2);
-						bigger.set(checkStack);
-						checkStack = bigger;
-					}
-					checkStack[checkSp++] = cur;
-					cur = M[dep + NodeField.DEPS];
-					sub = dep;
-					++checkDepth;
-					continue;
-				}
-
-				if (!dirty) {
-					const nextDep = M[cur + LinkField.NEXT_DEP];
-					if (nextDep !== 0) {
-						cur = nextDep;
-						continue;
-					}
-				}
-
-				while (checkDepth--) {
-					cur = checkStack[--checkSp];
-					if (dirty) {
-						const subSubs = M[sub + NodeField.SUBS];
-						if (update(sub)) {
-							if (M[subSubs + LinkField.NEXT_SUB] !== 0) {
-								shallowPropagate(subSubs);
-							}
-							sub = M[cur + LinkField.SUB];
-							continue;
-						}
-						dirty = false;
 					} else {
-						M[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
+						M[dep + NodeField.FLAGS] &= ~NodeFlag.PENDING;
 					}
-					sub = M[cur + LinkField.SUB];
-					const nextDep = M[cur + LinkField.NEXT_DEP];
-					if (nextDep !== 0) {
-						cur = nextDep;
-						continue top;
+					const nextDep = M[startLink + LinkField.NEXT_DEP];
+					if (nextDep === 0) {
+						return false;
 					}
+					startLink = nextDep;
 				}
-
-				// Upstream: `dirty && !!sub.flags` — a live node always has its
-				// kind bits set; flags reads 0 only if sub was disposed (record
-				// zeroed) by re-entrant user code during update().
-				return dirty && M[sub + NodeField.FLAGS] !== 0;
-			} while (true);
+				// A single non-dirty inner link may still head a chain —
+				// leave the chain dispatch on.
+			}
+			// Anything deeper falls through to the general loop with no
+			// state mutated.
+		}
+		// Chains: a run of single-dep, single-subscriber pending nodes needs
+		// no traversal stack — the descent is unbranched, and the unwind path
+		// is recoverable by climbing each node's unique subscriber link.
+		// deep/grid/island cones are exactly this shape.
+		if (tryChain && M[startLink + LinkField.NEXT_DEP] === 0) {
+			const r = chainCheck(startLink);
+			if (r >= 0) {
+				return r !== 0 && M[startSub + NodeField.FLAGS] !== 0;
+			}
+		}
+		const stackBase = checkSp;
+		try {
+			return checkDirtyLoop(startLink, startSub);
 		} finally {
 			checkSp = stackBase;
 		}
+	}
+
+	// update() + sibling Pending->Dirty upgrade, shared by the wrapper fast
+	// paths and the descend/unwind arms of checkDirtyLoop. `subs` is captured
+	// BEFORE update() runs (the re-track may rebuild the list), exactly as
+	// upstream.
+	function updateAndShallow(node: NodeId, subs: LinkId): boolean {
+		if (update(node)) {
+			if (M[subs + LinkField.NEXT_SUB] !== 0) {
+				shallowPropagate(subs);
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// Stackless walk for pure chains (see checkDirty). Descends while the
+	// pending dep has exactly one dep-link and one subscriber; on finding a
+	// directly-dirty base, updates back UP by climbing the unique subscriber
+	// links — the resume state a branching walk would need a stack for is
+	// recoverable from the graph itself. Returns 1 (dirty: caller re-checks
+	// its sub), 0 (resolved clean), -1 (shape is not a chain here: fall
+	// through to the general loop, nothing mutated).
+	function chainCheck(startLink: LinkId): number {
+		let link = startLink;
+		let depth = 0;
+		let dep = 0;
+		while (true) {
+			dep = M[link + LinkField.DEP];
+			const flags = M[dep + NodeField.FLAGS];
+			if ((flags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
+				break; // dirty base found
+			}
+			if ((flags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) !== (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
+				return -1; // clean or non-mutable dep: not a resolvable chain
+			}
+			const depDeps = M[dep + NodeField.DEPS];
+			if (depDeps === 0 || M[depDeps + LinkField.NEXT_DEP] !== 0) {
+				return -1; // branching deps
+			}
+			const depSubs = M[dep + NodeField.SUBS];
+			if (depSubs === 0 || M[depSubs + LinkField.NEXT_SUB] !== 0) {
+				return -1; // shared node: the climb needs a unique subscriber
+			}
+			link = depDeps;
+			++depth;
+		}
+		if (depth === 0) {
+			return -1; // directly-dirty first dep: the shallow paths own this
+		}
+		let changed = updateAndShallow(dep, M[dep + NodeField.SUBS]);
+		let node = dep;
+		while (depth--) {
+			const up = M[node + NodeField.SUBS];
+			const sub = M[up + LinkField.SUB];
+			if (changed) {
+				changed = updateAndShallow(sub, M[sub + NodeField.SUBS]);
+			} else {
+				M[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
+			}
+			node = sub;
+		}
+		return changed ? 1 : 0;
+	}
+
+	// The general walk, out of line (see checkDirty — the wrapper owns the
+	// checkSp restore, so a throwing getter unwinds through it).
+	function checkDirtyLoop(cur: LinkId, sub: NodeId): boolean {
+		let checkDepth = 0;
+		let dirty = false;
+
+		top: do {
+			const dep = M[cur + LinkField.DEP];
+			const depFlags = M[dep + NodeField.FLAGS];
+
+			if (M[sub + NodeField.FLAGS] & NodeFlag.DIRTY) {
+				dirty = true;
+			} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
+				if (updateAndShallow(dep, M[dep + NodeField.SUBS])) {
+					dirty = true;
+				}
+			} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) === (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
+				if (checkSp === checkStack.length) {
+					const bigger = new Int32Array(checkStack.length * 2);
+					bigger.set(checkStack);
+					checkStack = bigger;
+				}
+				checkStack[checkSp++] = cur;
+				cur = M[dep + NodeField.DEPS];
+				sub = dep;
+				++checkDepth;
+				continue;
+			}
+
+			if (!dirty) {
+				const nextDep = M[cur + LinkField.NEXT_DEP];
+				if (nextDep !== 0) {
+					cur = nextDep;
+					continue;
+				}
+			}
+
+			while (checkDepth--) {
+				cur = checkStack[--checkSp];
+				if (dirty) {
+					if (updateAndShallow(sub, M[sub + NodeField.SUBS])) {
+						sub = M[cur + LinkField.SUB];
+						continue;
+					}
+					dirty = false;
+				} else {
+					M[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
+				}
+				sub = M[cur + LinkField.SUB];
+				const nextDep = M[cur + LinkField.NEXT_DEP];
+				if (nextDep !== 0) {
+					cur = nextDep;
+					continue top;
+				}
+			}
+
+			// Upstream: `dirty && !!sub.flags` — a live node always has its
+			// kind bits set; flags reads 0 only if sub was disposed (record
+			// zeroed) by re-entrant user code during update().
+			return dirty && M[sub + NodeField.FLAGS] !== 0;
+		} while (true);
 	}
 
 	function shallowPropagate(startLink: LinkId): void {

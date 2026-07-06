@@ -35,6 +35,12 @@ const BUDGETS: Record<string, number> = {
 	linkInsert: 380, // 327: out-of-line insertion tail
 	unlink: 310, // 262
 	propagate: 460, // 426: already close to the limit — watch it
+	checkDirty: 440, // 414: B2 split — entry wrapper + shallow/two-level fast
+	// paths + chainCheck dispatch (was the 537 monolith pinned below); inside
+	// the inline limit so run()/computedReadSlow can absorb it
+	checkDirtyLoop: 460, // 411: the general walk, out of line — at the limit
+	updateAndShallow: 100, // 40: update() + sibling Pending->Dirty upgrade
+	chainCheck: 320, // 290: stackless chain walk (not inlined; it loops)
 	shallowPropagate: 130, // 106
 	isValidLink: 60, // 47
 	update: 90, // 74
@@ -68,18 +74,21 @@ const BUDGETS: Record<string, number> = {
 	// are the price of stale-safety). Still 160+ under the inline limit.
 	foldAtom: 420, // 358
 	aUpdateShadow: 230, // 188
+	aCheckDirty: 100, // 68: B2 split — entry wrapper owning the aCheckSp restore
+	// (was the 567 walk monolith pinned below)
+	aCheckDirtyLoop: 450, // 407: the general arena walk, out of line
+	aUpdateAndShallow: 110, // 59: refold + sibling Pending->Dirty upgrade
+	aUpdateComputed: 450, // 422: B2 split — frame save/restore wrapper (was the
+	// 714 fold monolith pinned below; the outcome ladder moved to aFoldOutcome)
+	aFoldOutcome: 300, // 265: fold-outcome classification, out of line
 };
 
-// Functions ALREADY over the V8 inline budget, pinned at current size.
-// TODO(B2): the checkDirty family split (entry wrapper + shallow fast path +
-// two-level fast path + stackless chainCheck + out-of-line loop — port study
-// row 10) is the B2 batch; do NOT refactor here. A pin that drops under
-// INLINE_LIMIT should move down into BUDGETS (deliberately).
-const OVER_LIMIT_PINS: Record<string, number> = {
-	checkDirty: 537, // TODO(B2): upstream-shape monolith (try/finally + loop)
-	aCheckDirty: 567, // TODO(B2): shadow-arena walk twin (guard counters + W reloads)
-	aUpdateComputed: 714, // TODO(B2): arena fold frame save/restore monolith
-};
+// Functions over the V8 inline budget, pinned at current size — B2 emptied
+// the list (checkDirty/aCheckDirty/aUpdateComputed split per port study row
+// 10 and moved into BUDGETS above). A function that outgrows the inline
+// limit gets pinned here (deliberately, justified in the PR); a pin that
+// drops back under it moves into BUDGETS.
+const OVER_LIMIT_PINS: Record<string, number> = {};
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const smoke = path.join(pkgRoot, 'tests', 'fixtures', 'bytecodeSmoke.ts');

@@ -83,6 +83,28 @@ cold.state;
 a.set(1234);
 cold.state;
 
+// B2 checkDirty fast paths as real dataflow: a 5-deep single-dep/single-sub
+// chain (stackless chainCheck descend + climb) and a 2-level cone (the
+// wrapper's two-level descend-then-unwind path).
+const base = new Atom(0);
+let chainNode = new Computed(() => base.state + 1);
+for (let d = 1; d < 5; d++) {
+	const prev = chainNode;
+	chainNode = new Computed(() => prev.state + 1);
+}
+const chainTop = chainNode;
+let chainSink = 0;
+effect(() => {
+	chainSink += chainTop.state;
+});
+const two1 = new Computed(() => base.state * 3);
+const two2 = new Computed(() => two1.state + 1);
+effect(() => {
+	chainSink += two2.state;
+});
+base.set(1);
+base.set(2);
+
 // ---- concurrent engine: aLink, aCheckDirty, shadowFor, aNoteAtom, foldAtom.
 // A bridge with the S-A divergence check armed: every op epilogue serves
 // every arena shadow through the arena's own walks (aServe → aCheckDirty).
@@ -128,6 +150,51 @@ bridge.passEnd(p2.id, 'commit');
 w2.live = false;
 commitWrite(atG as AnyNode, 1);
 commitWrite(atG as AnyNode, 2);
+
+// B2 aCheckDirtyLoop walk shapes. The cone's TOP gets the lowest node id
+// (created first; its fn closes over later-declared handles, resolved at
+// the first render), so the armed epilogue's node-id-order serve hits the
+// top FIRST and must WALK to resolve its Pending. Both computeds fold
+// CONSTANTS: a committed-arena atom shadow stays cold-invalid until its own
+// first direct serve, and a cold base is invisible to the walk's dirt arms
+// — a pre-existing S-A hole (probed on the B2 base commit) that
+// stale-serves value-carrying top-first cones; constants keep every serve
+// in agreement regardless of walk depth.
+const topK = bridge.computed('topK', (read) => {
+	read(cK);
+	return 11;
+});
+const cK = bridge.computed('cK', (read) => {
+	read(atK);
+	return 7;
+});
+const atK = bridge.atom('atK', 0);
+const p5 = bridge.passStart('R5', []);
+const w5 = bridge.mountWatcher(p5.id, topK as AnyNode, 'W5');
+bridge.passEnd(p5.id, 'commit');
+w5.live = false;
+commitWrite(atK as AnyNode, 1);
+commitWrite(atK as AnyNode, 2);
+// aCheckDirtyLoop's update arms (aUpdateAndShallow, descend + unwind): at
+// S-A no PUBLIC flow reaches them — arena-authoritative serves happen only
+// inside the armed epilogue, whose aValidate/memo-evaluate pass consumes
+// every mark before the node-id-order serves walk (probed with prototype
+// counters on the B2 base commit). The arms are the walk's safety net and
+// the S-B/S-C serving path, so exercise them directly: fan a mark into the
+// committed arena (valid shadows), then serve the top — the walk itself
+// refolds the dirty base (descend arm; committed fold, value unchanged)
+// and sees the unchanged constant above it (unwind arm), leaving flags
+// clean and every value as it was.
+const B = bridge as unknown as {
+	eachArena(cb: (a: unknown) => void): void;
+	fanAtomsToArena(a: unknown, atoms: unknown[], fromSettlement: boolean): void;
+	aServe(a: unknown, node: AnyNode): unknown;
+};
+B.eachArena((a) => {
+	if ((a as { root: string; kind: string }).root !== 'R5' || (a as { kind: string }).kind !== 'committed') return;
+	B.fanAtomsToArena(a, [atK], false);
+	B.aServe(a, topK as AnyNode);
+});
 
 // In-arena dynamic dep drop + re-link: aUnlink, aFreeLink, then aAllocLink
 // popping the freed records back into live chains.
