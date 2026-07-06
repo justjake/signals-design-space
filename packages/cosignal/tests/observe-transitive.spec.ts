@@ -7,14 +7,14 @@
  * episode-accumulated K1 log: each fn re-run of an observed computed
  * re-points them (dep flips move a retain from the abandoned branch to the
  * taken one), same-tick flip-flaps coalesce in the kernel's microtask
- * flush, and the closure plane survives quiescence's K1 bulk-reset (the
+ * flush, and the observation index survives quiescence's K1 bulk-reset (the
  * closure belongs to live watchers, not to the episode). A getter that
  * throws retains the deps it read up to the throw — those reads recorded
  * K1 edges, so deliveries still reach the node's watchers through them.
  *
  * Every test here (except the kernel-chain contrast leg, which pins the
  * pre-existing K0 behavior the overlay now matches) FAILS without the
- * observed-closure plane in src/logged.ts.
+ * observation index in src/logged.ts.
  */
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, Atom, Computed, effect, type CosignalBridge } from '../src/index.js';

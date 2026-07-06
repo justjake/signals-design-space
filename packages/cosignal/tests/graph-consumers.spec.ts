@@ -14,7 +14,7 @@
  *  5  notify() parent-chain SUBS read (outer-first)    | K0                       | K0-ONLY: effect nesting is kernel-only | conformance ordering cases
  *  6  kernel propagate/shallowPropagate seeds          | K0                       | K0-ONLY BY DESIGN: kernel flush serves K0 subscribers; K1 consumers get the delivery walk; union = the SUM of both paths | logged-scars S2/S3, T5
  *  7  invalidateComputed (suspense settle)             | K0                       | K0-ONLY: boxes live on kernel computeds; overlay folds SuspendedRead as a value | suspense.spec
- *  8  Atom.state host seam (index.ts)                  | K0 or world              | ROUTE-BY-FRAME: world routing only with NO kernel frame open; a kernel-frame read makes a K0 link + fills a K0 cache, so it must serve K0 (newest) — FIXED (was: world-routed → kernel cache poisoned = torn newest plane) | T6 (new), one-core 'overlay world evaluation' pins the routed side
+ *  8  Atom.state host seam (index.ts)                  | K0 or world              | ROUTE-BY-FRAME: world routing only with NO kernel frame open; a kernel-frame read makes a K0 link + fills a K0 cache, so it must serve K0 (newest) — FIXED (was: world-routed → kernel cache poisoned = torn newest arena) | T6 (new), one-core 'overlay world evaluation' pins the routed side
  *  9  Computed.state (no host seam)                    | K0                       | K0-ONLY: standalone computeds are not world-routable (bindings reject via resolveNode) | T6, hooks.ts resolveNode error
  * 10  deliveryWalk (outList+watchersByNode+coreFx)     | K1                       | K1-ONLY: K0 consumers already served by eager kernel apply | battery case 1, scars S2/S3, T5
  * 11  marking walk + recordEdge bit inheritance        | K1                       | K1-ONLY; feeds touched words; retroactive edges inherit source bits | fuzz, T9
@@ -23,8 +23,8 @@
  * 14  drainCommittedObservers (slotTouched+weak+outs)  | K1                       | K1-ONLY, conservative | lockstep drain parity, scars S26, T9
  * 15  mountFixup dependencyClosureOf (inList)          | K1                       | K1-ONLY: worlds fold receipts, kernel links irrelevant | battery cases 9/10 + the always-on fast-out audit (BridgeInvariantViolation)
  * 16  quiesce refresh-target collection (byNode+lists) | K1                       | K1-ONLY | quiet-mode 'quiesce() interoperates', T7
- * 17  Watcher.live setter → obsShift → retain/release  | K1 edge → union refcount | UNION (watcher half, via the observed-closure plane) | observe-union.spec (all), T1
- * 18  observed-closure plane (obsRefs/obsDeps/capture) | eval-time strong deps → K0 lifecycle | UNION-TRANSITIVE: a live watcher observes every atom its node's CURRENT evaluation (transitively) reads — retains follow fn re-runs (dep flips move them), survive quiescence, and release with the last watcher — FIXED (was: only DIRECT atom watchers retained; useComputed+useSignal left closure atoms unobserved) | T2 (flipped pin), observe-transitive.spec
+ * 17  Watcher.live setter → obsShift → retain/release  | K1 edge → union refcount | UNION (watcher half, via the observation index) | observe-union.spec (all), T1
+ * 18  observation index (obsRefs/obsDeps/capture) | eval-time strong deps → K0 lifecycle | UNION-TRANSITIVE: a live watcher observes every atom its node's CURRENT evaluation (transitively) reads — retains follow fn re-runs (dep flips move them), survive quiescence, and release with the last watcher — FIXED (was: only DIRECT atom watchers retained; useComputed+useSignal left closure atoms unobserved) | T2 (flipped pin), observe-transitive.spec
  * 19  watchers map + watchersByNode index mutation     | K1 dual store            | MUST MOVE TOGETHER via removeWatcher — FIXED (shim's map-only deletes stranded index entries: dead watchers seeded sweeps + quiesce refresh forever) | T7 (new), cosignal-react graph-consumers.spec.tsx
  * 20  episodeEdges/graphviz snapshot                   | K1                       | K1-ONLY diagnostics (documented: edges recorded since idle) | graphviz docstring; not behavior-bearing
  * 21  shim liveness flips (claim/orphan/finalize)      | K1 via one setter        | UNION + both stores (delegates to Watcher.live + removeWatcher) | cosignal-react hooks.spec StrictMode netting + graph-consumers.spec.tsx
@@ -32,7 +32,7 @@
  * 23  committed-subscription dep snapshots (captureRun) | committed VALUES + obs union + subDepRefs | value-gated per EF2 boundary, no edge store; snapshot nodes retain OL1 and seed sweep/quiesce coverage | logged-battery case 16, observe-union.spec, cosignal-react hooks.spec useSignalEffect
  *
  * §2 DUAL-REPRESENTATION AGREEMENTS ─ pair | enforcement
- *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel plane, the model folds; logged-fuzz.spec 'diff clean' + logged-battery
+ *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; logged-fuzz.spec 'diff clean' + logged-battery
  *  A2 memo fingerprints ≡ tapes (+retirement stamps)   | lockstep values; scars S5 pins receipt-after-read invalidation
  *  A3 quiet flag ≡ pending state (tokens/passes/tapes) | quiet-mode.spec arming/disarming battery
  *  A4 adoption stamp ≡ byKernelId registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
@@ -74,7 +74,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		const dispose = effect(() => {
-			void atom.state; // K0 subscriber; K1 watcher plane holds nothing
+			void atom.state; // K0 subscriber; K1 observation index holds nothing
 		});
 		await tick();
 		expect(log).toEqual(['observe']);
@@ -191,14 +191,14 @@ describe('§1 rows 8/9 — kernel-frame reads are NEVER world-routed (the fix + 
 		b.write(t.id, node, { kind: 'set', value: 5 }); // kernel newest = 5
 		const p = b.passStart('A', []); // t excluded: the pass world's a is 0
 		// kc's evaluation is a KERNEL frame: its atom read serves the kernel
-		// plane, never the pass world (pre-fix: 100 here — and a torn cache).
+		// arena, never the pass world (pre-fix: 100 here — and a torn cache).
 		expect(b.passValue(c, p)).toBe(105);
 		expect(kcEvals).toBe(1);
 		expect(b.episodeEdges.size).toBe(0); // the kernel read left no K1 edge (row 9: delivery-blind by design)
 		const routed = b.computed('r', () => handle.state); // contrast: overlay-frame handle read IS world-routed
 		expect(b.passValue(routed, p)).toBe(0);
 		b.passEnd(p.id, 'discard');
-		// The kernel's newest plane stayed coherent with the eager-apply
+		// The kernel's newest arena stayed coherent with the eager-apply
 		// invariant (A1): pre-fix this read served 0-world residue (100).
 		expect(kc.state).toBe(105);
 		b.retire(t.id, true);

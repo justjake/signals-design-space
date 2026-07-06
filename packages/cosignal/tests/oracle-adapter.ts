@@ -176,7 +176,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp): boolean {
  * replaced by the real engine). The bridge is structurally
  * snapshot-compatible with the model, so the reference model's own
  * `snapshotModel` reads the engine's observables — engine internals
- * (kernel plane, union edges, memos) are never compared.
+ * (kernel arena, union edges, memos) are never compared.
  */
 export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge } {
 	const b = __newBridgeForTest();

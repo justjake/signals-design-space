@@ -30,10 +30,10 @@
 > 7. **Program 2 sections (§3–§4, and §6 risks as they concern P2) are
 >    SUPERSEDED pending a design revision** addressing: untracked-read
 >    coverage (weak edges are load-bearing at HEAD — codex 3/fable B1),
->    committed-plane lifecycle (one consistent story — fable B2),
->    suspense settlement fanout per plane (codex 5/fable M2), per-world
+>    committed-arena lifecycle (one consistent story — fable B2),
+>    suspense settlement fanout per arena (codex 5/fable M2), per-world
 >    equality policy (codex 6), S-A executability (codex 7), and the
->    mandatory lifetime classification for planes/marks/boxes. The
+>    mandatory lifetime classification for arenas/marks/boxes. The
 >    revision gets a focused re-review before any stage runs.
 
 > **STATUS: DRAFT — plan only, no code has changed.** Written for
@@ -55,7 +55,7 @@ delivery/notification plumbing and must be sequenced deliberately:
 - **Program 2 — NF2 productionization.** Owner: "I want to queue up the
   NF2 design as well." Productionizes the de-risked mechanism of
   `research/experiments/world-tagged-links-spike.md` (per-world
-  segregated shadow planes; prototype archived at
+  segregated shadow arenas; prototype archived at
   `research/experiments/world-tagged-links-spike-code/`), whose prize is
   review finding F5's death: ONE computed API, with unmodified kernel
   `Computed` objects evaluating under any world.
@@ -81,7 +81,7 @@ Terms already defined by the contract §1.2/§2 (batch, render pass, root,
 committed state, newest state, retirement, consumer, delivery, the four
 lifetimes L1–L4) and by the engine header (`packages/cosignal/src/logged.ts`:
 receipt, tape, fold, world, token, slot, pin, mask, watcher, drain,
-K0/K1, touched word, memo, memo plane, memo ladder, episode, quiescence)
+K0/K1, touched word, memo, memo table, memo ladder, episode, quiescence)
 are used with those meanings. New terms this plan introduces:
 
 - **Subscription** — the one core consumer record Program 1 defines: a
@@ -101,14 +101,19 @@ are used with those meanings. New terms this plan introduces:
   subscription captured during its last run; the value-gated
   re-check surface (today this lives in the adapter as `EffectRec.deps`,
   `packages/cosignal-react/src/shim.ts:123-131`).
-- **Shadow plane** (NF2) — one world's private copy of graph structure:
+- **Shadow arena** (NF2) — one world's private copy of graph structure:
   shadow node records mirroring kernel nodes plus link records in the
   kernel's exact `LinkField` layout, stored in a per-world `Int32Array`
-  the kernel's lists never share. "Plane" here is the spike's usage —
-  a per-world storage layer — distinct from logged.ts's "memo plane"
-  (a per-world `Map` of memos), which NF2 deletes.
+  the kernel's lists never share. The spike-era word for this structure
+  is RETIRED from all live surfaces (it was overloaded three ways: this
+  structure, the kernel's packed storage, and logged.ts's per-world memo
+  `Map`s — which NF2 deletes). Current vocabulary: shadow / pass /
+  committed / live / dead **arena** here, **arena** for the kernel's
+  packed storage, **memo table(s)** for the per-world memo `Map`s.
+  Historical docs (research/, reviews/) keep the old word — see the
+  terminology note atop `research/experiments/world-tagged-links-spike.md`.
 - **Fanout** (NF2) — the write-path step that marks, in each live world
-  plane that can see the write, the written atom's shadow as changed
+  arena that can see the write, the written atom's shadow as changed
   (kernel-style PENDING/DIRTY flag propagation), with a **read-clock
   dedup**: a per-(node, world) stamp so an idle world's Nth write-storm
   mark costs O(1) after the first.
@@ -336,7 +341,7 @@ triggers its observe lifecycle. That is incident-I3-shaped (a consumer
 kind missing from the union) unless it was a deliberate scope decision;
 nothing in `observe-union.spec.ts` pins it either way. Promotion is the
 cheap moment to close it: the promoted subscription's dep snapshot holds
-one retain per snapshot node through the existing `obsShift` plane
+one retain per snapshot node through the existing `obsShift` observation index
 (re-pointed per run exactly like 7456c7b's `obsSyncDeps`; the kernel's
 microtask flush already damps same-tick flaps). **This is a behavior
 change** (the lifecycle fires in new cases) and needs an owner ruling
@@ -429,7 +434,7 @@ performance change (v1 is cost-identical by design).
 > discard-close / retirement / settlement / quiet fold, at op end,
 > never under an open same-root frame), refires as notify-queue kind 3,
 > `committedDirtySlots` + the `restaled` set gating drains, the
-> `subDepRefs` plane, and `obsCapture` fed pre-dedup inside
+> `subDepRefs` table, and `obsCapture` fed pre-dedup inside
 > `recordEdge` (codex-9's placement, landed). Every hole named by the
 > reviews (codex 3/4/5/6/7/9; fable B1/B2/B3/M1/M2/M4/M6/m1–m6) is
 > answered below with a mechanism, a walked schedule, or an explicit
@@ -442,20 +447,20 @@ below are that report's; numbers are its medians):
 - The hang schedule — NF2's entry criterion (contract §5) — written
   first, red on the documented failed design (`__naiveWorldRead`
   pinned: kernel-hosted world evaluation corrupts the newest cache),
-  green on segregated planes by construction; 200-iteration
+  green on segregated arenas by construction; 200-iteration
   discard-churn with alternating surgical/bulk teardown leaks zero
   links.
 - Sync-path neutrality: chain/fan write shapes +0.4–1.4% (within
   noise); the ONE real regression is **+0.5 ns (~19%) on a bare clean
   computed read** — the `spikeRoute` scalar branch in `Computed.state`.
   Idle live worlds +1–10%, bounded by the read-clock dedup.
-- Discard churn at parity: bulk plane drop −4.3%, per-edge surgical
-  +0.8% vs the shipped pass memo plane. **Important for §4.8: the
+- Discard churn at parity: bulk arena drop −4.3%, per-edge surgical
+  +0.8% vs the shipped pass memo table. **Important for §4.8: the
   spike had NO cross-world fast path at all — every world read routed
-  to its plane — so these numbers already price the fast-path deletion
+  to its arena — so these numbers already price the fast-path deletion
   §4.4 commits to.**
 - World evaluation 2.5× (1 dirty atom) / 5.5× (all dirty) vs the
-  cheapest shipped memo plane, 29× vs what a render pass pays today;
+  cheapest shipped memo table, 29× vs what a render pass pays today;
   zero-allocation steady state; conformance smoke 179/179 with zero
   worlds open; per-world footprint 32–64 KB at the bench shapes.
 
@@ -469,7 +474,7 @@ disposition, cross-referenced):**
 5. Watcher-delivery integration → §4.4.
 6. Commit-generation re-keying for committed worlds → §4.3(b) WITH
    fable B3's carve-out (refold-always at lock-in).
-7. Plane pooling / read-clock wrap / growth-mid-op reload → §4.5.7–8,
+7. Arena pooling / read-clock wrap / growth-mid-op reload → §4.5.7–8,
    §4.6 (pool claim generations).
 8. Receipts/retirement/tape/slot/token layer: untouched by NF2 either
    way (unchanged from the first pass; re-verified — nothing below
@@ -478,7 +483,7 @@ disposition, cross-referenced):**
 **What the spike also never exercised** (the second-pass additions all
 live here, per the reviews): untracked reads, folds, watchers, drains,
 quiet mode, quiescence, suspense. The spike had none of them; §4's new
-mechanisms (weak plane links, the four flip sites, plane persistence,
+mechanisms (weak arena links, the four flip sites, arena persistence,
 the settlement re-mark, the population rule) are exactly the closure of
 that gap.
 
@@ -507,7 +512,7 @@ Stated so every §4 mechanism can cite its joint instead of assuming it:
 - **`subDepRefs`** exists to protect K1's sweep and the quiesce
   refresh for effect-dep nodes. Both consumers die in S-B; §4.8 deletes
   the field with them (the P1 handoff item, resolved: its protective
-  job dissolves because effect re-checks validate through plane marks
+  job dissolves because effect re-checks validate through arena marks
   fed directly at flip sites, not through touched-word fast paths).
   The `obsShift` retains it was bundled with (RCC-OL1) are untouched.
 - **`obsCapture` feeds pre-dedup inside `recordEdge`** (landed). The
@@ -522,57 +527,57 @@ Stated so every §4 mechanism can cite its joint instead of assuming it:
   motion-implies-boundary invariant m6 asked for holds by construction
   and stays pinned.
 
-### 4.1 Which worlds get planes — and the ONE lifecycle story (fable B2)
+### 4.1 Which worlds get arenas — and the ONE lifecycle story (fable B2)
 
-- **newest** — IS the kernel; no plane, no shadow (the `newestMemos`
+- **newest** — IS the kernel; no arena, no shadow (the `newestMemos`
   ladder arm survives until S-C as the temporary newest
   representation — §4.8, codex 7 — then deletes).
-- **pass worlds** — one pooled plane per open pass: claimed at
+- **pass worlds** — one pooled arena per open pass: claimed at
   `passStart`, dropped in `reclaimAfterPassEnd` — which already runs
   AFTER mount fixup and after the re-staled detection loop, so the
-  fixup closure and the populator both see the plane (m2's ordering,
-  pinned with a dev assert: fixup/re-staled touching a dropped plane
+  fixup closure and the populator both see the arena (m2's ordering,
+  pinned with a dev assert: fixup/re-staled touching a dropped arena
   throws). Commit and discard drop identically.
-- **committed-for-root worlds** — one plane per root, materialized
+- **committed-for-root worlds** — one arena per root, materialized
   lazily at the root's first committed-world evaluation. **Committed
-  planes are permanent for the root's life: they survive pass ends,
+  arenas are permanent for the root's life: they survive pass ends,
   retirements, quiet mode, and QUIESCENCE.** They die only with the
   root record (host teardown) or bridge disposal. This is the single
   story replacing the first pass's three (fable B2): no drop at
   quiesce, no "pool at quiescence", and the first pass's "zero live
   worlds while quiet" invariant is STRUCK — the true asserted
-  invariant is **zero live PASS planes while quiet** (quiet ⇔ no open
+  invariant is **zero live PASS arenas while quiet** (quiet ⇔ no open
   passes) plus §4.3's quiet-fold fanout site (d).
-- **mountFix worlds** — remain one-shot planeless fold-throughs
+- **mountFix worlds** — remain one-shot arena-less fold-throughs
   (unchanged).
 
-**Consequences of committed-plane persistence, each walked:**
+**Consequences of committed-arena persistence, each walked:**
 
 1. **Quiescence sheds work instead of gaining it.** Today `quiesce()`
    bulk-resets K1 and then runs the kernel-pull refresh precisely
    because the routing coverage committed observers rely on dies with
-   the old episode's K1. Plane links are CURRENT structure, not an
+   the old episode's K1. Arena links are CURRENT structure, not an
    episode-accumulated log — nothing resets, so **the kernel-pull
    refresh is replaced by persistence, not by a substitute mechanism**.
    Fable B2's resolution-2 schedule now walks green: watcher `w` on
-   `C` (deps `{A}`) committed in R; quiesce (R's plane keeps `A→C`);
+   `C` (deps `{A}`) committed in R; quiesce (R's arena keeps `A→C`);
    event-handler write to `A` in new batch T → the delivery walk over
-   kernel ∪ live planes finds `A→C` in R's plane → `w` delivered in
+   kernel ∪ live arenas finds `A→C` in R's arena → `w` delivered in
    T's lane. What `quiesce()` keeps: the residue asserts, epoch bump +
    event, slot/dedup zeroes, dead-record reclamation — plus one new
-   duty: per-plane read-clock renumber (§4.5.7).
-2. **Quiet mode runs ON planes — flip site (d).** `__quietWrite`
+   duty: per-arena read-clock renumber (§4.5.7).
+2. **Quiet mode runs ON arenas — flip site (d).** `__quietWrite`
    already calls `quietDrain` + `revalidateCommittedSubs(undefined)`,
    both of which evaluate committed worlds; under NF2 those
-   evaluations use the surviving committed planes, so the quiet fold
+   evaluations use the surviving committed arenas, so the quiet fold
    must fan: after `base/cas` advance, mark the folded atom's shadow
-   in every live committed plane (guarded by one `planesLive !== 0`
+   in every live committed arena (guarded by one `arenasLive !== 0`
    scalar check). Fable B2's resolution-1 schedule walks green:
-   quiesce → quiet write to `A` → fanout marks `A` in R's plane →
+   quiesce → quiet write to `A` → fanout marks `A` in R's arena →
    `quietDrain` evaluates the watcher's computed committed → mark
    propagation reached it → refold → fresh value →
    `quiet-mode.spec.ts` stays green. PR1 accounting: an app with NO
-   React consumers never materializes a root, hence never a plane —
+   React consumers never materializes a root, hence never a arena —
    its quiet write pays exactly the one scalar check (same class as
    today's `watchers.size !== 0` branch); an app WITH live watchers
    already pays `quietDrain`'s full evaluation sweep per quiet write
@@ -580,16 +585,16 @@ Stated so every §4 mechanism can cite its joint instead of assuming it:
    shadows serve O(1)). Gated by the logged-quiet bench residuals P1
    just re-published.
 3. **The zero-worlds steady state, stated:** quiet + no consumers ⇒
-   no planes exist at all (lazy materialization has no trigger);
-   quiet + consumers ⇒ pass planes zero, committed planes idle with
+   no arenas exist at all (lazy materialization has no trigger);
+   quiet + consumers ⇒ pass arenas zero, committed arenas idle with
    all shadows clean, fanout O(marked=1) per quiet write with the
    read-clock dedup making repeat marks O(1).
 4. **The fourth fanout site exists** — (d) quiet fold, added to
    §4.3's list. B2's "missing fourth site" is thereby answered rather
    than argued away.
 
-Pooling: pass planes pool (per-pass churn is the hot case); committed
-planes do not pool (long-lived). Every pool tenancy carries a claim
+Pooling: pass arenas pool (per-pass churn is the hot case); committed
+arenas do not pool (long-lived). Every pool tenancy carries a claim
 generation checked by the structural validator so a dead tenancy's
 residue can never validate (§4.6).
 
@@ -597,8 +602,8 @@ residue can never validate (§4.6).
 
 A world's atom value is `foldAtom(atom, world)` — the existing packed
 fold under the existing two-clause visibility rule — computed lazily at
-the atom's first read in that plane and stored in the plane's value
-column together with a per-plane atom fingerprint (`fpOf(atom, world)`,
+the atom's first read in that arena and stored in the arena's value
+column together with a per-arena atom fingerprint (`fpOf(atom, world)`,
 the max-visible-seq the fold observed). What dies is every PER-COMPUTED
 fingerprint: computeds validate structurally (shadow flags +
 `wCheckDirty` + the §4.5.3 value cutoff), never by per-dep fp scans.
@@ -634,21 +639,21 @@ site can do:
 This split is also the honest form of the first pass's
 "lock-in fanout replaces commit-generation re-keying": it replaces it
 only TOGETHER with refold-always at (b) — re-keying evicted the whole
-plane because fp could not see below-max flips; (b)-fanout refolds
+arena because fp could not see below-max flips; (b)-fanout refolds
 precisely the flipped atoms instead, and never trusts fp there.
 
-### 4.3 Invalidation: fanout at four flip sites, the pass-plane rule, and the ordering joint
+### 4.3 Invalidation: fanout at four flip sites, the pass-arena rule, and the ordering joint
 
 `writeAtom`'s changed-write tail and the boundary operations fan into
-live planes with the read-clock dedup — but not uniformly:
+live arenas with the read-clock dedup — but not uniformly:
 
-- **Pass planes receive NO receipt-driven fanout, ever.** The pin
+- **Pass arenas receive NO receipt-driven fanout, ever.** The pin
   proof stands for everything receipts can do: every later write's seq
   postdates the pin (clause 2 excludes it), a later retirement's stamp
   postdates the pin (clause 1), compaction is pin-gated, and writes
-  during render throw (RCC-UM2). So a pass-plane value, once folded,
+  during render throw (RCC-UM2). So a pass-arena value, once folded,
   is valid for the pass's whole life AGAINST RECEIPT MOTION — enforced
-  by a dev assert (a receipt-flip fanout reaching a pass plane is a
+  by a dev assert (a receipt-flip fanout reaching a pass arena is a
   bug). **The one pin-exempt mark source is L4 resource settlement**
   (§4.5.4): SU5 requires a suspended pass's retry to observe
   settlement, settlement is monotone (pending→settled, never a value
@@ -657,36 +662,36 @@ live planes with the read-clock dedup — but not uniformly:
   entries are shared across views by key. Codex 5's schedule is
   exactly this: the assert is scoped to receipt flips so the
   settlement re-mark can pass.
-- **Committed planes receive fanout at COMMITTED-TRUTH motion.** The
+- **Committed arenas receive fanout at COMMITTED-TRUTH motion.** The
   four sites and their code joints, each fanning the flipped atoms'
   shadows (mark + read-clock dedup) and propagating kernel-style
-  PENDING over the plane's out-links (strong AND weak — §4.4):
+  PENDING over the arena's out-links (strong AND weak — §4.4):
   - **(a) retirement** — in `retireInternal`, after stamps + `cas` +
     compaction, before the drain loop: fan the retiring token's
-    `atomsTouched` into EVERY committed plane.
+    `atomsTouched` into EVERY committed arena.
   - **(b) per-root lock-in** — in `passEnd(commit)`'s
     `maskTokenRecords` loop, immediately after each
     `committedTokens.add`/`commitGen++`/`cas` and before that token's
     drain call: fan THAT token's `atomsTouched` into THAT root's
-    plane, **per locked-in token** (m4 — commits lock in SETS of
+    arena, **per locked-in token** (m4 — commits lock in SETS of
     tokens; the fanout runs inside the per-token loop, not once per
     commit), with §4.2's refold-always consumption.
   - **(c) committed-member write** — at the write-path lines that set
     `committedDirtySlots`: fan the ONE written atom into each member
-    root's plane. Marks only — the effect scan stays at the next
+    root's arena. Marks only — the effect scan stays at the next
     boundary (EF2 as amended; §4.0).
   - **(d) quiet fold** — in `__quietWrite` after `base/cas` advance,
     before `quietDrain`/the sub scan (§4.1.2).
 - **Newest needs no fanout**: the kernel's own propagate IS newest
   invalidation (unchanged).
 
-**The ordering joint (amendment 6), in plane terms:** at every
+**The ordering joint (amendment 6), in arena terms:** at every
 boundary operation, fanout marks land immediately after the
 committed-side mutation they describe and BEFORE any same-operation
 committed-world evaluation — and both consumers of those marks (the
 watcher drain's value re-checks and the boundary's
 `revalidateCommittedSubs` scan at op end) are evaluations, so both see
-the marked planes. Concretely the per-site order is: mutate
+the marked arenas. Concretely the per-site order is: mutate
 (membership/stamps/cas) → fan → drain → …rest of the operation… →
 `revalidateCommittedSubs` → `flushNotify`. One pinned ordering test
 per site; site (c)'s marks land at the write, strictly before any
@@ -696,8 +701,8 @@ first coupling after the EF2 ruling.
 **Mark consumption discipline** (the keep-the-dirt analog): a shadow's
 mark clears only when its refold/revalidation actually ran — marks are
 consumed by evaluation, which is always safe because marks are
-per-world and no other world can see them. Each committed plane keeps
-a dirty LIST (ids appended on a mark's 0→1 edge — the plane analog of
+per-world and no other world can see them. Each committed arena keeps
+a dirty LIST (ids appended on a mark's 0→1 edge — the arena analog of
 `slotTouched`); a drain swaps the list, collects, and re-appends any
 entry still marked after its evaluations, so an unconsumed mark (a
 cone no observer evaluated) survives to the next boundary instead of
@@ -710,14 +715,14 @@ seed from per-slot touched lists expanded over weak edges plus the
 `restaled` set; mount fixup closes over reverse K1. NF2 deletes K1's
 memo-invalidation job; the ROUTING jobs are re-homed as follows.
 
-**4.4.1 Untracked-read coverage: per-plane WEAK LINKS (codex 3 / fable B1).**
+**4.4.1 Untracked-read coverage: per-arena WEAK LINKS (codex 3 / fable B1).**
 The first pass's premise ("untracked reads leave no link in any
 design") was false at HEAD — `recordWeakEdge` fires unconditionally on
 every untracked read — and its TAINT replacement provably
 under-covered. The replacement mechanism: **an untracked read records
-a weak-flagged link in the evaluating plane** (one flag bit in the
+a weak-flagged link in the evaluating arena** (one flag bit in the
 link record's spare field; same record layout, same in-place-reuse
-discipline), unconditionally, exactly as HEAD's weak plane does —
+discipline), unconditionally, exactly as HEAD's weak table does —
 restoring BOTH of HEAD's mechanisms with one structure:
 
 - *Value validation* (B1's mechanism 1): weak links participate in
@@ -727,8 +732,8 @@ restoring BOTH of HEAD's mechanisms with one structure:
   structural transliteration of HEAD's "untracked dep enters the
   memo frame's fingerprint set".
 - *Drain candidates* (B1's mechanism 2): drain collection expands
-  marks over ALL plane links, weak included — subsuming HEAD's
-  weak-expansion AND its strong-past-weak-hop rule (transitive plane
+  marks over ALL arena links, weak included — subsuming HEAD's
+  weak-expansion AND its strong-past-weak-hop rule (transitive arena
   propagation walks both kinds).
 - *Never a notification carrier*: the write-time delivery walk tests
   the weak bit and does NOT traverse weak links (untracked reads never
@@ -740,11 +745,11 @@ Walked schedules: **codex 3's pinned battery member** ("taint member"
 in `logged-battery.spec.ts`: `c = tracked(b) + untracked(a)`, watcher
 on `d = c*1` in root A; T writes only `a` → no delivery ✓ (weak links
 untraversed); U writes `b` → delivery ✓; T retires → site-(a) fanout
-marks `a` in A's plane → weak `a→c` propagates PENDING → `c`, `d`
+marks `a` in A's arena → weak `a→c` propagates PENDING → `c`, `d`
 marked → drain collects the watcher off the dirty list → committed
 re-evaluation → correction to 3 ✓ — the pinned schedule stays green
 byte-identical). **Fable B1's read-before-pending schedule**: `C`
-reads `A` untracked while committed-quiet — C's committed-plane
+reads `A` untracked while committed-quiet — C's committed-arena
 evaluation recorded weak `A→C` at that moment (recording is
 unconditional, not pending-gated, which is exactly where TAINT
 failed) → T writes `A`, retires → fanout + weak propagation + drain →
@@ -752,46 +757,46 @@ correction ✓. Newest evaluations record no weak residue anywhere —
 matching HEAD's observable behavior, since HEAD's weak edges feed only
 committed drains, and a node with a committed consumer gets its weak
 links recorded by that consumer's own committed evaluations (§4.4.2).
-Price: weak links are ordinary plane links (spike's link-record cost
+Price: weak links are ordinary arena links (spike's link-record cost
 tables apply); the delivery walk pays one bit test per traversed
-plane link; TAINT and its propagation DELETE at S-B (its only
+arena link; TAINT and its propagation DELETE at S-B (its only
 remaining consumer after the fast-path deletion below is `sweepK1`'s
 keep-mask, which dies with K1) — the taint bit was strictly weaker
 coverage than weak links, so nothing is lost.
 
-**4.4.2 The committed-plane POPULATION RULE (fable M1) — first-class.**
+**4.4.2 The committed-arena POPULATION RULE (fable M1) — first-class.**
 Fanout writes marks; drains expand marks over links; so the coverage
-argument needs the plane to already HOLD the consumer's committed dep
+argument needs the arena to already HOLD the consumer's committed dep
 links. The populators are the committed-world evaluations themselves —
-link recording happens on every plane evaluation — and the rule names
+link recording happens on every arena evaluation — and the rule names
 their unconditional sites:
 
 1. **The `passEnd` re-staled detection loop** — committed-evaluates
    EVERY rendered watcher's node at EVERY commit (mounted watchers
    included, since `mountWatcher` adds to `p.rendered`), recursively
-   populating the root plane with each watcher node's full current
+   populating the root arena with each watcher node's full current
    committed dep cone (strong + weak) before `passEnd` returns —
    i.e., before any post-commit write needs routing. **This loop is
    hereby DECLARED load-bearing for routing** (M1's demand): its fate
    is survival verbatim plus a new dev assert pinning the property
    ("after a commit of pass P, every live `w ∈ p.rendered` has a
-   shadow for its node in the root's plane") and a pinned schedule
+   shadow for its node in the root's arena") and a pinned schedule
    (M1's walked shape: mount `C=f(A)` in R, commit, handler write to
-   `A` in fresh batch T2 → the walk finds `A→C` in R's plane →
+   `A` in fresh batch T2 → the walk finds `A→C` in R's arena →
    delivery ✓).
 2. **Durable drains' value re-checks** and **`quietDrain`** — every
    correction compare is a committed evaluation.
 3. **The boundary effect scans** — `captureRun`/`captureRead` and
    `revalidateCommittedSubs` evaluate every effect dep
-   committed-for-root, populating the plane with effect-dep cones per
+   committed-for-root, populating the arena with effect-dep cones per
    run.
 4. **The shim's reveal compare** (`resubscribeAtLayout`'s
    `committedValue` call) — M1's second unnamed carrier, named: it
    survives verbatim and is itself a populator.
 
-Commit-time migration of pass-plane links into the committed plane —
+Commit-time migration of pass-arena links into the committed arena —
 M1's other candidate — is REJECTED, on lifetime grounds (§4.6): links
-enter a plane only paired with the evaluation that chose them; a pass
+enter a arena only paired with the evaluation that chose them; a pass
 world's dep choice can differ from the committed world's (that is
 battery case 1's whole point), so migrated links would be
 wrong-not-just-extra structure filed across a lifetime boundary. The
@@ -799,38 +804,38 @@ re-staled loop re-DERIVES instead, at a cost the engine already pays
 today.
 
 **4.4.3 Write-time delivery** becomes reachability over the kernel's
-subs links ∪ every live plane's STRONG links (pass planes included —
+subs links ∪ every live arena's STRONG links (pass arenas included —
 the walk visits structure, never values or marks, so §4.3's pin
 invariant is untouched), collecting live `deliver`-subscriptions
 (watchers) and enqueuing newest-policy subscriptions on visited nodes.
 Value-blind by construction (RCC-SP5 preserved); the per-(watcher,
 slot) dedup bit and the interleaved-delivery rule are per-subscription
-policy, untouched. Per-plane walk-generation columns give termination
+policy, untouched. Per-arena walk-generation columns give termination
 without allocation, as in the spike.
 
 **4.4.4 The coverage argument, restated honestly (M1's sharpening
 adopted).** Under NF2, deliveries and drain candidates share ONE
-structural source — plane links — where HEAD had two independent nets
+structural source — arena links — where HEAD had two independent nets
 (episode-union K1 for deliveries; slot-touched lists + weak edges for
 drains). A routing miss is therefore stale-until-cone-motion, not a
 lane demotion; the first pass's R2 wording understated this and is
 corrected in §6. The argument that the required coverage survives:
-(i) an already-rendered consumer's links exist in its pass plane
-(alive until pass end) and in its root's committed plane (populated
+(i) an already-rendered consumer's links exist in its pass arena
+(alive until pass end) and in its root's committed arena (populated
 per §4.4.2, alive for the root's life, surviving quiescence per
 §4.1); (ii) dep flips re-track links at the refold that observes the
 flip, and the write that CAUSES a flip is routable through the
-pre-flip links (the discriminant edge argument), which the plane
+pre-flip links (the discriminant edge argument), which the arena
 holds; (iii) untracked deps are covered by §4.4.1's weak links in
-every plane a committed consumer evaluates in.
+every arena a committed consumer evaluates in.
 
-**4.4.5 The known residual — codex 4's dead-plane gap: a SCOPED
+**4.4.5 The known residual — codex 4's dead-arena gap: a SCOPED
 RETREAT, pinned.** Schedule: committed `c = flag ? a : b` with
 `flag=false`; parked T writes `flag=true` (delivered into T); T's
-pass evaluates the `a` branch and is DISCARDED (its plane — and the
+pass evaluates the `a` branch and is DISCARDED (its arena — and the
 only `a→c` link — dies) while T stays pending; independent batch U
-writes `a` in the gap. No live plane holds `a→c` (the committed
-plane's links are `{flag,b}→c`, correctly — committed truth still
+writes `a` in the gap. No live arena holds `a→c` (the committed
+arena's links are `{flag,b}→c`, correctly — committed truth still
 shows the `b` branch), so U's write delivers nothing to `c`'s
 watcher. HEAD's episode-union K1 would have scheduled the watcher in
 U's lane. Under NF2 the repair arrives at the next committed-truth
@@ -851,7 +856,7 @@ outcome, so any future silent worsening (or fix) diffs loudly.
 
 **4.4.6 Durable drains** keep their trigger sites, id-order firing,
 value gates, and the `restaled` merge (all landed P1 behavior); their
-candidate set becomes: the root plane's dirty list (marks from §4.3's
+candidate set becomes: the root arena's dirty list (marks from §4.3's
 sites, already expanded over strong+weak links at fanout time) →
 collect live same-root watchers on listed nodes → union the
 `restaled` set → sort by id → compare committed-vs-lastRendered.
@@ -865,8 +870,8 @@ instead of crying wolf.
 
 **4.4.7 Mount fixup** keeps its semantics wholesale (corrective loop +
 four-conjunct fast-out + covered-audit + compare). `dependencyClosureOf`
-walks reverse links over kernel ∪ the mounting pass's plane ∪ the
-root's committed plane (three reverse walks; the pass plane is alive
+walks reverse links over kernel ∪ the mounting pass's arena ∪ the
+root's committed arena (three reverse walks; the pass arena is alive
 here by §4.1/m2's ordering). That triple covers everything HEAD's
 episode union held FOR THIS NODE except dead foreign cones, whose
 exclusion is safe by the same discriminant argument — and the landed
@@ -876,11 +881,11 @@ standing tripwire for closure under-coverage, so this narrowing is
 audited at runtime, not assumed.
 
 **4.4.8 The touched word, TAINT, and the world-read fast path.** Bits
-0–30 and `slotTouched` die at S-B (drains seed from plane dirty
+0–30 and `slotTouched` die at S-B (drains seed from arena dirty
 lists). The `evaluate()` fast path — "touched word 0 ⇒ serve the
 validated newest memo to any world" — DELETES at S-A when world reads
-route to planes, and TAINT (its poison guard) with it at S-B. Price,
-stated: cold first-reads in a fresh pass plane fold instead of
+route to arenas, and TAINT (its poison guard) with it at S-B. Price,
+stated: cold first-reads in a fresh pass arena fold instead of
 borrowing the newest cache. The spike's churn bench already measured
 exactly this regime at parity (§3), and §4.9.6 adds a cold-pass shape
 (N≈200 quiet computeds, first render) as an explicit gate; the
@@ -903,12 +908,12 @@ schedule effort is allocated by that map.
 1. **Folds** — §4.2; reuses `foldAtom`/`visibleAt`/`fpOf` verbatim
    with §4.2's per-site consumption rules; no new fold logic.
 2. **Pins** — §4.3; the receipt-fanout ban plus pin-gated compaction
-   are the entire pin story; no per-plane pin state exists; the one
+   are the entire pin story; no per-arena pin state exists; the one
    pin-exempt mark source is settlement (§4.5.4).
 3. **Per-world equality (codex 6) — the record shape, made explicit.**
    The kernel's custom-equality `Computed` wraps its fn around the
    KERNEL value slot and returns the kernel's old reference on
-   equality — calling that wrapper from a plane compares against the
+   equality — calling that wrapper from a arena compares against the
    wrong world's previous value (codex 6's `[0]`/`[1]` counterexample:
    false change reported, reference preservation broken). The
    production shape separates four things:
@@ -917,46 +922,46 @@ schedule effort is allocated by that map.
      when `equals` is non-default; default-equality computeds need no
      entry);
    - *comparator* — the `equals` fn, same side column;
-   - *plane-local previous value* — the shadow's value-column slot in
-     THE EVALUATING PLANE (never the kernel slot);
+   - *arena-local previous value* — the shadow's value-column slot in
+     THE EVALUATING ARENA (never the kernel slot);
    - *exceptional-outcome bits* — per-shadow flag bits (has-box /
      box-suspended, mirroring the kernel's own box discipline) with
      the box payload in the value column.
-   `wUpdate` then is: `prev = plane value slot; next = rawFn();
+   `wUpdate` then is: `prev = arena value slot; next = rawFn();
    changed = !(prevValid && !exceptional && equals(next, prev))`; on
    unchanged, KEEP `prev`'s reference (write nothing, clear DIRTY, no
    propagate); on changed, store + propagate. Equality never bridges
    an exceptional boundary (value↔box is always changed; box→same-box
-   by sentinel identity is unchanged — the plane-level twin of
+   by sentinel identity is unchanged — the arena-level twin of
    battery 16d's still-pending rule). Until S-C, overlay
    `ComputedNode`s get the same cutoff through the fn-reader epilogue
    writing the shadow value column (their equals semantics today are
    `Object.is` at the memo compare; unchanged). One pinned test per
    arm, including codex 6's reference-preservation shape run in three
-   planes at once.
+   arenas at once.
 4. **Sentinel boxes + THE SETTLEMENT RE-MARK SITE (codex 5 / fable
    M2 / P1 handoff item 2).** A suspended background evaluation
    stores its stable `SuspendedRead` sentinel in the evaluating
-   plane's value column with the box-suspended bit (render-path
+   arena's value column with the box-suspended bit (render-path
    evaluations rethrow; the `suspendDepth` discipline stays
    adapter-side, unchanged). **Settlement re-marks:** the kernel's D5
    settlement-invalidate primitive (`invalidateComputed`, already
    called by every `ctx.use` settle listener) gains ONE
    bridge-registered hook — set at `registerReactBridge`, cleared at
-   dispose, one closure per BRIDGE, zero per-plane or per-key
+   dispose, one closure per BRIDGE, zero per-arena or per-key
    allocation. On settle of a key held by computed `c`, the hook
-   walks the live planes (pass AND committed — the pin-exempt case,
-   §4.3): for each plane whose shadow of `c` holds a box whose
+   walks the live arenas (pass AND committed — the pin-exempt case,
+   §4.3): for each arena whose shadow of `c` holds a box whose
    payload IS this key's sentinel (identity — sentinels are stable
-   per thenable), mark DIRTY + propagate PENDING; a plane that died
+   per thenable), mark DIRTY + propagate PENDING; a arena that died
    first is a lookup miss (no dangling listener — the hook holds the
-   bridge, the bridge holds planes, nothing retains thenables).
+   bridge, the bridge holds arenas, nothing retains thenables).
    Until S-C, the shim's second ctx wiring forwards its settle
    callback through the same hook. Scheduling stays the host's:
    React's own retry ping re-renders suspended trees; the library's
    job is that the retry and the next boundary scan SEE the settled
    value — which the mark guarantees (fable M2's schedule: sentinel
-   cached in R's plane; K settles → re-mark; the effect's next
+   cached in R's arena; K settles → re-mark; the effect's next
    boundary re-check refolds → sentinel→value IS a flip → refire; no
    more sentinel-forever). **This FIXES a pre-existing HEAD gap** (P1
    handoff, confirmed watcher-reachable at HEAD): today a committed
@@ -968,7 +973,7 @@ schedule effort is allocated by that map.
    battery lacks), + RCC-SU5 cited in both.
 5. **`ctx.use`** — unchanged L4 semantics: ONE per-key cache scoped to
    the living node, shared across worlds BY DESIGN (SU3's key carries
-   world-varying inputs). Planes add only §4.5.4's re-mark. The F5
+   world-varying inputs). Arenas add only §4.5.4's re-mark. The F5
    unification still deletes the shim's second wiring at S-C in favor
    of the kernel ctx layer's packed side-column cache.
 6. **`ctx.previous`** — unchanged from the first pass: inside a world
@@ -976,17 +981,17 @@ schedule effort is allocated by that map.
    (maintained at `passEnd(commit)`, moving from `shim.previousCells`
    into the bridge at S-C); plain path keeps kernel semantics; its own
    test.
-7. **Read-clock wrap (int32)** — per-plane clocks renumber (stamps
+7. **Read-clock wrap (int32)** — per-arena clocks renumber (stamps
    zeroed, clock reset) at quiescence as §4.1.1's new `quiesce()`
-   duty; a forced-wrap test drives a plane past 2^31 stamps via a
+   duty; a forced-wrap test drives a arena past 2^31 stamps via a
    test-only clock preset. If quiescence proves too rare in
    long-session profiles, the fallback (widen to float64 columns) is
    recorded; decided at implementation, tested either way.
 8. **Growth-mid-op reload** — every allocating world call re-loads
    `w.W`; enforced by (a) the spike's structural validator promoted to
    a dev-mode invariant run after every op in engine tests, (b) a
-   stride-sized-initial-plane test so every growth path exercises
-   mid-walk, and (c) React scenarios run with a tiny default plane
+   stride-sized-initial-arena test so every growth path exercises
+   mid-walk, and (c) React scenarios run with a tiny default arena
    size in test builds (the R8 hunt, unchanged).
 
 ### 4.6 Lifetime classification (contract §2/§6 step 1 — the mandatory table)
@@ -998,24 +1003,24 @@ caches inherit obligations from what they mirror):
 
 | state | lifetime | derived of | created | destroyed | teeth (what the classification forbids) |
 |---|---|---|---|---|---|
-| pass plane (shadows, strong+weak links, value columns, marks, walk/read-clock stamps) | **L3** per-attempt | the pass world's frozen view | `passStart` (pool claim) | `reclaimAfterPassEnd` (pool release; after fixup + re-staled loop, m2) | never consulted by fold/visibility machinery; nothing in it survives the pass — no value/link migration to any other plane (§4.4.2's rejection); settlement re-mark may INVALIDATE entries, never persist them |
-| committed plane (same columns, per root) | **L1**-derived (re-creatable cache OF committed truth) | `foldAtom` over tapes/base per the visibility rule | lazily at the root's first committed evaluation | with the root record / bridge dispose — NOT at quiescence (§4.1) | never a source of truth (tapes+base are); serves only through the §4.2/§4.3 mark discipline; holds no receipt, stamp, or payload the tape doesn't |
-| fanout marks + per-plane dirty lists | same lifetime as their plane | pending invalidation facts about that plane | flip sites (a)–(d), settlement | consumed by evaluation only (§4.3's keep-the-dirt analog) | a mark may never clear without its refold having run; marks never cross planes |
-| plane POOL (free Int32Array buffers) | mechanism, not state — holds NO tenant state between claims | — | bridge init / growth | bridge dispose | each tenancy stamps a claim generation; the validator rejects any record citing a dead generation (no I4-shaped immortal residue) |
-| per-plane cached evaluation outcomes: values, `SuspendedRead` sentinels, error boxes, outcome bits, plane-local previous values (§4.5.3–4) | the OWNING PLANE's lifetime (L3 or L1-derived) | one world's last evaluation outcome | that plane's evaluation | with the plane, or overwritten by refold | a sentinel cached here is an OUTCOME record, not the resource: it must be invalidatable without touching the entry (§4.5.4) and must never gate another world's read |
-| the `ctx.use` per-key entry (thenable, settled value) | **L4** (unchanged, pre-existing) | the request | first read of the key | with the living node (WP3) | keyed by request, never by consumer or plane; monotone; shared across worlds by design |
-| the settlement hook (one closure per bridge) | mechanism (bridge lifetime) | — | `registerReactBridge` | bridge dispose | holds the bridge only; retains no thenables, planes looked up at fire time |
+| pass arena (shadows, strong+weak links, value columns, marks, walk/read-clock stamps) | **L3** per-attempt | the pass world's frozen view | `passStart` (pool claim) | `reclaimAfterPassEnd` (pool release; after fixup + re-staled loop, m2) | never consulted by fold/visibility machinery; nothing in it survives the pass — no value/link migration to any other arena (§4.4.2's rejection); settlement re-mark may INVALIDATE entries, never persist them |
+| committed arena (same columns, per root) | **L1**-derived (re-creatable cache OF committed truth) | `foldAtom` over tapes/base per the visibility rule | lazily at the root's first committed evaluation | with the root record / bridge dispose — NOT at quiescence (§4.1) | never a source of truth (tapes+base are); serves only through the §4.2/§4.3 mark discipline; holds no receipt, stamp, or payload the tape doesn't |
+| fanout marks + per-arena dirty lists | same lifetime as their arena | pending invalidation facts about that arena | flip sites (a)–(d), settlement | consumed by evaluation only (§4.3's keep-the-dirt analog) | a mark may never clear without its refold having run; marks never cross arenas |
+| arena POOL (free Int32Array buffers) | mechanism, not state — holds NO tenant state between claims | — | bridge init / growth | bridge dispose | each tenancy stamps a claim generation; the validator rejects any record citing a dead generation (no I4-shaped immortal residue) |
+| per-arena cached evaluation outcomes: values, `SuspendedRead` sentinels, error boxes, outcome bits, arena-local previous values (§4.5.3–4) | the OWNING ARENA's lifetime (L3 or L1-derived) | one world's last evaluation outcome | that arena's evaluation | with the arena, or overwritten by refold | a sentinel cached here is an OUTCOME record, not the resource: it must be invalidatable without touching the entry (§4.5.4) and must never gate another world's read |
+| the `ctx.use` per-key entry (thenable, settled value) | **L4** (unchanged, pre-existing) | the request | first read of the key | with the living node (WP3) | keyed by request, never by consumer or arena; monotone; shared across worlds by design |
+| the settlement hook (one closure per bridge) | mechanism (bridge lifetime) | — | `registerReactBridge` | bridge dispose | holds the bridge only; retains no thenables, arenas looked up at fire time |
 | per-kernel-id rawFn/equals side column (§4.5.3) | node lifetime (registration bookkeeping, same class as the node record itself) | the authored computed | node registration | node disposal | policy lookup only; never consulted by folds |
 
 No new L2 state exists: Program 2 writes no receipts and touches no
 retirement machinery (§3 item 8). The P1 subscription record's
 classification (§2.3) is unchanged. Resistance check (contract §6):
 every row above took exactly one lifetime without force — the two
-that resisted in the first pass (committed planes "long-lived or
+that resisted in the first pass (committed arenas "long-lived or
 pooled?"; sentinel boxes "resource or cache?") are resolved by the
-derived-of column: a committed plane is L1-derived bookkeeping and so
-survives episodes like the obs plane does; a cached sentinel is a
-plane-lifetime OUTCOME of reading an L4 entry, not the entry.
+derived-of column: a committed arena is L1-derived bookkeeping and so
+survives episodes like the observation index does; a cached sentinel is a
+arena-lifetime OUTCOME of reading an L4 entry, not the entry.
 
 ### 4.7 The ~300 lines of walk specializations — and the two disciplines they must carry
 
@@ -1050,16 +1055,16 @@ The +0.5 ns computed-read seam still lands only in S-C. The stages,
 each with its executable-state answer, what it deletes, and its
 divergence rule:
 
-- **P2.S-A — planes as the WHOLE value+invalidation layer for pass
+- **P2.S-A — arenas as the WHOLE value+invalidation layer for pass
   and committed worlds; K1 still owns all routing.** Honest contents
   (m1's restatement adopted — this is the majority of NF2's new
-  write-path logic, not a value-store stub): plane
+  write-path logic, not a value-store stub): arena
   allocator/registry/claim-generations; shadow records + strong/weak
   link recording BY THE EXISTING fn-reader (`trackedReader`/
-  `untrackedReader` record into the active world's plane in addition
+  `untrackedReader` record into the active world's arena in addition
   to K1); folds into value columns (§4.2); ALL FOUR flip sites +
   settlement re-mark (§4.3, §4.5.4) — mandatory in this stage, since
-  with `validateMemoInner`'s pass/committed arms deleted, plane
+  with `validateMemoInner`'s pass/committed arms deleted, arena
   values are correct ONLY under complete fanout; the §4.5.3 equality
   record; the world-read fast path deletes (§4.4.8).
   **The temporary newest representation (codex 7's demand):
@@ -1072,22 +1077,22 @@ divergence rule:
   actually compares:** the lockstep per-op world snapshots
   (newest/committed-per-root/open-pass values) plus the EXACT
   correction/effect event streams are the cross-check between the
-  plane values and the model; the structural validator checks each
+  arena values and the model; the structural validator checks each
   graph internally. **Divergence mid-stage is a STOP** — with K1
-  still routing, any lockstep diff indicts the plane value layer
+  still routing, any lockstep diff indicts the arena value layer
   (folds/fanout/equality/boxes) in isolation, which is this stage's
   entire point (§6-R3). Bench gate: dual-write cost within the
   spike's live-world envelope.
 - **P2.S-B — routing re-homed; K1 deleted.** Delivery walk →
-  kernel ∪ planes with the weak-skip (§4.4.3); drains → plane dirty
+  kernel ∪ arenas with the weak-skip (§4.4.3); drains → arena dirty
   lists + `restaled` (§4.4.6); mount fixup closure → the §4.4.7
   triple; quiesce body shrinks (no K1 reset, no kernel-pull refresh,
-  no weak reset; planes persist; read-clock renumber added). Deletes:
+  no weak reset; arenas persist; read-clock renumber added). Deletes:
   `outSets`/`outList`/`inList`, `recordEdge`'s K1 half (the
-  obsCapture hook and plane recording remain in the fn-reader),
+  obsCapture hook and arena recording remain in the fn-reader),
   `sweepK1`, `propagateBits`/`applyBits`/`slotTouched`/touched bits
   0–30, TAINT + `propagateTaint`, `weakOutSets`/`weakOutList`,
-  `recordWeakEdge` (superseded by plane weak links), `subDepRefs`
+  `recordWeakEdge` (superseded by arena weak links), `subDepRefs`
   (§4.0), the quiesce refresh-target scan. Delivery-decision changes
   are possible here (fewer, never more): the ⊆ bound plus S-NF2-D1
   and the §4.4.2 pins police it; comparator noise beyond the
@@ -1103,7 +1108,7 @@ divergence rule:
   re-keys to kernel ids — the §4.5.3 side columns are already keyed
   that way. The hang schedule pins GREEN here (it needs kernel
   computeds under worlds; it is ported and red-wired during S-A).
-- **P2.S-D — perf closure.** Plane pooling hardened, wrap tests,
+- **P2.S-D — perf closure.** Arena pooling hardened, wrap tests,
   full bench battery (§4.9.5), spike benches ported under real names
   (F7 hygiene), README/API docs for the unified computed story.
 
@@ -1127,9 +1132,9 @@ Each stage remains its own verified commit series with a revert story
    interleavings with documented degraded-but-correct outcomes
    (§4.4.5); the settlement re-mark engine pin + React-battery
    background-settlement case (§4.5.4, RCC-SU5); codex 6's
-   reference-preservation shape ×3 planes (§4.5.3); M6's world-path
+   reference-preservation shape ×3 arenas (§4.5.3); M6's world-path
    retain re-point schedule as S-C's entry gate (§4.7); m2's
-   plane-drop-after-fixup dev assert; the §4.3 per-site ordering
+   arena-drop-after-fixup dev assert; the §4.3 per-site ordering
    pins; the m3-scoped delivery-precedes-correction fuzz invariant.
 4. **Full battery per stage**: package suites, 17-case battery at
    model and React level (16b–16h included — the P1 boundary pins
@@ -1152,24 +1157,24 @@ Each stage remains its own verified commit series with a revert story
    spike did.
 7. **Quiet-mode / sync-neutrality re-proof**: `quiet-mode.spec.ts` and
    `one-core.spec.ts` probes green untouched; PR1 ledger updated (the
-   +0.5 ns branch pinned; the quiet write's one `planesLive` branch
+   +0.5 ns branch pinned; the quiet write's one `arenasLive` branch
    documented per §4.1.2); PR2 re-proof via §4.1.2's flip-site (d)
    walk (quiet folds ARE fanned — the first pass's "quiet folds bypass
-   planes" claim is retracted).
+   arenas" claim is retracted).
 
 ### 4.10 Deletes vs adds (honest ledger, second pass)
 
 **Deletes**: memo ladder ~200 (S-A: pass/committed arms; S-C: newest
 arm); K1 log + sweep + touched/taint machinery + weak lists ~250
 (S-B); quiesce refresh + refresh-target scan + `subDepRefs` ~60
-(S-B); newest-plane special case ~40 (S-C); `ComputedNode` path + shim
+(S-B); newest-table special case ~40 (S-C); `ComputedNode` path + shim
 second wiring ~150 in cosignal-react + ~80 in cosignal (S-C).
-**Adds**: planes/pooling/claim-gens ~140; transliterated walks ~300
+**Adds**: arenas/pooling/claim-gens ~140; transliterated walks ~300
 (incl. weak-bit handling + capture hook); fanout at FOUR sites +
 settlement re-mark hook ~110; §4.5 policy items (equality columns,
 boxes, previous, wrap) ~110; validator + pins (test-side).
 **Net**: cosignal roughly +200 to +350 source lines and −3 concepts
-(ladder, K1-as-invalidation, second computed API) against +2 (planes,
+(ladder, K1-as-invalidation, second computed API) against +2 (arenas,
 fanout); cosignal-react −~150 lines; public surface −1 API. Still
 adopted as a PERFORMANCE mechanism with an API prize, per the spike's
 verdict — the second pass has made it slightly LARGER, not smaller,
@@ -1196,7 +1201,7 @@ rather than a recommendation — restated honestly per fable M4:
    causal bodies, cleanup events), so P2.S-B's routing re-homing is
    policed by the exact correction/effect streams (§4.4.9).
 3. The interface joint held: subscriptions re-check via
-   `evaluate(node, world)` — the same call before and after planes —
+   `evaluate(node, world)` — the same call before and after arenas —
    and the record references nodes opaquely, so S-C's identity re-key
    touches no subscription code.
 4. The member-write joint landed as `committedDirtySlots` marking
@@ -1222,11 +1227,11 @@ substrate P2 builds on.
   must not reopen it (the 16-series stays green through every stage).
 - **R2 — delivery coverage under one structural source (REWRITTEN,
   second pass).** §4.4 now names the mechanisms the first pass left
-  implicit: per-plane weak links (§4.4.1) carry the untracked family;
+  implicit: per-arena weak links (§4.4.1) carry the untracked family;
   the population rule (§4.4.2, the re-staled loop + reveal compare,
-  declared and pinned) carries the committed-plane premise; plane
+  declared and pinned) carries the committed-arena premise; arena
   persistence (§4.1) carries the post-quiescence window. The
-  remaining, DECLARED residual is codex 4's dead-plane gap
+  remaining, DECLARED residual is codex 4's dead-arena gap
   (§4.4.5) — value-correct, lane-degraded, pinned as S-NF2-D1 with
   documented outcomes, defensible under SP5's letter and the
   comparator's ⊆ delivery bound. M1's sharpening is adopted: a
@@ -1235,7 +1240,7 @@ substrate P2 builds on.
   exact-stream map are load-bearing, and why S-B comparator noise
   stays a STOP.
 - **R3 — per-world policy state (AMENDED per m1).** Folds under
-  planes remain the sharpest edge, but S-A is now honestly scoped as
+  arenas remain the sharpest edge, but S-A is now honestly scoped as
   the folds+fanout+flip-sites+equality+boxes stage — the majority of
   NF2's new write-path logic — with K1 still routing so every
   divergence indicts the value layer in isolation; the divergence
@@ -1251,9 +1256,9 @@ substrate P2 builds on.
   watched-links collapse stays a rejected follow-up with the same
   walked entry test.
 - **R5 — world-count scaling (kept; pricing widened).** Fanout is
-  O(live planes) per changed write; committed planes are long-lived,
+  O(live arenas) per changed write; committed arenas are long-lived,
   per-root, and now explicitly PERMANENT (§4.1), so the many-root
-  residual is permanent too: R planes × 32–64 KB plus the fanout
+  residual is permanent too: R arenas × 32–64 KB plus the fanout
   branch per write (spike: 4 idle worlds +6.9–9.6%). Mitigations
   unchanged (lazy materialization, read-clock dedup, pooling, R=4
   bench gate with the head-bridge anchor) — plus fable N2's
@@ -1278,11 +1283,11 @@ substrate P2 builds on.
   transitions (flags, tail reuse, reverse dispose) that drift breaks.
   Residual: a semantics-preserving kernel optimization that the mirror
   misses stays invisible until a world-side bench regresses — accepted.
-- **R8 — plane growth-mid-op is a new bug CLASS, not a bug.** `w.W`
+- **R8 — arena growth-mid-op is a new bug CLASS, not a bug.** `w.W`
   reload after allocating calls has no type-system enforcement.
-  Mitigations (§4.5.8): stride-sized-plane growth tests + validator.
+  Mitigations (§4.5.8): stride-sized-arena growth tests + validator.
   Residual: a growth path only reachable under real React interleavings
-  — the React scenarios run with a tiny default plane size in test
+  — the React scenarios run with a tiny default arena size in test
   builds to hunt it.
 - **R9 — RESOLVED (2026-07-06).** RUL-2 was ruled by OL1's letter
   (amendment 3): effect dep snapshots joined the union and P1 landed

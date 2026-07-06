@@ -631,14 +631,14 @@ Neither is part of the contract; nothing in section 3 depends on them.
   explicitly queued NF2 productionization ("I want to queue up the NF2
   design as well"), which is the owner-evidence entry criterion; the
   2026-07-06 plan's Program 2 was reviewed adversarially and sent back
-  for one design revision (untracked-read coverage, committed-plane
+  for one design revision (untracked-read coverage, committed-arena
   lifecycle, settlement fanout, per-world equality, lifetime
   classification) before staged implementation.
 - **NF2 spike result (2026-07-05,
   `research/experiments/world-tagged-links-spike.md`): MIXED.** Faster
   holds where it matters (world evaluation 2.5×–29× vs the shipped memo
   approach; sync path neutral except one +0.5ns computed-read seam;
-  discard churn at parity via segregated per-world planes with bulk
+  discard churn at parity via segregated per-world arenas with bulk
   abandonment — the O(edges) teardown concern dissolved). Simpler does
   NOT hold net (~350 lines of duplicated walk specializations; per-world
   policy state unbuilt). Owner-facing recommendation recorded: pursue as
@@ -654,7 +654,7 @@ Neither is part of the contract; nothing in section 3 depends on them.
   computed whose dependencies flip between evaluations in different
   views leaves stale cross-evaluation links that form link cycles the
   graph's unwatched-dispose walk cannot traverse — measured as a hang
-  (`packages/cosignal/src/logged.ts`, the newest-plane comment; the
+  (`packages/cosignal/src/logged.ts`, the newest-memo-table comment; the
   2026-07-05 simplification review filed "two computed APIs" as a
   top finding). IF unification is attempted, the named mechanism is
   tagging each dependency edge with the view that observed it, so

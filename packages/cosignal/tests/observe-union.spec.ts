@@ -36,7 +36,7 @@ function bridge(): CosignalBridge {
 	return b;
 }
 
-describe('observation union at the bridge plane', () => {
+describe('observation union at the bridge', () => {
 	it('a live watcher alone observes; dropping it unobserves', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);

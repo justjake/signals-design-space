@@ -49,7 +49,7 @@ updater queues compute.
 **Two graphs.** The kernel's edges describe the newest world only, and a
 pending world's dependencies can differ (a flag flip routes a computed to
 different inputs). So world evaluations record their *real* dependencies
-in a second edge plane, and any edge the kernel drops while receipts are
+in a second edge table, and any edge the kernel drops while receipts are
 live is mirrored there. A write walks the union of both graphs, marking
 every reachable node with the writing batch's slot bit; one more bit marks
 caches that may embed pending state acquired through untracked reads. That
@@ -156,9 +156,9 @@ document uses these words with exactly these meanings.
   The root's committed view includes that batch from then on, even before
   the batch fully retires (it may still be pending on another root).
 - **K0, the kernel** — the canonical donor arena: one packed Int32Array
-  plane of interleaved node and link records, iterative walks, newest
+  arena of interleaved node and link records, iterative walks, newest
   values, newest-basis edges. Closed and monomorphic.
-- **K1, the world-edge plane** — the second graph: real dependency edges
+- **K1, the world-edge table** — the second graph: real dependency edges
   recorded by world evaluations (and mirror copies of edges the kernel
   re-track removes while receipts are live). Add-only within an episode.
 - **touched word** — one int32 per node. Bits 0–30: "batch in slot s
@@ -516,7 +516,7 @@ committed-only certificate (5.5).
 
 ### 5.2 The kernel
 
-K0 is the donor arena kernel: one packed Int32Array plane, interleaved
+K0 is the donor arena kernel: one packed Int32Array arena, interleaved
 node+link records, iterative traversals, alien-signals v3 semantics,
 179/179 conformance with exact pull counts. It holds every node's
 newest-applied value and the newest-basis edges. It is closed and
@@ -596,7 +596,7 @@ Notes that carry weight:
   replay under the fold-purity guard (reads/writes throw). Fingerprints
   are computed during this same entry scan — no extra pass.
 - **Per-atom fold memos.** Atom folds in non-newest worlds are memoized
-  per (atom, worldKey) in the same memo plane as computeds. Within one
+  per (atom, worldKey) in the same memo table as computeds. Within one
   render `a.state === a.state`, always. A retirement or per-root commit
   whose visible prefix equals a committing world's memoized prefix
   installs **that memo's reference** as the committed value (the
@@ -770,12 +770,12 @@ In v1 this backstop is unconditionally safe because receipts carry their
 slot at mint and no other clause-2 consumer resolves identity through the
 interning table.
 
-### 5.5 The world-edge plane and the touched word
+### 5.5 The world-edge table and the touched word
 
 **K1** holds integer link records (node→node, generation-tagged),
 add-only within an episode, bulk-reset at quiescence. World evaluations
 record their real dependencies here — the pending world has a real
-topology, and this plane is it. The kernel stays untouched.
+topology, and this table is it. The kernel stays untouched.
 
 **The mirror rule.** Every edge a kernel re-track removes **while any
 live receipt exists anywhere** is mirrored into K1 with both endpoints
@@ -1192,7 +1192,7 @@ strictly decreases per failed sweep; a fixed observed set resets within
 2N+1 attempts; unbounded new observed work belongs to the ordinary loop
 budget, not quiescence. An exemption clears when a later ordinary kernel
 evaluation of the target completes without writing. Then: K1 bulk-reset
-(epoch bump), plane watermarks reset, counters renumbered.
+(epoch bump), table watermarks reset, counters renumbered.
 
 **Renumber duty list** (every retained sequence value rewritten in an
 order-preserving pass, or killed by the epoch in its key): tape
@@ -1689,11 +1689,11 @@ regress):
   naive one-array-per-field measured **1.8× worse than objects** on deep
   chains. Cold, rarely-touched parallel columns are not covered by that
   result.
-- Nodes and links share one plane: −2% deep / −8% diamond vs split
-  planes. A links-only arena (object nodes + integer links) **loses**:
+- Nodes and links share one arena: −2% deep / −8% diamond vs split
+  arenas. A links-only arena (object nodes + integer links) **loses**:
   the id→object→flags hop adds a dependent load per traversed link —
   kairo 1.2–1.6×, creation ~1.7× vs alien. Full-arena (flags/topology
-  in-plane) is required for the traversal win.
+  in-arena) is required for the traversal win.
 - Buffers as closure constants are the only binding at const parity;
   segment tables +35–40% per access, resizable ArrayBuffers +66–83%
   traversal, mutable `let` +34–43%, per-function aliases +26–30%. Growth
@@ -1714,7 +1714,7 @@ regress):
 expensive shape and is avoided (walks mark and deliver; folds are lazy);
 always-log is priced at the write gate, not wished away; the host
 boundary is free but the storage move costs 5–12% — values stay
-in-plane.
+in-arena.
 
 ---
 

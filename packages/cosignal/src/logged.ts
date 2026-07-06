@@ -72,8 +72,7 @@
  *     FINGERPRINTS — per-dependency version stamps (the highest receipt
  *     sequence the world can see for that dependency) — that tell whether
  *     the memo is still current. Each world keeps its memos in its own map,
- *     called that world's MEMO PLANE (this module borrows index.ts's word
- *     "plane" for any flat per-node storage layer). The MEMO LADDER is
+ *     called that world's MEMO TABLE. The MEMO LADDER is
  *     evaluate()'s ordered chain of attempts, cheapest first: untouched
  *     fast path, then memo validation, then a fresh fold.
  *   - An EPISODE is the stretch between QUIESCENCE points — moments when
@@ -135,7 +134,7 @@
  *     operation, at the boundary value, never while the subscription's own
  *     root has an open render-pass frame; cleanup guaranteed at removal.
  *     Their dep snapshots also join the RCC-OL1 observation union (one
- *     retain per snapshot node through the obsShift plane).
+ *     retain per snapshot node through the obsShift observation index).
  *   - episodes / quiescence (epoch reset), as defined above.
  *
  * The bridge surface consumes the external-runtime protocol's event shapes
@@ -181,7 +180,7 @@ export type EffectId = number;
 /** A point on the one global sequence line (receipt seqs, pins, retirement
  * stamps, write clocks, the committed-advance counter). */
 export type Seq = number;
-/** Episode counter: bumped at quiescence when the overlay planes bulk-reset. */
+/** Episode counter: bumped at quiescence when the overlay tables bulk-reset. */
 export type Epoch = number;
 /** A root's commit generation (bumped at every per-root commit). */
 export type CommitGen = number;
@@ -439,7 +438,7 @@ export type Pass = {
 	endKind: 'commit' | 'discard' | undefined;
 	mounted: WatcherId[];
 	rendered: Set<WatcherId>;
-	/** Pass-world memo plane — dies with the pass record. */
+	/** Pass-world memo table — dies with the pass record. */
 	memos: Map<NodeId, WorldMemo>;
 };
 
@@ -458,7 +457,7 @@ export type RootState = {
 	 * reference model's full observer scan catches this at any
 	 * retirement/commit; the engine keeps the precise dirty set instead). */
 	committedDirtySlots: SlotSet;
-	/** Committed-for-root memo plane (re-keyed by commitGen). */
+	/** Committed-for-root memo table (re-keyed by commitGen). */
 	memos: Map<NodeId, WorldMemo>;
 };
 
@@ -502,8 +501,8 @@ export class Watcher {
 	/**
 	 * Subscribed-for-delivery bit. The setter is the watcher half of the
 	 * observation union (AtomOptions.effect): a live watcher holds one
-	 * observed-consumer ref on its node, and the bridge's observed-closure
-	 * plane (obsShift) carries that ref transitively — a watcher over an
+	 * observed-consumer ref on its node, and the bridge's observation
+	 * index (obsShift) carries that ref transitively — a watcher over an
 	 * atom node retains that atom's lifecycle directly; a watcher over an
 	 * overlay computed retains every atom the computed's current evaluation
 	 * (transitively) reads. EVERY liveness site routes through here — the
@@ -931,7 +930,7 @@ export class CosignalBridge {
 	/** Committed-advance counter, in sequence units: bumped whenever committed
 	 * truth moves (per-root commit, or a retirement that changed history). */
 	cas: Seq = 0;
-	/** Episode counter; bumped at quiescence when the planes bulk-reset. */
+	/** Episode counter; bumped at quiescence when the overlay tables bulk-reset. */
 	epoch: Epoch = 0;
 
 	// ---- the K1 union graph + the touched word ----
@@ -968,7 +967,7 @@ export class CosignalBridge {
 	// K1 edge log (add-only within an episode, bulk-reset at quiescence),
 	// obsDeps snapshots follow the CURRENT edge set — each fn re-run of an
 	// observed computed re-points its retains (dep flips move them; the
-	// kernel's microtask flush coalesces same-tick flaps) — and the plane
+	// kernel's microtask flush coalesces same-tick flaps) — and the observation index
 	// deliberately survives quiescence: the closure is a property of live
 	// watchers, not of the episode, so an observed atom sees no
 	// unobserve/reobserve flap across the K1 bulk-reset.
@@ -1073,7 +1072,7 @@ export class CosignalBridge {
 	private eventCapacity: number | undefined = undefined;
 
 	/**
-	 * Referee surface — not consulted by engine logic. The K1 union plane as
+	 * Referee surface — not consulted by engine logic. The K1 union table as
 	 * dep → dependents, materialized from the adjacency columns; read by:
 	 * graphviz, twin tests, soak metrics.
 	 */
@@ -1429,7 +1428,7 @@ export class CosignalBridge {
 	 * The visibility rule — which receipts each world's fold replays (over the
 	 * packed columns; no Receipt object). The clauses:
 	 *  - newest: every receipt (the kernel applies writes eagerly, so this
-	 *    world is also readable straight off the kernel plane);
+	 *    world is also readable straight off the kernel arena);
 	 *  - pass: (1) receipts retired at-or-before the pass's pin — permanent
 	 *    history the render started from — and (2) receipts from included
 	 *    batches up to the pin, so a paused-and-resumed render never sees a
@@ -1497,15 +1496,15 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * The newest-world evaluation plane. The newest world's computed values
-	 * live in their own memo plane validated by the same memo ladder
+	 * The newest-world memo table. The newest world's computed values
+	 * live in their own memo table validated by the same memo ladder
 	 * (fingerprints ground at kernel atom state: fp(a, newest) is O(1) — the
 	 * last tape sequence / base sequence / retirement stamp). Real kernel
 	 * Computed records are deliberately NOT used for overlay computeds: a
 	 * computed whose dependencies flip between evaluations can leave stale
 	 * cross-evaluation links that form kernel link cycles the kernel's
 	 * unwatched-dispose walk cannot traverse (measured as a hang; the
-	 * overlay's union plane is cycle-guarded, the kernel plane must stay
+	 * overlay's union table is cycle-guarded, the kernel arena must stay
 	 * acyclic).
 	 */
 	private newestMemos = new Map<NodeId, WorldMemo>();
@@ -1519,7 +1518,7 @@ export class CosignalBridge {
 	/** The node id whose evaluation frame is open (raw-handle reads record to it). */
 	private currentSink: NodeId = 0;
 
-	private memoPlaneOf(world: World): Map<NodeId, WorldMemo> | undefined {
+	private memoTableOf(world: World): Map<NodeId, WorldMemo> | undefined {
 		if (world.kind === 'newest') return this.newestMemos;
 		if (world.kind === 'pass') return world.pass.memos;
 		// Never CREATE the root record here — the reference model materializes roots only
@@ -1634,13 +1633,13 @@ export class CosignalBridge {
 			this.captureAtomDep(atom, this.fpOf(atom, world));
 			return v;
 		}
-		const plane = this.memoPlaneOf(world);
-		if (plane === undefined) {
+		const table = this.memoTableOf(world);
+		if (table === undefined) {
 			const v = this.foldAtom(atom, world);
 			this.captureAtomDep(atom, this.lastFoldFp);
 			return v;
 		}
-		let m = plane.get(atom.id);
+		let m = table.get(atom.id);
 		if (m !== undefined && this.validateMemo(m, world)) {
 			this.captureAtomDep(atom, m.fps[0]!);
 			return m.value;
@@ -1652,7 +1651,7 @@ export class CosignalBridge {
 				value: v, seq: this.seq, gen: 0, epoch: this.epoch, checkedOp: this.seq, validating: false,
 				atoms: [atom], fps: [fp], comps: [], compValues: [],
 			};
-			plane.set(atom.id, m);
+			table.set(atom.id, m);
 		} else {
 			m.value = v;
 			m.seq = this.seq;
@@ -1683,8 +1682,8 @@ export class CosignalBridge {
 
 	/**
 	 * Evaluation of a node in a world. Newest-world atoms read straight off
-	 * the kernel plane; newest-world computeds serve from the newest memo
-	 * plane (recompute if stale, plain signals semantics). Other worlds
+	 * the kernel arena; newest-world computeds serve from the newest memo
+	 * table (recompute if stale, plain signals semantics). Other worlds
 	 * first try the fast path — when the node's touched word is 0, no
 	 * receipt from any live batch can reach it, so its newest cache is
 	 * committed-only state that every world agrees on: serve it with zero
@@ -1697,7 +1696,7 @@ export class CosignalBridge {
 		probes.worldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		if (node.kind === 'atom') return this.atomValue(node, world);
-		const plane = this.memoPlaneOf(world);
+		const table = this.memoTableOf(world);
 		if (world.kind !== 'newest' && world.kind !== 'mountFix') {
 			// Fast path: no slot bits, no taint, valid newest cache.
 			const word = this.touched[node.id]!;
@@ -1710,8 +1709,8 @@ export class CosignalBridge {
 			}
 		}
 		// World path: the memo ladder.
-		if (plane !== undefined) {
-			const m = plane.get(node.id);
+		if (table !== undefined) {
+			const m = table.get(node.id);
 			if (m !== undefined && this.validateMemo(m, world)) {
 				this.captureCompDep(node, m.value);
 				return m.value;
@@ -1738,7 +1737,7 @@ export class CosignalBridge {
 		this.currentSink = node.id;
 		if (world.kind === 'newest') this.newestFrameTaint = false;
 		let myFrame: WorldMemo | undefined;
-		if (plane !== undefined) {
+		if (table !== undefined) {
 			myFrame = {
 				value: undefined, seq: this.seq, gen: 0, epoch: this.epoch, checkedOp: this.seq, validating: false,
 				atoms: [], fps: [], comps: [], compValues: [],
@@ -1764,7 +1763,7 @@ export class CosignalBridge {
 				myFrame.value = value;
 				myFrame.seq = this.seq;
 				if (world.kind === 'committed') myFrame.gen = this.roots.get(world.root)?.commitGen ?? 0;
-				plane!.set(node.id, myFrame);
+				table!.set(node.id, myFrame);
 			}
 			// The frame captured MY deps; my caller captures me as a computed dep.
 			this.frame = savedFrame;
@@ -1829,7 +1828,7 @@ export class CosignalBridge {
 		}
 	};
 
-	// ---- the union plane + walks ----
+	// ---- the union table + walks ----
 
 	private recordEdge(dep: NodeId, dependent: NodeId): void {
 		// Observed-closure capture, BEFORE the episode dedup below: K1 edges
@@ -1871,7 +1870,7 @@ export class CosignalBridge {
 	private edgeCount = 0;
 	private lastSweepEdges = 0;
 
-	// ---- observed-closure maintenance (see the plane's fields above) ----
+	// ---- observed-closure maintenance (see the observation index's fields above) ----
 
 	/** Shift a node's observed-consumer refcount; enter/exit fire on the
 	 * 0↔1 edges only, so shared consumers (two watchers on one derived node,
@@ -1957,7 +1956,7 @@ export class CosignalBridge {
 	 * A committed subscription's run just installed a new dep snapshot:
 	 * re-point its observation retains (RCC-OL1 — effect dep snapshots count
 	 * toward the observation union exactly like watcher closures: one retain
-	 * per snapshot node through the obsShift plane; an atom retains its
+	 * per snapshot node through the obsShift observation index; an atom retains its
 	 * kernel lifecycle, an observed computed retains its current strong deps
 	 * transitively) and its routing-coverage counts (subDepRefs: K1 sweep
 	 * seeds + quiescence refresh targets). Retain-new before release-old;
@@ -2054,7 +2053,7 @@ export class CosignalBridge {
 		this.lastSweepEdges = kept;
 	}
 
-	// The WEAK plane: untracked reads record drain-only edges. Never
+	// The WEAK table: untracked reads record drain-only edges. Never
 	// traversed by marking or delivery walks (untracked paths never fire
 	// notifications); durable drains expand over them so a committed-truth
 	// flip reaching a node only through untracked reads still
@@ -2324,7 +2323,7 @@ export class CosignalBridge {
 	 * later starts from a base that already contains the quiet history.
 	 * Memo coherence: the fold mints one sequence and stamps it into the
 	 * atom's baseSeq and the committed-advance clock (cas), so every memo
-	 * plane revalidates instead of serving pre-fold values. Observers: no
+	 * table revalidates instead of serving pre-fold values. Observers: no
 	 * walk machinery is armed, so the small live-observer population is
 	 * reconciled value-gated, exactly like a durable drain (corrections for
 	 * watchers, re-runs for committed React effects, newest evaluations for
@@ -2493,7 +2492,7 @@ export class CosignalBridge {
 		if (this.eventsOn) this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
 
 		// Apply to the kernel eagerly with stepwise equality, so the newest
-		// world stays directly readable off the kernel plane.
+		// world stays directly readable off the kernel arena.
 		if (kind === OpKind.SET && node.eqIsDefault) {
 			this.applyToKernel(node, (op as { kind: 'set'; value: Value }).value); // kernel stores + propagates only on change
 		} else {
@@ -2842,7 +2841,7 @@ export class CosignalBridge {
 	 * throw installs the partial snapshot: the deps read before the throw are
 	 * real dependencies. After the frame closes, the snapshot's observation
 	 * retains re-point (RCC-OL1: effect deps count toward the union exactly
-	 * like watcher closures — the obsShift plane).
+	 * like watcher closures — the obsShift observation index).
 	 */
 	captureRun(id: EffectId, body: () => void): void {
 		const e = this.subs.get(id);
@@ -3612,11 +3611,11 @@ export class CosignalBridge {
 
 	/**
 	 * Quiescence (no live tokens, no live pins, no parked actions): the K1
-	 * union plane bulk-resets (epoch bump), and every K1-touched node holding
+	 * union table bulk-resets (epoch bump), and every K1-touched node holding
 	 * a committed watcher or effect-dep snapshot refreshes by a forced kernel
-	 * pull into the NEW episode's K1 plane — the walks route over K1, so
+	 * pull into the NEW episode's K1 table — the walks route over K1, so
 	 * the coverage those observers rely on must be re-recorded, not lost
-	 * with the old plane.
+	 * with the old table.
 	 *
 	 * SEQUENCE-WIDTH BOUND (where renumbering used to live). Retained
 	 * sequence values (baseSeq, retirement stamps, cas, watcher snapshot
@@ -3652,7 +3651,7 @@ export class CosignalBridge {
 			refreshTargets.push(n);
 		}
 		this.epoch++;
-		// K1 bulk-reset + plane watermark zeroes.
+		// K1 bulk-reset + table watermark zeroes.
 		this.outSets.length = 0;
 		this.outList.length = 0;
 		this.inList.length = 0;
@@ -3672,12 +3671,12 @@ export class CosignalBridge {
 		}
 		this.lastTokenId = 0;
 		this.lastTokenRef = undefined;
-		// Memo planes die by epoch; drop them eagerly (conservative refusal).
+		// Memo tables die by epoch; drop them eagerly (conservative refusal).
 		for (const r of this.roots.values()) r.memos.clear();
 		this.newestMemos.clear();
 		// Kernel-pull refresh, AFTER the reset: a fresh newest evaluation of
 		// each target re-records its dependency cone into the NEW episode's
-		// K1 plane. World evaluations reject writes, so the refresh cannot
+		// K1 table. World evaluations reject writes, so the refresh cannot
 		// loop; a pull that throws keeps its sentinel and stays on the
 		// demand path.
 		for (const n of refreshTargets) {

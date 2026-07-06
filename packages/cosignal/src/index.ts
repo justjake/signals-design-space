@@ -20,30 +20,30 @@
  * change lives in ordinary cold JavaScript around it.
  *
  * Kernel storage terms:
- * - THE PLANE is the one shared Int32Array (`M` in createEngine) holding
- *   every record; error messages call it the arena (a preallocated block
- *   that records are carved out of). A RECORD is Plane.STRIDE (8)
+ * - THE ARENA is the one shared Int32Array (`M` in createEngine) holding
+ *   every record: a preallocated block that records are carved out of
+ *   (error messages use the same word). A RECORD is Arena.STRIDE (8)
  *   consecutive Int32 slots; node records (signals/computeds/effects/scopes)
- *   and link records (one dependency edge each) share the plane, the stride,
+ *   and link records (one dependency edge each) share the arena, the stride,
  *   and one allocator.
- * - A record's id is PREMULTIPLIED: it is the plane index of the record's
- *   first field (record ordinal × Plane.STRIDE), so every field access is
+ * - A record's id is PREMULTIPLIED: it is the arena index of the record's
+ *   first field (record ordinal × Arena.STRIDE), so every field access is
  *   plain addition — M[id + NodeField.FLAGS] — with no multiply anywhere.
  * - JavaScript values and functions cannot live in an Int32Array, so they
- *   sit in ordinary arrays running parallel to the plane — the SIDE COLUMNS
+ *   sit in ordinary arrays running parallel to the arena — the SIDE COLUMNS
  *   `values` and `fns` — indexed by shifting the same premultiplied id (see
- *   the Plane const enum).
+ *   the Arena const enum).
  *
  * Mechanics the whole file relies on:
  * - OPERATION BOUNDARY: a moment when no evaluation, effect run, or graph
  *   walk is anywhere on the call stack (`enterDepth === 0`). Deferred work —
- *   growing the plane, freeing disposed records — runs only at boundaries,
+ *   growing the arena, freeing disposed records — runs only at boundaries,
  *   because in-flight work holds direct references to the buffers.
  * - CLOSURE REBUILD: the kernel's functions are created by one factory
- *   (`createEngine`) and capture the plane as a closure constant — which is
+ *   (`createEngine`) and capture the arena as a closure constant — which is
  *   what lets V8 fold the buffer reference into compiled code. The cost of
  *   that choice: the buffer cannot be swapped under a live function. So to
- *   grow, the module allocates a doubled plane, copies the records over, and
+ *   grow, the module allocates a doubled arena, copies the records over, and
  *   calls the factory again, producing a fresh set of functions closed over
  *   the new buffer. That wholesale re-creation is a "closure rebuild"; it
  *   happens only at operation boundaries. Scalar counters live at module
@@ -80,7 +80,7 @@
  *      resolve "which computed is evaluating right now" from kernel state,
  *      so passing it costs zero per-recompute setup.
  *   3. The kernel — alien-signals v3.2.1's push-pull algorithm, re-expressed
- *      over plane records instead of linked JavaScript objects. Upstream's
+ *      over arena records instead of linked JavaScript objects. Upstream's
  *      walk structure and flag transitions are preserved (plus a
  *      link/linkInsert hot/slow split, see linkInsert); buffers are closure
  *      constants; walks use persistent scratch stacks (module-level
@@ -161,7 +161,7 @@
  *       invalidateComputed (settlement-invalidate), markLifecycle (D1),
  *       activeIsComputed (backs the forbidWritesInComputeds check).
  *   D6. Capacity is configurable: the COSIGNAL_INITIAL_RECORDS env var sizes
- *       the plane before first import, and configure({initialRecords})
+ *       the arena before first import, and configure({initialRecords})
  *       feeds the same growth machinery through `desiredRecords`.
  *   D7. The public API is the class layer (Atom/Computed) rather than
  *       upstream's closure handles (signal()/computed());
@@ -276,10 +276,10 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 // Plain type aliases — zero runtime cost, no branding, no casts. They name what
 // each number MEANS so signatures read as the layout docs above.
 
-/** Premultiplied node record id: the Int32 plane index of the record's field 0
- * (id = record ordinal × Plane.STRIDE). 0 = "none" (record 0 is burned). */
+/** Premultiplied node record id: the Int32 arena index of the record's field 0
+ * (id = record ordinal × Arena.STRIDE). 0 = "none" (record 0 is burned). */
 type NodeId = number;
-/** Premultiplied link record id (links share the plane and stride with nodes). 0 = "none". */
+/** Premultiplied link record id (links share the arena and stride with nodes). 0 = "none". */
 type LinkId = number;
 /** A premultiplied record id of either kind (the shared bump pointer / allocators). */
 type RecordId = number;
@@ -291,7 +291,7 @@ type Version = number;
 type Generation = number;
 /** A count of fixed-stride records (nodes and links draw from one shared pool). */
 type RecordCount = number;
-/** Index into the `values` side column (two slots per record; see Plane). */
+/** Index into the `values` side column (two slots per record; see Arena). */
 type ValueIndex = number;
 
 // ---- record layout + flags as const enums ---------------------------------------
@@ -306,7 +306,7 @@ type ValueIndex = number;
 // enum members only within one file — a cross-file access becomes a real
 // property lookup at runtime.
 
-/** Field offsets within a NODE record (M plane, stride 8; ids are
+/** Field offsets within a NODE record (M arena, stride 8; ids are
  * pre-multiplied: id = record ordinal * 8). */
 const enum NodeField {
 	FLAGS = 0,
@@ -319,7 +319,7 @@ const enum NodeField {
 	// field 7 spare (pad to one cache line per record)
 }
 
-/** Field offsets within a LINK record (link records share the plane, stride,
+/** Field offsets within a LINK record (link records share the arena, stride,
  * and premultiplied ids with node records). */
 const enum LinkField {
 	VERSION = 0,
@@ -362,9 +362,9 @@ const enum NodeFlag {
 	BOX_SUSPENDED = 4096,
 }
 
-/** Plane geometry: the strides, shifts, and offsets that address a record's
+/** Arena geometry: the strides, shifts, and offsets that address a record's
  * fields and its side-column slots from its premultiplied id. */
-const enum Plane {
+const enum Arena {
 	/** Int32 fields per record; ids are premultiplied by this (id = record ordinal × STRIDE). */
 	STRIDE = 8,
 	/** id >> ID_TO_VALUE_SHIFT: premultiplied id → the record's base index in
@@ -377,9 +377,9 @@ const enum Plane {
 	 * signal's pending value, an effect's cleanup fn, or the computed's
 	 * owning Computed instance (D4). */
 	AUX_VALUE_OFFSET = 1,
-	/** length >> HALF_PLANE_SHIFT: half the plane — the "keep at least half
-	 * the plane free" watermark term. */
-	HALF_PLANE_SHIFT = 1,
+	/** length >> HALF_ARENA_SHIFT: half the arena — the "keep at least half
+	 * the arena free" watermark term. */
+	HALF_ARENA_SHIFT = 1,
 	/** Records budgeted per configured capacity unit: one node + two links. */
 	RECORDS_PER_UNIT = 3,
 
@@ -394,7 +394,7 @@ const enum Plane {
 // Scalar heads/counters live at module level so a rebuilt engine resumes
 // exactly where the old one stopped; only the buffer bindings live in the
 // engine closure.
-let recNext: RecordId = Plane.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
+let recNext: RecordId = Arena.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
 let nodeFreeHead: NodeId = 0; // free list threaded through M[id + NodeField.DEPS]
 let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.NEXT_DEP]
 let growPending = false;
@@ -454,7 +454,7 @@ interface Engine {
 }
 
 function createEngine(records: RecordCount, carry?: Int32Array): Engine {
-	const M = new Int32Array(records * Plane.STRIDE);
+	const M = new Int32Array(records * Arena.STRIDE);
 	// Bundler-proof aliases for the module-level side arrays: esbuild
 	// bundling demotes module-scope `const` to mutable `var`, so TurboFan
 	// loses their constant-folding at module scope; a function-scope const
@@ -468,10 +468,10 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		M.set(carry);
 	}
 	// Allocators flag growth once the bump pointer (the never-yet-used end of
-	// the plane; allocation takes a freed record first, else bumps this) crosses
+	// the arena; allocation takes a freed record first, else bumps this) crosses
 	// the watermark — the fill level that schedules growth. The rule: keep at
-	// least Plane.REC_SLACK records AND half the plane free at every boundary.
-	const WM = Math.min(M.length >> Plane.HALF_PLANE_SHIFT, M.length - Plane.REC_SLACK * Plane.STRIDE);
+	// least Arena.REC_SLACK records AND half the arena free at every boundary.
+	const WM = Math.min(M.length >> Arena.HALF_ARENA_SHIFT, M.length - Arena.REC_SLACK * Arena.STRIDE);
 	if (recNext > WM) {
 		growPending = true;
 	}
@@ -511,17 +511,17 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			if (id >= M.length) {
 				throw new Error('cosignal: arena exhausted mid-operation; raise COSIGNAL_INITIAL_RECORDS');
 			}
-			recNext = id + Plane.STRIDE;
+			recNext = id + Arena.STRIDE;
 			if (recNext > WM) {
 				growPending = true;
 			}
 		}
 		M[id + NodeField.FLAGS] = flags;
-		const v: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
-		while (vals.length <= v + Plane.AUX_VALUE_OFFSET) {
+		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
+		while (vals.length <= v + Arena.AUX_VALUE_OFFSET) {
 			vals.push(undefined);
 		}
-		while (fnTab.length <= id >> Plane.ID_TO_FN_SHIFT) {
+		while (fnTab.length <= id >> Arena.ID_TO_FN_SHIFT) {
 			fnTab.push(undefined);
 		}
 		return id;
@@ -534,10 +534,10 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		M[id + NodeField.SUBS_TAIL] = 0;
 		M[id + NodeField.LIFECYCLE] = 0; // D1
 		++M[id + NodeField.GEN];
-		const v: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
+		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
 		vals[v] = undefined;
-		vals[v + Plane.AUX_VALUE_OFFSET] = undefined;
-		fnTab[id >> Plane.ID_TO_FN_SHIFT] = undefined;
+		vals[v + Arena.AUX_VALUE_OFFSET] = undefined;
+		fnTab[id >> Arena.ID_TO_FN_SHIFT] = undefined;
 		M[id + NodeField.DEPS] = nodeFreeHead;
 		nodeFreeHead = id;
 	}
@@ -559,7 +559,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			if (id >= M.length) {
 				throw new Error('cosignal: arena exhausted mid-operation; raise COSIGNAL_INITIAL_RECORDS');
 			}
-			recNext = id + Plane.STRIDE;
+			recNext = id + Arena.STRIDE;
 			if (recNext > WM) {
 				growPending = true;
 			}
@@ -909,7 +909,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
-		const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
+		const v: ValueIndex = c >> Arena.ID_TO_VALUE_SHIFT;
 		const oldValue = vals[v];
 		const oldExc: NodeFlags = oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED);
 		// Success clears the exceptional bits (folded into the finally's
@@ -921,7 +921,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			// from an exceptional outcome to a plain value must propagate even
 			// when the payloads are identity-equal (threw undefined → returns
 			// undefined).
-			return oldValue !== (vals[v] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx)) || oldExc !== 0;
+			return oldValue !== (vals[v] = (fnTab[c >> Arena.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx)) || oldExc !== 0;
 		} catch (e) {
 			// D3: a throwing getter never corrupts graph state — the raw thrown
 			// value / pending thenable becomes the cached payload (cold).
@@ -939,8 +939,8 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 	function updateSignal(s: NodeId): boolean {
 		M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE;
-		const v: ValueIndex = s >> Plane.ID_TO_VALUE_SHIFT;
-		return vals[v] !== (vals[v] = vals[v + Plane.AUX_VALUE_OFFSET]);
+		const v: ValueIndex = s >> Arena.ID_TO_VALUE_SHIFT;
+		return vals[v] !== (vals[v] = vals[v + Arena.AUX_VALUE_OFFSET]);
 	}
 
 	function run(e: NodeId): void {
@@ -952,7 +952,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			if (flags & NodeFlag.HAS_CHILD_EFFECT) {
 				unlinkChildEffects(e);
 			}
-			const cv: ValueIndex = (e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET;
+			const cv: ValueIndex = (e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
 			if (vals[cv]) {
 				runCleanup(e);
 				if (M[e + NodeField.FLAGS] === 0) {
@@ -967,7 +967,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			try {
 				++cycle;
 				++runDepth;
-				vals[cv] = (fnTab[e >> Plane.ID_TO_FN_SHIFT] as () => (() => void) | void)();
+				vals[cv] = (fnTab[e >> Arena.ID_TO_FN_SHIFT] as () => (() => void) | void)();
 			} finally {
 				--runDepth;
 				--enterDepth;
@@ -988,7 +988,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function runCleanup(e: NodeId): void {
-		const cv: ValueIndex = (e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET;
+		const cv: ValueIndex = (e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
 		const cleanup = vals[cv] as () => void;
 		vals[cv] = undefined;
 		const prevSub = activeSub;
@@ -1014,7 +1014,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (sub !== 0) {
 			unlink(sub);
 		}
-		if (flags & NodeFlag.K_EFFECT && vals[(e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET]) {
+		if (flags & NodeFlag.K_EFFECT && vals[(e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET]) {
 			runCleanup(e);
 		}
 		// Deferred reclamation: the queue (or an in-flight walk) may still hold
@@ -1044,21 +1044,21 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 	function newSignal(value: unknown): NodeId {
 		const id = allocNode(NodeFlag.K_SIGNAL | NodeFlag.MUTABLE);
-		const v: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
+		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
 		vals[v] = value; // currentValue
-		vals[v + Plane.AUX_VALUE_OFFSET] = value; // pendingValue
+		vals[v + Arena.AUX_VALUE_OFFSET] = value; // pendingValue
 		return id;
 	}
 
 	function newComputed(getter: (ctx: unknown) => unknown): NodeId {
 		const id = allocNode(NodeFlag.K_COMPUTED);
-		fnTab[id >> Plane.ID_TO_FN_SHIFT] = getter;
+		fnTab[id >> Arena.ID_TO_FN_SHIFT] = getter;
 		return id;
 	}
 
 	function newEffect(fn: () => (() => void) | void): NodeId {
 		const e = allocNode(NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK);
-		fnTab[e >> Plane.ID_TO_FN_SHIFT] = fn;
+		fnTab[e >> Arena.ID_TO_FN_SHIFT] = fn;
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
@@ -1068,7 +1068,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		++enterDepth;
 		try {
 			++runDepth;
-			vals[(e >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] = fn();
+			vals[(e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] = fn();
 		} finally {
 			--runDepth;
 			--enterDepth;
@@ -1109,14 +1109,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (activeSub !== 0) {
 			link(s, activeSub, cycle);
 		}
-		return vals[s >> Plane.ID_TO_VALUE_SHIFT];
+		return vals[s >> Arena.ID_TO_VALUE_SHIFT];
 	}
 
 	// signalOper write path; the WRAPPER flushes (iff this returns true), so
 	// growth can happen between queue effects at the top level (upstream
 	// flushes inline here, only when the changed signal had subscribers).
 	function write(s: NodeId, value: unknown): boolean {
-		const p: ValueIndex = (s >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET;
+		const p: ValueIndex = (s >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
 		if (vals[p] !== (vals[p] = value)) {
 			M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE | NodeFlag.DIRTY;
 			const subs = M[s + NodeField.SUBS];
@@ -1146,7 +1146,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (activeSub !== 0) {
 			link(c, activeSub, cycle);
 		}
-		return vals[c >> Plane.ID_TO_VALUE_SHIFT];
+		return vals[c >> Arena.ID_TO_VALUE_SHIFT];
 	}
 
 	// The full computedRead decision chain, out of line (recompute/first-eval/boxed).
@@ -1179,7 +1179,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			activeSub = c;
 			++enterDepth;
 			try {
-				vals[c >> Plane.ID_TO_VALUE_SHIFT] = (fnTab[c >> Plane.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx);
+				vals[c >> Arena.ID_TO_VALUE_SHIFT] = (fnTab[c >> Arena.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx);
 			} catch (e) {
 				M[c + NodeField.FLAGS] |= storeThrown(c, e, undefined, 0); // D3 (cold; first eval — no previous outcome)
 			} finally {
@@ -1200,7 +1200,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (f & NodeFlag.HAS_BOX) {
 			return boxedRead(c, f);
 		}
-		return vals[c >> Plane.ID_TO_VALUE_SHIFT];
+		return vals[c >> Arena.ID_TO_VALUE_SHIFT];
 	}
 
 	// D5: settlement-invalidate primitive. Marks the computed stale exactly the
@@ -1232,7 +1232,7 @@ const initialRecords = (() => {
 })();
 
 // D6: configure({initialRecords}) raises this floor; the growth loop honors it.
-let desiredRecords: RecordCount = initialRecords * Plane.RECORDS_PER_UNIT;
+let desiredRecords: RecordCount = initialRecords * Arena.RECORDS_PER_UNIT;
 
 /**
  * The fold-purity table (see runFold): every operation throws the fold error
@@ -1267,9 +1267,9 @@ const POISON: Engine = {
 	activeIsComputed: foldPoisonOp as never,
 };
 
-// Plane capacity: 3x initialRecords shared records, budgeted as
-// initialRecords node records + 2x initialRecords link records in one plane.
-let E: Engine = createEngine(initialRecords * Plane.RECORDS_PER_UNIT);
+// Arena capacity: 3x initialRecords shared records, budgeted as
+// initialRecords node records + 2x initialRecords link records in one arena.
+let E: Engine = createEngine(initialRecords * Arena.RECORDS_PER_UNIT);
 
 // ---- the host seams -------------------------------------------------------------
 // ONE CORE: there is exactly one engine and one write/read path. The
@@ -1350,7 +1350,7 @@ export function __hostApplySet(atom: Atom<unknown>, value: unknown): void {
  * Newest-value read for the host's own folds and eager applies: the plain
  * kernel read path (`E.read` — dependency tracking included, exactly the
  * public getter minus the host-seam interception), so the host can read the
- * kernel plane regardless of any live routing context without toggling its
+ * kernel arena regardless of any live routing context without toggling its
  * seams around the call. @internal
  */
 export function __hostReadNewest(atom: Atom<unknown>): unknown {
@@ -1374,7 +1374,7 @@ function boundaryWork(): void {
 	if (growPending) {
 		growPending = false;
 		let records = E.records;
-		while (records < desiredRecords || recNext > Math.min((records * Plane.STRIDE) >> Plane.HALF_PLANE_SHIFT, (records - Plane.REC_SLACK) * Plane.STRIDE)) {
+		while (records < desiredRecords || recNext > Math.min((records * Arena.STRIDE) >> Arena.HALF_ARENA_SHIFT, (records - Arena.REC_SLACK) * Arena.STRIDE)) {
 			records *= 2;
 		}
 		if (records !== E.records) {
@@ -1387,11 +1387,11 @@ function flush(): void {
 	// Boundary-lite: growth/reclamation only BEFORE the flush loop, not between
 	// effects. Safe because (a) all user code during flush runs at
 	// enterDepth >= 1, so E cannot be swapped mid-loop (the `engine` hoist is
-	// sound), and (b) the watermark guarantees >= Plane.REC_SLACK (1280) free records
+	// sound), and (b) the watermark guarantees >= Arena.REC_SLACK (1280) free records
 	// at flush start while cascade re-runs re-track through the link() fast
 	// path / free lists (net new records per flush audited at ~tens across the
 	// conformance suite and benchmark workloads; a pathological cascade that
-	// out-allocates the whole remaining plane throws in the allocator rather
+	// out-allocates the whole remaining arena throws in the allocator rather
 	// than corrupting in-flight walks).
 	maybeBoundary();
 	const engine = E;
@@ -1532,7 +1532,7 @@ function lifecycleUnwatched(id: NodeId): void {
 /**
  * Bridge watcher retain/release — the second consumer kind feeding the
  * observation union (the first is the kernel liveness bit). Called by the
- * engine's watcher plane (./logged.ts) when a watcher over a registered
+ * engine's observation index (./logged.ts) when a watcher over a registered
  * atom's node flips live; a no-op for atoms carrying no observed-lifecycle
  * effect. Direct callbacks only — observation transitions are NOT
  * BridgeEvents and never enter the engine's event/lockstep stream. @internal
@@ -1568,7 +1568,7 @@ function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | 
 	// values.) Policy equality
 	// against the newest (pending) value here; the kernel's own identity
 	// compare covers the default.
-	if (isEqual !== undefined && isEqual(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET], value)) {
+	if (isEqual !== undefined && isEqual(values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET], value)) {
 		return;
 	}
 	maybeBoundary();
@@ -1627,7 +1627,7 @@ function ctxPrevious(): unknown {
 	if ((E.buffer()[c + NodeField.FLAGS]! & (NodeFlag.K_COMPUTED | NodeFlag.HAS_BOX)) !== NodeFlag.K_COMPUTED) {
 		return undefined;
 	}
-	return values[c >> Plane.ID_TO_VALUE_SHIFT];
+	return values[c >> Arena.ID_TO_VALUE_SHIFT];
 }
 
 /**
@@ -1748,7 +1748,7 @@ export function __ctxUse(
  */
 function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | undefined): unknown {
 	const c = activeSub;
-	const owner = c !== 0 ? values[(c >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] : undefined;
+	const owner = c !== 0 ? values[(c >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] : undefined;
 	if (!(owner instanceof Computed)) {
 		throw new Error('cosignal: ctx.use may only be called during a computed evaluation.');
 	}
@@ -1767,7 +1767,7 @@ function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | un
  * listener-stable.
  */
 function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
-	const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
+	const v: ValueIndex = c >> Arena.ID_TO_VALUE_SHIFT;
 	if (e instanceof SuspendedRead) {
 		const t = e.thenable as InstrumentedThenable;
 		values[v] = t;
@@ -1791,7 +1791,7 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
 	const onSettle = (): void => {
 		if (
 			(E.buffer()[c + NodeField.FLAGS]! & NodeFlag.BOX_SUSPENDED) === 0
-			|| values[c >> Plane.ID_TO_VALUE_SHIFT] !== t
+			|| values[c >> Arena.ID_TO_VALUE_SHIFT] !== t
 		) {
 			return;
 		}
@@ -1825,7 +1825,7 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
  * this synchronous frame.
  */
 function boxedRead(c: NodeId, flags: NodeFlags): unknown {
-	const v: ValueIndex = c >> Plane.ID_TO_VALUE_SHIFT;
+	const v: ValueIndex = c >> Arena.ID_TO_VALUE_SHIFT;
 	if ((flags & NodeFlag.BOX_SUSPENDED) === 0) {
 		throw values[v];
 	}
@@ -1928,7 +1928,7 @@ export class Atom<T> {
 						if (hostWrite !== undefined && hostWrite(self, 1, fn)) {
 							return;
 						}
-						const next = runFold(() => fn(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET]));
+						const next = runFold(() => fn(values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET]));
 						writeAtom(id, isEqual, next);
 					},
 				},
@@ -1992,7 +1992,7 @@ export class Atom<T> {
 			return;
 		}
 		const id = this._id;
-		const next = runFold(() => fn(values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] as T));
+		const next = runFold(() => fn(values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] as T));
 		writeAtom(id, this._isEqual, next);
 	}
 }
@@ -2039,15 +2039,15 @@ export class Computed<T> {
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);
 		this._id = id;
 		// D4: the aux value slot carries the owning instance (policy state).
-		values[(id >> Plane.ID_TO_VALUE_SHIFT) + Plane.AUX_VALUE_OFFSET] = this;
+		values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] = this;
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
 			// The wrapper runs inside the evaluation, where the eval-start
 			// rewrite preserved the exceptional bits — HAS_BOX set means `prev`
 			// is a residual error/thenable payload, not a comparable value.
-			const iv: ValueIndex = id >> Plane.ID_TO_VALUE_SHIFT;
-			fns[id >> Plane.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
+			const iv: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
+			fns[id >> Arena.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 				const prev = values[iv];
 				const next = (fn as (ctx: unknown) => unknown)(ctxArg);
 				if (prev === undefined || (E.buffer()[id + NodeField.FLAGS]! & NodeFlag.HAS_BOX) !== 0) {
@@ -2153,7 +2153,7 @@ export type ConfigureOptions = {
 	forbidWritesInComputeds?: boolean;
 	/**
 	 * Capacity floor, in records (one signal/computed/effect node or one
-	 * dependency link each; the plane holds 3× this number — budgeted as one
+	 * dependency link each; the arena holds 3× this number — budgeted as one
 	 * node plus two links per unit). Raising it triggers growth at the next
 	 * operation boundary; it never shrinks. Also settable via the
 	 * COSIGNAL_INITIAL_RECORDS env var before first import.
@@ -2170,7 +2170,7 @@ export function configure(options: ConfigureOptions): void {
 		if (!Number.isFinite(n) || n < 2) {
 			throw new Error('cosignal: configure({ initialRecords }) must be a number >= 2.');
 		}
-		const target = Math.ceil(n) * Plane.RECORDS_PER_UNIT;
+		const target = Math.ceil(n) * Arena.RECORDS_PER_UNIT;
 		if (target > desiredRecords) {
 			desiredRecords = target;
 		}

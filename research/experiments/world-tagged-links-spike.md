@@ -1,5 +1,7 @@
 # World-tagged kernel links (NF2) — design spike
 
+Terminology note (2026-07-06): "plane" in this historical document = "shadow arena" in current vocabulary.
+
 2026-07-05. Spike for the named future mechanism NF2
 (spec/react-compliance-contract.md §5): can ONE structural link mechanism
 serve all worlds — per-world precise invalidation instead of the K1 union's
