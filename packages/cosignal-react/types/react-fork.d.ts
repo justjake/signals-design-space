@@ -37,12 +37,6 @@ declare module 'react' {
 	export function unstable_runInBatch<R>(token: number, fn: () => R): R;
 	/** Synchronously abandons every in-progress render pass on every root. */
 	export function unstable_discardAllWip(): void;
-	/** The handshake object: protocol version, capability bits, and one entry per renderer that registered a provider. */
-	export const unstable_externalRuntimeProtocol: {
-		version: number;
-		capabilities: number;
-		providerProtocols: Array<{ version: number; capabilities: number }>;
-	};
 }
 
 export {};

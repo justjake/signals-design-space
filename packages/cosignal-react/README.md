@@ -53,12 +53,10 @@ test suite.)
 
 React itself does not expose when it starts, pauses, or commits a render
 pass — so these bindings require a React build implementing the
-**cosignal external-runtime protocol, version 1**: a patched React that
-emits batch, render-pass, and commit events to an external store and
-provides an API to schedule updates into a specific batch. Concretely the
-build exposes:
+**cosignal external-runtime protocol**: a patched React that emits batch,
+render-pass, and commit events to an external store and provides an API
+to schedule updates into a specific batch. Concretely the build exposes:
 
-- `React.unstable_externalRuntimeProtocol` — the handshake object;
 - render-pass events (start with the included batches, yield, resume,
   end with committed/discarded disposition), per-root commit events, and
   batch retirement events;
@@ -66,11 +64,9 @@ build exposes:
   behalf of?) and `unstable_runInBatch` (schedule a state update so it
   renders and commits with a specific batch).
 
-`registerCosignalReact()` verifies the handshake at startup — protocol
-version 1 with every version-1 capability, and at least one renderer
-provider (load `react-dom/client` first). On a stock React or a stale
-build it throws immediately with a descriptive error rather than tearing
-silently later.
+`registerCosignalReact()` feature-detects the protocol at startup: on a
+stock React (where these entry points simply don't exist) it throws
+immediately with a descriptive error rather than tearing silently later.
 
 ## Setup
 

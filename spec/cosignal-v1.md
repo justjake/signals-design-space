@@ -71,8 +71,8 @@ scheduled-but-unstarted work will fold anyway.
 lifecycle with yield and resume edges (handlers in yield gaps are
 correctly "not in render"); retirement exactly once per batch plus each
 root's commit of it; scheduling updates into an existing batch's lanes; a
-stable render-lineage identity; the DOM mutation window; a versioned
-handshake. Mounts reconcile late: a value-blind corrective joins each live
+stable render-lineage identity; the DOM mutation window; loud fork
+detection. Mounts reconcile late: a value-blind corrective joins each live
 non-included batch that touched the node, then one comparison against the
 mount's own world fast-forwarded to committed-now catches whatever retired
 or locked in during the window — before paint.
@@ -377,7 +377,7 @@ semantics.
 
 Hard rules: integers and documented callbacks only. No Fiber objects, lane
 bitmasks, or update-queue internals ever cross the boundary. The bindings
-feature-detect the protocol version and fail loudly on stock React.
+feature-detect the protocol and fail loudly on stock React.
 
 ### 4.1 The seven facts
 
@@ -430,8 +430,9 @@ lineage id is the settled answer.
 callbacks (kept per the fork charter; used by devtools/tracing, not by
 the engine's correctness).
 
-**Fact 7 — protocol handshake.** Version plus capability bits. Bindings
-refuse silently-degraded modes.
+**Fact 7 — fork detection.** The protocol's entry points exist only on
+the fork; bindings feature-detect them and refuse stock React loudly at
+startup rather than degrading silently.
 
 ### 4.2 Intra-commit ordering (normative)
 
@@ -458,8 +459,8 @@ facts. Lane renames touch fact 1's internal minting; commit-phase moves
 re-anchor facts 3 and the ordering clause to the events "root committed" /
 "before folds/layout"; update-queue changes touch nothing (the library
 never sees queues). Each fact carries its invariant in place and a
-reconciler-level test; the suite runs on every fork rebase. Version skew
-fails loudly at the handshake.
+reconciler-level test; the suite runs on every fork rebase. A stock or
+stale React build fails loudly at fork detection.
 
 ### 4.4 Fork test list (reconciler-level; on the critical path before bindings)
 

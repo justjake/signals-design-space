@@ -1,15 +1,14 @@
 /**
  * cosignal-react — the protocol shim. One Shim instance couples one
  * CosignalBridge (the concurrent engine of `cosignal`) to a React
- * build implementing the cosignal external-runtime protocol, version 1.
+ * build implementing the cosignal external-runtime protocol.
  * Stock React never reveals when it starts, pauses, commits, or discards a
  * render pass — which is exactly what an external store must know to stay
  * tear-free — so a patched React build provides those events, and this shim
  * is the adapter between them and the engine. Its jobs:
  *
- *  - handshake: assert protocol version 1 with every version-1 capability,
- *    on React itself and on every renderer provider; refuse stock or
- *    partially patched builds loudly at startup. Degrading silently would
+ *  - fork detection: refuse stock React loudly at startup (the protocol's
+ *    entry points simply don't exist there). Degrading silently would
  *    reintroduce tearing (a single rendered frame mixing old and new
  *    state) later, with no error pointing at the cause.
  *  - protocol events -> bridge: onRenderPassStart(includedBatches,
@@ -45,8 +44,8 @@
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
  *    write-context API (unstable_getCurrentWriteBatch, whose low bit is
  *    the deferred flag); token 0 (no provider registered) is unreachable
- *    post-handshake and defensively falls back to the bridge's ambient
- *    default batch (retired by the shim's own policy). Raw `.state` reads
+ *    once a renderer has loaded and defensively falls back to the bridge's
+ *    ambient default batch (retired by the shim's own policy). Raw `.state` reads
  *    route through the core's host read hook into the bridge's effective
  *    world (evaluation world, else the ambient world this shim maintains
  *    around render passes and effect fires) — no prototype patching
@@ -78,40 +77,21 @@ import type {
 	Watcher,
 } from 'cosignal';
 
-// ---- handshake -------------------------------------------------------------------
-
-export const REQUIRED_PROTOCOL_VERSION = 1;
-export const REQUIRED_CAPABILITIES = 511; // every version-1 capability bit (bits 0..8) set
+// ---- fork detection --------------------------------------------------------------
 
 /**
- * Verifies the external-runtime handshake: React.unstable_externalRuntimeProtocol
- * must report protocol version 1 with every version-1 capability, both on React
- * itself and on at least one registered renderer provider (load react-dom/client
- * before registering, or no provider exists yet). Throws on stock React or on a
- * stale patched build. Failing fast is deliberate: without the full protocol the
- * bindings could only fall back to a single current value, which is exactly the
- * tearing this package exists to prevent — one descriptive startup error beats
- * silently wrong frames later.
+ * Asserts the loaded React build implements the external-runtime protocol
+ * (feature detection: the entry points simply do not exist on stock React).
+ * Failing fast is deliberate: without the protocol the bindings could only
+ * fall back to a single current value, which is exactly the tearing this
+ * package exists to prevent — one descriptive startup error beats silently
+ * wrong frames later.
  */
-export function assertForkProtocol(): void {
-	const proto = React.unstable_externalRuntimeProtocol;
-	if (proto === undefined) {
-		throw new Error('cosignal-react: this React build has no external-runtime protocol — cosignal-react requires a React build with external-runtime support.');
-	}
-	if (proto.version !== REQUIRED_PROTOCOL_VERSION || proto.capabilities !== REQUIRED_CAPABILITIES) {
+export function assertForkPresent(): void {
+	if (typeof React.unstable_subscribeToExternalRuntime !== 'function') {
 		throw new Error(
-			`cosignal-react: protocol mismatch (version ${proto.version}, capabilities ${proto.capabilities}; ` +
-				`need ${REQUIRED_PROTOCOL_VERSION}/${REQUIRED_CAPABILITIES}) — rebuild React and react-dom with matching external-runtime support.`,
+			'cosignal-react: this React build has no external-runtime support — cosignal-react requires a React build with external-runtime support (stock React has none).',
 		);
-	}
-	const providers = proto.providerProtocols;
-	if (providers.length === 0) {
-		throw new Error('cosignal-react: no renderer registered an external-runtime provider — load a react-dom/client build with external-runtime support before registering.');
-	}
-	for (const p of providers) {
-		if (p.version !== REQUIRED_PROTOCOL_VERSION || p.capabilities !== REQUIRED_CAPABILITIES) {
-			throw new Error(`cosignal-react: renderer protocol mismatch (${p.version}/${p.capabilities}).`);
-		}
 	}
 }
 
@@ -199,7 +179,7 @@ export class Shim {
 
 	constructor(bridge: CosignalBridge) {
 		this.bridge = bridge;
-		assertForkProtocol();
+		assertForkPresent();
 		// The engine's host seams: the core's public Atom methods route
 		// host-attributable writes (whole ops) to the classifier, and routed
 		// reads to the effective world; the observer feeds effect dependency
@@ -561,9 +541,9 @@ export class Shim {
 		}
 		const forkToken = React.unstable_getCurrentWriteBatch();
 		if (forkToken === 0) {
-			// Defensively retained; UNREACHABLE post-handshake. Token 0 means
+			// Defensively retained; UNREACHABLE in practice. Token 0 means
 			// "no renderer provider registered" (ReactExternalRuntime returns 0
-			// only then), and this shim's constructor asserted a provider —
+			// only then), and a renderer registers its provider at module load —
 			// after that, getCurrentWriteBatch() mints a token for EVERY write
 			// (any call context) with a guaranteed close edge, so no write in
 			// the React path is ever context-free. Pinned by the ambient-

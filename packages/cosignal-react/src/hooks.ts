@@ -34,7 +34,7 @@ export type CosignalReactHandle = {
  * recording, once per process — and subscribes the shim to the
  * external-runtime protocol events. Call during app setup, after importing react-dom/client (the
  * renderer must have registered its protocol provider first), before
- * rendering any root; throws on stock React — see assertForkProtocol.
+ * rendering any root; throws on stock React — see assertForkPresent.
  * `opts.bridge` injects a pre-built bridge (tests use
  * `__newBridgeForTest()` instances).
  */
