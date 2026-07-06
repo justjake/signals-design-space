@@ -1,7 +1,7 @@
 /**
  * GRAPH-CONSUMER COHERENCE AUDIT. The engine keeps two edge stores — K0 (the
  * kernel's packed dependency links, index.ts) and K1 (the engine's episode
- * edge log + watcher/effect indexes, logged.ts) — and every consumer of
+ * edge log + watcher/effect indexes, concurrent.ts) — and every consumer of
  * edge/subscriber/liveness state must decide explicitly which store(s) it
  * consults. Each row below is that decision; rows whose enforcement was
  * NOTHING are pinned by the tests in this file (the suite IS the audit).

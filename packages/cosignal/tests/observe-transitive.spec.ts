@@ -14,7 +14,7 @@
  *
  * Every test here (except the kernel-chain contrast leg, which pins the
  * pre-existing K0 behavior the overlay now matches) FAILS without the
- * observation index in src/logged.ts.
+ * observation index in src/concurrent.ts.
  */
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, Atom, Computed, effect, type CosignalBridge } from '../src/index.js';

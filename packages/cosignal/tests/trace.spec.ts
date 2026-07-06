@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
-import { __newBridgeForTest, type BridgeEvent, type CosignalBridge } from '../src/logged.js';
+import { __newBridgeForTest, type BridgeEvent, type CosignalBridge } from '../src/concurrent.js';
 import { attachTracer, formatTrace, formatTraceEvent, Tracer, type TraceEvent, type TraceKind } from '../src/trace.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 

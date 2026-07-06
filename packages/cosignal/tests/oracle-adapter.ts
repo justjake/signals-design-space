@@ -22,7 +22,7 @@ import {
 	type AtomNode,
 	type CosignalBridge,
 	type Op,
-} from '../src/logged.js';
+} from '../src/concurrent.js';
 import {
 	comparableEvents,
 	snapshotModel,

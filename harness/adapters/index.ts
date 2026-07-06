@@ -19,7 +19,7 @@ export const adapterNames = [
 	'arena-spkh',
 	'arena-spkq',
 	'cosignal',
-	'cosignal-logged',
+	'cosignal-concurrent',
 ] as const;
 
 export type AdapterName = (typeof adapterNames)[number];
@@ -37,7 +37,7 @@ const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>>
 	'arena-spkh': () => import('./arena-spkh'),
 	'arena-spkq': () => import('./arena-spkq'),
 	cosignal: () => import('./cosignal'),
-	'cosignal-logged': () => import('./cosignal-logged'),
+	'cosignal-concurrent': () => import('./cosignal-concurrent'),
 };
 
 export function isAdapterName(name: string): name is AdapterName {

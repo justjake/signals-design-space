@@ -2,7 +2,7 @@
  * The One Core promise (replaces the old twin-build spec):
  *  - ONE public entry: `cosignal` exports the base API plus the concurrent
  *    engine's surface (registerReactBridge / CosignalBridge / bridge types);
- *    no `./logged` entry exists.
+ *    no `./concurrent` entry exists.
  *  - ZERO COST WHEN UNUSED, asserted behaviorally: with no host attached,
  *    heavy create/write/read/effect traffic mints zero receipts, zero batch
  *    tokens, zero world evaluations, zero bridge events, zero bridges (the
@@ -122,7 +122,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 	});
 
 	it('host attached, zero batches: unregistered traffic still does zero receipt/world work', () => {
-		// The harness cosignal-logged adapter's gate, in-package: attached-idle
+		// The harness cosignal-concurrent adapter's gate, in-package: attached-idle
 		// semantics ≡ sync semantics, and the probes prove no concurrent
 		// machinery ran for plain traffic.
 		const before = __coreProbes();

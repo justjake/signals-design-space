@@ -51,7 +51,7 @@
  *   the old one stopped.
  * - FOLD: applying a user's updater or reducer function to a value to
  *   produce the next value. The name comes from the concurrent engine
- *   (`./logged.ts`, part of this same entry), which reconstructs
+ *   (`./concurrent.ts`, part of this same entry), which reconstructs
  *   alternative views of the state ("worlds", see the README) by
  *   re-applying — folding — recorded write operations over a base value;
  *   that only works if updaters and reducers are pure. They therefore run
@@ -110,7 +110,7 @@
  * lives at module level for exactly this reason.
  *
  * There is exactly ONE build of this library. The concurrent-worlds engine
- * (`./logged.ts`, re-exported at the bottom of this file: `registerReactBridge`,
+ * (`./concurrent.ts`, re-exported at the bottom of this file: `registerReactBridge`,
  * `CosignalBridge`, the bridge types) attaches to this kernel through the
  * HOST SEAMS — two nullable module hooks consulted FIRST in the public
  * read/write methods (see "the host seams" section below). Sync-only apps
@@ -1273,7 +1273,7 @@ let E: Engine = createEngine(initialRecords * Arena.RECORDS_PER_UNIT);
 
 // ---- the host seams -------------------------------------------------------------
 // ONE CORE: there is exactly one engine and one write/read path. The
-// concurrent-worlds machinery (`./logged.ts`, re-exported at the bottom of
+// concurrent-worlds machinery (`./concurrent.ts`, re-exported at the bottom of
 // this file) is the HOST: it needs whole operations — set(value) vs
 // update(fn) — because worlds replay recorded writes, and
 // it needs world-routed reads while a world evaluation (or a host-declared
@@ -1443,7 +1443,7 @@ function foldNoop(): void {}
 //     hooks below (guarded by the node's NodeField.LIFECYCLE field, D1);
 //   - bridge watchers (the engine's record of one subscribed React
 //     component), one ref per live watcher: the watcher liveness setter in
-//     ./logged.ts calls __lifecycleRetain/__lifecycleRelease.
+//     ./concurrent.ts calls __lifecycleRetain/__lifecycleRelease.
 // The effect runs on the union's 0→1 transition and the cleanup on its 1→0;
 // both run through a microtask queue so observe/unobserve flaps within one
 // tick coalesce to nothing REGARDLESS of which consumer kind produced them
@@ -1532,7 +1532,7 @@ function lifecycleUnwatched(id: NodeId): void {
 /**
  * Bridge watcher retain/release — the second consumer kind feeding the
  * observation union (the first is the kernel liveness bit). Called by the
- * engine's observation index (./logged.ts) when a watcher over a registered
+ * engine's observation index (./concurrent.ts) when a watcher over a registered
  * atom's node flips live; a no-op for atoms carrying no observed-lifecycle
  * effect. Direct callbacks only — observation transitions are NOT
  * BridgeEvents and never enter the engine's event/lockstep stream. @internal
@@ -2205,14 +2205,14 @@ export function configure(options: ConfigureOptions): void {
 }
 
 // ---- the concurrent-worlds engine (the host) --------------------------------------
-// ONE public entry: the batch/world machinery lives in ./logged.ts and is
+// ONE public entry: the batch/world machinery lives in ./concurrent.ts and is
 // re-exported here — `registerReactBridge()`, `CosignalBridge`, the bridge
 // surface types (Seq, SlotSet, Receipt, BridgeEvent, …). Until
 // registerReactBridge() runs, none of it executes: the host seams above stay
 // undefined and every read/write short-circuits into the plain kernel path.
 // CURATED (no `export *`): the engine's internals — the packed Tape class,
 // node/watcher class VALUES, module seams — stay importable only from
-// './logged.js' inside this package; consumers get the activation function,
+// './concurrent.js' inside this package; consumers get the activation function,
 // the bridge, its error classes, the two @internal test seams the sibling
 // packages' suites drive, and the bridge-surface TYPES.
 export {
@@ -2224,7 +2224,7 @@ export {
 	// and one-core.spec proves the zero-cost promise through these):
 	__newBridgeForTest,
 	__coreProbes,
-} from './logged.js';
+} from './concurrent.js';
 export type {
 	// entities (type-only: the classes construct nowhere outside the engine)
 	AtomNode,
@@ -2261,4 +2261,4 @@ export type {
 	CommitGen,
 	SlotSet,
 	KernelId,
-} from './logged.js';
+} from './concurrent.js';

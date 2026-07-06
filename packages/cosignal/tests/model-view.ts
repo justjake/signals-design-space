@@ -21,7 +21,7 @@ import type {
 	Receipt,
 	Value,
 	World,
-} from '../src/logged.js';
+} from '../src/concurrent.js';
 
 /** The full-history mirror a twin driver owns and feeds. */
 export class RefereeMirror {

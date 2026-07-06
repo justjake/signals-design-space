@@ -7,7 +7,7 @@
 // ENGINE directly — a fan-out write inside one side's evaluation would corrupt
 // the other side by construction (the model half of that case runs in the
 // reference model's own suite).
-import { __newBridgeForTest } from '../src/logged.js';
+import { __newBridgeForTest } from '../src/concurrent.js';
 /**
  * The 17-case acceptance battery of the behavioral contract, as
  * deterministic named tests asserting the required outcomes at model level.

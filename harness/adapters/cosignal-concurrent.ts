@@ -14,7 +14,7 @@ import type { FrameworkAdapter } from './types';
 lib.registerReactBridge(); // attach the host; it stays idle forever
 
 const adapter: FrameworkAdapter = {
-	name: 'cosignal-logged',
+	name: 'cosignal-concurrent',
 	signal(initialValue) {
 		const a = new lib.Atom(initialValue);
 		return {

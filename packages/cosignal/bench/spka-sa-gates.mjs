@@ -13,7 +13,7 @@
 import process from 'node:process';
 
 const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
-const { __newBridgeForTest } = await import(`${ROOT}/packages/cosignal/src/logged.ts`);
+const { __newBridgeForTest } = await import(`${ROOT}/packages/cosignal/src/concurrent.ts`);
 
 const REPS = Number(process.env.REPS ?? 15);
 const N = 200;

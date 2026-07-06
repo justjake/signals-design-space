@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
 import { dependencyGraphToDot, traceToDot } from '../src/graphviz.js';
-import { __newBridgeForTest, type CosignalBridge } from '../src/logged.js';
+import { __newBridgeForTest, type CosignalBridge } from '../src/concurrent.js';
 import { attachTracer, REF_DROPPED, Tracer } from '../src/trace.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 
@@ -53,12 +53,12 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 	});
 
 	it('LOGGED never imports the trace or graphviz entries (lazy-loadability)', () => {
-		const logged = src('src/logged.ts');
+		const logged = src('src/concurrent.ts');
 		expect(logged).not.toMatch(/from '\.\/trace\.js'|from '\.\/graphviz\.js'/);
 	});
 
 	it("LOGGED's only tracing state is the one nullable slot, captured locally", () => {
-		const lines = src('src/logged.ts').split('\n');
+		const lines = src('src/concurrent.ts').split('\n');
 		for (const line of lines) {
 			if (!line.includes('this.trace')) continue;
 			const t = line.trim();
@@ -70,7 +70,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 	});
 
 	it('every hook invocation sits behind a single tr !== undefined check', () => {
-		const lines = src('src/logged.ts').split('\n');
+		const lines = src('src/concurrent.ts').split('\n');
 		for (let i = 0; i < lines.length; i++) {
 			const t = lines[i]!.trim();
 			if (!/(^|[^.\w])tr\.\w+\(/.test(t)) continue;
@@ -92,7 +92,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		expect(pkg.exports['./trace']).toBe('./src/trace.ts');
 		expect(pkg.exports['./graphviz']).toBe('./src/graphviz.ts');
 		expect(pkg.exports['.']).toBe('./src/index.ts');
-		expect(pkg.exports['./logged']).toBeUndefined(); // One Core: no second entry
+		expect(pkg.exports['./concurrent']).toBeUndefined(); // One Core: no second entry
 	});
 });
 
@@ -235,7 +235,7 @@ describe('R11 Graphviz renderers', () => {
 		const dot = dependencyGraphToDot(b);
 		expect(dot).toMatch(/^digraph cosignal \{/);
 		expect(dot).toContain(`n${flag.id} [shape=box`);
-		expect(dot).toContain(`n${flag.id} -> n${c.id};`); // the union edge the logged engine recorded
+		expect(dot).toContain(`n${flag.id} -> n${c.id};`); // the union edge the concurrent engine recorded
 		expect(dot).toContain('"W@A"');
 		expect(dot).toContain('CE runs:0');
 		expect(dot.trim().endsWith('}')).toBe(true);

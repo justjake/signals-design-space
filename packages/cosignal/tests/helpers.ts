@@ -38,7 +38,7 @@ import {
 	type CosignalBridge,
 	type Pass as EPass,
 	type World as EWorld,
-} from '../src/logged.js';
+} from '../src/concurrent.js';
 import { modelView, RefereeMirror } from './model-view.js';
 
 type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown };

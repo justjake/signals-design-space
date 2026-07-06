@@ -17,7 +17,7 @@
  *    event, clustered by nothing (time flows top to bottom).
  */
 
-import type { CosignalBridge } from './logged.js';
+import type { CosignalBridge } from './concurrent.js';
 import type { TraceEvent, TraceKind } from './trace.js';
 
 function q(s: string): string {

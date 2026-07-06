@@ -86,7 +86,7 @@
  * What lives here (full stories at the implementation sites):
  *   - receipts: every write appends {op, slot, seq, retiredSeq} to the
  *     written atom's tape.
- *   - kernel riding: every logged write also applies to the kernel eagerly
+ *   - kernel riding: every recorded write also applies to the kernel eagerly
  *     with stepwise equality (each step keeps the previous reference when
  *     the atom's equals function says nothing changed) — bridge atoms are
  *     kernel-backed `Atom` handles, and the newest world is read straight
@@ -680,11 +680,11 @@ export type TraceHooks = {
 
 const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and slot sets fit one int bit mask.
 
-// ---- module state + the logged operation table ----------------------------------
+// ---- module state + the concurrent operation table ------------------------------
 
 /** The bridge whose registered atoms the host hooks route for (one active). */
 let activeBridge: CosignalBridge | undefined;
-/** True while the bridge itself is applying a logged write to the kernel
+/** True while the bridge itself is applying a recorded write to the kernel
  * (the host write hook's recursion guard: the apply re-enters `Atom.set`). */
 let bridgeApplying = false;
 /** The public registerReactBridge() has been consumed (it may run only once). */
@@ -1144,7 +1144,7 @@ function aIsValidLink(a: ShadowArena, checkLink: number, sub: number): boolean {
  * the same surface the reference model (`cosignal-oracle`) implements, so the
  * two can run any schedule in lockstep. The kernel integration points are:
  * `AtomNode.handle` (kernel-backed newest storage, eager stepwise apply on
- * every logged write) and the module-level logged table (public-write
+ * every recorded write) and the module-level concurrent table (public-write
  * classification + world read routing).
  *
  * Referee surface: the twin tests run the oracle's `checkInvariants` /
@@ -1398,7 +1398,7 @@ export class CosignalBridge {
 	 * The ARMED quiet state — the one boolean the write path branches on,
 	 * recomputed only at state transitions (batch open/retire, pass
 	 * start/end, registration, event-retention/tracer changes): quiet ⇔
-	 * quietWrites AND logged AND zero live tokens AND zero open passes AND
+	 * quietWrites AND bridge registered AND zero live tokens AND zero open passes AND
 	 * every tape compacted AND no event consumer. Event consumers (a referee
 	 * retaining the log, an attached tracer) disarm quiet so their streams
 	 * stay complete — production apps have neither.
@@ -1443,9 +1443,9 @@ export class CosignalBridge {
 	/** Ambient default batch for bare (context-free) writes. */
 	ambientToken: TokenId | undefined;
 
-	/** Registered kernel-backed atoms, by kernel record id (logged-table routing). */
+	/** Registered kernel-backed atoms, by kernel record id (concurrent-table routing). */
 	byKernelId = new Map<KernelId, AtomNode>();
-	/** The world an overlay evaluation frame is folding in (logged-table read routing). */
+	/** The world an overlay evaluation frame is folding in (concurrent-table read routing). */
 	activeWorld: World | undefined;
 	/**
 	 * The bindings' ambient-world provider: consulted per routed read when no
@@ -1619,7 +1619,7 @@ export class CosignalBridge {
 
 	// ---------------------------------------------------------------- setup
 
-	/** Activates logged mode, once, monotonically; arms the table seam. */
+	/** Activates the concurrent engine, once, monotonically; arms the table seam. */
 	registerBridge(): void {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
 			throw new BridgeScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
@@ -1632,7 +1632,7 @@ export class CosignalBridge {
 		// time, routed to the active bridge — §4.5.4 push half).
 		__setSettleTap(settleTapImpl);
 		this.syncReadRouting();
-		this.recomputeQuiet(); // logged + nothing pending: quiet arms here
+		this.recomputeQuiet(); // registered + nothing pending: quiet arms here
 	}
 
 	/** Registers a node id in the dense side columns. */
@@ -1975,7 +1975,7 @@ export class CosignalBridge {
 	 * while an overlay evaluation frame was open. Record the edge to the
 	 * open frame's sink (mirroring into K1 the topology the bridge readers
 	 * never see) and serve the world value.
-	 * @internal (called from the logged table wrapper)
+	 * @internal (called from the concurrent table wrapper)
 	 */
 	routedRead(atom: AtomNode, world: World): Value {
 		const sink = this.currentSink;

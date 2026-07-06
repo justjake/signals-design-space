@@ -717,3 +717,14 @@ by design, no degradation regression).
 Verification state at these numbers: cosignal 188+1 skipped, oracle
 74+1 skipped, cosignal-react 53, conformance 179/179 ×
 {cosignal, cosignal-logged, arena}, both package tscs clean.
+
+---
+
+**Rename note (2026-07-06):** `packages/cosignal/src/logged.ts` is now
+`concurrent.ts` ("logged" referred to the deleted twin-build concept; the
+file is the concurrency engine), and the harness adapter
+`cosignal-logged` is now `cosignal-concurrent` — conformance runs are
+invoked as `FRAMEWORK=cosignal-concurrent` from here on. The run notes
+and tables above predate the rename and keep the old names verbatim;
+`cosignal-logged` in any historical "conformance 179/179 × {…}" line is
+the same gate as today's `cosignal-concurrent`.

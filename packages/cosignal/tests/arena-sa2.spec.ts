@@ -7,7 +7,7 @@
  * check armed (arena-served ≡ memo-served after every public operation).
  */
 import { describe, expect, it } from 'vitest';
-import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/logged.js';
+import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
 
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();

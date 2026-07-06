@@ -16,7 +16,7 @@
  *
  * ## Loading and cost
  * This module imports the engine as TYPES ONLY — its runtime module graph is
- * exactly {trace.ts}, and `./logged.ts` never imports it back, so neither
+ * exactly {trace.ts}, and `./concurrent.ts` never imports it back, so neither
  * entry pulls the other into a bundle. Until `attachTracer(bridge)` runs,
  * the engine's only tracing artifact is the `bridge.trace` slot, `undefined`
  * forever, checked once per emit site (tests/trace-off.spec.ts asserts the
@@ -138,7 +138,7 @@ import type {
 	TraceHooks,
 	Watcher,
 	World,
-} from './logged.js';
+} from './concurrent.js';
 
 // ---- record layout ---------------------------------------------------------------
 // Same-file const enums: esbuild-based toolchains inline the members as
