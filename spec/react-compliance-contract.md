@@ -480,6 +480,19 @@ rationale is section 4). Identifiers are stable: cite them as
   notification) until a tracked dependency moves. World-side
   revalidation (pass/committed folds at their boundaries) is unaffected.
   [oracle: worlds — newest], [ruling 2026-07-06: untracked sampling].
+- **EF4 (WON'T-PROMISE).** The library defines no firing order among
+  core effects (`effect()`) triggered by the same operation. The
+  contractual guarantees are each effect's observed VALUES (EF3's
+  newest-value face, value-gated) and the operation at which it fires;
+  how sibling runs interleave within that operation is
+  implementation-defined (the engine fires them in the kernel's
+  propagation order over its subscriber links — a link-creation and
+  relink history — which no bounded reference model reproduces without
+  modeling the kernel's link discipline). Checkers accordingly compare
+  same-operation core-effect runs as a multiset of (effect, value),
+  never as a sequence. [owner ruling 2026-07-06: sibling core-effect
+  firing order is implementation specific (panel item W9)], [finding
+  archive research/experiments/2026-07-06-w9-core-effect-order-finding.md].
 
 ### 3.7 Scheduling and priority
 

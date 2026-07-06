@@ -132,10 +132,11 @@
  *     invisible to the earlier-captured slot set), and any divergence the
  *     fast path suppresses must be exactly covered by the scheduled
  *     corrective re-renders (asserted on every mount).
- *   - subscriptions (see the Subscription type): ONE core record for both
- *     `run`-action consumer kinds. Newest-policy subscriptions observe the
- *     newest world and flush after the write's walk returns. Committed
- *     subscriptions — the PROMOTED production useSignalEffect mechanism —
+ *   - subscriptions (see the Subscription type): the ONE `run`-action
+ *     consumer record — committed subscriptions, the PROMOTED production
+ *     useSignalEffect mechanism. (Core `effect()`s are NOT bridge records:
+ *     they are real kernel effects, flushed by the eager kernel apply —
+ *     see logCoreEffectRun.) Committed subscriptions
  *     hold a dep snapshot captured by `captureRun` under committed-for-root
  *     and re-check value-gated at RCC-EF2's amended BOUNDARIES (per-root
  *     commit, retirement, settlement, quiet fold): once per boundary
@@ -542,36 +543,30 @@ export class Watcher {
 
 /**
  * The ONE core `run`-action subscription record (effects unification by
- * promotion, plans/2026-07-06). A subscription is a registration saying WHO
- * is notified and IN WHICH WORLD its reads resolve; `deliver`-action
- * consumers (component re-renders) remain `Watcher` structurally — their
- * state is untouched, the unification is of the firing machinery — so this
- * record carries the two `run` configurations:
+ * promotion, plans/2026-07-06): the PROMOTED production `useSignalEffect`
+ * mechanism (previously the adapter's EffectRec). A subscription is a
+ * registration saying WHO is notified and IN WHICH WORLD its reads resolve;
+ * `deliver`-action consumers (component re-renders) remain `Watcher`
+ * structurally — their state is untouched, the unification is of the firing
+ * machinery. `deps` is the (node, value) snapshot `captureRun` recorded
+ * under the committed world of the subscription's root; re-checks are
+ * value-gated over it and fire at RCC-EF2's amended BOUNDARIES (per-root
+ * commit, retirement, settlement, quiet fold; one re-check per boundary
+ * operation, at the boundary value, never while the subscription's own root
+ * has an open render-pass frame — deferred flips flush at that frame's
+ * close). `refire` (adapter-registered) rides the operation-boundary
+ * notification queue; referee-configured subscriptions (tests/helpers.ts's
+ * mountEngineReactEffect/-Pick) store a `body` and re-run it inline through
+ * the SAME capture frame, so lockstep referees the real mechanism.
  *
- *  - policy 'committed' — the PROMOTED production `useSignalEffect`
- *    mechanism (previously the adapter's EffectRec): `deps` is the
- *    (node, value) snapshot `captureRun` recorded under the committed world
- *    of the subscription's root; re-checks are value-gated over it and fire
- *    at RCC-EF2's amended BOUNDARIES (per-root commit, retirement,
- *    settlement, quiet fold; one re-check per boundary operation, at the
- *    boundary value, never while the subscription's own root has an open
- *    render-pass frame — deferred flips flush at that frame's close).
- *    `refire` (adapter-registered) rides the operation-boundary notification
- *    queue; referee-configured subscriptions (tests/helpers.ts's
- *    mountEngineReactEffect/-Pick) store a `body` and re-run it inline
- *    through the SAME capture frame, so lockstep referees the real mechanism.
- *  - policy 'newest' — the absorbed core-effect configuration: one `node`,
- *    value-gated on its newest value, enqueued by the delivery walk and
- *    flushed after the walk returns.
+ * Core `effect()`s hold no Subscription: they are REAL kernel effects,
+ * flushed by the eager kernel apply (see logCoreEffectRun).
  */
 export type Subscription = {
 	id: EffectId;
 	name: string;
-	policy: 'committed' | 'newest';
-	/** Owning root (committed policy; '' for newest). */
+	/** Owning root. */
 	root: RootId;
-	/** Subscribed node (newest policy; 0 for committed — `deps` carry nodes). */
-	node: NodeId;
 	/** Dep snapshot: the routed reads of the last run, in read order. */
 	deps: { node: AnyNode; value: Value }[];
 	/** Adapter-owned refire (cleanup + body scheduling), queued at the
@@ -579,7 +574,7 @@ export type Subscription = {
 	refire: (() => void) | undefined;
 	/** Referee-configured body (re-run inline through the capture frame). */
 	body: (() => void) | undefined;
-	/** Last captured value (committed: the last dep read; newest: the node). */
+	/** Last captured value (the last dep read). */
 	lastValue: Value;
 	runs: number;
 	cleanups: number;
@@ -1402,8 +1397,7 @@ export class CosignalBridge {
 	passes = new Map<PassId, Pass>();
 	roots = new Map<RootId, RootState>();
 	watchers = new Map<WatcherId, Watcher>();
-	/** ONE subscription store for both `run` policies (committed committed-
-	 * observer scans filter by policy; newest ones also live in subsByNode). */
+	/** The committed `run`-action subscription store (see Subscription). */
 	subs = new Map<EffectId, Subscription>();
 	/** The retained BridgeEvent log. Populated only while a referee retains
 	 * events (`setRetainEvents(true)`); a tracer attached without a referee
@@ -1570,9 +1564,8 @@ export class CosignalBridge {
 	/** The watcher liveness seam (one closure per bridge; Watcher._obs). */
 	private watcherObs = (node: NodeId, delta: 1 | -1): void => this.obsShift(node, delta);
 	private watchersByNode: (Watcher[] | undefined)[] = [];
-	/** Live counts per policy (fast bails on the write/quiet paths). */
+	/** Live subscription count (fast bail on the boundary-scan paths). */
 	private committedSubCount = 0;
-	private newestSubCount = 0;
 	/** The core capture frame `captureRun` opens: while set (and no evaluation
 	 * world is on stack) routed reads resolve committed-for-root and append to
 	 * the dep snapshot. Replaces the adapter's effectCapture + readObserver
@@ -3258,8 +3251,9 @@ export class CosignalBridge {
 					}
 				}
 				// Boundary subscription scan + the flush the loop OWNS.
+				// (Core effect()s need nothing here: settlements move world
+				// visibility, never newest values, so the kernel is untouched.)
 				if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
-				if (this.newestSubCount !== 0) this.directFlushCoreEffects();
 				this.flushNotify();
 			}
 		} finally {
@@ -3285,7 +3279,7 @@ export class CosignalBridge {
 			if (w.live && w.root === rootId) n++;
 		}
 		for (const e of this.subs.values()) {
-			if (e.live && e.policy === 'committed' && e.root === rootId) n++;
+			if (e.live && e.root === rootId) n++;
 		}
 		return n;
 	}
@@ -3710,8 +3704,7 @@ export class CosignalBridge {
 	 * order (the reference model's map order). Deliveries may be FEWER than
 	 * the model's union-conservative set, never more (the ⊆ bound): a cone
 	 * held by no live arena lane-degrades to a drain correction (§4.4.5,
-	 * S-NF2-D1). Newest-policy subscriptions flush value-gated after the
-	 * walk returns (see writeInner).
+	 * S-NF2-D1).
 	 */
 	private deliveryWalk(from: NodeId, token: Token, slot: SlotMeta, seq: Seq): void {
 		const gen = ++this.walkGen;
@@ -3888,8 +3881,9 @@ export class CosignalBridge {
 	 * committed-advance clock (cas), so baseline/fast-out checks see the fold. Observers: no
 	 * walk machinery is armed, so the small live-observer population is
 	 * reconciled value-gated, exactly like a durable drain (corrections for
-	 * watchers, re-runs for committed React effects, newest evaluations for
-	 * core effects). No receipt, no token, no tape append, no delivery walk,
+	 * watchers, re-runs for committed React effects; core effect()s are
+	 * kernel subscribers — the direct kernel apply itself flushes them).
+	 * No receipt, no token, no tape append, no delivery walk,
 	 * no bridge event (event consumers disarm quiet). @internal
 	 */
 	__quietWrite(node: AtomNode, kind: OpKind, payload: unknown): void {
@@ -3913,7 +3907,6 @@ export class CosignalBridge {
 		// A quiet fold moves committed truth for every root — an EF2 boundary
 		// (quiet ⇔ no open passes, so no frame can defer the re-check).
 		if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
-		if (this.newestSubCount !== 0) this.directFlushCoreEffects();
 		for (const a of this.arenaByRoot.values()) this.arenaDecay(a); // NF2 S-A boundary decay
 		if (this.notifyN !== 0) this.flushNotify();
 		this.arenaOpEpilogue();
@@ -4085,10 +4078,9 @@ export class CosignalBridge {
 		}
 
 		// The value-blind delivery walk (arena strong links), synchronously in
-		// the writer's stack; newest-policy subscriptions flush after it
-		// returns, reached over the newest world's strong structure.
+		// the writer's stack. (Core effect()s are kernel subscribers: the
+		// eager kernel apply above already flushed them.)
 		this.deliveryWalk(node.id, token, slot, seq);
-		this.flushNewestSubs(node.id);
 		this.endOp();
 	}
 
@@ -4134,73 +4126,18 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * Newest-policy subscription flush at a concurrent-mode write (§4.4.1: newest
-	 * subscriptions keep STRONG-structure-only reach — untracked deps
-	 * invalidate no newest value and never notify [ruling 2026-07-06],
-	 * matching the reference model's strong-edge reachability): reach walks
-	 * the KERNEL's own dep links (S-C — kernel links are tracked-only by
-	 * construction and exist from the subscription's mount evaluation on).
-	 * Reach lags evaluations exactly as HEAD's episode edge log did: a cone
-	 * re-tracked since its last evaluation reaches through the OLD dep set
-	 * (the discriminant edge covers the flip-causing write), and the value
-	 * gate keeps extra reach silent. Fires in id order (the model's map
-	 * order).
+	 * Referee seam for core `effect()` runs. Core effects are REAL kernel
+	 * effects (tests/helpers.ts `mountEngineCoreEffect` over the public
+	 * `effect()`), flushed by the eager kernel apply itself — the bridge
+	 * holds no record of them. Their wrappers report each value-gated run
+	 * here so `core-effect-run` events keep the retention/cursor/
+	 * trace-causality semantics of the one `log()` waist. Sibling firing
+	 * order under one operation is implementation-defined (kernel
+	 * subscriber-link order — owner ruling 2026-07-06); values and the
+	 * operation each run fires at are the contract (RCC-EF4).
 	 */
-	private flushNewestSubs(written: NodeId): void {
-		if (this.newestSubCount === 0) return;
-		const writtenAtom = this.nodesArr[written];
-		if (writtenAtom === undefined) return;
-		const targetKid = writtenAtom.handle._id;
-		for (const e of this.subs.values()) {
-			if (e.policy !== 'newest' || !e.live) continue;
-			const subNode = this.nodeById(e.node);
-			this.newestReachSeen.clear();
-			if (!this.newestReaches(subNode.handle._id, targetKid)) continue;
-			this.runNewestSub(e, subNode);
-		}
-	}
-
-	/** The ONE newest-subscription firing body (both flush forms share it):
-	 * evaluate newest, value-gate on the last flushed value, count + log. */
-	private runNewestSub(e: Subscription, subNode: AnyNode): void {
-		const value = this.evaluate(subNode, NEWEST);
-		if (!Object.is(value, e.lastValue)) {
-			e.lastValue = value;
-			e.runs++;
-			if (this.eventsOn) this.log({ type: 'core-effect-run', effect: e.name, value });
-		}
-	}
-
-	private newestReachSeen = new Set<KernelId>();
-
-	/** Does `targetKid` (a written atom's kernel record) feed `kid` through
-	 * TRACKED newest deps? Depth-first over the kernel's OWN dep links (the
-	 * mirrored field constants — asserted stable by the suite). Untracked
-	 * reads never linked, so weak reach is structurally absent. */
-	private newestReaches(kid: KernelId, targetKid: KernelId): boolean {
-		if (kid === targetKid) return true;
-		if (this.newestReachSeen.has(kid)) return false;
-		this.newestReachSeen.add(kid);
-		const M = __kernelBuffer();
-		let l = M[kid + AF.DEPS]!;
-		while (l !== 0) {
-			const dep = M[l + AF.L_DEP]!;
-			if (dep === targetKid) return true;
-			if ((M[dep + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0 && this.newestReaches(dep, targetKid)) return true;
-			l = M[l + AF.L_NEXT_DEP]!;
-		}
-		return false;
-	}
-
-	/** Newest-policy subscription full-scan flush, value-gated — the
-	 * reach-free boundaries' form (quiet folds, settlement drains), matching
-	 * the reference model's un-scoped flush at the same boundaries; iteration
-	 * order is id order (its map order). */
-	private directFlushCoreEffects(): void {
-		for (const e of this.subs.values()) {
-			if (e.policy !== 'newest') continue;
-			this.runNewestSub(e, this.nodeById(e.node));
-		}
+	logCoreEffectRun(name: string, value: Value): void {
+		if (this.eventsOn) this.log({ type: 'core-effect-run', effect: name, value });
 	}
 
 	// ------------------------------------------------------ pass lifecycle
@@ -4390,7 +4327,7 @@ export class CosignalBridge {
 			throw new BridgeScheduleError('effect registration is illegal inside an open evaluation/fold frame');
 		}
 		const e: Subscription = {
-			id: this.nextEffect++, name, policy: 'committed', root: rootId, node: 0,
+			id: this.nextEffect++, name, root: rootId,
 			deps: [], refire, body: undefined, lastValue: undefined,
 			runs: 0, cleanups: 0, live: true, obsDeps: undefined,
 		};
@@ -4406,20 +4343,6 @@ export class CosignalBridge {
 	// `body` mechanism itself stays here: it is the inline-run + event-mint
 	// path the lockstep referee compares.)
 
-	/** Newest-policy configuration (the absorbed core-effect referee shape):
-	 * one node, value-gated on its newest value, flushed post-delivery-walk. */
-	mountCoreEffect(node: AnyNode, name: string): Subscription {
-		const e: Subscription = {
-			id: this.nextEffect++, name, policy: 'newest', root: '', node: node.id,
-			deps: [], refire: undefined, body: undefined,
-			lastValue: this.evaluate(node, NEWEST),
-			runs: 0, cleanups: 0, live: true, obsDeps: undefined,
-		};
-		this.subs.set(e.id, e);
-		this.newestSubCount++;
-		return e;
-	}
-
 	/**
 	 * Runs a subscription body under the core capture frame: the effective
 	 * world becomes committed-for-root, every routed read (raw atom reads
@@ -4434,7 +4357,7 @@ export class CosignalBridge {
 	 */
 	captureRun(id: EffectId, body: () => void): void {
 		const e = this.subs.get(id);
-		if (e === undefined || e.policy !== 'committed') throw new BridgeScheduleError(`unknown committed subscription ${id}`);
+		if (e === undefined) throw new BridgeScheduleError(`unknown committed subscription ${id}`);
 		if (this.captureFrame !== undefined) throw new BridgeScheduleError('captureRun frames do not nest — one effect body runs at a time');
 		if (this.evalDepth > 0) throw new BridgeScheduleError('captureRun is illegal inside an open evaluation frame');
 		const frame = { sub: e, deps: [] as { node: AnyNode; value: Value }[] };
@@ -4480,10 +4403,6 @@ export class CosignalBridge {
 		const e = this.mustGet(this.subs, id, 'subscription');
 		e.live = false;
 		this.subs.delete(id);
-		if (e.policy === 'newest') {
-			this.newestSubCount--;
-			return;
-		}
 		this.committedSubCount--;
 		e.cleanups++;
 		if (this.eventsOn) this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
@@ -4500,7 +4419,7 @@ export class CosignalBridge {
 	 * pass frame (React double-invokes effects post-commit, never mid-render). */
 	replayReactEffect(id: EffectId): void {
 		const e = this.subs.get(id);
-		if (e === undefined || e.policy !== 'committed') throw new BridgeScheduleError(`unknown react effect ${id}`);
+		if (e === undefined) throw new BridgeScheduleError(`unknown react effect ${id}`);
 		if (this.openPassByRoot.has(e.root)) {
 			throw new BridgeScheduleError('replay requires the effect root to have no open pass frame');
 		}
@@ -4552,7 +4471,7 @@ export class CosignalBridge {
 	private revalidateCommittedSubs(rootFilter: RootId | undefined): void {
 		if (this.committedSubCount === 0) return;
 		for (const e of [...this.subs.values()]) {
-			if (e.policy !== 'committed' || !e.live) continue;
+			if (!e.live) continue;
 			if (rootFilter !== undefined && e.root !== rootFilter) continue;
 			if (this.openPassByRoot.has(e.root)) continue; // deferred to the frame's close
 			const world: World = { kind: 'committed', root: e.root };

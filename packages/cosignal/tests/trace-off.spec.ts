@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
+import { mountEngineReactEffect } from './helpers.js';
 import { dependencyGraphToDot, traceToDot } from '../src/graphviz.js';
 import { __newBridgeForTest, type CosignalBridge } from '../src/concurrent.js';
 import { attachTracer, REF_DROPPED, Tracer } from '../src/trace.js';
@@ -231,13 +232,15 @@ describe('R11 Graphviz renderers', () => {
 		const p = b.passStart('A', []);
 		b.mountWatcher(p.id, c, 'W');
 		b.passEnd(p.id, 'commit');
-		b.mountCoreEffect(c, 'CE');
+		// A committed observer (core effect()s are kernel effects now — no
+		// bridge record, so nothing of theirs appears in the dump).
+		mountEngineReactEffect(b, 'A', c, 'E');
 		const dot = dependencyGraphToDot(b);
 		expect(dot).toMatch(/^digraph cosignal \{/);
 		expect(dot).toContain(`n${flag.id} [shape=box`);
 		expect(dot).toContain(`n${flag.id} -> n${c.id};`); // the union edge the concurrent engine recorded
 		expect(dot).toContain('"W@A"');
-		expect(dot).toContain('CE runs:0');
+		expect(dot).toContain('E@A runs:0');
 		expect(dot.trim().endsWith('}')).toBe(true);
 	});
 

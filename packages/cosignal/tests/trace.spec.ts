@@ -7,7 +7,7 @@
  * and the stable human format are asserted here too.
  */
 import { describe, expect, it } from 'vitest';
-import { mountEngineReactEffect } from './helpers.js';
+import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
 import { __newBridgeForTest, type BridgeEvent, type CosignalBridge } from '../src/concurrent.js';
 import { attachTracer, formatTrace, formatTraceEvent, Tracer, type TraceEvent, type TraceKind } from '../src/trace.js';
@@ -140,12 +140,12 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('core effect run caused by its write; reconcile-correction caused by a top-level retirement', () => {
-		b.mountCoreEffect(c, 'CE'); // newest c = 7
+		mountEngineCoreEffect(b, c, 'CE'); // real kernel effect(); newest c = 7
 		const t3 = b.openBatch();
 		b.write(t3.id, a, { kind: 'set', value: 8 });
 		const wr = last(tr, 'write');
 		const ce = last(tr, 'core-effect-run');
-		expect(ce.data).toEqual({ effect: 'CE', value: 8 });
+		expect(ce.data).toEqual({ effect: 'CE#0', value: 8 }); // '#0': the per-mount name ordinal (see mountEngineCoreEffect)
 		expect(ce.cause).toBe(wr.id);
 
 		b.retire(t3.id, true); // top-level: an operation root, not chained to prior ops

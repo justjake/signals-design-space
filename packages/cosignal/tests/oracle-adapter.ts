@@ -32,7 +32,7 @@ import {
 } from '../../cosignal-oracle/src/adapter.js';
 import { CosignalModel, type ModelEvent } from '../../cosignal-oracle/src/model.js';
 import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
-import { mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
+import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
 
 // ---- BridgeEvent ≡ ModelEvent pin -------------------------------------------
 // The two unions are maintained BY HAND in two deliberately-independent
@@ -100,11 +100,13 @@ function watcherAt(b: CosignalBridge, index: number): number {
 }
 
 /** Mirrors the model's `effectAt`: index over react-effect ids in creation
- * order (the engine's one subs store holds both policies; the committed
- * filter yields exactly the model's reactEffects key sequence). */
+ * order (the engine's subs store holds ONLY committed observers — core
+ * effects are kernel `effect()`s, not bridge records — so its key sequence
+ * is exactly the model's reactEffects key sequence, by INDEX; the id VALUES
+ * diverge once a core effect mounts, which is why resolution is positional). */
 function effectAt(b: CosignalBridge, index: number): number {
 	const ids: number[] = [];
-	for (const s of b.subs.values()) if (s.policy === 'committed') ids.push(s.id);
+	for (const s of b.subs.values()) ids.push(s.id);
 	if (ids.length === 0) throw new BridgeScheduleError('no react effects yet');
 	return ids[index % ids.length]!;
 }
@@ -173,7 +175,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 				break;
 			case 'removeReactEffect': b.removeSubscription(effectAt(b, op.effect)); break;
 			case 'replayReactEffect': b.replayReactEffect(effectAt(b, op.effect)); break;
-			case 'coreEffect': b.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`); break;
+			case 'coreEffect': mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`); break;
 			case 'discardAllWip': b.discardAllWip(); break;
 			case 'quiesce':
 				b.quiesce();
@@ -241,7 +243,11 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 // keeps every other comparison EXACT:
 //   - op legality per step (exact);
 //   - the full observable snapshot per step (exact — values never relax);
-//   - non-delivery comparable events per step (exact, in order);
+//   - non-delivery comparable events per step (exact, in order — with ONE
+//     canonicalization: same-step contiguous core-effect-run blocks compare
+//     as a multiset, because sibling core-effect firing order is
+//     implementation-defined [owner ruling 2026-07-06]; see
+//     canonicalizeCoreEffectBlocks);
 //   - delivery-decision events ('delivery'/'suppressed'/'mount-corrective'):
 //     cumulative multiset ⊆ the model's, keyed (type, watcher, token, slot)
 //     — mode/seq excluded (an edge-add replay carries the replay sequence).
@@ -251,6 +257,43 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 // fast-out is not covered by correctives.
 
 const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);
+
+/**
+ * Sibling core-effect firing order is implementation-defined (owner ruling,
+ * 2026-07-06, panel item W9): the engine's core effects are real kernel
+ * `effect()`s flushed in the kernel's propagation order over its
+ * subscriber-link lists (a link-creation *and relink* history), while the
+ * model flushes its coreEffects map in mount order. The contractual
+ * guarantees are each effect's observed VALUES and the operation each run
+ * fires at (RCC-EF4) — so within one step, maximal contiguous blocks of
+ * `core-effect-run` events are canonicalized by sorting on (effect, value)
+ * on BOTH streams before the exact comparison. Effect names carry a
+ * per-mount ordinal (helpers.ts mountEngineCoreEffect / the model's
+ * mountCoreEffect), so names are unique and the multiset comparison is
+ * unambiguous. Nothing else about the comparison changes: block boundaries
+ * (any non-core-effect event) still pin placement, and values never relax.
+ */
+function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
+	const out = events.slice();
+	let i = 0;
+	while (i < out.length) {
+		if (out[i]!.type !== 'core-effect-run') {
+			i++;
+			continue;
+		}
+		let j = i + 1;
+		while (j < out.length && out[j]!.type === 'core-effect-run') j++;
+		if (j - i > 1) {
+			const block = out.slice(i, j) as Extract<ModelEvent, { type: 'core-effect-run' }>[];
+			block.sort((a, b) =>
+				a.effect < b.effect ? -1 : a.effect > b.effect ? 1 :
+				String(a.value) < String(b.value) ? -1 : String(a.value) > String(b.value) ? 1 : 0);
+			for (let k = i; k < j; k++) out[k] = block[k - i]!;
+		}
+		i = j;
+	}
+	return out;
+}
 
 /** Delivery-DECISION counts, pooled across the family's three modes per
  * (watcher, token, slot). The bound is "fewer decisions, never more"
@@ -301,8 +344,10 @@ export function diffAgainstModelTolerant(
 			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnap}` };
 		}
 		const eEvents = engine.drainEvents();
-		const mRest = JSON.stringify(mEvents.filter((e) => !DELIVERYISH.has(e.type)));
-		const eRest = JSON.stringify(eEvents.filter((e) => !DELIVERYISH.has(e.type)));
+		// Same-step core-effect-run blocks compare as a multiset (the ruling's
+		// mechanical form — see canonicalizeCoreEffectBlocks).
+		const mRest = JSON.stringify(canonicalizeCoreEffectBlocks(mEvents.filter((e) => !DELIVERYISH.has(e.type))));
+		const eRest = JSON.stringify(canonicalizeCoreEffectBlocks(eEvents.filter((e) => !DELIVERYISH.has(e.type))));
 		if (mRest !== eRest) {
 			return { seed, step, message: `events diverged:\nengine ${eRest}\nmodel  ${mRest}` };
 		}

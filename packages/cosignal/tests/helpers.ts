@@ -39,7 +39,7 @@ import {
 	type Subscription as ESubscription,
 	type World as EWorld,
 } from '../src/concurrent.js';
-import type { Atom } from '../src/index.js';
+import { effect, type Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';
 
 /** Scenario annotation only: the specs name each batch's React lane priority
@@ -112,6 +112,56 @@ export function mountEngineReactEffectPick(b: CosignalBridge, rootId: string, se
 	return e;
 }
 
+/** The record `mountEngineCoreEffect` returns — the model CoreEffect's
+ * engine twin (specs read `runs`/`lastValue`; the referee reads the stream). */
+export type EngineCoreEffect = {
+	name: string;
+	runs: number;
+	lastValue: Value;
+	dispose: () => void;
+};
+
+/** Per-bridge core-effect mount ordinal (never reset — mirrors the model's
+ * `coreEffectMounts`; both sides tick once per mount in lockstep, so minted
+ * names agree). */
+const coreEffectMounts = new WeakMap<CosignalBridge, number>();
+
+/**
+ * Mount a core effect: a REAL kernel `effect()` whose body does a plain
+ * tracked kernel read of the node's public handle (host world-routing is
+ * bypassed inside a kernel frame — `activeSub !== 0`), so the kernel's own
+ * propagation over its subscriber links re-runs it at exactly the writes
+ * that advance the newest fold (the eager kernel apply). The mount run
+ * baselines silently; later runs value-gate on `Object.is` and report
+ * through the bridge's `logCoreEffectRun` referee seam.
+ *
+ * Names take a per-mount ordinal suffix (`#k`): sibling core-effect firing
+ * order under one operation is implementation-defined (owner ruling
+ * 2026-07-06), so the lockstep differ compares same-step runs as a multiset
+ * sorted on (effect, value) — duplicate names (two mounts with no
+ * intervening event/seq used to mint the same `CE${events}.${seq}.${epoch}`
+ * uniq) would make that comparison ambiguous.
+ */
+export function mountEngineCoreEffect(b: CosignalBridge, node: ENode, name: string): EngineCoreEffect {
+	const ordinal = coreEffectMounts.get(b) ?? 0;
+	coreEffectMounts.set(b, ordinal + 1);
+	const rec: EngineCoreEffect = { name: `${name}#${ordinal}`, runs: 0, lastValue: undefined, dispose: () => {} };
+	let mounted = false;
+	rec.dispose = effect(() => {
+		const value: Value = node.handle.state; // tracked kernel read (newest world)
+		if (!mounted) {
+			mounted = true;
+			rec.lastValue = value; // silent baseline (the model seeds lastValue the same way)
+			return;
+		}
+		if (Object.is(value, rec.lastValue)) return; // value gate
+		rec.lastValue = value;
+		rec.runs++;
+		b.logCoreEffectRun(rec.name, value);
+	});
+	return rec;
+}
+
 export class TwinDriver {
 	readonly model = new CosignalModel();
 	readonly engine: CosignalBridge = __newBridgeForTest();
@@ -122,6 +172,11 @@ export class TwinDriver {
 	private readonly view = modelView(this.engine, this.mirror) as unknown as CosignalModel;
 	private nodeMap = new Map<AnyNode, ENode>();
 	private passMap = new Map<number, EPass>();
+	/** Model react-effect id → engine subscription id. The id spaces diverge
+	 * once a core effect mounts: the model's `nextEffect` ticks for BOTH
+	 * effect kinds, the engine's only for committed observers (core effects
+	 * are kernel `effect()`s, not bridge records). */
+	private effectMap = new Map<number, number>();
 
 	constructor() {
 		// The reference model's retention invariant (checkRetention in
@@ -159,6 +214,12 @@ export class TwinDriver {
 		const p = this.passMap.get(pass.id);
 		if (p === undefined) throw new Error(`twin: pass ${pass.id} was not created through the driver`);
 		return p;
+	}
+
+	private toEngineEffect(modelId: number): number {
+		const id = this.effectMap.get(modelId);
+		if (id === undefined) throw new Error(`twin: react effect ${modelId} was not created through the driver`);
+		return id;
 	}
 
 	/** Run a mutation on both sides; legality must agree; model's outcome wins. */
@@ -344,29 +405,38 @@ export class TwinDriver {
 	}
 
 	mountReactEffect(root: string, node: AnyNode, name: string): ReactEffect {
-		return this.both('mountReactEffect', () => this.model.mountReactEffect(root, node, name), () =>
-			mountEngineReactEffect(this.engine, root, this.toEngine(node), name));
+		let eId: number | undefined;
+		const e = this.both('mountReactEffect', () => this.model.mountReactEffect(root, node, name), () => {
+			eId = mountEngineReactEffect(this.engine, root, this.toEngine(node), name).id;
+		});
+		this.effectMap.set(e.id, eId!);
+		return e;
 	}
 
 	mountReactEffectPick(root: string, sel: AnyNode, a: AnyNode, b: AnyNode, name: string): ReactEffect {
-		return this.both('mountReactEffectPick',
+		let eId: number | undefined;
+		const e = this.both('mountReactEffectPick',
 			() => this.model.mountReactEffectPick(root, sel, a, b, name),
-			() => mountEngineReactEffectPick(this.engine, root, this.toEngine(sel), this.toEngine(a), this.toEngine(b), name));
+			() => {
+				eId = mountEngineReactEffectPick(this.engine, root, this.toEngine(sel), this.toEngine(a), this.toEngine(b), name).id;
+			});
+		this.effectMap.set(e.id, eId!);
+		return e;
 	}
 
 	removeReactEffect(id: number): void {
 		this.both('removeReactEffect', () => this.model.removeReactEffect(id), () =>
-			this.engine.removeSubscription(id));
+			this.engine.removeSubscription(this.toEngineEffect(id)));
 	}
 
 	replayReactEffect(id: number): void {
 		this.both('replayReactEffect', () => this.model.replayReactEffect(id), () =>
-			this.engine.replayReactEffect(id));
+			this.engine.replayReactEffect(this.toEngineEffect(id)));
 	}
 
 	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
 		return this.both('mountCoreEffect', () => this.model.mountCoreEffect(node, name), () =>
-			this.engine.mountCoreEffect(this.toEngine(node), name));
+			mountEngineCoreEffect(this.engine, this.toEngine(node), name));
 	}
 
 	discardAllWip(): void {

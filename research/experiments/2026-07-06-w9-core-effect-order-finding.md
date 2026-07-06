@@ -1,6 +1,14 @@
 # W9 core-effect deletion — stopped at the corpus gate: sibling firing order
 
-**Status: STOPPED AT GATE (2026-07-06). Working tree reverted to baseline; all suites re-verified green on the restored tree. Decision pending with the owner. The implementation is mechanically re-appliable from the edit list below.**
+**Status: RESOLVED (2026-07-06, same day). Owner ruled option 1 — "sibling core-effect
+firing order is implementation specific" — ratified as contract clause EF4
+(spec/react-compliance-contract.md §3.6). The deletion was re-applied from the edit
+list below plus four riders: multiset comparison of same-operation core-effect-run
+blocks in the lockstep differ, per-mount ordinals in referee effect names (the
+collision noted below), the EF4 clause, and the graphviz dead-arm + TwinDriver
+effect-id map. Corpus 100% clean under the multiset differ; a strict-comparator probe
+reproduced the census below to the seed (ordering-only, nothing else). W21 closed as
+moot (newestReaches deleted).**
 
 W9 (panel item): delete the bridge's synthetic "newest-policy" core-effect machinery
 (`mountCoreEffect`, `newestReaches`, the full-scan flush, ~16 policy-conditional sites)

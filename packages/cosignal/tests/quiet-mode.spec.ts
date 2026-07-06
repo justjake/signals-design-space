@@ -14,7 +14,7 @@
  * below are pinned directly instead.
  */
 import { describe, expect, it } from 'vitest';
-import { mountEngineReactEffect } from './helpers.js';
+import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import {
 	__coreProbes,
 	__newBridgeForTest,
@@ -134,7 +134,7 @@ describe('quiet-mode writes', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(a) as number) * 2);
-		const ce = b.mountCoreEffect(c, 'ce');
+		const ce = mountEngineCoreEffect(b, c, 'ce'); // real kernel effect(): the quiet fold's direct kernel apply flushes it
 		const re = mountEngineReactEffect(b, 'A', c, 're');
 		const ceRuns = ce.runs;
 		const reRuns = re.runs;

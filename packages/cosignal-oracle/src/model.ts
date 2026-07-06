@@ -348,6 +348,14 @@ export class CosignalModel {
 	private nextPass = 1;
 	private nextWatcher = 1;
 	private nextEffect = 1;
+	/** Core-effect mount ordinal, appended to minted names (`#k`) so every
+	 * core effect's name is unique: sibling firing order under one operation
+	 * is implementation-defined [owner ruling 2026-07-06], the lockstep
+	 * differ compares same-step runs as a multiset sorted on (effect, value),
+	 * and duplicate names would make that comparison ambiguous. Never reset
+	 * (core effects survive quiescence); the engine twin's mount helper keeps
+	 * the same counter, so lockstep-minted names agree. */
+	private coreEffectMounts = 0;
 
 	/** Purity frames: >0 while a world evaluation or fold is on stack (writes then throw). */
 	private evalDepth = 0;
@@ -743,6 +751,14 @@ export class CosignalModel {
 			}
 		}
 
+		// The stepwise-equality gate of the engine's EAGER KERNEL APPLY: the
+		// kernel stores + propagates a write only when it advances the atom's
+		// newest fold, and core effect()s are kernel subscribers — so they
+		// flush at exactly the newest-advancing writes (below), value-gated.
+		const prevNewest = this.newestValue(node);
+		const nextNewest = this.applyOp(node, op, prevNewest);
+		const advancesNewest = !this.inCallback(() => node.equals(nextNewest, prevNewest));
+
 		// Record the write: intern the slot, append the receipt, bump the slot's write clock.
 		const slot = this.internSlot(token);
 		const seq = this.mintSeq();
@@ -753,13 +769,15 @@ export class CosignalModel {
 
 		// Notify. The model recomputes the union dependency graph (edges are
 		// recorded by evaluation) and reaches every affected watcher/effect.
+		// Core effects flush BEFORE the delivery loop: in the engine the
+		// kernel apply (which runs kernel effects) precedes the arena walk.
 		this.refreshEdgesAllWorlds();
 		const reached = this.reachableFrom(node.id);
+		if (advancesNewest) this.flushCoreEffects(reached);
 		for (const w of this.watchers.values()) {
 			if (!w.live || !reached.has(w.node)) continue;
 			this.deliver(w, token, slot, seq);
 		}
-		this.flushCoreEffects(reached);
 	}
 
 	/**
@@ -799,8 +817,13 @@ export class CosignalModel {
 
 	/** Core effects observe the newest world — through `newestValue`, so the
 	 * values they compare carry the sampled-untracked rule [ruling 2026-07-06]
-	 * exactly as the engine's kernel-served flush does; they flush after the
-	 * write's notification walk returns. */
+	 * exactly as the engine's kernel-served flush does. They flush only when
+	 * a write advances the atom's newest fold, before the delivery loop —
+	 * mirroring the engine, where core effects are real kernel `effect()`s
+	 * flushed by the eager kernel apply itself. Iteration is mount order;
+	 * the ORDER of sibling runs under one operation is implementation-defined
+	 * [owner ruling 2026-07-06] and the lockstep differ compares same-step
+	 * runs as a multiset on (effect, value). */
 	private flushCoreEffects(reached?: Set<NodeId>): void {
 		for (const e of this.coreEffects.values()) {
 			if (reached !== undefined && !reached.has(e.node)) continue;
@@ -1046,10 +1069,12 @@ export class CosignalModel {
 	}
 
 	/** Mount a core effect() observer: it reads the newest world (sampled —
-	 * the same value face `newestValue` serves). */
+	 * the same value face `newestValue` serves). The mount evaluation is the
+	 * silent baseline; names take the per-mount ordinal suffix (see
+	 * `coreEffectMounts`). */
 	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
 		const e: CoreEffect = {
-			id: this.nextEffect++, name, node: node.id,
+			id: this.nextEffect++, name: `${name}#${this.coreEffectMounts++}`, node: node.id,
 			lastValue: this.newestValue(node),
 			runs: 0,
 		};
