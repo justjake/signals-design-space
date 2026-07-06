@@ -7,8 +7,10 @@ obviously-correct implementation of the same behavioral contract the
 real engine implements, plus the machinery to referee an engine against
 it:
 
-- **the model** (`src/model.ts`) — plain objects, no caches, no
-  cleverness: every observable is recomputed from first principles;
+- **the model** (`src/model.ts`) — plain objects, no cleverness, and
+  exactly one cache, which the behavioral contract itself requires
+  (explained below): everything else is recomputed from first
+  principles;
 - **an invariant checker** (`src/invariants.ts`) — self-checks run after
   every step of every schedule;
 - **a seeded random schedule generator, runner, and shrinker**
@@ -26,7 +28,13 @@ scratch at every write; React's render lifecycle is explicit
 token/pass/retirement bookkeeping. Wherever a real engine would use an
 optimization (memo tables, dirty marking, fast paths), the model simply
 recomputes everything — so if the engine and the model disagree, the
-engine is wrong.
+engine is wrong. The one exception is semantic, not an optimization: in
+the newest world, an untracked read observes a point-in-time sample
+taken when its computed last re-derived, and a value sampled in the
+past cannot be recomputed from present state — it has to be remembered.
+Each computed node therefore keeps its last newest-world derivation
+(the tracked dependencies with the values they had, plus the derived
+value); render-pass and committed worlds still replay cache-free.
 
 Run: `pnpm test` (vitest, about a second) and `pnpm typecheck`.
 
@@ -91,8 +99,8 @@ must reproduce. Terms are defined as they appear.
   point-in-time samples taken at those re-derivations. Untracked means
   untracked: a write reaching a computed only through untracked reads
   changes no newest answer until a tracked dependency moves (the base
-  library's documented untracked contract, value face — the model keeps
-  a per-computed `{trackedFingerprint, value}` record consulted only by
+  library's documented untracked contract, value face — each computed
+  node keeps a `{trackedFingerprint, value}` record consulted only by
   `newestValue` and the core-effect flush). World folds are unchanged:
   pass/committed/mount-fix evaluations refold at their boundaries, so
   untracked deps stay fresh in every world-side revalidation.
@@ -268,10 +276,13 @@ tests/SKIPPED-FOR-FORK-SUITE.md   what needs a real React host, and why
 
 ## What the model deliberately does not do
 
-No memos, no dirty marking, no fast paths for value computation (it
-always replays); no Suspense capsules or thenables; no packed storage;
-no performance claims. The `ctx.previous` hint is omitted because the
-contract grants it no semantics a test could pin. Where the engine
+No memos, no dirty marking, no fast paths for value computation —
+render-pass and committed worlds always replay, and the single
+exception is the newest world's per-computed sample record (see "The
+newest world" above), kept because the untracked-read contract requires
+remembering point-in-time samples. No Suspense capsules or thenables;
+no packed storage; no performance claims. The `ctx.previous` hint is
+omitted because the contract grants it no semantics a test could pin. Where the engine
 implements an optimization plus its safety argument, the model
 implements only the semantics the optimization must preserve — that is
 what makes it an oracle.

@@ -5,7 +5,10 @@
  * every rule here carries its rationale in a comment at the point it is
  * enforced.
  *
- * Authority comes from SIMPLICITY: plain objects, no caches, no cleverness.
+ * Authority comes from SIMPLICITY: plain objects, no cleverness, and no
+ * caches except the one the untracked-read contract itself requires
+ * (`ComputedNode.newestSample` — a point-in-time sample taken in the past
+ * cannot be recomputed from present state, so it must be remembered).
  * Worlds (self-consistent views of all atom values) are pure folds — a fold
  * replays the receipts a world may see, in timeline order, over the atom's
  * base value (README vocabulary); computeds are memo-free recursive
@@ -72,6 +75,10 @@ export type AtomNode = {
 export type Reader = (node: AnyNode) => Value;
 export type ComputedFn = (read: Reader, untracked: Reader) => Value;
 
+/** One newest-world derivation of a computed: the direct TRACKED deps with
+ * the values they had (the tracked fingerprint) and the derived value. */
+export type NewestSample = { deps: { node: AnyNode; value: Value }[]; value: Value };
+
 export type ComputedNode = {
 	kind: 'computed';
 	id: NodeId;
@@ -82,6 +89,30 @@ export type ComputedNode = {
 	 * "Changing" a computed means creating a fresh node.
 	 */
 	fn: ComputedFn;
+	/**
+	 * The newest world's SAMPLED-UNTRACKED computed cache [ruling 2026-07-06:
+	 * untracked sampling] — this node's semantic state, so it lives on the
+	 * node record. Newest values of computeds follow KERNEL semantics:
+	 * a computed re-derives only when a TRACKED dependency's newest value
+	 * changed; untracked reads are point-in-time samples taken at those
+	 * re-derivations and never invalidate on their own (the base library's
+	 * untracked contract, value face). The record holds the direct TRACKED
+	 * deps of the last newest derivation with the values they had — the
+	 * trackedFingerprint — and the derived value; validation re-checks each
+	 * recorded dep's CURRENT sampled-newest value by identity, recursively
+	 * (the kernel's checkDirty shape). Consulted ONLY by `newestValue` (and
+	 * the newest-policy effect flush, which observes newest values): world
+	 * folds are UNCHANGED — pass/committed/mountFix evaluations refold at
+	 * their boundaries per the existing contract, so untracked deps stay
+	 * fresh in every world-side revalidation. Deliberately NOT cleared at
+	 * quiescence: the staleness is a property of the value contract, not of
+	 * the episode (the kernel's cache persists the same way).
+	 */
+	newestSample?: NewestSample;
+	/** Per-derivation cycle guard for the sampled evaluations: set while this
+	 * node's sampled derivation frame is on the stack (evaluation is strictly
+	 * nested, so a per-node bit states exactly what stack membership did). */
+	sampling?: boolean;
 };
 
 export type AnyNode = AtomNode | ComputedNode;
@@ -361,28 +392,6 @@ export class CosignalModel {
 	private evalDepth = 0;
 	/** True while inside an updater/reducer/equals callback (reads+writes throw). */
 	private inFoldCallback = false;
-
-	/**
-	 * The newest world's SAMPLED-UNTRACKED computed cache [ruling 2026-07-06:
-	 * untracked sampling]. Newest values of computeds follow KERNEL semantics:
-	 * a computed re-derives only when a TRACKED dependency's newest value
-	 * changed; untracked reads are point-in-time samples taken at those
-	 * re-derivations and never invalidate on their own (the base library's
-	 * untracked contract, value face). Each entry records the direct TRACKED
-	 * deps of the last newest derivation with the values they had — the
-	 * trackedFingerprint — and the derived value; validation re-checks each
-	 * recorded dep's CURRENT sampled-newest value by identity, recursively
-	 * (the kernel's checkDirty shape). Consulted ONLY by `newestValue` (and
-	 * the newest-policy effect flush, which observes newest values): world
-	 * folds are UNCHANGED — pass/committed/mountFix evaluations refold at
-	 * their boundaries per the existing contract, so untracked deps stay
-	 * fresh in every world-side revalidation. Deliberately NOT cleared at
-	 * quiescence: the staleness is a property of the value contract, not of
-	 * the episode (the kernel's cache persists the same way).
-	 */
-	private newestSamples = new Map<NodeId, { deps: { node: AnyNode; value: Value }[]; value: Value }>();
-	/** Per-derivation cycle guard for the sampled evaluations. */
-	private samplingStack = new Set<NodeId>();
 
 	constructor() {
 		for (let i = 0; i < SLOT_COUNT; i++) {
@@ -1523,7 +1532,8 @@ export class CosignalModel {
 	}
 
 	/** The newest value: atoms fold; computeds serve the sampled-untracked
-	 * cache [ruling 2026-07-06: untracked sampling] — see `newestSamples`. */
+	 * cache [ruling 2026-07-06: untracked sampling] — see
+	 * `ComputedNode.newestSample`. */
 	newestValue(node: AnyNode): Value {
 		if (node.kind === 'atom') return this.evaluate(node, { kind: 'newest' });
 		return this.sampledNewest(node);
@@ -1541,7 +1551,7 @@ export class CosignalModel {
 	 * union edge graph, as every model evaluation's tracked reads do).
 	 */
 	private sampledNewest(node: ComputedNode): Value {
-		const cached = this.newestSamples.get(node.id);
+		const cached = node.newestSample;
 		if (cached !== undefined) {
 			let valid = true;
 			for (const d of cached.deps) {
@@ -1553,10 +1563,10 @@ export class CosignalModel {
 			if (valid) return cached.value;
 		}
 		if (this.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
-		if (this.samplingStack.has(node.id)) {
+		if (node.sampling === true) {
 			throw new ScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
 		}
-		this.samplingStack.add(node.id);
+		node.sampling = true;
 		this.evalDepth++;
 		const deps: { node: AnyNode; value: Value }[] = [];
 		try {
@@ -1568,11 +1578,11 @@ export class CosignalModel {
 			};
 			const untracked: Reader = (dep) => this.newestValue(dep);
 			const value = node.fn(read, untracked);
-			this.newestSamples.set(node.id, { deps, value });
+			node.newestSample = { deps, value };
 			return value;
 		} finally {
 			this.evalDepth--;
-			this.samplingStack.delete(node.id);
+			node.sampling = false;
 		}
 	}
 

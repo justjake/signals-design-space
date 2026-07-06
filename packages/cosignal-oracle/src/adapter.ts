@@ -79,44 +79,45 @@ export type DiffResult = { seed: number | undefined; step: number; message: stri
  * Replay `ops` into the engine and the naive model side by side; return the
  * first observable divergence (or undefined). This is the harness a real
  * engine build wires into CI; `modelAsEngine` below is its self-test.
+ *
+ * The two sides advance ALTERNATELY, one operation at a time: the model
+ * steps, its expectation for that step (legality + snapshot + drained
+ * events) is captured, the engine steps, and the comparison runs
+ * immediately — so the harness retains one step's expectation at a time
+ * regardless of schedule length, and a divergence stops BOTH sides at the
+ * step it appears. (The sides share no state, so stepping them
+ * interleaved is observationally identical to replaying the whole
+ * schedule through the model first.)
  */
 export function diffAgainstModel(engine: EngineAdapter, ops: ScheduleOp[], seed?: number): DiffResult {
-	const reference = runScheduleStepwise(ops);
-	for (let step = 0; step < ops.length; step++) {
-		const expected = reference[step]!;
-		const applied = engine.apply(ops[step]!);
-		if (applied !== expected.applied) {
-			return { seed, step, message: `legality diverged: engine ${applied}, model ${expected.applied}` };
-		}
-		const snap = JSON.stringify(engine.snapshot());
-		if (snap !== expected.snapshot) {
-			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expected.snapshot}` };
-		}
-		const events = JSON.stringify(comparableEvents(engine.drainEvents()));
-		if (events !== expected.events) {
-			return { seed, step, message: `events diverged:\nengine ${events}\nmodel  ${expected.events}` };
-		}
-	}
-	return undefined;
-}
-
-type StepRecord = { applied: 'applied' | 'skipped'; snapshot: string; events: string };
-
-function runScheduleStepwise(ops: ScheduleOp[]): StepRecord[] {
 	const m = new CosignalModel();
 	buildTopology(m);
 	m.registerBridge();
 	let drained = 0;
-	return ops.map((op) => {
-		const ok = applyOneOp(m, op);
-		const events = comparableEvents(m.events.slice(drained));
+	for (let step = 0; step < ops.length; step++) {
+		// The model's step: capture legality, then the step's comparable
+		// events, then the observable snapshot (snapshotting evaluates nodes,
+		// which records dependency edges — it must run in the same position
+		// relative to the model's ops that the comparison assumes).
+		const expectedApplied = applyOneOp(m, ops[step]!) ? 'applied' : 'skipped';
+		const expectedEvents = JSON.stringify(comparableEvents(m.events.slice(drained)));
 		drained = m.events.length;
-		return {
-			applied: ok ? 'applied' as const : 'skipped' as const,
-			snapshot: JSON.stringify(snapshotModel(m)),
-			events: JSON.stringify(events),
-		};
-	});
+		const expectedSnapshot = JSON.stringify(snapshotModel(m));
+		// The engine's step, compared immediately.
+		const applied = engine.apply(ops[step]!);
+		if (applied !== expectedApplied) {
+			return { seed, step, message: `legality diverged: engine ${applied}, model ${expectedApplied}` };
+		}
+		const snap = JSON.stringify(engine.snapshot());
+		if (snap !== expectedSnapshot) {
+			return { seed, step, message: `snapshot diverged:\nengine ${snap}\nmodel  ${expectedSnapshot}` };
+		}
+		const events = JSON.stringify(comparableEvents(engine.drainEvents()));
+		if (events !== expectedEvents) {
+			return { seed, step, message: `events diverged:\nengine ${events}\nmodel  ${expectedEvents}` };
+		}
+	}
+	return undefined;
 }
 
 /**
