@@ -42,7 +42,7 @@
  *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (__checkArenas): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
  *  A7 committedBits ≡ committedTokens×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
- *  A8 pass maskBits/includedBits ≡ mask/captured sets  | derived once at passStart from one loop; lockstep pass worlds
+ *  A8 pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's ONLY slot-set form (W1); model-view derives the oracle's Sets from the bits; lockstep pass worlds
  *  A9 token.atomsTouched ⊇ tape token columns          | retirement stamping via touch lists; quiesce residue BridgeInvariantViolation + lockstep retirement visibility
  * A10 token.liveReceipts ≡ un-compacted receipts       | T10 (new pin: token outlives pinned receipts, reclaims after compaction)
  * A11 DIRTY flag ⇒ dirty-list membership (decay + drain seeding stand on it) | the structural validator at every armed epilogue; arena-sa2 decay pins

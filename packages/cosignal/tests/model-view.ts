@@ -13,15 +13,26 @@
  * exported `visible` rule (imported — the one Receipt-shaped statement of
  * receipt visibility, not a copy); the engine keeps only the packed forms
  * (`visibleAt`, `foldAtom`).
+ *
+ * Slot sets: the engine's ONLY slot-set representation is the 31-bit integer
+ * word (`Pass.maskBits`/`includedBits`, `RootState.committedBits`,
+ * `WatcherSnapshot`, mountFix worlds); the model's shapes are Set-valued.
+ * This view is where the two meet, so it derives the Sets — pass wrappers
+ * with `maskSlots`, and the `VisibilityHost` the imported rule reads.
  */
-import { visible } from '../../cosignal-oracle/src/model.js';
+import { visible, type VisibilityHost, type World as ModelWorld } from '../../cosignal-oracle/src/model.js';
 import type {
 	AnyNode as ENode,
 	AtomNode,
 	CosignalBridge,
 	Op,
 	Pass,
+	PassId,
 	Receipt,
+	RootId,
+	Seq,
+	SlotId,
+	SlotSet,
 	Value,
 	World,
 } from '../src/concurrent.js';
@@ -79,9 +90,37 @@ type ViewAtom = {
 };
 type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: ENode };
 
-function unwrap(n: unknown): ENode {
-	const e = (n as { __engine?: ENode }).__engine;
-	return e !== undefined ? e : (n as ENode);
+/** A view pass: the model-shaped face of one engine pass — the Set-valued
+ * `maskSlots` the oracle's tenancy check reads, derived from the bit form. */
+type ViewPass = {
+	id: PassId;
+	root: RootId;
+	pin: Seq;
+	state: Pass['state'];
+	maskTokens: Pass['maskTokens'];
+	maskSlots: Set<SlotId>;
+	__engine: Pass;
+};
+
+/** View face → the engine record behind it (pass-through when already bare). */
+function unwrap<T>(n: unknown): T {
+	const e = (n as { __engine?: T }).__engine;
+	return e !== undefined ? e : (n as T);
+}
+
+/** Slot-set bits → the model's Set form (bit i = slot i). */
+function slotsOf(bits: SlotSet): Set<SlotId> {
+	const out = new Set<SlotId>();
+	for (let s = 0; bits !== 0; s++, bits >>>= 1) {
+		if ((bits & 1) === 1) out.add(s);
+	}
+	return out;
+}
+
+/** Worlds built by the oracle's checkers carry VIEW passes; the engine folds
+ * over its own pass records. */
+function engineWorld(w: World): World {
+	return w.kind === 'pass' ? { kind: 'pass', pass: unwrap<Pass>(w.pass) } : w;
 }
 
 /** Pure op application for the shadow fold (test-side: the corpus's updaters/
@@ -121,14 +160,27 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 			__engine: n,
 		};
 	};
+	const viewPass = (p: Pass): ViewPass => ({
+		id: p.id, root: p.root, pin: p.pin, state: p.state,
+		maskTokens: p.maskTokens, maskSlots: slotsOf(p.maskBits),
+		__engine: p,
+	});
+	/** The imported visibility rule's host, answered from the engine's bit
+	 * masks (the two set-valued lookups the pass/committed clauses read). */
+	const host: VisibilityHost = {
+		includedSet: (pass) => slotsOf(unwrap<Pass>(pass).includedBits),
+		committedSlotsNow: (root) => slotsOf(engine.root(root).committedBits),
+	};
 	return {
 		get nodes(): Map<number, ViewNode> {
 			const out = new Map<number, ViewNode>();
 			for (const [id, n] of engine.nodes) out.set(id, viewNode(n));
 			return out;
 		},
-		get passes() {
-			return engine.passes;
+		get passes(): Map<PassId, ViewPass> {
+			const out = new Map<PassId, ViewPass>();
+			for (const [id, p] of engine.passes) out.set(id, viewPass(p));
+			return out;
 		},
 		get roots() {
 			return engine.roots;
@@ -143,17 +195,23 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 			return engine.seq;
 		},
 		quiescent: () => engine.quiescent(),
-		evaluate: (n: unknown, w: World) => engine.evaluate(unwrap(n), w),
-		foldAtom: (n: unknown, w: World) => engine.foldAtom(unwrap(n) as AtomNode, w),
-		newestValue: (n: unknown) => engine.newestValue(unwrap(n)),
-		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap(n), root),
-		passValue: (n: unknown, p: Pass) => engine.passValue(unwrap(n), p),
+		evaluate: (n: unknown, w: World) => engine.evaluate(unwrap<ENode>(n), engineWorld(w)),
+		foldAtom: (n: unknown, w: World) => engine.foldAtom(unwrap<ENode>(n) as AtomNode, engineWorld(w)),
+		newestValue: (n: unknown) => engine.newestValue(unwrap<ENode>(n)),
+		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap<ENode>(n), root),
+		passValue: (n: unknown, p: unknown) => engine.passValue(unwrap<ENode>(n), unwrap<Pass>(p)),
 		/** The retention invariant's full-history fold: origin + archive + tape. */
 		shadowFoldAtom(n: unknown, world: World): Value {
-			const atom = unwrap(n) as AtomNode;
+			const atom = unwrap<ENode>(n) as AtomNode;
+			// The rule is Receipt/Set-shaped; worlds arrive bit-shaped (mountFix)
+			// or carrying view passes (whose host lookups unwrap) — translate here.
+			const w: ModelWorld =
+				world.kind === 'mountFix'
+					? { kind: 'mountFix', maskSlots: slotsOf(world.maskBits), pin: world.pin, root: world.root, excludeLiveTokens: world.excludeLiveTokens }
+					: (world as unknown as ModelWorld);
 			let value = mirror.originOf(atom);
 			for (const e of [...mirror.archiveOf(atom), ...atom.tp.materialize()]) {
-				if (!visible(engine, e, world)) continue;
+				if (!visible(host, e, w)) continue;
 				const next = applyOp(atom, e.op, value);
 				if (!atom.equals(next, value)) value = next;
 			}

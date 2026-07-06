@@ -441,9 +441,10 @@ export type Pass = {
 	 * drifts. */
 	pin: Seq;
 	maskTokens: Set<TokenId>;
-	maskSlots: Set<SlotId>;
-	capturedCommittedSlots: Set<SlotId>;
-	/** Bit forms of the slot sets (SlotId < 31), fixed at pass start. */
+	/** The pass's slot sets (bit i = slot i; SlotId < 31), fixed at pass
+	 * start: maskBits — slots of the render mask's written tokens;
+	 * includedBits — maskBits ∪ the root's committed slots captured at start
+	 * (every batch this render is allowed to see). */
 	maskBits: SlotSet;
 	includedBits: SlotSet;
 	state: PassState;
@@ -463,7 +464,8 @@ export type RootState = {
 	 * subsumes membership). */
 	committedTokens: Set<TokenId>;
 	commitGen: CommitGen;
-	/** Bit form of committedSlotsNow (maintained at commit/retire). */
+	/** The root's CURRENT committed-slot set (live committed tokens' slots)
+	 * — maintained at per-root commit, late slot intern, and retirement. */
 	committedBits: SlotSet;
 	/** Member slots written since the last drain. A write into a slot that is
 	 * already a committed member changes committed truth immediately, so the
@@ -473,12 +475,13 @@ export type RootState = {
 	committedDirtySlots: SlotSet;
 };
 
-/** The watcher's rendered-world snapshot: what the mounting render saw. */
+/** The watcher's rendered-world snapshot: what the mounting render saw
+ * (the pass's slot sets copied by integer assignment — see Pass). */
 export type WatcherSnapshot = {
 	passId: PassId;
 	pin: Seq;
-	maskSlots: Set<SlotId>;
-	includedSlots: Set<SlotId>;
+	maskBits: SlotSet;
+	includedBits: SlotSet;
 	rootCommitGen: CommitGen;
 };
 
@@ -592,7 +595,7 @@ export type World =
 	| { kind: 'newest' }
 	| { kind: 'pass'; pass: Pass }
 	| { kind: 'committed'; root: RootId }
-	| { kind: 'mountFix'; maskSlots: Set<SlotId>; pin: Seq; root: RootId; excludeLiveTokens?: Set<TokenId> };
+	| { kind: 'mountFix'; maskBits: SlotSet; pin: Seq; root: RootId; excludeLiveTokens?: Set<TokenId> };
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
@@ -2217,22 +2220,6 @@ export class CosignalBridge {
 
 	// ---------------------------------------------------- worlds and folds
 
-	/** The pass's included set = its render mask ∪ the committed slots it
-	 * captured at start: the batches this render is allowed to see. */
-	includedSet(pass: Pass): Set<SlotId> {
-		return new Set([...pass.maskSlots, ...pass.capturedCommittedSlots]);
-	}
-
-	/** The root's CURRENT committed-slot set (live committed tokens' slots). */
-	committedSlotsNow(rootId: RootId): Set<SlotId> {
-		const out = new Set<SlotId>();
-		for (const t of this.root(rootId).committedTokens) {
-			const tok = this.tokens.get(t);
-			if (tok !== undefined && tok.slot !== undefined) out.add(tok.slot);
-		}
-		return out;
-	}
-
 	/** Runs an updater/reducer/equals under the fold-purity guard: signal
 	 * reads and writes inside these callbacks throw, because they are
 	 * replayed per world and must stay pure. */
@@ -2317,11 +2304,11 @@ export class CosignalBridge {
 			case 'committed': {
 				if (retired[i]! !== 0) return true; // committed truth at now
 				// Membership consult materializes the root record (reference-model
-				// parity: the plain committedSlotsNow() creates it on first consult).
+				// parity: the model's committedSlotsNow() creates it on first consult).
 				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
 			}
 			case 'mountFix': {
-				if (world.maskSlots.has(slots[i]!) && seqs[i]! <= world.pin) return true;
+				if (((world.maskBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= world.pin) return true;
 				if (world.excludeLiveTokens?.has(atom.tp.tokens[i]!)) return false; // corrective-covered (audit form)
 				if (retired[i]! !== 0) return true; // committed truth at NOW
 				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
@@ -4229,7 +4216,6 @@ export class CosignalBridge {
 			throw new BridgeScheduleError(`root ${rootId} already has an open pass — one render pass per root at a time`);
 		}
 		const maskTokens = new Set<TokenId>();
-		const maskSlots = new Set<SlotId>();
 		let maskBits = 0;
 		for (const id of includeTokens) {
 			const t = this.token(id);
@@ -4238,18 +4224,14 @@ export class CosignalBridge {
 			// A live token with no slot never wrote; if it writes later, those
 			// receipts postdate this pass's pin and the visibility rule's
 			// included-up-to-pin clause excludes them anyway.
-			if (t.slot !== undefined) {
-				maskSlots.add(t.slot);
-				maskBits |= 1 << t.slot;
-			}
+			if (t.slot !== undefined) maskBits |= 1 << t.slot;
 		}
-		const capturedCommittedSlots = this.committedSlotsNow(rootId);
-		let includedBits = maskBits;
-		for (const s of capturedCommittedSlots) includedBits |= 1 << s;
+		// The committed-set capture materializes the root record (reference-model
+		// parity: the model's committedSlotsNow() creates it on first consult).
+		const includedBits = maskBits | this.root(rootId).committedBits;
 		const pass: Pass = {
 			id: this.nextPass++, root: rootId, pin: this.seq,
-			maskTokens, maskSlots, capturedCommittedSlots,
-			maskBits, includedBits,
+			maskTokens, maskBits, includedBits,
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
 		};
 		// NF2: claim the pass world's arena from the pool (§4.1) — the pass
@@ -4301,8 +4283,7 @@ export class CosignalBridge {
 		const value = this.evaluate(node, { kind: 'pass', pass: p });
 		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, this.watcherObs, value, {
 			passId: p.id, pin: p.pin,
-			maskSlots: new Set(p.maskSlots),
-			includedSlots: this.includedSet(p),
+			maskBits: p.maskBits, includedBits: p.includedBits,
 			rootCommitGen: this.root(p.root).commitGen,
 		});
 		this.watchers.set(watcher.id, watcher);
@@ -4675,8 +4656,8 @@ export class CosignalBridge {
 			if (w === undefined || p.mounted.includes(wid)) continue;
 			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'pass', pass: p });
 			w.snapshot = {
-				passId: p.id, pin: p.pin, maskSlots: new Set(p.maskSlots),
-				includedSlots: this.includedSet(p), rootCommitGen: this.root(p.root).commitGen,
+				passId: p.id, pin: p.pin, maskBits: p.maskBits,
+				includedBits: p.includedBits, rootCommitGen: this.root(p.root).commitGen,
 			};
 		}
 		// (2) retirement folds due at this commit; then the per-root commit
@@ -5167,6 +5148,15 @@ export class CosignalBridge {
 
 	// ---------------------------------------------------------- mount fixup
 
+	/** Every slot in `bits` has its last write at or before `pin` (the
+	 * fast-out's clock conjunct, quantified over a snapshot's slot bits). */
+	private slotClocksQuiet(bits: SlotSet, pin: Seq): boolean {
+		for (let s = 0; bits !== 0; s++, bits >>>= 1) {
+			if ((bits & 1) === 1 && this.slots[s]!.writeClock > pin) return false;
+		}
+		return true;
+	}
+
 	/**
 	 * Mount fixup — runs in the mounting component's layout effect (after
 	 * commit, before paint), after subscription. Why it exists: a component
@@ -5199,8 +5189,8 @@ export class CosignalBridge {
 			if (t.state !== 'live' || t.slot === undefined) continue;
 			if (!this.tokenTouches(t, closure)) continue;
 			const slot = this.slots[t.slot]!;
-			// Fully included (slot ∈ includedSet ∧ no post-pin write): skip — never by value.
-			if (w.snapshot.includedSlots.has(slot.id) && slot.writeClock <= w.snapshot.pin) continue;
+			// Fully included (slot ∈ included bits ∧ no post-pin write): skip — never by value.
+			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin) continue;
 			if (this.eventsOn) this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
 			correctedLive.add(t.id);
 			w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into t's lane (the protocol's runInBatch)
@@ -5213,7 +5203,7 @@ export class CosignalBridge {
 		// invisible to the slot-quantified form, because the slot set was
 		// captured at pass start, before that slot existed.
 		const clocksQuiet =
-			[...w.snapshot.maskSlots].every((s) => this.slots[s]!.writeClock <= w.snapshot.pin) &&
+			this.slotClocksQuiet(w.snapshot.maskBits, w.snapshot.pin) &&
 			maskTokenRecords.every((t) => t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin);
 		const fastOut =
 			w.snapshot.passId === committingPass.id &&
@@ -5221,7 +5211,7 @@ export class CosignalBridge {
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
 		const vFx = this.evaluate(node, {
-			kind: 'mountFix', maskSlots: w.snapshot.maskSlots, pin: w.snapshot.pin, root: w.root,
+			kind: 'mountFix', maskBits: w.snapshot.maskBits, pin: w.snapshot.pin, root: w.root,
 		});
 		const tr = this.trace; // one disposition record per mount fixup
 		if (fastOut) {
@@ -5232,7 +5222,7 @@ export class CosignalBridge {
 				// keeps what the render itself saw of the excluded tokens:
 				// its full included set at its pin.
 				const vCovered = this.evaluate(node, {
-					kind: 'mountFix', maskSlots: w.snapshot.includedSlots, pin: w.snapshot.pin,
+					kind: 'mountFix', maskBits: w.snapshot.includedBits, pin: w.snapshot.pin,
 					root: w.root, excludeLiveTokens: correctedLive,
 				});
 				if (this.changedValue(node, w.lastRenderedValue, vCovered)) {
