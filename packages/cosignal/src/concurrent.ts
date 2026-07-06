@@ -122,16 +122,17 @@
  *     root that committed UI from a still-live batch must keep agreeing
  *     with its own screen).
  *   - MOUNT FIXUP (see `mountFixup`): the commit-edge reconciliation for a
- *     freshly mounted component. A component can mount while other updates
- *     are in flight, and its subscription only activates at commit, so
- *     writes could slip by unobserved between its render and its commit;
- *     fixup joins it to the pending batches it missed and corrects
- *     committed drift before paint. Two subtle rules: the fast-path's
- *     write-clock check quantifies over the committing pass's member tokens
- *     at commit time (a token whose first write landed mid-render is
- *     invisible to the earlier-captured slot set), and any divergence the
- *     fast path suppresses must be exactly covered by the scheduled
- *     corrective re-renders (asserted on every mount).
+ *     freshly mounted component — contract clause RT6, decided conditions
+ *     first. A component can mount while other updates are in flight, and
+ *     its subscription only activates at commit, so writes could slip by
+ *     unobserved between its render and its commit; fixup joins it to the
+ *     pending batches it missed (from write metadata alone), then a
+ *     four-condition test decides whether anything committed or retired in
+ *     the window — only a failing condition triggers the fast-forwarded
+ *     re-evaluation and urgent pre-paint correction. One subtle rule: the
+ *     write-clock condition quantifies over the committing pass's member
+ *     tokens at commit time (a token whose first write landed mid-render
+ *     is invisible to the earlier-captured slot set).
  *   - subscriptions (see the Subscription type): the ONE `run`-action
  *     consumer record — committed subscriptions, the PROMOTED production
  *     useSignalEffect mechanism. (Core `effect()`s are NOT bridge records:
@@ -590,7 +591,7 @@ export type World =
 	| { kind: 'newest' }
 	| { kind: 'pass'; pass: Pass }
 	| { kind: 'committed'; root: RootId }
-	| { kind: 'mountFix'; maskBits: SlotSet; pin: Seq; root: RootId; excludeLiveTokens?: Set<TokenId> };
+	| { kind: 'mountFix'; maskBits: SlotSet; pin: Seq; root: RootId };
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
@@ -663,7 +664,7 @@ export type TraceHooks = {
 	/** One per mount: how fixup resolved, and how many correctives were scheduled. */
 	mountFixup(
 		w: Watcher,
-		disposition: 'fast-out' | 'fast-out-covered' | 'compare-clean' | 'corrected',
+		disposition: 'fast-out' | 'compare-clean' | 'corrected',
 		correctives: number,
 	): void;
 	/** A compound public operation (write / passEnd / retire / settle / quiesce) finished. */
@@ -2261,7 +2262,7 @@ export class CosignalBridge {
 		const retired = tp.retired;
 		const slots = tp.slots;
 		for (let i = tp.start; i < n; i++) {
-			if (!this.visibleAt(atom, i, world, seqs, retired, slots)) continue;
+			if (!this.visibleAt(i, world, seqs, retired, slots)) continue;
 			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], value);
 			if (atom.eqIsDefault) {
 				if (!Object.is(next, value)) value = next;
@@ -2285,13 +2286,12 @@ export class CosignalBridge {
 	 *    receipts from batches this root has committed but that are still
 	 *    live elsewhere (membership);
 	 *  - mountFix: the mount-fixup world (see mountFixup) — the render's own
-	 *    inclusions at its pin, plus committed truth at NOW, minus live
-	 *    divergence already covered by scheduled corrective re-renders.
+	 *    inclusions at its pin, plus committed truth at NOW.
 	 * (The Receipt-shaped twin of this rule is the reference model's
 	 * exported `visible` — cosignal-oracle model.ts; tests/model-view.ts
 	 * imports it rather than keeping a copy. It must mirror these clauses.)
 	 */
-	private visibleAt(atom: AtomNode, i: number, world: World, seqs: Seq[], retired: Seq[], slots: SlotId[]): boolean {
+	private visibleAt(i: number, world: World, seqs: Seq[], retired: Seq[], slots: SlotId[]): boolean {
 		switch (world.kind) {
 			case 'newest':
 				return true;
@@ -2309,7 +2309,6 @@ export class CosignalBridge {
 			}
 			case 'mountFix': {
 				if (((world.maskBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= world.pin) return true;
-				if (world.excludeLiveTokens?.has(atom.tp.tokens[i]!)) return false; // corrective-covered (audit form)
 				if (retired[i]! !== 0) return true; // committed truth at NOW
 				return ((this.root(world.root).committedBits >>> slots[i]!) & 1) === 1;
 			}
@@ -5081,29 +5080,38 @@ export class CosignalBridge {
 	 * commit, before paint), after subscription. Why it exists: a component
 	 * can mount while other updates are in flight, and its subscription only
 	 * activates at commit, so writes could slip by unobserved between its
-	 * render and its commit. Two mechanisms close the window:
-	 *  1. value-blind corrective re-renders join each live batch that
-	 *     touched the node but was not part of this render — the component
-	 *     joins the pending update in that batch's own lane instead of
-	 *     revealing it early or missing it;
-	 *  2. one comparison against the mount's own world fast-forwarded to
-	 *     committed-now catches whatever retired or locked in during the
-	 *     window — fixed urgently, before paint.
-	 * Two subtle rules, both asserted by the lockstep tests: the fast-path
-	 * clock check quantifies over the committing pass's member TOKENS at
-	 * commit time (not just the slot set captured at render start — a token
-	 * whose first write landed mid-render interned its slot after the
-	 * capture, so the slot-quantified form would miss its writes), and any
-	 * divergence the fast path suppresses must be exactly covered by the
-	 * scheduled correctives (checked on every mount).
+	 * render and its commit. This is contract clause RT6
+	 * (spec/react-compliance-contract.md §3.1) made mechanical — its two
+	 * halves, decided in this order:
+	 *  1. catch-up (no evaluation; write metadata only): a value-blind
+	 *     corrective re-render joins each live batch that touched the node
+	 *     but was not part of this render — the component joins the pending
+	 *     update in that batch's own lane instead of revealing it early or
+	 *     missing it;
+	 *  2. urgent correction: whatever committed or retired during the mount
+	 *     window is fixed before paint. The four-condition test decides
+	 *     FIRST: when every condition passes, nothing committed or retired
+	 *     in the window and any remaining drift is exactly the live-batch
+	 *     writes step 1 already scheduled catch-ups for (concurrent-scars
+	 *     S43 pins why those must NOT be corrected urgently) — so nothing
+	 *     else runs, no evaluation, no comparison. Only when a condition
+	 *     fails is the node re-evaluated in the fast-forwarded mount-fix
+	 *     world and a real difference corrected urgently.
+	 * One subtle rule, asserted by the lockstep tests: the clock condition
+	 * quantifies over the committing pass's member TOKENS at commit time
+	 * (not just the slot set captured at render start — a token whose first
+	 * write landed mid-render interned its slot after the capture, so the
+	 * slot-quantified form would miss its writes).
 	 */
 	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: Seq; rootCommitGen: CommitGen }, maskTokenRecords: Token[]): void {
 		const node = this.nodeById(w.node);
 		const closure = this.dependencyClosureOf(w.node, committingPass);
-		// Per-token corrective loop: every LIVE written token that touched the
-		// node. A premise of the fast path's soundness, not an optimization:
-		// it covers exactly the divergence the fast-out suppresses.
-		const correctedLive = new Set<TokenId>();
+		// RT6 first half — per-token catch-up loop: every LIVE written token
+		// that touched the node. A premise of the condition test's soundness,
+		// not an optimization: a live committed member can write after the pin
+		// without tripping any condition (its slot is outside the render
+		// mask), and this schedule is what carries such writes.
+		let correctives = 0;
 		for (const t of this.tokens.values()) {
 			if (t.state !== 'live' || t.slot === undefined) continue;
 			if (!this.tokenTouches(t, closure)) continue;
@@ -5111,16 +5119,17 @@ export class CosignalBridge {
 			// Fully included (slot ∈ included bits ∧ no post-pin write): skip — never by value.
 			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin) continue;
 			if (this.eventsOn) this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
-			correctedLive.add(t.id);
+			correctives++;
 			w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into t's lane (the protocol's runInBatch)
 			if (this.onMountCorrective !== undefined) this.queueNotify(1, w, t, slot.id);
 		}
-		// The four-conjunct fast-out: same pass, no committed-truth advance,
-		// no per-root commit, clocks quiet. The clock conjunct checks the
-		// captured mask slots AND the committing pass's mask tokens at commit
-		// time — a mask token whose first write interned its slot mid-pass is
-		// invisible to the slot-quantified form, because the slot set was
-		// captured at pass start, before that slot existed.
+		// RT6 second half — the four-condition test, decided before any
+		// evaluation: same pass, no committed-truth advance, no per-root
+		// commit, clocks quiet. The clock condition checks the captured mask
+		// slots AND the committing pass's mask tokens at commit time — a mask
+		// token whose first write interned its slot mid-pass is invisible to
+		// the slot-quantified form, because the slot set was captured at pass
+		// start, before that slot existed.
 		const clocksQuiet =
 			this.slotClocksQuiet(w.snapshot.maskBits, w.snapshot.pin) &&
 			maskTokenRecords.every((t) => t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin);
@@ -5129,37 +5138,19 @@ export class CosignalBridge {
 			baseline.cas <= w.snapshot.pin &&
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
+		const tr = this.trace; // one disposition record per mount fixup
+		if (fastOut) {
+			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctives);
+			return; // nothing committed or retired in the window: no evaluation, no comparison
+		}
 		const vFx = this.evaluate(node, {
 			kind: 'mountFix', maskBits: w.snapshot.maskBits, pin: w.snapshot.pin, root: w.root,
 		});
-		const tr = this.trace; // one disposition record per mount fixup
-		if (fastOut) {
-			if (this.changedValue(node, w.lastRenderedValue, vFx)) {
-				// Audit: divergence under a passing fast-out must be exactly
-				// covered by the scheduled correctives — otherwise the fast
-				// path just suppressed a real correction. The audit world
-				// keeps what the render itself saw of the excluded tokens:
-				// its full included set at its pin.
-				const vCovered = this.evaluate(node, {
-					kind: 'mountFix', maskBits: w.snapshot.includedBits, pin: w.snapshot.pin,
-					root: w.root, excludeLiveTokens: correctedLive,
-				});
-				if (this.changedValue(node, w.lastRenderedValue, vCovered)) {
-					throw new BridgeInvariantViolation(
-						`fast-out unsound: watcher ${w.name} fast-out held but the fixup value ${String(vFx)} differs from the rendered value ${String(w.lastRenderedValue)} and the residue is not covered by the scheduled correctives`,
-					);
-				}
-				if (tr !== undefined) tr.mountFixup(w, 'fast-out-covered', correctedLive.size);
-				return;
-			}
-			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctedLive.size);
-			return; // zero corrections — value-neutral modulo scheduled correctives
-		}
 		if (this.correctWatcher(w, node, vFx, 'mount')) {
-			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctedLive.size);
+			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctives);
 			return;
 		}
-		if (tr !== undefined) tr.mountFixup(w, 'compare-clean', correctedLive.size);
+		if (tr !== undefined) tr.mountFixup(w, 'compare-clean', correctives);
 	}
 
 	/** Transitive dependency closure feeding a node — §4.4.7's triple: three
@@ -5173,12 +5164,12 @@ export class CosignalBridge {
 	 * joined the closure — they can't deliver, so correctives never target
 	 * their batches). The pass arena is alive here by m2's ordering (fixup
 	 * runs before reclaimAfterPassEnd); dead foreign cones are excluded by
-	 * the discriminant argument, audited at runtime by the fast-out audit
-	 * below. The corrective population this closure feeds arms the
-	 * per-(watcher, slot) dedup bits, so it must cover every cone the
-	 * delivery walk can later route — pass + committed arenas + the newest
-	 * structure — or a suppression would degrade into an over-delivery
-	 * (the ⊆ bound polices exactly this). */
+	 * the discriminant argument. The corrective population this closure
+	 * feeds arms the per-(watcher, slot) dedup bits, so it must cover every
+	 * cone the delivery walk can later route — pass + committed arenas + the
+	 * newest structure — or a suppression would degrade into an
+	 * over-delivery (the lockstep corpus's ⊆ delivery bound polices exactly
+	 * this). */
 	dependencyClosureOf(nodeId: NodeId, pass?: Pass): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
 		const pa = pass?.arena;

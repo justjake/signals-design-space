@@ -207,7 +207,7 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 			// or carrying view passes (whose host lookups unwrap) — translate here.
 			const w: ModelWorld =
 				world.kind === 'mountFix'
-					? { kind: 'mountFix', maskSlots: slotsOf(world.maskBits), pin: world.pin, root: world.root, excludeLiveTokens: world.excludeLiveTokens }
+					? { kind: 'mountFix', maskSlots: slotsOf(world.maskBits), pin: world.pin, root: world.root }
 					: (world as unknown as ModelWorld);
 			let value = mirror.originOf(atom);
 			for (const e of [...mirror.archiveOf(atom), ...atom.tp.materialize()]) {

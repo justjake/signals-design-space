@@ -67,10 +67,10 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 });
 
 describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gate)', () => {
-	// The soundness half is asserted INSIDE the model: mountFixup throws
-	// InvariantViolation whenever the fast path's four conditions hold but
-	// the fast-forwarded value differs from the rendered value without being
-	// corrective-covered. Every battery/scars/fuzz mount exercises that assert.
+	// Conditions-first: a passing four-condition test skips the fixup
+	// evaluation and comparison entirely. The corrective loop is the test's
+	// soundness premise (FLAGS.md flag 5 finding 3); battery cases 9/10 and
+	// the fuzz corpus pin the observable behavior on both sides of the test.
 	it('quiet in-pass mount takes the fast-out: zero corrections, zero drift', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);

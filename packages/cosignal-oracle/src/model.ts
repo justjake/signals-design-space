@@ -247,14 +247,10 @@ export type World =
 	| { kind: 'committed'; root: RootId }
 	/**
 	 * The mount reconciliation's fast-forwarded world: the mounting render's
-	 * own included writes up to its pin, plus committed truth as of NOW.
-	 * `excludeLiveTokens` is the model's audit instrument for the fast-path
-	 * soundness invariant: receipts of those (live) tokens stay visible only
-	 * through the mask clause, subtracting exactly the divergence the
-	 * per-token corrective loop already scheduled corrections for (see
-	 * mountFixup and tests/FLAGS.md).
+	 * own included writes up to its pin, plus committed truth as of NOW
+	 * (see mountFixup and tests/FLAGS.md).
 	 */
-	| { kind: 'mountFix'; maskSlots: Set<SlotId>; pin: number; root: RootId; excludeLiveTokens?: Set<TokenId> };
+	| { kind: 'mountFix'; maskSlots: Set<SlotId>; pin: number; root: RootId };
 
 /** The observable surface — what an engine must reproduce (see the README's adapter contract). */
 export type ModelEvent =
@@ -333,7 +329,6 @@ export function visible(host: VisibilityHost, e: Receipt, world: World): boolean
 		}
 		case 'mountFix': {
 			if (world.maskSlots.has(e.slot) && e.seq <= world.pin) return true; // the render's own inclusions, at its pin
-			if (world.excludeLiveTokens?.has(e.token)) return false; // corrective-covered live divergence (audit only)
 			if (e.retiredSeq !== undefined) return true; // committed truth at NOW
 			return host.committedSlotsNow(world.root).has(e.slot); // the root's CURRENT committed set
 		}
@@ -1340,19 +1335,25 @@ export class CosignalModel {
 	 * Mount reconciliation — runs in the mounting component's layout effect
 	 * (after subscription, before paint). A component can mount while other
 	 * updates are in flight, and its subscription activates only now, so
-	 * writes could have slipped by between its render and this moment. Two
-	 * mechanisms close the window: value-blind correctives join the mount to
-	 * each live non-included batch that touched its node (so it rides those
-	 * pending updates rather than missing or revealing them), and one
-	 * comparison against the mount's own world fast-forwarded to
-	 * committed-now catches whatever retired or locked in during the window.
+	 * writes could have slipped by between its render and this moment. The
+	 * mount-correction rule, decided in this order: value-blind correctives
+	 * (from write metadata alone; no evaluation) join the mount to each live
+	 * non-included batch that touched its node, so it rides those pending
+	 * updates rather than missing or revealing them; then a four-condition
+	 * test decides whether anything retired or locked in during the window —
+	 * only a failing condition triggers the fast-forwarded re-evaluation and
+	 * the urgent pre-paint correction.
 	 */
 	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: number; rootCommitGen: number }): void {
 		const node = this.nodeById(w.node);
 		this.refreshEdgesAllWorlds();
 		const closure = this.dependencyClosureOf(w.node);
-		// Per-token corrective loop: every LIVE written token that touched the node.
-		const correctedLive = new Set<TokenId>();
+		// Per-token corrective loop: every LIVE written token that touched the
+		// node. A premise of the condition test's soundness, not an
+		// optimization (tests/FLAGS.md, flag 5 finding 3): a live token
+		// already committed into this root can write after the pass pinned —
+		// no condition observes that write, and this schedule is what carries
+		// it to the watcher, in the batch's own lane.
 		for (const t of this.tokens.values()) {
 			if (t.state !== 'live' || t.slot === undefined) continue;
 			if (!this.tokenTouches(t, closure)) continue;
@@ -1362,15 +1363,18 @@ export class CosignalModel {
 			// is by inclusion + clocks, never by comparing values.
 			if (w.snapshot.includedSlots.has(slot.id) && slot.writeClock <= w.snapshot.pin) continue;
 			this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
-			correctedLive.add(t.id);
 			w.dedup.add(slot.id); // the corrective is a re-render scheduled into t's own lane
 		}
-		// The fast path: skip the comparison when four conditions show the
+		// The four-condition test, decided before any evaluation: skip the
+		// re-evaluation and comparison entirely when the conditions show the
 		// mount window was quiet — (0) the mounting pass is the committing
 		// pass, (1) no committed-side advance since the pin, (2) the root's
 		// commit generation is unchanged, (3) no included batch wrote after
-		// the pin. Over-firing (comparing unnecessarily) is safe;
-		// under-firing would be a missed correction, i.e. a tear.
+		// the pin. When all hold, nothing retired or locked in during the
+		// window, and any drift the fast-forwarded world would show is
+		// exactly the live-batch writes the corrective loop above already
+		// scheduled re-renders for. Over-firing (comparing unnecessarily) is
+		// safe; under-firing would be a missed correction, i.e. a tear.
 		//
 		// SUBTLE (found by fuzzing; explained in tests/FLAGS.md under flag 5,
 		// finding 2): condition (3) must NOT quantify only over the slot set
@@ -1391,39 +1395,10 @@ export class CosignalModel {
 			baseline.cas <= w.snapshot.pin &&
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
+		if (fastOut) return; // the window was quiet: no evaluation, no comparison
 		const vFx = this.evaluate(node, {
 			kind: 'mountFix', maskSlots: w.snapshot.maskSlots, pin: w.snapshot.pin, root: w.root,
 		});
-		if (fastOut) {
-			if (!Object.is(vFx, w.lastRenderedValue)) {
-				// SOUNDNESS AUDIT (tests/FLAGS.md, flag 5 finding 3): a live token
-				// already committed into this root can write after the pass
-				// pinned (an async action's late scoped write). No fast-path
-				// condition observes that write — committed-advance, commit
-				// generation, and mask clocks are all silent — so the
-				// fast-forwarded value moves while the fast path holds. It is
-				// NOT a tear only because the corrective loop above scheduled
-				// that token's re-render in its own lane. The sound invariant,
-				// asserted here on every mount: divergence hidden by the fast
-				// path must be exactly covered by scheduled correctives. The
-				// audit world keeps what the render itself saw of the excluded
-				// tokens: its full included set at its pin (widening the mask
-				// set to includedSlots is inert for everyone else —
-				// captured-committed receipts are already visible as retired
-				// history or by membership, and a recycled slot's new tenant
-				// postdates the pin by the claim-ordering rule).
-				const vCovered = this.evaluate(node, {
-					kind: 'mountFix', maskSlots: w.snapshot.includedSlots, pin: w.snapshot.pin,
-					root: w.root, excludeLiveTokens: correctedLive,
-				});
-				if (!Object.is(vCovered, w.lastRenderedValue)) {
-					throw new InvariantViolation(
-						`fast-out unsound: watcher ${w.name} fast-out held but the fixup value ${String(vFx)} differs from the rendered value ${String(w.lastRenderedValue)} and the residue is not covered by the scheduled correctives`,
-					);
-				}
-			}
-			return; // zero corrections — anything the fast path hides is already corrective-covered
-		}
 		if (!Object.is(vFx, w.lastRenderedValue)) {
 			this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
 			w.lastRenderedValue = vFx; // urgent pre-paint correction

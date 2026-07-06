@@ -66,9 +66,10 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 });
 
 describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gate)', () => {
-	// The soundness half is asserted INSIDE the model: mountFixup throws
-	// InvariantViolation whenever the four conjuncts hold but v_fx ≠ v_r.
-	// Every battery/scars/fuzz mount exercises that assert.
+	// Conditions-first: a passing four-conjunct test skips the fixup
+	// evaluation and comparison entirely. The corrective loop is the test's
+	// soundness premise — concurrent-scars S43 pins the covered shape, and
+	// the lockstep corpus (incl. seeds 29/97/173) pins value parity.
 	it('quiet in-pass mount takes the fast-out: zero corrections, zero drift', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);

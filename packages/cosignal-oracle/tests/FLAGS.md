@@ -5,10 +5,9 @@ engine implementation. Each was validated — and in one case corrected —
 by fuzzing the reference model. Each has a targeted test in
 `tests/flags.spec.ts`; the ids (**flag 3**, **flag 4**, **flag 5**,
 **flag 7**) are stable identifiers shared with the test suite — the
-numbering is historical, the prose here is self-contained. Rule *flag 5*'s
-soundness half is additionally asserted inside the model on **every**
-mount reconciliation, so the acceptance scenarios, the pinned regression
-schedules, and every fuzz seed exercise it.
+numbering is historical, the prose here is self-contained. Rule *flag
+5*'s observable behavior is pinned by the acceptance scenarios, the
+pinned regression schedules, and the fuzz corpus.
 
 Background, briefly (defined fully in the package README): a **batch**
 groups the writes of one UI update and is visible per **slot** (a
@@ -52,19 +51,22 @@ model makes a yielded pass's value change across a yield — exactly the
 drift the contract forbids ("a pass observes included-batch writes only
 up to its pin, forever, across pauses").
 
-## flag 5 — the mount fast path is not standalone
+## flag 5 — the mount conditions are not standalone
 
-At a mount's commit, reconciliation normally (a) schedules a corrective
+At a mount's commit, reconciliation (a) schedules a corrective
 re-render into the lane of every live non-included batch that touched
-the mounted node, then (b) compares the mount's rendered value against
-its view fast-forwarded to committed-truth-now, correcting urgently
-before paint. A **fast path** may skip the comparison when four
-conditions suggest the mount window was quiet:
+the mounted node — from write metadata alone — then (b) runs a
+four-condition test asking whether the mount window was quiet:
 
 1. the pass that mounted the component is the pass now committing;
 2. no committed-side advance happened since the pass's pin;
 3. the root's commit generation is unchanged;
 4. no batch included in the render wrote after the pin.
+
+When every condition passes, reconciliation stops there: no
+re-evaluation, no comparison. Only when a condition fails is the
+mount's rendered value compared against its view fast-forwarded to
+committed-truth-now, correcting urgently before paint.
 
 Three findings sharpen this rule:
 
@@ -93,19 +95,21 @@ Three findings sharpen this rule:
    rendered **batches** themselves (latest write seq ≤ pin), so a
    member whose first write landed mid-pass is seen.
 
-3. **The fast path is only sound together with the per-batch corrective
-   loop** (found by fuzz seed 173, shrunk to 9 ops). A live batch
-   already committed into the root (the *flag 3* surface) takes a write
-   after an unrelated same-root pass pinned. Every condition is silent:
-   no committed-side advance (a live write is not a retirement), the
-   root's commit generation is unchanged, and the mask clocks say
-   nothing (the batch is in the committed set, not the mask). The
-   fast-forwarded value diverges while the fast path holds. It is not a
-   tear only because step (a) already scheduled that batch's corrective
-   re-render. The corrective loop is therefore a *premise* of the fast
-   path, and the sound invariant — asserted by the model on every
-   mount — is: **any divergence the fast path hides must be exactly
-   covered by scheduled correctives.**
+3. **The conditions are only sound together with the per-batch
+   corrective loop** (found by fuzz seed 173, shrunk to 9 ops). A live
+   batch already committed into the root (the *flag 3* surface) takes a
+   write after an unrelated same-root pass pinned. Every condition is
+   silent: no committed-side advance (a live write is not a
+   retirement), the root's commit generation is unchanged, and the mask
+   clocks say nothing (the batch is in the committed set, not the
+   mask). The fast-forwarded value diverges while every condition
+   holds. It is not a tear only because step (a) already scheduled that
+   batch's corrective re-render, so the component updates together with
+   the batch in its own lane. The corrective loop is therefore a
+   *premise* of the condition test: **any divergence the passing
+   conditions decline to correct is exactly the writes of live batches
+   whose correctives step (a) scheduled** — which is why a passing test
+   may skip the comparison outright.
 
 Related legality rule the fast path depends on (found by fuzz seed 97):
 **a retirement folded inside a commit must belong to a batch that commit

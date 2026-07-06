@@ -104,8 +104,9 @@ must reproduce. Terms are defined as they appear.
   `newestValue` and the core-effect flush). World folds are unchanged:
   pass/committed/mount-fix evaluations refold at their boundaries, so
   untracked deps stay fresh in every world-side revalidation.
-- **The mount-reconciliation world** (used once, at a mount's commit)
-  sees the mounting render's own included receipts up to its pin, plus
+- **The mount-reconciliation world** (used at most once per mount, at
+  its commit, when the four-condition test below falls through) sees
+  the mounting render's own included receipts up to its pin, plus
   committed truth *as of now* — i.e., the mounted component's view
   fast-forwarded to what actually committed during its mount window.
 
@@ -166,19 +167,24 @@ bumping the root's commit generation and notifying committed observers);
 then, in layout (before paint), newly mounted watchers subscribe and
 reconcile.
 
-Mount reconciliation closes the render-to-subscribe gap. For each live
-batch that touched the mounted node but was not included in its render,
-a corrective re-render is scheduled into that batch's own lane (so the
-mount joins pending updates instead of missing or revealing them). Then
-one comparison against the mount-reconciliation world catches whatever
-retired or locked in during the window and corrects it urgently before
-paint. A fast path may skip the comparison when four conditions prove
-the window was quiet (same pass mounting and committing; no
-committed-side advance since the pin; root commit generation unchanged;
-no included batch wrote after the pin — checked over the committing
-batches at commit time, not a stale slot snapshot). The fast path is
-sound only together with the corrective loop; the subtle cases live in
-`tests/FLAGS.md`.
+Mount reconciliation closes the render-to-subscribe gap, in two steps
+decided in order. First, for each live batch that touched the mounted
+node but was not included in its render, a corrective re-render is
+scheduled into that batch's own lane (so the mount joins pending
+updates instead of missing or revealing them) — this step reads write
+metadata only, no values. Second, a four-condition test decides whether
+anything retired or locked in during the window: same pass mounting and
+committing; no committed-side advance since the pin; root commit
+generation unchanged; no included batch wrote after the pin (checked
+over the committing batches at commit time, not a stale slot snapshot).
+When every condition passes, reconciliation is done — no re-evaluation,
+no comparison; any drift the window could still hide is a live batch's
+write that the first step just scheduled a re-render for. When a
+condition fails, the node is re-evaluated in the mount-reconciliation
+world (its own included writes at its pin, plus committed truth as of
+now) and a real difference is corrected urgently before paint. The
+conditions are sound only together with the corrective step; the subtle
+cases live in `tests/FLAGS.md`.
 
 Effects come in two kinds. Core effects (`effect()`) observe the newest
 world and flush after a write's notification walk. React-level effects

@@ -51,8 +51,9 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		// world evaluations recorded: the mount render evaluated c in p1's world
 		const evals = all(tr, 'eval');
 		expect(evals.some((e) => e.data['node'] === 'c' && e.data['world'] === `pass:${p1.id}`)).toBe(true);
-		// the fixup evaluated c in the fast-forwarded mount-fix world
-		expect(evals.some((e) => e.data['node'] === 'c' && e.data['world'] === 'mount-fix:A')).toBe(true);
+		// conditions-first fixup: a passing four-condition test skips the
+		// mount-fix evaluation entirely — no mount-fix eval record exists
+		expect(evals.some((e) => e.data['world'] === 'mount-fix:A')).toBe(false);
 		// clean mount on a quiet root: fast-out, zero correctives; provoked by the commit
 		const fx = all(tr, 'mount-fixup')[0]!;
 		expect(fx.data).toEqual({ watcher: 'W', root: 'A', disposition: 'fast-out', correctives: 0 });
@@ -228,7 +229,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(cor.data).toEqual({ watcher: 'W2', from: 42, to: 50 });
 	});
 
-	it('mount fixup: fast-out-covered — post-pin write into a committed-live batch is exactly corrective-covered', () => {
+	it('mount fixup: fast-out with a post-pin write into a committed-live batch — corrective scheduled, no urgent correction', () => {
 		const tc = b.openBatch();
 		b.write(tc.id, a, { kind: 'set', value: 70 });
 		const pc = b.passStart('A', [tc.id]);
@@ -239,10 +240,14 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		b.write(tc.id, a, { kind: 'set', value: 80 }); // post-pin write, mask-token-quiet
 		b.passEnd(p7.id, 'commit');
 
+		// the write moved no condition (tc is a committed member, outside the
+		// render mask), so the fast path holds and the corrective in tc's own
+		// lane is the whole fix — no evaluation, no urgent correction
 		const cor = last(tr, 'mount-corrective');
 		expect(cor.data).toMatchObject({ watcher: 'W3', token: tc.id });
 		const fx = last(tr, 'mount-fixup');
-		expect(fx.data).toEqual({ watcher: 'W3', root: 'A', disposition: 'fast-out-covered', correctives: 1 });
+		expect(fx.data).toEqual({ watcher: 'W3', root: 'A', disposition: 'fast-out', correctives: 1 });
+		expect(all(tr, 'mount-correction').filter((e) => e.data['watcher'] === 'W3')).toHaveLength(0);
 		b.retire(tc.id, true);
 	});
 
