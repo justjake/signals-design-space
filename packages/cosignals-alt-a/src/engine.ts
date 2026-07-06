@@ -34,98 +34,156 @@
  * structured for the §15 codegen to take over later.
  */
 
-// ---- layout constants (hand-written; future codegen target, §15) -----------
+// #region GENERATED — layout v1 (from tools/schema.ts; run pnpm gen) — DO NOT EDIT
 const enum C {
-	// Node fields (plane M, stride 8; ids pre-multiplied: id = record * 8).
+	// ---- node record (plane M, stride 8): main plane: nodes and links interleaved (ids pre-multiplied by 8; record 0 burned) ----
+	/** state machine + kind bits [flags; owner: alloc writes; free zeroes] */
 	FLAGS = 0,
-	DEPS = 1, // doubles as free-list next for freed node records
+	/** first link of my dependency list; doubles as free-list next for freed node records [LinkId; owner: link/unlink; free threads] */
+	DEPS = 1,
+	/** last confirmed dependency link (the re-run cursor) [LinkId; owner: link/purgeDeps] */
 	DEPS_TAIL = 2,
+	/** first link of my subscriber list [LinkId; owner: linkInsert/unlink] */
 	SUBS = 3,
+	/** last subscriber link [LinkId; owner: linkInsert/unlink] */
 	SUBS_TAIL = 4,
+	/** generation counter, bumped on free; stale disposers no-op [u31; owner: freeNode bumps] */
 	GEN = 5,
-	// +6: atoms LOG_HEAD; computeds/effects/watchers OVERLAY_STAMP.
+	/** atoms: first log record id in plane G (0 = no log). Aliased as OVERLAY_STAMP on non-atoms. [LogId; owner: appendLog creates; sweep clears] */
 	LOG_HEAD = 6,
-	OVERLAY_STAMP = 6,
-	// +7: atoms LOG_TAIL; computeds MEMO_KEY (first memo record's world key).
+	/** atoms: last log record id. Aliased as MEMO_KEY on computeds. [LogId; owner: appendLog/sweep] */
 	LOG_TAIL = 7,
+	/** non-atoms: the walk ticket of the last notify walk that visited me (alias of LOG_HEAD) */
+	OVERLAY_STAMP = 6,
+	/** computeds: the first memo record's world key (alias of LOG_TAIL) */
 	MEMO_KEY = 7,
-
-	// Link fields (plane M, stride 8, interleaved with nodes).
+	// ---- link record (plane M, stride 8): main plane: nodes and links interleaved (ids pre-multiplied by 8; record 0 burned) ----
+	/** evaluation-cycle stamp: intra-run duplicate-read dedup [u31; owner: link stamps] */
 	VERSION = 0,
+	/** producer node id [NodeId; owner: linkInsert] */
 	DEP = 1,
+	/** consumer node id [NodeId; owner: linkInsert] */
 	SUB = 2,
+	/** position in the producer's subscriber list [LinkId; owner: linkInsert/unlink] */
 	PREV_SUB = 3,
+	/** position in the producer's subscriber list [LinkId; owner: linkInsert/unlink] */
 	NEXT_SUB = 4,
+	/** position in the consumer's dependency list [LinkId; owner: linkInsert/unlink] */
 	PREV_DEP = 5,
-	NEXT_DEP = 6, // doubles as free-list next for freed link records
-
-	// Log entry fields (plane G, stride 4).
-	L_NEXT = 0, // doubles as free-list next
+	/** position in the consumer's dependency list; doubles as free-list next for freed link records [LinkId; owner: linkInsert/unlink; free threads] */
+	NEXT_DEP = 6,
+	// ---- log record (plane G, stride 4): log plane: write-log entries (ids pre-multiplied by 4; record 0 burned; bulk-reset at quiescence) ----
+	/** next entry in this atom's log (append order = seq order); 0 = tail; doubles as free-list next [LogId; owner: appendLog/sweep; free threads] */
+	L_NEXT = 0,
+	/** packed: bits 0-1 OP, bit 2 APPLIED, bit 3 RETIRED, bits 4-8 BATCH_SLOT, bit 9 PSEUDO [flags; owner: appendLog writes; retirement stamps RETIRED] */
 	L_META = 1,
+	/** take-a-number ticket at append time [seq; owner: appendLog/coalesce] */
 	L_SEQ = 2,
+	/** 0 while the batch is pending; one fresh ticket stamped per retirement [seq; owner: retirement stamps] */
 	L_RETIRED_SEQ = 3,
-
-	// World-memo fields (plane W, stride 8).
+	// ---- memo record (plane W, stride 8): world-memo plane: overlay memo records (certificate region lives in a companion array; bulk-reset at quiescence) ----
+	/** world key: newest 0; pass (serial<<2)|1; writer (token<<2)|2 [u31; owner: overlayEvaluate] */
 	W_KEY = 0,
-	W_EPOCH = 1, // 0 = tombstone (overlayEpoch starts at 1)
+	/** overlayEpoch at evaluation time; 0 is the tombstone value (epochs start at 1) [u31; owner: overlayEvaluate; re-memoization tombstones] */
+	W_EPOCH = 1,
+	/** owning computed node id (drain re-validation + stale-head guard) [NodeId; owner: overlayEvaluate] */
 	W_NODE = 2,
+	/** index into the memoVals side array holding the memoized value [u31; owner: overlayEvaluate; tombstone clears the slot] */
 	W_VAL = 3,
+	/** next memo record for the same node (the node's memo chain) [MemoId; owner: overlayEvaluate prepends] */
 	W_NEXT_MEMO = 4,
+	/** writer's-world records only: next record in the batch slot's memo chain; 0 on other keys [MemoId; owner: overlayEvaluate; slot release clears heads] */
 	W_SLOT_NEXT = 5,
+	/** number of certificate pairs [u31; owner: overlayEvaluate] */
 	W_NDEPS = 6,
+	/** offset of this memo's certificate run in the certificate region [CertOff; owner: overlayEvaluate] */
 	W_CERT = 7,
-
-	// Flags (spec §7.2).
+	// ---- flags (one 4-byte load carries state + kind) ----
+	/** can produce new values (atoms, computeds) */
 	MUTABLE = 1,
+	/** wants notification when possibly stale (effects, watchers) */
 	WATCHING = 2,
+	/** currently evaluating (re-entrancy guard) */
 	RECURSED_CHECK = 4,
+	/** re-entrant write reached me during my own run */
 	RECURSED = 8,
+	/** definitely stale */
 	DIRTY = 16,
+	/** possibly stale - verify by pulling before recomputing */
 	PENDING = 32,
+	/** my dep list contains child effects/scopes (slow-path cleanup) */
 	HAS_CHILD_EFFECT = 64,
+	/** atoms only: LOG_HEAD !== 0. The read gate. */
 	LOGGED = 128,
+	/** watchers only: notify synchronously via the broadcast list instead of the effect queue */
 	IMMEDIATE = 256,
+	/** transitively watched by some effect/watcher (liveness split, drives the observed-lifecycle) */
 	LIVE = 512,
+	/** kind bit: atom */
 	K_ATOM = 1024,
+	/** kind bit: computed */
 	K_COMPUTED = 2048,
+	/** kind bit: effect */
 	K_EFFECT = 4096,
+	/** kind bit: effect scope */
 	K_SCOPE = 8192,
+	/** kind bit: watcher (React hook subscription) */
 	K_WATCHER = 16384,
+	/** union of the kind bits; a freed record has FLAGS 0 */
 	KIND_MASK = K_ATOM | K_COMPUTED | K_EFFECT | K_SCOPE | K_WATCHER,
-
-	// Log META packing (§7.3): bits 0–1 OP, bit 2 APPLIED, bit 3 RETIRED,
-	// bits 4–8 BATCH_SLOT, bit 9 PSEUDO (slot-exhaustion fallback, §9.2).
+	// ---- log META packing: bits 0-1 OP, bit 2 APPLIED, bit 3 RETIRED, bits 4-8 BATCH_SLOT, bit 9 PSEUDO (slot-exhaustion fallback) ----
+	/** base record: the snapshot replays start from */
 	OP_BASE = 0,
+	/** SET: payload replaces the accumulator */
 	OP_SET = 1,
+	/** UPDATE: stored function applies to the accumulator */
 	OP_UPDATE = 2,
+	/** DISPATCH: the atom's reducer applies the stored action */
 	OP_DISPATCH = 3,
+	/** mask for the op bits */
 	OP_MASK = 3,
+	/** already written through the kernel (urgent writes) */
 	M_APPLIED = 4,
+	/** the entry's batch retired */
 	M_RETIRED = 8,
+	/** batch slot starts at bit 4 */
 	SLOT_SHIFT = 4,
+	/** 5 bits: 32 slots */
 	SLOT_MASK = 31,
+	/** always-included pseudo-batch fallback (degrades toward urgent) */
 	M_PSEUDO = 512,
-
-	// Read contexts (§10.1).
+	// ---- read contexts: per-read ambient context (a module scalar, kept correct by fork edges) ----
+	/** default: everything visible (Wn) */
 	CTX_NEWEST = 1,
+	/** while React executes render code: the pass world (Wp) */
 	CTX_RENDER = 2,
+	/** useSignalEffect callbacks and SSR: committed views */
 	CTX_COMMITTED = 3,
-
-	// World kinds (internal world descriptors).
+	// ---- world kinds: internal world-descriptor discriminants ----
+	/** the canonical world (committed + applied) the kernel maintains */
 	WK_W0 = 0,
+	/** every write visible */
 	WK_NEWEST = 1,
+	/** a render pass: pin + include mask */
 	WK_PASS = 2,
+	/** a batch's writer world: retired + applied + own entries */
 	WK_WRITER = 3,
+	/** committed views: retired-only, per-root refined by pin + lock-in mask */
 	WK_COMMITTED = 4,
-
-	// Write modes (§9.1).
+	// ---- write modes: the §9.1 monotonic gate ----
+	/** pure kernel writes (pre-activation, servers) */
 	MODE_DIRECT = 0,
+	/** every write is logged - permanently after first root registration */
 	MODE_LOGGED = 1,
-
+	// ---- named constants ----
+	/** infinity for pin comparisons */
 	MAX_SEQ = 0x7fffffff,
 }
+// #endregion GENERATED layout v1
 
 import type { Container, ExternalRuntimeListener, ForkAdapter } from './fork-double';
+import type { Tracer } from './tracing';
+import { TraceKind } from './tracing';
 
 // ---- public types -----------------------------------------------------------
 
@@ -176,13 +234,19 @@ export type WorldSelector =
 	| { kind: 'w0' }
 	| { kind: 'newest' }
 	| { kind: 'committed' }
+	| { kind: 'committedOn'; container: Container }
 	| { kind: 'writer'; token: number }
-	| { kind: 'pass' };
+	| { kind: 'pass' }
+	| { kind: 'rendered'; pin: number; tokens: readonly number[] };
 
 export type EngineOptions = {
 	initialRecords?: number; // main-plane records (default 8192)
 	initialLogRecords?: number; // log-plane records (default 1024)
 	initialMemoRecords?: number; // memo-plane records (default 1024)
+	/** §14.2: register atom/computed handles with a FinalizationRegistry that
+	 * reclaims their records when the handles are garbage-collected. Off by
+	 * default (flag-gated this pass). */
+	finalization?: boolean;
 };
 
 type WorldDesc = {
@@ -202,6 +266,11 @@ type NodeMeta = {
 	lastBroadcast?: Map<number, unknown>;
 	watchedId?: number;
 	onBroadcast?: (ev: BroadcastEvent) => void;
+	observeEffect?: (ctx: {
+		peek(): unknown;
+		set(v: unknown): void;
+		update(f: (x: unknown) => unknown): void;
+	}) => (() => void) | void;
 };
 
 export function createCosignalEngine(options?: EngineOptions) {
@@ -224,6 +293,13 @@ export function createCosignalEngine(options?: EngineOptions) {
 	const values: unknown[] = [undefined, undefined];
 	const fns: (Function | undefined)[] = [undefined];
 	const memos: number[] = [0]; // node memo-chain heads (guarded by W_NODE check)
+	// Era-scoped "some atom below me holds UNAPPLIED entries" stamps (walk
+	// tickets, valid while > eraFloor). This is what lets NEWEST reads keep
+	// the kernel path when only unrelated cones carry pending deferred writes
+	// (the §17.5(b) invisibility requirement) — the global unappliedEntries
+	// gate of §10.4 alone would degrade every marked cone.
+	const unappliedStamp: number[] = [0];
+	const atomUnapplied = new Map<number, number>(); // atomId → unapplied entry count
 	const metas: (NodeMeta | undefined)[] = [undefined];
 	const logVals: unknown[] = [undefined];
 	const memoVals: unknown[] = [];
@@ -273,6 +349,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	// Evaluation-mode tracking.
 	let canonicalEvalDepth = 0; // inside kernel updateComputed / first-eval
+	let untrackedDepth = 0; // inside untracked(): reads record no certificate pairs
 	// Overlay evaluation frames (world stack); certStack is the collector.
 	const frameWorlds: WorldDesc[] = [];
 	let certStack = new Int32Array(4096);
@@ -284,6 +361,48 @@ export function createCosignalEngine(options?: EngineOptions) {
 	const kernelBroadcasts: number[] = [];
 	let drainDepth = 0;
 	const broadcastLog: BroadcastEvent[] = []; // observable drain output
+
+	// Policy configuration (§4.4 configure).
+	let forbidWritesInComputeds = false;
+	// Observed-lifecycle (§12.4): microtask-debounced LIVE-transition delivery.
+	const lifecyclePending = new Map<number, boolean>(); // atomId → latest LIVE state
+	const lifecycleDelivered = new Map<number, { cleanup?: () => void }>();
+	let lifecycleScheduled = false;
+
+	// §13.4 per-root committed views: container → {pin, mask}.
+	const rootViews = new Map<Container, { pin: number; mask: number }>();
+	const commitListeners = new Set<(container: Container) => void>();
+
+	// §16.1 the tracer slot: one `tracer !== undefined` check per emit site.
+	let tracer: Tracer | undefined;
+
+	// §14.2: reclaim an unreachable (or deterministically disposed) atom or
+	// computed record. Conservative guards: never reclaim a node that still
+	// has subscribers (a live closure would have kept the handle reachable)
+	// or an atom with a live tape (the sweep owns that lifecycle).
+	function reclaimNode(id: number, gen: number): void {
+		if (M[id + C.GEN] !== gen || (M[id + C.FLAGS] & (C.K_ATOM | C.K_COMPUTED)) === 0) {
+			return;
+		}
+		if (M[id + C.SUBS] !== 0 || (M[id + C.FLAGS] & C.LOGGED) !== 0) {
+			return;
+		}
+		disposeAllDepsInReverse(id);
+		M[id + C.FLAGS] = 0;
+		pendingFree.push(id);
+		maybeBoundary();
+	}
+
+	const finalizationEnabled = options?.finalization === true;
+	const finalizer = finalizationEnabled && typeof FinalizationRegistry !== 'undefined'
+		? new FinalizationRegistry<{ id: number; gen: number }>((held) => {
+			reclaimNode(held.id, held.gen);
+		})
+		: undefined;
+
+	function registerHandle(handle: object, id: number): void {
+		finalizer?.register(handle, { id, gen: M[id + C.GEN] });
+	}
 
 	// Fork wiring.
 	let fork: ForkAdapter | undefined;
@@ -346,6 +465,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			fns.push(undefined);
 			memos.push(0);
 			metas.push(undefined);
+			unappliedStamp.push(0);
 		}
 		return id;
 	}
@@ -474,6 +594,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 		} else {
 			M[dep + C.SUBS] = newLink;
 		}
+		// §8.6: a LIVE consumer attaching to a non-LIVE producer moves the
+		// liveness boundary — flow the bit down the producer's dependency list.
+		if ((M[sub + C.FLAGS] & C.LIVE) !== 0 && (M[dep + C.FLAGS] & C.LIVE) === 0) {
+			flowLiveDown(dep);
+		}
 		// Overlay mark repair (§8.7.3): a canonical evaluation just picked up a
 		// logged/marked producer mid-era — stamp the consumer's cone so
 		// world-sensitive readers stop trusting kernel caches below it.
@@ -483,11 +608,93 @@ export function createCosignalEngine(options?: EngineOptions) {
 				(df & C.LOGGED) !== 0
 				|| ((df & C.K_ATOM) === 0 && M[dep + C.OVERLAY_STAMP] > eraFloor);
 			if (producerMarked) {
-				if (walkCounter <= eraFloor) {
-					walkCounter = eraFloor + 1;
-				}
-				stampCone(sub, walkCounter, false, 0);
+				const producerUnapplied = (df & C.K_ATOM) !== 0
+					? (atomUnapplied.get(dep) ?? 0) > 0
+					: unappliedStamp[dep >> 3] > eraFloor;
+				// A FRESH ticket, not the current counter: an earlier walk in
+				// this very drain may have stamped the consumer with the current
+				// ticket, and stampCone's dedup would then skip the repair —
+				// dropping the unapplied stamp this new edge must propagate.
+				stampCone(sub, ++walkCounter, false, producerUnapplied);
 			}
+		}
+	}
+
+	// ---- §8.6 liveness: LIVE flows down dependency lists when the boundary moves ----
+	function onAtomLiveChange(a: number, live: boolean): void {
+		if (metas[a >> 3]?.observeEffect !== undefined) {
+			lifecyclePending.set(a, live);
+			if (!lifecycleScheduled) {
+				lifecycleScheduled = true;
+				queueMicrotask(drainLifecycle);
+			}
+		}
+	}
+
+	function drainLifecycle(): void {
+		lifecycleScheduled = false;
+		const work = [...lifecyclePending];
+		lifecyclePending.clear();
+		for (const [a, live] of work) {
+			const meta = metas[a >> 3];
+			const delivered = lifecycleDelivered.get(a);
+			if (live && delivered === undefined) {
+				const observe = meta?.observeEffect;
+				if (observe === undefined) {
+					continue;
+				}
+				const ctx = {
+					peek: () => pendingValueOf(a),
+					set: (v: unknown) => writeOp(a, C.OP_SET, v),
+					update: (f: (x: unknown) => unknown) => writeOp(a, C.OP_UPDATE, f),
+				};
+				const cleanup = observe(ctx) as (() => void) | void;
+				lifecycleDelivered.set(a, { cleanup: cleanup ?? undefined });
+			} else if (!live && delivered !== undefined) {
+				lifecycleDelivered.delete(a);
+				delivered.cleanup?.();
+			}
+			// A flap within one tick nets to no delivery (§12.4 debounce).
+		}
+	}
+
+	function flowLiveDown(dep: number): void {
+		if ((M[dep + C.FLAGS] & C.LIVE) !== 0) {
+			return;
+		}
+		M[dep + C.FLAGS] |= C.LIVE;
+		if ((M[dep + C.FLAGS] & C.K_ATOM) !== 0) {
+			onAtomLiveChange(dep, true);
+			return;
+		}
+		let lnk = M[dep + C.DEPS];
+		while (lnk !== 0) {
+			flowLiveDown(M[lnk + C.DEP]);
+			lnk = M[lnk + C.NEXT_DEP];
+		}
+	}
+
+	function recheckLive(dep: number): void {
+		const flags = M[dep + C.FLAGS];
+		if ((flags & C.LIVE) === 0 || (flags & (C.K_EFFECT | C.K_WATCHER | C.K_SCOPE)) !== 0) {
+			return; // effects/watchers/scopes are born LIVE
+		}
+		let lnk = M[dep + C.SUBS];
+		while (lnk !== 0) {
+			if ((M[M[lnk + C.SUB] + C.FLAGS] & C.LIVE) !== 0) {
+				return; // still transitively watched
+			}
+			lnk = M[lnk + C.NEXT_SUB];
+		}
+		M[dep + C.FLAGS] &= ~C.LIVE;
+		if ((flags & C.K_ATOM) !== 0) {
+			onAtomLiveChange(dep, false);
+			return;
+		}
+		let d = M[dep + C.DEPS];
+		while (d !== 0) {
+			recheckLive(M[d + C.DEP]);
+			d = M[d + C.NEXT_DEP];
 		}
 	}
 
@@ -517,6 +724,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 			M[prevSub + C.NEXT_SUB] = nextSub;
 		} else if ((M[dep + C.SUBS] = nextSub) === 0) {
 			unwatched(dep);
+		}
+		// §8.6: removing a subscriber may clear the producer's liveness.
+		if ((M[dep + C.FLAGS] & C.LIVE) !== 0) {
+			recheckLive(dep);
 		}
 		return nextDep;
 	}
@@ -906,6 +1117,15 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	// ---- kernel: read/write ------------------------------------------------------
+	// The atom's newest kernel-side value WITHOUT resolving pending state: the
+	// pending slot always holds the latest applied write. Write-path equality
+	// gates must use this — resolving mid-batch (kernelPeekAtom) would fold
+	// pending -> current early and break the batch-revert cutoff (the
+	// conformance suite's dep-reverts cases).
+	function pendingValueOf(s: number): unknown {
+		return values[(s >> 2) + 1];
+	}
+
 	// Resolve a possibly-pending atom value without linking (W0 peek).
 	function kernelPeekAtom(s: number): unknown {
 		if (M[s + C.FLAGS] & C.DIRTY) {
@@ -1005,7 +1225,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 	// Walk the subscriber cone of `node`'s subscribers, stamping OVERLAY_STAMP
 	// with `ticket` (dedup per ticket). With `collect`, IMMEDIATE watchers are
 	// pushed into `collectInto`. Pure integer traversal; runs no user code.
-	function stampCone(startNode: number, ticket: number, collect: boolean, _token: number, collectInto?: number[]): void {
+	function stampCone(startNode: number, ticket: number, collect: boolean, unapplied: boolean, collectInto?: number[]): void {
 		const stackBase = propSp;
 		let node = startNode;
 		let nextLink = 0;
@@ -1013,6 +1233,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 			const flags = M[node + C.FLAGS];
 			if (!(flags & C.K_ATOM) && M[node + C.OVERLAY_STAMP] !== ticket) {
 				M[node + C.OVERLAY_STAMP] = ticket;
+				if (unapplied) {
+					unappliedStamp[node >> 3] = ticket;
+				}
 				if (collect && (flags & C.IMMEDIATE) && (flags & C.K_WATCHER) && collectInto !== undefined) {
 					collectInto.push(node);
 				}
@@ -1045,10 +1268,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 		} while (true);
 	}
 
-	function notifyWalkFromAtom(atom: number, ticket: number, collect: boolean, collectInto?: number[]): void {
+	function notifyWalkFromAtom(atom: number, ticket: number, collect: boolean, collectInto?: number[], unapplied = false): void {
 		let lnk = M[atom + C.SUBS];
 		while (lnk !== 0) {
-			stampCone(M[lnk + C.SUB], ticket, collect, 0, collectInto);
+			stampCone(M[lnk + C.SUB], ticket, collect, unapplied, collectInto);
 			lnk = M[lnk + C.NEXT_SUB];
 		}
 	}
@@ -1131,7 +1354,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 	// ---- world descriptors ---------------------------------------------------------
 	const W0_WORLD: WorldDesc = { k: C.WK_W0, key: -1, token: 0, slot: -1, pin: 0, mask: 0 };
 	const NEWEST_WORLD: WorldDesc = { k: C.WK_NEWEST, key: 0, token: 0, slot: -1, pin: 0, mask: 0 };
-	const COMMITTED_WORLD: WorldDesc = { k: C.WK_COMMITTED, key: -1, token: 0, slot: -1, pin: 0, mask: 0 };
+	// Global committed form (§10.2): every retired entry. Per-root views
+	// (§13.4) refine pin+mask per container.
+	const COMMITTED_WORLD: WorldDesc = { k: C.WK_COMMITTED, key: -1, token: 0, slot: -1, pin: C.MAX_SEQ, mask: 0 };
 	let passWorld: WorldDesc = { k: C.WK_PASS, key: 1, token: 0, slot: -1, pin: 0, mask: 0 };
 
 	function writerWorld(token: number): WorldDesc {
@@ -1175,7 +1400,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			const t = ticket();
 			G[base + C.L_SEQ] = t;
 			G[base + C.L_RETIRED_SEQ] = t;
-			logVals[base >> 2] = kernelPeekAtom(a);
+			logVals[base >> 2] = pendingValueOf(a); // W0 value, no mid-batch resolve
 			M[a + C.LOG_HEAD] = base;
 			M[a + C.LOG_TAIL] = base;
 			M[a + C.FLAGS] |= C.LOGGED;
@@ -1205,6 +1430,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 					logVals[tail >> 2] = payload;
 					G[tail + C.L_SEQ] = ticket();
 					G[tail + C.L_META] = (tm & ~C.OP_MASK) | C.OP_SET;
+					if (tracer !== undefined) {
+						tracer.emit(TraceKind.LOG_COALESCE, a, slot, tail);
+					}
 					return;
 				}
 				if ((op === C.OP_UPDATE || op === C.OP_DISPATCH) && tailOp !== C.OP_SET) {
@@ -1253,12 +1481,16 @@ export function createCosignalEngine(options?: EngineOptions) {
 			++batchEntryCount[slot];
 			if (!applied) {
 				++unappliedEntries;
+				atomUnapplied.set(a, (atomUnapplied.get(a) ?? 0) + 1);
 			}
 		}
 		G[rec + C.L_META] = meta;
 		logVals[rec >> 2] = payload;
 		G[M[a + C.LOG_TAIL] + C.L_NEXT] = rec;
 		M[a + C.LOG_TAIL] = rec;
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.LOG_APPEND, a, slot, rec, t, meta);
+		}
 	}
 
 	// ---- visibility (§10.2) ----------------------------------------------------------
@@ -1267,8 +1499,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 		switch (world.k) {
 			case C.WK_NEWEST:
 				return true;
-			case C.WK_COMMITTED:
-				return (meta & C.M_RETIRED) !== 0;
+			case C.WK_COMMITTED: {
+				if ((meta & C.M_RETIRED) !== 0 && G[rec + C.L_RETIRED_SEQ] <= world.pin) {
+					return true;
+				}
+				// §13.4: batches this root committed while pending elsewhere.
+				const slot = (meta >> C.SLOT_SHIFT) & C.SLOT_MASK;
+				return (meta & C.M_PSEUDO) === 0 && ((world.mask >> slot) & 1) !== 0;
+			}
 			case C.WK_W0:
 				return (meta & (C.M_RETIRED | C.M_APPLIED)) !== 0;
 			case C.WK_PASS: {
@@ -1286,7 +1524,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 					return true;
 				}
 				const slot = (meta >> C.SLOT_SHIFT) & C.SLOT_MASK;
-				return (meta & C.M_PSEUDO) === 0 && slot === world.slot;
+				// `mask` extends the single-slot form to a token SET — the §13.2
+				// fixup re-resolves "committed + applied + the batches the
+				// component rendered with" as one world.
+				return (meta & C.M_PSEUDO) === 0
+					&& (slot === world.slot || ((world.mask >> slot) & 1) !== 0);
 			}
 		}
 		return false;
@@ -1335,7 +1577,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if ((M[a + C.FLAGS] & C.LOGGED) === 0 || world.k === C.WK_W0) {
 			return kernelPeekAtom(a);
 		}
-		if (world.k === C.WK_NEWEST && unappliedEntries === 0) {
+		if (world.k === C.WK_NEWEST && (unappliedEntries === 0 || (atomUnapplied.get(a) ?? 0) === 0)) {
 			return kernelPeekAtom(a);
 		}
 		if (allVisibleAndApplied(a, world)) {
@@ -1416,6 +1658,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 	function overlayEvaluate(c: number, world: WorldDesc): unknown {
 		const hit = memoLookup(c, world);
 		if (hit !== 0) {
+			if (tracer !== undefined) {
+				tracer.emit(TraceKind.COMPUTED_EVAL, c, world.key, 0, 0, 1); // memo hit
+			}
 			if (frameWorlds.length > 0) {
 				// Flattening on memo hits: copy the child's certificate run into
 				// every open collector frame (§10.5).
@@ -1467,38 +1712,51 @@ export function createCosignalEngine(options?: EngineOptions) {
 				WC[off + i] = certStack[frameBase + i];
 			}
 			certNext = off + pairs * 2;
-			// Tombstone the superseded (node, key) record (§10.5 lifecycle).
-			let old = memoHeadOf(c);
-			while (old !== 0) {
-				if (W[old + C.W_KEY] === world.key && W[old + C.W_EPOCH] !== 0) {
-					W[old + C.W_EPOCH] = 0;
-					memoVals[W[old + C.W_VAL]] = undefined;
+			// Re-memoization updates the (node, key) record IN PLACE: chains
+			// (node chain and slot chain) keep exactly one record per key, so
+			// lookup and re-validation stay O(live keys) — a held-open
+			// transition's hot loop must not grow them per evaluation. (The
+			// spec's tombstone+append lifecycle relied on opportunistic sweep
+			// trimming; in-place reuse achieves the same bound determinately.)
+			let rec = 0;
+			for (let old = memoHeadOf(c); old !== 0; old = W[old + C.W_NEXT_MEMO]) {
+				if (W[old + C.W_KEY] === world.key) {
+					rec = old;
 					break;
 				}
-				old = W[old + C.W_NEXT_MEMO];
 			}
-			const rec = allocMemo();
-			W[rec + C.W_KEY] = world.key;
-			W[rec + C.W_EPOCH] = overlayEpoch;
-			W[rec + C.W_NODE] = c;
-			memoVals.push(v);
-			W[rec + C.W_VAL] = memoVals.length - 1;
-			W[rec + C.W_NEXT_MEMO] = memoHeadOf(c);
-			W[rec + C.W_NDEPS] = pairs;
-			W[rec + C.W_CERT] = off;
-			memos[c >> 3] = rec;
-			M[c + C.MEMO_KEY] = world.key;
-			if (world.k === C.WK_WRITER && world.slot >= 0) {
-				// Writer's-world records register on the slot memo chain — the
-				// drain re-validation registry (§9.8, §10.5).
-				W[rec + C.W_SLOT_NEXT] = slotMemoHead[world.slot];
-				slotMemoHead[world.slot] = rec;
+			if (rec !== 0) {
+				W[rec + C.W_EPOCH] = overlayEpoch;
+				memoVals[W[rec + C.W_VAL]] = v;
+				W[rec + C.W_NDEPS] = pairs;
+				W[rec + C.W_CERT] = off;
 			} else {
-				W[rec + C.W_SLOT_NEXT] = 0;
+				rec = allocMemo();
+				W[rec + C.W_KEY] = world.key;
+				W[rec + C.W_EPOCH] = overlayEpoch;
+				W[rec + C.W_NODE] = c;
+				memoVals.push(v);
+				W[rec + C.W_VAL] = memoVals.length - 1;
+				W[rec + C.W_NEXT_MEMO] = memoHeadOf(c);
+				W[rec + C.W_NDEPS] = pairs;
+				W[rec + C.W_CERT] = off;
+				memos[c >> 3] = rec;
+				M[c + C.MEMO_KEY] = world.key;
+				if (world.k === C.WK_WRITER && world.slot >= 0) {
+					// Writer's-world records register on the slot memo chain — the
+					// drain re-validation registry (§9.8, §10.5).
+					W[rec + C.W_SLOT_NEXT] = slotMemoHead[world.slot];
+					slotMemoHead[world.slot] = rec;
+				} else {
+					W[rec + C.W_SLOT_NEXT] = 0;
+				}
 			}
 		}
 		if (frameWorlds.length === 0) {
 			certSp = 0;
+		}
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.COMPUTED_EVAL, c, world.key, 0, 0, 0); // evaluated
 		}
 		return v;
 	}
@@ -1513,12 +1771,24 @@ export function createCosignalEngine(options?: EngineOptions) {
 			// Post-eval re-check: did this evaluation's own dependency linking
 			// just mark c (§8.7.3)? Only possible if the kernel path recomputed.
 			if (worldSensitive(world) && M[c + C.OVERLAY_STAMP] > eraFloor) {
-				return overlayEvaluate(c, world);
+				if (world.k !== C.WK_NEWEST || unappliedStamp[c >> 3] > eraFloor) {
+					return overlayEvaluate(c, world);
+				}
 			}
 			return v;
 		}
-		if (world.k === C.WK_NEWEST && unappliedEntries === 0) {
-			return kernelComputedReadUntracked(c); // Wn == W0 when nothing is unapplied
+		if (
+			world.k === C.WK_NEWEST
+			&& (unappliedEntries === 0 || unappliedStamp[c >> 3] <= eraFloor)
+		) {
+			// Wn == W0 for this cone: nothing unapplied below it (the per-cone
+			// refinement of §10.4's global gate; see §17.5(b)). The kernel path
+			// may reveal a new unapplied producer via mark repair — re-check.
+			const v = kernelComputedReadUntracked(c);
+			if (unappliedEntries !== 0 && unappliedStamp[c >> 3] > eraFloor) {
+				return overlayEvaluate(c, world);
+			}
+			return v;
 		}
 		return overlayEvaluate(c, world);
 	}
@@ -1556,6 +1826,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 				value: v,
 				forkBatchDuringCallback: entangled && fork !== undefined ? fork.getCurrentWriteBatch() : 0,
 			};
+			if (tracer !== undefined) {
+				tracer.emit(TraceKind.BROADCAST, w, token);
+			}
 			broadcastLog.push(ev);
 			meta.onBroadcast?.(ev);
 		}
@@ -1588,31 +1861,34 @@ export function createCosignalEngine(options?: EngineOptions) {
 			return;
 		}
 		const world = writerWorld(token);
-		const recs: number[] = [];
+		// Precompute validity AND snapshots for the WHOLE chain before any
+		// re-evaluation runs (coordinator pitfall, sharpened by in-place
+		// re-memoization): re-evaluating an earlier record can refresh a later
+		// record in place, and a late validity check or snapshot would then
+		// read the fresh state and silently skip its watcher decisions.
+		const entries: Array<{ node: number; wasValid: boolean; snapshot: unknown }> = [];
 		for (let rec = slotMemoHead[slot]; rec !== 0; rec = W[rec + C.W_SLOT_NEXT]) {
-			recs.push(rec);
-		}
-		const seen = new Set<number>();
-		for (const rec of recs) {
 			const node = W[rec + C.W_NODE];
-			if (node === 0 || seen.has(node) || (M[node + C.FLAGS] & C.K_COMPUTED) === 0) {
+			if (node === 0 || (M[node + C.FLAGS] & C.K_COMPUTED) === 0 || W[rec + C.W_EPOCH] === 0) {
 				continue;
 			}
-			// A tombstoned record may be the ONLY snapshot of its node in this
-			// walk: re-evaluating an earlier chain record can re-memoize (and
-			// tombstone) this node mid-loop, and the fresh record is not in the
-			// snapshot list. Process the node anyway, with no snapshot — the
-			// per-watcher lastBroadcast cutoff (§10.6) suppresses spurious fires.
-			const tombstone = W[rec + C.W_EPOCH] === 0;
+			entries.push({
+				node,
+				wasValid: W[rec + C.W_EPOCH] === overlayEpoch && certValid(rec),
+				snapshot: memoVals[W[rec + C.W_VAL]],
+			});
+		}
+		const seen = new Set<number>();
+		for (const { node, wasValid, snapshot } of entries) {
+			if (seen.has(node)) {
+				continue;
+			}
 			seen.add(node);
-			if (!tombstone && W[rec + C.W_EPOCH] === overlayEpoch && certValid(rec)) {
+			if (wasValid) {
 				continue; // still valid → this world's value unchanged
 			}
-			// Snapshot BEFORE re-evaluating (coordinator pitfall).
-			const hadSnapshot = !tombstone;
-			const snapshot = hadSnapshot ? memoVals[W[rec + C.W_VAL]] : undefined;
 			const fresh = resolveComputedInWorld(node, world);
-			if (!hadSnapshot || !valEq(equalityOf(node), snapshot, fresh)) {
+			if (!valEq(equalityOf(node), snapshot, fresh)) {
 				let lnk = M[node + C.SUBS];
 				while (lnk !== 0) {
 					const sub = M[lnk + C.SUB];
@@ -1667,6 +1943,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 						}
 						for (const a of atoms) {
 							notifyWalkFromAtom(a, t, true, into);
+						}
+						if (tracer !== undefined) {
+							tracer.emit(TraceKind.NOTIFY_WALK, atoms[0] ?? 0, token, t, atoms.length, into.length);
 						}
 					}
 				}
@@ -1752,8 +2031,18 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (readCtx === C.CTX_RENDER && passExecuting !== 0) {
 			throw new Error('cosignal: writes during render are not allowed (§10.8)');
 		}
+		if (
+			frameWorlds.length > 0
+			&& frameWorlds[frameWorlds.length - 1].k === C.WK_PASS
+		) {
+			// Render-world evaluation always rejects writes (§10.8/§12.5).
+			throw new Error('cosignal: writes during render-world evaluation are not allowed (§10.8)');
+		}
+		if (forbidWritesInComputeds && canonicalEvalDepth > 0) {
+			throw new Error('cosignal: writes inside computeds are forbidden (configure.forbidWritesInComputeds, §12.5)');
+		}
 		if (writeMode === C.MODE_DIRECT) {
-			const cur = kernelPeekAtom(a);
+			const cur = pendingValueOf(a);
 			const next = evalOp(a, op, payload, cur);
 			if (valEq(equalityOf(a), cur, next)) {
 				return;
@@ -1773,7 +2062,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		const token = f.getCurrentWriteBatch();
 		if (M[a + C.LOG_HEAD] === 0) {
 			// Equality drop — provably safe only on tapeless atoms (§9.3).
-			const cur = kernelPeekAtom(a);
+			const cur = pendingValueOf(a);
 			const next = evalOp(a, op, payload, cur);
 			if (valEq(equalityOf(a), cur, next)) {
 				return;
@@ -1788,9 +2077,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 			slot = 0;
 		}
 		appendLog(a, op, payload, applied, slot, pseudo);
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.ATOM_WRITE, a, token, op, applied ? 1 : 0, seqCounter);
+		}
 		if (applied) {
 			// Urgent: logged AND applied through the kernel (§9.4).
-			const cur = kernelPeekAtom(a);
+			const cur = pendingValueOf(a);
 			const next = evalOp(a, op, payload, cur);
 			if (!valEq(equalityOf(a), cur, next)) {
 				if (kernelWriteAtom(a, next) && batchDepth === 0) {
@@ -1802,6 +2094,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 			// shifts every pending world's fold.
 			requestWalk(a, 0);
 		} else {
+			// Stamp the unapplied cone before the write returns: grouped drains
+			// run at batch close, and an in-batch NEWEST read must already know
+			// this cone can differ from W0.
+			notifyWalkFromAtom(a, ++walkCounter, false, undefined, true);
 			requestWalk(a, token);
 		}
 		topLevelSettle();
@@ -1833,6 +2129,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 		++overlayEpoch; // world values changed with no tape-tail movement (§10.5)
 		const rt = ticket(); // ONE retire ticket per retirement (resolution 7a)
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.BATCH_RETIRED, 0, token, rt, _committed ? 1 : 0);
+		}
 		++batchDepth;
 		try {
 			for (let i = 0; i < loggedAtoms.length; ++i) {
@@ -1849,6 +2148,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 						G[rec + C.L_RETIRED_SEQ] = rt;
 						if ((m & C.M_APPLIED) === 0) {
 							--unappliedEntries;
+							const n = (atomUnapplied.get(a) ?? 0) - 1;
+							if (n <= 0) {
+								atomUnapplied.delete(a);
+							} else {
+								atomUnapplied.set(a, n);
+							}
 						}
 						touched = true;
 					}
@@ -1858,8 +2163,13 @@ export function createCosignalEngine(options?: EngineOptions) {
 					// Absorb: replay the W0 fold; write through the kernel iff the
 					// committed value moved (policy equality, §11.2).
 					const fold = foldTape(a, W0_WORLD);
-					if (!valEq(equalityOf(a), kernelPeekAtom(a), fold)) {
+					if (!valEq(equalityOf(a), pendingValueOf(a), fold)) {
 						kernelWriteAtom(a, fold);
+						if (tracer !== undefined) {
+							tracer.emit(TraceKind.ABSORB, a, token, 1);
+						}
+					} else if (tracer !== undefined) {
+						tracer.emit(TraceKind.ABSORB, a, token, 0);
 					}
 					// Even a W0-no-op retirement makes this batch's entries visible
 					// in every OTHER writer's world (coordinator pitfall): queue a
@@ -1876,6 +2186,17 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 		retiredSlotMask |= 1 << slot;
 		liveDeferredMask &= ~(1 << slot);
+		// §13.4: when a token retires everywhere, roots that had locked it in
+		// clear the slot bit and advance their pin past the retirement ticket —
+		// the view's CONTENTS are unchanged by this bookkeeping step.
+		for (const view of rootViews.values()) {
+			if (((view.mask >> slot) & 1) !== 0) {
+				view.mask &= ~(1 << slot);
+				if (view.pin < rt) {
+					view.pin = rt;
+				}
+			}
+		}
 		releaseSlotIfDone(slot);
 		// Post-retirement drain with full re-validation: a retirement that
 		// leaves W0 unchanged still shifts every OTHER pending world (retired
@@ -1893,6 +2214,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 			return;
 		}
 		++overlayEpoch; // mid-tape unlinks move no tail seq — memos must re-check
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.TRUNCATE, 0, token);
+		}
 		for (let i = 0; i < loggedAtoms.length; ++i) {
 			const a = loggedAtoms[i];
 			const head = M[a + C.LOG_HEAD];
@@ -1911,6 +2235,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 						M[a + C.LOG_TAIL] = prev;
 					}
 					--unappliedEntries;
+					{
+						const n = (atomUnapplied.get(a) ?? 0) - 1;
+						if (n <= 0) {
+							atomUnapplied.delete(a);
+						} else {
+							atomUnapplied.set(a, n);
+						}
+					}
 					--batchEntryCount[slot];
 					freeLog(rec);
 					touched = true;
@@ -2002,16 +2334,25 @@ export function createCosignalEngine(options?: EngineOptions) {
 		certNext = 2;
 		memoVals.length = 0;
 		slotMemoHead.fill(0);
-		eraFloor = walkCounter; // every mark goes stale in O(1)
+		eraFloor = walkCounter; // every mark (and unapplied stamp) goes stale in O(1)
+		atomUnapplied.clear();
+		for (const view of rootViews.values()) {
+			view.pin = 0; // seqs restart; all committed history lives in the kernel now
+			view.mask = 0;
+		}
 		++overlayEpoch; // the cross-era invalidator (§9.7): seqs repeat, epochs don't
 		seqCounter = 1;
 		++quiescenceCount;
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.QUIESCENCE, 0, 0, quiescenceCount);
+		}
 		// Walk-counter safety valve (§9.7): only at quiescence, nothing pinned.
 		if (walkCounter > 1 << 30) {
 			for (let i = 0; i < allNodes.length; ++i) {
 				const id = allNodes[i];
 				if ((M[id + C.FLAGS] & (C.K_COMPUTED | C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0) {
 					M[id + C.OVERLAY_STAMP] = 0;
+					unappliedStamp[id >> 3] = 0;
 				}
 			}
 			walkCounter = 0;
@@ -2045,9 +2386,15 @@ export function createCosignalEngine(options?: EngineOptions) {
 			mask,
 		};
 		readCtx = C.CTX_RENDER;
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.RENDER_PASS_START, 0, mask, passPin, lineage);
+		}
 	}
 
 	function onPassEndEdge(): void {
+		if (tracer !== undefined) {
+			tracer.emit(TraceKind.RENDER_PASS_END, 0, passIncludeMask);
+		}
 		passOpen = 0;
 		passExecuting = 0;
 		passContainer = undefined;
@@ -2077,8 +2424,22 @@ export function createCosignalEngine(options?: EngineOptions) {
 				readCtx = C.CTX_RENDER;
 			},
 			onRenderPassEnd: () => onPassEndEdge(),
-			onBatchCommitted: () => {
-				// Per-root committed views are §13.4 (M5) — deferred this pass.
+			onBatchCommitted: (container, token) => {
+				// §13.4: refresh this root's committed view. Entries retired at
+				// or below the fresh pin are in the view; a batch committed here
+				// while pending elsewhere locks in via the mask.
+				let view = rootViews.get(container);
+				if (view === undefined) {
+					rootViews.set(container, (view = { pin: 0, mask: 0 }));
+				}
+				view.pin = ticket();
+				const slot = findLiveSlot(token);
+				if (slot >= 0) {
+					view.mask |= 1 << slot;
+				}
+				for (const cb of commitListeners) {
+					cb(container);
+				}
 			},
 			onBatchRetired: (token, committed) => onBatchRetiredEdge(token, committed),
 			// onBatchOpened (coordinator resolution 6): variant A's monotonic
@@ -2165,16 +2526,31 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	// ---- public API ---------------------------------------------------------------
-	function atom<T>(initial: T, opts?: { isEqual?: Equality<T>; label?: string }): AtomHandle<T> {
+	function atom<T>(
+		initial: T,
+		opts?: {
+			isEqual?: Equality<T>;
+			label?: string;
+			observeEffect?: (ctx: {
+				peek(): unknown;
+				set(v: unknown): void;
+				update(f: (x: unknown) => unknown): void;
+			}) => (() => void) | void;
+		},
+	): AtomHandle<T> {
 		maybeBoundary();
 		const id = allocNode(C.K_ATOM | C.MUTABLE);
 		const v = id >> 2;
 		values[v] = initial;
 		values[v + 1] = initial;
-		if (opts?.isEqual !== undefined || opts?.label !== undefined) {
-			metas[id >> 3] = { isEqual: opts?.isEqual as Equality<unknown> | undefined, label: opts?.label };
+		if (opts?.isEqual !== undefined || opts?.label !== undefined || opts?.observeEffect !== undefined) {
+			metas[id >> 3] = {
+				isEqual: opts?.isEqual as Equality<unknown> | undefined,
+				label: opts?.label,
+				observeEffect: opts?.observeEffect,
+			};
 		}
-		return {
+		const handle = {
 			kind: 'atom',
 			id,
 			get state(): T {
@@ -2195,7 +2571,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 			update(fn: (current: T) => T): void {
 				writeOp(id, C.OP_UPDATE, fn);
 			},
-		};
+		} as const;
+		registerHandle(handle, id);
+		return handle as AtomHandle<T>;
 	}
 
 	function reducerAtom<S, A>(
@@ -2213,7 +2591,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			label: opts?.label,
 			reducer: reducer as (state: unknown, action: unknown) => unknown,
 		};
-		return {
+		const handle = {
 			kind: 'reducerAtom',
 			id,
 			get state(): S {
@@ -2231,7 +2609,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 			dispatch(action: A): void {
 				writeOp(id, C.OP_DISPATCH, action);
 			},
-		};
+		} as const;
+		registerHandle(handle, id);
+		return handle as ReducerAtomHandle<S, A>;
 	}
 
 	function computed<T>(fn: () => T, opts?: { isEqual?: Equality<T>; label?: string }): ComputedHandle<T> {
@@ -2247,13 +2627,15 @@ export function createCosignalEngine(options?: EngineOptions) {
 				const next = (fn as () => unknown)();
 				return prev !== undefined && isEqual(prev, next) ? prev : next;
 			};
-		return {
+		const handle = {
 			kind: 'computed',
 			id,
 			get state(): T {
 				return readComputedPublic(id) as T;
 			},
-		};
+		} as const;
+		registerHandle(handle, id);
+		return handle as ComputedHandle<T>;
 	}
 
 	function watch(target: SignalHandle, onBroadcast?: (ev: BroadcastEvent) => void): WatcherHandle {
@@ -2325,21 +2707,42 @@ export function createCosignalEngine(options?: EngineOptions) {
 	function untracked<T>(fn: () => T): T {
 		const prevSub = activeSub;
 		activeSub = 0;
+		++untrackedDepth;
+		const certBase = certSp;
 		try {
 			return fn();
 		} finally {
 			activeSub = prevSub;
+			--untrackedDepth;
+			// Untracked reads are not dependencies in ANY world: roll back
+			// certificate pairs recorded inside (kernel parity of
+			// untracked-staleness — conformance #76 — extended to worlds).
+			certSp = certBase;
 		}
 	}
 
-	function readCommitted<T>(target: SignalHandle): T {
+	function committedWorldFor(container?: Container): WorldDesc {
+		if (container === undefined) {
+			return COMMITTED_WORLD;
+		}
+		const view = rootViews.get(container);
+		if (view === undefined) {
+			// A root that never committed: nothing retired is on its screen yet
+			// beyond what quiescence folded into the kernel.
+			return { k: C.WK_COMMITTED, key: -1, token: 0, slot: -1, pin: 0, mask: 0 };
+		}
+		return { k: C.WK_COMMITTED, key: -1, token: 0, slot: -1, pin: view.pin, mask: view.mask };
+	}
+
+	function readCommitted<T>(target: SignalHandle, container?: Container): T {
 		const prevCtx = readCtx;
 		readCtx = C.CTX_COMMITTED;
 		try {
 			const id = target.id;
+			const world = committedWorldFor(container);
 			return ((M[id + C.FLAGS] & C.K_ATOM) !== 0
-				? resolveAtomInWorld(id, COMMITTED_WORLD)
-				: resolveComputedInWorld(id, COMMITTED_WORLD)) as T;
+				? resolveAtomInWorld(id, world)
+				: resolveComputedInWorld(id, world)) as T;
 		} finally {
 			readCtx = prevCtx;
 		}
@@ -2353,10 +2756,28 @@ export function createCosignalEngine(options?: EngineOptions) {
 				return NEWEST_WORLD;
 			case 'committed':
 				return COMMITTED_WORLD;
+			case 'committedOn':
+				return committedWorldFor(sel.container);
 			case 'writer':
 				return writerWorld(sel.token);
 			case 'pass':
 				return passWorld;
+			case 'rendered': {
+				// The §13.2 fixup's re-resolution of a remembered render world,
+				// NOW: committed (retired) + applied + the remembered include
+				// set. The render pin served render stability only — everything
+				// retired/applied since the pin is exactly what the component
+				// missed. Retired include-tokens degrade gracefully into the
+				// RETIRED clause. key -1 = never memoized.
+				let mask = 0;
+				for (const t of sel.tokens) {
+					const slot = findLiveSlot(t);
+					if (slot >= 0) {
+						mask |= 1 << slot;
+					}
+				}
+				return { k: C.WK_WRITER, key: -1, token: 0, slot: -1, pin: sel.pin, mask };
+			}
 		}
 	}
 
@@ -2427,6 +2848,137 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 	}
 
+	// §13.4: run `fn` reading in a root's committed world, collecting the
+	// leaf atoms it (transitively) read — the committedEffect dependency set.
+	function trackCommitted<T>(container: Container | undefined, fn: () => T): { value: T; reads: number[] } {
+		const world = committedWorldFor(container);
+		const prevCtx = readCtx;
+		readCtx = C.CTX_COMMITTED;
+		const base = certSp;
+		frameWorlds.push(world);
+		const prevSub = activeSub;
+		activeSub = 0;
+		try {
+			const value = fn();
+			const reads: number[] = [];
+			for (let i = base; i < certSp; i += 2) {
+				if (!reads.includes(certStack[i])) {
+					reads.push(certStack[i]);
+				}
+			}
+			return { value, reads };
+		} finally {
+			activeSub = prevSub;
+			frameWorlds.pop();
+			certSp = base;
+			readCtx = prevCtx;
+		}
+	}
+
+	function committedValueById(id: number, container: Container | undefined): unknown {
+		return worldValueOf(id, committedWorldFor(container));
+	}
+
+	// §13.4 `useSignalEffect` analogue: a passive watcher over COMMITTED state,
+	// re-run in a microtask after the owning root's commit when the committed
+	// value of anything it tracked changed. Cleanup supported.
+	function committedEffect(container: Container | undefined, fn: () => void | (() => void)): () => void {
+		let disposed = false;
+		let cleanup: (() => void) | undefined;
+		let deps = new Map<number, unknown>();
+
+		const runOnce = (): void => {
+			cleanup?.();
+			cleanup = undefined;
+			const { value, reads } = trackCommitted(container, fn);
+			cleanup = (value as (() => void) | undefined) ?? undefined;
+			deps = new Map(reads.map((id) => [id, committedValueById(id, container)]));
+		};
+
+		const recheck = (): void => {
+			if (disposed) {
+				return;
+			}
+			for (const [id, last] of deps) {
+				const cur = committedValueById(id, container);
+				if (!valEq(equalityOf(id), last, cur)) {
+					runOnce();
+					return;
+				}
+			}
+		};
+
+		const onCommit = (c: Container): void => {
+			if (container === undefined || c === container) {
+				queueMicrotask(recheck); // "after commit" — matching useEffect's contract
+			}
+		};
+		commitListeners.add(onCommit);
+		runOnce();
+		return () => {
+			disposed = true;
+			commitListeners.delete(onCommit);
+			cleanup?.();
+			cleanup = undefined;
+		};
+	}
+
+	// §13.2: the world-aware post-subscribe fixup. `rendered` remembers the
+	// world (pin + included tokens) and value the component rendered with.
+	function subscribeWithFixup(
+		target: SignalHandle,
+		rendered: { pin: number; tokens: readonly number[]; value: unknown; container?: Container },
+		onSetState: (token: number, value: unknown) => void,
+	): WatcherHandle {
+		const handle = watch(target, (ev) => onSetState(ev.token, ev.value));
+		const meta = metas[handle.id >> 3]!;
+		const lb = meta.lastBroadcast!;
+		const eq = equalityOf(target.id);
+		// The watcher's W0 baseline is what it RENDERED, not the current W0 —
+		// a gap write must fire the correction.
+		lb.set(0, rendered.value);
+		// Check 1: did this component's own world move? Re-resolve the
+		// remembered rendered world NOW (committed + applied + its include
+		// set — retired include-tokens degrade into the committed clause, the
+		// spec's degenerate form).
+		const nowValue = worldValueOf(
+			target.id,
+			worldFromSelector({ kind: 'rendered', pin: rendered.pin, tokens: rendered.tokens }),
+		);
+		if (!valEq(eq, nowValue, rendered.value)) {
+			// Pre-paint urgent correction in the layout effect's own context.
+			lb.set(0, nowValue);
+			onSetState(0, nowValue);
+		}
+		// Check 2: did a pending world this component missed move? Entangle the
+		// corrective update into that batch's own lanes (§6.5) so it renders
+		// and commits WITH the batch — never a separate transition.
+		for (const t of liveDeferredTokens()) {
+			const v = worldValueOf(target.id, writerWorld(t));
+			if (!valEq(eq, v, rendered.value)) {
+				lb.set(t, v);
+				if (fork === undefined || !fork.runInBatch(t, () => onSetState(t, v))) {
+					// Retired between check and call: absorbed values are covered
+					// by the committed/check-1 path — issue the urgent form.
+					const fallback = readCommitted(target, rendered.container);
+					if (!valEq(eq, fallback, rendered.value)) {
+						lb.set(0, fallback);
+						onSetState(0, fallback);
+					}
+				}
+			} else {
+				lb.set(t, v);
+			}
+		}
+		return handle;
+	}
+
+	function configure(opts: { forbidWritesInComputeds?: boolean }): void {
+		if (opts.forbidWritesInComputeds !== undefined) {
+			forbidWritesInComputeds = opts.forbidWritesInComputeds;
+		}
+	}
+
 	return {
 		atom,
 		reducerAtom,
@@ -2439,6 +2991,52 @@ export function createCosignalEngine(options?: EngineOptions) {
 		readCommitted,
 		truncateBatch,
 		attachFork,
+		configure,
+		trackCommitted,
+		committedEffect,
+		subscribeWithFixup,
+		/** §14.2 deterministic disposal of an atom/computed record (the same
+		 * path the FinalizationRegistry takes for collected handles). */
+		reclaim(h: SignalHandle): void {
+			reclaimNode(h.id, M[h.id + C.GEN]);
+		},
+		setTracer(t: Tracer | undefined): void {
+			tracer = t;
+		},
+		onCommit(cb: (container: Container) => void): () => void {
+			commitListeners.add(cb);
+			return () => {
+				commitListeners.delete(cb);
+			};
+		},
+		// Policy hooks (§12.3 suspense wiring; consumed by src/api.ts only).
+		policy: {
+			invalidate(h: SignalHandle): void {
+				invalidate(h.id);
+				if (batchDepth === 0 && canonicalEvalDepth === 0 && runDepth === 0 && drainDepth === 0) {
+					flush();
+					drainAll(false);
+				}
+			},
+			bumpOverlayEpoch(): void {
+				++overlayEpoch;
+			},
+			canonicalValue(h: SignalHandle): unknown {
+				return values[h.id >> 2];
+			},
+			evalWorldKind(): 'canonical' | 'pass' | 'other' {
+				if (frameWorlds.length > 0) {
+					return frameWorlds[frameWorlds.length - 1].k === C.WK_PASS ? 'pass' : 'other';
+				}
+				return 'canonical';
+			},
+			passLineage(): number {
+				return passLineage;
+			},
+			isLive(h: SignalHandle): boolean {
+				return (M[h.id + C.FLAGS] & C.LIVE) !== 0;
+			},
+		},
 		debug: {
 			verify,
 			mode: (): 'DIRECT' | 'LOGGED' => (writeMode === C.MODE_LOGGED ? 'LOGGED' : 'DIRECT'),

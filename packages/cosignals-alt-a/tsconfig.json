@@ -1,4 +1,12 @@
 {
 	"extends": "../../tsconfig.base.json",
-	"include": ["src", "tests", "vitest.config.ts"]
+	"include": [
+		"src",
+		"tests",
+		"tools",
+		"vitest.config.ts"
+	],
+	"compilerOptions": {
+		"allowImportingTsExtensions": true
+	}
 }

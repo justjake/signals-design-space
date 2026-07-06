@@ -83,6 +83,8 @@ export type WriteDesc = { batch: number; atom: number; op: 'set' | 'update' | 'd
 
 export type Op =
 	| { t: 'openDeferred' }
+	| { t: 'openUrgent' } // an explicit urgent batch (distinct from the bare event batch)
+	| { t: 'newNode'; spec: NodeSpec } // fresh nodes mid-era/mid-schedule
 	| { t: 'write'; w: WriteDesc }
 	| { t: 'group'; writes: WriteDesc[] } // engine batch(): grouped drain
 	| { t: 'retire'; b: number; committed: boolean }
@@ -123,6 +125,11 @@ export class Oracle {
 
 	constructor(public specs: NodeSpec[]) {
 		this.writes = specs.map(() => []);
+	}
+
+	addNode(spec: NodeSpec): void {
+		this.specs.push(spec);
+		this.writes.push([]);
 	}
 
 	eqOf(idx: number): ((a: number, b: number) => boolean) | undefined {
@@ -274,13 +281,14 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 	const fork = createForkDouble();
 	engine.attachFork(fork);
 	fork.registerRoot('root');
+	specs = specs.slice(); // the runner may append mid-schedule nodes
 	const oracle = new Oracle(specs);
 
 	// Build the node universe in the engine.
 	const handles: SignalHandle[] = [];
 	const reducerHandles = new Map<number, { dispatch(a: number): void }>();
 	const atomHandles = new Map<number, { set(v: number): void; update(f: (x: number) => number): void }>();
-	for (let i = 0; i < specs.length; ++i) {
+	function buildNode(i: number): void {
 		const s = specs[i];
 		if (s.kind === 'atom') {
 			const h = engine.atom<number>(s.initial, s.eqMod !== undefined ? { isEqual: modEq(s.eqMod) } : undefined);
@@ -298,6 +306,9 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 			);
 			handles.push(h);
 		}
+	}
+	for (let i = 0; i < specs.length; ++i) {
+		buildNode(i);
 	}
 
 	// Harness state.
@@ -466,6 +477,26 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 					b.token; // mint eagerly so the harness knows the token
 					batches.push(b);
 					oracle.noteToken(b.token, true);
+					break;
+				}
+				case 'openUrgent': {
+					const b = fork.openBatch('urgent');
+					b.token;
+					batches.push(b);
+					oracle.noteToken(b.token, false);
+					break;
+				}
+				case 'newNode': {
+					if (passExecuting()) {
+						break; // node creation is not a render-phase act here
+					}
+					const spec = op.spec;
+					if (spec.kind === 'computed' && spec.srcs.some((x) => x >= specs.length || x < 0)) {
+						break; // guard: shrinking may have removed a source
+					}
+					// `specs` IS oracle.specs (shared array): one push only.
+					oracle.addNode(spec);
+					buildNode(specs.length - 1);
 					break;
 				}
 				case 'write': {
@@ -757,10 +788,26 @@ export function generateSchedule(rng: () => number, specs: NodeSpec[], length: n
 				const n = 2 + Math.floor(rng() * 3);
 				ops.push({ t: 'group', writes: Array.from({ length: n }, randWrite) });
 			}
-		} else if (roll < 0.5) {
+		} else if (roll < 0.48) {
 			if (openBatches < 6) {
 				ops.push({ t: 'openDeferred' });
 				++openBatches;
+			}
+		} else if (roll < 0.5) {
+			if (openBatches < 6 && rng() < 0.5) {
+				ops.push({ t: 'openUrgent' });
+				++openBatches;
+			} else {
+				const idx = nNodes; // approximate; runner guards src ranges
+				const pick = (): number => Math.floor(rng() * (idx + ops.filter((o) => o.t === 'newNode').length));
+				ops.push({
+					t: 'newNode',
+					spec: rng() < 0.6
+						? { kind: 'computed', type: 'branch', srcs: [pick(), pick(), pick()] }
+						: rng() < 0.5
+							? { kind: 'computed', type: 'sum', srcs: [pick(), pick()] }
+							: { kind: 'atom', initial: Math.floor(rng() * 10) },
+				});
 			}
 		} else if (roll < 0.62) {
 			if (openBatches > 0) {
