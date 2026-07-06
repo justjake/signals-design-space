@@ -371,7 +371,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 	// Kernel broadcast queue (watcher ids; kernel propagate pushes token 0).
 	const kernelBroadcasts: number[] = [];
 	let drainDepth = 0;
-	const broadcastLog: BroadcastEvent[] = []; // observable drain output
+	// Observable drain output, consumed by debug.takeBroadcasts(). Bounded:
+	// production callers observe via onBroadcast callbacks and never drain
+	// this log, so an uncapped log would pin one event (value included) per
+	// broadcast forever. Oldest events drop past the cap; the drop count is
+	// visible in debug.stats().
+	const broadcastLog: BroadcastEvent[] = [];
+	const BROADCAST_LOG_CAP = 16384;
+	let broadcastLogDropped = 0;
 
 	// Policy configuration (§4.4 configure).
 	let forbidWritesInComputeds = false;
@@ -391,23 +398,60 @@ export function createCosignalEngine(options?: EngineOptions) {
 	// computed record. Conservative guards: never reclaim a node that still
 	// has subscribers (a live closure would have kept the handle reachable)
 	// or an atom with a live tape (the sweep owns that lifecycle).
-	function reclaimNode(id: number, gen: number): void {
+	//
+	// `fromFinalizer` marks GC-driven reclaims (the handle is provably
+	// unreachable): a guarded skip is recorded in `finalizeSkipped` and
+	// retried when the blocking reference drops (last subscriber unlinks /
+	// tape sweeps away). Without the retry, a FinalizationRegistry callback
+	// that lost the race fires exactly once and the record leaks forever.
+	// Deterministic `reclaim()` calls never register a retry: the caller may
+	// legitimately keep using the handle after a guarded skip.
+	function reclaimNode(id: number, gen: number, fromFinalizer = false): void {
 		if (M[id + C.GEN] !== gen || (M[id + C.FLAGS] & (C.K_ATOM | C.K_COMPUTED)) === 0) {
+			finalizeSkipped.delete(id);
 			return;
 		}
 		if (M[id + C.SUBS] !== 0 || (M[id + C.FLAGS] & C.LOGGED) !== 0) {
+			if (fromFinalizer) {
+				finalizeSkipped.set(id, gen);
+			}
 			return;
 		}
+		finalizeSkipped.delete(id);
 		disposeAllDepsInReverse(id);
 		M[id + C.FLAGS] = 0;
 		pendingFree.push(id);
 		maybeBoundary();
 	}
 
+	// GC-skipped reclaims awaiting their blocking reference to drop.
+	const finalizeSkipped = new Map<number, number>(); // id → gen
+	// Trigger queue: ids whose blocking condition JUST cleared (mid-operation
+	// sites push here; maybeBoundary retries at a safe boundary).
+	const finalizeRetry: number[] = [];
+
+	function noteReclaimRetry(id: number): void {
+		if (finalizeSkipped.size !== 0 && finalizeSkipped.has(id)) {
+			finalizeRetry.push(id);
+		}
+	}
+
+	function processFinalizeRetries(): void {
+		while (finalizeRetry.length !== 0) {
+			const batch = finalizeRetry.splice(0, finalizeRetry.length);
+			for (const id of batch) {
+				const gen = finalizeSkipped.get(id);
+				if (gen !== undefined) {
+					reclaimNode(id, gen, true);
+				}
+			}
+		}
+	}
+
 	const finalizationEnabled = options?.finalization === true;
 	const finalizer = finalizationEnabled && typeof FinalizationRegistry !== 'undefined'
 		? new FinalizationRegistry<{ id: number; gen: number }>((held) => {
-			reclaimNode(held.id, held.gen);
+			reclaimNode(held.id, held.gen, true);
 		})
 		: undefined;
 
@@ -494,8 +538,26 @@ export function createCosignalEngine(options?: EngineOptions) {
 		values[v] = undefined;
 		values[v + 1] = undefined;
 		fns[id >> 3] = undefined;
+		// Tombstone this node's world memos BEFORE dropping the chain head:
+		// slot-chain re-validation skips epoch-0 records, and the memoVals
+		// slots must not pin the dead node's values until quiescence.
+		let mrec = memos[id >> 3];
+		while (mrec !== 0 && mrec < wNext && W[mrec + C.W_NODE] === id) {
+			W[mrec + C.W_EPOCH] = 0;
+			memoVals[W[mrec + C.W_VAL]] = undefined;
+			mrec = W[mrec + C.W_NEXT_MEMO];
+		}
 		memos[id >> 3] = 0;
 		metas[id >> 3] = undefined;
+		// Side-array hygiene at the free site: a recycled record must not
+		// inherit the previous occupant's unapplied stamp or NEWEST-cache
+		// validation (a stale newestValidAt equal to the current certGen would
+		// serve the cleared values[+1] slot as a valid cached value).
+		unappliedStamp[id >> 3] = 0;
+		newestValidAt[id >> 3] = 0;
+		if (finalizeSkipped.size !== 0) {
+			finalizeSkipped.delete(id);
+		}
 		M[id + C.DEPS] = nodeFreeHead;
 		nodeFreeHead = id;
 	}
@@ -972,8 +1034,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 				M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY | (flags & (C.LIVE | C.LOGGED));
 				disposeAllDepsInReverse(node);
 			}
+			noteReclaimRetry(node); // last subscriber gone: retry a GC-skipped reclaim
 		} else if (flags & C.K_ATOM) {
-			// nothing to do
+			noteReclaimRetry(node); // last subscriber gone: retry a GC-skipped reclaim
 		} else if (flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) {
 			dispose(node);
 		}
@@ -1085,6 +1148,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (!(flags & C.KIND_MASK)) {
 			return;
 		}
+		if (flags & C.K_WATCHER) {
+			liveWatchers.delete(e);
+		}
 		M[e + C.FLAGS] = 0;
 		disposeAllDepsInReverse(e);
 		const sub = M[e + C.SUBS];
@@ -1115,8 +1181,13 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function maybeBoundary(): void {
-		if (enterDepth === 0 && pendingFree.length !== 0 && queuedLength === 0) {
-			sweepPendingFree();
+		if (enterDepth === 0 && queuedLength === 0) {
+			if (finalizeRetry.length !== 0 && drainDepth === 0) {
+				processFinalizeRetries();
+			}
+			if (pendingFree.length !== 0) {
+				sweepPendingFree();
+			}
 		}
 	}
 
@@ -1369,6 +1440,18 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	function releaseSlotIfDone(slot: number): void {
 		if (((retiredSlotMask >> slot) & 1) !== 0 && batchEntryCount[slot] === 0) {
+			// Tombstone the dead batch's writer's-world memos and release their
+			// memoVals slots NOW: the token never resolves again, and waiting
+			// for quiescence would pin those values for as long as any OTHER
+			// transition stays open (unbounded across overlapping batches).
+			let rec = slotMemoHead[slot];
+			while (rec > 0) {
+				const next = W[rec + C.W_SLOT_NEXT];
+				W[rec + C.W_EPOCH] = 0;
+				memoVals[W[rec + C.W_VAL]] = undefined;
+				W[rec + C.W_SLOT_NEXT] = -1;
+				rec = next;
+			}
 			batchToken[slot] = 0;
 			slotOccupiedMask &= ~(1 << slot);
 			liveSlotMask &= ~(1 << slot);
@@ -1755,17 +1838,6 @@ export function createCosignalEngine(options?: EngineOptions) {
 			v = prev;
 		}
 		if (world.key >= 0) {
-			// Pack the certificate run: [frameBase, certSp) — includes every
-			// nested frame's reads beneath this frame's base (flattening).
-			const pairs = (certSp - frameBase) >> 1;
-			while (certNext + pairs * 2 > WC.length) {
-				growWC();
-			}
-			const off = certNext;
-			for (let i = 0; i < pairs * 2; ++i) {
-				WC[off + i] = certStack[frameBase + i];
-			}
-			certNext = off + pairs * 2;
 			// Re-memoization updates the (node, key) record IN PLACE: chains
 			// (node chain and slot chain) keep exactly one record per key, so
 			// lookup and re-validation stay O(live keys) — a held-open
@@ -1778,6 +1850,27 @@ export function createCosignalEngine(options?: EngineOptions) {
 					rec = old;
 					break;
 				}
+			}
+			// Pack the certificate run: [frameBase, certSp) — includes every
+			// nested frame's reads beneath this frame's base (flattening).
+			// Re-memoization REUSES the record's existing run when the new run
+			// fits: nobody else aliases it, and a held-open transition's hot
+			// write→re-validate loop must not bump-allocate a fresh run per
+			// re-evaluation (certNext only resets at quiescence — that growth
+			// was per-operation and unbounded while any batch stayed open).
+			const pairs = (certSp - frameBase) >> 1;
+			let off: number;
+			if (rec !== 0 && pairs <= W[rec + C.W_NDEPS]) {
+				off = W[rec + C.W_CERT];
+			} else {
+				while (certNext + pairs * 2 > WC.length) {
+					growWC();
+				}
+				off = certNext;
+				certNext = off + pairs * 2;
+			}
+			for (let i = 0; i < pairs * 2; ++i) {
+				WC[off + i] = certStack[frameBase + i];
 			}
 			if (rec !== 0) {
 				W[rec + C.W_EPOCH] = overlayEpoch;
@@ -1915,6 +2008,31 @@ export function createCosignalEngine(options?: EngineOptions) {
 		pendingWalks.push(atom, token);
 	}
 
+	// Live watcher registry: lastBroadcast baselines are keyed by batch token,
+	// and tokens are minted fresh per batch — without pruning, a long-lived
+	// watcher's baseline Map grows by one entry (pinning one value) per
+	// broadcast-reaching batch, forever. Prune at retirement/quiescence: a
+	// key is dead once its token no longer occupies a slot (token 0, the W0
+	// baseline, is permanent).
+	const liveWatchers = new Set<number>();
+
+	function pruneWatcherBaselines(): void {
+		if (liveWatchers.size === 0) {
+			return;
+		}
+		for (const w of liveWatchers) {
+			const lb = metas[w >> 3]?.lastBroadcast;
+			if (lb === undefined || lb.size <= 1) {
+				continue;
+			}
+			for (const key of lb.keys()) {
+				if (key !== 0 && findLiveSlot(key) < 0) {
+					lb.delete(key);
+				}
+			}
+		}
+	}
+
 	function decide(w: number, token: number, entangled: boolean): void {
 		const meta = metas[w >> 3];
 		if (meta === undefined || meta.watchedId === undefined || (M[w + C.FLAGS] & C.K_WATCHER) === 0) {
@@ -1939,6 +2057,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 			};
 			if (tracer !== undefined) {
 				tracer.emit(TraceKind.BROADCAST, w, token);
+			}
+			if (broadcastLog.length >= BROADCAST_LOG_CAP) {
+				broadcastLogDropped += broadcastLog.length >> 1;
+				broadcastLog.splice(0, broadcastLog.length >> 1); // drop oldest half
 			}
 			broadcastLog.push(ev);
 			meta.onBroadcast?.(ev);
@@ -2434,7 +2556,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 		// pitfall "W0-no-op retirement".
 		drainAll(true);
 		sweepLogs();
+		// Retired token → its per-watcher baselines are dead; drop them (and
+		// any straggler keys from earlier retirements' fallback decisions).
+		pruneWatcherBaselines();
 		tryQuiescence();
+		maybeBoundary(); // process reclaim retries the sweep just unblocked
 	}
 
 	// ---- truncation (§9.6 + resolution 4) ---------------------------------------------
@@ -2500,6 +2626,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			sweepLogs();
 			tryQuiescence();
 		}
+		maybeBoundary(); // process reclaim retries the sweep just unblocked
 	}
 
 	// ---- sweep (§9.6) ---------------------------------------------------------------
@@ -2547,6 +2674,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				loggedAtoms[i] = loggedAtoms[loggedAtoms.length - 1];
 				loggedAtoms.pop();
 				--loggedAtomCount;
+				noteReclaimRetry(a); // tape gone: retry a GC-skipped reclaim
 				moved = true;
 			}
 		}
@@ -2591,6 +2719,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		seqCounter = 1;
 		++certGen; // recycled record offsets must not inherit stale validations
 		++quiescenceCount;
+		pruneWatcherBaselines(); // all slots are empty: only the W0 baseline survives
 		if (tracer !== undefined) {
 			tracer.emit(TraceKind.QUIESCENCE, 0, 0, quiescenceCount);
 		}
@@ -2938,6 +3067,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE | C.LIVE);
 		const meta: NodeMeta = { watchedId: targetId, lastBroadcast: new Map(), onBroadcast };
 		metas[w >> 3] = meta;
+		liveWatchers.add(w);
 		link(targetId, w, 0);
 		// Baseline: the watcher "rendered" the current canonical value.
 		meta.lastBroadcast!.set(0, worldValueOf(targetId, W0_WORLD));
@@ -3381,6 +3511,16 @@ export function createCosignalEngine(options?: EngineOptions) {
 			forceSeqCounter: (n: number): void => {
 				seqCounter = n;
 			},
+			/** Run the GC finalization path for a handle's record — the same
+			 * call the FinalizationRegistry makes (deterministic stand-in for
+			 * GC timing; a guarded skip registers the reclaim retry). */
+			simulateFinalize: (h: SignalHandle): void => {
+				reclaimNode(h.id, M[h.id + C.GEN], true);
+			},
+			/** Number of per-world baseline entries a watcher holds (leak
+			 * tests: must not grow with retired batches). */
+			watcherBaselineCount: (h: { id: number }): number =>
+				metas[h.id >> 3]?.lastBroadcast?.size ?? 0,
 			stats: (): Record<string, number> => ({
 				recNext,
 				gNext,
@@ -3396,6 +3536,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 				seqCounter,
 				passOpen,
 				unappliedEntries,
+				broadcastLogSize: broadcastLog.length,
+				broadcastLogDropped,
+				finalizePending: finalizeSkipped.size,
+				liveWatcherCount: liveWatchers.size,
+				memoValsLen: memoVals.length,
+				pendingFreeLen: pendingFree.length,
 			}),
 		},
 	};

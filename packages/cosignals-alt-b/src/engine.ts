@@ -378,6 +378,21 @@ let debugChecks = true;
 // §14.2 FinalizationRegistry (behind a flag; reclamation is GC-driven).
 let finalizationEnabled = false;
 let finalizationRegistry: FinalizationRegistry<{ id: number; gen: number }> | undefined;
+// GC-driven reclaims that hit a guard (live subscribers / live tape) are
+// recorded here and retried when the blocking reference drops — the
+// registry fires exactly once per handle, so a skipped callback would
+// otherwise leak the record forever. id → gen.
+const finalizeSkipped = new Map<number, number>();
+// ids whose blocking condition just cleared; drained at boundary().
+const finalizeRetry: number[] = [];
+// Live watcher registry: lastBroadcast baselines are keyed by batch token
+// and tokens are minted fresh per batch — prune dead-token keys at
+// retirement/quiescence or a long-lived watcher's Map grows (pinning one
+// value) per batch forever.
+const liveWatcherIds = new Set<number>();
+// Nodes whose meta carries a thenableCache (render-lineage keyed): pruned
+// at quiescence so retired lineages' thenables do not pin forever.
+const thenableCacheNodes = new Set<number>();
 let cfgInitialRecords = 8192;
 let cfgInitialLogRecords = 1024;
 let cfgInitialMemoRecords = 1024;
@@ -473,10 +488,24 @@ function freeNode(id: number): void {
 	values[v + 1] = undefined;
 	fns[id >> 3] = undefined;
 	metaCol[id >> 3] = undefined;
+	// Tombstone the node's world memos BEFORE dropping the chain head: slot
+	// chains still reference these records (skipped once epoch is 0), and
+	// their memoVals slots must not pin the dead node's values until the
+	// next quiescence reset.
+	let mrec = memoHeads[id >> 3];
+	while (mrec !== 0 && mrec < wNext && W[mrec + C.W_NODE] === id) {
+		W[mrec + C.W_EPOCH] = 0;
+		memoVals[W[mrec + C.W_VAL]] = undefined;
+		mrec = W[mrec + C.W_NEXT_MEMO];
+	}
 	memoHeads[id >> 3] = 0;
 	newestStamp[id >> 3] = 0;
 	unappliedCount[id >> 3] = 0;
 	unappliedStamp[id >> 3] = 0;
+	if (finalizeSkipped.size !== 0) {
+		finalizeSkipped.delete(id);
+	}
+	thenableCacheNodes.delete(id);
 	M[id + C.DEPS] = nodeFreeHead;
 	nodeFreeHead = id;
 }
@@ -1060,8 +1089,9 @@ function unwatched(node: number): void {
 			M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY;
 			disposeAllDepsInReverse(node);
 		}
+		noteReclaimRetry(node); // last subscriber gone: retry a GC-skipped reclaim
 	} else if (flags & C.K_ATOM) {
-		// nothing (observed-lifecycle is M4)
+		noteReclaimRetry(node); // last subscriber gone: retry a GC-skipped reclaim
 	} else if (flags & (C.K_EFFECT | C.K_SCOPE)) {
 		dispose(node);
 	}
@@ -1171,6 +1201,9 @@ function dispose(e: number): void {
 	const flags = M[e + C.FLAGS];
 	if (!(flags & C.KIND_MASK)) {
 		return;
+	}
+	if (flags & C.K_WATCHER) {
+		liveWatcherIds.delete(e);
 	}
 	M[e + C.FLAGS] = 0;
 	disposeAllDepsInReverse(e);
@@ -1693,15 +1726,24 @@ function writeMemoRecord(c: number, world: World, val: unknown, certBase: number
 	// re-appended (reclaimed by the quiescence reset like all cert bytes).
 	const old = memoLookup(c, world.key);
 	if (old !== 0) {
-		CERT.set(certStack.subarray(certBase, certSp), certNext);
+		// Reuse the record's existing certificate run when the new run fits:
+		// no other record aliases it, and a held-open transition's hot
+		// write→re-validate loop must not bump-allocate a fresh run per
+		// re-evaluation (certNext resets only at quiescence, so that growth
+		// was per-operation and unbounded while any batch stayed open).
+		if (nPairs <= W[old + C.W_NDEPS]) {
+			CERT.set(certStack.subarray(certBase, certSp), W[old + C.W_CERT]);
+		} else {
+			CERT.set(certStack.subarray(certBase, certSp), certNext);
+			W[old + C.W_CERT] = certNext;
+			certNext += nPairs * 2;
+			if (certNext > WM_CERT) {
+				growPending = true;
+			}
+		}
 		W[old + C.W_EPOCH] = overlayEpoch;
 		memoVals[W[old + C.W_VAL]] = val;
 		W[old + C.W_NDEPS] = nPairs;
-		W[old + C.W_CERT] = certNext;
-		certNext += nPairs * 2;
-		if (certNext > WM_CERT) {
-			growPending = true;
-		}
 		memoStamp[W[old + C.W_VAL]] = tapeStamp;
 		M[c + C.MEMO_KEY] = world.key;
 		// Late slot-chain link: the record may have been created while the
@@ -1976,6 +2018,7 @@ function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
 			let cache = m!.thenableCache;
 			if (cache === undefined) {
 				cache = m!.thenableCache = new Map();
+				thenableCacheNodes.add(c); // quiescence prunes lineage keys
 			}
 			let arr = cache.get(cacheKey);
 			if (arr === undefined) {
@@ -2548,7 +2591,11 @@ function onRetired(token: number): void {
 		drainAll();
 	}
 	sweepTapes();
+	// Retired token → its per-watcher baselines are dead; drop them (and any
+	// straggler keys from earlier retirements' fallback decisions).
+	pruneWatcherBaselines();
 	maybeQuiesce();
+	processFinalizeRetries(); // reclaims the sweep just unblocked
 }
 
 function anyUnretiredSlot(): boolean {
@@ -2599,6 +2646,7 @@ function sweepTapes(): void {
 				M[a + C.FLAGS] &= ~C.LOGGED;
 				--loggedAtomCount;
 				loggedAtoms.splice(i, 1);
+				noteReclaimRetry(a); // tape gone: retry a GC-skipped reclaim
 			}
 		}
 	}
@@ -2700,6 +2748,24 @@ function maybeQuiesce(): void {
 	++overlayEpoch;
 	++worldStamp; // cross-era invalidator (seqs repeat across eras)
 	seqCounter = 1;
+	pruneWatcherBaselines(); // all slots empty: only the W0 baseline survives
+	// Retired render lineages' thenable caches: only the canonical (key 0)
+	// positions can be consulted again after full quiescence — a suspended
+	// pass would have kept its batch live and blocked quiescence.
+	if (thenableCacheNodes.size !== 0) {
+		for (const id of thenableCacheNodes) {
+			const cache = metaCol[id >> 3]?.thenableCache;
+			if (cache === undefined) {
+				thenableCacheNodes.delete(id);
+				continue;
+			}
+			for (const key of cache.keys()) {
+				if (key !== 0) {
+					cache.delete(key);
+				}
+			}
+		}
+	}
 	if (walkCounter > 1 << 30) {
 		// Safety valve: zero every node's OVERLAY_STAMP at an idle moment.
 		for (let i = 0; i < nodeIds.length; ++i) {
@@ -3061,8 +3127,35 @@ function makeWatcher(watched: number, cb: (token: number) => void): { id: number
 		}
 	}
 	metaCol[w >> 3] = { cb, watched, lastBroadcast };
+	liveWatcherIds.add(w);
 	link(watched, w, 0);
 	return { id: w, gen: M[w + C.GEN] };
+}
+
+/** Drop per-watcher broadcast baselines whose batch token is dead: keys are
+ * minted per batch, so without this a long-lived watcher's lastBroadcast Map
+ * grows by one pinned value per broadcast-reaching batch, forever. Key 0
+ * (the W0 baseline) is permanent; a key survives while its token still
+ * occupies a slot (including retired-but-unswept) or is live on the fork. */
+function pruneWatcherBaselines(): void {
+	if (liveWatcherIds.size === 0) {
+		return;
+	}
+	for (const w of liveWatcherIds) {
+		const lb = metaCol[w >> 3]?.lastBroadcast;
+		if (lb === undefined || lb.size <= 1) {
+			continue;
+		}
+		for (const key of lb.keys()) {
+			if (key === 0) {
+				continue;
+			}
+			const token = key >> 2;
+			if (slotOfToken(token) < 0 && (fork === undefined || !fork.isBatchLive(token))) {
+				lb.delete(key);
+			}
+		}
+	}
 }
 
 function registerHandle(handle: object, id: number): void {
@@ -3077,22 +3170,52 @@ function registerHandle(handle: object, id: number): void {
 
 /** Free a handle-owned record once its handle is unreachable. Skips records
  * that are still subscribed-to or carry a live tape; the GEN check defuses
- * stale finalizations. */
-function finalizeRecord(held: { id: number; gen: number }): void {
+ * stale finalizations. `retryIfBusy` marks GC-driven calls (the handle is
+ * provably unreachable): a guarded skip is recorded and retried when the
+ * blocking reference drops (last subscriber unlinks / tape sweeps away) —
+ * the registry fires once per handle, so a skipped callback would otherwise
+ * leak the record forever. Deterministic disposeSignal() never registers a
+ * retry: its caller may legitimately keep using the handle after a skip. */
+function finalizeRecord(held: { id: number; gen: number }, retryIfBusy = false): void {
 	const { id, gen } = held;
 	if (M[id + C.GEN] !== gen) {
+		finalizeSkipped.delete(id);
 		return; // already freed and possibly reused
 	}
 	const flags = M[id + C.FLAGS];
 	if ((flags & (C.K_ATOM | C.K_COMPUTED)) === 0) {
+		finalizeSkipped.delete(id);
 		return;
 	}
 	if (M[id + C.SUBS] !== 0 || (flags & C.LOGGED) !== 0) {
+		if (retryIfBusy) {
+			finalizeSkipped.set(id, gen);
+		}
 		return; // graph edges or a live tape still reference it: leak-safe skip
 	}
+	finalizeSkipped.delete(id);
 	disposeAllDepsInReverse(id);
 	pendingFree.push(id);
 	sweepPendingFree();
+}
+
+/** A guard that blocked a GC-driven reclaim just cleared: queue the retry. */
+function noteReclaimRetry(id: number): void {
+	if (finalizeSkipped.size !== 0 && finalizeSkipped.has(id)) {
+		finalizeRetry.push(id);
+	}
+}
+
+function processFinalizeRetries(): void {
+	while (finalizeRetry.length !== 0) {
+		const batch = finalizeRetry.splice(0, finalizeRetry.length);
+		for (const id of batch) {
+			const gen = finalizeSkipped.get(id);
+			if (gen !== undefined) {
+				finalizeRecord({ id, gen }, true);
+			}
+		}
+	}
 }
 
 	return {
@@ -3100,6 +3223,8 @@ function finalizeRecord(held: { id: number; gen: number }): void {
 		allocNode,
 		gen: (id: number) => M[id + C.GEN],
 		dispose,
+		sweepPendingFree,
+		processFinalizeRetries,
 		atomWrite,
 		readAtomPublic,
 		readComputedPublic,
@@ -3213,8 +3338,23 @@ function boundaryWork(): void {
 }
 
 function boundary(): void {
-	if (enterDepth === 0 && growPending) {
-		boundaryWork();
+	if (enterDepth === 0) {
+		if (finalizeRetry.length !== 0 && drainDepth === 0) {
+			E.processFinalizeRetries();
+		}
+		if (growPending) {
+			boundaryWork();
+		}
+	}
+}
+
+/** Sweep dispose()d records into the free list at a true operation boundary.
+ * Without this, a create→dispose loop that never writes (nothing calls
+ * flush) grows the main plane and pendingFree forever: dispose() only
+ * queues the record, and the queue was drained solely at flush time. */
+function reclaimBoundary(): void {
+	if (enterDepth === 0 && drainDepth === 0) {
+		E.sweepPendingFree();
 	}
 }
 
@@ -3271,7 +3411,7 @@ function settleTrampoline(t: PromiseLike<unknown>, st: ThenableState): void {
 function finalizeTrampoline(held: { id: number; gen: number }): void {
 	++enterDepth;
 	try {
-		E.finalizeRecord(held);
+		E.finalizeRecord(held, true); // GC-driven: retry a guarded skip later
 	} finally {
 		--enterDepth;
 	}
@@ -3326,6 +3466,10 @@ export function __resetEngineForTests(options?: {
 	debugChecks = true;
 	finalizationEnabled = false;
 	finalizationRegistry = undefined;
+	finalizeSkipped.clear();
+	finalizeRetry.length = 0;
+	liveWatcherIds.clear();
+	thenableCacheNodes.clear();
 	cfgInitialRecords = options?.initialRecords ?? 8192;
 	cfgInitialLogRecords = options?.initialLogRecords ?? 1024;
 	cfgInitialMemoRecords = options?.initialMemoRecords ?? 1024;
@@ -3684,6 +3828,7 @@ export function effect(fn: () => void | (() => void)): () => void {
 			return;
 		}
 		E.dispose(h.id);
+		reclaimBoundary();
 		boundary();
 	};
 }
@@ -3696,6 +3841,7 @@ export function effectScope(fn: () => void): () => void {
 			return;
 		}
 		E.dispose(h.id);
+		reclaimBoundary();
 		boundary();
 	};
 }
@@ -3780,6 +3926,7 @@ export function createWatcher(signal: SignalLike, cb: (token: number) => void): 
 				return;
 			}
 			E.dispose(h.id);
+			reclaimBoundary();
 			boundary();
 		},
 	};
@@ -3901,6 +4048,10 @@ export const __debug = {
 			pseudoFallbacks,
 			liveMemos: enter(() => E.liveMemos()),
 			recNext,
+			pendingFreeLen: pendingFree.length,
+			finalizePending: finalizeSkipped.size,
+			liveWatcherCount: liveWatcherIds.size,
+			memoValsLen: memoVals.length,
 			planeBytes: (() => {
 				const b = E.buffers();
 				return (b.m.length + b.g.length + b.w.length + b.cert.length) * 4;
@@ -3908,10 +4059,21 @@ export const __debug = {
 		};
 	},
 	/** Run the finalization path for a handle's record as the GC would
-	 * (FinalizationRegistry timing is untestable without --expose-gc). */
+	 * (FinalizationRegistry timing is untestable without --expose-gc).
+	 * Like the GC path, a guarded skip registers the reclaim retry. */
 	simulateFinalize(signal: SignalLike, gen?: number): void {
-		enter(() => E.finalizeRecord({ id: signal.id, gen: gen ?? E.gen(signal.id) }));
+		enter(() => E.finalizeRecord({ id: signal.id, gen: gen ?? E.gen(signal.id) }, true));
 		boundary();
+	},
+	/** Number of per-world baseline entries a watcher holds (leak tests:
+	 * must not grow with retired batches). */
+	watcherBaselineCount(watcher: { id: number }): number {
+		return metaCol[watcher.id >> 3]?.lastBroadcast?.size ?? 0;
+	},
+	/** Lineage keys held by a computed's thenable cache (leak tests: retired
+	 * lineages must be pruned at quiescence; key 0 is the canonical slot). */
+	thenableLineageKeys(signal: SignalLike): number[] {
+		return [...(metaCol[signal.id >> 3]?.thenableCache?.keys() ?? [])];
 	},
 	/** Is the node currently LIVE (transitively watched)? */
 	isLive(signal: SignalLike): boolean {
