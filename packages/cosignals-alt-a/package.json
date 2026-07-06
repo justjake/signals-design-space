@@ -19,6 +19,7 @@
 	},
 	"devDependencies": {
 		"@lab/arena": "workspace:*",
+		"esbuild": "0.28.1",
 		"reactive-framework-test-suite": "0.0.2",
 		"typescript": "6.0.3",
 		"vitest": "4.1.6"

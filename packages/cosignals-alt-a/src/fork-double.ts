@@ -110,19 +110,12 @@ export type ForkDouble = ForkAdapter & {
 	readonly reportedErrors: unknown[];
 };
 
-type BatchState = {
-	script: BatchScript;
-	deferred: boolean;
-	token: number; // 0 until minted
-	retired: boolean;
-	committedRoots: Set<Container>;
-};
 
 export function createForkDouble(): ForkDouble {
 	const listeners = new Set<ExternalRuntimeListener>();
 	const roots = new Set<Container>();
 	const reportedErrors: unknown[] = [];
-	const batches: BatchState[] = []; // all ever opened
+	const batches: BatchScript[] = []; // all ever opened
 	const liveByToken = new Map<number, BatchState>();
 	let serial = 0;
 	let lineageSerial = 0;
@@ -141,15 +134,14 @@ export function createForkDouble(): ForkDouble {
 		}
 		| undefined;
 
-	function emit<K extends keyof ExternalRuntimeListener>(
-		k: K,
-		...args: Parameters<NonNullable<ExternalRuntimeListener[K]>>
-	): void {
+	// Fixed arity (no rest/spread): emit runs on every batch lifecycle edge
+	// and rest-arg materialization dominated the idle-write profile.
+	function emit(k: keyof ExternalRuntimeListener, a?: unknown, b?: unknown, c?: unknown): void {
 		for (const l of listeners) {
-			const fn = l[k] as ((...a: unknown[]) => void) | undefined;
+			const fn = l[k] as ((x?: unknown, y?: unknown, z?: unknown) => void) | undefined;
 			if (fn !== undefined) {
 				try {
-					fn(...(args as unknown[]));
+					fn(a, b, c);
 				} catch (err) {
 					reportedErrors.push(err);
 				}
@@ -158,83 +150,80 @@ export function createForkDouble(): ForkDouble {
 	}
 
 	function mint(b: BatchState): number {
-		if (b.token === 0) {
+		if (b._token === 0) {
 			if (liveByToken.size >= 31) {
 				throw new Error('fork-double: >31 live tokens (violates §6.2 liveness invariant)');
 			}
-			b.token = (++serial << 1) | (b.deferred ? 1 : 0);
-			liveByToken.set(b.token, b);
-			emit('onBatchOpened', b.token, b.deferred);
+			b._token = (++serial << 1) | (b.deferred ? 1 : 0);
+			liveByToken.set(b._token, b);
+			emit('onBatchOpened', b._token, b.deferred);
 		}
-		return b.token;
+		return b._token;
+	}
+
+	// A class (prototype methods, no per-batch closures): batch construction
+	// is the idle-write workload's hottest allocation site.
+	class BatchState implements BatchScript {
+		_token = 0;
+		retired = false;
+		committedRootsLazy: Set<Container> | undefined;
+		constructor(readonly deferred: boolean) {}
+		get committedRoots(): Set<Container> {
+			return (this.committedRootsLazy ??= new Set());
+		}
+		get token(): number {
+			return mint(this);
+		}
+		get minted(): boolean {
+			return this._token !== 0;
+		}
+		run<T>(fn: () => T): T {
+			if (this.retired) {
+				throw new Error('fork-double: run() on a retired batch');
+			}
+			ctxStack.push(this);
+			try {
+				return fn();
+			} finally {
+				ctxStack.pop();
+			}
+		}
+		commitOnRoot(container: Container): void {
+			if (!roots.has(container)) {
+				throw new Error('fork-double: commitOnRoot on unregistered root');
+			}
+			if (this.retired) {
+				throw new Error('fork-double: commitOnRoot after retirement');
+			}
+			const token = mint(this);
+			if (this.committedRoots.has(container)) {
+				throw new Error('fork-double: duplicate onBatchCommitted for (token, root)');
+			}
+			this.committedRoots.add(container);
+			emit('onBatchCommitted', container, token);
+		}
+		retire(committed?: boolean): void {
+			if (this.retired) {
+				throw new Error('fork-double: batch retired twice');
+			}
+			const token = mint(this);
+			if (pass !== undefined && !pass.ended && pass.included.includes(token)) {
+				throw new Error('fork-double: retiring a batch included in the open pass (end the pass first)');
+			}
+			this.retired = true;
+			liveByToken.delete(token);
+			if (eventBatch === this) {
+				eventBatch = undefined;
+			}
+			// Default: committed=true iff any root committed it; a batch that
+			// produced no React work retires committed=false (§6.2 close edge).
+			const c = committed ?? (this.committedRootsLazy !== undefined && this.committedRootsLazy.size > 0);
+			emit('onBatchRetired', token, c);
+		}
 	}
 
 	function makeBatch(deferred: boolean): BatchState {
-		const state: BatchState = {
-			deferred,
-			token: 0,
-			retired: false,
-			committedRoots: new Set(),
-			script: undefined as unknown as BatchScript,
-		};
-		const script: BatchScript = {
-			get token() {
-				return mint(state);
-			},
-			get deferred() {
-				return state.deferred;
-			},
-			get minted() {
-				return state.token !== 0;
-			},
-			get retired() {
-				return state.retired;
-			},
-			run<T>(fn: () => T): T {
-				if (state.retired) {
-					throw new Error('fork-double: run() on a retired batch');
-				}
-				ctxStack.push(state);
-				try {
-					return fn();
-				} finally {
-					ctxStack.pop();
-				}
-			},
-			commitOnRoot(container: Container): void {
-				if (!roots.has(container)) {
-					throw new Error('fork-double: commitOnRoot on unregistered root');
-				}
-				if (state.retired) {
-					throw new Error('fork-double: commitOnRoot after retirement');
-				}
-				const token = mint(state);
-				if (state.committedRoots.has(container)) {
-					throw new Error('fork-double: duplicate onBatchCommitted for (token, root)');
-				}
-				state.committedRoots.add(container);
-				emit('onBatchCommitted', container, token);
-			},
-			retire(committed?: boolean): void {
-				if (state.retired) {
-					throw new Error('fork-double: batch retired twice');
-				}
-				const token = mint(state);
-				if (pass !== undefined && !pass.ended && pass.included.includes(token)) {
-					throw new Error('fork-double: retiring a batch included in the open pass (end the pass first)');
-				}
-				state.retired = true;
-				liveByToken.delete(token);
-				if (eventBatch === state) {
-					eventBatch = undefined;
-				}
-				// Default: committed=true iff any root committed it; a batch that
-				// produced no React work retires committed=false (§6.2 close edge).
-				const c = committed ?? state.committedRoots.size > 0;
-				emit('onBatchRetired', token, c);
-			},
-		};
-		state.script = script;
+		const state = new BatchState(deferred);
 		batches.push(state);
 		return state;
 	}
@@ -250,13 +239,21 @@ export function createForkDouble(): ForkDouble {
 			};
 		},
 		isCurrentWriteDeferred(): boolean {
-			const top = ctxStack[ctxStack.length - 1];
-			return top !== undefined ? top.deferred : false;
+			const n = ctxStack.length;
+			return n !== 0 && ctxStack[n - 1].deferred;
 		},
 		getCurrentWriteBatch(): number {
-			const top = ctxStack[ctxStack.length - 1];
-			if (top !== undefined) {
-				return mint(top);
+			// Hot early exits first (the engine calls this on every logged
+			// write); minting stays out of line.
+			const n = ctxStack.length;
+			if (n !== 0) {
+				const top = ctxStack[n - 1];
+				// _token directly: the `token` getter is the minting path.
+				return top._token !== 0 ? top._token : mint(top);
+			}
+			const eb = eventBatch;
+			if (eb !== undefined && !eb.retired && eb._token !== 0) {
+				return eb._token;
 			}
 			// Bare write: attribute to the lazily-minted urgent event batch
 			// (one token per "event that touches external state", §6.2).
@@ -293,17 +290,17 @@ export function createForkDouble(): ForkDouble {
 			emit('onRootRegistered', container);
 		},
 		openBatch(kind: 'urgent' | 'deferred'): BatchScript {
-			return makeBatch(kind === 'deferred').script;
+			return makeBatch(kind === 'deferred');
 		},
 		mintLineage(): number {
 			return ++lineageSerial;
 		},
 		currentEventBatch(): BatchScript | undefined {
-			return eventBatch?.script;
+			return eventBatch;
 		},
 		closeEvent(committed = false): void {
 			if (eventBatch !== undefined && !eventBatch.retired) {
-				eventBatch.script.retire(committed);
+				eventBatch.retire(committed);
 			}
 			eventBatch = undefined;
 		},
@@ -329,7 +326,7 @@ export function createForkDouble(): ForkDouble {
 			// §6.2 lock-in: batches this root committed while pending elsewhere
 			// must stay included.
 			for (const st of liveByToken.values()) {
-				if (st.committedRoots.has(container) && !included.includes(st.token)) {
+				if (st.committedRootsLazy?.has(container) === true && !included.includes(st.token)) {
 					included.push(st.token);
 				}
 			}

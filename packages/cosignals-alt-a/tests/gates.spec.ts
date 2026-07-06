@@ -159,25 +159,52 @@ describe('§18 gate measurements (reported; sanity ceilings only)', () => {
 		}
 	});
 
-	it('G-18/G-19: tracing unloaded vs RING-enabled on a write/read loop', () => {
+	it('G-18/G-19: tracing on tier-0 DIRECT shapes (zero emits) + the LOGGED-loop clock floor', () => {
+		// G-19's gate is tier-0 DIRECT shapes: the DIRECT write/read paths
+		// carry ZERO tracing instructions, so the ratio prices only the
+		// tracer-slot checks (§16.5 discipline).
+		const d = directEngine();
+		const da = d.atom(0);
+		let prev = d.computed(() => (da.state as number) + 1);
+		for (let i = 0; i < 30; ++i) {
+			const p = prev;
+			prev = d.computed(() => (p.state as number) + 1);
+		}
+		const tail = prev;
+		d.effect(() => {
+			tail.state;
+		});
+		let y = 0;
+		const directLoop = (): void => {
+			da.set(++y);
+		};
+		const untracedNs = bench(directLoop, 3000);
+		d.setTracer(createTracer({ mode: 'ring', capacity: 1 << 16 }));
+		const tracedNs = bench(directLoop, 3000);
+		d.setTracer(undefined);
+		const afterNs = bench(directLoop, 3000);
+		report['G-19 RING traced (tier-0 DIRECT)'] = `untraced ${untracedNs.toFixed(0)}ns vs traced ${tracedNs.toFixed(0)}ns = ${(tracedNs / untracedNs).toFixed(2)}x (spec gate 1.15x)`;
+		report['G-18 tracer detached'] = `before ${untracedNs.toFixed(0)}ns vs after-detach ${afterNs.toFixed(0)}ns = ${(afterNs / untracedNs).toFixed(2)}x (expect ~1x)`;
+		expect(tracedNs / untracedNs).toBeLessThan(2);
+
+		// Report (declared floor, not a gate): tracing a LOGGED write loop
+		// pays ~20-25ns of performance.now() per emit.
 		const { e, fork } = loggedEngine();
 		const a = e.atom(0);
 		const c = e.computed(() => (a.state as number) + 1);
 		c.state;
 		const holder = fork.openBatch('deferred');
-		holder.run(() => a.set(-1)); // keep LOGGED steady state
+		holder.run(() => a.set(-1));
 		let x = 0;
-		const loop = (): void => {
+		const loggedLoop = (): void => {
 			a.set(++x);
 			c.state;
 		};
-		const untracedNs = bench(loop, 5000);
+		const lu = bench(loggedLoop, 5000);
 		e.setTracer(createTracer({ mode: 'ring', capacity: 1 << 16 }));
-		const tracedNs = bench(loop, 5000);
+		const lt = bench(loggedLoop, 5000);
 		e.setTracer(undefined);
-		const afterNs = bench(loop, 5000);
-		report['G-19 RING traced'] = `untraced ${untracedNs.toFixed(0)}ns vs traced ${tracedNs.toFixed(0)}ns = ${(tracedNs / untracedNs).toFixed(2)}x (spec gate 1.15x)`;
-		report['G-18 tracer detached'] = `before ${untracedNs.toFixed(0)}ns vs after-detach ${afterNs.toFixed(0)}ns = ${(afterNs / untracedNs).toFixed(2)}x (expect ~1x)`;
+		report['G-19 LOGGED loop (report; clock floor)'] = `untraced ${lu.toFixed(0)}ns vs traced ${lt.toFixed(0)}ns = ${(lt / lu).toFixed(2)}x (~performance.now per emit)`;
 		holder.retire();
 	});
 

@@ -303,6 +303,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 	const metas: (NodeMeta | undefined)[] = [undefined];
 	const logVals: unknown[] = [undefined];
 	const memoVals: unknown[] = [];
+	const memoCheckedAt: number[] = [0]; // per memo record: certGen at last validation
+	const newestValidAt: number[] = [0]; // per node: certGen when values[+1] cached a NEWEST value
 
 	// ---- kernel scalars -----------------------------------------------------------
 	let cycle = 0;
@@ -321,6 +323,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 	let walkCounter = 0;
 	let eraFloor = 0;
 	let overlayEpoch = 1;
+	// certGen: bumped by EVERY event that can move any certificate input
+	// (append/coalesce/tape-create, sweep fold/free, truncation, quiescence).
+	// A memo validated at the current certGen is valid without a scan — the
+	// O(1) shortcut that makes marked-cone memo hits approach DIRECT reads.
+	let certGen = 1;
 	let loggedAtomCount = 0;
 	let unappliedEntries = 0;
 	let quiescenceCount = 0;
@@ -333,6 +340,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 	let liveSlotMask = 0;
 	let liveDeferredMask = 0;
 	let retiredSlotMask = 0; // token retired, entries not yet fully swept
+	let slotChainMask = 0; // slots whose writer's-world memo chain is nonempty
+	let slotOccupiedMask = 0; // slots holding any token (live or retired-unswept)
 	let lastToken = 0;
 	let lastSlot = -1;
 
@@ -357,6 +366,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	// Pending notify-walk requests: flat (atomId, token) pairs awaiting drain.
 	const pendingWalks: number[] = [];
+	const fastCollect: number[] = []; // reusable drain fast-path collector
+	let sweepNeeded = false; // set at retirement/truncation/pass-end; consumed by settle
 	// Kernel broadcast queue (watcher ids; kernel propagate pushes token 0).
 	const kernelBroadcasts: number[] = [];
 	let drainDepth = 0;
@@ -466,6 +477,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			memos.push(0);
 			metas.push(undefined);
 			unappliedStamp.push(0);
+			newestValidAt.push(0);
 		}
 		return id;
 	}
@@ -546,6 +558,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 			growW();
 		}
 		wNext = wid + 8;
+		while (memoCheckedAt.length <= wid >> 3) {
+			memoCheckedAt.push(0);
+		}
 		return wid;
 	}
 
@@ -1290,30 +1305,47 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function findLiveSlot(token: number): number {
-		if (token !== 0 && token === lastToken && lastSlot >= 0 && batchToken[lastSlot] === token) {
+		if (token === 0) {
+			return -1;
+		}
+		if (token === lastToken && lastSlot >= 0 && batchToken[lastSlot] === token) {
 			return lastSlot;
 		}
-		for (let s = 0; s < 32; ++s) {
-			if (batchToken[s] === token && token !== 0) {
+		// Mask-driven: iterate only occupied slots (the linear 32-scan showed
+		// up in the idle-write profile).
+		let m = slotOccupiedMask;
+		while (m !== 0) {
+			const bit = m & -m;
+			const s = 31 - Math.clz32(bit);
+			if (batchToken[s] === token) {
 				lastToken = token;
 				lastSlot = s;
 				return s;
 			}
+			m &= m - 1;
 		}
 		return -1;
 	}
 
 	// §9.2: intern a token to a slot; -1 = exhausted (pseudo fallback).
 	function internSlot(token: number): number {
+		// One-entry cache inline (the profiled steady-write path).
+		if (token === lastToken && lastSlot >= 0 && batchToken[lastSlot] === token) {
+			return lastSlot;
+		}
 		const found = findLiveSlot(token);
 		if (found >= 0) {
 			return found;
 		}
-		for (let s = 0; s < 32; ++s) {
-			if (batchToken[s] === 0) {
+		const free = ~slotOccupiedMask;
+		if (free !== 0) {
+			const bit = free & -free;
+			const s = 31 - Math.clz32(bit);
+			if (s < 32 && s >= 0) {
 				batchToken[s] = token;
 				batchEntryCount[s] = 0;
 				slotMemoHead[s] = 0;
+				slotOccupiedMask |= 1 << s;
 				liveSlotMask |= 1 << s;
 				retiredSlotMask &= ~(1 << s);
 				if (token & 1) {
@@ -1330,10 +1362,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 	function releaseSlotIfDone(slot: number): void {
 		if (((retiredSlotMask >> slot) & 1) !== 0 && batchEntryCount[slot] === 0) {
 			batchToken[slot] = 0;
+			slotOccupiedMask &= ~(1 << slot);
 			liveSlotMask &= ~(1 << slot);
 			liveDeferredMask &= ~(1 << slot);
 			retiredSlotMask &= ~(1 << slot);
 			slotMemoHead[slot] = 0;
+			slotChainMask &= ~(1 << slot);
 			if (lastSlot === slot) {
 				lastToken = 0;
 				lastSlot = -1;
@@ -1391,6 +1425,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	// ---- tape append (§9.3) --------------------------------------------------------
 	function appendLog(a: number, op: number, payload: unknown, applied: boolean, slot: number, pseudo: boolean): void {
+		++certGen; // every append/coalesce moves some certificate input
 		let head = M[a + C.LOG_HEAD];
 		if (head === 0) {
 			// First entry: create the tape. Base snapshots the canonical value
@@ -1428,8 +1463,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 			) {
 				if (op === C.OP_SET) {
 					logVals[tail >> 2] = payload;
-					G[tail + C.L_SEQ] = ticket();
-					G[tail + C.L_META] = (tm & ~C.OP_MASK) | C.OP_SET;
+					G[tail + C.L_SEQ] = ++seqCounter; // new seq: pins + certs must see movement
+					if (tailOp !== C.OP_SET) {
+						G[tail + C.L_META] = (tm & ~C.OP_MASK) | C.OP_SET;
+					}
 					if (tracer !== undefined) {
 						tracer.emit(TraceKind.LOG_COALESCE, a, slot, tail);
 					}
@@ -1619,7 +1656,16 @@ export function createCosignalEngine(options?: EngineOptions) {
 		while (rec !== 0) {
 			if (W[rec + C.W_KEY] === world.key && W[rec + C.W_EPOCH] === overlayEpoch) {
 				// Pass worlds: key + epoch suffice (pins freeze the world, §10.5).
-				if (world.k === C.WK_PASS || certValid(rec)) {
+				if (world.k === C.WK_PASS) {
+					return rec;
+				}
+				// O(1) validity: nothing that could move a certificate input has
+				// happened since this record was last validated.
+				if (memoCheckedAt[rec >> 3] === certGen) {
+					return rec;
+				}
+				if (certValid(rec)) {
+					memoCheckedAt[rec >> 3] = certGen;
 					return rec;
 				}
 			}
@@ -1730,6 +1776,20 @@ export function createCosignalEngine(options?: EngineOptions) {
 				memoVals[W[rec + C.W_VAL]] = v;
 				W[rec + C.W_NDEPS] = pairs;
 				W[rec + C.W_CERT] = off;
+				memoCheckedAt[rec >> 3] = certGen;
+				// Late-linking (the slot-less registration hole): a writer-key
+				// record created while its token had no slot carries the -1
+				// sentinel; if the slot exists NOW, register it so drain
+				// re-validation can reach it.
+				if (
+					world.k === C.WK_WRITER
+					&& world.slot >= 0
+					&& W[rec + C.W_SLOT_NEXT] === -1
+				) {
+					W[rec + C.W_SLOT_NEXT] = slotMemoHead[world.slot];
+					slotMemoHead[world.slot] = rec;
+					slotChainMask |= 1 << world.slot;
+				}
 			} else {
 				rec = allocMemo();
 				W[rec + C.W_KEY] = world.key;
@@ -1740,6 +1800,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				W[rec + C.W_NEXT_MEMO] = memoHeadOf(c);
 				W[rec + C.W_NDEPS] = pairs;
 				W[rec + C.W_CERT] = off;
+				memoCheckedAt[rec >> 3] = certGen;
 				memos[c >> 3] = rec;
 				M[c + C.MEMO_KEY] = world.key;
 				if (world.k === C.WK_WRITER && world.slot >= 0) {
@@ -1747,8 +1808,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 					// drain re-validation registry (§9.8, §10.5).
 					W[rec + C.W_SLOT_NEXT] = slotMemoHead[world.slot];
 					slotMemoHead[world.slot] = rec;
+					slotChainMask |= 1 << world.slot;
 				} else {
-					W[rec + C.W_SLOT_NEXT] = 0;
+					// -1 = writer-key record not on any slot chain (0 would be
+					// ambiguous with chain tail); 0 for non-writer keys.
+					W[rec + C.W_SLOT_NEXT] = world.k === C.WK_WRITER ? -1 : 0;
 				}
 			}
 		}
@@ -1761,8 +1825,29 @@ export function createCosignalEngine(options?: EngineOptions) {
 		return v;
 	}
 
-	// §10.4: the computed read gate + post-eval re-check.
+	// §10.4: the computed read gate + post-eval re-check. The NEWEST world
+	// carries a per-node validated-value cache (values[+1], unused on
+	// computeds): valid while certGen is unchanged — the hot marked-cone read
+	// becomes one array load + compare + value load.
 	function resolveComputedInWorld(c: number, world: WorldDesc): unknown {
+		if (world.k === C.WK_NEWEST && writeMode === C.MODE_LOGGED) {
+			if (newestValidAt[c >> 3] === certGen) {
+				return values[(c >> 2) + 1];
+			}
+			// Stamp with the PRE-resolution generation: an evaluation that
+			// mutates the world itself (writes inside computeds) must leave the
+			// cache invalid so the pending recompute is observed (conformance
+			// #179).
+			const genBefore = certGen;
+			const v = resolveComputedInWorldInner(c, world);
+			values[(c >> 2) + 1] = v;
+			newestValidAt[c >> 3] = genBefore;
+			return v;
+		}
+		return resolveComputedInWorldInner(c, world);
+	}
+
+	function resolveComputedInWorldInner(c: number, world: WorldDesc): unknown {
 		if (world.k === C.WK_W0) {
 			return kernelComputedReadUntracked(c);
 		}
@@ -1789,6 +1874,24 @@ export function createCosignalEngine(options?: EngineOptions) {
 				return overlayEvaluate(c, world);
 			}
 			return v;
+		}
+		// Head-record memo peek: the common steady shape is one world reading
+		// one node repeatedly, whose memo is the chain head. overlayEvaluate is
+		// far over the inline budget, so hitting here saves two call frames on
+		// the hot marked-cone read (the G-8 inner loop).
+		{
+			const head = memos[c >> 3];
+			if (
+				head !== 0
+				&& head < wNext
+				&& W[head + C.W_NODE] === c
+				&& W[head + C.W_KEY] === world.key
+				&& W[head + C.W_EPOCH] === overlayEpoch
+				&& (world.k === C.WK_PASS || memoCheckedAt[head >> 3] === certGen)
+				&& frameWorlds.length === 0
+			) {
+				return memoVals[W[head + C.W_VAL]];
+			}
 		}
 		return overlayEvaluate(c, world);
 	}
@@ -1857,8 +1960,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 	// cutoff for the node's IMMEDIATE watchers, entangled into the batch.
 	function revalidateSlotChain(slot: number): void {
 		const token = batchToken[slot];
-		if (token === 0) {
-			return;
+		if (token === 0 || slotMemoHead[slot] === 0) {
+			return; // nothing registered: allocation-free exit
 		}
 		const world = writerWorld(token);
 		// Precompute validity AND snapshots for the WHOLE chain before any
@@ -1874,7 +1977,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 			entries.push({
 				node,
-				wasValid: W[rec + C.W_EPOCH] === overlayEpoch && certValid(rec),
+				wasValid:
+					W[rec + C.W_EPOCH] === overlayEpoch
+					&& (memoCheckedAt[rec >> 3] === certGen || certValid(rec)),
 				snapshot: memoVals[W[rec + C.W_VAL]],
 			});
 		}
@@ -1903,9 +2008,99 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	// ---- the drain (§9.8 + resolutions 1/2/3; re-validation BEFORE decisions;
 	// one walk ticket PER TOKEN GROUP) ------------------------------------------------
+	function revalidateLiveDeferredChains(): void {
+		// O(registered slots): one mask AND, then set-bit iteration.
+		let m = liveDeferredMask & ~retiredSlotMask & slotChainMask;
+		while (m !== 0) {
+			const bit = m & -m;
+			revalidateSlotChain(31 - Math.clz32(bit));
+			m &= m - 1;
+		}
+	}
+
 	function drainAll(fullRevalidation: boolean): void {
 		if (drainDepth > 0) {
 			return; // the outer drain loop picks up newly queued work
+		}
+		// FAST PATH (profiled: drainAll was 46% of the steady-logged-write
+		// tick, almost all of it per-drain Map/Set/array allocations): the
+		// overwhelmingly common drain is ONE write's walk with no kernel
+		// broadcasts. Handle it with reused scratch and integer loops;
+		// anything it uncovers (cascades, new walks) falls through to the
+		// general loop below.
+		// Force-only drains (retirement/truncation with nothing queued): the
+		// mask-guarded re-validation is the whole obligation — allocation-free.
+		if (fullRevalidation && kernelBroadcasts.length === 0 && pendingWalks.length === 0) {
+			++drainDepth;
+			try {
+				revalidateLiveDeferredChains();
+			} finally {
+				--drainDepth;
+			}
+			if (pendingWalks.length === 0 && kernelBroadcasts.length === 0) {
+				return;
+			}
+			fullRevalidation = false; // done; fall through for the new work
+		}
+		if (!fullRevalidation && kernelBroadcasts.length === 0 && pendingWalks.length === 2) {
+			const atom = pendingWalks[0];
+			const token = pendingWalks[1];
+			pendingWalks.length = 0;
+			++drainDepth;
+			try {
+				fastCollect.length = 0;
+				notifyWalkFromAtom(atom, ++walkCounter, true, fastCollect);
+				if (tracer !== undefined) {
+					tracer.emit(TraceKind.NOTIFY_WALK, atom, token, walkCounter, 1, fastCollect.length);
+				}
+				// Re-validation, ordered BEFORE decisions (unchanged semantics).
+				if (token === 0) {
+					revalidateLiveDeferredChains();
+				} else if ((token & 1) === 1) {
+					const s2 = findLiveSlot(token);
+					if (s2 >= 0) {
+						revalidateSlotChain(s2);
+					}
+				}
+				if (fastCollect.length !== 0) {
+					if (token === 0) {
+						const expansion = liveDeferredTokens();
+						for (let i = 0; i < fastCollect.length; ++i) {
+							const w = fastCollect[i];
+							decide(w, 0, false);
+							for (const t of expansion) {
+								decideEntangled(w, t);
+							}
+							clearWatcherStale(w);
+						}
+					} else if ((token & 1) === 1 && fork !== undefined) {
+						const ws = fastCollect.slice();
+						const group = (): void => {
+							for (const w of ws) {
+								decide(w, token, true);
+								clearWatcherStale(w);
+							}
+						};
+						if (!fork.runInBatch(token, group)) {
+							for (const w of ws) {
+								decide(w, token, false);
+								clearWatcherStale(w);
+							}
+						}
+					} else {
+						for (let i = 0; i < fastCollect.length; ++i) {
+							decide(fastCollect[i], token, false);
+							clearWatcherStale(fastCollect[i]);
+						}
+					}
+				}
+			} finally {
+				--drainDepth;
+			}
+			if (pendingWalks.length === 0 && kernelBroadcasts.length === 0) {
+				return;
+			}
+			// Cascade work appeared: continue into the general loop.
 		}
 		++drainDepth;
 		try {
@@ -2058,12 +2253,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (f === undefined) {
 			throw new Error('cosignal: LOGGED mode without an attached fork');
 		}
-		const deferred = f.isCurrentWriteDeferred();
+		// One fork call, not two: bit 0 of the token IS the deferred bit
+		// (§6.2 encoding), so isCurrentWriteDeferred() is redundant here.
 		const token = f.getCurrentWriteBatch();
+		const deferred = (token & 1) === 1;
 		if (M[a + C.LOG_HEAD] === 0) {
 			// Equality drop — provably safe only on tapeless atoms (§9.3).
 			const cur = pendingValueOf(a);
-			const next = evalOp(a, op, payload, cur);
+			const next = op === C.OP_SET ? payload : evalOp(a, op, payload, cur);
 			if (valEq(equalityOf(a), cur, next)) {
 				return;
 			}
@@ -2083,7 +2280,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (applied) {
 			// Urgent: logged AND applied through the kernel (§9.4).
 			const cur = pendingValueOf(a);
-			const next = evalOp(a, op, payload, cur);
+			const next = op === C.OP_SET ? payload : evalOp(a, op, payload, cur);
 			if (!valEq(equalityOf(a), cur, next)) {
 				if (kernelWriteAtom(a, next) && batchDepth === 0) {
 					flush();
@@ -2091,14 +2288,25 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 			// Resolution 2: applied logged writes ALWAYS queue a token-0 walk —
 			// an equal-value urgent write never propagates via the kernel yet
-			// shifts every pending world's fold.
-			requestWalk(a, 0);
+			// shifts every pending world's fold. PROVABLE NO-OP ELISION: with no
+			// canonical subscribers there is no watcher in this atom's cone, and
+			// with no registered writer's-world memo chains no divergent-only
+			// dependent exists either (subscription-time seeding guarantees any
+			// watched divergent node has its memo registered) — the drain would
+			// decide nothing, so skip queueing it.
+			if (M[a + C.SUBS] !== 0 || (liveDeferredMask & ~retiredSlotMask & slotChainMask) !== 0) {
+				requestWalk(a, 0);
+			}
 		} else {
 			// Stamp the unapplied cone before the write returns: grouped drains
 			// run at batch close, and an in-batch NEWEST read must already know
 			// this cone can differ from W0.
 			notifyWalkFromAtom(a, ++walkCounter, false, undefined, true);
-			requestWalk(a, token);
+			// Same no-op elision as the urgent branch, scoped to this token's
+			// own chain (a deferred write can only shift its own writer world).
+			if (M[a + C.SUBS] !== 0 || slotMemoHead[slot] !== 0) {
+				requestWalk(a, token);
+			}
 		}
 		topLevelSettle();
 	}
@@ -2112,10 +2320,18 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (queuedLength > notifyIndex) {
 			flush();
 		}
-		drainAll(false);
+		if (pendingWalks.length !== 0 || kernelBroadcasts.length !== 0) {
+			drainAll(false);
+		}
 		if (enterDepth === 0) {
-			sweepLogs();
-			tryQuiescence();
+			// Sweeping folds RETIRED entries; only retirement, truncation, and
+			// pass-end (pin release) create foldable work — steady writes never
+			// do, so the per-write settle skips the sweep walk entirely.
+			if (sweepNeeded) {
+				sweepNeeded = false;
+				sweepLogs();
+				tryQuiescence();
+			}
 			maybeBoundary();
 		}
 	}
@@ -2128,6 +2344,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			return; // batch carried no external writes — unknown, ignored
 		}
 		++overlayEpoch; // world values changed with no tape-tail movement (§10.5)
+		++certGen; // fused worldStamp: epoch bumps invalidate cached world values
 		const rt = ticket(); // ONE retire ticket per retirement (resolution 7a)
 		if (tracer !== undefined) {
 			tracer.emit(TraceKind.BATCH_RETIRED, 0, token, rt, _committed ? 1 : 0);
@@ -2174,8 +2391,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 					// Even a W0-no-op retirement makes this batch's entries visible
 					// in every OTHER writer's world (coordinator pitfall): queue a
 					// token-0 walk so the drain's expansion re-decides watchers in
-					// each live deferred world — same shape as resolution 2.
-					requestWalk(a, 0);
+					// each live deferred world — same shape as resolution 2 (and
+					// the same provable no-op elision applies).
+					if (M[a + C.SUBS] !== 0 || (liveDeferredMask & ~retiredSlotMask & slotChainMask) !== 0) {
+						requestWalk(a, 0);
+					}
 				}
 			}
 		} finally {
@@ -2189,6 +2409,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		// §13.4: when a token retires everywhere, roots that had locked it in
 		// clear the slot bit and advance their pin past the retirement ticket —
 		// the view's CONTENTS are unchanged by this bookkeeping step.
+		if (rootViews.size !== 0)
 		for (const view of rootViews.values()) {
 			if (((view.mask >> slot) & 1) !== 0) {
 				view.mask &= ~(1 << slot);
@@ -2198,6 +2419,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 		}
 		releaseSlotIfDone(slot);
+		sweepNeeded = true;
 		// Post-retirement drain with full re-validation: a retirement that
 		// leaves W0 unchanged still shifts every OTHER pending world (retired
 		// entries become visible in their writer's worlds) — coordinator
@@ -2214,6 +2436,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			return;
 		}
 		++overlayEpoch; // mid-tape unlinks move no tail seq — memos must re-check
+		++certGen;
 		if (tracer !== undefined) {
 			tracer.emit(TraceKind.TRUNCATE, 0, token);
 		}
@@ -2258,6 +2481,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 		}
 		releaseSlotIfDone(slot);
+		sweepNeeded = true;
 		// Resolution 4: re-notify the rolled-back batch's lane, else its
 		// components stay stale until an unrelated drain.
 		if (batchToken[slot] === token) {
@@ -2272,6 +2496,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	// ---- sweep (§9.6) ---------------------------------------------------------------
 	function sweepLogs(): void {
+		let moved = false;
 		const minPin = passOpen !== 0 ? passPin : C.MAX_SEQ;
 		for (let i = loggedAtoms.length - 1; i >= 0; --i) {
 			const a = loggedAtoms[i];
@@ -2300,6 +2525,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				if (next === 0) {
 					M[a + C.LOG_TAIL] = head;
 				}
+				moved = true;
 				rec = next;
 			}
 			// Free the tape: base-only, and no live unretired batch could still
@@ -2309,9 +2535,15 @@ export function createCosignalEngine(options?: EngineOptions) {
 				M[a + C.LOG_HEAD] = 0;
 				M[a + C.LOG_TAIL] = 0;
 				M[a + C.FLAGS] &= ~C.LOGGED;
-				loggedAtoms.splice(i, 1);
+				// swap-pop (splice allocates its removed-elements array)
+				loggedAtoms[i] = loggedAtoms[loggedAtoms.length - 1];
+				loggedAtoms.pop();
 				--loggedAtomCount;
+				moved = true;
 			}
+		}
+		if (moved) {
+			++certGen; // folds/frees moved tape tails or LOGGED bits
 		}
 	}
 
@@ -2330,18 +2562,26 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 		gNext = 4;
 		logFreeHead = 0;
-		wNext = 8;
-		certNext = 2;
-		memoVals.length = 0;
-		slotMemoHead.fill(0);
+		if (wNext !== 8) {
+			wNext = 8;
+			certNext = 2;
+			memoVals.length = 0;
+			slotMemoHead.fill(0);
+		}
+		slotChainMask = 0;
 		eraFloor = walkCounter; // every mark (and unapplied stamp) goes stale in O(1)
-		atomUnapplied.clear();
-		for (const view of rootViews.values()) {
-			view.pin = 0; // seqs restart; all committed history lives in the kernel now
-			view.mask = 0;
+		if (atomUnapplied.size !== 0) {
+			atomUnapplied.clear();
+		}
+		if (rootViews.size !== 0) {
+			for (const view of rootViews.values()) {
+				view.pin = 0; // seqs restart; committed history lives in the kernel now
+				view.mask = 0;
+			}
 		}
 		++overlayEpoch; // the cross-era invalidator (§9.7): seqs repeat, epochs don't
 		seqCounter = 1;
+		++certGen; // recycled record offsets must not inherit stale validations
 		++quiescenceCount;
 		if (tracer !== undefined) {
 			tracer.emit(TraceKind.QUIESCENCE, 0, 0, quiescenceCount);
@@ -2399,7 +2639,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 		passExecuting = 0;
 		passContainer = undefined;
 		readCtx = C.CTX_NEWEST;
-		sweepLogs(); // §9.6: sweep runs at pass end
+		sweepNeeded = true;
+		sweepLogs(); // §9.6: sweep runs at pass end (pin release folds entries)
 		tryQuiescence();
 	}
 
@@ -3020,6 +3261,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			},
 			bumpOverlayEpoch(): void {
 				++overlayEpoch;
+				++certGen; // fused worldStamp (settlements change world values)
 			},
 			canonicalValue(h: SignalHandle): unknown {
 				return values[h.id >> 2];
