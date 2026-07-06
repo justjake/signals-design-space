@@ -46,7 +46,20 @@
 > refcounting proves insufficient. S-A's ruling gate is CLEAR pending
 > the third-pass verifier.
 
-> **STATUS: DRAFT — plan only, no code has changed.** Written for
+> **STATUS: COMPLETE (2026-07-06).** Every stage landed and pushed:
+> Program 1 (effects unification) 3b0063a · S-A dual bookkeeping
+> ca04129 (stopped at its cold-pass gate; resolved by the B1 shaves
+> 487b91c) · S-B routing transfer 1d4ca4b · S-C one-computed-API
+> 70c6eb3 (entry pins + the untracked-sampling ruling f563b74; the
+> historical kernel hang fixed at its root) · S-D closure c4e54a5
+> (NF2 final numbers in research/experiments/cosignal-gates.md:
+> cold-pass 0.54x, wide-mask 0.76x, untracked-fan 1.08x vs the
+> pre-NF2 anchor; armed writes -44/-49%). Remaining deferred markers
+> are outside NF2's staging by design (the provably-quiet TODO(perf)
+> fast path with its N-4 constraint; the B2 over-limit pin
+> discipline).
+
+> **Historical status: DRAFT — plan only, no code has changed.** Written for
 > adversarial review (codex + a fresh no-priors reviewer) before any
 > implementation, per this repo's process. Every mechanism, invariant,
 > cost, and open risk is stated to be attacked; §7 lists the rulings the
