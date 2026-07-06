@@ -1612,6 +1612,14 @@ export function __kernelGen(id: NodeId): Generation {
 	return E.gen(id);
 }
 
+/** @internal Test seam (leak audit): a record's side-column slots. freeNode
+ * must clear all three, or freed records pin dead values/closures for the
+ * arena's life; tests/leak-audit.spec.ts probes exactly that. Read-only. */
+export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: unknown; fn: Function | undefined } {
+	const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
+	return { value: values[v], aux: values[v + Arena.AUX_VALUE_OFFSET], fn: fns[id >> Arena.ID_TO_FN_SHIFT] };
+}
+
 /**
  * Raw arena view for the host's kernel-link strong walks (S-C: newest
  * subscription reach + the mount-fixup closure's kernel leg ride the

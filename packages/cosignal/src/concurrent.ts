@@ -918,6 +918,15 @@ export class ShadowArena {
 	weakSubsTail: number[] = [];
 	next = A_STRIDE; // bump pointer (record 0 burned: 0 = null)
 	linkFree = 0;
+	/** Dead-SHADOW free list head (leak audit): record ids threaded through
+	 * AF.DEPS of records `disposeComputed`'s eager purge orphaned — the one
+	 * site that kills a shadow record mid-tenancy (the dead-GEN path re-keys
+	 * records in place). Records join FULLY ZEROED (byNode cleared, links
+	 * purged, unsuspended), so nothing can reach one until aAllocShadow
+	 * re-issues it; without this list the bump pointer grew a LIVE arena by
+	 * one record per useComputed recreation, forever
+	 * (tests/leak-audit.spec.ts pins the boundedness). */
+	shadowFree = 0;
 	links = 0;
 	/** overlay NodeId → shadow record id (0 = none). */
 	byNode: number[] = [];
@@ -1003,9 +1012,20 @@ function aGrow(a: ShadowArena, need: number): void {
 }
 
 function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number): number {
-	const id = a.next;
-	aGrow(a, id + A_STRIDE);
-	a.next = id + A_STRIDE;
+	let id = a.shadowFree;
+	if (id !== 0) {
+		// Reuse a dead-shadow record (see ShadowArena.shadowFree): it was
+		// zeroed wholesale when it joined the list, its side columns were
+		// scrubbed by the evict (vals/suspIdx) and the unlinks (weak heads),
+		// and its walk stamp is stale by generation monotonicity — so once
+		// the thread field clears, the fresh-record invariant below holds.
+		a.shadowFree = a.W[id + AF.DEPS]!;
+		a.W[id + AF.DEPS] = 0;
+	} else {
+		id = a.next;
+		aGrow(a, id + A_STRIDE);
+		a.next = id + A_STRIDE;
+	}
 	const W = a.W;
 	// Fresh-record invariant (B1 cold-pass shave): W[a.next..] is ALL ZERO —
 	// a fresh Int32Array is zeroed, aGrow's replacement buffer is zeroed past
@@ -2021,6 +2041,15 @@ export class CosignalBridge {
 				// record (FLAGS 0 — decay drops it); nothing routes here again.
 				for (let f = 0; f < A_STRIDE; f++) a.W[sh + f] = 0;
 				a.byNode[nid] = 0;
+				// Leak audit: thread the orphaned record onto the arena's
+				// dead-shadow free list so recreation churn (the useComputed
+				// dispose→create pattern) reuses it instead of growing a live
+				// arena's record plane without bound. Stale dirty-list entries
+				// naming it stay benign: pre-reuse they read FLAGS 0 (dropped),
+				// post-reuse they alias the new tenant's listed entry (decay
+				// re-checks flags per entry; duplicates cannot amplify).
+				a.W[sh + AF.DEPS] = a.shadowFree;
+				a.shadowFree = sh;
 			});
 			this.byKernelId.delete(handle._id);
 			this.nodes.delete(nid);
@@ -2538,6 +2567,7 @@ export class CosignalBridge {
 		a.W.fill(0, 0, a.next);
 		a.next = A_STRIDE;
 		a.linkFree = 0;
+		a.shadowFree = 0; // dead-shadow list dies with the tenancy (threads were zeroed above)
 		a.links = 0;
 		a.readClock = 0;
 		a.cycle = 0;
