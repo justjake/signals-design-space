@@ -29,7 +29,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { __newBridgeForTest, type AnyNode, type BridgeOptions, type CosignalBridge } from '../src/concurrent.js';
 
 /** Mirror of concurrent.ts's private A_CLOCK_LIMIT (0x7fff0000): stores of
  * the limit itself still fit Int32 (65535 under 2^31-1); the renumber fires
@@ -38,8 +38,8 @@ const A_CLOCK_LIMIT = 0x7fff0000;
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
+function bridge(options?: BridgeOptions): CosignalBridge {
+	const b = __newBridgeForTest(options);
 	b.registerBridge();
 	b.__setArenaCheck(true);
 	return b;
@@ -160,8 +160,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 	});
 
 	it('growth across pooled tenancies: a grown buffer re-claims at capacity and keeps growing mid-op', () => {
-		const b = bridge();
-		b.arenaInitInts = 16; // two records: every alloc beyond the burn grows mid-operation
+		const b = bridge({ arenaInitInts: 16 }); // two records: every alloc beyond the burn grows mid-operation
 		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
 		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w1 = mount(b, 'R', sum, 'W1');

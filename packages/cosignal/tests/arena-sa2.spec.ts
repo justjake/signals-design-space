@@ -7,10 +7,10 @@
  * check armed (arena-served ≡ memo-served after every public operation).
  */
 import { describe, expect, it } from 'vitest';
-import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { __newBridgeForTest, type AnyNode, type BridgeOptions, type CosignalBridge } from '../src/concurrent.js';
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
+function bridge(options?: BridgeOptions): CosignalBridge {
+	const b = __newBridgeForTest(options);
 	b.registerBridge();
 	b.__setArenaCheck(true);
 	return b;
@@ -151,8 +151,7 @@ describe('S-A mark decay (§4.3) + growth (§4.5.9) + GEN tenancy (§4.5.3)', ()
 	});
 
 	it('stride-sized initial arena: every growth path exercises mid-walk (structural validator green throughout)', () => {
-		const b = bridge();
-		b.arenaInitInts = 16; // two records: every later alloc grows mid-operation
+		const b = bridge({ arenaInitInts: 16 }); // two records: every later alloc grows mid-operation
 		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
 		const c = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w = mount(b, 'R', c, 'W');

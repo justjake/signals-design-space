@@ -756,6 +756,22 @@ function settleTapImpl(t: PromiseLike<unknown>): void {
 	if (b !== undefined) b.__settleTap(t);
 }
 
+/** An arena buffer capacity, counted in Int32 slots (stride-8 records: one
+ * node shadow or one dependency link per record). */
+export type ArenaInitInts = number;
+
+/** Construction-time bridge tuning (the bridge-level analog of the kernel's
+ * `configure()`). */
+export type BridgeOptions = {
+	/**
+	 * Every claimed shadow arena's buffer starts at this capacity and grows
+	 * in place when its records outgrow it (default 8192 ints). Shrinking it
+	 * makes even small graphs exercise mid-operation growth, which is how the
+	 * arena suites pin every growth path.
+	 */
+	arenaInitInts?: ArenaInitInts;
+};
+
 /**
  * Activates the concurrent engine: arms the kernel's host seams
  * (`__setHostWrite` / read routing), exactly once per process, and returns
@@ -764,11 +780,11 @@ function settleTapImpl(t: PromiseLike<unknown>): void {
  * (the seams must not arm under a live kernel frame) and on
  * re-registration.
  */
-export function registerReactBridge(): CosignalBridge {
+export function registerReactBridge(options?: BridgeOptions): CosignalBridge {
 	if (publiclyRegistered) {
 		throw new Error('cosignal: registerReactBridge may only be called once per process.');
 	}
-	const bridge = new CosignalBridge();
+	const bridge = new CosignalBridge(options);
 	bridge.registerBridge(); // arms the seam + flips the bridge to CONCURRENT mode
 	publiclyRegistered = true;
 	return bridge;
@@ -779,8 +795,8 @@ export function registerReactBridge(): CosignalBridge {
  * model" analog — the module seam still arms only once per process; kernel
  * records of abandoned bridges are inert). @internal
  */
-export function __newBridgeForTest(): CosignalBridge {
-	const b = new CosignalBridge();
+export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
+	const b = new CosignalBridge(options);
 	b.setRetainEvents(true); // the referee/tests read the event log; production bridges keep it off
 	// REFEREE MODE: the oracle models always-receipt semantics, so test/lockstep
 	// bridges run with the quiet-mode short-circuit disabled (production
@@ -1706,7 +1722,8 @@ export class CosignalBridge {
 	/** True inside an updater/reducer/equals callback (reads+writes throw). */
 	inFoldCallback = false;
 
-	constructor() {
+	constructor(options?: BridgeOptions) {
+		this.arenaInitInts = options?.arenaInitInts ?? 8192;
 		probes.bridges++; // One Core probe (referee surface)
 		for (let i = 0; i < SLOT_COUNT; i++) {
 			this.slots.push({
@@ -2283,8 +2300,9 @@ export class CosignalBridge {
 	 *  - mountFix: the mount-fixup world (see mountFixup) — the render's own
 	 *    inclusions at its pin, plus committed truth at NOW, minus live
 	 *    divergence already covered by scheduled corrective re-renders.
-	 * (The referee's Receipt-shaped twin of this rule lives in
-	 * tests/model-view.ts and must mirror these clauses.)
+	 * (The Receipt-shaped twin of this rule is the reference model's
+	 * exported `visible` — cosignal-oracle model.ts; tests/model-view.ts
+	 * imports it rather than keeping a copy. It must mirror these clauses.)
 	 */
 	private visibleAt(atom: AtomNode, i: number, world: World, seqs: Seq[], retired: Seq[], slots: SlotId[]): boolean {
 		switch (world.kind) {
@@ -2497,8 +2515,8 @@ export class CosignalBridge {
 	private arenaByRoot = new Map<RootId, ShadowArena>();
 	/** Pooled released arena shells (buffers reused; claimGen bumped per tenancy). */
 	private arenaPool: ShadowArena[] = [];
-	/** Initial arena size in ints (tests shrink it to force mid-op growth — §4.5.9). */
-	arenaInitInts = 8192;
+	/** Initial arena size in ints (BridgeOptions knob; tests shrink it to force mid-op growth — §4.5.9). */
+	private readonly arenaInitInts: ArenaInitInts;
 	/** Overlay node id-tenancy generations (§4.5.3: overlay ids are never freed
 	 * pre-S-C, so these move only via the test seam; shadows stamp + validate). */
 	private nodeGen: number[] = [0];
@@ -3784,7 +3802,7 @@ export class CosignalBridge {
 		};
 		this.tokens.set(token.id, token);
 		this.liveTokenCount++;
-		this.quiet = false; // a live batch: the pipeline is armed until the last retirement
+		this.recomputeQuiet(); // a live batch: the pipeline is armed until the last retirement
 		const tr = this.trace;
 		if (tr !== undefined) tr.batchOpen(token);
 		return token;
@@ -4239,7 +4257,7 @@ export class CosignalBridge {
 		pass.arena = this.claimArena('pass', { kind: 'pass', pass }, rootId);
 		this.passes.set(pass.id, pass);
 		this.openPassByRoot.set(rootId, pass);
-		this.quiet = false; // an open render pass: the pipeline is armed until it closes
+		this.recomputeQuiet(); // an open render pass: the pipeline is armed until it closes
 		const tr = this.trace;
 		if (tr !== undefined) {
 			tr.passStart(pass);

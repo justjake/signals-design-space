@@ -32,7 +32,7 @@ import {
 	effect,
 	effectScope,
 } from '../src/index.js';
-import { __newBridgeForTest, type AnyNode, type AtomNode, type ComputedNode, type CosignalBridge } from '../src/concurrent.js';
+import { __newBridgeForTest, type AnyNode, type AtomNode, type BridgeOptions, type ComputedNode, type CosignalBridge } from '../src/concurrent.js';
 
 // Mirrored kernel field offsets (index.ts const enums; asserted stable by the
 // suite's kernel-walk tests): NodeField.DEPS = 1, LinkField.NEXT_DEP = 6.
@@ -41,8 +41,8 @@ const LF_NEXT_DEP = 6;
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
+function bridge(options?: BridgeOptions): CosignalBridge {
+	const b = __newBridgeForTest(options);
 	b.registerBridge();
 	return b;
 }
@@ -260,8 +260,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 
 describe('4. ARENA POOL', () => {
 	it('bounded at 8 shells; pooled capacity is the tenancy high-water and small tenancies never grow it (BOUNDED-BY-DESIGN; cap/scrub/growth pinned by arena-sd.spec.ts)', () => {
-		const b = bridge();
-		b.arenaInitInts = 64;
+		const b = bridge({ arenaInitInts: 64 });
 		const atoms = Array.from({ length: 40 }, (_, i) => b.atom(`a${i}`, i));
 		const big = b.computed('big', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w = mount(b, 'B', big, 'WB');
