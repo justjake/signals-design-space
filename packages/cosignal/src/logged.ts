@@ -473,10 +473,11 @@ export class Watcher {
 	name: string;
 	readonly root: RootId;
 	readonly node: NodeId;
-	/** Kernel record id of the watched ATOM node (0 for computed-node
-	 * watchers): the observation-union retain target for the `live` setter.
-	 * The kernel side no-ops for atoms carrying no observed-lifecycle effect. */
-	readonly kernelAtom: number;
+	/** The owning bridge's observed-closure shift (see obsShift): the `live`
+	 * setter feeds the watched node's observed-consumer refcount through it,
+	 * and the bridge propagates retains transitively over the node's current
+	 * strong dep set down to lifecycle-registered atoms. @internal */
+	readonly _obs: (node: NodeId, delta: 1 | -1) => void;
 	private _live = false;
 	lastRenderedValue: Value;
 	snapshot: WatcherSnapshot;
@@ -485,27 +486,30 @@ export class Watcher {
 	 * render will fold it anyway. */
 	dedupBits: SlotSet = 0;
 
-	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, kernelAtom: number, value: Value, snapshot: WatcherSnapshot) {
+	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, obs: (node: NodeId, delta: 1 | -1) => void, value: Value, snapshot: WatcherSnapshot) {
 		this.id = id;
 		this.name = name;
 		this.root = root;
 		this.node = node;
-		this.kernelAtom = kernelAtom;
+		this._obs = obs;
 		this.lastRenderedValue = value;
 		this.snapshot = snapshot;
 	}
 
 	/**
 	 * Subscribed-for-delivery bit. The setter is the watcher half of the
-	 * observation union (AtomOptions.effect): a live watcher over an atom
-	 * node holds one retain on that atom's observed lifecycle, released when
-	 * liveness drops. EVERY liveness site routes through here — the commit
-	 * layout loop and adoptMount reveals (engine side), and the reveal
-	 * resubscribe / StrictMode orphan sweep / debounce-finalized unsubscribe
-	 * (shim side, which flips this field directly) — so kernel subscribers
-	 * and bridge watchers count into ONE refcount, and same-tick flips
-	 * coalesce in the kernel's microtask flush. Edge-filtered: re-asserting
-	 * the current state is a no-op.
+	 * observation union (AtomOptions.effect): a live watcher holds one
+	 * observed-consumer ref on its node, and the bridge's observed-closure
+	 * plane (obsShift) carries that ref transitively — a watcher over an
+	 * atom node retains that atom's lifecycle directly; a watcher over an
+	 * overlay computed retains every atom the computed's current evaluation
+	 * (transitively) reads. EVERY liveness site routes through here — the
+	 * commit layout loop and adoptMount reveals (engine side), and the
+	 * reveal resubscribe / StrictMode orphan sweep / debounce-finalized
+	 * unsubscribe (shim side, which flips this field directly) — so kernel
+	 * subscribers and bridge watchers count into ONE refcount, and same-tick
+	 * flips coalesce in the kernel's microtask flush. Edge-filtered:
+	 * re-asserting the current state is a no-op.
 	 */
 	get live(): boolean {
 		return this._live;
@@ -515,13 +519,7 @@ export class Watcher {
 			return;
 		}
 		this._live = value;
-		if (this.kernelAtom !== 0) {
-			if (value) {
-				__lifecycleRetain(this.kernelAtom);
-			} else {
-				__lifecycleRelease(this.kernelAtom);
-			}
-		}
+		this._obs(this.node, value ? 1 : -1);
 	}
 }
 
@@ -920,6 +918,34 @@ export class CosignalBridge {
 	private slotTouched: NodeId[][] = [];
 	/** Nodes by id (dense array twin of `nodes`). */
 	private nodesArr: (AnyNode | undefined)[] = [undefined];
+	// ---- the observed closure (transitive observation retains) ----
+	// A node is OBSERVED while a live watcher consumes it — directly, or
+	// transitively through the strong (tracked) dep edges of observed overlay
+	// computeds. Observed ATOMS hold exactly one retain on the kernel's
+	// observed-lifecycle union (AtomOptions.effect); the kernel's
+	// lifecycleShift is a Map-miss no-op for atoms without the option, and
+	// these shifts fire only at closure-membership EDGES (never per
+	// evaluation), so routing every closure atom through it costs nothing
+	// measurable and needs no second has-lifecycle registry here. Unlike the
+	// K1 edge log (add-only within an episode, bulk-reset at quiescence),
+	// obsDeps snapshots follow the CURRENT edge set — each fn re-run of an
+	// observed computed re-points its retains (dep flips move them; the
+	// kernel's microtask flush coalesces same-tick flaps) — and the plane
+	// deliberately survives quiescence: the closure is a property of live
+	// watchers, not of the episode, so an observed atom sees no
+	// unobserve/reobserve flap across the K1 bulk-reset.
+	/** Observed-consumer refcount per node id: +1 per live watcher on the
+	 * node, +1 per observed computed currently holding it in obsDeps. */
+	private obsRefs: number[] = [0];
+	/** Per OBSERVED computed: the retained direct strong-dep set as of its
+	 * last fn run (undefined while unobserved — unwatched nodes store nothing). */
+	private obsDeps: (Set<NodeId> | undefined)[] = [];
+	/** Strong-dep capture list of the innermost evaluation frame, undefined
+	 * unless that frame's node is observed — the one field unwatched
+	 * evaluations pay for (a check per recorded edge). */
+	private obsCapture: NodeId[] | undefined = undefined;
+	/** The watcher liveness seam (one closure per bridge; Watcher._obs). */
+	private watcherObs = (node: NodeId, delta: 1 | -1): void => this.obsShift(node, delta);
 	private watchersByNode: (Watcher[] | undefined)[] = [];
 	private reactEffectsByNode: (ReactEffect[] | undefined)[] = [];
 	private coreEffectsByNode: (CoreEffect[] | undefined)[] = [];
@@ -1192,6 +1218,7 @@ export class CosignalBridge {
 		this.touched[id] = 0;
 		this.lastWalk[id] = 0;
 		this.evalMark[id] = 0;
+		this.obsRefs[id] = 0;
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
@@ -1658,6 +1685,10 @@ export class CosignalBridge {
 		const savedFrame = this.frame;
 		const savedSink = this.currentSink;
 		const savedTaint = this.newestFrameTaint;
+		const savedObsCapture = this.obsCapture;
+		// Observed nodes capture the strong deps of this run (recordEdge
+		// pushes); everyone else pays this one check.
+		this.obsCapture = this.obsRefs[node.id]! > 0 ? [] : undefined;
 		this.currentSink = node.id;
 		if (world.kind === 'newest') this.newestFrameTaint = false;
 		let myFrame: WorldMemo | undefined;
@@ -1694,6 +1725,8 @@ export class CosignalBridge {
 			this.captureCompDep(node, value);
 			return value;
 		} finally {
+			const obsCaptured = this.obsCapture;
+			this.obsCapture = savedObsCapture;
 			this.frame = savedFrame;
 			this.currentSink = savedSink;
 			this.newestFrameTaint = savedTaint;
@@ -1701,6 +1734,11 @@ export class CosignalBridge {
 			this.evalDepth--;
 			marks[node.id] = 0;
 			if (tr !== undefined) tr.evalEnd();
+			// Observed-closure sync — after every restore, so the discovery
+			// evaluations the sync may trigger run on a clean frame stack. On
+			// a throw the list holds the deps recorded up to it (see obsEnter
+			// for the rule).
+			if (obsCaptured !== undefined) this.obsSyncDeps(node.id, obsCaptured);
 		}
 	}
 
@@ -1748,6 +1786,11 @@ export class CosignalBridge {
 	// ---- the union plane + walks ----
 
 	private recordEdge(dep: NodeId, dependent: NodeId): void {
+		// Observed-closure capture, BEFORE the episode dedup below: K1 edges
+		// record once per episode, but an observed re-evaluation must capture
+		// its full current dep list (that list is what moves the retains).
+		const oc = this.obsCapture;
+		if (oc !== undefined) oc.push(dep);
 		let s = this.outSets[dep];
 		if (s !== undefined && s.has(dependent)) return;
 		if (s === undefined) {
@@ -1781,6 +1824,88 @@ export class CosignalBridge {
 
 	private edgeCount = 0;
 	private lastSweepEdges = 0;
+
+	// ---- observed-closure maintenance (see the plane's fields above) ----
+
+	/** Shift a node's observed-consumer refcount; enter/exit fire on the
+	 * 0↔1 edges only, so shared consumers (two watchers on one derived node,
+	 * two observed dependents of one dep) hold ONE closure membership. */
+	private obsShift(id: NodeId, delta: 1 | -1): void {
+		const refs = this.obsRefs[id]! + delta;
+		this.obsRefs[id] = refs;
+		if (refs === 1 && delta === 1) this.obsEnter(id);
+		else if (refs === 0 && delta === -1) this.obsExit(id);
+	}
+
+	/**
+	 * A node joined the live-watcher closure. Atoms retain their kernel
+	 * observed lifecycle (the watcher half of the observation union — the
+	 * kernel liveness bit is the other). Computeds must discover their
+	 * CURRENT strong dep set: the fn may never have run while observed
+	 * (memo-served or evaluated pre-liveness), so force one newest
+	 * evaluation — dropping the newest memo guarantees the fn runs and the
+	 * evaluate epilogue records and retains the dep set. A getter that
+	 * throws keeps its throw-on-demand behavior; the deps it read before
+	 * throwing ARE retained (their K1 edges are recorded, so deliveries
+	 * reach this node's watchers through them — they have live consumers).
+	 */
+	private obsEnter(id: NodeId): void {
+		const node = this.nodesArr[id]!;
+		if (node.kind === 'atom') {
+			__lifecycleRetain(node.handle._id);
+			return;
+		}
+		this.newestMemos.delete(id);
+		// Frame mask: entry can fire inside an enclosing evaluation's epilogue
+		// (a parent's dep sync), and the discovery is not a READ by that
+		// parent — its trailing dep capture must not enter the open frame's
+		// fingerprint set.
+		const savedFrame = this.frame;
+		this.frame = undefined;
+		try {
+			this.evaluate(node, NEWEST);
+		} catch {
+			// partial dep set already synced by the evaluate epilogue
+		} finally {
+			this.frame = savedFrame;
+		}
+	}
+
+	/** The last observed consumer left: release the whole retained closure.
+	 * obsDeps clears BEFORE the child shifts so a degenerate cyclic dep
+	 * record (possible only via throwing getters) cannot re-release. */
+	private obsExit(id: NodeId): void {
+		const node = this.nodesArr[id]!;
+		if (node.kind === 'atom') {
+			__lifecycleRelease(node.handle._id);
+			return;
+		}
+		const deps = this.obsDeps[id];
+		if (deps === undefined) return;
+		this.obsDeps[id] = undefined;
+		for (const dep of deps) this.obsShift(dep, -1);
+	}
+
+	/**
+	 * An observed computed's fn just ran (fully, or up to a throw): re-point
+	 * its retains at the strong deps THIS evaluation recorded. Retain-new
+	 * before release-old; deps present in both snapshots never shift, and
+	 * an A→B→A flip within one tick nets out in the kernel's microtask
+	 * flush. Skipped if observation left mid-evaluation (the exit already
+	 * released the old snapshot; installing a new one would leak).
+	 */
+	private obsSyncDeps(id: NodeId, list: NodeId[]): void {
+		if (this.obsRefs[id]! === 0) return;
+		const prev = this.obsDeps[id];
+		const next = new Set(list);
+		this.obsDeps[id] = next;
+		for (const dep of next) {
+			if (prev === undefined || !prev.delete(dep)) this.obsShift(dep, 1);
+		}
+		if (prev !== undefined) {
+			for (const dep of prev) this.obsShift(dep, -1);
+		}
+	}
 
 	/**
 	 * Bounded mid-episode sweep so K1 cannot grow without limit between
@@ -2480,7 +2605,7 @@ export class CosignalBridge {
 		const p = this.pass(passId);
 		if (p.state === 'ended') throw new BridgeScheduleError('mount requires an open pass');
 		const value = this.evaluate(node, { kind: 'pass', pass: p });
-		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, node.kind === 'atom' ? node.handle._id : 0, value, {
+		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, this.watcherObs, value, {
 			passId: p.id, pin: p.pin,
 			maskSlots: new Set(p.maskSlots),
 			includedSlots: this.includedSet(p),

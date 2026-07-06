@@ -23,8 +23,8 @@
  * 14  drainCommittedObservers (slotTouched+weak+outs)  | K1                       | K1-ONLY, conservative | lockstep drain parity, scars S26, T9
  * 15  mountFixup dependencyClosureOf (inList)          | K1                       | K1-ONLY: worlds fold receipts, kernel links irrelevant | battery cases 9/10 + the always-on fast-out audit (BridgeInvariantViolation)
  * 16  quiesce refresh-target collection (byNode+lists) | K1                       | K1-ONLY | quiet-mode 'quiesce() interoperates', T7
- * 17  Watcher.live setter → retain/release             | K1 edge → union refcount | UNION (watcher half)      | observe-union.spec (all), T1
- * 18  mountWatcher kernelAtom wiring (atoms only)      | K1→K0 id                 | UNION-BOUNDARY: only DIRECT atom watchers retain; watchers over overlay computeds do NOT feed the atom's union (deliberate; was comment-only) | T2 (new pin)
+ * 17  Watcher.live setter → obsShift → retain/release  | K1 edge → union refcount | UNION (watcher half, via the observed-closure plane) | observe-union.spec (all), T1
+ * 18  observed-closure plane (obsRefs/obsDeps/capture) | eval-time strong deps → K0 lifecycle | UNION-TRANSITIVE: a live watcher observes every atom its node's CURRENT evaluation (transitively) reads — retains follow fn re-runs (dep flips move them), survive quiescence, and release with the last watcher — FIXED (was: only DIRECT atom watchers retained; useComputed+useSignal left closure atoms unobserved) | T2 (flipped pin), observe-transitive.spec
  * 19  watchers map + watchersByNode index mutation     | K1 dual store            | MUST MOVE TOGETHER via removeWatcher — FIXED (shim's map-only deletes stranded index entries: dead watchers seeded sweeps + quiesce refresh forever) | T7 (new), cosignal-react graph-consumers.spec.tsx
  * 20  episodeEdges/graphviz snapshot                   | K1                       | K1-ONLY diagnostics (documented: edges recorded since idle) | graphviz docstring; not behavior-bearing
  * 21  shim liveness flips (claim/orphan/finalize)      | K1 via one setter        | UNION + both stores (delegates to Watcher.live + removeWatcher) | cosignal-react hooks.spec StrictMode netting + graph-consumers.spec.tsx
@@ -90,23 +90,25 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 		expect(log).toEqual(['observe', 'unobserve']);
 	});
 
-	it('T2: UNION-BOUNDARY (row 18) — a watcher over an overlay COMPUTED does not retain the atom; a direct atom watcher does', async () => {
+	it('T2: UNION-TRANSITIVE (row 18) — a watcher over an overlay COMPUTED retains the atoms its evaluation reads; a direct atom watcher joining is an interior transition', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		const oc = b.computed('oc', (read) => read(node));
 		const p = b.passStart('A', []);
-		const wc = b.mountWatcher(p.id, oc, 'WC'); // kernelAtom = 0 by design
+		const wc = b.mountWatcher(p.id, oc, 'WC'); // no direct atom watcher anywhere
 		b.passEnd(p.id, 'commit');
 		await tick();
-		expect(log).toEqual([]); // transitive overlay chains deliberately do NOT observe
+		expect(log).toEqual(['observe']); // the closure atom IS observed through the derived node
 		const p2 = b.passStart('A', []);
-		const wa = b.mountWatcher(p2.id, node, 'WA'); // direct atom watcher
+		const wa = b.mountWatcher(p2.id, node, 'WA'); // direct atom watcher joins the same union
 		b.passEnd(p2.id, 'commit');
 		await tick();
+		expect(log).toEqual(['observe']); // interior transition: no re-observe
+		wa.live = false; // direct consumer leaves; the transitive one still holds
+		await tick();
 		expect(log).toEqual(['observe']);
-		wa.live = false;
-		wc.live = false;
+		wc.live = false; // last consumer of EVERY kind leaves
 		await tick();
 		expect(log).toEqual(['observe', 'unobserve']);
 	});

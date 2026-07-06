@@ -459,6 +459,37 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		expect(log).toEqual(['observe', 'unobserve', 'observe']);
 	});
 
+	test('derived subscriber (was the KNOWN GAP): useComputed closure atoms observe on mount and unobserve after unmount, StrictMode-safe', async () => {
+		// The component subscribes to a DERIVED node (useComputed + useSignal):
+		// the watcher sits on the computed, not the atom — pre-fix the atom
+		// underneath never observed (only DIRECT consumers fed the union;
+		// kernel chains retained transitively but overlay chains did not).
+		h = makeHarness();
+		const { atom: a, log } = observedAtom(2);
+		function View() {
+			const doubled = useComputed(() => (a.state as number) * 2, []);
+			return <span>{useSignal(doubled)}</span>;
+		}
+		const { root, container } = await h.mount(
+			<React.StrictMode>
+				<View />
+			</React.StrictMode>,
+		);
+		expect(text(container)).toBe('4');
+		await act(async () => {}); // orphan sweep + unsub debounce + observe delivery settle
+		expect(log).toEqual(['observe']); // the closure atom IS observed; StrictMode double-mount netted
+		await act(async () => {
+			a.set(3); // delivery through the derived node…
+		});
+		expect(text(container)).toBe('6');
+		expect(log).toEqual(['observe']); // …re-renders without re-observing
+		await act(async () => {
+			root.render(<React.StrictMode><div /></React.StrictMode>);
+		});
+		await act(async () => {}); // debounced unsubscribe finalizes → closure released
+		expect(log).toEqual(['observe', 'unobserve']);
+	});
+
 	test('quiet-mode interplay: observation transitions need no armed pipeline and leave none armed', async () => {
 		h = makeHarness();
 		h.bridge.setRetainEvents(false); // production posture: no event consumer…
