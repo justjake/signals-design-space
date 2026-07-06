@@ -1,0 +1,2807 @@
+/**
+ * cosignals-alt-b engine: M1 kernel + M2 tapes/write gate + M3 world overlay,
+ * in one module so the layout `const enum` inlines everywhere (spec §15.1).
+ *
+ * Kernel: adapted from the proven donor at libs/arena/src/index.ts
+ * (alien-signals v3.2.1 semantics on interleaved Int32Array records), with the
+ * five overlay-support mechanisms of spec §8.7: broadcast list, notify walk,
+ * mark repair in linkInsert, invalidate, and log-plane allocation.
+ *
+ * Pragmatic deviations from the spec, made for this pass and reported in the
+ * package summary:
+ * - Growth uses module-level `let` plane bindings grown by doubling instead of
+ *   the donor's closure-rebuild-over-const-buffers (§14.1). Semantics
+ *   identical; perf gates are out of scope this pass.
+ * - Certificates live in their own Int32Array (CERT) with a bump pointer
+ *   rather than the tail half of plane W (§7.4). Same lifecycle (bulk reset at
+ *   quiescence), simpler bounds math.
+ * - Urgent-drain broadcast evaluation uses the W0 world (retired ∪ applied)
+ *   per §10.6's writer's-world rule; §17.2's oracle prose says "newest world"
+ *   for urgent drains — the two differ when unapplied deferred entries
+ *   interact with an urgent write. We follow §10.6 (see report).
+ */
+
+import type { Container, ForkDouble } from './fork';
+
+// ---- layout constants (hand-written this pass; structured for later codegen) --
+const enum C {
+	// Node fields (plane M, stride 8; ids pre-multiplied: id = record * 8).
+	FLAGS = 0,
+	DEPS = 1, // free-list next when freed
+	DEPS_TAIL = 2,
+	SUBS = 3,
+	SUBS_TAIL = 4,
+	GEN = 5,
+	// +6: atoms LOG_HEAD; computeds/effects/watchers OVERLAY_STAMP
+	LOG_HEAD = 6,
+	OVERLAY_STAMP = 6,
+	// +7: atoms LOG_TAIL; computeds MEMO_KEY (head memo's world key mirror)
+	LOG_TAIL = 7,
+	MEMO_KEY = 7,
+
+	// Link fields (plane M, stride 8).
+	VERSION = 0,
+	DEP = 1,
+	SUB = 2,
+	PREV_SUB = 3,
+	NEXT_SUB = 4,
+	PREV_DEP = 5,
+	NEXT_DEP = 6, // free-list next when freed
+
+	// Flags word (spec §7.2).
+	MUTABLE = 1,
+	WATCHING = 2,
+	RECURSED_CHECK = 4,
+	RECURSED = 8,
+	DIRTY = 16,
+	PENDING = 32,
+	HAS_CHILD_EFFECT = 64,
+	LOGGED = 128, // atoms: LOG_HEAD !== 0 (the read gate)
+	IMMEDIATE = 256, // watchers: notify via broadcast list
+	LIVE = 512,
+	K_ATOM = 1024,
+	K_COMPUTED = 2048,
+	K_EFFECT = 4096,
+	K_SCOPE = 8192,
+	K_WATCHER = 16384,
+	KIND_MASK = K_ATOM | K_COMPUTED | K_EFFECT | K_SCOPE | K_WATCHER,
+
+	// Log plane G (stride 4; spec §7.3).
+	L_NEXT = 0,
+	L_META = 1,
+	L_SEQ = 2,
+	L_RETIRED_SEQ = 3,
+	// META packing: bits 0-1 OP; bit 2 APPLIED; bit 3 RETIRED; bits 4-8 slot;
+	// bit 9 PSEUDO (slot-exhaustion fallback entry, counted outside slots).
+	OP_MASK = 3,
+	OP_BASE = 0,
+	OP_SET = 1,
+	OP_UPDATE = 2,
+	OP_DISPATCH = 3,
+	F_APPLIED = 4,
+	F_RETIRED = 8,
+	SLOT_SHIFT = 4,
+	SLOT_MASK = 31 << 4,
+	F_PSEUDO = 512,
+
+	// World-memo plane W (stride 8; spec §7.4).
+	W_KEY = 0,
+	W_EPOCH = 1, // 0 = tombstone; overlayEpoch starts at 1
+	W_NODE = 2,
+	W_VAL = 3,
+	W_NEXT_MEMO = 4,
+	W_SLOT_NEXT = 5,
+	W_NDEPS = 6,
+	W_CERT = 7,
+
+	REC_SLACK = 1280,
+}
+
+// Read contexts (spec §10.1).
+const enum Ctx {
+	NEWEST = 0,
+	RENDER = 1,
+	COMMITTED = 2,
+}
+
+// World kinds for overlay resolution (spec §10.2).
+const enum WK {
+	NEWEST = 0,
+	PASS = 1,
+	WRITER = 2, // deferred writer's world: RETIRED | APPLIED | own batch
+	COMMITTED = 3, // global form: RETIRED only
+	W0 = 4, // retired | applied — the canonical world; urgent broadcast world
+}
+
+type World = {
+	kind: WK;
+	/** memo key; -1 = not memoizable (COMMITTED, W0) */
+	key: number;
+	pin: number;
+	mask: number;
+	slot: number;
+	token: number;
+};
+
+const WORLD_NEWEST: World = { kind: WK.NEWEST, key: 0, pin: 0, mask: 0, slot: -1, token: 0 };
+const WORLD_COMMITTED: World = { kind: WK.COMMITTED, key: -1, pin: 0, mask: 0, slot: -1, token: 0 };
+const WORLD_W0: World = { kind: WK.W0, key: -1, pin: 0, mask: 0, slot: -1, token: 0 };
+
+// Sentinel boxes (spec §11.3) — policy vocabulary, opaque to the kernel.
+export type ErrorBox = { kind: 'error'; error: unknown };
+export type SuspendedBox = { kind: 'suspended'; thenable: PromiseLike<unknown> };
+export function isErrorBox(v: unknown): v is ErrorBox {
+	return typeof v === 'object' && v !== null && (v as ErrorBox).kind === 'error' && 'error' in v;
+}
+export function isSuspendedBox(v: unknown): v is SuspendedBox {
+	return (
+		typeof v === 'object' && v !== null && (v as SuspendedBox).kind === 'suspended' && 'thenable' in v
+	);
+}
+const SUSPEND_MARKER: { marker: true } = { marker: true };
+
+type NodeMeta = {
+	label?: string;
+	isEqual?: (a: unknown, b: unknown) => boolean;
+	reducer?: (s: unknown, a: unknown) => unknown;
+	rawFn?: (ctx: ComputedCtxImpl) => unknown;
+	thenableCache?: Map<number, PromiseLike<unknown>[]>;
+	// watchers:
+	cb?: (token: number) => void;
+	watched?: number;
+	lastBroadcast?: Map<number, unknown>;
+	seed?: unknown;
+};
+
+export type ComputedCtxImpl = {
+	use<U>(thenable: PromiseLike<U>): U;
+	previous: unknown;
+};
+
+// ---- mutable module state (reset by __resetEngineForTests) --------------------
+
+let M = new Int32Array(0);
+let recNext = 8;
+let nodeFreeHead = 0;
+let linkFreeHead = 0;
+
+let G = new Int32Array(0);
+let gNext = 4; // record 0 burned (stride 4)
+let gFreeHead = 0;
+
+let W = new Int32Array(0);
+let wNext = 8; // record 0 burned (stride 8)
+let CERT = new Int32Array(0);
+let certNext = 0;
+
+let cycle = 0;
+let runDepth = 0;
+let batchDepth = 0;
+let notifyIndex = 0;
+let queuedLength = 0;
+let activeSub = 0;
+let queued: number[] = [];
+let pendingFree: number[] = [];
+
+let values: unknown[] = [undefined, undefined];
+let fns: (Function | undefined)[] = [undefined];
+let metaCol: (NodeMeta | undefined)[] = [undefined];
+let memoHeads: number[] = [0];
+let logVals: unknown[] = [undefined];
+let memoVals: unknown[] = [];
+
+let propStack = new Int32Array(4096);
+let propSp = 0;
+let checkStack = new Int32Array(4096);
+let checkSp = 0;
+let certStack = new Int32Array(4096);
+let certSp = 0;
+
+// Overlay scalars (spec §7.6).
+let batchTokenTab = new Int32Array(32);
+let batchEntryCount = new Int32Array(32);
+let slotRetired = new Int32Array(32);
+let slotMemoHead = new Int32Array(32);
+let liveSlotMask = 0;
+let liveDeferredMask = 0;
+let unappliedEntries = 0;
+let loggedAtomCount = 0;
+let seqCounter = 1;
+let walkCounter = 0;
+let eraFloor = 0;
+let overlayEpoch = 1;
+let lastToken = 0;
+let lastSlot = -1;
+let pseudoFallbacks = 0;
+
+const enum Mode {
+	DIRECT = 0,
+	LOGGED = 1,
+}
+let writeMode: Mode = Mode.DIRECT;
+
+// Pass set.
+let passOpen = 0;
+let passSerial = 0;
+let passPin = 0;
+let passIncludeMask = 0;
+let passContainer: Container = undefined;
+let passLineage = 0;
+let currentCtx: Ctx = Ctx.NEWEST;
+
+let loggedAtoms: number[] = [];
+// Node registry for the walk-counter wrap safety valve and the invariant
+// verifier. A record allocated as a node is never reused as a link (separate
+// free lists), so this list stays accurate; freed nodes have FLAGS 0 and are
+// skipped.
+let nodeIds: number[] = [];
+let broadcastQueue: number[] = []; // stride-2 (watcherId, token)
+let broadcastLen = 0;
+let pendingWalks: number[] = []; // stride-2 (atomId, token)
+let drainUrgent = false;
+let drainDirtySlots = 0;
+let drainDepth = 0;
+
+// Overlay evaluation context.
+let ovWorld: World | undefined;
+let ovDepth = 0;
+
+// Optional drain trace (debugging aid; see __debug.startTrace).
+let traceLog: string[] | undefined;
+
+function trace(msg: string): void {
+	if (traceLog !== undefined) {
+		traceLog.push(msg);
+	}
+}
+
+// Bridge / config.
+let fork: ForkDouble | undefined;
+let unsubscribeFork: (() => void) | undefined;
+let strictLanes = false;
+let forbidWritesInComputeds = false;
+let cfgInitialRecords = 8192;
+let cfgInitialLogRecords = 1024;
+let cfgInitialMemoRecords = 1024;
+
+// ---- init / reset --------------------------------------------------------------
+
+function initPlanes(): void {
+	M = new Int32Array(cfgInitialRecords * 8);
+	G = new Int32Array(cfgInitialLogRecords * 4);
+	W = new Int32Array(cfgInitialMemoRecords * 8);
+	CERT = new Int32Array(cfgInitialMemoRecords * 8);
+	recNext = 8;
+	nodeFreeHead = 0;
+	linkFreeHead = 0;
+	gNext = 4;
+	gFreeHead = 0;
+	wNext = 8;
+	certNext = 0;
+}
+
+initPlanes();
+
+/** Full engine reset for test isolation. Optionally reconfigures sizes. */
+export function __resetEngineForTests(options?: {
+	initialRecords?: number;
+	initialLogRecords?: number;
+	initialMemoRecords?: number;
+}): void {
+	if (unsubscribeFork !== undefined) {
+		unsubscribeFork();
+		unsubscribeFork = undefined;
+	}
+	fork = undefined;
+	strictLanes = false;
+	forbidWritesInComputeds = false;
+	cfgInitialRecords = options?.initialRecords ?? 8192;
+	cfgInitialLogRecords = options?.initialLogRecords ?? 1024;
+	cfgInitialMemoRecords = options?.initialMemoRecords ?? 1024;
+	initPlanes();
+	cycle = 0;
+	runDepth = 0;
+	batchDepth = 0;
+	notifyIndex = 0;
+	queuedLength = 0;
+	activeSub = 0;
+	queued = [];
+	pendingFree = [];
+	values = [undefined, undefined];
+	fns = [undefined];
+	metaCol = [undefined];
+	memoHeads = [0];
+	logVals = [undefined];
+	memoVals = [];
+	propStack = new Int32Array(4096);
+	propSp = 0;
+	checkStack = new Int32Array(4096);
+	checkSp = 0;
+	certStack = new Int32Array(4096);
+	certSp = 0;
+	batchTokenTab = new Int32Array(32);
+	batchEntryCount = new Int32Array(32);
+	slotRetired = new Int32Array(32);
+	slotMemoHead = new Int32Array(32);
+	liveSlotMask = 0;
+	liveDeferredMask = 0;
+	unappliedEntries = 0;
+	loggedAtomCount = 0;
+	seqCounter = 1;
+	walkCounter = 0;
+	eraFloor = 0;
+	overlayEpoch = 1;
+	lastToken = 0;
+	lastSlot = -1;
+	pseudoFallbacks = 0;
+	writeMode = Mode.DIRECT;
+	nodeIds = [];
+	passOpen = 0;
+	passSerial = 0;
+	passPin = 0;
+	passIncludeMask = 0;
+	passContainer = undefined;
+	passLineage = 0;
+	currentCtx = Ctx.NEWEST;
+	loggedAtoms = [];
+	broadcastQueue = [];
+	broadcastLen = 0;
+	pendingWalks = [];
+	drainUrgent = false;
+	drainDirtySlots = 0;
+	drainDepth = 0;
+	ovWorld = undefined;
+	ovDepth = 0;
+}
+
+// ---- plane growth (module-binding doubling; see module doc) --------------------
+
+function growM(): void {
+	const bigger = new Int32Array(M.length * 2);
+	bigger.set(M);
+	M = bigger;
+}
+
+function growG(): void {
+	const bigger = new Int32Array(G.length * 2);
+	bigger.set(G);
+	G = bigger;
+}
+
+function growW(): void {
+	const bigger = new Int32Array(W.length * 2);
+	bigger.set(W);
+	W = bigger;
+}
+
+function growCert(need: number): void {
+	let len = CERT.length * 2;
+	while (len < need) {
+		len *= 2;
+	}
+	const bigger = new Int32Array(len);
+	bigger.set(CERT);
+	CERT = bigger;
+}
+
+// ---- allocation -----------------------------------------------------------------
+
+function allocNode(flags: number): number {
+	let id: number;
+	if (nodeFreeHead !== 0) {
+		id = nodeFreeHead;
+		nodeFreeHead = M[id + C.DEPS];
+		M[id + C.DEPS] = 0;
+	} else {
+		if (recNext >= M.length) {
+			growM();
+		}
+		id = recNext;
+		recNext = id + 8;
+		nodeIds.push(id);
+	}
+	M[id + C.FLAGS] = flags;
+	const v = id >> 2;
+	while (values.length <= v + 1) {
+		values.push(undefined);
+	}
+	const r = id >> 3;
+	while (fns.length <= r) {
+		fns.push(undefined);
+	}
+	while (metaCol.length <= r) {
+		metaCol.push(undefined);
+	}
+	while (memoHeads.length <= r) {
+		memoHeads.push(0);
+	}
+	return id;
+}
+
+function freeNode(id: number): void {
+	M[id + C.FLAGS] = 0;
+	M[id + C.DEPS_TAIL] = 0;
+	M[id + C.SUBS] = 0;
+	M[id + C.SUBS_TAIL] = 0;
+	M[id + C.LOG_HEAD] = 0;
+	M[id + C.LOG_TAIL] = 0;
+	++M[id + C.GEN];
+	const v = id >> 2;
+	values[v] = undefined;
+	values[v + 1] = undefined;
+	fns[id >> 3] = undefined;
+	metaCol[id >> 3] = undefined;
+	memoHeads[id >> 3] = 0;
+	M[id + C.DEPS] = nodeFreeHead;
+	nodeFreeHead = id;
+}
+
+function sweepPendingFree(): void {
+	if (queuedLength !== 0 || notifyIndex !== 0) {
+		return; // queue may still hold ids
+	}
+	for (let i = 0; i < pendingFree.length; ++i) {
+		freeNode(pendingFree[i]);
+	}
+	pendingFree.length = 0;
+}
+
+function allocLink(): number {
+	let id: number;
+	if (linkFreeHead !== 0) {
+		id = linkFreeHead;
+		linkFreeHead = M[id + C.NEXT_DEP];
+	} else {
+		if (recNext >= M.length) {
+			growM();
+		}
+		id = recNext;
+		recNext = id + 8;
+	}
+	return id;
+}
+
+function freeLink(id: number): void {
+	M[id + C.NEXT_DEP] = linkFreeHead;
+	linkFreeHead = id;
+}
+
+/** Log-plane allocation (§8.7.5). */
+function allocLog(): number {
+	let id: number;
+	if (gFreeHead !== 0) {
+		id = gFreeHead;
+		gFreeHead = G[id + C.L_NEXT];
+	} else {
+		if (gNext >= G.length) {
+			growG();
+		}
+		id = gNext;
+		gNext = id + 4;
+	}
+	G[id + C.L_NEXT] = 0;
+	const r = id >> 2;
+	while (logVals.length <= r) {
+		logVals.push(undefined);
+	}
+	return id;
+}
+
+function freeLogRec(id: number): void {
+	logVals[id >> 2] = undefined;
+	G[id + C.L_META] = 0;
+	G[id + C.L_SEQ] = 0;
+	G[id + C.L_RETIRED_SEQ] = 0;
+	G[id + C.L_NEXT] = gFreeHead;
+	gFreeHead = id;
+}
+
+function allocMemo(): number {
+	if (wNext >= W.length) {
+		growW();
+	}
+	const id = wNext;
+	wNext = id + 8;
+	return id;
+}
+
+// ---- kernel: topology (donor transliteration + §8.7.3 mark repair) --------------
+
+function link(dep: number, sub: number, version: number): void {
+	const prevDep = M[sub + C.DEPS_TAIL];
+	if (prevDep !== 0 && M[prevDep + C.DEP] === dep) {
+		return;
+	}
+	const nextDep = prevDep !== 0 ? M[prevDep + C.NEXT_DEP] : M[sub + C.DEPS];
+	if (nextDep !== 0 && M[nextDep + C.DEP] === dep) {
+		M[nextDep + C.VERSION] = version;
+		M[sub + C.DEPS_TAIL] = nextDep;
+		return;
+	}
+	linkInsert(dep, sub, version, prevDep, nextDep);
+}
+
+// Out-of-line insertion tail (donor discipline). The overlay's mark repair
+// (§8.7.3) lives HERE, never in link().
+function linkInsert(dep: number, sub: number, version: number, prevDep: number, nextDep: number): void {
+	const prevSub = M[dep + C.SUBS_TAIL];
+	if (prevSub !== 0 && M[prevSub + C.VERSION] === version && M[prevSub + C.SUB] === sub) {
+		return;
+	}
+	const newLink = allocLink();
+	M[sub + C.DEPS_TAIL] = newLink;
+	M[dep + C.SUBS_TAIL] = newLink;
+	M[newLink + C.VERSION] = version;
+	M[newLink + C.DEP] = dep;
+	M[newLink + C.SUB] = sub;
+	M[newLink + C.PREV_DEP] = prevDep;
+	M[newLink + C.NEXT_DEP] = nextDep;
+	M[newLink + C.PREV_SUB] = prevSub;
+	M[newLink + C.NEXT_SUB] = 0;
+	if (nextDep !== 0) {
+		M[nextDep + C.PREV_DEP] = newLink;
+	}
+	if (prevDep !== 0) {
+		M[prevDep + C.NEXT_DEP] = newLink;
+	} else {
+		M[sub + C.DEPS] = newLink;
+	}
+	if (prevSub !== 0) {
+		M[prevSub + C.NEXT_SUB] = newLink;
+	} else {
+		M[dep + C.SUBS] = newLink;
+	}
+	// Mark repair (§8.7.3): if the overlay is live and the new producer is
+	// marked (or is a LOGGED atom), stamp the consumer's cone with the current
+	// walk ticket so the mark invariant holds for mid-era new edges.
+	if (loggedAtomCount !== 0) {
+		const depFlags = M[dep + C.FLAGS];
+		const depMarked =
+			(depFlags & C.LOGGED) !== 0
+			|| ((depFlags & C.K_ATOM) === 0 && M[dep + C.OVERLAY_STAMP] > eraFloor);
+		if (depMarked && M[sub + C.OVERLAY_STAMP] <= eraFloor) {
+			markCone(sub, walkCounter === eraFloor ? ++walkCounter : walkCounter);
+		}
+	}
+}
+
+/** Stamp `node` and its transitive subscribers with `ticket` (mark-only). */
+function markCone(node: number, ticket: number): void {
+	const stackBase = propSp;
+	let cur = node;
+	do {
+		if (M[cur + C.OVERLAY_STAMP] !== ticket && (M[cur + C.FLAGS] & C.K_ATOM) === 0) {
+			M[cur + C.OVERLAY_STAMP] = ticket;
+			let l = M[cur + C.SUBS];
+			while (l !== 0) {
+				if (propSp === propStack.length) {
+					const bigger = new Int32Array(propStack.length * 2);
+					bigger.set(propStack);
+					propStack = bigger;
+				}
+				propStack[propSp++] = M[l + C.SUB];
+				l = M[l + C.NEXT_SUB];
+			}
+		}
+		cur = propSp > stackBase ? propStack[--propSp] : 0;
+	} while (cur !== 0);
+	propSp = stackBase;
+}
+
+function unlink(id: number, sub = M[id + C.SUB]): number {
+	const dep = M[id + C.DEP];
+	const prevDep = M[id + C.PREV_DEP];
+	const nextDep = M[id + C.NEXT_DEP];
+	const nextSub = M[id + C.NEXT_SUB];
+	const prevSub = M[id + C.PREV_SUB];
+	if (nextDep !== 0) {
+		M[nextDep + C.PREV_DEP] = prevDep;
+	} else {
+		M[sub + C.DEPS_TAIL] = prevDep;
+	}
+	if (prevDep !== 0) {
+		M[prevDep + C.NEXT_DEP] = nextDep;
+	} else {
+		M[sub + C.DEPS] = nextDep;
+	}
+	if (nextSub !== 0) {
+		M[nextSub + C.PREV_SUB] = prevSub;
+	} else {
+		M[dep + C.SUBS_TAIL] = prevSub;
+	}
+	freeLink(id);
+	if (prevSub !== 0) {
+		M[prevSub + C.NEXT_SUB] = nextSub;
+	} else if ((M[dep + C.SUBS] = nextSub) === 0) {
+		unwatched(dep);
+	}
+	return nextDep;
+}
+
+// ---- kernel: traversals ----------------------------------------------------------
+
+function pushBroadcast(watcher: number, token: number): void {
+	if (broadcastLen + 2 > broadcastQueue.length) {
+		broadcastQueue.length = broadcastLen + 2;
+	}
+	broadcastQueue[broadcastLen] = watcher;
+	broadcastQueue[broadcastLen + 1] = token;
+	broadcastLen += 2;
+}
+
+function propagate(startLink: number, innerWrite: boolean): void {
+	let cur = startLink;
+	let next = M[cur + C.NEXT_SUB];
+	const stackBase = propSp;
+
+	top: do {
+		const sub = M[cur + C.SUB];
+		let flags = M[sub + C.FLAGS];
+
+		if (!(flags & (C.RECURSED_CHECK | C.RECURSED | C.DIRTY | C.PENDING))) {
+			M[sub + C.FLAGS] = flags | C.PENDING;
+			if (innerWrite) {
+				M[sub + C.FLAGS] |= C.RECURSED;
+			}
+		} else if (!(flags & (C.RECURSED_CHECK | C.RECURSED))) {
+			flags = 0;
+		} else if (!(flags & C.RECURSED_CHECK)) {
+			M[sub + C.FLAGS] = (flags & ~C.RECURSED) | C.PENDING;
+		} else if (!(flags & (C.DIRTY | C.PENDING)) && isValidLink(cur, sub)) {
+			M[sub + C.FLAGS] = flags | (C.RECURSED | C.PENDING);
+			flags &= C.MUTABLE;
+		} else {
+			flags = 0;
+		}
+
+		if (flags & C.WATCHING) {
+			if (flags & C.IMMEDIATE) {
+				pushBroadcast(sub, 0); // §8.7.1: propagate pushes token 0 (urgent)
+			} else {
+				notify(sub);
+			}
+		}
+
+		if (flags & C.MUTABLE) {
+			const subSubs = M[sub + C.SUBS];
+			if (subSubs !== 0) {
+				cur = subSubs;
+				const nextSub = M[cur + C.NEXT_SUB];
+				if (nextSub !== 0) {
+					if (propSp === propStack.length) {
+						const bigger = new Int32Array(propStack.length * 2);
+						bigger.set(propStack);
+						propStack = bigger;
+					}
+					propStack[propSp++] = next;
+					next = nextSub;
+				}
+				continue;
+			}
+		}
+
+		if ((cur = next) !== 0) {
+			next = M[cur + C.NEXT_SUB];
+			continue;
+		}
+
+		while (propSp > stackBase) {
+			cur = propStack[--propSp];
+			if (cur !== 0) {
+				next = M[cur + C.NEXT_SUB];
+				continue top;
+			}
+		}
+
+		break;
+	} while (true);
+}
+
+function checkDirty(startLink: number, startSub: number): boolean {
+	let cur = startLink;
+	let sub = startSub;
+	const stackBase = checkSp;
+	let checkDepth = 0;
+	let dirty = false;
+
+	try {
+		top: do {
+			const dep = M[cur + C.DEP];
+			const depFlags = M[dep + C.FLAGS];
+
+			if (M[sub + C.FLAGS] & C.DIRTY) {
+				dirty = true;
+			} else if ((depFlags & (C.MUTABLE | C.DIRTY)) === (C.MUTABLE | C.DIRTY)) {
+				const depSubs = M[dep + C.SUBS];
+				if (update(dep)) {
+					if (M[depSubs + C.NEXT_SUB] !== 0) {
+						shallowPropagate(depSubs);
+					}
+					dirty = true;
+				}
+			} else if ((depFlags & (C.MUTABLE | C.PENDING)) === (C.MUTABLE | C.PENDING)) {
+				if (checkSp === checkStack.length) {
+					const bigger = new Int32Array(checkStack.length * 2);
+					bigger.set(checkStack);
+					checkStack = bigger;
+				}
+				checkStack[checkSp++] = cur;
+				cur = M[dep + C.DEPS];
+				sub = dep;
+				++checkDepth;
+				continue;
+			}
+
+			if (!dirty) {
+				const nextDep = M[cur + C.NEXT_DEP];
+				if (nextDep !== 0) {
+					cur = nextDep;
+					continue;
+				}
+			}
+
+			while (checkDepth--) {
+				cur = checkStack[--checkSp];
+				if (dirty) {
+					const subSubs = M[sub + C.SUBS];
+					if (update(sub)) {
+						if (M[subSubs + C.NEXT_SUB] !== 0) {
+							shallowPropagate(subSubs);
+						}
+						sub = M[cur + C.SUB];
+						continue;
+					}
+					dirty = false;
+				} else {
+					M[sub + C.FLAGS] &= ~C.PENDING;
+				}
+				sub = M[cur + C.SUB];
+				const nextDep = M[cur + C.NEXT_DEP];
+				if (nextDep !== 0) {
+					cur = nextDep;
+					continue top;
+				}
+			}
+
+			return dirty && M[sub + C.FLAGS] !== 0;
+		} while (true);
+	} finally {
+		checkSp = stackBase;
+	}
+}
+
+function shallowPropagate(startLink: number): void {
+	let cur = startLink;
+	do {
+		const sub = M[cur + C.SUB];
+		const flags = M[sub + C.FLAGS];
+		if ((flags & (C.PENDING | C.DIRTY)) === C.PENDING) {
+			M[sub + C.FLAGS] = flags | C.DIRTY;
+			if ((flags & (C.WATCHING | C.RECURSED_CHECK)) === C.WATCHING) {
+				if (flags & C.IMMEDIATE) {
+					pushBroadcast(sub, 0);
+				} else {
+					notify(sub);
+				}
+			}
+		}
+	} while ((cur = M[cur + C.NEXT_SUB]) !== 0);
+}
+
+function isValidLink(checkLink: number, sub: number): boolean {
+	let cur = M[sub + C.DEPS_TAIL];
+	while (cur !== 0) {
+		if (cur === checkLink) {
+			return true;
+		}
+		cur = M[cur + C.PREV_DEP];
+	}
+	return false;
+}
+
+/** §8.7.2 — notify walk: stamp overlay marks; optionally collect IMMEDIATE
+ * watchers onto the broadcast queue tagged with the write's token. */
+function notifyWalk(atom: number, ticket: number, token: number, collect: boolean): void {
+	const stackBase = propSp;
+	let l = M[atom + C.SUBS];
+	while (l !== 0) {
+		if (propSp === propStack.length) {
+			const bigger = new Int32Array(propStack.length * 2);
+			bigger.set(propStack);
+			propStack = bigger;
+		}
+		propStack[propSp++] = M[l + C.SUB];
+		l = M[l + C.NEXT_SUB];
+	}
+	while (propSp > stackBase) {
+		const node = propStack[--propSp];
+		if (M[node + C.OVERLAY_STAMP] === ticket) {
+			continue; // already visited by THIS walk (diamond dedup)
+		}
+		M[node + C.OVERLAY_STAMP] = ticket;
+		const flags = M[node + C.FLAGS];
+		if (collect && flags & C.IMMEDIATE) {
+			pushBroadcast(node, token);
+		}
+		let sl = M[node + C.SUBS];
+		while (sl !== 0) {
+			if (propSp === propStack.length) {
+				const bigger = new Int32Array(propStack.length * 2);
+				bigger.set(propStack);
+				propStack = bigger;
+			}
+			propStack[propSp++] = M[sl + C.SUB];
+			sl = M[sl + C.NEXT_SUB];
+		}
+	}
+	propSp = stackBase;
+}
+
+// ---- kernel: scheduling, update, dispose -----------------------------------------
+
+function update(node: number): boolean {
+	const flags = M[node + C.FLAGS];
+	if (flags & C.K_COMPUTED) {
+		return updateComputed(node);
+	}
+	if (flags & C.K_ATOM) {
+		return updateAtom(node);
+	}
+	M[node + C.FLAGS] = (flags & C.KIND_MASK) | C.MUTABLE;
+	return true;
+}
+
+function notify(e: number): void {
+	let insertIndex = queuedLength;
+	const firstInsertedIndex = insertIndex;
+
+	do {
+		queued[insertIndex++] = e;
+		M[e + C.FLAGS] &= ~C.WATCHING;
+		const subs = M[e + C.SUBS];
+		e = subs !== 0 ? M[subs + C.SUB] : 0;
+		if (e === 0 || !(M[e + C.FLAGS] & C.WATCHING) || M[e + C.FLAGS] & C.IMMEDIATE) {
+			break;
+		}
+	} while (true);
+
+	queuedLength = insertIndex;
+
+	let left = firstInsertedIndex;
+	while (left < --insertIndex) {
+		const tmp = queued[left];
+		queued[left++] = queued[insertIndex];
+		queued[insertIndex] = tmp;
+	}
+}
+
+function unwatched(node: number): void {
+	const flags = M[node + C.FLAGS];
+	if (flags & C.K_COMPUTED) {
+		if (M[node + C.DEPS_TAIL] !== 0) {
+			M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY;
+			disposeAllDepsInReverse(node);
+		}
+	} else if (flags & C.K_ATOM) {
+		// nothing (observed-lifecycle is M4)
+	} else if (flags & (C.K_EFFECT | C.K_SCOPE)) {
+		dispose(node);
+	}
+}
+
+function unlinkChildEffects(sub: number): void {
+	let cur = M[sub + C.DEPS_TAIL];
+	while (cur !== 0) {
+		const prev = M[cur + C.PREV_DEP];
+		const dep = M[cur + C.DEP];
+		if (!(M[dep + C.FLAGS] & (C.K_COMPUTED | C.K_ATOM))) {
+			unlink(cur, sub);
+		}
+		cur = prev;
+	}
+}
+
+function updateComputed(c: number): boolean {
+	if (M[c + C.FLAGS] & C.HAS_CHILD_EFFECT) {
+		unlinkChildEffects(c);
+	}
+	M[c + C.DEPS_TAIL] = 0;
+	const stamp = M[c + C.OVERLAY_STAMP];
+	M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
+	M[c + C.OVERLAY_STAMP] = stamp;
+	const prevSub = activeSub;
+	activeSub = c;
+	try {
+		++cycle;
+		const v = c >> 2;
+		const oldValue = values[v];
+		return oldValue !== (values[v] = (fns[c >> 3] as (previousValue?: unknown) => unknown)(oldValue));
+	} finally {
+		activeSub = prevSub;
+		M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
+		purgeDeps(c);
+	}
+}
+
+function updateAtom(s: number): boolean {
+	const flags = M[s + C.FLAGS];
+	M[s + C.FLAGS] = flags & ~(C.DIRTY | C.PENDING);
+	const v = s >> 2;
+	return values[v] !== (values[v] = values[v + 1]);
+}
+
+function run(e: number): void {
+	const flags = M[e + C.FLAGS];
+	if (flags & C.DIRTY || (flags & C.PENDING && checkDirty(M[e + C.DEPS], e))) {
+		if (flags & C.HAS_CHILD_EFFECT) {
+			unlinkChildEffects(e);
+		}
+		const cv = (e >> 2) + 1;
+		if (values[cv]) {
+			runCleanup(e);
+			if (M[e + C.FLAGS] === 0) {
+				return; // disposed by its own cleanup
+			}
+		}
+		M[e + C.DEPS_TAIL] = 0;
+		const stamp = M[e + C.OVERLAY_STAMP];
+		M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK;
+		M[e + C.OVERLAY_STAMP] = stamp;
+		const prevSub = activeSub;
+		activeSub = e;
+		try {
+			++cycle;
+			++runDepth;
+			values[cv] = (fns[e >> 3] as () => (() => void) | void)();
+		} finally {
+			--runDepth;
+			activeSub = prevSub;
+			M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
+			purgeDeps(e);
+		}
+	} else if (M[e + C.DEPS] !== 0) {
+		M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & C.HAS_CHILD_EFFECT);
+	}
+}
+
+function requeueAbort(e: number): void {
+	if (M[e + C.FLAGS] & C.KIND_MASK) {
+		M[e + C.FLAGS] |= C.WATCHING | C.RECURSED;
+	}
+}
+
+function runCleanup(e: number): void {
+	const cv = (e >> 2) + 1;
+	const cleanup = values[cv] as () => void;
+	values[cv] = undefined;
+	const prevSub = activeSub;
+	activeSub = 0;
+	try {
+		cleanup();
+	} finally {
+		activeSub = prevSub;
+	}
+}
+
+function dispose(e: number): void {
+	const flags = M[e + C.FLAGS];
+	if (!(flags & C.KIND_MASK)) {
+		return;
+	}
+	M[e + C.FLAGS] = 0;
+	disposeAllDepsInReverse(e);
+	const sub = M[e + C.SUBS];
+	if (sub !== 0) {
+		unlink(sub);
+	}
+	if (flags & C.K_EFFECT && values[(e >> 2) + 1]) {
+		runCleanup(e);
+	}
+	pendingFree.push(e);
+}
+
+function disposeAllDepsInReverse(sub: number): void {
+	let cur = M[sub + C.DEPS_TAIL];
+	while (cur !== 0) {
+		const prev = M[cur + C.PREV_DEP];
+		unlink(cur, sub);
+		cur = prev;
+	}
+}
+
+function purgeDeps(sub: number): void {
+	const depsTail = M[sub + C.DEPS_TAIL];
+	let dep = depsTail !== 0 ? M[depsTail + C.NEXT_DEP] : M[sub + C.DEPS];
+	while (dep !== 0) {
+		dep = unlink(dep, sub);
+	}
+}
+
+function flush(): void {
+	sweepPendingFree();
+	try {
+		while (notifyIndex < queuedLength) {
+			const e = queued[notifyIndex];
+			queued[notifyIndex++] = 0;
+			run(e);
+		}
+	} finally {
+		while (notifyIndex < queuedLength) {
+			const e = queued[notifyIndex];
+			queued[notifyIndex++] = 0;
+			requeueAbort(e);
+		}
+		notifyIndex = 0;
+		queuedLength = 0;
+	}
+}
+
+/** §8.7.4 — invalidate: set DIRTY, propagate, queue notifications. */
+function invalidate(id: number): void {
+	M[id + C.FLAGS] |= C.DIRTY;
+	const subs = M[id + C.SUBS];
+	if (subs !== 0) {
+		propagate(subs, runDepth !== 0);
+	}
+}
+
+// ---- M2: seq tickets, batch slots, tape lifecycle (spec §9) ----------------------
+
+function ticket(): number {
+	return ++seqCounter;
+}
+
+/** §9.2 — intern a fork token into a batch slot (0-31); -1 = exhausted. */
+function internSlot(token: number): number {
+	if (token === lastToken && lastSlot >= 0 && batchTokenTab[lastSlot] === token) {
+		return lastSlot;
+	}
+	for (let s = 0; s < 32; ++s) {
+		if (batchTokenTab[s] === token) {
+			lastToken = token;
+			lastSlot = s;
+			return s;
+		}
+	}
+	for (let s = 0; s < 32; ++s) {
+		if (batchTokenTab[s] === 0) {
+			batchTokenTab[s] = token;
+			batchEntryCount[s] = 0;
+			slotRetired[s] = 0;
+			slotMemoHead[s] = 0;
+			liveSlotMask |= 1 << s;
+			if (token & 1) {
+				liveDeferredMask |= 1 << s;
+			}
+			lastToken = token;
+			lastSlot = s;
+			return s;
+		}
+	}
+	++pseudoFallbacks; // §9.2 defensive fallback
+	return -1;
+}
+
+function slotOfToken(token: number): number {
+	for (let s = 0; s < 32; ++s) {
+		if (batchTokenTab[s] === token) {
+			return s;
+		}
+	}
+	return -1;
+}
+
+function releaseSlot(s: number): void {
+	// Drop writer's-world memos whose key names the dead batch (§9.6).
+	let rec = slotMemoHead[s];
+	while (rec !== 0) {
+		const next = W[rec + C.W_SLOT_NEXT];
+		W[rec + C.W_EPOCH] = 0;
+		memoVals[W[rec + C.W_VAL]] = undefined;
+		rec = next;
+	}
+	slotMemoHead[s] = 0;
+	batchTokenTab[s] = 0;
+	batchEntryCount[s] = 0;
+	slotRetired[s] = 0;
+	liveSlotMask &= ~(1 << s);
+	liveDeferredMask &= ~(1 << s);
+	if (lastSlot === s) {
+		lastToken = 0;
+		lastSlot = -1;
+	}
+}
+
+/** §9.3 — first entry: create the tape (base record) and mark the cone. */
+function createTape(a: number): void {
+	const base = allocLog();
+	const t = ticket();
+	G[base + C.L_META] = C.OP_BASE | C.F_RETIRED;
+	G[base + C.L_SEQ] = t;
+	G[base + C.L_RETIRED_SEQ] = t;
+	logVals[base >> 2] = kernelAtomValue(a); // snapshot canonical value
+	M[a + C.LOG_HEAD] = base;
+	M[a + C.LOG_TAIL] = base;
+	M[a + C.FLAGS] |= C.LOGGED;
+	loggedAtoms.push(a);
+	++loggedAtomCount;
+	// Mark-only walk, unconditionally, whatever the write's classification.
+	notifyWalk(a, ++walkCounter, 0, false);
+}
+
+function appendLogRec(a: number, op: number, slot: number, payload: unknown, applied: boolean): number {
+	const rec = allocLog();
+	let meta = op | (applied ? C.F_APPLIED : 0);
+	if (slot >= 0) {
+		meta |= slot << C.SLOT_SHIFT;
+	} else {
+		// Slot exhaustion (§9.2): degrade toward urgent — applied + immediately
+		// retired pseudo-batch entry, visible everywhere new, no slot count.
+		meta |= C.F_PSEUDO | C.F_APPLIED | C.F_RETIRED;
+	}
+	G[rec + C.L_META] = meta;
+	const t = ticket();
+	G[rec + C.L_SEQ] = t;
+	G[rec + C.L_RETIRED_SEQ] = slot >= 0 ? 0 : t;
+	logVals[rec >> 2] = payload;
+	const tail = M[a + C.LOG_TAIL];
+	G[tail + C.L_NEXT] = rec;
+	M[a + C.LOG_TAIL] = rec;
+	if (slot >= 0) {
+		++batchEntryCount[slot];
+		if (!applied) {
+			++unappliedEntries;
+		}
+	}
+	return rec;
+}
+
+// ---- policy value application (ops over accumulators) ----------------------------
+
+function applyOp(a: number, op: number, payload: unknown, acc: unknown): unknown {
+	if (op === C.OP_SET) {
+		return payload;
+	}
+	if (op === C.OP_UPDATE) {
+		return (payload as (v: unknown) => unknown)(acc);
+	}
+	// OP_DISPATCH
+	const reducer = metaCol[a >> 3]?.reducer;
+	if (reducer === undefined) {
+		throw new Error('cosignals-alt-b: DISPATCH on an atom with no reducer');
+	}
+	return reducer(acc, payload);
+}
+
+function applyLogRec(a: number, rec: number, acc: unknown): unknown {
+	return applyOp(a, G[rec + C.L_META] & C.OP_MASK, logVals[rec >> 2], acc);
+}
+
+function isEqualPolicy(node: number, x: unknown, y: unknown): boolean {
+	if (Object.is(x, y)) {
+		return true;
+	}
+	const eq = metaCol[node >> 3]?.isEqual;
+	return eq !== undefined && eq(x, y);
+}
+
+// ---- kernel value access ----------------------------------------------------------
+
+/** Canonical atom value (promotes a pending kernel write), no tracking. */
+function kernelAtomValue(a: number): unknown {
+	if (M[a + C.FLAGS] & C.DIRTY) {
+		if (updateAtom(a)) {
+			const subs = M[a + C.SUBS];
+			if (subs !== 0) {
+				shallowPropagate(subs);
+			}
+		}
+	}
+	return values[a >> 2];
+}
+
+/** Donor kernel write: set pending value, mark DIRTY, propagate. */
+function kernelWrite(a: number, value: unknown): boolean {
+	const p = (a >> 2) + 1;
+	if (values[p] !== (values[p] = value)) {
+		M[a + C.FLAGS] |= C.DIRTY;
+		const subs = M[a + C.SUBS];
+		if (subs !== 0) {
+			propagate(subs, runDepth !== 0);
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Donor computedRead (canonical/W0), with optional dependency tracking. */
+function kernelComputedRead(c: number, track: boolean): unknown {
+	const flags = M[c + C.FLAGS];
+	if (
+		flags & C.DIRTY
+		|| (flags & C.PENDING
+			&& (checkDirty(M[c + C.DEPS], c) || ((M[c + C.FLAGS] = flags & ~C.PENDING), false)))
+	) {
+		if (updateComputed(c)) {
+			const subs = M[c + C.SUBS];
+			if (subs !== 0) {
+				shallowPropagate(subs);
+			}
+		}
+	} else if (flags === C.K_COMPUTED) {
+		// never evaluated (donor `!flags` shape: kind bit only)
+		firstEvalComputed(c);
+	}
+	if (track && activeSub !== 0) {
+		link(c, activeSub, cycle);
+	}
+	return values[c >> 2];
+}
+
+function firstEvalComputed(c: number): void {
+	const stamp = M[c + C.OVERLAY_STAMP];
+	M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
+	M[c + C.OVERLAY_STAMP] = stamp;
+	const prevSub = activeSub;
+	activeSub = c;
+	try {
+		++cycle;
+		values[c >> 2] = (fns[c >> 3] as (prev?: unknown) => unknown)(undefined);
+	} finally {
+		activeSub = prevSub;
+		M[c + C.FLAGS] &= ~C.RECURSED_CHECK;
+	}
+}
+
+// ---- M3: visibility and world resolution (spec §10) --------------------------------
+
+/** §10.2 — is log entry `rec` visible in `world`? */
+function visibleIn(rec: number, world: World): boolean {
+	const meta = G[rec + C.L_META];
+	switch (world.kind) {
+		case WK.NEWEST:
+			return true;
+		case WK.COMMITTED:
+			return (meta & C.F_RETIRED) !== 0;
+		case WK.W0:
+			return (meta & (C.F_RETIRED | C.F_APPLIED)) !== 0;
+		case WK.PASS: {
+			if (meta & C.F_RETIRED && G[rec + C.L_RETIRED_SEQ] <= world.pin) {
+				return true;
+			}
+			if (meta & C.F_PSEUDO) {
+				return false; // pseudo entries are only reachable via the retired clause
+			}
+			const slot = (meta & C.SLOT_MASK) >> C.SLOT_SHIFT;
+			return ((world.mask >>> slot) & 1) !== 0 && G[rec + C.L_SEQ] <= world.pin;
+		}
+		case WK.WRITER: {
+			if (meta & (C.F_RETIRED | C.F_APPLIED)) {
+				return true;
+			}
+			if (meta & C.F_PSEUDO) {
+				return false;
+			}
+			return ((meta & C.SLOT_MASK) >> C.SLOT_SHIFT) === world.slot;
+		}
+	}
+}
+
+/** §10.3 — replay an atom's tape for a world. Fold starts at the base
+ * snapshot; equality folds preserve reference stability. */
+function foldTape(a: number, world: World): unknown {
+	const head = M[a + C.LOG_HEAD];
+	let acc = logVals[head >> 2];
+	let rec = G[head + C.L_NEXT];
+	while (rec !== 0) {
+		if (visibleIn(rec, world)) {
+			const next = applyLogRec(a, rec, acc);
+			acc = isEqualPolicy(a, acc, next) ? acc : next;
+		}
+		rec = G[rec + C.L_NEXT];
+	}
+	return acc;
+}
+
+/** Resolve an atom's value in a world (kernel value when unlogged). */
+function atomValueInWorld(a: number, world: World): unknown {
+	if ((M[a + C.FLAGS] & C.LOGGED) === 0) {
+		return kernelAtomValue(a);
+	}
+	if (world.kind === WK.W0) {
+		return kernelAtomValue(a); // W0 invariant (§9.4)
+	}
+	return foldTape(a, world);
+}
+
+function passWorld(): World {
+	return {
+		kind: WK.PASS,
+		key: (passSerial << 2) | 1,
+		pin: passPin,
+		mask: passIncludeMask,
+		slot: -1,
+		token: 0,
+	};
+}
+
+function writerWorld(token: number): World {
+	return {
+		kind: WK.WRITER,
+		key: (token << 2) | 2,
+		pin: 0,
+		mask: 0,
+		slot: slotOfToken(token),
+		token,
+	};
+}
+
+function worldOfCtx(ctx: Ctx): World {
+	if (ctx === Ctx.RENDER) {
+		return passWorld();
+	}
+	if (ctx === Ctx.COMMITTED) {
+		return WORLD_COMMITTED;
+	}
+	return WORLD_NEWEST;
+}
+
+// ---- M3: world memos and certificates (spec §10.5) ---------------------------------
+
+function certPush(atomId: number, seqOrZero: number): void {
+	if (certSp + 2 > certStack.length) {
+		const bigger = new Int32Array(certStack.length * 2);
+		bigger.set(certStack);
+		certStack = bigger;
+	}
+	certStack[certSp] = atomId;
+	certStack[certSp + 1] = seqOrZero;
+	certSp += 2;
+}
+
+function atomTailSeqOrZero(a: number): number {
+	return M[a + C.FLAGS] & C.LOGGED ? G[M[a + C.LOG_TAIL] + C.L_SEQ] : 0;
+}
+
+/** Overlay atom read: fold in ovWorld, record the certificate pair. */
+function overlayReadAtom(a: number): unknown {
+	certPush(a, atomTailSeqOrZero(a));
+	return atomValueInWorld(a, ovWorld as World);
+}
+
+/** Find a live memo record for (node, key); lazily zeroes stale heads (§7.4). */
+function memoLookup(c: number, key: number): number {
+	let rec = memoHeads[c >> 3];
+	if (rec !== 0 && (rec >= wNext || W[rec + C.W_NODE] !== c)) {
+		memoHeads[c >> 3] = 0; // dangling head after a plane reset
+		M[c + C.MEMO_KEY] = 0;
+		return 0;
+	}
+	// Per-record NODE guard: the chain is cut at the first record this node
+	// does not own (stale-reference defense, §7.4).
+	while (rec !== 0 && rec < wNext && W[rec + C.W_NODE] === c) {
+		if (W[rec + C.W_EPOCH] !== 0 && W[rec + C.W_KEY] === key) {
+			return rec;
+		}
+		rec = W[rec + C.W_NEXT_MEMO];
+	}
+	return 0;
+}
+
+/** Certificate scan (§10.5): every pair must still hold. */
+function certValid(rec: number): boolean {
+	const n = W[rec + C.W_NDEPS];
+	const base = W[rec + C.W_CERT];
+	for (let i = 0; i < n; ++i) {
+		const aid = CERT[base + i * 2];
+		const s = CERT[base + i * 2 + 1];
+		if (atomTailSeqOrZero(aid) !== s) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function copyCertRun(rec: number): void {
+	const n = W[rec + C.W_NDEPS];
+	const base = W[rec + C.W_CERT];
+	for (let i = 0; i < n; ++i) {
+		certPush(CERT[base + i * 2], CERT[base + i * 2 + 1]);
+	}
+}
+
+function writeMemoRecord(c: number, world: World, val: unknown, certBase: number): number {
+	// Tombstone the superseded record for this (node, key).
+	const old = memoLookup(c, world.key);
+	if (old !== 0) {
+		W[old + C.W_EPOCH] = 0;
+		memoVals[W[old + C.W_VAL]] = undefined;
+	}
+	const rec = allocMemo();
+	const nPairs = (certSp - certBase) >> 1;
+	if (certNext + nPairs * 2 > CERT.length) {
+		growCert(certNext + nPairs * 2);
+	}
+	CERT.set(certStack.subarray(certBase, certSp), certNext);
+	W[rec + C.W_KEY] = world.key;
+	W[rec + C.W_EPOCH] = overlayEpoch;
+	W[rec + C.W_NODE] = c;
+	const vi = memoVals.length;
+	memoVals.push(val);
+	W[rec + C.W_VAL] = vi;
+	W[rec + C.W_NDEPS] = nPairs;
+	W[rec + C.W_CERT] = certNext;
+	certNext += nPairs * 2;
+	// Node chain (head in the memos side column, key mirrored on the node).
+	const head = memoHeads[c >> 3];
+	W[rec + C.W_NEXT_MEMO] = head !== 0 && rec !== head && W[head + C.W_NODE] === c ? head : 0;
+	memoHeads[c >> 3] = rec;
+	M[c + C.MEMO_KEY] = world.key;
+	// Slot memo chain: writer's-world records only (§10.5, §9.8).
+	if (world.kind === WK.WRITER && world.slot >= 0) {
+		W[rec + C.W_SLOT_NEXT] = slotMemoHead[world.slot];
+		slotMemoHead[world.slot] = rec;
+	} else {
+		W[rec + C.W_SLOT_NEXT] = 0;
+	}
+	return rec;
+}
+
+/** §10.5 — overlay evaluation of computed `c` in `world`, memoized. */
+function overlayEvaluate(c: number, world: World): unknown {
+	if (world.key !== -1) {
+		const rec = memoLookup(c, world.key);
+		if (
+			rec !== 0
+			&& W[rec + C.W_EPOCH] === overlayEpoch
+			&& (world.kind === WK.PASS || certValid(rec))
+		) {
+			if (ovDepth !== 0) {
+				copyCertRun(rec); // memo hit inside a collection frame flattens
+			}
+			return memoVals[W[rec + C.W_VAL]];
+		}
+	}
+	const certBase = certSp;
+	const prevWorld = ovWorld;
+	ovWorld = world;
+	++ovDepth;
+	const prevSub = activeSub;
+	activeSub = 0; // overlay evaluation never tracks (§10.5)
+	let prevVal: unknown;
+	if (world.key !== -1) {
+		const oldRec = memoLookup(c, world.key);
+		prevVal = oldRec !== 0 ? memoVals[W[oldRec + C.W_VAL]] : undefined;
+	}
+	let val: unknown;
+	try {
+		val = runComputedFn(c, prevVal, world.kind === WK.PASS ? passLineage : 0);
+	} finally {
+		--ovDepth;
+		ovWorld = prevWorld;
+		activeSub = prevSub;
+	}
+	if (prevVal !== undefined && isEqualPolicy(c, prevVal, val)) {
+		val = prevVal; // reference stability (§11.2)
+	}
+	if (world.key !== -1) {
+		writeMemoRecord(c, world, val, certBase);
+	}
+	if (ovDepth === 0) {
+		certSp = 0;
+	}
+	return val;
+}
+
+/** Resolve a computed's value in a world (read gate + post-eval re-check, §10.4). */
+function resolveComputed(c: number, world: World, track: boolean): unknown {
+	if (world.kind === WK.W0) {
+		return kernelComputedRead(c, track);
+	}
+	if (loggedAtomCount === 0 || M[c + C.OVERLAY_STAMP] <= eraFloor) {
+		const v = kernelComputedRead(c, track);
+		const worldSensitive = world.kind !== WK.NEWEST || unappliedEntries !== 0;
+		if (worldSensitive && M[c + C.OVERLAY_STAMP] > eraFloor) {
+			// Post-eval re-check: this evaluation's own linking just marked c
+			// (fresh node, or a new branch into a logged atom, §10.4).
+			return overlayEvaluate(c, world);
+		}
+		return v;
+	}
+	if (world.kind === WK.NEWEST && unappliedEntries === 0) {
+		return kernelComputedRead(c, track);
+	}
+	return overlayEvaluate(c, world);
+}
+
+/** Resolve any node in a world (broadcast decisions, oracle comparisons). */
+function resolveNode(node: number, world: World): unknown {
+	if (M[node + C.FLAGS] & C.K_ATOM) {
+		return atomValueInWorld(node, world);
+	}
+	return resolveComputed(node, world, false);
+}
+
+// ---- computed evaluation wrapper (policy; §11.2/§11.3/§12.3) ----------------------
+
+type ThenableState = {
+	status: 'pending' | 'fulfilled' | 'rejected';
+	value?: unknown;
+	reason?: unknown;
+	waiters: Set<number>;
+};
+const thenableStates = new WeakMap<PromiseLike<unknown>, ThenableState>();
+
+function stampThenable(t: PromiseLike<unknown>, waiter: number): ThenableState {
+	let st = thenableStates.get(t);
+	if (st === undefined) {
+		const state: ThenableState = { status: 'pending', waiters: new Set() };
+		thenableStates.set(t, state);
+		st = state;
+		t.then(
+			(v) => {
+				state.status = 'fulfilled';
+				state.value = v;
+				onThenableSettled(t, state);
+			},
+			(r) => {
+				state.status = 'rejected';
+				state.reason = r;
+				onThenableSettled(t, state);
+			},
+		);
+	}
+	st.waiters.add(waiter);
+	return st;
+}
+
+function onThenableSettled(t: PromiseLike<unknown>, st: ThenableState): void {
+	// §12.3: settlement of a thenable while the overlay is live bumps the epoch
+	// (nothing else would invalidate a writer's-world memo holding the box).
+	if (loggedAtomCount !== 0) {
+		++overlayEpoch;
+	}
+	for (const c of st.waiters) {
+		const cached = values[c >> 2];
+		if (isSuspendedBox(cached) && cached.thenable === t) {
+			invalidate(c);
+		}
+	}
+	st.waiters.clear();
+	flush();
+	drainAll();
+}
+
+/** Run a computed's user fn; returns a value or a sentinel box. Boxes are
+ * reference-stable while the state is unchanged (§11.2). */
+function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
+	const m = metaCol[c >> 3];
+	const rawFn = m?.rawFn;
+	if (rawFn === undefined) {
+		throw new Error('cosignals-alt-b: computed has no fn');
+	}
+	let useIndex = 0;
+	let suspended: PromiseLike<unknown> | undefined;
+	const ctx: ComputedCtxImpl = {
+		previous: isErrorBox(prev) || isSuspendedBox(prev) ? undefined : prev,
+		use<U>(thenable: PromiseLike<U>): U {
+			let cache = m!.thenableCache;
+			if (cache === undefined) {
+				cache = m!.thenableCache = new Map();
+			}
+			let arr = cache.get(cacheKey);
+			if (arr === undefined) {
+				arr = [];
+				cache.set(cacheKey, arr);
+			}
+			const idx = useIndex++;
+			const t = (arr[idx] ?? (arr[idx] = thenable)) as PromiseLike<U>;
+			const st = stampThenable(t, c);
+			if (st.status === 'fulfilled') {
+				return st.value as U;
+			}
+			if (st.status === 'rejected') {
+				throw st.reason;
+			}
+			suspended = t;
+			throw SUSPEND_MARKER;
+		},
+	};
+	let next: unknown;
+	try {
+		next = rawFn(ctx);
+	} catch (e) {
+		if (e === SUSPEND_MARKER) {
+			if (isSuspendedBox(prev) && prev.thenable === suspended) {
+				return prev;
+			}
+			return { kind: 'suspended', thenable: suspended } as SuspendedBox;
+		}
+		if (isErrorBox(prev) && Object.is(prev.error, e)) {
+			return prev;
+		}
+		return { kind: 'error', error: e } as ErrorBox;
+	}
+	if (
+		prev !== undefined
+		&& !isErrorBox(prev)
+		&& !isSuspendedBox(prev)
+		&& !isErrorBox(next)
+		&& !isSuspendedBox(next)
+		&& isEqualPolicy(c, prev, next)
+	) {
+		return prev;
+	}
+	return next;
+}
+
+function broadcastEqual(node: number, a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) {
+		return true;
+	}
+	if (isErrorBox(a) || isErrorBox(b) || isSuspendedBox(a) || isSuspendedBox(b)) {
+		return false; // boxes compare by identity only
+	}
+	return isEqualPolicy(node, a, b);
+}
+
+// ---- the write path (§9.1 gate, §9.3 append, §9.4 applied, §9.8 notify) ----------
+
+function atomWrite(a: number, op: number, payload: unknown): void {
+	if (currentCtx === Ctx.RENDER) {
+		throw new Error('cosignals-alt-b: writes during render are forbidden (§10.8)');
+	}
+	if (
+		forbidWritesInComputeds
+		&& activeSub !== 0
+		&& (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0
+	) {
+		throw new Error('cosignals-alt-b: writes inside computeds are forbidden (configure)');
+	}
+	if (writeMode === Mode.DIRECT) {
+		// DIRECT: the proven kernel write, zero overlay instructions (§9.1).
+		const cur = kernelAtomValue(a);
+		const next = applyOp(a, op, payload, cur);
+		if (isEqualPolicy(a, cur, next)) {
+			return;
+		}
+		kernelWrite(a, next);
+		if (batchDepth === 0) {
+			flush();
+			drainAll();
+		}
+		return;
+	}
+	// LOGGED: every write is logged (§9.1 always-log rule).
+	const f = fork;
+	if (f === undefined) {
+		throw new Error('cosignals-alt-b: LOGGED mode without a fork attached');
+	}
+	const deferred = f.isCurrentWriteDeferred();
+	const token = f.getCurrentWriteBatch();
+	const slot = internSlot(token);
+	const applied = !deferred || slot < 0; // slot exhaustion degrades to urgent
+	let coalesced = false;
+	if (M[a + C.LOG_HEAD] === 0) {
+		// Equality drop — provably safe only while tapeless (§9.3): evaluate
+		// once against the base-to-be value.
+		const cur = kernelAtomValue(a);
+		const next = applyOp(a, op, payload, cur);
+		if (isEqualPolicy(a, cur, next)) {
+			return;
+		}
+		createTape(a);
+	} else if (op === C.OP_SET && passOpen === 0 && slot >= 0) {
+		// Same-batch coalescing (§9.3): SET replaces a same-slot unretired SET
+		// tail in place. (UPDATE/DISPATCH composition is deferred this pass.)
+		const tail = M[a + C.LOG_TAIL];
+		const tmeta = G[tail + C.L_META];
+		if (
+			(tmeta & C.OP_MASK) === C.OP_SET
+			&& (tmeta & (C.F_RETIRED | C.F_PSEUDO)) === 0
+			&& ((tmeta & C.SLOT_MASK) >> C.SLOT_SHIFT) === slot
+		) {
+			logVals[tail >> 2] = payload;
+			G[tail + C.L_SEQ] = ticket();
+			coalesced = true;
+		}
+	}
+	if (!coalesced) {
+		appendLogRec(a, op, slot, payload, applied);
+	}
+	if (applied) {
+		// Urgent: logged AND applied through the kernel (§9.4).
+		const cur = kernelAtomValue(a);
+		const next = applyOp(a, op, payload, cur);
+		if (!isEqualPolicy(a, cur, next)) {
+			kernelWrite(a, next);
+		}
+		drainUrgent = true; // applied entries change pending worlds too (§9.8)
+		// Always collect this atom's watcher cone with a token-0 walk. The
+		// spec's "urgent writes skip the walk; propagate reaches watchers"
+		// (§9.8) is unsound for an equal-value urgent write onto a tape: the
+		// kernel value does not move (no propagation), yet the applied entry
+		// lands with a later seq in every pending world and can change THEIR
+		// folds. §17.2's generator includes equal-value writes onto logged
+		// atoms precisely to catch this. Decisions dedup the overlap with
+		// kernel propagation via the per-world cutoff.
+		pendingWalks.push(a, 0);
+	} else {
+		pendingWalks.push(a, token);
+		if (slot >= 0) {
+			drainDirtySlots |= 1 << slot;
+		}
+	}
+	if (batchDepth === 0) {
+		drainAll();
+	}
+}
+
+// ---- the drain (§9.8): walks, broadcasts, slot-chain re-validation -----------------
+
+function unretiredDeferredMask(): number {
+	let mask = 0;
+	for (let s = 0; s < 32; ++s) {
+		if (batchTokenTab[s] !== 0 && slotRetired[s] === 0 && (batchTokenTab[s] & 1) === 1) {
+			mask |= 1 << s;
+		}
+	}
+	return mask;
+}
+
+function drainAll(): void {
+	if (drainDepth !== 0) {
+		return;
+	}
+	drainDepth = 1;
+	try {
+		let guard = 0;
+		while (
+			pendingWalks.length !== 0
+			|| notifyIndex < queuedLength
+			|| broadcastLen !== 0
+			|| drainUrgent
+			|| drainDirtySlots !== 0
+		) {
+			if (++guard > 100000) {
+				throw new Error('cosignals-alt-b: drain did not settle (write storm?)');
+			}
+			// 1. Deferred notify walks — one walk ticket per TOKEN per drain
+			// (§9.8). Same-token writes over one region dedup against the
+			// shared ticket; different tokens must re-walk, because watcher
+			// collection is per (watcher, token) — one shared ticket across
+			// tokens would silently drop the second batch's notifications.
+			if (pendingWalks.length !== 0) {
+				const walks = pendingWalks;
+				pendingWalks = [];
+				const byToken = new Map<number, number[]>();
+				for (let i = 0; i < walks.length; i += 2) {
+					let atoms = byToken.get(walks[i + 1]);
+					if (atoms === undefined) {
+						atoms = [];
+						byToken.set(walks[i + 1], atoms);
+					}
+					atoms.push(walks[i]);
+				}
+				for (const [token, atoms] of byToken) {
+					const t = ++walkCounter;
+					for (const a of atoms) {
+						notifyWalk(a, t, token, true);
+					}
+				}
+			}
+			// 2. Kernel effects (urgent writes queued them).
+			flush();
+			// 3. Slot-chain re-validation (§9.8) — BEFORE the broadcast
+			// decisions: the decisions' own world evaluations re-memoize the
+			// marked subgraph, and if they ran first, phase 1 of the
+			// re-validation would see only fresh records and miss the value
+			// changes of intermediate nodes whose watchers the walk did not
+			// collect (found by the §17.2 oracle).
+			const urgent = drainUrgent;
+			drainUrgent = false;
+			let slots = drainDirtySlots;
+			drainDirtySlots = 0;
+			if (urgent) {
+				slots = unretiredDeferredMask();
+			}
+			trace(`drain-iter urgent=${urgent} slots=${slots.toString(2)} bq=${broadcastLen}`);
+			if (slots !== 0) {
+				processRevalidations(slots);
+			}
+			// 4. Broadcasts, grouped by token; deferred groups entangled (§9.8).
+			processBroadcasts();
+		}
+	} finally {
+		drainDepth = 0;
+	}
+}
+
+function processBroadcasts(): void {
+	if (broadcastLen === 0) {
+		return;
+	}
+	const n = broadcastLen;
+	const items = broadcastQueue.slice(0, n);
+	broadcastLen = 0;
+	const seen = new Set<string>();
+	const groups = new Map<number, number[]>();
+	for (let i = 0; i < n; i += 2) {
+		const w = items[i];
+		const t = items[i + 1];
+		const key = w + ':' + t;
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		let g = groups.get(t);
+		if (g === undefined) {
+			g = [];
+			groups.set(t, g);
+		}
+		g.push(w);
+	}
+	for (const [token, ws] of groups) {
+		if (token !== 0 && (token & 1) === 1 && fork !== undefined) {
+			// Deferred group: setStates must land in the batch's own lanes even
+			// when the drain runs after the writer's scope closed (§9.8).
+			const ok = fork.runInBatch(token, () => {
+				for (const w of ws) {
+					broadcastDecide(w, token);
+				}
+			});
+			if (!ok) {
+				// Token retired between write and drain: urgent fallback — its
+				// values are already absorbed into canonical state.
+				for (const w of ws) {
+					broadcastDecide(w, 0);
+				}
+			}
+		} else {
+			for (const w of ws) {
+				broadcastDecide(w, 0);
+			}
+			// Urgent drains decide in every live deferred writer's world too
+			// (§17.2's oracle rule): an applied entry is visible in every
+			// writer's world, and it can CAUSE first divergence for a pending
+			// world (e.g. flip a branch onto that world's entries) — a case
+			// the slot chains cannot cover because no memo exists yet. These
+			// decisions also create those memos. Iterate the fork's live
+			// tokens, not slots: a live batch with no writes has no slot but
+			// its writer's world still moves when entries retire into it.
+			if (fork !== undefined) {
+				for (const token of fork.liveTokens()) {
+					if ((token & 1) === 1) {
+						fork.runInBatch(token, () => {
+							for (const w of ws) {
+								broadcastDecide(w, token);
+							}
+						});
+					}
+				}
+			}
+		}
+	}
+}
+
+/** §10.6 — per-watcher cutoff: broadcast iff the watched node's value in the
+ * writer's world differs from the last value broadcast for that world. */
+function broadcastDecide(w: number, token: number): void {
+	if ((M[w + C.FLAGS] & C.K_WATCHER) === 0) {
+		return; // disposed since enqueue
+	}
+	M[w + C.FLAGS] &= ~(C.PENDING | C.DIRTY | C.RECURSED);
+	const m = metaCol[w >> 3];
+	if (m === undefined || m.watched === undefined) {
+		return;
+	}
+	const node = m.watched;
+	const world = token === 0 ? WORLD_W0 : writerWorld(token);
+	const key = token === 0 ? 0 : (token << 2) | 2;
+	const v = resolveNode(node, world);
+	// Default for a world this watcher has never decided in: the node's
+	// CURRENT W0 value — "what the committed/urgent path will show". A batch
+	// opened after subscription starts identical to W0; the first genuine
+	// divergence differs from W0 and fires.
+	const last = m.lastBroadcast!.has(key)
+		? m.lastBroadcast!.get(key)
+		: token === 0
+			? undefined // key 0 is always seeded at creation
+			: resolveNode(node, WORLD_W0);
+	trace(`decide w=${w} node=${node} token=${token} v=${String(v)} last=${String(last)}`);
+	if (!broadcastEqual(node, last, v)) {
+		m.lastBroadcast!.set(key, v);
+		m.cb!(token);
+	}
+}
+
+function processRevalidations(slotsMask: number): void {
+	for (let s = 0; s < 32; ++s) {
+		if (((slotsMask >>> s) & 1) === 0) {
+			continue;
+		}
+		const token = batchTokenTab[s];
+		if (token === 0 || slotRetired[s] !== 0) {
+			continue;
+		}
+		const world = writerWorld(token);
+		// Phase 1 — snapshot the chain's live stale records BEFORE evaluating
+		// anything: a re-evaluation nests into downstream computeds and
+		// re-memoizes them, tombstoning their own chain records; a single-pass
+		// walk would then skip those records as tombstones and lose their
+		// value-change notifications (found by the §17.2 oracle).
+		const staleNodes: number[] = [];
+		const staleOldVals: unknown[] = [];
+		let rec = slotMemoHead[s];
+		while (rec !== 0) {
+			if (W[rec + C.W_EPOCH] !== 0) {
+				const node = W[rec + C.W_NODE];
+				if (W[rec + C.W_EPOCH] !== overlayEpoch || !certValid(rec)) {
+					staleNodes.push(node);
+					staleOldVals.push(memoVals[W[rec + C.W_VAL]]);
+				}
+			}
+			rec = W[rec + C.W_SLOT_NEXT];
+		}
+		// Phase 2 — re-evaluate (memo hits make shared subgraphs cheap) and
+		// compare against the snapshot.
+		const toNotify: number[] = [];
+		for (let i = 0; i < staleNodes.length; ++i) {
+			const node = staleNodes[i];
+			const newVal = overlayEvaluate(node, world); // re-memoizes
+			trace(
+				`revalidate slot=${s} token=${token} node=${node} old=${String(staleOldVals[i])} new=${String(newVal)}`,
+			);
+			if (!broadcastEqual(node, staleOldVals[i], newVal)) {
+				toNotify.push(node);
+			}
+		}
+		for (const node of toNotify) {
+			let l = M[node + C.SUBS];
+			while (l !== 0) {
+				const sub = M[l + C.SUB];
+				if (M[sub + C.FLAGS] & C.IMMEDIATE) {
+					pushBroadcast(sub, token); // grouped + entangled next iteration
+				}
+				l = M[l + C.NEXT_SUB];
+			}
+		}
+	}
+}
+
+// ---- retirement, absorption, sweep, truncation, quiescence (§9.5-§9.7) ------------
+
+function onRetired(token: number): void {
+	const slot = slotOfToken(token);
+	++overlayEpoch; // §10.5: retirement changes world values without moving tails
+	if (slot >= 0) {
+		slotRetired[slot] = 1;
+		const rseq = ticket();
+		++batchDepth;
+		try {
+			const atoms = loggedAtoms.slice();
+			for (const a of atoms) {
+				const head = M[a + C.LOG_HEAD];
+				if (head === 0) {
+					continue;
+				}
+				let touched = false;
+				let rec = G[head + C.L_NEXT];
+				while (rec !== 0) {
+					const meta = G[rec + C.L_META];
+					if (
+						(meta & (C.F_PSEUDO | C.F_RETIRED)) === 0
+						&& ((meta & C.SLOT_MASK) >> C.SLOT_SHIFT) === slot
+					) {
+						G[rec + C.L_META] = meta | C.F_RETIRED;
+						G[rec + C.L_RETIRED_SEQ] = rseq;
+						if ((meta & C.F_APPLIED) === 0) {
+							--unappliedEntries;
+						}
+						touched = true;
+					}
+					rec = G[rec + C.L_NEXT];
+				}
+				if (touched) {
+					// Absorb (§9.5): replay the W0 fold; committed=false batches
+					// fold identically (the writes are real).
+					const fold = foldTape(a, WORLD_W0);
+					const cur = kernelAtomValue(a);
+					if (!isEqualPolicy(a, cur, fold)) {
+						kernelWrite(a, fold);
+					}
+					// Even when the fold is a W0 no-op, the newly-RETIRED entries
+					// just became visible in every OTHER pending writer's world
+					// (they can land under or over that world's own entries in
+					// seq order). Kernel propagation only runs on W0 change, so
+					// queue a token-0 walk: its group-0 decisions expand across
+					// every live deferred world (§17.2's urgent-drain rule).
+					pendingWalks.push(a, 0);
+				}
+			}
+		} finally {
+			--batchDepth;
+		}
+		drainUrgent = true; // newly-retired entries are visible in other writer's worlds
+		drainAll();
+	}
+	sweepTapes();
+	maybeQuiesce();
+}
+
+function anyUnretiredSlot(): boolean {
+	for (let s = 0; s < 32; ++s) {
+		if (batchTokenTab[s] !== 0 && slotRetired[s] === 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** §9.6 — fold each tape's leading run of dead entries into its base record;
+ * free base-only tapes once no live batch could still write. */
+function sweepTapes(): void {
+	const minPin = passOpen !== 0 ? passPin : 0x7fffffff;
+	const pendingBatches = anyUnretiredSlot();
+	for (let i = loggedAtoms.length - 1; i >= 0; --i) {
+		const a = loggedAtoms[i];
+		const base = M[a + C.LOG_HEAD];
+		let cur = G[base + C.L_NEXT];
+		while (cur !== 0) {
+			const meta = G[cur + C.L_META];
+			if ((meta & C.F_RETIRED) === 0 || G[cur + C.L_RETIRED_SEQ] > minPin) {
+				break;
+			}
+			const folded = applyLogRec(a, cur, logVals[base >> 2]);
+			if (!isEqualPolicy(a, logVals[base >> 2], folded)) {
+				logVals[base >> 2] = folded;
+			}
+			G[base + C.L_SEQ] = G[cur + C.L_RETIRED_SEQ];
+			G[base + C.L_RETIRED_SEQ] = G[cur + C.L_RETIRED_SEQ];
+			const next = G[cur + C.L_NEXT];
+			if ((meta & C.F_PSEUDO) === 0) {
+				--batchEntryCount[(meta & C.SLOT_MASK) >> C.SLOT_SHIFT];
+			}
+			freeLogRec(cur);
+			cur = next;
+		}
+		G[base + C.L_NEXT] = cur;
+		if (cur === 0) {
+			M[a + C.LOG_TAIL] = base;
+			if (!pendingBatches) {
+				freeLogRec(base);
+				M[a + C.LOG_HEAD] = 0;
+				M[a + C.LOG_TAIL] = 0;
+				M[a + C.FLAGS] &= ~C.LOGGED;
+				--loggedAtomCount;
+				loggedAtoms.splice(i, 1);
+			}
+		}
+	}
+	for (let s = 0; s < 32; ++s) {
+		if (batchTokenTab[s] !== 0 && slotRetired[s] !== 0 && batchEntryCount[s] === 0) {
+			releaseSlot(s);
+		}
+	}
+}
+
+/** §9.6 — truncation: unlink a batch's unretired entries without folding.
+ * The truncated batch's watchers are re-notified (its world's values just
+ * rolled back — an optimistic rollback that never rebroadcast would leave
+ * that lane's UI stale until an unrelated drain exposed it). */
+function truncateBatchBySlot(s: number): void {
+	++overlayEpoch;
+	const token = batchTokenTab[s];
+	const touchedApplied: number[] = [];
+	for (const a of loggedAtoms) {
+		let prev = M[a + C.LOG_HEAD];
+		let cur = G[prev + C.L_NEXT];
+		let touched = false;
+		while (cur !== 0) {
+			const meta = G[cur + C.L_META];
+			const next = G[cur + C.L_NEXT];
+			if (
+				(meta & (C.F_PSEUDO | C.F_RETIRED)) === 0
+				&& ((meta & C.SLOT_MASK) >> C.SLOT_SHIFT) === s
+			) {
+				G[prev + C.L_NEXT] = next;
+				if (M[a + C.LOG_TAIL] === cur) {
+					M[a + C.LOG_TAIL] = prev;
+				}
+				if ((meta & C.F_APPLIED) === 0) {
+					--unappliedEntries;
+				} else {
+					touched = true;
+				}
+				--batchEntryCount[s];
+				freeLogRec(cur);
+				// Re-notify this atom's cone in the truncated batch's world.
+				if (token !== 0 && slotRetired[s] === 0) {
+					pendingWalks.push(a, token);
+					drainDirtySlots |= 1 << s;
+				}
+			} else {
+				prev = cur;
+			}
+			cur = next;
+		}
+		if (touched) {
+			touchedApplied.push(a);
+		}
+	}
+	// Truncating applied entries moves W0: restore the invariant.
+	for (const a of touchedApplied) {
+		const fold = foldTape(a, WORLD_W0);
+		const cur = kernelAtomValue(a);
+		if (!isEqualPolicy(a, cur, fold)) {
+			kernelWrite(a, fold);
+		}
+		drainUrgent = true;
+	}
+	flush();
+	drainAll();
+}
+
+/** §9.7 — quiescence: the O(1)-ish bulk reset. */
+function maybeQuiesce(): void {
+	if (
+		loggedAtomCount !== 0
+		|| passOpen !== 0
+		|| liveSlotMask !== 0
+		|| pendingWalks.length !== 0
+		|| broadcastLen !== 0
+	) {
+		return;
+	}
+	gNext = 4;
+	gFreeHead = 0;
+	logVals = [undefined];
+	// Zero the used W region so stale node memo heads (§7.4 hazard) can never
+	// false-positive the NODE guard against a coincidentally-matching record
+	// from the dead era.
+	W.fill(0, 0, wNext);
+	wNext = 8;
+	certNext = 0;
+	memoVals = [];
+	slotMemoHead.fill(0);
+	eraFloor = walkCounter; // every mark goes stale in O(1)
+	++overlayEpoch; // cross-era invalidator (seqs repeat across eras)
+	seqCounter = 1;
+	if (walkCounter > 1 << 30) {
+		// Safety valve: zero every node's OVERLAY_STAMP at an idle moment.
+		for (let i = 0; i < nodeIds.length; ++i) {
+			const id = nodeIds[i];
+			const flags = M[id + C.FLAGS];
+			if (flags & C.KIND_MASK && (flags & C.K_ATOM) === 0) {
+				M[id + C.OVERLAY_STAMP] = 0;
+			}
+		}
+		walkCounter = 0;
+		eraFloor = 0;
+	}
+	if (!strictLanes && (fork === undefined || fork.isQuiescent())) {
+		writeMode = Mode.DIRECT; // the LOGGED→DIRECT flip lives here and only here
+	}
+}
+
+// ---- the bridge (§13 preamble, driven by the fork double) --------------------------
+
+export function attachFork(f: ForkDouble): void {
+	if (fork !== undefined) {
+		throw new Error('cosignals-alt-b: a fork is already attached');
+	}
+	fork = f;
+	if (strictLanes) {
+		writeMode = Mode.LOGGED; // pinned once bindings register (§9.1)
+	}
+	unsubscribeFork = f.subscribeToExternalRuntime({
+		onBatchOpened() {
+			writeMode = Mode.LOGGED; // DIRECT→LOGGED rides the claim/mint edge (§9.1)
+		},
+		onRenderPassStart(container, tokens, lineage) {
+			writeMode = Mode.LOGGED;
+			passOpen = 1;
+			++passSerial;
+			passPin = seqCounter;
+			let mask = 0;
+			for (const t of tokens) {
+				const s = internSlot(t);
+				if (s >= 0) {
+					mask |= 1 << s;
+				}
+			}
+			passIncludeMask = mask;
+			passContainer = container;
+			passLineage = lineage;
+			currentCtx = Ctx.RENDER;
+		},
+		onRenderPassYield() {
+			currentCtx = Ctx.NEWEST; // gap code reads newest, writes legally (§10.1)
+		},
+		onRenderPassResume() {
+			currentCtx = Ctx.RENDER;
+		},
+		onRenderPassEnd() {
+			passOpen = 0;
+			passContainer = undefined;
+			currentCtx = Ctx.NEWEST;
+			sweepTapes();
+			maybeQuiesce();
+		},
+		onBatchCommitted() {
+			// Per-root committed views are M5 (deferred this pass); the global
+			// retired-only COMMITTED form is what reads use (§10.2).
+		},
+		onBatchRetired(token) {
+			onRetired(token);
+		},
+	});
+}
+
+export function detachFork(): void {
+	if (unsubscribeFork !== undefined) {
+		unsubscribeFork();
+		unsubscribeFork = undefined;
+	}
+	fork = undefined;
+}
+
+export function configure(options: {
+	forbidWritesInComputeds?: boolean;
+	strictLanes?: boolean;
+	initialRecords?: number;
+	initialLogRecords?: number;
+	initialMemoRecords?: number;
+}): void {
+	if (options.forbidWritesInComputeds !== undefined) {
+		forbidWritesInComputeds = options.forbidWritesInComputeds;
+	}
+	if (options.strictLanes !== undefined) {
+		strictLanes = options.strictLanes;
+		if (strictLanes && fork !== undefined) {
+			writeMode = Mode.LOGGED;
+		}
+	}
+	// Sizing options take effect on the next reset (module singleton).
+	if (options.initialRecords !== undefined) {
+		cfgInitialRecords = options.initialRecords;
+	}
+	if (options.initialLogRecords !== undefined) {
+		cfgInitialLogRecords = options.initialLogRecords;
+	}
+	if (options.initialMemoRecords !== undefined) {
+		cfgInitialMemoRecords = options.initialMemoRecords;
+	}
+}
+
+// ---- public read paths ---------------------------------------------------------------
+
+function readAtomPublic(a: number): unknown {
+	if (ovDepth !== 0) {
+		return overlayReadAtom(a); // overlay evaluation: world fold + certificate
+	}
+	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
+		// Canonical evaluation reads W0 by construction (§10.1) and tracks.
+		const v = kernelAtomValue(a);
+		link(a, activeSub, cycle);
+		return v;
+	}
+	const flags = M[a + C.FLAGS];
+	if ((flags & C.LOGGED) === 0) {
+		const v = kernelAtomValue(a); // the fast path
+		if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+			link(a, activeSub, cycle);
+		}
+		return v;
+	}
+	if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+		link(a, activeSub, cycle);
+	}
+	return foldTape(a, worldOfCtx(currentCtx));
+}
+
+function readComputedPublic(c: number): unknown {
+	if (ovDepth !== 0) {
+		// Nested overlay read: recurse in the same world so the parent's
+		// certificate contains the child's (possibly still-unlogged) sources.
+		// See report: spec §10.4/§10.5 leave the unmarked-child-with-
+		// divergent-parent case underdetermined; always recursing is sound.
+		return overlayEvaluate(c, ovWorld as World);
+	}
+	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
+		return kernelComputedRead(c, true); // canonical nesting: W0
+	}
+	const track = currentCtx !== Ctx.RENDER; // render never mutates topology (§10.3)
+	return resolveComputed(c, worldOfCtx(currentCtx), track);
+}
+
+// ---- policy classes (§4, §12) ----------------------------------------------------------
+
+export type AtomOptions<T> = {
+	state: T;
+	isEqual?: (a: T, b: T) => boolean;
+	label?: string;
+};
+
+export class Atom<T> {
+	readonly id: number;
+	constructor(options: AtomOptions<T>) {
+		const id = allocNode(C.K_ATOM | C.MUTABLE);
+		this.id = id;
+		values[id >> 2] = options.state;
+		values[(id >> 2) + 1] = options.state;
+		if (options.isEqual !== undefined || options.label !== undefined) {
+			metaCol[id >> 3] = {
+				isEqual: options.isEqual as ((a: unknown, b: unknown) => boolean) | undefined,
+				label: options.label,
+			};
+		}
+	}
+	get state(): T {
+		return readAtomPublic(this.id) as T;
+	}
+	peek(): T {
+		const prevSub = activeSub;
+		activeSub = 0;
+		try {
+			return readAtomPublic(this.id) as T;
+		} finally {
+			activeSub = prevSub;
+		}
+	}
+	set(next: T): void {
+		atomWrite(this.id, C.OP_SET, next);
+	}
+	update(fn: (current: T) => T): void {
+		atomWrite(this.id, C.OP_UPDATE, fn);
+	}
+}
+
+export type ReducerAtomOptions<S, A> = {
+	state: S;
+	reducer: (state: S, action: A) => S;
+	isEqual?: (a: S, b: S) => boolean;
+	label?: string;
+};
+
+export class ReducerAtom<S, A> {
+	readonly id: number;
+	constructor(options: ReducerAtomOptions<S, A>) {
+		const id = allocNode(C.K_ATOM | C.MUTABLE);
+		this.id = id;
+		values[id >> 2] = options.state;
+		values[(id >> 2) + 1] = options.state;
+		metaCol[id >> 3] = {
+			isEqual: options.isEqual as ((a: unknown, b: unknown) => boolean) | undefined,
+			reducer: options.reducer as (s: unknown, a: unknown) => unknown,
+			label: options.label,
+		};
+	}
+	get state(): S {
+		return readAtomPublic(this.id) as S;
+	}
+	peek(): S {
+		const prevSub = activeSub;
+		activeSub = 0;
+		try {
+			return readAtomPublic(this.id) as S;
+		} finally {
+			activeSub = prevSub;
+		}
+	}
+	dispatch(action: A): void {
+		atomWrite(this.id, C.OP_DISPATCH, action);
+	}
+}
+
+export type ComputedCtx<T> = {
+	use<U>(thenable: PromiseLike<U>): U;
+	previous: T | undefined;
+};
+
+export type ComputedOptions<T> = {
+	fn: (ctx: ComputedCtx<T>) => T;
+	isEqual?: (a: T, b: T) => boolean;
+	label?: string;
+};
+
+export class Computed<T> {
+	readonly id: number;
+	constructor(options: ComputedOptions<T>) {
+		const id = allocNode(C.K_COMPUTED);
+		this.id = id;
+		metaCol[id >> 3] = {
+			rawFn: options.fn as unknown as (ctx: ComputedCtxImpl) => unknown,
+			isEqual: options.isEqual as ((a: unknown, b: unknown) => boolean) | undefined,
+			label: options.label,
+		};
+		fns[id >> 3] = (prev: unknown) => runComputedFn(id, prev, 0);
+	}
+	/** Rethrows cached errors; throws the thenable while suspended (§11.3). */
+	get state(): T {
+		const v = readComputedPublic(this.id);
+		if (isErrorBox(v)) {
+			throw v.error;
+		}
+		if (isSuspendedBox(v)) {
+			throw v.thenable;
+		}
+		return v as T;
+	}
+}
+
+/** Synchronous reactive effect over canonical state (§4.4). */
+export function effect(fn: () => void | (() => void)): () => void {
+	const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK | C.LIVE);
+	fns[e >> 3] = fn;
+	const prevSub = activeSub;
+	activeSub = e;
+	if (prevSub !== 0) {
+		link(e, prevSub, 0);
+		M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
+	}
+	try {
+		++runDepth;
+		values[(e >> 2) + 1] = fn();
+	} finally {
+		--runDepth;
+		activeSub = prevSub;
+		M[e + C.FLAGS] &= ~C.RECURSED_CHECK;
+	}
+	const gen = M[e + C.GEN];
+	return () => {
+		if (M[e + C.GEN] !== gen) {
+			return;
+		}
+		dispose(e);
+	};
+}
+
+export function effectScope(fn: () => void): () => void {
+	const e = allocNode(C.K_SCOPE | C.MUTABLE | C.LIVE);
+	const prevSub = activeSub;
+	activeSub = e;
+	if (prevSub !== 0) {
+		link(e, prevSub, 0);
+		M[prevSub + C.FLAGS] |= C.HAS_CHILD_EFFECT;
+	}
+	try {
+		fn();
+	} finally {
+		activeSub = prevSub;
+	}
+	const gen = M[e + C.GEN];
+	return () => {
+		if (M[e + C.GEN] !== gen) {
+			return;
+		}
+		dispose(e);
+	};
+}
+
+/** Coalesce writes: one flush + one drain (one walk ticket) at close (§9.8). */
+export function batch<T>(fn: () => T): T {
+	++batchDepth;
+	try {
+		return fn();
+	} finally {
+		if (--batchDepth === 0) {
+			flush();
+			drainAll();
+		}
+	}
+}
+
+export function untracked<T>(fn: () => T): T {
+	const prevSub = activeSub;
+	activeSub = 0;
+	try {
+		return fn();
+	} finally {
+		activeSub = prevSub;
+	}
+}
+
+// ---- watchers (the M0-M3 stand-in for mounted useSignal hooks, §13.1) ----------------
+
+export type SignalLike = { id: number };
+
+export type WatcherHandle = {
+	id: number;
+	dispose(): void;
+};
+
+/**
+ * A watcher node (kind K_WATCHER, WATCHING|IMMEDIATE): notified synchronously
+ * in the writer's stack via the broadcast list, with the §10.6 world-value
+ * cutoff. `cb(token)` simulates the hook's setState; deferred tokens arrive
+ * inside the fork's runInBatch scope (assert via the double's entangleLog).
+ */
+export function createWatcher(signal: SignalLike, cb: (token: number) => void): WatcherHandle {
+	const watched = signal.id;
+	const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE | C.LIVE);
+	// Subscription-time world seeding (the engine-level analogue of §13.2's
+	// post-subscribe fixup): record what this watcher "rendered" — its W0
+	// value — and its value in every live deferred writer's world. The
+	// writer's-world evaluations also create the memos that register the node
+	// on the slot chains, which is what makes the drain re-validation complete
+	// for late subscribers (§9.8's first-divergence argument).
+	const lastBroadcast = new Map<number, unknown>();
+	lastBroadcast.set(0, resolveNode(watched, WORLD_W0));
+	if (fork !== undefined) {
+		for (const token of fork.liveTokens()) {
+			if ((token & 1) === 1) {
+				lastBroadcast.set((token << 2) | 2, resolveNode(watched, writerWorld(token)));
+			}
+		}
+	}
+	metaCol[w >> 3] = { cb, watched, lastBroadcast };
+	link(watched, w, 0);
+	const gen = M[w + C.GEN];
+	return {
+		id: w,
+		dispose() {
+			if (M[w + C.GEN] !== gen) {
+				return;
+			}
+			dispose(w);
+		},
+	};
+}
+
+// ---- debug surface (verifyArena-lite + oracle hooks; §16.6, §17.2) --------------------
+
+export type WorldSpec =
+	| { kind: 'newest' }
+	| { kind: 'committed' }
+	| { kind: 'w0' }
+	| { kind: 'writer'; token: number }
+	| { kind: 'pass'; pin: number; tokens: readonly number[] };
+
+function worldFromSpec(spec: WorldSpec): World {
+	switch (spec.kind) {
+		case 'newest':
+			return WORLD_NEWEST;
+		case 'committed':
+			return WORLD_COMMITTED;
+		case 'w0':
+			return WORLD_W0;
+		case 'writer':
+			return writerWorld(spec.token);
+		case 'pass': {
+			let mask = 0;
+			for (const t of spec.tokens) {
+				const s = slotOfToken(t);
+				if (s >= 0) {
+					mask |= 1 << s;
+				}
+			}
+			return { kind: WK.PASS, key: -1, pin: spec.pin, mask, slot: -1, token: 0 };
+		}
+	}
+}
+
+export const __debug = {
+	/** Run fn with reads resolving in COMMITTED context (per §10.1;
+	 * useSignalEffect's context — the global retired-only form). */
+	committed<T>(fn: () => T): T {
+		const prev = currentCtx;
+		currentCtx = Ctx.COMMITTED;
+		try {
+			return fn();
+		} finally {
+			currentCtx = prev;
+		}
+	},
+	/** Resolve a node's value in an explicit world (oracle comparisons). */
+	readInWorld(signal: SignalLike, spec: WorldSpec): unknown {
+		return resolveNode(signal.id, worldFromSpec(spec));
+	},
+	/** Current seq counter (pass pins for explicit pass-world reads). */
+	seqCounter(): number {
+		return seqCounter;
+	},
+	/** The atom's canonical (W0) kernel value. */
+	kernelValue(signal: SignalLike): unknown {
+		return kernelAtomValue(signal.id);
+	},
+	isDirect(): boolean {
+		return writeMode === Mode.DIRECT;
+	},
+	truncateToken(token: number): void {
+		const s = slotOfToken(token);
+		if (s >= 0) {
+			truncateBatchBySlot(s);
+		}
+	},
+	sweep(): void {
+		sweepTapes();
+		maybeQuiesce();
+	},
+	stats() {
+		let liveMemos = 0;
+		for (let rec = 8; rec < wNext; rec += 8) {
+			if (W[rec + C.W_EPOCH] !== 0) {
+				++liveMemos;
+			}
+		}
+		return {
+			gNext,
+			wNext,
+			certNext,
+			liveSlotMask,
+			loggedAtomCount,
+			seqCounter,
+			walkCounter,
+			eraFloor,
+			overlayEpoch,
+			unappliedEntries,
+			writeMode: writeMode === Mode.DIRECT ? 'DIRECT' : 'LOGGED',
+			pseudoFallbacks,
+			liveMemos,
+			recNext,
+		};
+	},
+	/** Capture drain-internal decisions for debugging. */
+	startTrace(): void {
+		traceLog = [];
+	},
+	takeTrace(): string[] {
+		const t = traceLog ?? [];
+		traceLog = undefined;
+		return t;
+	},
+	/** Force counter values (wrap-around unit tests, §17.2 pinned list). */
+	forceCounters(opts: { walkCounter?: number; seqCounter?: number }): void {
+		if (opts.walkCounter !== undefined) {
+			walkCounter = opts.walkCounter;
+			if (eraFloor > walkCounter) {
+				eraFloor = walkCounter;
+			}
+		}
+		if (opts.seqCounter !== undefined) {
+			seqCounter = opts.seqCounter;
+		}
+	},
+	/** Invariant sweeper (verifyArena-lite): throws on the first violation
+	 * with a description; run by the oracle after every step. */
+	verify(): void {
+		if (eraFloor > walkCounter) {
+			throw new Error(`verify: eraFloor ${eraFloor} > walkCounter ${walkCounter}`);
+		}
+		if (propSp !== 0 || checkSp !== 0) {
+			throw new Error('verify: traversal scratch stacks not at base at boundary');
+		}
+		if (ovDepth === 0 && certSp !== 0) {
+			throw new Error('verify: certificate collector not at base at boundary');
+		}
+		// Link topology coherence for every live node.
+		for (const id of nodeIds) {
+			const flags = M[id + C.FLAGS];
+			if ((flags & C.KIND_MASK) === 0) {
+				continue; // freed
+			}
+			if ((flags & C.K_ATOM) === 0 && M[id + C.OVERLAY_STAMP] > walkCounter) {
+				throw new Error(`verify: node ${id} stamp exceeds walkCounter`);
+			}
+			let l = M[id + C.DEPS];
+			let prev = 0;
+			let steps = 0;
+			while (l !== 0) {
+				if (++steps > 1_000_000) {
+					throw new Error(`verify: dep list of ${id} does not terminate`);
+				}
+				if (M[l + C.SUB] !== id) {
+					throw new Error(`verify: link ${l} in dep list of ${id} has SUB ${M[l + C.SUB]}`);
+				}
+				if (M[l + C.PREV_DEP] !== prev) {
+					throw new Error(`verify: link ${l} PREV_DEP incoherent`);
+				}
+				prev = l;
+				l = M[l + C.NEXT_DEP];
+			}
+			l = M[id + C.SUBS];
+			prev = 0;
+			steps = 0;
+			while (l !== 0) {
+				if (++steps > 1_000_000) {
+					throw new Error(`verify: sub list of ${id} does not terminate`);
+				}
+				if (M[l + C.DEP] !== id) {
+					throw new Error(`verify: link ${l} in sub list of ${id} has DEP ${M[l + C.DEP]}`);
+				}
+				if (M[l + C.PREV_SUB] !== prev) {
+					throw new Error(`verify: link ${l} PREV_SUB incoherent`);
+				}
+				prev = l;
+				l = M[l + C.NEXT_SUB];
+			}
+			if (M[id + C.SUBS_TAIL] !== prev) {
+				throw new Error(`verify: SUBS_TAIL of ${id} incoherent`);
+			}
+		}
+		// Tapes: LOGGED flag ⇔ LOG_HEAD, chain seq monotone, counts consistent.
+		const perSlot = new Int32Array(32);
+		let logged = 0;
+		for (const a of loggedAtoms) {
+			if ((M[a + C.FLAGS] & C.LOGGED) === 0 || M[a + C.LOG_HEAD] === 0) {
+				throw new Error(`verify: loggedAtoms entry ${a} has no tape`);
+			}
+			++logged;
+			let rec = M[a + C.LOG_HEAD];
+			let lastSeq = 0;
+			let steps = 0;
+			let sawTail = false;
+			let isBase = true;
+			while (rec !== 0) {
+				if (++steps > 1_000_000) {
+					throw new Error(`verify: tape of ${a} does not terminate`);
+				}
+				const seq = G[rec + C.L_SEQ];
+				// The base record's seq moves to the folded run's retire stamp
+				// at sweep (§9.6) and may legitimately exceed live entries' seqs;
+				// monotonicity applies to non-base entries only.
+				if (!isBase && seq < lastSeq) {
+					throw new Error(`verify: tape of ${a} seq not monotone`);
+				}
+				if (!isBase) {
+					lastSeq = seq;
+				}
+				isBase = false;
+				const meta = G[rec + C.L_META];
+				if ((meta & C.OP_MASK) !== C.OP_BASE && (meta & (C.F_PSEUDO)) === 0) {
+					++perSlot[(meta & C.SLOT_MASK) >> C.SLOT_SHIFT];
+				}
+				if (rec === M[a + C.LOG_TAIL]) {
+					sawTail = true;
+				}
+				rec = G[rec + C.L_NEXT];
+			}
+			if (!sawTail) {
+				throw new Error(`verify: LOG_TAIL of ${a} not on its chain`);
+			}
+		}
+		if (logged !== loggedAtomCount) {
+			throw new Error(`verify: loggedAtomCount ${loggedAtomCount} != ${logged}`);
+		}
+		for (let s = 0; s < 32; ++s) {
+			if (batchTokenTab[s] !== 0 && perSlot[s] !== batchEntryCount[s]) {
+				throw new Error(
+					`verify: slot ${s} entry count ${batchEntryCount[s]} != counted ${perSlot[s]}`,
+				);
+			}
+			if (batchTokenTab[s] === 0 && perSlot[s] !== 0) {
+				throw new Error(`verify: entries name a free slot ${s}`);
+			}
+			if (batchTokenTab[s] === 0 && slotMemoHead[s] !== 0) {
+				throw new Error(`verify: free slot ${s} has a memo chain`);
+			}
+		}
+		// Memo plane: slot chains carry writer keys; cert runs in bounds.
+		for (let rec = 8; rec < wNext; rec += 8) {
+			if (W[rec + C.W_EPOCH] === 0) {
+				continue;
+			}
+			const nd = W[rec + C.W_NDEPS];
+			const cb = W[rec + C.W_CERT];
+			if (cb < 0 || cb + nd * 2 > certNext) {
+				throw new Error(`verify: memo ${rec} certificate run out of bounds`);
+			}
+			if (W[rec + C.W_SLOT_NEXT] !== 0 && (W[rec + C.W_KEY] & 3) !== 2) {
+				throw new Error(`verify: memo ${rec} slot-chained but not a writer's-world key`);
+			}
+		}
+		// Quiescent residue (§8.8, §14.3).
+		if (loggedAtomCount === 0 && passOpen === 0 && liveSlotMask === 0) {
+			if (gNext !== 4 || wNext !== 8 || certNext !== 0) {
+				throw new Error('verify: quiescent overlay has plane residue');
+			}
+			if (seqCounter !== 1) {
+				throw new Error(`verify: quiescent seqCounter ${seqCounter} != 1`);
+			}
+		}
+	},
+};
+
+
+

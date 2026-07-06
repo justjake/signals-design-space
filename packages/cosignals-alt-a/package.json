@@ -1,0 +1,21 @@
+{
+	"name": "cosignals-alt-a",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "Variant A implementation of the react-concurrent-signals-arena-alt-a spec: canonical typed-array signals kernel + tapes/write gate + plane W overlay with certificates, driven by a scriptable React fork test double and a randomized oracle. Monotonic write-gate activation, exact React lane parity, no strictLanes flag.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

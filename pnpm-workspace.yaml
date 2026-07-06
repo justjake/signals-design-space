@@ -1,6 +1,7 @@
 packages:
   - libs/*
   - harness
+  - packages/*
   - packages/cosignal
   - packages/cosignal-oracle
   - packages/cosignal-react
