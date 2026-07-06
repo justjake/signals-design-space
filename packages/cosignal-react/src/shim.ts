@@ -63,15 +63,13 @@
  */
 
 import * as React from 'react';
-import { __ctxUse, Atom, SuspendedRead, type ComputedCtx } from 'cosignal';
+import { Atom, type ComputedCtx } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
-	ComputedNode,
 	CosignalBridge,
 	Op,
 	Pass,
-	Reader,
 	RootId,
 	TokenId,
 	Value,
@@ -119,13 +117,6 @@ type RootRec = {
 	lastCommitGeneration: number;
 };
 
-/** Bookkeeping for one bound-computed evaluation: read routing for nested
- * bound-computed reads (the engine's capture frame suppresses effect-capture
- * inside evaluations on its own — the evaluation world outranks the frame). */
-type EvalFrame = {
-	read: Reader;
-};
-
 let nextRootSerial = 1;
 
 /** The one active shim (module registry; hooks.ts manages activation). */
@@ -159,8 +150,6 @@ export class Shim {
 	targets = new Map<number, WatcherTarget>();
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
 	claimed = new Set<number>();
-	/** The bridge evaluation frames opened by bound computeds (innermost last). */
-	private evalStack: EvalFrame[] = [];
 	/**
 	 * The React effect-timing shell (the ONE piece of effect machinery that
 	 * stays adapter-side): user refire bodies queued by the engine's
@@ -407,16 +396,8 @@ export class Shim {
 		}
 		rec.pass = undefined;
 		this.maybeRetireAmbient(); // the closing pass may have been the last thing keeping ambient pending
-		// ctx.previous cells must hold the last COMMITTED value — a pending
-		// render's value must never leak into the hint, because a pending
-		// transition may still be discarded — so update the cells from every
-		// watcher this commit rendered or mounted.
-		for (const wid of [...pass.rendered, ...pass.mounted]) {
-			const w = this.bridge.watchers.get(wid);
-			if (w !== undefined && !(w.lastRenderedValue instanceof SuspendedRead)) {
-				this.previousCell(w.node).value = w.lastRenderedValue;
-			}
-		}
+		// (ctx.previous cells update inside bridge.passEnd since S-C — the
+		// cells live on the bridge's computed nodes with the ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
 		// surface impure renders, so even a committed pass can mint watchers
 		// whose hook instance was thrown away and will never be claimed. Layout
@@ -662,89 +643,24 @@ export class Shim {
 		);
 	}
 
-	// ---- bound computeds + suspense translation ---------------------------------------
+	// ---- suspense translation ----------------------------------------------------------
+	// (The bound-computed machinery — per-fn wrappers, previous cells, the
+	// shim evaluation frames — died at S-C: kernel `Computed` handles are the
+	// supported type, world-routed through the core's .state read seams, and
+	// the engine owns the ctx adapter, the committed previous cells, and the
+	// background-suspension fold. What stays here is exactly the React-phase
+	// knowledge: hook-initiated evaluations may legally suspend the render.)
 
-	/** ctx.previous cells: one per node, holding the last COMMITTED value (a best-effort hint; may be stale or undefined). */
-	previousCells = new Map<number, { value: unknown }>();
-	/** >0 while a hook-initiated evaluation may legally suspend the render. */
-	private suspendDepth = 0;
-
-	previousCell(nodeId: number): { value: unknown } {
-		let cell = this.previousCells.get(nodeId);
-		if (cell === undefined) {
-			cell = { value: undefined };
-			this.previousCells.set(nodeId, cell);
-		}
-		return cell;
-	}
-
-	/**
-	 * Mints a bridge computed whose evaluations open a shim frame: patched-atom
-	 * and bound-computed reads inside `fn` route through the frame's tracked
-	 * reader (dependency edges in the kernel, values folded in the evaluating
-	 * world), ctx.previous reads the node's last-committed cell, and ctx.use
-	 * is the core's two-form implementation over a cache holder scoped to
-	 * THIS node (created here, garbage-collected with the node — same key ⇒
-	 * same thenable for the node's lifetime, across worlds and re-renders;
-	 * a recreated node refetches, exactly like React discarding a useMemo
-	 * cache). When the engine evaluates the node in the background — no
-	 * component rendering — a pending suspension folds to the thenable's
-	 * stable SuspendedRead sentinel instead of unwinding, so "still pending"
-	 * caches like any other value; hook-initiated evaluations rethrow it so
-	 * React can suspend the component.
-	 */
-	makeComputedNode<T>(label: string, fn: (ctx: BoundCtx<T>) => T): ComputedNode {
-		const shim = this;
-		const useHolder: { _useCache: Map<string, PromiseLike<unknown>> | undefined } = { _useCache: undefined };
-		let node: ComputedNode;
-		const wrapper = (read: Reader): Value => {
-			const frame: EvalFrame = { read };
-			shim.evalStack.push(frame);
-			try {
-				const cell = shim.previousCell(node.id);
-				const ctx: BoundCtx<T> = {
-					get previous(): T | undefined {
-						return cell.value as T | undefined;
-					},
-					use: <V>(sourceOrKey: unknown, factory?: () => PromiseLike<V>): V =>
-						__ctxUse(useHolder, sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V,
-				};
-				return fn(ctx);
-			} catch (err) {
-				if (err instanceof SuspendedRead && shim.suspendDepth === 0) return err; // stable sentinel value
-				throw err;
-			} finally {
-				shim.evalStack.pop();
-			}
-		};
-		node = this.bridge.computed(label, wrapper);
-		return node;
-	}
-
-	/** Hook-initiated evaluation: SuspendedRead propagates (React will suspend). */
+	/** Hook-initiated evaluation: SuspendedRead propagates (React will
+	 * suspend); the engine's ctx adapter and newest read tail consult the
+	 * bridge counter to rethrow instead of folding to a sentinel value. */
 	evaluateSuspending(fn: () => Value): Value {
-		this.suspendDepth++;
+		this.bridge.suspendDepth++;
 		try {
 			return fn();
 		} finally {
-			this.suspendDepth--;
+			this.bridge.suspendDepth--;
 		}
-	}
-
-	/** Read routing for a BoundComputed's `.state` (same routing order as routeRead). */
-	routeComputedRead(node: ComputedNode): unknown {
-		const frame = this.evalStack[this.evalStack.length - 1];
-		if (frame !== undefined) {
-			return frame.read(node);
-		}
-		// An open engine capture frame (an effect body running): committed-
-		// for-root read, recorded into the dep snapshot by the engine.
-		if (this.bridge.captureActive()) return this.bridge.captureRead(node);
-		const rendering = this.renderingRoot();
-		if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
-			return this.evaluateSuspending(() => this.bridge.passValue(node, rendering.pass!));
-		}
-		return this.bridge.newestValue(node);
 	}
 
 	/** Register a watcher minted during the current pass (orphan-sweep set). */

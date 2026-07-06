@@ -471,7 +471,15 @@ rationale is section 4). Identifiers are stable: cite them as
 - **EF3 (MUST).** Library-level effects created outside React
   (`effect()`) observe newest state and re-run after a write's
   notification, batching permitted. [oracle: contract — effects],
-  [cosignal README].
+  [cosignal README]. Newest COMPUTED values (what these effects and
+  plain reads observe) carry the base library's untracked contract on
+  their value face: a computed's newest value re-derives only when a
+  TRACKED dependency changes; untracked reads are point-in-time samples
+  taken at those re-derivations, so a write reaching a computed only
+  through untracked reads changes no newest answer (and fires no
+  notification) until a tracked dependency moves. World-side
+  revalidation (pass/committed folds at their boundaries) is unaffected.
+  [oracle: worlds — newest], [ruling 2026-07-06: untracked sampling].
 
 ### 3.7 Scheduling and priority
 

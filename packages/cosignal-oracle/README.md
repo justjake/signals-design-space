@@ -84,7 +84,18 @@ must reproduce. Terms are defined as they appear.
   committed UI rendered from a batch, that root must keep agreeing with
   its own screen even though the batch is still live elsewhere.
 - **The newest world** sees everything. Plain (non-React) reads and core
-  effects use it.
+  effects use it. One rule refines its COMPUTED values [ruling
+  2026-07-06: untracked sampling]: newest values of computeds follow
+  KERNEL semantics — a computed re-derives only when a TRACKED
+  dependency's newest value changed, and untracked reads are
+  point-in-time samples taken at those re-derivations. Untracked means
+  untracked: a write reaching a computed only through untracked reads
+  changes no newest answer until a tracked dependency moves (the base
+  library's documented untracked contract, value face — the model keeps
+  a per-computed `{trackedFingerprint, value}` record consulted only by
+  `newestValue` and the core-effect flush). World folds are unchanged:
+  pass/committed/mount-fix evaluations refold at their boundaries, so
+  untracked deps stay fresh in every world-side revalidation.
 - **The mount-reconciliation world** (used once, at a mount's commit)
   sees the mounting render's own included receipts up to its pin, plus
   committed truth *as of now* — i.e., the mounted component's view

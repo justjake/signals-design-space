@@ -131,10 +131,13 @@
  *       flag set at creation for atoms carrying an observed-lifecycle
  *       effect, so the kernel's own liveness transitions can feed the
  *       observed-lifecycle option (AtomOptions.effect) — one consumer kind
- *       of the observation union (bridge watchers are the other; see the
- *       observed-lifecycle section). Checked only in linkInsert's
- *       first-subscriber branch and in unwatched()'s signal branch; cleared
- *       in freeNode.
+ *       of the observation union (bridge watchers and the host observation
+ *       index are the other; see the observed-lifecycle section). Since
+ *       S-C the kernel arm is a per-LINK refcount (linkInsert +1 /
+ *       unlink -1, lifecycle-flagged deps only, HOST_OWNED subscribers
+ *       excluded — host computeds carry their own observation arm); the
+ *       union's observable edges (effect at 0→1, cleanup at →0) are
+ *       unchanged. Cleared in freeNode.
  *   D2. computedRead throws CycleError when the computed is re-entered
  *       during its own evaluation: reading a computed while its own
  *       evaluation frame is open is a dependency cycle, and throwing beats
@@ -366,6 +369,14 @@ const enum NodeFlag {
 	/** Refines HAS_BOX (never set without it): the payload is a pending
 	 * thenable, not a thrown error. */
 	BOX_SUSPENDED = 4096,
+	/** S-C: the record is a HOST-owned computed (a bridge computed riding
+	 * this kernel record). Its dep links do NOT feed the D1 observed-
+	 * lifecycle union — the host's own observation index is its arm (one
+	 * retain per strong dep of an OBSERVED computed, re-pointed per run) —
+	 * so a host computed's newest structure never pins an atom's remote
+	 * subscription past the host's last consumer. Set via the
+	 * __hostMarkComputedOwned seam at registration/adoption. */
+	HOST_OWNED = 8192,
 }
 
 /** Arena geometry: the strides, shifts, and offsets that address a record's
@@ -453,6 +464,12 @@ interface Engine {
 	// D5: cold policy ops (never called from the hot walks).
 	/** Marks a computed stale and propagates to its subs (settlement-invalidate). */
 	invalidateComputed(c: NodeId): boolean;
+	/** S-C: dispose a computed record (deps unlinked, subs detached, free deferred). */
+	disposeComputed(c: NodeId): void;
+	/** S-C: flag a computed HOST_OWNED and retro-release the lifecycle refs
+	 * its EXISTING dep links contributed (future links are excluded at the
+	 * gate; future unlinks see the flag and skip the -1 — balanced). */
+	markHostOwned(c: NodeId): void;
 	/** D1: flags the node for observed-lifecycle delivery. */
 	markLifecycle(id: NodeId): void;
 	/** True iff the currently-evaluating subscriber is a computed. */
@@ -498,6 +515,8 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		dispose,
 		sweepPendingFree,
 		invalidateComputed,
+		disposeComputed: disposeComputedOp,
+		markHostOwned: markHostOwnedOp,
 		markLifecycle: (id) => {
 			M[id + NodeField.LIFECYCLE] = 1;
 		},
@@ -625,10 +644,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			M[prevSub + LinkField.NEXT_SUB] = newLink;
 		} else {
 			M[dep + NodeField.SUBS] = newLink;
-			// D1: first subscriber attached — the liveness bit flips 0→1.
-			if (M[dep + NodeField.LIFECYCLE] !== 0) {
-				lifecycleWatched(dep);
-			}
+		}
+		// D1 (per-LINK since S-C — the kernel arm is a refcount, not a bit,
+		// so host-owned subscribers can be excluded without losing later
+		// non-host ones): every NEW link to a lifecycle-flagged dep shifts
+		// the union +1, unless the subscriber is a HOST-owned computed (the
+		// host's own observation index is its arm). Balanced by unlink's -1.
+		if (M[dep + NodeField.LIFECYCLE] !== 0 && !(M[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
+			lifecycleWatched(dep);
 		}
 	}
 
@@ -638,6 +661,11 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		const nextDep = M[id + LinkField.NEXT_DEP];
 		const nextSub = M[id + LinkField.NEXT_SUB];
 		const prevSub = M[id + LinkField.PREV_SUB];
+		// D1's balancing -1 (per-link; see linkInsert): lifecycle-flagged
+		// deps release one union ref per removed non-host link.
+		if (M[dep + NodeField.LIFECYCLE] !== 0 && !(M[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
+			lifecycleUnwatched(dep);
+		}
 		if (nextDep !== 0) {
 			M[nextDep + LinkField.PREV_DEP] = prevDep;
 		} else {
@@ -1007,15 +1035,26 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	function unwatched(node: NodeId): void {
 		const flags = M[node + NodeField.FLAGS];
 		if (flags & NodeFlag.K_COMPUTED) {
-			if (M[node + NodeField.DEPS_TAIL] !== 0) {
-				M[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY;
+			// NEVER strip a MID-EVALUATION record (RECURSED_CHECK): its
+			// DEPS_TAIL is the live re-track cursor, and a neighbor's re-track
+			// can unlink the last sub of a node whose own frame is open (the
+			// mutual dep-flip shape — x newly reads y while y stale-depends on
+			// x). Stripping then frees the cursor link, the very next insert
+			// reuses it AS ITS OWN NEIGHBOR, and the dep list goes cyclic —
+			// the S-C union-cycle hang (historically "kernel link cycles the
+			// unwatched walk cannot traverse", measured as a hang when world
+			// evaluations rode kernel records). The open evaluation owns its
+			// list: its epilogue purge trims it, and a truly-dead record is
+			// lazily stripped at its NEXT unwatched edge (bounded residue,
+			// base-kernel-acceptable).
+			if (M[node + NodeField.DEPS_TAIL] !== 0 && !(flags & NodeFlag.RECURSED_CHECK)) {
+				M[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY
+					| (flags & NodeFlag.HOST_OWNED); // ownership survives the rewrite (S-C)
 				disposeAllDepsInReverse(node);
 			}
 		} else if (flags & NodeFlag.K_SIGNAL) {
-			// D1: last subscriber detached — the liveness bit flips 1→0.
-			if (M[node + NodeField.LIFECYCLE] !== 0) {
-				lifecycleUnwatched(node);
-			}
+			// (D1 releases per-link inside unlink since S-C — nothing left to
+			// do at the subs-empty edge for signals.)
 		} else if (flags & (NodeFlag.K_EFFECT | NodeFlag.K_SCOPE)) {
 			dispose(node);
 		}
@@ -1046,7 +1085,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		// ctx.previous / the isEqual wrapper need the bits to tell a residual
 		// error/thenable payload from a plain previous value.
 		M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
-			| (oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED));
+			| (oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED | NodeFlag.HOST_OWNED));
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
@@ -1280,7 +1319,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		const flags = M[c + NodeField.FLAGS];
 		if (
 			flags & (NodeFlag.RECURSED_CHECK | NodeFlag.DIRTY | NodeFlag.PENDING | NodeFlag.HAS_BOX)
-			|| flags === NodeFlag.K_COMPUTED
+			|| !(flags & NodeFlag.MUTABLE) // never evaluated (upstream `!flags`; exact-compare broke when HOST_OWNED joined the word)
 		) {
 			return computedReadSlow(c, flags);
 		}
@@ -1314,8 +1353,9 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 					shallowPropagate(subs);
 				}
 			}
-		} else if (flags === NodeFlag.K_COMPUTED) { // upstream `!flags`: never evaluated
-			M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK;
+		} else if (!(flags & NodeFlag.MUTABLE)) { // upstream `!flags`: never evaluated
+			M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
+				| (flags & NodeFlag.HOST_OWNED);
 			const prevSub = activeSub;
 			activeSub = c;
 			++enterDepth;
@@ -1361,6 +1401,49 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		}
 		return false;
 	}
+
+	// S-C: flag a computed HOST_OWNED (see NodeFlag.HOST_OWNED) and settle the
+	// books for links minted BEFORE adoption: each existing link to a
+	// lifecycle dep fired +1 at insert, and its eventual unlink will skip the
+	// -1 (the flag reads at unlink time) — so release those refs here, once.
+	function markHostOwnedOp(c: NodeId): void {
+		const flags = M[c + NodeField.FLAGS];
+		if (!(flags & NodeFlag.K_COMPUTED) || flags & NodeFlag.HOST_OWNED) {
+			return;
+		}
+		M[c + NodeField.FLAGS] = flags | NodeFlag.HOST_OWNED;
+		let l = M[c + NodeField.DEPS];
+		while (l !== 0) {
+			const dep = M[l + LinkField.DEP];
+			if (M[dep + NodeField.LIFECYCLE] !== 0) {
+				lifecycleUnwatched(dep);
+			}
+			l = M[l + LinkField.NEXT_DEP];
+		}
+	}
+
+	// S-C: computed disposal (the useComputed deps-change reclamation path;
+	// cold — reached only through the __hostDisposeComputed seam). Flags zero
+	// FIRST so the last sub unlink's unwatched() probe sees a dead record;
+	// remaining subscriber links detach (their records simply lose the dep —
+	// a later re-track just doesn't see it; the caller owns the discipline
+	// that the node is superseded); the free defers to the next operation
+	// boundary exactly like effect/scope disposal (in-flight walks may still
+	// hold the id), where freeNode bumps GEN — the id-tenancy stamp (§4.5.3).
+	function disposeComputedOp(c: NodeId): void {
+		if (!(M[c + NodeField.FLAGS] & NodeFlag.K_COMPUTED)) {
+			return; // not a computed / already disposed
+		}
+		M[c + NodeField.FLAGS] = 0;
+		disposeAllDepsInReverse(c);
+		let l = M[c + NodeField.SUBS];
+		while (l !== 0) {
+			const next = M[l + LinkField.NEXT_SUB];
+			unlink(l);
+			l = next;
+		}
+		pendingFree.push(c);
+	}
 }
 
 // ---- engine instance + growth ------------------------------------------------
@@ -1404,6 +1487,8 @@ const POISON: Engine = {
 	dispose: foldPoisonOp as never,
 	sweepPendingFree: foldPoisonOp as never,
 	invalidateComputed: foldPoisonOp as never,
+	disposeComputed: foldPoisonOp as never,
+	markHostOwned: foldPoisonOp as never,
 	markLifecycle: foldPoisonOp as never,
 	activeIsComputed: foldPoisonOp as never,
 };
@@ -1447,6 +1532,14 @@ let hostWrite: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => boo
  */
 let hostRead: ((atom: Atom<unknown>) => unknown) | undefined;
 
+/**
+ * Host COMPUTED read router (S-C: one computed — kernel `Computed` records
+ * evaluate under worlds). Armed/disarmed in lockstep with `hostRead`; the
+ * same `activeSub === 0` gate applies (kernel-frame reads are never
+ * world-routed). Returns __HOST_MISS to decline. @internal
+ */
+let hostComputedRead: ((c: Computed<unknown>) => unknown) | undefined;
+
 /** @internal */
 export function __setHostWrite(fn: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => boolean) | undefined): void {
 	hostWrite = fn;
@@ -1455,6 +1548,11 @@ export function __setHostWrite(fn: ((atom: Atom<unknown>, kind: HostOpKind, payl
 /** @internal */
 export function __setHostRead(fn: ((atom: Atom<unknown>) => unknown) | undefined): void {
 	hostRead = fn;
+}
+
+/** @internal */
+export function __setHostComputedRead(fn: ((c: Computed<unknown>) => unknown) | undefined): void {
+	hostComputedRead = fn;
 }
 
 /**
@@ -1496,6 +1594,68 @@ export function __hostApplySet(atom: Atom<unknown>, value: unknown): void {
  */
 export function __hostReadNewest(atom: Atom<unknown>): unknown {
 	return E.read(atom._id);
+}
+
+/**
+ * Raw kernel computed read for the host's own newest serving (S-C): the
+ * plain kernel path — recompute-if-stale, kernel links to any open kernel
+ * frame, boxed-read unwrap — minus the host-seam interception, so the host
+ * serves the newest world off the kernel regardless of any live routing
+ * context. @internal
+ */
+export function __kernelComputedRead(c: Computed<unknown>): unknown {
+	return E.computedRead(c._id);
+}
+
+/** @internal Current GEN of a kernel record (id-tenancy validation, §4.5.3). */
+export function __kernelGen(id: NodeId): Generation {
+	return E.gen(id);
+}
+
+/**
+ * Raw arena view for the host's kernel-link strong walks (S-C: newest
+ * subscription reach + the mount-fixup closure's kernel leg ride the
+ * kernel's own dep links). The buffer is valid only until the next growth
+ * boundary — hosts must re-fetch per walk and never retain it across public
+ * operations. Field offsets are the host's mirrored constants (asserted
+ * stable by the suite). @internal
+ */
+export function __kernelBuffer(): Int32Array {
+	return E.buffer();
+}
+
+/**
+ * Dispose a computed record (S-C — the useComputed deps-change reclamation
+ * path): unlink its deps in reverse, detach every remaining subscriber
+ * link, and defer the free to the next operation boundary (GEN bumps at the
+ * sweep; the freed id is then reusable). The caller owns the discipline
+ * that no live consumer still reads the handle — a disposed handle's reads
+ * serve garbage, exactly like a use-after-dispose anywhere else. @internal
+ */
+export function __hostDisposeComputed(c: Computed<unknown>): void {
+	maybeBoundary();
+	E.disposeComputed(c._id);
+	maybeBoundary(); // sweep now when possible, so the id-tenancy GEN moves at this boundary
+}
+
+/**
+ * Flag a computed record HOST-owned (S-C): its kernel dep links stop
+ * feeding the D1 observed-lifecycle union — the host's observation index
+ * is its arm. See NodeFlag.HOST_OWNED and the engine op. @internal
+ */
+export function __hostMarkComputedOwned(c: Computed<unknown>): void {
+	E.markHostOwned(c._id);
+}
+
+/**
+ * Wrap a computed's kernel getter with a host epilogue (S-C: the bridge's
+ * observation re-pointing rides every kernel re-run of an adopted computed,
+ * and bridge-created computeds get their world-fn adapters this way).
+ * Policy wrappers (custom equality) stay INSIDE the wrap — the host sees the
+ * same fn the kernel would have run. @internal
+ */
+export function __hostWrapComputedFn(id: NodeId, wrap: (inner: (ctx: unknown) => unknown) => (ctx: unknown) => unknown): void {
+	fns[id >> Arena.ID_TO_FN_SHIFT] = wrap(fns[id >> Arena.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown);
 }
 
 function maybeBoundary(): void {
@@ -1579,9 +1739,10 @@ function foldNoop(): void {}
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
 // Observation is ONE state per registered atom, counted over the UNION of
 // consumer kinds. Two kinds feed the refcount:
-//   - the kernel liveness bit, contributing exactly 0/1: linkInsert's
-//     first-subscriber branch and unwatched()'s signal branch call the two
-//     hooks below (guarded by the node's NodeField.LIFECYCLE field, D1);
+//   - the kernel liveness arm: one ref per NON-HOST kernel link to the atom
+//     (linkInsert +1 / unlink -1, guarded by NodeField.LIFECYCLE, D1 —
+//     HOST_OWNED computed subscribers are excluded: the host observation
+//     index below is their arm);
 //   - bridge watchers (the engine's record of one subscribed React
 //     component), one ref per live watcher: the watcher liveness setter in
 //     ./concurrent.ts calls __lifecycleRetain/__lifecycleRelease.
@@ -2193,13 +2354,26 @@ export class Computed<T> {
 	 * created; dies with the node). Same key ⇒ same thenable for the node's
 	 * lifetime. @internal */
 	_useCache: Map<string, PromiseLike<unknown>> | undefined;
+	/** §4.5.3 retention columns (S-C): the RAW authored fn and the policy
+	 * comparator, kept on the owning instance (GC-owned, so a reused kernel
+	 * id can never serve another tenant's fn/comparator) — the host's world
+	 * evaluations run the raw fn against WORLD-local previous values; the
+	 * kernel's own equality wrapper stays kernel-slot-scoped. @internal */
+	readonly _fn: (ctx: ComputedCtx<T>) => T;
+	/** @internal */
+	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
+	/** Host adoption stamp (same shape and rule as Atom._hostStamp). @internal */
+	_hostStamp: { b: unknown; n: unknown } | undefined;
 	readonly label: string | undefined;
 
 	constructor(fn: (ctx: ComputedCtx<T>) => T, options?: ComputedOptions<T>) {
 		maybeBoundary();
 		this._useCache = undefined;
+		this._fn = fn;
+		this._hostStamp = undefined;
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
+		this._isEqual = isEqual;
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);
 		this._id = id;
 		// D4: the aux value slot carries the owning instance (policy state).
@@ -2227,8 +2401,21 @@ export class Computed<T> {
 	 * throws SuspendedRead while suspended on a pending `ctx.use` thenable
 	 * (the kernel's boxed-read tail, D3). Inside a fold frame the dispatch
 	 * itself throws (POISON table).
+	 *
+	 * With a host routing context live (world evaluation / ambient world),
+	 * the host serves the value of the world doing the asking — the S-C
+	 * computed-read seam, the exact twin of Atom.state's: armed only while a
+	 * routing context exists, gated on `activeSub === 0` (KERNEL-FRAME READS
+	 * ARE NEVER WORLD-ROUTED — see Atom.state for the poisoning argument).
 	 */
 	get state(): T {
+		const hr = hostComputedRead;
+		if (hr !== undefined && activeSub === 0) {
+			const v = hr(this as Computed<unknown>);
+			if (v !== __HOST_MISS) {
+				return v as T;
+			}
+		}
 		return E.computedRead(this._id) as T;
 	}
 }

@@ -79,11 +79,14 @@ describe('kernel link free list threads through a spare field (row 2)', () => {
 		// unwind followed eff→b.NEXT_DEP (= the primed free head) into the
 		// free list and update()ed victim off a freed link's stale DEP.
 		expect(victimEvals).toBe(1);
-		// a and a2 evaluate twice during the schedule: once from checkDirty's
-		// own update()s, once more when b's rebuild pulls them (the dispose
-		// cascade left both unwatched-DIRTY mid-walk) — upstream-shape
-		// behavior, identical before and after the free-list fix.
-		expect([aEvals, a2Evals, bEvals]).toEqual([3, 3, 2]);
+		// `a` evaluates twice during the schedule: once from checkDirty's own
+		// update(), once more when b's rebuild pulls it (the dispose cascade
+		// left it unwatched-DIRTY mid-walk). `a2` evaluates ONCE: it was
+		// MID-EVALUATION when the cascade reached it (its own getter ran the
+		// dispose), and unwatched() skips mid-evaluation records since S-C
+		// (stripping the live re-track cursor minted cyclic dep lists — the
+		// union-cycle hang), so its just-computed cache serves b's rebuild.
+		expect([aEvals, a2Evals, bEvals]).toEqual([3, 2, 2]);
 	});
 
 	test('primed free list + mid-walk dispose leaves the free list coherent (allocation after the schedule)', () => {

@@ -298,6 +298,28 @@ export class CosignalModel {
 	/** True while inside an updater/reducer/equals callback (reads+writes throw). */
 	private inFoldCallback = false;
 
+	/**
+	 * The newest world's SAMPLED-UNTRACKED computed cache [ruling 2026-07-06:
+	 * untracked sampling]. Newest values of computeds follow KERNEL semantics:
+	 * a computed re-derives only when a TRACKED dependency's newest value
+	 * changed; untracked reads are point-in-time samples taken at those
+	 * re-derivations and never invalidate on their own (the base library's
+	 * untracked contract, value face). Each entry records the direct TRACKED
+	 * deps of the last newest derivation with the values they had — the
+	 * trackedFingerprint — and the derived value; validation re-checks each
+	 * recorded dep's CURRENT sampled-newest value by identity, recursively
+	 * (the kernel's checkDirty shape). Consulted ONLY by `newestValue` (and
+	 * the newest-policy effect flush, which observes newest values): world
+	 * folds are UNCHANGED — pass/committed/mountFix evaluations refold at
+	 * their boundaries per the existing contract, so untracked deps stay
+	 * fresh in every world-side revalidation. Deliberately NOT cleared at
+	 * quiescence: the staleness is a property of the value contract, not of
+	 * the episode (the kernel's cache persists the same way).
+	 */
+	private newestSamples = new Map<NodeId, { deps: { node: AnyNode; value: Value }[]; value: Value }>();
+	/** Per-derivation cycle guard for the sampled evaluations. */
+	private samplingStack = new Set<NodeId>();
+
 	constructor() {
 		for (let i = 0; i < SLOT_COUNT; i++) {
 			this.slots.push({
@@ -756,11 +778,14 @@ export class CosignalModel {
 		}
 	}
 
-	/** Core effects observe the newest world; they flush after the write's notification walk returns. */
+	/** Core effects observe the newest world — through `newestValue`, so the
+	 * values they compare carry the sampled-untracked rule [ruling 2026-07-06]
+	 * exactly as the engine's kernel-served flush does; they flush after the
+	 * write's notification walk returns. */
 	private flushCoreEffects(reached?: Set<NodeId>): void {
 		for (const e of this.coreEffects.values()) {
 			if (reached !== undefined && !reached.has(e.node)) continue;
-			const value = this.evaluate(this.nodeById(e.node), { kind: 'newest' });
+			const value = this.newestValue(this.nodeById(e.node));
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
 				e.runs++;
@@ -1006,11 +1031,12 @@ export class CosignalModel {
 		}
 	}
 
-	/** Mount a core effect() observer: it reads the newest world. */
+	/** Mount a core effect() observer: it reads the newest world (sampled —
+	 * the same value face `newestValue` serves). */
 	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
 		const e: CoreEffect = {
 			id: this.nextEffect++, name, node: node.id,
-			lastValue: this.evaluate(node, { kind: 'newest' }),
+			lastValue: this.newestValue(node),
 			runs: 0,
 		};
 		this.coreEffects.set(e.id, e);
@@ -1459,8 +1485,58 @@ export class CosignalModel {
 		return this.evaluate(node, { kind: 'committed', root });
 	}
 
+	/** The newest value: atoms fold; computeds serve the sampled-untracked
+	 * cache [ruling 2026-07-06: untracked sampling] — see `newestSamples`. */
 	newestValue(node: AnyNode): Value {
-		return this.evaluate(node, { kind: 'newest' });
+		if (node.kind === 'atom') return this.evaluate(node, { kind: 'newest' });
+		return this.sampledNewest(node);
+	}
+
+	/**
+	 * Serve-or-derive under the sampling rule. Validation is value identity
+	 * over the recorded tracked deps, each resolved at ITS sampled-newest
+	 * value (recursion mirrors the kernel's checkDirty descent, including the
+	 * equality-cutoff behavior: a tracked dep whose own re-derivation folded
+	 * back to an identical value invalidates nothing above it). A derivation
+	 * runs the fn once with readers that resolve BOTH read kinds at
+	 * sampled-newest values — the untracked reads ARE the point-in-time
+	 * samples; only tracked reads enter the fingerprint (and the episode's
+	 * union edge graph, as every model evaluation's tracked reads do).
+	 */
+	private sampledNewest(node: ComputedNode): Value {
+		const cached = this.newestSamples.get(node.id);
+		if (cached !== undefined) {
+			let valid = true;
+			for (const d of cached.deps) {
+				if (!Object.is(this.newestValue(d.node), d.value)) {
+					valid = false;
+					break;
+				}
+			}
+			if (valid) return cached.value;
+		}
+		if (this.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+		if (this.samplingStack.has(node.id)) {
+			throw new ScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+		}
+		this.samplingStack.add(node.id);
+		this.evalDepth++;
+		const deps: { node: AnyNode; value: Value }[] = [];
+		try {
+			const read: Reader = (dep) => {
+				this.recordEdge(dep.id, node.id);
+				const v = this.newestValue(dep);
+				deps.push({ node: dep, value: v });
+				return v;
+			};
+			const untracked: Reader = (dep) => this.newestValue(dep);
+			const value = node.fn(read, untracked);
+			this.newestSamples.set(node.id, { deps, value });
+			return value;
+		} finally {
+			this.evalDepth--;
+			this.samplingStack.delete(node.id);
+		}
 	}
 
 	passValue(node: AnyNode, pass: Pass): Value {

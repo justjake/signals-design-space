@@ -6,7 +6,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom } from 'cosignal';
+import { Atom, ReducerAtom, type AtomNode } from 'cosignal';
 import { useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
@@ -43,7 +43,7 @@ describe('useSignal', () => {
 		expect(text(container)).toBe('15');
 		// The receipt holds the updater function itself, not a pre-folded value,
 		// so each world can replay it against its own view.
-		const node = h.bridge.byKernelId.get(a._id)!;
+		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
 		const ops = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
 		expect(ops).toContain('update');
 	});
@@ -137,7 +137,7 @@ describe('useComputed (§3.3 cut C3)', () => {
 		const seen: number[] = [];
 		function View({ mult }: { mult: number }) {
 			const c = useComputed<number>((_ctx) => useSignalValueless(a) * mult, [mult]);
-			seen.push(c._node.id);
+			seen.push(c._id); // S-C: the kernel record id IS the node identity
 			return <span>{useSignal(c)}</span>;
 		}
 		// helper: read the atom inside the computed via its patched .state
@@ -227,7 +227,7 @@ describe('useReducerAtom (§3.2)', () => {
 			r.dispatch(7);
 		});
 		expect(text(container)).toBe('107');
-		const node = h.bridge.byKernelId.get(r._id)!;
+		const node = h.bridge.byKernelId.get(r._id) as AtomNode;
 		const kinds = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
 		expect(kinds).toContain('update'); // re-pinned: dispatch → update(s => reduce(s, action))
 	});

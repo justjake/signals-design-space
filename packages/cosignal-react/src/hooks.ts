@@ -17,8 +17,8 @@
  */
 
 import * as React from 'react';
-import { Atom, ReducerAtom, SuspendedRead, registerReactBridge } from 'cosignal';
-import type { AnyNode, AtomNode, ComputedNode, CosignalBridge, RootId } from 'cosignal';
+import { Atom, Computed, ReducerAtom, SuspendedRead, registerReactBridge } from 'cosignal';
+import type { AnyNode, CosignalBridge, RootId } from 'cosignal';
 import { Shim, getActiveShim, setActiveShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------
@@ -64,36 +64,18 @@ export function requireShim(): Shim {
 	return shim;
 }
 
-// ---- bound computed handle ------------------------------------------------------------
+// ---- signal sources ---------------------------------------------------------------------
+// (S-C: one computed — kernel `Computed` handles ARE the supported derived
+// type. `useComputed` returns a real `Computed`; standalone `Computed`
+// instances route to the render's world through the core's computed-read
+// seam and subscribe through `useSignal` exactly like atoms.)
 
-/** The handle useComputed returns: a world-routed readable signal. */
-export class BoundComputed<T> {
-	/** @internal */
-	readonly _node: ComputedNode;
-	/** @internal */
-	readonly _shim: Shim;
-	constructor(node: ComputedNode, shim: Shim) {
-		this._node = node;
-		this._shim = shim;
-	}
-	/** World-routed read (frame > effect capture > pass world > newest). */
-	get state(): T {
-		return this._shim.routeComputedRead(this._node) as T;
-	}
-}
-
-export type SignalSource<T> = Atom<T> | ReducerAtom<T, unknown> | BoundComputed<T>;
+export type SignalSource<T> = Atom<T> | ReducerAtom<T, unknown> | Computed<T>;
 
 function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyNode {
-	if (signal instanceof BoundComputed) {
-		if (signal._shim !== shim) throw new Error('cosignal-react: BoundComputed belongs to a disposed registration.');
-		return signal._node;
-	}
 	if (signal instanceof Atom) return shim.nodeForAtom(signal as Atom<unknown>);
-	throw new Error(
-		'cosignal-react: useSignal accepts Atom/ReducerAtom handles or useComputed results. ' +
-			"Standalone Computed instances cannot be routed to a render's world — wrap the computation in useComputed.",
-	);
+	if (signal instanceof Computed) return shim.bridge.nodeForComputed(signal as Computed<unknown>);
+	throw new Error('cosignal-react: useSignal accepts Atom/ReducerAtom/Computed handles (useComputed results are Computed handles).');
 }
 
 // ---- useSignal --------------------------------------------------------------------------
@@ -238,8 +220,9 @@ let nextComputedSerial = 1;
  * node identity: while `deps` are equal you keep the same node (nothing is
  * minted); when `deps` change, a fresh node capturing the new closure is
  * created in work-in-progress hook state — adopted if the render commits,
- * dropped if the render is discarded. Returns a handle whose `.state` reads
- * in the current render's world.
+ * dropped if the render is discarded. Returns a real kernel `Computed`
+ * handle (S-C: one computed) whose `.state` reads in the current render's
+ * world through the core's computed-read seam.
  *
  * Recreating instead of swapping the function in place is deliberate: a
  * node's evaluating function must stay immutable for the node's whole life,
@@ -254,15 +237,34 @@ let nextComputedSerial = 1;
  * The keyed cache lives exactly as long as the node: deps changes (and
  * discarded mount attempts, which throw away hook state) recreate the node
  * and refetch — React's own useMemo/uncached-promise lifecycle.
+ *
+ * Reclamation (S-C): when a deps change commits, the SUPERSEDED handle's
+ * kernel record is disposed after the commit (a passive effect keyed on the
+ * handle — by then every subscription hook re-keyed to the replacement), so
+ * kernel ids recycle instead of leaking per deps change; the §4.5.3 GEN
+ * discipline makes the reuse sound. Discarded render attempts leak their
+ * minted node exactly as the overlay representation did (never current, so
+ * never disposed) — bounded by React's own discard rate.
  */
-export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[]): BoundComputed<T> {
+export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[]): Computed<T> {
 	const shim = requireShim();
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	return React.useMemo(
-		() => new BoundComputed<T>(shim.makeComputedNode(`useComputed#${nextComputedSerial++}`, fn), shim),
+	const handle = React.useMemo(
+		() => {
+			const c = new Computed<T>(fn, { label: `useComputed#${nextComputedSerial++}` });
+			shim.bridge.nodeForComputed(c as Computed<unknown>); // adopt: register + wrap for world evaluation
+			return c;
+		},
 		// The user's deps ARE the memo key: a changed fn takes effect only with changed deps.
 		[shim, ...deps],
 	);
+	const prevRef = React.useRef<Computed<T> | null>(null);
+	React.useEffect(() => {
+		const prev = prevRef.current;
+		prevRef.current = handle;
+		if (prev !== null && prev !== handle) shim.bridge.disposeComputed(prev as Computed<unknown>);
+	}, [shim, handle]);
+	return handle;
 }
 
 // ---- useReducerAtom -----------------------------------------------------------------------

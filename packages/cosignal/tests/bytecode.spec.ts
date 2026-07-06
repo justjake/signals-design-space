@@ -32,8 +32,10 @@ const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
 const BUDGETS: Record<string, number> = {
 	// graph kernel (src/index.ts createEngine internals)
 	link: 180, // 154: re-track fast path
-	linkInsert: 380, // 327: out-of-line insertion tail
-	unlink: 310, // 262
+	linkInsert: 380, // 346: out-of-line insertion tail (+ D1's per-link shift at S-C)
+	unlink: 350, // 308: S-C added D1's per-link lifecycle release (one dep
+	// LIFECYCLE load + host-owned gate — the kernel arm became a refcount so
+	// bridge computeds' links could be excluded; see index.ts D1)
 	propagate: 460, // 426: already close to the limit — watch it
 	checkDirty: 440, // 414: B2 split — entry wrapper + shallow/two-level fast
 	// paths + chainCheck dispatch (was the 537 monolith pinned below); inside
@@ -56,7 +58,7 @@ const BUDGETS: Record<string, number> = {
 	read: 120, // 98
 	write: 180, // 152
 	computedRead: 110, // 86: hot/cold split entry
-	computedReadSlow: 460, // 410: the out-of-line ladder — near the limit
+	computedReadSlow: 460, // 418: the out-of-line ladder — near the limit (S-C: never-evaluated probe reads MUTABLE; HOST_OWNED carried)
 	writeAtom: 120, // 100
 	flush: 170, // 139
 	// concurrency engine (src/concurrent.ts shadow arenas)
@@ -78,7 +80,10 @@ const BUDGETS: Record<string, number> = {
 	// (was the 567 walk monolith pinned below)
 	aCheckDirtyLoop: 450, // 407: the general arena walk, out of line
 	aUpdateAndShallow: 110, // 59: refold + sibling Pending->Dirty upgrade
-	aFoldOutcome: 300, // 265: fold-outcome classification, out of line
+	aFoldOutcome: 340, // 322: fold-outcome classification, out of line — S-C
+	// added the §4.5.3 comparator arm (custom-equality computeds compare
+	// against the ARENA-local previous, HEAD order; the user-fn call itself
+	// is out of line in aEqCold, so the hot default arm stays closure-free)
 	aSyncObsAfterRefold: 130, // 92: S-B out-of-line obs epilogue (observed nodes only)
 };
 
@@ -88,7 +93,10 @@ const BUDGETS: Record<string, number> = {
 // limit gets pinned here (deliberately, justified in the PR); a pin that
 // drops back under it moves into BUDGETS.
 const OVER_LIMIT_PINS: Record<string, number> = {
-	aUpdateComputed: 530, // 511: S-B made the arenas the serving authority —
+	aUpdateComputed: 530, // 495 (re-checked at S-C: the dead newest-memo frame
+	// save/restore left; the §4.5.3 comparator arg joined — still over the
+	// 460 inline limit, so the pin STANDS, not promoted): S-B made the
+	// arenas the serving authority —
 	// the refold wrapper gained the M6 observed-capture open (obsRefs probe)
 	// and the paired world-eval trace hooks. Deliberate: the wrapper brackets
 	// a DYNAMIC user-fn call, so inlining the wrapper is not load-bearing

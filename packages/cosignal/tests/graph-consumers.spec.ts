@@ -179,8 +179,8 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 	});
 });
 
-describe('§1 rows 8/9 — kernel-frame reads are NEVER world-routed (the fix + its boundary)', () => {
-	it('T6: a kernel computed evaluated inside a pass world reads K0 (newest), records no K1 edge, and its cache stays newest-coherent', () => {
+describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COMPUTEDS world-route through the S-C seam', () => {
+	it('T6 (re-pinned at S-C): a kernel computed read inside a world evaluation ADOPTS and evaluates under that world (arena links recorded); the kernel cache stays newest-coherent because worlds never touch it; kernel-frame reads still serve newest', () => {
 		const b = bridge();
 		const handle = new Atom(0);
 		const node = b.adoptAtom('a', handle as Atom<unknown>);
@@ -189,22 +189,34 @@ describe('§1 rows 8/9 — kernel-frame reads are NEVER world-routed (the fix + 
 			kcEvals++;
 			return (handle.state as number) + 100;
 		});
-		const c = b.computed('c', () => kc.state); // standalone kernel computed inside an overlay fn
+		const c = b.computed('c', () => kc.state); // standalone kernel computed inside a bridge fn
 		const t = b.openBatch();
 		b.write(t.id, node, { kind: 'set', value: 5 }); // kernel newest = 5
 		const p = b.passStart('A', []); // t excluded: the pass world's a is 0
-		// kc's evaluation is a KERNEL frame: its atom read serves the kernel
-		// arena, never the pass world (pre-fix: 100 here — and a torn cache).
-		expect(b.passValue(c, p)).toBe(105);
-		expect(kcEvals).toBe(1);
-		expect(b.dependencyEdges.size).toBe(0); // the kernel read left no arena link (row 9: delivery-blind by design)
-		const routed = b.computed('r', () => handle.state); // contrast: overlay-frame handle read IS world-routed
-		expect(b.passValue(routed, p)).toBe(0);
+		// S-C INVERSION (§4.8 — one computed): kc's read inside c's ARENA
+		// evaluation routes through the computed host-read seam, adopts kc,
+		// and evaluates it UNDER THE PASS WORLD — the pass sees a=0. (Pre-S-C
+		// this read was a kernel frame serving newest: 105.)
+		expect(b.passValue(c, p)).toBe(100);
+		expect(kcEvals).toBe(1); // the arena evaluation ran the raw fn once
+		// The world evaluation recorded ARENA links (a→kc→c) — kc's cone is
+		// deliverable — while the KERNEL slot was never written by the world
+		// path (arenas own world values):
+		expect(b.dependencyEdges.size).toBeGreaterThan(0);
+		expect(kc.state).toBe(105); // newest read: kernel evaluates its own record
+		expect(kcEvals).toBe(2); // …a SECOND, kernel-frame run — no world residue served
+		// KERNEL-FRAME reads stay un-routed (the boundary that survives S-C:
+		// the seam gates on activeSub === 0): a kernel effect re-reading kc
+		// during the open pass sees NEWEST.
+		let kernelSeen = -1;
+		const dispose = effect(() => {
+			kernelSeen = kc.state as number;
+		});
+		expect(kernelSeen).toBe(105);
 		b.passEnd(p.id, 'discard');
-		// The kernel's newest arena stayed coherent with the eager-apply
-		// invariant (A1): pre-fix this read served 0-world residue (100).
-		expect(kc.state).toBe(105);
+		expect(kc.state).toBe(105); // eager-apply coherence (A1), unchanged
 		b.retire(t.id, true);
+		dispose();
 	});
 });
 

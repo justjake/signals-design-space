@@ -71,18 +71,21 @@
  *     Committed-truth flips FAN OUT marks into the arenas at four sites
  *     (§4.3): retirement, per-root lock-in, committed-member write, and
  *     quiet fold — plus L4 resource settlement.
- *   - A MEMO caches a NEWEST computed's value, together with FINGERPRINTS —
- *     per-dependency version stamps (the highest receipt sequence for that
- *     dependency) — that tell whether the memo is still current. The
- *     newest MEMO TABLE is the ladder's surviving arm (`newestMemos`;
- *     kernel computeds absorb it at S-C): kernel atoms serve newest
- *     directly, overlay computeds memo-validate, everything else folds.
+ *   - NEWEST COMPUTED SERVING is the kernel's (S-C: one computed). Every
+ *     bridge computed rides a kernel `Computed` record: the kernel's own
+ *     dep links, staleness marks, and value cache serve the newest world,
+ *     so a computed re-derives only when a TRACKED dependency changed —
+ *     untracked reads are point-in-time samples taken at those
+ *     re-derivations [ruling 2026-07-06: untracked sampling]. Kernel atoms
+ *     serve newest directly (the eager-apply invariant); everything else
+ *     folds.
  *   - An EPISODE is the stretch between QUIESCENCE points — moments when
  *     nothing is in flight (no live batches, no open passes, no PARKED
  *     actions — async actions kept pending until their promise settles).
- *     At quiescence the memo tables reset by epoch and zero-consumer
- *     committed arenas reclaim; populated arenas PERSIST — their links are
- *     current structure, not an episode log (§4.1). Sequence values are
+ *     At quiescence zero-consumer committed arenas reclaim; populated
+ *     arenas PERSIST — their links are current structure, not an episode
+ *     log (§4.1) — and the kernel's newest caches persist the same way
+ *     (nothing newest-visible changes at quiescence). Sequence values are
  *     NEVER rewritten: the global counter climbs monotonically for the
  *     process's life (exact to 2^53 — see the bound note at `quiesce`).
  *
@@ -159,7 +162,7 @@
  *     never be skipped. The B1 read-before-pending pin is the tripwire.
  */
 
-import { Atom, SuspendedRead, __assertHostWritable, __hostApplySet, __hostReadNewest, __hostRunFold, __lifecycleRelease, __lifecycleRetain, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type HostOpKind } from './index.js';
+import { Atom, Computed, CycleError, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain, __setHostComputedRead, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type ComputedCtx, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -355,11 +358,37 @@ export class AtomNode {
 export type Reader = (node: AnyNode) => Value;
 export type ComputedFn = (read: Reader, untracked: Reader) => Value;
 
+/**
+ * The bridge's computed node record (S-C: one computed — no overlay
+ * representation). Every bridge computed RIDES a kernel `Computed` record:
+ * the kernel serves the newest world (links, marks, value cache — the
+ * sampled-untracked rule falls out of kernel semantics), and the bridge
+ * evaluates `fn` under pass/committed worlds through the arena walks. For
+ * bridge-created computeds `fn` is the authored (read, untracked) function;
+ * for adopted public `Computed` handles it is the bridge's ctx adapter
+ * (committed `previous` cell, `use` over the handle's own `_useCache`,
+ * background-suspension fold) around the handle's raw fn.
+ */
 export type ComputedNode = {
 	kind: 'computed';
 	id: NodeId;
 	name: string;
+	/** The WORLD evaluation function (arena refolds, mount-fix folds). */
 	fn: ComputedFn;
+	/** The kernel record this node rides (newest serving + kernel links). */
+	handle: Computed<unknown>;
+	/** True for adopted public handles (ctx-shaped raw fns): their world fn
+	 * is the bridge's ctx adapter, and background newest reads fold pending
+	 * suspensions to sentinel values (the old shim-wrapper translation). */
+	ctxShaped: boolean;
+	/** §4.5.3 retention: the policy comparator (HEAD order `isEqual(prev,
+	 * next)`), applied by arena refolds against the ARENA-local previous
+	 * value; undefined = default equality (Object.is). */
+	isEqual: Equals | undefined;
+	/** ctx.previous cell for adopted ctx-shaped fns: the node's last
+	 * COMMITTED value (a best-effort hint; may be stale or undefined),
+	 * updated at pass commits from the watchers that rendered it. */
+	prevCell: { value: Value };
 };
 
 export type AnyNode = AtomNode | ComputedNode;
@@ -383,32 +412,6 @@ export type Token = {
 	 * so the token record must outlive them (reclamation gate). */
 	liveReceipts: number;
 	ambient: boolean;
-};
-
-/** One newest-world memo: value + evaluation seq + per-atom-dep
- * fingerprints. (Pass/committed worlds serve from their arenas since S-B;
- * this record dies with the ladder's newest arm at S-C.) */
-export type WorldMemo = {
-	value: Value;
-	/** Evaluation/re-stamp sequence. */
-	seq: Seq;
-	epoch: Epoch;
-	/** seq value at last validation (any state change mints a seq — cheap dedup). */
-	checkedOp: Seq;
-	/** Re-entrancy guard: stale cross-linked dep lists must refuse, not recurse. */
-	validating: boolean;
-	/** Direct atom deps (recorded during evaluation) + their fingerprints.
-	 * `atomsStrong[i]` = the dep was TRACKED-read (§4.4.1's notification
-	 * rule: untracked deps invalidate VALUES — they stay in the fp set — but
-	 * never carry notifications; the newest-subscription flush walks strong
-	 * deps only). */
-	atoms: AtomNode[];
-	fps: Seq[];
-	atomsStrong: boolean[];
-	/** Direct computed deps + the values they had (identity revalidation). */
-	comps: ComputedNode[];
-	compValues: Value[];
-	compsStrong: boolean[];
 };
 
 /** One entry of the 31-slot recycling table a written batch occupies (see
@@ -748,6 +751,11 @@ function hostReadImpl(atom: Atom<unknown>): unknown {
 	return activeBridge === undefined ? __HOST_MISS : activeBridge.hostRead(atom);
 }
 
+/** The host COMPUTED read router (S-C twin of hostReadImpl; armed together). */
+function hostComputedReadImpl(c: Computed<unknown>): unknown {
+	return activeBridge === undefined ? __HOST_MISS : activeBridge.hostComputedRead(c);
+}
+
 /** NF2 S-A: the settle-tap router (ONE closure per process; the kernel's
  * shared listener consults it at fire time — §4.5.4). */
 function settleTapImpl(t: PromiseLike<unknown>): void {
@@ -797,9 +805,12 @@ export function __newBridgeForTest(): CosignalBridge {
 // boxes + settlement, consumer-refcount reclamation at quiesce, write-time
 // delivery over strong links, drain candidates off the dirty lists, and the
 // mount-fixup closure over reverse (deps) links. The K1 episode edge log,
-// its touched-word machinery, and the separate weak-edge table are DELETED
-// (§4.8 S-B); `newestMemos` remains the newest world's temporary
-// representation until S-C. Behind a test flag (`__setArenaCheck`), every
+// its touched-word machinery, and the separate weak-edge table were DELETED
+// at S-B; the newest memo table (the ladder's last arm) died at S-C, when
+// every bridge computed re-keyed onto a kernel `Computed` record — the
+// kernel serves newest, and the kernel's own dep links carry the newest
+// strong walks (subscription reach, the fixup closure's kernel leg). Behind
+// a test flag (`__setArenaCheck`), every
 // public operation's epilogue serves each live arena's shadows FROM THE
 // ARENA (its own transliterated walks) and compares against FOLD-TRUTH — a
 // naive cache-free re-fold — ANY divergence throws. Layouts and walks are
@@ -1563,8 +1574,11 @@ export class CosignalBridge {
 	/** Ambient default batch for bare (context-free) writes. */
 	ambientToken: TokenId | undefined;
 
-	/** Registered kernel-backed atoms, by kernel record id (concurrent-table routing). */
-	byKernelId = new Map<KernelId, AtomNode>();
+	/** Registered kernel-backed nodes (atoms AND computeds since S-C), by
+	 * kernel record id (concurrent-table routing + the kernel-link walks'
+	 * id mapping). `disposeComputed` clears rows, so a REUSED kernel id can
+	 * never resolve to a dead tenant (§4.5.3 id tenancy). */
+	byKernelId = new Map<KernelId, AnyNode>();
 	/** The world an overlay evaluation frame is folding in (concurrent-table read routing). */
 	activeWorld: World | undefined;
 	/**
@@ -1628,13 +1642,15 @@ export class CosignalBridge {
 		this.syncReadRouting();
 	}
 
-	/** Arms/disarms the core's host read hook: armed while an evaluation
-	 * world is on stack OR a provider could answer — so a provider-less
-	 * quiet host costs reads exactly one undefined-check. */
+	/** Arms/disarms the core's host read hooks (atom + computed — the S-C
+	 * computed-read seam arms in lockstep): armed while an evaluation world
+	 * is on stack OR a provider could answer — so a provider-less quiet host
+	 * costs reads exactly one undefined-check. */
 	private syncReadRouting(): void {
 		if (activeBridge !== this) return;
 		const armed = this.activeWorld !== undefined || this.worldProvider !== undefined || this.captureFrame !== undefined;
 		__setHostRead(armed ? hostReadImpl : undefined);
+		__setHostComputedRead(armed ? hostComputedReadImpl : undefined);
 	}
 
 	/** The world a routed read resolves in RIGHT NOW: the evaluation world on
@@ -1684,9 +1700,68 @@ export class CosignalBridge {
 			}
 			node = adopt(atom);
 		}
-		const v = this.routedRead(node, world);
+		const v = this.routedRead(node as AtomNode, world);
 		if (cap !== undefined) cap.deps.push({ node, value: v });
 		return v;
+	}
+
+	/**
+	 * The computed host read hook's target (S-C computed-read seam): route a
+	 * public `Computed.state` read to the effective world, adopting
+	 * unregistered handles on demand (adoption is bridge-owned — unlike
+	 * atoms, no bindings policy participates). Newest resolution declines
+	 * (__HOST_MISS): the plain kernel path IS newest serving, seam-free.
+	 * Reads inside an open capture frame resolve committed-for-root and
+	 * append to the dep snapshot, exactly like routed atom reads.
+	 * @internal (reached only through index.ts's `Computed.state`)
+	 */
+	hostComputedRead(c: Computed<unknown>): unknown {
+		if (this.inFoldCallback) {
+			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+		}
+		let world = this.activeWorld;
+		let cap: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined;
+		if (world === undefined) {
+			cap = this.captureFrame;
+			if (cap !== undefined) {
+				world = { kind: 'committed', root: cap.sub.root };
+			} else {
+				const p = this.worldProvider;
+				world = p === undefined ? undefined : p();
+			}
+		}
+		if (world === undefined || world.kind === 'newest') {
+			return __HOST_MISS; // the plain kernel path is newest serving
+		}
+		const node = this.nodeForComputed(c);
+		// The pre-dedup observation capture rides tracked reads (§4.7/M6);
+		// raw handle reads inside world evaluations have no reader hook, so
+		// the seam is their capture site (mirrors routedRead's atom half).
+		if (this.currentSink !== 0) {
+			const oc = this.obsCapture;
+			if (oc !== undefined) oc.push(node.id);
+		}
+		const v = this.evaluate(node, world);
+		if (cap !== undefined) cap.deps.push({ node, value: v });
+		return v;
+	}
+
+	/**
+	 * Resolve a public Computed handle to its registered node, adopting on
+	 * first sight — the ONE stamp-validate + registry-probe rule (nodeFor's
+	 * computed twin). Kernel id reuse can never serve a dead tenant here:
+	 * `disposeComputed` clears the stamp and the byKernelId row, so a reused
+	 * id's new handle adopts fresh (§4.5.3 id tenancy).
+	 */
+	nodeForComputed(c: Computed<unknown>): ComputedNode {
+		const stamp = c._hostStamp;
+		if (stamp !== undefined && stamp.b === this) return stamp.n as ComputedNode;
+		const hit = this.byKernelId.get(c._id);
+		if (hit !== undefined && hit.kind === 'computed') {
+			c._hostStamp = { b: this, n: hit }; // re-stamp after a bridge swap
+			return hit;
+		}
+		return this.adoptComputed(c.label ?? `computed#${c._id}`, c);
 	}
 
 	private log(e: BridgeEvent): void {
@@ -1787,7 +1862,8 @@ export class CosignalBridge {
 		const stamp = atom._hostStamp;
 		if (stamp !== undefined && stamp.b === this) return stamp.n as AtomNode;
 		const node = this.byKernelId.get(atom._id);
-		if (node !== undefined) atom._hostStamp = { b: this, n: node }; // re-stamp after a bridge swap
+		if (node === undefined || node.kind !== 'atom') return undefined;
+		atom._hostStamp = { b: this, n: node }; // re-stamp after a bridge swap
 		return node;
 	}
 
@@ -1806,10 +1882,224 @@ export class CosignalBridge {
 		return node;
 	}
 
-	computed(name: string, fn: ComputedFn): ComputedNode {
-		const node: ComputedNode = { kind: 'computed', id: this.nextNode++, name, fn };
+	/**
+	 * Mint a bridge computed (S-C: one computed — the node RIDES a fresh
+	 * kernel `Computed` record). The kernel getter runs the authored
+	 * (read, untracked) fn with the KERNEL readers — dep reads take the
+	 * plain kernel paths (linking to this record; untracked reads clear the
+	 * kernel frame, so they leave no link and never notify) — under the
+	 * bridge's evaluation guards (writes throw; observed runs capture their
+	 * strong deps; trace hooks fire). World evaluations run the same fn with
+	 * the ARENA readers through `aUpdateComputed`.
+	 */
+	computed(name: string, fn: ComputedFn, equals?: Equals): ComputedNode {
+		const node: ComputedNode = {
+			kind: 'computed', id: this.nextNode++, name, fn,
+			handle: undefined as never, ctxShaped: false, isEqual: equals, prevCell: { value: undefined },
+		};
+		node.handle = new Computed<unknown>(this.makeKernelGetter(node) as (ctx: ComputedCtx<unknown>) => Value, equals === undefined ? { label: name } : { label: name, isEqual: equals });
+		__hostMarkComputedOwned(node.handle); // its links carry no D1 lifecycle refs — the obs index is its arm
 		this.indexNode(node);
+		this.byKernelId.set(node.handle._id, node);
+		node.handle._hostStamp = { b: this, n: node };
 		return node;
+	}
+
+	/**
+	 * Adopt a public `Computed` handle (S-C): the handle's kernel record
+	 * keeps serving the newest world exactly as before adoption — the bridge
+	 * only WRAPS its kernel getter with the host epilogue (observation
+	 * re-pointing per re-run) and builds the ctx-shaped WORLD fn: reads
+	 * inside the raw fn are raw `.state` reads, which the host read seams
+	 * route into the evaluating arena; `ctx.previous` serves the node's
+	 * committed previous cell; `ctx.use` is the core's two-form dispatch
+	 * over the handle's own `_useCache` (same key ⇒ same thenable for the
+	 * node's lifetime, across worlds); a background evaluation folds a
+	 * pending suspension to its stable sentinel VALUE (hook-initiated ones
+	 * rethrow — `suspendDepth`).
+	 */
+	adoptComputed(name: string, handle: Computed<unknown>): ComputedNode {
+		const existing = this.byKernelId.get(handle._id);
+		if (existing !== undefined && existing.kind === 'computed') return existing;
+		const node: ComputedNode = {
+			kind: 'computed', id: this.nextNode++, name, fn: undefined as never,
+			handle, ctxShaped: true, isEqual: handle._isEqual, prevCell: { value: undefined },
+		};
+		node.fn = this.makeCtxWorldFn(node);
+		__hostWrapComputedFn(handle._id, (inner) => this.makeAdoptedKernelGetter(node, inner));
+		__hostMarkComputedOwned(handle); // retro-releases any pre-adoption lifecycle refs its links held
+		this.indexNode(node);
+		this.byKernelId.set(handle._id, node);
+		handle._hostStamp = { b: this, n: node };
+		return node;
+	}
+
+	/**
+	 * Dispose a computed (S-C — the useComputed deps-change reclamation
+	 * path: the superseded node's kernel record frees and its id becomes
+	 * reusable). The caller owns the discipline that the node is SUPERSEDED
+	 * (its watchers re-keyed to the replacement; live watchers here throw).
+	 * Order matters for §4.5.3 id tenancy: the bridge-side tenancy moves
+	 * FIRST — nodeGen bumps (dead-GEN shadows never serve), every live
+	 * arena's shadow purges eagerly (walks traverse links without per-hop
+	 * GEN checks, so links through the dead shadow must go now), the
+	 * kernel-id row and handle stamp clear (a reused kernel id resolves
+	 * fresh, never to the dead tenant) — then the kernel record disposes.
+	 */
+	disposeComputed(handle: Computed<unknown>): void {
+		const node = this.byKernelId.get(handle._id);
+		if (node !== undefined && node.kind === 'computed' && node.handle === handle) {
+			const nid = node.id;
+			const ws = this.watchersByNode[nid];
+			if (ws !== undefined && ws.some((w) => w.live)) {
+				throw new BridgeScheduleError(`disposeComputed(${node.name}): live watchers still subscribe — re-key them to the replacement first`);
+			}
+			if (this.obsRefs[nid]! > 0) this.obsExit(nid); // release any retained closure (defensive)
+			this.nodeGen[nid] = (this.nodeGen[nid] ?? 0) + 1;
+			this.eachArena((a) => {
+				const sh = nid < a.byNode.length ? a.byNode[nid]! : 0;
+				if (sh === 0) return;
+				this.aEvictShadow(a, sh);
+				// Zero the record and unindex: dirty-list residue reads an inert
+				// record (FLAGS 0 — decay drops it); nothing routes here again.
+				for (let f = 0; f < A_STRIDE; f++) a.W[sh + f] = 0;
+				a.byNode[nid] = 0;
+			});
+			this.byKernelId.delete(handle._id);
+			this.nodes.delete(nid);
+			this.nodesArr[nid] = undefined;
+			handle._hostStamp = undefined;
+		}
+		__hostDisposeComputed(handle); // kernel: deps unlink, subs detach, deferred free (GEN bump at the sweep)
+	}
+
+	/** >0 while a hook-initiated evaluation may legally suspend the render
+	 * (the bindings' `evaluateSuspending` bumps it); background evaluations
+	 * of ctx-shaped computeds fold pending suspensions to sentinel values. */
+	suspendDepth = 0;
+
+	/** The kernel getter of a bridge-created computed (see `computed`). */
+	private makeKernelGetter(node: ComputedNode): () => Value {
+		return () => {
+			const savedCapture = this.obsCapture;
+			this.obsCapture = this.obsRefs[node.id]! > 0 ? [] : undefined;
+			this.evalDepth++; // writes during a newest evaluation throw, as in every world
+			const tr = this.trace;
+			if (tr !== undefined) tr.evalStart(node, NEWEST);
+			try {
+				return node.fn(this.kernelTrackedReader, this.kernelUntrackedReader);
+			} finally {
+				this.evalDepth--;
+				const captured = this.obsCapture;
+				this.obsCapture = savedCapture;
+				if (tr !== undefined) tr.evalEnd();
+				if (captured !== undefined) this.obsSyncAfterKernelRun(node.id, captured);
+			}
+		};
+	}
+
+	/** The wrapped kernel getter of an ADOPTED computed: run the original
+	 * (equality wrappers and all), then re-point the observed closure at the
+	 * kernel links this run just re-tracked (raw `.state` reads inside a
+	 * kernel frame never reach a bridge reader, so the fresh link list IS
+	 * the capture — full, reuse-proof, tracked-only). */
+	private makeAdoptedKernelGetter(node: ComputedNode, inner: (ctx: unknown) => unknown): (ctx: unknown) => unknown {
+		return (ctx: unknown) => {
+			this.evalDepth++; // writes during a newest evaluation throw, as in every world
+			const tr = this.trace;
+			if (tr !== undefined) tr.evalStart(node, NEWEST);
+			try {
+				return inner(ctx);
+			} finally {
+				this.evalDepth--;
+				if (tr !== undefined) tr.evalEnd();
+				if (this.obsRefs[node.id]! > 0) this.obsSyncAfterKernelRun(node.id, this.kernelStrongDepsOf(node));
+			}
+		};
+	}
+
+	/** The (read, untracked)-shaped WORLD evaluation fn of an adopted
+	 * ctx-shaped computed (see `adoptComputed`; the readers are unused — the
+	 * raw fn reads through the `.state` seams, which the open arena frame
+	 * routes and links). */
+	private makeCtxWorldFn(node: ComputedNode): ComputedFn {
+		const handle = node.handle;
+		const rawFn = handle._fn as (ctx: ComputedCtx<unknown>) => Value;
+		const ctx: ComputedCtx<unknown> = {
+			get previous(): Value {
+				return node.prevCell.value;
+			},
+			use: <V>(sourceOrKey: unknown, factory?: () => PromiseLike<V>): V =>
+				__ctxUse(handle, sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V,
+		} as ComputedCtx<unknown>;
+		return () => {
+			try {
+				return rawFn(ctx);
+			} catch (err) {
+				// Background world evaluation: a pending suspension folds to its
+				// stable SuspendedRead sentinel VALUE (so "still pending" caches
+				// and compares like any value — battery 16d); hook-initiated
+				// evaluations rethrow so React can suspend the component.
+				if (err instanceof SuspendedRead && this.suspendDepth === 0) return err;
+				throw err;
+			}
+		};
+	}
+
+	/** Kernel-frame tracked reader (bridge-created computeds' newest runs):
+	 * the plain kernel read paths — E.read/E.computedRead link the dep to
+	 * the open kernel frame — plus the pre-dedup observation capture. */
+	private kernelTrackedReader: Reader = (dep) => {
+		const oc = this.obsCapture;
+		if (oc !== undefined) oc.push(dep.id);
+		if (dep.kind === 'atom') return this.kernelValueOf(dep.handle);
+		try {
+			return __kernelComputedRead(dep.handle);
+		} catch (err) {
+			if (err instanceof CycleError) {
+				throw new BridgeScheduleError(`cyclic evaluation of ${dep.name} within one world — a computed may not depend on itself`);
+			}
+			throw err;
+		}
+	};
+
+	/** Kernel-frame untracked reader: kernel `untracked()` clears the frame,
+	 * so the dep's own serving still runs (recompute-if-stale) but no link —
+	 * and therefore no notification, and no invalidation of this computed —
+	 * is ever recorded (§4.4.1's value face, the ruling's sampling rule). */
+	private kernelUntrackedReader: Reader = (dep) => untracked(() => {
+		if (dep.kind === 'atom') return this.kernelValueOf(dep.handle);
+		try {
+			return __kernelComputedRead(dep.handle);
+		} catch (err) {
+			if (err instanceof CycleError) {
+				throw new BridgeScheduleError(`cyclic evaluation of ${dep.name} within one world — a computed may not depend on itself`);
+			}
+			throw err;
+		}
+	});
+
+	/** Observation re-point after a KERNEL re-run, inside the still-open
+	 * kernel frame: discovery evaluations (obsEnter forcing dep reads) must
+	 * not link into that frame — kernel `untracked()` clears it around the
+	 * sync (the arena twin clears `aOnly` instead — aSyncObsAfterRefold). */
+	private obsSyncAfterKernelRun(nid: NodeId, captured: NodeId[]): void {
+		untracked(() => this.obsSyncDeps(nid, captured));
+	}
+
+	/** The registered bridge nodes among a computed's CURRENT kernel deps
+	 * (tracked-only by construction: untracked reads leave no kernel link).
+	 * Walked off the raw kernel arena with the mirrored field constants. */
+	private kernelStrongDepsOf(node: ComputedNode): NodeId[] {
+		const M = __kernelBuffer();
+		const out: NodeId[] = [];
+		let l = M[node.handle._id + AF.DEPS]!;
+		while (l !== 0) {
+			const dep = this.byKernelId.get(M[l + AF.L_DEP]!);
+			if (dep !== undefined) out.push(dep.id);
+			l = M[l + AF.L_NEXT_DEP]!;
+		}
+		return out;
 	}
 
 	root(id: RootId): RootState {
@@ -1954,60 +2244,11 @@ export class CosignalBridge {
 		return __hostReadNewest(handle);
 	}
 
-	/**
-	 * The newest-world memo table. The newest world's computed values
-	 * live in their own memo table validated by the same memo ladder
-	 * (fingerprints ground at kernel atom state: fp(a, newest) is O(1) — the
-	 * last tape sequence / base sequence / retirement stamp). Real kernel
-	 * Computed records are deliberately NOT used for overlay computeds: a
-	 * computed whose dependencies flip between evaluations can leave stale
-	 * cross-evaluation links that form kernel link cycles the kernel's
-	 * unwatched-dispose walk cannot traverse (measured as a hang; the
-	 * overlay's union table is cycle-guarded, the kernel arena must stay
-	 * acyclic).
-	 */
-	private newestMemos = new Map<NodeId, WorldMemo>();
-
-	// ---- memo frames: direct deps of the newest evaluation in progress ----
-	private frame: WorldMemo | undefined = undefined;
-	/** The node id whose evaluation frame is open (raw-handle reads record to it). */
+	// ---- fold-through frame state (mountFix / unmaterialized-root folds) ----
+	/** The node id whose fold-through evaluation frame is open (raw-handle
+	 * reads gate their observation capture on it; the untracked reader
+	 * clears it around the dep — sink 0 ⇔ weak). */
 	private currentSink: NodeId = 0;
-
-	/**
-	 * Validate a newest memo: per-dependency fingerprint rechecks (atoms
-	 * ground at O(1) tape tails; computed deps revalidate recursively by
-	 * value identity). Returns true if the memo may serve (re-stamped when
-	 * the fingerprint step carried it). The ladder's pass/committed arms
-	 * died at S-B — those worlds serve from their arenas.
-	 */
-	private validateMemo(m: WorldMemo): boolean {
-		if (m.epoch !== this.epoch) return false;
-		if (m.checkedOp === this.seq) return true; // nothing minted since last validation ⇒ nothing changed
-		if (m.validating) return false; // stale dep lists can cross-link; refuse instead of recursing
-		m.validating = true;
-		try {
-			for (let i = 0; i < m.atoms.length; i++) {
-				if (this.fpOf(m.atoms[i]!) !== m.fps[i]!) return false;
-			}
-			for (let i = 0; i < m.comps.length; i++) {
-				if (!Object.is(this.evaluate(m.comps[i]!, NEWEST), m.compValues[i])) return false;
-			}
-			m.seq = this.seq; // re-stamp
-		} finally {
-			m.validating = false;
-		}
-		m.checkedOp = this.seq;
-		return true;
-	}
-
-	/** fp(a, newest) = max(last entry seq, baseSeq, retirementStamp) —
-	 * every entry is newest-visible: O(1) off the packed tail. */
-	private fpOf(atom: AtomNode): Seq {
-		const tp = atom.tp;
-		const last = tp.n === tp.start ? 0 : tp.seqs[tp.n - 1]!;
-		const floor = atom.baseSeq > atom.retirementStamp ? atom.baseSeq : atom.retirementStamp;
-		return last > floor ? last : floor;
-	}
 
 	/**
 	 * Raw-handle reads: a registered atom read reached the operation table
@@ -2033,9 +2274,7 @@ export class CosignalBridge {
 		if (this.naiveFold !== undefined) return this.foldAtom(atom, world); // fold-truth reads (armed checker)
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
-			const v = this.kernelValueOf(atom.handle);
-			this.captureAtomDep(atom, this.fpOf(atom));
-			return v;
+			return this.kernelValueOf(atom.handle);
 		}
 		if (world.kind === 'pass' || world.kind === 'committed') {
 			const a = this.arenaOf(world);
@@ -2043,32 +2282,7 @@ export class CosignalBridge {
 			// Unmaterialized root (no record): fold plain — mirrors the old
 			// memo-table rule (never CREATE the root record on a read).
 		}
-		const v = this.foldAtom(atom, world);
-		this.captureAtomDep(atom, this.lastFoldFp);
-		return v;
-	}
-
-	/** Frame capture, atom half. Mode rides `currentSink`: an untracked
-	 * read cleared it around the dep's evaluation, so sink 0 ⇔ weak. */
-	private captureAtomDep(atom: AtomNode, fp: Seq): void {
-		const f = this.frame;
-		if (f !== undefined) {
-			f.atoms.push(atom);
-			f.fps.push(fp);
-			f.atomsStrong.push(this.currentSink !== 0);
-		}
-	}
-
-	/** Frame capture, computed half; the caller passes the mode (the sink
-	 * observed at the dep evaluation's ENTRY — evaluate's own frame has
-	 * already re-pointed currentSink by its tail). */
-	private captureCompDep(node: ComputedNode, value: Value, strong: boolean): void {
-		const f = this.frame;
-		if (f !== undefined) {
-			f.comps.push(node);
-			f.compValues.push(value);
-			f.compsStrong.push(strong);
-		}
+		return this.foldAtom(atom, world);
 	}
 
 	/**
@@ -2079,12 +2293,12 @@ export class CosignalBridge {
 	 * run is what RECORDS the strong and weak links the routing coverage
 	 * argument stands on (fable N-4; the cold-pass bench gate priced it).
 	 * An unmaterialized root has no arena and folds plain. Newest-world
-	 * atoms read straight off the kernel arena; newest-world computeds
-	 * serve from the newest memo table (recompute if stale, plain signals
-	 * semantics — the ladder's surviving arm until S-C). mountFix worlds
-	 * are one-shot fold-throughs. Reads inside fold callbacks throw
-	 * (updaters/reducers must be pure); per-world cycles throw instead of
-	 * recursing.
+	 * atoms read straight off the kernel arena; newest-world computeds are
+	 * KERNEL-SERVED (S-C: one computed — `kernelComputed` below carries the
+	 * ruling: stale until a TRACKED dependency changes; untracked reads are
+	 * samples taken at re-derivations). mountFix worlds are one-shot
+	 * fold-throughs. Reads inside fold callbacks throw (updaters/reducers
+	 * must be pure); per-world cycles throw instead of recursing.
 	 */
 	evaluate(node: AnyNode, world: World): Value {
 		probes.worldEvals++; // One Core probe (referee surface)
@@ -2095,24 +2309,9 @@ export class CosignalBridge {
 			if (a !== undefined) return this.aServe(a, node);
 		}
 		if (node.kind === 'atom') return this.atomValue(node, world);
-		const table = world.kind === 'newest' ? this.newestMemos : undefined;
-		if (table !== undefined) {
-			const m = table.get(node.id);
-			if (m !== undefined && this.validateMemo(m)) {
-				// Read-site self-heal (§4.5.4 pull half; mirrored at `aServe`
-				// and the kernel's `boxedRead`): a background suspension
-				// memoized the SENTINEL AS A VALUE, whose atom fingerprints
-				// never move at settlement — probe the thenable's status
-				// exactly as `boxedRead` does and re-run when settled, so a
-				// read after `await` is deterministic even before the settle
-				// listener's microtask runs (RCC-SU5).
-				if (!(m.value instanceof SuspendedRead) || !this.sentinelSettled(m.value)) {
-					this.captureCompDep(node, m.value, this.currentSink !== 0);
-					return m.value;
-				}
-				table.delete(node.id);
-			}
-		}
+		if (world.kind === 'newest') return this.kernelComputed(node);
+		// Fold-through evaluation (mountFix worlds + unmaterialized-root
+		// committed folds): memo-free recursion in the frame's world.
 		// Per-world cycle detection via the mark column: marks carry the
 		// current top-level evaluation generation.
 		const marks = this.evalMark;
@@ -2124,38 +2323,19 @@ export class CosignalBridge {
 		this.evalDepth++;
 		const savedWorld = this.activeWorld;
 		this.setWorld(world);
-		const savedFrame = this.frame;
 		const savedSink = this.currentSink;
 		const savedObsCapture = this.obsCapture;
 		// Observed nodes capture the strong deps of this run (the readers
 		// push); everyone else pays this one check.
 		this.obsCapture = this.obsRefs[node.id]! > 0 ? [] : undefined;
 		this.currentSink = node.id;
-		let myFrame: WorldMemo | undefined;
-		if (table !== undefined) {
-			myFrame = {
-				value: undefined, seq: this.seq, epoch: this.epoch, checkedOp: this.seq, validating: false,
-				atoms: [], fps: [], atomsStrong: [], comps: [], compValues: [], compsStrong: [],
-			};
-		}
-		this.frame = myFrame;
 		const tr = this.trace; // paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, world);
 		try {
-			const value = node.fn(this.trackedReader, this.untrackedReader);
-			if (myFrame !== undefined) {
-				myFrame.value = value;
-				myFrame.seq = this.seq;
-				table!.set(node.id, myFrame);
-			}
-			// The frame captured MY deps; my caller captures me as a computed dep.
-			this.frame = savedFrame;
-			this.captureCompDep(node, value, savedSink !== 0);
-			return value;
+			return node.fn(this.trackedReader, this.untrackedReader);
 		} finally {
 			const obsCaptured = this.obsCapture;
 			this.obsCapture = savedObsCapture;
-			this.frame = savedFrame;
 			this.currentSink = savedSink;
 			this.setWorld(savedWorld);
 			this.evalDepth--;
@@ -2169,21 +2349,44 @@ export class CosignalBridge {
 		}
 	}
 
+	/**
+	 * Newest computed serving — the kernel's `computedRead` (S-C; [ruling
+	 * 2026-07-06: untracked sampling]: the kernel re-derives only when a
+	 * TRACKED dependency changed — kernel links exist for tracked reads
+	 * only — so untracked reads are point-in-time samples taken at those
+	 * re-derivations, and a write reaching a computed only through
+	 * untracked reads changes no newest answer). Read-site translations
+	 * preserve the bridge surface: kernel CycleErrors (fresh or cached)
+	 * become the bridge's cycle error; a PENDING suspension of a
+	 * ctx-shaped (adopted) computed folds to its stable sentinel VALUE for
+	 * background reads (the shim wrapper's old translation, engine-owned
+	 * since S-C) and rethrows for hook-initiated ones; settled suspensions
+	 * self-heal inside the kernel's boxedRead before this frame ever sees
+	 * them (RCC-SU5's read-after-await determinism).
+	 */
+	private kernelComputed(node: ComputedNode): Value {
+		try {
+			return __kernelComputedRead(node.handle);
+		} catch (err) {
+			if (err instanceof CycleError) {
+				throw new BridgeScheduleError(`cyclic evaluation of ${node.name} within one world — a computed may not depend on itself`);
+			}
+			if (err instanceof SuspendedRead && this.suspendDepth === 0 && node.ctxShaped) {
+				return err; // adopted ctx fn, background read: the sentinel serves as a value
+			}
+			throw err;
+		}
+	}
+
 	/** Mark column + generation for per-world cycle detection (no Set allocs). */
 	private evalMark: EvalGen[] = [0];
 	private evalGen: EvalGen = 0;
 
-	/** NF2 S-A: the kernel `boxedRead` status probe, shared by both self-heal
-	 * sites (`t.status === undefined || t.status === 'pending'` ⇒ pending). */
-	private sentinelSettled(sr: SuspendedRead): boolean {
-		const t = sr.thenable as { status?: string };
-		return t.status !== undefined && t.status !== 'pending';
-	}
-
-	/** The persistent tracked reader (newest/mountFix/plain-fold frames —
-	 * arena fn runs use aTrackedReader): the pre-dedup observation capture
-	 * rides the tracked read path (recordEdge's surviving half, §4.8 S-B),
-	 * then the dep evaluates in the frame's world. */
+	/** The persistent tracked reader (mountFix/plain-fold frames — arena fn
+	 * runs use aTrackedReader; kernel newest runs use kernelTrackedReader):
+	 * the pre-dedup observation capture rides the tracked read path
+	 * (recordEdge's surviving half, §4.8 S-B), then the dep evaluates in
+	 * the frame's world. */
 	private trackedReader: Reader = (dep) => {
 		const oc = this.obsCapture;
 		if (oc !== undefined) oc.push(dep.id);
@@ -2192,11 +2395,11 @@ export class CosignalBridge {
 
 	/**
 	 * The persistent untracked reader: CAPTURE-free, not INPUT-free — the
-	 * dep still enters the open memo frame's fingerprint set (validation
-	 * must observe untracked movement), but it never joins the observation
-	 * capture (OL1 is strong-only, §4.4.1) and — in arena worlds, where
-	 * aUntrackedReader is the analog — records only a weak link, so no
-	 * notification ever fires through it.
+	 * dep still folds in the frame's world (fold-throughs re-derive
+	 * everything, so untracked deps stay fresh in these one-shot worlds),
+	 * but it never joins the observation capture (OL1 is strong-only,
+	 * §4.4.1) and — in arena worlds, where aUntrackedReader is the analog —
+	 * records only a weak link, so no notification ever fires through it.
 	 */
 	private untrackedReader: Reader = (dep) => {
 		const sink = this.currentSink;
@@ -2330,28 +2533,35 @@ export class CosignalBridge {
 			// Dead tenancy: evict, purge links (both directions, both subs
 			// lists), refold under the new tenant — never serve the dead
 			// node's value or fn.
-			aDisposeAllDepsInReverse(a, sh);
-			let sl = a.W[sh + AF.SUBS]!;
-			while (sl !== 0) {
-				const next = a.W[sl + AF.L_NEXT_SUB]!;
-				aUnlink(a, sl);
-				sl = next;
-			}
-			let wl = a.weakSubs[sh >> A_SHIFT]!;
-			while (wl !== 0) {
-				const next = a.W[wl + AF.L_NEXT_SUB]!;
-				aUnlink(a, wl);
-				wl = next;
-			}
-			if ((a.W[sh + AF.FLAGS]! & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+			this.aEvictShadow(a, sh);
 			a.W[sh + AF.FLAGS] = kindFlags;
 			a.W[sh + AF.GEN] = gen;
 			a.W[sh + AF.MARK] = 0;
-			a.vals[sh >> A_SHIFT] = undefined;
 			return sh;
 		}
 		sh = aAllocShadow(a, nid, kindFlags, gen);
 		return sh;
+	}
+
+	/** Detach a shadow from its arena wholesale: deps in reverse, BOTH subs
+	 * lists, the suspended set, the cached value. Shared by shadowFor's
+	 * dead-tenancy re-key (§4.5.3) and disposeComputed's eager purge. */
+	private aEvictShadow(a: ShadowArena, sh: number): void {
+		aDisposeAllDepsInReverse(a, sh);
+		let sl = a.W[sh + AF.SUBS]!;
+		while (sl !== 0) {
+			const next = a.W[sl + AF.L_NEXT_SUB]!;
+			aUnlink(a, sl);
+			sl = next;
+		}
+		let wl = a.weakSubs[sh >> A_SHIFT]!;
+		while (wl !== 0) {
+			const next = a.W[wl + AF.L_NEXT_SUB]!;
+			aUnlink(a, wl);
+			wl = next;
+		}
+		if ((a.W[sh + AF.FLAGS]! & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+		a.vals[sh >> A_SHIFT] = undefined;
 	}
 
 	/** Arena dep recording (arena fn-reader hook): first-occurrence mode
@@ -2373,12 +2583,12 @@ export class CosignalBridge {
 
 	/** The arena atom-propagation gate is Object.is over FOLD OUTPUTS: the
 	 * atom's own `equals` already participated in the fold's stepwise
-	 * equality, and the memo ladder re-derives consumers on any fold-output
-	 * motion — a custom comparator here could suppress propagation the memo
+	 * equality, and world serving re-derives consumers on any fold-output
+	 * motion — a custom comparator here could suppress propagation the fold
 	 * path performs (dual-bookkeeping divergence by construction). The
 	 * §4.5.3 comparator-order mandate — HEAD's `isEqual(prev, next)`,
 	 * mirroring the kernel's `writeAtom` compare — binds the CUSTOM-EQUALITY
-	 * COMPUTED record, which lands with kernel computeds at S-C. */
+	 * COMPUTED record (aFoldOutcome's comparator arm, landed at S-C). */
 	private aEqAtom(_atom: AtomNode, prev: Value, next: Value): boolean {
 		return Object.is(prev, next);
 	}
@@ -2518,9 +2728,9 @@ export class CosignalBridge {
 		a.W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID;
 		a.readClock++;
 		// The shadow column ALWAYS stores the fold's own output (dual
-		// bookkeeping requires arena value ≡ fold ≡ memo-served value bit
-		// for bit); the comparator gates PROPAGATION only. Reference
-		// preservation for custom-equality computeds is §4.5.3's S-C story.
+		// bookkeeping requires arena value ≡ fold, bit for bit); the
+		// comparator gates PROPAGATION only. Reference preservation for
+		// custom-equality COMPUTEDS lives in aFoldOutcome (§4.5.3, S-C).
 		a.vals[vi] = next;
 		return !(prevValid && this.aEqAtom(atom, prev, next));
 	}
@@ -2542,20 +2752,18 @@ export class CosignalBridge {
 		const savedWorld = this.activeWorld;
 		const savedSink = this.currentSink;
 		const savedObsCapture = this.obsCapture;
-		const savedMemoFrame = this.frame;
 		this.aFrameArena = a;
 		this.aFrameShadow = sh;
 		this.aFrameCycle = ++a.cycle;
 		this.aOnly = a;
 		this.currentSink = 0;
 		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined;
-		this.frame = undefined;
 		this.setWorld(a.world);
 		this.evalDepth++;
 		const tr = this.trace; // paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, a.world);
 		try {
-			return this.aFoldOutcome(a, sh, node.fn(this.aTrackedReader, this.aUntrackedReader));
+			return this.aFoldOutcome(a, sh, node.fn(this.aTrackedReader, this.aUntrackedReader), node.isEqual);
 		} catch (err) {
 			this.aNoteThrow(a, sh, err);
 			throw err;
@@ -2564,7 +2772,6 @@ export class CosignalBridge {
 			const obsCaptured = this.obsCapture;
 			this.evalDepth--;
 			this.setWorld(savedWorld);
-			this.frame = savedMemoFrame;
 			this.obsCapture = savedObsCapture;
 			this.currentSink = savedSink;
 			this.aOnly = savedOnly;
@@ -2601,8 +2808,15 @@ export class CosignalBridge {
 	 * and outcome bits; returns the §4.2 value cutoff. The caller cleared
 	 * DIRTY/PENDING at entry, and its call sites own propagation. A RETURNED
 	 * sentinel clears the THROWN bit (it serves as a value; box→same-box by
-	 * sentinel identity is UNCHANGED — battery 16d's still-pending rule). */
-	private aFoldOutcome(a: ShadowArena, sh: number, value: Value): boolean {
+	 * sentinel identity is UNCHANGED — battery 16d's still-pending rule).
+	 * §4.5.3 (S-C): custom-equality computeds compare through their policy
+	 * comparator against the ARENA-LOCAL previous value — never the kernel
+	 * slot — in HEAD's argument order `isEqual(prev, next)` (mirroring the
+	 * kernel's writeAtom compare; comparators need not be equivalence
+	 * relations, so the order is load-bearing). On unchanged, the PREVIOUS
+	 * reference is kept (write nothing). Equality never bridges an
+	 * exceptional boundary: `prevValid` demands a plain previous value. */
+	private aFoldOutcome(a: ShadowArena, sh: number, value: Value, eq: Equals | undefined): boolean {
 		const vi = sh >> A_SHIFT;
 		const flags = a.W[sh + AF.FLAGS]!;
 		if (value instanceof SuspendedRead) {
@@ -2613,11 +2827,20 @@ export class CosignalBridge {
 			return !same;
 		}
 		const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
-		const changed = !(prevValid && Object.is(a.vals[vi], value));
+		const changed = !(prevValid && (eq === undefined
+			? Object.is(a.vals[vi], value)
+			: this.aEqCold(eq, a.vals[vi], value)));
 		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
 		if (changed) a.vals[vi] = value;
 		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN)) | AFlag.VALID;
 		return changed;
+	}
+
+	/** The custom-equality compare, out of line (cold — §4.5.3 policy users
+	 * only; keeps aFoldOutcome's hot default arm closure-free and under its
+	 * budget). HEAD argument order: isEqual(prev, next) — see aFoldOutcome. */
+	private aEqCold(eq: Equals, prev: Value, next: Value): boolean {
+		return this.inCallback(() => eq(prev, next));
 	}
 
 	private aTrackedReader: Reader = (dep) => {
@@ -2930,12 +3153,9 @@ export class CosignalBridge {
 						}
 						if (matched) a.readClock++;
 					});
-					// The newest world's memo can hold the same sentinel-as-value
-					// (kernel atoms' fps do not move at settlement): evict by scan —
-					// suspension populations are tiny and the scan is settlement-only.
-					for (const [nid, m] of this.newestMemos) {
-						if (m.value === sr) this.newestMemos.delete(nid);
-					}
+					// (Newest suspensions need no eviction here since S-C: the
+					// kernel's own attachSettle listener invalidates kernel-cached
+					// suspensions at settlement, and boxedRead self-heals at reads.)
 				}
 				// Cone drain: value-gated committed re-checks of the touched
 				// roots' live watchers (the durable-drain compare; the marks
@@ -2945,8 +3165,9 @@ export class CosignalBridge {
 					if (this.openPassByRoot.has(rootId)) continue;
 					for (const w of this.watchers.values()) {
 						if (!w.live || w.root !== rootId) continue;
-						const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: rootId });
-						if (!Object.is(now, w.lastRenderedValue)) {
+						const wNode = this.nodeById(w.node);
+						const now = this.evaluate(wNode, { kind: 'committed', root: rootId });
+						if (this.changedValue(wNode, w.lastRenderedValue, now)) {
 							if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause: 'retirement' });
 							w.lastRenderedValue = now;
 							w.dedupBits = 0;
@@ -3183,10 +3404,22 @@ export class CosignalBridge {
 						if (String(aThrew) !== String(mThrew)) {
 							throw new BridgeInvariantViolation(`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but fold-truth threw ${String(mThrew)}`);
 						}
-					} else if (!Object.is(aVal!, mVal!)) {
-						throw new BridgeInvariantViolation(
-							`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
-						);
+					} else {
+						// §4.5.3 (S-C): a custom-equality computed's arena slot keeps
+						// the PREVIOUS reference on comparator-equal refolds — correct
+						// exactly when the retained value is equal BY THE NODE'S OWN
+						// COMPARATOR to the naive re-fold (the kernel slot keeps old
+						// references under the same policy). Default nodes compare by
+						// identity, bit for bit, as before.
+						const ceq = node.kind === 'computed' && node.isEqual !== undefined
+							&& !(aVal instanceof SuspendedRead) && !(mVal instanceof SuspendedRead)
+							? node.isEqual : undefined; // sentinels compare by identity (16d), never through user comparators
+						const same = ceq === undefined ? Object.is(aVal!, mVal!) : this.inCallback(() => ceq(aVal!, mVal!));
+						if (!same) {
+							throw new BridgeInvariantViolation(
+								`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
+							);
+						}
 					}
 				}
 				// Deliberately NO list compaction here: consumed entries stay
@@ -3223,13 +3456,11 @@ export class CosignalBridge {
 		const savedWorld = this.activeWorld;
 		const savedOnly = this.aOnly;
 		const savedNaive = this.naiveFold;
-		const savedFrame = this.frame;
 		const savedSink = this.currentSink;
 		const savedObsCapture = this.obsCapture;
 		this.setWorld(world);
 		this.aOnly = undefined;
 		this.naiveFold = world;
-		this.frame = undefined;
 		this.currentSink = 0;
 		this.obsCapture = undefined;
 		this.evalDepth++;
@@ -3245,7 +3476,6 @@ export class CosignalBridge {
 			this.evalDepth--;
 			this.obsCapture = savedObsCapture;
 			this.currentSink = savedSink;
-			this.frame = savedFrame;
 			this.naiveFold = savedNaive;
 			this.aOnly = savedOnly;
 			this.setWorld(savedWorld);
@@ -3269,12 +3499,15 @@ export class CosignalBridge {
 	 * A node joined the live-watcher closure. Atoms retain their kernel
 	 * observed lifecycle (the watcher half of the observation union — the
 	 * kernel liveness bit is the other). Computeds must discover their
-	 * CURRENT strong dep set: the fn may never have run while observed
-	 * (memo-served or evaluated pre-liveness), so force one newest
-	 * evaluation — dropping the newest memo guarantees the fn runs and the
-	 * evaluate epilogue records and retains the dep set. A getter that
-	 * throws keeps its throw-on-demand behavior; the deps it read before
-	 * throwing ARE retained (they have live consumers).
+	 * CURRENT strong dep set: since S-C that IS the kernel's dep-link list
+	 * (tracked-only by construction, per-last-evaluation) — force one
+	 * kernel read so the record has evaluated at least once, then retain
+	 * the links it holds. The read runs under kernel `untracked()`: entry
+	 * can fire inside an open kernel evaluation frame (a getter epilogue's
+	 * dep sync), and the discovery is not a READ by that frame — a link
+	 * would corrupt its dep list. A getter that throws keeps its
+	 * throw-on-demand behavior; the deps it read before throwing ARE
+	 * retained (the kernel keeps the partial link prefix).
 	 */
 	private obsEnter(id: NodeId): void {
 		const node = this.nodesArr[id]!;
@@ -3282,25 +3515,21 @@ export class CosignalBridge {
 			__lifecycleRetain(node.handle._id);
 			return;
 		}
-		this.newestMemos.delete(id);
-		// Frame mask: entry can fire inside an enclosing evaluation's epilogue
-		// (a parent's dep sync), and the discovery is not a READ by that
-		// parent — its trailing dep capture must not enter the open frame's
-		// fingerprint set.
-		const savedFrame = this.frame;
-		this.frame = undefined;
 		try {
-			this.evaluate(node, NEWEST);
+			untracked(() => __kernelComputedRead(node.handle));
 		} catch {
-			// partial dep set already synced by the evaluate epilogue
-		} finally {
-			this.frame = savedFrame;
+			// partial dep prefix retained below
 		}
+		this.obsSyncDeps(id, this.kernelStrongDepsOf(node));
 	}
 
 	/** The last observed consumer left: release the whole retained closure.
 	 * obsDeps clears BEFORE the child shifts so a degenerate cyclic dep
-	 * record (possible only via throwing getters) cannot re-release. */
+	 * record (possible only via throwing getters) cannot re-release. (The
+	 * node's kernel record keeps its links and cache: HOST_OWNED records
+	 * never feed the D1 lifecycle union, and stripping them would force an
+	 * untracked re-sample at the next read — an eager refresh the ruling
+	 * forbids [2026-07-06].) */
 	private obsExit(id: NodeId): void {
 		const node = this.nodesArr[id]!;
 		if (node.kind === 'atom') {
@@ -3605,8 +3834,9 @@ export class CosignalBridge {
 	private quietDrain(): void {
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
-			const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: w.root });
-			if (!Object.is(now, w.lastRenderedValue)) {
+			const wNode = this.nodeById(w.node);
+			const now = this.evaluate(wNode, { kind: 'committed', root: w.root });
+			if (this.changedValue(wNode, w.lastRenderedValue, now)) {
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
 				if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
@@ -3823,23 +4053,27 @@ export class CosignalBridge {
 	/**
 	 * Newest-policy subscription flush at a logged write (§4.4.1: newest
 	 * subscriptions keep STRONG-structure-only reach — untracked deps
-	 * invalidate values but never notify, matching the reference model's
-	 * strong-edge reachability): reach walks the newest memos' strong dep
-	 * records — the newest world's only structure until S-C gives overlay
-	 * computeds kernel links — re-derived by evaluation when a memo is
-	 * missing (post-quiesce, post-settlement-eviction). Reach lags
-	 * evaluations exactly as HEAD's episode edge log did: a cone re-tracked
-	 * since its last evaluation reaches through the OLD dep set (the
-	 * discriminant edge covers the flip-causing write), and the value gate
-	 * keeps extra reach silent. Fires in id order (the model's map order).
+	 * invalidate no newest value and never notify [ruling 2026-07-06],
+	 * matching the reference model's strong-edge reachability): reach walks
+	 * the KERNEL's own dep links (S-C — kernel links are tracked-only by
+	 * construction and exist from the subscription's mount evaluation on).
+	 * Reach lags evaluations exactly as HEAD's episode edge log did: a cone
+	 * re-tracked since its last evaluation reaches through the OLD dep set
+	 * (the discriminant edge covers the flip-causing write), and the value
+	 * gate keeps extra reach silent. Fires in id order (the model's map
+	 * order).
 	 */
 	private flushNewestSubs(written: NodeId): void {
 		if (this.newestSubCount === 0) return;
+		const writtenAtom = this.nodesArr[written];
+		if (writtenAtom === undefined) return;
+		const targetKid = writtenAtom.handle._id;
 		for (const e of this.subs.values()) {
 			if (e.policy !== 'newest' || !e.live) continue;
+			const subNode = this.nodeById(e.node);
 			this.newestReachSeen.clear();
-			if (!this.newestReaches(e.node, written)) continue;
-			const value = this.evaluate(this.nodeById(e.node), NEWEST);
+			if (!this.newestReaches(subNode.handle._id, targetKid)) continue;
+			const value = this.evaluate(subNode, NEWEST);
 			if (!Object.is(value, e.lastValue)) {
 				e.lastValue = value;
 				e.runs++;
@@ -3848,31 +4082,23 @@ export class CosignalBridge {
 		}
 	}
 
-	private newestReachSeen = new Set<NodeId>();
+	private newestReachSeen = new Set<KernelId>();
 
-	/** Does `target` (a written atom) feed `nid` through TRACKED newest
-	 * deps? Walks the memoized strong dep records depth-first. */
-	private newestReaches(nid: NodeId, target: NodeId): boolean {
-		if (nid === target) return true;
-		if (this.newestReachSeen.has(nid)) return false;
-		this.newestReachSeen.add(nid);
-		const node = this.nodesArr[nid];
-		if (node === undefined || node.kind === 'atom') return false;
-		let m = this.newestMemos.get(nid);
-		if (m === undefined) {
-			this.evaluate(node, NEWEST); // derive current structure (mints no events; a throw propagates as a reached-eval throw would)
-			m = this.newestMemos.get(nid);
-			if (m === undefined) return false;
-		}
-		const atoms = m.atoms;
-		const aStrong = m.atomsStrong;
-		for (let i = 0; i < atoms.length; i++) {
-			if (aStrong[i]! && atoms[i]!.id === target) return true;
-		}
-		const comps = m.comps;
-		const cStrong = m.compsStrong;
-		for (let i = 0; i < comps.length; i++) {
-			if (cStrong[i]! && this.newestReaches(comps[i]!.id, target)) return true;
+	/** Does `targetKid` (a written atom's kernel record) feed `kid` through
+	 * TRACKED newest deps? Depth-first over the kernel's OWN dep links (the
+	 * mirrored field constants — asserted stable by the suite). Untracked
+	 * reads never linked, so weak reach is structurally absent. */
+	private newestReaches(kid: KernelId, targetKid: KernelId): boolean {
+		if (kid === targetKid) return true;
+		if (this.newestReachSeen.has(kid)) return false;
+		this.newestReachSeen.add(kid);
+		const M = __kernelBuffer();
+		let l = M[kid + AF.DEPS]!;
+		while (l !== 0) {
+			const dep = M[l + AF.L_DEP]!;
+			if (dep === targetKid) return true;
+			if ((M[dep + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0 && this.newestReaches(dep, targetKid)) return true;
+			l = M[l + AF.L_NEXT_DEP]!;
 		}
 		return false;
 	}
@@ -4165,9 +4391,9 @@ export class CosignalBridge {
 		}
 	}
 
-	/** A routed read inside an open capture frame (overlay-node form: the
-	 * bindings' BoundComputed reads and referee bodies land here; raw kernel
-	 * atom reads route through the host read hook instead). */
+	/** A routed read inside an open capture frame (bridge-node form: referee
+	 * bodies land here; raw kernel atom AND computed reads route through the
+	 * host read seams instead, which push the same dep-snapshot entries). */
 	captureRead(node: AnyNode): Value {
 		const frame = this.captureFrame;
 		if (frame === undefined) throw new BridgeScheduleError('captureRead requires an open captureRun frame');
@@ -4279,7 +4505,7 @@ export class CosignalBridge {
 					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (battery 16d)
 					throw err;
 				}
-				if (!Object.is(now, d.value)) {
+				if (this.changedValue(d.node, d.value, now)) {
 					changed = true;
 					break;
 				}
@@ -4425,8 +4651,9 @@ export class CosignalBridge {
 		for (const wid of p.rendered) {
 			const w = this.watchers.get(wid);
 			if (w === undefined || !w.live) continue;
-			const committedNow = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: p.root });
-			if (!Object.is(committedNow, w.lastRenderedValue)) this.markRestaled(w);
+			const wNode = this.nodeById(w.node);
+			const committedNow = this.evaluate(wNode, { kind: 'committed', root: p.root });
+			if (this.changedValue(wNode, w.lastRenderedValue, committedNow)) this.markRestaled(w);
 		}
 		// §4.4.2's population dev assert: after a commit of pass P, every
 		// live rendered watcher has a shadow for its node in the root's
@@ -4443,6 +4670,17 @@ export class CosignalBridge {
 			}
 		}
 		if (this.eventsOn) this.log({ type: 'pass-committed', pass: p.id, root: p.root });
+		// ctx.previous cells hold the last COMMITTED value — a pending
+		// render's value must never leak into the hint, because a pending
+		// transition may still be discarded — so update them from every
+		// watcher this commit rendered or mounted (S-C: the cells moved from
+		// the shim onto the bridge computed nodes with the ctx adapter).
+		for (const wid of [...p.rendered, ...p.mounted]) {
+			const w = this.watchers.get(wid);
+			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) continue;
+			const node = this.nodesArr[w.node];
+			if (node !== undefined && node.kind === 'computed') node.prevCell.value = w.lastRenderedValue;
+		}
 		{
 			const ra = this.arenaByRoot.get(p.root);
 			if (ra !== undefined) this.arenaDecay(ra); // NF2 S-A boundary decay
@@ -4829,8 +5067,9 @@ export class CosignalBridge {
 		if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
 		for (let i = 0; i < ws.length; i++) {
 			const w = ws[i]!;
-			const now = this.evaluate(this.nodeById(w.node), world);
-			if (!Object.is(now, w.lastRenderedValue)) {
+			const wNode = this.nodeById(w.node);
+			const now = this.evaluate(wNode, world);
+			if (this.changedValue(wNode, w.lastRenderedValue, now)) {
 				if (this.eventsOn) this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
 				w.lastRenderedValue = now; // the urgent pre-paint re-render
 				w.dedupBits = 0; // dedup bits re-arm at the watcher's render
@@ -4900,7 +5139,7 @@ export class CosignalBridge {
 		});
 		const tr = this.trace; // one disposition record per mount fixup
 		if (fastOut) {
-			if (!Object.is(vFx, w.lastRenderedValue)) {
+			if (this.changedValue(node, w.lastRenderedValue, vFx)) {
 				// Audit: divergence under a passing fast-out must be exactly
 				// covered by the scheduled correctives — otherwise the fast
 				// path just suppressed a real correction. The audit world
@@ -4910,7 +5149,7 @@ export class CosignalBridge {
 					kind: 'mountFix', maskSlots: w.snapshot.includedSlots, pin: w.snapshot.pin,
 					root: w.root, excludeLiveTokens: correctedLive,
 				});
-				if (!Object.is(vCovered, w.lastRenderedValue)) {
+				if (this.changedValue(node, w.lastRenderedValue, vCovered)) {
 					throw new BridgeInvariantViolation(
 						`fast-out unsound: watcher ${w.name} fast-out held but the fixup value ${String(vFx)} differs from the rendered value ${String(w.lastRenderedValue)} and the residue is not covered by the scheduled correctives`,
 					);
@@ -4921,7 +5160,7 @@ export class CosignalBridge {
 			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctedLive.size);
 			return; // zero corrections — value-neutral modulo scheduled correctives
 		}
-		if (!Object.is(vFx, w.lastRenderedValue)) {
+		if (this.changedValue(node, w.lastRenderedValue, vFx)) {
 			if (this.eventsOn) this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: vFx });
 			w.lastRenderedValue = vFx; // urgent pre-paint correction
 			w.dedupBits = 0;
@@ -4934,19 +5173,21 @@ export class CosignalBridge {
 
 	/** Transitive dependency closure feeding a node — §4.4.7's triple: three
 	 * reverse (deps-direction) walks over kernel ∪ the mounting pass's arena
-	 * ∪ the root's committed arena. Overlay computeds hold no kernel links
-	 * until S-C, so the kernel leg's stand-in is the NEWEST MEMOS' strong
-	 * dep records (the ladder's surviving arm is the temporary newest
-	 * representation — §4.8/codex 7; real kernel links replace it at S-C).
-	 * STRONG links only (weak deps never joined the closure — they can't
-	 * deliver, so correctives never target their batches). The pass arena is
-	 * alive here by m2's ordering (fixup runs before reclaimAfterPassEnd);
-	 * dead foreign cones are excluded by the discriminant argument, audited
-	 * at runtime by the fast-out audit below. The corrective population this
-	 * closure feeds arms the per-(watcher, slot) dedup bits, so it must
-	 * cover every cone the delivery walk can later route — pass + committed
-	 * arenas + the newest structure — or a suppression would degrade into an
-	 * over-delivery (the ⊆ bound polices exactly this). */
+	 * ∪ the root's committed arena. The kernel leg walks the KERNEL's own
+	 * dep links (S-C — tracked-only by construction, evaluation-lagged
+	 * exactly like every other recorded structure), mapping visited kernel
+	 * records back to registered bridge nodes; unregistered intermediates
+	 * are traversed but contribute nothing (only bridge-written atoms can
+	 * appear in token touch sets). STRONG links only (weak deps never
+	 * joined the closure — they can't deliver, so correctives never target
+	 * their batches). The pass arena is alive here by m2's ordering (fixup
+	 * runs before reclaimAfterPassEnd); dead foreign cones are excluded by
+	 * the discriminant argument, audited at runtime by the fast-out audit
+	 * below. The corrective population this closure feeds arms the
+	 * per-(watcher, slot) dedup bits, so it must cover every cone the
+	 * delivery walk can later route — pass + committed arenas + the newest
+	 * structure — or a suppression would degrade into an over-delivery
+	 * (the ⊆ bound polices exactly this). */
 	dependencyClosureOf(nodeId: NodeId, pass?: Pass): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
 		const pa = pass?.arena;
@@ -4955,30 +5196,24 @@ export class CosignalBridge {
 			const ca = this.arenaByRoot.get(pass.root);
 			if (ca !== undefined) this.closureOverArena(ca, nodeId, closure);
 		}
-		this.closureOverNewestMemos(nodeId, closure, new Set());
+		const node = this.nodesArr[nodeId];
+		if (node !== undefined) this.closureOverKernel(node.handle._id, closure, new Set());
 		return closure;
 	}
 
-	/** The kernel-leg stand-in of the fixup closure (until S-C): reverse
-	 * walk over the newest memos' strong dep records, evaluation-lagged
-	 * exactly like every other recorded structure. */
-	private closureOverNewestMemos(nid: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
-		if (seen.has(nid)) return;
-		seen.add(nid);
-		const m = this.newestMemos.get(nid);
-		if (m === undefined) return;
-		const atoms = m.atoms;
-		const aStrong = m.atomsStrong;
-		for (let i = 0; i < atoms.length; i++) {
-			if (aStrong[i]!) closure.add(atoms[i]!.id);
-		}
-		const comps = m.comps;
-		const cStrong = m.compsStrong;
-		for (let i = 0; i < comps.length; i++) {
-			if (cStrong[i]!) {
-				closure.add(comps[i]!.id);
-				this.closureOverNewestMemos(comps[i]!.id, closure, seen);
-			}
+	/** The kernel leg of the fixup closure (S-C): reverse walk over the
+	 * kernel's dep links off the raw arena view (mirrored constants). */
+	private closureOverKernel(kid: KernelId, closure: Set<NodeId>, seen: Set<KernelId>): void {
+		if (seen.has(kid)) return;
+		seen.add(kid);
+		const M = __kernelBuffer();
+		let l = M[kid + AF.DEPS]!;
+		while (l !== 0) {
+			const depKid = M[l + AF.L_DEP]!;
+			const dep = this.byKernelId.get(depKid);
+			if (dep !== undefined) closure.add(dep.id);
+			if ((M[depKid + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0) this.closureOverKernel(depKid, closure, seen);
+			l = M[l + AF.L_NEXT_DEP]!;
 		}
 	}
 
@@ -5011,6 +5246,25 @@ export class CosignalBridge {
 		}
 	}
 
+	/** §4.5.3 (S-C): the value-change gate for compare-and-correct sites,
+	 * honoring a custom-equality computed's policy comparator — mountFix
+	 * fold-throughs (and evicted-then-refolded arena slots) mint FRESH
+	 * references for comparator-equal values, which are NOT changes for a
+	 * custom-equality node (the kernel wrapper and the arena slot both keep
+	 * old references under the same policy). Exceptional payloads never
+	 * bridge the gate (sentinels compare by identity — battery 16d).
+	 * Default-equality nodes compare by identity, exactly as before. */
+	private changedValue(node: AnyNode, prev: Value, next: Value): boolean {
+		if (
+			node.kind === 'computed' && node.isEqual !== undefined
+			&& !(prev instanceof SuspendedRead) && !(next instanceof SuspendedRead)
+		) {
+			const eq = node.isEqual;
+			return !this.inCallback(() => eq(prev, next));
+		}
+		return !Object.is(prev, next);
+	}
+
 	private tokenTouches(t: Token, closure: Set<NodeId>): boolean {
 		const atoms = t.atomsTouched;
 		for (let i = 0; i < atoms.length; i++) {
@@ -5034,7 +5288,7 @@ export class CosignalBridge {
 
 	/**
 	 * Quiescence (no live tokens, no live pins, no parked actions): the
-	 * epoch bumps (newest memos die by it), dead episode records drop, and
+	 * epoch bumps, dead episode records drop, and
 	 * the ARENAS PERSIST — their links are current structure, not an
 	 * episode log (§4.1), so the routing coverage committed observers rely
 	 * on survives by persistence (the old K1 bulk-reset + kernel-pull
@@ -5076,8 +5330,8 @@ export class CosignalBridge {
 		}
 		this.lastTokenId = 0;
 		this.lastTokenRef = undefined;
-		// Newest memos die by epoch; drop them eagerly (conservative refusal).
-		this.newestMemos.clear();
+		// (No newest-side reset since S-C: kernel caches persist — nothing
+		// newest-visible changes at quiescence.)
 		// Arena duties (§4.5.8 then §4.5.7): reclamation sweep, then the
 		// read-clock renumber over surviving consumer-populated arenas.
 		this.arenaQuiesceSweep();

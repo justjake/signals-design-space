@@ -17,7 +17,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom, ReducerAtom, SuspendedRead, effect } from 'cosignal';
+import { Atom, ReducerAtom, SuspendedRead, effect, type AtomNode } from 'cosignal';
 import * as CosignalReact from '../src/index.js';
 import { useSignal, useComputed, useSignalEffect, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
@@ -64,7 +64,7 @@ describe('battery (spec §6) at React level', () => {
 		// Divergence window: committed world (and the DOM) hold the old value
 		// while the newest world already folded the pending write.
 		expect(text(container)).toBe('c:10;s:1;');
-		const node = h.bridge.byKernelId.get(a._id)!;
+		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
 		expect(h.bridge.newestValue(node)).toBe(2);
 		gate.settled = true;
 		await act(async () => {
@@ -97,7 +97,7 @@ describe('battery (spec §6) at React level', () => {
 			flushSync(() => b.set(2)); // urgent synchronous commit excludes it
 			mid = text(container);
 			// Always-log: the excluded write already holds a receipt.
-			const node = h.bridge.byKernelId.get(a._id)!;
+			const node = h.bridge.byKernelId.get(a._id) as AtomNode;
 			expect(node.tp.length).toBe(1);
 		});
 		expect(mid).toBe('a:0;b:2;');
@@ -206,7 +206,7 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:5;');
-		const node = h.bridge.byKernelId.get(a._id)!;
+		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
 		// Both writes held receipts (the retained referee event log counts
 		// them; the receipts themselves compacted into base at retirement).
 		expect(h.bridge.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
@@ -369,7 +369,7 @@ describe('battery (spec §6) at React level', () => {
 		function View({ dep }: { dep: number }) {
 			const c = useComputed<number>(() => (a.state as number) + dep, [dep]);
 			React.useEffect(() => {
-				committedNodeIds.push(c._node.id); // the committed render's node
+				committedNodeIds.push(c._id); // the committed render's node (S-C: the kernel record id IS the node identity)
 			});
 			return <span>{useSignal(c)}</span>;
 		}

@@ -27,7 +27,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
-import { Atom } from '../src/index.js';
+import { Atom, Computed, effect } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
@@ -132,5 +132,232 @@ describe('S-C entry gate 2 — N-1 dispose-reuse-read id tenancy (§4.5.3)', () 
 		// And the re-tenanted shadow routes: a committed write reaches the cone.
 		commitWrite(b, a, 6);
 		expect(b.committedValue(c, 'R')).toBe(12);
+	});
+});
+
+describe('S-C — N-1 REAL-REUSE leg (§4.5.3): a disposed computed\'s kernel id, reused by a new tenant, never serves the dead value/fn/comparator', () => {
+	it('dispose → kernel id reuse → reads run the NEW tenant cold; the dead fn and dead comparator never run again', () => {
+		const b = bridge();
+		const a = b.atom('a', 5);
+		let oldEvals = 0;
+		let oldCompares = 0;
+		const cOld = b.computed('cOld', (read) => {
+			oldEvals++;
+			return (read(a) as number) * 2;
+		}, (p, n) => {
+			oldCompares++;
+			return Object.is(p, n);
+		});
+		const w1 = mount(b, 'R', cOld, 'W1');
+		expect(b.committedValue(cOld, 'R')).toBe(10);
+		const oldKid = cOld.handle._id;
+		const oldEvalsAtDispose = oldEvals;
+		const oldComparesAtDispose = oldCompares;
+
+		// Supersede: the watcher re-keys first (the hooks' discipline; dispose
+		// throws on live watchers), then the kernel record frees — its id
+		// joins the free list at the operation boundary inside the call.
+		b.removeWatcher(w1.id);
+		b.disposeComputed(cOld.handle);
+
+		// REAL reuse: the next kernel computed allocation takes the freed id.
+		let newEvals = 0;
+		const cNew = b.computed('cNew', (read) => {
+			newEvals++;
+			return (read(a) as number) + 1000;
+		});
+		expect(cNew.handle._id).toBe(oldKid); // the free-list handed the id to the new tenant
+
+		// Reads under a live committed arena: the NEW tenant folds cold —
+		// never the dead node's cached 10, fn, or comparator.
+		mount(b, 'R', cNew, 'W2');
+		expect(b.committedValue(cNew, 'R')).toBe(1005);
+		expect(newEvals).toBeGreaterThan(0);
+		expect(b.newestValue(cNew)).toBe(1005); // kernel serving under the reused id: the new tenant's fn
+		expect(oldEvals).toBe(oldEvalsAtDispose); // the dead fn never ran again
+		expect(oldCompares).toBe(oldComparesAtDispose); // the dead comparator never ran again
+		expect(b.__arenaLinkMode('R', a, cNew)).toBe('strong'); // re-tenanted links under the new bridge id
+
+		// And the new tenancy routes: a committed write reaches the cone.
+		commitWrite(b, a, 6);
+		expect(b.committedValue(cNew, 'R')).toBe(1006);
+		expect(b.newestValue(cNew)).toBe(1006);
+	});
+});
+
+describe('S-C — §4.5.3 per-world equality record (custom-equality computeds under arenas)', () => {
+	it('comparator-order pin: a deliberately NON-SYMMETRIC comparator runs in HEAD\'s isEqual(prev, next) order at every arena compare site', () => {
+		const b = bridge();
+		const x = b.atom('x', 2);
+		// isEqual(prev, next) = next <= prev: with prev=2, next=1 this is EQUAL
+		// at HEAD (no change); the FLIPPED order would report a change and
+		// regress the world to 1 (§4.5.3, codex checklist 6).
+		const orders: string[] = [];
+		const cMono = b.computed('cMono', (read) => read(x), (p, n) => {
+			orders.push(`eq(${String(p)},${String(n)})`);
+			return (n as number) <= (p as number);
+		});
+		mount(b, 'R', cMono, 'W');
+		expect(b.committedValue(cMono, 'R')).toBe(2);
+		commitWrite(b, x, 1); // next=1 vs prev=2: EQUAL under HEAD order → the world KEEPS 2
+		expect(b.committedValue(cMono, 'R')).toBe(2);
+		expect(orders).toContain('eq(2,1)'); // the arena compare ran (prev, next) — never (next, prev)
+		expect(orders).not.toContain('eq(1,2)');
+		commitWrite(b, x, 5); // next=5 vs prev=2: changed → the world moves
+		expect(b.committedValue(cMono, 'R')).toBe(5);
+		expect(b.newestValue(cMono)).toBe(5); // kernel wrapper agrees (same HEAD order)
+	});
+
+	it('codex 6\'s reference-preservation shape in THREE arenas at once: each arena keeps ITS OWN previous reference on an equal refold — never the kernel\'s', () => {
+		const b = bridge();
+		const x = b.atom('x', 1);
+		const y = b.atom('y', 0); // the refold driver: marks cArr without moving [x]
+		const cArr = b.computed('cArr', (read) => {
+			read(y);
+			return [read(x)];
+		}, (p, n) => (p as number[])[0] === (n as number[])[0]);
+		// Three arenas: committed R1, committed R2, and an open pass on R3.
+		mount(b, 'R1', cArr, 'W1');
+		mount(b, 'R2', cArr, 'W2');
+		const ref1 = b.committedValue(cArr, 'R1');
+		const ref2 = b.committedValue(cArr, 'R2');
+		const p3 = b.passStart('R3', []);
+		const ref3 = b.passValue(cArr, p3);
+		expect(ref1).toEqual([1]);
+		// Distinct evaluations per arena: three distinct references.
+		expect(ref1 === ref2).toBe(false);
+		// Drive a refold that the comparator calls EQUAL ([x] unchanged): every
+		// arena must serve ITS previous reference — identity-stable per world.
+		commitWrite(b, y, 1);
+		expect(b.committedValue(cArr, 'R1')).toBe(ref1);
+		expect(b.committedValue(cArr, 'R2')).toBe(ref2);
+		expect(b.passValue(cArr, p3)).toBe(ref3); // the pin kept y=0; the pass serves its own cached reference
+		b.passEnd(p3.id, 'discard');
+		// A REAL change moves every committed world to a fresh reference.
+		commitWrite(b, x, 9);
+		const next1 = b.committedValue(cArr, 'R1');
+		expect(next1).toEqual([9]);
+		expect(next1 === ref1).toBe(false);
+	});
+
+	it('equality never bridges an exceptional boundary: value→box and box→value are CHANGES even under an always-equal comparator (which still gates value→value)', () => {
+		const b = bridge();
+		const gate = b.atom('gate', 0);
+		// Pathological comparator: EVERYTHING is "equal". If equality could
+		// bridge an exceptional boundary, the box below would never serve (or
+		// never clear); if it gated value→value, the world would freeze at
+		// its first value — both arms pinned here.
+		const cBoom = b.computed('cBoom', (read) => {
+			const g = read(gate) as number;
+			if (g === 1) throw new Error('boom');
+			return 100 + g;
+		}, () => true);
+		b.root('R'); // materialize the committed arena without a watcher
+		expect(b.committedValue(cBoom, 'R')).toBe(100);
+		commitWrite(b, gate, 1); // value → box: a CHANGE — the thrown payload caches and rethrows
+		expect(() => b.committedValue(cBoom, 'R')).toThrow('boom');
+		commitWrite(b, gate, 2); // box → value: a CHANGE — prevValid is false, the comparator never sees the box
+		expect(b.committedValue(cBoom, 'R')).toBe(102);
+		commitWrite(b, gate, 3); // value → value: the comparator gates — the world KEEPS 102
+		expect(b.committedValue(cBoom, 'R')).toBe(102);
+	});
+});
+
+describe('§4.9.1 hang schedule — kernel computeds under worlds via arena frames (ported from research/experiments/world-tagged-links-spike-code/tests/hang.spec.ts; pinned GREEN at S-C)', () => {
+	it('dep-flipping kernel computeds evaluated under two divergent worlds, deliveries and mid-eval kernel propagation interleaved, then the unwatched-dispose cascade: terminates, per-world correct, kernel sound', () => {
+		const b = bridge();
+		// The NF2 graph: c = (flag ? a : bb) + 1 through a middle computed —
+		// REAL kernel Computed records, watched by a kernel effect so the
+		// unwatched/dispose cascades engage (the historical hang site: world
+		// evaluations hosted on kernel records left cross-world link cycles
+		// the dispose walk could not traverse — see the spike's RED half).
+		const flag = new Atom<unknown>(true);
+		const a = new Atom<unknown>(10);
+		const bb = new Atom<unknown>(20);
+		const m = new Computed<number>(() => (flag.state ? a.state : bb.state) as number);
+		const c = new Computed<number>(() => m.state + 1);
+		const seen: number[] = [];
+		const disposeEff = effect(() => {
+			seen.push(c.state);
+		});
+		expect(seen).toEqual([11]); // newest: flag=true → a=10 → 11
+		const nFlag = b.adoptAtom('flag', flag);
+		b.adoptAtom('a', a);
+		b.adoptAtom('bb', bb);
+		const nC = b.adoptComputed('c', c as Computed<unknown>);
+
+		// Two worlds with DIFFERENT flag values (the dep flip): w1 = the pass
+		// world of a live batch writing flag=false; w2 = the committed world
+		// of root R2 (flag=true — the batch is not committed there).
+		const t1 = b.openBatch();
+		b.write(t1.id, nFlag, { kind: 'set', value: false }); // NEWEST sees it eagerly (unlike the spike's world-LOCAL override)
+		expect(seen[seen.length - 1]).toBe(21); // kernel effect heard the eager apply: flag=false → bb → 21
+		const p1 = b.passStart('R1', [t1.id]);
+		b.root('R2'); // materialize the committed arena
+		expect(b.passValue(nC, p1)).toBe(21); // w1: flag=false → bb=20 → 21 (deps diverge per world)
+		expect(b.committedValue(nC, 'R2')).toBe(11); // w2: t1 uncommitted → flag=true → a=10 → 11
+
+		// DELIVERY mid-schedule: a committed write while both worlds hold live
+		// arena links. w2 folds it; newest is on the bb branch (kernel links
+		// exclude a — the write is delivery-silent there); w1's pin excludes it.
+		const t2 = b.openBatch();
+		b.write(t2.id, b.nodeFor(a)!, { kind: 'set', value: 100 });
+		b.retire(t2.id, true);
+		expect(seen).toEqual([11, 21]); // no newest re-run: a is off m's newest dep set (the ruling's tracked-only rule)
+		expect(b.committedValue(nC, 'R2')).toBe(101); // w2: flag=true (no t1) → a=100 → 101
+		expect(b.passValue(nC, p1)).toBe(21); // pin: the paused render never drifts
+
+		// Kernel propagation INSIDE a world evaluation (the spike's mid-walk
+		// interleave): a computed whose getter writes an UNREGISTERED kernel
+		// signal — tolerated writes-in-computeds take the plain kernel path
+		// and propagate while the ARENA evaluation frame is open.
+		const poker = new Atom(0);
+		const pokerSeen: number[] = [];
+		const disposePoker = effect(() => {
+			pokerSeen.push(poker.state as number);
+		});
+		const noisy = new Computed<number>(() => {
+			const v = (flag.state ? a.state : bb.state) as number;
+			poker.set(v); // kernel propagate during the world evaluation
+			return v;
+		});
+		const nNoisy = b.adoptComputed('noisy', noisy as Computed<unknown>);
+		expect(b.passValue(nNoisy, p1)).toBe(20); // w1: flag=false → bb
+		expect(pokerSeen[pokerSeen.length - 1]).toBe(20); // the mid-eval write flushed
+		expect(b.committedValue(nNoisy, 'R2')).toBe(100); // w2: flag=true → a=100
+		expect(pokerSeen[pokerSeen.length - 1]).toBe(100); // …and its mid-eval write flushed too
+		expect(noisy.state).toBe(20); // newest evaluation, kernel path (newest flag=false → bb)
+
+		// Kernel dep flip UNDER live worlds: newest re-track while world links live.
+		const t3 = b.openBatch();
+		b.write(t3.id, nFlag, { kind: 'set', value: false });
+		b.retire(t3.id, true);
+		expect(seen[seen.length - 1]).toBe(21); // newest: m → {flag, bb} (re-tracked at the earlier flip)
+		expect(b.committedValue(nC, 'R2')).toBe(21); // w2 folds the retired flip: flag=false → bb → 21
+		expect(b.passValue(nC, p1)).toBe(21);
+
+		// DISPOSAL: the NF2 hang site — the kernel's unwatched cascade
+		// (disposeAllDepsInReverse) runs while the arenas still hold m/c
+		// shadows and links. Kernel links and arena links are SEPARATE planes
+		// since NF2 — the cascade terminates (this test completing IS the
+		// regression pin) and both planes stay functional.
+		disposeEff();
+		disposePoker();
+		const t4 = b.openBatch();
+		b.write(t4.id, b.nodeFor(a)!, { kind: 'set', value: 7 });
+		b.write(t4.id, nFlag, { kind: 'set', value: true });
+		b.retire(t4.id, true);
+		expect(c.state).toBe(8); // kernel fully functional after dispose (lazy re-eval)
+		expect(b.committedValue(nC, 'R2')).toBe(8); // worlds correct after the cascade
+		expect(b.passValue(nC, p1)).toBe(21); // the pinned pass STILL never drifts
+		b.passEnd(p1.id, 'discard');
+		b.retire(t1.id, false);
+		// Zero-world sync semantics intact after everything.
+		const t5 = b.openBatch();
+		b.write(t5.id, b.nodeFor(bb)!, { kind: 'set', value: 99 });
+		b.write(t5.id, nFlag, { kind: 'set', value: false });
+		b.retire(t5.id, true);
+		expect(c.state).toBe(100);
+		expect(b.newestValue(nC)).toBe(100);
 	});
 });

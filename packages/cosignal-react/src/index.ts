@@ -13,7 +13,6 @@ export {
 	useReducerAtom,
 	useSignalEffect,
 	startSignalTransition,
-	BoundComputed,
 	type ActionScope,
 	type CosignalReactHandle,
 	type SignalSource,
@@ -21,15 +20,17 @@ export {
 export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // Curated re-export of the engine surface an app using these bindings
-// actually consumes: the signal constructors the hooks accept (`useSignal`
-// rejects kernel `Computed` — component-scoped derivations come from
-// `useComputed`), the write/read utilities that are world-safe under React,
-// and the types those signatures mention (`CosignalReactHandle.bridge` is a
+// actually consumes: the signal constructors the hooks accept (S-C: kernel
+// `Computed` IS the supported derived type — `useComputed` returns one, and
+// standalone instances world-route through the core's computed-read seam),
+// the write/read utilities that are world-safe under React, and the types
+// those signatures mention (`CosignalReactHandle.bridge` is a
 // `CosignalBridge`). Bridge internals (`CosignalBridge` the value, `Tape`,
 // `Watcher`, `BridgeEvent`, node/receipt types, …) stay available on the
 // power-user path: import them from 'cosignal'.
 export {
 	Atom,
+	Computed,
 	ReducerAtom,
 	batch,
 	untracked,
@@ -38,6 +39,7 @@ export {
 	SuspendedRead,
 	type AtomOptions,
 	type AtomCtx,
+	type ComputedOptions,
 	type ReducerAtomOptions,
 	type CosignalBridge,
 } from 'cosignal';
