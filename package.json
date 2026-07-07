@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"conformance": "pnpm -C harness conformance",
+		"inlining": "pnpm -C harness inlining",
 		"bench": "pnpm -C harness bench",
 		"memory": "pnpm -C harness memory",
 		"typecheck": "pnpm -C harness typecheck",

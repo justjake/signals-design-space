@@ -4,7 +4,8 @@
 	"version": "0.0.0",
 	"type": "module",
 	"scripts": {
-		"conformance": "vitest run",
+		"conformance": "vitest run conformance",
+		"inlining": "vitest run inlining",
 		"bench": "tsx bench/run.ts",
 		"memory": "tsx memory/run.ts",
 		"typecheck": "tsc -p tsconfig.json"
