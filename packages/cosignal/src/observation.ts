@@ -1,14 +1,14 @@
 /**
  * The observation index — the engine's transitive observation retains.
  * A node is OBSERVED while a live watcher consumes it — directly, or
- * transitively through the strong (tracked) dep edges of observed overlay
+ * transitively through the strong (tracked) dep edges of observed
  * computeds. Observed ATOMS hold exactly one retain on the kernel's
  * observed-lifecycle union (AtomOptions.effect); the kernel's lifecycleShift
  * is a Map-miss no-op for atoms without the option, and these shifts fire
  * only at closure-membership EDGES (never per evaluation), so routing every
  * closure atom through it costs nothing measurable and needs no second
  * has-lifecycle registry here. obsDeps snapshots follow the CURRENT edge set
- * — each fn re-run of an observed computed (overlay newest runs AND arena
+ * — each fn re-run of an observed computed (newest kernel runs AND arena
  * world refolds carry the capture) re-points its retains (dep flips move
  * them; the kernel's microtask flush coalesces same-tick flaps) — and the
  * observation index deliberately survives quiescence: the closure is a
@@ -34,11 +34,11 @@ import type { AnyNode, ComputedNode, Subscription } from './concurrent.js';
 type NodeIndex = number;
 
 export type ObservationDeps = {
-	/** The dense node row by NODE INDEX (the identity guard's referee: a
+	/** The dense node row by NODE INDEX (the identity guard's authority: a
 	 * stale node object whose record re-tenanted must never shift the new
 	 * tenant's count). */
 	nodeAt(ix: NodeIndex): AnyNode | undefined;
-	/** The registered bridge nodes among a computed's CURRENT kernel deps
+	/** The engine nodes among a computed's CURRENT kernel deps
 	 * (tracked-only by construction — obsEnter's discovery source). */
 	kernelStrongDepsOf(node: ComputedNode): AnyNode[];
 };
@@ -91,7 +91,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * A node joined the live-watcher closure. Atoms retain their kernel
 	 * observed lifecycle (the watcher half of the observation union — the
 	 * kernel liveness bit is the other). Computeds must discover their
-	 * CURRENT strong dep set: since S-C that IS the kernel's dep-link list
+	 * CURRENT strong dep set: that IS the kernel's dep-link list
 	 * (tracked-only by construction, per-last-evaluation) — force one
 	 * kernel read so the record has evaluated at least once, then retain
 	 * the links it holds. The read runs under kernel `untracked()`: entry
@@ -119,8 +119,9 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * record (possible only via throwing getters) cannot re-release. (The
 	 * node's kernel record keeps its links and cache: HOST_OWNED records
 	 * never feed the D1 lifecycle union, and stripping them would force an
-	 * untracked re-sample at the next read — an eager refresh the ruling
-	 * forbids [2026-07-06].) */
+	 * untracked re-sample at the next read — an eager refresh the
+	 * untracked-sampling rule forbids: untracked reads are point-in-time
+	 * samples taken only at tracked re-derivations.) */
 	function obsExit(node: AnyNode): void {
 		if (node.kind === 'atom') {
 			__lifecycleRelease(node.id);
@@ -155,15 +156,15 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 
 	/**
 	 * A committed subscription's run just installed a new dep snapshot:
-	 * re-point its observation retains (RCC-OL1 — effect dep snapshots count
+	 * re-point its observation retains (effect dep snapshots count
 	 * toward the observation union exactly like watcher closures: one retain
 	 * per snapshot node through the obsShift observation index; an atom retains its
 	 * kernel lifecycle, an observed computed retains its current strong deps
 	 * transitively). Retain-new before release-old; same-tick flaps coalesce
 	 * in the kernel's microtask flush. (The snapshot's routing coverage
-	 * needs no counts since S-B: the capture's committed evaluations
+	 * needs no counts of its own: the capture's committed evaluations
 	 * populate the root's arena, whose marks the re-checks validate
-	 * through — §4.0's subDepRefs dissolution.)
+	 * through.)
 	 */
 	function syncSubObs(e: Subscription): void {
 		const prev = e.obsDeps;

@@ -108,7 +108,7 @@ export function createDeliver(deps: DeliverDeps): DeliverTable {
 					// already passed at the boundary scan; the adapter owns the
 					// body run (cleanup + fire + re-capture) and any React-phase
 					// deferral. Removal flips `live`, so nothing runs after
-					// teardown (RCC-OL2).
+					// teardown.
 					const r = s.refire;
 					if (r !== undefined) r();
 				}
@@ -123,7 +123,7 @@ export function createDeliver(deps: DeliverDeps): DeliverTable {
 }
 
 /**
- * The walk ORCHESTRATION (E7): the per-write delivery walk, the durable
+ * The walk ORCHESTRATION: the per-write delivery walk, the durable
  * drain, the quiet-fold drain, and the one urgent correction — assigned onto
  * the shared engine core record's late-bound slots (the arena walk halves it
  * calls — `walkArenaStrong`, `collectWatchersAt`,
@@ -144,20 +144,21 @@ export function createDeliverWalks(core: EngineCore): void {
 	const drainWatcherBuf: Watcher[] = [];
 
 	/**
-	 * The value-blind delivery walk (§4.4.3): reachability from the written
+	 * The value-blind delivery walk: reachability from the written
 	 * atom over EVERY live arena's STRONG links — render arenas included; the
-	 * walk visits structure, never values or marks, so the §4.3 pin
-	 * invariant is untouched. The weak bit is tested and weak links are
-	 * never traversed (untracked reads never notify — §4.4.1; the bit test
-	 * is the cost the untracked-fan gate prices). Kernel (K0) subscribers
-	 * are served by the eager kernel apply, not this walk. Value-blind: a
+	 * walk visits structure, never values or marks, so a render's frozen pin
+	 * is untouched. The weak bit is tested and weak links are
+	 * never traversed (untracked reads never notify; the bit test
+	 * is the walk's whole per-link cost for that rule). Kernel (K0)
+	 * subscribers are served by the eager kernel apply, not this walk.
+	 * Value-blind: a
 	 * delivery announces "a write in this batch may affect you", never a
 	 * value — the receiving render folds its own world. Collected watchers
 	 * dedup globally per node (lastWalk) across arenas and deliver in id
 	 * order (the reference model's map order). Deliveries may be FEWER than
-	 * the model's union-conservative set, never more (the ⊆ bound): a cone
-	 * held by no live arena lane-degrades to a drain correction (§4.4.5,
-	 * S-NF2-D1).
+	 * the model's union-conservative set, never more: a cone
+	 * held by no live arena is still corrected — it degrades to the
+	 * committed-truth drain instead of a live delivery.
 	 */
 	function deliveryWalk(from: AtomNode, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
 		const c = core; // one context load; slot/field reads below stay one-load
@@ -212,8 +213,8 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * body so the triple can never drift. Records by cause: drains record
 	 * reconcile-correction; mounts record mount-correction (decoded as
 	 * 'mount-urgent-correction'); quiet folds record nothing here — the fold's
-	 * own quiet-write record is the whole quiet stream, and the oracle's
-	 * mirrored quiet corrections are silent too, so the streams stay
+	 * own quiet-write record is the whole quiet stream, and the reference
+	 * model's mirrored quiet corrections are silent too, so the streams stay
 	 * comparable. Returns true iff a correction fired. */
 	function correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
 		if (!core.changedValue(wNode, w.lastRenderedValue, now)) return false;
@@ -247,10 +248,10 @@ export function createDeliverWalks(core: EngineCore): void {
 
 	/**
 	 * Durable drain at a committed-truth flip (a retirement or per-root
-	 * commit), §4.4.6: the candidate set is the root arena's DIRTY LIST —
+	 * commit): the candidate set is the root arena's DIRTY LIST —
 	 * the fanout sites' marks, whose cones the marks' PENDING propagation
 	 * already covers — expanded over ALL arena links, strong AND weak
-	 * (§4.4.1: drains expand over both; a weak hop's strong dependents
+	 * (drains expand over both; a weak hop's strong dependents
 	 * expand past it too, since the walk keeps going), collecting live
 	 * same-root watchers on visited nodes, unioned with the `restaled` set.
 	 * Reconcile-check each candidate (last rendered value vs
@@ -262,7 +263,7 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * conservatively — extras are value-gated no-ops, exactly as the old
 	 * slot touched lists were. Committed SUBSCRIPTIONS do not drain here:
 	 * their re-check is once per boundary operation
-	 * (revalidateCommittedSubs) — RCC-EF2's amended boundary semantics.
+	 * (revalidateCommittedSubs).
 	 */
 	function drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		const c = core; // one context load; slot/field reads below stay one-load
@@ -271,7 +272,7 @@ export function createDeliverWalks(core: EngineCore): void {
 		const lastWalk = c.lastWalk;
 		const ws = drainWatcherBuf;
 		ws.length = 0;
-		// Candidate collection (§4.4.6): the root arena's dirty list seeds a
+		// Candidate collection: the root arena's dirty list seeds a
 		// walk over ALL arena links — weak included (the walk itself lives in
 		// WorldArena.ts, same-file with the layout enums).
 		const a = c.rootToArena.get(rootId);

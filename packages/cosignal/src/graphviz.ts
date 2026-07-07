@@ -16,6 +16,12 @@
  *  - `traceToDot(events, filter?)` — the causal graph of a decoded trace
  *    (CAUSE edges: write → delivery → correction chains), one node per
  *    event, clustered by nothing (time flows top to bottom).
+ *
+ * Rendered-label glossary:
+ *  - box = atom; ellipse = computed; house = watcher (one subscribed UI
+ *    component); cds = subscription (a committed-world effect record).
+ *  - `log:N` = N recorded writes not yet folded into the atom's base value.
+ *  - solid edge = dependency; dashed = watcher's node; dotted = effect dep.
  */
 
 import type { CosignalEngine } from './concurrent.js';

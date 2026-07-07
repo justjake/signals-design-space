@@ -13,7 +13,7 @@
  * watcher via microtask-debounced unsubscription); the mount fixup — the
  * engine's commit-time reconciliation of a freshly mounted component
  * against updates that were in flight while it mounted — runs inside the
- * bridge at the commit edge, and its corrective re-renders and urgent
+ * engine at the commit edge, and its corrective re-renders and urgent
  * corrections reach React as pre-paint setStates through the shim.
  */
 
@@ -69,7 +69,7 @@ export function requireShim(): Shim {
 }
 
 // ---- signal sources ---------------------------------------------------------------------
-// (S-C: one computed — kernel `Computed` handles ARE the supported derived
+// (Kernel `Computed` handles ARE the supported derived
 // type. `useComputed` returns a real `Computed`; standalone `Computed`
 // instances route to the render's world through the core's computed-read
 // seam and subscribe through `useSignal` exactly like atoms.)
@@ -216,9 +216,9 @@ let nextComputedSerial = 1;
  * A derived value scoped to the component, with useMemo semantics applied to
  * node identity: while `deps` are equal you keep the same node (nothing is
  * created); when `deps` change, a fresh node capturing the new closure is
- * created in work-in-progress hook state — adopted if the render commits,
+ * created in work-in-progress hook state — kept if the render commits,
  * dropped if the render is discarded. Returns a real kernel `Computed`
- * handle (S-C: one computed) whose `.state` reads in the current render's
+ * handle whose `.state` reads in the current render's
  * world through the core's computed-read seam.
  *
  * Recreating instead of swapping the function in place is deliberate: a
@@ -235,13 +235,14 @@ let nextComputedSerial = 1;
  * discarded mount attempts, which throw away hook state) recreate the node
  * and refetch — React's own useMemo/uncached-promise lifecycle.
  *
- * Reclamation (S-C): when a deps change commits, the SUPERSEDED handle's
+ * Reclamation: when a deps change commits, the SUPERSEDED handle's
  * kernel record is disposed after the commit (a passive effect keyed on the
  * handle — by then every subscription hook re-keyed to the replacement), so
- * kernel ids recycle instead of leaking per deps change; the §4.5.3 GEN
- * discipline makes the reuse sound. Discarded render attempts leak their
- * created node exactly as the overlay representation did (never current, so
- * never disposed) — bounded by React's own discard rate.
+ * kernel ids recycle deterministically per deps change; the record's
+ * generation stamp makes the reuse sound. Discarded render attempts drop
+ * their created handle with the discarded hook state; the record recovers
+ * through the garbage-collection reclamation path once the handle is
+ * collected.
  */
 export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[]): Computed<T> {
 	const shim = requireShim();
@@ -249,7 +250,7 @@ export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unkno
 	const handle = React.useMemo(
 		() => {
 			const c = new Computed<T>(fn, { label: `useComputed#${nextComputedSerial++}` });
-			shim.bridge.nodeForComputed(c as Computed<unknown>); // adopt: register + wrap for world evaluation
+			shim.bridge.nodeForComputed(c as Computed<unknown>); // allocate engine content + wrap for world evaluation
 			return c;
 		},
 		// The user's deps ARE the memo key: a changed fn takes effect only with changed deps.

@@ -83,7 +83,7 @@ export class WriteLog {
 	}
 
 	push(kind: WriteKind, slot: BatchSlot, seq: Seq, batch: BatchId, payload: unknown): void {
-		probes.logEntries++; // One Core probe (referee surface)
+		probes.logEntries++; // engine-activity counter (tests/one-core.spec.ts's zero-cost check)
 		this.kinds.push(kind);
 		this.slots.push(slot);
 		this.seqs.push(seq);
@@ -181,7 +181,7 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 			if (n.log.n === n.log.start) {
 				uncompactedAtoms.delete(n);
 				// Reclamation retry trigger — the WriteLog guard row clears at
-				// compaction's tape-empty transition (edge-triggered: filed on
+				// compaction's log-empty transition (edge-triggered: filed on
 				// the transition, so the warm compaction path otherwise pays
 				// only the size-0 bail).
 				if (reclaimSkippedN !== 0) noteReclaimRetry(n.id);
@@ -206,8 +206,8 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 		for (let k = 0; k < cut; k++) {
 			const i = from + k;
 			const next = deps.applyOp(atom, log.kinds[i]!, log.payloads[i], atom.base);
-			// R-2 order: isEqual(current, incoming) — per compacted entry
-			// (compaction re-invokes per entry BY DESIGN).
+			// Equality order: isEqual(current, incoming) — per compacted entry
+			// (compaction re-invokes per entry by design).
 			if (!deps.eqAtom(atom, atom.base, next)) atom.base = next;
 			atom.baseSeq = log.seqs[i]!;
 			if (onCompact !== undefined) onCompact(atom, log.entryAt(i));

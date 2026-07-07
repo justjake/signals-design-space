@@ -1,12 +1,12 @@
 /**
  * SUBSCRIPTIONS — the ONE core `run`-action consumer record (committed
- * observers, the PROMOTED production useSignalEffect mechanism) and its
+ * observers, the production useSignalEffect mechanism) and its
  * lifecycle: registration, the capture frame that snapshots deps under the
- * committed world, removal, the referee replay surface, and the RCC-EF2
+ * committed world, removal, the test-side replay surface, and the
  * boundary revalidation. `deliver`-action consumers (component re-renders)
  * remain `Watcher` structurally and stay with the engine. Core `effect()`s
  * hold no Subscription: they are REAL kernel effects, flushed by the eager
- * kernel apply (their referee seam, `logCoreEffectRun`, stays with the
+ * kernel apply (their trace seam, `logCoreEffectRun`, stays with the
  * engine's trace sites).
  *
  * `createSubscription` is a factory in the kernel's own style: it closes
@@ -24,22 +24,23 @@ import type { World } from './World.js';
 import type { DeliverTable } from './deliver.js';
 
 /**
- * The ONE core `run`-action subscription record (effects unification by
- * promotion, plans/2026-07-06): the PROMOTED production `useSignalEffect`
- * mechanism (previously the adapter's EffectRec). A subscription is a
+ * The ONE core `run`-action subscription record: the production
+ * `useSignalEffect` mechanism, shared with the test suites (one record type,
+ * one firing machinery). A subscription is a
  * registration saying WHO is notified and IN WHICH WORLD its reads resolve;
  * `deliver`-action consumers (component re-renders) remain `Watcher`
- * structurally — their state is untouched, the unification is of the firing
- * machinery. `deps` is the (node, value) snapshot `captureRun` recorded
+ * structurally — only the firing machinery is shared. `deps` is the
+ * (node, value) snapshot `captureRun` recorded
  * under the committed world of the subscription's root; re-checks are
- * value-gated over it and fire at RCC-EF2's amended BOUNDARIES (per-root
+ * value-gated over it and fire at the boundary operations (per-root
  * commit, retirement, settlement, quiet fold; one re-check per boundary
  * operation, at the boundary value, never while the subscription's own root
- * has an open render-pass frame — deferred flips flush at that frame's
+ * has an open render frame — deferred flips flush at that frame's
  * close). `refire` (adapter-registered) rides the operation-boundary
- * notification queue; referee-configured subscriptions (tests/helpers.ts's
+ * notification queue; test-configured subscriptions (tests/helpers.ts's
  * mountEngineReactEffect/-Pick) store a `body` and re-run it inline through
- * the SAME capture frame, so lockstep referees the real mechanism.
+ * the SAME capture frame, so the model-comparison suites exercise the real
+ * mechanism.
  *
  * Core `effect()`s hold no Subscription: they are REAL kernel effects,
  * flushed by the eager kernel apply (see logCoreEffectRun).
@@ -52,16 +53,16 @@ export type Subscription = {
 	/** Dep snapshot: the routed reads of the last run, in read order. */
 	deps: { node: AnyNode; value: Value }[];
 	/** Adapter-owned refire (cleanup + body scheduling), queued at the
-	 * operation boundary; undefined for referee-configured subscriptions. */
+	 * operation boundary; undefined for test-configured subscriptions. */
 	refire: (() => void) | undefined;
-	/** Referee-configured body (re-run inline through the capture frame). */
+	/** Test-configured body (re-run inline through the capture frame). */
 	body: (() => void) | undefined;
 	/** Last captured value (the last dep read). */
 	lastValue: Value;
 	runs: number;
 	cleanups: number;
 	live: boolean;
-	/** RCC-OL1: snapshot nodes currently holding observation retains
+	/** Snapshot nodes currently holding observation retains
 	 * (re-pointed per run exactly like watcher obsDeps; see obsShift).
 	 * Node OBJECTS, not ids: a retained node's record can free and re-tenant
 	 * while the stale reference lingers, and obsShift's identity guard is
@@ -71,8 +72,7 @@ export type Subscription = {
 
 /** The core capture frame `captureRun` opens: while set (and no evaluation
  * world is on stack) routed reads resolve committed-for-root and append to
- * the dep snapshot. Replaces the adapter's effectCapture + readObserver
- * seam + the world provider's committed arm (plan §2.2.2). The FIELD lives
+ * the dep snapshot. The FIELD lives
  * on the shared engine core record (the read-routing resolution consults it
  * per routed read); this module is its one writer, through
  * `deps.setCaptureFrame`. */
@@ -84,7 +84,7 @@ export type SubscriptionDeps = {
 	/** World evaluation (World.ts — the core's late-bound slot, passed as the
 	 * real closure: the World factory is composed first). */
 	evaluate(node: AnyNode, world: World): Value;
-	/** §4.5.3 value-change gate honoring custom-equality computeds (resident). */
+	/** The value-change gate, honoring custom-equality computeds (resident). */
 	changedValue(node: AnyNode, prev: Value, next: Value): boolean;
 	/** Root record lookup-or-create (resident registry). */
 	root(id: RootId): RootState;
@@ -133,7 +133,7 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 	 * Register a committed observer (the production `useSignalEffect`
 	 * surface). Registration is illegal inside an open evaluation frame —
 	 * the record is committed-consumer state; it must never exist for a
-	 * discarded render attempt (contract §2 L3; the render-stack half of the
+	 * discarded render attempt (the render-stack half of the
 	 * guard is adapter-enforced, since "on a render call stack" is a host
 	 * predicate). The caller then runs `captureRun` from the host's effect
 	 * phase to take the first dep snapshot.
@@ -153,23 +153,23 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 		return sub;
 	}
 
-	// (The referee convenience constructors mountReactEffect /
+	// (The test-side convenience constructors mountReactEffect /
 	// mountReactEffectPick — 4-line compositions of mountCommittedObserver +
-	// a `body` + captureRun — live test-side now: tests/helpers.ts. The
+	// a `body` + captureRun — live in tests/helpers.ts. The
 	// `body` mechanism itself stays here: it is the inline-run + event-creation
-	// path the lockstep referee compares.)
+	// path the model-comparison suites drive.)
 
 	/**
 	 * Runs a subscription body under the core capture frame: the effective
 	 * world becomes committed-for-root, every routed read (raw atom reads
-	 * through the host read hook, bound/overlay computed reads through
+	 * through the routed-read resolution, engine computed reads through
 	 * `captureRead`) appends to the dep snapshot, and reads INSIDE a
 	 * computed's own evaluation stay the computed's (the evaluation world on
-	 * stack outranks the frame — the promoted suppression rule). A mid-body
+	 * stack outranks the frame). A mid-body
 	 * throw installs the partial snapshot: the deps read before the throw are
 	 * real dependencies. After the frame closes, the snapshot's observation
-	 * retains re-point (RCC-OL1: effect deps count toward the union exactly
-	 * like watcher closures — the obsShift observation index).
+	 * retains re-point (effect deps count toward the observation union
+	 * exactly like watcher closures — the obsShift observation index).
 	 */
 	function captureRun(id: EffectId, body: () => void): void {
 		const sub = idToSubscription.get(id);
@@ -190,9 +190,9 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 		}
 	}
 
-	/** A routed read inside an open capture frame (bridge-node form: referee
+	/** A routed read inside an open capture frame (node form: test-configured
 	 * bodies land here; raw kernel atom AND computed reads route through the
-	 * host read seams instead, which push the same dep-snapshot entries). */
+	 * routed-read seams instead, which push the same dep-snapshot entries). */
 	function captureRead(node: AnyNode): Value {
 		const frame = deps.captureFrame();
 		if (frame === undefined) throw new ScheduleError('captureRead requires an open captureRun frame');
@@ -203,10 +203,10 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 
 	/**
 	 * Remove a subscription (unmount / teardown). Cleanup invocation is the
-	 * REGISTRAR's job (the adapter runs the user cleanup; referee
+	 * REGISTRAR's job (the adapter runs the user cleanup; test
 	 * configurations count it here) — guaranteed at unmount, while a make-up
-	 * fire is not (RCC-EF2 amended; RCC-OL2 forbids anything after teardown:
-	 * `live` flips so queued refires no-op).
+	 * fire is not. Nothing may run after teardown:
+	 * `live` flips so queued refires no-op.
 	 */
 	function removeSubscription(id: EffectId): void {
 		const sub = idToSubscription.get(id);
@@ -225,7 +225,7 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 		}
 	}
 
-	/** Referee surface — StrictMode-style replay: cleanup + unconditional
+	/** Test surface — StrictMode-style replay: cleanup + unconditional
 	 * re-run + recapture. Illegal while the subscription's root has an open
 	 * render frame (React double-invokes effects post-commit, never mid-render). */
 	function replayReactEffect(id: EffectId): void {
@@ -238,7 +238,8 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 		deps.notify.flushNotify();
 	}
 
-	/** The referee re-fire: cleanup + body re-run through the REAL capture
+	/** The inline re-fire (test-configured `body` subscriptions): cleanup +
+	 * body re-run through the REAL capture
 	 * frame + records (adapter-registered subscriptions instead queue their
 	 * refire to the operation boundary — the adapter owns the body run). */
 	function runCommittedSub(sub: Subscription): void {
@@ -252,22 +253,23 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 		if (sub.body !== undefined) captureRun(sub.id, sub.body);
 		sub.runs++;
 		// The dep-values array is the ONE per-record payload a site allocates,
-		// and only under the guard: the lockstep referee compares it entry by
-		// entry, so the record must carry the real snapshot.
+		// and only under the guard: the model-comparison suites compare it
+		// entry by entry, so the record must carry the real snapshot.
 		if (tr !== undefined) tr.reactEffectRun(sub.name, sub.root, sub.lastValue, sub.deps.map((d) => d.value));
 	}
 
 	/**
-	 * The RCC-EF2 boundary re-check (amended, 2026-07-06): once per boundary
+	 * The boundary re-check: once per boundary
 	 * OPERATION — per-root commit, retirement, settlement, quiet fold —
 	 * value-gated over each subscription's dep snapshot, at the boundary
 	 * value (multiple member writes coalesce), and NEVER while the
-	 * subscription's own root has an open render-pass frame (the deferred
+	 * subscription's own root has an open render frame (the deferred
 	 * flip flushes at that frame's close — commit or discard). A retirement
 	 * re-checks every root (a write-free retirement still flushes pending
 	 * member-write flips); a plain commit re-checks its own root. Runs at the
 	 * END of the boundary operation, after every committed-side mutation of
-	 * the boundary has landed (ordering joint, plan amendment 6).
+	 * the boundary has landed (the same mutate-then-notify ordering every
+	 * boundary shares).
 	 */
 	function revalidateCommittedSubs(rootFilter: RootId | undefined): void {
 		if (deps.committedSubCount() === 0) return;
@@ -283,7 +285,7 @@ export function createSubscription(deps: SubscriptionDeps): SubscriptionTable {
 				try {
 					now = deps.evaluate(d.node, world);
 				} catch (err) {
-					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (battery 16d)
+					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (pinned in tests/concurrent-battery.spec.ts)
 					throw err;
 				}
 				if (deps.changedValue(d.node, d.value, now)) {

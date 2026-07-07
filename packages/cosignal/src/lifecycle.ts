@@ -2,11 +2,12 @@
  * The OBSERVED LIFECYCLE (AtomOptions.effect): the "first subscriber
  * attached / last one detached" callback an atom can carry, counted over
  * the UNION of consumer kinds — kernel subscribers (live computed chains,
- * core effect()s: one ref per non-host kernel link to the atom, fed by the
- * kernel's linkInsert/unlink through `lifecycleWatched`/`lifecycleUnwatched`)
- * and bridge watchers (subscribed React components: one ref per live
- * watcher, fed by the concurrent engine's observation index through
- * `__lifecycleRetain`/`__lifecycleRelease`). The effect runs on the union's
+ * core effect()s: one ref per non-engine-owned kernel link to the atom, fed
+ * by the kernel's linkInsert/unlink through
+ * `lifecycleWatched`/`lifecycleUnwatched`) and watchers (subscribed UI
+ * components: one ref per live watcher, fed by the concurrent engine's
+ * observation index through `__lifecycleRetain`/`__lifecycleRelease`). The
+ * effect runs on the union's
  * 0→1 transition and the cleanup on its 1→0; both run through a microtask
  * queue so observe/unobserve flaps within one tick coalesce to nothing
  * REGARDLESS of which consumer kind produced them (StrictMode double-mount
@@ -14,8 +15,9 @@
  * the effect option never enter the state map, and the kernel hot paths
  * stay gated on the record's LIFECYCLE field — the plain path pays nothing.
  *
- * ID-KEYED AND HANDLE-FREE (reclamation plan §2 — built here so the
- * reclamation stage lands on it):
+ * ID-KEYED AND HANDLE-FREE (so a record whose public handle was
+ * garbage-collected can still be reclaimed — see graph.ts's reclamation
+ * section):
  *  - THE DORMANT OWNER: the user's callback is stored in the atom's own
  *    record `fns` COLUMN SLOT at construction (index.ts — atoms never use
  *    that slot; it is engine memory addressed by id, cleared by the
@@ -30,8 +32,8 @@
  *    of handle reachability.
  *  - DORMANCY: when the cleanup has run and no shift is pending, the
  *    active entry DELETES — releasing the context and any pending cleanup.
- *    (That deletion site is reclamation's retry trigger for lifecycle
- *    atoms when stage S5R lands.)
+ *    (That deletion site is also reclamation's retry trigger for lifecycle
+ *    atoms — see maybeDropDormant.)
  *  - The ACTIVE CONTEXT routes state/set/update BY ID through the engine
  *    write path (index.ts `__lifecycleWrite`) — the engine never stores a
  *    handle reference of its own; the callback pins only what the user's
@@ -48,7 +50,7 @@ export type LifecycleState = {
 	effect: (ctx: AtomCtx<unknown>) => void | (() => void);
 	ctx: AtomCtx<unknown>;
 	cleanup: (() => void) | undefined;
-	/** Union refcount: kernel liveness bit (0/1) + one per live bridge watcher. */
+	/** Union refcount: kernel liveness bit (0/1) + one per live watcher. */
 	refs: number;
 	/** Desired state as of the last union transition (refs > 0). */
 	wantMounted: boolean;
@@ -199,12 +201,12 @@ export function lifecycleUnwatched(id: NodeId): void {
 }
 
 /**
- * Bridge watcher retain/release — the second consumer kind feeding the
+ * Watcher retain/release — the second consumer kind feeding the
  * observation union (the first is the kernel liveness bit). Called by the
  * engine's observation index when a watcher over an engine atom's node
  * flips live; a no-op for atoms carrying no observed-lifecycle effect.
  * Direct callbacks only — observation transitions are NOT TraceEvents and
- * never enter the engine's event/lockstep stream. @internal
+ * never enter the engine's trace stream. @internal
  */
 export function __lifecycleRetain(id: NodeId): void {
 	lifecycleShift(id, 1);

@@ -11,7 +11,7 @@
  * Layout discipline: ArenaField/ArenaLinkField/ArenaFlag/ArenaGeom/ArenaWalk
  * are SAME-FILE const enums — every hot arena walk lives in this module so
  * the members inline as literals under every esbuild-based toolchain. The
- * test referee reads the layout through `arenaCheckerLayout()` (data
+ * test-side checker reads the layout through `arenaCheckerLayout()` (data
  * passing), never through exported enums.
  *
  * Two layers, one module:
@@ -41,7 +41,7 @@ type Generation = number;
 type WalkGen = number;
 
 /** A node record's tenancy generation, read live from kernel memory. The
- * buffer is re-fetched per read: kernel growth rebuilds swap it, and bridge
+ * buffer is re-fetched per read: kernel growth rebuilds swap it, and engine
  * operations span growth boundaries. */
 export function kernelGenOf(id: NodeId): Generation {
 	return E.buffer()[id + NodeField.GEN]!;
@@ -52,28 +52,24 @@ export function kernelNodeIndexOf(id: NodeId): NodeIndex {
 	return E.buffer()[id + NodeField.NODE_INDEX]!;
 }
 
-// ---- the arena layer (NF2, plans/2026-07-06 §4) -----------------------------------
-// S-B (routing-authority transfer): the arenas are the value, invalidation,
+// ---- the arena layer --------------------------------------------------------------
+// The arenas are the value, invalidation,
 // AND routing layer for render and committed worlds — shadow records +
 // strong/weak links recorded by the arena fn-readers, folds into value
 // columns, fanout marks at the four committed-truth flip sites, sentinel
 // boxes + settlement, consumer-refcount reclamation at quiesce, write-time
 // delivery over strong links, drain candidates off the dirty lists, and the
-// mount-fixup closure over reverse (deps) links. The K1 episode edge log,
-// its touched-word machinery, and the separate weak-edge table were DELETED
-// at S-B; the newest memo table (the ladder's last arm) died at S-C, when
-// every bridge computed re-keyed onto a kernel `Computed` record — the
+// mount-fixup closure over reverse (deps) links. Newest is NOT arena-served:
+// every engine computed rides a kernel `Computed` record — the
 // kernel serves newest, and the kernel's own dep links carry the newest
 // strong walks (subscription reach, the fixup closure's kernel leg). When
 // the test harness arms the divergence checker (tests/arena-checker.ts, fed
 // through `__checkerInternals`), every
 // public operation's epilogue serves each live arena's shadows FROM THE
 // ARENA (its own transliterated walks) and compares against FOLD-TRUTH — a
-// naive cache-free re-fold — ANY divergence throws. Layouts and walks are
-// adapted from the spike prototype
-// (research/experiments/world-tagged-links-spike-code/). ArenaField/ArenaLinkField/
+// naive cache-free re-fold — ANY divergence throws. ArenaField/ArenaLinkField/
 // ArenaFlag below are
-// the world arenas' OWN layout — bridge-owned, same-file so the hot arena
+// the world arenas' OWN layout — engine-owned, same-file so the hot arena
 // walks (the arenaPropagate/arenaCheckDirty family) inline the members as literals
 // under every toolchain. The shared field/bit names deliberately keep the
 // kernel's numbering (the walks are transliterations of the kernel's
@@ -83,7 +79,7 @@ export function kernelNodeIndexOf(id: NodeId): NodeIndex {
 // kernelStrongDepsOf and closureOverKernel), and offsets 5-7 here mean
 // shadow-specific things the kernel's fields don't.
 
-/** World-arena node-record fields (bridge-owned layout — NOT the kernel's
+/** World-arena node-record fields (engine-owned layout — NOT the kernel's
  * NodeField/LinkField, whose offsets 5-7 mean different things; stride 8;
  * node-shadow and link records share the pool). */
 const enum ArenaField {
@@ -94,7 +90,7 @@ const enum ArenaField {
 	SUBS_TAIL = 4,
 	NODE = 5, // the nodeIndex this shadows (dense column key; identity is the kernel record id)
 	NODE_GEN = 6, // id-tenancy stamp: the node's KERNEL record GEN observed at recording
-	MARK = 7, // fanout read-clock dedup stamp (§4.3)
+	MARK = 7, // fanout read-clock dedup stamp
 }
 
 /** World-arena link-record fields (link records share ArenaField's pool
@@ -107,7 +103,7 @@ const enum ArenaLinkField {
 	NEXT_SUB = 4,
 	PREV_DEP = 5,
 	NEXT_DEP = 6,
-	MODE = 7, // ArenaLinkMode bits — §4.4.1
+	MODE = 7, // ArenaLinkMode bits (strong/weak — see the weak-link rules below)
 	/** The free list threads through the VERSION field (FREE_NEXT aliases it):
 	 * kernel row-2 discipline — a freed link must keep every field a walk
 	 * still reads intact. arenaCheckDirty reads NEXT_DEP (and arenaShallowPropagate
@@ -121,10 +117,10 @@ const enum ArenaLinkField {
 
 /** MODE field bits. */
 const enum ArenaLinkMode {
-	WEAK = 1, // bit 0: 1 = weak (untracked-read) link — §4.4.1
+	WEAK = 1, // bit 0: 1 = weak (untracked-read) link — never delivers
 }
 
-/** Shadow flag bits (bridge-owned; the shared names keep the kernel
+/** Shadow flag bits (engine-owned; the shared names keep the kernel
  * NodeFlag numbering for side-by-side reading — see header note). */
 const enum ArenaFlag {
 	MUTABLE = 1,
@@ -142,7 +138,7 @@ const enum ArenaFlag {
 	BOX_SUSPENDED = 4096,
 	/** Refines HAS_BOX: the payload was THROWN by the fn (render-path
 	 * suspension or plain error) — serves rethrow the cached payload,
-	 * boxedRead-style (§4.5.3; arenas serve real reads at S-B). Clear means
+	 * boxedRead-style. Clear means
 	 * a RETURNED sentinel (background suspensions fold to the sentinel
 	 * VALUE), which serves as a value. Arena-local bit with no
 	 * kernel NodeFlag counterpart (the kernel encodes the split differently). */
@@ -157,7 +153,7 @@ const enum ArenaGeom {
 	/** record id >> ID_TO_COLUMN_SHIFT = value/susp column index */
 	ID_TO_COLUMN_SHIFT = 3,
 	/**
-	 * Int32 stamp ceiling (S-D pooling hardening): `readClock` and `cycle` are
+	 * Int32 stamp ceiling: `readClock` and `cycle` are
 	 * JS numbers, but their stamps store into Int32Array fields (`ArenaField.MARK`,
 	 * `ArenaLinkField.VERSION`) which truncate past 2^31-1 — a wrapped store could collide
 	 * with a live stamp and dedup FALSE-POSITIVE (a skipped propagation or a
@@ -194,22 +190,22 @@ export class WorldArena {
 	claimGen = 0;
 	memory: Int32Array;
 	vals: Value[] = [];
-	/** Per-record suspended-list slot + 1 (0 = not suspended) — §4.5.4 step-0
-	 * compaction: the field IS the set bit and stores the dense index. */
+	/** Per-record suspended-list slot + 1 (0 = not suspended) — the field IS
+	 * the set bit and stores the dense index (swap-remove compaction). */
 	suspIdx: number[] = [];
-	/** Per-record walk-generation stamps (S-B routing walks: delivery reach,
+	/** Per-record walk-generation stamps (the routing walks: delivery reach,
 	 * drain candidate collection, fixup closure) — termination + O(V+E)
-	 * without allocation, per §4.4.3. Compared against the bridge's global
+	 * without allocation. Compared against the engine's global
 	 * walk generation; scrubbed at release like the other side columns. */
 	walk: number[] = [];
-	/** THE SEGREGATED WEAK SUBS LIST (§4.4.1's recorded fallback, DECIDED BY
-	 * THE UNTRACKED-FAN GATE at S-B: the combined-list walk measured 4.9× the
-	 * head-bridge anchor on the K=100 × R=4 write-storm shape — every write
-	 * visited-and-skipped 400 weak links). Weak-flagged links live on a
+	/** THE SEGREGATED WEAK SUBS LIST. Segregation is priced, not cosmetic:
+	 * a combined-list walk measured 4.9× the write cost on a write-storm
+	 * shape with hundreds of weak links per node — every write
+	 * visited-and-skipped them all. Weak-flagged links live on a
 	 * per-shadow SECOND subs list (head + tail side columns, record ids;
 	 * same link-record layout): the delivery walk traverses the STRONG list
 	 * (ArenaField.SUBS) only and never sees a weak link; mark propagation and drain
-	 * candidate collection walk both. §4.4.1's mode transitions (first-
+	 * candidate collection walk both. The mode transitions (first-
 	 * occurrence reset, strong-dominates) MOVE a link between the lists. */
 	weakSubs: number[] = [];
 	weakSubsTail: number[] = [];
@@ -231,7 +227,7 @@ export class WorldArena {
 	dirty: number[] = [];
 	/** Suspended-shadow list (record ids; dense — swap-remove compaction). */
 	suspended: number[] = [];
-	/** Fanout dedup clock: bumped on every arena consumption (§4.3). */
+	/** Fanout dedup clock: bumped on every arena consumption. */
 	readClock = 0;
 	/** Per-arena evaluation cycle (link VERSION stamps). */
 	cycle = 0;
@@ -244,7 +240,7 @@ export class WorldArena {
 	}
 }
 
-/** Reclamation guard probe (the §4 suspended-list row, engine hook side):
+/** Reclamation guard probe (the suspended-list guard row, engine hook side):
  * whether this arena's suspended list holds the node's shadow. Same-file
  * with the layout enums; cold — one probe per arena per finalizer
  * fire/retry. */
@@ -254,7 +250,7 @@ export function arenaHoldsSuspended(a: WorldArena, ix: number): boolean {
 }
 
 /** Renumber the read clock: MARK → 0 on every live shadow record, clock
- * restarts at 0 — the exact quiesce-duty state (§4.5.7), where "marks 0 /
+ * restarts at 0 — the exact quiesce-duty state, where "marks 0 /
  * clock 0" is proven sound: a dedup hit in that state claims an
  * already-marked cone whose PENDING flags persist, and any intervening
  * consumption bumps the clock away from 0. Link records are skipped by the
@@ -299,7 +295,7 @@ function arenaGrow(a: WorldArena, need: number): void {
 	if (len !== a.memory.length) {
 		const bigger = new Int32Array(len);
 		bigger.set(a.memory);
-		a.memory = bigger; // growth-mid-op: every allocating call site re-loads a.memory (§4.5.9)
+		a.memory = bigger; // growth-mid-op: every allocating call site re-loads a.memory
 	}
 }
 
@@ -319,7 +315,7 @@ function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: numb
 		a.next = id + ArenaGeom.STRIDE;
 	}
 	const memory = a.memory;
-	// Fresh-record invariant (B1 cold-render shave): memory[a.next..] is ALL ZERO —
+	// Fresh-record invariant (a priced cold-render saving): memory[a.next..] is ALL ZERO —
 	// a fresh Int32Array is zeroed, arenaGrow's replacement buffer is zeroed past
 	// the copied prefix, and releaseArena scrubs the dead tenancy's whole
 	// written prefix [0, next) before the buffer pools. So the list heads
@@ -399,7 +395,7 @@ function arenaSubsAppend(a: WorldArena, id: number, weak: boolean): void {
 }
 
 /** Set a live link's mode; a change MOVES it between the dep's two subs
- * lists (§4.4.1's transitions under the segregated-list fallback). */
+ * lists (the mode transitions under the segregated-list scheme). */
 function arenaSetLinkWeak(a: WorldArena, id: number, weak: boolean): void {
 	if (((a.memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0) === weak) return;
 	arenaSubsDetach(a, id);
@@ -412,7 +408,7 @@ function arenaSetLinkWeak(a: WorldArena, id: number, weak: boolean): void {
  * the kernel's push-pull algorithms over the arena layout. A semantic
  * change on either side must be re-derived — not copied — on the other.
  *
- * Link maintenance (transliterated) PLUS §4.4.1's mode discipline, which
+ * Link maintenance (transliterated) PLUS the mode discipline, which
  * the transliteration source lacked and may not be transplanted bare:
  * the FIRST occurrence of a dep in an evaluation SETS the link's mode from
  * that occurrence's read kind (fresh and REUSED links alike — the in-place
@@ -543,8 +539,8 @@ function arenaWalkCycle(site: string, cur: number): never {
 }
 
 /** Propagate PENDING over strong AND weak links
- * (§4.4.1: weak links participate in mark propagation and drains — only the
- * write-time delivery walk skips them). Under the segregated-list fallback
+ * (weak links participate in mark propagation and drains — only the
+ * write-time delivery walk skips them). Under the segregated-list scheme
  * each descended sub contributes TWO chains: the strong list is walked
  * first and the weak head is pushed as a pending continuation (the same
  * stack mechanism that holds sibling continuations). */
@@ -638,9 +634,8 @@ function arenaShallowPropagate(a: WorldArena, startLink: number): void {
 		if ((flags & (ArenaFlag.PENDING | ArenaFlag.DIRTY)) === ArenaFlag.PENDING) {
 			memory[sub + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY;
 			// Dirty-LIST append on the DIRTY 0→1 edge (the a.dirty contract:
-			// DIRTY ⇒ listed — decay and drain seeding both stand on it). At
-			// S-A this site's upgrades were always consumed within the same
-			// checker pass; S-B serves arenas mid-operation, so an upgraded
+			// DIRTY ⇒ listed — decay and drain seeding both stand on it).
+			// Arenas serve mid-operation, so an upgraded
 			// shadow can reach a boundary unconsumed and MUST be listed.
 			a.dirty.push(sub);
 		}
@@ -648,7 +643,7 @@ function arenaShallowPropagate(a: WorldArena, startLink: number): void {
 }
 
 /** Shallow-propagate over BOTH of a shadow's subs lists (weak dependents
- * take the PENDING→DIRTY upgrade too — validation coverage, §4.4.1). */
+ * take the PENDING→DIRTY upgrade too — drain validation coverage). */
 function arenaShallowBoth(a: WorldArena, sh: number): void {
 	const subs = a.memory[sh + ArenaField.SUBS]!;
 	if (subs !== 0) arenaShallowPropagate(a, subs);
@@ -669,7 +664,7 @@ function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolea
 }
 
 /**
- * The serve-override slot's non-arena occupant (W3): while `serveOverride`
+ * The serve-override slot's non-arena occupant: while `serveOverride`
  * holds this marker, routed atom reads fold plain from their write logs in the
  * frame's world — no arena, no kernel shortcut — the armed divergence
  * checker's reference discipline (tests/arena-checker.ts compares arena
@@ -680,7 +675,7 @@ function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolea
 export const FOLD_TRUTH = Symbol('cosignal.foldTruth');
 
 /** The arena record layout as plain numbers, restricted to the fields the
- * test referee's structural validator reads (`ArenaCheckerInternals.layout`
+ * test-side structural validator reads (`ArenaCheckerInternals.layout`
  * — concurrent.ts documents the data-passing decision). Built HERE, in the
  * enums' own file, so the view is in sync by construction; a fresh object
  * per call, exactly as the in-class construction allocated. */
@@ -718,14 +713,14 @@ export function createWorldArena(core: EngineCore): void {
 	const obsSyncDeps = core.obsSyncDeps;
 	const roots = core.roots;
 	const rootToOpenRender = core.rootToOpenRender;
-	/** Committed arenas, by root (consumer-populated life — §4.1/§4.5.8). */
+	/** Committed arenas, by root (consumer-populated life). */
 	const rootToArena = core.rootToArena;
 	/** Pooled released arena shells (buffers reused; claimGen bumped per tenancy). */
 	const arenaPool = core.arenaPool;
-	/** Initial arena size in ints (BridgeOptions knob; tests shrink it to force mid-op growth — §4.5.9). */
+	/** Initial arena size in ints (EngineResetOptions knob; tests shrink it to force mid-op growth). */
 	const arenaInitInts: ArenaInitInts = core.arenaInitInts;
 
-	/** Open arena evaluation frame (piggybacked on the overlay evaluation OR
+	/** Open arena evaluation frame (piggybacked on the world evaluation OR
 	 * an arena-only refold): links record into arenaFrame at arenaFrameCycle.
 	 * Flattened to scalars — one object per evaluation showed up in the
 	 * cold-render gate. undefined arena ⇔ no frame. */
@@ -753,14 +748,14 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Release an arena: buffer to the pool, claim generation bumped, columns
-	 * dropped (payload release), dirty + suspended lists discarded (§4.5.8 —
-	 * safe by the evict-don't-serve argument; nobody observes those cones). */
+	 * dropped (payload release), dirty + suspended lists discarded (safe by
+	 * the evict-don't-serve argument; nobody observes those cones). */
 	function releaseArena(a: WorldArena): void {
 		for (let i = 0; i < a.suspended.length; i++) core.suspendedCount--;
 		a.alive = false;
 		a.claimGen++;
-		// Keep the side columns' CAPACITY across pool tenancies (B1 cold-render
-		// shave): truncating to 0 forced claimArena + arenaAllocShadow to re-push
+		// Keep the side columns' CAPACITY across pool tenancies (a priced
+		// cold-render saving): truncating to 0 forced claimArena + arenaAllocShadow to re-push
 		// every element on every claim (~2k pushes per cold render). fill()
 		// scrubs the residue the truncation used to drop — value refs are
 		// released (no pooled-arena leak), nodeToShadow reads 0 (= none), suspIdx
@@ -794,9 +789,10 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** The arena of a world: render arenas ride the render record (claimed at
-	 * renderStart, m2's dev assert on dropped-arena touch); committed arenas
+	 * renderStart; a dev assert below throws on dropped-arena touch);
+	 * committed arenas
 	 * materialize lazily at the root's first committed evaluation and persist
-	 * for the root's consumer-populated life (§4.1). */
+	 * for the root's consumer-populated life. */
 	function arenaOf(world: World): WorldArena | undefined {
 		if (world.kind === 'render') {
 			const a = world.render.arena;
@@ -806,7 +802,7 @@ export function createWorldArena(core: EngineCore): void {
 		if (world.kind !== 'committed') return undefined;
 		let a = rootToArena.get(world.root);
 		if (a === undefined) {
-			// Mirror memoTableOf's rule: never CREATE the root record here.
+			// Never CREATE the root record on a read.
 			if (!roots.has(world.root)) return undefined;
 			a = claimArena('committed', { kind: 'committed', root: world.root }, world.root);
 			rootToArena.set(world.root, a);
@@ -845,7 +841,7 @@ export function createWorldArena(core: EngineCore): void {
 
 	/** Detach a shadow from its arena wholesale: deps in reverse, BOTH subs
 	 * lists, the suspended set, the cached value. Shared by shadowFor's
-	 * dead-tenancy re-key (§4.5.3) and disposeComputed's eager purge. */
+	 * dead-tenancy re-key and disposeComputed's eager purge. */
 	function arenaEvictShadow(a: WorldArena, sh: number): void {
 		arenaDisposeAllDepsInReverse(a, sh);
 		for (let list = 0; list < 2; list++) {
@@ -861,9 +857,9 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Arena dep recording (arena fn-reader hook): first-occurrence mode
-	 * reset + strong-dominates ride inside arenaLink (§4.4.1). The pre-dedup
-	 * observation capture rides the STRONG arm only (§4.7/M6 — the
-	 * discipline carried into the walks; OL1 is strong-only). */
+	 * reset + strong-dominates ride inside arenaLink. The pre-dedup
+	 * observation capture rides the STRONG arm only (the observation union
+	 * is strong-only). */
 	function arenaRecordDep(dep: AnyNode, weak: boolean): void {
 		const a = arenaFrame;
 		if (a === undefined) return;
@@ -882,15 +878,15 @@ export function createWorldArena(core: EngineCore): void {
 	 * equality, and world serving re-derives consumers on any fold-output
 	 * motion — a custom comparator here could suppress propagation the fold
 	 * path performs (dual-bookkeeping divergence by construction). The
-	 * §4.5.3 comparator-order mandate — HEAD's `isEqual(prev, next)`,
-	 * mirroring the kernel's `writeAtom` compare — binds the CUSTOM-EQUALITY
-	 * COMPUTED record (arenaFoldOutcome's comparator arm, landed at S-C). */
+	 * comparator-order rule — `isEqual(prev, next)`, previous value first,
+	 * mirroring the kernel's own compare — binds the CUSTOM-EQUALITY
+	 * COMPUTED record (arenaFoldOutcome's comparator arm). */
 	function arenaEqAtom(prev: Value, next: Value): boolean {
 		return Object.is(prev, next);
 	}
 
 	/** Suspended-list append on the box-suspended bit's 0→1; the per-shadow
-	 * field stores the dense index (S-A step 0 compaction — §4.5.4). */
+	 * field stores the dense index (swap-remove compaction). */
 	function arenaSuspend(a: WorldArena, sh: number): void {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		if (a.suspIdx[vi] !== 0) return; // already a member (value column just swaps sentinels)
@@ -900,7 +896,7 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Swap-remove at the stored index on the 1→0 clear: the list stays a
-	 * DENSE set; the moved entry's stored index is updated (S-A step 0). */
+	 * DENSE set; the moved entry's stored index is updated. */
 	function arenaUnsuspend(a: WorldArena, sh: number): void {
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		const slot = a.suspIdx[vi]!;
@@ -944,7 +940,7 @@ export function createWorldArena(core: EngineCore): void {
 
 	// ---- arena serving (world reads, checks, settlement refolds) ----
 
-	/** Serve a node from an arena — THE render/committed read path since S-B —
+	/** Serve a node from an arena — THE render/committed read path —
 	 * refolding through the arena's own walks when marks or cold bases
 	 * demand it. Refolds run under the arena-only routing override so
 	 * raw-handle reads inside fns resolve to arena values too; frame-link
@@ -973,8 +969,8 @@ export function createWorldArena(core: EngineCore): void {
 		if ((flags & ArenaFlag.RECURSED_CHECK) !== 0) {
 			throw core.cycleError(node.name);
 		}
-		// Read-site self-heal probe (§4.5.4 pull half; mirrored at the memo
-		// serve and the kernel's boxedRead): a settled-but-not-yet-invalidated
+		// Read-site self-heal probe (the pull half of settlement; mirrors
+		// the kernel's boxedRead): a settled-but-not-yet-invalidated
 		// suspension self-invalidates AT THE READ, so a read after `await` is
 		// deterministic even before the settle listener's microtask runs.
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
@@ -988,7 +984,7 @@ export function createWorldArena(core: EngineCore): void {
 			arenaUpdateComputed(a, sh); // never evaluated in this arena: cold fold
 		} else if (
 			(flags & ArenaFlag.DIRTY) !== 0
-			// Evicted-to-cold residue (decay §4.3 / torn-cone dirt): VALID is
+			// Evicted-to-cold residue (decay / torn-cone dirt): VALID is
 			// the "value column holds a folded value" bit — with it clear the
 			// slot is evicted and must refold on consult, exactly as the atom
 			// branch above does. MUTABLE alone only says "evaluated once".
@@ -1005,11 +1001,12 @@ export function createWorldArena(core: EngineCore): void {
 			if (oc !== undefined) oc.push(node);
 		}
 		const outFlags = a.memory[sh + ArenaField.FLAGS]!;
-		// The boxedRead-style rethrow discipline (arenas serve real reads at
-		// S-B): a THROWN payload — plain error, or a still-pending render-path
+		// The boxedRead-style rethrow discipline: a THROWN payload — plain
+		// error, or a still-pending render-path
 		// suspension — rethrows from the cache; a RETURNED sentinel (background
 		// suspensions fold to the sentinel VALUE) serves
-		// as a value, compared by identity (battery 16d's still-pending rule).
+		// as a value, compared by identity (the still-pending rule, pinned in
+		// tests/concurrent-battery.spec.ts).
 		if ((outFlags & ArenaFlag.HAS_BOX) !== 0 && ((outFlags & ArenaFlag.BOX_SUSPENDED) === 0 || (outFlags & ArenaFlag.BOX_THROWN) !== 0)) {
 			throw a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
 		}
@@ -1017,14 +1014,13 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Refold a shadow (atom fold or computed fn run);
-	 * returns whether the world's value changed (the §4.2 value cutoff). */
+	 * returns whether the world's value changed (the value cutoff). */
 	function arenaUpdateShadow(a: WorldArena, sh: number): boolean {
 		const flags = a.memory[sh + ArenaField.FLAGS]!;
 		if ((flags & ArenaFlag.K_COMPUTED) !== 0) return arenaUpdateComputed(a, sh);
 		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
 		const atom = nodesArr[nid] as AtomNode;
-		// §4.2 (iii): marked ⇒ REFOLD unconditionally — no fingerprint
-		// consulted (the fp side channel was deleted at S-D).
+		// Marked ⇒ REFOLD unconditionally — no fingerprint shortcut.
 		const next = core.foldAtom(atom, a.world);
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		const prev = a.vals[vi];
@@ -1034,16 +1030,16 @@ export function createWorldArena(core: EngineCore): void {
 		// The shadow column ALWAYS stores the fold's own output (dual
 		// bookkeeping requires arena value ≡ fold, bit for bit); the
 		// comparator gates PROPAGATION only. Reference preservation for
-		// custom-equality COMPUTEDS lives in arenaFoldOutcome (§4.5.3, S-C).
+		// custom-equality COMPUTEDS lives in arenaFoldOutcome.
 		a.vals[vi] = next;
 		return !(prevValid && arenaEqAtom(prev, next));
 	}
 
 	/** Arena computed refold: the fn runs with the ARENA readers and the
-	 * arena-only routing override — no memo writes. The evaluating world is
+	 * arena-only routing override. The evaluating world is
 	 * set so raw-handle reads route. OBSERVED nodes capture the strong deps
-	 * of this run and re-point their retains afterward (§4.7/M6: the
-	 * world-path retain re-point, carried into the arena walks at S-B). */
+	 * of this run and re-point their retains afterward (the world-path
+	 * retain re-point — see observation.ts). */
 	function arenaUpdateComputed(a: WorldArena, sh: number): boolean {
 		const c = core; // one context load; field accesses below keep the one-load shape
 		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
@@ -1107,16 +1103,17 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Fold epilogue of an arena computed refold, out of line from
-	 * arenaUpdateComputed (B2 split — the frame save/restore wrapper stays under
-	 * V8's 460-bytecode inline budget): classify the fn's outcome —
+	 * arenaUpdateComputed (a split that keeps the frame save/restore wrapper
+	 * under V8's 460-bytecode inline budget): classify the fn's outcome —
 	 * suspension sentinel or plain value — into the shadow's value column
-	 * and outcome bits; returns the §4.2 value cutoff. The caller cleared
+	 * and outcome bits; returns the value cutoff. The caller cleared
 	 * DIRTY/PENDING at entry, and its call sites own propagation. A RETURNED
 	 * sentinel clears the THROWN bit (it serves as a value; box→same-box by
-	 * sentinel identity is UNCHANGED — battery 16d's still-pending rule).
-	 * §4.5.3 (S-C): custom-equality computeds compare through their policy
+	 * sentinel identity is UNCHANGED — the still-pending rule).
+	 * Custom-equality computeds compare through their policy
 	 * comparator against the ARENA-LOCAL previous value — never the kernel
-	 * slot — in HEAD's argument order `isEqual(prev, next)` (mirroring the
+	 * slot — in the argument order `isEqual(prev, next)`, previous first
+	 * (mirroring the
 	 * kernel's writeAtom compare; comparators need not be equivalence
 	 * relations, so the order is load-bearing). On unchanged, the PREVIOUS
 	 * reference is kept (write nothing). Equality never bridges an
@@ -1141,9 +1138,10 @@ export function createWorldArena(core: EngineCore): void {
 		return changed;
 	}
 
-	/** The custom-equality compare, out of line (cold — §4.5.3 policy users
-	 * only; keeps arenaFoldOutcome's hot default arm closure-free and under its
-	 * budget). HEAD argument order: isEqual(prev, next) — see arenaFoldOutcome. */
+	/** The custom-equality compare, out of line (cold — custom-comparator
+	 * users only; keeps arenaFoldOutcome's hot default arm closure-free and
+	 * under its budget). Argument order: isEqual(prev, next) — see
+	 * arenaFoldOutcome. */
 	function arenaEqCold(eq: Equals, prev: Value, next: Value): boolean {
 		return core.inCallback(() => eq(prev, next));
 	}
@@ -1168,7 +1166,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * allocations, arena growth — so a.memory re-loads after every update call).
 	 * Entry wrapper: owns the scratch-stack base restore around the
 	 * out-of-line walk so each piece stays under V8's 460-bytecode inline
-	 * budget (B2 — the arena twin of the kernel checkDirty split). */
+	 * budget (the arena counterpart of the kernel checkDirty split). */
 	function arenaCheckDirty(a: WorldArena, startLink: number, startSub: number): boolean {
 		if (startLink === 0) return false;
 		const stackBase = arenaCheckSp;
@@ -1182,11 +1180,11 @@ export function createWorldArena(core: EngineCore): void {
 	/** arenaUpdateShadow + sibling Pending->Dirty upgrade, shared by the descend
 	 * and unwind arms of arenaCheckDirtyLoop. Heads are captured BEFORE the
 	 * refold runs (it can rebuild the lists), as in the kernel's
-	 * updateAndShallow; BOTH subs lists take the upgrade (§4.4.1). The
+	 * updateAndShallow; BOTH subs lists take the upgrade. The
 	 * kernel's single-sub skip ("the only sub is the walker itself") is
 	 * UNSOUND under the segregated lists — a validation walk can arrive via
 	 * the OTHER list, leaving a lone strong sub PENDING with no refold due
-	 * (found by the fuzz corpus, seed 40: a weak-side validation refolded
+	 * (found by fuzzing: a weak-side validation refolded
 	 * the shared dep and the strong-side consumer stale-served) — so both
 	 * lists propagate unconditionally; the walker's own re-upgrade is a
 	 * flag-guarded no-op. */
@@ -1216,13 +1214,13 @@ export function createWorldArena(core: EngineCore): void {
 				dirty = true;
 			} else if (
 				(depFlags & (ArenaFlag.MUTABLE | ArenaFlag.DIRTY)) === (ArenaFlag.MUTABLE | ArenaFlag.DIRTY)
-				// Cold base (decay §4.3 evicted the value: MUTABLE kept, VALID
+				// Cold base (decay evicted the value: MUTABLE kept, VALID
 				// cleared, column dropped) — the walk's twin of arenaServe's
 				// evicted-to-cold arm: with no folded value there is nothing to
 				// validate against, so a cold dep IS dirt and must refold on
 				// consult. Without this arm a cold base is invisible (neither
 				// DIRTY nor PENDING) and a top-first serve stale-serves its
-				// cone (the B2-documented S-A bug; pinned in arena-sa3).
+				// cone (pinned in tests/arena-sa3.spec.ts).
 				|| (depFlags & (ArenaFlag.MUTABLE | ArenaFlag.VALID)) === ArenaFlag.MUTABLE
 			) {
 				if (arenaUpdateAndShallow(a, dep)) {
@@ -1269,15 +1267,15 @@ export function createWorldArena(core: EngineCore): void {
 		} while (true);
 	}
 
-	// ---- fanout at the four flip sites + mark decay (§4.3) ----
+	// ---- fanout at the four flip sites + mark decay ----
 
 	/** Mark the flipped atoms' shadows in one arena and propagate PENDING over
 	 * strong AND weak links, with the read-clock dedup: a still-DIRTY shadow
 	 * whose MARK stamp equals the arena's clock has an already-marked cone
 	 * that nothing re-validated since — re-propagation would be a no-op walk.
-	 * RenderPass arenas receive NO log-entry-driven fanout, ever (the pin proof,
-	 * §4.3) — dev-asserted here; the one pin-exempt mark source is L4
-	 * resource settlement (`fromSettlement`). */
+	 * Render arenas receive NO log-entry-driven fanout, ever (render-world
+	 * values are pin-frozen) — dev-asserted here; the one pin-exempt mark
+	 * source is resource settlement (`fromSettlement`). */
 	function fanAtomsToArena(a: WorldArena, atoms: AtomNode[], fromSettlement: boolean): void {
 		if (a.kind === 'render' && !fromSettlement) {
 			throw new InvariantViolation('log-entry-flip fanout reached a render arena — render-world values are pin-frozen (§4.3)');
@@ -1293,24 +1291,24 @@ export function createWorldArena(core: EngineCore): void {
 				a.dirty.push(sh); // dirty-LIST append on the mark's 0→1 edge
 			}
 			memory[sh + ArenaField.MARK] = a.readClock;
-			arenaPropagateBoth(a, sh); // strong AND weak (§4.4.1)
+			arenaPropagateBoth(a, sh); // strong AND weak
 		}
 	}
 
-	/** Reused single-atom buffer for site (c)/(d) fanout (no per-write alloc). */
+	/** Reused single-atom buffer for single-write fanout (no per-write alloc). */
 	const oneAtom: AtomNode[] = [];
 	function oneAtomBuf(atom: AtomNode): AtomNode[] {
 		oneAtom[0] = atom;
 		return oneAtom;
 	}
 
-	/** Site (a)/(d) helper: fan into EVERY live committed arena. */
+	/** Fan into EVERY live committed arena (retirement, quiet fold). */
 	function fanAtomsToCommittedArenas(atoms: AtomNode[]): void {
-		if (rootToArena.size === 0) return; // the one scalar check quiet writes pay (§4.1.2)
+		if (rootToArena.size === 0) return; // the one scalar check quiet writes pay
 		for (const a of rootToArena.values()) fanAtomsToArena(a, atoms, false);
 	}
 
-	/** §4.3 decay-by-eviction: swap the dirty list; an entry no evaluation
+	/** Decay-by-eviction: swap the dirty list; an entry no evaluation
 	 * consumed whose node has no live same-root watcher MAY drop to cold
 	 * (evict the value, clear the mark) instead of re-appending — the dirty
 	 * list stays bounded by live consumers' cones. A mark never clears
@@ -1340,7 +1338,8 @@ export function createWorldArena(core: EngineCore): void {
 				a.dirty.push(sh); // keep-the-dirt: unconsumed marks survive to the next boundary
 			} else {
 				// Drop-to-cold: evict the cached value, clear the mark; links and
-				// MUTABLE stay so routing coverage survives (§4.1's point).
+				// MUTABLE stay so routing coverage survives (arena links are
+				// current structure — they persist with the arena).
 				if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh);
 				memory[sh + ArenaField.FLAGS] = flags & ~(ArenaFlag.DIRTY | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN);
 				a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = undefined;
@@ -1365,7 +1364,7 @@ export function createWorldArena(core: EngineCore): void {
 			// Leak audit: thread the orphaned record onto the arena's
 			// dead-shadow free list so recreation churn (the useComputed
 			// dispose→create pattern) reuses it instead of growing a live
-			// arena's record plane without bound. Stale dirty-list entries
+			// arena's record storage without bound. Stale dirty-list entries
 			// naming it stay benign: pre-reuse they read FLAGS 0 (dropped),
 			// post-reuse they alias the new tenant's listed entry (decay
 			// re-checks flags per entry; duplicates cannot amplify).
@@ -1379,7 +1378,8 @@ export function createWorldArena(core: EngineCore): void {
 	 * with the layout enums): scan the dense suspended list for shadows whose
 	 * box payload IS this sentinel; each match marks DIRTY (listed), stamps
 	 * the mark clock, and propagates PENDING over BOTH subs lists (pin-exempt
-	 * for render arenas — §4.3). Returns whether anything matched (the drain
+	 * for render arenas — settlement is not a log-entry flip). Returns
+	 * whether anything matched (the drain
 	 * adds committed roots to its cone set); the read clock bumps once per
 	 * matched arena, after the marks, exactly as the in-drain loop did. */
 	function arenaInvalidateSettled(a: WorldArena, suspendSentinel: SuspendedRead): boolean {
@@ -1395,14 +1395,14 @@ export function createWorldArena(core: EngineCore): void {
 				a.dirty.push(sh);
 			}
 			memory[sh + ArenaField.MARK] = a.readClock;
-			arenaPropagateBoth(a, sh); // strong AND weak; pin-exempt for render arenas (§4.3)
+			arenaPropagateBoth(a, sh); // strong AND weak; pin-exempt for render arenas
 			matched = true;
 		}
 		if (matched) arenaBumpReadClock(a);
 		return matched;
 	}
 
-	// ---- the routing walks (S-B: arenas route; §4.4.3/§4.4.6/§4.4.7) ----
+	// ---- the routing walks (arenas are the routing authority) ----
 
 	/** Reused routing-walk stack (walks are never re-entrant; holds arena
 	 * shadow RECORD ids during arena walks). */
@@ -1434,7 +1434,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * (the segregated weak lists are never visited — the untracked-fan
 	 * gate's prize) with per-arena shadow stamps for traversal termination
 	 * and the global per-node stamps for collection dedup. Dead-GEN residue
-	 * never routes (§4.5.3). Never allocates or folds: a.memory/a.walk stable. */
+	 * never routes. Never allocates or folds: a.memory/a.walk stable. */
 	function walkArenaStrong(a: WorldArena, from: NodeIndex, kGen: Generation, gen: WalkGen, found: Watcher[]): void {
 		const start = from < a.nodeToShadow.length ? a.nodeToShadow[from]! : 0;
 		if (start === 0) return;
@@ -1464,10 +1464,10 @@ export function createWorldArena(core: EngineCore): void {
 		}
 	}
 
-	/** The durable drain's candidate collection (§4.4.6), the arena-walking
+	/** The durable drain's candidate collection, the arena-walking
 	 * half of drainCommittedObservers — same-file with the layout enums: the
 	 * root arena's dirty list seeds a walk over ALL arena links, strong AND
-	 * weak (§4.4.1: drains expand over both; a weak hop's strong dependents
+	 * weak (drains expand over both; a weak hop's strong dependents
 	 * expand past it too, since the walk keeps going), collecting live
 	 * same-root watchers on visited nodes with the global per-node stamps
 	 * for collection dedup. No folds or allocations run inside the walk, so
@@ -1492,7 +1492,7 @@ export function createWorldArena(core: EngineCore): void {
 		}
 		while (sp > 0) {
 			const sh = stack[--sp]!;
-			// BOTH subs lists: drains expand over weak links too (§4.4.1).
+			// BOTH subs lists: drains expand over weak links too.
 			for (let list = 0; list < 2; list++) {
 				let l = arenaSubsHead(a, sh, list);
 				while (l !== 0) {
@@ -1582,8 +1582,9 @@ export function createWorldArena(core: EngineCore): void {
 	 * dependency edges as dep → dependents (NodeIds — kernel record ids), materialized
 	 * as the union of every live arena's links (strong AND weak-flagged —
 	 * the current structure the routing walks consult); read by: graphviz,
-	 * twin tests, soak metrics. (Replaced the K1 episode-edge snapshot at
-	 * S-B; arena links persist across quiescence with their arenas.)
+	 * the model-comparison tests, soak metrics. (Arena links persist across
+	 * quiescence with their arenas: the links are current structure, not an
+	 * episode log.)
 	 */
 	function dependencyEdges(): Map<NodeId, Set<NodeId>> {
 		const out = new Map<NodeId, Set<NodeId>>();
@@ -1616,7 +1617,7 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Test seam: a committed arena's (dep → sub) link mode, or undefined
-	 * when no link exists (§4.4.1 mode-transition pin). @internal */
+	 * when no link exists (the mode-transition pins read it). @internal */
 	function __arenaLinkMode(rootId: RootId, dep: AnyNode, sub: AnyNode): 'strong' | 'weak' | undefined {
 		const a = rootToArena.get(rootId);
 		if (a === undefined) return undefined;

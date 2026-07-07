@@ -59,8 +59,8 @@
  *      - protocolReset() — test-only: scrubs React's batch registry; the
  *        engine reset invokes it FIRST, before scrubbing engine state, so
  *        no stale protocol slot survives into the next composition.
- *    The engine's TraceEvent stream is a referee/tracing surface only: it
- *    does not create unless a referee retains it or a tracer attaches.
+ *    The engine's TraceEvent stream is a test/tracing surface only: it
+ *    does not create unless a test retains it or a tracer attaches.
  *  - batch identity (protocol v2) — ONE id space, no translation: the shim
  *    registers a BATCH-ID ALLOCATOR on the protocol
  *    (unstable_registerBatchIdAllocator). At every React batch's creation
@@ -68,9 +68,9 @@
  *    allocator opens an engine batch (recording `deferred` on it) and
  *    returns the engine BatchId, which React stores as THE batch's identity
  *    for its whole life. Every protocol surface — getCurrentWriteBatch,
- *    runInBatch, the retirement and per-root commit reports, render-pass
- *    included-batch lists — speaks engine BatchIds directly; the old
- *    reactBatch<->engineBatch mapping tables are gone. BATCH_NONE (0),
+ *    runInBatch, the retirement and per-root commit reports, the render
+ *    events' included-batch lists — speaks engine BatchIds directly, with
+ *    no mapping tables anywhere. BATCH_NONE (0),
  *    named on both sides, is the "no batch context" sentinel.
  *  - Suspense: the core's `ctx.use` is the ONE implementation (two forms:
  *    caller-cached thenable, and a per-key cache scoped to the living node —
@@ -128,14 +128,15 @@ export type WatcherTarget = {
 
 type RootRec = {
 	id: RootId;
-	/** The open bridge render pass mirroring the protocol host's in-progress render, if any. */
+	/** The open engine render mirroring the protocol host's in-progress render, if any. */
 	renderPass: RenderPass | undefined;
 	/** Watcher ids created during the current/most recent render, for the orphan sweep. */
 	created: Set<number>;
 };
 
-/** Fallback root id for effects/watchers created outside any tracked render
- * pass (defensive paths; both packages name it through this one constant). */
+/** Fallback root id for effects/watchers created outside any tracked
+ * render (defensive paths; both packages name it through this one
+ * constant). */
 export const ROOT_UNKNOWN: RootId = 'root-unknown';
 
 let nextRootSerial = 1;
@@ -191,14 +192,17 @@ export class Shim {
 	 * The React effect-timing shell (the ONE piece of effect machinery that
 	 * stays adapter-side): user refire bodies queued by the engine's
 	 * per-root-commit boundary scan must NOT run inside onRenderPassEnd —
-	 * React captures its re-pend classification before emitting render end, so
-	 * a body write there could desync lock-in accounting (plan amendment 2;
-	 * codex review finding 1). While `holdingRefires` is set (around
+	 * React captures its re-pend classification before emitting render end,
+	 * so a body write there could desync lock-in accounting. While
+	 * `holdingRefires` is set (around
 	 * bridge.renderEnd for a COMMIT), refires park here and flush at the
-	 * root-commit report (`onRootCommitted` — CR5 orders it right after the
-	 * frame close, with no user code in between, so the boundary values are
-	 * unchanged). Retirement/settlement refires run at their own operation
-	 * boundary, exactly like today's post-`bridge.retire` revalidation did.
+	 * root-commit report. THE PROTOCOL'S ORDERING GUARANTEE makes that safe:
+	 * the fork emits `onRootCommitted` immediately after the render frame
+	 * closes, in the same synchronous commit sequence, with NO user code
+	 * (effects, event handlers, timers) able to run between the two events —
+	 * so the boundary values the engine's scan captured are still the values
+	 * when the refires flush. Retirement/settlement refires run at their own
+	 * operation boundary.
 	 */
 	private holdingRefires = false;
 	private heldRefires: (() => void)[] = [];
@@ -232,8 +236,8 @@ export class Shim {
 				return undefined;
 			},
 			// Direct listeners — the load-bearing consumption surface. The
-			// engine's trace stream stays a referee/tracing artifact (it does not
-			// create unless a referee retains it or a tracer attaches);
+			// engine's trace stream stays a test/tracing artifact (it does not
+			// create unless a test retains it or a tracer attaches);
 			// scheduling decisions arrive here as live objects, allocation-free.
 			// Listener bodies must never throw into the engine mid-operation:
 			// failures are recorded. One listener error policy: guard() — which
@@ -429,8 +433,8 @@ export class Shim {
 			this.holdingRefires = false;
 		}
 		rec.renderPass = undefined;
-		// (ctx.previous cells update inside bridge.renderEnd since S-C — the
-		// cells live on the bridge's computed nodes with the ctx adapter.)
+		// (ctx.previous cells update inside bridge.renderEnd — the
+		// cells live on the engine's computed nodes, beside their ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
 		// surface impure renders, so even a committed render can create watchers
 		// whose hook instance was thrown away and will never be claimed. Layout
@@ -465,10 +469,9 @@ export class Shim {
 		// batch) create none.
 		const tr = this.bridge.trace;
 		if (tr !== undefined) tr.batchDisposition(batchId, committed);
-		// Retirement/settlement ARE effect boundaries now (RCC-EF2 amended):
+		// Retirement/settlement ARE effect boundaries:
 		// the engine's boundary scan runs inside retire/settleAction and
-		// queued refires fire at the operation boundary, inside this call —
-		// the same observable point as the old post-retire revalidation.
+		// queued refires fire at the operation boundary, inside this call.
 		if (t.parked) this.bridge.settleAction(batchId); // async action reached settlement
 		else this.bridge.retire(batchId); // batch done everywhere: its writes become permanent history
 	}
@@ -481,7 +484,7 @@ export class Shim {
 		// across more than one flush), and re-reporting a batch is defined as
 		// idempotent set-add — so hand every reported batch with an engine
 		// batch to the engine's commitBatches, THE single owner of the per-root
-		// commit transition (W11): already-committed batches skip; a live batch
+		// commit transition: already-committed batches skip; a live batch
 		// the renderEnd sweep missed locks in COMPLETELY (batch set, committed
 		// bit mask, generation, commit clock, arena fan-out, drain — never a
 		// partial table write from here). Defensive: for React batches with
@@ -495,9 +498,11 @@ export class Shim {
 		}
 		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported);
 		// The root-commit REPORT is where the commit's effect refires run
-		// (React's re-pend classification is behind us; CR5 puts no user code
+		// (React's re-pend classification is behind us; the protocol's
+		// ordering guarantee puts no user code
 		// between the frame close and this report, so the boundary values are
-		// unchanged). commitBatches is itself an EF2 boundary: when the report
+		// unchanged — see holdingRefires). commitBatches is itself a boundary
+		// operation: when the report
 		// actually moved committed truth, the engine re-checked that root's
 		// committed observers inside the call.
 		this.flushHeldRefires();
@@ -641,9 +646,8 @@ export class Shim {
 	}
 
 	// ---- suspense translation ----------------------------------------------------------
-	// (The bound-computed machinery — per-fn wrappers, previous cells, the
-	// shim evaluation frames — died at S-C: kernel `Computed` handles are the
-	// supported type, world-routed through the core's .state read seams, and
+	// (Kernel `Computed` handles are the supported derived type,
+	// world-routed through the core's .state read seams, and
 	// the engine owns the ctx adapter, the committed previous cells, and the
 	// background-suspension fold. What stays here is exactly the React-phase
 	// knowledge: hook-initiated evaluations may legally suspend the render.)

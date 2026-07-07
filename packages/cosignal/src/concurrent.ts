@@ -1,6 +1,6 @@
 /**
  * cosignal — the concurrent-worlds engine riding the KERNEL. The kernel is
- * the dependency-tracking engine (index.ts, whose header defines its terms): it
+ * the dependency-tracking engine (graph.ts; index.ts's header defines its terms): it
  * stores every signal, computed, effect, and dependency edge as fixed-size
  * integer records in shared arrays — and it holds exactly ONE current value
  * per atom. React's concurrent rendering needs several views of the state
@@ -64,23 +64,23 @@
  *     re-check every observer the change could reach against committed
  *     state and correct the stale ones.
  *   - The engine keeps two dependency graphs. K0 is the kernel's own graph
- *     (the packed records in index.ts), which only knows newest values. The
- *     other is the per-world WORLD ARENAS (NF2, plans/2026-07-06 §4): one
- *     packed record plane per render world and per committed-for-root world,
+ *     (the packed records in graph.ts), which only knows newest values. The
+ *     other is the per-world WORLD ARENAS: one
+ *     packed record arena per render world and per committed-for-root world,
  *     holding a SHADOW (value + flags) per consumed node and the strong and
  *     weak-flagged LINKS the world's own evaluations actually took. Arenas
  *     are the routing AND serving authority for render/committed worlds:
  *     write-time deliveries walk arena strong links, durable drains seed
  *     from arena dirty lists, and world reads serve from arena walks.
- *     Committed-truth flips FAN OUT marks into the arenas at four sites
- *     (§4.3): retirement, per-root lock-in, committed-member write, and
- *     quiet fold — plus L4 resource settlement.
- *   - NEWEST COMPUTED SERVING is the kernel's (S-C: one computed). Every
- *     bridge computed rides a kernel `Computed` record: the kernel's own
+ *     Committed-truth flips FAN OUT marks into the arenas at four
+ *     sites: retirement, per-root lock-in, committed-member write, and
+ *     quiet fold — plus resource settlement.
+ *   - NEWEST COMPUTED SERVING is the kernel's. Every
+ *     engine computed rides a kernel `Computed` record: the kernel's own
  *     dep links, staleness marks, and value cache serve the newest world,
  *     so a computed re-derives only when a TRACKED dependency changed —
  *     untracked reads are point-in-time samples taken at those
- *     re-derivations [ruling 2026-07-06: untracked sampling]. Kernel atoms
+ *     re-derivations (the untracked-sampling rule). Kernel atoms
  *     serve newest directly (the eager-apply invariant); everything else
  *     folds.
  *   - An EPISODE is the stretch between QUIESCENCE points — moments when
@@ -88,7 +88,7 @@
  *     actions — async actions kept pending until their promise settles).
  *     At quiescence zero-consumer committed arenas reclaim; populated
  *     arenas PERSIST — their links are current structure, not an episode
- *     log (§4.1) — and the kernel's newest caches persist the same way
+ *     log — and the kernel's newest caches persist the same way
  *     (nothing newest-visible changes at quiescence). Sequence values are
  *     NEVER rewritten: the global counter climbs monotonically for the
  *     process's life (exact to 2^53 — see the bound note at `quiesce`).
@@ -98,17 +98,17 @@
  *     written atom's write log.
  *   - kernel riding: every recorded write also applies to the kernel eagerly
  *     with stepwise equality (each step keeps the previous reference when
- *     the atom's equals function says nothing changed) — bridge atoms are
+ *     the atom's equals function says nothing changed) — engine atoms are
  *     kernel-backed `Atom` handles, and the newest world is read straight
  *     off the kernel. The engine-vs-reference-model diff verifies kernel
  *     value ≡ fold(base, log entries) at every step of the test corpus.
- *   - arena routing (NF2 S-B): write-time delivery reachability runs from
+ *   - arena routing: write-time delivery reachability runs from
  *     the written atom over every live arena's STRONG links (weak links are
  *     tested and skipped — untracked reads never notify); kernel (K0)
  *     subscribers are served by the eager kernel apply. Deliveries stay
  *     value-blind and may be FEWER than the model's union-conservative set
  *     (never more): a cone reachable only through structure no live arena
- *     holds lane-degrades to a drain correction (§4.4.5, pinned S-NF2-D1).
+ *     holds degrades to a drain correction instead of a live delivery.
  *   - worlds as pure folds with the two-clause visibility rule (see
  *     `visible`), the committed-for-root world, and the fast-forwarded
  *     mount-fixup world (see `mountFixup`).
@@ -126,7 +126,7 @@
  *     root that committed UI from a still-live batch must keep agreeing
  *     with its own screen).
  *   - MOUNT FIXUP (see `mountFixup`): the commit-edge reconciliation for a
- *     freshly mounted component — contract clause RT6, decided conditions
+ *     freshly mounted component — decided conditions
  *     first. A component can mount while other updates are in flight, and
  *     its subscription only activates at commit, so writes could slip by
  *     unobserved between its render and its commit; fixup joins it to the
@@ -138,20 +138,20 @@
  *     batches at commit time (a batch whose first write landed mid-render
  *     is invisible to the earlier-captured slot set).
  *   - subscriptions (see the Subscription type): the ONE `run`-action
- *     consumer record — committed subscriptions, the PROMOTED production
- *     useSignalEffect mechanism. (Core `effect()`s are NOT bridge records:
+ *     consumer record — committed subscriptions, the production
+ *     useSignalEffect mechanism. (Core `effect()`s are NOT engine records:
  *     they are real kernel effects, flushed by the eager kernel apply —
  *     see logCoreEffectRun.) Committed subscriptions
  *     hold a dep snapshot captured by `captureRun` under committed-for-root
- *     and re-check value-gated at RCC-EF2's amended BOUNDARIES (per-root
+ *     and re-check value-gated at the BOUNDARY operations (per-root
  *     commit, retirement, settlement, quiet fold): once per boundary
  *     operation, at the boundary value, never while the subscription's own
- *     root has an open render-pass frame; cleanup guaranteed at removal.
- *     Their dep snapshots also join the RCC-OL1 observation union (one
+ *     root has an open render frame; cleanup guaranteed at removal.
+ *     Their dep snapshots also join the observation union (one
  *     retain per snapshot node through the obsShift observation index).
  *   - episodes / quiescence (epoch reset), as defined above.
  *
- * The bridge surface consumes the external-runtime protocol's event shapes
+ * The engine surface consumes the external-runtime protocol's event shapes
  * (batch open/retire, render begin/yield/resume/end with per-root commits,
  * settlements) — the events a patched React build emits about its own
  * scheduling. The React bindings (`cosignal-react`) drive it from a real
@@ -161,11 +161,11 @@
  * Deliberately deferred, marked at each site:
  *   TODO(perf): a "provably quiet" world-read fast path (serve a shared
  *     cache instead of the arena walk when nothing pending can reach the
- *     node). CORRECTNESS CONSTRAINT (fable N-4, §4.4.8): the cold in-arena
+ *     node). CORRECTNESS CONSTRAINT: the cold in-arena
  *     fn run is what RECORDS the strong and weak links the whole routing
  *     coverage argument stands on — a re-entry may value-serve ONLY when
  *     the arena already holds the node's links; structure recording may
- *     never be skipped. The B1 read-before-pending pin is the tripwire.
+ *     never be skipped. The read-before-pending pin is the tripwire.
  */
 
 import { Atom, Computed, CycleError, SuspendedRead, untracked, __plainAtomWrite, __resetPolicyForTest, __setStandaloneQuiet, type ComputedCtx } from './index.js';
@@ -187,7 +187,7 @@ import { Watcher, type RenderPass, type RenderPassTable } from './RenderPass.js'
 
 export { InvariantViolation, ScheduleError } from './errors.js';
 
-// ---- bridge-surface types (structurally mirror the reference model's) ------------
+// ---- engine-surface types (structurally mirror the reference model's) ------------
 
 export type Value = unknown;
 /** THE node identity, package-wide: the premultiplied KERNEL record id (the
@@ -202,7 +202,7 @@ export type NodeId = number;
  * sound). A packing detail, never an identity. */
 type NodeIndex = number;
 // Batch identity, slots, and slot sets live in Batch.ts (the batch
-// MECHANISM module); re-exported here — they are bridge surface.
+// MECHANISM module); re-exported here — they are engine surface.
 export { BATCH_NONE } from './Batch.js';
 export type { Batch, BatchId, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
 export type RootId = string;
@@ -222,7 +222,7 @@ type WalkGen = number;
 type EvalGen = number;
 
 // The per-atom write log and its compaction mechanism live in WriteLog.ts;
-// re-exported here — the class and the entry shape are bridge surface.
+// re-exported here — the class and the entry shape are engine surface.
 export { WriteLog } from './WriteLog.js';
 export type { WriteLogEntry } from './WriteLog.js';
 
@@ -249,7 +249,7 @@ export class AtomNode {
 	base: Value;
 	baseSeq: Seq = 0;
 	/** Packed log entry columns (the engine truth; tests/diagnostics materialize
-	 * them via `log.materialize()`; the referee's model-shaped view lives in
+	 * them via `log.materialize()`; the test-side model-shaped view lives in
 	 * tests/model-view.ts). */
 	log = new WriteLog();
 	equals: Equals;
@@ -258,13 +258,12 @@ export class AtomNode {
 	 * guard. */
 	eqIsDefault: boolean;
 	/** Per-atom retirement stamp, created at every retirement fold touching it.
-	 * Sole remaining consumer: retireInternal's duplicate-touch dedup (the
-	 * memo ladder that read it as a fingerprint clock is deleted — S-C/S-D). */
+	 * Sole consumer: retireInternal's duplicate-touch dedup. */
 	retirementStamp: Seq = 0;
-	/** The public handle this overlay rides — STRONG for referee/embedding-
-	 * created nodes (engine.atom: the NODE is the public object and owns its
+	/** The public handle this node rides — STRONG for engine-created nodes
+	 * (engine.atom: the NODE is the public object and owns its
 	 * handle), a WEAKREF for handle-resolved nodes (nodeForAtom). RECLAMATION
-	 * (plan §1 L2): the engine must never pin a public handle — the handle
+	 * rule: the engine must never pin a public handle — the handle
 	 * pins the node (`Atom._node`), never the reverse — or a content-ful
 	 * handle could never become unreachable and its record could never free.
 	 * Warm paths never read this slot: they use the `id` copy (identical by
@@ -296,14 +295,14 @@ export type Reader = (node: AnyNode) => Value;
 export type ComputedFn = (read: Reader, untracked: Reader) => Value;
 
 /**
- * The bridge's computed node record (S-C: one computed — no overlay
- * representation). Every bridge computed RIDES a kernel `Computed` record:
+ * The engine's computed node record — ONE computed representation. Every
+ * engine computed RIDES a kernel `Computed` record:
  * the kernel serves the newest world (links, marks, value cache — the
- * sampled-untracked rule falls out of kernel semantics), and the bridge
+ * sampled-untracked rule falls out of kernel semantics), and the engine
  * evaluates `fn` under render/committed worlds through the arena walks. For
- * bridge-created computeds `fn` is the authored (read, untracked) function;
- * for adopted public `Computed` handles it is the bridge's ctx adapter
- * (committed `previous` cell, `use` over the handle's own `_useCache`,
+ * engine-created computeds `fn` is the authored (read, untracked) function;
+ * for handle-resolved public `Computed`s it is the engine's ctx adapter
+ * (committed `previous` cell, the id-keyed `use` request cache,
  * background-suspension fold) around the handle's raw fn.
  */
 export class ComputedNode {
@@ -320,15 +319,16 @@ export class ComputedNode {
 	 * rule as AtomNode._h: the engine never pins a public handle; warm paths
 	 * read the `id` copy. @internal */
 	_h: Computed<unknown> | WeakRef<Computed<unknown>>;
-	/** True for adopted public handles (ctx-shaped raw fns): their world fn
-	 * is the bridge's ctx adapter, and background newest reads fold pending
-	 * suspensions to sentinel values (the old React-bindings wrapper translation). */
+	/** True for handle-resolved public computeds (ctx-shaped raw fns): their
+	 * world fn is the engine's ctx adapter, and background newest reads fold
+	 * pending suspensions to sentinel values. */
 	ctxShaped: boolean;
-	/** §4.5.3 retention: the policy comparator (HEAD order `isEqual(prev,
-	 * next)`), applied by arena refolds against the ARENA-local previous
+	/** Retention: the policy comparator (argument order `isEqual(prev,
+	 * next)`, previous first), applied by arena refolds against the
+	 * ARENA-local previous
 	 * value; undefined = default equality (Object.is). */
 	isEqual: Equals | undefined;
-	/** ctx.previous cell for adopted ctx-shaped fns: the node's last
+	/** ctx.previous cell for handle-resolved ctx-shaped fns: the node's last
 	 * COMMITTED value (a best-effort hint; may be stale or undefined),
 	 * updated at render commits from the watchers that rendered it. */
 	prevCell: { value: Value } = { value: undefined };
@@ -356,7 +356,7 @@ export type AnyNode = AtomNode | ComputedNode;
 // Batch.ts with the batch mechanism; re-exported above. The `RenderPass`
 // record, the `Watcher` class, and the watcher snapshot live in
 // RenderPass.ts with the render lifecycle; re-exported here — they are
-// bridge surface.)
+// engine surface.)
 
 export { Watcher } from './RenderPass.js';
 export type { RenderPass, RenderPassState, WatcherSnapshot } from './RenderPass.js';
@@ -381,7 +381,7 @@ export type RootState = {
 
 // The committed `run`-action Subscription record and its whole lifecycle
 // (registration, capture frame, removal, replay, boundary revalidation)
-// live in Subscription.ts; the type is re-exported here — it is bridge
+// live in Subscription.ts; the type is re-exported here — it is engine
 // surface. The `World` type — one self-consistent assignment of values to
 // all atoms — and the fold/evaluation/read-routing machinery live in
 // World.ts, beside the one shared engine-core record the strongly-connected
@@ -394,9 +394,9 @@ export type { World } from './World.js';
  * engine constructs these objects NOWHERE: instrumentation sites create packed
  * trace records directly (see TraceHooks below), and the test-side decoder
  * (tests/trace-events.ts) reconstructs this shape from an attached tracer's
- * records for lockstep/referee comparison. The type stays declared and
+ * records for model comparison. The type stays declared and
  * exported here because the package entry re-exports it (type-only) and the
- * decoder/oracle parity pin is written against it. */
+ * decoder/model parity pin is written against it. */
 export type TraceEvent =
 	| { type: 'write'; node: string; batch: BatchId; slot: BatchSlot; seq: Seq }
 	| { type: 'write-dropped'; node: string; batch: BatchId }
@@ -436,7 +436,7 @@ export type TraceEvent =
  *  - hooks receive the engine's own live objects and integers; they must not
  *    mutate them, and the recorder must not allocate per event (one
  *    documented exception: `reactEffectRun`'s dep-values array, built by its
- *    site only under the guard — the lockstep referee compares it).
+ *    site only under the guard — the model-comparison suites compare it).
  *
  * ONE channel: the packed trace stream. Every instrumentation site creates its
  * record directly through a typed hook — scalars and live engine objects in,
@@ -472,7 +472,7 @@ export type TraceHooks = {
 	renderYield(p: RenderPass): void;
 	renderResume(p: RenderPass): void;
 	renderEnd(p: RenderPass, kind: 'commit' | 'discard'): void;
-	/** Post-consequence referee markers: every retirement fold / lock-in /
+	/** Post-consequence checkpoint markers: every retirement fold / lock-in /
 	 * drain / fixup of the render end has landed (the reference model's stream
 	 * position for its render events). */
 	renderCommitted(p: RenderPass): void;
@@ -481,10 +481,10 @@ export type TraceHooks = {
 	delivery(w: Watcher, batch: BatchId, slot: BatchSlot, seq: Seq, interleaved: boolean): void;
 	/** Delivery skipped: scheduled-but-unstarted work will fold the write. */
 	suppressed(w: Watcher, batch: BatchId, slot: BatchSlot, seq: Seq): void;
-	/** A core effect's value-gated run (via the bridge's logCoreEffectRun seam). */
+	/** A core effect's value-gated run (via the engine's logCoreEffectRun seam). */
 	coreEffectRun(effect: string, value: Value): void;
 	/** A committed-world observer ran; `values` is its dep snapshot (the one
-	 * per-event array a site builds, tracer-attached only — referee-compared). */
+	 * per-event array a site builds, tracer-attached only — model-compared). */
 	reactEffectRun(effect: string, root: RootId, value: Value, values: Value[]): void;
 	/** A committed-world observer's cleanup ran (pre-re-run or removal). */
 	reactEffectCleanup(effect: string, root: RootId): void;
@@ -545,11 +545,11 @@ export let quiet = true;
 // in index.ts beside the write methods that read it every call; the quiet
 // derivation lands it there through `__setStandaloneQuiet`.)
 
-// ---- One Core probes (referee surface) --------------------------------------------
+// ---- engine-activity probes (test surface) -----------------------------------------
 // The counter record lives in engine.ts (its mutation sites span
 // WriteLog.ts, Batch.ts, World.ts, and engine.ts); engine logic never reads it.
 
-/** Referee surface — a snapshot of the engine-activity counters for the zero-cost test. @internal */
+/** Test surface — a snapshot of the engine-activity counters for the zero-cost test. @internal */
 export function __coreProbes(): { logEntries: number; batches: number; worldEvals: number; bridges: number } {
 	return { ...probes };
 }
@@ -583,7 +583,7 @@ export function engineWrite(atom: Atom<unknown>, kind: WriteKind, payload: unkno
 			// The node-less arm: no engine content (no log entries, no
 			// watchers, no arena presence) means no world consumer can see
 			// this atom except through newest — the plain graph write IS the
-			// whole quiet fold (index.ts owns the tail: fold + R-2 policy
+			// whole quiet fold (index.ts owns the tail: fold + policy
 			// equality once + kernel write). Content allocation later
 			// re-seeds base from kernel-current, which this write is part of.
 			__plainAtomWrite(atom, kind, payload);
@@ -631,8 +631,8 @@ export function __routedComputedRead(c: Computed<unknown>): unknown {
 	return core.routedComputedRead(c);
 }
 
-/** NF2 S-A: the settle-tap target (ONE closure per process; the kernel's
- * shared listener consults it at fire time — §4.5.4). */
+/** The settle-tap target (ONE closure per process; the kernel's
+ * shared listener consults it at fire time). */
 function settleTapImpl(t: PromiseLike<unknown>): void {
 	core.settleTap(t);
 }
@@ -653,9 +653,8 @@ function recordFreeImpl(recordId: NodeId, nodeIndex: number): void {
  * node shadow or one dependency link per record). */
 export type ArenaInitInts = number;
 
-/** Engine tuning — accepted by `__resetEngineForTest` (per-instance bridge
- * construction died with the class; these are RESET PARAMETERS now, and a
- * never-reset production process runs the defaults). */
+/** Engine tuning — accepted by `__resetEngineForTest` (RESET PARAMETERS:
+ * a never-reset production process runs the defaults). */
 export type EngineResetOptions = {
 	/**
 	 * Every claimed world arena's buffer starts at this capacity and grows
@@ -679,8 +678,7 @@ export type EngineResetOptions = {
 
 /**
  * THE DRIVER SEAM — the one attachment surface a host integration installs
- * (the React bindings' shim, or a test harness standing in for them). It
- * replaces the old registration/classifier/adopter/provider seam family:
+ * (the React bindings' shim, or a test harness standing in for them):
  * one record, installed once, a second attach throws (reset clears it).
  *
  * THE DRIVER CONTRACT:
@@ -720,8 +718,7 @@ export type EngineDriver = {
 };
 
 /**
- * Installs the driver, exactly once (the enforcement that replaced the
- * dying once-per-process registration latch): a second attach throws;
+ * Installs the driver, exactly once per process: a second attach throws;
  * `__resetEngineForTest` clears the slot. Throws inside any open
  * evaluation/fold frame — the seam must not move under a live frame.
  */
@@ -740,26 +737,26 @@ export function attachDriver(d: EngineDriver): void {
 	eng.recomputeQuiet(); // re-derives quiet AND standaloneQuiet (now false: every write makes the one foreign call)
 }
 
-// ---- NF2: per-world world arenas (plans/2026-07-06 §4) ---------------------------
+// ---- per-world world arenas -------------------------------------------------------
 // The WorldArena record class, its same-file layout const enums, the
 // transliterated walk family, and the whole serving/lifecycle layer
 // (serve/refold, claim/release/pool, fanout, decay, the routing walks) live
 // in WorldArena.ts; the FOLD_TRUTH serve-override marker and the world
 // fold/evaluation/read-routing layer live in World.ts. Both are composed by
-// engine.ts (createConcurrentEngine, called by the constructor below)
+// engine.ts (createConcurrentEngine, called at module initialization below)
 // through ONE shared engine-core record (World.ts
 // `EngineCore`): each factory assigns its operation table onto the record,
 // and every cross-module call reads its late-bound slot at call time — the
-// wiring that closes the evaluate → arenaServe → foldAtom recursion. The
-// class re-exports the arena class (bridge surface) and keeps own-field
+// wiring that closes the evaluate → arenaServe → foldAtom recursion. This
+// module re-exports the arena class (engine surface) and keeps module-level
 // aliases of the hot table entries so resident callers keep their one-load
 // call shapes.
 export { WorldArena } from './WorldArena.js';
 
 /**
- * The armed checker's window into the engine (W3) — returned by
+ * The armed checker's window into the engine — returned by
  * `__checkerInternals()`, consumed only by the test-side
- * referee (tests/arena-checker.ts: the divergence check and the structural
+ * checker (tests/arena-checker.ts: the divergence check and the structural
  * validator). Readonly-shaped: live state getters plus bracket methods
  * that keep every mutation's save/restore discipline engine-side.
  * @internal
@@ -771,7 +768,8 @@ export type ArenaCheckerInternals = {
 	 * values into this object at construction, so the view is in sync by
 	 * construction — a layout change here flows through automatically, unlike
 	 * a hand-copied declaration. Data-passing stays (deliberate): the arena
-	 * layout is bridge-internal with ONE external reader (the test referee),
+	 * layout is engine-internal with ONE external reader (the test-side
+	 * checker),
 	 * and exporting the enums for it would widen the module surface without
 	 * deleting any drift risk. (Contrast the KERNEL's layout, which has
 	 * independent walkers and is therefore exported from index.ts —
@@ -822,13 +820,13 @@ export type ArenaCheckerInternals = {
 	 * override at FOLD_TRUTH, capture/sink closed, eval depth bumped —
 	 * everything restored on the way out. */
 	foldTruthFrame<T>(world: World, fn: () => T): T;
-	/** The bridge's ONE cycle-error construction — the naive side's cycle
+	/** The engine's ONE cycle-error construction — the naive side's cycle
 	 * throws must compare string-equal to the arena side's. */
 	cycleError(name: string): ScheduleError;
 	/** The fold-purity bracket: the checker runs user equality comparators
 	 * under it, exactly like every other comparator call site. */
 	inCallback<T>(fn: () => T): T;
-	/** Op-depth bracket around one whole check pass: settle taps landing
+	/** Op-depth bracket around one whole checker run: settle taps landing
 	 * mid-check enqueue for the epilogue's drain instead of draining
 	 * re-entrantly (the discipline the in-class check kept via opDepth). */
 	holdOp<T>(fn: () => T): T;
@@ -849,23 +847,25 @@ export type ArenaCheckerInternals = {
  * write) and the public methods' direct dispatch (engineWrite + the routed
  * `.state` reads).
  *
- * Referee surface: the twin tests run the oracle's `checkInvariants` /
+ * Test surface: the model-comparison tests run the reference model's
+ * `checkInvariants` /
  * `snapshotModel` against a MODEL VIEW of this engine (tests/model-view.ts)
  * that materializes the model's shape — write logs, archives, origins, dedup
  * sets — from packed engine state plus a driver-side mirror fed by the
  * `onCompact` hook, so the production engine carries no mirror members.
  *
- * STATE THREADING (§3.2 of the great-refactor plan): every binding below is
+ * STATE THREADING: every binding below is
  * module state re-pointed by `composeEngine` — the ONE composition call,
  * run at module initialization and re-run only by `__resetEngineForTest`.
  * Cross-module reads go through the composition's tables at call time.
  */
 
-/** Registered nodes (atoms AND computeds) by NodeId — the kernel record
+/** Engine nodes (atoms AND computeds) by NodeId — the kernel record
  * id, one id space. `disposeComputed` and the record-free scrub clear
  * rows, so a REUSED record id can never resolve to a dead tenant. Nodes
  * appear on first CONTENT (a log entry, a watcher, arena presence, a
- * routed read, a referee construction) — never at handle creation. */
+ * routed read, an engine.atom/engine.computed construction) — never at
+ * handle creation. */
 let idToNode: Map<NodeId, AnyNode>;
 /** Batch records by id (alias of Batch.ts's registry, by identity). */
 let idToBatch: Map<BatchId, Batch>;
@@ -879,7 +879,7 @@ let watchers: Map<WatcherId, Watcher>;
 let idToSubscription: Map<EffectId, Subscription>;
 // (The trace recorder slot and the direct listeners live on the shared
 // engine core record; the `engine` surface object at the bottom of this
-// file exposes accessor pairs over them for the referee/bindings.)
+// file exposes accessor pairs over them for the bindings and the tests.)
 
 // The notification queue mechanism (deliver.ts): columns + enqueue/flush.
 // `notifyState` aliases the table's two live scalars so the resident hot
@@ -943,8 +943,9 @@ let batchOps: BatchTable;
  * write path's cache over the mechanism's registry. */
 let lastBatchId = 0;
 let lastBatchRef: Batch | undefined = undefined;
-/** Optional compaction observer (referee/diagnostics seam): called once
- * per log entry as it folds into base and leaves the write log. The oracle's
+/** Optional compaction observer (test/diagnostics seam): called once
+ * per log entry as it folds into base and leaves the write log. The
+ * reference model's
  * retention invariant needs the full history; its archive mirror lives
  * OUTSIDE the engine (tests/model-view.ts), fed by this hook — keeping
  * every compacted log entry in-engine would grow without bound. Production
@@ -986,8 +987,8 @@ let kernelTrackedReader: Reader;
 /**
  * THE COMPOSITION CALL — runs every mechanism factory (engine.ts
  * createConcurrentEngine) and re-points the module bindings above. Run once
- * at module initialization; re-run ONLY by `__resetEngineForTest` (§3.2:
- * RESET re-runs all factories; GROWTH re-runs the graph factory only and
+ * at module initialization; re-run ONLY by `__resetEngineForTest` (RESET
+ * re-runs all factories; GROWTH re-runs the graph factory only and
  * never touches this). The host record's arrows close over module state.
  */
 function composeEngine(options?: EngineResetOptions): void {
@@ -1102,7 +1103,8 @@ composeEngine();
  * seeds from kernel-current, which IS the atom's full committed history:
  * a content-less atom's every accepted write was a plain newest apply (the
  * node-less arm), and those are exactly quiet folds — visible to every
- * world by construction. There is no adoption era: a handle exists ⟺ the
+ * world by construction. There is no separate registration step: a handle
+ * exists ⟺ the
  * engine can resolve it, and allocation is an internal packing step.
  */
 function nodeForAtom(atom: Atom<unknown>): AtomNode {
@@ -1133,9 +1135,10 @@ function nextSeq(): Seq {
 	return ++seq;
 }
 
-/** Registers a node in the dense side columns (keyed by its nodeIndex).
+/** Indexes a node into the dense side columns (keyed by its nodeIndex).
  * Gap-fill keeps every column PACKED: kernel nodes without engine content
- * (plain effects/scopes/handles) consume indexes between registrations, and
+ * (plain effects/scopes/handles) consume indexes between content
+ * allocations, and
  * a write past a plain array's length would drop it to a holey kind. */
 function indexNode(node: AnyNode): void {
 	const ix = node.ix;
@@ -1153,16 +1156,17 @@ function indexNode(node: AnyNode): void {
 	evalMark[ix] = 0;
 	obsRefs[ix] = 0;
 	// Any row already here is a dead tenant's by construction (a fresh
-	// registration means the slot's previous tenant freed) — the record-free
+	// content allocation means the slot's previous tenant freed) — the
+	// record-free
 	// scrub normally cleared it already; this keeps the columns sound even
 	// if a free was missed.
 	obsDeps[ix] = undefined;
 	nodeToWatchers[ix] = undefined;
 }
 
-/** Referee/embedding constructor: a NAMED engine atom (creates the public
- * handle AND its engine content in one step — the lockstep harness names
- * nodes so streams compare by name). */
+/** Embedding/test constructor: a NAMED engine atom (creates the public
+ * handle AND its engine content in one step — the model-comparison harness
+ * names nodes so streams compare by name). */
 export function atom(name: string, initial: Value, equals?: Equals): AtomNode {
 	const handle = new Atom<Value>(initial, equals === undefined ? undefined : { isEqual: equals });
 	const node = new AtomNode(handle._id, kernelNodeIndexOf(handle._id), name, initial, equals ?? Object.is, equals === undefined, handle);
@@ -1172,8 +1176,8 @@ export function atom(name: string, initial: Value, equals?: Equals): AtomNode {
 }
 
 /**
- * Referee/embedding constructor: an engine computed (S-C: one computed —
- * the node RIDES a fresh kernel `Computed` record). The kernel getter runs
+ * Embedding/test constructor: an engine computed
+ * (the node RIDES a fresh kernel `Computed` record). The kernel getter runs
  * the authored (read, untracked) fn with the KERNEL readers — dep reads
  * take the plain kernel paths (linking to this record; untracked reads
  * clear the kernel frame, so they leave no link and never notify) — under
@@ -1184,8 +1188,8 @@ export function atom(name: string, initial: Value, equals?: Equals): AtomNode {
 export function computed(name: string, fn: ComputedFn, equals?: Equals): ComputedNode {
 	// id/ix land after the kernel record exists (the getter closure needs
 	// the node object first); nothing reads them in between. The handle slot
-	// is STRONG: the referee/embedding node IS the public object and owns
-	// its handle for its own lifetime.
+	// is STRONG: an embedding/test-created node IS the public object and
+	// owns its handle for its own lifetime.
 	const node = new ComputedNode(0, 0, name, fn, undefined as never, false, equals);
 	const handle = new Computed<unknown>(makeKernelGetter(node) as (ctx: ComputedCtx<unknown>) => Value, equals === undefined ? { label: name } : { label: name, isEqual: equals });
 	node._h = handle;
@@ -1199,7 +1203,7 @@ export function computed(name: string, fn: ComputedFn, equals?: Equals): Compute
 
 /**
  * Resolve a public `Computed` handle to its engine node, allocating content
- * on first participation (S-C): the handle's kernel record keeps serving
+ * on first participation: the handle's kernel record keeps serving
  * the newest world exactly as before — allocation only WRAPS its kernel
  * getter with the engine epilogue (observation re-pointing per re-run) and
  * builds the ctx-shaped WORLD fn: reads inside the raw fn are raw `.state`
@@ -1208,8 +1212,7 @@ export function computed(name: string, fn: ComputedFn, equals?: Equals): Compute
  * the id-keyed two-form dispatch (same key ⇒ same thenable for the node's
  * lifetime, across worlds); a background evaluation folds a pending
  * suspension to its stable sentinel VALUE (hook-initiated ones rethrow —
- * `suspendDepth`). Inlined here (the merge): the old makeCtxWorldFn /
- * makeAdoptedKernelGetter single-caller utilities.
+ * `suspendDepth`).
  */
 export function nodeForComputed(c: Computed<unknown>): ComputedNode {
 	const hit = c._node;
@@ -1272,7 +1275,7 @@ export function nodeForComputed(c: Computed<unknown>): ComputedNode {
 }
 
 /**
- * Dispose a computed (S-C — the useComputed deps-change reclamation
+ * Dispose a computed (the useComputed deps-change reclamation
  * path: the superseded node's kernel record frees and its id becomes
  * reusable). The caller owns the discipline that the node is SUPERSEDED
  * (its watchers re-keyed to the replacement; live watchers here throw).
@@ -1355,8 +1358,8 @@ function clearHandleBacklink(node: AnyNode): void {
 }
 
 /**
- * ENGINE-SIDE RECLAIM GUARDS (registered kernel-side per composition — the
- * signal-reclamation plan's §4 table rows the kernel cannot see): watcher-
+ * ENGINE-SIDE RECLAIM GUARDS (installed kernel-side per composition — the
+ * guard-table rows the kernel cannot see itself): watcher-
  * index membership (covers live, mounted-in-an-open-render, and reveal-
  * deferred watchers uniformly), observation retains (obsRefs > 0), a
  * non-empty write log, membership in any OPEN RENDER's arena, and membership
@@ -1422,7 +1425,7 @@ function kernelReadOf(dep: AnyNode): Value {
 /** Kernel-frame untracked reader: kernel `untracked()` clears the frame,
  * so the dep's own serving still runs (recompute-if-stale) but no link —
  * and therefore no notification, and no invalidation of this computed —
- * is ever recorded (§4.4.1's value face, the ruling's sampling rule). */
+ * is ever recorded (the untracked-sampling rule's value face). */
 const kernelUntrackedReader: Reader = (dep) => untracked(() => kernelReadOf(dep));
 
 /** Observation re-point after a KERNEL re-run, inside the still-open
@@ -1472,7 +1475,7 @@ export function __setSettleCapForTest(n: number): void {
 	core.setSettleCap(n);
 }
 
-// ---- NF2 S-A: reclamation (§4.5.8) + the checker window (the divergence
+// ---- quiescence reclamation + the checker window (the divergence
 // check and structural validator are TEST machinery and live in
 // tests/arena-checker.ts, fed through __checkerInternals below) ----
 
@@ -1489,10 +1492,10 @@ function consumerCount(rootId: RootId): number {
 	return n;
 }
 
-/** Quiesce duty 1 (§4.5.8): release committed arenas whose consumer
+/** Quiesce duty 1: release committed arenas whose consumer
  * population is zero — buffer to the pool (claim gen bumped), columns
  * dropped, lists discarded; the root RECORD stays (no teardown event
- * exists). Then duty 2 (§4.5.7): per-arena read-clock renumber over the
+ * exists). Then duty 2: per-arena read-clock renumber over the
  * SURVIVORS only. */
 function arenaQuiesceSweep(): void {
 	for (const [rootId, a] of rootToArena) {
@@ -1505,7 +1508,7 @@ function arenaQuiesceSweep(): void {
 }
 
 /**
- * THE CHECKER WINDOW (W3): the one seam feeding the test-side referee —
+ * THE CHECKER WINDOW: the one seam feeding the test-side checker —
  * tests/arena-checker.ts, which owns the armed divergence check
  * (arena-served values ≡ fold-truth) and the structural validator. The
  * views are readonly-shaped: live state getters plus bracket methods
@@ -1545,14 +1548,14 @@ export function __checkerInternals(): ArenaCheckerInternals {
 }
 
 /** Test seam: the root's committed arena shell, if materialized — the
- * S-D pool/wrap pins read shell state (claimGen, buffer identity,
+ * pool/wrap pins read shell state (claimGen, buffer identity,
  * column capacities) and force the clocks toward the Int32 ceiling.
  * @internal */
 export function __arenaForTest(rootId: RootId): WorldArena | undefined {
 	return rootToArena.get(rootId);
 }
 
-/** Test seam: pooled arena shells (S-D pool reuse/cap pins). @internal */
+/** Test seam: pooled arena shells (the pool reuse/cap pins). @internal */
 export function __arenaPoolForTest(): WorldArena[] {
 	return core.arenaPool;
 }
@@ -1571,8 +1574,8 @@ export function __columnsForTest(): {
 	return { nodesArr, lastWalk, evalMark, obsRefs, obsDeps, nodeToWatchers };
 }
 
-/** Test seam: force an id-tenancy generation bump — the kernel-GEN referee
- * seam. Tenancy IS the kernel record generation since the id-space merge,
+/** Test seam: force an id-tenancy generation bump.
+ * Tenancy IS the kernel record generation (one id space),
  * so the bump writes the LIVE record's GEN field in kernel memory: arena
  * shadows re-tenant cold at their next consult and watcher stamps go
  * stale, exactly as a real free+reuse would move them. @internal */
@@ -1594,7 +1597,7 @@ export function __arenaStats(): { committed: number; renders: number; pooled: nu
 }
 
 /** Test seam: a committed arena's (dep → sub) link mode, or undefined
- * when no link exists (§4.4.1 mode-transition pin). @internal */
+ * when no link exists (the mode-transition pins read it). @internal */
 export function __arenaLinkMode(rootId: RootId, dep: AnyNode, sub: AnyNode): 'strong' | 'weak' | undefined {
 	return core.__arenaLinkMode(rootId, dep, sub);
 }
@@ -1640,9 +1643,9 @@ export function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): numbe
 // Batch.ts (composed as `batchOps`; `idToBatch`/`slots` aliased above).
 // Retirement lives with it; the public surface keeps thin delegates.
 
-/** Create a batch (the public/referee surface — see Batch.ts openBatch;
- * R-5: with devChecks armed and no driver attached this throws — hosts
- * that open batches must retire them). */
+/** Create a batch (the public embedding/test surface — see Batch.ts
+ * openBatch; with devChecks armed and no driver attached this throws —
+ * hosts that open batches must retire them). */
 export function openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
 	return batchOps.openBatch(opts);
 }
@@ -1666,7 +1669,7 @@ export function nodeById(id: NodeId): AnyNode {
  * quiet is base ≡ kernel newest ≡ every world's value, so a batch opened
  * later starts from a base that already contains the quiet history.
  * Clock coherence: the fold creates one sequence and stamps it into the
- * atom's baseSeq (compaction + the referee's model view read it) and the
+ * atom's baseSeq (compaction + the test-side model view read it) and the
  * committed-advance clock (committedAdvance), so baseline/fast-out checks see the fold. Observers: no
  * walk machinery is armed, so the small live-observer population is
  * reconciled value-gated, exactly like a durable drain (corrections for
@@ -1678,18 +1681,18 @@ export function nodeById(id: NodeId): AnyNode {
  * changes which write path executes (equality drops stay silent: there
  * is no batch to attribute a drop to).
  *
- * R-2 equality: `isEqual(current, incoming)` — kernel order — invoked ONCE,
- * at the acceptance decision. The direct kernel apply below runs no policy
- * comparator (the old public-method re-entry double-invoked it).
+ * Policy equality: `isEqual(current, incoming)` — kernel order — invoked
+ * ONCE, at the acceptance decision. The direct kernel apply below runs no
+ * policy comparator (a public-method re-entry would double-invoke it).
  */
 export function quietWrite(node: AtomNode, kind: WriteKind, payload: unknown): void {
 	const c = core; // one load; the frame guards/pre-checks below stay one-property reads
 	if (c.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 	if (c.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
-	// NF2 S-A: public-operation frame (matches `write`): the fused kernel
-	// apply below can run effects whose writes are WHOLE nested operations
-	// (R-3) — settlements they tap enqueue for THIS fold's epilogue, and the
-	// armed divergence check waits for the top-level boundary.
+	// Public-operation frame (matches `write`): the fused kernel
+	// apply below can run effects whose writes are WHOLE nested
+	// operations — settlements they tap enqueue for THIS fold's epilogue,
+	// and the armed divergence check waits for the top-level boundary.
 	c.opDepth++;
 	try {
 		quietWriteInner(node, kind, payload);
@@ -1703,7 +1706,7 @@ function quietWriteInner(node: AtomNode, kind: WriteKind, payload: unknown): voi
 	const c = core;
 	const prev = node.base;
 	// Fast arm — bench-pinned, do not fold into the eqAtom general arm
-	// (spkw-quiet A/B, 2026-07: folding cost +37% on the bare quiet fold,
+	// (A/B-measured: folding cost +37% on the bare quiet fold,
 	// 12.9 → 17.7 ns): equality drops on one bare Object.is — no
 	// applyOp/eqAtom call layer on the dominant write shape.
 	let next: Value;
@@ -1715,7 +1718,7 @@ function quietWriteInner(node: AtomNode, kind: WriteKind, payload: unknown): voi
 	} else {
 		next = kind === 0 /* WriteKind.SET */ ? payload : applyOp(node, kind, payload, prev);
 		if (eqAtom(node, prev, next)) {
-			return; // R-2 equality drop — once, kernel order (current, incoming)
+			return; // policy equality drop — once, kernel order (current, incoming)
 		}
 	}
 	node.base = next;
@@ -1723,20 +1726,20 @@ function quietWriteInner(node: AtomNode, kind: WriteKind, payload: unknown): voi
 	const tr = c.trace;
 	if (tr !== undefined) tr.quietWrite(node, node.baseSeq);
 	// Direct kernel apply: the plain write tail, no public-method re-entry
-	// (policy checked, op folded, acceptance decided — R-2's "once").
+	// (policy checked, op folded, acceptance decided — equality's "once").
 	// Effects flushed by it re-enter the public write path and classify
-	// normally (R-3). `node.id` IS the kernel record id (never through the
+	// normally. `node.id` IS the kernel record id (never through the
 	// handle slot — reclamation keeps it weak for resolved nodes).
 	writeNewest(node.id, next);
-	// NF2 S-A flip site (d): quiet fold — after the base/committedAdvance advance,
-	// before quietDrain and the sub scan (§4.1.2; the rootToArena.size
-	// check is the one scalar branch PR1's ledger documents).
+	// Committed-truth flip site: quiet fold — after the base/committedAdvance
+	// advance, before quietDrain and the sub scan (the rootToArena.size
+	// check is the one scalar branch consumer-less processes pay).
 	fanAtomsToCommittedArenas(oneAtomBuf(node));
 	if (watchers.size !== 0) c.quietDrain();
-	// A quiet fold moves committed truth for every root — an EF2 boundary
-	// (quiet ⇔ no open renders, so no frame can defer the re-check).
+	// A quiet fold moves committed truth for every root — a boundary
+	// operation (quiet ⇔ no open renders, so no frame can defer the re-check).
 	if (c.committedSubCount !== 0) revalidateCommittedSubs(undefined);
-	for (const a of rootToArena.values()) arenaDecay(a); // NF2 S-A boundary decay
+	for (const a of rootToArena.values()) arenaDecay(a); // boundary mark decay
 	if (notifyState.n !== 0) notifyOps.flushNotify();
 }
 
@@ -1764,7 +1767,7 @@ export function bareWrite(node: AtomNode, kind: WriteKind, payload: unknown): vo
 // settlement.ts with the operation epilogue; aliased above.)
 
 /**
- * The write path (the referee/protocol surface: an explicit batch id, or
+ * The write path (the embedding/protocol surface: an explicit batch id, or
  * undefined for the context-free arm). Logged steps, in order: classify
  * (caller) → drop check → intern slot → append packed log entry + write
  * clock → member-slot fanout → apply to the kernel with stepwise equality
@@ -1775,9 +1778,9 @@ export function writeInBatch(batchId: BatchId | undefined, node: AtomNode, kind:
 	if (c.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 	if (c.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 	if (node.kind !== 'atom') throw new ScheduleError('writes target atoms');
-	// NF2 S-A: public-operation frame — settlements landing anywhere
+	// Public-operation frame — settlements landing anywhere
 	// inside (walks, effect bodies, notify callbacks) enqueue and the
-	// epilogue drains to empty (§4.5.4's fixed point).
+	// epilogue drains to empty (the settlement fixed point).
 	c.opDepth++;
 	try {
 		writeInner(batchId, node, kind, payload);
@@ -1810,7 +1813,7 @@ function writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKin
 	if (log.n === log.start) {
 		if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
 			// Fast arm — bench-pinned, do not fold into the general arm
-			// (spkw A/B, 2026-07: folding the two write-path fast arms
+			// (A/B-measured: folding the two write-path fast arms
 			// into their eqAtom general arms cost +11% bare / +3-6%
 			// chain3+watch1 per logged write). A plain set with default
 			// equality drops on one bare Object.is — no applyOp/eqAtom
@@ -1824,8 +1827,8 @@ function writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKin
 		} else {
 			const evaluated = applyOp(node, kind, payload, node.base);
 			if (eqAtom(node, node.base, evaluated)) {
-				// R-2 equality drop — kernel order (current, incoming), once at
-				// the acceptance decision.
+				// Policy equality drop — kernel order (current, incoming), once
+				// at the acceptance decision.
 				const tr = core.trace;
 				if (tr !== undefined) tr.writeDropped(node, batchId);
 				endOp();
@@ -1853,9 +1856,9 @@ function writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKin
 		for (const r of roots.values()) {
 			if ((r.committedBits & bit0) !== 0) {
 				r.committedDirtySlots |= bit0;
-				// NF2 S-A flip site (c): committed-member write — fan the ONE
-				// written atom into the member root's arena. Marks only; the
-				// effect scan stays at the next boundary (EF2 as amended, §4.0).
+				// Committed-truth flip site: committed-member write — fan the
+				// ONE written atom into the member root's arena. Marks only;
+				// the effect scan stays at the next boundary.
 				const ra = rootToArena.get(r.id);
 				if (ra !== undefined) fanAtomsToArena(ra, oneAtomBuf(node), false);
 			}
@@ -1870,24 +1873,24 @@ function writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKin
 	}
 
 	// Apply to the kernel eagerly with stepwise equality, so the newest
-	// world stays directly readable off the kernel arena. R-3: the direct
+	// world stays directly readable off the kernel arena. The direct
 	// apply's effect flush re-enters the public write path, so writes made
-	// by core effects during this apply CLASSIFY NORMALLY (the old
-	// recursion guard silently bypassed recording — a fixed bug).
+	// by core effects during this apply CLASSIFY NORMALLY (a recursion
+	// guard here would silently bypass recording).
 	if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
 		// Fast arm — bench-pinned, do not fold into the general arm
-		// (spkw A/B, 2026-07: folding the two write-path fast arms
+		// (A/B-measured: folding the two write-path fast arms
 		// into their eqAtom general arms cost +11% bare / +3-6%
 		// chain3+watch1 per logged write). A plain set with default
 		// equality applies unconditionally: the kernel's own
-		// store-compare gates propagation, which beats paying
-		// kernelValueOf + Object.is up front on every EFFECTIVE write.
+		// store-compare gates propagation, which beats paying a
+		// kernel read + Object.is up front on every EFFECTIVE write.
 		writeNewest(node.id, payload);
 	} else {
 		const prevNewest = E.read(node.id);
 		const nextNewest = applyOp(node, kind, payload, prevNewest);
 		if (!eqAtom(node, prevNewest, nextNewest)) {
-			// R-2 order: (current, incoming) — the eager-advance site.
+			// Equality order: (current, incoming) — the eager-advance site.
 			writeNewest(node.id, nextNewest);
 		}
 	}
@@ -1900,7 +1903,7 @@ function writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKin
 }
 
 /**
- * Referee seam for core `effect()` runs. Core effects are REAL kernel
+ * Trace seam for core `effect()` runs. Core effects are REAL kernel
  * effects (tests/helpers.ts `mountEngineCoreEffect` over the public
  * `effect()`), flushed by the eager kernel apply itself — the engine
  * holds no record of them. Their wrappers report each value-gated run
@@ -1998,7 +2001,7 @@ export function settleAction(batchId: BatchId): void {
 }
 
 /** Transitive dependency closure feeding a node (RenderPass.ts — the
- * triple walk; public referee/diagnostics surface). */
+ * triple walk; public embedding/diagnostics surface). */
 export function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 	return renderOps.dependencyClosureOf(nodeId, render);
 }
@@ -2020,23 +2023,22 @@ export function quiescent(): boolean {
  * Quiescence (no live batches, no live pins, no parked actions): the
  * epoch bumps, dead episode records drop, and
  * the ARENAS PERSIST — their links are current structure, not an
- * episode log (§4.1), so the routing coverage committed observers rely
- * on survives by persistence (the old K1 bulk-reset + kernel-pull
- * refresh dissolved with K1 at S-B; nothing re-records because nothing
+ * episode log, so the routing coverage committed observers rely
+ * on survives by persistence (nothing re-records because nothing
  * was lost). Two arena duties run, in order: the zero-consumer
  * reclamation sweep, then the read-clock renumber over the survivors
- * only (§4.5.8, §4.5.7).
+ * only.
  *
- * SEQUENCE-WIDTH BOUND (where renumbering used to live). Retained
+ * SEQUENCE-WIDTH BOUND. Retained
  * sequence values (baseSeq, retirement stamps, committedAdvance, watcher snapshot
  * pins) are NOT rewritten at quiescence: sequences are plain JS numbers,
  * exact for integers to 2^53, they are only ever compared (<, <=, max —
  * never bit-twiddled), and every storage site is a scalar field or a
  * plain number array, so the engine stays correct until 2^53 creates —
- * about 28 years at a sustained 10M writes/sec. Renumbering was measured
- * (grind batch 4, item C): forcing every seq past SMI range (2^35) on
- * log-heavy shapes moved fold/write throughput by ~1% — within noise,
- * below the 2% keep threshold — so the machinery was deleted. One
+ * about 28 years at a sustained 10M writes/sec. Renumbering was
+ * A/B-measured: forcing every seq past SMI range (2^35) on
+ * log-heavy shapes moved fold/write throughput by ~1% — within noise —
+ * so no renumbering machinery exists. One
  * diagnostics caveat: `cosignal/trace` packs seqs into Int32 records,
  * so trace decode fidelity (not engine correctness) degrades past
  * 2^31-1 created sequences.
@@ -2060,9 +2062,9 @@ export function quiesce(): void {
 	}
 	lastBatchId = 0;
 	lastBatchRef = undefined;
-	// (No newest-side reset since S-C: kernel caches persist — nothing
+	// (No newest-side reset: kernel caches persist — nothing
 	// newest-visible changes at quiescence.)
-	// Arena duties (§4.5.8 then §4.5.7): reclamation sweep, then the
+	// Arena duties, in order: reclamation sweep, then the
 	// read-clock renumber over surviving consumer-populated arenas.
 	arenaQuiesceSweep();
 	// Dead-episode bookkeeping zeroes (bulk-zero at episode reset).
@@ -2100,7 +2102,7 @@ export function renderValue(node: AnyNode, render: RenderPass): Value {
 	return evaluate(node, { kind: 'render', render });
 }
 
-// ------------------------------------------------- the engine reset (R-6)
+// ------------------------------------------------- the engine reset (test-only)
 
 /**
  * Idle preconditions for `__resetEngineForTest`: a reset from inside any
@@ -2129,8 +2131,8 @@ function assertIdleForReset(): void {
 }
 
 /**
- * THE ENGINE RESET (test-only; great-refactor R-6) — the fresh-engine
- * analog that replaced per-test bridge construction. Order:
+ * THE ENGINE RESET (test-only) — the fresh-engine
+ * analog for suites that need one engine per test. Order:
  *
  *  1. assertIdle (above) — preconditions, loudly.
  *  2. the driver's protocol reset FIRST (protocol v2's hook): the host's
@@ -2145,8 +2147,8 @@ function assertIdleForReset(): void {
  *  4. the policy scrub (index.ts): configure() state, the lifecycle map,
  *     queue, and its scheduled flush.
  *  5. the suspense scrub: the id-keyed ctx.use request caches.
- *  6. probes to zero (the zero-cost referee re-baselines per test).
- *  7. `composeEngine(options)` — EVERY mechanism factory re-runs (§3.2);
+ *  6. probes to zero (the zero-cost test re-baselines per test).
+ *  7. `composeEngine(options)` — EVERY mechanism factory re-runs;
  *     trace detaches (the fresh core's slot is undefined), checker state
  *     disarms, devChecks/arenaInitInts land as reset parameters, and the
  *     driver slot is empty (attach again after the reset).
@@ -2176,9 +2178,9 @@ export function __resetEngineForTest(options?: EngineResetOptions): void {
  * THE ENGINE SURFACE — the module's operational API grouped as one record
  * (the kernel's own op-table pattern): every function field is the module
  * function above, every accessor reads the CURRENT composition's state, so
- * the record stays valid across `__resetEngineForTest`. The lockstep
- * harness, the referee tooling, and the React bindings all drive this one
- * object; nothing constructs engines.
+ * the record stays valid across `__resetEngineForTest`. The test
+ * harnesses, the diagnostics tooling, and the React bindings all drive this
+ * one object; nothing constructs engines.
  */
 export const engine = {
 	// creation + resolution
@@ -2226,7 +2228,7 @@ export const engine = {
 	evaluate: (node: AnyNode, world: World): Value => evaluate(node, world),
 	foldAtom: (node: AtomNode, world: World): Value => foldAtomOp(node, world),
 	logCoreEffectRun,
-	// referee seams
+	// test seams
 	__coreProbes,
 	__checkerInternals,
 	__arenaForTest,
@@ -2305,7 +2307,7 @@ export const engine = {
 	set trace(hooks: TraceHooks | undefined) {
 		core.trace = hooks;
 	},
-	/** Optional compaction observer (referee/diagnostics seam — see the
+	/** Optional compaction observer (test/diagnostics seam — see the
 	 * module-state declaration). */
 	get onCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined {
 		return onCompact;
@@ -2314,7 +2316,7 @@ export const engine = {
 		onCompact = fn;
 	},
 	// direct listeners (the bindings' consumption surface — attachDriver
-	// assigns them too; these accessors are the referee/diagnostics face)
+	// assigns them too; these accessors are the test/diagnostics face)
 	get onDelivery(): ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined {
 		return core.onDelivery;
 	},
@@ -2333,18 +2335,19 @@ export const engine = {
 	set onCorrection(fn: ((w: Watcher) => void) | undefined) {
 		core.onCorrection = fn;
 	},
-	/** Referee surface — the recorded dependency edges as dep → dependents
-	 * (the union of every live arena's links; read by graphviz/twin/soak). */
+	/** Diagnostics surface — the recorded dependency edges as dep →
+	 * dependents (the union of every live arena's links; read by graphviz
+	 * and the test suites). */
 	get dependencyEdges(): Map<NodeId, Set<NodeId>> {
 		return core.dependencyEdges();
 	},
-	/** Stale-watcher loud skips (the P1 aliasing pin). @internal */
+	/** Stale-watcher loud skips (the dormant-watcher aliasing pin). @internal */
 	get __staleWatcherSkips(): number {
 		return renderOps.staleWatcherSkips();
 	},
 };
 
-/** The engine surface's type (the referee tooling's parameter shape). */
+/** The engine surface's type (the diagnostics tooling's parameter shape). */
 export type CosignalEngine = typeof engine;
 
 // One Core: this module is internal machinery of the single `cosignal`

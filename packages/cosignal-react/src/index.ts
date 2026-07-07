@@ -1,8 +1,9 @@
 /**
  * cosignal-react — public surface. The bindings couple `cosignal`'s
- * concurrent engine (dormant until registered; see the cosignal README's
- * "sync by default" posture) to the external-runtime protocol of a patched
- * React build; `registerCosignalReact()` activates both.
+ * always-on concurrent engine to the external-runtime protocol of a patched
+ * React build: `registerCosignalReact()` attaches the engine's driver and
+ * subscribes to the protocol's events, and the hooks below are the
+ * component-side surface.
  */
 
 export {
@@ -19,7 +20,7 @@ export {
 export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // Curated re-export of the engine surface an app using these bindings
-// actually consumes: the signal constructors the hooks accept (S-C: kernel
+// actually consumes: the signal constructors the hooks accept (kernel
 // `Computed` IS the supported derived type — `useComputed` returns one, and
 // standalone instances world-route through the core's computed-read seam),
 // the write/read utilities that are world-safe under React, and the types

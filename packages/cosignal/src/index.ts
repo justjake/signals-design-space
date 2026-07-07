@@ -1,6 +1,15 @@
 /**
- * cosignal — the package entry: the POLICY LAYER over the kernel, the host
- * seams the concurrent engine attaches through, and the public surface.
+ * cosignal — the package entry: the POLICY LAYER over the kernel, the public
+ * surface, and the re-export point for the concurrent engine (which composes
+ * at module initialization — see "ONE CORE, ONE ENTRY" below).
+ *
+ * READING ORDER for the package: this header (vocabulary), then graph.ts
+ * (the kernel), then concurrent.ts (the engine and its vocabulary), then the
+ * mechanism modules it composes — WriteLog.ts, Batch.ts, World.ts,
+ * WorldArena.ts, RenderPass.ts, Subscription.ts, deliver.ts, observation.ts,
+ * settlement.ts, engine.ts (the composition root) — with suspense.ts and
+ * lifecycle.ts beside the policy layer, and errors.ts/trace.ts/graphviz.ts
+ * self-contained.
  *
  * ─── VOCABULARY (in reading order; used throughout this package) ─────────────
  *
@@ -57,9 +66,9 @@
  *   alternative views of the state ("worlds", see the README) by
  *   re-applying — folding — recorded write operations over a base value;
  *   that only works if updaters and reducers are pure. They therefore run
- *   under the same FOLD-PURITY guard whether or not a bridge is registered:
- *   signal reads and writes inside an updater or reducer throw (see
- *   runFold).
+ *   under the same FOLD-PURITY guard on every path, engine-dispatched or
+ *   standalone: signal reads and writes inside an updater or reducer throw
+ *   (see runFold).
  *
  * With that vocabulary, the package's kernel-side layers and their homes:
  *
@@ -100,7 +109,7 @@
  *      as sentinel boxes (suspense.ts); the observed lifecycle
  *      (AtomOptions.effect — the "first subscriber attached / last one
  *      detached" callback, counted over the union of kernel subscribers and
- *      bridge watchers, lifecycle.ts) with microtask flap damping; the
+ *      engine watchers, lifecycle.ts) with microtask flap damping; the
  *      fold-purity and writes-in-computeds disciplines.
  *
  * ─── ONE CORE, ONE ENTRY ─────────────────────────────────────────────────────
@@ -139,13 +148,13 @@
  *       flag set at creation for atoms carrying an observed-lifecycle
  *       effect, so the kernel's own liveness transitions can feed the
  *       observed-lifecycle option (AtomOptions.effect) — one consumer kind
- *       of the observation union (bridge watchers and the host observation
- *       index are the other; see the observed-lifecycle section). Since
- *       S-C the kernel arm is a per-LINK refcount (linkInsert +1 /
+ *       of the observation union (watchers and the engine's observation
+ *       index are the other; see the observed-lifecycle section). The
+ *       kernel arm is a per-LINK refcount (linkInsert +1 /
  *       unlink -1, lifecycle-flagged deps only, HOST_OWNED subscribers
- *       excluded — host computeds carry their own observation arm); the
- *       union's observable edges (effect at 0→1, cleanup at →0) are
- *       unchanged. Cleared in freeNode.
+ *       excluded — engine computeds carry their own observation arm); the
+ *       union's observable edges (effect at 0→1, cleanup at →0) count
+ *       every consumer kind. Cleared in freeNode.
  *   D2. computedRead throws CycleError when the computed is re-entered
  *       during its own evaluation: reading a computed while its own
  *       evaluation frame is open is a dependency cycle, and throwing beats
@@ -166,8 +175,10 @@
  *       read-heavy workloads.
  *   D4. A computed's aux value slot — `values[(id >> 2) + 1]`, the "signal
  *       pending value OR effect cleanup" column, unused for computeds —
- *       holds the owning `Computed` instance (policy state for boxes and
- *       the ctx.use key cache; same packed side column, no extra map).
+ *       deliberately stays EMPTY. Policy state that could ride it (the
+ *       owning instance for ctx.use) is id-keyed in suspense.ts instead,
+ *       so the kernel never pins a public handle — a dropped handle's
+ *       record must stay reclaimable.
  *   D5. Engine gains cold policy ops the policy layer needs:
  *       invalidateComputed (settlement-invalidate), markLifecycle (D1),
  *       activeIsComputed (backs the forbidWritesInComputeds check).
@@ -184,8 +195,8 @@
  * effect/scope records, plus FinalizationRegistry-driven recovery of
  * atom/computed records whose handles were garbage-collected — the guard
  * table, retry triggers, and two-phase free path live in graph.ts's
- * reclamation section per plans/2026-07-07-signal-reclamation.md) — is
- * kernel-wide behavior, bridge registered or not, documented at its
+ * reclamation section) — is
+ * kernel-wide behavior on every path, documented at its
  * implementation sites in graph.ts.
  */
 
@@ -315,7 +326,7 @@ export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: u
 /**
  * The plain-path write tail shared by the standalone fast arm and the
  * engine's node-less arm: fold the op (updaters under the fold-purity
- * guard), then `writeAtom` — which applies the R-2 policy equality ONCE
+ * guard), then `writeAtom` — which applies the policy equality ONCE
  * (kernel order: `isEqual(current, incoming)`) at the acceptance decision
  * and takes the kernel write + flush. @internal
  */
@@ -418,10 +429,10 @@ export function __setStandaloneQuiet(v: boolean): void {
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
 // The observed-lifecycle option — the per-atom state map, the union
 // refcount, and the flap-damped microtask flush — lives in lifecycle.ts
-// (its header carries the full story). The Atom constructor below registers
-// each lifecycle-carrying atom into `lifecycleStates`; the kernel arm feeds
-// the refcount from linkInsert/unlink; the bridge-watcher arm enters
-// through these re-exported seams (host seam surface, called by the
+// (its header carries the full story). The Atom constructor below marks
+// each lifecycle-carrying atom's record; the kernel arm feeds
+// the refcount from linkInsert/unlink; the watcher arm enters
+// through these re-exported seams (called by the
 // concurrent engine's observation index).
 export { __lifecycleRetain, __lifecycleRelease } from './lifecycle.js';
 
@@ -433,7 +444,7 @@ export { __lifecycleRetain, __lifecycleRelease } from './lifecycle.js';
 
 /**
  * Runs a reducer/updater under the fold-purity guard. The rule: updaters and
- * reducers must be pure — a registered bridge stores and replays them per
+ * reducers must be pure — the concurrent engine stores and replays them per
  * world — so signal reads and writes inside them always throw.
  * Mechanism: the operation table is swapped to the POISON table for the
  * duration (graph.ts's fold-guard pair), so every read/write/creation the fold attempts throws at the
@@ -454,9 +465,11 @@ function runFold<T>(fn: () => T): T {
 // ---- the computed evaluation policy (suspense.ts) --------------------------------
 // The suspension/exception machinery — the thenable protocol, the ctx.use
 // request cache, the kernel's storeThrown/boxedRead cold hooks, and the
-// settle tap — lives in suspense.ts (its header carries the full story);
-// the two seams below are re-exported (bindings/bridge surface).
-export { __setSettleTap, __ctxUse } from './suspense.js';
+// settle tap — lives in suspense.ts (its header carries the full story).
+// __ctxUse is re-exported for the test suites (the arena and leak-audit
+// specs drive the request cache directly); the engine itself imports it
+// from './suspense.js'.
+export { __ctxUse } from './suspense.js';
 
 
 
@@ -482,7 +495,7 @@ export type AtomOptions<T> = {
 	 * Observed lifecycle: runs when the atom gains its first subscriber of
 	 * ANY kind — a kernel subscriber (a live computed chain, a core
 	 * `effect()`) or a React component subscribed through the bindings (a
-	 * bridge watcher; `useSignal`) — and the returned cleanup runs once the
+	 * watcher; `useSignal`) — and the returned cleanup runs once the
 	 * last subscriber of every kind is gone. One observation state over the
 	 * union: an atom held by both kinds at once observes exactly once. Both
 	 * transitions are delivered in a microtask so observe/unobserve flaps
@@ -492,9 +505,10 @@ export type AtomOptions<T> = {
 	effect?: (ctx: AtomCtx<T>) => void | (() => void);
 	/**
 	 * Policy equality for writes: an incoming value equal to the newest value
-	 * is dropped (unconditionally with no bridge registered; under a bridge,
-	 * only while the atom's write history holds no un-retired log entries). The
-	 * kernel itself compares reference identity only; keep values
+	 * is dropped — unconditionally while the atom's write history is empty;
+	 * once un-retired log entries exist, different worlds may fold different
+	 * values, so recorded writes are kept and equality applies per fold step.
+	 * The kernel itself compares reference identity only; keep values
 	 * reference-stable rather than relying on deep equality.
 	 */
 	isEqual?: (a: T, b: T) => boolean;
@@ -524,19 +538,19 @@ export class Atom<T> {
 	 * handle-node link is 1:1 for the handle's life; the record-free scrub
 	 * clears it. Creation is ONE STEP: the constructor makes the kernel
 	 * record, and the engine resolves the handle by its id — content
-	 * allocates lazily, never through a user-facing adoption step. @internal */
+	 * allocates lazily, never through any user-facing extra step. @internal */
 	_node: AtomNode | undefined = undefined;
 	readonly label: string | undefined;
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
 		maybeBoundary();
-		// RECLAMATION (plans/2026-07-07-signal-reclamation.md): a dropped
+		// RECLAMATION: a dropped
 		// handle's record recovers via the finalizer; registration rides the
 		// allocation op. Direct lean-instance registration — Atom (and
 		// ReducerAtom, which registers here through super() and completes
-		// its shape with one post-constructor field — flagged for the
-		// per-class creation profile) is a flat field record, the
-		// donor-measured cheap GC-death shape. Constructor-only cost.
+		// its shape with one post-constructor field) is a flat field record,
+		// the shape measured cheapest for the GC to collect.
+		// Constructor-only cost.
 		const id = E.newSignal(initialState, this);
 		this._id = id;
 		this._isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
@@ -544,7 +558,7 @@ export class Atom<T> {
 		const effect = options?.effect;
 		if (effect !== undefined) {
 			E.markLifecycle(id);
-			// THE DORMANT OWNER (reclamation plan §2): the user's callback
+			// THE DORMANT OWNER (see lifecycle.ts): the user's callback
 			// lives in the atom's own record `fns` slot — atoms never use
 			// that column, it is engine memory addressed by id, and the
 			// record-free path clears it like every column. The ACTIVE
@@ -590,7 +604,7 @@ export class Atom<T> {
 
 	/** Replaces the atom's value. Policy asserts first; then the standalone
 	 * fast arm (no engine content, quiet, no driver — the plain kernel
-	 * write, R-2 equality once) or the engine dispatch (driver batch
+	 * write, policy equality once) or the engine dispatch (driver batch
 	 * context / quiet fold / ambient batch). */
 	set(value: T): void {
 		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
@@ -630,8 +644,8 @@ export type ReducerAtomOptions<S> = AtomOptions<S>;
  * An atom whose writes go through a reducer. The reducer is fixed at
  * creation and must be pure — it runs under the fold-purity guard.
  * A thin layer over `update`: dispatch(action) is exactly
- * `update(s => reduce(s, action))`, so with a bridge registered the
- * recorded op is an UPDATE whose closure carries the reducer and the
+ * `update(s => reduce(s, action))`, so an engine-dispatched dispatch
+ * records an UPDATE whose closure carries the reducer and the
  * action — replayed per world like any other updater.
  */
 export class ReducerAtom<S, A> extends Atom<S> {
@@ -655,7 +669,7 @@ export class Computed<T> {
 	/** The engine node, once this handle has ENGINE CONTENT (see Atom._node —
 	 * same one-step-creation, content-lazy rule). @internal */
 	_node: ComputedNode | undefined = undefined;
-	/** Retention columns (S-C): the RAW authored fn and the policy
+	/** Retention columns: the RAW authored fn and the policy
 	 * comparator, kept on the owning instance (GC-owned, so a reused kernel
 	 * id can never serve another tenant's fn/comparator) — the engine's
 	 * world evaluations run the raw fn against WORLD-local previous values;
@@ -677,12 +691,12 @@ export class Computed<T> {
 		// the cheap GC-death shape.
 		const id = E.newComputed(fn as (ctx: unknown) => unknown, this);
 		this._id = id;
-		// (The old D4 aux-slot instance backref died at the merge: ctx.use
-		// owner resolution is ID-KEYED now — suspense.ts resolves the
+		// (ctx.use owner resolution is ID-KEYED — suspense.ts resolves the
 		// evaluating record straight from `activeSub`, and the per-key
 		// request cache is a nodeIndex-keyed engine column scrubbed at
-		// record free. The aux slot stays empty for computeds; nothing pins
-		// the handle — the reclamation plan's L3 prerequisite.)
+		// record free. The aux slot stays empty for computeds — D4: nothing
+		// kernel-side pins the handle, so a dropped handle's record can
+		// reclaim.)
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
@@ -707,8 +721,8 @@ export class Computed<T> {
 	 * (the kernel's boxed-read tail, D3). Inside a fold frame the dispatch
 	 * itself throws (POISON table).
 	 *
-	 * With a host routing context live (world evaluation / ambient world),
-	 * the host serves the value of the world doing the asking — the S-C
+	 * With a routing context live (world evaluation / ambient world),
+	 * the engine serves the value of the world doing the asking — the
 	 * computed-read seam, the exact twin of Atom.state's: armed only while a
 	 * routing context exists, gated on `activeSub === 0` (KERNEL-FRAME READS
 	 * ARE NEVER WORLD-ROUTED — see Atom.state for the poisoning argument).

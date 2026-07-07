@@ -3,7 +3,7 @@
 	"private": true,
 	"version": "0.1.0",
 	"license": "MIT",
-	"description": "One concurrency-ready signals library, sync by default: writable atoms, lazy computed values, and effects with alien-signals-compatible semantics on a packed typed-array kernel; registering the React bridge (registerReactBridge) turns on write recording as batches and consistent per-render world views — never used, never paid for beyond one predictable branch. Includes a zero-allocation trace recorder (cosignal/trace).",
+	"description": "A signals library designed for React concurrent rendering: writable atoms, lazy computed values, and effects with alien-signals-compatible semantics on a packed typed-array kernel. Writes record into batches on one timeline and every render reads its own consistent world view — apps that never start a transition pay almost nothing. Includes a zero-allocation trace recorder (cosignal/trace).",
 	"type": "module",
 	"main": "./src/index.ts",
 	"exports": {

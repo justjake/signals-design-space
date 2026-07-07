@@ -52,16 +52,18 @@ test suite.)
 ## Requirements
 
 React itself does not expose when it starts, pauses, or commits a render
-pass — so these bindings require a React build implementing the
+— so these bindings require a React build implementing the
 **cosignal external-runtime protocol**: a patched React that emits batch,
-render-pass, and commit events to an external store and provides an API
+render, and commit events to an external store and provides an API
 to schedule updates into a specific batch. Concretely the build exposes:
 
-- render-pass events (start with the included batches, yield, resume,
+- render events (start with the included batches, yield, resume,
   end with committed/discarded disposition), per-root commit events, and
   batch retirement events;
-- a write-context API (which batch is the code currently executing on
-  behalf of?) and `unstable_runInBatch` (schedule a state update so it
+- a batch-identity registration (the bindings supply the id for every
+  React batch at its creation, so both sides speak one shared id space),
+  a write-context API (which batch is the code currently executing on
+  behalf of?), and `unstable_runInBatch` (schedule a state update so it
   renders and commits with a specific batch).
 
 `registerCosignalReact()` feature-detects the protocol at startup: on a
@@ -88,16 +90,19 @@ function Counter() {
 createRoot(document.getElementById('root')!).render(<Counter />);
 ```
 
-`registerCosignalReact()` arms the engine's write recording and
-subscribes to the protocol events. It returns a handle
-(`{ bridge, shim, dispose }`); `dispose()` unhooks everything (mainly for
-tests).
+`registerCosignalReact()` attaches the engine's driver — write
+classification and per-render world routing — and subscribes to the
+protocol events. It returns a handle
+(`{ bridge, shim, dispose }`: the engine surface, the protocol adapter,
+and a teardown); `dispose()` releases the React-side registrations
+(mainly for tests).
 
 This package re-exports the app-facing part of the engine surface —
-`Atom`, `ReducerAtom`, `effect`, `effectScope`, `batch`, `untracked`,
-`SuspendedRead` and their option types — so applications can import them
-from `cosignal-react` directly. Bridge internals (the `CosignalBridge`
-class, `WriteLog`, event/log entry types, …) are deliberately not re-exported;
+`Atom`, `Computed`, `ReducerAtom`, `effect`, `effectScope`, `batch`,
+`untracked`, `SuspendedRead` and their option types — so applications can
+import them from `cosignal-react` directly. Engine internals (the `engine`
+surface object, `attachDriver`, trace and log-entry types, …) are
+deliberately not re-exported;
 import those from `cosignal` if you are writing engine-level tooling.
 
 ## Hooks
@@ -107,7 +112,7 @@ import those from `cosignal` if you are writing engine-level tooling.
 Subscribes the component to an atom (or a `useComputed` result) and
 returns its value **in the world of the render the component is part
 of** — a transition render sees the transition's pending value, an urgent
-render sees committed state, and every component in one render pass sees
+render sees committed state, and every component in one render sees
 the same frozen view.
 
 Mounting is the subtle case. A component can mount while other updates
@@ -133,9 +138,9 @@ committed frame.
 
 A derived value scoped to the component — same mental model as `useMemo`:
 while `deps` are equal, you keep the same node; when `deps` change, a
-fresh node is created with the new closure (adopted if the render
-commits, dropped if it is discarded). Returns a handle whose `.state`
-reads in the current render's world.
+fresh node is created with the new closure (kept if the render
+commits, dropped if it is discarded). Returns a real `Computed` handle
+whose `.state` reads in the current render's world.
 
 Why recreate instead of swapping the function in place: a computed's
 function must stay immutable for the node's whole life, because pending
@@ -235,7 +240,7 @@ batch that caused them.
 
 ## Testing
 
-The suite runs against a real protocol-v1 React build (via jsdom and
+The suite runs against a real protocol React build (via jsdom and
 `react-dom/client`), not mocks: hook behavior (StrictMode double-mount
 netting, deps-keyed recreation, replay fidelity of functional updates,
 Suspense via both `ctx.use` forms), fifteen concurrency scenarios —

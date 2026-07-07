@@ -193,13 +193,13 @@ export const enum NodeFlag {
 	/** Refines HAS_BOX (never set without it): the payload is a pending
 	 * thenable, not a thrown error. */
 	BOX_SUSPENDED = 4096,
-	/** S-C: the record is a HOST-owned computed (a bridge computed riding
-	 * this kernel record). Its dep links do NOT feed the D1 observed-
-	 * lifecycle union — the host's own observation index is its arm (one
-	 * retain per strong dep of an OBSERVED computed, re-pointed per run) —
-	 * so a host computed's newest structure never pins an atom's remote
-	 * subscription past the host's last consumer. Set via the
-	 * __hostMarkComputedOwned seam at registration/adoption. */
+	/** The record is an ENGINE-owned computed (a concurrent-engine computed
+	 * node riding this kernel record). Its dep links do NOT feed the D1
+	 * observed-lifecycle union — the engine's own observation index is its
+	 * arm (one retain per strong dep of an OBSERVED computed, re-pointed per
+	 * run) — so an engine computed's newest structure never pins an atom's
+	 * remote subscription past the engine's last consumer. Set via
+	 * Engine.markHostOwned when a computed gains engine content. */
 	HOST_OWNED = 8192,
 }
 
@@ -215,8 +215,8 @@ export const enum RecordGeom {
 	 * `fns` side column (one fn slot per record: 8 / 8 = 1). */
 	ID_TO_FN_SHIFT = 3,
 	/** valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
-	 * signal's pending value, an effect's cleanup fn, or the computed's
-	 * owning Computed instance (D4). */
+	 * signal's pending value or an effect's cleanup fn (computeds leave it
+	 * empty — D4: nothing kernel-side may pin the public handle). */
 	AUX_VALUE_OFFSET = 1,
 	/** length >> HALF_ARENA_SHIFT: half the arena — the "keep at least half
 	 * the arena free" watermark term. */
@@ -266,13 +266,14 @@ export function __setRoutingActive(v: boolean): void {
 }
 
 /**
- * THE ENGINE EPOCH (great-refactor R-6): bumped once per
+ * THE ENGINE EPOCH: bumped once per
  * `__resetEngineForTest`, never in production. Every cross-reset microtask
  * (settle drain, lifecycle flush, thenable settle-invalidate, unhandled
  * rethrow) captures the epoch at schedule time and no-ops if it moved — a
  * microtask scheduled by a dead test must never touch the next test's
- * engine. Reclamation (plans/2026-07-07-signal-reclamation.md) consumes the
- * same counter for its per-epoch registry.
+ * engine. Reclamation consumes the
+ * same counter for its per-epoch registry (see the reclamation section
+ * below).
  */
 export let engineEpoch = 0;
 
@@ -280,8 +281,8 @@ const queued: NodeId[] = [];
 const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the sweep (batch-freed at the next operation boundary)
 
 // Side columns, indexed off the id: values[id >> 2] = current/computed value,
-// values[(id >> 2) + 1] = signal pending value OR effect cleanup fn OR the
-// computed's owning Computed instance (D4), fns[id >> 3] = computed getter /
+// values[(id >> 2) + 1] = signal pending value OR effect cleanup fn (empty
+// for computeds — D4), fns[id >> 3] = computed getter /
 // effect fn. Plain arrays grown by push (stays PACKED; plain-array growth has
 // no binding problem). The policy layer reads these columns directly — they
 // are shared state like the scalar heads, not operations.
@@ -316,7 +317,7 @@ export interface Engine {
 	requeueAbort(e: NodeId): void;
 	dispose(e: NodeId): void;
 	sweepPendingFree(): void;
-	/** Reclamation's structural phase (cold; signal-reclamation plan §4):
+	/** Reclamation's structural phase (cold):
 	 * tear down the record's kernel structure — flags zeroed, a computed's
 	 * deps disposed in reverse, residual subs defensively detached — WITHOUT
 	 * freeing the record: the caller owns free ordering (pendingFree now, or
@@ -325,9 +326,9 @@ export interface Engine {
 	// D5: cold policy ops (never called from the hot walks).
 	/** Marks a computed stale and propagates to its subs (settlement-invalidate). */
 	invalidateComputed(c: NodeId): boolean;
-	/** S-C: dispose a computed record (deps unlinked, subs detached, free deferred). */
+	/** Dispose a computed record (deps unlinked, subs detached, free deferred). */
 	disposeComputed(c: NodeId): void;
-	/** S-C: flag a computed HOST_OWNED and retro-release the lifecycle refs
+	/** Flag a computed HOST_OWNED and retro-release the lifecycle refs
 	 * its EXISTING dep links contributed (future links are excluded at the
 	 * gate; future unlinks see the flag and skip the -1 — balanced). */
 	markHostOwned(c: NodeId): void;
@@ -529,11 +530,11 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		} else {
 			memory[dep + NodeField.SUBS] = newLink;
 		}
-		// D1 (per-LINK since S-C — the kernel arm is a refcount, not a bit,
-		// so host-owned subscribers can be excluded without losing later
-		// non-host ones): every NEW link to a lifecycle-flagged dep shifts
-		// the union +1, unless the subscriber is a HOST-owned computed (the
-		// host's own observation index is its arm). Balanced by unlink's -1.
+		// D1 (per-LINK — the kernel arm is a refcount, not a bit,
+		// so engine-owned subscribers can be excluded without losing later
+		// plain ones): every NEW link to a lifecycle-flagged dep shifts
+		// the union +1, unless the subscriber is an engine-owned computed (the
+		// engine's own observation index is its arm). Balanced by unlink's -1.
 		if (memory[dep + NodeField.LIFECYCLE] !== 0 && !(memory[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
 			lifecycleWatched(dep);
 		}
@@ -546,7 +547,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		const nextSub = memory[id + LinkField.NEXT_SUB];
 		const prevSub = memory[id + LinkField.PREV_SUB];
 		// D1's balancing -1 (per-link; see linkInsert): lifecycle-flagged
-		// deps release one union ref per removed non-host link.
+		// deps release one union ref per removed non-engine-owned link.
 		if (memory[dep + NodeField.LIFECYCLE] !== 0 && !(memory[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
 			lifecycleUnwatched(dep);
 		}
@@ -925,26 +926,26 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			// mutual dep-flip shape — x newly reads y while y stale-depends on
 			// x). Stripping then frees the cursor link, the very next insert
 			// reuses it AS ITS OWN NEIGHBOR, and the dep list goes cyclic —
-			// the S-C union-cycle hang (historically "kernel link cycles the
-			// unwatched walk cannot traverse", measured as a hang when world
+			// a hang (kernel link cycles the
+			// unwatched walk cannot traverse, first seen when world
 			// evaluations rode kernel records). The open evaluation owns its
 			// list: its epilogue purge trims it, and a truly-dead record is
 			// lazily stripped at its NEXT unwatched edge (bounded residue,
 			// base-kernel-acceptable).
 			if (memory[node + NodeField.DEPS_TAIL] !== 0 && !(flags & NodeFlag.RECURSED_CHECK)) {
 				memory[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY
-					| (flags & NodeFlag.HOST_OWNED); // ownership survives the rewrite (S-C)
+					| (flags & NodeFlag.HOST_OWNED); // ownership survives the rewrite
 				disposeAllDepsInReverse(node);
 			}
 			// Reclamation retry trigger — the kernel-SUBS guard row's clearing
-			// site (signal-reclamation plan §4): a GC-skipped reclaim blocked
+			// site: a GC-skipped reclaim blocked
 			// on "something reads this record" re-attempts when the last
 			// subscriber unlinks. Size-0 bail on the module var.
 			if (reclaimSkippedN !== 0) {
 				noteReclaimRetry(node);
 			}
 		} else if (flags & NodeFlag.K_SIGNAL) {
-			// (D1 releases per-link inside unlink since S-C.) Reclamation
+			// (D1 releases per-link inside unlink.) Reclamation
 			// retry trigger — the kernel-SUBS guard row for signals.
 			if (reclaimSkippedN !== 0) {
 				noteReclaimRetry(node);
@@ -1313,10 +1314,11 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		return false;
 	}
 
-	// S-C: flag a computed HOST_OWNED (see NodeFlag.HOST_OWNED) and settle the
-	// books for links created BEFORE adoption: each existing link to a
-	// lifecycle dep fired +1 at insert, and its eventual unlink will skip the
-	// -1 (the flag reads at unlink time) — so release those refs here, once.
+	// Flag a computed HOST_OWNED (see NodeFlag.HOST_OWNED) and settle the
+	// books for links created BEFORE the computed gained engine content: each
+	// existing link to a lifecycle dep fired +1 at insert, and its eventual
+	// unlink will skip the -1 (the flag reads at unlink time) — so release
+	// those refs here, once.
 	function markHostOwnedOp(c: NodeId): void {
 		const flags = memory[c + NodeField.FLAGS];
 		if (!(flags & NodeFlag.K_COMPUTED) || flags & NodeFlag.HOST_OWNED) {
@@ -1356,14 +1358,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		}
 	}
 
-	// S-C: computed disposal (the useComputed deps-change reclamation path;
-	// cold — reached only through the __hostDisposeComputed seam). Flags zero
+	// Computed disposal (the useComputed deps-change reclamation path;
+	// cold — reached only through the engine's disposeComputed). Flags zero
 	// FIRST so the last sub unlink's unwatched() probe sees a dead record;
 	// remaining subscriber links detach (their records simply lose the dep —
 	// a later re-track just doesn't see it; the caller owns the discipline
 	// that the node is superseded); the free defers to the next operation
 	// boundary exactly like effect/scope disposal (in-flight walks may still
-	// hold the id), where freeNode bumps GEN — the id-tenancy stamp (§4.5.3).
+	// hold the id), where freeNode bumps GEN — the id-tenancy stamp.
 	function disposeComputedOp(c: NodeId): void {
 		if (!(memory[c + NodeField.FLAGS] & NodeFlag.K_COMPUTED)) {
 			return; // not a computed / already disposed
@@ -1448,12 +1450,12 @@ export let E: Engine = createEngine(initialRecords * RecordGeom.RECORDS_PER_UNIT
  */
 let recordFreeHook: ((recordId: NodeId, nodeIndex: number) => void) | undefined;
 
-/** Registers/clears the record-free hook (host seam). @internal */
+/** Installs/clears the record-free hook (engine seam). @internal */
 export function __setRecordFreeHook(fn: ((recordId: NodeId, nodeIndex: number) => void) | undefined): void {
 	recordFreeHook = fn;
 }
 
-// ---- SIGNAL RECLAMATION (plans/2026-07-07-signal-reclamation.md) ------------------
+// ---- SIGNAL RECLAMATION -----------------------------------------------------------
 // FinalizationRegistry-driven recovery of atom/computed records whose public
 // handles were garbage-collected. The kernel owns the machinery because its
 // hottest trigger site (unwatched's last-subscriber edge) is kernel code: the
@@ -1506,7 +1508,7 @@ let deferredCleanups: DeferredCleanupEntry[] = [];
 // eslint-disable-next-line no-var
 var reclaimWorkPending = false;
 
-/** The deferred-cleanup DRAIN GUARD (plan §4 take-before-call): set while
+/** The deferred-cleanup DRAIN GUARD (take-before-call): set while
  * phase 2 runs taken entries; a reentrant boundary (a cleanup writing an
  * atom) finds it set and does no cleanup work. Joins `__resetEngineForTest`'s
  * assertIdle preconditions. */
@@ -1525,7 +1527,7 @@ var reclaimNudgeScheduled = false;
  * non-empty write log. */
 let reclaimGuardHook: ((id: NodeId, nodeIndex: number) => boolean) | undefined;
 
-/** Registers/clears the engine guard hook (host seam). @internal */
+/** Installs/clears the engine guard hook (engine seam). @internal */
 export function __setReclaimGuardHook(fn: ((id: NodeId, nodeIndex: number) => boolean) | undefined): void {
 	reclaimGuardHook = fn;
 }
@@ -1569,9 +1571,10 @@ var reclaimRegistry = makeReclaimRegistry();
  * constructors (the priced creation cost; registration never appears on
  * read/write paths). LEAN-INSTANCE DIRECT REGISTRATION for all three classes
  * (Atom, ReducerAtom, Computed): the instances are flat field records
- * (methods live on prototypes; user closures are referents, not shape), the
- * donor-measured cheap death shape. Measured rejects (binding): per-handle
- * unregister tokens (+103ns), WeakRef schemes (+93ns), deferred/batched and
+ * (methods live on prototypes; user closures are referents, not shape) —
+ * the shape measured cheapest for the GC to collect. Measured rejects
+ * (binding): per-handle FinalizationRegistry unregister keys (+103ns),
+ * WeakRef schemes (+93ns), deferred/batched and
  * lazy registration. Deterministic dispose paths do NOT unregister —
  * epoch+gen defusing covers their finalizers. Registration itself lives on
  * the allocation ops (registerReclaim inside createEngine — the closure owns
@@ -1700,7 +1703,7 @@ function reclaimNode(id: NodeId, gen: Generation, epoch: number): void {
 		scheduleReclaimNudge();
 		return;
 	}
-	// The guard table (plan §4). Kernel SUBS; lifecycle ACTIVE (the id-keyed
+	// The guard table. Kernel SUBS; lifecycle ACTIVE (the id-keyed
 	// active record — the dormant fns-slot callback is column state, not a
 	// guard); the engine hook covers watcher-index membership, open-render
 	// arena membership, any arena's suspended list, obsRefs, and a non-empty
@@ -1866,8 +1869,8 @@ export function maybeBoundary(): void {
  * imported binding pays a per-access cell + initialization check that a
  * same-module read doesn't.
  *
- * R-2 equality drop — `isEqual(current, incoming)`, kernel order, ONCE, at
- * the acceptance decision: an atom on this path has no engine content, so
+ * Policy equality drop — `isEqual(current, incoming)`, kernel order, ONCE,
+ * at the acceptance decision: an atom on this path has no engine content, so
  * its write history is empty by construction and a write equal to the
  * current pending value simply drops. (An atom WITH engine content
  * dispatches through the engine, where the same rule applies only while its
@@ -1888,7 +1891,7 @@ export function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => bool
 }
 
 function boundaryWork(): void {
-	// Reclamation work first (signal-reclamation plan §4 free-path ordering):
+	// Reclamation work first (the free-path ordering rule):
 	// queued guard-cleared retries run their structural phase (feeding
 	// pendingFree / the deferred-cleanup queue), then the deferred user
 	// cleanups run under the drain guard — each record's free-list insertion
@@ -2033,11 +2036,11 @@ export function requestCapacity(units: RecordCount): void {
  * Direct newest apply — the plain write tail (equality-drop-free: the caller
  * has already made the acceptance decision and folded the operation to a
  * plain value), used by the concurrent engine's quiet fold and eager apply.
- * The policy comparator does NOT run here (R-2: `isEqual(current, incoming)`
+ * The policy comparator does NOT run here (`isEqual(current, incoming)`
  * is invoked exactly once, at the acceptance decision — re-running it inside
- * the apply was the old double invocation); the kernel's own identity
+ * the apply would double-invoke it); the kernel's own identity
  * store-compare still gates propagation. Effects flushed here re-enter the
- * public write path and CLASSIFY NORMALLY (R-3) — there is no recursion
+ * public write path and CLASSIFY NORMALLY — there is no recursion
  * guard because this tail never re-enters the public methods itself.
  */
 export function writeNewest(id: NodeId, value: unknown): void {
@@ -2047,7 +2050,7 @@ export function writeNewest(id: NodeId, value: unknown): void {
 	}
 }
 
-// ---- the engine reset's kernel half (test-only; great-refactor R-6) --------------
+// ---- the engine reset's kernel half (test-only) -----------------------------------
 
 /**
  * Kernel idle preconditions for `__resetEngineForTest` — a reset from inside
@@ -2064,7 +2067,7 @@ export function __assertKernelIdleForReset(): void {
 }
 
 /**
- * THE KERNEL SCRUB (test-only; great-refactor R-6): a watermark-bounded
+ * THE KERNEL SCRUB (test-only): a watermark-bounded
  * scrub — zero the used arena range and every allocator head/counter, drop
  * the side columns to their burned seeds — never a reallocation (the arena
  * keeps any grown capacity; the live operation table stays valid because it

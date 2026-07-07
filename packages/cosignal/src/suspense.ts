@@ -21,8 +21,8 @@
  *    hoisted functions behind the one `ctx` object the kernel passes every
  *    computed getter (graph.ts POLICY_CTX), with the thenable protocol
  *    (`unwrapThenable`, mirroring React's trackUsedThenable), the per-node
- *    keyed request cache (`__ctxUse`, shared with the React bindings), and
- *    the key serialization;
+ *    keyed request cache (`__ctxUse`, shared with the engine's ctx-shaped
+ *    world fns in concurrent.ts), and the key serialization;
  *  - the settle TAP seam (`__setSettleTap`): the concurrent engine's hook
  *    into thenable settlement, consulted by the per-thenable shared
  *    listener at fire time.
@@ -111,8 +111,10 @@ function unwrapThenable(t: InstrumentedThenable): unknown {
 					if (t.status === 'pending') {
 						t.status = 'fulfilled';
 						t.value = v;
-						// NF2 S-A settle tap: consulted at FIRE time (a thenable
-						// instrumented before the bridge existed still notifies).
+						// Settle tap: consulted at FIRE time, never captured at
+						// instrument time — a thenable instrumented under an
+						// earlier engine composition still notifies the current
+						// one (test resets re-compose the engine).
 						const tap = settleTap;
 						if (tap !== undefined) tap(t);
 					}
@@ -132,18 +134,18 @@ function unwrapThenable(t: InstrumentedThenable): unknown {
 }
 
 /**
- * NF2 S-A (plans/2026-07-06 §4.5.4): the bridge-registered settle tap. The
- * kernel's per-thenable shared listener — the pair `unwrapThenable` installs
- * exactly once per thenable — calls it after the status write, so world-only
- * suspensions (arena-cached sentinels the kernel never cached) are notified
- * AT the settlement event itself. ONE closure per bridge registration;
- * distinct-thenable dedup IS the instrument-once discipline. The kernel-
- * cached path (`attachSettle` → stale-guarded `invalidateComputed`) is
- * untouched and keeps handling KERNEL suspensions precisely.
+ * The concurrent engine's settle tap. The kernel's per-thenable shared
+ * listener — the pair `unwrapThenable` installs exactly once per thenable —
+ * calls it after the status write, so world-only suspensions (arena-cached
+ * sentinels the kernel never cached) are notified AT the settlement event
+ * itself. ONE closure per engine composition; distinct-thenable dedup IS
+ * the instrument-once discipline. The kernel-cached path (`attachSettle` →
+ * stale-guarded `invalidateComputed`) is untouched and keeps handling
+ * KERNEL suspensions precisely.
  */
 let settleTap: ((t: PromiseLike<unknown>) => void) | undefined;
 
-/** Registers/clears the settle tap (bridge seam). @internal */
+/** Installs/clears the settle tap (engine seam, set at composition). @internal */
 export function __setSettleTap(fn: ((t: PromiseLike<unknown>) => void) | undefined): void {
 	settleTap = fn;
 }
@@ -178,9 +180,9 @@ function serializeUseKey(key: unknown): string {
 }
 
 /**
- * THE ctx.use REQUEST-CACHE COLUMN — id-keyed engine state (reclamation
- * plan §2's prerequisite: the owning `Computed` INSTANCE is no longer
- * stored anywhere kernel-side, so nothing pins the handle). Keyed by
+ * THE ctx.use REQUEST-CACHE COLUMN — id-keyed engine state. The owning
+ * `Computed` INSTANCE is stored nowhere kernel-side, so nothing here pins
+ * the handle and a dropped handle's record can still reclaim. Keyed by
  * NODE INDEX (the recycled dense key): the record-free scrub clears the
  * freed record's entry (`__clearUseCacheForIndex`), so a slot's next
  * tenant can never be served the previous tenant's requests. A Map (not a

@@ -1,6 +1,6 @@
 /**
  * `cosignal/trace` — the lazily loaded diagnostics entry: a zero-allocation
- * event recorder for the concurrent engine (the bridge). It answers
+ * event recorder for the concurrent engine. It answers
  * "why did this component re-render / this effect run / this value change?"
  * without perturbing the engine it observes. The disciplines it holds:
  *
@@ -11,7 +11,8 @@
  *    scalars straight into typed record methods, which write fixed-size
  *    integer records into preallocated buffers (one documented exception:
  *    a react-effect-run's dep-values array is built by its emit site — only
- *    while a tracer is attached — because the referee compares it);
+ *    while a tracer is attached — because the model-comparison suites
+ *    compare it);
  *  - two capture modes — a ring (flight recorder) and a session (lossless
  *    capture up to a byte budget);
  *  - every record names the event that provoked it, so causality is
@@ -20,8 +21,8 @@
  * ## Loading and cost
  * This module imports the engine as TYPES ONLY — its runtime module graph is
  * exactly {trace.ts}, and `./concurrent.ts` never imports it back, so neither
- * entry pulls the other into a bundle. Until `attachTracer(bridge)` runs,
- * the engine's only tracing artifact is the `bridge.trace` slot, `undefined`
+ * entry pulls the other into a bundle. Until `attachTracer(engine)` runs,
+ * the engine's only tracing artifact is its `trace` slot, `undefined`
  * forever, checked once per emit site (tests/trace-off.spec.ts asserts the
  * discipline; the kernel itself contains no tracing instructions at all).
  * `tracer.stop()` detaches at runtime; attaching again later
@@ -97,8 +98,8 @@
  *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
  *  react-effect-run     {effect, root, value, values?}       a committed-world observer ran (it sees exactly what its root's UI shows); values = its dep snapshot, when captured
  *  react-effect-cleanup {effect, root}                       a committed-world observer's cleanup ran (before a re-run, or at removal)
- *  render-committed       {renderPass, root}                   referee marker: the commit's consequences (retirement folds, lock-ins, drains, fixups) have all landed
- *  render-discarded       {renderPass, root}                   referee marker: the discard's consequences have all landed
+ *  render-committed       {renderPass, root}                   checkpoint marker: the commit's consequences (retirement folds, lock-ins, drains, fixups) have all landed
+ *  render-discarded       {renderPass, root}                   checkpoint marker: the discard's consequences have all landed
  *  epoch-reset          {epoch}                              quiescence: nothing in flight, so the engine reset its per-episode state
  *  clock-sync           {absoluteUs}                         emitted when DT saturates
  *  truncation           {boundaryId}                         SESSION budget crossed
@@ -220,8 +221,8 @@ const MAX_I32 = 0x7fffffff;
 
 /** Kind codes (record form). Public decoded events carry the NAME, not the
  * code. Codes are append-only (existing recordings decode forever): 28-30
- * joined when the packed stream became the engine's ONLY event output — the
- * referee kinds the deleted TraceEvent object channel used to carry alone;
+ * joined when the packed stream became the engine's ONLY event output —
+ * kinds a since-deleted object-event channel used to carry alone;
  * 31 joined when the committed/abandoned report moved to its source (the
  * React bindings' protocol handler) and left the retirement chain. */
 const K = {
@@ -518,7 +519,7 @@ export class Tracer implements TraceHooks {
 	/** ARG1 stores ref(values)+1 — 0 means "not captured", so recordings made
 	 * before dep-value capture (ARG1 always 0) decode unchanged. The `values`
 	 * array is the one payload an emit site allocates (tracer-attached only):
-	 * the lockstep referee compares it entry by entry. */
+	 * the model-comparison suites compare it entry by entry. */
 	reactEffectRun(effect: string, root: RootId, value: Value, values: Value[]): void {
 		this.rec(K.reactEffectRun, this.label(effect), this.label(root), this.ref(value), this.ref(values) + 1, 0);
 	}
@@ -564,7 +565,7 @@ export class Tracer implements TraceHooks {
 		this.rec(K.slotBackstop, slot, batch, 0, 0, 0);
 	}
 
-	/** Post-consequence referee markers (unlike `renderEnd`, which fires BEFORE
+	/** Post-consequence checkpoint markers (unlike `renderEnd`, which fires BEFORE
 	 * the end's consequences so they can cite it as cause): these record after
 	 * every retirement fold / lock-in / drain / fixup of the render end landed —
 	 * the stream position the reference model emits its render events at. */
@@ -910,8 +911,8 @@ export class Tracer implements TraceHooks {
 // ---- attach / detach ---------------------------------------------------------------
 
 /**
- * Attach a recorder to a bridge (fills the engine's `trace` slot). One tracer
- * per bridge; `tracer.stop()` detaches at runtime and freezes the capture for
+ * Attach a recorder to the engine (fills its `trace` slot). One tracer
+ * per engine; `tracer.stop()` detaches at runtime and freezes the capture for
  * decoding. To capture a provably complete SESSION, attach before the
  * engine's first operation.
  */

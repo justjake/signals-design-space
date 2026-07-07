@@ -14,13 +14,14 @@
  *
  * `createBatch` is a factory in the kernel's own style (index.ts
  * `createEngine`): it closes over its state and returns its operation
- * table; the engine composes one per bridge and keeps `idToBatch`/`slots`
+ * table; the engine runs it once per composition (module initialization,
+ * test resets) and keeps `idToBatch`/`slots`
  * aliased for its resident readers (the shared-array pattern the kernel
  * uses for its `values`/`fns` side columns). It takes the shared core
  * record for retirement's cross-module fan (every such call reads its
  * late-bound slot at call time); the two remaining resident-state edges
- * (the registered latch, the write path's last-batch cache) come in
- * through `deps`.
+ * (the driver/devChecks presence, the write path's last-batch cache) come
+ * in through `deps`.
  */
 
 import { ScheduleError } from './errors.js';
@@ -30,8 +31,8 @@ import type { EngineCore } from './World.js';
 
 export type BatchId = number;
 /** The reserved "no batch context" BatchId. Never allocated (batch ids start
- * at 1): `getCurrentWriteBatch() === BATCH_NONE` means no renderer provider
- * has registered, and a classified write carrying it has no batch to join.
+ * at 1): `driver.currentBatch() === BATCH_NONE` means the write executes in
+ * no host batch context, so it has no batch to join.
  * The React fork names the same sentinel on its side (protocol v2 shares ONE
  * id space between the engine and React, so the sentinel must too). */
 export const BATCH_NONE: BatchId = 0;
@@ -74,8 +75,8 @@ export type BatchSlotMeta = {
 	/** Claim sequence — a point on the shared timeline created at every
 	 * intern (the creation itself is load-bearing for model parity: both sides
 	 * spend one sequence per claim). The engine never reads the stored
-	 * value; the oracle's `checkInvariants` tenancy orderings consult it
-	 * through the test-side model view. */
+	 * value; the reference model's (`cosignal-oracle`) `checkInvariants`
+	 * tenancy orderings consult it through the test-side model view. */
 	claimSeq: Seq;
 	/** Sequence of the last write under this slot; zeroed when a new tenant
 	 * claims it (the mount fixup's clock conjunct compares it against
@@ -105,8 +106,8 @@ export function __peekNextBatchIdForTest(): BatchId {
 /** The resident-state edges the mechanism consumes (provided by the engine's
  * composition site; each is a thin arrow over engine state or orchestration). */
 export type BatchDeps = {
-	/** The driver slot's presence + the devChecks switch — R-5's openBatch
-	 * guard: with devChecks armed, opening a batch with no driver attached
+	/** The driver slot's presence + the devChecks switch — openBatch's
+	 * dev guard: with devChecks armed, opening a batch with no driver attached
 	 * throws (the documented host contract is "hosts that open batches must
 	 * retire them"; the guard catches harnesses that forgot to attach). */
 	hasDriver(): boolean;
@@ -182,7 +183,7 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 	 * counter, registry map, quiet recompute, probes/trace records. No
 	 * operation epilogue, no drains, no kernel mutation, no user code.
 	 *
-	 * R-5: with devChecks armed, opening a batch with NO driver attached
+	 * With devChecks armed, opening a batch with NO driver attached
 	 * throws — the documented host contract is "hosts that open batches
 	 * must retire them", and a devChecks harness must attach its driver
 	 * before opening engine batches. */
@@ -194,7 +195,7 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 			throw new ScheduleError('at most 31 batches may be live at once (one per React lane)');
 		}
 		const parked = opts?.action ?? false;
-		probes.batches++; // One Core probe (referee surface)
+		probes.batches++; // engine-activity counter (tests/one-core.spec.ts's zero-cost check)
 		const batch: Batch = {
 			id: nextBatchId++,
 			action: opts?.action ?? false,
@@ -345,10 +346,10 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 		const t = batchById(batchId);
 		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per batch');
 		if (t.parked) throw new ScheduleError('parked action batches retire only at settlement');
-		core.opDepth++; // NF2 S-A: public-operation frame (see the engine's write)
+		core.opDepth++; // public-operation frame (see the engine's write dispatch)
 		try {
 			retireInternal(t);
-			// EF2 boundary: retirement is a guaranteed flush point for every root
+			// Boundary rule: retirement is a guaranteed flush point for every root
 			// (a write-free retirement still flushes pending member-write flips).
 			core.revalidateCommittedSubs(undefined);
 			core.endOp();
@@ -363,13 +364,13 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 		const t = batchById(batchId);
 		if (!t.action) throw new ScheduleError('settle targets an action batch');
 		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled');
-		core.opDepth++; // NF2 S-A: public-operation frame (see the engine's write)
+		core.opDepth++; // public-operation frame (see the engine's write dispatch)
 		try {
 			t.parked = false;
 			const tr = core.trace;
 			if (tr !== undefined) tr.batchSettle(t);
 			retireInternal(t);
-			core.revalidateCommittedSubs(undefined); // EF2 boundary: settlement is a guaranteed flush point
+			core.revalidateCommittedSubs(undefined); // boundary rule: settlement is a guaranteed flush point
 			core.endOp();
 		} finally {
 			core.opDepth--;
@@ -424,9 +425,10 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 		if (touchedAny) core.advanceCommitted();
 		// Fold/compaction (see WriteLog.ts compactAll for the two-clause predicate).
 		core.compactAll();
-		// NF2 S-A flip site (a): retirement — after stamps + committedAdvance + compaction,
-		// BEFORE the drain loop (§4.3's ordering joint: mutate → fan → drain),
-		// fan the retiring batch's touched atoms into EVERY committed arena.
+		// Committed-truth flip site: retirement — after stamps +
+		// committedAdvance + compaction, BEFORE the drain loop (the ordering
+		// joint every flip site shares: mutate → fan → drain), fan the
+		// retiring batch's touched atoms into EVERY committed arena.
 		if (touchedAny) core.fanAtomsToCommittedArenas(batch.atomsTouched);
 		{
 			const tr = core.trace;
@@ -445,8 +447,8 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 				const re = core.restaled.get(r.id);
 				if (bits !== 0 || (re !== undefined && re.size > 0)) core.drainCommittedObservers(r.id, 'retirement');
 			}
-			// NF2 S-A: boundary mark decay — unconsumed marks on unwatched
-			// nodes drop to cold instead of re-appending forever (§4.3).
+			// Boundary mark decay — unconsumed marks on unwatched
+			// nodes drop to cold instead of re-appending forever.
 			for (const a of core.rootToArena.values()) core.arenaDecay(a);
 		}
 		// Clear per-root rows (the retired clause subsumes membership now),

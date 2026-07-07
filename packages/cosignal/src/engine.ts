@@ -48,12 +48,11 @@ import type { Atom, Computed } from './index.js';
 import type { AnyNode, AtomNode, ComputedNode, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
 
 /** Write-kind tags: the packed log entry column AND the write surface's kind
- * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the
- * same codes the kernel's host write hook captures (the kernel's own
- * `WriteKind`, index.ts: the two same-name declarations share the 0/1
- * encoding by construction, 0/1 literals are assignable so cross-module
- * callers never name this type, and the engine merge collapses them into
- * one definition). Const enum, exported TYPE-ONLY in effect: the write
+ * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the same codes
+ * index.ts's public write dispatch carries end to end (its public
+ * `WriteKind` type alias names the same 0/1 encoding by construction;
+ * 0/1 literals are assignable, so cross-module callers never need this
+ * type's name). Const enum, exported TYPE-ONLY in effect: the write
  * path's hot comparisons (concurrent.ts, World.ts applyOp) use the shared
  * bare 0/1 codes with a naming comment — cross-module const enum access
  * does not survive per-file transforms. */
@@ -63,9 +62,9 @@ export const enum WriteKind {
 }
 
 /**
- * One Core probes (referee surface): one module-wide counter record proving
- * the zero-cost promise behaviorally — with no bridge registered, heavy
- * signal traffic must leave every field at its baseline
+ * Engine-activity probes (test surface): one module-wide counter record
+ * proving the zero-cost promise behaviorally — with no driver attached and
+ * no batch open, heavy signal traffic must leave every field at its baseline
  * (tests/one-core.spec.ts). Engine logic never reads the counters; each
  * mutation site lives beside the machinery it counts (log-entry appends in
  * WriteLog.ts, batch creation in Batch.ts, world evaluations in World.ts,
@@ -96,8 +95,8 @@ export type ConcurrentEngineHost = {
 	kernelReadOf(dep: AnyNode): Value;
 	/** The optional compaction observer slot (the engine's public `onCompact`). */
 	onCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined;
-	/** The driver slot's presence + the devChecks switch (R-5's openBatch
-	 * guard reads both). */
+	/** The driver slot's presence + the devChecks switch (openBatch's
+	 * dev-time guard reads both). */
 	hasDriver(): boolean;
 	devChecksOn(): boolean;
 	/** The quiet flag's one writer (the flags stay module lets — the write
@@ -125,7 +124,7 @@ export type ConcurrentEngine = {
 	subs: SubscriptionTable;
 	/** The quiet derivation (composition-owned; see the module header). */
 	recomputeQuiet(): void;
-	/** Kernel-frame tracked reader (bridge-created computeds' newest runs):
+	/** Kernel-frame tracked reader (engine-created computeds' newest runs):
 	 * the shared kernel read plus the pre-dedup observation capture — built
 	 * here so the closure captures the core record directly (the
 	 * capture-list read stays one load). */
@@ -133,7 +132,7 @@ export type ConcurrentEngine = {
 };
 
 export function createConcurrentEngine(host: ConcurrentEngineHost, options?: EngineResetOptions): ConcurrentEngine {
-	probes.bridges++; // One Core probe (referee surface): counts COMPOSITIONS (module init + resets)
+	probes.bridges++; // engine-activity counter: counts COMPOSITIONS (module init + resets; tests/one-core.spec.ts)
 	// Stable resident containers, aliased once (identity-shared).
 	const idToNode = host.idToNode;
 	const nodesArr = host.nodesArr;
