@@ -19,8 +19,8 @@ export const adapterNames = [
 	'arena-spkh',
 	'arena-spkq',
 	'dalien',
-	'cosignal',
-	'cosignal-concurrent',
+	'cosignals',
+	'cosignals-concurrent',
 	'cosignals-alt-a',
 	'cosignals-alt-b',
 ] as const;
@@ -40,8 +40,8 @@ const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>>
 	'arena-spkh': () => import('./arena-spkh'),
 	'arena-spkq': () => import('./arena-spkq'),
 	dalien: () => import('./dalien'),
-	cosignal: () => import('./cosignal'),
-	'cosignal-concurrent': () => import('./cosignal-concurrent'),
+	cosignals: () => import('./cosignals'),
+	'cosignals-concurrent': () => import('./cosignals-concurrent'),
 	'cosignals-alt-a': () => import('./cosignals-alt-a'),
 	'cosignals-alt-b': () => import('./cosignals-alt-b'),
 };

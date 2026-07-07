@@ -14,8 +14,8 @@
 	},
 	"dependencies": {
 		"alien-signals": "link:../../upstream-alien-signals",
-		"cosignal": "workspace:*",
-		"cosignal-react": "workspace:*",
+		"cosignals": "workspace:*",
+		"cosignals-react": "workspace:*",
 		"cosignals-alt-a": "workspace:*",
 		"cosignals-alt-b": "workspace:*",
 		"dalien-signals": "link:../dalien-signals",

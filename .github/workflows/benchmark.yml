@@ -1,12 +1,12 @@
-# Benchmark the signal-library family (cosignal DIRECT, cosignal LOGGED,
-# dalien-signals) against upstream alien-signals whenever the cosignal
+# Benchmark the signal-library family (cosignals DIRECT, cosignals LOGGED,
+# dalien-signals) against upstream alien-signals whenever the cosignals
 # packages or the dalien-signals submodule pointer change on main. Node and
 # Bun run as parallel jobs; each uploads a CSV of per-test medians and a
 # rendered PNG chart.
 #
 # This is the family-wide sibling of packages/dalien-signals'
 # .github/workflows/benchmark.yml (which benchmarks dalien against upstream
-# on that repo's own pushes — it cannot measure cosignal because this repo
+# on that repo's own pushes — it cannot measure cosignals because this repo
 # is private). Both share the same harness: the milomg js-reactivity-
 # benchmark plus the fork patch stored at
 # packages/dalien-signals/benchs/ci/milomg-fork.patch (median-of-N
@@ -21,9 +21,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/cosignal/**'
-      - 'packages/cosignal-react/**'
-      - 'packages/cosignal-oracle/**'
+      - 'packages/cosignals/**'
+      - 'packages/cosignals-react/**'
+      - 'packages/cosignals-oracle/**'
       - 'packages/dalien-signals'
       - '.github/workflows/benchmark.yml'
   workflow_dispatch:
@@ -89,7 +89,7 @@ jobs:
           pnpm install --ignore-workspace
           node build.js
 
-      # cosignal's exports point at TypeScript source with no dependencies;
+      # cosignals's exports point at TypeScript source with no dependencies;
       # the harness bundler compiles it directly, so no install/build here.
 
       - name: Build benchmark runner

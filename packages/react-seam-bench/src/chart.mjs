@@ -98,7 +98,7 @@ svg.push(`<text x="${x(axisMax / 2)}" y="${H - 10}" font-size="11" fill="${INK2}
 // bars
 frameworks.forEach((f, i) => {
 	const y = TOP + i * ROW + (ROW - BAR) / 2;
-	const isOurs = f.fw === 'cosignal-react';
+	const isOurs = f.fw === 'cosignals-react';
 	const isDalien = f.fw === 'dalien-uses';
 	svg.push(`<text x="${LABEL_W - 8}" y="${y + BAR / 2 + 4}" font-size="12" text-anchor="end" fill="${INK}"${isOurs ? ' font-weight="700"' : isDalien ? ' font-weight="600"' : ''}>${esc(f.fw)}</text>`);
 	let cx = LABEL_W;

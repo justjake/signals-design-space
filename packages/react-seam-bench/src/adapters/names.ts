@@ -4,7 +4,7 @@
  * without loading any contender code. Order is the round-robin order.
  */
 export const contenderNames = [
-	'cosignal-react',
+	'cosignals-react',
 	'alien-uses',
 	'dalien-uses',
 	'baseline-context',

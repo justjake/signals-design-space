@@ -2,7 +2,7 @@
  * Runs every scenario for ONE contender and prints CSV rows to stdout.
  *
  * One contender per process is structural, not a convenience: registering
- * cosignal-react patches Atom's prototype onto its concurrent engine
+ * cosignals-react patches Atom's prototype onto its concurrent engine
  * process-wide, and V8's JIT specializes hot call sites to whichever
  * library ran first — either would contaminate a second contender measured
  * in the same process. Per-scenario extra stats go to stderr as `#` comment

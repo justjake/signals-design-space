@@ -31,7 +31,7 @@ which is how nearly every standalone signal library meets React — a bulk
 write wrapped in `startTransition` still produces one blocking re-render of
 every subscribed component, and urgent updates queue behind it.
 
-`cosignal-react` binds through a different mechanism: writes made inside
+`cosignals-react` binds through a different mechanism: writes made inside
 `React.startTransition` are classified into that transition and render at
 transition priority, so urgent updates keep committing while the bulk
 re-render proceeds. Native `useState`/`useReducer` state also participates
@@ -42,7 +42,7 @@ p95 asymmetry between these groups is the point of the scenario, not noise.
 
 | name | reads | writes |
 | --- | --- | --- |
-| `cosignal-react` | `useSignal(atom)` from cosignal's own bindings | `atom.set(v)`, batched with `batch()`, transitions via `startTransition` |
+| `cosignals-react` | `useSignal(atom)` from the cosignals package's own bindings | `atom.set(v)`, batched with `batch()`, transitions via `startTransition` |
 | `alien-uses` | upstream alien-signals through the shared `useSyncExternalStore` adapter (`src/adapters/useReactive.ts`) | `sig(v)`, batched with `startBatch`/`endBatch` |
 | `dalien-uses` | dalien-signals through the identical adapter | same call style as alien-signals |
 | `baseline-context` | one root `useReducer`, values distributed through a single context | dispatch captured at mount; every consumer re-renders per write (the honest context cost — `React.memo` cannot help because context bypasses it) |
@@ -81,7 +81,7 @@ Then, in this package:
 ```sh
 pnpm build                      # bundles dist/child.js and dist/isolated.js
 pnpm bench                      # all contenders, 3 rounds; CSV on stdout
-node dist/isolated.js --rounds 5 cosignal-react alien-uses   # subset
+node dist/isolated.js --rounds 5 cosignals-react alien-uses   # subset
 node dist/isolated.js > results.txt
 node src/chart.mjs results.txt out.svg   # stacked-bar chart of the totals
 ```

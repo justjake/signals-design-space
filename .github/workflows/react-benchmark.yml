@@ -19,7 +19,7 @@
 #                job's verdict step encodes which failures actually gate.
 #
 # Every contender runs on the same React build: the patched fork in
-# vendor/react (cosignal-react requires it; it behaves as stock React for
+# vendor/react (cosignals-react requires it; it behaves as stock React for
 # non-bridge code, and one React version for everyone is the fairness rule).
 # The ~13s fork build is cached keyed on the vendor/react submodule SHA;
 # the fork's own toolchain pins node 20 (vendor/react/.nvmrc), so cache
@@ -33,8 +33,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/cosignal/**'
-      - 'packages/cosignal-react/**'
+      - 'packages/cosignals/**'
+      - 'packages/cosignals-react/**'
       - 'packages/react-seam-bench/**'
       - 'packages/dalien-signals'
       - 'daishi-concurrent-benchmark'
@@ -44,7 +44,7 @@ on:
       contenders:
         description: 'Contender names (quoted, space-separated)'
         required: false
-        default: '"cosignal-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
+        default: '"cosignals-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"'
       rounds:
         description: 'Interleaved rounds per contender'
         required: false
@@ -55,7 +55,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CONTENDERS: ${{ inputs.contenders || '"cosignal-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
+  CONTENDERS: ${{ inputs.contenders || '"cosignals-react" "alien-uses" "dalien-uses" "baseline-context" "baseline-local"' }}
   ROUNDS: ${{ inputs.rounds || '3' }}
 
 jobs:
@@ -111,7 +111,7 @@ jobs:
       - run: npm install -g pnpm@10
 
       # Root install links the workspace packages (react-seam-bench,
-      # cosignal, cosignal-react) and resolves react/react-dom/scheduler
+      # cosignals, cosignals-react) and resolves react/react-dom/scheduler
       # through the pnpm overrides into the fork build restored above — so
       - name: Build upstream alien-signals (esm/ is a local build artifact)
         working-directory: upstream-alien-signals
@@ -131,7 +131,7 @@ jobs:
       - name: Install workspace
         run: pnpm install --no-frozen-lockfile
 
-      # cosignal and cosignal-react export TypeScript source directly; the
+      # cosignals and cosignals-react export TypeScript source directly; the
       # scenario bundler compiles them, so no separate build step.
 
       - name: Build react-seam-bench runner
@@ -257,8 +257,8 @@ jobs:
       # stock libraries' react@^18 peer ranges; the fork pins ajv@^8 in its
       # devDependencies so webpack's schema-utils survives the resulting
       # hoisting.
-      # The contender pages bundle packages/cosignal-react from raw TS; its
-      # own imports (react, cosignal) resolve through the workspace links
+      # The contender pages bundle packages/cosignals-react from raw TS; its
+      # own imports (react, cosignals) resolve through the workspace links
       # that only exist after a root install.
       - name: Install workspace
         run: pnpm install --no-frozen-lockfile
@@ -275,6 +275,11 @@ jobs:
       # useState — passes everything, proves the harness can pass) and
       # zustand (a stock useSyncExternalStore store — fails Level 3, proves
       # the harness can detect the de-opt).
+      # NOTE: the "cosignal-react" entry name, build script, and LIBS/lib
+      # keys below are defined inside the daishi-concurrent-benchmark
+      # submodule (a separate repo) and must match it, not this repo's
+      # package name (cosignals-react). Rename them only together with an
+      # update of that submodule.
       - name: Build contender pages
         working-directory: daishi-concurrent-benchmark
         run: |

@@ -2,9 +2,9 @@ packages:
   - libs/*
   - harness
   - packages/*
-  - packages/cosignal
-  - packages/cosignal-oracle
-  - packages/cosignal-react
+  - packages/cosignals
+  - packages/cosignals-oracle
+  - packages/cosignals-react
   - packages/react-seam-bench
 onlyBuiltDependencies:
   - esbuild

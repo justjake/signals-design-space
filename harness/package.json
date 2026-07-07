@@ -17,7 +17,7 @@
 		"@lab/control": "workspace:*",
 		"@lab/sweep": "workspace:*",
 		"alien-signals": "file:../upstream-alien-signals",
-		"cosignal": "workspace:*",
+		"cosignals": "workspace:*",
 		"cosignals-alt-a": "workspace:*",
 		"cosignals-alt-b": "workspace:*"
 	},

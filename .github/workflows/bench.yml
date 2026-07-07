@@ -1,4 +1,4 @@
-# Family-B gate benches (dalien port study §2.2): the packages/cosignal/bench
+# Family-B gate benches (dalien port study §2.2): the packages/cosignals/bench
 # spawn-per-config drivers, one runner per gate family, plus a rounds-sharded
 # suite/conformance job. Complements benchmark.yml (family A: milomg suite).
 #
@@ -59,7 +59,7 @@ jobs:
 
       # The lockfile carries workspace importers for packages/dalien-signals;
       # the harness carries a file: dep on upstream-alien-signals. Init both
-      # (no builds needed: family B imports only cosignal TS source via tsx).
+      # (no builds needed: family B imports only cosignals TS source via tsx).
       - name: Init submodules (both trees)
         run: |
           git submodule update --init packages/dalien-signals upstream-alien-signals
@@ -73,10 +73,10 @@ jobs:
 
       - name: Install harness deps (both trees, filtered — no react link materialization)
         run: |
-          pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..."
+          pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignals..." --filter "cosignals-oracle..."
           cd anchor-tree
-          pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..." || \
-            pnpm install --no-frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..."
+          pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignals..." --filter "cosignals-oracle..." || \
+            pnpm install --no-frozen-lockfile --filter "@lab/harness..." --filter "cosignals..." --filter "cosignals-oracle..."
 
       # Bench parents and children reference the repo by its canonical
       # absolute path (children import by absolute path so cwd stays a
@@ -93,10 +93,10 @@ jobs:
           FAMILY: ${{ matrix.family }}
         run: |
           set -o pipefail
-          node "packages/cosignal/bench/$FAMILY.mjs" 2>&1 | tee "out/$FAMILY-head.log"
+          node "packages/cosignals/bench/$FAMILY.mjs" 2>&1 | tee "out/$FAMILY-head.log"
           sudo ln -sfn "$GITHUB_WORKSPACE/anchor-tree" "$CANON"
-          if [ -f "anchor-tree/packages/cosignal/bench/$FAMILY.mjs" ]; then
-            node "anchor-tree/packages/cosignal/bench/$FAMILY.mjs" 2>&1 | tee "out/$FAMILY-anchor.log"
+          if [ -f "anchor-tree/packages/cosignals/bench/$FAMILY.mjs" ]; then
+            node "anchor-tree/packages/cosignals/bench/$FAMILY.mjs" 2>&1 | tee "out/$FAMILY-anchor.log"
           else
             echo "anchor ref has no $FAMILY.mjs — skipping anchor leg" | tee "out/$FAMILY-anchor.log"
           fi
@@ -108,9 +108,9 @@ jobs:
         run: |
           set -o pipefail
           COSIGNAL_ROOT="$GITHUB_WORKSPACE/anchor-tree" node --expose-gc --import tsx \
-            "$GITHUB_WORKSPACE/packages/cosignal/bench/spka-sa-gates.mjs" 2>&1 | tee "$GITHUB_WORKSPACE/out/spka-sa-gates-anchor.log"
+            "$GITHUB_WORKSPACE/packages/cosignals/bench/spka-sa-gates.mjs" 2>&1 | tee "$GITHUB_WORKSPACE/out/spka-sa-gates-anchor.log"
           COSIGNAL_ROOT="$GITHUB_WORKSPACE" node --expose-gc --import tsx \
-            "$GITHUB_WORKSPACE/packages/cosignal/bench/spka-sa-gates.mjs" 2>&1 | tee "$GITHUB_WORKSPACE/out/spka-sa-gates-head.log"
+            "$GITHUB_WORKSPACE/packages/cosignals/bench/spka-sa-gates.mjs" 2>&1 | tee "$GITHUB_WORKSPACE/out/spka-sa-gates-head.log"
 
       # Parents end by printing a JSON table; @@ROW jsonl lines carry the raw
       # per-config rows. Extract both into artifacts the collate job merges.
@@ -183,7 +183,7 @@ jobs:
   suites:
     # Rounds-sharded correctness pass: each round is a COMPLETE suite +
     # conformance run on one runner (rounds catch flake; frameworks and
-    # suites are never sharded across machines). cosignal-react is excluded
+    # suites are never sharded across machines). cosignals-react is excluded
     # here: it needs the vendor/react fork build (react-benchmark.yml owns
     # that toolchain).
     if: github.event_name != 'pull_request' || github.event.label.name == 'bench'
@@ -207,21 +207,21 @@ jobs:
       - run: npm install -g pnpm@10
 
       - name: Install (filtered)
-        run: pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignal..." --filter "cosignal-oracle..."
+        run: pnpm install --frozen-lockfile --filter "@lab/harness..." --filter "cosignals..." --filter "cosignals-oracle..."
 
-      - name: cosignal package suite (incl. bytecode budgets, round ${{ matrix.round }})
-        working-directory: packages/cosignal
+      - name: cosignals package suite (incl. bytecode budgets, round ${{ matrix.round }})
+        working-directory: packages/cosignals
         run: npx vitest run
 
-      - name: cosignal-oracle suite
-        working-directory: packages/cosignal-oracle
+      - name: cosignals-oracle suite
+        working-directory: packages/cosignals-oracle
         run: npx vitest run
 
-      - name: Conformance (cosignal, cosignal-concurrent, arena)
+      - name: Conformance (cosignals, cosignals-concurrent, arena)
         working-directory: harness
         run: |
-          FRAMEWORK=cosignal npx vitest run
-          FRAMEWORK=cosignal-concurrent npx vitest run
+          FRAMEWORK=cosignals npx vitest run
+          FRAMEWORK=cosignals-concurrent npx vitest run
           FRAMEWORK=arena npx vitest run
 
   collate:
@@ -235,10 +235,10 @@ jobs:
           path: artifacts
           pattern: bench-*
 
-      - name: Merge gate outputs -> cosignal-gates-${{ github.sha }}.md
+      - name: Merge gate outputs -> cosignals-gates-${{ github.sha }}.md
         run: |
           {
-            echo "# cosignal gate benches @ ${{ github.sha }}"
+            echo "# cosignals gate benches @ ${{ github.sha }}"
             echo ""
             echo "anchor: $ANCHOR_REF | gates: ${{ needs.gates.result }} | suites: ${{ needs.suites.result }}"
             echo ""
@@ -248,10 +248,10 @@ jobs:
               cat "$f"
               echo '```'
             done
-          } > "cosignal-gates-${{ github.sha }}.md"
-          cat "cosignal-gates-${{ github.sha }}.md" >> "$GITHUB_STEP_SUMMARY"
+          } > "cosignals-gates-${{ github.sha }}.md"
+          cat "cosignals-gates-${{ github.sha }}.md" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cosignal-gates-${{ github.sha }}
-          path: cosignal-gates-${{ github.sha }}.md
+          name: cosignals-gates-${{ github.sha }}
+          path: cosignals-gates-${{ github.sha }}.md

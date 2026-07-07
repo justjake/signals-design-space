@@ -13,6 +13,6 @@
 	},
 	"include": [
 		"src",
-		"../cosignal-react/types"
+		"../cosignals-react/types"
 	]
 }
