@@ -305,13 +305,21 @@ type ValueIndex = number;
 // benchmark workloads when bundled. Same-file const enum members are inlined
 // as numeric literals by esbuild (transform AND bundle modes), tsx, vitest,
 // and tsc alike, so the codegen no longer depends on how the library is
-// packaged. They must STAY in this file: esbuild-based tools inline const
-// enum members only within one file — a cross-file access becomes a real
-// property lookup at runtime.
+// packaged. The DECLARATIONS stay in this file — the kernel owns its record
+// layout — and the enums other modules walk kernel records with (NodeField,
+// LinkField, NodeFlag) are EXPORTED so those consumers import the one
+// definition instead of hand-copying numbers a kernel field reorder would
+// silently orphan. Same-file member accesses still inline as literals under
+// every toolchain; a cross-file access inlines under whole-program tsc emit
+// and esbuild bundling, and becomes a property read of the emitted enum
+// object under per-file transforms (tsx, vitest) — acceptable on the
+// bridge's cold-to-warm kernel walks, never in the kernel's own hot paths
+// (which are all same-file by construction). Arena (geometry) has no
+// external consumer and stays unexported.
 
 /** Field offsets within a NODE record (M arena, stride 8; ids are
  * pre-multiplied: id = record ordinal * 8). */
-const enum NodeField {
+export const enum NodeField {
 	FLAGS = 0,
 	DEPS = 1, // doubles as the free-list next pointer for freed records
 	DEPS_TAIL = 2,
@@ -324,7 +332,7 @@ const enum NodeField {
 
 /** Field offsets within a LINK record (link records share the arena, stride,
  * and premultiplied ids with node records). */
-const enum LinkField {
+export const enum LinkField {
 	VERSION = 0,
 	DEP = 1,
 	SUB = 2,
@@ -343,7 +351,7 @@ const enum LinkField {
 
 /** Bit values of a node's FLAGS field (upstream ReactiveFlags + HasChildEffect
  * + kind bits). A flags word is an OR of these (see `type NodeFlags`). */
-const enum NodeFlag {
+export const enum NodeFlag {
 	MUTABLE = 1,
 	WATCHING = 2,
 	RECURSED_CHECK = 4,

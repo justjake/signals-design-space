@@ -164,7 +164,7 @@
  *     never be skipped. The B1 read-before-pending pin is the tripwire.
  */
 
-import { Atom, Computed, CycleError, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain, __setHostComputedRead, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type ComputedCtx, type HostOpKind } from './index.js';
+import { Atom, Computed, CycleError, LinkField, NodeField, NodeFlag, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain, __setHostComputedRead, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type ComputedCtx, type HostOpKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -894,11 +894,20 @@ export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
 // ARENA (its own transliterated walks) and compares against FOLD-TRUTH — a
 // naive cache-free re-fold — ANY divergence throws. Layouts and walks are
 // adapted from the spike prototype
-// (research/experiments/world-tagged-links-spike-code/), record stride and
-// flag values mirroring the kernel's (index.ts NodeField/NodeFlag — const
-// enums are not exported; values are asserted stable by the suite).
+// (research/experiments/world-tagged-links-spike-code/). AF/AFlag below are
+// the shadow arenas' OWN layout — bridge-owned, same-file so the hot arena
+// walks (the aPropagate/aCheckDirty family) inline the members as literals
+// under every toolchain. The shared field/bit names deliberately keep the
+// kernel's numbering (the walks are transliterations of the kernel's
+// propagate/checkDirty family and read best side by side), but nothing
+// couples the two layouts: walks over KERNEL records use the kernel's own
+// exported enums (index.ts NodeField/LinkField/NodeFlag — see
+// kernelStrongDepsOf and closureOverKernel), and offsets 5-7 here mean
+// shadow-specific things the kernel's fields don't.
 
-/** Arena record fields (stride 8; node-shadow and link records share the pool). */
+/** Shadow-arena record fields (bridge-owned layout — NOT the kernel's
+ * NodeField/LinkField, whose offsets 5-7 mean different things; stride 8;
+ * node-shadow and link records share the pool). */
 const enum AF {
 	// shadow node record
 	FLAGS = 0,
@@ -929,7 +938,8 @@ const enum AF {
 	L_FREE_NEXT = 0,
 }
 
-/** Shadow flag bits (kernel NodeFlag values, mirrored — see header note). */
+/** Shadow flag bits (bridge-owned; the shared names keep the kernel
+ * NodeFlag numbering for side-by-side reading — see header note). */
 const enum AFlag {
 	MUTABLE = 1,
 	RECURSED_CHECK = 4,
@@ -948,8 +958,8 @@ const enum AFlag {
 	 * suspension or plain error) — serves rethrow the cached payload,
 	 * boxedRead-style (§4.5.3; arenas serve real reads at S-B). Clear means
 	 * a RETURNED sentinel (the shim wrapper folds background suspensions to
-	 * the sentinel VALUE), which serves as a value. Arena-local bit — not a
-	 * kernel NodeFlag mirror (the kernel encodes the split differently). */
+	 * the sentinel VALUE), which serves as a value. Arena-local bit with no
+	 * kernel NodeFlag counterpart (the kernel encodes the split differently). */
 	BOX_THROWN = 16384,
 }
 
@@ -1465,11 +1475,18 @@ const FOLD_TRUTH = Symbol('cosignal.foldTruth');
  */
 export type ArenaCheckerInternals = {
 	/** Arena record layout as plain numbers, restricted to the fields the
-	 * structural validator reads. The engine's AF/AFlag/A_SHIFT are
-	 * same-file const enums (esbuild inlines them per file), so the values
-	 * are inlined HERE at construction and travel as data. AF entries are
-	 * Int32 word offsets within a record; AFlag entries are FLAGS bits;
-	 * A_SHIFT converts a record id to its side-column index. */
+	 * structural validator reads. The engine's AF/AFlag are same-file const
+	 * enums (A_SHIFT a module const): the OWNER inlines the values into this
+	 * object at construction, so the view is in sync by construction — a
+	 * layout change here flows through automatically, unlike a hand-copied
+	 * declaration. Data-passing stays (deliberate): the shadow layout is
+	 * bridge-internal with ONE external reader (the test referee), and
+	 * exporting the enums for it would widen the module surface without
+	 * deleting any drift risk. (Contrast the KERNEL's layout, which has
+	 * independent walkers and is therefore exported from index.ts —
+	 * NodeField/LinkField/NodeFlag.) AF entries are Int32 word offsets
+	 * within a record; AFlag entries are FLAGS bits; A_SHIFT converts a
+	 * record id to its side-column index. */
 	readonly layout: {
 		readonly A_SHIFT: number;
 		readonly AF: {
@@ -2266,15 +2283,17 @@ export class CosignalBridge {
 
 	/** The registered bridge nodes among a computed's CURRENT kernel deps
 	 * (tracked-only by construction: untracked reads leave no kernel link).
-	 * Walked off the raw kernel arena with the mirrored field constants. */
+	 * Walked off the raw kernel arena with the kernel's own exported layout
+	 * enums — a kernel field reorder flows through the import instead of
+	 * silently corrupting this walk. */
 	private kernelStrongDepsOf(node: ComputedNode): NodeId[] {
 		const M = __kernelBuffer();
 		const out: NodeId[] = [];
-		let l = M[node.handle._id + AF.DEPS]!;
+		let l = M[node.handle._id + NodeField.DEPS]!;
 		while (l !== 0) {
-			const dep = this.byKernelId.get(M[l + AF.L_DEP]!);
+			const dep = this.byKernelId.get(M[l + LinkField.DEP]!);
 			if (dep !== undefined) out.push(dep.id);
-			l = M[l + AF.L_NEXT_DEP]!;
+			l = M[l + LinkField.NEXT_DEP]!;
 		}
 		return out;
 	}
@@ -5236,18 +5255,19 @@ export class CosignalBridge {
 	}
 
 	/** The kernel leg of the fixup closure (S-C): reverse walk over the
-	 * kernel's dep links off the raw arena view (mirrored constants). */
+	 * kernel's dep links off the raw arena view (the kernel's own exported
+	 * layout enums). */
 	private closureOverKernel(kid: KernelId, closure: Set<NodeId>, seen: Set<KernelId>): void {
 		if (seen.has(kid)) return;
 		seen.add(kid);
 		const M = __kernelBuffer();
-		let l = M[kid + AF.DEPS]!;
+		let l = M[kid + NodeField.DEPS]!;
 		while (l !== 0) {
-			const depKid = M[l + AF.L_DEP]!;
+			const depKid = M[l + LinkField.DEP]!;
 			const dep = this.byKernelId.get(depKid);
 			if (dep !== undefined) closure.add(dep.id);
-			if ((M[depKid + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0) this.closureOverKernel(depKid, closure, seen);
-			l = M[l + AF.L_NEXT_DEP]!;
+			if ((M[depKid + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) this.closureOverKernel(depKid, closure, seen);
+			l = M[l + LinkField.NEXT_DEP]!;
 		}
 	}
 

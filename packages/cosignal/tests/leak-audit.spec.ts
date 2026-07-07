@@ -23,6 +23,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	Atom,
 	Computed,
+	LinkField,
+	NodeField,
 	SuspendedRead,
 	__ctxUse,
 	__hostDisposeComputed,
@@ -33,11 +35,6 @@ import {
 } from '../src/index.js';
 import { __newBridgeForTest, type AnyNode, type AtomNode, type BridgeOptions, type ComputedNode, type CosignalBridge } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
-
-// Mirrored kernel field offsets (index.ts const enums; asserted stable by the
-// suite's kernel-walk tests): NodeField.DEPS = 1, LinkField.NEXT_DEP = 6.
-const NF_DEPS = 1;
-const LF_NEXT_DEP = 6;
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
@@ -123,7 +120,7 @@ describe('1. KERNEL (index.ts arena)', () => {
 			gate.set(i % 2 === 0);
 			void c.state; // re-track: one link unlinks (freed), its replacement allocates
 			const M = __kernelBuffer();
-			for (let l = M[cid + NF_DEPS]!; l !== 0; l = M[l + LF_NEXT_DEP]!) linkIds.add(l);
+			for (let l = M[cid + NodeField.DEPS]!; l !== 0; l = M[l + LinkField.NEXT_DEP]!) linkIds.add(l);
 		}
 		expect(linkIds.size).toBeLessThanOrEqual(6); // the flip cycles the same few records, not 400 fresh ones
 	});
