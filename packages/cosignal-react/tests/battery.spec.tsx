@@ -648,13 +648,16 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 	});
 });
 
-describe('ambient batch retirement (a context-free write must never wedge the pipeline)', () => {
-	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the forkToken===0 arm is unreachable', async () => {
-		// F4 verdict half 1 (unreachability): once a renderer provider exists
-		// (the shim's handshake asserts one), unstable_getCurrentWriteBatch()
-		// mints a nonzero token for EVERY write — even from a bare timer-style
-		// call stack — with a guaranteed close edge. So no write in the React
-		// path ever reaches bareWrite, and no ambient batch is ever minted.
+describe('context-free writes (token 0 is unreachable once a renderer provider exists)', () => {
+	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the token-0 state is unreachable', async () => {
+		// Unreachability, proven on the happy path: once a renderer provider
+		// exists (the shim's handshake asserts one),
+		// unstable_getCurrentWriteBatch() mints a nonzero token for EVERY
+		// write — even from a bare timer-style call stack — with a guaranteed
+		// close edge. So the classifier's token-0 protocol-violation check
+		// (devChecks, armed by this harness) never fires in the React path,
+		// and no ambient batch is ever minted. dev-checks.spec.ts drives the
+		// token-0 state itself in a renderer-less environment.
 		h = makeHarness();
 		const a = new Atom(0);
 		const flag = new Atom(0); // written outside any React context; observed by no component
@@ -692,49 +695,12 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		expect(text(container)).toBe('a:1;');
 	});
 
-	test('fallback drivers: the shim retires an engine-minted ambient batch when the pending window closes; quiet re-arms', async () => {
-		// F4 verdict half 2 (the policy): an ambient batch CAN still be minted
-		// through the engine's own bareWrite (classifier-less fallback drivers;
-		// a hypothetical future build returning token 0). No protocol batch
-		// mirrors it, so no onBatchRetired will ever name it — the shim owns
-		// its retirement: ambient content is sync-committed by definition, so
-		// the batch retires as soon as no live non-ambient token and no open
-		// pass remain (checked at bare writes, batch retirements, pass ends).
-		h = makeHarness();
-		const a = new Atom(0);
-		const flag = new Atom(0);
-		const io = deferred<void>();
-		const settled = deferred<void>();
-		const { container } = await h.mount(<Reader id="a" atom={a} />);
-		await act(async () => {
-			startSignalTransition(async () => {
-				await io.promise;
-				a.set(1); // post-await: classifies like any write at that moment (urgent protocol batch)
-				settled.resolve();
-			});
-		});
-		expect(h.bridge.quiet).toBe(false); // pipeline armed: the parked action holds the window open
-		// Simulate the classifier-less route: a bare write straight into the
-		// engine while the window is open mints the ambient default batch.
-		const flagNode = h.handle.shim.nodeForAtom(flag as Atom<unknown>);
-		h.bridge.bareWrite(flagNode, 0, 7);
-		const ambient = h.bridge.ambientToken;
-		expect(ambient).toBeDefined(); // ambient minted; nothing protocol-side will ever retire it…
-		// The pending window closes: the action settles and its batch retires —
-		// the shim's policy retires the ambient batch with it.
-		await act(async () => {
-			io.resolve();
-			await settled.promise;
-		});
-		await act(async () => {});
-		expect(h.bridge.ambientToken).toBeUndefined(); // …the shim did
-		expect(h.bridge.tokens.get(ambient!)?.state ?? 'retired').toBe('retired');
-		expect(h.bridge.liveTokens()).toHaveLength(0);
-		expect(h.bridge.quiescent()).toBe(true); // liveness restored: quiesce() reachable again
-		expect(h.bridge.quiet).toBe(true); // quiet re-armed — compaction and re-arming no longer blocked
-		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // ambient content is committed truth
-		expect(text(container)).toBe('a:1;');
-	});
+	// (The shim's ambient-batch retirement policy — and its pin here — died
+	// with the classifier's bareWrite fallback: the classifier never routes
+	// to the engine's ambient batch anymore, so the shim owns no ambient
+	// retirement. The engine KEEPS bareWrite/ambient minting for
+	// classifier-less hosts (host-agnostic embedding); the engine suites and
+	// the oracle corpus pin that capability.)
 });
 
 describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — effects-unification re-pin)', () => {

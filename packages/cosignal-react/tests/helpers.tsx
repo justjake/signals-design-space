@@ -30,8 +30,11 @@ export type Harness = {
 	cleanup(): Promise<void>;
 };
 
-export function makeHarness(): Harness {
-	const bridge = __newBridgeForTest();
+export function makeHarness(opts?: { devChecks?: boolean }): Harness {
+	// devChecks arms by default so the suite exercises the protocol-edge
+	// throws and the dev warnings; pass { devChecks: false } to pin the
+	// production posture (defined fall-throughs, no warning allocation).
+	const bridge = __newBridgeForTest({ devChecks: opts?.devChecks ?? true });
 	const events = attachRefereeStream(bridge);
 	const compacted: Array<{ atom: AtomNode; entry: Receipt }> = [];
 	bridge.onCompact = (atom, entry) => compacted.push({ atom, entry });

@@ -830,6 +830,18 @@ export type BridgeOptions = {
 	 * arena suites pin every growth path.
 	 */
 	arenaInitInts?: ArenaInitInts;
+	/**
+	 * Arms development-time checks in the bindings driving this bridge:
+	 * protocol-edge states the host integration contract makes unreachable
+	 * (a write with no batch context, a render pass starting over a
+	 * still-open one, a transition with no batch context) throw instead of
+	 * taking their defined fall-through, and dev-only diagnostics (the
+	 * post-await orphan-write warning) run. The engine itself never branches
+	 * on it — it lives here so hosts and bindings share one switch. Default
+	 * off: each guarded site then costs one boolean branch and allocates
+	 * nothing. Test harnesses arm it so suites exercise the throws.
+	 */
+	devChecks?: boolean;
 };
 
 /**
@@ -1808,6 +1820,10 @@ export class CosignalBridge {
 	writeClassifier: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => void) | undefined;
 	/** Adopt-on-demand for routed reads of not-yet-registered atoms. */
 	readAdopter: ((atom: Atom<unknown>) => AtomNode) | undefined;
+	/** Development-time checks switch (BridgeOptions.devChecks). Read by the
+	 * bindings/host adapter driving this bridge — the engine never branches
+	 * on it. */
+	readonly devChecks: boolean;
 
 	private nextNode = 1;
 	private nextToken = 1;
@@ -1822,6 +1838,7 @@ export class CosignalBridge {
 
 	constructor(options?: BridgeOptions) {
 		this.arenaInitInts = options?.arenaInitInts ?? 8192;
+		this.devChecks = options?.devChecks ?? false;
 		probes.bridges++; // One Core probe (referee surface)
 		for (let i = 0; i < SLOT_COUNT; i++) {
 			this.slots.push({

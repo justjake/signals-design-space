@@ -198,7 +198,9 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
  * (kernel arena, union edges, memos) are never compared.
  */
 export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __syncNamingEvents(n: number): void } {
-	const b = __newBridgeForTest();
+	// devChecks armed (an engine-inert switch): the corpus referees the
+	// engine with it on, proving the flag perturbs no engine semantics.
+	const b = __newBridgeForTest({ devChecks: true });
 	// The engine's event stream: a lossless session tracer decoded on demand
 	// (the packed records are the only event channel; tests/trace-events.ts).
 	const stream = attachRefereeStream(b);

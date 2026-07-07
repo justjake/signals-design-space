@@ -326,10 +326,10 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		expect(h.events.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
 	});
 
-	test('R12: async action parity — parked prefix, ambient post-await raw write, engine-level member write at settle', async () => {
+	test('R12: async action parity — parked prefix, urgent post-await raw write, engine-level member write at settle', async () => {
 		h = makeHarness();
 		const a = new Atom(0); // sync-prefix write (parks with the action)
-		const b = new Atom(0); // raw post-await write (ambient — commits early)
+		const b = new Atom(0); // raw post-await write (urgent protocol batch — commits early)
 		const c = new Atom(0); // member write into the action's still-live token (parks with the action)
 		const io = deferred<void>();
 		const settled = deferred<void>();
@@ -364,8 +364,42 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:1;b:2;c:3;');
-		// The raw post-await write was dev-warned as landing outside the action.
+		// The raw post-await write was dev-warned as landing outside the action
+		// (the warning heuristic is devChecks-gated; this harness arms it).
 		expect(h.handle.shim.devWarnings.some((m) => m.includes('outside the action'))).toBe(true);
+	});
+
+	test('R12b: with devChecks off, the post-await orphan-write heuristic never runs — no warning, same values', async () => {
+		// Production posture: the whole heuristic (the liveTokens() allocation,
+		// the parked scan, the warn) sits behind the devChecks branch. The
+		// values are identical either way — the flag gates diagnostics only.
+		h = makeHarness({ devChecks: false });
+		const a = new Atom(0);
+		const b = new Atom(0);
+		const io = deferred<void>();
+		const settled = deferred<void>();
+		const { container } = await h.mount(
+			<>
+				<Reader id="a" atom={a} />
+				<Reader id="b" atom={b} />
+			</>,
+		);
+		await act(async () => {
+			startSignalTransition(async () => {
+				a.set(1); // transition context: the action's token
+				await io.promise;
+				b.set(2); // bare continuation: urgent protocol batch, outside the parked action
+				settled.resolve();
+			});
+		});
+		expect(text(container)).toBe('a:0;b:0;'); // parked: nothing committed
+		await act(async () => {
+			io.resolve();
+			await settled.promise;
+		});
+		await act(async () => {});
+		expect(text(container)).toBe('a:1;b:2;');
+		expect(h.handle.shim.devWarnings).toHaveLength(0); // heuristic never ran
 	});
 
 	test('R13: flushSync commits urgently and excludes the pending deferred batch', async () => {

@@ -49,8 +49,9 @@
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
  *    write-context API (unstable_getCurrentWriteBatch, whose low bit is
  *    the deferred flag); token 0 (no provider registered) is unreachable
- *    once a renderer has loaded and defensively falls back to the bridge's
- *    ambient default batch (retired by the shim's own policy). Raw `.state` reads
+ *    once a renderer has loaded — with dev checks armed
+ *    (BridgeOptions.devChecks) it throws as a protocol violation, and
+ *    without them it classifies as an ordinary urgent write. Raw `.state` reads
  *    route through the core's host read hook into the bridge's effective
  *    world (evaluation world, else the ambient world this shim maintains
  *    around render passes and effect fires) — no prototype patching
@@ -148,6 +149,11 @@ export function getActiveShim(): Shim | undefined {
 
 export class Shim {
 	readonly bridge: CosignalBridge;
+	/** Development-time checks (the bridge's BridgeOptions.devChecks): armed,
+	 * protocol-edge states the integration contract makes unreachable throw,
+	 * and the post-await orphan-write warning runs; off, each guarded site is
+	 * one boolean branch and the defined fall-through. */
+	readonly devChecks: boolean;
 	disposed = false;
 	/** Listener/translation errors (recorded, not thrown across React's commit). */
 	errors: unknown[] = [];
@@ -181,6 +187,7 @@ export class Shim {
 
 	constructor(bridge: CosignalBridge) {
 		this.bridge = bridge;
+		this.devChecks = bridge.devChecks;
 		assertForkPresent();
 		// The engine's host seams: the core's public Atom methods route
 		// host-attributable writes (whole ops) to the classifier, and routed
@@ -325,11 +332,20 @@ export class Shim {
 	private handlePassStart(container: unknown, includedBatches: readonly number[]): void {
 		const rec = this.rootRec(container);
 		if (rec.pass !== undefined && rec.pass.state !== 'ended') {
-			// Defensive: the protocol host ends a pass frame before restarting it,
-			// so a still-open pass here means the two sides desynced — discard it
-			// and record the failure loudly in the error log.
+			// The protocol host closes a pass frame (onRenderPassEnd) before
+			// restarting the root, so a still-open pass here means the two
+			// sides desynced.
+			if (this.devChecks) {
+				throw new Error(
+					`cosignal-react: protocol violation — render pass started on ${rec.id} while its previous pass is still open`,
+				);
+			}
+			// Defined fall-through: discard the stale pass. A discarded pass
+			// contributes nothing to committed truth (its batch set never locks
+			// into the root's committed table; pass-owned mounts die), so this
+			// cannot double-account — while leaving it open would pin the
+			// engine's pending window forever.
 			this.bridge.passEnd(rec.pass.id, 'discard');
-			this.errors.push(new Error(`cosignal-react: stale open pass on ${rec.id} at passStart`));
 		}
 		const known: TokenId[] = [];
 		for (const forkToken of includedBatches) {
@@ -368,7 +384,6 @@ export class Shim {
 			}
 			rec.minted = new Set();
 			rec.pass = undefined;
-			this.maybeRetireAmbient(); // the closing pass may have been the last thing keeping ambient pending
 			return;
 		}
 		// The end(commit) event is where the bridge captures its baseline:
@@ -389,7 +404,6 @@ export class Shim {
 			this.holdingRefires = false;
 		}
 		rec.pass = undefined;
-		this.maybeRetireAmbient(); // the closing pass may have been the last thing keeping ambient pending
 		// (ctx.previous cells update inside bridge.passEnd since S-C — the
 		// cells live on the bridge's computed nodes with the ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
@@ -436,34 +450,6 @@ export class Shim {
 		else this.bridge.retire(mapped); // batch done everywhere: its writes become permanent history
 		this.bridgeTokenByFork.delete(forkToken);
 		this.forkTokenByBridge.delete(mapped);
-		this.maybeRetireAmbient(); // the last protocol retirement may close the ambient batch's pending window
-	}
-
-	/**
-	 * Ambient-batch retirement policy — the shim owns it because no protocol
-	 * batch mirrors the engine's ambient default batch (it is minted engine-
-	 * side for context-free writes), so no `onBatchRetired` will ever name it.
-	 * Ambient content is sync-committed by definition — a context-free write
-	 * is urgent truth the moment it lands — so the batch retires as soon as
-	 * nothing else is in flight: no live non-ambient token and no open pass.
-	 * Checked after every event that can close that window (a bare write
-	 * itself, a protocol batch retirement, a pass end). Leaving it live
-	 * would permanently block quiet-mode re-arming, tape compaction, and
-	 * quiescence, and keep ambient writes out of every committed world.
-	 */
-	private maybeRetireAmbient(): void {
-		const b = this.bridge;
-		const ambientId = b.ambientToken;
-		if (ambientId === undefined) return;
-		const ambient = b.tokens.get(ambientId);
-		if (ambient === undefined || ambient.state !== 'live') return;
-		for (const t of b.tokens.values()) {
-			if (t.state === 'live' && !t.ambient) return; // the pending window is still open
-		}
-		for (const p of b.passes.values()) {
-			if (p.state !== 'ended') return; // an open render still folds pre-retirement state
-		}
-		b.retire(ambientId); // sync-committed content locks into every committed world
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {
@@ -512,16 +498,17 @@ export class Shim {
 	// the causing batch's lane; urgent/reconcile corrections take the
 	// discrete-urgent fallback. The bridge delivers them at the end of each
 	// engine operation — the same timing the old post-op event drain had.
-	// Dev warnings are shim-local: the post-await lint lives HERE only, in
-	// classifyWrite — the engine and the reference model emit no dev events.)
+	// Dev warnings are shim-local AND devChecks-gated: the post-await lint
+	// lives HERE only, in classifyWrite — the engine and the reference model
+	// emit no dev events.)
 
 	/**
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
 	 * unstable_runInBatch, so the re-render renders and commits together with
 	 * the batch that caused it. Bridge tokens without a live protocol
-	 * counterpart (the bridge's ambient default batch, or an already-retired
-	 * batch) pass token 0, which unstable_runInBatch defines as a
-	 * discrete-urgent fallback.
+	 * counterpart (an already-retired batch, or an engine-minted batch no
+	 * protocol token mirrors) pass token 0, which unstable_runInBatch defines
+	 * as a discrete-urgent fallback.
 	 */
 	private bumpInBatch(watcherId: number, bridgeToken: TokenId | undefined): void {
 		const target = this.targets.get(watcherId);
@@ -541,21 +528,21 @@ export class Shim {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
 		const forkToken = React.unstable_getCurrentWriteBatch();
-		if (forkToken === 0) {
-			// Defensively retained; UNREACHABLE in practice. Token 0 means
-			// "no renderer provider registered" (ReactExternalRuntime returns 0
-			// only then), and a renderer registers its provider at module load —
-			// after that, getCurrentWriteBatch() mints a token for EVERY write
-			// (any call context) with a guaranteed close edge, so no write in
-			// the React path is ever context-free. Pinned by the ambient-
-			// retirement battery test.
-			this.bridge.bareWrite(node, kind, payload);
-			// If a bare write does land (a future build regression), the ambient
-			// batch it minted has no protocol counterpart to close it: retire it
-			// one-shot when nothing else is pending.
-			this.maybeRetireAmbient();
-		} else {
-			const tokenId = this.bridgeTokenFor(forkToken);
+		// Token 0 is UNREACHABLE in practice: it means "no renderer provider
+		// registered" (ReactExternalRuntime returns 0 only then), and a
+		// renderer registers its provider at module load — after that,
+		// getCurrentWriteBatch() mints a token for EVERY write (any call
+		// context) with a guaranteed close edge, so no write in the React
+		// path is ever context-free. Dev checks make reaching it explode;
+		// without them it classifies below as an ordinary urgent write
+		// (token 0's low bit is clear = non-deferred).
+		if (this.devChecks && forkToken === 0) {
+			throw new Error(
+				'cosignal: protocol violation — signal write with no batch context after registration (the renderer provided no external-runtime write batch)',
+			);
+		}
+		const tokenId = this.bridgeTokenFor(forkToken);
+		if (this.devChecks) {
 			// Dev-warning heuristic. After an await, code runs on a fresh call
 			// stack with no ambient transition context, so a bare write lands
 			// urgent — while an async action is pending that is usually a bug
@@ -575,8 +562,8 @@ export class Shim {
 			) {
 				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
 			}
-			this.bridge.write(tokenId, node, kind, payload);
 		}
+		this.bridge.write(tokenId, node, kind, payload);
 		// A write into a batch already locked into some root's committed table
 		// moves that root's committed world immediately — but effects are
 		// BOUNDARY consumers (RCC-EF2 amended, 2026-07-06): they never re-run

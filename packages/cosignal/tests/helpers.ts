@@ -166,7 +166,9 @@ export function mountEngineCoreEffect(b: CosignalBridge, node: ENode, name: stri
 
 export class TwinDriver {
 	readonly model = new CosignalModel();
-	readonly engine: CosignalBridge = __newBridgeForTest();
+	/** devChecks armed: the switch must be engine-inert — the whole lockstep
+	 * suite running with it on proves the flag itself perturbs nothing. */
+	readonly engine: CosignalBridge = __newBridgeForTest({ devChecks: true });
 	/** The engine's event stream: a lossless session tracer attached at
 	 * bridge birth, decoded to BridgeEvents on demand (the engine mints no
 	 * event objects — tests/trace-events.ts). */

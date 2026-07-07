@@ -343,23 +343,29 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
  */
 export function startSignalTransition(fn: () => unknown): void {
 	const shim = requireShim();
+	// Token 0 ("no renderer provider registered") is unreachable once a
+	// renderer has loaded, and it is a global condition — zero out here means
+	// zero inside the transition scope too. The dev check throws HERE, before
+	// React.startTransition, because startTransition reports a sync throw
+	// from its scope as an uncaught error instead of propagating it.
+	if (shim.devChecks && React.unstable_getCurrentWriteBatch() === 0) {
+		throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
+	}
 	React.startTransition((): void => {
 		// The action's batch context is React's own transition scope: inside
 		// this callback unstable_getCurrentWriteBatch() returns the
 		// transition's batch token, and the shim's classifier routes every
-		// write executed here into that batch. Token 0 ("no renderer
-		// provider") is unreachable once a renderer has loaded — fail as
-		// loudly as the old per-write guard did rather than let the action's
-		// writes silently classify ambient.
+		// write executed here into that batch.
 		const forkToken = React.unstable_getCurrentWriteBatch();
-		if (forkToken === 0) {
-			throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
-		}
 		// Upgrade the batch to action semantics NOW (parked — kept pending —
 		// until the action settles), before fn writes anything: the parked
 		// token holds the pending window open for the action's whole life,
-		// even for an action that only writes after its first await.
-		shim.bridgeTokenFor(forkToken, { action: true });
+		// even for an action that only writes after its first await. With no
+		// batch context (token 0, dev checks off) there is no batch to park:
+		// the action runs and its writes classify as they land — ordinary
+		// urgent writes, the same fall-through as the write classifier —
+		// rather than minting a parked batch nothing could ever settle.
+		if (forkToken !== 0) shim.bridgeTokenFor(forkToken, { action: true });
 		// Returning fn's thenable keeps the transition pending until it settles
 		// (React async-action semantics); the protocol host retires the batch
 		// at settlement, which is when its writes become permanent history.
