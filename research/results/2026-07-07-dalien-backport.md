@@ -459,3 +459,29 @@ still works.
 - Patched-package test copies: `/Users/jitl/.claude/jobs/2e4b7274/tmp/testpkg-{pristine,candidate}/`
 - CPU profiles (create0to1): `/Users/jitl/.claude/jobs/2e4b7274/tmp/prof/`
 - Raw runs: `repro-milomg.txt`, `real-suite-ablation.txt`, `dynamic-ablation.txt`, `final-ab.txt` in the same tmp dir.
+
+---
+
+## ADDENDUM (2026-07-07, owner directive): first-use registration REJECTED
+
+**Owner rule, absolute: WE MUST NEVER LEAK. Any leak is a bug. Leaking is
+not a valid optimization at any bound.** This supersedes the backport
+recommendation above:
+
+- **First-use registration is rejected** — its "one 32-byte record per
+  never-used dropped signal" bound is a leak, therefore a bug. Signals must
+  register at MINT (total reclamation coverage). The ~12ns/mint cost is the
+  price of correctness; optimize its constants (SMI heldValues, token
+  strategy per handle shape — see packages/cosignals-alt-a/b, engineered to
+  the measured V8 FR floor) but never trade coverage away.
+- **The seedGas fix stands** (pure bug fix, no leak trade): worth ~all of
+  the createComputations gap on its own.
+- **cosignal's never-reclaiming handles are a BUG to fix**, not a
+  performance win: its field-leading creation numbers were partly purchased
+  with an unbounded leak and must be re-measured after it registers at mint.
+  Benchmark comparisons in this repo must flag leak-vs-no-leak asymmetry;
+  a leaking engine is disqualified from "faster," not credited.
+- Corrected expectation for dalien-userspace: adopt seedGas; keep mint-time
+  registration; adopt the cosignals-alt-a/b registration-constant
+  optimizations. Creation will not reach 0.66x — the FR floor is the honest
+  price every non-leaking engine pays equally.
