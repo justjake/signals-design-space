@@ -1,0 +1,6 @@
+# Repo-local mise pins.
+# mise remains the manager for node/pnpm (node 24 comes from the user's global
+# mise config); this file only pins the Vite+ CLI so everyone in this repo gets
+# the same `vp` regardless of their global `vp = "latest"` setting.
+[tools]
+vp = "0.2.3"

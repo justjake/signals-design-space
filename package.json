@@ -11,6 +11,13 @@
 		"fork:build": "fork/build-react.sh",
 		"fork:test": "cd vendor/react && yarn test --no-watchman ReactFiberBatchRegistry"
 	},
+	"devEngines": {
+		"packageManager": {
+			"name": "pnpm",
+			"version": "10.33.0",
+			"onFail": "download"
+		}
+	},
 	"pnpm": {
 		"overrides": {
 			"react": "link:vendor/react/build/oss-experimental/react",
