@@ -1,7 +1,7 @@
 /**
  * THE COMPOSITION ROOT of the concurrent engine. Every mechanism module in
  * this package is a FACTORY in the kernel's own style (graph.ts
- * `createEngine`): it closes over its state and returns/assigns its
+ * `createKernel`): it closes over its state and returns/assigns its
  * operation table. `createConcurrentEngine` is the one place they compose:
  * it builds the shared engine core record (World.ts `EngineCore`) with the
  * resident-state edges filled, runs every factory in dependency order, and
@@ -142,7 +142,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// below, read only at call time — every caller runs post-composition).
 	let core!: EngineCore;
 	// ---- the composition: build the mechanism tables in dependency order
-	// (each factory closes over its own state — the kernel's createEngine
+	// (each factory closes over its own state — the kernel's createKernel
 	// pattern — and receives its resident-state edges as thin arrows), then
 	// the class shell aliases the shared columns its resident hot paths and
 	// the tests read in place.

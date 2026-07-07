@@ -15,7 +15,7 @@
  * `__resetEngineForTest` re-runs it, nothing else does). There is no
  * installation step and no registration era: the public Atom/Computed
  * methods dispatch into the engine's paths DIRECTLY — writes through
- * `engineWrite` (behind the `standaloneQuiet` fast arm), reads through the
+ * `writeAtomConcurrent` (behind the `standaloneQuiet` fast arm), reads through the
  * routed-read trampolines (behind the `routingActive` flag) — and a
  * process that never attaches a driver and never opens a batch keeps both
  * fast arms forever (tests/one-core.spec.ts asserts zero log
@@ -170,7 +170,7 @@
  */
 
 import { Atom, Computed, CycleError, SuspendedRead, untracked, __plainAtomWrite, __resetPolicyForTest, __setStandaloneQuiet, type ComputedCtx } from './index.js';
-import { E, LinkField, NodeField, RecordGeom, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch, type IdBrand, type NodeId, type NodeIndex } from './graph.js';
+import { ArenaShape, E, LinkField, NodeField, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch, type IdBrand, type NodeId, type NodeIndex } from './graph.js';
 import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleTap } from './suspense.js';
 import { __setReclaimGuardHook, __setRecordFreeHook } from './graph.js';
 import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
@@ -568,7 +568,7 @@ export function __coreProbes(): { logEntries: number; batches: number; worldEval
 // ---- the public write dispatch (called by index.ts's Atom.set/update) -------------
 
 /**
- * THE classified write dispatch — everything after index.ts's policy assert
+ * The concurrent write dispatch — everything after index.ts's policy assert
  * and its standalone fast arm (a contentless handle while `standaloneQuiet`
  * takes the plain graph write without entering this function):
  *
@@ -579,7 +579,7 @@ export function __coreProbes(): { logEntries: number; batches: number; worldEval
  *   quiet → the internals-less arm (plain graph write) or the quiet fold.
  *   else → the ambient default batch (bareWrite).
  */
-export function engineWrite(atom: Atom<unknown>, kind: WriteKind, payload: unknown): void {
+export function writeAtomConcurrent(atom: Atom<unknown>, kind: WriteKind, payload: unknown): void {
 	const d = driver;
 	if (d !== undefined) {
 		const batchId = d.currentBatch();
@@ -647,7 +647,7 @@ export function __eachInternalsForTest(): AnyInternals[] {
 }
 
 /** The classified dispatch over an already-resolved node (the handle-free
- * lifecycle write path — same arms as engineWrite). @internal */
+ * lifecycle write path — same arms as writeAtomConcurrent). @internal */
 export function __engineWriteNode(node: AtomInternals, kind: WriteKind, payload: unknown): void {
 	const d = driver;
 	if (d !== undefined) {
@@ -888,7 +888,7 @@ export type ArenaCheckerInternals = {
  * (`cosignals-oracle`) implements, so the two can run any schedule in
  * lockstep. The kernel integration points are: `AtomInternals.handle`
  * (kernel-backed newest storage, eager stepwise apply on every recorded
- * write) and the public methods' direct dispatch (engineWrite + the routed
+ * write) and the public methods' direct dispatch (writeAtomConcurrent + the routed
  * `.state` reads).
  *
  * Test surface: the model-comparison tests run the reference model's
@@ -1152,7 +1152,7 @@ function internalsForAtom(atom: Atom<unknown>): AtomInternals {
 	const hit = atom._internals;
 	if (hit !== undefined) return hit;
 	const id = atom._id;
-	const current = untracked(() => E.read(id)); // non-linking newest read
+	const current = untracked(() => E.readAtom(id)); // non-linking newest read
 	const node = new AtomInternals(
 		id,
 		kernelNodeIndexOf(id),
@@ -1236,7 +1236,7 @@ export function computed(name: string, fn: ComputedFn, equals?: Equals): Compute
 	node.id = handle._id;
 	node.ix = kernelNodeIndexOf(node.id);
 	handle._internals = node;
-	E.markHostOwned(node.id); // its links carry no D1 lifecycle refs — the obs index is its arm
+	E.markMachineryOwned(node.id); // its links add no lifecycle union refs — the obs index is its arm
 	indexInternals(node);
 	return node;
 }
@@ -1293,7 +1293,7 @@ export function internalsForComputed(c: Computed<unknown>): ComputedInternals {
 	// kernel frame never reach a routed reader, so the fresh link list IS
 	// the capture — full, reuse-proof, tracked-only).
 	{
-		const fnIx = c._id >> RecordGeom.ID_TO_FN_SHIFT;
+		const fnIx = c._id >> ArenaShape.ID_TO_FN_SHIFT;
 		const inner = fns[fnIx] as (ctx: unknown) => unknown;
 		fns[fnIx] = (ctxArg: unknown): unknown => {
 			core.evalDepth++; // writes during a newest evaluation throw, as in every world
@@ -1308,7 +1308,7 @@ export function internalsForComputed(c: Computed<unknown>): ComputedInternals {
 			}
 		};
 	}
-	E.markHostOwned(c._id); // retro-releases any lifecycle refs its links held (the obs index is its arm now)
+	E.markMachineryOwned(c._id); // retro-releases any lifecycle refs its links held (the obs index is its arm now)
 	c._internals = node;
 	indexInternals(node);
 	return node;
@@ -1454,11 +1454,11 @@ function makeKernelGetter(node: ComputedInternals): () => Value {
 }
 
 /** The kernel-way dep read both kernel-frame readers share: atoms off the
- * kernel arena, computeds via the plain kernel computed read (E.read/
+ * kernel arena, computeds via the plain kernel computed read (E.readAtom/
  * E.computedRead link the dep to any open kernel frame), kernel
  * CycleErrors translated to the engine's. */
 function kernelReadOf(dep: AnyInternals): Value {
-	if (dep.kind === 'atom') return E.read(dep.id);
+	if (dep.kind === 'atom') return E.readAtom(dep.id);
 	try {
 		return E.computedRead(dep.id);
 	} catch (err) {
@@ -1945,7 +1945,7 @@ function writeInner(batchId: BatchId | undefined, node: AtomInternals, kind: Wri
 		// kernel read + Object.is up front on every EFFECTIVE write.
 		writeNewest(node.id, payload);
 	} else {
-		const prevNewest = E.read(node.id);
+		const prevNewest = E.readAtom(node.id);
 		const nextNewest = applyOp(node, kind, payload, prevNewest);
 		if (!eqAtom(node, prevNewest, nextNewest)) {
 			// Equality order: (current, incoming) — the eager-advance site.

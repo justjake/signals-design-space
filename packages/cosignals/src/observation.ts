@@ -15,7 +15,7 @@
  * property of live watchers, not of the episode.
  *
  * `createObservationIndex` is a factory in the kernel's own style (index.ts
- * `createEngine`): it closes over the two dense per-nodeIndex columns and
+ * `createKernel`): it closes over the two dense per-nodeIndex columns and
  * returns its operation table. The columns are exposed on the table by
  * IDENTITY (the kernel's shared-side-column pattern): the engine aliases
  * them for its hot readers (evaluation frames probe `refs[ix] > 0` per
@@ -118,12 +118,12 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	}
 
 	/** The last observed consumer left: release the whole retained closure.
-	 * obsDeps clears BEFORE the child shifts so a degenerate cyclic dep
+	 * obsDeps clears before the child shifts so a degenerate cyclic dep
 	 * record (possible only via throwing getters) cannot re-release. (The
-	 * node's kernel record keeps its links and cache: HOST_OWNED records
-	 * never feed the D1 lifecycle union, and stripping them would force an
-	 * untracked re-sample at the next read — an eager refresh the
-	 * untracked-sampling rule forbids: untracked reads are point-in-time
+	 * node's kernel record keeps its links and cache: MACHINERY_OWNED
+	 * records never feed the observed-lifecycle union, and stripping them
+	 * would force an untracked re-sample at the next read — an eager refresh
+	 * the untracked-sampling rule forbids: untracked reads are point-in-time
 	 * samples taken only at tracked re-derivations.) */
 	function exitObservation(node: AnyInternals): void {
 		if (node.kind === 'atom') {

@@ -1,10 +1,10 @@
 /**
- * Link free-list discipline (dalien port study row 2): the kernel threads its
- * link free list through a SPARE link field (LinkField.FREE_NEXT = 7), never
- * through NEXT_DEP, because upstream's walks deliberately read stale
- * nextDep/nextSub off links unlinked earlier in the same walk (conformance
- * #203 exercises exactly that) and those stale pointers must keep naming
- * former neighbors — never the free list.
+ * Link free-list discipline: the kernel threads its link free list through a
+ * spare link field (LinkField.FREE_NEXT = 7), never through NEXT_DEP,
+ * because upstream's walks deliberately read stale nextDep/nextSub off links
+ * unlinked earlier in the same walk (conformance #203 exercises exactly
+ * that) and those stale pointers must keep naming former neighbors — never
+ * the free list.
  *
  * These tests are mutation-style: with the free list threaded through
  * NEXT_DEP (the pre-fix layout), checkDirty's unwind pops a link freed by a
@@ -16,8 +16,9 @@
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, effect } from '../src/index';
+import { E, maybeBoundary, __reclaimStatsForTest } from '../src/graph.js';
 
-describe('kernel link free list threads through a spare field (row 2)', () => {
+describe('kernel link free list threads through a spare field', () => {
 	test('#203 shape with a primed free list: the mid-walk-freed link must not lead into the free list', () => {
 		// --- The #203 graph FIRST (its links allocate from the bump pointer,
 		//     so the primed free list below stays intact until the schedule).
@@ -81,11 +82,11 @@ describe('kernel link free list threads through a spare field (row 2)', () => {
 		expect(victimEvals).toBe(1);
 		// `a` evaluates twice during the schedule: once from checkDirty's own
 		// update(), once more when b's rebuild pulls it (the dispose cascade
-		// left it unwatched-DIRTY mid-walk). `a2` evaluates ONCE: it was
-		// MID-EVALUATION when the cascade reached it (its own getter ran the
-		// dispose), and unwatched() skips mid-evaluation records since S-C
-		// (stripping the live re-track cursor created cyclic dep lists — the
-		// union-cycle hang), so its just-computed cache serves b's rebuild.
+		// left it unwatched-DIRTY mid-walk). `a2` evaluates once: it was
+		// mid-evaluation when the cascade reached it (its own getter ran the
+		// dispose), and unwatched() never strips mid-evaluation records
+		// (stripping the live re-track cursor makes dep lists go cyclic — a
+		// hang), so its just-computed cache serves b's rebuild.
 		expect([aEvals, a2Evals, bEvals]).toEqual([3, 2, 2]);
 	});
 
@@ -144,5 +145,54 @@ describe('kernel link free list threads through a spare field (row 2)', () => {
 		expect(observed).toBe(41);
 		expect(sumEvals).toBe(2);
 		disposeSum();
+	});
+});
+
+describe('mass-teardown sweep restores ascending free-list order', () => {
+	test('a qualifying batch reuses the lowest freed node ids first, and recycled records stay coherent', () => {
+		// Build one anchor atom and a batch of effects reading it — big enough
+		// to cross both MassTeardown bounds (batch > 4096 and >= 1/64 of the
+		// arena's used extent). Created through the raw kernel ops so the ids
+		// are visible, and disposed through E.disposeEffect directly (the
+		// public disposer runs a boundary per call, which would sweep the
+		// batch one record at a time — the raw op defers every free to one
+		// sweep, the mass-teardown shape).
+		const anchor = new Atom(0);
+		const BATCH = 4200;
+		const ids: number[] = [];
+		for (let i = 0; i < BATCH; i++) {
+			ids.push(E.newEffect(() => {
+				anchor.state;
+			}));
+		}
+		for (const id of ids) {
+			E.disposeEffect(id);
+		}
+		expect(__reclaimStatsForTest().pendingFree).toBe(BATCH);
+
+		// One boundary sweeps the whole batch. Effects were created (and so
+		// disposed) in ascending id order, so a plain LIFO thread would hand
+		// the HIGHEST freed id back first; the mass-teardown sort must hand
+		// back the lowest ids, ascending.
+		maybeBoundary();
+		expect(__reclaimStatsForTest().pendingFree).toBe(0);
+		const recNextAfterSweep = __reclaimStatsForTest().recNext;
+		const a1 = new Atom(1);
+		const a2 = new Atom(2);
+		const a3 = new Atom(3);
+		expect([a1._id, a2._id, a3._id]).toEqual([ids[0], ids[1], ids[2]]);
+
+		// The rethreaded link free list must still be a coherent list: a fresh
+		// cone built entirely from recycled records allocates nothing past the
+		// bump pointer and behaves normally.
+		let observed = -1;
+		const disposeProbe = effect(() => {
+			observed = a1.state + a2.state;
+		});
+		expect(observed).toBe(3);
+		a1.set(10);
+		expect(observed).toBe(12);
+		expect(__reclaimStatsForTest().recNext).toBe(recNextAfterSweep);
+		disposeProbe();
 	});
 });

@@ -32,7 +32,7 @@
  * or suspends never calls into this module.
  */
 
-import { E, NodeField, NodeFlag, RecordGeom, batchDepth, activeSub, engineEpoch, flush, maybeBoundary, values } from './graph.js';
+import { E, NodeField, NodeFlag, ArenaShape, batchDepth, activeSub, engineEpoch, flush, maybeBoundary, values } from './graph.js';
 import type { NodeFlags, NodeId, ValueIndex } from './graph.js';
 
 /**
@@ -85,7 +85,7 @@ export function ctxPrevious(): unknown {
 	if ((E.buffer()[c + NodeField.FLAGS]! & (NodeFlag.K_COMPUTED | NodeFlag.HAS_BOX)) !== NodeFlag.K_COMPUTED) {
 		return undefined;
 	}
-	return values[c >> RecordGeom.ID_TO_VALUE_SHIFT];
+	return values[c >> ArenaShape.ID_TO_VALUE_SHIFT];
 }
 
 /**
@@ -273,7 +273,7 @@ export function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown
 }
 
 /**
- * The kernel's exception hook (D3), cold: stores whatever a computed
+ * The kernel's exception hook, cold: stores whatever a computed
  * evaluation threw as the RAW cached payload — the thrown value for an
  * error, the pending thenable for a suspension — and returns the exceptional
  * flag bits for the outcome. The caller folds the bits into the node's flags
@@ -284,7 +284,7 @@ export function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown
  * listener-stable.
  */
 export function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
-	const v: ValueIndex = c >> RecordGeom.ID_TO_VALUE_SHIFT;
+	const v: ValueIndex = c >> ArenaShape.ID_TO_VALUE_SHIFT;
 	if (e instanceof SuspendedRead) {
 		const t = e.thenable as InstrumentedThenable;
 		values[v] = t;
@@ -318,7 +318,7 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
 		}
 		if (
 			(E.buffer()[c + NodeField.FLAGS]! & NodeFlag.BOX_SUSPENDED) === 0
-			|| values[c >> RecordGeom.ID_TO_VALUE_SHIFT] !== t
+			|| values[c >> ArenaShape.ID_TO_VALUE_SHIFT] !== t
 		) {
 			return;
 		}
@@ -356,7 +356,7 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
  * this synchronous frame.
  */
 export function boxedRead(c: NodeId, flags: NodeFlags): unknown {
-	const v: ValueIndex = c >> RecordGeom.ID_TO_VALUE_SHIFT;
+	const v: ValueIndex = c >> ArenaShape.ID_TO_VALUE_SHIFT;
 	if ((flags & NodeFlag.BOX_SUSPENDED) === 0) {
 		throw values[v];
 	}

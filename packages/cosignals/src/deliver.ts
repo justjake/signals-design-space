@@ -20,7 +20,7 @@
  *    `correctWatcher`, THE one urgent pre-paint correction every
  *    compare-and-correct site shares.
  *
- * Both are factories in the kernel's own style (index.ts `createEngine`):
+ * Both are factories in the kernel's own style (index.ts `createKernel`):
  * each closes over its state and returns/assigns its operation table. The
  * queue's two live scalars (`n`, `flushing`) sit in one shared `state`
  * record the engine aliases, so its resident hot checks (the quiet-write

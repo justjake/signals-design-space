@@ -30,19 +30,19 @@
  * change lives in ordinary cold JavaScript around it.
  *
  * Kernel storage terms:
- * - THE ARENA is the one shared Int32Array (`memory` in createEngine) holding
+ * - THE ARENA is the one shared Int32Array (`memory` in createKernel) holding
  *   every record: a preallocated block that records are carved out of
- *   (error messages use the same word). A RECORD is RecordGeom.STRIDE (8)
+ *   (error messages use the same word). A RECORD is ArenaShape.STRIDE (8)
  *   consecutive Int32 slots; node records (signals/computeds/effects/scopes)
  *   and link records (one dependency edge each) share the arena, the stride,
  *   and one allocator.
  * - A record's id is PREMULTIPLIED: it is the arena index of the record's
- *   first field (record ordinal × RecordGeom.STRIDE), so every field access is
+ *   first field (record ordinal × ArenaShape.STRIDE), so every field access is
  *   plain addition — memory[id + NodeField.FLAGS] — with no multiply anywhere.
  * - JavaScript values and functions cannot live in an Int32Array, so they
  *   sit in ordinary arrays running parallel to the arena — the SIDE COLUMNS
  *   `values` and `fns` — indexed by shifting the same premultiplied id (see
- *   the RecordGeom const enum).
+ *   the ArenaShape const enum).
  *
  * Mechanics the whole package relies on (implementation and full stories in
  * graph.ts):
@@ -51,14 +51,14 @@
  *   growing the arena, freeing disposed records — runs only at boundaries,
  *   because in-flight work holds direct references to the buffers.
  * - CLOSURE REBUILD: the kernel's functions are created by one factory
- *   (`createEngine`) and capture the arena as a closure constant — which is
+ *   (`createKernel`) and capture the arena as a closure constant — which is
  *   what lets V8 fold the buffer reference into compiled code. The cost of
  *   that choice: the buffer cannot be swapped under a live function. So to
  *   grow, the module allocates a doubled arena, copies the records over, and
  *   calls the factory again, producing a fresh set of functions closed over
  *   the new buffer. That wholesale re-creation is a "closure rebuild"; it
  *   happens only at operation boundaries. Scalar counters live at module
- *   level (not in the closure) precisely so a rebuilt engine resumes where
+ *   level (not in the closure) precisely so a rebuilt kernel resumes where
  *   the old one stopped.
  * - FOLD: applying a user's updater or reducer function to a value to
  *   produce the next value. The name comes from the concurrent engine
@@ -114,14 +114,14 @@
  *
  * ─── ONE CORE, ONE ENTRY ─────────────────────────────────────────────────────
  *
- * The `Engine` record returned by `createEngine` is the engine's OPERATION
- * TABLE: the one object whose function fields are the kernel's operations.
+ * The `Kernel` record returned by `createKernel` is the kernel op table:
+ * the one object whose function fields are the kernel's operations.
  * Every public operation routes through the module-level binding `E`
- * (`E.read`, `E.write`, `E.computedRead`, …), and `E` is only ever replaced
- * at an operation boundary via closure rebuild — growth (`boundaryWork` →
- * `createEngine(records, carry)`) and nothing else. All shared mutable state
- * a rebuilt table needs (scalar heads, side columns, queue, scratch stacks)
- * lives at module level for exactly this reason.
+ * (`E.readAtom`, `E.write`, `E.computedRead`, …), and `E` is only ever
+ * replaced at an operation boundary via closure rebuild — growth
+ * (`boundaryWork` → `createKernel(records, carry)`) and nothing else. All
+ * shared mutable state a rebuilt table needs (scalar heads, side columns,
+ * queue, scratch stacks) lives at module level for exactly this reason.
  *
  * There is exactly ONE build of this library, and ONE ENGINE — the
  * concurrent-worlds machinery (`./concurrent.ts`, re-exported at the bottom
@@ -144,17 +144,17 @@
  * paths, reached rarely; the hot walks are untouched — measured ≈parity on
  * benchmark workloads):
  *
- *   D1. Node field 6 (otherwise a spare pad field) is `NodeField.LIFECYCLE`: a 0/1
- *       flag set at creation for atoms carrying an observed-lifecycle
- *       effect, so the kernel's own liveness transitions can feed the
- *       observed-lifecycle option (AtomOptions.effect) — one consumer kind
- *       of the observation union (watchers and the engine's observation
- *       index are the other; see the observed-lifecycle section). The
- *       kernel arm is a per-LINK refcount (linkInsert +1 /
- *       unlink -1, lifecycle-flagged deps only, HOST_OWNED subscribers
- *       excluded — engine computeds carry their own observation arm); the
- *       union's observable edges (effect at 0→1, cleanup at →0) count
- *       every consumer kind. Cleared in freeNode.
+ *   D1. A record field, `NodeField.LIFECYCLE`, is set at creation for atoms
+ *       carrying an observed-lifecycle effect, so the kernel's own liveness
+ *       transitions can feed the observed-lifecycle option
+ *       (AtomOptions.effect) — one consumer kind of the observation union
+ *       (watchers and the observation index are the other; see the
+ *       observed-lifecycle section). The kernel arm is a per-link refcount
+ *       (linkInsert retains / unlink releases, lifecycle-flagged deps only,
+ *       MACHINERY_OWNED subscribers excluded — machinery computeds carry
+ *       their own observation arm); the union's observable edges (effect at
+ *       0→1, cleanup at →0) count every consumer kind. Cleared with the
+ *       flags word in freeNode.
  *   D2. computedRead throws CycleError when the computed is re-entered
  *       during its own evaluation: reading a computed while its own
  *       evaluation frame is open is a dependency cycle, and throwing beats
@@ -179,7 +179,7 @@
  *       owning instance for ctx.use) is id-keyed in suspense.ts instead,
  *       so the kernel never pins a public handle — a dropped handle's
  *       record must stay reclaimable.
- *   D5. Engine gains cold policy ops the policy layer needs:
+ *   D5. The kernel op table gains cold policy ops the policy layer needs:
  *       invalidateComputed (settlement-invalidate), markLifecycle (D1),
  *       activeIsComputed (backs the forbidWritesInComputeds check).
  *   D6. Capacity is configurable: the COSIGNAL_INITIAL_RECORDS env var sizes
@@ -200,10 +200,10 @@
  * implementation sites in graph.ts.
  */
 
-import { E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, RecordGeom, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom } from './graph.js';
+import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom } from './graph.js';
 import { __resetLifecycleForTest } from './lifecycle.js';
 import { NOT_ROUTED } from './World.js';
-import { engineWrite, __engineAtomInternalsById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
+import { writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
 import type { AtomInternals, ComputedInternals } from './concurrent.js';
 import type { NodeId, ValueIndex } from './graph.js';
 
@@ -275,14 +275,14 @@ export type ComputedCtx<T> = {
 };
 
 // (The ONE evaluation-context OBJECT the kernel passes every computed getter
-// — POLICY_CTX — lives in graph.ts beside its capture site (createEngine
+// — POLICY_CTX — lives in graph.ts beside its capture site (createKernel
 // captures it at factory run, so it must be initialized before the kernel
 // builds); its members delegate to suspense.ts's ctxPrevious/ctxUse.)
 
 // ---- THE KERNEL (graph.ts) --------------------------------------------------
 // The whole dependency-tracking engine — the record layout const enums
 // (NodeField/LinkField/NodeFlag, re-exported below for independent walkers;
-// RecordGeom addresses the side columns), allocation, the link/propagate/
+// ArenaShape addresses the side columns), allocation, the link/propagate/
 // checkDirty walk families, update/notify/run/dispose, the flush queue,
 // growth by closure rebuild, the `values`/`fns` side columns, the walk
 // scratch stacks, and the fold-purity POISON table — lives in graph.ts. The
@@ -319,8 +319,8 @@ export type WriteKind = 0 | 1;
  * must clear all three, or freed records pin dead values/closures for the
  * arena's life; tests/leak-audit.spec.ts probes exactly that. Read-only. */
 export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: unknown; fn: Function | undefined } {
-	const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
-	return { value: values[v], aux: values[v + RecordGeom.AUX_VALUE_OFFSET], fn: fns[id >> RecordGeom.ID_TO_FN_SHIFT] };
+	const v: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
+	return { value: values[v], aux: values[v + ArenaShape.AUX_VALUE_OFFSET], fn: fns[id >> ArenaShape.ID_TO_FN_SHIFT] };
 }
 
 /**
@@ -334,7 +334,7 @@ export function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: 
 	const id = atom._id;
 	const next = kind === 0
 		? payload
-		: runFold(() => (payload as (p: unknown) => unknown)(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET]));
+		: runFold(() => (payload as (p: unknown) => unknown)(values[(id >> ArenaShape.ID_TO_VALUE_SHIFT) + ArenaShape.AUX_VALUE_OFFSET]));
 	writeAtom(id, atom._isEqual, next);
 }
 
@@ -358,7 +358,7 @@ export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown):
 	}
 	const next = kind === 0
 		? payload
-		: runFold(() => (payload as (p: unknown) => unknown)(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET]));
+		: runFold(() => (payload as (p: unknown) => unknown)(values[(id >> ArenaShape.ID_TO_VALUE_SHIFT) + ArenaShape.AUX_VALUE_OFFSET]));
 	writeAtom(id, undefined, next);
 }
 
@@ -567,7 +567,7 @@ export class Atom<T> {
 			// deleted at dormancy — the engine never stores a handle
 			// reference of its own (the ctx routes set/update BY ID through
 			// the engine write path).
-			fns[id >> RecordGeom.ID_TO_FN_SHIFT] = effect as (ctx: AtomCtx<unknown>) => void | (() => void);
+			fns[id >> ArenaShape.ID_TO_FN_SHIFT] = effect as (ctx: AtomCtx<unknown>) => void | (() => void);
 		}
 	}
 
@@ -599,7 +599,7 @@ export class Atom<T> {
 				return v as T;
 			}
 		}
-		return E.read(this._id) as T;
+		return E.readAtom(this._id) as T;
 	}
 
 	/** Replaces the atom's value. Policy asserts first; then the standalone
@@ -614,7 +614,7 @@ export class Atom<T> {
 			writeAtom(this._id, this._isEqual, value);
 			return;
 		}
-		engineWrite(this as Atom<unknown>, 0, value);
+		writeAtomConcurrent(this as Atom<unknown>, 0, value);
 	}
 
 	/**
@@ -630,11 +630,11 @@ export class Atom<T> {
 		}
 		if (this._internals === undefined && standaloneQuiet === true) {
 			const id = this._id;
-			const next = runFold(() => fn(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] as T));
+			const next = runFold(() => fn(values[(id >> ArenaShape.ID_TO_VALUE_SHIFT) + ArenaShape.AUX_VALUE_OFFSET] as T));
 			writeAtom(id, this._isEqual, next);
 			return;
 		}
-		engineWrite(this as Atom<unknown>, 1, fn);
+		writeAtomConcurrent(this as Atom<unknown>, 1, fn);
 	}
 }
 
@@ -691,20 +691,19 @@ export class Computed<T> {
 		// the cheap GC-death shape.
 		const id = E.newComputed(fn as (ctx: unknown) => unknown, this);
 		this._id = id;
-		// (ctx.use owner resolution is ID-KEYED — suspense.ts resolves the
+		// (ctx.use owner resolution is id-keyed — suspense.ts resolves the
 		// evaluating record straight from `activeSub`, and the per-key
-		// request cache is a nodeIndex-keyed engine column scrubbed at
-		// record free. The aux slot stays empty for computeds — D4: nothing
-		// kernel-side pins the handle, so a dropped handle's record can
-		// reclaim.)
+		// request cache is a nodeIndex-keyed column scrubbed at record free.
+		// The aux slot stays empty for computeds: nothing kernel-side pins
+		// the handle, so a dropped handle's record can reclaim.)
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
 			// The wrapper runs inside the evaluation, where the eval-start
 			// rewrite preserved the exceptional bits — HAS_BOX set means `prev`
 			// is a residual error/thenable payload, not a comparable value.
-			const iv: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
-			fns[id >> RecordGeom.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
+			const iv: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
+			fns[id >> ArenaShape.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 				const prev = values[iv];
 				const next = (fn as (ctx: unknown) => unknown)(ctxArg);
 				if (prev === undefined || (E.buffer()[id + NodeField.FLAGS]! & NodeFlag.HAS_BOX) !== 0) {
@@ -718,7 +717,7 @@ export class Computed<T> {
 	/**
 	 * The computed's current value. Rethrows the evaluation's cached error;
 	 * throws SuspendedRead while suspended on a pending `ctx.use` thenable
-	 * (the kernel's boxed-read tail, D3). Inside a fold frame the dispatch
+	 * (the kernel's boxed-read tail). Inside a fold frame the dispatch
 	 * itself throws (POISON table).
 	 *
 	 * With a routing context live (world evaluation / ambient world),
@@ -755,7 +754,7 @@ export function effect(fn: () => void | (() => void)): () => void {
 		if (E.gen(id) !== gen) {
 			return; // record already reclaimed (and possibly reused)
 		}
-		E.dispose(id);
+		E.disposeEffect(id);
 		maybeBoundary();
 	};
 }
@@ -769,7 +768,7 @@ export function effectScope(fn: () => void): () => void {
 		if (E.gen(id) !== gen) {
 			return;
 		}
-		E.dispose(id);
+		E.disposeEffect(id);
 		maybeBoundary();
 	};
 }
@@ -809,7 +808,7 @@ export function configure(options: ConfigureOptions): void {
 		if (!Number.isFinite(n) || n < MIN_INITIAL_RECORDS) {
 			throw new Error(`cosignals: configure({ initialRecords }) must be a number >= ${MIN_INITIAL_RECORDS}.`);
 		}
-		requestCapacity(Math.ceil(n)); // graph.ts: unit→record scaling + growth scheduling (D6)
+		requestCapacity(Math.ceil(n)); // graph.ts: unit→record scaling + growth scheduling
 	}
 }
 

@@ -1,47 +1,46 @@
 /**
- * The OBSERVED LIFECYCLE (AtomOptions.effect): the "first subscriber
+ * The observed lifecycle (AtomOptions.effect): the "first subscriber
  * attached / last one detached" callback an atom can carry, counted over
- * the UNION of consumer kinds — kernel subscribers (live computed chains,
- * core effect()s: one ref per non-engine-owned kernel link to the atom, fed
- * by the kernel's linkInsert/unlink through
- * `lifecycleWatched`/`lifecycleUnwatched`, each a strict edge into
- * `shiftLifecycleCount`) and watchers (subscribed UI
- * components: one ref per live watcher, fed by the concurrent engine's
+ * the union of consumer kinds — kernel subscribers (live computed chains,
+ * core effect()s: one ref per non-machinery kernel link to the atom, fed by
+ * the kernel's linkInsert/unlink through
+ * `retainLifecycle`/`releaseLifecycle`) and watchers (subscribed UI
+ * components: one ref per live watcher, fed by the concurrent machinery's
  * observation index through `__lifecycleRetain`/`__lifecycleRelease`). The
- * effect runs on the union's
- * 0→1 transition and the cleanup on its 1→0; both run through a microtask
- * queue so observe/unobserve flaps within one tick coalesce to nothing
- * REGARDLESS of which consumer kind produced them (StrictMode double-mount
- * netting, watcher claim/debounced-unsub, remount handoffs). Atoms without
- * the effect option never enter the state map, and the kernel hot paths
- * stay gated on the record's LIFECYCLE field — the plain path pays nothing.
+ * effect runs on the union's 0→1 transition and the cleanup on its 1→0;
+ * both run through a microtask queue so observe/unobserve flaps within one
+ * tick coalesce to nothing regardless of which consumer kind produced them
+ * (StrictMode double-mount netting, watcher claim/debounced-unsub, remount
+ * handoffs). Atoms without the effect option never enter the state map, and
+ * the kernel hot paths stay gated on the record's LIFECYCLE field —
+ * the plain path pays nothing.
  *
- * ID-KEYED AND HANDLE-FREE (so a record whose public handle was
+ * Id-keyed and handle-free (so a record whose public handle was
  * garbage-collected can still be reclaimed — see graph.ts's reclamation
  * section):
- *  - THE DORMANT OWNER: the user's callback is stored in the atom's own
- *    record `fns` COLUMN SLOT at construction (index.ts — atoms never use
- *    that slot; it is engine memory addressed by id, cleared by the
+ *  - The dormant owner: the user's callback is stored in the atom's own
+ *    record `fns` column slot at construction (index.ts — atoms never use
+ *    that slot; it is arena-side memory addressed by id, cleared by the
  *    record-free path like every column). No map entry exists while
  *    dormant.
- *  - REHYDRATION: a watched transition on a lifecycle-flagged record with
+ *  - Rehydration: a watched transition on a lifecycle-flagged record with
  *    no active entry reads the callback from the fns slot and creates a
- *    fresh ACTIVE record (this map's entry) — the engine holds the record
- *    strongly exactly WHILE THE LIFECYCLE IS ACTIVE (watched, or with a
- *    pending flap-damped shift): an atom with an active lifecycle effect
- *    is observable machinery whose cleanup MUST run at unmount regardless
- *    of handle reachability.
- *  - DORMANCY: when the cleanup has run and no shift is pending, the
- *    active entry DELETES — releasing the context and any pending cleanup.
+ *    fresh active record (this map's entry) — held strongly exactly while
+ *    the lifecycle is active (watched, or with a pending flap-damped
+ *    shift): an atom with an active lifecycle effect is observable
+ *    machinery whose cleanup must run at unmount regardless of handle
+ *    reachability.
+ *  - Dormancy: when the cleanup has run and no shift is pending, the
+ *    active entry deletes — releasing the context and any pending cleanup.
  *    (That deletion site is also reclamation's retry trigger for lifecycle
  *    atoms — see maybeDropDormant.)
- *  - The ACTIVE CONTEXT routes state/set/update BY ID through the engine
- *    write path (index.ts `__lifecycleWrite`) — the engine never stores a
- *    handle reference of its own; the callback pins only what the user's
- *    closure captures, exactly as long as the RECORD lives.
+ *  - The active context routes state/set/update by id through the write
+ *    path (index.ts `__lifecycleWrite`) — no handle reference is ever
+ *    stored; the callback pins only what the user's closure captures,
+ *    exactly as long as the record lives.
  */
 
-import { E, NodeField, RecordGeom, engineEpoch, fns, noteReclaimRetry, reclaimSkippedN, untracked } from './graph.js';
+import { ArenaShape, E, NodeField, NodeFlag, engineEpoch, fns, noteReclaimRetry, reclaimSkippedN, untracked } from './graph.js';
 import { __lifecycleWrite, type AtomCtx } from './index.js';
 import type { NodeId } from './graph.js';
 
@@ -51,7 +50,8 @@ export type LifecycleState = {
 	effect: (ctx: AtomCtx<unknown>) => void | (() => void);
 	ctx: AtomCtx<unknown>;
 	cleanup: (() => void) | undefined;
-	/** Union refcount: kernel liveness bit (0/1) + one per live watcher. */
+	/** Union refcount: one per live non-machinery kernel link + one per
+	 * live watcher. */
 	refs: number;
 	/** Desired state as of the last union transition (refs > 0). */
 	wantMounted: boolean;
@@ -133,7 +133,7 @@ function maybeDropDormant(state: LifecycleState): void {
 function createLifecycleContext(id: NodeId): AtomCtx<unknown> {
 	return {
 		get state(): unknown {
-			return untracked(() => E.read(id));
+			return untracked(() => E.readAtom(id));
 		},
 		set(value: unknown): void {
 			__lifecycleWrite(id, 0, value);
@@ -150,16 +150,16 @@ function shiftLifecycleCount(id: NodeId, delta: -1 | 1): void {
 		if (delta < 0) {
 			return; // release without an active record: dormant already
 		}
-		// REHYDRATION: read the dormant owner off the record's fns slot. A
+		// Rehydration: read the dormant owner off the record's fns slot. A
 		// watched transition can only arrive for a live record (observation
 		// is a tracked read, which is handle-mediated). Gate on the record's
-		// LIFECYCLE field (D1) — only atoms constructed with the effect
-		// option carry it, so a computed's getter in the same fns column can
-		// never masquerade as a lifecycle callback.
-		if (E.buffer()[id + NodeField.LIFECYCLE] !== 1) {
+		// LIFECYCLE field — only atoms constructed with the effect option
+		// carry it, so a computed's getter in the same fns column can never
+		// masquerade as a lifecycle callback.
+		if (E.buffer()[id + NodeField.LIFECYCLE] === 0) {
 			return; // no lifecycle effect on this record
 		}
-		const fn = fns[id >> RecordGeom.ID_TO_FN_SHIFT];
+		const fn = fns[id >> ArenaShape.ID_TO_FN_SHIFT];
 		if (typeof fn !== 'function') {
 			return; // dormant owner already cleared (record freed mid-flight)
 		}
@@ -189,25 +189,30 @@ function shiftLifecycleCount(id: NodeId, delta: -1 | 1): void {
 	}
 }
 
-// Hoisted function declarations: the kernel calls these from linkInsert /
-// unwatched, which are defined earlier in the module. Each is a strict edge
-// of the liveness bit (SUBS empty↔non-empty), so the kernel's contribution
-// to the union refcount is exactly 0 or 1.
-export function lifecycleWatched(id: NodeId): void {
+/**
+ * The kernel's arm of the observed-lifecycle union — hoisted function
+ * declarations because the kernel calls them from linkInsert/unlink. Each
+ * call moves the union refcount by one link's worth: retainLifecycle fires
+ * for every new non-machinery link to a lifecycle-flagged dep (the union's
+ * 0→1 edge schedules the user's flap-damped effect), releaseLifecycle for
+ * every such link removed (the union count hitting zero schedules the
+ * flap-damped cleanup).
+ */
+export function retainLifecycle(id: NodeId): void {
 	shiftLifecycleCount(id, 1);
 }
 
-export function lifecycleUnwatched(id: NodeId): void {
+export function releaseLifecycle(id: NodeId): void {
 	shiftLifecycleCount(id, -1);
 }
 
 /**
  * Watcher retain/release — the second consumer kind feeding the
- * observation union (the first is the kernel liveness bit). Called by the
- * engine's observation index when a watcher over an engine atom's node
- * flips live; a no-op for atoms carrying no observed-lifecycle effect.
- * Direct callbacks only — observation transitions are NOT TraceEvents and
- * never enter the engine's trace stream. @internal
+ * observation union (the first is the kernel's per-link arm above). Called
+ * by the observation index when a watcher over an atom's node flips live; a
+ * no-op for atoms carrying no observed-lifecycle effect. Direct callbacks
+ * only — observation transitions are not TraceEvents and never enter the
+ * trace stream. @internal
  */
 export function __lifecycleRetain(id: NodeId): void {
 	shiftLifecycleCount(id, 1);

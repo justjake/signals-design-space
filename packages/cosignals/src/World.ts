@@ -699,7 +699,7 @@ export function createWorld(core: EngineCore): void {
 
 	/** Atom value in a world: kernel for newest, the world's arena for
 	 * render/committed, a plain fold for mountFix and unmaterialized roots.
-	 * (The newest read is the direct kernel read `E.read` — world routing
+	 * (The newest read is the direct kernel read `E.readAtom` — world routing
 	 * can never intercept it.) */
 	function atomValue(atom: AtomInternals, world: World): Value {
 		const c = core; // one context load; field accesses below keep the one-load shape
@@ -712,7 +712,7 @@ export function createWorld(core: EngineCore): void {
 			// The kernel holds the newest fold by the eager-apply invariant.
 			// (`atom.id` IS the record id — never through the handle slot,
 			// which reclamation keeps weak for resolved nodes.)
-			return E.read(atom.id);
+			return E.readAtom(atom.id);
 		}
 		if (world.kind === 'render' || world.kind === 'committed') {
 			const a = c.arenaOf(world);

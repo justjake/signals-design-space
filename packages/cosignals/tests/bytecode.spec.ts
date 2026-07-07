@@ -1,15 +1,14 @@
 /**
- * Bytecode budget regression test (dalien port study row 6). V8 only inlines
- * a function whose bytecode is under --max-inlined-bytecode-size (460 in
- * Node 24, 920 cumulative per optimized function), and typed-array field
- * access generates ~3x the bytecode of an object field load — a hot function
- * that drifts past 460 silently stops inlining and costs real time (dalien:
- * the monolithic link() at 475 never inlined; splitting measured -8..-13% on
- * propagation shapes; checkDirty at 543 could not inline into
- * run()/computedRead until split).
+ * Bytecode budget regression test. V8 only inlines a function whose bytecode
+ * is under --max-inlined-bytecode-size (460 in Node 24, 920 cumulative per
+ * optimized function), and typed-array field access generates ~3x the
+ * bytecode of an object field load — a hot function that drifts past 460
+ * silently stops inlining and costs real time (the monolithic link() at 475
+ * never inlined; splitting measured -8..-13% on propagation shapes;
+ * checkDirty at 543 could not inline into run()/computedRead until split).
  *
  * cosignals ships TS source, so budgets are asserted against an
- * esbuild-BUNDLED smoke (const enums inline to literals — the codegen
+ * esbuild-bundled smoke (const enums inline to literals — the codegen
  * consumers execute), run under `node --print-bytecode`. Raising a budget is
  * a deliberate act: justify it in the PR. Budgets are V8-version-sensitive:
  * measured on Node 24 (CI pins it); the suite skips elsewhere.
@@ -27,19 +26,18 @@ const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
 // name -> budget (bytecode bytes), all under the inline limit: current size
 // (Node 24.16, esbuild 0.28 bundle) plus slack. Pins the propagate/read/
 // flush hot paths of the kernel and the world-arena walks of the
-// concurrency engine — including the freelist alloc/free pair the row-2 fix
-// rethreaded.
+// concurrency engine — including the freelist alloc/free pair.
 const BUDGETS: Record<string, number> = {
-	// graph kernel (src/graph.ts createEngine internals)
+	// graph kernel (src/graph.ts createKernel internals)
 	link: 180, // 154: re-track fast path
-	linkInsert: 380, // 346: out-of-line insertion tail (+ D1's per-link shift at S-C)
-	unlink: 350, // 308: S-C added D1's per-link lifecycle release (one dep
-	// LIFECYCLE load + host-owned gate — the kernel arm became a refcount so
-	// bridge computeds' links could be excluded; see index.ts D1)
+	linkInsert: 380, // 346: out-of-line insertion tail (+ the per-link lifecycle retain)
+	unlink: 350, // 308: carries the per-link lifecycle release (one dep FLAGS
+	// load + machinery-owned gate — the kernel arm is a refcount so machinery
+	// computeds' links can be excluded; see index.ts D1)
 	propagate: 460, // 426: already close to the limit — watch it
-	checkDirty: 440, // 426: B2 split — entry wrapper + shallow/two-level fast
-	// paths + chainCheck dispatch (was the 537 monolith pinned below); inside
-	// the inline limit so run()/computedReadSlow can absorb it
+	checkDirty: 440, // 426: entry wrapper + shallow/two-level fast paths +
+	// chainCheck dispatch (was a 537-byte monolith); inside the inline limit
+	// so run()/computedReadSlow can absorb it
 	checkDirtyLoop: 460, // 411: the general walk, out of line — at the limit
 	updateAndShallow: 100, // 40: update() + sibling Pending->Dirty upgrade
 	chainCheck: 320, // 290: stackless chain walk (not inlined; it loops)
@@ -53,61 +51,53 @@ const BUDGETS: Record<string, number> = {
 	purgeDeps: 80, // 66
 	unlinkChildEffects: 100, // 82
 	allocLink: 120, // 102
-	freeLink: 40, // 27: threads the free list through spare field 7 (row 2)
+	freeLink: 40, // 27: threads the free list through spare field 7
 	// public read/write paths
-	read: 120, // 98
+	readAtom: 120, // 98
 	write: 130, // 96
 	computedRead: 110, // 84: hot/cold split entry
-	computedReadSlow: 460, // 418: the out-of-line ladder — near the limit (S-C: never-evaluated probe reads MUTABLE; HOST_OWNED carried)
+	computedReadSlow: 460, // 418: the out-of-line ladder — near the limit (never-evaluated probe reads MUTABLE; the ownership bit is carried)
 	writeAtom: 90, // 67
 	flush: 170, // 139
 	// concurrency engine (src/concurrent.ts world arenas)
 	arenaLink: 230, // 179
 	arenaLinkInsert: 380, // 302
 	arenaUnlink: 340, // 276
-	arenaPropagate: 460, // 453: S-B segregated-list interleave — each descended sub
+	arenaPropagate: 460, // 453: segregated-list interleave — each descended sub
 	// contributes its weak head as a parked continuation (one shared grow
-	// block; the cycle-cap thrower moved out of line) — AT the inline limit,
+	// block; the cycle-cap thrower moved out of line) — at the inline limit,
 	// exactly like checkDirtyLoop; watch it
 	arenaShallowPropagate: 160, // 127
 	arenaPurgeDeps: 170, // 137
 	arenaAllocLink: 90, // 71
-	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (row 2 twin)
+	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (the kernel freeLink's twin)
 	shadowFor: 210, // 163
-	foldAtom: 190, // 142: S-D deleted the lastFoldFp fingerprint scan (its
-	// last reader died with the memo ladder at S-C) — budget tightened with it
-	arenaUpdateShadow: 230, // 173 (S-D: the readClock bump routed through arenaBumpReadClock)
-	arenaBumpReadClock: 60, // 35: S-D Int32 wrap guard on the consumption bump path
-	arenaBumpCycle: 60, // 37: S-D Int32 wrap guard on the evaluation-cycle bump
-	arenaCheckDirty: 100, // 67: B2 split — entry wrapper owning the arenaCheckSp restore
-	// (was the 567 walk monolith pinned below)
+	foldAtom: 190, // 142
+	arenaUpdateShadow: 230, // 173 (the readClock bump routed through arenaBumpReadClock)
+	arenaBumpReadClock: 60, // 35: Int32 wrap guard on the consumption bump path
+	arenaBumpCycle: 60, // 37: Int32 wrap guard on the evaluation-cycle bump
+	arenaCheckDirty: 100, // 67: entry wrapper owning the arenaCheckSp restore
+	// (was a 567-byte walk monolith)
 	arenaCheckDirtyLoop: 450, // 407: the general arena walk, out of line
 	arenaUpdateAndShallow: 110, // 74: refold + sibling Pending->Dirty upgrade
-	arenaFoldOutcome: 340, // 313: fold-outcome classification, out of line — S-C
-	// added the §4.5.3 comparator arm (custom-equality computeds compare
-	// against the ARENA-local previous, HEAD order; the user-fn call itself
-	// is out of line in arenaEqCold, so the hot default arm stays closure-free)
-	arenaSyncObservationAfterRefold: 90, // 65: S-B out-of-line observation epilogue (observed nodes only)
+	arenaFoldOutcome: 340, // 313: fold-outcome classification, out of line —
+	// includes the comparator arm (custom-equality computeds compare against
+	// the arena-local previous, in head order; the user-fn call itself is out
+	// of line in arenaEqCold, so the hot default arm stays closure-free)
+	arenaSyncObservationAfterRefold: 90, // 65: out-of-line observation epilogue (observed nodes only)
 };
 
-// Functions over the V8 inline budget, pinned at current size — B2 emptied
-// the list (checkDirty/arenaCheckDirty/arenaUpdateComputed split per port study row
-// 10 and moved into BUDGETS above). A function that outgrows the inline
-// limit gets pinned here (deliberately, justified in the PR); a pin that
-// drops back under it moves into BUDGETS.
+// Functions over the V8 inline budget, pinned at current size. A function
+// that outgrows the inline limit gets pinned here (deliberately, justified
+// in the PR); a pin that drops back under it moves into BUDGETS.
 const OVER_LIMIT_PINS: Record<string, number> = {
-	arenaUpdateComputed: 530, // 479 (re-checked at S-D: the wrap-guarded arenaBumpCycle
-	// call replaced the inline cycle increment, -9; items 1-2's other shaves
-	// landed in foldAtom, not here — still over the 460 inline limit, so the
-	// pin STANDS, not promoted): S-B made the
-	// arenas the serving authority —
-	// the refold wrapper gained the M6 observed-capture open (obsRefs probe)
-	// and the paired world-eval trace hooks. Deliberate: the wrapper brackets
-	// a DYNAMIC user-fn call, so inlining the wrapper is not load-bearing
-	// (B2's exit criterion tracked the WALK ARMS — arenaCheckDirty/-Loop,
-	// arenaUpdateShadow, arenaUpdateAndShallow — which all stay inside the budget);
-	// the observation sync epilogue is already out of line
-	// (arenaSyncObservationAfterRefold).
+	arenaUpdateComputed: 530, // 479: the refold wrapper carries the
+	// observed-capture open (obsRefs probe) and the paired world-eval trace
+	// hooks — over the 460 inline limit, deliberately: the wrapper brackets
+	// a dynamic user-fn call, so inlining the wrapper is not load-bearing
+	// (the walk arms — arenaCheckDirty/-Loop, arenaUpdateShadow,
+	// arenaUpdateAndShallow — all stay inside the budget); the observation
+	// sync epilogue is already out of line (arenaSyncObservationAfterRefold).
 };
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -129,10 +119,10 @@ function measure(): Map<string, number> {
 		['--print-bytecode', '--print-bytecode-filter=*', bundle],
 		{ cwd: pkgRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
 	);
-	// Node-internal functions share names with ours (`read`, `write`, `run`);
-	// they compile during bootstrap, BEFORE the smoke's marker line — parse
-	// only after it. (Within the smoke, same-name collisions keep the max,
-	// which is conservative for the budget.)
+	// Node-internal functions share names with ours (`write`, `run`); they
+	// compile during bootstrap, before the smoke's marker line — parse only
+	// after it. (Within the smoke, same-name collisions keep the max, which
+	// is conservative for the budget.)
 	const markerAt = out.lastIndexOf('@@SMOKE-START');
 	expect(markerAt, 'smoke marker missing from --print-bytecode output').toBeGreaterThanOrEqual(0);
 	const sizes = new Map<string, number>();

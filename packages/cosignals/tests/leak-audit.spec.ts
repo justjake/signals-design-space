@@ -334,7 +334,7 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 		for (let i = 1; i <= 25; i++) {
 			const w = mount(b, 'R', c, `W${i}`);
 			await tick(); // union transitions flush on microtasks
-			expect(effects).toBe(i); // 0→1: the observed-lifecycle effect ran (obs index arm; HOST_OWNED kernel links contribute nothing)
+			expect(effects).toBe(i); // 0→1: the observed-lifecycle effect ran (obs index arm; MACHINERY_OWNED kernel links contribute nothing)
 			b.removeWatcher(w.id);
 			await tick();
 			expect(cleanups).toBe(i); // 1→0: cleanup ran — no stuck retain anywhere in the closure

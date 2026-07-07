@@ -113,45 +113,46 @@ const enum ArenaLinkField {
 	PREV_DEP = 5,
 	NEXT_DEP = 6,
 	MODE = 7, // ArenaLinkMode bits (strong/weak — see the weak-link rules below)
-	/** The free list threads through the VERSION field (FREE_NEXT aliases it):
-	 * kernel row-2 discipline — a freed link must keep every field a walk
-	 * still reads intact. arenaCheckDirty reads NEXT_DEP (and arenaShallowPropagate
-	 * NEXT_SUB) off links a mid-walk purge freed, so those must keep naming
-	 * former neighbors, never the free list. VERSION is genuinely dead on freed
-	 * links: it is only written at link creation/reuse (arenaLink/arenaLinkInsert) and
-	 * only read off LIVE links (the subs-tail dedup probe); every allocation
-	 * path rewrites it before any read. Pinned by tests/arena-freelist.spec.ts. */
+	/** The free list threads through the VERSION field (FREE_NEXT aliases it),
+	 * the same discipline as the kernel's LinkField.FREE_NEXT: a freed link
+	 * must keep every field a walk still reads intact. arenaCheckDirty reads
+	 * NEXT_DEP (and arenaShallowPropagate NEXT_SUB) off links a mid-walk
+	 * purge freed, so those must keep naming former neighbors, never the
+	 * free list. VERSION is genuinely dead on freed links: it is only
+	 * written at link creation/reuse (arenaLink/arenaLinkInsert) and only
+	 * read off live links (the subs-tail dedup probe); every allocation path
+	 * rewrites it before any read. Pinned by tests/arena-freelist.spec.ts. */
 	FREE_NEXT = 0,
 }
 
 /** MODE field bits. */
 const enum ArenaLinkMode {
-	WEAK = 1, // bit 0: 1 = weak (untracked-read) link — never delivers
+	WEAK = 0b1, // bit 0: 1 = weak (untracked-read) link — never delivers
 }
 
 /** Shadow flag bits (engine-owned; the shared names keep the kernel
  * NodeFlag numbering for side-by-side reading — see header note). */
 const enum ArenaFlag {
-	MUTABLE = 1,
-	RECURSED_CHECK = 4,
-	RECURSED = 8,
-	DIRTY = 16,
-	PENDING = 32,
-	K_SIGNAL = 128,
-	K_COMPUTED = 256,
+	MUTABLE        = 0b000000000000001,
+	RECURSED_CHECK = 0b000000000000100,
+	RECURSED       = 0b000000000001000,
+	DIRTY          = 0b000000000010000,
+	PENDING        = 0b000000000100000,
+	K_SIGNAL       = 0b000000010000000,
+	K_COMPUTED     = 0b000000100000000,
 	/** The value column holds a folded value (cold shadow when unset). */
-	VALID = 8192,
+	VALID          = 0b010000000000000,
 	/** Value column holds an exceptional payload (thrown error, or sentinel). */
-	HAS_BOX = 2048,
+	HAS_BOX        = 0b000100000000000,
 	/** Refines HAS_BOX: payload is the thenable's stable SuspendedRead. */
-	BOX_SUSPENDED = 4096,
-	/** Refines HAS_BOX: the payload was THROWN by the fn (render-path
+	BOX_SUSPENDED  = 0b001000000000000,
+	/** Refines HAS_BOX: the payload was thrown by the fn (render-path
 	 * suspension or plain error) — serves rethrow the cached payload,
-	 * boxedRead-style. Clear means
-	 * a RETURNED sentinel (background suspensions fold to the sentinel
-	 * VALUE), which serves as a value. Arena-local bit with no
-	 * kernel NodeFlag counterpart (the kernel encodes the split differently). */
-	BOX_THROWN = 16384,
+	 * boxedRead-style. Clear means a returned sentinel (background
+	 * suspensions fold to the sentinel value), which serves as a value.
+	 * Arena-local bit with no kernel NodeFlag counterpart (the kernel
+	 * encodes the split differently). */
+	BOX_THROWN     = 0b100000000000000,
 }
 
 /** Arena geometry. Same-file const enum members (not module consts): the
@@ -368,10 +369,10 @@ function arenaFreeLink(a: WorldArena, id: number): void {
 }
 
 /** Detach a link from its dep's subs list (the MODE-matching one). Fixes
- * neighbors and the head/tail columns only — the link's OWN prev/next stay
- * stale (row-2 discipline: mid-walk readers must keep seeing former
- * neighbors; movers rewrite them in arenaSubsAppend, and freed links never
- * revalidate). */
+ * neighbors and the head/tail columns only — the link's own prev/next stay
+ * stale on purpose: mid-walk readers must keep seeing former neighbors;
+ * movers rewrite them in arenaSubsAppend, and freed links never
+ * revalidate. */
 function arenaSubsDetach(a: WorldArena, id: number): void {
 	const memory = a.memory;
 	const dep = memory[id + ArenaLinkField.DEP]!;
@@ -480,7 +481,7 @@ function arenaUnlink(a: WorldArena, id: number, sub: number = a.memory[id + Aren
 	else memory[sub + ArenaField.DEPS_TAIL] = prevDep;
 	if (prevDep !== 0) memory[prevDep + ArenaLinkField.NEXT_DEP] = nextDep;
 	else memory[sub + ArenaField.DEPS] = nextDep;
-	arenaSubsDetach(a, id); // mode-matching subs list; the freed link keeps stale pointers (row 2)
+	arenaSubsDetach(a, id); // mode-matching subs list; the freed link keeps stale pointers for mid-walk readers
 	arenaFreeLink(a, id);
 	if (memory[dep + ArenaField.SUBS] === 0 && a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] === 0 && (memory[dep + ArenaField.FLAGS]! & ArenaFlag.K_COMPUTED) !== 0) {
 		// Unwatched computed shadow (BOTH subs lists empty): mark stale, tear

@@ -13,7 +13,7 @@
  * top of concurrent.ts.
  *
  * `createBatchManager` is a factory in the kernel's own style (index.ts
- * `createEngine`): it closes over its state and returns its operation
+ * `createKernel`): it closes over its state and returns its operation
  * table (the `BatchManager`); the engine runs it once per composition
  * (module initialization,
  * test resets) and keeps `idToBatch`/`slots`

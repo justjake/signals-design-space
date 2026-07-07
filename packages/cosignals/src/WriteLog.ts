@@ -14,7 +14,7 @@
  * the pin floor (`getMinLivePin`) come in through `deps` the same way.
  *
  * `createCompaction` is a factory in the kernel's own style (index.ts
- * `createEngine`): it closes over `uncompactedAtoms` (the compaction
+ * `createKernel`): it closes over `uncompactedAtoms` (the compaction
  * candidates — atoms with a non-empty write log) and returns its operation
  * table; the set is exposed by identity so the engine's write path can keep
  * its one-branch membership add and the quiet derivation its size check.
