@@ -16,7 +16,6 @@ const vendored = [
 	'vendor/**',
 	'upstream-alien-signals/**',
 	'milomg-reactivity-benchmark/**',
-	'tb-reactivity-benchmark/**',
 	'daishi-concurrent-benchmark/**',
 	'packages/dalien-signals/**',
 	'fork/**',

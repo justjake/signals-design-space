@@ -1,6 +1,3 @@
-[submodule "tb-reactivity-benchmark"]
-	path = tb-reactivity-benchmark
-	url = https://github.com/transitive-bullshit/js-reactivity-benchmark
 [submodule "milomg-reactivity-benchmark"]
 	path = milomg-reactivity-benchmark
 	url = https://github.com/milomg/js-reactivity-benchmark

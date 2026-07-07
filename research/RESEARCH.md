@@ -151,7 +151,19 @@ governing effects either way.
    even when nothing anywhere has changed (Preact/Angular/Svelte all have
    one; Vue added `globalVersion` on top of its alien port).
 
-### 1.8 The two benchmark suites (diverged — use milomg's)
+### 1.8 The two benchmark suites (diverged — use milomg's; tb submodule REMOVED 2026-07-07)
+
+The `tb-reactivity-benchmark` submodule was removed after a semantic audit
+found the milomg fork strictly supersedes it: every tb suite (sbench, kairo
+incl. molBench, cellx, dynamicBench) exists in the fork in evolved form —
+median-of-N instead of fastest-of-N, per-framework process isolation,
+zero-allocation adapter interface, cellx active where tb disabled it, the
+"very dynamic" 6-100x15 config active where tb commented it out. Adapters
+unique to tb were deprecated frameworks — signia (superseded by
+`@tldraw/state`, which the fork carries as `tldrawState`), valtio and kairo
+(inactive even in tb's own config) — and the fork parks the rest of the old
+roster in `frameworks/inactive`. The table below stays as the historical
+record of the divergence.
 
 | | `milomg-reactivity-benchmark` | `tb-reactivity-benchmark` |
 |---|---|---|
