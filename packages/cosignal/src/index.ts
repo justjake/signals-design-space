@@ -2579,8 +2579,10 @@ export type {
 	WatcherSnapshot,
 	Subscription,
 	// operations and worlds (the tracing hook types stay on the
-	// `cosignal/trace` side of the seam; this entry never names them)
-	Op,
+	// `cosignal/trace` side of the seam; this entry never names them.
+	// Write ops travel as (kind, payload) scalars — HostOpKind above is the
+	// kind's name; the object shape survives only inside Receipt, the
+	// materialized test/trace surface)
 	Receipt,
 	World,
 	BridgeEvent,

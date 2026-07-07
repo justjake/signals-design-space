@@ -208,12 +208,6 @@ type WalkGen = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
 
-/** A write operation: set/update on atoms. A ReducerAtom dispatch records
- * as an update whose closure captures the reducer and the action. */
-export type Op =
-	| { kind: 'set'; value: Value }
-	| { kind: 'update'; fn: (prev: Value) => Value };
-
 /**
  * A receipt: one recorded write — {op, slot, seq} appended at the write,
  * retiredSeq stamped at the batch's retirement. Receipts denormalize their
@@ -222,19 +216,27 @@ export type Op =
  * already be released); the token id is carried for invariants and event
  * logs only. Receipts live int-packed in per-atom `Tape` columns ({kind,
  * slot, seq, retiredSeq, token} parallel number columns + one unknown[]
- * payload side column); this materialized object shape is the test/trace
- * surface (`Tape.materialize()`, trace `receipt` hook).
+ * payload side column); this materialized object shape — including the
+ * object-shaped `op` (a write operation: set/update; a ReducerAtom dispatch
+ * records as an update whose closure captures the reducer and the action) —
+ * is the test/trace surface only (`Tape.materialize()`, trace `receipt`
+ * hook). The write path itself carries the (kind, payload) scalar pair end
+ * to end and never builds it.
  */
 export type Receipt = {
-	op: Op;
+	op: { kind: 'set'; value: Value } | { kind: 'update'; fn: (prev: Value) => Value };
 	token: TokenId;
 	slot: SlotId;
 	seq: Seq;
 	retiredSeq: Seq | undefined;
 };
 
-/** Op-kind tags for the packed receipt column. Same-file const enum so every
- * esbuild-based toolchain inlines the codes as literals. */
+/** Op-kind tags: the packed receipt column AND the write surface's kind
+ * argument (`write`/`bareWrite`/`scopeWrite`) — 0 = set, 1 = update, the
+ * same codes the kernel's host write hook captures (`HostOpKind`; the two
+ * share the 0/1 encoding by construction, and 0/1 literals are assignable
+ * here, so cross-file callers never name this type). Same-file const enum so
+ * every esbuild-based toolchain inlines the codes as literals. */
 const enum OpKind {
 	SET = 0,
 	UPDATE = 1,
@@ -278,7 +280,7 @@ export class Tape {
 		this.n++;
 	}
 
-	opAt(i: number): Op {
+	opAt(i: number): Receipt['op'] {
 		const k = this.kinds[i]!;
 		if (k === OpKind.SET) return { kind: 'set', value: this.payloads[i] };
 		return { kind: 'update', fn: this.payloads[i] as (prev: Value) => Value };
@@ -336,7 +338,9 @@ export class AtomNode {
 	 * tests/model-view.ts). */
 	tp = new Tape();
 	equals: Equals;
-	/** True iff `equals` is the default Object.is (write fast path). */
+	/** True iff `equals` is the default Object.is — eqAtom's branch: the
+	 * default compares bare, a custom comparator runs under the fold-purity
+	 * guard. */
 	eqIsDefault: boolean;
 	/** Per-atom retirement stamp, minted at every retirement fold touching it.
 	 * Sole remaining consumer: retireInternal's duplicate-touch dedup (the
@@ -753,19 +757,15 @@ export function __coreProbes(): { receipts: number; tokens: number; worldEvals: 
 
 // ---- the host-hook implementations (installed into index.ts's public methods) -----
 
-/** Rebuild an Op from the public method's scalar (kind, payload) pair. */
-function opOf(kind: HostOpKind, payload: unknown): Op {
-	if (kind === 0) return { kind: 'set', value: payload };
-	return { kind: 'update', fn: payload as (prev: Value) => Value };
-}
-
 /**
  * The host write interceptor: a public write is attributable to a batch when
  * a bridge is registered and the write is not the bridge's own kernel apply.
  * The bindings' classifier (when installed) owns classification — batch
  * context, adoption-on-first-write, render guard; without bindings, writes to
  * REGISTERED atoms classify into the ambient default batch and everything
- * else takes the plain kernel path.
+ * else takes the plain kernel path. The public method's scalar
+ * (kind, payload) pair passes through unchanged — no op object exists on
+ * this path (HostOpKind and OpKind share the 0/1 encoding by construction).
  */
 function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown): boolean {
 	const b = activeBridge;
@@ -777,7 +777,7 @@ function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown):
 	__assertHostWritable();
 	const classify = b.writeClassifier;
 	if (classify !== undefined) {
-		classify(atom, opOf(kind, payload));
+		classify(atom, kind, payload);
 		return true;
 	}
 	const node = b.nodeFor(atom); // the ONE stamp-validate + registry-probe rule
@@ -786,12 +786,11 @@ function hostWriteImpl(atom: Atom<unknown>, kind: HostOpKind, payload: unknown):
 	}
 	if (b.quiet) {
 		// Quiet mode: nothing is pending, so the whole write is one fold —
-		// no Op object, no ambient batch, no receipt, no walk (Phase 1b).
-		// HostOpKind and OpKind share the 0/1 encoding by construction.
-		b.__quietWrite(node, kind as number as OpKind, payload);
+		// no ambient batch, no receipt, no walk (Phase 1b).
+		b.__quietWrite(node, kind, payload);
 		return true;
 	}
-	b.bareWrite(node, opOf(kind, payload));
+	b.bareWrite(node, kind, payload);
 	return true;
 }
 
@@ -1797,11 +1796,11 @@ export class CosignalBridge {
 	/**
 	 * Write classification for host-attributable public writes. When set, it
 	 * owns the WHOLE op (adoption on first write, batch context, render
-	 * guard) — received already rebuilt as an `Op`, so exactly one
-	 * (kind, payload) → Op site exists (the host seam's `opOf`); when unset,
-	 * registered atoms classify into the ambient batch.
+	 * guard) — received as the public method's scalar (kind, payload) pair,
+	 * exactly as the host seam captured it; when unset, registered atoms
+	 * classify into the ambient batch.
 	 */
-	writeClassifier: ((atom: Atom<unknown>, op: Op) => void) | undefined;
+	writeClassifier: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => void) | undefined;
 	/** Adopt-on-demand for routed reads of not-yet-registered atoms. */
 	readAdopter: ((atom: Atom<unknown>) => AtomNode) | undefined;
 
@@ -2282,20 +2281,6 @@ export class CosignalBridge {
 		}
 	}
 
-	private applyOp(atom: AtomNode, op: Op, prev: Value): Value {
-		switch (op.kind) {
-			case 'set':
-				return op.value;
-			case 'update':
-				// Replayed updaters run under BOTH fold guards: the bridge's
-				// (bridge reads throw) and the kernel's POISON table (raw
-				// public reads/writes throw exactly as in the unhosted path).
-				// ReducerAtom dispatches arrive here too: the closure carries
-				// the reducer and the captured action.
-				return this.inCallback(() => __hostRunFold(() => op.fn(prev)));
-		}
-	}
-
 	/**
 	 * The fold — replay visible entries over base in sequence order with
 	 * stepwise equality (an equal step keeps the old reference). Runs over
@@ -2311,12 +2296,8 @@ export class CosignalBridge {
 		const slots = tp.slots;
 		for (let i = tp.start; i < n; i++) {
 			if (!this.visibleAt(i, world, seqs, retired, slots)) continue;
-			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], value);
-			if (atom.eqIsDefault) {
-				if (!Object.is(next, value)) value = next;
-			} else if (!this.inCallback(() => atom.equals(next, value))) {
-				value = next;
-			}
+			const next = this.applyOp(atom, tp.kinds[i]!, tp.payloads[i], value);
+			if (!this.eqAtom(atom, next, value)) value = next;
 		}
 		return value;
 	}
@@ -2363,9 +2344,25 @@ export class CosignalBridge {
 		}
 	}
 
-	private applyOpPacked(atom: AtomNode, kind: OpKind, payload: unknown, prev: Value): Value {
+	/** Apply one op over `prev`, straight off the scalar (kind, payload) pair
+	 * (a SET's payload is the value; an UPDATE's is the updater). Replayed
+	 * updaters run under BOTH fold guards: the bridge's (bridge reads throw)
+	 * and the kernel's POISON table (raw public reads/writes throw exactly as
+	 * in the unhosted path). ReducerAtom dispatches arrive here too: the
+	 * closure carries the reducer and the captured action. */
+	private applyOp(atom: AtomNode, kind: OpKind, payload: unknown, prev: Value): Value {
 		if (kind === OpKind.SET) return payload;
 		return this.inCallback(() => __hostRunFold(() => (payload as (p: Value) => Value)(prev)));
+	}
+
+	/** How this atom compares two values — THE equality rule, one copy for
+	 * every site that asks (fold replay, the write path's drop check and
+	 * eager kernel apply, quiet-mode folds, tape compaction): Object.is when
+	 * the atom carries the default, otherwise the atom's custom comparator
+	 * under the fold-purity guard (equality callbacks replay per world, so
+	 * signal reads/writes inside them throw — the updater contract). */
+	private eqAtom(atom: AtomNode, a: Value, b: Value): boolean {
+		return atom.eqIsDefault ? Object.is(a, b) : this.inCallback(() => atom.equals(a, b));
 	}
 
 	/** Reads an atom's newest value straight from the kernel — the core's
@@ -3840,9 +3837,21 @@ export class CosignalBridge {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		const prev = node.base;
-		const next = kind === OpKind.SET ? payload : this.applyOpPacked(node, kind, payload, prev);
-		if (node.eqIsDefault ? Object.is(next, prev) : this.inCallback(() => node.equals(next, prev))) {
-			return; // equality drop against base — the tape is empty by the quiet invariant
+		// Fast arm — bench-pinned, do not fold into the eqAtom general arm
+		// (spkw-quiet A/B, 2026-07: folding cost +37% on the bare quiet fold,
+		// 12.9 → 17.7 ns): equality drops on one bare Object.is — no
+		// applyOp/eqAtom call layer on the dominant write shape.
+		let next: Value;
+		if (kind === OpKind.SET && node.eqIsDefault) {
+			if (Object.is(payload, prev)) {
+				return; // equality drop against base — the tape is empty by the quiet invariant
+			}
+			next = payload;
+		} else {
+			next = kind === OpKind.SET ? payload : this.applyOp(node, kind, payload, prev);
+			if (this.eqAtom(node, next, prev)) {
+				return; // equality drop against base — the tape is empty by the quiet invariant
+			}
 		}
 		node.base = next;
 		node.baseSeq = this.cas = ++this.seq; // advance the base + committed-advance clocks together (mintSeq, inlined)
@@ -3881,13 +3890,9 @@ export class CosignalBridge {
 	 * none, so it joins the ambient default batch — unless the bridge is
 	 * QUIET, in which case the write folds directly (no ambient batch is
 	 * minted while nothing is pending). */
-	bareWrite(node: AtomNode, op: Op): void {
+	bareWrite(node: AtomNode, kind: OpKind, payload: unknown): void {
 		if (this.quiet) {
-			this.__quietWrite(
-				node,
-				op.kind === 'set' ? OpKind.SET : OpKind.UPDATE,
-				op.kind === 'set' ? op.value : op.fn,
-			);
+			this.__quietWrite(node, kind, payload);
 			return;
 		}
 		let ambient = this.ambientToken === undefined ? undefined : this.tokens.get(this.ambientToken);
@@ -3897,7 +3902,7 @@ export class CosignalBridge {
 		}
 		// The post-await dev-warning heuristic lives adapter-side only
 		// (cosignal-react's shim classifyWrite) — the engine stays lint-free.
-		this.write(ambient.id, node, op);
+		this.write(ambient.id, node, kind, payload);
 	}
 
 	/** The compound-operation tail every public exit owes, in order: the
@@ -3912,11 +3917,11 @@ export class CosignalBridge {
 
 	/** Action-scope write: classifies into the action's batch explicitly
 	 * (usable after an await); throws once the action has settled. */
-	scopeWrite(tokenId: TokenId, node: AtomNode, op: Op): void {
+	scopeWrite(tokenId: TokenId, node: AtomNode, kind: OpKind, payload: unknown): void {
 		const t = this.token(tokenId);
 		if (!t.action) throw new BridgeScheduleError('scope writes require an action token');
 		if (t.state !== 'live') throw new BridgeScheduleError('ActionScope closed — the action already settled');
-		this.write(tokenId, node, op);
+		this.write(tokenId, node, kind, payload);
 	}
 
 	/**
@@ -3929,7 +3934,7 @@ export class CosignalBridge {
 	 * fanout → apply to the kernel with stepwise equality → arena delivery
 	 * walk → newest-subscription flush after the walk returns.
 	 */
-	write(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
+	write(tokenId: TokenId | undefined, node: AtomNode, kind: OpKind, payload: unknown): void {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		if (node.kind !== 'atom') throw new BridgeScheduleError('writes target atoms');
@@ -3938,17 +3943,17 @@ export class CosignalBridge {
 		// epilogue drains to empty (§4.5.4's fixed point).
 		this.opDepth++;
 		try {
-			this.writeInner(tokenId, node, op);
+			this.writeInner(tokenId, node, kind, payload);
 		} finally {
 			this.opDepth--;
 		}
 		this.arenaOpEpilogue();
 	}
 
-	private writeInner(tokenId: TokenId | undefined, node: AtomNode, op: Op): void {
+	private writeInner(tokenId: TokenId | undefined, node: AtomNode, kind: OpKind, payload: unknown): void {
 		if (!this._registered) throw new BridgeScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
 		if (tokenId === undefined) {
-			this.bareWrite(node, op);
+			this.bareWrite(node, kind, payload);
 			return;
 		}
 		// Windowed writes hit one token repeatedly — one compare beats a Map probe.
@@ -3967,16 +3972,22 @@ export class CosignalBridge {
 		// against base may a write be dropped — once receipts exist, worlds
 		// may fold different previous values, so equality here proves nothing.
 		if (tp.n === tp.start) {
-			if (op.kind === 'set' && node.eqIsDefault) {
-				if (Object.is(op.value, node.base)) {
+			if (kind === OpKind.SET && node.eqIsDefault) {
+				// Fast arm — bench-pinned, do not fold into the general arm
+				// (spkw A/B, 2026-07: folding the two write-path fast arms
+				// into their eqAtom general arms cost +11% bare / +3-6%
+				// chain3+watch1 per logged write). A plain set with default
+				// equality drops on one bare Object.is — no applyOp/eqAtom
+				// call layer on the dominant write shape.
+				if (Object.is(payload, node.base)) {
 					const tr = this.trace;
 					if (tr !== undefined) tr.writeDropped(node, tokenId);
 					this.endOp();
 					return;
 				}
 			} else {
-				const evaluated = this.applyOp(node, op, node.base);
-				if (this.inCallback(() => node.equals(evaluated, node.base))) {
+				const evaluated = this.applyOp(node, kind, payload, node.base);
+				if (this.eqAtom(node, evaluated, node.base)) {
 					const tr = this.trace;
 					if (tr !== undefined) tr.writeDropped(node, tokenId);
 					this.endOp();
@@ -3988,8 +3999,7 @@ export class CosignalBridge {
 		// Intern slot, append receipt, bump the slot write clock.
 		const slot = token.slot !== undefined ? this.slots[token.slot]! : this.internSlot(token);
 		const seq = this.mintSeq();
-		const kind = op.kind === 'set' ? OpKind.SET : OpKind.UPDATE;
-		tp.push(kind, slot.id, seq, token.id, op.kind === 'set' ? op.value : op.fn);
+		tp.push(kind, slot.id, seq, token.id, payload);
 		token.lastWriteSeq = seq;
 		token.liveReceipts++;
 		if (node.lastTouchToken !== token.id) {
@@ -4024,11 +4034,18 @@ export class CosignalBridge {
 		// Apply to the kernel eagerly with stepwise equality, so the newest
 		// world stays directly readable off the kernel arena.
 		if (kind === OpKind.SET && node.eqIsDefault) {
-			this.applyToKernel(node, (op as { kind: 'set'; value: Value }).value); // kernel stores + propagates only on change
+			// Fast arm — bench-pinned, do not fold into the general arm
+			// (spkw A/B, 2026-07: folding the two write-path fast arms
+			// into their eqAtom general arms cost +11% bare / +3-6%
+			// chain3+watch1 per logged write). A plain set with default
+			// equality applies unconditionally: the kernel's own
+			// store-compare gates propagation, which beats paying
+			// kernelValueOf + Object.is up front on every EFFECTIVE write.
+			this.applyToKernel(node, payload);
 		} else {
 			const prevNewest = this.kernelValueOf(node.handle);
-			const nextNewest = this.applyOp(node, op, prevNewest);
-			if (!this.inCallback(() => node.equals(nextNewest, prevNewest))) {
+			const nextNewest = this.applyOp(node, kind, payload, prevNewest);
+			if (!this.eqAtom(node, nextNewest, prevNewest)) {
 				this.applyToKernel(node, nextNewest);
 			}
 		}
@@ -4873,12 +4890,8 @@ export class CosignalBridge {
 		const onCompact = this.onCompact;
 		for (let k = 0; k < cut; k++) {
 			const i = from + k;
-			const next = this.applyOpPacked(atom, tp.kinds[i]!, tp.payloads[i], atom.base);
-			if (atom.eqIsDefault) {
-				if (!Object.is(next, atom.base)) atom.base = next;
-			} else if (!this.inCallback(() => atom.equals(next, atom.base))) {
-				atom.base = next;
-			}
+			const next = this.applyOp(atom, tp.kinds[i]!, tp.payloads[i], atom.base);
+			if (!this.eqAtom(atom, next, atom.base)) atom.base = next;
 			atom.baseSeq = tp.seqs[i]!;
 			if (onCompact !== undefined) onCompact(atom, tp.entryAt(i));
 			// A compacted receipt stops pinning its token record.

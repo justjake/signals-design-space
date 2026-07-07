@@ -48,7 +48,7 @@ function repOnce() {
 		const f0 = process.hrtime.bigint();
 		const toks = [];
 		for (let i = 0; i < B; i++) toks.push(b.openBatch());
-		if (held !== undefined) b.write(held.id, a, { kind: 'set', value: ++v });
+		if (held !== undefined) b.write(held.id, a, 0, ++v);
 		// per-(watcher,slot) delivery/spurious accounting keyed on event slices
 		const perWB = new Map(); // `${watcher}:${slot}` -> {d, s}
 		let frameWriteNs = 0;
@@ -56,7 +56,7 @@ function repOnce() {
 		if (INTERLEAVE) {
 			// Slot intern happens at first write: seed one changing write per
 			// token so the pass mask captures their slots, then open+yield.
-			for (const tok of toks) b.write(tok.id, a, { kind: 'set', value: ++v });
+			for (const tok of toks) b.write(tok.id, a, 0, ++v);
 			interPass = b.passStart('R', b.liveTokens().map((t) => t.id));
 			for (const w of watchers) b.renderWatcher(interPass.id, w.id);
 			b.passYield(interPass.id);
@@ -67,7 +67,7 @@ function repOnce() {
 			const value = changed ? ++v : v;
 			const mark = b.events.length;
 			const t0 = process.hrtime.bigint();
-			b.write(tok.id, a, { kind: 'set', value });
+			b.write(tok.id, a, 0, value);
 			const t1 = process.hrtime.bigint();
 			frameWriteNs += Number(t1 - t0);
 			for (let e = mark; e < b.events.length; e++) {
@@ -92,7 +92,7 @@ function repOnce() {
 			for (const w of watchers) b.renderWatcher(p.id, w.id);
 			b.passEnd(p.id, 'commit');
 		}
-		for (const t of toks) b.retire(t.id, true);
+		for (const t of toks) b.retire(t.id);
 		const f1 = process.hrtime.bigint();
 		frameNsTot += Number(f1 - f0);
 		for (const rec of perWB.values()) {
@@ -101,7 +101,7 @@ function repOnce() {
 		}
 	}
 	const tapeLen = a.tp.length;
-	if (held !== undefined) b.retire(held.id, true);
+	if (held !== undefined) b.retire(held.id);
 	const n = firstLast.length;
 	const head = firstLast.slice(0, 5).reduce((x, y) => x + y, 0) / Math.min(5, n);
 	const tail = firstLast.slice(-5).reduce((x, y) => x + y, 0) / Math.min(5, n);

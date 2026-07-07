@@ -59,7 +59,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
-	b.write(t.id, node as never, { kind: 'set', value });
+	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
 }
 
@@ -83,7 +83,7 @@ describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)
 		// flag=1, committed-for-R keeps flag=0. A newest evaluation re-points
 		// the observed closure at the NEWEST deps {flag, B}.
 		const t1 = b.openBatch();
-		b.write(t1.id, flag, { kind: 'set', value: 1 });
+		b.write(t1.id, flag, 0, 1);
 		expect(b.newestValue(oc)).toBe(20);
 		await tick();
 		expect(logA).toEqual(['observe', 'unobserve']);
@@ -291,7 +291,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		// world of a live batch writing flag=false; w2 = the committed world
 		// of root R2 (flag=true — the batch is not committed there).
 		const t1 = b.openBatch();
-		b.write(t1.id, nFlag, { kind: 'set', value: false }); // NEWEST sees it eagerly (unlike the spike's world-LOCAL override)
+		b.write(t1.id, nFlag, 0, false); // NEWEST sees it eagerly (unlike the spike's world-LOCAL override)
 		expect(seen[seen.length - 1]).toBe(21); // kernel effect heard the eager apply: flag=false → bb → 21
 		const p1 = b.passStart('R1', [t1.id]);
 		b.root('R2'); // materialize the committed arena
@@ -302,7 +302,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		// arena links. w2 folds it; newest is on the bb branch (kernel links
 		// exclude a — the write is delivery-silent there); w1's pin excludes it.
 		const t2 = b.openBatch();
-		b.write(t2.id, b.nodeFor(a)!, { kind: 'set', value: 100 });
+		b.write(t2.id, b.nodeFor(a)!, 0, 100);
 		b.retire(t2.id);
 		expect(seen).toEqual([11, 21]); // no newest re-run: a is off m's newest dep set (the ruling's tracked-only rule)
 		expect(b.committedValue(nC, 'R2')).toBe(101); // w2: flag=true (no t1) → a=100 → 101
@@ -331,7 +331,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 
 		// Kernel dep flip UNDER live worlds: newest re-track while world links live.
 		const t3 = b.openBatch();
-		b.write(t3.id, nFlag, { kind: 'set', value: false });
+		b.write(t3.id, nFlag, 0, false);
 		b.retire(t3.id);
 		expect(seen[seen.length - 1]).toBe(21); // newest: m → {flag, bb} (re-tracked at the earlier flip)
 		expect(b.committedValue(nC, 'R2')).toBe(21); // w2 folds the retired flip: flag=false → bb → 21
@@ -345,8 +345,8 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		disposeEff();
 		disposePoker();
 		const t4 = b.openBatch();
-		b.write(t4.id, b.nodeFor(a)!, { kind: 'set', value: 7 });
-		b.write(t4.id, nFlag, { kind: 'set', value: true });
+		b.write(t4.id, b.nodeFor(a)!, 0, 7);
+		b.write(t4.id, nFlag, 0, true);
 		b.retire(t4.id);
 		expect(c.state).toBe(8); // kernel fully functional after dispose (lazy re-eval)
 		expect(b.committedValue(nC, 'R2')).toBe(8); // worlds correct after the cascade
@@ -355,8 +355,8 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.retire(t1.id);
 		// Zero-world sync semantics intact after everything.
 		const t5 = b.openBatch();
-		b.write(t5.id, b.nodeFor(bb)!, { kind: 'set', value: 99 });
-		b.write(t5.id, nFlag, { kind: 'set', value: false });
+		b.write(t5.id, b.nodeFor(bb)!, 0, 99);
+		b.write(t5.id, nFlag, 0, false);
 		b.retire(t5.id);
 		expect(c.state).toBe(100);
 		expect(b.newestValue(nC)).toBe(100);

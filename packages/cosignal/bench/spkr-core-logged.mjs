@@ -38,10 +38,10 @@ function repOnce() {
 	const toks = [];
 	for (let k = 0; k < K; k++) toks.push(b.openBatch());
 	for (let k = 0; k < K; k++) {
-		for (let m = 0; m < M; m++) b.write(toks[k].id, atoms[m % 4], { kind: 'set', value: ++v });
+		for (let m = 0; m < M; m++) b.write(toks[k].id, atoms[m % 4], 0, ++v);
 	}
 	const t1 = process.hrtime.bigint();
-	for (const t of toks) b.retire(t.id, true);
+	for (const t of toks) b.retire(t.id);
 	const t2 = process.hrtime.bigint();
 	return {
 		writeNsPerBatch: Number(t1 - t0) / K,

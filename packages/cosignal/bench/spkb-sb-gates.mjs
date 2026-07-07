@@ -55,10 +55,10 @@ function untrackedFan() {
 		globalThis.gc?.();
 		const t0 = process.hrtime.bigint();
 		for (let i = 0; i < WRITES; i++) {
-			b.write(t.id, hot, { kind: 'set', value: i + rep });
+			b.write(t.id, hot, 0, i + rep);
 		}
 		const t1 = process.hrtime.bigint();
-		b.retire(t.id, true);
+		b.retire(t.id);
 		for (let r = 0; r < R; r++) checksum += Number(b.committedValue(aggs[r], `R${r}`));
 		if (rep >= 3) times.push(Number(t1 - t0) / WRITES); // per-write ns (delivery walk incl. weak bit-tests)
 	}

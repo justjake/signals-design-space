@@ -213,7 +213,7 @@ describe('observation union at the bridge', () => {
 		expect(log).toEqual([]); // a is not in the snapshot
 		expect(logB).toEqual(['observe']); // b holds one union retain via the dep snapshot
 		const t = b.openBatch();
-		b.write(t.id, flag, { kind: 'set', value: 1 });
+		b.write(t.id, flag, 0, 1);
 		b.retire(t.id); // boundary: the body re-chooses a; the retains re-point
 		await tick();
 		expect(log).toEqual(['observe']);

@@ -35,7 +35,6 @@ import {
 	type AnyNode as ENode,
 	type AtomNode as EAtomNode,
 	type CosignalBridge,
-	type Op as EOp,
 	type Pass as EPass,
 	type Subscription as ESubscription,
 	type World as EWorld,
@@ -346,14 +345,14 @@ export class TwinDriver {
 	write(tokenId: number | undefined, node: AtomNode, op: Op): void {
 		const mark = this.model.events.length;
 		this.both('write', () => this.model.write(tokenId, node, op), () =>
-			this.engine.write(tokenId, this.toEngine(node) as never, op));
+			this.engine.write(tokenId, this.toEngine(node) as never, ...opScalars(op)));
 		if (tokenId === undefined) this.mirrorQuietFold(node, op, mark);
 	}
 
 	bareWrite(node: AtomNode, op: Op): void {
 		const mark = this.model.events.length;
 		this.both('bareWrite', () => this.model.bareWrite(node, op), () =>
-			this.engine.bareWrite(this.toEngine(node) as never, op));
+			this.engine.bareWrite(this.toEngine(node) as never, ...opScalars(op)));
 		this.mirrorQuietFold(node, op, mark);
 	}
 
@@ -368,13 +367,13 @@ export class TwinDriver {
 		for (const e of this.model.events.slice(mark)) {
 			if (e.type !== 'quiet-write') continue;
 			const eNode = this.toEngine(node) as EAtomNode;
-			this.mirror.archiveOf(eNode).push({ op: op as EOp, token: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
+			this.mirror.archiveOf(eNode).push({ op, token: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
 		}
 	}
 
 	scopeWrite(tokenId: number, node: AtomNode, op: Op): void {
 		this.both('scopeWrite', () => this.model.scopeWrite(tokenId, node, op), () =>
-			this.engine.scopeWrite(tokenId, this.toEngine(node) as never, op));
+			this.engine.scopeWrite(tokenId, this.toEngine(node) as never, ...opScalars(op)));
 	}
 
 	settleAction(tokenId: number): void {
@@ -589,4 +588,12 @@ export function set(value: unknown): { kind: 'set'; value: unknown } {
 
 export function update(fn: (p: unknown) => unknown): { kind: 'update'; fn: (p: unknown) => unknown } {
 	return { kind: 'update', fn };
+}
+
+/** The referee boundary's op conversion: specs and the model speak op
+ * literals (`set`/`update` above — the reference model's vocabulary); the
+ * ENGINE's write surface takes the scalar (kind, payload) pair (0 = set,
+ * 1 = update), so the twin converts exactly here, at the engine dispatch. */
+export function opScalars(op: Op): [0 | 1, unknown] {
+	return op.kind === 'set' ? [0, op.value] : [1, op.fn];
 }

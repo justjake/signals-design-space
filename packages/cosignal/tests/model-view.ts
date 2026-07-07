@@ -25,7 +25,6 @@ import type {
 	AnyNode as ENode,
 	AtomNode,
 	CosignalBridge,
-	Op,
 	Pass,
 	PassId,
 	Receipt,
@@ -124,8 +123,10 @@ function engineWorld(w: World): World {
 }
 
 /** Pure op application for the shadow fold (test-side: the corpus's updaters/
- * reducers are pure by the fold-purity contract the engine enforces). */
-function applyOp(atom: AtomNode, op: Op, prev: Value): Value {
+ * reducers are pure by the fold-purity contract the engine enforces; the
+ * object-shaped op is the materialized Receipt surface — engine truth is the
+ * packed scalar pair). */
+function applyOp(atom: AtomNode, op: Receipt['op'], prev: Value): Value {
 	switch (op.kind) {
 		case 'set':
 			return op.value;

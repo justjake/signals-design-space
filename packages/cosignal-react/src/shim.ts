@@ -72,7 +72,7 @@ import type {
 	AnyNode,
 	AtomNode,
 	CosignalBridge,
-	Op,
+	HostOpKind,
 	Pass,
 	RootId,
 	TokenId,
@@ -99,6 +99,14 @@ export function assertForkPresent(): void {
 }
 
 // ---- shim types ------------------------------------------------------------------
+
+/** The op-literal shape `scopeWrite` accepts at its boundary (hooks.ts
+ * spells whole operations as these literals); converted to the engine's
+ * scalar (kind, payload) pair at entry — the engine itself has no op
+ * object anywhere on its write path. */
+export type ScopeWriteOp =
+	| { kind: 'set'; value: Value }
+	| { kind: 'update'; fn: (prev: Value) => Value };
 
 /** A live delivery target: the shim-side handle for one watcher (the
  * engine's record of one subscribed component instance) that can re-render
@@ -186,8 +194,8 @@ export class Shim {
 		// host-attributable writes (whole ops) to the classifier, and routed
 		// reads to the effective world; the observer feeds effect dependency
 		// snapshots.
-		bridge.writeClassifier = (atom, op) => {
-			this.classifyWrite(this.nodeForAtom(atom), op); // the seam already rebuilt the whole Op
+		bridge.writeClassifier = (atom, kind, payload) => {
+			this.classifyWrite(this.nodeForAtom(atom), kind, payload); // the seam's scalar (kind, payload) pair, untouched
 		};
 		bridge.readAdopter = (atom) => this.nodeForAtom(atom);
 		// The ambient-world provider answers from the LIVE call context, per
@@ -534,8 +542,11 @@ export class Shim {
 
 	// ---- write classification -----------------------------------------------------
 
-	/** The single write entry for adopted atoms: records the WHOLE operation, classified into the batch context the write executes in. */
-	classifyWrite(node: AtomNode, op: Op): void {
+	/** The single write entry for adopted atoms: records the WHOLE operation
+	 * — carried as the host seam's scalar (kind, payload) pair (0 = set with
+	 * the value, 1 = update with the updater fn) — classified into the batch
+	 * context the write executes in. */
+	classifyWrite(node: AtomNode, kind: HostOpKind, payload: unknown): void {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
@@ -548,7 +559,7 @@ export class Shim {
 			// (any call context) with a guaranteed close edge, so no write in
 			// the React path is ever context-free. Pinned by the ambient-
 			// retirement battery test.
-			this.bridge.bareWrite(node, op);
+			this.bridge.bareWrite(node, kind, payload);
 			// If a bare write does land (a future build regression), the ambient
 			// batch it minted has no protocol counterpart to close it: retire it
 			// one-shot when nothing else is pending.
@@ -574,7 +585,7 @@ export class Shim {
 			) {
 				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
 			}
-			this.bridge.write(tokenId, node, op);
+			this.bridge.write(tokenId, node, kind, payload);
 		}
 		// A write into a batch already locked into some root's committed table
 		// moves that root's committed world immediately — but effects are
@@ -585,13 +596,18 @@ export class Shim {
 		// one run at the boundary value. Nothing to do here.
 	}
 
-	/** Action-scope writes: classify into the action's batch explicitly, from anywhere — including after an await. */
-	scopeWrite(bridgeToken: TokenId, node: AtomNode, op: Op): void {
+	/** Action-scope writes: classify into the action's batch explicitly, from
+	 * anywhere — including after an await. This entry accepts the op as an
+	 * object literal (its callers in hooks.ts spell the whole operation at
+	 * the call site) and converts to the engine's scalar (kind, payload)
+	 * pair immediately — no op object travels past this boundary. */
+	scopeWrite(bridgeToken: TokenId, node: AtomNode, op: ScopeWriteOp): void {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
 		// Member-write effect timing: see classifyWrite — boundary semantics.
-		this.bridge.scopeWrite(bridgeToken, node, op);
+		if (op.kind === 'set') this.bridge.scopeWrite(bridgeToken, node, 0, op.value);
+		else this.bridge.scopeWrite(bridgeToken, node, 1, op.fn);
 	}
 
 	// ---- useSignalEffect timing shell -------------------------------------------------

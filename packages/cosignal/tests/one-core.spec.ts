@@ -274,7 +274,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const la = bridge.atom('routed', 0);
 		const viaHandle = bridge.computed('viaHandle', () => la.handle.state as number); // NOT the reader — the public API
 		const t = bridge.openBatch();
-		bridge.write(t.id, la, { kind: 'set', value: 5 });
+		bridge.write(t.id, la, 0, 5);
 		expect(bridge.newestValue(viaHandle)).toBe(5); // newest = kernel arena
 		const p = bridge.passStart('A', []); // t excluded
 		expect(bridge.passValue(viaHandle, p)).toBe(0); // the world evaluation routes the public read: the excluded batch stays invisible

@@ -66,7 +66,7 @@ function wideMask() {
 	const times = [];
 	for (let r = 0; r < REPS + 3; r++) {
 		const t = b.openBatch();
-		for (let i = 0; i < N; i++) b.write(t.id, atoms[i], { kind: 'set', value: i + r });
+		for (let i = 0; i < N; i++) b.write(t.id, atoms[i], 0, i + r);
 		const p = b.passStart('R', [t.id]);
 		b.renderWatcher(p.id, w.id);
 		globalThis.gc?.();

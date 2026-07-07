@@ -122,16 +122,16 @@ bridge.passEnd(pass.id, 'commit');
 for (let i = 0; i < 50; i++) {
 	const t = bridge.openBatch();
 	// update-op receipts make committed folds run the updater: foldAtom.
-	bridge.write(t.id, at as never, { kind: 'update', fn: (prev) => (prev as number) + 1 });
+	bridge.write(t.id, at as never, 1, (prev: unknown) => (prev as number) + 1);
 	bridge.retire(t.id);
 }
 const t2 = bridge.openBatch();
-bridge.write(t2.id, at2 as never, { kind: 'set', value: 100 });
+bridge.write(t2.id, at2 as never, 0, 100);
 bridge.retire(t2.id);
 
 function commitWrite(node: AnyNode, value: unknown): void {
 	const t = bridge.openBatch();
-	bridge.write(t.id, node as never, { kind: 'set', value });
+	bridge.write(t.id, node as never, 0, value);
 	bridge.retire(t.id);
 }
 

@@ -45,7 +45,7 @@ function repBurst() {
 	let heldPass;
 	if (HELD) {
 		held = b.openBatch({ action: true });
-		b.write(held.id, query, { kind: 'set', value: ++v });
+		b.write(held.id, query, 0, ++v);
 		heldPass = b.passStart('R', [held.id]);
 		b.renderWatcher(heldPass.id, watcher.id);
 		b.passYield(heldPass.id);
@@ -56,10 +56,10 @@ function repBurst() {
 		b.events.length = 0;
 		const tok = b.openBatch();
 		const t0 = process.hrtime.bigint();
-		for (let k = 0; k < W; k++) b.write(tok.id, query, { kind: 'set', value: ++v });
+		for (let k = 0; k < W; k++) b.write(tok.id, query, 0, ++v);
 		const t1 = process.hrtime.bigint();
 		writeNs += Number(t1 - t0);
-		b.retire(tok.id, true);
+		b.retire(tok.id);
 	}
 	const evalsPerWrite = evals / (FRAMES * W);
 	const tapeLen = query.tp.length;
@@ -67,7 +67,7 @@ function repBurst() {
 		b.passResume(heldPass.id);
 		b.passEnd(heldPass.id, 'commit');
 	}
-	if (held !== undefined) b.settleAction(held.id, true);
+	if (held !== undefined) b.settleAction(held.id);
 	return { writeNs: writeNs / (FRAMES * W), evalsPerWrite, tapeLen };
 }
 
@@ -79,7 +79,7 @@ function repTypeahead() {
 	let keyNs = 0;
 	for (let k = 0; k < KEYS; k++) {
 		const t0 = process.hrtime.bigint();
-		b.write(T.id, query, { kind: 'set', value: ++v });
+		b.write(T.id, query, 0, ++v);
 		if (open !== undefined) b.passEnd(open.id, 'discard'); // interruption: restart
 		open = b.passStart('R', [T.id]);
 		b.renderWatcher(open.id, watcher.id);
@@ -91,7 +91,7 @@ function repTypeahead() {
 	const evalsPerKey = evals / KEYS;
 	b.passResume(open.id);
 	b.passEnd(open.id, 'commit');
-	b.settleAction(T.id, true);
+	b.settleAction(T.id);
 	const t1all = process.hrtime.bigint();
 	b.events.length = 0;
 	return { keyNs: keyNs / KEYS, evalsPerKey, tapeLen, runNs: Number(t1all - t0all) / KEYS };

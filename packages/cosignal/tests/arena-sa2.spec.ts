@@ -27,7 +27,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 /** Write + retire in one committed batch (a committed-truth advance). */
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
-	b.write(t.id, node as never, { kind: 'set', value });
+	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
 }
 
@@ -79,9 +79,9 @@ describe('S-A fp-100/seq-50 lock-in walk (§4.2 no-fp rule)', () => {
 		const c = b.computed('c', (read) => read(a));
 		const w = mount(b, 'R', c, 'W');
 		const tLow = b.openBatch(); // T: the EARLIER sequence (the seq-50 analog)
-		b.write(tLow.id, a, { kind: 'update', fn: (p) => (p as number) + 50 });
+		b.write(tLow.id, a, 1, (p: unknown) => (p as number) + 50);
 		const tHigh = b.openBatch(); // U: the later, retired sequence (the seq-100 analog)
-		b.write(tHigh.id, a, { kind: 'update', fn: (p) => (p as number) + 100 });
+		b.write(tHigh.id, a, 1, (p: unknown) => (p as number) + 100);
 		b.retire(tHigh.id);
 		expect(w.lastRenderedValue).toBe(100); // committed sees only the retired +100
 		// Lock T in via a per-root commit: membership exposes T's receipt

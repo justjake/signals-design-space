@@ -175,7 +175,7 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 		const stream = refereeStreamOf(b);
 		const mark = stream.cursor();
 		const t = b.openBatch();
-		b.write(t.id, node, { kind: 'set', value: 9 });
+		b.write(t.id, node, 0, 9);
 		expect(kernelSeen).toBe(9); // K0: eager kernel apply flushed the effect
 		expect(stream.eventsSince(mark).some((e) => e.type === 'delivery' && e.watcher === 'W')).toBe(true); // K1: delivery walk
 		b.retire(t.id);
@@ -195,7 +195,7 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 		});
 		const c = b.computed('c', () => kc.state); // standalone kernel computed inside a bridge fn
 		const t = b.openBatch();
-		b.write(t.id, node, { kind: 'set', value: 5 }); // kernel newest = 5
+		b.write(t.id, node, 0, 5); // kernel newest = 5
 		const p = b.passStart('A', []); // t excluded: the pass world's a is 0
 		// S-C INVERSION (§4.8 — one computed): kc's read inside c's ARENA
 		// evaluation routes through the computed host-read seam, adopts kc,
@@ -277,7 +277,7 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(a));
 		const t = b.openBatch();
-		b.write(t.id, a, { kind: 'set', value: 7 }); // no arena holds a→c yet
+		b.write(t.id, a, 0, 7); // no arena holds a→c yet
 		const p = b.passStart('A', []); // pin postdates the write; t excluded → renders base
 		const w = b.mountWatcher(p.id, c, 'W'); // pass-arena links record NOW; the commit's re-staled loop populates the committed arena (§4.4.2)
 		expect(w.lastRenderedValue).toBe(0);
@@ -294,7 +294,7 @@ describe('§2 A10 — token.liveReceipts gates reclamation against un-compacted 
 		const b = bridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
-		b.write(t.id, a, { kind: 'set', value: 1 });
+		b.write(t.id, a, 0, 1);
 		const p = b.passStart('A', []); // live pin below the coming retirement blocks compaction
 		b.retire(t.id);
 		expect(b.tokens.has(t.id)).toBe(true); // receipts still on the tape reference the token by id

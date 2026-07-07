@@ -34,7 +34,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 /** Write + retire in one committed batch (a committed-truth advance). */
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
-	b.write(t.id, node as never, { kind: 'set', value });
+	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
 }
 

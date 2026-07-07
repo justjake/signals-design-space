@@ -65,7 +65,7 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(6); // armed: classifies into the AMBIENT batch
 		expect(b.ambientToken).toBeDefined();
 		expect(a.tp.materialize()).toHaveLength(1);
-		b.write(t.id, a, { kind: 'update', fn: (v) => (v as number) * 10 });
+		b.write(t.id, a, 1, (v: unknown) => (v as number) * 10);
 		expect(b.newestValue(a)).toBe(60);
 		// A pass excluding both live batches folds committed base — which
 		// already contains the QUIET fold (5), not the live receipts.
@@ -89,7 +89,7 @@ describe('quiet-mode writes', () => {
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(5); // quiet history
 		const t = b.openBatch();
-		b.write(t.id, a, { kind: 'update', fn: (v) => (v as number) + 1 }); // folds over base 5
+		b.write(t.id, a, 1, (v: unknown) => (v as number) + 1); // folds over base 5
 		const p = b.passStart('A', [t.id]);
 		expect(b.passValue(a, p)).toBe(6); // the transition world = quiet base + its own receipt
 		b.passEnd(p.id, 'commit');
@@ -181,7 +181,7 @@ describe('quiet-mode writes', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
-		b.write(t.id, a, { kind: 'set', value: 1 });
+		b.write(t.id, a, 0, 1);
 		const p = b.passStart('B', [t.id]); // pin freezes before the retirement below
 		b.retire(t.id);
 		// The pass's pin blocks compaction: the retired receipt is still on

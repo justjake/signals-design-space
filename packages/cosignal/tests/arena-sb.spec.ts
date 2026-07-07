@@ -72,17 +72,17 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		expect(w.lastRenderedValue).toBe(2);
 
 		const T = b.openBatch({ action: true }); // parked: cannot retire until settled
-		b.write(T.id, flag, { kind: 'set', value: 1 }); // delivered into T via committed flag→c
+		b.write(T.id, flag, 0, 1); // delivered into T via committed flag→c
 		expect(deliveriesTo(b, 'W', T.id).length).toBe(1);
 
 		const pT = b.passStart('R', [T.id]);
 		b.passValue(c, pT); // T's pass evaluates the a-branch: ONLY pT's arena holds a→c
 		const U = b.openBatch();
-		b.write(U.id, a, { kind: 'set', value: 10 }); // pass arena alive: routed, fresh delivery
+		b.write(U.id, a, 0, 10); // pass arena alive: routed, fresh delivery
 		expect(deliveriesTo(b, 'W', U.id).length).toBe(1);
 
 		b.passEnd(pT.id, 'discard'); // the arena — and the only a→c link — dies; T stays pending
-		b.write(U.id, a, { kind: 'set', value: 20 }); // THE GAP WRITE
+		b.write(U.id, a, 0, 20); // THE GAP WRITE
 		// Documented degraded outcome: no live arena holds a→c, so the walk
 		// collects nothing — no delivery AND no suppression (HEAD's K1 union
 		// logged 'suppressed' here; the dedup bit was armed by the first
@@ -112,13 +112,13 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		const w = mount(b, 'R', c, 'W');
 
 		const T = b.openBatch({ action: true });
-		b.write(T.id, flag, { kind: 'set', value: 1 });
+		b.write(T.id, flag, 0, 1);
 		const pT = b.passStart('R', [T.id]);
 		b.passValue(c, pT); // a-branch links live only here
 		b.passEnd(pT.id, 'discard');
 
 		const U = b.openBatch();
-		b.write(U.id, a, { kind: 'set', value: 10 }); // the gap write
+		b.write(U.id, a, 0, 10); // the gap write
 		expect(deliveriesTo(b, 'W', U.id).length).toBe(0); // documented: lane-degraded
 		expect(w.lastRenderedValue).toBe(2); // committed view unchanged
 
@@ -140,13 +140,13 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		const w = mount(b, 'R', c, 'W');
 
 		const T = b.openBatch({ action: true });
-		b.write(T.id, flag, { kind: 'set', value: 1 });
+		b.write(T.id, flag, 0, 1);
 		const pT = b.passStart('R', [T.id]);
 		b.passValue(c, pT);
 		b.passEnd(pT.id, 'discard');
 
 		const U = b.openBatch();
-		b.write(U.id, a, { kind: 'set', value: 10 });
+		b.write(U.id, a, 0, 10);
 		expect(deliveriesTo(b, 'W', U.id).length).toBe(0); // no route at the write
 
 		// U retires while committed truth still shows the b-branch: the
@@ -174,7 +174,7 @@ describe('S-B routing coverage pins (§4.4.1 / §4.4.2)', () => {
 		const C = b.computed('C', (read) => read(A));
 		const w = mount(b, 'R', C, 'W');
 		const t2 = b.openBatch();
-		b.write(t2.id, A, { kind: 'set', value: 5 }); // post-commit write, brand-new batch
+		b.write(t2.id, A, 0, 5); // post-commit write, brand-new batch
 		expect(deliveriesTo(b, 'W', t2.id).length).toBe(1); // routed via the committed arena
 		b.retire(t2.id);
 		expect(w.lastRenderedValue).toBe(5);
@@ -192,12 +192,12 @@ describe('S-B routing coverage pins (§4.4.1 / §4.4.2)', () => {
 		expect(b.__arenaLinkMode('R', bb, c)).toBe('strong');
 
 		const T = b.openBatch();
-		b.write(T.id, a, { kind: 'set', value: 100 }); // untracked dep: the walk tests the weak bit and skips
+		b.write(T.id, a, 0, 100); // untracked dep: the walk tests the weak bit and skips
 		expect(deliveriesTo(b, 'W').length).toBe(0);
 		expect(suppressionsTo(b, 'W').length).toBe(0);
 
 		const U = b.openBatch();
-		b.write(U.id, bb, { kind: 'set', value: 5 }); // tracked dep: delivers
+		b.write(U.id, bb, 0, 5); // tracked dep: delivers
 		expect(deliveriesTo(b, 'W', U.id).length).toBe(1);
 
 		// T retires: site-(a) fanout marks `a`, weak a→c propagates PENDING,

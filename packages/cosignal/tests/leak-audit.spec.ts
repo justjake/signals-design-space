@@ -56,7 +56,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 
 function commitWrite(b: CosignalBridge, node: AtomNode, value: unknown): void {
 	const t = b.openBatch();
-	b.write(t.id, node, { kind: 'set', value });
+	b.write(t.id, node, 0, value);
 	b.retire(t.id);
 }
 
@@ -288,7 +288,7 @@ describe('5. TAPES / TOKENS / PASSES', () => {
 		const w = mount(b, 'R', c, 'W');
 		for (let i = 1; i <= 400; i++) {
 			const t = b.openBatch();
-			b.write(t.id, an, { kind: 'set', value: i });
+			b.write(t.id, an, 0, i);
 			if (i % 8 === 0) {
 				const p = b.passStart('R', [t.id]); // an open pass pin-blocks compaction…
 				b.renderWatcher(p.id, w.id);
@@ -298,7 +298,7 @@ describe('5. TAPES / TOKENS / PASSES', () => {
 			}
 			if (i % 16 === 0) {
 				const act = b.openBatch({ action: true }); // parked async action…
-				b.write(act.id, an, { kind: 'set', value: i + 1000 });
+				b.write(act.id, an, 0, i + 1000);
 				b.settleAction(act.id); // …parks then settles
 			}
 		}

@@ -672,7 +672,7 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		// Simulate the classifier-less route: a bare write straight into the
 		// engine while the window is open mints the ambient default batch.
 		const flagNode = h.handle.shim.nodeForAtom(flag as Atom<unknown>);
-		h.bridge.bareWrite(flagNode, { kind: 'set', value: 7 });
+		h.bridge.bareWrite(flagNode, 0, 7);
 		const ambient = h.bridge.ambientToken;
 		expect(ambient).toBeDefined(); // ambient minted; nothing protocol-side will ever retire it…
 		// The pending window closes: the action settles and its batch retires —

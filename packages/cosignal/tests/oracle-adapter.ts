@@ -21,7 +21,6 @@ import {
 	BridgeScheduleError,
 	type AtomNode,
 	type CosignalBridge,
-	type Op,
 } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
@@ -119,12 +118,15 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 	const allNodes = [...b.nodes.values()];
 	const atoms = allNodes.filter((n): n is AtomNode => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
-	const writeOp = (kind: WriteKind, value: number, atomIdx: number): Op => {
+	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
+	 * pair (0 = set, 1 = update) — the adapter's op-literal twin of the
+	 * model-side writeOp in the oracle's schedule.ts. */
+	const writeScalars = (kind: WriteKind, value: number, atomIdx: number): [0 | 1, unknown] => {
 		switch (kind) {
-			case 'set': return { kind: 'set', value };
-			case 'inc': return { kind: 'update', fn: (p) => (p as number) + 1 };
-			case 'double': return { kind: 'update', fn: (p) => (p as number) * 2 };
-			case 'equalNewest': return { kind: 'set', value: b.newestValue(atoms[atomIdx]!) };
+			case 'set': return [0, value];
+			case 'inc': return [1, (p: unknown) => (p as number) + 1];
+			case 'double': return [1, (p: unknown) => (p as number) * 2];
+			case 'equalNewest': return [0, b.newestValue(atoms[atomIdx]!)];
 		}
 	};
 	const opIndex = (appliedOps.get(b) ?? 0) + 1;
@@ -143,18 +145,18 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'open': reg.tokens.push(b.openBatch({ action: op.action }).id); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
-				b.write(tokenAt(b, op.token), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
+				b.write(tokenAt(b, op.token), atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
 			case 'bareWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				b.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length));
+				b.bareWrite(atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
 				syncAmbient();
 				break;
 			}
 			case 'scopeWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
-				b.scopeWrite(tokenAt(b, op.token)!, atom, { kind: 'set', value: op.value });
+				b.scopeWrite(tokenAt(b, op.token)!, atom, 0, op.value);
 				break;
 			}
 			case 'settle': b.settleAction(tokenAt(b, op.token)!); break;

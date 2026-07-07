@@ -42,7 +42,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 /** Write + retire in one committed batch (a committed-truth advance). */
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
-	b.write(t.id, node as never, { kind: 'set', value });
+	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
 }
 
@@ -112,7 +112,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		// Open the boundary batch BEFORE the settle so the first armed epilogue
 		// after the settlement is the retire itself (the boundary under test).
 		const t = b.openBatch();
-		b.write(t.id, k, { kind: 'set', value: 1 });
+		b.write(t.id, k, 0, 1);
 		// Background settlement at rest: the drain marks leaf's shadow DIRTY
 		// (suspended-list scan), propagates PENDING up the unwatched cone, and
 		// evicts leaf's memo — no live watcher consumes anything.

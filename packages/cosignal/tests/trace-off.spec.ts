@@ -104,28 +104,28 @@ describe('R11 runtime enable/disable', () => {
 		const a = b.atom('a', 0);
 		b.registerBridge();
 		expect(b.trace).toBeUndefined();
-		b.bareWrite(a, { kind: 'set', value: 1 });
+		b.bareWrite(a, 0, 1);
 		expect(b.trace).toBeUndefined(); // nothing armed it
 
 		const tr = attachTracer(b);
 		expect(b.trace).toBe(tr);
 		expect(tr.attached).toBe(true);
 		expect(() => attachTracer(b)).toThrow(/already attached/);
-		b.bareWrite(a, { kind: 'set', value: 2 });
+		b.bareWrite(a, 0, 2);
 		const recorded = tr.stats().recorded;
 		expect(recorded).toBeGreaterThan(0);
 
 		tr.stop();
 		expect(b.trace).toBeUndefined();
 		expect(tr.attached).toBe(false);
-		b.bareWrite(a, { kind: 'set', value: 3 });
+		b.bareWrite(a, 0, 3);
 		expect(tr.stats().recorded).toBe(recorded); // capture frozen, still decodable
 		// The bridge was at rest for every write above, so the captured records
 		// are quiet folds (the production default write path), not receipts.
 		expect(tr.events('quiet-write').length).toBeGreaterThan(0);
 
 		const tr2 = attachTracer(b); // a later session starts fresh
-		b.bareWrite(a, { kind: 'set', value: 4 });
+		b.bareWrite(a, 0, 4);
 		expect(tr2.stats().recorded).toBeGreaterThan(0);
 		tr2.stop();
 	});
@@ -265,7 +265,7 @@ describe('R11 Graphviz renderers', () => {
 		b.mountWatcher(p.id, c, 'W');
 		b.passEnd(p.id, 'commit');
 		const t = b.openBatch();
-		b.write(t.id, a, { kind: 'set', value: 1 });
+		b.write(t.id, a, 0, 1);
 
 		const write = tr.events('write')[0]!;
 		const delivery = tr.events('delivery')[0]!;
