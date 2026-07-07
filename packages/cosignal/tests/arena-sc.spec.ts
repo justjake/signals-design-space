@@ -51,9 +51,9 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 }
 
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
@@ -217,13 +217,13 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 			read(y);
 			return [read(x)];
 		}, (p, n) => (p as number[])[0] === (n as number[])[0]);
-		// Three arenas: committed R1, committed R2, and an open pass on R3.
+		// Three arenas: committed R1, committed R2, and an open render on R3.
 		mount(b, 'R1', cArr, 'W1');
 		mount(b, 'R2', cArr, 'W2');
 		const ref1 = b.committedValue(cArr, 'R1');
 		const ref2 = b.committedValue(cArr, 'R2');
-		const p3 = b.passStart('R3', []);
-		const ref3 = b.passValue(cArr, p3);
+		const p3 = b.renderStart('R3', []);
+		const ref3 = b.renderValue(cArr, p3);
 		expect(ref1).toEqual([1]);
 		// Distinct evaluations per arena: three distinct references.
 		expect(ref1 === ref2).toBe(false);
@@ -232,8 +232,8 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 		commitWrite(b, y, 1);
 		expect(b.committedValue(cArr, 'R1')).toBe(ref1);
 		expect(b.committedValue(cArr, 'R2')).toBe(ref2);
-		expect(b.passValue(cArr, p3)).toBe(ref3); // the pin kept y=0; the pass serves its own cached reference
-		b.passEnd(p3.id, 'discard');
+		expect(b.renderValue(cArr, p3)).toBe(ref3); // the pin kept y=0; the render serves its own cached reference
+		b.renderEnd(p3.id, 'discard');
 		// A REAL change moves every committed world to a fresh reference.
 		commitWrite(b, x, 9);
 		const next1 = b.committedValue(cArr, 'R1');
@@ -287,15 +287,15 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.adoptAtom('bb', bb);
 		const nC = b.adoptComputed('c', c as Computed<unknown>);
 
-		// Two worlds with DIFFERENT flag values (the dep flip): w1 = the pass
+		// Two worlds with DIFFERENT flag values (the dep flip): w1 = the render
 		// world of a live batch writing flag=false; w2 = the committed world
 		// of root R2 (flag=true — the batch is not committed there).
 		const t1 = b.openBatch();
 		b.write(t1.id, nFlag, 0, false); // NEWEST sees it eagerly (unlike the spike's world-LOCAL override)
 		expect(seen[seen.length - 1]).toBe(21); // kernel effect heard the eager apply: flag=false → bb → 21
-		const p1 = b.passStart('R1', [t1.id]);
+		const p1 = b.renderStart('R1', [t1.id]);
 		b.root('R2'); // materialize the committed arena
-		expect(b.passValue(nC, p1)).toBe(21); // w1: flag=false → bb=20 → 21 (deps diverge per world)
+		expect(b.renderValue(nC, p1)).toBe(21); // w1: flag=false → bb=20 → 21 (deps diverge per world)
 		expect(b.committedValue(nC, 'R2')).toBe(11); // w2: t1 uncommitted → flag=true → a=10 → 11
 
 		// DELIVERY mid-schedule: a committed write while both worlds hold live
@@ -306,7 +306,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.retire(t2.id);
 		expect(seen).toEqual([11, 21]); // no newest re-run: a is off m's newest dep set (the ruling's tracked-only rule)
 		expect(b.committedValue(nC, 'R2')).toBe(101); // w2: flag=true (no t1) → a=100 → 101
-		expect(b.passValue(nC, p1)).toBe(21); // pin: the paused render never drifts
+		expect(b.renderValue(nC, p1)).toBe(21); // pin: the paused render never drifts
 
 		// Kernel propagation INSIDE a world evaluation (the spike's mid-walk
 		// interleave): a computed whose getter writes an UNREGISTERED kernel
@@ -323,7 +323,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 			return v;
 		});
 		const nNoisy = b.adoptComputed('noisy', noisy as Computed<unknown>);
-		expect(b.passValue(nNoisy, p1)).toBe(20); // w1: flag=false → bb
+		expect(b.renderValue(nNoisy, p1)).toBe(20); // w1: flag=false → bb
 		expect(pokerSeen[pokerSeen.length - 1]).toBe(20); // the mid-eval write flushed
 		expect(b.committedValue(nNoisy, 'R2')).toBe(100); // w2: flag=true → a=100
 		expect(pokerSeen[pokerSeen.length - 1]).toBe(100); // …and its mid-eval write flushed too
@@ -335,7 +335,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.retire(t3.id);
 		expect(seen[seen.length - 1]).toBe(21); // newest: m → {flag, bb} (re-tracked at the earlier flip)
 		expect(b.committedValue(nC, 'R2')).toBe(21); // w2 folds the retired flip: flag=false → bb → 21
-		expect(b.passValue(nC, p1)).toBe(21);
+		expect(b.renderValue(nC, p1)).toBe(21);
 
 		// DISPOSAL: the NF2 hang site — the kernel's unwatched cascade
 		// (disposeAllDepsInReverse) runs while the arenas still hold m/c
@@ -350,8 +350,8 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.retire(t4.id);
 		expect(c.state).toBe(8); // kernel fully functional after dispose (lazy re-eval)
 		expect(b.committedValue(nC, 'R2')).toBe(8); // worlds correct after the cascade
-		expect(b.passValue(nC, p1)).toBe(21); // the pinned pass STILL never drifts
-		b.passEnd(p1.id, 'discard');
+		expect(b.renderValue(nC, p1)).toBe(21); // the pinned render STILL never drifts
+		b.renderEnd(p1.id, 'discard');
 		b.retire(t1.id);
 		// Zero-world sync semantics intact after everything.
 		const t5 = b.openBatch();

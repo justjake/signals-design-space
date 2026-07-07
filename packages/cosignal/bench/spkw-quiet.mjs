@@ -1,6 +1,6 @@
 // Measures the QUIET-MODE write price (Phase 1b): the bridge is registered
 // and the written atom is REGISTERED, but nothing is pending — no batches,
-// no passes — so every public `a.set(i)` takes the quiet fold (committed
+// no renders — so every public `a.set(i)` takes the quiet fold (committed
 // base + kernel advance together; no receipt/batch/walk/event). Same graph
 // shapes and protocol as spkw-direct.mjs; compare per-write ns against it.
 import { Atom, Computed, effect, registerReactBridge, __coreProbes } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';

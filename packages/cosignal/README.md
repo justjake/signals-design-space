@@ -220,17 +220,17 @@ could implement the same contract. A host driver's responsibilities:
   that wants an abandoned batch's writes gone must undo them with new
   writes). A batch backing an asynchronous action can be parked — kept
   pending until the action's promise settles (`settleAction`).
-- **Render passes.** Report each speculative render: `passStart(root,
+- **Render passes.** Report each speculative render: `renderStart(root,
   includedBatches)` declares which batches the render may see (its view
   is frozen at start, so pausing and resuming never drifts);
-  `passYield`/`passResume` bracket interruptions; `passEnd(pass,
+  `renderYield`/`renderResume` bracket interruptions; `renderEnd(renderPass,
   'commit' | 'discard')` ends it with a disposition. At a commit the
-  engine snapshots committed state, folds the pass's batches into the
+  engine snapshots committed state, folds the render's batches into the
   root's committed view, and reconciles subscribers that mounted during
-  the pass against updates that were in flight but not included.
+  the render against updates that were in flight but not included.
 - **Per-root commits.** Each root (one independently rendered tree) has
   its own committed view and a commit generation (`root(id)`
-  materializes it). The engine advances them at `passEnd('commit')`; the
+  materializes it). The engine advances them at `renderEnd('commit')`; the
   host reconciles any commit its renderer reports beyond that
   (idempotent set-add into the root's committed-batch table).
 - **Write classification.** Install `bridge.writeClassifier` to
@@ -239,7 +239,7 @@ could implement the same contract. A host driver's responsibilities:
   whole operation (set / functional update / reducer action) and hand it
   over — and `setWorldProvider` to answer, per read, which world the
   current call context should resolve in (a rendering subscriber reads
-  its own pass's frozen world; everything else reads newest).
+  its own render's frozen world; everything else reads newest).
 - **Delivery scheduling.** Receive the engine's re-render decisions
   through direct callbacks — `onDelivery` (a batch's write reached a
   subscriber), `onMountCorrective` (a freshly mounted subscriber must
@@ -249,7 +249,7 @@ could implement the same contract. A host driver's responsibilities:
   together with its cause. Deliveries are value-blind: the engine
   decides who must re-render; the host only schedules.
 
-The remaining engine exports (`CosignalBridge`, the node/pass/token
+The remaining engine exports (`CosignalBridge`, the node/render-pass/token
 types, `BridgeScheduleError`, `BridgeInvariantViolation`) are that seam;
 applications normally touch only `registerReactBridge()`, indirectly,
 via `cosignal-react`.

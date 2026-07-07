@@ -6,7 +6,7 @@
  * step, so any divergence is caught at the exact step it appears.
  *
  * The comparable surface is deliberately the OBSERVABLE one:
- *   - values: read(node, world) for the newest world, every open pass world,
+ *   - values: read(node, world) for the newest world, every open render world,
  *     and committed-for-root(r) for every root;
  *   - deliveries: the value-blind decisions to schedule a watcher
  *     re-render, in order, with their {watcher, batch, slot} attribution;
@@ -43,8 +43,8 @@ export type ObservableSnapshot = {
 	/** node name → value, for newest and committed-per-root worlds. */
 	newest: Record<string, Value>;
 	committed: Record<string, Record<string, Value>>; // root → node → value
-	/** open pass id → node → value. */
-	passes: Record<string, Record<string, Value>>;
+	/** open render pass id → node → value. */
+	renderPasses: Record<string, Record<string, Value>>;
 };
 
 export type EngineAdapter = {
@@ -59,18 +59,18 @@ export type EngineAdapter = {
 export function snapshotModel(m: CosignalModel): ObservableSnapshot {
 	const newest: Record<string, Value> = {};
 	const committed: Record<string, Record<string, Value>> = {};
-	const passes: Record<string, Record<string, Value>> = {};
+	const renderPasses: Record<string, Record<string, Value>> = {};
 	for (const n of m.nodes.values()) newest[n.name] = m.newestValue(n);
 	for (const root of m.roots.keys()) {
 		committed[root] = {};
 		for (const n of m.nodes.values()) committed[root]![n.name] = m.committedValue(n, root);
 	}
-	for (const p of m.passes.values()) {
+	for (const p of m.idToRenderPass.values()) {
 		if (p.state === 'ended') continue;
-		passes[String(p.id)] = {};
-		for (const n of m.nodes.values()) passes[String(p.id)]![n.name] = m.passValue(n, p);
+		renderPasses[String(p.id)] = {};
+		for (const n of m.nodes.values()) renderPasses[String(p.id)]![n.name] = m.renderValue(n, p);
 	}
-	return { newest, committed, passes };
+	return { newest, committed, renderPasses };
 }
 
 export function comparableEvents(events: ModelEvent[]): ModelEvent[] {

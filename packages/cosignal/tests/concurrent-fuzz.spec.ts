@@ -3,7 +3,7 @@
  * (`cosignal-oracle`); the required outcome is zero diffs over the full
  * corpus. Identical seeded schedules replay into the engine and the model
  * side by side, comparing — after EVERY step — op legality, the full
- * observable snapshot (newest / committed-per-root / every open pass
+ * observable snapshot (newest / committed-per-root / every open render
  * world), and the comparable event stream (deliveries, suppressions,
  * corrections, commits, retirements, effect runs). Corpus: the reference
  * model's own CI scale (300 seeds × 80 steps) plus the 8 long episode-churn

@@ -6,7 +6,7 @@
  *
  * Watcher lifecycle, shared by the subscription hooks (a watcher is the
  * engine's record of one subscribed component instance): render mints (or
- * re-tracks) a watcher in the current pass's world, so the component reads
+ * re-tracks) a watcher in the current render's world, so the component reads
  * the view of the render it is part of; the layout effect claims the
  * subscription after commit (StrictMode's double-mount nets to one live
  * watcher via microtask-debounced unsubscription); the mount fixup — the
@@ -144,15 +144,15 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 	const rendering = shim.renderingRoot();
 	const bridge = shim.bridge;
 	let value: unknown;
-	if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
-		const pass = rendering.pass;
+	if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
+		const render = rendering.renderPass;
 		rec.root = rendering.id;
 		const w = rec.watcherId === undefined ? undefined : bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
-			// Mount: mint the watcher in this pass's world; the value it renders
+			// Mount: mint the watcher in this render's world; the value it renders
 			// is captured so the commit-edge fixup can compare against it.
 			value = shim.hookRead(() => {
-				const minted = bridge.mountWatcher(pass.id, node, 'w?');
+				const minted = bridge.mountWatcher(render.id, node, 'w?');
 				minted.name = `w${minted.id}`;
 				rec.watcherId = minted.id;
 				shim.targets.set(minted.id, rec.target);
@@ -160,21 +160,21 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 				return minted.lastRenderedValue;
 			});
 		} else if (w.live) {
-			// Re-render: re-arm the watcher's delivery dedup and read this pass's world.
-			bridge.renderWatcher(pass.id, w.id);
-			value = shim.hookRead(() => bridge.passValue(node, pass));
+			// Re-render: re-arm the watcher's delivery dedup and read this render's world.
+			bridge.renderWatcher(render.id, w.id);
+			value = shim.hookRead(() => bridge.renderValue(node, render));
 		} else {
 			// Reveal-shaped re-render (previously hidden content shown again, e.g.
-			// React Activity/Offscreen): adopt the dormant watcher into this pass
+			// React Activity/Offscreen): adopt the dormant watcher into this render
 			// so the commit-edge mount fixup reconciles it — against batches this
 			// render did not include, and against committed state — as if it were
 			// a fresh mount.
-			bridge.adoptMount(pass.id, w.id);
+			bridge.adoptMount(render.id, w.id);
 			shim.noteMinted(rendering, w.id);
-			value = shim.hookRead(() => bridge.passValue(node, pass));
+			value = shim.hookRead(() => bridge.renderValue(node, render));
 		}
 	} else {
-		// Render outside a tracked pass (defensive): unrouted newest read.
+		// Render outside a tracked render pass (defensive): unrouted newest read.
 		value = shim.hookRead(() => bridge.newestValue(node));
 	}
 	rec.lastValue = value;

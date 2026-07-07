@@ -1,6 +1,6 @@
 // Quiet side of the residual measurement: registerReactBridge() has swapped
 // in the logged build's read/write wrappers and one registered decoy
-// atom + computed exist, but no batches, passes, or receipts are live during
+// atom + computed exist, but no batches, render passes, or receipts are live during
 // measurement. The hot loops run on UNREGISTERED plain signals through the
 // armed wrappers — the cost an app pays for merely loading the concurrent
 // engine. Same injected shape code as the base-build child.

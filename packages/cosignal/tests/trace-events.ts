@@ -11,7 +11,7 @@
  * The mapping is the exact inverse of the engine sites' packing, minus
  * trace-only enrichments (a write's op, a suppression's reason, a
  * root-commit's generation) and minus trace-only kinds (batch open/settle,
- * pass start/yield/resume/end, evals, mount-fixup dispositions, deferred
+ * render start/yield/resume/end, evals, mount-fixup dispositions, deferred
  * releases, clock-sync, truncation): the decoded stream contains exactly the
  * BridgeEvent vocabulary, in mint order, with the FIELD ORDER the reference
  * model's own event literals use — the twin and the oracle differ compare
@@ -85,10 +85,10 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 			return { type: 'slot-released', slot: d['slot'] as number, batch: d['batch'] as number };
 		case 'slot-backstop-release':
 			return { type: 'slot-backstop-released', slot: d['slot'] as number, batch: d['batch'] as number };
-		case 'pass-committed':
-			return { type: 'pass-committed', pass: d['pass'] as number, root: d['root'] as string };
-		case 'pass-discarded':
-			return { type: 'pass-discarded', pass: d['pass'] as number, root: d['root'] as string };
+		case 'render-committed':
+			return { type: 'render-committed', renderPass: d['renderPass'] as number, root: d['root'] as string };
+		case 'render-discarded':
+			return { type: 'render-discarded', renderPass: d['renderPass'] as number, root: d['root'] as string };
 		case 'epoch-reset':
 			return { type: 'epoch-reset', epoch: d['epoch'] as number };
 		// trace-only kinds: no BridgeEvent counterpart ('batch-disposition' is
@@ -98,10 +98,10 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 		case 'batch-settle':
 		case 'batch-disposition':
 		case 'slot-release-deferred':
-		case 'pass-start':
-		case 'pass-yield':
-		case 'pass-resume':
-		case 'pass-end':
+		case 'render-start':
+		case 'render-yield':
+		case 'render-resume':
+		case 'render-end':
 		case 'eval':
 		case 'mount-fixup':
 		case 'clock-sync':

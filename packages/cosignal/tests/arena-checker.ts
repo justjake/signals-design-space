@@ -31,7 +31,7 @@ import {
 import { SuspendedRead } from '../src/index.js';
 
 /** One memoized naive outcome (thrown outcomes memoize and rethrow,
- * identity-stable — same payload object every consult within a pass). */
+ * identity-stable — same payload object every consult within a check). */
 type NaiveOutcome = { threw: boolean; v: Value };
 
 /** Per-bridge checker state, held OUTSIDE the engine. */
@@ -39,7 +39,7 @@ type CheckerState = {
 	readonly bridge: CosignalBridge;
 	readonly views: ArenaCheckerInternals;
 	/** Re-entry latch (one check at a time; a serve inside the check can
-	 * run user fns, and nothing they reach may start a nested pass). */
+	 * run user fns, and nothing they reach may start a nested check). */
 	checking: boolean;
 	/** Naive-evaluation stack for per-check cycle detection. */
 	readonly naiveStack: Set<NodeId>;

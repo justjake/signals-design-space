@@ -34,21 +34,21 @@ for (let i = 0; i < G; i++) {
 		computeds.push(b.computed(`c${i}`, (read) => { evals++; return Number(read(u)) + 1; }));
 	}
 }
-const setup = b.passStart('R', []);
+const setup = b.renderStart('R', []);
 const watcher = b.mountWatcher(setup.id, computeds[0], 'w0');
-b.passEnd(setup.id, 'commit');
+b.renderEnd(setup.id, 'commit');
 
 let v = 0;
 
 function repBurst() {
 	let held;
-	let heldPass;
+	let heldRender;
 	if (HELD) {
 		held = b.openBatch({ action: true });
 		b.write(held.id, query, 0, ++v);
-		heldPass = b.passStart('R', [held.id]);
-		b.renderWatcher(heldPass.id, watcher.id);
-		b.passYield(heldPass.id);
+		heldRender = b.renderStart('R', [held.id]);
+		b.renderWatcher(heldRender.id, watcher.id);
+		b.renderYield(heldRender.id);
 	}
 	evals = 0;
 	let writeNs = 0;
@@ -63,9 +63,9 @@ function repBurst() {
 	}
 	const evalsPerWrite = evals / (FRAMES * W);
 	const tapeLen = query.tp.length;
-	if (heldPass !== undefined) {
-		b.passResume(heldPass.id);
-		b.passEnd(heldPass.id, 'commit');
+	if (heldRender !== undefined) {
+		b.renderResume(heldRender.id);
+		b.renderEnd(heldRender.id, 'commit');
 	}
 	if (held !== undefined) b.settleAction(held.id);
 	return { writeNs: writeNs / (FRAMES * W), evalsPerWrite, tapeLen };
@@ -80,17 +80,17 @@ function repTypeahead() {
 	for (let k = 0; k < KEYS; k++) {
 		const t0 = process.hrtime.bigint();
 		b.write(T.id, query, 0, ++v);
-		if (open !== undefined) b.passEnd(open.id, 'discard'); // interruption: restart
-		open = b.passStart('R', [T.id]);
+		if (open !== undefined) b.renderEnd(open.id, 'discard'); // interruption: restart
+		open = b.renderStart('R', [T.id]);
 		b.renderWatcher(open.id, watcher.id);
-		b.passYield(open.id);
+		b.renderYield(open.id);
 		const t1 = process.hrtime.bigint();
 		keyNs += Number(t1 - t0);
 	}
 	const tapeLen = query.tp.length; // retention/prefix length before settle
 	const evalsPerKey = evals / KEYS;
-	b.passResume(open.id);
-	b.passEnd(open.id, 'commit');
+	b.renderResume(open.id);
+	b.renderEnd(open.id, 'commit');
 	b.settleAction(T.id);
 	const t1all = process.hrtime.bigint();
 	b.events.length = 0;

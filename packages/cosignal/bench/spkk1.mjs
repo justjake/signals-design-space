@@ -34,7 +34,7 @@ const out = {
 	'K1 edges/h': stat(g('k1EdgesPerHour'), 0),
 	'tape at end (receipts)': stat(g('tapeEnd'), 0),
 	'batch records/h': stat(g('batchesPerHour'), 0),
-	'pass records/h': stat(g('passesPerHour'), 0),
+	'render passes/h': stat(g('renderPassesPerHour'), 0),
 	'events/h (allocated either way)': stat(g('eventsPerHour'), 0),
 	'frames/s': stat(g('framesPerSec'), 0),
 	'RETAIN events MB/h (n=2)': stat(r?.byMetric.get('mbPerHour') ?? [NaN], 2),

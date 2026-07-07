@@ -5,14 +5,14 @@
  *
  *  - S-NF2-D1 (§4.4.5, three interleavings): the DEAD-ARENA retREAT,
  *    pinned with its documented degraded-but-value-correct outcomes. A
- *    discarded pass takes the only arena holding a branch's links with it;
+ *    discarded render takes the only arena holding a branch's links with it;
  *    a write in the gap reaches NO live arena and delivers NOTHING (HEAD's
  *    episode-union K1 would have scheduled the watcher in the writer's
  *    lane). The repair arrives at the next committed-truth motion via the
  *    drain — value-correct, lane-degraded. Any future silent worsening (or
  *    fix) diffs loudly here.
  *  - Routing coverage pins: M1's population schedule (§4.4.2 — the
- *    passEnd re-staled loop populates the committed arena BEFORE any
+ *    renderEnd re-staled loop populates the committed arena BEFORE any
  *    post-commit write needs routing) and the untracked-fan member
  *    (§4.4.1 — weak links never carry deliveries THROUGH the new walk;
  *    drains still reach through them).
@@ -36,9 +36,9 @@ function bridge(): CosignalBridge {
 
 /** Mount a live committed watcher on `node` via a clean commit. */
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
@@ -55,7 +55,7 @@ function correctionsTo(b: CosignalBridge, watcher: string) {
 }
 
 /** The D1 topology: committed truth shows the b-branch; a parked action
- * flips the discriminant only in its own (soon-discarded) pass world. */
+ * flips the discriminant only in its own (soon-discarded) render world. */
 function d1Topology(b: CosignalBridge) {
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 1);
@@ -65,7 +65,7 @@ function d1Topology(b: CosignalBridge) {
 }
 
 describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
-	it('D1-1 second-write-before-pass-restart: the pre-discard write delivers (pass arena route); the gap write delivers NOTHING — not even a suppression; value repairs at retirement', () => {
+	it('D1-1 second-write-before-render-restart: the pre-discard write delivers (render arena route); the gap write delivers NOTHING — not even a suppression; value repairs at retirement', () => {
 		const b = bridge();
 		const { flag, a, c } = d1Topology(b);
 		const w = mount(b, 'R', c, 'W'); // committed arena: {flag,b}→c
@@ -75,13 +75,13 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		b.write(T.id, flag, 0, 1); // delivered into T via committed flag→c
 		expect(deliveriesTo(b, 'W', T.id).length).toBe(1);
 
-		const pT = b.passStart('R', [T.id]);
-		b.passValue(c, pT); // T's pass evaluates the a-branch: ONLY pT's arena holds a→c
+		const pT = b.renderStart('R', [T.id]);
+		b.renderValue(c, pT); // T's render evaluates the a-branch: ONLY pT's arena holds a→c
 		const U = b.openBatch();
-		b.write(U.id, a, 0, 10); // pass arena alive: routed, fresh delivery
+		b.write(U.id, a, 0, 10); // render arena alive: routed, fresh delivery
 		expect(deliveriesTo(b, 'W', U.id).length).toBe(1);
 
-		b.passEnd(pT.id, 'discard'); // the arena — and the only a→c link — dies; T stays pending
+		b.renderEnd(pT.id, 'discard'); // the arena — and the only a→c link — dies; T stays pending
 		b.write(U.id, a, 0, 20); // THE GAP WRITE
 		// Documented degraded outcome: no live arena holds a→c, so the walk
 		// collects nothing — no delivery AND no suppression (HEAD's K1 union
@@ -92,11 +92,11 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		expect(suppressionsTo(b, 'W', U.id).length).toBe(0);
 		expect(correctionsTo(b, 'W').length).toBe(0);
 
-		// Pass restart + commit: T locks in (flag=1 committed), the render
+		// RenderPass restart + commit: T locks in (flag=1 committed), the render
 		// folds base a (U still pending) — committed truth agrees.
-		const p2 = b.passStart('R', [T.id]);
+		const p2 = b.renderStart('R', [T.id]);
 		b.renderWatcher(p2.id, w.id);
-		b.passEnd(p2.id, 'commit');
+		b.renderEnd(p2.id, 'commit');
 		expect(w.lastRenderedValue).toBe(1); // a-branch at base a
 		// U's retirement is the repair boundary: the drain corrects to 20.
 		b.retire(U.id);
@@ -113,9 +113,9 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 
 		const T = b.openBatch({ action: true });
 		b.write(T.id, flag, 0, 1);
-		const pT = b.passStart('R', [T.id]);
-		b.passValue(c, pT); // a-branch links live only here
-		b.passEnd(pT.id, 'discard');
+		const pT = b.renderStart('R', [T.id]);
+		b.renderValue(c, pT); // a-branch links live only here
+		b.renderEnd(pT.id, 'discard');
 
 		const U = b.openBatch();
 		b.write(U.id, a, 0, 10); // the gap write
@@ -141,9 +141,9 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 
 		const T = b.openBatch({ action: true });
 		b.write(T.id, flag, 0, 1);
-		const pT = b.passStart('R', [T.id]);
-		b.passValue(c, pT);
-		b.passEnd(pT.id, 'discard');
+		const pT = b.renderStart('R', [T.id]);
+		b.renderValue(c, pT);
+		b.renderEnd(pT.id, 'discard');
 
 		const U = b.openBatch();
 		b.write(U.id, a, 0, 10);

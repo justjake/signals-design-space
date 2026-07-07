@@ -13,7 +13,7 @@
  * replays the receipts a world may see, in timeline order, over the atom's
  * base value (README vocabulary); computeds are memo-free recursive
  * evaluation in a given world; the React host is simulated as explicit
- * batch/pass/retirement bookkeeping. Where the engine has optimizations
+ * batch/render/retirement bookkeeping. Where the engine has optimizations
  * (dirty marking, memo tables, fast paths) the model simply recomputes
  * everything, so any engine behavior those optimizations change is a bug
  * in the engine, not in the model.
@@ -24,7 +24,7 @@ export type NodeId = number;
 export type BatchId = number;
 export type BatchSlot = number;
 export type RootId = string;
-export type PassId = number;
+export type RenderPassId = number;
 export type WatcherId = number;
 export type EffectId = number;
 
@@ -106,7 +106,7 @@ export type ComputedNode = {
 	 * recorded dep's CURRENT sampled-newest value by identity, recursively
 	 * (the kernel's checkDirty shape). Consulted ONLY by `newestValue` (and
 	 * the newest-policy effect flush, which observes newest values): world
-	 * folds are UNCHANGED — pass/committed/mountFix evaluations refold at
+	 * folds are UNCHANGED — render/committed/mountFix evaluations refold at
 	 * their boundaries per the existing contract, so untracked deps stay
 	 * fresh in every world-side revalidation. Deliberately NOT cleared at
 	 * quiescence: the staleness is a property of the value contract, not of
@@ -148,32 +148,32 @@ export type BatchSlotMeta = {
 	claimSeq: number;
 	/** Write clock: seq of the slot's last write. Zeroed when a new tenant claims the slot. */
 	writeClock: number;
-	/** Retirement done but release deferred because an open pass's render mask names the slot. */
+	/** Retirement done but release deferred because an open render's render mask names the slot. */
 	releasePending: boolean;
 };
 
-export type PassState = 'open' | 'yielded' | 'ended';
+export type RenderPassState = 'open' | 'yielded' | 'ended';
 
-export type Pass = {
-	id: PassId;
+export type RenderPass = {
+	id: RenderPassId;
 	root: RootId;
 	/**
-	 * The pin: the global sequence position frozen at pass start and observed
+	 * The pin: the global sequence position frozen at render start and observed
 	 * forever, across yields — a paused-and-resumed render must never see a
 	 * write that landed during the pause (that would be a tear inside one render).
 	 */
 	pin: number;
-	/** Render mask: the live batches this pass renders, captured at pass start. */
+	/** Render mask: the live batches this render renders, captured at render start. */
 	maskBatches: Set<BatchId>;
 	maskSlots: Set<BatchSlot>;
-	/** The root's committed-batch slot set, snapshotted at pass start. */
+	/** The root's committed-batch slot set, snapshotted at render start. */
 	capturedCommittedSlots: Set<BatchSlot>;
-	state: PassState;
+	state: RenderPassState;
 	endKind: 'commit' | 'discard' | undefined;
-	/** Watchers first mounted by this pass (they subscribe + reconcile at its commit).
+	/** Watchers first mounted by this render (they subscribe + reconcile at its commit).
 	 * Disjoint from `rendered`. */
 	mounted: WatcherId[];
-	/** Existing watchers re-rendered by this pass (lastRenderedValue updates at
+	/** Existing watchers re-rendered by this render (lastRenderedValue updates at
 	 * commit only) — re-renders ONLY, disjoint from `mounted`. */
 	rendered: Set<WatcherId>;
 };
@@ -188,7 +188,7 @@ export type RootState = {
 
 /** The watcher's rendered-world snapshot: what its last committed render was allowed to see. */
 export type WatcherSnapshot = {
-	passId: PassId;
+	renderPassId: RenderPassId;
 	pin: number;
 	maskSlots: Set<BatchSlot>;
 	includedSlots: Set<BatchSlot>;
@@ -200,7 +200,7 @@ export type Watcher = {
 	name: string;
 	root: RootId;
 	node: NodeId;
-	/** Subscribed at its mounting pass's commit (React: in the layout phase, before paint). */
+	/** Subscribed at its mounting render's commit (React: in the layout phase, before paint). */
 	live: boolean;
 	lastRenderedValue: Value;
 	snapshot: WatcherSnapshot;
@@ -249,7 +249,7 @@ export type CoreEffect = {
 /** A world: one self-consistent assignment of values to all atoms. */
 export type World =
 	| { kind: 'newest' }
-	| { kind: 'pass'; pass: Pass }
+	| { kind: 'render'; render: RenderPass }
 	| { kind: 'committed'; root: RootId }
 	/**
 	 * The mount reconciliation's fast-forwarded world: the mounting render's
@@ -279,8 +279,8 @@ export type ModelEvent =
 	| { type: 'slot-claimed'; slot: BatchSlot; batch: BatchId }
 	| { type: 'slot-released'; slot: BatchSlot; batch: BatchId }
 	| { type: 'slot-backstop-released'; slot: BatchSlot; batch: BatchId }
-	| { type: 'pass-committed'; pass: PassId; root: RootId }
-	| { type: 'pass-discarded'; pass: PassId; root: RootId }
+	| { type: 'render-committed'; renderPass: RenderPassId; root: RootId }
+	| { type: 'render-discarded'; renderPass: RenderPassId; root: RootId }
 	| { type: 'epoch-reset'; epoch: number };
 
 /** An op the schedule proposed that is illegal in the current state (generator skips these). */
@@ -292,13 +292,13 @@ const SLOT_COUNT = 31; // At most 31 live batches — one per React priority lan
 
 /**
  * What the visibility rule reads from its host: the two set-valued lookups
- * the pass and committed clauses are defined over. `CosignalModel` is its
+ * the render and committed clauses are defined over. `CosignalModel` is its
  * own host (its `visible` method); an engine-side adapter that answers the
  * same two lookups can host the rule too, instead of restating it.
  */
 export type VisibilityHost = {
-	/** The pass's included set: the batches it renders plus the root's committed set at its start. */
-	includedSet(pass: Pass): Set<BatchSlot>;
+	/** The render's included set: the batches it renders plus the root's committed set at its start. */
+	includedSet(render: RenderPass): Set<BatchSlot>;
 	/** The root's CURRENT committed-slot set (live committed batches' slots). */
 	committedSlotsNow(root: RootId): Set<BatchSlot>;
 };
@@ -306,10 +306,10 @@ export type VisibilityHost = {
 /**
  * THE visibility rule: which receipts each kind of world replays.
  *
- * - Pass world, two clauses: (1) receipts whose batch retired at or
- *   before the pass's pin — already permanent history when the render
+ * - RenderPass world, two clauses: (1) receipts whose batch retired at or
+ *   before the render's pin — already permanent history when the render
  *   started; (2) receipts of included batches (rendered or already
- *   committed into the root at pass start), up to the pin. The pin cap
+ *   committed into the root at render start), up to the pin. The pin cap
  *   is what keeps a paused-and-resumed render from drifting.
  * - Committed-for-root: every retired receipt, plus receipts of batches
  *   currently committed into the root (membership) — a root must keep
@@ -328,8 +328,8 @@ export function visible(host: VisibilityHost, e: Receipt, world: World): boolean
 	switch (world.kind) {
 		case 'newest':
 			return true;
-		case 'pass': {
-			const w = world.pass;
+		case 'render': {
+			const w = world.render;
 			if (e.retiredSeq !== undefined && e.retiredSeq <= w.pin) return true; // clause 1: retired by my pin
 			return host.includedSet(w).has(e.slot) && e.seq <= w.pin; // clause 2: included, up to my pin
 		}
@@ -349,7 +349,7 @@ export class CosignalModel {
 	nodes = new Map<NodeId, AnyNode>();
 	idToBatch = new Map<BatchId, Batch>();
 	slots: BatchSlotMeta[] = [];
-	passes = new Map<PassId, Pass>();
+	idToRenderPass = new Map<RenderPassId, RenderPass>();
 	roots = new Map<RootId, RootState>();
 	watchers = new Map<WatcherId, Watcher>();
 	reactEffects = new Map<EffectId, ReactEffect>();
@@ -381,7 +381,7 @@ export class CosignalModel {
 
 	private nextNode = 1;
 	private nextBatchId = 1;
-	private nextPass = 1;
+	private nextRenderPassId = 1;
 	private nextWatcher = 1;
 	private nextEffect = 1;
 	/** Core-effect mount ordinal, appended to minted names (`#k`) so every
@@ -456,9 +456,9 @@ export class CosignalModel {
 
 	// ---------------------------------------------------- worlds and folds
 
-	/** The pass's included set: the batches it renders plus the root's committed set at its start. */
-	includedSet(pass: Pass): Set<BatchSlot> {
-		return new Set([...pass.maskSlots, ...pass.capturedCommittedSlots]);
+	/** The render's included set: the batches it renders plus the root's committed set at its start. */
+	includedSet(render: RenderPass): Set<BatchSlot> {
+		return new Set([...render.maskSlots, ...render.capturedCommittedSlots]);
 	}
 
 	/** The root's CURRENT committed-slot set (live committed batches' slots; retired batches' rows are cleared). */
@@ -582,8 +582,8 @@ export class CosignalModel {
 	 */
 	private refreshEdgesAllWorlds(): void {
 		const worlds: World[] = [{ kind: 'newest' }];
-		for (const p of this.passes.values()) {
-			if (p.state !== 'ended') worlds.push({ kind: 'pass', pass: p });
+		for (const p of this.idToRenderPass.values()) {
+			if (p.state !== 'ended') worlds.push({ kind: 'render', render: p });
 		}
 		for (const r of this.roots.keys()) worlds.push({ kind: 'committed', root: r });
 		for (const n of this.nodes.values()) {
@@ -616,7 +616,7 @@ export class CosignalModel {
 
 	livePins(): number[] {
 		const pins: number[] = [];
-		for (const p of this.passes.values()) if (p.state !== 'ended') pins.push(p.pin);
+		for (const p of this.idToRenderPass.values()) if (p.state !== 'ended') pins.push(p.pin);
 		return pins;
 	}
 
@@ -715,7 +715,7 @@ export class CosignalModel {
 	/**
 	 * The quiet state, derived on demand (the model recomputes everything;
 	 * the engine keeps the same four-condition derivation as a recomputed
-	 * boolean): registered AND zero live batches AND zero open passes AND
+	 * boolean): registered AND zero live batches AND zero open renders AND
 	 * every tape compacted. While quiet, a bare write is one direct fold —
 	 * see quietWrite.
 	 */
@@ -775,7 +775,7 @@ export class CosignalModel {
 			}
 		}
 		// EF2 boundary: a quiet fold moves committed truth for every root
-		// (quiet ⇔ no open passes, so no frame can defer the re-check).
+		// (quiet ⇔ no open renders, so no frame can defer the re-check).
 		this.revalidateReactEffects();
 	}
 
@@ -875,11 +875,11 @@ export class CosignalModel {
 			this.log({ type: 'delivery', watcher: w.name, batch: batch.id, slot: slot.id, seq, mode: 'fresh' });
 			return;
 		}
-		// Bit already set: suppress iff NO started-and-uncommitted pass on W's
+		// Bit already set: suppress iff NO started-and-uncommitted render on W's
 		// root renders this slot with a pin below the write's sequence — such
-		// a pass has already read past the write and will not fold it.
+		// a render has already read past the write and will not fold it.
 		let mustDeliver = false;
-		for (const p of this.passes.values()) {
+		for (const p of this.idToRenderPass.values()) {
 			if (p.state === 'ended') continue; // "open" includes yielded and completed-but-uncommitted
 			if (p.root !== w.root) continue;
 			if (p.maskSlots.has(slot.id) && p.pin < seq) {
@@ -915,19 +915,19 @@ export class CosignalModel {
 		}
 	}
 
-	// ------------------------------------------------------ pass lifecycle
+	// ------------------------------------------------------ render lifecycle
 
 	/**
 	 * Open a render pass: the pin freezes at start, the render mask is
 	 * captured from live batches, and the root's committed set is
-	 * snapshotted. One work-in-progress pass per root — a same-root restart
-	 * is a NEW pass at a fresh pin, which is how React picks up interleaved
+	 * snapshotted. One work-in-progress render per root — a same-root restart
+	 * is a NEW render at a fresh pin, which is how React picks up interleaved
 	 * writes it could not fold mid-render.
 	 */
-	passStart(rootId: RootId, includeBatches: BatchId[]): Pass {
-		for (const p of this.passes.values()) {
+	renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass {
+		for (const p of this.idToRenderPass.values()) {
 			if (p.state !== 'ended' && p.root === rootId) {
-				throw new ScheduleError(`root ${rootId} already has an open pass — one render pass per root at a time`);
+				throw new ScheduleError(`root ${rootId} already has an open render — one render pass per root at a time`);
 			}
 		}
 		const maskBatches = new Set<BatchId>();
@@ -938,52 +938,52 @@ export class CosignalModel {
 			maskBatches.add(id);
 			// A live batch with no slot never wrote; its later receipts postdate the
 			// pin and are excluded by the pin cap anyway (claims are sequenced, so
-			// any future slot's writes sit above this pass's pin).
+			// any future slot's writes sit above this render's pin).
 			if (t.slot !== undefined) maskSlots.add(t.slot);
 		}
-		const pass: Pass = {
-			id: this.nextPass++, root: rootId, pin: this.seq,
+		const render: RenderPass = {
+			id: this.nextRenderPassId++, root: rootId, pin: this.seq,
 			maskBatches, maskSlots,
 			capturedCommittedSlots: this.committedSlotsNow(rootId),
 			state: 'open', endKind: undefined, mounted: [], rendered: new Set(),
 		};
-		this.passes.set(pass.id, pass);
-		return pass;
+		this.idToRenderPass.set(render.id, render);
+		return render;
 	}
 
-	private pass(id: PassId): Pass {
-		return this.mustGet(this.passes, id, 'pass');
+	private renderPassById(id: RenderPassId): RenderPass {
+		return this.mustGet(this.idToRenderPass, id, 'render pass');
 	}
 
 	/**
-	 * Yield/resume edges of a pass. Code running in the gap (event handlers,
+	 * Yield/resume edges of a render. Code running in the gap (event handlers,
 	 * timers) is NOT "in render" — being in render is a property of the call
-	 * stack, not of wall-clock time between a pass's slices — so gap code
+	 * stack, not of wall-clock time between a render's slices — so gap code
 	 * reads the newest world and may write freely into its own batches.
 	 */
-	passYield(id: PassId): void {
-		const p = this.pass(id);
-		if (p.state !== 'open') throw new ScheduleError('yield requires an open (running) pass');
+	renderYield(id: RenderPassId): void {
+		const p = this.renderPassById(id);
+		if (p.state !== 'open') throw new ScheduleError('yield requires an open (running) render');
 		p.state = 'yielded';
 	}
 
-	passResume(id: PassId): void {
-		const p = this.pass(id);
-		if (p.state !== 'yielded') throw new ScheduleError('resume requires a yielded pass');
+	renderResume(id: RenderPassId): void {
+		const p = this.renderPassById(id);
+		if (p.state !== 'yielded') throw new ScheduleError('resume requires a yielded render');
 		p.state = 'open';
 	}
 
-	/** Mount a new watcher inside an open pass; its first render reads the pass's world. */
-	mountWatcher(passId: PassId, node: AnyNode, name: string): Watcher {
-		const p = this.pass(passId);
-		if (p.state === 'ended') throw new ScheduleError('mount requires an open pass');
-		const value = this.evaluate(node, { kind: 'pass', pass: p });
+	/** Mount a new watcher inside an open render; its first render reads the render's world. */
+	mountWatcher(renderPassId: RenderPassId, node: AnyNode, name: string): Watcher {
+		const p = this.renderPassById(renderPassId);
+		if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
+		const value = this.evaluate(node, { kind: 'render', render: p });
 		const watcher: Watcher = {
 			id: this.nextWatcher++, name, root: p.root, node: node.id,
-			live: false, // subscribes at layout, i.e. at this pass's commit
+			live: false, // subscribes at layout, i.e. at this render's commit
 			lastRenderedValue: value,
 			snapshot: {
-				passId: p.id, pin: p.pin,
+				renderPassId: p.id, pin: p.pin,
 				maskSlots: new Set(p.maskSlots),
 				includedSlots: this.includedSet(p),
 				rootCommitGen: this.root(p.root).commitGen,
@@ -998,37 +998,37 @@ export class CosignalModel {
 	/**
 	 * Reveal-shaped mounts (React Offscreen/Activity: a subtree is
 	 * pre-rendered hidden, then revealed later): a watcher rendered by an
-	 * older pass whose layout effects fire inside a DIFFERENT pass's commit.
+	 * older render whose layout effects fire inside a DIFFERENT render's commit.
 	 * The adopting commit runs the reconciliation; the watcher's snapshot
-	 * keeps its original rendered world, so the fast path's same-pass
+	 * keeps its original rendered world, so the fast path's same-render
 	 * condition fails and the conservative comparison runs — which is the
 	 * point, since arbitrary time passed between render and reveal.
 	 */
-	/** The hidden half of a reveal: the mounting pass commits but the watcher's
+	/** The hidden half of a reveal: the mounting render commits but the watcher's
 	 * layout effects (subscribe + reconcile) defer — an Offscreen/Activity subtree. */
 	deferMount(watcherId: WatcherId): void {
-		for (const p of this.passes.values()) {
+		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId);
 			if (i >= 0) p.mounted.splice(i, 1);
 		}
 	}
 
-	adoptMount(passId: PassId, watcherId: WatcherId): void {
-		const adopter = this.pass(passId);
-		if (adopter.state === 'ended') throw new ScheduleError('adopting pass must be open');
+	adoptMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
+		const adopter = this.renderPassById(renderPassId);
+		if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open');
 		const w = this.mustGet(this.watchers, watcherId, 'watcher');
 		if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root');
-		for (const p of this.passes.values()) {
+		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId);
 			if (i >= 0) p.mounted.splice(i, 1);
 		}
 		adopter.mounted.push(watcherId);
 	}
 
-	/** An existing live watcher re-rendered by a pass: its dedup bits re-arm at render. */
-	renderWatcher(passId: PassId, watcherId: WatcherId): void {
-		const p = this.pass(passId);
-		if (p.state === 'ended') throw new ScheduleError('render requires an open pass');
+	/** An existing live watcher re-rendered by a render: its dedup bits re-arm at render. */
+	renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
+		const p = this.renderPassById(renderPassId);
+		if (p.state === 'ended') throw new ScheduleError('render requires an open render');
 		const w = this.watchers.get(watcherId);
 		if (w === undefined || !w.live) throw new ScheduleError('render targets a live watcher');
 		if (w.root !== p.root) throw new ScheduleError('watcher belongs to another root');
@@ -1075,12 +1075,12 @@ export class CosignalModel {
 
 	/** StrictMode-style replay: cleanup + unconditional re-run (not value-
 	 * gated), recapturing deps. Illegal while the effect's root has an open
-	 * pass frame (React double-invokes effects post-commit, never mid-render). */
+	 * render frame (React double-invokes effects post-commit, never mid-render). */
 	replayReactEffect(id: EffectId): void {
 		const e = this.mustGet(this.reactEffects, id, 'react effect');
-		for (const p of this.passes.values()) {
+		for (const p of this.idToRenderPass.values()) {
 			if (p.state !== 'ended' && p.root === e.root) {
-				throw new ScheduleError('replay requires the effect root to have no open pass frame');
+				throw new ScheduleError('replay requires the effect root to have no open render frame');
 			}
 		}
 		this.runReactEffect(e);
@@ -1121,9 +1121,9 @@ export class CosignalModel {
 
 	/**
 	 * The EF2 boundary re-check: once per boundary OPERATION (never per
-	 * locked-in batch — one pass committing two batches re-checks once, at
+	 * locked-in batch — one render committing two batches re-checks once, at
 	 * the boundary value), value-gated over each effect's dep snapshot,
-	 * SKIPPING effects whose root has an open pass frame (an effect never
+	 * SKIPPING effects whose root has an open render frame (an effect never
 	 * runs ahead of its own root's screen; the deferred flip flushes when
 	 * that frame closes). Runs at the END of the boundary operation.
 	 */
@@ -1131,7 +1131,7 @@ export class CosignalModel {
 		for (const e of [...this.reactEffects.values()]) {
 			if (rootFilter !== undefined && e.root !== rootFilter) continue;
 			let open = false;
-			for (const p of this.passes.values()) {
+			for (const p of this.idToRenderPass.values()) {
 				if (p.state !== 'ended' && p.root === e.root) { open = true; break; }
 			}
 			if (open) continue; // deferred to the frame's close
@@ -1161,109 +1161,109 @@ export class CosignalModel {
 	}
 
 	/**
-	 * End a pass. The commit order is normative: (1) baseline capture (the
+	 * End a render. The commit order is normative: (1) baseline capture (the
 	 * committed-side counters the mount fast path compares against),
 	 * (2) retirements due at this commit + the per-root commit table update,
 	 * (3) notification of committed-state observers, (4) layout (newly
-	 * mounted watchers subscribe, then reconcile). On discard, pass-owned
+	 * mounted watchers subscribe, then reconcile). On discard, render-owned
 	 * mounts die with the discarded tree. Deferred slot releases re-evaluate
-	 * at EVERY pass end, commit and discard alike — the pass that retained
+	 * at EVERY render end, commit and discard alike — the render that retained
 	 * them is what just ended.
 	 */
-	passEnd(id: PassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
-		const p = this.pass(id);
-		if (p.state === 'ended') throw new ScheduleError('pass already ended');
+	renderEnd(id: RenderPassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
+		const render = this.renderPassById(id);
+		if (render.state === 'ended') throw new ScheduleError('render already ended');
 		if (kind === 'commit') {
 			for (const tid of opts?.retireAtCommit ?? []) {
 				const t = this.batchById(tid); // throws on unknown ids before any mutation
-				if (!p.maskBatches.has(tid)) {
-					throw new ScheduleError(`batch ${tid} is not rendered by pass ${p.id}; its retirement cannot be due at this commit`);
+				if (!render.maskBatches.has(tid)) {
+					throw new ScheduleError(`batch ${tid} is not rendered by render pass ${render.id}; its retirement cannot be due at this commit`);
 				}
 				if (t.state !== 'live' || t.parked) {
 					throw new ScheduleError(`batch ${tid} cannot retire at this commit (already retired, or parked)`);
 				}
 			}
 		}
-		p.state = 'ended';
-		p.endKind = kind;
+		render.state = 'ended';
+		render.endKind = kind;
 		if (kind === 'discard') {
-			for (const wid of p.mounted) this.watchers.delete(wid); // never subscribed; the tree died
-			this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
+			for (const wid of render.mounted) this.watchers.delete(wid); // never subscribed; the tree died
+			this.log({ type: 'render-discarded', renderPass: render.id, root: render.root });
 			this.reevaluateDeferredReleases();
 			// EF2: the frame close is the deferred flush point for boundaries
 			// that occurred while this root's frame was open (committed truth
 			// may already have moved via member writes / retirements the open
 			// frame deferred) — the discard itself advances nothing.
-			this.revalidateReactEffects(p.root);
+			this.revalidateReactEffects(render.root);
 			return;
 		}
 		// (1) Baseline capture at the commit's committed-side entry: the mount
 		// fast path later asks "did committed truth move after my pin?" against
 		// exactly these values.
-		const baseline = { cas: this.cas, rootCommitGen: this.root(p.root).commitGen };
-		// The committing tree's content: re-rendered watchers take this pass's
+		const baseline = { cas: this.cas, rootCommitGen: this.root(render.root).commitGen };
+		// The committing tree's content: re-rendered watchers take this render's
 		// world values NOW — a watcher's "last rendered value" updates only at
 		// committed renders, and it is the comparand every later
 		// committed-truth reconciliation checks against.
-		for (const wid of p.rendered) {
+		for (const wid of render.rendered) {
 			const w = this.watchers.get(wid);
-			if (w === undefined) continue; // removed mid-pass
-			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'pass', pass: p });
+			if (w === undefined) continue; // removed mid-render
+			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'render', render });
 			w.snapshot = {
-				passId: p.id, pin: p.pin, maskSlots: new Set(p.maskSlots),
-				includedSlots: this.includedSet(p), rootCommitGen: this.root(p.root).commitGen,
+				renderPassId: render.id, pin: render.pin, maskSlots: new Set(render.maskSlots),
+				includedSlots: this.includedSet(render), rootCommitGen: this.root(render.root).commitGen,
 			};
 		}
 		// (2) Retirements due at this commit; then the per-root commit
 		// (lock-in) of every still-live rendered batch. A retirement is "due
-		// at this commit" only for batches this pass rendered (validated
+		// at this commit" only for batches this render rendered (validated
 		// above): a foreign batch retires at its own closure, never inside
-		// another pass's commit — folding it here would land AFTER this
+		// another render's commit — folding it here would land AFTER this
 		// commit's baseline capture and silently break the mount fast path's
 		// accounting (see tests/FLAGS.md, the legality rule under flag 5).
 		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.batchById(tid));
-		for (const tid of p.maskBatches) {
+		for (const tid of render.maskBatches) {
 			const t = this.batchById(tid);
 			if (t.state !== 'live') continue; // fully retired above (or earlier): the retired clause subsumes membership
-			const root = this.root(p.root);
+			const root = this.root(render.root);
 			if (!root.committedBatches.has(tid)) {
 				root.committedBatches.add(tid);
 				root.commitGen++;
 				this.cas = this.mintSeq(); // committed-advance: every per-root commit moves committed truth
-				this.log({ type: 'per-root-commit', root: p.root, batch: tid });
+				this.log({ type: 'per-root-commit', root: render.root, batch: tid });
 				// (3) Committed truth moved: reconcile this root's committed observers now.
-				this.drainCommittedObservers(p.root, 'per-root-commit');
+				this.drainCommittedObservers(render.root, 'per-root-commit');
 			}
 		}
 		// (4) Layout: newly mounted watchers subscribe, then reconcile — before paint.
-		for (const wid of p.mounted) {
+		for (const wid of render.mounted) {
 			const w = this.watchers.get(wid);
 			if (w === undefined) continue;
 			w.live = true;
-			this.mountFixup(w, p, baseline);
+			this.mountFixup(w, render, baseline);
 		}
-		this.log({ type: 'pass-committed', pass: p.id, root: p.root });
+		this.log({ type: 'render-committed', renderPass: render.id, root: render.root });
 		this.reevaluateDeferredReleases();
 		// EF2 boundary: ONE effect re-check per commit operation, at the
-		// boundary value — a pass locking in two batches re-checks once, not
+		// boundary value — a render locking in two batches re-checks once, not
 		// per batch (amendment 4's dedup rule). With retirements folded into
 		// this commit, committed truth moved for every root, so the scan
 		// widens to all roots (each still open-frame-deferred individually).
-		this.revalidateReactEffects((opts?.retireAtCommit ?? []).length > 0 ? undefined : p.root);
+		this.revalidateReactEffects((opts?.retireAtCommit ?? []).length > 0 ? undefined : render.root);
 	}
 
-	/** A deferred slot release re-evaluates at every pass end, commit and discard alike. */
+	/** A deferred slot release re-evaluates at every render end, commit and discard alike. */
 	private reevaluateDeferredReleases(): void {
 		for (const s of this.slots) {
 			if (!s.releasePending) continue;
 			if (!this.slotRetainedByOpenMask(s.id)) this.releaseSlot(s);
 		}
-		// A pass ending releases its pin, which can unblock pin-gated compaction.
+		// A render ending releases its pin, which can unblock pin-gated compaction.
 		this.compactAll();
 	}
 
 	private slotRetainedByOpenMask(slot: BatchSlot): boolean {
-		for (const p of this.passes.values()) {
+		for (const p of this.idToRenderPass.values()) {
 			if (p.state !== 'ended' && p.maskSlots.has(slot)) return true;
 		}
 		return false;
@@ -1296,7 +1296,7 @@ export class CosignalModel {
 	 * Retirement — the internal order is normative: stamp the receipts, fold
 	 * (compaction), mint per-atom retirement stamps + advance the committed
 	 * counter, reconcile committed observers, clear per-root membership
-	 * rows, and only then release the slot (deferred if an open pass's
+	 * rows, and only then release the slot (deferred if an open render's
 	 * render mask names it). The row-clear-before-release order guarantees a
 	 * recycled slot can never impersonate a committed member. Retirement is
 	 * disposition-blind: a batch the host abandoned retires through the same
@@ -1341,7 +1341,7 @@ export class CosignalModel {
 		if (batch.slot !== undefined) {
 			const slot = this.slots[batch.slot]!;
 			if (this.slotRetainedByOpenMask(slot.id)) {
-				slot.releasePending = true; // re-evaluated at every pass end
+				slot.releasePending = true; // re-evaluated at every render end
 			} else {
 				this.releaseSlot(slot);
 			}
@@ -1421,14 +1421,14 @@ export class CosignalModel {
 	 * only a failing condition triggers the fast-forwarded re-evaluation and
 	 * the urgent pre-paint correction.
 	 */
-	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: number; rootCommitGen: number }): void {
+	private mountFixup(w: Watcher, committingRender: RenderPass, baseline: { cas: number; rootCommitGen: number }): void {
 		const node = this.nodeById(w.node);
 		this.refreshEdgesAllWorlds();
 		const closure = this.dependencyClosureOf(w.node);
 		// Per-batch corrective loop: every LIVE written batch that touched the
 		// node. A premise of the condition test's soundness, not an
 		// optimization (tests/FLAGS.md, flag 5 finding 3): a live batch
-		// already committed into this root can write after the pass pinned —
+		// already committed into this root can write after the render pinned —
 		// no condition observes that write, and this schedule is what carries
 		// it to the watcher, in the batch's own lane.
 		for (const t of this.idToBatch.values()) {
@@ -1444,8 +1444,8 @@ export class CosignalModel {
 		}
 		// The four-condition test, decided before any evaluation: skip the
 		// re-evaluation and comparison entirely when the conditions show the
-		// mount window was quiet — (0) the mounting pass is the committing
-		// pass, (1) no committed-side advance since the pin, (2) the root's
+		// mount window was quiet — (0) the mounting render is the committing
+		// render, (1) no committed-side advance since the pin, (2) the root's
 		// commit generation is unchanged, (3) no included batch wrote after
 		// the pin. When all hold, nothing retired or locked in during the
 		// window, and any drift the fast-forwarded world would show is
@@ -1455,20 +1455,20 @@ export class CosignalModel {
 		//
 		// SUBTLE (found by fuzzing; explained in tests/FLAGS.md under flag 5,
 		// finding 2): condition (3) must NOT quantify only over the slot set
-		// captured at pass start. A rendered batch whose FIRST write lands
-		// mid-pass interned its slot after that capture, making the captured
+		// captured at render start. A rendered batch whose FIRST write lands
+		// mid-render interned its slot after that capture, making the captured
 		// check vacuous for it — yet this commit locks the batch in and the
 		// fast-forwarded world folds the post-pin write. The model therefore
-		// also checks the committing pass's rendered BATCHES at commit time
+		// also checks the committing render's rendered BATCHES at commit time
 		// (their latest write seq vs the pin).
 		const clocksQuiet =
 			[...w.snapshot.maskSlots].every((s) => this.slots[s]!.writeClock <= w.snapshot.pin) &&
-			[...committingPass.maskBatches].every((tid) => {
+			[...committingRender.maskBatches].every((tid) => {
 				const t = this.batchById(tid);
 				return t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin;
 			});
 		const fastOut =
-			w.snapshot.passId === committingPass.id &&
+			w.snapshot.renderPassId === committingRender.id &&
 			baseline.cas <= w.snapshot.pin &&
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
@@ -1513,10 +1513,10 @@ export class CosignalModel {
 
 	// ------------------------------------------- episodes and quiescence
 
-	/** Synchronously abandons every work-in-progress pass on every root (a host capability). */
+	/** Synchronously abandons every work-in-progress render on every root (a host capability). */
 	discardAllWip(): void {
-		for (const p of this.passes.values()) {
-			if (p.state !== 'ended') this.passEnd(p.id, 'discard');
+		for (const p of this.idToRenderPass.values()) {
+			if (p.state !== 'ended') this.renderEnd(p.id, 'discard');
 		}
 	}
 
@@ -1545,12 +1545,12 @@ export class CosignalModel {
 		}
 		this.episodeEdges.clear();
 		this.epoch++;
-		// Dead-episode records drop at the reset: ended passes and retired
+		// Dead-episode records drop at the reset: ended renders and retired
 		// batches belong to the dead episode, and nothing from a dead episode
 		// may validate anything in a live one. Id counters stay monotone
 		// across episodes.
-		for (const [id, p] of this.passes) {
-			if (p.state === 'ended') this.passes.delete(id);
+		for (const [id, p] of this.idToRenderPass) {
+			if (p.state === 'ended') this.idToRenderPass.delete(id);
 		}
 		for (const [id, t] of this.idToBatch) {
 			if (t.state === 'retired') this.idToBatch.delete(id);
@@ -1638,8 +1638,8 @@ export class CosignalModel {
 		}
 	}
 
-	passValue(node: AnyNode, pass: Pass): Value {
-		return this.evaluate(node, { kind: 'pass', pass });
+	renderValue(node: AnyNode, render: RenderPass): Value {
+		return this.evaluate(node, { kind: 'render', render });
 	}
 
 	eventsOfType<T extends ModelEvent['type']>(type: T): Extract<ModelEvent, { type: T }>[] {

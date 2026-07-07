@@ -21,8 +21,8 @@ import { registerCosignalReact, startSignalTransition, type CosignalReactHandle 
 /** The shim's protocol listeners, driven directly (TypeScript-private only;
  * the protocol host is what normally calls these). */
 type ShimListeners = {
-	handlePassStart(container: unknown, includedBatches: readonly number[]): void;
-	handlePassEnd(container: unknown, committed: boolean): void;
+	handleRenderStart(container: unknown, includedBatches: readonly number[]): void;
+	handleRenderEnd(container: unknown, committed: boolean): void;
 };
 
 let handle: CosignalReactHandle | undefined;
@@ -94,29 +94,29 @@ describe('startSignalTransition: no batch context (React batch id 0)', () => {
 	});
 });
 
-describe('pass start over a still-open pass', () => {
-	test('armed: the second pass start throws a protocol violation', () => {
+describe('render start over a still-open render', () => {
+	test('armed: the second render start throws a protocol violation', () => {
 		const h = register(true);
 		const shim = h.shim as unknown as ShimListeners;
 		const container = {};
-		shim.handlePassStart(container, []);
-		expect([...h.bridge.passes.values()].filter((p) => p.state !== 'ended')).toHaveLength(1);
-		expect(() => shim.handlePassStart(container, [])).toThrow(/protocol violation — render pass started .* still open/);
-		shim.handlePassEnd(container, false); // close the frame so the bridge quiesces
+		shim.handleRenderStart(container, []);
+		expect([...h.bridge.idToRenderPass.values()].filter((p) => p.state !== 'ended')).toHaveLength(1);
+		expect(() => shim.handleRenderStart(container, [])).toThrow(/protocol violation — render pass started .* still open/);
+		shim.handleRenderEnd(container, false); // close the frame so the bridge quiesces
 	});
 
-	test('off: the stale pass is discarded silently (no error log) and the new pass opens', () => {
+	test('off: the stale render is discarded silently (no error log) and the new render opens', () => {
 		const h = register(false);
 		const shim = h.shim as unknown as ShimListeners;
 		const container = {};
-		shim.handlePassStart(container, []);
-		const first = [...h.bridge.passes.values()].find((p) => p.state !== 'ended')!;
-		shim.handlePassStart(container, []); // desync repair: discard, then start fresh
+		shim.handleRenderStart(container, []);
+		const first = [...h.bridge.idToRenderPass.values()].find((p) => p.state !== 'ended')!;
+		shim.handleRenderStart(container, []); // desync repair: discard, then start fresh
 		expect(h.shim.errors).toHaveLength(0); // the old loud error log is gone
-		expect(first.state).toBe('ended'); // the stale pass was discarded (it can never double-account)
-		const open = [...h.bridge.passes.values()].filter((p) => p.state !== 'ended');
-		expect(open).toHaveLength(1); // exactly the fresh pass remains
+		expect(first.state).toBe('ended'); // the stale render was discarded (it can never double-account)
+		const open = [...h.bridge.idToRenderPass.values()].filter((p) => p.state !== 'ended');
+		expect(open).toHaveLength(1); // exactly the fresh render remains
 		expect(open[0]!.id).not.toBe(first.id);
-		shim.handlePassEnd(container, false);
+		shim.handleRenderEnd(container, false);
 	});
 });

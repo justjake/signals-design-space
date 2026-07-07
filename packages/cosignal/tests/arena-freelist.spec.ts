@@ -25,9 +25,9 @@ function bridge(arm = false): CosignalBridge {
 }
 
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 

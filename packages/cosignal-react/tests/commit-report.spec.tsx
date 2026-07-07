@@ -3,7 +3,7 @@
  *
  * React's per-root commit report is a delta, and re-reporting a batch is
  * defined as an idempotent set-add. When the report names a live batch the
- * engine's pass-end sweep did NOT lock in, the shim reconciles it — and that
+ * engine's render-end sweep did NOT lock in, the shim reconciles it — and that
  * reconciliation must be the engine's COMPLETE per-root commit transition
  * (committed-batch set, the committed bit mask the visibility check reads,
  * the commit generation, the committed-advance clock, arena fan-out, and the
@@ -12,7 +12,7 @@
  * INCLUDE the reported batch's writes.
  *
  * React never produces this shape on its own (for batches carrying bridge
- * batches, the committing pass's own batch set covers the delta by
+ * batches, the committing render's own batch set covers the delta by
  * construction), so the report is injected directly into the shim's
  * `onRootCommitted` handler while a REAL transition batch is live and not
  * yet locked in.
@@ -35,7 +35,7 @@ afterEach(async () => {
 });
 
 describe('root-commit report reconciliation (W11)', () => {
-	test("report names a live batch pass-end didn't lock in — committed world includes its writes", async () => {
+	test("report names a live batch render-end didn't lock in — committed world includes its writes", async () => {
 		h = makeHarness();
 		const a = new Atom(0);
 		function Reader() {
@@ -51,8 +51,8 @@ describe('root-commit report reconciliation (W11)', () => {
 
 		await act(async () => {
 			// A REAL protocol batch: the transition write classifies into it and
-			// it stays live — no pass has rendered or committed it yet, so
-			// pass-end has NOT locked it into the root's committed table.
+			// it stays live — no render has rendered or committed it yet, so
+			// render-end has NOT locked it into the root's committed table.
 			React.startTransition(() => a.set(7));
 			const batch = h.bridge.liveBatches().find((t) => !t.ambient);
 			expect(batch).toBeDefined();
@@ -60,11 +60,11 @@ describe('root-commit report reconciliation (W11)', () => {
 			const reactBatchId = h.handle.shim.reactBatchForBatch(tid);
 			expect(reactBatchId).toBeDefined();
 			const root = h.bridge.root(rec.id);
-			expect(root.committedBatches.has(tid)).toBe(false); // pass-end never saw it
+			expect(root.committedBatches.has(tid)).toBe(false); // render-end never saw it
 			const genBefore = root.commitGen;
 			expect(h.bridge.committedValue(node, rec.id)).toBe(0); // still pending for this root
 
-			// React's report names the live batch pass-end didn't lock in.
+			// React's report names the live batch render-end didn't lock in.
 			shim.handleRootCommitted(rootContainer, [reactBatchId!], 1);
 
 			// The COMPLETE lock-in, not the half-job: committed-world reads for
@@ -85,7 +85,7 @@ describe('root-commit report reconciliation (W11)', () => {
 		});
 
 		// The act flush lets the transition render, commit, and retire through
-		// the REAL protocol events: pass-end's own sweep sees the batch already
+		// the REAL protocol events: render-end's own sweep sees the batch already
 		// committed (the other caller of the same idempotent operation), and the
 		// screen settles on the batch's value.
 		expect(text(container)).toBe('v:7;');

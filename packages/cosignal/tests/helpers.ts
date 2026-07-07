@@ -23,7 +23,7 @@ import {
 	type Equals,
 	type ModelEvent,
 	type Op,
-	type Pass,
+	type RenderPass,
 	type ReactEffect,
 	type Batch,
 	type Value,
@@ -35,7 +35,7 @@ import {
 	type AnyNode as ENode,
 	type AtomNode as EAtomNode,
 	type CosignalBridge,
-	type Pass as EPass,
+	type RenderPass as ERenderPass,
 	type Subscription as ESubscription,
 	type World as EWorld,
 } from '../src/concurrent.js';
@@ -179,7 +179,7 @@ export class TwinDriver {
 	/** The engine presented in the model's shape for the oracle's checkers. */
 	private readonly view = modelView(this.engine, this.mirror) as unknown as CosignalModel;
 	private nodeMap = new Map<AnyNode, ENode>();
-	private passMap = new Map<number, EPass>();
+	private idToEngineRenderPass = new Map<number, ERenderPass>();
 	/** Model react-effect id → engine subscription id. The id spaces diverge
 	 * once a core effect mounts: the model's `nextEffect` ticks for BOTH
 	 * effect kinds, the engine's only for committed observers (core effects
@@ -204,7 +204,7 @@ export class TwinDriver {
 	get events(): ModelEvent[] { return this.model.events; }
 	get idToBatch(): CosignalModel['idToBatch'] { return this.model.idToBatch; }
 	get slots(): CosignalModel['slots'] { return this.model.slots; }
-	get passes(): CosignalModel['passes'] { return this.model.passes; }
+	get idToRenderPass(): CosignalModel['idToRenderPass'] { return this.model.idToRenderPass; }
 	get roots(): CosignalModel['roots'] { return this.model.roots; }
 	get nodes(): CosignalModel['nodes'] { return this.model.nodes; }
 	get watchers(): CosignalModel['watchers'] { return this.model.watchers; }
@@ -218,9 +218,9 @@ export class TwinDriver {
 		return e;
 	}
 
-	private toEngineWorldPass(pass: Pass): EPass {
-		const p = this.passMap.get(pass.id);
-		if (p === undefined) throw new Error(`twin: pass ${pass.id} was not created through the driver`);
+	private toEngineRenderPass(render: RenderPass): ERenderPass {
+		const p = this.idToEngineRenderPass.get(render.id);
+		if (p === undefined) throw new Error(`twin: render pass ${render.id} was not created through the driver`);
 		return p;
 	}
 
@@ -383,51 +383,51 @@ export class TwinDriver {
 			this.engine.retire(batchId));
 	}
 
-	passStart(root: string, includeBatches: number[]): Pass {
-		let ePass: EPass | undefined;
-		const mPass = this.both('passStart', () => this.model.passStart(root, includeBatches), () => {
-			ePass = this.engine.passStart(root, includeBatches);
-			return ePass;
+	renderStart(root: string, includeBatches: number[]): RenderPass {
+		let eRenderPass: ERenderPass | undefined;
+		const mRenderPass = this.both('renderStart', () => this.model.renderStart(root, includeBatches), () => {
+			eRenderPass = this.engine.renderStart(root, includeBatches);
+			return eRenderPass;
 		});
-		expect(ePass!.id, 'twin passStart: pass ids diverged').toBe(mPass.id);
-		expect(ePass!.pin, 'twin passStart: pins diverged').toBe(mPass.pin);
-		this.passMap.set(mPass.id, ePass!);
-		return mPass;
+		expect(eRenderPass!.id, 'twin renderStart: render pass ids diverged').toBe(mRenderPass.id);
+		expect(eRenderPass!.pin, 'twin renderStart: pins diverged').toBe(mRenderPass.pin);
+		this.idToEngineRenderPass.set(mRenderPass.id, eRenderPass!);
+		return mRenderPass;
 	}
 
-	passYield(id: number): void {
-		this.both('passYield', () => this.model.passYield(id), () => this.engine.passYield(id));
+	renderYield(id: number): void {
+		this.both('renderYield', () => this.model.renderYield(id), () => this.engine.renderYield(id));
 	}
 
-	passResume(id: number): void {
-		this.both('passResume', () => this.model.passResume(id), () => this.engine.passResume(id));
+	renderResume(id: number): void {
+		this.both('renderResume', () => this.model.renderResume(id), () => this.engine.renderResume(id));
 	}
 
-	passEnd(id: number, kind: 'commit' | 'discard', opts?: { retireAtCommit?: number[] }): void {
-		this.both('passEnd', () => this.model.passEnd(id, kind, opts), () => this.engine.passEnd(id, kind, opts));
+	renderEnd(id: number, kind: 'commit' | 'discard', opts?: { retireAtCommit?: number[] }): void {
+		this.both('renderEnd', () => this.model.renderEnd(id, kind, opts), () => this.engine.renderEnd(id, kind, opts));
 	}
 
-	mountWatcher(passId: number, node: AnyNode, name: string): Watcher {
+	mountWatcher(renderPassId: number, node: AnyNode, name: string): Watcher {
 		let eId: number | undefined;
-		const w = this.both('mountWatcher', () => this.model.mountWatcher(passId, node, name), () => {
-			eId = this.engine.mountWatcher(passId, this.toEngine(node), name).id;
+		const w = this.both('mountWatcher', () => this.model.mountWatcher(renderPassId, node, name), () => {
+			eId = this.engine.mountWatcher(renderPassId, this.toEngine(node), name).id;
 		});
 		expect(eId, 'twin mountWatcher: watcher ids diverged').toBe(w.id);
 		return w;
 	}
 
-	renderWatcher(passId: number, watcherId: number): void {
-		this.both('renderWatcher', () => this.model.renderWatcher(passId, watcherId), () =>
-			this.engine.renderWatcher(passId, watcherId));
+	renderWatcher(renderPassId: number, watcherId: number): void {
+		this.both('renderWatcher', () => this.model.renderWatcher(renderPassId, watcherId), () =>
+			this.engine.renderWatcher(renderPassId, watcherId));
 	}
 
 	deferMount(watcherId: number): void {
 		this.both('deferMount', () => this.model.deferMount(watcherId), () => this.engine.deferMount(watcherId));
 	}
 
-	adoptMount(passId: number, watcherId: number): void {
-		this.both('adoptMount', () => this.model.adoptMount(passId, watcherId), () =>
-			this.engine.adoptMount(passId, watcherId));
+	adoptMount(renderPassId: number, watcherId: number): void {
+		this.both('adoptMount', () => this.model.adoptMount(renderPassId, watcherId), () =>
+			this.engine.adoptMount(renderPassId, watcherId));
 	}
 
 	mountReactEffect(root: string, node: AnyNode, name: string): ReactEffect {
@@ -480,7 +480,7 @@ export class TwinDriver {
 	livePins(): number[] {
 		const m = this.model.livePins();
 		const e: number[] = [];
-		for (const p of this.engine.passes.values()) if (p.state !== 'ended') e.push(p.pin);
+		for (const p of this.engine.idToRenderPass.values()) if (p.state !== 'ended') e.push(p.pin);
 		expect(e, 'twin livePins diverged').toEqual(m);
 		return m;
 	}
@@ -501,10 +501,10 @@ export class TwinDriver {
 		return m;
 	}
 
-	passValue(node: AnyNode, pass: Pass): Value {
-		const m = this.model.passValue(node, pass);
-		const e = this.engine.passValue(this.toEngine(node), this.toEngineWorldPass(pass));
-		expect(Object.is(m, e), `twin passValue(${node.name}, pass ${pass.id}): model ${String(m)} ≠ engine ${String(e)}`).toBe(true);
+	renderValue(node: AnyNode, render: RenderPass): Value {
+		const m = this.model.renderValue(node, render);
+		const e = this.engine.renderValue(this.toEngine(node), this.toEngineRenderPass(render));
+		expect(Object.is(m, e), `twin renderValue(${node.name}, render pass ${render.id}): model ${String(m)} ≠ engine ${String(e)}`).toBe(true);
 		return m;
 	}
 
@@ -556,22 +556,22 @@ export function concurrent(): TwinDriver {
 
 /** Mount a watcher on `node` via a clean committed render on `root`. */
 export function mountCommitted(m: TwinDriver, root: string, node: AnyNode, name: string): Watcher {
-	const p = m.passStart(root, []);
+	const p = m.renderStart(root, []);
 	const w = m.mountWatcher(p.id, node, name);
-	m.passEnd(p.id, 'commit');
+	m.renderEnd(p.id, 'commit');
 	return w;
 }
 
-/** Render `batch`'s pass on `root` (watchers re-rendered), commit, retire the batch. */
+/** Render `batch` on `root` (watchers re-rendered), commit, retire the batch. */
 export function commitAndRetire(m: TwinDriver, root: string, batch: Batch, watchers: Watcher[] = []): void {
-	const p = m.passStart(root, [batch.id]);
+	const p = m.renderStart(root, [batch.id]);
 	for (const w of watchers) m.renderWatcher(p.id, w.id);
-	m.passEnd(p.id, 'commit', { retireAtCommit: [batch.id] });
+	m.renderEnd(p.id, 'commit', { retireAtCommit: [batch.id] });
 }
 
-/** Open a pass including the given batches. */
-export function pass(m: TwinDriver, root: string, batches: Batch[]): Pass {
-	return m.passStart(root, batches.map((t) => t.id));
+/** Open a render pass including the given batches. */
+export function openRender(m: TwinDriver, root: string, batches: Batch[]): RenderPass {
+	return m.renderStart(root, batches.map((t) => t.id));
 }
 
 /** Full twin verification (events, snapshots, invariants both sides, K0 parity). */

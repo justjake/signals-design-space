@@ -26,9 +26,9 @@ for (let j = 0; j < 4; j++) {
 }
 for (const c of computeds) b.mountCoreEffect(c, `e-${c.name}`);
 if (WATCHERS > 0) {
-	const p = b.passStart('R', []);
+	const p = b.renderStart('R', []);
 	for (let i = 0; i < WATCHERS; i++) b.mountWatcher(p.id, computeds[i % 4], `w${i}`);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 }
 
 let v = 0;

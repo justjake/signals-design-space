@@ -51,21 +51,21 @@ export function buildEngineTopology(b: CosignalBridge) {
 }
 
 /**
- * Adapter-side entity registries. The MODEL retains dead batch/pass records
+ * Adapter-side entity registries. The MODEL retains dead batch/render records
  * until quiescence, and schedule ops resolve entities by index over those
  * maps; the engine reclaims dead records mid-episode (keeping them all
  * would grow memory with the episode), so the adapter mirrors the model's
  * population itself to keep op resolution identical on both sides. Purely
  * an indexing-fidelity shim — no tolerance.
  */
-type EntityRegistry = { batches: number[]; passes: number[] };
+type EntityRegistry = { batches: number[]; renderPasses: number[] };
 
 const registries = new WeakMap<CosignalBridge, EntityRegistry>();
 
 function registryOf(b: CosignalBridge): EntityRegistry {
 	let r = registries.get(b);
 	if (r === undefined) {
-		r = { batches: [], passes: [] };
+		r = { batches: [], renderPasses: [] };
 		registries.set(b, r);
 	}
 	return r;
@@ -77,9 +77,9 @@ function batchAt(b: CosignalBridge, index: number): number | undefined {
 	return ids[index % ids.length];
 }
 
-function passAt(b: CosignalBridge, index: number): number {
-	const ids = registryOf(b).passes;
-	if (ids.length === 0) throw new BridgeScheduleError('no passes yet');
+function renderPassAt(b: CosignalBridge, index: number): number {
+	const ids = registryOf(b).renderPasses;
+	if (ids.length === 0) throw new BridgeScheduleError('no render passes yet');
 	return ids[index % ids.length]!;
 }
 
@@ -156,12 +156,12 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			}
 			case 'settle': b.settleAction(batchAt(b, op.batch)!); break;
 			case 'retire': b.retire(batchAt(b, op.batch)!); break;
-			case 'passStart': reg.passes.push(b.passStart(op.root, op.include.map((i) => batchAt(b, i)!)).id); break;
-			case 'yield': b.passYield(passAt(b, op.pass)); break;
-			case 'resume': b.passResume(passAt(b, op.pass)); break;
-			case 'end': b.passEnd(passAt(b, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(b, i)!) }); break;
-			case 'mount': b.mountWatcher(passAt(b, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
-			case 'render': b.renderWatcher(passAt(b, op.pass), watcherAt(b, op.watcher)); break;
+			case 'renderStart': reg.renderPasses.push(b.renderStart(op.root, op.include.map((i) => batchAt(b, i)!)).id); break;
+			case 'yield': b.renderYield(renderPassAt(b, op.renderPass)); break;
+			case 'resume': b.renderResume(renderPassAt(b, op.renderPass)); break;
+			case 'end': b.renderEnd(renderPassAt(b, op.renderPass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(b, i)!) }); break;
+			case 'mount': b.mountWatcher(renderPassAt(b, op.renderPass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
+			case 'render': b.renderWatcher(renderPassAt(b, op.renderPass), watcherAt(b, op.watcher)); break;
 			case 'reactEffect': mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
 			case 'reactEffectPick':
 				mountEngineReactEffectPick(
@@ -176,10 +176,10 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'discardAllWip': b.discardAllWip(); break;
 			case 'quiesce':
 				b.quiesce();
-				// The model drops every retired batch and ended pass here; at
-				// quiescence that is all of them (no live batches/passes remain).
+				// The model drops every retired batch and ended render here; at
+				// quiescence that is all of them (no live batches/renders remain).
 				reg.batches.length = 0;
-				reg.passes.length = 0;
+				reg.renderPasses.length = 0;
 				break;
 		}
 		return true;

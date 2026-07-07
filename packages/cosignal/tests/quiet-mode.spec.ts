@@ -5,7 +5,7 @@
  * committed base and the kernel advance together; no receipt, no tape
  * append, no batch (the ambient batch is NOT minted), no delivery
  * walk. The pipeline arms while anything is pending and re-arms at the last
- * retirement / pass close. Observation never perturbs the derivation: an
+ * retirement / render close. Observation never perturbs the derivation: an
  * attached tracer gets ONE quiet-write record per accepted fold and the
  * write path stays the quiet one.
  *
@@ -67,11 +67,11 @@ describe('quiet-mode writes', () => {
 		expect(a.tp.materialize()).toHaveLength(1);
 		b.write(t.id, a, 1, (v: unknown) => (v as number) * 10);
 		expect(b.newestValue(a)).toBe(60);
-		// A pass excluding both live batches folds committed base — which
+		// A render excluding both live batches folds committed base — which
 		// already contains the QUIET fold (5), not the live receipts.
-		const p = b.passStart('A', []);
-		expect(b.passValue(a, p)).toBe(5);
-		b.passEnd(p.id, 'discard');
+		const p = b.renderStart('A', []);
+		expect(b.renderValue(a, p)).toBe(5);
+		b.renderEnd(p.id, 'discard');
 		b.retire(b.ambientBatch!);
 		expect(b.quiet).toBe(false); // t is still live
 		b.retire(t.id);
@@ -90,9 +90,9 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(5); // quiet history
 		const t = b.openBatch();
 		b.write(t.id, a, 1, (v: unknown) => (v as number) + 1); // folds over base 5
-		const p = b.passStart('A', [t.id]);
-		expect(b.passValue(a, p)).toBe(6); // the transition world = quiet base + its own receipt
-		b.passEnd(p.id, 'commit');
+		const p = b.renderStart('A', [t.id]);
+		expect(b.renderValue(a, p)).toBe(6); // the transition world = quiet base + its own receipt
+		b.renderEnd(p.id, 'commit');
 		const root = b.root('A');
 		expect(root.committedBatches.has(t.id)).toBe(true); // locked in at commit
 		expect(b.committedValue(a, 'A')).toBe(6); // membership clause
@@ -110,11 +110,11 @@ describe('quiet-mode writes', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(a) as number) + 1);
-		// Mount a watcher on c through a committed pass (the pass ARMS the
+		// Mount a watcher on c through a committed render (the render ARMS the
 		// pipeline; quiet re-arms once it closes and nothing stays live).
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, c, 'w1');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		expect(b.quiet).toBe(true);
 		let corrections = 0;
 		let deliveries = 0;
@@ -177,14 +177,14 @@ describe('quiet-mode writes', () => {
 		expect(r.tp.materialize()).toHaveLength(0);
 	});
 
-	it('pin-blocked arming: an open pass holds the pipeline armed past the last retirement; pass close compacts and re-arms', () => {
+	it('pin-blocked arming: an open render holds the pipeline armed past the last retirement; render close compacts and re-arms', () => {
 		const b = quietBridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
-		const p = b.passStart('B', [t.id]); // pin freezes before the retirement below
+		const p = b.renderStart('B', [t.id]); // pin freezes before the retirement below
 		b.retire(t.id);
-		// The pass's pin blocks compaction: the retired receipt is still on
+		// The render's pin blocks compaction: the retired receipt is still on
 		// the tape, so quiet must NOT re-arm (a fold would slide base under
 		// a receipt that replays over it).
 		expect(a.tp.materialize()).toHaveLength(1);
@@ -193,8 +193,8 @@ describe('quiet-mode writes', () => {
 		expect(b.ambientBatch).toBeDefined();
 		expect(a.tp.materialize()).toHaveLength(2);
 		b.retire(b.ambientBatch!);
-		expect(b.quiet).toBe(false); // pass still open
-		b.passEnd(p.id, 'discard'); // pin lapses: compaction drains, quiet re-arms
+		expect(b.quiet).toBe(false); // render still open
+		b.renderEnd(p.id, 'discard'); // pin lapses: compaction drains, quiet re-arms
 		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.quiet).toBe(true);
 		(a.handle as Atom<number>).set(3);

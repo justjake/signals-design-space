@@ -46,25 +46,25 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	const tr = attachTracer(b, { mode: 'session', now: tick() });
 	let w!: ReturnType<CosignalBridge['mountWatcher']>;
 
-	it('pass lifecycle + mount fixup fast-out: pass-start/pass-end payloads, eval records, disposition', () => {
-		const p1 = b.passStart('A', []);
+	it('render lifecycle + mount fixup fast-out: render-start/render-end payloads, eval records, disposition', () => {
+		const p1 = b.renderStart('A', []);
 		w = b.mountWatcher(p1.id, c, 'W');
-		b.passEnd(p1.id, 'commit');
+		b.renderEnd(p1.id, 'commit');
 
-		expect(all(tr, 'pass-start')[0]!.data).toEqual({ pass: p1.id, root: 'A', pin: 0, maskSize: 0 });
-		expect(all(tr, 'pass-start')[0]!.cause).toBeUndefined();
-		const end = all(tr, 'pass-end')[0]!;
-		expect(end.data).toEqual({ pass: p1.id, root: 'A', disposition: 'commit' });
+		expect(all(tr, 'render-start')[0]!.data).toEqual({ renderPass: p1.id, root: 'A', pin: 0, maskSize: 0 });
+		expect(all(tr, 'render-start')[0]!.cause).toBeUndefined();
+		const end = all(tr, 'render-end')[0]!;
+		expect(end.data).toEqual({ renderPass: p1.id, root: 'A', disposition: 'commit' });
 		// world evaluations recorded: the mount render evaluated c in p1's world
 		const evals = all(tr, 'eval');
-		expect(evals.some((e) => e.data['node'] === 'c' && e.data['world'] === `pass:${p1.id}`)).toBe(true);
+		expect(evals.some((e) => e.data['node'] === 'c' && e.data['world'] === `render:${p1.id}`)).toBe(true);
 		// conditions-first fixup: a passing four-condition test skips the
 		// mount-fix evaluation entirely — no mount-fix eval record exists
 		expect(evals.some((e) => e.data['world'] === 'mount-fix:A')).toBe(false);
 		// clean mount on a quiet root: fast-out, zero correctives; provoked by the commit
 		const fx = all(tr, 'mount-fixup')[0]!;
 		expect(fx.data).toEqual({ watcher: 'W', root: 'A', disposition: 'fast-out', correctives: 0 });
-		expect(tr.causeChain(fx.id).map((e) => e.kind)).toContain('pass-end');
+		expect(tr.causeChain(fx.id).map((e) => e.kind)).toContain('render-end');
 	});
 
 	it('writes: batch-open, slot-claim, receipt payload with op, fresh delivery caused by the write', () => {
@@ -84,7 +84,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		// Engine mechanics: the flip's topology (c now reads a) is discovered
 		// at evaluation sites. Routing structure lives in the per-world
 		// arenas (S-B): the newest pull below feeds the newest memo (core
-		// effects, stage below), and the NEXT stage's pass read records the
+		// effects, stage below), and the NEXT stage's render read records the
 		// a→c link in its own arena — the structure its interleaved
 		// delivery walks.
 		b.newestValue(c);
@@ -100,15 +100,15 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(s.cause).toBe(w2.id);
 	});
 
-	it('pass yield/resume edges; post-pin write delivers interleaved (§5.9)', () => {
-		const p2 = b.passStart('A', [1]);
-		b.passValue(c, p2); // the render reads c: p2's arena records flag→c, a→c (the routing structure the write below walks)
-		b.passYield(p2.id);
-		b.passResume(p2.id);
-		expect(all(tr, 'pass-start')[1]!.data).toEqual({ pass: p2.id, root: 'A', pin: p2.pin, maskSize: 1 });
-		expect(all(tr, 'pass-yield')[0]!.data).toEqual({ pass: p2.id, root: 'A' });
-		expect(all(tr, 'pass-yield')[0]!.cause).toBeUndefined();
-		expect(all(tr, 'pass-resume')[0]!.data).toEqual({ pass: p2.id, root: 'A' });
+	it('render yield/resume edges; post-pin write delivers interleaved (§5.9)', () => {
+		const p2 = b.renderStart('A', [1]);
+		b.renderValue(c, p2); // the render reads c: p2's arena records flag→c, a→c (the routing structure the write below walks)
+		b.renderYield(p2.id);
+		b.renderResume(p2.id);
+		expect(all(tr, 'render-start')[1]!.data).toEqual({ renderPass: p2.id, root: 'A', pin: p2.pin, maskSize: 1 });
+		expect(all(tr, 'render-yield')[0]!.data).toEqual({ renderPass: p2.id, root: 'A' });
+		expect(all(tr, 'render-yield')[0]!.cause).toBeUndefined();
+		expect(all(tr, 'render-resume')[0]!.data).toEqual({ renderPass: p2.id, root: 'A' });
 
 		b.write(1, a, 0, 5);
 		const d = last(tr, 'delivery');
@@ -116,35 +116,35 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(d.data).toEqual({ watcher: 'W', batch: 1, slot: 0, seq, mode: 'interleaved' });
 
 		b.renderWatcher(p2.id, w.id);
-		b.passEnd(p2.id, 'commit', { retireAtCommit: [1] });
+		b.renderEnd(p2.id, 'commit', { retireAtCommit: [1] });
 	});
 
-	it('retirement at commit chains: pass-end → batch-retire → slot-release (causeChain)', () => {
-		const end = all(tr, 'pass-end')[1]!;
+	it('retirement at commit chains: render-end → batch-retire → slot-release (causeChain)', () => {
+		const end = all(tr, 'render-end')[1]!;
 		expect(end.data['disposition']).toBe('commit');
 		const ret = all(tr, 'batch-retire')[0]!;
 		expect(ret.data).toEqual({ batch: 1, retiredSeq: bevents(tr, 'retired')[0]!.retiredSeq });
 		expect(ret.cause).toBe(end.id); // retirement folded inside the commit
 		const rel = all(tr, 'slot-release')[0]!;
 		expect(rel.data).toEqual({ slot: 0, batch: 1 });
-		expect(tr.causeChain(rel.id).map((e) => e.kind)).toEqual(['slot-release', 'batch-retire', 'pass-end']);
+		expect(tr.causeChain(rel.id).map((e) => e.kind)).toEqual(['slot-release', 'batch-retire', 'render-end']);
 	});
 
 	it('per-root commit with generation; react effect run caused by it', () => {
 		mountEngineReactEffect(b, 'A', c, 'RE'); // committed c = 5
 		const t2 = b.openBatch();
 		b.write(t2.id, a, 0, 7);
-		const p3 = b.passStart('A', [t2.id]);
+		const p3 = b.renderStart('A', [t2.id]);
 		b.renderWatcher(p3.id, w.id);
-		b.passEnd(p3.id, 'commit'); // lock-in without retirement
+		b.renderEnd(p3.id, 'commit'); // lock-in without retirement
 
 		const rc = all(tr, 'root-commit')[0]!;
 		expect(rc.data).toEqual({ root: 'A', batch: t2.id, commitGen: 1 });
-		expect(rc.cause).toBe(all(tr, 'pass-end')[2]!.id);
+		expect(rc.cause).toBe(all(tr, 'render-end')[2]!.id);
 		const re = all(tr, 'react-effect-run')[0]!;
 		expect(re.data).toEqual({ effect: 'RE', root: 'A', value: 7, values: [7] }); // values = the dep snapshot (referee-compared)
 		expect(re.cause).toBe(rc.id);
-		expect(tr.whyEffectRan('RE').map((e) => e.kind)).toEqual(['react-effect-run', 'root-commit', 'pass-end']);
+		expect(tr.whyEffectRan('RE').map((e) => e.kind)).toEqual(['react-effect-run', 'root-commit', 'render-end']);
 	});
 
 	it('core effect run caused by its write; reconcile-correction caused by a top-level retirement', () => {
@@ -213,34 +213,34 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(last(tr, 'batch-settle').data).toEqual({ batch: act2.id });
 	});
 
-	it('slot-release-deferred while an open mask names the slot; released at the discard pass-end', () => {
+	it('slot-release-deferred while an open mask names the slot; released at the discard render-end', () => {
 		const t5 = b.openBatch();
 		b.write(t5.id, a, 0, 42);
 		const claimed = last(tr, 'slot-claim').data['slot'];
-		const p4 = b.passStart('A', [t5.id]);
+		const p4 = b.renderStart('A', [t5.id]);
 		b.retire(t5.id);
 		const def = last(tr, 'slot-release-deferred');
 		expect(def.data).toEqual({ slot: claimed, batch: t5.id });
 		expect(def.cause).toBe(last(tr, 'batch-retire').id);
 
-		b.passEnd(p4.id, 'discard');
-		const end = last(tr, 'pass-end');
-		expect(end.data).toMatchObject({ pass: p4.id, disposition: 'discard' });
+		b.renderEnd(p4.id, 'discard');
+		const end = last(tr, 'render-end');
+		expect(end.data).toMatchObject({ renderPass: p4.id, disposition: 'discard' });
 		const rel = last(tr, 'slot-release');
 		expect(rel.data).toEqual({ slot: claimed, batch: t5.id });
 		expect(rel.cause).toBe(end.id);
 	});
 
-	it('mount fixup: corrected (urgent pre-paint fix) when committed truth moved under the open pass', () => {
+	it('mount fixup: corrected (urgent pre-paint fix) when committed truth moved under the open render', () => {
 		// retire the straggler batches (ambient, t2): live written batches would
 		// (correctly) draw mount correctives on every mount below
 		for (const t of b.liveBatches()) b.retire(t.id);
-		const p5 = b.passStart('A', []);
+		const p5 = b.renderStart('A', []);
 		b.mountWatcher(p5.id, c, 'W2'); // renders committed-at-pin: c = 42
 		const t6 = b.openBatch();
 		b.write(t6.id, a, 0, 50);
 		b.retire(t6.id); // cas moves past p5's pin
-		b.passEnd(p5.id, 'commit');
+		b.renderEnd(p5.id, 'commit');
 
 		const fx = last(tr, 'mount-fixup');
 		expect(fx.data).toEqual({ watcher: 'W2', root: 'A', disposition: 'corrected', correctives: 0 });
@@ -251,13 +251,13 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	it('mount fixup: fast-out with a post-pin write into a committed-live batch — corrective scheduled, no urgent correction', () => {
 		const tc = b.openBatch();
 		b.write(tc.id, a, 0, 70);
-		const pc = b.passStart('A', [tc.id]);
+		const pc = b.renderStart('A', [tc.id]);
 		b.renderWatcher(pc.id, w.id);
-		b.passEnd(pc.id, 'commit'); // tc locked in, still live
-		const p7 = b.passStart('A', []);
+		b.renderEnd(pc.id, 'commit'); // tc locked in, still live
+		const p7 = b.renderStart('A', []);
 		b.mountWatcher(p7.id, c, 'W3'); // sees committed member tc: c = 70
 		b.write(tc.id, a, 0, 80); // post-pin write, mask-batch-quiet
-		b.passEnd(p7.id, 'commit');
+		b.renderEnd(p7.id, 'commit');
 
 		// the write moved no condition (tc is a committed member, outside the
 		// render mask), so the fast path holds and the corrective in tc's own
@@ -271,12 +271,12 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	});
 
 	it('mount fixup: compare-clean when the fast-out fails but values agree', () => {
-		const p8 = b.passStart('A', []);
+		const p8 = b.renderStart('A', []);
 		b.mountWatcher(p8.id, c, 'W4'); // c = 80
 		const t8 = b.openBatch();
 		b.write(t8.id, bb, 0, 123); // c is on the a-path: value unaffected
 		b.retire(t8.id); // cas moves → fast-out fails
-		b.passEnd(p8.id, 'commit');
+		b.renderEnd(p8.id, 'commit');
 		expect(last(tr, 'mount-fixup').data).toEqual({ watcher: 'W4', root: 'A', disposition: 'compare-clean', correctives: 0 });
 	});
 
@@ -330,7 +330,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 // concurrent-fuzz.spec's lockstep differ). What this sweep still owns:
 // losslessness, total decode/format over every kind a real schedule
 // produces, terminating causality, and the structural pairing between
-// pre-consequence pass-end records and post-consequence pass markers.
+// pre-consequence render-end records and post-consequence render markers.
 
 describe('R11 fuzz sweep: lossless capture, total decode, terminating causality (oracle schedules)', () => {
 	it('20 seeds × 60 steps: session lossless; decode/format total; referee decode covers the stream; causality terminates', () => {
@@ -350,14 +350,14 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 			const bridgeEvents = decodedBridgeEvents(tr);
 			const mapped = decoded.filter((e) => decodeBridgeEvent(e) !== undefined);
 			expect(bridgeEvents.length, `seed ${seed}: referee coverage`).toBe(mapped.length);
-			// every pass end has exactly one disposition record BEFORE its
+			// every render end has exactly one disposition record BEFORE its
 			// consequences and exactly one referee marker after them
-			const passEnds = decoded.filter((e) => e.kind === 'pass-end');
-			const markers = decoded.filter((e) => e.kind === 'pass-committed' || e.kind === 'pass-discarded');
-			expect(passEnds.length, `seed ${seed}: pass-end records`).toBe(markers.length);
+			const renderEnds = decoded.filter((e) => e.kind === 'render-end');
+			const markers = decoded.filter((e) => e.kind === 'render-committed' || e.kind === 'render-discarded');
+			expect(renderEnds.length, `seed ${seed}: render-end records`).toBe(markers.length);
 			for (const m of markers) {
-				expect(m.id, `seed ${seed}: marker #${m.id} must follow a pass-end`).toBeGreaterThan(
-					passEnds.find((e) => e.data['pass'] === m.data['pass'] && e.data['root'] === m.data['root'])!.id,
+				expect(m.id, `seed ${seed}: marker #${m.id} must follow a render-end`).toBeGreaterThan(
+					renderEnds.find((e) => e.data['renderPass'] === m.data['renderPass'] && e.data['root'] === m.data['root'])!.id,
 				);
 			}
 			// causality always terminates at an operation root without leaving the capture
@@ -384,7 +384,7 @@ describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)
 			batches.push(t);
 			b.write(t.id, a, 0, i + 1);
 		}
-		const p = b.passStart('A', batches.map((t) => t.id)); // masks all 31 slots
+		const p = b.renderStart('A', batches.map((t) => t.id)); // masks all 31 slots
 		for (const t of batches) b.retire(t.id); // all releases defer
 		expect(all(tr, 'slot-release-deferred')).toHaveLength(31);
 
@@ -393,7 +393,7 @@ describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)
 		const back = last(tr, 'slot-backstop-release');
 		expect(back.data).toEqual({ slot: 0, batch: batches[0]!.id }); // oldest retiredSeq evicted
 		expect(last(tr, 'slot-claim').data).toEqual({ slot: 0, batch: t32.id });
-		b.passEnd(p.id, 'discard');
+		b.renderEnd(p.id, 'discard');
 		b.retire(t32.id);
 	});
 });

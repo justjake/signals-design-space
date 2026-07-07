@@ -1,7 +1,7 @@
 # Behaviors that need a real React host
 
 The model deliberately simulates React's lifecycle as explicit
-bookkeeping (passes, commits, retirements) and carries no engine
+bookkeeping (renders, commits, retirements) and carries no engine
 internals (no packed storage, no memo caches, no real hooks, no real
 promises). Some behaviors therefore cannot be expressed against it: they
 are pinned instead in the test suites that run the real engine and a
@@ -25,7 +25,7 @@ suites.
 - **S22** — tracking async carriers by patching promise methods does not
   work. An empirical ruling about how the platform schedules promise
   continuations; there is nothing to model.
-- **S24** — per-pass evaluation stamps break cache keys that must
+- **S24** — per-render evaluation stamps break cache keys that must
   survive a Suspense retry. Needs real Suspense retries under a stable
   render lineage.
 - **S28** — publishing staged evaluator versions out of order around
@@ -35,7 +35,7 @@ suites.
 - **S31** — a moved evaluation stamp forces a refetch, which
   side-effectful caches observe. Suspense cache validity (duplicate
   fetches are accepted in v1); host scope.
-- **S32** — sampling live committed evaluators while replaying a pass
+- **S32** — sampling live committed evaluators while replaying a render
   world mixes closures. Staging was removed; evaluators and reducers are
   immutable, so the schedule cannot exist.
 - **S34** — gating evaluator stages only at hook execution time leaves
@@ -64,9 +64,9 @@ episode reset.)
 
 - **Case 1 V7** — two live batches where one suspends: Suspense caching
   and render lineage; host scope.
-- **Case 9 / case 10 restart races** — an update inserted after a pass
+- **Case 9 / case 10 restart races** — an update inserted after a render
   has finished rendering but before it commits forces React to restart
-  the pass at a fresh pin. The model *assumes* this as a legality fact
+  the render at a fresh pin. The model *assumes* this as a legality fact
   about the host; the race itself needs the real reconciler.
 - **Case 13, counter-overflow halves** — wrap-around of internal walk
   and cache generation counters, reserve arithmetic for live counter

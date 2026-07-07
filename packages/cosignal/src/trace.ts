@@ -59,7 +59,7 @@
  * writes of one UI update; a *slot* is one of 31 tracking entries a written
  * batch occupies while its writes can still matter (31 because React
  * schedules work on 31 "lanes" — its internal units of priority; slots are
- * recycled); a *pass* is one render pass of one root,
+ * recycled); a *render pass* is one render of one root,
  * whose *pin* is the timeline position it froze at start; a *watcher* is
  * one mounted UI subscription; *retirement* makes a batch's writes
  * permanent history; a *world* is one self-consistent view of all values.
@@ -78,14 +78,14 @@
  *  slot-release         {slot, batch}
  *  slot-release-deferred{slot, batch}                        release waited: an open render's mask still names the slot
  *  slot-backstop-release{slot, batch}                        slot table full: the oldest deferred slot was released anyway, loudly
- *  pass-start           {pass, root, pin, maskSize}          a render pass began; mask = the batches it may see
- *  pass-yield           {pass, root}                         the pass paused (concurrent rendering runs in interruptible slices)
- *  pass-resume          {pass, root}
- *  pass-end             {pass, root, disposition}            commit | discard; fires before its consequences
+ *  render-start           {renderPass, root, pin, maskSize}    a render pass began; mask = the batches it may see
+ *  render-yield           {renderPass, root}                   the render paused (concurrent rendering runs in interruptible slices)
+ *  render-resume          {renderPass, root}
+ *  render-end             {renderPass, root, disposition}      commit | discard; fires before its consequences
  *  root-commit          {root, batch, commitGen}             the root locked in a batch: its committed world now includes those writes
  *  delivery             {watcher, batch, slot, seq, mode}    a write told this watcher to re-render (deliveries are value-blind; fresh | interleaved, see below)
  *  suppressed           {watcher, batch, slot, seq, reason}  delivery skipped: a scheduled-but-unstarted re-render will fold this write anyway ('dedup-pending-fold')
- *  eval                 {node, world, durationUs, depth}     one computed evaluation in one world (newest | pass:N | committed:root | mount-fix:root)
+ *  eval                 {node, world, durationUs, depth}     one computed evaluation in one world (newest | render:N | committed:root | mount-fix:root)
  *  mount-corrective     {watcher, batch, slot}               at mount, a corrective re-render was scheduled for a live batch the mounting render did not include
  *  mount-fixup          {watcher, root, disposition, correctives}  how the mount-window check resolved:
  *                       fast-out (provably nothing moved; drift, if any, is exactly the live-batch writes
@@ -97,8 +97,8 @@
  *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
  *  react-effect-run     {effect, root, value, values?}       a committed-world observer ran (it sees exactly what its root's UI shows); values = its dep snapshot, when captured
  *  react-effect-cleanup {effect, root}                       a committed-world observer's cleanup ran (before a re-run, or at removal)
- *  pass-committed       {pass, root}                         referee marker: the commit's consequences (retirement folds, lock-ins, drains, fixups) have all landed
- *  pass-discarded       {pass, root}                         referee marker: the discard's consequences have all landed
+ *  render-committed       {renderPass, root}                   referee marker: the commit's consequences (retirement folds, lock-ins, drains, fixups) have all landed
+ *  render-discarded       {renderPass, root}                   referee marker: the discard's consequences have all landed
  *  epoch-reset          {epoch}                              quiescence: nothing in flight, so the engine reset its per-episode state
  *  clock-sync           {absoluteUs}                         emitted when DT saturates
  *  truncation           {boundaryId}                         SESSION budget crossed
@@ -114,14 +114,14 @@
  * `causeChain`). The engine emits through hooks rather than tracking causes
  * itself, so the tracer keeps the causality register: provoking kinds
  * (write, write-dropped, batch-settle, batch-retire,
- * pass-start/yield/resume/end, root-commit, epoch-reset) record the old
+ * render-start/yield/resume/end, root-commit, epoch-reset) record the old
  * register as their CAUSE and then claim it; consequence kinds (deliveries,
  * suppressions, slot transitions, evals, corrections, effect runs…) record
  * it untouched; the engine's `opEnd` hook clears it whenever a compound
- * public operation (a write, a pass end, a retirement, a settlement, a
+ * public operation (a write, a render end, a retirement, a settlement, a
  * quiesce) finishes, so unrelated operations never chain. Chains are real
  * call chains: delivery ← its write; batch-retire inside a commit ← that
- * pass-end; reconcile-correction ← its root-commit or retirement.
+ * render-end; reconcile-correction ← its root-commit or retirement.
  *
  * ## Reading a trace
  * `tracer.events()` returns decoded `{id, kind, dt, cause, data}` objects
@@ -144,7 +144,7 @@ import type {
 	ComputedNode,
 	CosignalBridge,
 	Epoch,
-	Pass,
+	RenderPass,
 	Receipt,
 	RootId,
 	Seq,
@@ -212,7 +212,7 @@ const enum KindBits {
 const enum WorldPack {
 	/** Bit 0: this eval ran in a mount-fixup world. */
 	MOUNT_FIX_BIT = 1,
-	/** code >> PAYLOAD_SHIFT: 0 = newest | +passId | −(rootLabel+1). */
+	/** code >> PAYLOAD_SHIFT: 0 = newest | +renderPassId | −(rootLabel+1). */
 	PAYLOAD_SHIFT = 1,
 }
 
@@ -227,24 +227,24 @@ const MAX_I32 = 0x7fffffff;
 const K = {
 	write: 1, writeDropped: 2, batchOpen: 3, batchSettle: 4, batchRetire: 5,
 	slotClaim: 6, slotRelease: 7, slotReleaseDeferred: 8, slotBackstop: 9,
-	passStart: 10, passYield: 11, passResume: 12, passEnd: 13,
+	renderStart: 10, renderYield: 11, renderResume: 12, renderEnd: 13,
 	rootCommit: 14, delivery: 15, suppressed: 16, evalDone: 17,
 	mountCorrective: 18, mountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
 	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
 	clockSync: 25, truncation: 26, quietWrite: 27,
-	reactEffectCleanup: 28, passCommitted: 29, passDiscarded: 30,
+	reactEffectCleanup: 28, renderCommitted: 29, renderDiscarded: 30,
 	batchDisposition: 31,
 } as const;
 
 const KIND_NAMES = [
 	'', 'write', 'write-dropped', 'batch-open', 'batch-settle', 'batch-retire',
 	'slot-claim', 'slot-release', 'slot-release-deferred', 'slot-backstop-release',
-	'pass-start', 'pass-yield', 'pass-resume', 'pass-end',
+	'render-start', 'render-yield', 'render-resume', 'render-end',
 	'root-commit', 'delivery', 'suppressed', 'eval',
 	'mount-corrective', 'mount-fixup', 'mount-correction', 'reconcile-correction',
 	'core-effect-run', 'react-effect-run', 'epoch-reset',
 	'clock-sync', 'truncation', 'quiet-write',
-	'react-effect-cleanup', 'pass-committed', 'pass-discarded',
+	'react-effect-cleanup', 'render-committed', 'render-discarded',
 	'batch-disposition',
 ] as const;
 
@@ -253,7 +253,7 @@ export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>;
 /** Kinds that claim the causality register (operation provokers). */
 const CAUSE_SETTING = new Set<TraceKindCode>([
 	K.write, K.writeDropped, K.batchSettle, K.batchRetire,
-	K.passStart, K.passYield, K.passResume, K.passEnd, K.rootCommit, K.epochReset,
+	K.renderStart, K.renderYield, K.renderResume, K.renderEnd, K.rootCommit, K.epochReset,
 ]);
 
 const OP_NAMES = ['set', 'update'] as const;
@@ -470,12 +470,12 @@ export class Tracer implements TraceHooks {
 
 	/**
 	 * World encoding for eval records, packed allocation-free: bit 0 = mount-fix,
-	 * rest = 0 newest | +passId | −(rootLabel+1) for committed/mount-fix worlds.
+	 * rest = 0 newest | +renderPassId | −(rootLabel+1) for committed/mount-fix worlds.
 	 */
 	private worldCode(world: World): PackedWorld {
 		switch (world.kind) {
 			case 'newest': return 0;
-			case 'pass': return world.pass.id << WorldPack.PAYLOAD_SHIFT;
+			case 'render': return world.render.id << WorldPack.PAYLOAD_SHIFT;
 			case 'committed': return -(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT;
 			case 'mountFix': return (-(this.label(world.root) + 1) << WorldPack.PAYLOAD_SHIFT) | WorldPack.MOUNT_FIX_BIT;
 		}
@@ -564,16 +564,16 @@ export class Tracer implements TraceHooks {
 		this.rec(K.slotBackstop, slot, batch, 0, 0, 0);
 	}
 
-	/** Post-consequence referee markers (unlike `passEnd`, which fires BEFORE
+	/** Post-consequence referee markers (unlike `renderEnd`, which fires BEFORE
 	 * the end's consequences so they can cite it as cause): these record after
-	 * every retirement fold / lock-in / drain / fixup of the pass end landed —
-	 * the stream position the reference model emits its pass events at. */
-	passCommitted(p: Pass): void {
-		this.rec(K.passCommitted, p.id, this.label(p.root), 0, 0, 0);
+	 * every retirement fold / lock-in / drain / fixup of the render end landed —
+	 * the stream position the reference model emits its render events at. */
+	renderCommitted(p: RenderPass): void {
+		this.rec(K.renderCommitted, p.id, this.label(p.root), 0, 0, 0);
 	}
 
-	passDiscarded(p: Pass): void {
-		this.rec(K.passDiscarded, p.id, this.label(p.root), 0, 0, 0);
+	renderDiscarded(p: RenderPass): void {
+		this.rec(K.renderDiscarded, p.id, this.label(p.root), 0, 0, 0);
 	}
 
 	epochReset(epoch: Epoch): void {
@@ -601,20 +601,20 @@ export class Tracer implements TraceHooks {
 		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), batch, 0, 0, 0, 0);
 	}
 
-	passStart(p: Pass): void {
-		this.rec(K.passStart, p.id, this.label(p.root), p.pin, p.maskBatches.size, 0);
+	renderStart(p: RenderPass): void {
+		this.rec(K.renderStart, p.id, this.label(p.root), p.pin, p.maskBatches.size, 0);
 	}
 
-	passYield(p: Pass): void {
-		this.rec(K.passYield, p.id, this.label(p.root), 0, 0, 0);
+	renderYield(p: RenderPass): void {
+		this.rec(K.renderYield, p.id, this.label(p.root), 0, 0, 0);
 	}
 
-	passResume(p: Pass): void {
-		this.rec(K.passResume, p.id, this.label(p.root), 0, 0, 0);
+	renderResume(p: RenderPass): void {
+		this.rec(K.renderResume, p.id, this.label(p.root), 0, 0, 0);
 	}
 
-	passEnd(p: Pass, kind: 'commit' | 'discard'): void {
-		this.rec(K.passEnd | (kind === 'commit' ? KindBits.FLAG_A : 0), p.id, this.label(p.root), 0, 0, 0);
+	renderEnd(p: RenderPass, kind: 'commit' | 'discard'): void {
+		this.rec(K.renderEnd | (kind === 'commit' ? KindBits.FLAG_A : 0), p.id, this.label(p.root), 0, 0, 0);
 	}
 
 	evalStart(node: ComputedNode, world: World): void {
@@ -690,7 +690,7 @@ export class Tracer implements TraceHooks {
 
 	private worldName(code: number, mountFix: boolean): string {
 		if (code === 0) return 'newest';
-		if (code > 0) return `pass:${code}`;
+		if (code > 0) return `render:${code}`;
 		const root = this.labelOf(-code - 1);
 		return mountFix ? `mount-fix:${root}` : `committed:${root}`;
 	}
@@ -739,15 +739,15 @@ export class Tracer implements TraceHooks {
 			case K.slotBackstop:
 				data = { slot: subject, batch: world };
 				break;
-			case K.passStart:
-				data = { pass: subject, root: this.labelOf(world), pin: a0, maskSize: a1 };
+			case K.renderStart:
+				data = { renderPass: subject, root: this.labelOf(world), pin: a0, maskSize: a1 };
 				break;
-			case K.passYield:
-			case K.passResume:
-				data = { pass: subject, root: this.labelOf(world) };
+			case K.renderYield:
+			case K.renderResume:
+				data = { renderPass: subject, root: this.labelOf(world) };
 				break;
-			case K.passEnd:
-				data = { pass: subject, root: this.labelOf(world), disposition: a ? 'commit' : 'discard' };
+			case K.renderEnd:
+				data = { renderPass: subject, root: this.labelOf(world), disposition: a ? 'commit' : 'discard' };
 				break;
 			case K.rootCommit:
 				data = { root: this.labelOf(world), batch: subject, commitGen: a0 };
@@ -787,9 +787,9 @@ export class Tracer implements TraceHooks {
 			case K.reactEffectCleanup:
 				data = { effect: this.labelOf(subject), root: this.labelOf(world) };
 				break;
-			case K.passCommitted:
-			case K.passDiscarded:
-				data = { pass: subject, root: this.labelOf(world) };
+			case K.renderCommitted:
+			case K.renderDiscarded:
+				data = { renderPass: subject, root: this.labelOf(world) };
 				break;
 			case K.epochReset:
 				data = { epoch: subject };

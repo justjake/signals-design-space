@@ -1,8 +1,8 @@
 // NF2 P2.S-A bench gates (plans/2026-07-06 §4.9.6): the two staged gates,
 // each ≤ 1.4× the head-bridge anchor; breach = mid-stage STOP.
 //
-//  - cold-pass: N=200 quiet computeds, first render — per-computed cold
-//    world read in a fresh pass (prices the §4.4.8 fast-path deletion).
+//  - cold-render: N=200 quiet computeds, first render — per-computed cold
+//    world read in a fresh render (prices the §4.4.8 fast-path deletion).
 //  - wide-mask lock-in: one commit locking in a batch with W=200
 //    atomsTouched against a committed arena shadowing all of them —
 //    end-to-end commit+drain cost (site-(b) fan + refold burst).
@@ -24,26 +24,26 @@ function median(xs) {
 	return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-function coldPass() {
+function coldRender() {
 	const b = __newBridgeForTest();
 	b.registerBridge();
 	const atoms = Array.from({ length: N }, (_, i) => b.atom(`a${i}`, i));
 	const comps = Array.from({ length: N }, (_, i) =>
 		b.computed(`c${i}`, (read) => Number(read(atoms[i])) + Number(read(atoms[(i + 1) % N]))));
 	// A committed consumer exists (mounted-quiet app state), so the committed
-	// arena is populated and passes claim pooled arenas.
+	// arena is populated and renders claim pooled arenas.
 	const sum = b.computed('sum', (read) => Number(read(atoms[0])) + Number(read(atoms[N - 1])));
-	const p0 = b.passStart('R', []);
+	const p0 = b.renderStart('R', []);
 	b.mountWatcher(p0.id, sum, 'W');
-	b.passEnd(p0.id, 'commit');
+	b.renderEnd(p0.id, 'commit');
 	let checksum = 0;
 	const times = [];
 	for (let r = 0; r < REPS + 3; r++) {
 		globalThis.gc?.();
 		const t0 = process.hrtime.bigint();
-		const p = b.passStart('R', []);
-		for (let i = 0; i < N; i++) checksum += Number(b.passValue(comps[i], p));
-		b.passEnd(p.id, 'discard');
+		const p = b.renderStart('R', []);
+		for (let i = 0; i < N; i++) checksum += Number(b.renderValue(comps[i], p));
+		b.renderEnd(p.id, 'discard');
 		const t1 = process.hrtime.bigint();
 		if (r >= 3) times.push(Number(t1 - t0) / N); // per-computed cold read ns
 	}
@@ -59,19 +59,19 @@ function wideMask() {
 		for (let i = 0; i < N; i++) s += Number(read(atoms[i]));
 		return s;
 	});
-	const p0 = b.passStart('R', []);
+	const p0 = b.renderStart('R', []);
 	const w = b.mountWatcher(p0.id, c, 'W');
-	b.passEnd(p0.id, 'commit'); // committed arena now shadows all 200 atoms + c
+	b.renderEnd(p0.id, 'commit'); // committed arena now shadows all 200 atoms + c
 	let checksum = 0;
 	const times = [];
 	for (let r = 0; r < REPS + 3; r++) {
 		const t = b.openBatch();
 		for (let i = 0; i < N; i++) b.write(t.id, atoms[i], 0, i + r);
-		const p = b.passStart('R', [t.id]);
+		const p = b.renderStart('R', [t.id]);
 		b.renderWatcher(p.id, w.id);
 		globalThis.gc?.();
 		const t0 = process.hrtime.bigint();
-		b.passEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // lock-in fan + drain refold burst
+		b.renderEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // lock-in fan + drain refold burst
 		const t1 = process.hrtime.bigint();
 		checksum += Number(b.committedValue(c, 'R'));
 		if (r >= 3) times.push(Number(t1 - t0) / 1000); // µs per commit+drain
@@ -79,7 +79,7 @@ function wideMask() {
 	return { us: median(times), checksum };
 }
 
-const cp = coldPass();
+const cp = coldRender();
 const wm = wideMask();
-console.log(`@@ROW ${JSON.stringify({ gate: 'S-A', shape: 'cold-pass', metric: 'perComputedColdReadNs', value: cp.ns, checksum: cp.checksum, root: ROOT })}`);
+console.log(`@@ROW ${JSON.stringify({ gate: 'S-A', shape: 'cold-render', metric: 'perComputedColdReadNs', value: cp.ns, checksum: cp.checksum, root: ROOT })}`);
 console.log(`@@ROW ${JSON.stringify({ gate: 'S-A', shape: 'wide-mask-lock-in', metric: 'commitDrainUs', value: wm.us, checksum: wm.checksum, root: ROOT })}`);

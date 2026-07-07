@@ -41,12 +41,12 @@ export type ScheduleOp =
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
 	| { t: 'settle'; batch: number }
 	| { t: 'retire'; batch: number }
-	| { t: 'passStart'; root: string; include: number[] }
-	| { t: 'yield'; pass: number }
-	| { t: 'resume'; pass: number }
-	| { t: 'end'; pass: number; kind: 'commit' | 'discard'; retireAtCommit: number[] }
-	| { t: 'mount'; pass: number; node: number }
-	| { t: 'render'; pass: number; watcher: number }
+	| { t: 'renderStart'; root: string; include: number[] }
+	| { t: 'yield'; renderPass: number }
+	| { t: 'resume'; renderPass: number }
+	| { t: 'end'; renderPass: number; kind: 'commit' | 'discard'; retireAtCommit: number[] }
+	| { t: 'mount'; renderPass: number; node: number }
+	| { t: 'render'; renderPass: number; watcher: number }
 	| { t: 'reactEffect'; root: string; node: number }
 	/** A committed observer whose body re-chooses deps CAUSALLY:
 	 * read(sel) ? read(a) : read(b) — the dep-flip family. */
@@ -120,12 +120,12 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			}
 			case 'settle': m.settleAction(batchAt(m, op.batch)); break;
 			case 'retire': m.retire(batchAt(m, op.batch)); break;
-			case 'passStart': m.passStart(op.root, op.include.map((i) => batchAt(m, i))); break;
-			case 'yield': m.passYield(passAt(m, op.pass)); break;
-			case 'resume': m.passResume(passAt(m, op.pass)); break;
-			case 'end': m.passEnd(passAt(m, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(m, i)) }); break;
-			case 'mount': m.mountWatcher(passAt(m, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
-			case 'render': m.renderWatcher(passAt(m, op.pass), watcherAt(m, op.watcher)); break;
+			case 'renderStart': m.renderStart(op.root, op.include.map((i) => batchAt(m, i))); break;
+			case 'yield': m.renderYield(renderPassAt(m, op.renderPass)); break;
+			case 'resume': m.renderResume(renderPassAt(m, op.renderPass)); break;
+			case 'end': m.renderEnd(renderPassAt(m, op.renderPass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(m, i)) }); break;
+			case 'mount': m.mountWatcher(renderPassAt(m, op.renderPass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
+			case 'render': m.renderWatcher(renderPassAt(m, op.renderPass), watcherAt(m, op.watcher)); break;
 			case 'reactEffect': m.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
 			case 'reactEffectPick':
 				m.mountReactEffectPick(
@@ -176,7 +176,7 @@ function pickId<K>(map: Map<K, unknown>, index: number, what: string): K {
 }
 
 const batchAt = (m: CosignalModel, index: number): number => pickId(m.idToBatch, index, 'batches');
-const passAt = (m: CosignalModel, index: number): number => pickId(m.passes, index, 'passes');
+const renderPassAt = (m: CosignalModel, index: number): number => pickId(m.idToRenderPass, index, 'render passes');
 const watcherAt = (m: CosignalModel, index: number): number => pickId(m.watchers, index, 'watchers');
 const effectAt = (m: CosignalModel, index: number): number => pickId(m.reactEffects, index, 'react effects');
 
@@ -197,7 +197,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			const batch = pick(34);
 			ops.push({ t: 'write', batch, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 			// same-batch bursts exercise the per-(watcher, slot) dedup and the
-			// pass-aware suppression rule far more often than uniform picks
+			// render-aware suppression rule far more often than uniform picks
 			while (bool(0.4)) ops.push({ t: 'write', batch, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		}
 		else if (roll < 0.38) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
@@ -225,26 +225,26 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			const n = pick(3);
 			for (let k = 0; k < n; k++) include.push(pick(34));
 			// the interleaved-delivery shape: arm the (watcher, slot) dedup bit
-			// pre-pin, open a pass including that slot, then write post-pin —
+			// pre-pin, open a render including that slot, then write post-pin —
 			// the started render cannot fold the write, so it must re-deliver
 			if (include.length > 0 && bool(0.5)) {
 				ops.push({ t: 'write', batch: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
-				ops.push({ t: 'passStart', root: ROOTS[pick(2)]!, include });
+				ops.push({ t: 'renderStart', root: ROOTS[pick(2)]!, include });
 				ops.push({ t: 'write', batch: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
 			} else {
-				ops.push({ t: 'passStart', root: ROOTS[pick(2)]!, include });
+				ops.push({ t: 'renderStart', root: ROOTS[pick(2)]!, include });
 			}
-		} else if (roll < 0.68) ops.push({ t: 'yield', pass: pick(20) });
-		else if (roll < 0.72) ops.push({ t: 'resume', pass: pick(20) });
+		} else if (roll < 0.68) ops.push({ t: 'yield', renderPass: pick(20) });
+		else if (roll < 0.72) ops.push({ t: 'resume', renderPass: pick(20) });
 		else if (roll < 0.82) {
 			const retireAtCommit: number[] = [];
 			if (bool(0.3)) retireAtCommit.push(pick(34));
-			ops.push({ t: 'end', pass: pick(20), kind: bool(0.75) ? 'commit' : 'discard', retireAtCommit });
+			ops.push({ t: 'end', renderPass: pick(20), kind: bool(0.75) ? 'commit' : 'discard', retireAtCommit });
 		} else if (roll < 0.88) {
-			ops.push({ t: 'mount', pass: pick(20), node: pick(8) });
-			if (bool(0.5)) ops.push({ t: 'render', pass: pick(20), watcher: pick(10) });
+			ops.push({ t: 'mount', renderPass: pick(20), node: pick(8) });
+			if (bool(0.5)) ops.push({ t: 'render', renderPass: pick(20), watcher: pick(10) });
 		}
-		else if (roll < 0.91) ops.push({ t: 'render', pass: pick(20), watcher: pick(10) });
+		else if (roll < 0.91) ops.push({ t: 'render', renderPass: pick(20), watcher: pick(10) });
 		else if (roll < 0.94) {
 			// Committed observers: single-node bodies and causally dep-choosing
 			// (pick) bodies, with occasional removal / StrictMode replay so the

@@ -44,9 +44,9 @@ function untrackedFan() {
 			for (let i = 0; i < K; i++) s += Number(read(fans[i]));
 			return s;
 		});
-		const p = b.passStart(`R${r}`, []);
+		const p = b.renderStart(`R${r}`, []);
 		b.mountWatcher(p.id, agg, `W${r}`);
-		b.passEnd(p.id, 'commit'); // committed arena now holds K weak hot→c links
+		b.renderEnd(p.id, 'commit'); // committed arena now holds K weak hot→c links
 		aggs.push(agg);
 	}
 	const times = [];

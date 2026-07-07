@@ -19,7 +19,7 @@ const HELD = envInt('HELD', 0) === 1;
 /**
  * INTERLEAVE=1: the frame's writes land while the render pass is YIELDED
  * with the written slot in its mask and its pin predating the writes, so
- * pass-aware suppression MUST deliver interleaved (that render's frozen
+ * render-aware suppression MUST deliver interleaved (that render's frozen
  * world cannot show the writes). Equal-value interleaved deliveries are the
  * spurious-render exposure.
  */
@@ -30,10 +30,10 @@ const WARMUP = envInt('WARMUP', 1);
 const b = registerReactBridge();
 const a = b.atom('a', 0);
 const c = b.computed('c', (read) => read(a) + 1);
-const setup = b.passStart('R', []);
+const setup = b.renderStart('R', []);
 const watchers = [];
 for (let i = 0; i < F; i++) watchers.push(b.mountWatcher(setup.id, c, `w${i}`));
-b.passEnd(setup.id, 'commit');
+b.renderEnd(setup.id, 'commit');
 
 let v = 0;
 function repOnce() {
@@ -52,14 +52,14 @@ function repOnce() {
 		// per-(watcher,slot) delivery/spurious accounting keyed on event slices
 		const perWB = new Map(); // `${watcher}:${slot}` -> {d, s}
 		let frameWriteNs = 0;
-		let interPass;
+		let interRender;
 		if (INTERLEAVE) {
 			// Slot intern happens at first write: seed one changing write per
-			// batch so the pass mask captures their slots, then open+yield.
+			// batch so the render mask captures their slots, then open+yield.
 			for (const batch of batches) b.write(batch.id, a, 0, ++v);
-			interPass = b.passStart('R', b.liveBatches().map((t) => t.id));
-			for (const w of watchers) b.renderWatcher(interPass.id, w.id);
-			b.passYield(interPass.id);
+			interRender = b.renderStart('R', b.liveBatches().map((t) => t.id));
+			for (const w of watchers) b.renderWatcher(interRender.id, w.id);
+			b.renderYield(interRender.id);
 		}
 		for (let k = 0; k < W; k++) {
 			const batch = batches[k % B];
@@ -82,15 +82,15 @@ function repOnce() {
 		}
 		writeNs += frameWriteNs;
 		firstLast.push(frameWriteNs / W);
-		if (interPass !== undefined) {
-			b.passResume(interPass.id);
-			b.passEnd(interPass.id, 'commit');
+		if (interRender !== undefined) {
+			b.renderResume(interRender.id);
+			b.renderEnd(interRender.id, 'commit');
 		} else {
-			// render cycle: pass over all live batches, render every watcher, commit.
+			// render cycle: a render pass over all live batches, render every watcher, commit.
 			const live = b.liveBatches().map((t) => t.id);
-			const p = b.passStart('R', live);
+			const p = b.renderStart('R', live);
 			for (const w of watchers) b.renderWatcher(p.id, w.id);
-			b.passEnd(p.id, 'commit');
+			b.renderEnd(p.id, 'commit');
 		}
 		for (const t of batches) b.retire(t.id);
 		const f1 = process.hrtime.bigint();

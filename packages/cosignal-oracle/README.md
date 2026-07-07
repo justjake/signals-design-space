@@ -15,7 +15,7 @@ it:
   every step of every schedule;
 - **a seeded random schedule generator, runner, and shrinker**
   (`src/schedule.ts`) — randomized interleavings of writes, render
-  passes, pauses, commits, abandons, and mounts, reproducible from a
+  renders, pauses, commits, abandons, and mounts, reproducible from a
   seed, with automatic reduction of failures to minimal schedules;
 - **an engine adapter interface and diff harness** (`src/adapter.ts`) —
   any engine implementation can run the same schedules in lockstep with
@@ -25,7 +25,7 @@ The model's authority comes from simplicity. Worlds are pure replays
 over visibility-filtered write records; derived values are memo-free
 recursive evaluation; notification reachability is recomputed from
 scratch at every write; React's render lifecycle is explicit
-batch/pass/retirement bookkeeping. Wherever a real engine would use an
+batch/render/retirement bookkeeping. Wherever a real engine would use an
 optimization (memo tables, dirty marking, fast paths), the model simply
 recomputes everything — so if the engine and the model disagree, the
 engine is wrong. The one exception is semantic, not an optimization: in
@@ -75,12 +75,12 @@ must reproduce. Terms are defined as they appear.
 
 ### Visibility (which receipts a world replays)
 
-- **A pass world** sees a receipt if (1) the receipt's batch retired at
-  or before the pass's pin — it was already permanent history when the
-  pass started — or (2) the receipt belongs to an *included* batch (in
-  the pass's mask, or committed into the root when the pass started)
+- **A render world** sees a receipt if (1) the receipt's batch retired at
+  or before the render's pin — it was already permanent history when the
+  render started — or (2) the receipt belongs to an *included* batch (in
+  the render's mask, or committed into the root when the render started)
   *and* the receipt's seq is at or before the pin. The pin cap exists
-  because a pass can pause and resume: without it, a write landing
+  because a render can pause and resume: without it, a write landing
   mid-pause would change answers between two slices of the same render,
   which is exactly the tearing this design exists to prevent. The pin
   cap applies to committed members too: a still-live batch that is
@@ -102,7 +102,7 @@ must reproduce. Terms are defined as they appear.
   library's documented untracked contract, value face — each computed
   node keeps a `{trackedFingerprint, value}` record consulted only by
   `newestValue` and the core-effect flush). World folds are unchanged:
-  pass/committed/mount-fix evaluations refold at their boundaries, so
+  render/committed/mount-fix evaluations refold at their boundaries, so
   untracked deps stay fresh in every world-side revalidation.
 - **The mount-reconciliation world** (used at most once per mount, at
   its commit, when the four-condition test below falls through) sees
@@ -117,8 +117,8 @@ receipt, and bumps the slot's write clock. On retirement the model runs
 a fixed order: stamp every receipt of the batch with the retirement seq;
 fold/compact what can be folded; notify committed-state observers; clear
 the batch's per-root membership rows; release the slot — deferred while
-any open pass's mask names it (deferred releases re-evaluate at every
-pass end). The order is load-bearing: rows clear before release so a
+any open render's mask names it (deferred releases re-evaluate at every
+render end). The order is load-bearing: rows clear before release so a
 recycled slot can never be mistaken for a committed member, and
 notification happens after stamping so observers see the post-retirement
 truth. Slot recycling is safe because receipts carry their slot
@@ -126,10 +126,10 @@ permanently and every claim is sequenced after the previous tenant's
 retirement, so a fold can always tell tenants apart by seq. Write clocks
 and delivery-dedup bits reset at claim. If every slot is somehow held, a
 retired-but-mask-retained slot is released anyway, loudly — retained
-passes stay correct because their receipts kept their slot fields.
+renders stay correct because their receipts kept their slot fields.
 
 Compaction folds a prefix of a tape into the base only when every
-receipt in the prefix is retired *and* every live pass's pin already
+receipt in the prefix is retired *and* every live render's pin already
 sees them via the retired-history rule — so compaction can never change
 any live world's answer. An abandoned batch (no React work ever
 committed) retires through the same path: writes never silently revert,
@@ -152,15 +152,15 @@ folds to an equal value), which is safe.
 
 One dedup bit per (watcher, slot) suppresses repeat deliveries — but
 only when scheduled-and-not-yet-started work will fold the new write. If
-a pass on the watcher's root already started (its pin predates the
+a render on the watcher's root already started (its pin predates the
 write) and its mask names the slot, the running render cannot see the
 write, so it is delivered anyway as an "interleaved" update (React
 restarts at a fresh pin). Dedup bits re-arm when the watcher re-renders.
 
 ### Commit, mount reconciliation, and effects
 
-When a pass commits: re-rendered watchers adopt the pass-world values;
-retirements due at this commit run (only batches this pass rendered may
+When a render commits: re-rendered watchers adopt the render-world values;
+retirements due at this commit run (only batches this render rendered may
 retire inside its commit — a foreign batch retires at its own closure);
 every still-live rendered batch is committed into the root (**lock-in**,
 bumping the root's commit generation and notifying committed observers);
@@ -173,7 +173,7 @@ node but was not included in its render, a corrective re-render is
 scheduled into that batch's own lane (so the mount joins pending
 updates instead of missing or revealing them) — this step reads write
 metadata only, no values. Second, a four-condition test decides whether
-anything retired or locked in during the window: same pass mounting and
+anything retired or locked in during the window: same render mounting and
 committing; no committed-side advance since the pin; root commit
 generation unchanged; no included batch wrote after the pin (checked
 over the committing batches at commit time, not a stale slot snapshot).
@@ -197,7 +197,7 @@ captured is the value-gated re-check surface. Re-check timing is
 RCC-EF2's amended BOUNDARY semantics (2026-07-06): once per boundary
 OPERATION — a per-root commit, a retirement (write-free ones included:
 retirement and settlement are guaranteed flush points), a settlement —
-at the boundary value (member writes coalesce; one pass locking in two
+at the boundary value (member writes coalesce; one render locking in two
 batches re-checks once), and never while the effect's own root has an
 open render-pass frame (the deferred flip flushes when that frame
 closes, commit or discard). Cleanup runs before every re-fire and at
@@ -206,7 +206,7 @@ explicit op (cleanup + unconditional re-run + recapture).
 
 ### Quiescence
 
-When nothing is live (no batches, no passes, no parked actions), every
+When nothing is live (no batches, no renders, no parked actions), every
 tape has fully compacted. The model then resets per-episode dependency
 bookkeeping (epoch bump, dead-record drop, slot bookkeeping zeroes).
 Timeline values are never rewritten: sequence counters are plain JS
@@ -220,12 +220,12 @@ Implement `EngineAdapter` (`src/adapter.ts`) over the engine:
 ```ts
 type EngineAdapter = {
   // Apply one ScheduleOp (open batch, write, scoped write, settle, retire,
-  // pass start/yield/resume/end(+retire-at-commit), mount/render watcher,
+  // render start/yield/resume/end(+retire-at-commit), mount/render watcher,
   // effects, discard-all, quiesce). Return 'skipped' iff the op is illegal
   // in the current state — legality must match the model's.
   apply(op: ScheduleOp): 'applied' | 'skipped';
   // All observable values right now: the newest world, committed-for-root
-  // for every root, and every open pass's world.
+  // for every root, and every open render's world.
   snapshot(): ObservableSnapshot;
   // Comparable events since the last drain, in order: deliveries and
   // suppressions (value-blind, with {watcher, batch, slot} attribution),
@@ -305,7 +305,7 @@ refereed elsewhere, named here so the coverage boundary is explicit
 - **Host refire phase.** The model runs a re-fire at the boundary
   operation's end. The React adapter additionally defers refires queued
   by a COMMIT's boundary to the root-commit report (React captures its
-  re-pend classification before pass-end) — a host-phase shell with no
+  re-pend classification before render-end) — a host-phase shell with no
   protocol counterpart here; the React suite referees it.
 - **Observation liveness.** Effect dep snapshots retain the RCC-OL1
   observation union engine-side (like watchers, whose lifecycle the

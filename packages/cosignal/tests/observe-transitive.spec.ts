@@ -45,16 +45,16 @@ describe('transitive observation through derived nodes', () => {
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		const oc = b.computed('oc', (read) => read(node));
-		const p1 = b.passStart('A', []);
+		const p1 = b.renderStart('A', []);
 		const w1 = b.mountWatcher(p1.id, oc, 'W1');
 		await tick();
 		expect(log).toEqual([]); // minted, not live: a render alone observes nothing
-		b.passEnd(p1.id, 'commit');
+		b.renderEnd(p1.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']); // the closure atom observes through the derived node
-		const p2 = b.passStart('A', []);
+		const p2 = b.renderStart('A', []);
 		const w2 = b.mountWatcher(p2.id, oc, 'W2');
-		b.passEnd(p2.id, 'commit');
+		b.renderEnd(p2.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']); // second watcher on the SAME node: interior transition
 		w1.live = false;
@@ -73,9 +73,9 @@ describe('transitive observation through derived nodes', () => {
 		const nb = b.adoptAtom('b', atomB as Atom<unknown>);
 		const flag = b.atom('flag', 1);
 		const oc = b.computed('oc', (read) => ((read(flag) as number) ? read(na) : read(nb)));
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, oc, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		expect(logA).toEqual(['observe']); // the taken branch is retained…
 		expect(logB).toEqual([]); // …the untaken one is not
@@ -106,9 +106,9 @@ describe('transitive observation through derived nodes', () => {
 		const na = b.adoptAtom('a', atom as Atom<unknown>);
 		const cB = b.computed('cB', (read) => (read(na) as number) * 2);
 		const cA = b.computed('cA', (read) => (read(cB) as number) + 1);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, cA, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']); // watcher → cA → cB → atom
 		b.removeWatcher(w.id); // the grind-3 unsubscribe surface
@@ -122,9 +122,9 @@ describe('transitive observation through derived nodes', () => {
 		const { atom, log } = observedAtom(0);
 		const na = b.adoptAtom('a', atom as Atom<unknown>);
 		const oc = b.computed('oc', (read) => read(na));
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, oc, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']);
 		const epochBefore = b.epoch;
@@ -162,9 +162,9 @@ describe('transitive observation through derived nodes', () => {
 			if (bv > 0) throw new Error('boom');
 			return read(na);
 		});
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, oc, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		expect(logA).toEqual(['observe']); // healthy evaluation reads both
 		expect(logB).toEqual(['observe']);

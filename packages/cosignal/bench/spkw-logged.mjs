@@ -32,9 +32,9 @@ if (SHAPE === 'chain3') {
 } else if (SHAPE === 'watch1') {
 	const c1 = b.computed('c1', (read) => { evals++; return read(a) + 1; });
 	top = c1;
-	const p = b.passStart('root', []);
+	const p = b.renderStart('root', []);
 	b.mountWatcher(p.id, c1, 'w1');
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 } else if (SHAPE !== 'bare') {
 	throw new Error(`unknown SHAPE ${SHAPE}`);
 }

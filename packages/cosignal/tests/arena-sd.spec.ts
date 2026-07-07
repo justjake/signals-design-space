@@ -4,7 +4,7 @@
  *
  *  1. Pool shell reuse round-trip: release SCRUBS totally (columns zeroed,
  *     written prefix zeroed, lists dropped) while CAPACITY persists (the B1
- *     cold-pass shave); claimGen is monotone with claim/release parity
+ *     cold-render shave); claimGen is monotone with claim/release parity
  *     (odd = live tenancy, even = at rest); a re-claimed shell serves
  *     current truth, never dead-tenancy residue.
  *  2. The pool cap (8): releases beyond the cap drop the shell.
@@ -43,9 +43,9 @@ function bridge(options?: BridgeOptions): CosignalBridge {
 }
 
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
@@ -128,13 +128,13 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		expect(shell.vals.length).toBe(valsCap);
 		// Advance committed truth while nothing is materialized, then remount
 		// under a DIFFERENT root: the claimed shell (this one or the mount
-		// pass's recycled shell — pass arenas share the pool) must refold
+		// render's recycled shell — render arenas share the pool) must refold
 		// fresh truth, never tenancy-1 residue.
 		commitWrite(b, a0, 3);
 		const w2 = mount(b, 'S', c, 'W2');
 		expect(w2.lastRenderedValue).toBe(3);
 		expect(b.committedValue(c, 'S')).toBe(3);
-		expect(shell.claimGen).toBeGreaterThan(genLive + 1); // the shell WAS re-claimed (pass or committed tenancy)
+		expect(shell.claimGen).toBeGreaterThan(genLive + 1); // the shell WAS re-claimed (render or committed tenancy)
 		const s = b.__arenaForTest('S')!;
 		expect(s.claimGen % 2).toBe(1); // live parity again
 		expect(s.root).toBe('S');

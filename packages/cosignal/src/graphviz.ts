@@ -61,7 +61,7 @@ export function traceToDot(events: TraceEvent[], filter?: (e: TraceEvent) => boo
 		'write': 'lightblue',
 		'batch-retire': 'lightyellow',
 		'root-commit': 'lightyellow',
-		'pass-end': 'lightyellow',
+		'render-end': 'lightyellow',
 		'delivery': 'lightgreen',
 		'suppressed': 'lightgray',
 		'mount-correction': 'salmon',

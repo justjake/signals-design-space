@@ -18,9 +18,9 @@ function bridge(options?: BridgeOptions): CosignalBridge {
 }
 
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
@@ -88,9 +88,9 @@ describe('S-A fp-100/seq-50 lock-in walk (§4.2 no-fp rule)', () => {
 		// BELOW the visible maximum — an fp gate could never see this flip;
 		// the site-(b) mark + unconditional refold does (and the armed
 		// divergence check proves arena ≡ memo at the epilogue).
-		const p = b.passStart('R', [tLow.id]);
+		const p = b.renderStart('R', [tLow.id]);
 		b.renderWatcher(p.id, w.id);
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		expect(b.committedValue(c, 'R')).toBe(150); // (0 + 50) + 100 — the fold now includes seq-50
 		expect(w.lastRenderedValue).toBe(150);
 		b.retire(tLow.id);

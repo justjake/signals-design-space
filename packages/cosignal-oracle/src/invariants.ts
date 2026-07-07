@@ -15,7 +15,7 @@
  *    sequence alone.
  * 3. monotone sequence relations — tapes strictly increase, nothing exceeds
  *    the global counter, retirement stamps follow the writes they stamp.
- * 4. receipt-retention soundness — a pinned pass can always reconstruct its
+ * 4. receipt-retention soundness — a pinned render can always reconstruct its
  *    world: the base+tape fold equals the full-history
  *    (origin+archive+tape) fold for every live world, i.e. compaction never
  *    changed any live world's answer.
@@ -23,7 +23,7 @@
  *    tape has fully compacted into its base.
  * 6. structural coherence — at most 31 live batches, slot↔batch bindings
  *    agree both ways, per-root commit rows never name retired batches (rows
- *    clear at retirement, before slot release), one open pass per root.
+ *    clear at retirement, before slot release), one open render per root.
  */
 
 import {
@@ -40,8 +40,8 @@ function fail(msg: string): never {
 /** Every world the model can currently name. */
 export function relevantWorlds(m: CosignalModel): World[] {
 	const worlds: World[] = [{ kind: 'newest' }];
-	for (const p of m.passes.values()) {
-		if (p.state !== 'ended') worlds.push({ kind: 'pass', pass: p });
+	for (const p of m.idToRenderPass.values()) {
+		if (p.state !== 'ended') worlds.push({ kind: 'render', render: p });
 	}
 	for (const root of m.roots.keys()) worlds.push({ kind: 'committed', root });
 	return worlds;
@@ -50,7 +50,7 @@ export function relevantWorlds(m: CosignalModel): World[] {
 function worldName(w: World): string {
 	switch (w.kind) {
 		case 'newest': return 'newest';
-		case 'pass': return `pass#${w.pass.id}(pin ${w.pass.pin})`;
+		case 'render': return `render#${w.render.id}(pin ${w.render.pin})`;
 		case 'committed': return `committed(${w.root})`;
 		case 'mountFix': return 'mountFix';
 	}
@@ -106,12 +106,12 @@ function checkTenancy(m: CosignalModel): void {
 				}
 			}
 		}
-		// Pin-after-claim: any open pass whose mask means the CURRENT tenant pinned after the claim.
+		// Pin-after-claim: any open render whose mask means the CURRENT tenant pinned after the claim.
 		if (tenant !== undefined) {
-			for (const p of m.passes.values()) {
+			for (const p of m.idToRenderPass.values()) {
 				if (p.state === 'ended' || !p.maskBatches.has(tenant) || !p.maskSlots.has(slot.id)) continue;
 				if (p.pin < slot.claimSeq) {
-					fail(`tenancy: pass ${p.id} pinned at ${p.pin} but masks slot ${slot.id} claimed at ${slot.claimSeq}`);
+					fail(`tenancy: render pass ${p.id} pinned at ${p.pin} but masks slot ${slot.id} claimed at ${slot.claimSeq}`);
 				}
 			}
 		}
@@ -140,8 +140,8 @@ function checkMonotone(m: CosignalModel): void {
 			}
 		}
 	}
-	for (const p of m.passes.values()) {
-		if (p.pin > m.seq) fail(`pass ${p.id} pin ${p.pin} above global counter ${m.seq}`);
+	for (const p of m.idToRenderPass.values()) {
+		if (p.pin > m.seq) fail(`render pass ${p.id} pin ${p.pin} above global counter ${m.seq}`);
 	}
 	for (const t of m.idToBatch.values()) {
 		if (t.parked && t.state === 'retired') fail(`batch ${t.id} both parked and retired — parked batches may not retire before settlement`);
@@ -193,9 +193,9 @@ function checkStructure(m: CosignalModel): void {
 		}
 	}
 	const openByRoot = new Set<string>();
-	for (const p of m.passes.values()) {
+	for (const p of m.idToRenderPass.values()) {
 		if (p.state === 'ended') continue;
-		if (openByRoot.has(p.root)) fail(`two open passes on root ${p.root}`);
+		if (openByRoot.has(p.root)) fail(`two open renders on root ${p.root}`);
 		openByRoot.add(p.root);
 	}
 }

@@ -14,7 +14,7 @@
  *  - dispose→reuse id tenancy (§4.5.3):          tests/arena-sc.spec.ts
  *  - watcher dual-store rule (T7):               tests/graph-consumers.spec.ts
  *    + cosignal-react/tests/graph-consumers.spec.tsx (the shim-side fix)
- *  - never-quiescent soak that motivated mid-episode batch/pass reclamation
+ *  - never-quiescent soak that motivated mid-episode batch/render reclamation
  *    and the event-minting gate: research/experiments/cosignal-gates.md SPK-K1
  *  - KNOWN-HOLE-BY-RULING (not probed, not fixed): root records are immortal
  *    (RUL-6 — no root-teardown event exists; concurrent.ts arenaQuiesceSweep).
@@ -45,9 +45,9 @@ function bridge(options?: BridgeOptions): CosignalBridge {
 }
 
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
@@ -267,16 +267,16 @@ describe('4. ARENA POOL', () => {
 		const capAfterBig = Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length));
 		for (let i = 0; i < 12; i++) {
 			const s = b.computed(`s${i}`, (read) => read(atoms[0]!));
-			const ws = mount(b, `S${i}`, s, `WS${i}`); // small tenancies churn pool claims (pass + committed shells)
+			const ws = mount(b, `S${i}`, s, `WS${i}`); // small tenancies churn pool claims (render + committed shells)
 			ws.live = false;
 			b.quiesce();
 		}
 		expect(b.__arenaPoolForTest().length).toBeLessThanOrEqual(8); // the cap: extra releases DROP the shell
-		expect(Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length))).toBe(capAfterBig); // capacity kept (by design), never grown by small passes
+		expect(Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length))).toBe(capAfterBig); // capacity kept (by design), never grown by small renders
 	});
 });
 
-describe('5. TAPES / BATCHES / PASSES', () => {
+describe('5. TAPES / BATCHES / RENDER PASSES', () => {
 	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE (SPK-K1 regression: mid-episode reclamation; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
 		const b = __newBridgeForTest(); // production posture: no referee, no tracer
 		b.registerBridge();
@@ -287,9 +287,9 @@ describe('5. TAPES / BATCHES / PASSES', () => {
 			const t = b.openBatch();
 			b.write(t.id, an, 0, i);
 			if (i % 8 === 0) {
-				const p = b.passStart('R', [t.id]); // an open pass pin-blocks compaction…
+				const p = b.renderStart('R', [t.id]); // an open render pin-blocks compaction…
 				b.renderWatcher(p.id, w.id);
-				b.passEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // …and its close drains it
+				b.renderEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // …and its close drains it
 			} else {
 				b.retire(t.id);
 			}
@@ -300,7 +300,7 @@ describe('5. TAPES / BATCHES / PASSES', () => {
 			}
 		}
 		expect(b.idToBatch.size).toBe(0); // retired batches reclaimed mid-episode — NO quiesce ran
-		expect(b.passes.size).toBe(0); // ended passes reclaimed at pass end
+		expect(b.idToRenderPass.size).toBe(0); // ended renders reclaimed at render end
 		expect(an.tp.n - an.tp.start).toBe(0); // tapes fully compacted
 		expect(an.tp.kinds.length).toBe(0); // packed columns reset with the empty window
 		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing minted anywhere)

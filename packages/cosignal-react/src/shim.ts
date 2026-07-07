@@ -12,13 +12,13 @@
  *    reintroduce tearing (a single rendered frame mixing old and new
  *    state) later, with no error pointing at the cause.
  *  - protocol events -> bridge: onRenderPassStart(includedBatches) ->
- *    passStart; yield/resume -> passYield/passResume;
- *    onRenderPassEnd(committed) -> passEnd('commit') at the moment the
- *    pass commits — before that commit's per-root report and before any
+ *    renderStart; yield/resume -> renderYield/renderResume;
+ *    onRenderPassEnd(committed) -> renderEnd('commit') at the moment the
+ *    render commits — before that commit's per-root report and before any
  *    retirement, which is what lets the bridge snapshot committed state as
  *    the baseline for mount fixups (the engine's commit-time reconciliation
  *    of freshly mounted components against updates that were in flight
- *    while they mounted); onRenderPassEnd(discarded) -> passEnd('discard');
+ *    while they mounted); onRenderPassEnd(discarded) -> renderEnd('discard');
  *    onBatchRetired -> retire (or settleAction for a parked async action —
  *    one kept pending until its promise settles) — React's committed/
  *    abandoned bit stops in that handler, the site where the fact is born:
@@ -74,7 +74,7 @@ import type {
 	AtomNode,
 	CosignalBridge,
 	HostOpKind,
-	Pass,
+	RenderPass,
 	RootId,
 	BatchId,
 	Value,
@@ -112,9 +112,9 @@ export type WatcherTarget = {
 
 type RootRec = {
 	id: RootId;
-	/** The open bridge pass mirroring the protocol host's in-progress render pass, if any. */
-	pass: Pass | undefined;
-	/** Watcher ids minted during the current/most recent pass, for the orphan sweep. */
+	/** The open bridge render pass mirroring the protocol host's in-progress render, if any. */
+	renderPass: RenderPass | undefined;
+	/** Watcher ids minted during the current/most recent render, for the orphan sweep. */
 	minted: Set<number>;
 };
 
@@ -173,10 +173,10 @@ export class Shim {
 	 * The React effect-timing shell (the ONE piece of effect machinery that
 	 * stays adapter-side): user refire bodies queued by the engine's
 	 * per-root-commit boundary scan must NOT run inside onRenderPassEnd —
-	 * React captures its re-pend classification before emitting pass end, so
+	 * React captures its re-pend classification before emitting render end, so
 	 * a body write there could desync lock-in accounting (plan amendment 2;
 	 * codex review finding 1). While `holdingRefires` is set (around
-	 * bridge.passEnd for a COMMIT), refires park here and flush at the
+	 * bridge.renderEnd for a COMMIT), refires park here and flush at the
 	 * root-commit report (`onRootCommitted` — CR5 orders it right after the
 	 * frame close, with no user code in between, so the boundary values are
 	 * unchanged). Retirement/settlement refires run at their own operation
@@ -198,17 +198,17 @@ export class Shim {
 		};
 		bridge.readAdopter = (atom) => this.nodeForAtom(atom);
 		// The ambient-world provider answers from the LIVE call context, per
-		// read: a render resolves its own pass's world via the protocol's
-		// render context (stack-accurate — a COMPLETED-but-uncommitted pass is
-		// not "in render", and interleaved roots each see their own pass);
+		// read: a render resolves its own render's world via the protocol's
+		// render context (stack-accurate — a COMPLETED-but-uncommitted render is
+		// not "in render", and interleaved roots each see their own render);
 		// anything else resolves newest (undefined). Effect fires need no arm
 		// here: the ENGINE's captureRun frame owns committed-for-root routing
 		// and dependency capture (the promoted mechanism), and the engine
 		// consults its own frame before this provider.
 		bridge.setWorldProvider(() => {
 			const rendering = this.renderingRoot();
-			if (rendering?.pass !== undefined && rendering.pass.state !== 'ended') {
-				return { kind: 'pass', pass: rendering.pass };
+			if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
+				return { kind: 'render', render: rendering.renderPass };
 			}
 			return undefined;
 		});
@@ -226,10 +226,10 @@ export class Shim {
 		bridge.onCorrection = (w) => this.guard(() => this.bumpInBatch(w.id, undefined)); // urgent pre-paint fix: discrete-urgent fallback lane
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches) =>
-				this.guard(() => this.handlePassStart(container, includedBatches)),
+				this.guard(() => this.handleRenderStart(container, includedBatches)),
 			onRenderPassYield: (container) => this.guard(() => this.handleYield(container)),
 			onRenderPassResume: (container) => this.guard(() => this.handleResume(container)),
-			onRenderPassEnd: (container, committed) => this.guard(() => this.handlePassEnd(container, committed)),
+			onRenderPassEnd: (container, committed) => this.guard(() => this.handleRenderEnd(container, committed)),
 			onBatchRetired: (batch, committed) => this.guard(() => this.handleBatchRetired(batch, committed)),
 			onRootCommitted: (container, committedBatches, generation) =>
 				this.guard(() => this.handleRootCommitted(container, committedBatches, generation)),
@@ -282,7 +282,7 @@ export class Shim {
 		if (rec === undefined) {
 			rec = {
 				id: `root-${nextRootSerial++}`,
-				pass: undefined,
+				renderPass: undefined,
 				minted: new Set(),
 			};
 			this.rootsByContainer.set(container, rec);
@@ -320,7 +320,7 @@ export class Shim {
 		return this.batchToReactBatch.get(batchId);
 	}
 
-	/** The root whose pass is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
+	/** The root whose render is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
 	renderingRoot(): RootRec | undefined {
 		const ctx = React.unstable_getRenderContext();
 		if (ctx === null) return undefined;
@@ -329,89 +329,89 @@ export class Shim {
 
 	// ---- protocol listener -> bridge --------------------------------------------
 
-	private handlePassStart(container: unknown, includedBatches: readonly number[]): void {
+	private handleRenderStart(container: unknown, includedBatches: readonly number[]): void {
 		const rec = this.rootRec(container);
-		if (rec.pass !== undefined && rec.pass.state !== 'ended') {
-			// The protocol host closes a pass frame (onRenderPassEnd) before
-			// restarting the root, so a still-open pass here means the two
+		if (rec.renderPass !== undefined && rec.renderPass.state !== 'ended') {
+			// The protocol host closes a render frame (onRenderPassEnd) before
+			// restarting the root, so a still-open render here means the two
 			// sides desynced.
 			if (this.devChecks) {
 				throw new Error(
-					`cosignal-react: protocol violation — render pass started on ${rec.id} while its previous pass is still open`,
+					`cosignal-react: protocol violation — render pass started on ${rec.id} while its previous render is still open`,
 				);
 			}
-			// Defined fall-through: discard the stale pass. A discarded pass
+			// Defined fall-through: discard the stale render. A discarded render
 			// contributes nothing to committed truth (its batch set never locks
-			// into the root's committed table; pass-owned mounts die), so this
+			// into the root's committed table; render-owned mounts die), so this
 			// cannot double-account — while leaving it open would pin the
 			// engine's pending window forever.
-			this.bridge.passEnd(rec.pass.id, 'discard');
+			this.bridge.renderEnd(rec.renderPass.id, 'discard');
 		}
 		const known: BatchId[] = [];
 		for (const reactBatchId of includedBatches) {
 			// Only React batches carrying cosignal writes have engine batches.
 			// A pure-React batch contributed no receipts, and a world is computed
 			// purely by replaying receipts, so leaving that batch out of the
-			// pass's batch set cannot change any value the pass observes.
+			// render's batch set cannot change any value the render observes.
 			const mapped = this.reactBatchToBatch.get(reactBatchId);
 			if (mapped !== undefined && this.bridge.idToBatch.get(mapped)?.state === 'live') known.push(mapped);
 		}
-		rec.pass = this.bridge.passStart(rec.id, known);
+		rec.renderPass = this.bridge.renderStart(rec.id, known);
 		rec.minted = new Set();
 	}
 
 	private handleYield(container: unknown): void {
 		const rec = this.rootsByContainer.get(container);
-		if (rec?.pass === undefined || rec.pass.state === 'ended') return;
-		this.bridge.passYield(rec.pass.id);
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
+		this.bridge.renderYield(rec.renderPass.id);
 	}
 
 	private handleResume(container: unknown): void {
 		const rec = this.rootsByContainer.get(container);
-		if (rec?.pass === undefined || rec.pass.state === 'ended') return;
-		this.bridge.passResume(rec.pass.id);
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
+		this.bridge.renderResume(rec.renderPass.id);
 	}
 
-	private handlePassEnd(container: unknown, committed: boolean): void {
+	private handleRenderEnd(container: unknown, committed: boolean): void {
 		const rec = this.rootsByContainer.get(container);
-		if (rec?.pass === undefined || rec.pass.state === 'ended') return;
-		const pass = rec.pass;
+		if (rec?.renderPass === undefined || rec.renderPass.state === 'ended') return;
+		const render = rec.renderPass;
 		if (!committed) {
-			// Discard: pass-owned mounts die in the bridge; drop their targets too.
-			this.bridge.passEnd(pass.id, 'discard');
+			// Discard: render-owned mounts die in the bridge; drop their targets too.
+			this.bridge.renderEnd(render.id, 'discard');
 			for (const wid of rec.minted) {
 				if (!this.claimed.has(wid)) this.targets.delete(wid);
 			}
 			rec.minted = new Set();
-			rec.pass = undefined;
+			rec.renderPass = undefined;
 			return;
 		}
 		// The end(commit) event is where the bridge captures its baseline:
-		// bridge.passEnd snapshots committed state and the root's commit
-		// generation on entry — before it locks this pass's batches into the
+		// bridge.renderEnd snapshots committed state and the root's commit
+		// generation on entry — before it locks this render's batches into the
 		// root's committed table, and before the protocol's onRootCommitted /
 		// onBatchRetired events for the same commit arrive. The mount fixup
-		// for watchers minted this pass runs inside passEnd; the corrective
+		// for watchers minted this render runs inside renderEnd; the corrective
 		// re-renders it emits reach React through the direct listeners
 		// (delivered at the operation boundary, inside this call). Effect
 		// REFIRES the commit's boundary scan queues are HELD here and flushed
-		// at the root-commit report (see holdingRefires) — pass-end precedes
+		// at the root-commit report (see holdingRefires) — render-end precedes
 		// React's re-pend classification, the report follows it.
 		this.holdingRefires = true;
 		try {
-			this.bridge.passEnd(pass.id, 'commit');
+			this.bridge.renderEnd(render.id, 'commit');
 		} finally {
 			this.holdingRefires = false;
 		}
-		rec.pass = undefined;
-		// (ctx.previous cells update inside bridge.passEnd since S-C — the
+		rec.renderPass = undefined;
+		// (ctx.previous cells update inside bridge.renderEnd since S-C — the
 		// cells live on the bridge's computed nodes with the ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
-		// surface impure renders, so even a committed pass can mint watchers
+		// surface impure renders, so even a committed render can mint watchers
 		// whose hook instance was thrown away and will never be claimed. Layout
 		// effects run synchronously inside the commit, so by the time this
 		// microtask runs every claim has happened — any watcher minted by this
-		// pass and still unclaimed is dead.
+		// render and still unclaimed is dead.
 		const minted = rec.minted;
 		rec.minted = new Set();
 		queueMicrotask(() => {
@@ -454,17 +454,17 @@ export class Shim {
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {
 		const rec = this.rootRec(container);
-		// The bridge already locked the committing pass's batch set into the
-		// root's committed table at passEnd(commit). The protocol's per-root
+		// The bridge already locked the committing render's batch set into the
+		// root's committed table at renderEnd(commit). The protocol's per-root
 		// commit report is a delta (one batch's work can reach the screen
 		// across more than one flush), and re-reporting a batch is defined as
 		// idempotent set-add — so hand every reported batch with an engine
 		// batch to the engine's commitBatches, THE single owner of the per-root
 		// commit transition (W11): already-committed batches skip; a live batch
-		// the passEnd sweep missed locks in COMPLETELY (batch set, committed
+		// the renderEnd sweep missed locks in COMPLETELY (batch set, committed
 		// bit mask, generation, commit clock, arena fan-out, drain — never a
 		// partial table write from here). Defensive: for React batches with
-		// engine batches the pass's set already covers the delta by construction.
+		// engine batches the render's set already covers the delta by construction.
 		const reported: BatchId[] = [];
 		for (const reactBatchId of committedBatches) {
 			const mapped = this.reactBatchToBatch.get(reactBatchId);
@@ -578,13 +578,13 @@ export class Shim {
 	// boundary re-checks, observation retains) lives in the engine
 	// (mountCommittedObserver / captureRun / removeSubscription). What stays
 	// here is exactly the React-phase knowledge: refires queued during a
-	// COMMIT's pass-end hold until the root-commit report (holdingRefires).
+	// COMMIT's render-end hold until the root-commit report (holdingRefires).
 
 	registerEffect(root: RootId, refire: () => void): number {
 		this.bridge.root(root); // materialize the per-root committed table (as before)
 		const sub = this.bridge.mountCommittedObserver(root, `effect@${root}`, () => {
 			// Invoked by the engine at the boundary operation's end. Inside a
-			// commit's pass-end: park until the root-commit report. Everywhere
+			// commit's render-end: park until the root-commit report. Everywhere
 			// else (retirement, settlement, quiet fold, frame-close flush of a
 			// deferred flip): run now — the engine op has fully completed.
 			if (this.holdingRefires) this.heldRefires.push(refire);
@@ -648,7 +648,7 @@ export class Shim {
 		}
 	}
 
-	/** Register a watcher minted during the current pass (orphan-sweep set). */
+	/** Register a watcher minted during the current render (orphan-sweep set). */
 	noteMinted(rootRec: RootRec, watcherId: number): void {
 		rootRec.minted.add(watcherId);
 	}
@@ -661,7 +661,7 @@ export class Shim {
 		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
 			// Reveal without a re-render (React bailed out) or a swept
-			// subscription: mint a fresh watcher outside any React pass and take
+			// subscription: mint a fresh watcher outside any React render and take
 			// the conservative reveal path — compare what the committed DOM shows
 			// against committed truth, and fix urgently, before paint.
 			this.resubscribeAtLayout(rec);
@@ -674,14 +674,14 @@ export class Shim {
 
 	private resubscribeAtLayout(rec: { node: AnyNode; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
 		const root = rec.root ?? ROOT_UNKNOWN;
-		const pass = this.bridge.passStart(root, []);
+		const render = this.bridge.renderStart(root, []);
 		let minted: Watcher | undefined;
 		try {
-			minted = this.bridge.mountWatcher(pass.id, rec.node, 'w?');
+			minted = this.bridge.mountWatcher(render.id, rec.node, 'w?');
 			minted.name = `w${minted.id}`;
-			this.bridge.deferMount(minted.id); // keep it out of the degenerate pass
+			this.bridge.deferMount(minted.id); // keep it out of the degenerate render
 		} finally {
-			this.bridge.passEnd(pass.id, 'discard');
+			this.bridge.renderEnd(render.id, 'discard');
 		}
 		if (minted === undefined) return;
 		minted.live = true;

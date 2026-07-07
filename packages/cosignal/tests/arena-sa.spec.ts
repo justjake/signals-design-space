@@ -61,9 +61,9 @@ function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
 
 /** Mount a live committed watcher on `node` via a clean commit. */
 function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
-	const p = b.passStart(root, []);
+	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
-	b.passEnd(p.id, 'commit');
+	b.renderEnd(p.id, 'commit');
 	return w;
 }
 

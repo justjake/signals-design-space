@@ -4,7 +4,7 @@
  * `checkInvariants` / `snapshotModel` run against the engine without the
  * production class carrying mirror members. Everything the checkers read is
  * materialized on demand from load-bearing packed state (`tp`,
- * `openPassByRoot`-backed maps, slot/batch/root registries) plus the one
+ * `rootToOpenRender`-backed maps, slot/batch/root registries) plus the one
  * thing packed state cannot answer — the FULL history behind compaction —
  * which a driver-side mirror retains: per-atom archives fed by the engine's
  * `onCompact` hook and per-atom origins maintained at the ops that move them
@@ -15,9 +15,9 @@
  * (`visibleAt`, `foldAtom`).
  *
  * Slot sets: the engine's ONLY slot-set representation is the 31-bit integer
- * word (`Pass.maskBits`/`includedBits`, `RootState.committedBits`,
+ * word (`RenderPass.maskBits`/`includedBits`, `RootState.committedBits`,
  * `WatcherSnapshot`, mountFix worlds); the model's shapes are Set-valued.
- * This view is where the two meet, so it derives the Sets — pass wrappers
+ * This view is where the two meet, so it derives the Sets — render-pass wrappers
  * with `maskSlots`, and the `VisibilityHost` the imported rule reads.
  */
 import { visible, type VisibilityHost, type World as ModelWorld } from '../../cosignal-oracle/src/model.js';
@@ -25,8 +25,8 @@ import type {
 	AnyNode as ENode,
 	AtomNode,
 	CosignalBridge,
-	Pass,
-	PassId,
+	RenderPass,
+	RenderPassId,
 	Receipt,
 	RootId,
 	Seq,
@@ -89,16 +89,16 @@ type ViewAtom = {
 };
 type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: ENode };
 
-/** A view pass: the model-shaped face of one engine pass — the Set-valued
+/** A view render pass: the model-shaped face of one engine render pass — the Set-valued
  * `maskSlots` the oracle's tenancy check reads, derived from the bit form. */
-type ViewPass = {
-	id: PassId;
+type ViewRenderPass = {
+	id: RenderPassId;
 	root: RootId;
 	pin: Seq;
-	state: Pass['state'];
-	maskBatches: Pass['maskBatches'];
+	state: RenderPass['state'];
+	maskBatches: RenderPass['maskBatches'];
 	maskSlots: Set<BatchSlot>;
-	__engine: Pass;
+	__engine: RenderPass;
 };
 
 /** View face → the engine record behind it (pass-through when already bare). */
@@ -116,10 +116,10 @@ function slotsOf(bits: BatchSlotSet): Set<BatchSlot> {
 	return out;
 }
 
-/** Worlds built by the oracle's checkers carry VIEW passes; the engine folds
- * over its own pass records. */
+/** Worlds built by the oracle's checkers carry VIEW render passes; the engine folds
+ * over its own render records. */
 function engineWorld(w: World): World {
-	return w.kind === 'pass' ? { kind: 'pass', pass: unwrap<Pass>(w.pass) } : w;
+	return w.kind === 'render' ? { kind: 'render', render: unwrap<RenderPass>(w.render) } : w;
 }
 
 /** Pure op application for the shadow fold (test-side: the corpus's updaters/
@@ -161,15 +161,15 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 			__engine: n,
 		};
 	};
-	const viewPass = (p: Pass): ViewPass => ({
+	const viewRenderPass = (p: RenderPass): ViewRenderPass => ({
 		id: p.id, root: p.root, pin: p.pin, state: p.state,
 		maskBatches: p.maskBatches, maskSlots: slotsOf(p.maskBits),
 		__engine: p,
 	});
 	/** The imported visibility rule's host, answered from the engine's bit
-	 * masks (the two set-valued lookups the pass/committed clauses read). */
+	 * masks (the two set-valued lookups the render/committed clauses read). */
 	const host: VisibilityHost = {
-		includedSet: (pass) => slotsOf(unwrap<Pass>(pass).includedBits),
+		includedSet: (render) => slotsOf(unwrap<RenderPass>(render).includedBits),
 		committedSlotsNow: (root) => slotsOf(engine.root(root).committedBits),
 	};
 	return {
@@ -178,9 +178,9 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 			for (const [id, n] of engine.nodes) out.set(id, viewNode(n));
 			return out;
 		},
-		get passes(): Map<PassId, ViewPass> {
-			const out = new Map<PassId, ViewPass>();
-			for (const [id, p] of engine.passes) out.set(id, viewPass(p));
+		get idToRenderPass(): Map<RenderPassId, ViewRenderPass> {
+			const out = new Map<RenderPassId, ViewRenderPass>();
+			for (const [id, p] of engine.idToRenderPass) out.set(id, viewRenderPass(p));
 			return out;
 		},
 		get roots() {
@@ -200,12 +200,12 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 		foldAtom: (n: unknown, w: World) => engine.foldAtom(unwrap<ENode>(n) as AtomNode, engineWorld(w)),
 		newestValue: (n: unknown) => engine.newestValue(unwrap<ENode>(n)),
 		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap<ENode>(n), root),
-		passValue: (n: unknown, p: unknown) => engine.passValue(unwrap<ENode>(n), unwrap<Pass>(p)),
+		renderValue: (n: unknown, p: unknown) => engine.renderValue(unwrap<ENode>(n), unwrap<RenderPass>(p)),
 		/** The retention invariant's full-history fold: origin + archive + tape. */
 		shadowFoldAtom(n: unknown, world: World): Value {
 			const atom = unwrap<ENode>(n) as AtomNode;
 			// The rule is Receipt/Set-shaped; worlds arrive bit-shaped (mountFix)
-			// or carrying view passes (whose host lookups unwrap) — translate here.
+			// or carrying view render passes (whose host lookups unwrap) — translate here.
 			const w: ModelWorld =
 				world.kind === 'mountFix'
 					? { kind: 'mountFix', maskSlots: slotsOf(world.maskBits), pin: world.pin, root: world.root }

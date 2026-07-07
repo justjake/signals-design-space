@@ -435,9 +435,9 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		expect(text(container)).toBe('a:9;b:1;s:9;');
 	});
 
-	test('R15: raw reads outside any render resolve NEWEST while a pass is pending (world routing is stack-accurate)', async () => {
+	test('R15: raw reads outside any render resolve NEWEST while a render is pending (world routing is stack-accurate)', async () => {
 		h = makeHarness();
-		const a = new Atom(10); // transition-written; its pending pass pins BEFORE b's write
+		const a = new Atom(10); // transition-written; its pending render pins BEFORE b's write
 		const b = new Atom(0); // urgent-written after the pin
 		const gate = deferred<void>();
 		function Suspender() {
@@ -454,15 +454,15 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 			</>,
 		);
 		await act(async () => {
-			React.startTransition(() => a.set(20)); // renders 20 and suspends: pass work done, commit pending
+			React.startTransition(() => a.set(20)); // renders 20 and suspends: render work done, commit pending
 		});
 		expect(text(container)).toBe('b:0;s:10;'); // committed DOM unchanged
 		await act(async () => {
-			b.set(1); // urgent write lands mid-pending-transition, after the pass pinned
+			b.set(1); // urgent write lands mid-pending-transition, after the render pinned
 		});
 		// A timer-context read — no render on the current stack. It must see the
-		// NEWEST world (b=1, a=20), never the pending pass's frozen world (which
-		// pinned before b's write and would fold b=0): "pass started but not
+		// NEWEST world (b=1, a=20), never the pending render's frozen world (which
+		// pinned before b's write and would fold b=0): "render started but not
 		// committed" is NOT "in render", so ambient routing may only answer from
 		// the live render context.
 		const seen = await new Promise<{ a: number; b: number }>((resolve) => {

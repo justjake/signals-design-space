@@ -276,9 +276,9 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const t = bridge.openBatch();
 		bridge.write(t.id, la, 0, 5);
 		expect(bridge.newestValue(viaHandle)).toBe(5); // newest = kernel arena
-		const p = bridge.passStart('A', []); // t excluded
-		expect(bridge.passValue(viaHandle, p)).toBe(0); // the world evaluation routes the public read: the excluded batch stays invisible
-		bridge.passEnd(p.id, 'discard');
+		const p = bridge.renderStart('A', []); // t excluded
+		expect(bridge.renderValue(viaHandle, p)).toBe(0); // the world evaluation routes the public read: the excluded batch stays invisible
+		bridge.renderEnd(p.id, 'discard');
 		bridge.retire(t.id);
 		expect(bridge.committedValue(viaHandle, 'A')).toBe(5);
 	});

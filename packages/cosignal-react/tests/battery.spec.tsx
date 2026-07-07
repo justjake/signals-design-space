@@ -224,7 +224,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(h.events.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
 	});
 
-	test('case 9(a) — mount inside the batch pass: k-world value on FIRST render, no correction', async () => {
+	test('case 9(a) — mount inside the batch\'s render: k-world value on FIRST render, no correction', async () => {
 		h = makeHarness();
 		const a = new Atom(0);
 		let freshRenders = 0;
@@ -247,7 +247,7 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {
 			React.startTransition(() => {
 				a.set(1);
-				setShow(true); // Fresh mounts inside k's own pass
+				setShow(true); // Fresh mounts inside k's own render
 			});
 		});
 		expect(text(container)).toBe('r1:1;f:1;'); // k-world value on first render

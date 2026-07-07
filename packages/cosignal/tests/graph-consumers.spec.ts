@@ -24,7 +24,7 @@
  * 12  weak (untracked) links — segregated subs lists   | arena weak lists         | WEAK-ONLY: mark propagation + drain candidates, never deliveries | battery 'taint member', arena-sa2 mixed-mode, arena-sb untracked-fan, fuzz
  * 13  arena reclamation (consumerCount sweep)          | watchers + committed subs | ZERO-CONSUMER quiescence sweep (§4.5.8); no reachability walk needed — coverage is the arena itself | arena-sa2 root-churn, long-seed fuzz (episode churn), T7
  * 14  drainCommittedObservers (arena dirty lists)      | arenas (strong+weak)     | ARENA-ONLY, conservative: dirty-list seeds expand over BOTH lists; entries persist until decay (drain seeding stands on it) | lockstep drain parity, scars S26, T9
- * 15  mountFixup dependencyClosureOf                   | pass arena ∪ committed arena ∪ newest memos (strong) | §4.4.7's triple (the memo leg stands in for kernel links until S-C): correctives arm dedup bits, so the closure must cover every later-routable cone | battery cases 9/10, scars S43, lockstep corpus (seeds 29/97/173)
+ * 15  mountFixup dependencyClosureOf                   | render arena ∪ committed arena ∪ newest memos (strong) | §4.4.7's triple (the memo leg stands in for kernel links until S-C): correctives arm dedup bits, so the closure must cover every later-routable cone | battery cases 9/10, scars S43, lockstep corpus (seeds 29/97/173)
  * 16  quiesce                                          | arenas persist           | NO refresh: routing coverage survives by arena persistence (§4.1); duties = zero-consumer sweep + read-clock renumber | quiet-mode 'quiesce() interoperates', T7
  * 17  Watcher.live setter → obsShift → retain/release  | edge → union refcount    | UNION (watcher half, via the observation index) | observe-union.spec (all), T1
  * 18  observation index (obsRefs/obsDeps/capture) | eval-time strong deps → K0 lifecycle | UNION-TRANSITIVE: a live watcher observes every atom its node's CURRENT evaluation (transitively) reads — retains follow fn re-runs in EVERY world (arena refolds carry the capture, §4.7/M6), survive quiescence, release with the last watcher | T2 (flipped pin), observe-transitive.spec
@@ -37,12 +37,12 @@
  * §2 DUAL-REPRESENTATION AGREEMENTS ─ pair | enforcement
  *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
  *  A2 newest memo fingerprints ≡ tapes (+retirement stamps) | lockstep values; scars S5 pins receipt-after-read invalidation
- *  A3 quiet flag ≡ pending state (batches/passes/tapes) | quiet-mode.spec arming/disarming battery
+ *  A3 quiet flag ≡ pending state (batches/renders/tapes) | quiet-mode.spec arming/disarming battery
  *  A4 adoption stamp ≡ byKernelId registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
  *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (tests/arena-checker.ts): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
  *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
- *  A8 pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's ONLY slot-set form (W1); model-view derives the oracle's Sets from the bits; lockstep pass worlds
+ *  A8 render-pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's ONLY slot-set form (W1); model-view derives the oracle's Sets from the bits; lockstep render worlds
  *  A9 batch.atomsTouched ⊇ tape batch columns          | retirement stamping via touch lists; quiesce residue BridgeInvariantViolation + lockstep retirement visibility
  * A10 batch.liveReceipts ≡ un-compacted receipts       | T10 (new pin: batch outlives pinned receipts, reclaims after compaction)
  * A11 DIRTY flag ⇒ dirty-list membership (decay + drain seeding stand on it) | the structural validator at every armed epilogue; arena-sa2 decay pins
@@ -85,9 +85,9 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 		await tick();
 		expect(log).toEqual(['observe']);
 		expect(b.watchers.size).toBe(0); // the disagreement: K1 says "no consumers"
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit'); // K1 watcher joins
+		b.renderEnd(p.id, 'commit'); // K1 watcher joins
 		dispose(); // K0 SUBS now empty — the stores disagree; the union must hold
 		await tick();
 		expect(log).toEqual(['observe']);
@@ -101,14 +101,14 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		const oc = b.computed('oc', (read) => read(node));
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const wc = b.mountWatcher(p.id, oc, 'WC'); // no direct atom watcher anywhere
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']); // the closure atom IS observed through the derived node
-		const p2 = b.passStart('A', []);
+		const p2 = b.renderStart('A', []);
 		const wa = b.mountWatcher(p2.id, node, 'WA'); // direct atom watcher joins the same union
-		b.passEnd(p2.id, 'commit');
+		b.renderEnd(p2.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']); // interior transition: no re-observe
 		wa.live = false; // direct consumer leaves; the transitive one still holds
@@ -125,9 +125,9 @@ describe('§1 rows 3/4 — kernel liveness transitions consult K0 only', () => {
 		const b = bridge();
 		const handle = new Atom(1);
 		const node = b.adoptAtom('a', handle as Atom<unknown>);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, b.computed('oc', (read) => read(node)), 'W');
-		b.passEnd(p.id, 'commit'); // K1 holds a live watcher over the atom
+		b.renderEnd(p.id, 'commit'); // K1 holds a live watcher over the atom
 		let evals = 0;
 		const kc = new Computed(() => {
 			evals++;
@@ -169,9 +169,9 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 			kernelSeen = handle.state as number; // K0 subscriber
 		});
 		const oc = b.computed('oc', (read) => read(node));
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		b.mountWatcher(p.id, oc, 'W'); // K1 subscriber (edge a→oc recorded by the mount eval)
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		const stream = refereeStreamOf(b);
 		const mark = stream.cursor();
 		const t = b.openBatch();
@@ -196,12 +196,12 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 		const c = b.computed('c', () => kc.state); // standalone kernel computed inside a bridge fn
 		const t = b.openBatch();
 		b.write(t.id, node, 0, 5); // kernel newest = 5
-		const p = b.passStart('A', []); // t excluded: the pass world's a is 0
+		const p = b.renderStart('A', []); // t excluded: the render world's a is 0
 		// S-C INVERSION (§4.8 — one computed): kc's read inside c's ARENA
 		// evaluation routes through the computed host-read seam, adopts kc,
-		// and evaluates it UNDER THE PASS WORLD — the pass sees a=0. (Pre-S-C
+		// and evaluates it UNDER THE RENDER WORLD — the render sees a=0. (Pre-S-C
 		// this read was a kernel frame serving newest: 105.)
-		expect(b.passValue(c, p)).toBe(100);
+		expect(b.renderValue(c, p)).toBe(100);
 		expect(kcEvals).toBe(1); // the arena evaluation ran the raw fn once
 		// The world evaluation recorded ARENA links (a→kc→c) — kc's cone is
 		// deliverable — while the KERNEL slot was never written by the world
@@ -211,13 +211,13 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 		expect(kcEvals).toBe(2); // …a SECOND, kernel-frame run — no world residue served
 		// KERNEL-FRAME reads stay un-routed (the boundary that survives S-C:
 		// the seam gates on activeSub === 0): a kernel effect re-reading kc
-		// during the open pass sees NEWEST.
+		// during the open render sees NEWEST.
 		let kernelSeen = -1;
 		const dispose = effect(() => {
 			kernelSeen = kc.state as number;
 		});
 		expect(kernelSeen).toBe(105);
-		b.passEnd(p.id, 'discard');
+		b.renderEnd(p.id, 'discard');
 		expect(kc.state).toBe(105); // eager-apply coherence (A1), unchanged
 		b.retire(t.id);
 		dispose();
@@ -233,9 +233,9 @@ describe('§1 rows 13/16/19 — the two watcher stores move together (removeWatc
 			evals++;
 			return read(a);
 		});
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, c, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		expect(b.watchers.size).toBe(1);
 		b.removeWatcher(w.id);
 		expect(b.watchers.size).toBe(0);
@@ -243,11 +243,11 @@ describe('§1 rows 13/16/19 — the two watcher stores move together (removeWatc
 		const before = evals;
 		b.quiesce(); // zero-consumer sweep releases the root's arena; NO refresh evaluations run
 		expect(evals).toBe(before); // a stranded index entry would keep the watcher population nonzero (arena retained, coverage leaked)
-		// Removal inside an open pass scrubs the mounted list: commit must not revive it.
-		const p2 = b.passStart('A', []);
+		// Removal inside an open render scrubs the mounted list: commit must not revive it.
+		const p2 = b.renderStart('A', []);
 		const w2 = b.mountWatcher(p2.id, c, 'W2');
 		b.removeWatcher(w2.id);
-		b.passEnd(p2.id, 'commit');
+		b.renderEnd(p2.id, 'commit');
 		expect(b.watchers.size).toBe(0);
 	});
 });
@@ -278,10 +278,10 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 		const c = b.computed('c', (read) => read(a));
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 7); // no arena holds a→c yet
-		const p = b.passStart('A', []); // pin postdates the write; t excluded → renders base
-		const w = b.mountWatcher(p.id, c, 'W'); // pass-arena links record NOW; the commit's re-staled loop populates the committed arena (§4.4.2)
+		const p = b.renderStart('A', []); // pin postdates the write; t excluded → renders base
+		const w = b.mountWatcher(p.id, c, 'W'); // render-arena links record NOW; the commit's re-staled loop populates the committed arena (§4.4.2)
 		expect(w.lastRenderedValue).toBe(0);
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		b.retire(t.id); // site-(a) fanout marks `a`; the drain walks the dirty cone to the watcher
 		expect(w.lastRenderedValue).toBe(7);
 		expect(refereeStreamOf(b).eventsOfType('reconcile-correction').length).toBeGreaterThan(0);
@@ -295,10 +295,10 @@ describe('§2 A10 — batch.liveReceipts gates reclamation against un-compacted 
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
-		const p = b.passStart('A', []); // live pin below the coming retirement blocks compaction
+		const p = b.renderStart('A', []); // live pin below the coming retirement blocks compaction
 		b.retire(t.id);
 		expect(b.idToBatch.has(t.id)).toBe(true); // receipts still on the tape reference the batch by id
-		b.passEnd(p.id, 'discard'); // pin released → compaction folds the receipt → gate opens
+		b.renderEnd(p.id, 'discard'); // pin released → compaction folds the receipt → gate opens
 		expect(b.idToBatch.has(t.id)).toBe(false);
 	});
 });

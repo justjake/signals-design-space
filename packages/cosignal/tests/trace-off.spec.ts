@@ -240,9 +240,9 @@ describe('R11 Graphviz renderers', () => {
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(flag) ? read(a) : 0));
 		b.registerBridge();
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		b.mountWatcher(p.id, c, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		// A committed observer (core effect()s are kernel effects now — no
 		// bridge record, so nothing of theirs appears in the dump).
 		mountEngineReactEffect(b, 'A', c, 'E');
@@ -261,9 +261,9 @@ describe('R11 Graphviz renderers', () => {
 		const c = b.computed('c', (read) => read(a));
 		b.registerBridge();
 		const tr = attachTracer(b);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		b.mountWatcher(p.id, c, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
 

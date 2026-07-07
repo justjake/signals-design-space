@@ -44,11 +44,11 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		await tick();
 		expect(log).toEqual([]); // minted ≠ subscribed: a render alone does not observe
-		b.passEnd(p.id, 'commit'); // layout: the watcher goes live
+		b.renderEnd(p.id, 'commit'); // layout: the watcher goes live
 		expect(log).toEqual([]); // delivery is a microtask, never synchronous
 		await tick();
 		expect(log).toEqual(['observe']);
@@ -66,9 +66,9 @@ describe('observation union at the bridge', () => {
 		});
 		await tick();
 		expect(log).toEqual(['observe']);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit'); // watcher consumer joins (union 1→2)
+		b.renderEnd(p.id, 'commit'); // watcher consumer joins (union 1→2)
 		await tick();
 		expect(log).toEqual(['observe']); // interior transition: no re-observe
 		dispose(); // kernel side leaves (2→1)
@@ -83,16 +83,16 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
-		const hidden = b.passStart('A', []);
+		const hidden = b.renderStart('A', []);
 		const w = b.mountWatcher(hidden.id, node, 'W');
 		b.deferMount(w.id); // Activity pre-render: layout effects deferred
-		b.passEnd(hidden.id, 'commit');
+		b.renderEnd(hidden.id, 'commit');
 		await tick();
 		expect(w.live).toBe(false);
 		expect(log).toEqual([]); // the hidden commit subscribed nothing
-		const reveal = b.passStart('A', []);
+		const reveal = b.renderStart('A', []);
 		b.adoptMount(reveal.id, w.id);
-		b.passEnd(reveal.id, 'commit'); // adopting commit: subscribe fires HERE
+		b.renderEnd(reveal.id, 'commit'); // adopting commit: subscribe fires HERE
 		await tick();
 		expect(log).toEqual(['observe']); // one clean 0→1 — the reveal never flapped
 		w.live = false;
@@ -104,9 +104,9 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']);
 		// watcher → kernel handoff within one tick: the union never sits at 0
@@ -118,9 +118,9 @@ describe('observation union at the bridge', () => {
 		await tick();
 		expect(log).toEqual(['observe']);
 		// kernel → watcher handoff, same rule.
-		const p2 = b.passStart('A', []);
+		const p2 = b.renderStart('A', []);
 		const w2 = b.mountWatcher(p2.id, node, 'W2');
-		b.passEnd(p2.id, 'commit');
+		b.renderEnd(p2.id, 'commit');
 		dispose(); // same tick as w2 going live
 		await tick();
 		expect(log).toEqual(['observe']);
@@ -133,9 +133,9 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		w.live = false; // same tick: e.g. a mount whose tree is immediately torn down
 		await tick();
 		expect(log).toEqual([]); // coalesced — the documented flap-damping contract
@@ -145,9 +145,9 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		w.live = true; // re-assertion (already live): must not double-count
 		await tick();
 		expect(log).toEqual(['observe']);
@@ -162,9 +162,9 @@ describe('observation union at the bridge', () => {
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		expect(b.quiet).toBe(true);
-		const p = b.passStart('A', []); // the pass disarms quiet while open…
+		const p = b.renderStart('A', []); // the render disarms quiet while open…
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit'); // …and it re-arms at the commit
+		b.renderEnd(p.id, 'commit'); // …and it re-arms at the commit
 		expect(b.quiet).toBe(true);
 		await tick();
 		expect(log).toEqual(['observe']); // fired with the pipeline fully quiet
@@ -183,16 +183,16 @@ describe('observation union at the bridge', () => {
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		const before = stream.cursor();
-		const p = b.passStart('A', []);
+		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
-		b.passEnd(p.id, 'commit');
+		b.renderEnd(p.id, 'commit');
 		await tick();
 		w.live = false;
 		await tick();
 		expect(log).toEqual(['observe', 'unobserve']);
 		const minted = stream.eventsSince(before).map((e) => e.type);
 		expect(minted.filter((t) => /observe|lifecycle/i.test(t))).toEqual([]);
-		expect(minted).toEqual(['pass-committed']); // pass bookkeeping only
+		expect(minted).toEqual(['render-committed']); // render-pass bookkeeping only
 	});
 
 	// RCC-OL1 re-pin (effects unification, 2026-07-06): committed
