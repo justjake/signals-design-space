@@ -34,6 +34,41 @@ re-checked every battery (bytecode.spec is in the suite); spkl quick A/B for E1/
 
 ## OWNER (a decision, a bench, or a coordinated change — in plain language)
 
+### OUTCOMES — campaign completed 2026-07-07
+
+All 26 items ruled by the owner (2026-07-06) and resolved. Dispositions, with landing commits:
+
+- **W1** landed `3984717` — bit masks are the only in-engine slot-set form.
+- **W2** landed `e9f4d5e` — RT6 implemented conditions-first; audit machinery deleted; external behavior proved identical.
+- **W3** landed `e81fe10` — checker moved test-side; one override slot; cold-pass bench flat (0.985×).
+- **W4** landed `93c1f15` — quiet mode in lockstep; the referee flag deleted; observation never perturbs the write path.
+- **W5** landed `9b76019` — packed trace records are the only event output; "allocates nothing" measured true; three kinds ADDED so the comparison never narrowed.
+- **W6** landed `68d8bba` — scalar write path end to end; Op object/type deleted.
+- **W7** landed `68d8bba` — eqAtom is the one equality-policy site; the fast-arm folds were **bench-rejected** (+11% bare writes; +37% bare quiet fold for the quiet-site extraction) and the three fast arms are pinned with those numbers in comments.
+- **W8** owner ruled leave alone; revisited at campaign end (see the conversation record) — any future change is micro-benchmark-first.
+- **W9** landed `3a9f029` — kernel `effect()` is the only core-effect implementation; ruling ratified as contract clause **EF4** (sibling firing order is implementation-defined); finding archive `research/experiments/2026-07-06-w9-core-effect-order-finding.md`.
+- **W10** landed `777296f` — kernel exports NodeField/LinkField/NodeFlag; **premise corrected**: AF/AFlag are the shadow arenas' own layout, not a kernel mirror — only two functions walked kernel memory, and no equality assertion ever existed; kernel bytecode proven byte-identical.
+- **W11** landed `6d88462` — commitTokens is the single owner; **fixed a real latent bug** (the report path updated committedTokens but not committedBits), demonstrated by a fail-first test.
+- **W12** landed `98813aa` — retirement is disposition-blind; committed/abandoned recorded at the shim source site.
+- **W13** landed `7aede9b` — streaming differ (the buffering was oracle-side only; the main differ already streamed).
+- **W14** landed `7aede9b` — sample cache lives on ComputedNode; README states the precise truth.
+- **W15** landed `f51cc98` — post-await warning entirely behind devChecks.
+- **W16** landed `f51cc98` — fail-fast protocol edges; ambient fallback machinery deleted; the full React suite passes with throws armed by default.
+- **W17** landed `46efd40` — pre-registration mode deleted from engine, model, and twin driver; scar re-pinned at the kernel level.
+- **W18** landed `3ea14c9` — the oracle's visibility rule exported; the third copy deleted.
+- **W19** landed `ef579a1` — disjoint collections; the two union consumers proved to need **different** unions (adopted reveals out of the populator, in for the prevCell hint).
+- **W20** landed `3c45dfb` — ActionScope deleted; fn receives nothing; post-await follows React's own re-wrap rule.
+- **W21** closed moot `3a9f029` — the walk it wanted to merge was deleted by W9.
+- **W22** declined by the owner (leave alone; half dissolved under W6 anyway).
+- **W23** landed `a19d621` — the quiet flag has exactly one writer.
+- **W24** landed `a19d621` — arenaInitInts moved into BridgeOptions.
+- **W25** landed `b2276fb` — the two protocol hooks documented as planned surface.
+- **W26** landed `b2276fb` — explicit unregisterShim with identity compare.
+
+Every commit was gate-verified before push: full suites (cosignal/oracle/react), conformance ×2–3, the lockstep corpus, bytecode budgets, and interleaved A/B bench runs on every hot-path change.
+
+---
+
 Every item below needs an owner decision, a benchmark, or a coordinated multi-package change — nothing here is safe to land mechanically. Each item was re-verified against the code at HEAD (after the SAFE batch, commit aa1ccb4); where that batch already changed part of an item, the item says so. W-numbers preserve the panel's convergence-times-leverage ranking; the theme headings only group siblings.
 
 **The cast, once — every item uses these words in these senses.** The **kernel** (`packages/cosignal/src/index.ts`) is the fast core signal engine: signals, computed values, and their dependency links live in packed integer arrays, and each signal holds exactly one "current" value. The **bridge** (`src/concurrent.ts`) makes that kernel safe under React's interruptible ("concurrent") rendering: it records every write as a **receipt** (a log entry tagged with the update batch it belongs to) and answers reads from named **worlds** — points of view such as "newest state", "what this in-progress render is allowed to see", or "what this React root has committed to the screen". Render-pass and committed worlds are served from **shadow arenas**: a second packed-array copy of the dependency graph, one per world. A **token** identifies one update batch; a **slot** is one of at most 31 recycled small integers naming a live batch, so a set of batches fits in the bits of one integer. A **pass** is one render pass of a React root; a **watcher** is the bridge's record for one component that subscribed to a signal and may need re-rendering. The **shim** (`packages/cosignal-react`) is the React adapter: it listens to a patched React build's protocol events (render pass started/ended, batch retired, root committed) and translates them into bridge calls. The **oracle** or **reference model** (`packages/cosignal-oracle`) is a second, deliberately slow implementation of the same rules in plain objects; **lockstep** tests feed one script of operations to both engine and model and compare state and event logs after every step, and the **fuzz corpus** is thousands of such scripts generated from fixed random seeds, so every failure replays exactly.
