@@ -276,6 +276,6 @@ describe('R11 Graphviz renderers', () => {
 		const onlyWrites = traceToDot(tr.events(), (e) => e.kind === 'write');
 		expect(onlyWrites).not.toContain('->'); // causes outside the kept set are not drawn
 		tr.stop();
-		b.retire(t.id, false);
+		b.retire(t.id);
 	});
 });

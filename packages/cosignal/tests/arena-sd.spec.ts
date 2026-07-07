@@ -57,7 +57,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, { kind: 'set', value });
-	b.retire(t.id, true);
+	b.retire(t.id);
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {

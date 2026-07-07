@@ -273,7 +273,7 @@ export type ModelEvent =
 	| { type: 'mount-corrective'; watcher: string; token: TokenId; slot: SlotId }
 	| { type: 'mount-urgent-correction'; watcher: string; from: Value; to: Value }
 	| { type: 'per-root-commit'; root: RootId; token: TokenId }
-	| { type: 'retired'; token: TokenId; committed: boolean; retiredSeq: number }
+	| { type: 'retired'; token: TokenId; retiredSeq: number }
 	| { type: 'slot-claimed'; slot: SlotId; token: TokenId }
 	| { type: 'slot-released'; slot: SlotId; token: TokenId }
 	| { type: 'slot-backstop-released'; slot: SlotId; token: TokenId }
@@ -1228,7 +1228,7 @@ export class CosignalModel {
 		// another pass's commit — folding it here would land AFTER this
 		// commit's baseline capture and silently break the mount fast path's
 		// accounting (see tests/FLAGS.md, the legality rule under flag 5).
-		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.token(tid), true);
+		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.token(tid));
 		for (const tid of p.maskTokens) {
 			const t = this.token(tid);
 			if (t.state !== 'live') continue; // fully retired above (or earlier): the retired clause subsumes membership
@@ -1279,23 +1279,23 @@ export class CosignalModel {
 	// ---------------------------------------------------------- retirement
 
 	/** Retirement fires exactly once per token; parked action tokens retire only at settlement. */
-	retire(tokenId: TokenId, committed: boolean): void {
+	retire(tokenId: TokenId): void {
 		const t = this.token(tokenId);
 		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per token');
 		if (t.parked) throw new ScheduleError('parked action tokens retire only at settlement');
-		this.retireInternal(t, committed);
+		this.retireInternal(t);
 		// EF2 boundary: retirement is a guaranteed flush point for every root
 		// (a write-free retirement still flushes pending member-write flips).
 		this.revalidateReactEffects();
 	}
 
 	/** The async action's thenable settles; the host then retires the token. */
-	settleAction(tokenId: TokenId, committed: boolean): void {
+	settleAction(tokenId: TokenId): void {
 		const t = this.token(tokenId);
 		if (!t.action) throw new ScheduleError('settle targets an action token');
 		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled');
 		t.parked = false;
-		this.retireInternal(t, committed);
+		this.retireInternal(t);
 		this.revalidateReactEffects(); // EF2 boundary: settlement is a guaranteed flush point
 	}
 
@@ -1305,11 +1305,14 @@ export class CosignalModel {
 	 * counter, reconcile committed observers, clear per-root membership
 	 * rows, and only then release the slot (deferred if an open pass's
 	 * render mask names it). The row-clear-before-release order guarantees a
-	 * recycled slot can never impersonate a committed member. Abandoned
-	 * (committed=false) batches retire through the same path — writes never
-	 * silently revert, and persistence never depends on having subscribers.
+	 * recycled slot can never impersonate a committed member. Retirement is
+	 * disposition-blind: a batch the host abandoned retires through the same
+	 * path — writes never silently revert, and persistence never depends on
+	 * having subscribers. (The host's committed/abandoned report is a
+	 * bindings-side diagnostic, recorded at its source; neither the model nor
+	 * the engine ever consumes it.)
 	 */
-	private retireInternal(t: Token, committed: boolean): void {
+	private retireInternal(t: Token): void {
 		t.state = 'retired';
 		t.parked = false;
 		const retiredSeq = this.mintSeq(); // one retirement sequence per retirement event
@@ -1332,7 +1335,7 @@ export class CosignalModel {
 		// Fold/compaction. Naive form: try every atom — a retirement can
 		// unblock compactable prefixes anywhere.
 		this.compactAll();
-		this.log({ type: 'retired', token: t.id, committed, retiredSeq });
+		this.log({ type: 'retired', token: t.id, retiredSeq });
 		// Committed truth flipped: reconcile watchers and revalidate effects
 		// against it. The engine enumerates only the observers the slot
 		// touched; the naive model checks every observer — corrections are

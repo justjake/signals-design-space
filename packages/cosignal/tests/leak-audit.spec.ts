@@ -57,7 +57,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 function commitWrite(b: CosignalBridge, node: AtomNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, { kind: 'set', value });
-	b.retire(t.id, true);
+	b.retire(t.id);
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
@@ -294,12 +294,12 @@ describe('5. TAPES / TOKENS / PASSES', () => {
 				b.renderWatcher(p.id, w.id);
 				b.passEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // …and its close drains it
 			} else {
-				b.retire(t.id, true);
+				b.retire(t.id);
 			}
 			if (i % 16 === 0) {
 				const act = b.openBatch({ action: true }); // parked async action…
 				b.write(act.id, an, { kind: 'set', value: i + 1000 });
-				b.settleAction(act.id, true); // …parks then settles
+				b.settleAction(act.id); // …parks then settles
 			}
 		}
 		expect(b.tokens.size).toBe(0); // retired tokens reclaimed mid-episode — NO quiesce ran

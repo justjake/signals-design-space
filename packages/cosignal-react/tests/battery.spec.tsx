@@ -140,6 +140,18 @@ describe('battery (spec §6) at React level', () => {
 		const byToken = new Map<number, number>();
 		for (const e of retired) byToken.set(e.token, (byToken.get(e.token) ?? 0) + 1);
 		for (const [, count] of byToken) expect(count).toBe(1); // exactly once per token
+		// React's committed/abandoned report is recorded AT ITS SOURCE (the
+		// shim's protocol handler) as a batch-disposition trace record — the
+		// engine's retirement is disposition-blind. Both transitions here
+		// reached the screen, so every report says committed, and every report
+		// names a batch that then retired. (The ambient batch, which no
+		// protocol report ever names, correctly mints none.)
+		const dispositions = h.events.tracer.events('batch-disposition');
+		expect(dispositions.length).toBeGreaterThan(0);
+		for (const d of dispositions) {
+			expect(d.data['committed']).toBe(true);
+			expect(byToken.has(d.data['token'] as number)).toBe(true);
+		}
 	});
 
 	test('case 5 — cutoff-suppressed first write, effective second write (same batch)', async () => {
@@ -326,7 +338,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(h.events.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1); // exactly once
 	});
 
-	test('case 12 — store-only transition persists (committed=false folds identically)', async () => {
+	test('case 12 — store-only transition persists (an abandoned batch folds identically)', async () => {
 		h = makeHarness();
 		const shown = new Atom(0);
 		const orphan = new Atom(0); // never read by any component
@@ -335,10 +347,13 @@ describe('battery (spec §6) at React level', () => {
 			React.startTransition(() => orphan.set(5)); // no React work at all
 		});
 		await act(async () => {});
-		// The batch retired committed=false through the same path: fold happened.
+		// The batch retired through the same disposition-blind path: fold
+		// happened. React's "abandoned" report survives only as the shim's
+		// source-minted batch-disposition record — pin it with the right value.
 		const orphanNode = h.bridge.byKernelId.get(orphan._id)!;
-		const retired = h.events.eventsOfType('retired');
-		expect(retired.some((e) => e.committed === false)).toBe(true);
+		expect(h.events.eventsOfType('retired').length).toBeGreaterThan(0);
+		const dispositions = h.events.tracer.events('batch-disposition');
+		expect(dispositions.some((d) => d.data['committed'] === false)).toBe(true);
 		expect(h.bridge.committedValue(orphanNode, 'root-1')).toBe(5); // persistence
 		expect(text(container)).toBe('s:0;'); // untouched subscriber unaffected
 	});

@@ -43,7 +43,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, { kind: 'set', value });
-	b.retire(t.id, true);
+	b.retire(t.id);
 }
 
 /** The shim-wrapper analog (`makeComputedNode`): a background suspension
@@ -124,7 +124,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		// The epilogue then serves TOP first: its walk descends mid (PENDING),
 		// must see the cold leaf as dirt (and the cold atom k after it), or it
 		// unwinds clearing PENDING and stale-serves 'p:0'.
-		b.retire(t.id, true);
+		b.retire(t.id);
 		expect(b.committedValue(top, 'R')).toBe('D:1');
 		expect(b.committedValue(mid, 'R')).toBe('D');
 	});

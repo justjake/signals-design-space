@@ -32,7 +32,7 @@ describe('flag 3 — write-set closure at commit (ActionScope late-write surface
 		// slot-lifecycle side is clean: a committed-but-live token cannot release its slot
 		expect(m.tokens.get(t.id)!.slot).toBeDefined();
 		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(0);
-		m.settleAction(t.id, true); // membership rows clear at retirement, strictly before slot release
+		m.settleAction(t.id); // membership rows clear at retirement, strictly before slot release
 		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(false);
 		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(1);
 		selfCheck(m);
@@ -61,7 +61,7 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 		const p3 = pass(m, 'A', []);
 		expect(m.passValue(a, p3)).toBe(9);
 		m.passEnd(p3.id, 'commit');
-		m.settleAction(t.id, true);
+		m.settleAction(t.id);
 		selfCheck(m);
 	});
 });
@@ -83,7 +83,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		expect(m.eventsOfType('mount-corrective')).toHaveLength(0);
 		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(0);
 		expect(w.lastRenderedValue).toBe(5);
-		m.retire(k.id, true);
+		m.retire(k.id);
 		selfCheck(m);
 	});
 
@@ -96,13 +96,13 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		m.passYield(pk.id);
 		const d = m.openBatch(); // foreign committed-side motion in the window
 		m.write(d.id, a, set(3));
-		m.retire(d.id, false);
+		m.retire(d.id);
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit');
 		// the no-committed-advance condition fails ⇒ compare ⇒ value-true correction
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(3);
-		m.retire(k.id, false);
+		m.retire(k.id);
 		selfCheck(m);
 	});
 });
@@ -116,7 +116,7 @@ describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', (
 		const held = pass(m, 'B', retained); // mask names all five
 		m.passYield(held.id);
 		expect(m.passValue(a, held)).toBe(5);
-		for (const t of retained) m.retire(t.id, true); // all retire mid-pass; releases defer
+		for (const t of retained) m.retire(t.id); // all retire mid-pass; releases defer
 		const live: number[] = [];
 		for (let i = 0; i < 27; i++) {
 			const u = m.openBatch();
@@ -134,7 +134,7 @@ describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', (
 		m.passEnd(q.id, 'discard');
 		m.passResume(held.id);
 		m.passEnd(held.id, 'discard');
-		for (const id of live) m.retire(id, true);
+		for (const id of live) m.retire(id);
 		selfCheck(m);
 	});
 });

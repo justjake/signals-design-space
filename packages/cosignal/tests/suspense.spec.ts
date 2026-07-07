@@ -309,12 +309,12 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 		expect(e.lastValue).toBe(sentinel);
 		const t1 = b.openBatch();
 		b.write(t1.id, gate, { kind: 'set', value: 1 });
-		b.retire(t1.id, true); // boundary: re-read is the SAME sentinel — still pending, no flip
+		b.retire(t1.id); // boundary: re-read is the SAME sentinel — still pending, no flip
 		expect(e.runs).toBe(0);
 		settled = 'DATA';
 		const t2 = b.openBatch();
 		b.write(t2.id, gate, { kind: 'set', value: 2 });
-		b.retire(t2.id, true); // boundary: the settled value replaced the sentinel — a real flip
+		b.retire(t2.id); // boundary: the settled value replaced the sentinel — a real flip
 		expect(e.runs).toBe(1);
 		expect(e.lastValue).toBe('DATA');
 	});
@@ -335,7 +335,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 		pending = true;
 		const t = b.openBatch();
 		b.write(t.id, gate, { kind: 'set', value: 1 });
-		b.retire(t.id, true); // boundary: the re-read suspends — not a flip (and not an error)
+		b.retire(t.id); // boundary: the re-read suspends — not a flip (and not an error)
 		expect(e.runs).toBe(0);
 		expect(e.lastValue).toBe('v0');
 	});

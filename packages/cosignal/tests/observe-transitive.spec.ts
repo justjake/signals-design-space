@@ -81,17 +81,17 @@ describe('transitive observation through derived nodes', () => {
 		expect(logB).toEqual([]); // …the untaken one is not
 		const t = b.openBatch();
 		b.write(t.id, flag, { kind: 'set', value: 0 });
-		b.retire(t.id, true); // durable drain re-evaluates the watched computed
+		b.retire(t.id); // durable drain re-evaluates the watched computed
 		await tick();
 		expect(logA).toEqual(['observe', 'unobserve']); // the retain MOVED with the edge set
 		expect(logB).toEqual(['observe']);
 		// Flip A→B→A within one tick: the microtask flush nets both shifts out.
 		const t2 = b.openBatch();
 		b.write(t2.id, flag, { kind: 'set', value: 1 });
-		b.retire(t2.id, true); // re-eval reads a again (retain a, release b)…
+		b.retire(t2.id); // re-eval reads a again (retain a, release b)…
 		const t3 = b.openBatch();
 		b.write(t3.id, flag, { kind: 'set', value: 0 });
-		b.retire(t3.id, true); // …and back (retain b, release a), same tick
+		b.retire(t3.id); // …and back (retain b, release a), same tick
 		await tick();
 		expect(logA).toEqual(['observe', 'unobserve']); // no flap
 		expect(logB).toEqual(['observe']); // no flap
@@ -177,6 +177,6 @@ describe('transitive observation through derived nodes', () => {
 		w.live = false;
 		await tick();
 		expect(logB).toEqual(['observe', 'unobserve']);
-		b.retire(t.id, true);
+		b.retire(t.id);
 	});
 });

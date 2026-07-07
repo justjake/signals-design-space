@@ -620,7 +620,7 @@ export type BridgeEvent =
 	| { type: 'mount-corrective'; watcher: string; token: TokenId; slot: SlotId }
 	| { type: 'mount-urgent-correction'; watcher: string; from: Value; to: Value }
 	| { type: 'per-root-commit'; root: RootId; token: TokenId }
-	| { type: 'retired'; token: TokenId; committed: boolean; retiredSeq: Seq }
+	| { type: 'retired'; token: TokenId; retiredSeq: Seq }
 	| { type: 'slot-claimed'; slot: SlotId; token: TokenId }
 	| { type: 'slot-released'; slot: SlotId; token: TokenId }
 	| { type: 'slot-backstop-released'; slot: SlotId; token: TokenId }
@@ -666,7 +666,13 @@ export type TraceHooks = {
 	/** A batch token was minted. */
 	batchOpen(t: Token): void;
 	/** An async-action token settled (its retirement follows). */
-	batchSettle(t: Token, committed: boolean): void;
+	batchSettle(t: Token): void;
+	/** The external runtime's committed/abandoned report for a batch. Minted
+	 * by the BINDINGS' protocol handler — the site where the fact is born —
+	 * never by the engine: retirement itself is disposition-blind (recorded
+	 * writes never revert either way), so the flag exists only as this
+	 * source-side diagnostic record. */
+	batchDisposition(token: TokenId, committed: boolean): void;
 	/** Pass edges (end fires before retirements/commits/fixups). */
 	passStart(p: Pass): void;
 	passYield(p: Pass): void;
@@ -697,7 +703,7 @@ export type TraceHooks = {
 	/** A root locked a batch in; commitGen is the root's (just-bumped) generation. */
 	perRootCommit(root: RootId, token: TokenId, commitGen: CommitGen): void;
 	/** The batch retired: its writes became permanent history. */
-	retired(token: TokenId, committed: boolean, retiredSeq: Seq): void;
+	retired(token: TokenId, retiredSeq: Seq): void;
 	/** Slot lifecycle (claim / identity release / loud backstop eviction). */
 	slotClaimed(slot: SlotId, token: TokenId): void;
 	slotReleased(slot: SlotId, token: TokenId): void;
@@ -4534,7 +4540,7 @@ export class CosignalBridge {
 		// (2) retirement folds due at this commit; then the per-root commit
 		// (lock-in) of every still-live mask token: this root now shows those
 		// batches' writes, so its committed world must include them.
-		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.token(tid), true);
+		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.token(tid));
 		for (const t of maskTokenRecords) {
 			if (t.state !== 'live') continue; // fully retired above: the retired clause subsumes membership
 			const root = this.root(p.root);
@@ -4697,13 +4703,13 @@ export class CosignalBridge {
 
 	/** Retirement fires exactly once per batch; parked async actions retire
 	 * only at settlement (their pending state must stay pending until then). */
-	retire(tokenId: TokenId, committed: boolean): void {
+	retire(tokenId: TokenId): void {
 		const t = this.token(tokenId);
 		if (t.state === 'retired') throw new BridgeScheduleError('retirement fires exactly once per token');
 		if (t.parked) throw new BridgeScheduleError('parked action tokens retire only at settlement');
 		this.opDepth++; // NF2 S-A: public-operation frame (see write)
 		try {
-			this.retireInternal(t, committed);
+			this.retireInternal(t);
 			// EF2 boundary: retirement is a guaranteed flush point for every root
 			// (a write-free retirement still flushes pending member-write flips).
 			this.revalidateCommittedSubs(undefined);
@@ -4715,7 +4721,7 @@ export class CosignalBridge {
 	}
 
 	/** The async action's promise settled; the protocol host then retires the token. */
-	settleAction(tokenId: TokenId, committed: boolean): void {
+	settleAction(tokenId: TokenId): void {
 		const t = this.token(tokenId);
 		if (!t.action) throw new BridgeScheduleError('settle targets an action token');
 		if (!t.parked || t.state !== 'live') throw new BridgeScheduleError('action already settled');
@@ -4723,8 +4729,8 @@ export class CosignalBridge {
 		try {
 			t.parked = false;
 			const tr = this.trace;
-			if (tr !== undefined) tr.batchSettle(t, committed);
-			this.retireInternal(t, committed);
+			if (tr !== undefined) tr.batchSettle(t);
+			this.retireInternal(t);
 			this.revalidateCommittedSubs(undefined); // EF2 boundary: settlement is a guaranteed flush point
 			this.endOp();
 		} finally {
@@ -4739,10 +4745,13 @@ export class CosignalBridge {
 	 * (compaction), retirement stamps + committed-advance, durable drains,
 	 * clear per-root rows (the retired clause now subsumes membership), and
 	 * only then release the slot (deferred if an open pass's render mask
-	 * still names it). committed=false batches retire through this same
-	 * path — whether writes persist never depends on who was subscribed.
+	 * still names it). Retirement is disposition-blind: a batch React
+	 * abandoned retires through this same path — whether writes persist
+	 * never depends on who was subscribed (the bindings record the
+	 * committed/abandoned report diagnostically at its source; see
+	 * TraceHooks.batchDisposition).
 	 */
-	private retireInternal(t: Token, committed: boolean): void {
+	private retireInternal(t: Token): void {
 		if (t.state === 'live') {
 			this.liveTokenCount--;
 		}
@@ -4783,7 +4792,7 @@ export class CosignalBridge {
 		if (touchedAny) this.fanAtomsToCommittedArenas(t.atomsTouched);
 		{
 			const tr = this.trace;
-			if (tr !== undefined) tr.retired(t.id, committed, retiredSeq);
+			if (tr !== undefined) tr.retired(t.id, retiredSeq);
 		}
 		// Durable drains, per root, gated exactly as before (flipped slot or
 		// member-write drift or restaled leftovers): candidates come from

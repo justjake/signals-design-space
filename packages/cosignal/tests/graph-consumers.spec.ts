@@ -178,7 +178,7 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 		b.write(t.id, node, { kind: 'set', value: 9 });
 		expect(kernelSeen).toBe(9); // K0: eager kernel apply flushed the effect
 		expect(stream.eventsSince(mark).some((e) => e.type === 'delivery' && e.watcher === 'W')).toBe(true); // K1: delivery walk
-		b.retire(t.id, true);
+		b.retire(t.id);
 		dispose();
 	});
 });
@@ -219,7 +219,7 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 		expect(kernelSeen).toBe(105);
 		b.passEnd(p.id, 'discard');
 		expect(kc.state).toBe(105); // eager-apply coherence (A1), unchanged
-		b.retire(t.id, true);
+		b.retire(t.id);
 		dispose();
 	});
 });
@@ -282,7 +282,7 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 		const w = b.mountWatcher(p.id, c, 'W'); // pass-arena links record NOW; the commit's re-staled loop populates the committed arena (§4.4.2)
 		expect(w.lastRenderedValue).toBe(0);
 		b.passEnd(p.id, 'commit');
-		b.retire(t.id, true); // site-(a) fanout marks `a`; the drain walks the dirty cone to the watcher
+		b.retire(t.id); // site-(a) fanout marks `a`; the drain walks the dirty cone to the watcher
 		expect(w.lastRenderedValue).toBe(7);
 		expect(refereeStreamOf(b).eventsOfType('reconcile-correction').length).toBeGreaterThan(0);
 		w.live = false;
@@ -296,7 +296,7 @@ describe('§2 A10 — token.liveReceipts gates reclamation against un-compacted 
 		const t = b.openBatch();
 		b.write(t.id, a, { kind: 'set', value: 1 });
 		const p = b.passStart('A', []); // live pin below the coming retirement blocks compaction
-		b.retire(t.id, true);
+		b.retire(t.id);
 		expect(b.tokens.has(t.id)).toBe(true); // receipts still on the tape reference the token by id
 		b.passEnd(p.id, 'discard'); // pin released → compaction folds the receipt → gate opens
 		expect(b.tokens.has(t.id)).toBe(false);

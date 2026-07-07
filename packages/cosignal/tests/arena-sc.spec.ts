@@ -60,7 +60,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, { kind: 'set', value });
-	b.retire(t.id, true);
+	b.retire(t.id);
 }
 
 describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)', () => {
@@ -303,7 +303,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		// exclude a — the write is delivery-silent there); w1's pin excludes it.
 		const t2 = b.openBatch();
 		b.write(t2.id, b.nodeFor(a)!, { kind: 'set', value: 100 });
-		b.retire(t2.id, true);
+		b.retire(t2.id);
 		expect(seen).toEqual([11, 21]); // no newest re-run: a is off m's newest dep set (the ruling's tracked-only rule)
 		expect(b.committedValue(nC, 'R2')).toBe(101); // w2: flag=true (no t1) → a=100 → 101
 		expect(b.passValue(nC, p1)).toBe(21); // pin: the paused render never drifts
@@ -332,7 +332,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		// Kernel dep flip UNDER live worlds: newest re-track while world links live.
 		const t3 = b.openBatch();
 		b.write(t3.id, nFlag, { kind: 'set', value: false });
-		b.retire(t3.id, true);
+		b.retire(t3.id);
 		expect(seen[seen.length - 1]).toBe(21); // newest: m → {flag, bb} (re-tracked at the earlier flip)
 		expect(b.committedValue(nC, 'R2')).toBe(21); // w2 folds the retired flip: flag=false → bb → 21
 		expect(b.passValue(nC, p1)).toBe(21);
@@ -347,17 +347,17 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		const t4 = b.openBatch();
 		b.write(t4.id, b.nodeFor(a)!, { kind: 'set', value: 7 });
 		b.write(t4.id, nFlag, { kind: 'set', value: true });
-		b.retire(t4.id, true);
+		b.retire(t4.id);
 		expect(c.state).toBe(8); // kernel fully functional after dispose (lazy re-eval)
 		expect(b.committedValue(nC, 'R2')).toBe(8); // worlds correct after the cascade
 		expect(b.passValue(nC, p1)).toBe(21); // the pinned pass STILL never drifts
 		b.passEnd(p1.id, 'discard');
-		b.retire(t1.id, false);
+		b.retire(t1.id);
 		// Zero-world sync semantics intact after everything.
 		const t5 = b.openBatch();
 		b.write(t5.id, b.nodeFor(bb)!, { kind: 'set', value: 99 });
 		b.write(t5.id, nFlag, { kind: 'set', value: false });
-		b.retire(t5.id, true);
+		b.retire(t5.id);
 		expect(c.state).toBe(100);
 		expect(b.newestValue(nC)).toBe(100);
 	});

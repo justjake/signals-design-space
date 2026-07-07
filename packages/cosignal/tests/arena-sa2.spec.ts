@@ -28,7 +28,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, { kind: 'set', value });
-	b.retire(t.id, true);
+	b.retire(t.id);
 }
 
 describe('S-A mixed-mode link modes (§4.4.1)', () => {
@@ -82,7 +82,7 @@ describe('S-A fp-100/seq-50 lock-in walk (§4.2 no-fp rule)', () => {
 		b.write(tLow.id, a, { kind: 'update', fn: (p) => (p as number) + 50 });
 		const tHigh = b.openBatch(); // U: the later, retired sequence (the seq-100 analog)
 		b.write(tHigh.id, a, { kind: 'update', fn: (p) => (p as number) + 100 });
-		b.retire(tHigh.id, true);
+		b.retire(tHigh.id);
 		expect(w.lastRenderedValue).toBe(100); // committed sees only the retired +100
 		// Lock T in via a per-root commit: membership exposes T's receipt
 		// BELOW the visible maximum — an fp gate could never see this flip;
@@ -93,7 +93,7 @@ describe('S-A fp-100/seq-50 lock-in walk (§4.2 no-fp rule)', () => {
 		b.passEnd(p.id, 'commit');
 		expect(b.committedValue(c, 'R')).toBe(150); // (0 + 50) + 100 — the fold now includes seq-50
 		expect(w.lastRenderedValue).toBe(150);
-		b.retire(tLow.id, true);
+		b.retire(tLow.id);
 	});
 });
 

@@ -78,7 +78,7 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 		case 'root-commit': // `commitGen` is a trace-only enrichment
 			return { type: 'per-root-commit', root: d['root'] as string, token: d['token'] as number };
 		case 'batch-retire':
-			return { type: 'retired', token: d['token'] as number, committed: d['committed'] as boolean, retiredSeq: d['retiredSeq'] as number };
+			return { type: 'retired', token: d['token'] as number, retiredSeq: d['retiredSeq'] as number };
 		case 'slot-claim':
 			return { type: 'slot-claimed', slot: d['slot'] as number, token: d['token'] as number };
 		case 'slot-release':
@@ -91,9 +91,12 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 			return { type: 'pass-discarded', pass: d['pass'] as number, root: d['root'] as string };
 		case 'epoch-reset':
 			return { type: 'epoch-reset', epoch: d['epoch'] as number };
-		// trace-only kinds: no BridgeEvent counterpart
+		// trace-only kinds: no BridgeEvent counterpart ('batch-disposition' is
+		// the bindings-minted committed/abandoned report — the model has no
+		// twin because neither side's retirement consumes the flag)
 		case 'batch-open':
 		case 'batch-settle':
+		case 'batch-disposition':
 		case 'slot-release-deferred':
 		case 'pass-start':
 		case 'pass-yield':

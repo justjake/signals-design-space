@@ -40,8 +40,8 @@ export type ScheduleOp =
 	| { t: 'write'; token: number; atom: number; kind: WriteKind; value: number }
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
 	| { t: 'scopeWrite'; token: number; atom: number; value: number }
-	| { t: 'settle'; token: number; committed: boolean }
-	| { t: 'retire'; token: number; committed: boolean }
+	| { t: 'settle'; token: number }
+	| { t: 'retire'; token: number }
 	| { t: 'passStart'; root: string; include: number[] }
 	| { t: 'yield'; pass: number }
 	| { t: 'resume'; pass: number }
@@ -124,8 +124,8 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				m.scopeWrite(tokenAt(m, op.token), atom, { kind: 'set', value: op.value });
 				break;
 			}
-			case 'settle': m.settleAction(tokenAt(m, op.token), op.committed); break;
-			case 'retire': m.retire(tokenAt(m, op.token), op.committed); break;
+			case 'settle': m.settleAction(tokenAt(m, op.token)); break;
+			case 'retire': m.retire(tokenAt(m, op.token)); break;
 			case 'passStart': m.passStart(op.root, op.include.map((i) => tokenAt(m, i))); break;
 			case 'yield': m.passYield(passAt(m, op.pass)); break;
 			case 'resume': m.passResume(passAt(m, op.pass)); break;
@@ -208,8 +208,16 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		}
 		else if (roll < 0.38) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		else if (roll < 0.41) ops.push({ t: 'scopeWrite', token: pick(34), atom: pick(4), value: pick(10) });
-		else if (roll < 0.45) ops.push({ t: 'settle', token: pick(34), committed: bool(0.7) });
-		else if (roll < 0.55) ops.push({ t: 'retire', token: pick(34), committed: bool(0.7) });
+		else if (roll < 0.45) {
+			const token = pick(34);
+			bool(0.7); // discarded draw — preserves the historical seed stream byte-for-byte (it fed the deleted settle committed flag; the model never branched on it)
+			ops.push({ t: 'settle', token });
+		}
+		else if (roll < 0.55) {
+			const token = pick(34);
+			bool(0.7); // discarded draw — same seed-stream preservation for the deleted retire committed flag
+			ops.push({ t: 'retire', token });
+		}
 		else if (roll < 0.64) {
 			const include: number[] = [];
 			const n = pick(3);
@@ -251,8 +259,9 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 	// Close out: retire everything then quiesce, so residue/epoch-reset rules run on most seeds.
 	for (let tokenIdx = 0; tokenIdx < 34; tokenIdx++) {
 		ops.push({ t: 'discardAllWip' });
-		ops.push({ t: 'settle', token: tokenIdx, committed: true });
-		ops.push({ t: 'retire', token: tokenIdx, committed: bool(0.5) });
+		ops.push({ t: 'settle', token: tokenIdx });
+		bool(0.5); // discarded draw — the deleted retire committed flag (seed-stream preservation; the settle above drew nothing, matching its old constant)
+		ops.push({ t: 'retire', token: tokenIdx });
 	}
 	ops.push({ t: 'quiesce' });
 	return ops;

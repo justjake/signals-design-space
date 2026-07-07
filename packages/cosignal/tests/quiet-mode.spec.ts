@@ -72,9 +72,9 @@ describe('quiet-mode writes', () => {
 		const p = b.passStart('A', []);
 		expect(b.passValue(a, p)).toBe(5);
 		b.passEnd(p.id, 'discard');
-		b.retire(b.ambientToken!, true);
+		b.retire(b.ambientToken!);
 		expect(b.quiet).toBe(false); // t is still live
-		b.retire(t.id, true);
+		b.retire(t.id);
 		expect(b.quiet).toBe(true); // LAST retirement: tapes compacted, quiet re-armed
 		expect(a.tp.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'A')).toBe(60);
@@ -97,7 +97,7 @@ describe('quiet-mode writes', () => {
 		expect(root.committedTokens.has(t.id)).toBe(true); // locked in at commit
 		expect(b.committedValue(a, 'A')).toBe(6); // membership clause
 		const genAtCommit = root.commitGen;
-		b.retire(t.id, true);
+		b.retire(t.id);
 		expect(root.committedTokens.size).toBe(0); // retired clause subsumes membership
 		expect(root.committedDirtySlots).toBe(0);
 		expect(b.quiet).toBe(true);
@@ -183,7 +183,7 @@ describe('quiet-mode writes', () => {
 		const t = b.openBatch();
 		b.write(t.id, a, { kind: 'set', value: 1 });
 		const p = b.passStart('B', [t.id]); // pin freezes before the retirement below
-		b.retire(t.id, true);
+		b.retire(t.id);
 		// The pass's pin blocks compaction: the retired receipt is still on
 		// the tape, so quiet must NOT re-arm (a fold would slide base under
 		// a receipt that replays over it).
@@ -192,7 +192,7 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(2); // armed semantics: ambient receipt
 		expect(b.ambientToken).toBeDefined();
 		expect(a.tp.materialize()).toHaveLength(2);
-		b.retire(b.ambientToken!, true);
+		b.retire(b.ambientToken!);
 		expect(b.quiet).toBe(false); // pass still open
 		b.passEnd(p.id, 'discard'); // pin lapses: compaction drains, quiet re-arms
 		expect(a.tp.materialize()).toHaveLength(0);
@@ -225,8 +225,8 @@ describe('quiet-mode writes', () => {
 		expect(b.quiet).toBe(false);
 		(a.handle as Atom<number>).set(2);
 		expect(stream.eventsOfType('write').length).toBe(1);
-		b.retire(b.ambientToken!, true);
-		b.retire(t.id, true);
+		b.retire(b.ambientToken!);
+		b.retire(t.id);
 		expect(b.quiet).toBe(true); // and quiet re-arms with the consumer still attached
 	});
 

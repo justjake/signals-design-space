@@ -99,11 +99,11 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		b.passEnd(p2.id, 'commit');
 		expect(w.lastRenderedValue).toBe(1); // a-branch at base a
 		// U's retirement is the repair boundary: the drain corrects to 20.
-		b.retire(U.id, true);
+		b.retire(U.id);
 		expect(w.lastRenderedValue).toBe(20);
 		const cs = correctionsTo(b, 'W');
 		expect(cs[cs.length - 1]).toMatchObject({ from: 1, to: 20, cause: 'retirement' });
-		b.settleAction(T.id, true);
+		b.settleAction(T.id);
 	});
 
 	it('D1-2 write-after-discard-before-restart: the gap write reaches nothing; the repair arrives in TWO drain corrections as committed truth moves', () => {
@@ -125,11 +125,11 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		// T settles+retires: site-(a) fanout marks flag, the drain refolds c
 		// committed (flag=1 → a-branch at base a=1) and RE-TRACKS the
 		// committed links to {flag,a} — the §4.4.4(ii) discriminant repair.
-		b.settleAction(T.id, true);
+		b.settleAction(T.id);
 		expect(w.lastRenderedValue).toBe(1);
 		expect(correctionsTo(b, 'W')[0]).toMatchObject({ from: 2, to: 1, cause: 'retirement' });
 		// U's retirement now routes through the re-tracked a→c: value lands.
-		b.retire(U.id, true);
+		b.retire(U.id);
 		expect(w.lastRenderedValue).toBe(10);
 		expect(correctionsTo(b, 'W')[1]).toMatchObject({ from: 1, to: 10, cause: 'retirement' });
 	});
@@ -153,14 +153,14 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		// drain's value gate sees no difference — NO correction is
 		// attributable to U's lane, ever (its write's visibility is pending
 		// on T's flip).
-		b.retire(U.id, true);
+		b.retire(U.id);
 		expect(correctionsTo(b, 'W').length).toBe(0);
 		expect(w.lastRenderedValue).toBe(2);
 
 		// T's settlement flips the discriminant: ONE correction carries the
 		// combined repair (flag=1 AND a=10) — value-correct, with the lane
 		// attribution degraded onto T's boundary.
-		b.settleAction(T.id, true);
+		b.settleAction(T.id);
 		expect(correctionsTo(b, 'W').length).toBe(1);
 		expect(correctionsTo(b, 'W')[0]).toMatchObject({ from: 2, to: 10, cause: 'retirement' });
 		expect(w.lastRenderedValue).toBe(10);
@@ -176,7 +176,7 @@ describe('S-B routing coverage pins (§4.4.1 / §4.4.2)', () => {
 		const t2 = b.openBatch();
 		b.write(t2.id, A, { kind: 'set', value: 5 }); // post-commit write, brand-new batch
 		expect(deliveriesTo(b, 'W', t2.id).length).toBe(1); // routed via the committed arena
-		b.retire(t2.id, true);
+		b.retire(t2.id);
 		expect(w.lastRenderedValue).toBe(5);
 	});
 
@@ -203,9 +203,9 @@ describe('S-B routing coverage pins (§4.4.1 / §4.4.2)', () => {
 		// T retires: site-(a) fanout marks `a`, weak a→c propagates PENDING,
 		// the drain collects the watcher off the dirty cone, and the
 		// committed re-evaluation corrects — coverage without notification.
-		b.retire(T.id, true);
+		b.retire(T.id);
 		expect(w.lastRenderedValue).toBe(102); // b=2 still pending in U; a=100 retired
-		b.retire(U.id, true);
+		b.retire(U.id);
 		expect(w.lastRenderedValue).toBe(105);
 	});
 });

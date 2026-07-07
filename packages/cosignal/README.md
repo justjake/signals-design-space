@@ -213,11 +213,13 @@ could implement the same contract. A host driver's responsibilities:
 
 - **Batch lifecycle.** Open a batch (`openBatch`) for each group of
   writes that must land together — one event handler, one transition —
-  and retire it (`retire(token, committed)`) once it is finished
-  everywhere, with a disposition: committed (its writes become permanent
-  history every world sees) or abandoned (its writes vanish). A batch
-  backing an asynchronous action can be parked — kept pending until the
-  action's promise settles (`settleAction`).
+  and retire it (`retire(token)`) once it is finished everywhere.
+  Retirement makes the batch's recorded writes permanent history that
+  every world sees; this holds whether the host committed the batch or
+  abandoned it (state changes are never silently discarded — a host
+  that wants an abandoned batch's writes gone must undo them with new
+  writes). A batch backing an asynchronous action can be parked — kept
+  pending until the action's promise settles (`settleAction`).
 - **Render passes.** Report each speculative render: `passStart(root,
   includedBatches)` declares which batches the render may see (its view
   is frozen at start, so pausing and resuming never drifts);

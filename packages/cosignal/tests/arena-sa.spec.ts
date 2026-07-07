@@ -118,7 +118,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		};
 		const t = b.openBatch();
 		b.write(t.id, kick, { kind: 'set', value: 1 });
-		b.retire(t.id, true); // WD corrects → callback settles m1 mid-flush
+		b.retire(t.id); // WD corrects → callback settles m1 mid-flush
 		// The SAME operation's epilogue drained the queued settlement:
 		expect(settled).toBe(true);
 		expect(w.lastRenderedValue).toBe('MID');
@@ -208,7 +208,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		gateA.resolve('A!'); // world-only settlement: no kernel cache ever held A
 		await tick();
 		expect(w.lastRenderedValue).toBe('A!'); // healed FROM the settlement drain
-		b.retire(t.id, false);
+		b.retire(t.id);
 	});
 
 	it('termination cap (step 0): a self-perpetuating settlement chain trips the dev diagnostic instead of hanging', async () => {
@@ -249,7 +249,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		// Re-suspend all three on fresh keys (new pending thenables):
 		const t = b.openBatch();
 		b.write(t.id, keyAtom, { kind: 'set', value: 1 });
-		b.retire(t.id, true);
+		b.retire(t.id);
 		expect(b.__arenaStats().suspended).toBe(3); // exactly one dense entry per shadow — never a duplicate
 		expect(b.__arenaStats().pendingSettlements).toBe(0);
 	});

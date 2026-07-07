@@ -20,7 +20,11 @@
  *    of freshly mounted components against updates that were in flight
  *    while they mounted); onRenderPassEnd(discarded) -> passEnd('discard');
  *    onBatchRetired -> retire (or settleAction for a parked async action —
- *    one kept pending until its promise settles); onRootCommitted ->
+ *    one kept pending until its promise settles) — React's committed/
+ *    abandoned bit stops in that handler, the site where the fact is born:
+ *    retirement is disposition-blind (recorded writes never revert either
+ *    way), and the handler records the report as a batch-disposition trace
+ *    record when a tracer is attached; onRootCommitted ->
  *    idempotent reconciliation of the root's committed-batch table +
  *    effect re-checks.
  *  - bridge listeners -> React: the shim registers direct listeners on the
@@ -416,12 +420,20 @@ export class Shim {
 		if (mapped === undefined) return; // no cosignal writes rode this batch
 		const t = this.bridge.tokens.get(mapped);
 		if (t === undefined || t.state !== 'live') return;
+		// The committed/abandoned fact is BORN here — React's own report about
+		// its batch. Retirement is disposition-blind (recorded writes never
+		// revert either way), so the flag goes no further than this diagnostic
+		// record, minted straight into the bridge's tracer when one is
+		// attached. Batches with no protocol report (the ambient batch below)
+		// mint none.
+		const tr = this.bridge.trace;
+		if (tr !== undefined) tr.batchDisposition(mapped, committed);
 		// Retirement/settlement ARE effect boundaries now (RCC-EF2 amended):
 		// the engine's boundary scan runs inside retire/settleAction and
 		// queued refires fire at the operation boundary, inside this call —
 		// the same observable point as the old post-retire revalidation.
-		if (t.parked) this.bridge.settleAction(mapped, committed); // async action reached settlement
-		else this.bridge.retire(mapped, committed); // batch done everywhere: its writes become permanent history
+		if (t.parked) this.bridge.settleAction(mapped); // async action reached settlement
+		else this.bridge.retire(mapped); // batch done everywhere: its writes become permanent history
 		this.bridgeTokenByFork.delete(forkToken);
 		this.forkTokenByBridge.delete(mapped);
 		this.maybeRetireAmbient(); // the last protocol retirement may close the ambient batch's pending window
@@ -451,7 +463,7 @@ export class Shim {
 		for (const p of b.passes.values()) {
 			if (p.state !== 'ended') return; // an open render still folds pre-retirement state
 		}
-		b.retire(ambientId, true); // sync-committed content locks into every committed world
+		b.retire(ambientId); // sync-committed content locks into every committed world
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {

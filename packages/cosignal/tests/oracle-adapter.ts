@@ -157,8 +157,8 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 				b.scopeWrite(tokenAt(b, op.token)!, atom, { kind: 'set', value: op.value });
 				break;
 			}
-			case 'settle': b.settleAction(tokenAt(b, op.token)!, op.committed); break;
-			case 'retire': b.retire(tokenAt(b, op.token)!, op.committed); break;
+			case 'settle': b.settleAction(tokenAt(b, op.token)!); break;
+			case 'retire': b.retire(tokenAt(b, op.token)!); break;
 			case 'passStart': reg.passes.push(b.passStart(op.root, op.include.map((i) => tokenAt(b, i)!)).id); break;
 			case 'yield': b.passYield(passAt(b, op.pass)); break;
 			case 'resume': b.passResume(passAt(b, op.pass)); break;

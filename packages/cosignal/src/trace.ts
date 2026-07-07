@@ -68,8 +68,12 @@
  *  quiet-write          {node, seq}                          a quiet-mode fold: nothing was pending, so the write folded straight into committed state (no batch, no receipt)
  *  write-dropped        {node, token}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
  *  batch-open           {token, action, ambient}             a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
- *  batch-settle         {token, committed}                   an async action's promise settled; its retirement follows
- *  batch-retire         {token, retiredSeq, committed}       the batch retired: its writes became permanent history visible to every world
+ *  batch-settle         {token}                              an async action's promise settled; its retirement follows
+ *  batch-retire         {token, retiredSeq}                  the batch retired: its writes became permanent history visible to every world
+ *  batch-disposition    {token, committed}                   the React bindings' report, recorded at its source (the protocol handler):
+ *                       React committed (true) or abandoned (false) the batch. Diagnostic only — retirement behavior is identical
+ *                       either way. The engine never mints this kind. (Recordings from older engines carried the flag as a bit on
+ *                       batch-settle / batch-retire records instead; that bit is ignored at decode.)
  *  slot-claim           {slot, token}                        a batch's first write claimed a slot
  *  slot-release         {slot, token}
  *  slot-release-deferred{slot, token}                        release waited: an open render's mask still names the slot
@@ -217,7 +221,9 @@ const MAX_I32 = 0x7fffffff;
 /** Kind codes (record form). Public decoded events carry the NAME, not the
  * code. Codes are append-only (existing recordings decode forever): 28-30
  * joined when the packed stream became the engine's ONLY event output — the
- * referee kinds the deleted BridgeEvent object channel used to carry alone. */
+ * referee kinds the deleted BridgeEvent object channel used to carry alone;
+ * 31 joined when the committed/abandoned report moved to its source (the
+ * React bindings' protocol handler) and left the retirement chain. */
 const K = {
 	write: 1, writeDropped: 2, batchOpen: 3, batchSettle: 4, batchRetire: 5,
 	slotClaim: 6, slotRelease: 7, slotReleaseDeferred: 8, slotBackstop: 9,
@@ -227,6 +233,7 @@ const K = {
 	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
 	clockSync: 25, truncation: 26, quietWrite: 27,
 	reactEffectCleanup: 28, passCommitted: 29, passDiscarded: 30,
+	batchDisposition: 31,
 } as const;
 
 const KIND_NAMES = [
@@ -238,6 +245,7 @@ const KIND_NAMES = [
 	'core-effect-run', 'react-effect-run', 'epoch-reset',
 	'clock-sync', 'truncation', 'quiet-write',
 	'react-effect-cleanup', 'pass-committed', 'pass-discarded',
+	'batch-disposition',
 ] as const;
 
 export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>;
@@ -533,8 +541,8 @@ export class Tracer implements TraceHooks {
 		this.rec(K.rootCommit, token, this.label(root), commitGen, 0, 0);
 	}
 
-	retired(token: TokenId, committed: boolean, retiredSeq: Seq): void {
-		this.rec(K.batchRetire | (committed ? KindBits.FLAG_A : 0), token, 0, retiredSeq, 0, 0);
+	retired(token: TokenId, retiredSeq: Seq): void {
+		this.rec(K.batchRetire, token, 0, retiredSeq, 0, 0);
 	}
 
 	slotClaimed(slot: SlotId, token: TokenId): void {
@@ -574,8 +582,16 @@ export class Tracer implements TraceHooks {
 		this.rec(K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0), t.id, 0, 0, 0, 0);
 	}
 
-	batchSettle(t: Token, committed: boolean): void {
-		this.rec(K.batchSettle | (committed ? KindBits.FLAG_A : 0), t.id, 0, 0, 0, 0);
+	batchSettle(t: Token): void {
+		this.rec(K.batchSettle, t.id, 0, 0, 0, 0);
+	}
+
+	/** The bindings' committed/abandoned report, minted at its source (the
+	 * protocol handler that received it) — the engine never calls this hook.
+	 * Not a cause-claiming kind: the retirement operation it precedes roots
+	 * its own chain, exactly as it did when the flag rode the engine call. */
+	batchDisposition(token: TokenId, committed: boolean): void {
+		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), token, 0, 0, 0, 0);
 	}
 
 	passStart(p: Pass): void {
@@ -700,10 +716,15 @@ export class Tracer implements TraceHooks {
 				data = { token: subject, action: a, ambient: b };
 				break;
 			case K.batchSettle:
-				data = { token: subject, committed: a };
+				// (a FLAG_A bit here is a legacy committed flag from older
+				// recordings — ignored; see batch-disposition.)
+				data = { token: subject };
 				break;
 			case K.batchRetire:
-				data = { token: subject, retiredSeq: a0, committed: a };
+				data = { token: subject, retiredSeq: a0 }; // legacy FLAG_A ignored, as above
+				break;
+			case K.batchDisposition:
+				data = { token: subject, committed: a };
 				break;
 			case K.slotClaim:
 			case K.slotRelease:

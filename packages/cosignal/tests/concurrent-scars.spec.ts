@@ -54,12 +54,12 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S4 — drop-on-abort retirement: committed=false batches fold; writes never silently revert', () => {
+	it('S4 — drop-on-abort retirement: abandoned batches fold; writes never silently revert', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred');
-		m.write(t.id, a, set(5)); // no subscriber → no React work → committed=false
-		m.retire(t.id, false);
+		m.write(t.id, a, set(5)); // no subscriber → no React work → React will abandon the batch
+		m.retire(t.id);
 		expect(m.committedValue(a, 'A')).toBe(5); // persistence must never depend on subscription
 		selfCheck(m);
 	});
@@ -77,7 +77,7 @@ describe('pinned scars (model-expressible)', () => {
 		const pk2 = pass(m, 'A', [k]);
 		expect(m.passValue(c, pk2)).toBe(10); // a fresh k render must see it (no stale certificate)
 		m.passEnd(pk2.id, 'discard');
-		m.retire(k.id, false);
+		m.retire(k.id);
 		selfCheck(m);
 	});
 
@@ -124,8 +124,8 @@ describe('pinned scars (model-expressible)', () => {
 		m.passResume(p.id);
 		expect(m.passValue(a, p)).toBe(1); // and the pass never sees it
 		m.passEnd(p.id, 'discard');
-		m.retire(t.id, false);
-		m.retire(u.id, true);
+		m.retire(t.id);
+		m.retire(u.id);
 		selfCheck(m);
 	});
 
@@ -139,7 +139,7 @@ describe('pinned scars (model-expressible)', () => {
 		const pu = pass(m, 'A', [u]);
 		expect(m.passValue(a, pu)).toBe(1); // U's render excludes T and must still show 1, not 0
 		m.passEnd(pu.id, 'commit', { retireAtCommit: [u.id] });
-		m.retire(t.id, false); // even if T dies, U's receipt independently commits 1
+		m.retire(t.id); // even if T dies, U's receipt independently commits 1
 		expect(m.committedValue(a, 'A')).toBe(1);
 		selfCheck(m);
 	});
@@ -154,7 +154,7 @@ describe('pinned scars (model-expressible)', () => {
 		const sync = pass(m, 'A', []); // urgent pass reads the never-evaluated node
 		expect(m.passValue(c, sync)).toBe(1); // committed world, never 10 (a torn urgent frame)
 		m.passEnd(sync.id, 'commit');
-		m.retire(k.id, false);
+		m.retire(k.id);
 		selfCheck(m);
 	});
 
@@ -193,7 +193,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.passYield(p.id);
 		const d = m.openBatch('default');
 		m.write(d.id, a, set(7));
-		m.retire(d.id, true); // retires mid-yield (work on another root / store-only)
+		m.retire(d.id); // retires mid-yield (work on another root / store-only)
 		m.passResume(p.id);
 		// FIRST read of a not-yet-read node after resume: fullyRetired-at-read-time designs leak 7
 		expect(m.passValue(n, p)).toBe(11); // pin excludes the mid-yield retirement
@@ -265,8 +265,8 @@ describe('pinned scars (model-expressible)', () => {
 		m.write(k.id, a, set(3)); // k's next write must still deliver
 		const kD = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === k.id);
 		expect(kD.length).toBeGreaterThanOrEqual(2); // initial + post-re-arm delivery
-		m.retire(k.id, true);
-		m.retire(j.id, false);
+		m.retire(k.id);
+		m.retire(j.id);
 		selfCheck(m);
 	});
 
@@ -285,7 +285,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(m.passValue(c, pOut)).toBe(0);
 		m.passEnd(pIn.id, 'discard');
 		m.passEnd(pOut.id, 'discard');
-		m.retire(t.id, false);
+		m.retire(t.id);
 		selfCheck(m);
 	});
 
@@ -312,7 +312,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.renderWatcher(pA2.id, w.id);
 		m.passEnd(pA2.id, 'commit');
 		expect(w.lastRenderedValue).toBe(2); // bounded window, closed
-		m.settleAction(t.id, true);
+		m.settleAction(t.id);
 		selfCheck(m);
 	});
 
@@ -324,9 +324,9 @@ describe('pinned scars (model-expressible)', () => {
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack (the post-await lint is adapter-only)
 		const ambient = m.tokens.get(m.ambientToken!)!;
 		expect(ambient.ambient).toBe(true); // the auto-minted ambient default batch
-		m.retire(ambient.id, true);
+		m.retire(ambient.id);
 		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — matching React's own async-action rule
-		m.settleAction(t.id, true);
+		m.settleAction(t.id);
 		expect(m.committedValue(a, 'A')).toBe(2); // write order wins at the fold
 		selfCheck(m);
 	});
@@ -344,7 +344,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(m.passValue(cOld, pOut)).toBe(101); // no evaluator swap can mix these
 		m.passEnd(pIn.id, 'discard');
 		m.passEnd(pOut.id, 'discard');
-		m.retire(t.id, false);
+		m.retire(t.id);
 		selfCheck(m);
 	});
 
@@ -356,13 +356,13 @@ describe('pinned scars (model-expressible)', () => {
 		m.scopeWrite(k.id, a, set(1));
 		const x = m.openBatch('urgent');
 		m.write(x.id, m.atom('unrelated', 0), set(1));
-		m.retire(x.id, true); // an earlier unrelated retirement "consumes the queue entry"
+		m.retire(x.id); // an earlier unrelated retirement "consumes the queue entry"
 		expect(e.runs).toBe(0); // k invisible to committed-for-A: correctly no run yet
 		const pA = pass(m, 'A', [k]);
 		m.passEnd(pA.id, 'commit'); // the later per-root advance exposes the parked write
 		expect(e.runs).toBe(1); // durable enumeration: the advance itself drains
 		expect(e.lastValue).toBe(1);
-		m.settleAction(k.id, true);
+		m.settleAction(k.id);
 		selfCheck(m);
 	});
 
@@ -396,12 +396,12 @@ describe('pinned scars (model-expressible)', () => {
 		m.passYield(p.id);
 		const u = m.openBatch('urgent');
 		m.write(u.id, a, set(1));
-		m.retire(u.id, true); // clears-at-retire designs then serve kernel n=12 beside folded a=100
+		m.retire(u.id); // clears-at-retire designs then serve kernel n=12 beside folded a=100
 		m.passResume(p.id);
 		expect(m.passValue(a, p)).toBe(100);
 		expect(m.passValue(n, p)).toBe(111); // same world — no torn frame
 		m.passEnd(p.id, 'discard');
-		m.retire(t.id, false);
+		m.retire(t.id);
 		selfCheck(m);
 	});
 
@@ -414,7 +414,7 @@ describe('pinned scars (model-expressible)', () => {
 		const held = pass(m, 'B', retained);
 		m.passYield(held.id);
 		const heldBefore = m.passValue(a, held);
-		for (const t of retained) m.retire(t.id, true); // entangled lanes: work lived on other roots
+		for (const t of retained) m.retire(t.id); // entangled lanes: work lived on other roots
 		expect(m.slots.filter((s) => s.releasePending)).toHaveLength(5); // mask-retained
 		// fresh live batches demand slots: 26 free + 5 retained = table full at the 27th claim
 		const live: number[] = [];
@@ -428,7 +428,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(m.passValue(a, held)).toBe(heldBefore);
 		m.passResume(held.id);
 		m.passEnd(held.id, 'discard');
-		for (const id of live) m.retire(id, true);
+		for (const id of live) m.retire(id);
 		selfCheck(m);
 	});
 
@@ -447,7 +447,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.write(k.id, x, set(2)); // next episode's write must reach the watcher through x→u→w
 		const d = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W');
 		expect(d).toHaveLength(1);
-		m.retire(k.id, true);
+		m.retire(k.id);
 		selfCheck(m);
 	});
 
@@ -473,7 +473,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.renderWatcher(pt2.id, w.id);
 		m.passEnd(pt2.id, 'commit');
 		expect(w.lastRenderedValue).toBe(2); // committed DOM never wedges at 1
-		m.settleAction(t.id, true);
+		m.settleAction(t.id);
 		selfCheck(m);
 	});
 
@@ -491,7 +491,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.passYield(pk.id); // …and yields
 		const d = m.openBatch('default');
 		m.write(d.id, a, set(1)); // store-only default writes a (no committed edge a→c yet)
-		m.retire(d.id, false); // and retires; its slot releases immediately (S36's freed-slot half)
+		m.retire(d.id); // and retires; its slot releases immediately (S36's freed-slot half)
 		expect(m.eventsOfType('slot-released').some((e) => e.token === d.id)).toBe(true);
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit'); // commits, locking K: committed-for-A = flag 1 (member), a 1 (retired) → c=1
@@ -500,7 +500,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(w.lastRenderedValue).toBe(1);
 		const corrections = m.eventsOfType('reconcile-correction').filter((e) => e.watcher === 'W' && e.cause === 'per-root-commit');
 		expect(corrections).toHaveLength(1);
-		m.settleAction(k.id, true);
+		m.settleAction(k.id);
 		selfCheck(m);
 	});
 
@@ -514,7 +514,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(() => m.quiesce()).toThrow(/quiescence requires/); // a live pin forbids the episode reset
 		m.discardAllWip(); // a synchronous capability of the external-runtime protocol
 		expect(m.livePins()).toHaveLength(0);
-		m.retire(t.id, true);
+		m.retire(t.id);
 		m.quiesce(); // discard-first, then reset: no post-reset stamp can land below a live pin
 		expect(m.committedValue(a, 'A')).toBe(3);
 		selfCheck(m);
@@ -542,7 +542,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(2); // urgent pre-paint correction to committed-now
 		expect(m.committedValue(a, 'A')).toBe(2);
-		m.settleAction(k.id, true);
+		m.settleAction(k.id);
 		selfCheck(m);
 	});
 

@@ -187,9 +187,9 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(la.tp.materialize()[0]!.token).toBe(ambient);
 		expect(bridge.newestValue(la)).toBe(101); // writes apply to the kernel immediately
 		expect(bridge.committedValue(la, 'A')).toBe(8); // not committed yet: base still holds the quiet fold
-		bridge.retire(ambient!, false);
+		bridge.retire(ambient!);
 		expect(bridge.committedValue(la, 'A')).toBe(101); // persistence never depends on subscription
-		bridge.retire(t.id, true); // last retirement: quiet re-arms
+		bridge.retire(t.id); // last retirement: quiet re-arms
 		expect(la.tp.materialize()).toHaveLength(0); // pin-free retirement compacts the prefix
 		la.handle.set(500); // and the next write folds again
 		expect(la.tp.materialize()).toHaveLength(0);
@@ -279,7 +279,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const p = bridge.passStart('A', []); // t excluded
 		expect(bridge.passValue(viaHandle, p)).toBe(0); // the world evaluation routes the public read: the excluded batch stays invisible
 		bridge.passEnd(p.id, 'discard');
-		bridge.retire(t.id, true);
+		bridge.retire(t.id);
 		expect(bridge.committedValue(viaHandle, 'A')).toBe(5);
 	});
 

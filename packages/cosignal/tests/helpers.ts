@@ -377,14 +377,14 @@ export class TwinDriver {
 			this.engine.scopeWrite(tokenId, this.toEngine(node) as never, op));
 	}
 
-	settleAction(tokenId: number, committed: boolean): void {
-		this.both('settleAction', () => this.model.settleAction(tokenId, committed), () =>
-			this.engine.settleAction(tokenId, committed));
+	settleAction(tokenId: number): void {
+		this.both('settleAction', () => this.model.settleAction(tokenId), () =>
+			this.engine.settleAction(tokenId));
 	}
 
-	retire(tokenId: number, committed: boolean): void {
-		this.both('retire', () => this.model.retire(tokenId, committed), () =>
-			this.engine.retire(tokenId, committed));
+	retire(tokenId: number): void {
+		this.both('retire', () => this.model.retire(tokenId), () =>
+			this.engine.retire(tokenId));
 	}
 
 	passStart(root: string, includeTokens: number[]): Pass {
