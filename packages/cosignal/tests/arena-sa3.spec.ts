@@ -2,7 +2,7 @@
  * NF2 P2.S-A pins, part 3: cold-base visibility in the arena walk (the
  * pre-existing S-A bug documented at B2, 41fe7d6). §4.3 decay-by-eviction
  * drops an unconsumed mark on an unwatched shadow to COLD (MUTABLE kept,
- * VALID cleared, value column evicted) — and aCheckDirty's dirt arms
+ * VALID cleared, value column evicted) — and arenaCheckDirty's dirt arms
  * matched only MUTABLE|DIRTY / MUTABLE|PENDING, so a cold base was
  * INVISIBLE to a validation walk entered from above. Every suite that
  * creates atoms before readers is masked by node-id order: the armed
@@ -84,7 +84,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		// PENDING; no live consumer refolds; §4.3 boundary decay then evicts
 		// base to COLD (MUTABLE kept, VALID cleared, value column dropped).
 		// The armed epilogue serves in node-id order — TOP first: its
-		// aCheckDirty walk must treat the cold base as dirt, or it clears the
+		// arenaCheckDirty walk must treat the cold base as dirt, or it clears the
 		// cone's PENDING and stale-serves 2 while the memo path serves 3.
 		commitWrite(b, base, 3);
 		expect(b.committedValue(top, 'R')).toBe(3);

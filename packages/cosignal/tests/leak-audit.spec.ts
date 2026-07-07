@@ -119,8 +119,8 @@ describe('1. KERNEL (index.ts arena)', () => {
 		for (let i = 0; i < 400; i++) {
 			gate.set(i % 2 === 0);
 			void c.state; // re-track: one link unlinks (freed), its replacement allocates
-			const M = __kernelBuffer();
-			for (let l = M[cid + NodeField.DEPS]!; l !== 0; l = M[l + LinkField.NEXT_DEP]!) linkIds.add(l);
+			const memory = __kernelBuffer();
+			for (let l = memory[cid + NodeField.DEPS]!; l !== 0; l = memory[l + LinkField.NEXT_DEP]!) linkIds.add(l);
 		}
 		expect(linkIds.size).toBeLessThanOrEqual(6); // the flip cycles the same few records, not 400 fresh ones
 	});
@@ -170,7 +170,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		b.disposeComputed(warm as unknown as Computed<unknown>);
 		const shell = b.__arenaForTest('R')!;
 		const next0 = shell.next;
-		const wlen0 = shell.W.length;
+		const wlen0 = shell.memory.length;
 		const vals0 = shell.vals.length;
 		const links0 = shell.links;
 		const N = 400;
@@ -184,7 +184,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		// Pre-fix signature: shell.next === next0 + 8 * N (one dead 8-int record
 		// + ~6 side-column slots leaked per recreation, per live arena, forever).
 		expect(shell.next).toBe(next0);
-		expect(shell.W.length).toBe(wlen0);
+		expect(shell.memory.length).toBe(wlen0);
 		expect(shell.vals.length).toBe(vals0);
 		expect(shell.links).toBe(links0); // dep links recycled through the arena link free list
 		expect(shell.suspended.length).toBe(0);
@@ -214,7 +214,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
 		expect(b.__arenaStats().suspended).toBe(1);
 		b.disposeComputed((c as ComputedNode).handle);
-		expect(b.__arenaStats().suspended).toBe(0); // aEvictShadow swap-removed the entry
+		expect(b.__arenaStats().suspended).toBe(0); // arenaEvictShadow swap-removed the entry
 		gate.resolve('x');
 		await tick();
 		expect(b.__arenaStats().pendingSettlements).toBe(0); // tap fast-out: nothing suspended anywhere
@@ -261,10 +261,10 @@ describe('4. ARENA POOL', () => {
 		const atoms = Array.from({ length: 40 }, (_, i) => b.atom(`a${i}`, i));
 		const big = b.computed('big', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w = mount(b, 'B', big, 'WB');
-		expect(b.__arenaForTest('B')!.W.length).toBeGreaterThan(64); // the big tenancy grew its buffer
+		expect(b.__arenaForTest('B')!.memory.length).toBeGreaterThan(64); // the big tenancy grew its buffer
 		w.live = false;
 		b.quiesce();
-		const capAfterBig = Math.max(...b.__arenaPoolForTest().map((a) => a.W.length));
+		const capAfterBig = Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length));
 		for (let i = 0; i < 12; i++) {
 			const s = b.computed(`s${i}`, (read) => read(atoms[0]!));
 			const ws = mount(b, `S${i}`, s, `WS${i}`); // small tenancies churn pool claims (pass + committed shells)
@@ -272,7 +272,7 @@ describe('4. ARENA POOL', () => {
 			b.quiesce();
 		}
 		expect(b.__arenaPoolForTest().length).toBeLessThanOrEqual(8); // the cap: extra releases DROP the shell
-		expect(Math.max(...b.__arenaPoolForTest().map((a) => a.W.length))).toBe(capAfterBig); // capacity kept (by design), never grown by small passes
+		expect(Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length))).toBe(capAfterBig); // capacity kept (by design), never grown by small passes
 	});
 });
 

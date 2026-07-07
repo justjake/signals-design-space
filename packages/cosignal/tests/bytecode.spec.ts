@@ -26,7 +26,7 @@ const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
 
 // name -> budget (bytecode bytes), all under the inline limit: current size
 // (Node 24.16, esbuild 0.28 bundle) plus slack. Pins the propagate/read/
-// flush hot paths of the kernel and the shadow-arena walks of the
+// flush hot paths of the kernel and the world-arena walks of the
 // concurrency engine — including the freelist alloc/free pair the row-2 fix
 // rethreaded.
 const BUDGETS: Record<string, number> = {
@@ -61,42 +61,42 @@ const BUDGETS: Record<string, number> = {
 	computedReadSlow: 460, // 418: the out-of-line ladder — near the limit (S-C: never-evaluated probe reads MUTABLE; HOST_OWNED carried)
 	writeAtom: 120, // 100
 	flush: 170, // 139
-	// concurrency engine (src/concurrent.ts shadow arenas)
-	aLink: 230, // 189
-	aLinkInsert: 380, // 325
-	aUnlink: 380, // 321
-	aPropagate: 460, // 453: S-B segregated-list interleave — each descended sub
+	// concurrency engine (src/concurrent.ts world arenas)
+	arenaLink: 230, // 189
+	arenaLinkInsert: 380, // 325
+	arenaUnlink: 380, // 321
+	arenaPropagate: 460, // 453: S-B segregated-list interleave — each descended sub
 	// contributes its weak head as a parked continuation (one shared grow
 	// block; the cycle-cap thrower moved out of line) — AT the inline limit,
 	// exactly like checkDirtyLoop; watch it
-	aShallowPropagate: 140, // 112
-	aPurgeDeps: 170, // 137
-	aAllocLink: 90, // 71
-	aFreeLink: 50, // 37: threads a.linkFree through L_VER (row 2 twin)
+	arenaShallowPropagate: 140, // 112
+	arenaPurgeDeps: 170, // 137
+	arenaAllocLink: 90, // 71
+	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (row 2 twin)
 	shadowFor: 310, // 261
 	foldAtom: 350, // 290: S-D deleted the lastFoldFp fingerprint scan (its
 	// last reader died with the memo ladder at S-C) — budget tightened with it
-	aUpdateShadow: 230, // 185 (S-D: the readClock bump routed through aBumpReadClock)
-	aBumpReadClock: 60, // 31: S-D Int32 wrap guard on the consumption bump path
-	aBumpCycle: 60, // 33: S-D Int32 wrap guard on the evaluation-cycle bump
-	aCheckDirty: 100, // 68: B2 split — entry wrapper owning the aCheckSp restore
+	arenaUpdateShadow: 230, // 185 (S-D: the readClock bump routed through arenaBumpReadClock)
+	arenaBumpReadClock: 60, // 31: S-D Int32 wrap guard on the consumption bump path
+	arenaBumpCycle: 60, // 33: S-D Int32 wrap guard on the evaluation-cycle bump
+	arenaCheckDirty: 100, // 68: B2 split — entry wrapper owning the arenaCheckSp restore
 	// (was the 567 walk monolith pinned below)
-	aCheckDirtyLoop: 450, // 407: the general arena walk, out of line
-	aUpdateAndShallow: 110, // 59: refold + sibling Pending->Dirty upgrade
-	aFoldOutcome: 340, // 322: fold-outcome classification, out of line — S-C
+	arenaCheckDirtyLoop: 450, // 407: the general arena walk, out of line
+	arenaUpdateAndShallow: 110, // 59: refold + sibling Pending->Dirty upgrade
+	arenaFoldOutcome: 340, // 322: fold-outcome classification, out of line — S-C
 	// added the §4.5.3 comparator arm (custom-equality computeds compare
 	// against the ARENA-local previous, HEAD order; the user-fn call itself
-	// is out of line in aEqCold, so the hot default arm stays closure-free)
-	aSyncObsAfterRefold: 130, // 92: S-B out-of-line obs epilogue (observed nodes only)
+	// is out of line in arenaEqCold, so the hot default arm stays closure-free)
+	arenaSyncObsAfterRefold: 130, // 92: S-B out-of-line obs epilogue (observed nodes only)
 };
 
 // Functions over the V8 inline budget, pinned at current size — B2 emptied
-// the list (checkDirty/aCheckDirty/aUpdateComputed split per port study row
+// the list (checkDirty/arenaCheckDirty/arenaUpdateComputed split per port study row
 // 10 and moved into BUDGETS above). A function that outgrows the inline
 // limit gets pinned here (deliberately, justified in the PR); a pin that
 // drops back under it moves into BUDGETS.
 const OVER_LIMIT_PINS: Record<string, number> = {
-	aUpdateComputed: 530, // 486 (re-checked at S-D: the wrap-guarded aBumpCycle
+	arenaUpdateComputed: 530, // 486 (re-checked at S-D: the wrap-guarded arenaBumpCycle
 	// call replaced the inline cycle increment, -9; items 1-2's other shaves
 	// landed in foldAtom, not here — still over the 460 inline limit, so the
 	// pin STANDS, not promoted): S-B made the
@@ -104,9 +104,9 @@ const OVER_LIMIT_PINS: Record<string, number> = {
 	// the refold wrapper gained the M6 observed-capture open (obsRefs probe)
 	// and the paired world-eval trace hooks. Deliberate: the wrapper brackets
 	// a DYNAMIC user-fn call, so inlining the wrapper is not load-bearing
-	// (B2's exit criterion tracked the WALK ARMS — aCheckDirty/-Loop,
-	// aUpdateShadow, aUpdateAndShallow — which all stay inside the budget);
-	// the obs sync epilogue is already out of line (aSyncObsAfterRefold).
+	// (B2's exit criterion tracked the WALK ARMS — arenaCheckDirty/-Loop,
+	// arenaUpdateShadow, arenaUpdateAndShallow — which all stay inside the budget);
+	// the obs sync epilogue is already out of line (arenaSyncObsAfterRefold).
 };
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

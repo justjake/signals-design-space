@@ -61,7 +61,7 @@
  *     state and correct the stale ones.
  *   - The engine keeps two dependency graphs. K0 is the kernel's own graph
  *     (the packed records in index.ts), which only knows newest values. The
- *     other is the per-world SHADOW ARENAS (NF2, plans/2026-07-06 §4): one
+ *     other is the per-world WORLD ARENAS (NF2, plans/2026-07-06 §4): one
  *     packed record plane per pass world and per committed-for-root world,
  *     holding a SHADOW (value + flags) per consumed node and the strong and
  *     weak-flagged LINKS the world's own evaluations actually took. Arenas
@@ -466,10 +466,10 @@ export type Pass = {
 	 * (disjoint from `mounted`; where pass-end means the union it writes the
 	 * union explicitly). */
 	rendered: Set<WatcherId>;
-	/** NF2: the pass world's shadow arena — its value+invalidation+routing
+	/** NF2: the pass world's arena — its value+invalidation+routing
 	 * layer (claimed at passStart, dropped in reclaimAfterPassEnd —
 	 * engine-side only; the oracle has no twin). */
-	arena?: ShadowArena;
+	arena?: WorldArena;
 };
 
 export type RootState = {
@@ -828,7 +828,7 @@ export type ArenaInitInts = number;
  * `configure()`). */
 export type BridgeOptions = {
 	/**
-	 * Every claimed shadow arena's buffer starts at this capacity and grows
+	 * Every claimed world arena's buffer starts at this capacity and grows
 	 * in place when its records outgrow it (default 8192 ints). Shrinking it
 	 * makes even small graphs exercise mid-operation growth, which is how the
 	 * arena suites pin every growth path.
@@ -879,7 +879,7 @@ export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
 	return new CosignalBridge(options);
 }
 
-// ---- NF2: per-world shadow arenas (plans/2026-07-06 §4) ---------------------------
+// ---- NF2: per-world world arenas (plans/2026-07-06 §4) ---------------------------
 // S-B (routing-authority transfer): the arenas are the value, invalidation,
 // AND routing layer for pass and committed worlds — shadow records +
 // strong/weak links recorded by the arena fn-readers, folds into value
@@ -898,9 +898,10 @@ export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
 // ARENA (its own transliterated walks) and compares against FOLD-TRUTH — a
 // naive cache-free re-fold — ANY divergence throws. Layouts and walks are
 // adapted from the spike prototype
-// (research/experiments/world-tagged-links-spike-code/). AF/AFlag below are
-// the shadow arenas' OWN layout — bridge-owned, same-file so the hot arena
-// walks (the aPropagate/aCheckDirty family) inline the members as literals
+// (research/experiments/world-tagged-links-spike-code/). ArenaField/ArenaLinkField/
+// ArenaFlag below are
+// the world arenas' OWN layout — bridge-owned, same-file so the hot arena
+// walks (the arenaPropagate/arenaCheckDirty family) inline the members as literals
 // under every toolchain. The shared field/bit names deliberately keep the
 // kernel's numbering (the walks are transliterations of the kernel's
 // propagate/checkDirty family and read best side by side), but nothing
@@ -909,42 +910,50 @@ export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
 // kernelStrongDepsOf and closureOverKernel), and offsets 5-7 here mean
 // shadow-specific things the kernel's fields don't.
 
-/** Shadow-arena record fields (bridge-owned layout — NOT the kernel's
+/** World-arena node-record fields (bridge-owned layout — NOT the kernel's
  * NodeField/LinkField, whose offsets 5-7 mean different things; stride 8;
  * node-shadow and link records share the pool). */
-const enum AF {
-	// shadow node record
+const enum ArenaField {
 	FLAGS = 0,
 	DEPS = 1,
 	DEPS_TAIL = 2,
 	SUBS = 3,
 	SUBS_TAIL = 4,
 	NODE = 5, // the overlay NodeId this shadows
-	GEN = 6, // id-tenancy stamp: bridge nodeGen[NODE] observed at recording (§4.5.3)
+	NODE_GEN = 6, // id-tenancy stamp: bridge nodeGen[NODE] observed at recording (§4.5.3)
 	MARK = 7, // fanout read-clock dedup stamp (§4.3)
-	// link record
-	L_VER = 0,
-	L_DEP = 1,
-	L_SUB = 2,
-	L_PREV_SUB = 3,
-	L_NEXT_SUB = 4,
-	L_PREV_DEP = 5,
-	L_NEXT_DEP = 6,
-	L_MODE = 7, // bit 0: 1 = weak (untracked-read) link — §4.4.1
-	/** The free list threads through the VERSION field (aliases L_VER):
+}
+
+/** World-arena link-record fields (link records share ArenaField's pool
+ * and stride; offsets overlay the node-record fields). */
+const enum ArenaLinkField {
+	VERSION = 0,
+	DEP = 1,
+	SUB = 2,
+	PREV_SUB = 3,
+	NEXT_SUB = 4,
+	PREV_DEP = 5,
+	NEXT_DEP = 6,
+	MODE = 7, // ArenaLinkMode bits — §4.4.1
+	/** The free list threads through the VERSION field (FREE_NEXT aliases it):
 	 * kernel row-2 discipline — a freed link must keep every field a walk
-	 * still reads intact. aCheckDirty reads L_NEXT_DEP (and aShallowPropagate
-	 * L_NEXT_SUB) off links a mid-walk purge freed, so those must keep naming
-	 * former neighbors, never the free list. L_VER is genuinely dead on freed
-	 * links: it is only written at link mint/reuse (aLink/aLinkInsert) and
+	 * still reads intact. arenaCheckDirty reads NEXT_DEP (and arenaShallowPropagate
+	 * NEXT_SUB) off links a mid-walk purge freed, so those must keep naming
+	 * former neighbors, never the free list. VERSION is genuinely dead on freed
+	 * links: it is only written at link mint/reuse (arenaLink/arenaLinkInsert) and
 	 * only read off LIVE links (the subs-tail dedup probe); every allocation
 	 * path rewrites it before any read. Pinned by tests/arena-freelist.spec.ts. */
-	L_FREE_NEXT = 0,
+	FREE_NEXT = 0,
+}
+
+/** MODE field bits. */
+const enum ArenaLinkMode {
+	WEAK = 1, // bit 0: 1 = weak (untracked-read) link — §4.4.1
 }
 
 /** Shadow flag bits (bridge-owned; the shared names keep the kernel
  * NodeFlag numbering for side-by-side reading — see header note). */
-const enum AFlag {
+const enum ArenaFlag {
 	MUTABLE = 1,
 	RECURSED_CHECK = 4,
 	RECURSED = 8,
@@ -967,14 +976,34 @@ const enum AFlag {
 	BOX_THROWN = 16384,
 }
 
-const A_STRIDE = 8;
-const A_SHIFT = 3; // record id >> A_SHIFT = value/susp column index
+/** Arena geometry. Same-file const enum members (not module consts): the
+ * reads sit inside the hot arena walks and must inline as literals. */
+const enum ArenaGeom {
+	/** Int32 fields per record; record ids are premultiplied by this. */
+	STRIDE = 8,
+	/** record id >> ID_TO_COLUMN_SHIFT = value/susp column index */
+	ID_TO_COLUMN_SHIFT = 3,
+	/**
+	 * Int32 stamp ceiling (S-D pooling hardening): `readClock` and `cycle` are
+	 * JS numbers, but their stamps store into Int32Array fields (`ArenaField.MARK`,
+	 * `ArenaLinkField.VERSION`) which truncate past 2^31-1 — a wrapped store could collide
+	 * with a live stamp and dedup FALSE-POSITIVE (a skipped propagation or a
+	 * dropped link: the dangerous direction). The bump helpers (arenaBumpReadClock,
+	 * arenaBumpCycle) renumber BEFORE any store can wrap: stamps reset to 0
+	 * (= stale), the clock restarts, and the next walk re-marks — at most one
+	 * conservative re-walk per record per 2^31 events, amortized zero. (Margin
+	 * under 2^31-1 is cosmetic headroom; bumps route through the helpers, so
+	 * the clocks never reach the ceiling.)
+	 */
+	CLOCK_LIMIT = 0x7fff0000,
+}
+
 /** Bounds the arena pool: releaseArena keeps at most this many scrubbed shells (further releases drop the shell). */
 const ARENA_POOL_CAP = 8;
 const EMPTY_I32 = new Int32Array(0);
 
 /**
- * One world's shadow arena: packed records (spike plane layout), a value
+ * One world's arena: packed records, a value
  * side column, a per-shadow suspended-list index column, a dirty list, and
  * the read clock. Pooled: buffers return to the pool at release, where the
  * FULL SCRUB (releaseArena: written prefix + every side column zeroed) is
@@ -982,7 +1011,7 @@ const EMPTY_I32 = new Int32Array(0);
  * tenancy diagnostic (bumped at claim AND release, monotone per shell —
  * a float64 counter, exact to 2^53, so it has no wrap surface).
  */
-export class ShadowArena {
+export class WorldArena {
 	kind: 'pass' | 'committed';
 	/** Owning world (pass object or committed root) — folds cite it. */
 	world: World;
@@ -990,7 +1019,7 @@ export class ShadowArena {
 	alive = true;
 	/** Pool claim generation (bumped at claim AND release). */
 	claimGen = 0;
-	W: Int32Array;
+	memory: Int32Array;
 	vals: Value[] = [];
 	/** Per-record suspended-list slot + 1 (0 = not suspended) — §4.5.4 step-0
 	 * compaction: the field IS the set bit and stores the dense index. */
@@ -1006,18 +1035,18 @@ export class ShadowArena {
 	 * visited-and-skipped 400 weak links). Weak-flagged links live on a
 	 * per-shadow SECOND subs list (head + tail side columns, record ids;
 	 * same link-record layout): the delivery walk traverses the STRONG list
-	 * (AF.SUBS) only and never sees a weak link; mark propagation and drain
+	 * (ArenaField.SUBS) only and never sees a weak link; mark propagation and drain
 	 * candidate collection walk both. §4.4.1's mode transitions (first-
 	 * occurrence reset, strong-dominates) MOVE a link between the lists. */
 	weakSubs: number[] = [];
 	weakSubsTail: number[] = [];
-	next = A_STRIDE; // bump pointer (record 0 burned: 0 = null)
+	next = ArenaGeom.STRIDE; // bump pointer (record 0 burned: 0 = null)
 	linkFree = 0;
 	/** Dead-SHADOW free list head (leak audit): record ids threaded through
-	 * AF.DEPS of records `disposeComputed`'s eager purge orphaned — the one
+	 * ArenaField.DEPS of records `disposeComputed`'s eager purge orphaned — the one
 	 * site that kills a shadow record mid-tenancy (the dead-GEN path re-keys
 	 * records in place). Records join FULLY ZEROED (byNode cleared, links
-	 * purged, unsuspended), so nothing can reach one until aAllocShadow
+	 * purged, unsuspended), so nothing can reach one until arenaAllocShadow
 	 * re-issues it; without this list the bump pointer grew a LIVE arena by
 	 * one record per useComputed recreation, forever
 	 * (tests/leak-audit.spec.ts pins the boundedness). */
@@ -1038,102 +1067,88 @@ export class ShadowArena {
 		this.kind = kind;
 		this.world = world;
 		this.root = root;
-		this.W = buf;
+		this.memory = buf;
 	}
 }
-
-/**
- * Int32 stamp ceiling (S-D pooling hardening): `readClock` and `cycle` are
- * JS numbers, but their stamps store into Int32Array fields (`AF.MARK`,
- * `AF.L_VER`) which truncate past 2^31-1 — a wrapped store could collide
- * with a live stamp and dedup FALSE-POSITIVE (a skipped propagation or a
- * dropped link: the dangerous direction). The bump helpers below renumber
- * BEFORE any store can wrap: stamps reset to 0 (= stale), the clock
- * restarts, and the next walk re-marks — at most one conservative re-walk
- * per record per 2^31 events, amortized zero. (Margin under 2^31-1 is
- * cosmetic headroom; bumps route through the helpers, so the clocks never
- * reach the ceiling.)
- */
-const A_CLOCK_LIMIT = 0x7fff0000;
 
 /** Renumber the read clock: MARK → 0 on every live shadow record, clock
  * restarts at 0 — the exact quiesce-duty state (§4.5.7), where "marks 0 /
  * clock 0" is proven sound: a dedup hit in that state claims an
  * already-marked cone whose PENDING flags persist, and any intervening
  * consumption bumps the clock away from 0. Link records are skipped by the
- * byNode round-trip guard (their slot 7 is L_MODE, not MARK). */
-function aRenumberMarks(a: ShadowArena): void {
-	for (let sh = A_STRIDE; sh < a.next; sh += A_STRIDE) {
-		if ((a.W[sh + AF.NODE] ?? 0) !== 0 && a.byNode[a.W[sh + AF.NODE]!] === sh) a.W[sh + AF.MARK] = 0;
+ * byNode round-trip guard (their slot 7 is MODE, not MARK). */
+function arenaRenumberMarks(a: WorldArena): void {
+	for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
+		if ((a.memory[sh + ArenaField.NODE] ?? 0) !== 0 && a.byNode[a.memory[sh + ArenaField.NODE]!] === sh) a.memory[sh + ArenaField.MARK] = 0;
 	}
 	a.readClock = 0;
 }
 
-function aBumpReadClock(a: ShadowArena): void {
-	if (a.readClock >= A_CLOCK_LIMIT) aRenumberMarks(a);
+function arenaBumpReadClock(a: WorldArena): void {
+	if (a.readClock >= ArenaGeom.CLOCK_LIMIT) arenaRenumberMarks(a);
 	a.readClock++;
 }
 
-/** Renumber evaluation-cycle stamps: L_VER → 0 on every LIVE link (each
- * lives on exactly one deps chain), cycle restarts at 0. L_VER is only
+/** Renumber evaluation-cycle stamps: VERSION → 0 on every LIVE link (each
+ * lives on exactly one deps chain), cycle restarts at 0. VERSION is only
  * compared for SAME-evaluation link dedup, so a zeroed stamp just reads as
  * "stale from an old evaluation" — the normal case. Freed links are never
- * touched: their L_VER aliases the free-list thread (L_FREE_NEXT). An open
+ * touched: their VERSION aliases the free-list thread (FREE_NEXT). An open
  * outer frame keeps stamping its saved (≥ limit) cycle, which post-renumber
  * cycles can never reach again before the next renumber — no collision. */
-function aRenumberLinkVersions(a: ShadowArena): void {
-	const W = a.W;
-	for (let sh = A_STRIDE; sh < a.next; sh += A_STRIDE) {
-		if ((W[sh + AF.NODE] ?? 0) !== 0 && a.byNode[W[sh + AF.NODE]!] === sh) {
-			for (let l = W[sh + AF.DEPS]!; l !== 0; l = W[l + AF.L_NEXT_DEP]!) W[l + AF.L_VER] = 0;
+function arenaRenumberLinkVersions(a: WorldArena): void {
+	const memory = a.memory;
+	for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
+		if ((memory[sh + ArenaField.NODE] ?? 0) !== 0 && a.byNode[memory[sh + ArenaField.NODE]!] === sh) {
+			for (let l = memory[sh + ArenaField.DEPS]!; l !== 0; l = memory[l + ArenaLinkField.NEXT_DEP]!) memory[l + ArenaLinkField.VERSION] = 0;
 		}
 	}
 	a.cycle = 0;
 }
 
-function aBumpCycle(a: ShadowArena): number {
-	if (a.cycle >= A_CLOCK_LIMIT) aRenumberLinkVersions(a);
+function arenaBumpCycle(a: WorldArena): number {
+	if (a.cycle >= ArenaGeom.CLOCK_LIMIT) arenaRenumberLinkVersions(a);
 	return ++a.cycle;
 }
 
-function aGrow(a: ShadowArena, need: number): void {
-	let len = a.W.length;
+function arenaGrow(a: WorldArena, need: number): void {
+	let len = a.memory.length;
 	while (len < need) len *= 2;
-	if (len !== a.W.length) {
+	if (len !== a.memory.length) {
 		const bigger = new Int32Array(len);
-		bigger.set(a.W);
-		a.W = bigger; // growth-mid-op: every allocating call site re-loads a.W (§4.5.9)
+		bigger.set(a.memory);
+		a.memory = bigger; // growth-mid-op: every allocating call site re-loads a.memory (§4.5.9)
 	}
 }
 
-function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number): number {
+function arenaAllocShadow(a: WorldArena, nodeId: NodeId, flags: number, gen: number): number {
 	let id = a.shadowFree;
 	if (id !== 0) {
-		// Reuse a dead-shadow record (see ShadowArena.shadowFree): it was
+		// Reuse a dead-shadow record (see WorldArena.shadowFree): it was
 		// zeroed wholesale when it joined the list, its side columns were
 		// scrubbed by the evict (vals/suspIdx) and the unlinks (weak heads),
 		// and its walk stamp is stale by generation monotonicity — so once
 		// the thread field clears, the fresh-record invariant below holds.
-		a.shadowFree = a.W[id + AF.DEPS]!;
-		a.W[id + AF.DEPS] = 0;
+		a.shadowFree = a.memory[id + ArenaField.DEPS]!;
+		a.memory[id + ArenaField.DEPS] = 0;
 	} else {
 		id = a.next;
-		aGrow(a, id + A_STRIDE);
-		a.next = id + A_STRIDE;
+		arenaGrow(a, id + ArenaGeom.STRIDE);
+		a.next = id + ArenaGeom.STRIDE;
 	}
-	const W = a.W;
-	// Fresh-record invariant (B1 cold-pass shave): W[a.next..] is ALL ZERO —
-	// a fresh Int32Array is zeroed, aGrow's replacement buffer is zeroed past
+	const memory = a.memory;
+	// Fresh-record invariant (B1 cold-pass shave): memory[a.next..] is ALL ZERO —
+	// a fresh Int32Array is zeroed, arenaGrow's replacement buffer is zeroed past
 	// the copied prefix, and releaseArena scrubs the dead tenancy's whole
 	// written prefix [0, next) before the buffer pools. So the list heads
 	// (DEPS/DEPS_TAIL/SUBS/SUBS_TAIL) and MARK are already 0 here, and the
 	// bump allocator never re-issues a record id mid-tenancy — only the
 	// tenant fields need stores. (The freelist re-issues LINK records, whose
 	// mint paths write every field — tests/arena-freelist.spec.ts.)
-	W[id + AF.FLAGS] = flags;
-	W[id + AF.NODE] = nodeId;
-	W[id + AF.GEN] = gen;
-	const v = id >> A_SHIFT;
+	memory[id + ArenaField.FLAGS] = flags;
+	memory[id + ArenaField.NODE] = nodeId;
+	memory[id + ArenaField.NODE_GEN] = gen;
+	const v = id >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 	while (a.vals.length <= v) {
 		a.vals.push(undefined);
 		a.suspIdx.push(0);
@@ -1146,21 +1161,21 @@ function aAllocShadow(a: ShadowArena, nodeId: NodeId, flags: number, gen: number
 	return id;
 }
 
-function aAllocLink(a: ShadowArena): number {
+function arenaAllocLink(a: WorldArena): number {
 	let id = a.linkFree;
 	if (id !== 0) {
-		a.linkFree = a.W[id + AF.L_FREE_NEXT]!;
+		a.linkFree = a.memory[id + ArenaLinkField.FREE_NEXT]!;
 	} else {
 		id = a.next;
-		aGrow(a, id + A_STRIDE);
-		a.next = id + A_STRIDE;
+		arenaGrow(a, id + ArenaGeom.STRIDE);
+		a.next = id + ArenaGeom.STRIDE;
 	}
 	a.links++;
 	return id;
 }
 
-function aFreeLink(a: ShadowArena, id: number): void {
-	a.W[id + AF.L_FREE_NEXT] = a.linkFree;
+function arenaFreeLink(a: WorldArena, id: number): void {
+	a.memory[id + ArenaLinkField.FREE_NEXT] = a.linkFree;
 	a.linkFree = id;
 	a.links--;
 }
@@ -1168,45 +1183,45 @@ function aFreeLink(a: ShadowArena, id: number): void {
 /** Detach a link from its dep's subs list (the MODE-matching one). Fixes
  * neighbors and the head/tail columns only — the link's OWN prev/next stay
  * stale (row-2 discipline: mid-walk readers must keep seeing former
- * neighbors; movers rewrite them in aSubsAppend, and freed links never
+ * neighbors; movers rewrite them in arenaSubsAppend, and freed links never
  * revalidate). */
-function aSubsDetach(a: ShadowArena, id: number): void {
-	const W = a.W;
-	const dep = W[id + AF.L_DEP]!;
-	const nextSub = W[id + AF.L_NEXT_SUB]!;
-	const prevSub = W[id + AF.L_PREV_SUB]!;
-	const weak = (W[id + AF.L_MODE]! & 1) !== 0;
-	if (nextSub !== 0) W[nextSub + AF.L_PREV_SUB] = prevSub;
-	else if (weak) a.weakSubsTail[dep >> A_SHIFT] = prevSub;
-	else W[dep + AF.SUBS_TAIL] = prevSub;
-	if (prevSub !== 0) W[prevSub + AF.L_NEXT_SUB] = nextSub;
-	else if (weak) a.weakSubs[dep >> A_SHIFT] = nextSub;
-	else W[dep + AF.SUBS] = nextSub;
+function arenaSubsDetach(a: WorldArena, id: number): void {
+	const memory = a.memory;
+	const dep = memory[id + ArenaLinkField.DEP]!;
+	const nextSub = memory[id + ArenaLinkField.NEXT_SUB]!;
+	const prevSub = memory[id + ArenaLinkField.PREV_SUB]!;
+	const weak = (memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0;
+	if (nextSub !== 0) memory[nextSub + ArenaLinkField.PREV_SUB] = prevSub;
+	else if (weak) a.weakSubsTail[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = prevSub;
+	else memory[dep + ArenaField.SUBS_TAIL] = prevSub;
+	if (prevSub !== 0) memory[prevSub + ArenaLinkField.NEXT_SUB] = nextSub;
+	else if (weak) a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = nextSub;
+	else memory[dep + ArenaField.SUBS] = nextSub;
 }
 
 /** Append a link to its dep's MODE-matching subs list tail (sets the
  * link's own prev/next and mode). */
-function aSubsAppend(a: ShadowArena, id: number, weak: boolean): void {
-	const W = a.W;
-	const dep = W[id + AF.L_DEP]!;
-	const vi = dep >> A_SHIFT;
-	const tail = weak ? a.weakSubsTail[vi]! : W[dep + AF.SUBS_TAIL]!;
-	W[id + AF.L_MODE] = weak ? 1 : 0;
-	W[id + AF.L_PREV_SUB] = tail;
-	W[id + AF.L_NEXT_SUB] = 0;
-	if (tail !== 0) W[tail + AF.L_NEXT_SUB] = id;
+function arenaSubsAppend(a: WorldArena, id: number, weak: boolean): void {
+	const memory = a.memory;
+	const dep = memory[id + ArenaLinkField.DEP]!;
+	const vi = dep >> ArenaGeom.ID_TO_COLUMN_SHIFT;
+	const tail = weak ? a.weakSubsTail[vi]! : memory[dep + ArenaField.SUBS_TAIL]!;
+	memory[id + ArenaLinkField.MODE] = weak ? ArenaLinkMode.WEAK : 0;
+	memory[id + ArenaLinkField.PREV_SUB] = tail;
+	memory[id + ArenaLinkField.NEXT_SUB] = 0;
+	if (tail !== 0) memory[tail + ArenaLinkField.NEXT_SUB] = id;
 	else if (weak) a.weakSubs[vi] = id;
-	else W[dep + AF.SUBS] = id;
+	else memory[dep + ArenaField.SUBS] = id;
 	if (weak) a.weakSubsTail[vi] = id;
-	else W[dep + AF.SUBS_TAIL] = id;
+	else memory[dep + ArenaField.SUBS_TAIL] = id;
 }
 
 /** Set a live link's mode; a change MOVES it between the dep's two subs
  * lists (§4.4.1's transitions under the segregated-list fallback). */
-function aSetMode(a: ShadowArena, id: number, weak: boolean): void {
-	if (((a.W[id + AF.L_MODE]! & 1) !== 0) === weak) return;
-	aSubsDetach(a, id);
-	aSubsAppend(a, id, weak);
+function arenaSetLinkWeak(a: WorldArena, id: number, weak: boolean): void {
+	if (((a.memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0) === weak) return;
+	arenaSubsDetach(a, id);
+	arenaSubsAppend(a, id, weak);
 }
 
 /**
@@ -1215,97 +1230,97 @@ function aSetMode(a: ShadowArena, id: number, weak: boolean): void {
  * the kernel's push-pull algorithms over the arena layout. A semantic
  * change on either side must be re-derived — not copied — on the other.
  *
- * Link maintenance (spike `wLink`, transliterated) PLUS §4.4.1's mode
- * discipline, which the spike form lacked and may not be transplanted bare:
+ * Link maintenance (transliterated) PLUS §4.4.1's mode discipline, which
+ * the transliteration source lacked and may not be transplanted bare:
  * the FIRST occurrence of a dep in an evaluation SETS the link's mode from
  * that occurrence's read kind (fresh and REUSED links alike — the in-place
  * and tail fast paths below perform the write); a LATER occurrence may only
- * upgrade weak→strong, never downgrade. Mode writes route through aSetMode:
+ * upgrade weak→strong, never downgrade. Mode writes route through arenaSetLinkWeak:
  * under the segregated-list fallback a mode change moves the link between
  * the dep's strong and weak subs lists.
  */
-function aLink(a: ShadowArena, dep: number, sub: number, version: number, weak: boolean): void {
-	const W = a.W;
-	const prevDep = W[sub + AF.DEPS_TAIL]!;
-	if (prevDep !== 0 && W[prevDep + AF.L_DEP] === dep) {
+function arenaLink(a: WorldArena, dep: number, sub: number, version: number, weak: boolean): void {
+	const memory = a.memory;
+	const prevDep = memory[sub + ArenaField.DEPS_TAIL]!;
+	if (prevDep !== 0 && memory[prevDep + ArenaLinkField.DEP] === dep) {
 		// Duplicate occurrence within this evaluation: strong dominates.
-		if (!weak) aSetMode(a, prevDep, false);
+		if (!weak) arenaSetLinkWeak(a, prevDep, false);
 		return;
 	}
-	const nextDep = prevDep !== 0 ? W[prevDep + AF.L_NEXT_DEP]! : W[sub + AF.DEPS]!;
-	if (nextDep !== 0 && W[nextDep + AF.L_DEP] === dep) {
+	const nextDep = prevDep !== 0 ? memory[prevDep + ArenaLinkField.NEXT_DEP]! : memory[sub + ArenaField.DEPS]!;
+	if (nextDep !== 0 && memory[nextDep + ArenaLinkField.DEP] === dep) {
 		// In-place reuse: first occurrence this evaluation — reset the mode.
-		W[nextDep + AF.L_VER] = version;
-		aSetMode(a, nextDep, weak);
-		W[sub + AF.DEPS_TAIL] = nextDep;
+		memory[nextDep + ArenaLinkField.VERSION] = version;
+		arenaSetLinkWeak(a, nextDep, weak);
+		memory[sub + ArenaField.DEPS_TAIL] = nextDep;
 		return;
 	}
-	aLinkInsert(a, dep, sub, version, weak, prevDep, nextDep);
+	arenaLinkInsert(a, dep, sub, version, weak, prevDep, nextDep);
 }
 
-function aLinkInsert(a: ShadowArena, dep: number, sub: number, version: number, weak: boolean, prevDep: number, nextDep: number): void {
+function arenaLinkInsert(a: WorldArena, dep: number, sub: number, version: number, weak: boolean, prevDep: number, nextDep: number): void {
 	// Same-evaluation duplicate arriving via the insert path (nonadjacent
 	// re-read): probe BOTH mode tails; strong dominates.
-	const sTail = a.W[dep + AF.SUBS_TAIL]!;
-	if (sTail !== 0 && a.W[sTail + AF.L_VER] === version && a.W[sTail + AF.L_SUB] === sub) {
+	const sTail = a.memory[dep + ArenaField.SUBS_TAIL]!;
+	if (sTail !== 0 && a.memory[sTail + ArenaLinkField.VERSION] === version && a.memory[sTail + ArenaLinkField.SUB] === sub) {
 		return; // already strong this evaluation
 	}
-	const wTail = a.weakSubsTail[dep >> A_SHIFT]!;
-	if (wTail !== 0 && a.W[wTail + AF.L_VER] === version && a.W[wTail + AF.L_SUB] === sub) {
-		if (!weak) aSetMode(a, wTail, false); // upgrade weak→strong
+	const wTail = a.weakSubsTail[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+	if (wTail !== 0 && a.memory[wTail + ArenaLinkField.VERSION] === version && a.memory[wTail + ArenaLinkField.SUB] === sub) {
+		if (!weak) arenaSetLinkWeak(a, wTail, false); // upgrade weak→strong
 		return;
 	}
-	const newLink = aAllocLink(a); // may grow the arena: re-load W after
-	const W = a.W;
-	W[sub + AF.DEPS_TAIL] = newLink;
-	W[newLink + AF.L_VER] = version;
-	W[newLink + AF.L_DEP] = dep;
-	W[newLink + AF.L_SUB] = sub;
-	W[newLink + AF.L_PREV_DEP] = prevDep;
-	W[newLink + AF.L_NEXT_DEP] = nextDep;
-	if (nextDep !== 0) W[nextDep + AF.L_PREV_DEP] = newLink;
-	if (prevDep !== 0) W[prevDep + AF.L_NEXT_DEP] = newLink;
-	else W[sub + AF.DEPS] = newLink;
-	aSubsAppend(a, newLink, weak); // subs-side wiring + mode, on the matching list
+	const newLink = arenaAllocLink(a); // may grow the arena: re-load memory after
+	const memory = a.memory;
+	memory[sub + ArenaField.DEPS_TAIL] = newLink;
+	memory[newLink + ArenaLinkField.VERSION] = version;
+	memory[newLink + ArenaLinkField.DEP] = dep;
+	memory[newLink + ArenaLinkField.SUB] = sub;
+	memory[newLink + ArenaLinkField.PREV_DEP] = prevDep;
+	memory[newLink + ArenaLinkField.NEXT_DEP] = nextDep;
+	if (nextDep !== 0) memory[nextDep + ArenaLinkField.PREV_DEP] = newLink;
+	if (prevDep !== 0) memory[prevDep + ArenaLinkField.NEXT_DEP] = newLink;
+	else memory[sub + ArenaField.DEPS] = newLink;
+	arenaSubsAppend(a, newLink, weak); // subs-side wiring + mode, on the matching list
 }
 
-function aUnlink(a: ShadowArena, id: number, sub: number = a.W[id + AF.L_SUB]!): number {
-	const W = a.W;
-	const dep = W[id + AF.L_DEP]!;
-	const prevDep = W[id + AF.L_PREV_DEP]!;
-	const nextDep = W[id + AF.L_NEXT_DEP]!;
-	if (nextDep !== 0) W[nextDep + AF.L_PREV_DEP] = prevDep;
-	else W[sub + AF.DEPS_TAIL] = prevDep;
-	if (prevDep !== 0) W[prevDep + AF.L_NEXT_DEP] = nextDep;
-	else W[sub + AF.DEPS] = nextDep;
-	aSubsDetach(a, id); // mode-matching subs list; the freed link keeps stale pointers (row 2)
-	aFreeLink(a, id);
-	if (W[dep + AF.SUBS] === 0 && a.weakSubs[dep >> A_SHIFT] === 0 && (W[dep + AF.FLAGS]! & AFlag.K_COMPUTED) !== 0) {
+function arenaUnlink(a: WorldArena, id: number, sub: number = a.memory[id + ArenaLinkField.SUB]!): number {
+	const memory = a.memory;
+	const dep = memory[id + ArenaLinkField.DEP]!;
+	const prevDep = memory[id + ArenaLinkField.PREV_DEP]!;
+	const nextDep = memory[id + ArenaLinkField.NEXT_DEP]!;
+	if (nextDep !== 0) memory[nextDep + ArenaLinkField.PREV_DEP] = prevDep;
+	else memory[sub + ArenaField.DEPS_TAIL] = prevDep;
+	if (prevDep !== 0) memory[prevDep + ArenaLinkField.NEXT_DEP] = nextDep;
+	else memory[sub + ArenaField.DEPS] = nextDep;
+	arenaSubsDetach(a, id); // mode-matching subs list; the freed link keeps stale pointers (row 2)
+	arenaFreeLink(a, id);
+	if (memory[dep + ArenaField.SUBS] === 0 && a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] === 0 && (memory[dep + ArenaField.FLAGS]! & ArenaFlag.K_COMPUTED) !== 0) {
 		// Unwatched computed shadow (BOTH subs lists empty): mark stale, tear
 		// down its own deps (in-world cascade — per-view acyclicity makes
 		// this terminate).
-		if (W[dep + AF.DEPS_TAIL] !== 0) {
+		if (memory[dep + ArenaField.DEPS_TAIL] !== 0) {
 			// Dirty-LIST append on the mark's 0→1 edge (the a.dirty contract;
 			// the armed validator — tests/arena-checker.ts — enforces DIRTY ⇒
 			// listed, and decay drops the torn
 			// shadow to cold from the list). This was the one DIRTY-setting
 			// site that skipped the append — the armed validator catches it
 			// the first time a last-sub unlink tears a computed with deps.
-			if ((W[dep + AF.FLAGS]! & AFlag.DIRTY) === 0) {
+			if ((memory[dep + ArenaField.FLAGS]! & ArenaFlag.DIRTY) === 0) {
 				a.dirty.push(dep);
 			}
-			W[dep + AF.FLAGS] = W[dep + AF.FLAGS]! | AFlag.DIRTY;
-			aDisposeAllDepsInReverse(a, dep);
+			memory[dep + ArenaField.FLAGS] = memory[dep + ArenaField.FLAGS]! | ArenaFlag.DIRTY;
+			arenaDisposeAllDepsInReverse(a, dep);
 		}
 	}
 	return nextDep;
 }
 
-function aDisposeAllDepsInReverse(a: ShadowArena, sub: number): void {
-	let cur = a.W[sub + AF.DEPS_TAIL]!;
+function arenaDisposeAllDepsInReverse(a: WorldArena, sub: number): void {
+	let cur = a.memory[sub + ArenaField.DEPS_TAIL]!;
 	while (cur !== 0) {
-		const prev = a.W[cur + AF.L_PREV_DEP]!;
-		aUnlink(a, cur, sub);
+		const prev = a.memory[cur + ArenaLinkField.PREV_DEP]!;
+		arenaUnlink(a, cur, sub);
 		cur = prev;
 	}
 }
@@ -1314,18 +1329,18 @@ function aDisposeAllDepsInReverse(a: ShadowArena, sub: number): void {
  * be a corrupted-list cycle, so the guards throw. Same-file const enum member
  * (not a module const): the comparison sits inside the hot walk loops and
  * must inline as a literal. */
-const enum AWalk {
+const enum ArenaWalk {
 	CYCLE_CAP = 1_000_000,
 }
 
 /** Purge links not re-tracked by the current evaluation (kernel discipline). */
-function aPurgeDeps(a: ShadowArena, sub: number): void {
-	const depsTail = a.W[sub + AF.DEPS_TAIL]!;
-	let dep = depsTail !== 0 ? a.W[depsTail + AF.L_NEXT_DEP]! : a.W[sub + AF.DEPS]!;
+function arenaPurgeDeps(a: WorldArena, sub: number): void {
+	const depsTail = a.memory[sub + ArenaField.DEPS_TAIL]!;
+	let dep = depsTail !== 0 ? a.memory[depsTail + ArenaLinkField.NEXT_DEP]! : a.memory[sub + ArenaField.DEPS]!;
 	let guard = 0;
 	while (dep !== 0) {
-		if (++guard > AWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`aPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
-		dep = aUnlink(a, dep, sub);
+		if (++guard > ArenaWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`arenaPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
+		dep = arenaUnlink(a, dep, sub);
 	}
 }
 
@@ -1334,48 +1349,48 @@ const WALK_STACK_SEED = 4096;
 
 // Arena-walk scratch stacks (module-owned; the routing walks use the
 // bridge's own buffers instead).
-let aPropStack = new Int32Array(WALK_STACK_SEED);
-let aPropSp = 0;
-let aCheckStack = new Int32Array(WALK_STACK_SEED);
-let aCheckSp = 0;
+let arenaPropStack = new Int32Array(WALK_STACK_SEED);
+let arenaPropSp = 0;
+let arenaCheckStack = new Int32Array(WALK_STACK_SEED);
+let arenaCheckSp = 0;
 
 /** Out-of-line cycle-cap thrower (keeps the walk arms' inline bytecode
  * free of the message-building code — cold by definition). */
-function aWalkCycle(site: string, cur: number): never {
-	throw new BridgeInvariantViolation(`${site}: walk exceeded ${AWalk.CYCLE_CAP} steps (cycle) at link ${cur}`);
+function arenaWalkCycle(site: string, cur: number): never {
+	throw new BridgeInvariantViolation(`${site}: walk exceeded ${ArenaWalk.CYCLE_CAP} steps (cycle) at link ${cur}`);
 }
 
-/** Propagate PENDING over strong AND weak links (spike `wPropagate`;
- * §4.4.1: weak links participate in mark propagation and drains — only the
+/** Propagate PENDING over strong AND weak links
+ * (§4.4.1: weak links participate in mark propagation and drains — only the
  * write-time delivery walk skips them). Under the segregated-list fallback
  * each descended sub contributes TWO chains: the strong list is walked
  * first and the weak head is pushed as a pending continuation (the same
  * stack mechanism that holds sibling continuations). */
-function aPropagate(a: ShadowArena, startLink: number): void {
-	const W = a.W; // never allocates: safe to cache
+function arenaPropagate(a: WorldArena, startLink: number): void {
+	const memory = a.memory; // never allocates: safe to cache
 	let cur = startLink;
-	let next = W[cur + AF.L_NEXT_SUB]!;
-	const stackBase = aPropSp;
+	let next = memory[cur + ArenaLinkField.NEXT_SUB]!;
+	const stackBase = arenaPropSp;
 	let guard = 0;
 	top: do {
-		if (++guard > AWalk.CYCLE_CAP) aWalkCycle('aPropagate', cur);
-		const sub = W[cur + AF.L_SUB]!;
-		let flags = W[sub + AF.FLAGS]!;
-		if (!(flags & (AFlag.RECURSED_CHECK | AFlag.RECURSED | AFlag.DIRTY | AFlag.PENDING))) {
-			W[sub + AF.FLAGS] = flags | AFlag.PENDING;
-		} else if (!(flags & (AFlag.RECURSED_CHECK | AFlag.RECURSED))) {
+		if (++guard > ArenaWalk.CYCLE_CAP) arenaWalkCycle('arenaPropagate', cur);
+		const sub = memory[cur + ArenaLinkField.SUB]!;
+		let flags = memory[sub + ArenaField.FLAGS]!;
+		if (!(flags & (ArenaFlag.RECURSED_CHECK | ArenaFlag.RECURSED | ArenaFlag.DIRTY | ArenaFlag.PENDING))) {
+			memory[sub + ArenaField.FLAGS] = flags | ArenaFlag.PENDING;
+		} else if (!(flags & (ArenaFlag.RECURSED_CHECK | ArenaFlag.RECURSED))) {
 			flags = 0;
-		} else if (!(flags & AFlag.RECURSED_CHECK)) {
-			W[sub + AF.FLAGS] = (flags & ~AFlag.RECURSED) | AFlag.PENDING;
-		} else if (!(flags & (AFlag.DIRTY | AFlag.PENDING)) && aIsValidLink(a, cur, sub)) {
-			W[sub + AF.FLAGS] = flags | (AFlag.RECURSED | AFlag.PENDING);
-			flags &= AFlag.MUTABLE;
+		} else if (!(flags & ArenaFlag.RECURSED_CHECK)) {
+			memory[sub + ArenaField.FLAGS] = (flags & ~ArenaFlag.RECURSED) | ArenaFlag.PENDING;
+		} else if (!(flags & (ArenaFlag.DIRTY | ArenaFlag.PENDING)) && arenaIsValidLink(a, cur, sub)) {
+			memory[sub + ArenaField.FLAGS] = flags | (ArenaFlag.RECURSED | ArenaFlag.PENDING);
+			flags &= ArenaFlag.MUTABLE;
 		} else {
 			flags = 0;
 		}
-		if (flags & AFlag.MUTABLE) {
-			let subSubs = W[sub + AF.SUBS]!;
-			const subWeak = a.weakSubs[sub >> A_SHIFT]!;
+		if (flags & ArenaFlag.MUTABLE) {
+			let subSubs = memory[sub + ArenaField.SUBS]!;
+			const subWeak = a.weakSubs[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
 			let park = 0; // the weak head, parked when both lists are populated
 			if (subWeak !== 0) {
 				if (subSubs === 0) subSubs = subWeak; // only weak dependents: descend into them
@@ -1383,16 +1398,16 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 			}
 			if (subSubs !== 0) {
 				cur = subSubs;
-				const nextSub = W[cur + AF.L_NEXT_SUB]!;
+				const nextSub = memory[cur + ArenaLinkField.NEXT_SUB]!;
 				if (nextSub !== 0 || park !== 0) {
-					if (aPropSp + 2 > aPropStack.length) {
-						const bigger = new Int32Array(aPropStack.length * 2);
-						bigger.set(aPropStack);
-						aPropStack = bigger;
+					if (arenaPropSp + 2 > arenaPropStack.length) {
+						const bigger = new Int32Array(arenaPropStack.length * 2);
+						bigger.set(arenaPropStack);
+						arenaPropStack = bigger;
 					}
-					if (park !== 0) aPropStack[aPropSp++] = park;
+					if (park !== 0) arenaPropStack[arenaPropSp++] = park;
 					if (nextSub !== 0) {
-						aPropStack[aPropSp++] = next;
+						arenaPropStack[arenaPropSp++] = next;
 						next = nextSub;
 					}
 				}
@@ -1400,13 +1415,13 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 			}
 		}
 		if ((cur = next) !== 0) {
-			next = W[cur + AF.L_NEXT_SUB]!;
+			next = memory[cur + ArenaLinkField.NEXT_SUB]!;
 			continue;
 		}
-		while (aPropSp > stackBase) {
-			cur = aPropStack[--aPropSp]!;
+		while (arenaPropSp > stackBase) {
+			cur = arenaPropStack[--arenaPropSp]!;
 			if (cur !== 0) {
-				next = W[cur + AF.L_NEXT_SUB]!;
+				next = memory[cur + ArenaLinkField.NEXT_SUB]!;
 				continue top;
 			}
 		}
@@ -1416,30 +1431,30 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 
 /** Head of a shadow's subs list by index: 0 = strong (arena links), 1 = weak
  * (the side column) — the one place the `for (list 0..1)` walk sites learn
- * where the two lists live. (aPropagateBoth/aShallowBoth below read the
+ * where the two lists live. (arenaPropagateBoth/arenaShallowBoth below read the
  * heads directly: they are the write-fanout hot path.) */
-function aSubsHead(a: ShadowArena, sh: number, list: number): number {
-	return list === 0 ? a.W[sh + AF.SUBS]! : a.weakSubs[sh >> A_SHIFT]!;
+function arenaSubsHead(a: WorldArena, sh: number, list: number): number {
+	return list === 0 ? a.memory[sh + ArenaField.SUBS]! : a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
 }
 
-/** Seed aPropagate over BOTH of a shadow's subs lists (fanout sites). */
-function aPropagateBoth(a: ShadowArena, sh: number): void {
-	const subs = a.W[sh + AF.SUBS]!;
-	if (subs !== 0) aPropagate(a, subs);
-	const weak = a.weakSubs[sh >> A_SHIFT]!;
-	if (weak !== 0) aPropagate(a, weak);
+/** Seed arenaPropagate over BOTH of a shadow's subs lists (fanout sites). */
+function arenaPropagateBoth(a: WorldArena, sh: number): void {
+	const subs = a.memory[sh + ArenaField.SUBS]!;
+	if (subs !== 0) arenaPropagate(a, subs);
+	const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+	if (weak !== 0) arenaPropagate(a, weak);
 }
 
-function aShallowPropagate(a: ShadowArena, startLink: number): void {
-	const W = a.W;
+function arenaShallowPropagate(a: WorldArena, startLink: number): void {
+	const memory = a.memory;
 	let cur = startLink;
 	let guard = 0;
 	do {
-		if (++guard > AWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`aShallowPropagate: subs chain cycle at link ${cur}`);
-		const sub = W[cur + AF.L_SUB]!;
-		const flags = W[sub + AF.FLAGS]!;
-		if ((flags & (AFlag.PENDING | AFlag.DIRTY)) === AFlag.PENDING) {
-			W[sub + AF.FLAGS] = flags | AFlag.DIRTY;
+		if (++guard > ArenaWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`arenaShallowPropagate: subs chain cycle at link ${cur}`);
+		const sub = memory[cur + ArenaLinkField.SUB]!;
+		const flags = memory[sub + ArenaField.FLAGS]!;
+		if ((flags & (ArenaFlag.PENDING | ArenaFlag.DIRTY)) === ArenaFlag.PENDING) {
+			memory[sub + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY;
 			// Dirty-LIST append on the DIRTY 0→1 edge (the a.dirty contract:
 			// DIRTY ⇒ listed — decay and drain seeding both stand on it). At
 			// S-A this site's upgrades were always consumed within the same
@@ -1447,26 +1462,26 @@ function aShallowPropagate(a: ShadowArena, startLink: number): void {
 			// shadow can reach a boundary unconsumed and MUST be listed.
 			a.dirty.push(sub);
 		}
-	} while ((cur = W[cur + AF.L_NEXT_SUB]!) !== 0);
+	} while ((cur = memory[cur + ArenaLinkField.NEXT_SUB]!) !== 0);
 }
 
 /** Shallow-propagate over BOTH of a shadow's subs lists (weak dependents
  * take the PENDING→DIRTY upgrade too — validation coverage, §4.4.1). */
-function aShallowBoth(a: ShadowArena, sh: number): void {
-	const subs = a.W[sh + AF.SUBS]!;
-	if (subs !== 0) aShallowPropagate(a, subs);
-	const weak = a.weakSubs[sh >> A_SHIFT]!;
-	if (weak !== 0) aShallowPropagate(a, weak);
+function arenaShallowBoth(a: WorldArena, sh: number): void {
+	const subs = a.memory[sh + ArenaField.SUBS]!;
+	if (subs !== 0) arenaShallowPropagate(a, subs);
+	const weak = a.weakSubs[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+	if (weak !== 0) arenaShallowPropagate(a, weak);
 }
 
-function aIsValidLink(a: ShadowArena, checkLink: number, sub: number): boolean {
-	const W = a.W;
-	let cur = W[sub + AF.DEPS_TAIL]!;
+function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolean {
+	const memory = a.memory;
+	let cur = memory[sub + ArenaField.DEPS_TAIL]!;
 	let guard = 0;
 	while (cur !== 0) {
-		if (++guard > AWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`aIsValidLink: prev-dep chain cycle at link ${cur}`);
+		if (++guard > ArenaWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`arenaIsValidLink: prev-dep chain cycle at link ${cur}`);
 		if (cur === checkLink) return true;
-		cur = W[cur + AF.L_PREV_DEP]!;
+		cur = memory[cur + ArenaLinkField.PREV_DEP]!;
 	}
 	return false;
 }
@@ -1492,36 +1507,39 @@ const FOLD_TRUTH = Symbol('cosignal.foldTruth');
  */
 export type ArenaCheckerInternals = {
 	/** Arena record layout as plain numbers, restricted to the fields the
-	 * structural validator reads. The engine's AF/AFlag are same-file const
-	 * enums (A_SHIFT a module const): the OWNER inlines the values into this
-	 * object at construction, so the view is in sync by construction — a
-	 * layout change here flows through automatically, unlike a hand-copied
-	 * declaration. Data-passing stays (deliberate): the shadow layout is
-	 * bridge-internal with ONE external reader (the test referee), and
-	 * exporting the enums for it would widen the module surface without
+	 * structural validator reads. The engine's ArenaField/ArenaLinkField/
+	 * ArenaFlag/ArenaGeom are same-file const enums: the OWNER inlines the
+	 * values into this object at construction, so the view is in sync by
+	 * construction — a layout change here flows through automatically, unlike
+	 * a hand-copied declaration. Data-passing stays (deliberate): the arena
+	 * layout is bridge-internal with ONE external reader (the test referee),
+	 * and exporting the enums for it would widen the module surface without
 	 * deleting any drift risk. (Contrast the KERNEL's layout, which has
 	 * independent walkers and is therefore exported from index.ts —
-	 * NodeField/LinkField/NodeFlag.) AF entries are Int32 word offsets
-	 * within a record; AFlag entries are FLAGS bits; A_SHIFT converts a
-	 * record id to its side-column index; CLOCK_LIMIT is the Int32 clock-wrap
-	 * renumber ceiling (readClock/cycle). */
+	 * NodeField/LinkField/NodeFlag.) ArenaField/ArenaLinkField entries are
+	 * Int32 word offsets within a record; ArenaFlag entries are FLAGS bits;
+	 * ArenaLinkMode entries are MODE bits; ArenaGeom.ID_TO_COLUMN_SHIFT
+	 * converts a record id to its side-column index; ArenaGeom.CLOCK_LIMIT is
+	 * the Int32 clock-wrap renumber ceiling (readClock/cycle). */
 	readonly layout: {
-		readonly A_SHIFT: number;
-		readonly CLOCK_LIMIT: number;
-		readonly AF: {
+		readonly ArenaGeom: { readonly ID_TO_COLUMN_SHIFT: number; readonly CLOCK_LIMIT: number };
+		readonly ArenaField: {
 			readonly NODE: number;
 			readonly MARK: number;
 			readonly FLAGS: number;
 			readonly DEPS: number;
 			readonly SUBS: number;
-			readonly L_DEP: number;
-			readonly L_SUB: number;
-			readonly L_PREV_DEP: number;
-			readonly L_NEXT_DEP: number;
-			readonly L_NEXT_SUB: number;
-			readonly L_MODE: number;
 		};
-		readonly AFlag: { readonly DIRTY: number; readonly BOX_SUSPENDED: number };
+		readonly ArenaLinkField: {
+			readonly DEP: number;
+			readonly SUB: number;
+			readonly PREV_DEP: number;
+			readonly NEXT_DEP: number;
+			readonly NEXT_SUB: number;
+			readonly MODE: number;
+		};
+		readonly ArenaLinkMode: { readonly WEAK: number };
+		readonly ArenaFlag: { readonly DIRTY: number; readonly BOX_SUSPENDED: number };
 	};
 	/** Open world-evaluation frames — the checker must not run inside one
 	 * (an epilogue can fire from a nested context; the check waits for the
@@ -1531,15 +1549,15 @@ export type ArenaCheckerInternals = {
 	readonly inFoldCallback: boolean;
 	/** Every LIVE arena: committed arenas by root, then open-pass arenas —
 	 * the check's iteration domain (the stores are private). */
-	eachArena(fn: (a: ShadowArena) => void): void;
+	eachArena(fn: (a: WorldArena) => void): void;
 	/** The node registry row, or undefined for a disposed id (an arena's
 	 * byNode rows can outlive their node — the checker skips those). */
 	nodeAt(id: NodeId): AnyNode | undefined;
-	/** `aServe` — THE arena serving entry (values, walks, refolds). The
+	/** `arenaServe` — THE arena serving entry (values, walks, refolds). The
 	 * checker serves the arena side FIRST, pinning the discipline that a
 	 * stale shadow is never refreshed by the reference side before the
 	 * comparison reads it. */
-	serve(a: ShadowArena, node: AnyNode): Value;
+	serve(a: WorldArena, node: AnyNode): Value;
 	/** One fold-truth fn run (see `foldTruthFrame`): world pinned, serve
 	 * override at FOLD_TRUTH, capture/sink closed, eval depth bumped —
 	 * everything restored on the way out. */
@@ -1795,21 +1813,21 @@ export class CosignalBridge {
 	get dependencyEdges(): Map<NodeId, Set<NodeId>> {
 		const out = new Map<NodeId, Set<NodeId>>();
 		this.eachArena((a) => {
-			const W = a.W;
+			const memory = a.memory;
 			for (let nid = 0; nid < a.byNode.length; nid++) {
 				const sh = a.byNode[nid]!;
 				if (sh === 0) continue;
 				for (let list = 0; list < 2; list++) {
-					let l = aSubsHead(a, sh, list);
+					let l = arenaSubsHead(a, sh, list);
 					while (l !== 0) {
-						const sub = W[l + AF.L_SUB]!;
+						const sub = memory[l + ArenaLinkField.SUB]!;
 						let s = out.get(nid);
 						if (s === undefined) {
 							s = new Set();
 							out.set(nid, s);
 						}
-						s.add(W[sub + AF.NODE]!);
-						l = W[l + AF.L_NEXT_SUB]!;
+						s.add(memory[sub + ArenaField.NODE]!);
+						l = memory[l + ArenaLinkField.NEXT_SUB]!;
 					}
 				}
 			}
@@ -2094,7 +2112,7 @@ export class CosignalBridge {
 	 * kernel frame, so they leave no link and never notify) — under the
 	 * bridge's evaluation guards (writes throw; observed runs capture their
 	 * strong deps; trace hooks fire). World evaluations run the same fn with
-	 * the ARENA readers through `aUpdateComputed`.
+	 * the ARENA readers through `arenaUpdateComputed`.
 	 */
 	computed(name: string, fn: ComputedFn, equals?: Equals): ComputedNode {
 		const node: ComputedNode = {
@@ -2163,10 +2181,10 @@ export class CosignalBridge {
 			this.eachArena((a) => {
 				const sh = nid < a.byNode.length ? a.byNode[nid]! : 0;
 				if (sh === 0) return;
-				this.aEvictShadow(a, sh);
+				this.arenaEvictShadow(a, sh);
 				// Zero the record and unindex: dirty-list residue reads an inert
 				// record (FLAGS 0 — decay drops it); nothing routes here again.
-				for (let f = 0; f < A_STRIDE; f++) a.W[sh + f] = 0;
+				for (let f = 0; f < ArenaGeom.STRIDE; f++) a.memory[sh + f] = 0;
 				a.byNode[nid] = 0;
 				// Leak audit: thread the orphaned record onto the arena's
 				// dead-shadow free list so recreation churn (the useComputed
@@ -2175,7 +2193,7 @@ export class CosignalBridge {
 				// naming it stay benign: pre-reuse they read FLAGS 0 (dropped),
 				// post-reuse they alias the new tenant's listed entry (decay
 				// re-checks flags per entry; duplicates cannot amplify).
-				a.W[sh + AF.DEPS] = a.shadowFree;
+				a.memory[sh + ArenaField.DEPS] = a.shadowFree;
 				a.shadowFree = sh;
 			});
 			this.byKernelId.delete(handle._id);
@@ -2296,7 +2314,7 @@ export class CosignalBridge {
 	/** Observation re-point after a KERNEL re-run, inside the still-open
 	 * kernel frame: discovery evaluations (obsEnter forcing dep reads) must
 	 * not link into that frame — kernel `untracked()` clears it around the
-	 * sync (the arena twin clears `serveOverride` instead — aSyncObsAfterRefold). */
+	 * sync (the arena twin clears `serveOverride` instead — arenaSyncObsAfterRefold). */
 	private obsSyncAfterKernelRun(nid: NodeId, captured: NodeId[]): void {
 		untracked(() => this.obsSyncDeps(nid, captured));
 	}
@@ -2307,13 +2325,13 @@ export class CosignalBridge {
 	 * enums — a kernel field reorder flows through the import instead of
 	 * silently corrupting this walk. */
 	private kernelStrongDepsOf(node: ComputedNode): NodeId[] {
-		const M = __kernelBuffer();
+		const memory = __kernelBuffer();
 		const out: NodeId[] = [];
-		let l = M[node.handle._id + NodeField.DEPS]!;
+		let l = memory[node.handle._id + NodeField.DEPS]!;
 		while (l !== 0) {
-			const dep = this.byKernelId.get(M[l + LinkField.DEP]!);
+			const dep = this.byKernelId.get(memory[l + LinkField.DEP]!);
 			if (dep !== undefined) out.push(dep.id);
-			l = M[l + LinkField.NEXT_DEP]!;
+			l = memory[l + LinkField.NEXT_DEP]!;
 		}
 		return out;
 	}
@@ -2442,7 +2460,7 @@ export class CosignalBridge {
 	/**
 	 * Raw-handle reads: a registered atom read reached the operation table
 	 * while an overlay evaluation frame was open (newest/mountFix — arena
-	 * fn runs route through `serveOverride` inside atomValue and link at `aServe`).
+	 * fn runs route through `serveOverride` inside atomValue and link at `arenaServe`).
 	 * The open frame's sink gates the observation capture — recordEdge's
 	 * surviving half (§4.8 S-B): the pre-dedup capture rides the tracked
 	 * read path.
@@ -2461,7 +2479,7 @@ export class CosignalBridge {
 	private atomValue(atom: AtomNode, world: World): Value {
 		const route = this.serveOverride; // ONE override test on the routed-read path (W3)
 		if (route !== undefined) {
-			if (route !== FOLD_TRUTH) return this.aServe(route, atom); // arena-refold routing override
+			if (route !== FOLD_TRUTH) return this.arenaServe(route, atom); // arena-refold routing override
 			return this.foldAtom(atom, world); // fold-truth reads (armed checker)
 		}
 		if (world.kind === 'newest') {
@@ -2470,7 +2488,7 @@ export class CosignalBridge {
 		}
 		if (world.kind === 'pass' || world.kind === 'committed') {
 			const a = this.arenaOf(world);
-			if (a !== undefined) return this.aServe(a, atom);
+			if (a !== undefined) return this.arenaServe(a, atom);
 			// Unmaterialized root (no record): fold plain — mirrors the old
 			// memo-table rule (never CREATE the root record on a read).
 		}
@@ -2480,7 +2498,7 @@ export class CosignalBridge {
 	/**
 	 * Evaluation of a node in a world. Pass/committed worlds are
 	 * ARENA-SERVED (NF2 S-B): values, invalidation, and routing structure
-	 * live in the world's arena, and `aServe` refolds through the arena's
+	 * live in the world's arena, and `arenaServe` refolds through the arena's
 	 * own walks when marks or cold bases demand it — the cold in-arena fn
 	 * run is what RECORDS the strong and weak links the routing coverage
 	 * argument stands on (fable N-4; the cold-pass bench gate priced it).
@@ -2496,10 +2514,10 @@ export class CosignalBridge {
 		probes.worldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		const route = this.serveOverride; // no-override fast-out is the ONE hot test; FOLD_TRUTH falls through (fold-truth computeds re-run checker-side, never here)
-		if (route !== undefined && route !== FOLD_TRUTH) return this.aServe(route, node); // arena-refold routing override
+		if (route !== undefined && route !== FOLD_TRUTH) return this.arenaServe(route, node); // arena-refold routing override
 		if (world.kind === 'pass' || world.kind === 'committed') {
 			const a = this.arenaOf(world);
-			if (a !== undefined) return this.aServe(a, node);
+			if (a !== undefined) return this.arenaServe(a, node);
 		}
 		if (node.kind === 'atom') return this.atomValue(node, world);
 		if (world.kind === 'newest') return this.kernelComputed(node);
@@ -2576,7 +2594,7 @@ export class CosignalBridge {
 	private evalGen: EvalGen = 0;
 
 	/** The persistent tracked reader (mountFix/plain-fold frames — arena fn
-	 * runs use aTrackedReader; kernel newest runs use kernelTrackedReader):
+	 * runs use arenaTrackedReader; kernel newest runs use kernelTrackedReader):
 	 * the pre-dedup observation capture rides the tracked read path
 	 * (recordEdge's surviving half, §4.8 S-B), then the dep evaluates in
 	 * the frame's world. */
@@ -2591,7 +2609,7 @@ export class CosignalBridge {
 	 * dep still folds in the frame's world (fold-throughs re-derive
 	 * everything, so untracked deps stay fresh in these one-shot worlds),
 	 * but it never joins the observation capture (OL1 is strong-only,
-	 * §4.4.1) and — in arena worlds, where aUntrackedReader is the analog —
+	 * §4.4.1) and — in arena worlds, where arenaUntrackedReader is the analog —
 	 * records only a weak link, so no notification ever fires through it.
 	 */
 	private untrackedReader: Reader = (dep) => {
@@ -2605,32 +2623,32 @@ export class CosignalBridge {
 	};
 
 	// ---- NF2: arena state + evaluation (the pass/committed authority) ----
-	// See the module-level S-B header above AF.
+	// See the module-level S-B header above ArenaField.
 
 	/** Committed arenas, by root (consumer-populated life — §4.1/§4.5.8). */
-	private arenaByRoot = new Map<RootId, ShadowArena>();
+	private arenaByRoot = new Map<RootId, WorldArena>();
 	/** Pooled released arena shells (buffers reused; claimGen bumped per tenancy). */
-	private arenaPool: ShadowArena[] = [];
+	private arenaPool: WorldArena[] = [];
 	/** Initial arena size in ints (BridgeOptions knob; tests shrink it to force mid-op growth — §4.5.9). */
 	private readonly arenaInitInts: ArenaInitInts;
 	/** Overlay node id-tenancy generations (§4.5.3: overlay ids are never freed
 	 * pre-S-C, so these move only via the test seam; shadows stamp + validate). */
 	private nodeGen: number[] = [0];
 	/** Open arena evaluation frame (piggybacked on the overlay evaluation OR
-	 * an arena-only refold): links record into aFrameArena at aFrameCycle.
+	 * an arena-only refold): links record into arenaFrame at arenaFrameCycle.
 	 * Flattened to scalars — one object per evaluation showed up in the
 	 * cold-pass gate. undefined arena ⇔ no frame. */
-	private aFrameArena: ShadowArena | undefined = undefined;
-	private aFrameShadow = 0;
-	private aFrameCycle = 0;
+	private arenaFrame: WorldArena | undefined = undefined;
+	private arenaFrameShadow = 0;
+	private arenaFrameCycle = 0;
 	/** THE SERVE-OVERRIDE SLOT — the one override the routed-read path tests
 	 * (W3 merged the old two-slot pair; setters bracket save/restore, so the
-	 * innermost override wins). Occupants: a ShadowArena (arena-refold
+	 * innermost override wins). Occupants: a WorldArena (arena-refold
 	 * routing — raw-handle reads inside arena fn runs serve from that arena)
 	 * or FOLD_TRUTH (the armed checker's naive reads — atom reads fold plain
 	 * in the frame's world: no arenas, no memos, no caches; test-armed only).
 	 * undefined ⇔ no override, the production steady state. */
-	private serveOverride: ShadowArena | typeof FOLD_TRUTH | undefined = undefined;
+	private serveOverride: WorldArena | typeof FOLD_TRUTH | undefined = undefined;
 	/** Global count of box-suspended shadows (tap fast-out). */
 	private suspendedCount = 0;
 	/** The armed divergence-check hook (W3): the referee-grade checker lives
@@ -2641,10 +2659,10 @@ export class CosignalBridge {
 	 * so the epilogue pays one undefined test. */
 	private epilogueCheck: (() => void) | undefined = undefined;
 
-	private claimArena(kind: 'pass' | 'committed', world: World, root: RootId): ShadowArena {
+	private claimArena(kind: 'pass' | 'committed', world: World, root: RootId): WorldArena {
 		let a = this.arenaPool.pop();
 		if (a === undefined) {
-			a = new ShadowArena(kind, world, root, new Int32Array(this.arenaInitInts));
+			a = new WorldArena(kind, world, root, new Int32Array(this.arenaInitInts));
 		} else {
 			a.kind = kind;
 			a.world = world;
@@ -2654,7 +2672,7 @@ export class CosignalBridge {
 		a.claimGen++;
 		// Dense byNode: pre-size to the node population and keep it PACKED
 		// (holey reads cost on the cold-read hot path; shadowFor probes this
-		// per read). aAllocShadow grows it densely past this watermark.
+		// per read). arenaAllocShadow grows it densely past this watermark.
 		const n = this.nodesArr.length;
 		for (let i = a.byNode.length; i < n; i++) a.byNode.push(0);
 		return a;
@@ -2663,12 +2681,12 @@ export class CosignalBridge {
 	/** Release an arena: buffer to the pool, claim generation bumped, columns
 	 * dropped (payload release), dirty + suspended lists discarded (§4.5.8 —
 	 * safe by the evict-don't-serve argument; nobody observes those cones). */
-	private releaseArena(a: ShadowArena): void {
+	private releaseArena(a: WorldArena): void {
 		for (let i = 0; i < a.suspended.length; i++) this.suspendedCount--;
 		a.alive = false;
 		a.claimGen++;
 		// Keep the side columns' CAPACITY across pool tenancies (B1 cold-pass
-		// shave): truncating to 0 forced claimArena + aAllocShadow to re-push
+		// shave): truncating to 0 forced claimArena + arenaAllocShadow to re-push
 		// every element on every claim (~2k pushes per cold pass). fill()
 		// scrubs the residue the truncation used to drop — value refs are
 		// released (no pooled-arena leak), byNode reads 0 (= none), suspIdx
@@ -2683,11 +2701,11 @@ export class CosignalBridge {
 		a.dirty.length = 0;
 		a.suspended.length = 0;
 		// Scrub the written record prefix so pooled buffers re-claim ALL-ZERO
-		// past the burned record — aAllocShadow's fresh-record invariant (one
+		// past the burned record — arenaAllocShadow's fresh-record invariant (one
 		// vectorized fill here beats per-field zeroing on every cold alloc,
 		// and closes the pooled-residue class wholesale: nothing survives).
-		a.W.fill(0, 0, a.next);
-		a.next = A_STRIDE;
+		a.memory.fill(0, 0, a.next);
+		a.next = ArenaGeom.STRIDE;
 		a.linkFree = 0;
 		a.shadowFree = 0; // dead-shadow list dies with the tenancy (threads were zeroed above)
 		a.links = 0;
@@ -2700,7 +2718,7 @@ export class CosignalBridge {
 	 * passStart, m2's dev assert on dropped-arena touch); committed arenas
 	 * materialize lazily at the root's first committed evaluation and persist
 	 * for the root's consumer-populated life (§4.1). */
-	private arenaOf(world: World): ShadowArena | undefined {
+	private arenaOf(world: World): WorldArena | undefined {
 		if (world.kind === 'pass') {
 			const a = world.pass.arena;
 			if (a !== undefined && !a.alive) throw new BridgeInvariantViolation(`arena of pass ${world.pass.id} was reclaimed while still reachable (m2)`);
@@ -2717,7 +2735,7 @@ export class CosignalBridge {
 		return a;
 	}
 
-	private eachArena(fn: (a: ShadowArena) => void): void {
+	private eachArena(fn: (a: WorldArena) => void): void {
 		for (const a of this.arenaByRoot.values()) fn(a);
 		for (const p of this.openPassByRoot.values()) {
 			if (p.arena !== undefined) fn(p.arena);
@@ -2726,56 +2744,56 @@ export class CosignalBridge {
 
 	/** Shadow lookup/create with the §4.5.3 GEN id-tenancy validation: a
 	 * dead-GEN shadow never serves — it is reset cold and re-tenanted. */
-	private shadowFor(a: ShadowArena, nid: NodeId, kindFlags: number): number {
+	private shadowFor(a: WorldArena, nid: NodeId, kindFlags: number): number {
 		let sh = nid < a.byNode.length ? a.byNode[nid]! : 0;
 		const gen = this.nodeGen[nid]!; // dense (indexNode) — no OOB/?? probe on the hot path
 		if (sh !== 0) {
-			if (a.W[sh + AF.GEN] === gen) return sh;
+			if (a.memory[sh + ArenaField.NODE_GEN] === gen) return sh;
 			// Dead tenancy: evict, purge links (both directions, both subs
 			// lists), refold under the new tenant — never serve the dead
 			// node's value or fn.
-			this.aEvictShadow(a, sh);
-			a.W[sh + AF.FLAGS] = kindFlags;
-			a.W[sh + AF.GEN] = gen;
-			a.W[sh + AF.MARK] = 0;
+			this.arenaEvictShadow(a, sh);
+			a.memory[sh + ArenaField.FLAGS] = kindFlags;
+			a.memory[sh + ArenaField.NODE_GEN] = gen;
+			a.memory[sh + ArenaField.MARK] = 0;
 			return sh;
 		}
-		sh = aAllocShadow(a, nid, kindFlags, gen);
+		sh = arenaAllocShadow(a, nid, kindFlags, gen);
 		return sh;
 	}
 
 	/** Detach a shadow from its arena wholesale: deps in reverse, BOTH subs
 	 * lists, the suspended set, the cached value. Shared by shadowFor's
 	 * dead-tenancy re-key (§4.5.3) and disposeComputed's eager purge. */
-	private aEvictShadow(a: ShadowArena, sh: number): void {
-		aDisposeAllDepsInReverse(a, sh);
+	private arenaEvictShadow(a: WorldArena, sh: number): void {
+		arenaDisposeAllDepsInReverse(a, sh);
 		for (let list = 0; list < 2; list++) {
-			let sl = aSubsHead(a, sh, list);
+			let sl = arenaSubsHead(a, sh, list);
 			while (sl !== 0) {
-				const next = a.W[sl + AF.L_NEXT_SUB]!;
-				aUnlink(a, sl);
+				const next = a.memory[sl + ArenaLinkField.NEXT_SUB]!;
+				arenaUnlink(a, sl);
 				sl = next;
 			}
 		}
-		if ((a.W[sh + AF.FLAGS]! & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
-		a.vals[sh >> A_SHIFT] = undefined;
+		if ((a.memory[sh + ArenaField.FLAGS]! & ArenaFlag.BOX_SUSPENDED) !== 0) this.arenaUnsuspend(a, sh);
+		a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = undefined;
 	}
 
 	/** Arena dep recording (arena fn-reader hook): first-occurrence mode
-	 * reset + strong-dominates ride inside aLink (§4.4.1). The pre-dedup
+	 * reset + strong-dominates ride inside arenaLink (§4.4.1). The pre-dedup
 	 * observation capture rides the STRONG arm only (§4.7/M6 — the
 	 * discipline carried into the walks; OL1 is strong-only). */
-	private aRecordDep(dep: AnyNode, weak: boolean): void {
-		const a = this.aFrameArena;
+	private arenaRecordDep(dep: AnyNode, weak: boolean): void {
+		const a = this.arenaFrame;
 		if (a === undefined) return;
 		if (!weak) {
 			const oc = this.obsCapture;
 			if (oc !== undefined) oc.push(dep.id);
 		}
 		const sh = dep.kind === 'atom'
-			? this.shadowFor(a, dep.id, AFlag.K_SIGNAL | AFlag.MUTABLE)
-			: this.shadowFor(a, dep.id, AFlag.K_COMPUTED);
-		aLink(a, sh, this.aFrameShadow, this.aFrameCycle, weak);
+			? this.shadowFor(a, dep.id, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE)
+			: this.shadowFor(a, dep.id, ArenaFlag.K_COMPUTED);
+		arenaLink(a, sh, this.arenaFrameShadow, this.arenaFrameCycle, weak);
 	}
 
 	/** The arena atom-propagation gate is Object.is over FOLD OUTPUTS: the
@@ -2785,15 +2803,15 @@ export class CosignalBridge {
 	 * path performs (dual-bookkeeping divergence by construction). The
 	 * §4.5.3 comparator-order mandate — HEAD's `isEqual(prev, next)`,
 	 * mirroring the kernel's `writeAtom` compare — binds the CUSTOM-EQUALITY
-	 * COMPUTED record (aFoldOutcome's comparator arm, landed at S-C). */
-	private aEqAtom(prev: Value, next: Value): boolean {
+	 * COMPUTED record (arenaFoldOutcome's comparator arm, landed at S-C). */
+	private arenaEqAtom(prev: Value, next: Value): boolean {
 		return Object.is(prev, next);
 	}
 
 	/** Suspended-list append on the box-suspended bit's 0→1; the per-shadow
 	 * field stores the dense index (S-A step 0 compaction — §4.5.4). */
-	private aSuspend(a: ShadowArena, sh: number): void {
-		const vi = sh >> A_SHIFT;
+	private arenaSuspend(a: WorldArena, sh: number): void {
+		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		if (a.suspIdx[vi] !== 0) return; // already a member (value column just swaps sentinels)
 		a.suspended.push(sh);
 		a.suspIdx[vi] = a.suspended.length; // index + 1
@@ -2802,37 +2820,37 @@ export class CosignalBridge {
 
 	/** Swap-remove at the stored index on the 1→0 clear: the list stays a
 	 * DENSE set; the moved entry's stored index is updated (S-A step 0). */
-	private aUnsuspend(a: ShadowArena, sh: number): void {
-		const vi = sh >> A_SHIFT;
+	private arenaUnsuspend(a: WorldArena, sh: number): void {
+		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		const slot = a.suspIdx[vi]!;
 		if (slot === 0) return;
 		const last = a.suspended.length - 1;
 		const moved = a.suspended[last]!;
 		a.suspended[slot - 1] = moved;
-		a.suspIdx[moved >> A_SHIFT] = slot;
+		a.suspIdx[moved >> ArenaGeom.ID_TO_COLUMN_SHIFT] = slot;
 		a.suspended.pop();
 		a.suspIdx[vi] = 0;
 		this.suspendedCount--;
 	}
 
-	/** Exceptional outcome of an arena fn run (aUpdateComputed's catch):
+	/** Exceptional outcome of an arena fn run (arenaUpdateComputed's catch):
 	 * cache the thrown payload into the shadow with the THROWN bit — later
 	 * serves rethrow it boxedRead-style (a thrown suspension re-runs once
 	 * its thenable settles: the serve-site probe marks it DIRTY). */
-	private aNoteThrow(a: ShadowArena, sh: number, err: unknown): void {
-		const W = a.W;
-		const flags = W[sh + AF.FLAGS]!;
-		const vi = sh >> A_SHIFT;
-		aBumpReadClock(a);
+	private arenaNoteThrow(a: WorldArena, sh: number, err: unknown): void {
+		const memory = a.memory;
+		const flags = memory[sh + ArenaField.FLAGS]!;
+		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
+		arenaBumpReadClock(a);
 		if (err instanceof SuspendedRead) {
 			a.vals[vi] = err;
-			W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN;
-			this.aSuspend(a, sh);
+			memory[sh + ArenaField.FLAGS] = (flags & ~(ArenaFlag.DIRTY | ArenaFlag.PENDING)) | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN;
+			this.arenaSuspend(a, sh);
 			return;
 		}
-		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) this.arenaUnsuspend(a, sh);
 		a.vals[vi] = err;
-		W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING | AFlag.BOX_SUSPENDED)) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_THROWN;
+		memory[sh + ArenaField.FLAGS] = (flags & ~(ArenaFlag.DIRTY | ArenaFlag.PENDING | ArenaFlag.BOX_SUSPENDED)) | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_THROWN;
 	}
 
 	// ---- NF2: arena serving (world reads, checks, settlement refolds) ----
@@ -2842,94 +2860,94 @@ export class CosignalBridge {
 	 * demand it. Refolds run under the arena-only routing override so
 	 * raw-handle reads inside fns resolve to arena values too; frame-link
 	 * sites feed the observation capture (raw reads have no reader hook). */
-	private aServe(a: ShadowArena, node: AnyNode): Value {
+	private arenaServe(a: WorldArena, node: AnyNode): Value {
 		if (node.kind === 'atom') {
-			const sh = this.shadowFor(a, node.id, AFlag.K_SIGNAL | AFlag.MUTABLE);
-			const W = a.W;
-			const flags = W[sh + AF.FLAGS]!;
-			if ((flags & AFlag.VALID) === 0 || (flags & AFlag.DIRTY) !== 0) {
+			const sh = this.shadowFor(a, node.id, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE);
+			const memory = a.memory;
+			const flags = memory[sh + ArenaField.FLAGS]!;
+			if ((flags & ArenaFlag.VALID) === 0 || (flags & ArenaFlag.DIRTY) !== 0) {
 				// Spike wAtomRead: a changed refold upgrades PENDING dependents
 				// to DIRTY (shallow propagate, both subs lists) so their
 				// re-check refolds them.
-				if (this.aUpdateShadow(a, sh)) aShallowBoth(a, sh);
+				if (this.arenaUpdateShadow(a, sh)) arenaShallowBoth(a, sh);
 			}
-			if (this.aFrameArena === a) {
-				aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+			if (this.arenaFrame === a) {
+				arenaLink(a, sh, this.arenaFrameShadow, this.arenaFrameCycle, false);
 				const oc = this.obsCapture;
 				if (oc !== undefined) oc.push(node.id);
 			}
-			return a.vals[sh >> A_SHIFT];
+			return a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
 		}
-		const sh = this.shadowFor(a, node.id, AFlag.K_COMPUTED);
-		const W = a.W;
-		let flags = W[sh + AF.FLAGS]!;
-		if ((flags & AFlag.RECURSED_CHECK) !== 0) {
+		const sh = this.shadowFor(a, node.id, ArenaFlag.K_COMPUTED);
+		const memory = a.memory;
+		let flags = memory[sh + ArenaField.FLAGS]!;
+		if ((flags & ArenaFlag.RECURSED_CHECK) !== 0) {
 			throw this.cycleError(node.name);
 		}
 		// Read-site self-heal probe (§4.5.4 pull half; mirrored at the memo
 		// serve and the kernel's boxedRead): a settled-but-not-yet-invalidated
 		// suspension self-invalidates AT THE READ, so a read after `await` is
 		// deterministic even before the settle listener's microtask runs.
-		if ((flags & AFlag.BOX_SUSPENDED) !== 0) {
-			const t = (a.vals[sh >> A_SHIFT] as SuspendedRead).thenable as { status?: string };
+		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
+			const t = (a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] as SuspendedRead).thenable as { status?: string };
 			if (t.status !== undefined && t.status !== 'pending') {
-				W[sh + AF.FLAGS] = flags | AFlag.DIRTY;
-				flags = W[sh + AF.FLAGS]!;
+				memory[sh + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY;
+				flags = memory[sh + ArenaField.FLAGS]!;
 			}
 		}
-		if ((flags & AFlag.MUTABLE) === 0) {
-			this.aUpdateComputed(a, sh); // never evaluated in this arena: cold fold
+		if ((flags & ArenaFlag.MUTABLE) === 0) {
+			this.arenaUpdateComputed(a, sh); // never evaluated in this arena: cold fold
 		} else if (
-			(flags & AFlag.DIRTY) !== 0
+			(flags & ArenaFlag.DIRTY) !== 0
 			// Evicted-to-cold residue (decay §4.3 / torn-cone dirt): VALID is
 			// the "value column holds a folded value" bit — with it clear the
 			// slot is evicted and must refold on consult, exactly as the atom
 			// branch above does. MUTABLE alone only says "evaluated once".
-			|| (flags & AFlag.VALID) === 0
-			|| ((flags & AFlag.PENDING) !== 0 && this.aCheckDirty(a, a.W[sh + AF.DEPS]!, sh))
+			|| (flags & ArenaFlag.VALID) === 0
+			|| ((flags & ArenaFlag.PENDING) !== 0 && this.arenaCheckDirty(a, a.memory[sh + ArenaField.DEPS]!, sh))
 		) {
-			if (this.aUpdateComputed(a, sh)) aShallowBoth(a, sh);
-		} else if ((flags & AFlag.PENDING) !== 0) {
-			a.W[sh + AF.FLAGS] = flags & ~AFlag.PENDING;
+			if (this.arenaUpdateComputed(a, sh)) arenaShallowBoth(a, sh);
+		} else if ((flags & ArenaFlag.PENDING) !== 0) {
+			a.memory[sh + ArenaField.FLAGS] = flags & ~ArenaFlag.PENDING;
 		}
-		if (this.aFrameArena === a) {
-			aLink(a, sh, this.aFrameShadow, this.aFrameCycle, false);
+		if (this.arenaFrame === a) {
+			arenaLink(a, sh, this.arenaFrameShadow, this.arenaFrameCycle, false);
 			const oc = this.obsCapture;
 			if (oc !== undefined) oc.push(node.id);
 		}
-		const outFlags = a.W[sh + AF.FLAGS]!;
+		const outFlags = a.memory[sh + ArenaField.FLAGS]!;
 		// The boxedRead-style rethrow discipline (arenas serve real reads at
 		// S-B): a THROWN payload — plain error, or a still-pending render-path
 		// suspension — rethrows from the cache; a RETURNED sentinel (the shim
 		// wrapper folds background suspensions to the sentinel VALUE) serves
 		// as a value, compared by identity (battery 16d's still-pending rule).
-		if ((outFlags & AFlag.HAS_BOX) !== 0 && ((outFlags & AFlag.BOX_SUSPENDED) === 0 || (outFlags & AFlag.BOX_THROWN) !== 0)) {
-			throw a.vals[sh >> A_SHIFT];
+		if ((outFlags & ArenaFlag.HAS_BOX) !== 0 && ((outFlags & ArenaFlag.BOX_SUSPENDED) === 0 || (outFlags & ArenaFlag.BOX_THROWN) !== 0)) {
+			throw a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
 		}
-		return a.vals[sh >> A_SHIFT];
+		return a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
 	}
 
-	/** Spike `wUpdate`: refold a shadow (atom fold or computed fn run);
+	/** Refold a shadow (atom fold or computed fn run);
 	 * returns whether the world's value changed (the §4.2 value cutoff). */
-	private aUpdateShadow(a: ShadowArena, sh: number): boolean {
-		const flags = a.W[sh + AF.FLAGS]!;
-		if ((flags & AFlag.K_COMPUTED) !== 0) return this.aUpdateComputed(a, sh);
-		const nid = a.W[sh + AF.NODE]!;
+	private arenaUpdateShadow(a: WorldArena, sh: number): boolean {
+		const flags = a.memory[sh + ArenaField.FLAGS]!;
+		if ((flags & ArenaFlag.K_COMPUTED) !== 0) return this.arenaUpdateComputed(a, sh);
+		const nid = a.memory[sh + ArenaField.NODE]!;
 		const atom = this.nodesArr[nid] as AtomNode;
 		// §4.2 (iii): marked ⇒ REFOLD unconditionally — no fingerprint
 		// consulted (the fp side channel was deleted at S-D).
 		const next = this.foldAtom(atom, a.world);
-		const vi = sh >> A_SHIFT;
+		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		const prev = a.vals[vi];
-		const prevValid = (flags & AFlag.VALID) !== 0;
-		a.W[sh + AF.FLAGS] = (flags & ~(AFlag.DIRTY | AFlag.PENDING)) | AFlag.VALID;
-		aBumpReadClock(a);
+		const prevValid = (flags & ArenaFlag.VALID) !== 0;
+		a.memory[sh + ArenaField.FLAGS] = (flags & ~(ArenaFlag.DIRTY | ArenaFlag.PENDING)) | ArenaFlag.VALID;
+		arenaBumpReadClock(a);
 		// The shadow column ALWAYS stores the fold's own output (dual
 		// bookkeeping requires arena value ≡ fold, bit for bit); the
 		// comparator gates PROPAGATION only. Reference preservation for
-		// custom-equality COMPUTEDS lives in aFoldOutcome (§4.5.3, S-C).
+		// custom-equality COMPUTEDS lives in arenaFoldOutcome (§4.5.3, S-C).
 		a.vals[vi] = next;
-		return !(prevValid && this.aEqAtom(prev, next));
+		return !(prevValid && this.arenaEqAtom(prev, next));
 	}
 
 	/** Arena computed refold: the fn runs with the ARENA readers and the
@@ -2937,21 +2955,21 @@ export class CosignalBridge {
 	 * set so raw-handle reads route. OBSERVED nodes capture the strong deps
 	 * of this run and re-point their retains afterward (§4.7/M6: the
 	 * world-path retain re-point, carried into the arena walks at S-B). */
-	private aUpdateComputed(a: ShadowArena, sh: number): boolean {
-		const nid = a.W[sh + AF.NODE]!;
+	private arenaUpdateComputed(a: WorldArena, sh: number): boolean {
+		const nid = a.memory[sh + ArenaField.NODE]!;
 		const node = this.nodesArr[nid] as ComputedNode;
-		a.W[sh + AF.DEPS_TAIL] = 0;
-		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! | AFlag.MUTABLE | AFlag.RECURSED_CHECK) & ~(AFlag.RECURSED | AFlag.DIRTY | AFlag.PENDING);
-		const savedFrameArena = this.aFrameArena;
-		const savedFrameShadow = this.aFrameShadow;
-		const savedFrameCycle = this.aFrameCycle;
+		a.memory[sh + ArenaField.DEPS_TAIL] = 0;
+		a.memory[sh + ArenaField.FLAGS] = (a.memory[sh + ArenaField.FLAGS]! | ArenaFlag.MUTABLE | ArenaFlag.RECURSED_CHECK) & ~(ArenaFlag.RECURSED | ArenaFlag.DIRTY | ArenaFlag.PENDING);
+		const savedFrameArena = this.arenaFrame;
+		const savedFrameShadow = this.arenaFrameShadow;
+		const savedFrameCycle = this.arenaFrameCycle;
 		const savedRoute = this.serveOverride;
 		const savedWorld = this.activeWorld;
 		const savedSink = this.currentSink;
 		const savedObsCapture = this.obsCapture;
-		this.aFrameArena = a;
-		this.aFrameShadow = sh;
-		this.aFrameCycle = aBumpCycle(a);
+		this.arenaFrame = a;
+		this.arenaFrameShadow = sh;
+		this.arenaFrameCycle = arenaBumpCycle(a);
 		this.serveOverride = a;
 		this.currentSink = 0;
 		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined;
@@ -2960,9 +2978,9 @@ export class CosignalBridge {
 		const tr = this.trace; // paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, a.world);
 		try {
-			return this.aFoldOutcome(a, sh, node.fn(this.aTrackedReader, this.aUntrackedReader), node.isEqual);
+			return this.arenaFoldOutcome(a, sh, node.fn(this.arenaTrackedReader, this.arenaUntrackedReader), node.isEqual);
 		} catch (err) {
-			this.aNoteThrow(a, sh, err);
+			this.arenaNoteThrow(a, sh, err);
 			throw err;
 		} finally {
 			if (tr !== undefined) tr.evalEnd();
@@ -2972,23 +2990,23 @@ export class CosignalBridge {
 			this.obsCapture = savedObsCapture;
 			this.currentSink = savedSink;
 			this.serveOverride = savedRoute;
-			this.aFrameArena = savedFrameArena;
-			this.aFrameShadow = savedFrameShadow;
-			this.aFrameCycle = savedFrameCycle;
-			a.W[sh + AF.FLAGS] = a.W[sh + AF.FLAGS]! & ~AFlag.RECURSED_CHECK;
-			aPurgeDeps(a, sh);
-			aBumpReadClock(a);
-			if (obsCaptured !== undefined) this.aSyncObsAfterRefold(nid, obsCaptured);
+			this.arenaFrame = savedFrameArena;
+			this.arenaFrameShadow = savedFrameShadow;
+			this.arenaFrameCycle = savedFrameCycle;
+			a.memory[sh + ArenaField.FLAGS] = a.memory[sh + ArenaField.FLAGS]! & ~ArenaFlag.RECURSED_CHECK;
+			arenaPurgeDeps(a, sh);
+			arenaBumpReadClock(a);
+			if (obsCaptured !== undefined) this.arenaSyncObsAfterRefold(nid, obsCaptured);
 		}
 	}
 
 	/** Observed-closure sync after an arena refold, out of line (keeps
-	 * aUpdateComputed under the V8 inline budget; observed nodes only) —
+	 * arenaUpdateComputed under the V8 inline budget; observed nodes only) —
 	 * after every restore, so discovery evaluations run on a clean frame
 	 * stack. A NESTED refold (inside an outer walk) has serveOverride
 	 * restored to the OUTER arena; clear it around the sync so discovery's
 	 * newest evaluations route newest. */
-	private aSyncObsAfterRefold(nid: NodeId, captured: NodeId[]): void {
+	private arenaSyncObsAfterRefold(nid: NodeId, captured: NodeId[]): void {
 		const so = this.serveOverride;
 		this.serveOverride = undefined;
 		try {
@@ -2999,7 +3017,7 @@ export class CosignalBridge {
 	}
 
 	/** Fold epilogue of an arena computed refold, out of line from
-	 * aUpdateComputed (B2 split — the frame save/restore wrapper stays under
+	 * arenaUpdateComputed (B2 split — the frame save/restore wrapper stays under
 	 * V8's 460-bytecode inline budget): classify the fn's outcome —
 	 * suspension sentinel or plain value — into the shadow's value column
 	 * and outcome bits; returns the §4.2 value cutoff. The caller cleared
@@ -3013,66 +3031,66 @@ export class CosignalBridge {
 	 * relations, so the order is load-bearing). On unchanged, the PREVIOUS
 	 * reference is kept (write nothing). Equality never bridges an
 	 * exceptional boundary: `prevValid` demands a plain previous value. */
-	private aFoldOutcome(a: ShadowArena, sh: number, value: Value, eq: Equals | undefined): boolean {
-		const vi = sh >> A_SHIFT;
-		const flags = a.W[sh + AF.FLAGS]!;
+	private arenaFoldOutcome(a: WorldArena, sh: number, value: Value, eq: Equals | undefined): boolean {
+		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
+		const flags = a.memory[sh + ArenaField.FLAGS]!;
 		if (value instanceof SuspendedRead) {
-			const same = (flags & AFlag.BOX_SUSPENDED) !== 0 && (flags & AFlag.BOX_THROWN) === 0 && a.vals[vi] === value;
+			const same = (flags & ArenaFlag.BOX_SUSPENDED) !== 0 && (flags & ArenaFlag.BOX_THROWN) === 0 && a.vals[vi] === value;
 			a.vals[vi] = value;
-			a.W[sh + AF.FLAGS] = (flags & ~AFlag.BOX_THROWN) | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED;
-			this.aSuspend(a, sh);
+			a.memory[sh + ArenaField.FLAGS] = (flags & ~ArenaFlag.BOX_THROWN) | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED;
+			this.arenaSuspend(a, sh);
 			return !same;
 		}
-		const prevValid = (flags & AFlag.VALID) !== 0 && (flags & AFlag.HAS_BOX) === 0;
+		const prevValid = (flags & ArenaFlag.VALID) !== 0 && (flags & ArenaFlag.HAS_BOX) === 0;
 		const changed = !(prevValid && (eq === undefined
 			? Object.is(a.vals[vi], value)
-			: this.aEqCold(eq, a.vals[vi], value)));
-		if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
+			: this.arenaEqCold(eq, a.vals[vi], value)));
+		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) this.arenaUnsuspend(a, sh);
 		if (changed) a.vals[vi] = value;
-		a.W[sh + AF.FLAGS] = (a.W[sh + AF.FLAGS]! & ~(AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN)) | AFlag.VALID;
+		a.memory[sh + ArenaField.FLAGS] = (a.memory[sh + ArenaField.FLAGS]! & ~(ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN)) | ArenaFlag.VALID;
 		return changed;
 	}
 
 	/** The custom-equality compare, out of line (cold — §4.5.3 policy users
-	 * only; keeps aFoldOutcome's hot default arm closure-free and under its
-	 * budget). HEAD argument order: isEqual(prev, next) — see aFoldOutcome. */
-	private aEqCold(eq: Equals, prev: Value, next: Value): boolean {
+	 * only; keeps arenaFoldOutcome's hot default arm closure-free and under its
+	 * budget). HEAD argument order: isEqual(prev, next) — see arenaFoldOutcome. */
+	private arenaEqCold(eq: Equals, prev: Value, next: Value): boolean {
 		return this.inCallback(() => eq(prev, next));
 	}
 
-	private aTrackedReader: Reader = (dep) => {
-		this.aRecordDep(dep, false);
-		return this.aServe(this.aFrameArena!, dep);
+	private arenaTrackedReader: Reader = (dep) => {
+		this.arenaRecordDep(dep, false);
+		return this.arenaServe(this.arenaFrame!, dep);
 	};
 
-	private aUntrackedReader: Reader = (dep) => {
-		this.aRecordDep(dep, true);
-		const a = this.aFrameArena;
-		this.aFrameArena = undefined; // untracked: dep's own reads link nowhere new
+	private arenaUntrackedReader: Reader = (dep) => {
+		this.arenaRecordDep(dep, true);
+		const a = this.arenaFrame;
+		this.arenaFrame = undefined; // untracked: dep's own reads link nowhere new
 		try {
-			return this.aServe(a!, dep);
+			return this.arenaServe(a!, dep);
 		} finally {
-			this.aFrameArena = a;
+			this.arenaFrame = a;
 		}
 	};
 
-	/** Spike `wCheckDirty` transliteration (aUpdateShadow can run getters —
-	 * allocations, arena growth — so a.W re-loads after every update call).
+	/** Kernel `checkDirty` transliteration (arenaUpdateShadow can run getters —
+	 * allocations, arena growth — so a.memory re-loads after every update call).
 	 * Entry wrapper: owns the scratch-stack base restore around the
 	 * out-of-line walk so each piece stays under V8's 460-bytecode inline
 	 * budget (B2 — the arena twin of the kernel checkDirty split). */
-	private aCheckDirty(a: ShadowArena, startLink: number, startSub: number): boolean {
+	private arenaCheckDirty(a: WorldArena, startLink: number, startSub: number): boolean {
 		if (startLink === 0) return false;
-		const stackBase = aCheckSp;
+		const stackBase = arenaCheckSp;
 		try {
-			return this.aCheckDirtyLoop(a, startLink, startSub);
+			return this.arenaCheckDirtyLoop(a, startLink, startSub);
 		} finally {
-			aCheckSp = stackBase;
+			arenaCheckSp = stackBase;
 		}
 	}
 
-	/** aUpdateShadow + sibling Pending->Dirty upgrade, shared by the descend
-	 * and unwind arms of aCheckDirtyLoop. Heads are captured BEFORE the
+	/** arenaUpdateShadow + sibling Pending->Dirty upgrade, shared by the descend
+	 * and unwind arms of arenaCheckDirtyLoop. Heads are captured BEFORE the
 	 * refold runs (it can rebuild the lists), as in the kernel's
 	 * updateAndShallow; BOTH subs lists take the upgrade (§4.4.1). The
 	 * kernel's single-sub skip ("the only sub is the walker itself") is
@@ -3082,76 +3100,76 @@ export class CosignalBridge {
 	 * the shared dep and the strong-side consumer stale-served) — so both
 	 * lists propagate unconditionally; the walker's own re-upgrade is a
 	 * flag-guarded no-op. */
-	private aUpdateAndShallow(a: ShadowArena, node: number): boolean {
-		const subs = a.W[node + AF.SUBS]!;
-		const weak = a.weakSubs[node >> A_SHIFT]!;
-		if (this.aUpdateShadow(a, node)) {
-			if (subs !== 0) aShallowPropagate(a, subs);
-			if (weak !== 0) aShallowPropagate(a, weak);
+	private arenaUpdateAndShallow(a: WorldArena, node: number): boolean {
+		const subs = a.memory[node + ArenaField.SUBS]!;
+		const weak = a.weakSubs[node >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+		if (this.arenaUpdateShadow(a, node)) {
+			if (subs !== 0) arenaShallowPropagate(a, subs);
+			if (weak !== 0) arenaShallowPropagate(a, weak);
 			return true;
 		}
 		return false;
 	}
 
-	/** The general arena walk, out of line (see aCheckDirty — the wrapper
-	 * owns the aCheckSp restore, so a throwing fold unwinds through it). */
-	private aCheckDirtyLoop(a: ShadowArena, cur: number, sub: number): boolean {
+	/** The general arena walk, out of line (see arenaCheckDirty — the wrapper
+	 * owns the arenaCheckSp restore, so a throwing fold unwinds through it). */
+	private arenaCheckDirtyLoop(a: WorldArena, cur: number, sub: number): boolean {
 		let checkDepth = 0;
 		let dirty = false;
 		let guard = 0;
 		top: do {
-			if (++guard > AWalk.CYCLE_CAP) aWalkCycle('aCheckDirty', cur);
-			const W = a.W;
-			const dep = W[cur + AF.L_DEP]!;
-			const depFlags = W[dep + AF.FLAGS]!;
-			if ((W[sub + AF.FLAGS]! & AFlag.DIRTY) !== 0) {
+			if (++guard > ArenaWalk.CYCLE_CAP) arenaWalkCycle('arenaCheckDirty', cur);
+			const memory = a.memory;
+			const dep = memory[cur + ArenaLinkField.DEP]!;
+			const depFlags = memory[dep + ArenaField.FLAGS]!;
+			if ((memory[sub + ArenaField.FLAGS]! & ArenaFlag.DIRTY) !== 0) {
 				dirty = true;
 			} else if (
-				(depFlags & (AFlag.MUTABLE | AFlag.DIRTY)) === (AFlag.MUTABLE | AFlag.DIRTY)
+				(depFlags & (ArenaFlag.MUTABLE | ArenaFlag.DIRTY)) === (ArenaFlag.MUTABLE | ArenaFlag.DIRTY)
 				// Cold base (decay §4.3 evicted the value: MUTABLE kept, VALID
-				// cleared, column dropped) — the walk's twin of aServe's
+				// cleared, column dropped) — the walk's twin of arenaServe's
 				// evicted-to-cold arm: with no folded value there is nothing to
 				// validate against, so a cold dep IS dirt and must refold on
 				// consult. Without this arm a cold base is invisible (neither
 				// DIRTY nor PENDING) and a top-first serve stale-serves its
 				// cone (the B2-documented S-A bug; pinned in arena-sa3).
-				|| (depFlags & (AFlag.MUTABLE | AFlag.VALID)) === AFlag.MUTABLE
+				|| (depFlags & (ArenaFlag.MUTABLE | ArenaFlag.VALID)) === ArenaFlag.MUTABLE
 			) {
-				if (this.aUpdateAndShallow(a, dep)) {
+				if (this.arenaUpdateAndShallow(a, dep)) {
 					dirty = true;
 				}
-			} else if ((depFlags & (AFlag.MUTABLE | AFlag.PENDING)) === (AFlag.MUTABLE | AFlag.PENDING)) {
-				if (aCheckSp === aCheckStack.length) {
-					const bigger = new Int32Array(aCheckStack.length * 2);
-					bigger.set(aCheckStack);
-					aCheckStack = bigger;
+			} else if ((depFlags & (ArenaFlag.MUTABLE | ArenaFlag.PENDING)) === (ArenaFlag.MUTABLE | ArenaFlag.PENDING)) {
+				if (arenaCheckSp === arenaCheckStack.length) {
+					const bigger = new Int32Array(arenaCheckStack.length * 2);
+					bigger.set(arenaCheckStack);
+					arenaCheckStack = bigger;
 				}
-				aCheckStack[aCheckSp++] = cur;
-				cur = W[dep + AF.DEPS]!;
+				arenaCheckStack[arenaCheckSp++] = cur;
+				cur = memory[dep + ArenaField.DEPS]!;
 				sub = dep;
 				++checkDepth;
 				continue;
 			}
 			if (!dirty) {
-				const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
+				const nextDep = a.memory[cur + ArenaLinkField.NEXT_DEP]!;
 				if (nextDep !== 0) {
 					cur = nextDep;
 					continue;
 				}
 			}
 			while (checkDepth--) {
-				cur = aCheckStack[--aCheckSp]!;
+				cur = arenaCheckStack[--arenaCheckSp]!;
 				if (dirty) {
-					if (this.aUpdateAndShallow(a, sub)) {
-						sub = a.W[cur + AF.L_SUB]!;
+					if (this.arenaUpdateAndShallow(a, sub)) {
+						sub = a.memory[cur + ArenaLinkField.SUB]!;
 						continue;
 					}
 					dirty = false;
 				} else {
-					a.W[sub + AF.FLAGS] = a.W[sub + AF.FLAGS]! & ~AFlag.PENDING;
+					a.memory[sub + ArenaField.FLAGS] = a.memory[sub + ArenaField.FLAGS]! & ~ArenaFlag.PENDING;
 				}
-				sub = a.W[cur + AF.L_SUB]!;
-				const nextDep = a.W[cur + AF.L_NEXT_DEP]!;
+				sub = a.memory[cur + ArenaLinkField.SUB]!;
+				const nextDep = a.memory[cur + ArenaLinkField.NEXT_DEP]!;
 				if (nextDep !== 0) {
 					cur = nextDep;
 					continue top;
@@ -3170,22 +3188,22 @@ export class CosignalBridge {
 	 * Pass arenas receive NO receipt-driven fanout, ever (the pin proof,
 	 * §4.3) — dev-asserted here; the one pin-exempt mark source is L4
 	 * resource settlement (`fromSettlement`). */
-	private fanAtomsToArena(a: ShadowArena, atoms: AtomNode[], fromSettlement: boolean): void {
+	private fanAtomsToArena(a: WorldArena, atoms: AtomNode[], fromSettlement: boolean): void {
 		if (a.kind === 'pass' && !fromSettlement) {
 			throw new BridgeInvariantViolation('receipt-flip fanout reached a pass arena — pass-world values are pin-frozen (§4.3)');
 		}
-		const W = a.W;
+		const memory = a.memory;
 		for (let i = 0; i < atoms.length; i++) {
 			const sh = a.byNode[atoms[i]!.id] ?? 0;
 			if (sh === 0) continue; // no shadow: nothing consumes this atom here
-			const flags = W[sh + AF.FLAGS]!;
-			if ((flags & AFlag.DIRTY) !== 0 && W[sh + AF.MARK] === a.readClock) continue; // dedup
-			if ((flags & AFlag.DIRTY) === 0) {
-				W[sh + AF.FLAGS] = flags | AFlag.DIRTY;
+			const flags = memory[sh + ArenaField.FLAGS]!;
+			if ((flags & ArenaFlag.DIRTY) !== 0 && memory[sh + ArenaField.MARK] === a.readClock) continue; // dedup
+			if ((flags & ArenaFlag.DIRTY) === 0) {
+				memory[sh + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY;
 				a.dirty.push(sh); // dirty-LIST append on the mark's 0→1 edge
 			}
-			W[sh + AF.MARK] = a.readClock;
-			aPropagateBoth(a, sh); // strong AND weak (§4.4.1)
+			memory[sh + ArenaField.MARK] = a.readClock;
+			arenaPropagateBoth(a, sh); // strong AND weak (§4.4.1)
 		}
 	}
 
@@ -3207,16 +3225,16 @@ export class CosignalBridge {
 	 * (evict the value, clear the mark) instead of re-appending — the dirty
 	 * list stays bounded by live consumers' cones. A mark never clears
 	 * without its refold having run OR its value having been evicted. */
-	private arenaDecay(a: ShadowArena): void {
+	private arenaDecay(a: WorldArena): void {
 		if (a.dirty.length === 0) return;
 		const list = a.dirty;
 		a.dirty = [];
-		const W = a.W;
+		const memory = a.memory;
 		for (let i = 0; i < list.length; i++) {
 			const sh = list[i]!;
-			const flags = W[sh + AF.FLAGS]!;
-			if ((flags & AFlag.DIRTY) === 0) continue; // consumed by an evaluation: drop the entry
-			const nid = W[sh + AF.NODE]!;
+			const flags = memory[sh + ArenaField.FLAGS]!;
+			if ((flags & ArenaFlag.DIRTY) === 0) continue; // consumed by an evaluation: drop the entry
+			const nid = memory[sh + ArenaField.NODE]!;
 			const ws = this.watchersByNode[nid];
 			let watched = false;
 			if (ws !== undefined) {
@@ -3233,9 +3251,9 @@ export class CosignalBridge {
 			} else {
 				// Drop-to-cold: evict the cached value, clear the mark; links and
 				// MUTABLE stay so routing coverage survives (§4.1's point).
-				if ((flags & AFlag.BOX_SUSPENDED) !== 0) this.aUnsuspend(a, sh);
-				W[sh + AF.FLAGS] = flags & ~(AFlag.DIRTY | AFlag.VALID | AFlag.HAS_BOX | AFlag.BOX_SUSPENDED | AFlag.BOX_THROWN);
-				a.vals[sh >> A_SHIFT] = undefined;
+				if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) this.arenaUnsuspend(a, sh);
+				memory[sh + ArenaField.FLAGS] = flags & ~(ArenaFlag.DIRTY | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN);
+				a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = undefined;
 			}
 		}
 	}
@@ -3329,18 +3347,18 @@ export class CosignalBridge {
 						// Scan the suspended list (dense — O(current suspensions),
 						// §4.5.4) for shadows whose box payload IS this sentinel.
 						const list = a.suspended;
-						const W = a.W;
+						const memory = a.memory;
 						let matched = false;
 						for (let j = 0; j < list.length; j++) {
 							const sh = list[j]!;
-							if (a.vals[sh >> A_SHIFT] !== sr) continue;
-							const flags = W[sh + AF.FLAGS]!;
-							if ((flags & AFlag.DIRTY) === 0) {
-								W[sh + AF.FLAGS] = flags | AFlag.DIRTY;
+							if (a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== sr) continue;
+							const flags = memory[sh + ArenaField.FLAGS]!;
+							if ((flags & ArenaFlag.DIRTY) === 0) {
+								memory[sh + ArenaField.FLAGS] = flags | ArenaFlag.DIRTY;
 								a.dirty.push(sh);
 							}
-							W[sh + AF.MARK] = a.readClock;
-							aPropagateBoth(a, sh); // strong AND weak; pin-exempt for pass arenas (§4.3)
+							memory[sh + ArenaField.MARK] = a.readClock;
+							arenaPropagateBoth(a, sh); // strong AND weak; pin-exempt for pass arenas (§4.3)
 							matched = true;
 							// The marks above ARE the invalidation (arenas serve
 							// world reads since S-B); committed roots also join the
@@ -3348,7 +3366,7 @@ export class CosignalBridge {
 							// for the frame's close.
 							if (a.kind === 'committed') touchedRoots.add(a.root);
 						}
-						if (matched) aBumpReadClock(a);
+						if (matched) arenaBumpReadClock(a);
 					});
 					// (Newest suspensions need no eviction here since S-C: the
 					// kernel's own attachSettle listener invalidates kernel-cached
@@ -3414,7 +3432,7 @@ export class CosignalBridge {
 				this.releaseArena(a);
 			}
 		}
-		for (const a of this.arenaByRoot.values()) aRenumberMarks(a);
+		for (const a of this.arenaByRoot.values()) arenaRenumberMarks(a);
 	}
 
 	/**
@@ -3429,10 +3447,11 @@ export class CosignalBridge {
 		const self = this;
 		return {
 			layout: {
-				A_SHIFT,
-				CLOCK_LIMIT: A_CLOCK_LIMIT,
-				AF: { NODE: AF.NODE, MARK: AF.MARK, FLAGS: AF.FLAGS, DEPS: AF.DEPS, SUBS: AF.SUBS, L_DEP: AF.L_DEP, L_SUB: AF.L_SUB, L_PREV_DEP: AF.L_PREV_DEP, L_NEXT_DEP: AF.L_NEXT_DEP, L_NEXT_SUB: AF.L_NEXT_SUB, L_MODE: AF.L_MODE },
-				AFlag: { DIRTY: AFlag.DIRTY, BOX_SUSPENDED: AFlag.BOX_SUSPENDED },
+				ArenaGeom: { ID_TO_COLUMN_SHIFT: ArenaGeom.ID_TO_COLUMN_SHIFT, CLOCK_LIMIT: ArenaGeom.CLOCK_LIMIT },
+				ArenaField: { NODE: ArenaField.NODE, MARK: ArenaField.MARK, FLAGS: ArenaField.FLAGS, DEPS: ArenaField.DEPS, SUBS: ArenaField.SUBS },
+				ArenaLinkField: { DEP: ArenaLinkField.DEP, SUB: ArenaLinkField.SUB, PREV_DEP: ArenaLinkField.PREV_DEP, NEXT_DEP: ArenaLinkField.NEXT_DEP, NEXT_SUB: ArenaLinkField.NEXT_SUB, MODE: ArenaLinkField.MODE },
+				ArenaLinkMode: { WEAK: ArenaLinkMode.WEAK },
+				ArenaFlag: { DIRTY: ArenaFlag.DIRTY, BOX_SUSPENDED: ArenaFlag.BOX_SUSPENDED },
 			},
 			get evalDepth(): number {
 				return self.evalDepth;
@@ -3442,7 +3461,7 @@ export class CosignalBridge {
 			},
 			eachArena: (fn) => this.eachArena(fn),
 			nodeAt: (id) => this.nodesArr[id],
-			serve: (a, node) => this.aServe(a, node),
+			serve: (a, node) => this.arenaServe(a, node),
 			foldTruthFrame: (world, fn) => this.foldTruthFrame(world, fn),
 			cycleError: (name) => this.cycleError(name),
 			inCallback: (fn) => this.inCallback(fn),
@@ -3464,12 +3483,12 @@ export class CosignalBridge {
 	 * S-D pool/wrap pins read shell state (claimGen, buffer identity,
 	 * column capacities) and force the clocks toward the Int32 ceiling.
 	 * @internal */
-	__arenaForTest(rootId: RootId): ShadowArena | undefined {
+	__arenaForTest(rootId: RootId): WorldArena | undefined {
 		return this.arenaByRoot.get(rootId);
 	}
 
 	/** Test seam: pooled arena shells (S-D pool reuse/cap pins). @internal */
-	__arenaPoolForTest(): ShadowArena[] {
+	__arenaPoolForTest(): WorldArena[] {
 		return this.arenaPool;
 	}
 
@@ -3499,10 +3518,10 @@ export class CosignalBridge {
 		const depSh = a.byNode[dep.id] ?? 0;
 		const subSh = a.byNode[sub.id] ?? 0;
 		if (depSh === 0 || subSh === 0) return undefined;
-		let cur = a.W[subSh + AF.DEPS]!;
+		let cur = a.memory[subSh + ArenaField.DEPS]!;
 		while (cur !== 0) {
-			if (a.W[cur + AF.L_DEP] === depSh) return (a.W[cur + AF.L_MODE]! & 1) !== 0 ? 'weak' : 'strong';
-			cur = a.W[cur + AF.L_NEXT_DEP]!;
+			if (a.memory[cur + ArenaLinkField.DEP] === depSh) return (a.memory[cur + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0 ? 'weak' : 'strong';
+			cur = a.memory[cur + ArenaLinkField.NEXT_DEP]!;
 		}
 		return undefined;
 	}
@@ -3516,23 +3535,23 @@ export class CosignalBridge {
 		const depSh = a.byNode[dep.id] ?? 0;
 		const subSh = a.byNode[sub.id] ?? 0;
 		if (depSh === 0 || subSh === 0) return 0;
-		let cur = a.W[subSh + AF.DEPS]!;
+		let cur = a.memory[subSh + ArenaField.DEPS]!;
 		while (cur !== 0) {
-			if (a.W[cur + AF.L_DEP] === depSh) return cur;
-			cur = a.W[cur + AF.L_NEXT_DEP]!;
+			if (a.memory[cur + ArenaLinkField.DEP] === depSh) return cur;
+			cur = a.memory[cur + ArenaLinkField.NEXT_DEP]!;
 		}
 		return 0;
 	}
 
-	/** Test seam: raw L_NEXT_DEP field of an arena link record BY ID — valid
+	/** Test seam: raw NEXT_DEP field of an arena link record BY ID — valid
 	 * on freed links too. The freelist-discipline regression pin (dalien row
 	 * 2 twin) asserts a freed link's stale nextDep still names its former
-	 * neighbor, never the free list: aCheckDirty reads L_NEXT_DEP off links
+	 * neighbor, never the free list: arenaCheckDirty reads NEXT_DEP off links
 	 * a mid-walk purge freed. @internal */
 	__arenaLinkNextDepForTest(rootId: RootId, linkId: number): number {
 		const a = this.arenaByRoot.get(rootId);
 		if (a === undefined) return -1;
-		return a.W[linkId + AF.L_NEXT_DEP] ?? -1;
+		return a.memory[linkId + ArenaLinkField.NEXT_DEP] ?? -1;
 	}
 
 	/**
@@ -3726,33 +3745,33 @@ export class CosignalBridge {
 	 * (the segregated weak lists are never visited — the untracked-fan
 	 * gate's prize) with per-arena shadow stamps for traversal termination
 	 * and the global per-node stamps for collection dedup. Dead-GEN residue
-	 * never routes (§4.5.3). Never allocates or folds: a.W/a.walk stable. */
-	private walkArenaStrong(a: ShadowArena, from: NodeId, gen: WalkGen, found: Watcher[]): void {
+	 * never routes (§4.5.3). Never allocates or folds: a.memory/a.walk stable. */
+	private walkArenaStrong(a: WorldArena, from: NodeId, gen: WalkGen, found: Watcher[]): void {
 		const start = from < a.byNode.length ? a.byNode[from]! : 0;
 		if (start === 0) return;
-		if (a.W[start + AF.GEN] !== this.nodeGen[from]!) return;
-		const W = a.W;
+		if (a.memory[start + ArenaField.NODE_GEN] !== this.nodeGen[from]!) return;
+		const memory = a.memory;
 		const walk = a.walk;
 		const lastWalk = this.lastWalk;
 		const stack = this.walkStack;
 		let sp = 0;
-		walk[start >> A_SHIFT] = gen;
+		walk[start >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
 		stack[sp++] = start;
 		while (sp > 0) {
 			const sh = stack[--sp]!;
-			let l = W[sh + AF.SUBS]!;
+			let l = memory[sh + ArenaField.SUBS]!;
 			while (l !== 0) {
-				const sub = W[l + AF.L_SUB]!;
-				if (walk[sub >> A_SHIFT] !== gen) {
-					walk[sub >> A_SHIFT] = gen;
+				const sub = memory[l + ArenaLinkField.SUB]!;
+				if (walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
+					walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
 					stack[sp++] = sub;
-					const nid = W[sub + AF.NODE]!;
+					const nid = memory[sub + ArenaField.NODE]!;
 					if (lastWalk[nid] !== gen) {
 						lastWalk[nid] = gen;
 						this.collectWatchersAt(nid, found);
 					}
 				}
-				l = W[l + AF.L_NEXT_SUB]!;
+				l = memory[l + ArenaLinkField.NEXT_SUB]!;
 			}
 		}
 	}
@@ -5091,20 +5110,20 @@ export class CosignalBridge {
 		ws.length = 0;
 		// Candidate collection (§4.4.6): the root arena's dirty list seeds a
 		// walk over ALL arena links — weak included. No folds or allocations
-		// run inside the walk, so a.W/a.walk are stable to cache.
+		// run inside the walk, so a.memory/a.walk are stable to cache.
 		const a = this.arenaByRoot.get(rootId);
 		if (a !== undefined && a.dirty.length !== 0) {
-			const W = a.W;
+			const memory = a.memory;
 			const walk = a.walk;
 			const stack = this.walkStack;
 			let sp = 0;
 			const list = a.dirty;
 			for (let i = 0; i < list.length; i++) {
 				const sh = list[i]!;
-				if (walk[sh >> A_SHIFT] === gen) continue;
-				walk[sh >> A_SHIFT] = gen;
+				if (walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] === gen) continue;
+				walk[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
 				stack[sp++] = sh;
-				const nid = W[sh + AF.NODE]!;
+				const nid = memory[sh + ArenaField.NODE]!;
 				if (lastWalk[nid] !== gen) {
 					lastWalk[nid] = gen;
 					this.collectRootWatchersAt(nid, rootId, ws);
@@ -5114,19 +5133,19 @@ export class CosignalBridge {
 				const sh = stack[--sp]!;
 				// BOTH subs lists: drains expand over weak links too (§4.4.1).
 				for (let list = 0; list < 2; list++) {
-					let l = aSubsHead(a, sh, list);
+					let l = arenaSubsHead(a, sh, list);
 					while (l !== 0) {
-						const sub = W[l + AF.L_SUB]!;
-						if (walk[sub >> A_SHIFT] !== gen) {
-							walk[sub >> A_SHIFT] = gen;
+						const sub = memory[l + ArenaLinkField.SUB]!;
+						if (walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
+							walk[sub >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
 							stack[sp++] = sub;
-							const nid = W[sub + AF.NODE]!;
+							const nid = memory[sub + ArenaField.NODE]!;
 							if (lastWalk[nid] !== gen) {
 								lastWalk[nid] = gen;
 								this.collectRootWatchersAt(nid, rootId, ws);
 							}
 						}
-						l = W[l + AF.L_NEXT_SUB]!;
+						l = memory[l + ArenaLinkField.NEXT_SUB]!;
 					}
 				}
 			}
@@ -5276,42 +5295,42 @@ export class CosignalBridge {
 	private closureOverKernel(kid: KernelId, closure: Set<NodeId>, seen: Set<KernelId>): void {
 		if (seen.has(kid)) return;
 		seen.add(kid);
-		const M = __kernelBuffer();
-		let l = M[kid + NodeField.DEPS]!;
+		const memory = __kernelBuffer();
+		let l = memory[kid + NodeField.DEPS]!;
 		while (l !== 0) {
-			const depKid = M[l + LinkField.DEP]!;
+			const depKid = memory[l + LinkField.DEP]!;
 			const dep = this.byKernelId.get(depKid);
 			if (dep !== undefined) closure.add(dep.id);
-			if ((M[depKid + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) this.closureOverKernel(depKid, closure, seen);
-			l = M[l + LinkField.NEXT_DEP]!;
+			if ((memory[depKid + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) this.closureOverKernel(depKid, closure, seen);
+			l = memory[l + LinkField.NEXT_DEP]!;
 		}
 	}
 
 	/** One arena's reverse-deps half of the fixup closure (strong links). */
-	private closureOverArena(a: ShadowArena, nodeId: NodeId, closure: Set<NodeId>): void {
+	private closureOverArena(a: WorldArena, nodeId: NodeId, closure: Set<NodeId>): void {
 		const start = nodeId < a.byNode.length ? a.byNode[nodeId]! : 0;
 		if (start === 0) return;
-		if (a.W[start + AF.GEN] !== this.nodeGen[nodeId]!) return; // dead-tenancy residue never routes
+		if (a.memory[start + ArenaField.NODE_GEN] !== this.nodeGen[nodeId]!) return; // dead-tenancy residue never routes
 		const gen = ++this.walkGen;
-		const W = a.W;
+		const memory = a.memory;
 		const walk = a.walk;
 		const stack = this.walkStack;
 		let sp = 0;
-		walk[start >> A_SHIFT] = gen;
+		walk[start >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
 		stack[sp++] = start;
 		while (sp > 0) {
 			const sh = stack[--sp]!;
-			let l = W[sh + AF.DEPS]!;
+			let l = memory[sh + ArenaField.DEPS]!;
 			while (l !== 0) {
-				if ((W[l + AF.L_MODE]! & 1) === 0) {
-					const dep = W[l + AF.L_DEP]!;
-					if (walk[dep >> A_SHIFT] !== gen) {
-						walk[dep >> A_SHIFT] = gen;
-						closure.add(W[dep + AF.NODE]!);
+				if ((memory[l + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) === 0) {
+					const dep = memory[l + ArenaLinkField.DEP]!;
+					if (walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
+						walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
+						closure.add(memory[dep + ArenaField.NODE]!);
 						stack[sp++] = dep;
 					}
 				}
-				l = W[l + AF.L_NEXT_DEP]!;
+				l = memory[l + ArenaLinkField.NEXT_DEP]!;
 			}
 		}
 	}

@@ -106,9 +106,9 @@ effect(() => {
 base.set(1);
 base.set(2);
 
-// ---- concurrent engine: aLink, aCheckDirty, shadowFor, aNoteAtom, foldAtom.
+// ---- concurrent engine: arenaLink, arenaCheckDirty, shadowFor, arenaPropagateBoth, foldAtom.
 // A bridge with the S-A divergence check armed: every op epilogue serves
-// every arena shadow through the arena's own walks (aServe → aCheckDirty).
+// every arena shadow through the arena's own walks (arenaServe → arenaCheckDirty).
 const bridge = __newBridgeForTest();
 bridge.registerBridge();
 armArenaCheck(bridge);
@@ -136,9 +136,9 @@ function commitWrite(node: AnyNode, value: unknown): void {
 }
 
 // Dead-watcher constant cone: marks survive the drain (no live watcher to
-// re-evaluate), so the armed epilogue's serves run aUpdateShadow (the dirty
-// atom), aUpdateComputed (the promoted computed, folding UNCHANGED), and
-// aCheckDirty (the pending-only grandchild's walk).
+// re-evaluate), so the armed epilogue's serves run arenaUpdateShadow (the dirty
+// atom), arenaUpdateComputed (the promoted computed, folding UNCHANGED), and
+// arenaCheckDirty (the pending-only grandchild's walk).
 const atG = bridge.atom('atG', 0);
 const cGate = bridge.computed('cGate', (read) => {
 	read(atG);
@@ -152,7 +152,7 @@ w2.live = false;
 commitWrite(atG as AnyNode, 1);
 commitWrite(atG as AnyNode, 2);
 
-// B2 aCheckDirtyLoop walk shapes. The cone's TOP gets the lowest node id
+// B2 arenaCheckDirtyLoop walk shapes. The cone's TOP gets the lowest node id
 // (created first; its fn closes over later-declared handles, resolved at
 // the first render), so the armed epilogue's node-id-order serve hits the
 // top FIRST and must WALK to resolve its Pending. Both computeds fold
@@ -176,7 +176,7 @@ bridge.passEnd(p5.id, 'commit');
 w5.live = false;
 commitWrite(atK as AnyNode, 1);
 commitWrite(atK as AnyNode, 2);
-// aCheckDirtyLoop's update arms (aUpdateAndShallow, descend + unwind): at
+// arenaCheckDirtyLoop's update arms (arenaUpdateAndShallow, descend + unwind): at
 // S-A no PUBLIC flow reaches them — arena-authoritative serves happen only
 // inside the armed epilogue, whose aValidate/memo-evaluate pass consumes
 // every mark before the node-id-order serves walk (probed with prototype
@@ -189,15 +189,15 @@ commitWrite(atK as AnyNode, 2);
 const B = bridge as unknown as {
 	eachArena(cb: (a: unknown) => void): void;
 	fanAtomsToArena(a: unknown, atoms: unknown[], fromSettlement: boolean): void;
-	aServe(a: unknown, node: AnyNode): unknown;
+	arenaServe(a: unknown, node: AnyNode): unknown;
 };
 B.eachArena((a) => {
 	if ((a as { root: string; kind: string }).root !== 'R5' || (a as { kind: string }).kind !== 'committed') return;
 	B.fanAtomsToArena(a, [atK], false);
-	B.aServe(a, topK as AnyNode);
+	B.arenaServe(a, topK as AnyNode);
 });
 
-// In-arena dynamic dep drop + re-link: aUnlink, aFreeLink, then aAllocLink
+// In-arena dynamic dep drop + re-link: arenaUnlink, arenaFreeLink, then arenaAllocLink
 // popping the freed records back into live chains.
 const gateB = bridge.atom('gateB', 0);
 const extra = bridge.atom('extra', 5);

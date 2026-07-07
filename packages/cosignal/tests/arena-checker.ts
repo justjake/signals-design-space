@@ -24,7 +24,7 @@ import {
 	type CosignalBridge,
 	type NodeId,
 	type Reader,
-	type ShadowArena,
+	type WorldArena,
 	type Value,
 	type World,
 } from '../src/concurrent.js';
@@ -186,42 +186,42 @@ function naiveValue(st: CheckerState, node: AnyNode, world: World, memo: Map<Nod
  * Int32 words through the layout view (the engine's field offsets and flag
  * bits are same-file const enums; the view carries their values as data).
  */
-function validateArena(v: ArenaCheckerInternals, a: ShadowArena): void {
-	const { A_SHIFT, AF, AFlag } = v.layout;
-	const W = a.W;
+function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
+	const { ArenaGeom, ArenaField, ArenaLinkField, ArenaLinkMode, ArenaFlag } = v.layout;
+	const memory = a.memory;
 	const CAP = 100_000;
 	let suspSeen = 0;
 	for (let nid = 0; nid < a.byNode.length; nid++) {
 		const sh = a.byNode[nid] ?? 0;
 		if (sh === 0) continue;
-		if (W[sh + AF.NODE] !== nid) throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
+		if (memory[sh + ArenaField.NODE] !== nid) throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
 		// A dead-GEN shadow is legal COLD residue (§4.5.3): the invariant is
 		// that it never SERVES — enforced at shadowFor (re-tenant on consult),
 		// which every serve/link path routes through. No assert here.
-		const flags = W[sh + AF.FLAGS]!;
-		if ((flags & AFlag.BOX_SUSPENDED) !== 0) {
-			const slot = a.suspIdx[sh >> A_SHIFT]!;
+		const flags = memory[sh + ArenaField.FLAGS]!;
+		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
+			const slot = a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
 			if (slot === 0 || a.suspended[slot - 1] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`);
 			suspSeen++;
-		} else if ((a.suspIdx[sh >> A_SHIFT] ?? 0) !== 0) {
+		} else if ((a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0) {
 			throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} holds a suspended index without the bit`);
 		}
-		if ((flags & AFlag.DIRTY) !== 0 && !a.dirty.includes(sh)) {
+		if ((flags & ArenaFlag.DIRTY) !== 0 && !a.dirty.includes(sh)) {
 			throw new BridgeInvariantViolation(`arena ${a.root}: DIRTY shadow ${sh} missing from the dirty list`);
 		}
 		// deps list symmetry
-		let cur = W[sh + AF.DEPS]!;
+		let cur = memory[sh + ArenaField.DEPS]!;
 		let prev = 0;
 		let steps = 0;
 		while (cur !== 0) {
 			if (++steps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: deps list of shadow ${sh} exceeds ${CAP} steps (cycle)`);
-			if (W[cur + AF.L_SUB] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
-			if (W[cur + AF.L_PREV_DEP] !== prev) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
-			const dep = W[cur + AF.L_DEP]!;
+			if (memory[cur + ArenaLinkField.SUB] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
+			if (memory[cur + ArenaLinkField.PREV_DEP] !== prev) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
+			const dep = memory[cur + ArenaLinkField.DEP]!;
 			// Weak symmetry: the link must sit on its MODE's subs list —
 			// a weak-flagged link on the strong list (or vice versa) makes
 			// this search miss and throw (the segregated-list invariant).
-			let s = (W[cur + AF.L_MODE]! & 1) !== 0 ? a.weakSubs[dep >> A_SHIFT]! : W[dep + AF.SUBS]!;
+			let s = (memory[cur + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) !== 0 ? a.weakSubs[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT]! : memory[dep + ArenaField.SUBS]!;
 			let found = false;
 			let ssteps = 0;
 			while (s !== 0) {
@@ -230,11 +230,11 @@ function validateArena(v: ArenaCheckerInternals, a: ShadowArena): void {
 					found = true;
 					break;
 				}
-				s = W[s + AF.L_NEXT_SUB]!;
+				s = memory[s + ArenaLinkField.NEXT_SUB]!;
 			}
 			if (!found) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} missing from dep subs list (asymmetry)`);
 			prev = cur;
-			cur = W[cur + AF.L_NEXT_DEP]!;
+			cur = memory[cur + ArenaLinkField.NEXT_DEP]!;
 		}
 	}
 	if (suspSeen !== a.suspended.length) throw new BridgeInvariantViolation(`arena ${a.root}: suspended list holds ${a.suspended.length} entries but ${suspSeen} shadows carry the bit`);

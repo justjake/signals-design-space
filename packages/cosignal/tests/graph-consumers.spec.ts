@@ -1,7 +1,7 @@
 /**
  * GRAPH-CONSUMER COHERENCE AUDIT. The engine keeps two families of edge
  * stores — K0 (the kernel's packed dependency links, index.ts) and the
- * per-world SHADOW ARENAS (strong + segregated weak links, concurrent.ts;
+ * per-world WORLD ARENAS (strong + segregated weak links, concurrent.ts;
  * they replaced the K1 episode edge log at NF2 S-B) plus the newest memos'
  * strong dep records (the ladder's surviving arm, the kernel-links stand-in
  * until S-C) — and every consumer of edge/subscriber/liveness state must

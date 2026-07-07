@@ -14,16 +14,16 @@
  *     to zero with the arena, and a settlement arriving AFTER the release
  *     is a no-op, not a crash.
  *  5. Int32 clock-wrap renumbers (the S-D hardening): readClock stamps
- *     into AF.MARK and cycle stamps into L_VER — Int32Array fields that
+ *     into ArenaField.MARK and cycle stamps into VERSION — Int32Array fields that
  *     would truncate past 2^31-1. The bump helpers renumber at
- *     A_CLOCK_LIMIT (read off the checker seam's layout, CLOCK_LIMIT):
+ *     ArenaGeom.CLOCK_LIMIT (read off the checker seam's layout):
  *     stamps reset to 0
  *     (= stale, the conservative fail-open direction), clocks restart, and
  *     values stay EXACT across the boundary (armed divergence check).
  *     Same-eval link dedup keeps deps chains duplicate-free through the
  *     renumber (single-level frames renumber only at frame START, so all
  *     stamps within a frame are post-renumber-consistent; the nested-frame
- *     fail-open argument lives at aRenumberLinkVersions' doc).
+ *     fail-open argument lives at arenaRenumberLinkVersions' doc).
  *
  * Every bridge runs with the S-A divergence check ARMED: arena-served ≡
  * fold-truth after every public operation, plus the structural validator.
@@ -102,7 +102,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		commitWrite(b, a0, 2);
 		expect(w.lastRenderedValue).toBe(2);
 		const genLive = shell.claimGen;
-		const buf = shell.W;
+		const buf = shell.memory;
 		const valsCap = shell.vals.length;
 		expect(valsCap).toBeGreaterThan(0);
 		w.live = false;
@@ -110,9 +110,9 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		expect(b.__arenaPoolForTest()).toContain(shell);
 		expect(shell.alive).toBe(false);
 		expect(shell.claimGen).toBe(genLive + 1); // release bump: even = at rest
-		expect(shell.W).toBe(buf); // the buffer rides the pooled shell
+		expect(shell.memory).toBe(buf); // the buffer rides the pooled shell
 		// The scrub is TOTAL — dead-tenancy residue cannot validate…
-		expect(shell.W.every((x) => x === 0)).toBe(true); // written prefix zeroed; past it was fresh-zero
+		expect(shell.memory.every((x) => x === 0)).toBe(true); // written prefix zeroed; past it was fresh-zero
 		expect(shell.vals.every((v) => v === undefined)).toBe(true); // value refs released (no pooled leak)
 		expect(shell.byNode.every((x) => x === 0)).toBe(true);
 		expect(shell.suspIdx.every((x) => x === 0)).toBe(true);
@@ -163,11 +163,11 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		const w1 = mount(b, 'R', sum, 'W1');
 		expect(w1.lastRenderedValue).toBe(66);
 		const shell = b.__arenaForTest('R')!;
-		const grownLen = shell.W.length;
+		const grownLen = shell.memory.length;
 		expect(grownLen).toBeGreaterThan(16); // tenancy 1 grew the buffer
 		w1.live = false;
 		b.quiesce();
-		expect(shell.W.length).toBe(grownLen); // pooled at grown capacity
+		expect(shell.memory.length).toBe(grownLen); // pooled at grown capacity
 		// Tenancy 2 under another root: a WIDER cone — whatever pooled shell
 		// serves it starts at pooled capacity and grows further, with the
 		// fresh-record invariant enforced by the armed check + validator.
@@ -254,7 +254,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		const w = mount(b, 'R', c, 'W');
 		const shell = b.__arenaForTest('R')!;
 		const layout = b.__checkerInternals().layout; // the engine-owned constants (no hand copies)
-		shell.readClock = layout.CLOCK_LIMIT - 3; // a hair under the ceiling
+		shell.readClock = layout.ArenaGeom.CLOCK_LIMIT - 3; // a hair under the ceiling
 		for (let i = 1; i <= 6; i++) {
 			commitWrite(b, a0, i); // each write: fan (stamps MARK = clock) + serves (bump the clock)
 			expect(w.lastRenderedValue).toBe(100 + i); // exact through the renumber
@@ -264,7 +264,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		// Every live MARK stamp is again a small post-renumber value (Int32-exact).
 		for (let nid = 0; nid < shell.byNode.length; nid++) {
 			const sh = shell.byNode[nid]!;
-			if (sh !== 0) expect(shell.W[sh + layout.AF.MARK]).toBeLessThanOrEqual(shell.readClock);
+			if (sh !== 0) expect(shell.memory[sh + layout.ArenaField.MARK]).toBeLessThanOrEqual(shell.readClock);
 		}
 	});
 
@@ -274,8 +274,8 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		const y = b.atom('y', 10);
 		const z = b.atom('z', 100);
 		// x is read FIRST (its link heads the chain) and AGAIN nonadjacently —
-		// the aLinkInsert tail probes carry the same-eval dedup that a wrapped
-		// L_VER stamp would break.
+		// the arenaLinkInsert tail probes carry the same-eval dedup that a wrapped
+		// VERSION stamp would break.
 		const c = b.computed('c', (read) => {
 			const first = read(x) as number;
 			const mid = read(y) as number;
@@ -286,7 +286,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		expect(w.lastRenderedValue).toBe(112);
 		expect(depsChainLen(b, 'R', x, c)).toBe(3); // x, y, z — the duplicate read reused, not re-minted
 		const shell = b.__arenaForTest('R')!;
-		shell.cycle = b.__checkerInternals().layout.CLOCK_LIMIT - 2;
+		shell.cycle = b.__checkerInternals().layout.ArenaGeom.CLOCK_LIMIT - 2;
 		for (let i = 2; i <= 6; i++) {
 			commitWrite(b, x, i); // re-evals bump the cycle across the ceiling
 			expect(w.lastRenderedValue).toBe(2 * i + 110);

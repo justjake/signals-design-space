@@ -5,7 +5,7 @@
  *  - M6 world-path retain re-point (§4.7, fable M6 / codex 9): observation
  *    capture fires on EVERY tracked dependency read BEFORE any link
  *    reuse/dedup — including WORLD evaluations through the arena walks
- *    (aUpdateComputed's capture). An observed computed whose committed-world
+ *    (arenaUpdateComputed's capture). An observed computed whose committed-world
  *    deps are {A} while its newest deps are {B} (world-divergent flag),
  *    re-evaluated on the COMMITTED path through a drain, must re-point the
  *    observation retains: A gains/holds its retain and B's releases. A

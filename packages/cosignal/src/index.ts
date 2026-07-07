@@ -20,19 +20,19 @@
  * change lives in ordinary cold JavaScript around it.
  *
  * Kernel storage terms:
- * - THE ARENA is the one shared Int32Array (`M` in createEngine) holding
+ * - THE ARENA is the one shared Int32Array (`memory` in createEngine) holding
  *   every record: a preallocated block that records are carved out of
- *   (error messages use the same word). A RECORD is Arena.STRIDE (8)
+ *   (error messages use the same word). A RECORD is RecordGeom.STRIDE (8)
  *   consecutive Int32 slots; node records (signals/computeds/effects/scopes)
  *   and link records (one dependency edge each) share the arena, the stride,
  *   and one allocator.
  * - A record's id is PREMULTIPLIED: it is the arena index of the record's
- *   first field (record ordinal × Arena.STRIDE), so every field access is
- *   plain addition — M[id + NodeField.FLAGS] — with no multiply anywhere.
+ *   first field (record ordinal × RecordGeom.STRIDE), so every field access is
+ *   plain addition — memory[id + NodeField.FLAGS] — with no multiply anywhere.
  * - JavaScript values and functions cannot live in an Int32Array, so they
  *   sit in ordinary arrays running parallel to the arena — the SIDE COLUMNS
  *   `values` and `fns` — indexed by shifting the same premultiplied id (see
- *   the Arena const enum).
+ *   the RecordGeom const enum).
  *
  * Mechanics the whole file relies on:
  * - OPERATION BOUNDARY: a moment when no evaluation, effect run, or graph
@@ -280,7 +280,7 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 // each number MEANS so signatures read as the layout docs above.
 
 /** Premultiplied node record id: the Int32 arena index of the record's field 0
- * (id = record ordinal × Arena.STRIDE). 0 = "none" (record 0 is burned). */
+ * (id = record ordinal × RecordGeom.STRIDE). 0 = "none" (record 0 is burned). */
 type NodeId = number;
 /** Premultiplied link record id (links share the arena and stride with nodes). 0 = "none". */
 type LinkId = number;
@@ -294,7 +294,7 @@ type Version = number;
 type Generation = number;
 /** A count of fixed-stride records (nodes and links draw from one shared pool). */
 type RecordCount = number;
-/** Index into the `values` side column (two slots per record; see Arena). */
+/** Index into the `values` side column (two slots per record; see RecordGeom). */
 type ValueIndex = number;
 
 // ---- record layout + flags as const enums ---------------------------------------
@@ -314,10 +314,10 @@ type ValueIndex = number;
 // and esbuild bundling, and becomes a property read of the emitted enum
 // object under per-file transforms (tsx, vitest) — acceptable on the
 // bridge's cold-to-warm kernel walks, never in the kernel's own hot paths
-// (which are all same-file by construction). Arena (geometry) has no
+// (which are all same-file by construction). RecordGeom (geometry) has no
 // external consumer and stays unexported.
 
-/** Field offsets within a NODE record (M arena, stride 8; ids are
+/** Field offsets within a NODE record (memory arena, stride 8; ids are
  * pre-multiplied: id = record ordinal * 8). */
 export const enum NodeField {
 	FLAGS = 0,
@@ -387,9 +387,9 @@ export const enum NodeFlag {
 	HOST_OWNED = 8192,
 }
 
-/** Arena geometry: the strides, shifts, and offsets that address a record's
+/** Record geometry: the strides, shifts, and offsets that address a record's
  * fields and its side-column slots from its premultiplied id. */
-const enum Arena {
+const enum RecordGeom {
 	/** Int32 fields per record; ids are premultiplied by this (id = record ordinal × STRIDE). */
 	STRIDE = 8,
 	/** id >> ID_TO_VALUE_SHIFT: premultiplied id → the record's base index in
@@ -419,9 +419,9 @@ const enum Arena {
 // Scalar heads/counters live at module level so a rebuilt engine resumes
 // exactly where the old one stopped; only the buffer bindings live in the
 // engine closure.
-let recNext: RecordId = Arena.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
-let nodeFreeHead: NodeId = 0; // free list threaded through M[id + NodeField.DEPS]
-let linkFreeHead: LinkId = 0; // free list threaded through M[id + LinkField.FREE_NEXT] (spare field 7: freed links keep NEXT_DEP/NEXT_SUB intact for mid-walk stale reads)
+let recNext: RecordId = RecordGeom.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
+let nodeFreeHead: NodeId = 0; // free list threaded through memory[id + NodeField.DEPS]
+let linkFreeHead: LinkId = 0; // free list threaded through memory[id + LinkField.FREE_NEXT] (spare field 7: freed links keep NEXT_DEP/NEXT_SUB intact for mid-walk stale reads)
 let growPending = false;
 
 let cycle: Version = 0;
@@ -430,7 +430,7 @@ let batchDepth = 0;
 let notifyIndex = 0;
 let queuedLength = 0;
 let activeSub: NodeId = 0;
-let enterDepth = 0; // live engine frames that captured M; 0 = op boundary
+let enterDepth = 0; // live engine frames that captured memory; 0 = op boundary
 
 const queued: NodeId[] = [];
 const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the sweep (batch-freed at the next operation boundary)
@@ -488,36 +488,36 @@ interface Engine {
 }
 
 function createEngine(records: RecordCount, carry?: Int32Array): Engine {
-	const M = new Int32Array(records * Arena.STRIDE);
+	const memory = new Int32Array(records * RecordGeom.STRIDE);
 	// Bundler-proof aliases for the module-level side arrays: esbuild
 	// bundling demotes module-scope `const` to mutable `var`, so TurboFan
 	// loses their constant-folding at module scope; a function-scope const
 	// is preserved verbatim and folds via the same one-closure-cell context
-	// specialization that embeds M.
+	// specialization that embeds memory.
 	const vals = values;
 	const fnTab = fns;
 	const queue = queued;
 	const evalCtx = POLICY_CTX;
 	if (carry !== undefined) {
-		M.set(carry);
+		memory.set(carry);
 	}
 	// Allocators flag growth once the bump pointer (the never-yet-used end of
 	// the arena; allocation takes a freed record first, else bumps this) crosses
 	// the watermark — the fill level that schedules growth. The rule: keep at
-	// least Arena.REC_SLACK records AND half the arena free at every boundary.
-	const WM = Math.min(M.length >> Arena.HALF_ARENA_SHIFT, M.length - Arena.REC_SLACK * Arena.STRIDE);
-	if (recNext > WM) {
+	// least RecordGeom.REC_SLACK records AND half the arena free at every boundary.
+	const watermark = Math.min(memory.length >> RecordGeom.HALF_ARENA_SHIFT, memory.length - RecordGeom.REC_SLACK * RecordGeom.STRIDE);
+	if (recNext > watermark) {
 		growPending = true;
 	}
 
 	return {
 		records,
-		buffer: () => M,
+		buffer: () => memory,
 		newSignal,
 		newComputed,
 		newEffect,
 		newScope,
-		gen: (id) => M[id + NodeField.GEN],
+		gen: (id) => memory[id + NodeField.GEN],
 		read,
 		write,
 		computedRead,
@@ -529,9 +529,9 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		disposeComputed: disposeComputedOp,
 		markHostOwned: markHostOwnedOp,
 		markLifecycle: (id) => {
-			M[id + NodeField.LIFECYCLE] = 1;
+			memory[id + NodeField.LIFECYCLE] = 1;
 		},
-		activeIsComputed: () => activeSub !== 0 && (M[activeSub + NodeField.FLAGS] & NodeFlag.K_COMPUTED) !== 0,
+		activeIsComputed: () => activeSub !== 0 && (memory[activeSub + NodeField.FLAGS] & NodeFlag.K_COMPUTED) !== 0,
 	};
 
 	// ---- allocation ----------------------------------------------------------
@@ -540,41 +540,41 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		let id: NodeId;
 		if (nodeFreeHead !== 0) {
 			id = nodeFreeHead;
-			nodeFreeHead = M[id + NodeField.DEPS];
-			M[id + NodeField.DEPS] = 0;
+			nodeFreeHead = memory[id + NodeField.DEPS];
+			memory[id + NodeField.DEPS] = 0;
 		} else {
 			id = recNext;
-			if (id >= M.length) {
+			if (id >= memory.length) {
 				throw new Error('cosignal: arena exhausted mid-operation; raise COSIGNAL_INITIAL_RECORDS');
 			}
-			recNext = id + Arena.STRIDE;
-			if (recNext > WM) {
+			recNext = id + RecordGeom.STRIDE;
+			if (recNext > watermark) {
 				growPending = true;
 			}
 		}
-		M[id + NodeField.FLAGS] = flags;
-		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
-		while (vals.length <= v + Arena.AUX_VALUE_OFFSET) {
+		memory[id + NodeField.FLAGS] = flags;
+		const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
+		while (vals.length <= v + RecordGeom.AUX_VALUE_OFFSET) {
 			vals.push(undefined);
 		}
-		while (fnTab.length <= id >> Arena.ID_TO_FN_SHIFT) {
+		while (fnTab.length <= id >> RecordGeom.ID_TO_FN_SHIFT) {
 			fnTab.push(undefined);
 		}
 		return id;
 	}
 
 	function freeNode(id: NodeId): void {
-		M[id + NodeField.FLAGS] = 0;
-		M[id + NodeField.DEPS_TAIL] = 0;
-		M[id + NodeField.SUBS] = 0;
-		M[id + NodeField.SUBS_TAIL] = 0;
-		M[id + NodeField.LIFECYCLE] = 0; // D1
-		++M[id + NodeField.GEN];
-		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
+		memory[id + NodeField.FLAGS] = 0;
+		memory[id + NodeField.DEPS_TAIL] = 0;
+		memory[id + NodeField.SUBS] = 0;
+		memory[id + NodeField.SUBS_TAIL] = 0;
+		memory[id + NodeField.LIFECYCLE] = 0; // D1
+		++memory[id + NodeField.GEN];
+		const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
 		vals[v] = undefined;
-		vals[v + Arena.AUX_VALUE_OFFSET] = undefined;
-		fnTab[id >> Arena.ID_TO_FN_SHIFT] = undefined;
-		M[id + NodeField.DEPS] = nodeFreeHead;
+		vals[v + RecordGeom.AUX_VALUE_OFFSET] = undefined;
+		fnTab[id >> RecordGeom.ID_TO_FN_SHIFT] = undefined;
+		memory[id + NodeField.DEPS] = nodeFreeHead;
 		nodeFreeHead = id;
 	}
 
@@ -589,14 +589,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		let id: LinkId;
 		if (linkFreeHead !== 0) {
 			id = linkFreeHead;
-			linkFreeHead = M[id + LinkField.FREE_NEXT];
+			linkFreeHead = memory[id + LinkField.FREE_NEXT];
 		} else {
 			id = recNext;
-			if (id >= M.length) {
+			if (id >= memory.length) {
 				throw new Error('cosignal: arena exhausted mid-operation; raise COSIGNAL_INITIAL_RECORDS');
 			}
-			recNext = id + Arena.STRIDE;
-			if (recNext > WM) {
+			recNext = id + RecordGeom.STRIDE;
+			if (recNext > watermark) {
 				growPending = true;
 			}
 		}
@@ -604,30 +604,30 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function freeLink(id: LinkId): void {
-		M[id + LinkField.FREE_NEXT] = linkFreeHead;
+		memory[id + LinkField.FREE_NEXT] = linkFreeHead;
 		linkFreeHead = id;
 	}
 
 	// ---- system.ts transliteration -------------------------------------------
-	// TWINNING OBLIGATION: the shadow arenas in concurrent.ts re-state these
-	// walks over their own layout (aLink/aUnlink/aPropagate/aShallowPropagate/
-	// aIsValidLink/aCheckDirty*, deliberately — see the header there). Any
+	// TWINNING OBLIGATION: the world arenas in concurrent.ts re-state these
+	// walks over their own layout (arenaLink/arenaUnlink/arenaPropagate/arenaShallowPropagate/
+	// arenaIsValidLink/arenaCheckDirty*, deliberately — see the header there). Any
 	// semantic change to {link, linkInsert, unlink, propagate, checkDirty*,
 	// chainCheck, shallowPropagate, isValidLink, purgeDeps} must be re-derived
-	// in the `a`-prefixed twin (and vice versa); the twins diverge for real,
+	// in the `arena`-prefixed twin (and vice versa); the twins diverge for real,
 	// argued reasons (weak-subs second list, VALID/BOX bits, guard counters),
 	// so port the RULE, not the text. Drift here has already produced a real
-	// bug caught only by fuzz seed 40 (aUpdateAndShallow's comment).
+	// bug caught only by fuzz seed 40 (arenaUpdateAndShallow's comment).
 
 	function link(dep: NodeId, sub: NodeId, version: Version): void {
-		const prevDep = M[sub + NodeField.DEPS_TAIL];
-		if (prevDep !== 0 && M[prevDep + LinkField.DEP] === dep) {
+		const prevDep = memory[sub + NodeField.DEPS_TAIL];
+		if (prevDep !== 0 && memory[prevDep + LinkField.DEP] === dep) {
 			return;
 		}
-		const nextDep = prevDep !== 0 ? M[prevDep + LinkField.NEXT_DEP] : M[sub + NodeField.DEPS];
-		if (nextDep !== 0 && M[nextDep + LinkField.DEP] === dep) {
-			M[nextDep + LinkField.VERSION] = version;
-			M[sub + NodeField.DEPS_TAIL] = nextDep;
+		const nextDep = prevDep !== 0 ? memory[prevDep + LinkField.NEXT_DEP] : memory[sub + NodeField.DEPS];
+		if (nextDep !== 0 && memory[nextDep + LinkField.DEP] === dep) {
+			memory[nextDep + LinkField.VERSION] = version;
+			memory[sub + NodeField.DEPS_TAIL] = nextDep;
 			return;
 		}
 		linkInsert(dep, sub, version, prevDep, nextDep);
@@ -638,73 +638,73 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// monolithic link() was 475 bytecodes — kExceedsBytecodeLimit — and never
 	// inlined into the read paths despite running on every tracked read).
 	function linkInsert(dep: NodeId, sub: NodeId, version: Version, prevDep: LinkId, nextDep: LinkId): void {
-		const prevSub = M[dep + NodeField.SUBS_TAIL];
-		if (prevSub !== 0 && M[prevSub + LinkField.VERSION] === version && M[prevSub + LinkField.SUB] === sub) {
+		const prevSub = memory[dep + NodeField.SUBS_TAIL];
+		if (prevSub !== 0 && memory[prevSub + LinkField.VERSION] === version && memory[prevSub + LinkField.SUB] === sub) {
 			return;
 		}
 		const newLink = allocLink();
-		M[sub + NodeField.DEPS_TAIL] = newLink;
-		M[dep + NodeField.SUBS_TAIL] = newLink;
-		M[newLink + LinkField.VERSION] = version;
-		M[newLink + LinkField.DEP] = dep;
-		M[newLink + LinkField.SUB] = sub;
-		M[newLink + LinkField.PREV_DEP] = prevDep;
-		M[newLink + LinkField.NEXT_DEP] = nextDep;
-		M[newLink + LinkField.PREV_SUB] = prevSub;
-		M[newLink + LinkField.NEXT_SUB] = 0;
+		memory[sub + NodeField.DEPS_TAIL] = newLink;
+		memory[dep + NodeField.SUBS_TAIL] = newLink;
+		memory[newLink + LinkField.VERSION] = version;
+		memory[newLink + LinkField.DEP] = dep;
+		memory[newLink + LinkField.SUB] = sub;
+		memory[newLink + LinkField.PREV_DEP] = prevDep;
+		memory[newLink + LinkField.NEXT_DEP] = nextDep;
+		memory[newLink + LinkField.PREV_SUB] = prevSub;
+		memory[newLink + LinkField.NEXT_SUB] = 0;
 		if (nextDep !== 0) {
-			M[nextDep + LinkField.PREV_DEP] = newLink;
+			memory[nextDep + LinkField.PREV_DEP] = newLink;
 		}
 		if (prevDep !== 0) {
-			M[prevDep + LinkField.NEXT_DEP] = newLink;
+			memory[prevDep + LinkField.NEXT_DEP] = newLink;
 		} else {
-			M[sub + NodeField.DEPS] = newLink;
+			memory[sub + NodeField.DEPS] = newLink;
 		}
 		if (prevSub !== 0) {
-			M[prevSub + LinkField.NEXT_SUB] = newLink;
+			memory[prevSub + LinkField.NEXT_SUB] = newLink;
 		} else {
-			M[dep + NodeField.SUBS] = newLink;
+			memory[dep + NodeField.SUBS] = newLink;
 		}
 		// D1 (per-LINK since S-C — the kernel arm is a refcount, not a bit,
 		// so host-owned subscribers can be excluded without losing later
 		// non-host ones): every NEW link to a lifecycle-flagged dep shifts
 		// the union +1, unless the subscriber is a HOST-owned computed (the
 		// host's own observation index is its arm). Balanced by unlink's -1.
-		if (M[dep + NodeField.LIFECYCLE] !== 0 && !(M[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
+		if (memory[dep + NodeField.LIFECYCLE] !== 0 && !(memory[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
 			lifecycleWatched(dep);
 		}
 	}
 
-	function unlink(id: LinkId, sub: NodeId = M[id + LinkField.SUB]): LinkId {
-		const dep = M[id + LinkField.DEP];
-		const prevDep = M[id + LinkField.PREV_DEP];
-		const nextDep = M[id + LinkField.NEXT_DEP];
-		const nextSub = M[id + LinkField.NEXT_SUB];
-		const prevSub = M[id + LinkField.PREV_SUB];
+	function unlink(id: LinkId, sub: NodeId = memory[id + LinkField.SUB]): LinkId {
+		const dep = memory[id + LinkField.DEP];
+		const prevDep = memory[id + LinkField.PREV_DEP];
+		const nextDep = memory[id + LinkField.NEXT_DEP];
+		const nextSub = memory[id + LinkField.NEXT_SUB];
+		const prevSub = memory[id + LinkField.PREV_SUB];
 		// D1's balancing -1 (per-link; see linkInsert): lifecycle-flagged
 		// deps release one union ref per removed non-host link.
-		if (M[dep + NodeField.LIFECYCLE] !== 0 && !(M[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
+		if (memory[dep + NodeField.LIFECYCLE] !== 0 && !(memory[sub + NodeField.FLAGS] & NodeFlag.HOST_OWNED)) {
 			lifecycleUnwatched(dep);
 		}
 		if (nextDep !== 0) {
-			M[nextDep + LinkField.PREV_DEP] = prevDep;
+			memory[nextDep + LinkField.PREV_DEP] = prevDep;
 		} else {
-			M[sub + NodeField.DEPS_TAIL] = prevDep;
+			memory[sub + NodeField.DEPS_TAIL] = prevDep;
 		}
 		if (prevDep !== 0) {
-			M[prevDep + LinkField.NEXT_DEP] = nextDep;
+			memory[prevDep + LinkField.NEXT_DEP] = nextDep;
 		} else {
-			M[sub + NodeField.DEPS] = nextDep;
+			memory[sub + NodeField.DEPS] = nextDep;
 		}
 		if (nextSub !== 0) {
-			M[nextSub + LinkField.PREV_SUB] = prevSub;
+			memory[nextSub + LinkField.PREV_SUB] = prevSub;
 		} else {
-			M[dep + NodeField.SUBS_TAIL] = prevSub;
+			memory[dep + NodeField.SUBS_TAIL] = prevSub;
 		}
 		freeLink(id);
 		if (prevSub !== 0) {
-			M[prevSub + LinkField.NEXT_SUB] = nextSub;
-		} else if ((M[dep + NodeField.SUBS] = nextSub) === 0) {
+			memory[prevSub + LinkField.NEXT_SUB] = nextSub;
+		} else if ((memory[dep + NodeField.SUBS] = nextSub) === 0) {
 			unwatched(dep);
 		}
 		return nextDep;
@@ -714,24 +714,24 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		// No try/finally: propagate never runs user code (notify only queues),
 		// so it cannot throw and always drains the stack back to its base.
 		let cur = startLink;
-		let next = M[cur + LinkField.NEXT_SUB];
+		let next = memory[cur + LinkField.NEXT_SUB];
 		const stackBase = propSp;
 
 		top: do {
-			const sub = M[cur + LinkField.SUB];
-			let flags = M[sub + NodeField.FLAGS];
+			const sub = memory[cur + LinkField.SUB];
+			let flags = memory[sub + NodeField.FLAGS];
 
 			if (!(flags & (NodeFlag.RECURSED_CHECK | NodeFlag.RECURSED | NodeFlag.DIRTY | NodeFlag.PENDING))) {
-				M[sub + NodeField.FLAGS] = flags | NodeFlag.PENDING;
+				memory[sub + NodeField.FLAGS] = flags | NodeFlag.PENDING;
 				if (innerWrite) {
-					M[sub + NodeField.FLAGS] |= NodeFlag.RECURSED;
+					memory[sub + NodeField.FLAGS] |= NodeFlag.RECURSED;
 				}
 			} else if (!(flags & (NodeFlag.RECURSED_CHECK | NodeFlag.RECURSED))) {
 				flags = 0;
 			} else if (!(flags & NodeFlag.RECURSED_CHECK)) {
-				M[sub + NodeField.FLAGS] = (flags & ~NodeFlag.RECURSED) | NodeFlag.PENDING;
+				memory[sub + NodeField.FLAGS] = (flags & ~NodeFlag.RECURSED) | NodeFlag.PENDING;
 			} else if (!(flags & (NodeFlag.DIRTY | NodeFlag.PENDING)) && isValidLink(cur, sub)) {
-				M[sub + NodeField.FLAGS] = flags | (NodeFlag.RECURSED | NodeFlag.PENDING);
+				memory[sub + NodeField.FLAGS] = flags | (NodeFlag.RECURSED | NodeFlag.PENDING);
 				flags &= NodeFlag.MUTABLE;
 			} else {
 				flags = 0;
@@ -742,10 +742,10 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			}
 
 			if (flags & NodeFlag.MUTABLE) {
-				const subSubs = M[sub + NodeField.SUBS];
+				const subSubs = memory[sub + NodeField.SUBS];
 				if (subSubs !== 0) {
 					cur = subSubs;
-					const nextSub = M[cur + LinkField.NEXT_SUB];
+					const nextSub = memory[cur + LinkField.NEXT_SUB];
 					if (nextSub !== 0) {
 						if (propSp === propStack.length) {
 							const bigger = new Int32Array(propStack.length * 2);
@@ -760,14 +760,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			}
 
 			if ((cur = next) !== 0) {
-				next = M[cur + LinkField.NEXT_SUB];
+				next = memory[cur + LinkField.NEXT_SUB];
 				continue;
 			}
 
 			while (propSp > stackBase) {
 				cur = propStack[--propSp];
 				if (cur !== 0) {
-					next = M[cur + LinkField.NEXT_SUB];
+					next = memory[cur + LinkField.NEXT_SUB];
 					continue top;
 				}
 			}
@@ -790,26 +790,26 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		// signal's computed. Resolving here skips the loop's stack machinery
 		// and the try/finally for the hottest walks; anything deeper falls
 		// through to the general loop unchanged.
-		if (M[startSub + NodeField.FLAGS] & NodeFlag.DIRTY) {
+		if (memory[startSub + NodeField.FLAGS] & NodeFlag.DIRTY) {
 			return true;
 		}
-		const dep = M[startLink + LinkField.DEP];
-		const depFlags = M[dep + NodeField.FLAGS];
+		const dep = memory[startLink + LinkField.DEP];
+		const depFlags = memory[dep + NodeField.FLAGS];
 		let tryChain = true;
 		if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
-			if (updateAndShallow(dep, M[dep + NodeField.SUBS])) {
+			if (updateAndShallow(dep, memory[dep + NodeField.SUBS])) {
 				// Same disposed-sub guard as the loop's return: update() may
 				// run user code that disposes the sub mid-walk.
-				return M[startSub + NodeField.FLAGS] !== 0;
+				return memory[startSub + NodeField.FLAGS] !== 0;
 			}
-			const nextDep = M[startLink + LinkField.NEXT_DEP];
+			const nextDep = memory[startLink + LinkField.NEXT_DEP];
 			if (nextDep === 0) {
 				return false;
 			}
 			startLink = nextDep;
 		} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) === (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
-			const innerLink = M[dep + NodeField.DEPS];
-			if (M[innerLink + LinkField.NEXT_DEP] !== 0) {
+			const innerLink = memory[dep + NodeField.DEPS];
+			if (memory[innerLink + LinkField.NEXT_DEP] !== 0) {
 				// Branching inner deps (a diamond join): neither the
 				// two-level fast path nor a chain can resolve this —
 				// chainCheck's first descend provably fails the same
@@ -822,16 +822,16 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 				// sequence mirrors the loop's descend-then-unwind for this
 				// shape: update the inner node (subs captured first), then
 				// either recompute the pending dep or clear its Pending.
-				const inner = M[innerLink + LinkField.DEP];
-				if ((M[inner + NodeField.FLAGS] & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
-					if (updateAndShallow(inner, M[inner + NodeField.SUBS])) {
-						if (updateAndShallow(dep, M[dep + NodeField.SUBS])) {
-							return M[startSub + NodeField.FLAGS] !== 0;
+				const inner = memory[innerLink + LinkField.DEP];
+				if ((memory[inner + NodeField.FLAGS] & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
+					if (updateAndShallow(inner, memory[inner + NodeField.SUBS])) {
+						if (updateAndShallow(dep, memory[dep + NodeField.SUBS])) {
+							return memory[startSub + NodeField.FLAGS] !== 0;
 						}
 					} else {
-						M[dep + NodeField.FLAGS] &= ~NodeFlag.PENDING;
+						memory[dep + NodeField.FLAGS] &= ~NodeFlag.PENDING;
 					}
-					const nextDep = M[startLink + LinkField.NEXT_DEP];
+					const nextDep = memory[startLink + LinkField.NEXT_DEP];
 					if (nextDep === 0) {
 						return false;
 					}
@@ -847,10 +847,10 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		// no traversal stack — the descent is unbranched, and the unwind path
 		// is recoverable by climbing each node's unique subscriber link.
 		// deep/grid/island cones are exactly this shape.
-		if (tryChain && M[startLink + LinkField.NEXT_DEP] === 0) {
+		if (tryChain && memory[startLink + LinkField.NEXT_DEP] === 0) {
 			const r = chainCheck(startLink);
 			if (r >= 0) {
-				return r !== 0 && M[startSub + NodeField.FLAGS] !== 0;
+				return r !== 0 && memory[startSub + NodeField.FLAGS] !== 0;
 			}
 		}
 		const stackBase = checkSp;
@@ -867,7 +867,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// upstream.
 	function updateAndShallow(node: NodeId, subs: LinkId): boolean {
 		if (update(node)) {
-			if (M[subs + LinkField.NEXT_SUB] !== 0) {
+			if (memory[subs + LinkField.NEXT_SUB] !== 0) {
 				shallowPropagate(subs);
 			}
 			return true;
@@ -887,20 +887,20 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		let depth = 0;
 		let dep = 0;
 		while (true) {
-			dep = M[link + LinkField.DEP];
-			const flags = M[dep + NodeField.FLAGS];
+			dep = memory[link + LinkField.DEP];
+			const flags = memory[dep + NodeField.FLAGS];
 			if ((flags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
 				break; // dirty base found
 			}
 			if ((flags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) !== (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
 				return -1; // clean or non-mutable dep: not a resolvable chain
 			}
-			const depDeps = M[dep + NodeField.DEPS];
-			if (depDeps === 0 || M[depDeps + LinkField.NEXT_DEP] !== 0) {
+			const depDeps = memory[dep + NodeField.DEPS];
+			if (depDeps === 0 || memory[depDeps + LinkField.NEXT_DEP] !== 0) {
 				return -1; // branching deps
 			}
-			const depSubs = M[dep + NodeField.SUBS];
-			if (depSubs === 0 || M[depSubs + LinkField.NEXT_SUB] !== 0) {
+			const depSubs = memory[dep + NodeField.SUBS];
+			if (depSubs === 0 || memory[depSubs + LinkField.NEXT_SUB] !== 0) {
 				return -1; // shared node: the climb needs a unique subscriber
 			}
 			link = depDeps;
@@ -909,15 +909,15 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (depth === 0) {
 			return -1; // directly-dirty first dep: the shallow paths own this
 		}
-		let changed = updateAndShallow(dep, M[dep + NodeField.SUBS]);
+		let changed = updateAndShallow(dep, memory[dep + NodeField.SUBS]);
 		let node = dep;
 		while (depth--) {
-			const up = M[node + NodeField.SUBS];
-			const sub = M[up + LinkField.SUB];
+			const up = memory[node + NodeField.SUBS];
+			const sub = memory[up + LinkField.SUB];
 			if (changed) {
-				changed = updateAndShallow(sub, M[sub + NodeField.SUBS]);
+				changed = updateAndShallow(sub, memory[sub + NodeField.SUBS]);
 			} else {
-				M[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
+				memory[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
 			}
 			node = sub;
 		}
@@ -931,13 +931,13 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		let dirty = false;
 
 		top: do {
-			const dep = M[cur + LinkField.DEP];
-			const depFlags = M[dep + NodeField.FLAGS];
+			const dep = memory[cur + LinkField.DEP];
+			const depFlags = memory[dep + NodeField.FLAGS];
 
-			if (M[sub + NodeField.FLAGS] & NodeFlag.DIRTY) {
+			if (memory[sub + NodeField.FLAGS] & NodeFlag.DIRTY) {
 				dirty = true;
 			} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.DIRTY)) === (NodeFlag.MUTABLE | NodeFlag.DIRTY)) {
-				if (updateAndShallow(dep, M[dep + NodeField.SUBS])) {
+				if (updateAndShallow(dep, memory[dep + NodeField.SUBS])) {
 					dirty = true;
 				}
 			} else if ((depFlags & (NodeFlag.MUTABLE | NodeFlag.PENDING)) === (NodeFlag.MUTABLE | NodeFlag.PENDING)) {
@@ -947,14 +947,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 					checkStack = bigger;
 				}
 				checkStack[checkSp++] = cur;
-				cur = M[dep + NodeField.DEPS];
+				cur = memory[dep + NodeField.DEPS];
 				sub = dep;
 				++checkDepth;
 				continue;
 			}
 
 			if (!dirty) {
-				const nextDep = M[cur + LinkField.NEXT_DEP];
+				const nextDep = memory[cur + LinkField.NEXT_DEP];
 				if (nextDep !== 0) {
 					cur = nextDep;
 					continue;
@@ -964,16 +964,16 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			while (checkDepth--) {
 				cur = checkStack[--checkSp];
 				if (dirty) {
-					if (updateAndShallow(sub, M[sub + NodeField.SUBS])) {
-						sub = M[cur + LinkField.SUB];
+					if (updateAndShallow(sub, memory[sub + NodeField.SUBS])) {
+						sub = memory[cur + LinkField.SUB];
 						continue;
 					}
 					dirty = false;
 				} else {
-					M[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
+					memory[sub + NodeField.FLAGS] &= ~NodeFlag.PENDING;
 				}
-				sub = M[cur + LinkField.SUB];
-				const nextDep = M[cur + LinkField.NEXT_DEP];
+				sub = memory[cur + LinkField.SUB];
+				const nextDep = memory[cur + LinkField.NEXT_DEP];
 				if (nextDep !== 0) {
 					cur = nextDep;
 					continue top;
@@ -983,31 +983,31 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			// Upstream: `dirty && !!sub.flags` — a live node always has its
 			// kind bits set; flags reads 0 only if sub was disposed (record
 			// zeroed) by re-entrant user code during update().
-			return dirty && M[sub + NodeField.FLAGS] !== 0;
+			return dirty && memory[sub + NodeField.FLAGS] !== 0;
 		} while (true);
 	}
 
 	function shallowPropagate(startLink: LinkId): void {
 		let cur = startLink;
 		do {
-			const sub = M[cur + LinkField.SUB];
-			const flags = M[sub + NodeField.FLAGS];
+			const sub = memory[cur + LinkField.SUB];
+			const flags = memory[sub + NodeField.FLAGS];
 			if ((flags & (NodeFlag.PENDING | NodeFlag.DIRTY)) === NodeFlag.PENDING) {
-				M[sub + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
+				memory[sub + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
 				if ((flags & (NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK)) === NodeFlag.WATCHING) {
 					notify(sub);
 				}
 			}
-		} while ((cur = M[cur + LinkField.NEXT_SUB]) !== 0);
+		} while ((cur = memory[cur + LinkField.NEXT_SUB]) !== 0);
 	}
 
 	function isValidLink(checkLink: LinkId, sub: NodeId): boolean {
-		let cur = M[sub + NodeField.DEPS_TAIL];
+		let cur = memory[sub + NodeField.DEPS_TAIL];
 		while (cur !== 0) {
 			if (cur === checkLink) {
 				return true;
 			}
-			cur = M[cur + LinkField.PREV_DEP];
+			cur = memory[cur + LinkField.PREV_DEP];
 		}
 		return false;
 	}
@@ -1015,14 +1015,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// ---- index.ts transliteration ---------------------------------------------
 
 	function update(node: NodeId): boolean {
-		const flags = M[node + NodeField.FLAGS];
+		const flags = memory[node + NodeField.FLAGS];
 		if (flags & NodeFlag.K_COMPUTED) {
 			return updateComputed(node);
 		}
 		if (flags & NodeFlag.K_SIGNAL) {
 			return updateSignal(node);
 		}
-		M[node + NodeField.FLAGS] = (flags & NodeFlag.KIND_MASK) | NodeFlag.MUTABLE;
+		memory[node + NodeField.FLAGS] = (flags & NodeFlag.KIND_MASK) | NodeFlag.MUTABLE;
 		return true;
 	}
 
@@ -1032,10 +1032,10 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 		do {
 			queue[insertIndex++] = e;
-			M[e + NodeField.FLAGS] &= ~NodeFlag.WATCHING;
-			const subs = M[e + NodeField.SUBS];
-			e = subs !== 0 ? M[subs + LinkField.SUB] : 0;
-			if (e === 0 || !(M[e + NodeField.FLAGS] & NodeFlag.WATCHING)) {
+			memory[e + NodeField.FLAGS] &= ~NodeFlag.WATCHING;
+			const subs = memory[e + NodeField.SUBS];
+			e = subs !== 0 ? memory[subs + LinkField.SUB] : 0;
+			if (e === 0 || !(memory[e + NodeField.FLAGS] & NodeFlag.WATCHING)) {
 				break;
 			}
 		} while (true);
@@ -1053,7 +1053,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function unwatched(node: NodeId): void {
-		const flags = M[node + NodeField.FLAGS];
+		const flags = memory[node + NodeField.FLAGS];
 		if (flags & NodeFlag.K_COMPUTED) {
 			// NEVER strip a MID-EVALUATION record (RECURSED_CHECK): its
 			// DEPS_TAIL is the live re-track cursor, and a neighbor's re-track
@@ -1067,8 +1067,8 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			// list: its epilogue purge trims it, and a truly-dead record is
 			// lazily stripped at its NEXT unwatched edge (bounded residue,
 			// base-kernel-acceptable).
-			if (M[node + NodeField.DEPS_TAIL] !== 0 && !(flags & NodeFlag.RECURSED_CHECK)) {
-				M[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY
+			if (memory[node + NodeField.DEPS_TAIL] !== 0 && !(flags & NodeFlag.RECURSED_CHECK)) {
+				memory[node + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.DIRTY
 					| (flags & NodeFlag.HOST_OWNED); // ownership survives the rewrite (S-C)
 				disposeAllDepsInReverse(node);
 			}
@@ -1083,11 +1083,11 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// Upstream's HasChildEffect slow path in updateComputed/run: unlink every
 	// dep that is not a signal/computed (i.e. child effects/scopes), in reverse.
 	function unlinkChildEffects(sub: NodeId): void {
-		let cur = M[sub + NodeField.DEPS_TAIL];
+		let cur = memory[sub + NodeField.DEPS_TAIL];
 		while (cur !== 0) {
-			const prev = M[cur + LinkField.PREV_DEP];
-			const dep = M[cur + LinkField.DEP];
-			if (!(M[dep + NodeField.FLAGS] & (NodeFlag.K_COMPUTED | NodeFlag.K_SIGNAL))) {
+			const prev = memory[cur + LinkField.PREV_DEP];
+			const dep = memory[cur + LinkField.DEP];
+			if (!(memory[dep + NodeField.FLAGS] & (NodeFlag.K_COMPUTED | NodeFlag.K_SIGNAL))) {
 				unlink(cur, sub);
 			}
 			cur = prev;
@@ -1095,21 +1095,21 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function updateComputed(c: NodeId): boolean {
-		const oldFlags = M[c + NodeField.FLAGS];
+		const oldFlags = memory[c + NodeField.FLAGS];
 		if (oldFlags & NodeFlag.HAS_CHILD_EFFECT) {
 			unlinkChildEffects(c);
 		}
-		M[c + NodeField.DEPS_TAIL] = 0;
+		memory[c + NodeField.DEPS_TAIL] = 0;
 		// D3: the eval-start rewrite PRESERVES the exceptional bits — while the
 		// getter runs, the value slot still holds the PREVIOUS outcome, and
 		// ctx.previous / the isEqual wrapper need the bits to tell a residual
 		// error/thenable payload from a plain previous value.
-		M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
+		memory[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
 			| (oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED | NodeFlag.HOST_OWNED));
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
-		const v: ValueIndex = c >> Arena.ID_TO_VALUE_SHIFT;
+		const v: ValueIndex = c >> RecordGeom.ID_TO_VALUE_SHIFT;
 		const oldValue = vals[v];
 		const oldExc: NodeFlags = oldFlags & (NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED);
 		// Success clears the exceptional bits (folded into the finally's
@@ -1121,74 +1121,74 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			// from an exceptional outcome to a plain value must propagate even
 			// when the payloads are identity-equal (threw undefined → returns
 			// undefined).
-			return oldValue !== (vals[v] = (fnTab[c >> Arena.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx)) || oldExc !== 0;
+			return oldValue !== (vals[v] = (fnTab[c >> RecordGeom.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx)) || oldExc !== 0;
 		} catch (e) {
 			// D3: a throwing getter never corrupts graph state — the raw thrown
 			// value / pending thenable becomes the cached payload (cold).
 			const bits = storeThrown(c, e, oldValue, oldExc);
-			M[c + NodeField.FLAGS] = (M[c + NodeField.FLAGS] & ~(NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED)) | bits;
+			memory[c + NodeField.FLAGS] = (memory[c + NodeField.FLAGS] & ~(NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED)) | bits;
 			keep = ~NodeFlag.RECURSED_CHECK;
 			return oldExc !== bits || oldValue !== vals[v];
 		} finally {
 			--enterDepth;
 			activeSub = prevSub;
-			M[c + NodeField.FLAGS] &= keep;
+			memory[c + NodeField.FLAGS] &= keep;
 			purgeDeps(c);
 		}
 	}
 
 	function updateSignal(s: NodeId): boolean {
-		M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE;
-		const v: ValueIndex = s >> Arena.ID_TO_VALUE_SHIFT;
-		return vals[v] !== (vals[v] = vals[v + Arena.AUX_VALUE_OFFSET]);
+		memory[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE;
+		const v: ValueIndex = s >> RecordGeom.ID_TO_VALUE_SHIFT;
+		return vals[v] !== (vals[v] = vals[v + RecordGeom.AUX_VALUE_OFFSET]);
 	}
 
 	function run(e: NodeId): void {
-		const flags = M[e + NodeField.FLAGS];
+		const flags = memory[e + NodeField.FLAGS];
 		if (
 			flags & NodeFlag.DIRTY
-			|| (flags & NodeFlag.PENDING && checkDirty(M[e + NodeField.DEPS], e))
+			|| (flags & NodeFlag.PENDING && checkDirty(memory[e + NodeField.DEPS], e))
 		) {
 			if (flags & NodeFlag.HAS_CHILD_EFFECT) {
 				unlinkChildEffects(e);
 			}
-			const cv: ValueIndex = (e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
+			const cv: ValueIndex = (e >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET;
 			if (vals[cv]) {
 				runCleanup(e);
-				if (M[e + NodeField.FLAGS] === 0) {
+				if (memory[e + NodeField.FLAGS] === 0) {
 					return; // disposed by its own cleanup
 				}
 			}
-			M[e + NodeField.DEPS_TAIL] = 0;
-			M[e + NodeField.FLAGS] = NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK;
+			memory[e + NodeField.DEPS_TAIL] = 0;
+			memory[e + NodeField.FLAGS] = NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK;
 			const prevSub = activeSub;
 			activeSub = e;
 			++enterDepth;
 			try {
 				++cycle;
 				++runDepth;
-				vals[cv] = (fnTab[e >> Arena.ID_TO_FN_SHIFT] as () => (() => void) | void)();
+				vals[cv] = (fnTab[e >> RecordGeom.ID_TO_FN_SHIFT] as () => (() => void) | void)();
 			} finally {
 				--runDepth;
 				--enterDepth;
 				activeSub = prevSub;
-				M[e + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
+				memory[e + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 				purgeDeps(e);
 			}
-		} else if (M[e + NodeField.DEPS] !== 0) {
-			M[e + NodeField.FLAGS] = NodeFlag.K_EFFECT | NodeFlag.WATCHING | (flags & NodeFlag.HAS_CHILD_EFFECT);
+		} else if (memory[e + NodeField.DEPS] !== 0) {
+			memory[e + NodeField.FLAGS] = NodeFlag.K_EFFECT | NodeFlag.WATCHING | (flags & NodeFlag.HAS_CHILD_EFFECT);
 		}
 	}
 
 	// flush() abort path: re-arm effects still queue after a throw.
 	function requeueAbort(e: NodeId): void {
-		if (M[e + NodeField.FLAGS] & NodeFlag.KIND_MASK) {
-			M[e + NodeField.FLAGS] |= NodeFlag.WATCHING | NodeFlag.RECURSED;
+		if (memory[e + NodeField.FLAGS] & NodeFlag.KIND_MASK) {
+			memory[e + NodeField.FLAGS] |= NodeFlag.WATCHING | NodeFlag.RECURSED;
 		}
 	}
 
 	function runCleanup(e: NodeId): void {
-		const cv: ValueIndex = (e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
+		const cv: ValueIndex = (e >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET;
 		const cleanup = vals[cv] as () => void;
 		vals[cv] = undefined;
 		const prevSub = activeSub;
@@ -1204,17 +1204,17 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 	// effectOper + effectScopeOper: dispose an effect (runs cleanup) or scope.
 	function dispose(e: NodeId): void {
-		const flags = M[e + NodeField.FLAGS];
+		const flags = memory[e + NodeField.FLAGS];
 		if (!(flags & NodeFlag.KIND_MASK)) {
 			return; // already disposed
 		}
-		M[e + NodeField.FLAGS] = 0;
+		memory[e + NodeField.FLAGS] = 0;
 		disposeAllDepsInReverse(e);
-		const sub = M[e + NodeField.SUBS];
+		const sub = memory[e + NodeField.SUBS];
 		if (sub !== 0) {
 			unlink(sub);
 		}
-		if (flags & NodeFlag.K_EFFECT && vals[(e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET]) {
+		if (flags & NodeFlag.K_EFFECT && vals[(e >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET]) {
 			runCleanup(e);
 		}
 		// Deferred reclamation: the queue (or an in-flight walk) may still hold
@@ -1224,17 +1224,17 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	function disposeAllDepsInReverse(sub: NodeId): void {
-		let cur = M[sub + NodeField.DEPS_TAIL];
+		let cur = memory[sub + NodeField.DEPS_TAIL];
 		while (cur !== 0) {
-			const prev = M[cur + LinkField.PREV_DEP];
+			const prev = memory[cur + LinkField.PREV_DEP];
 			unlink(cur, sub);
 			cur = prev;
 		}
 	}
 
 	function purgeDeps(sub: NodeId): void {
-		const depsTail = M[sub + NodeField.DEPS_TAIL];
-		let dep = depsTail !== 0 ? M[depsTail + LinkField.NEXT_DEP] : M[sub + NodeField.DEPS];
+		const depsTail = memory[sub + NodeField.DEPS_TAIL];
+		let dep = depsTail !== 0 ? memory[depsTail + LinkField.NEXT_DEP] : memory[sub + NodeField.DEPS];
 		while (dep !== 0) {
 			dep = unlink(dep, sub);
 		}
@@ -1244,36 +1244,36 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 	function newSignal(value: unknown): NodeId {
 		const id = allocNode(NodeFlag.K_SIGNAL | NodeFlag.MUTABLE);
-		const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
+		const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
 		vals[v] = value; // currentValue
-		vals[v + Arena.AUX_VALUE_OFFSET] = value; // pendingValue
+		vals[v + RecordGeom.AUX_VALUE_OFFSET] = value; // pendingValue
 		return id;
 	}
 
 	function newComputed(getter: (ctx: unknown) => unknown): NodeId {
 		const id = allocNode(NodeFlag.K_COMPUTED);
-		fnTab[id >> Arena.ID_TO_FN_SHIFT] = getter;
+		fnTab[id >> RecordGeom.ID_TO_FN_SHIFT] = getter;
 		return id;
 	}
 
 	function newEffect(fn: () => (() => void) | void): NodeId {
 		const e = allocNode(NodeFlag.K_EFFECT | NodeFlag.WATCHING | NodeFlag.RECURSED_CHECK);
-		fnTab[e >> Arena.ID_TO_FN_SHIFT] = fn;
+		fnTab[e >> RecordGeom.ID_TO_FN_SHIFT] = fn;
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
 			link(e, prevSub, 0);
-			M[prevSub + NodeField.FLAGS] |= NodeFlag.HAS_CHILD_EFFECT;
+			memory[prevSub + NodeField.FLAGS] |= NodeFlag.HAS_CHILD_EFFECT;
 		}
 		++enterDepth;
 		try {
 			++runDepth;
-			vals[(e >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] = fn();
+			vals[(e >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] = fn();
 		} finally {
 			--runDepth;
 			--enterDepth;
 			activeSub = prevSub;
-			M[e + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
+			memory[e + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 		}
 		return e;
 	}
@@ -1284,7 +1284,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		activeSub = e;
 		if (prevSub !== 0) {
 			link(e, prevSub, 0);
-			M[prevSub + NodeField.FLAGS] |= NodeFlag.HAS_CHILD_EFFECT;
+			memory[prevSub + NodeField.FLAGS] |= NodeFlag.HAS_CHILD_EFFECT;
 		}
 		++enterDepth;
 		try {
@@ -1298,9 +1298,9 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 	// signalOper read path.
 	function read(s: NodeId): unknown {
-		if (M[s + NodeField.FLAGS] & NodeFlag.DIRTY) {
+		if (memory[s + NodeField.FLAGS] & NodeFlag.DIRTY) {
 			if (updateSignal(s)) {
-				const subs = M[s + NodeField.SUBS];
+				const subs = memory[s + NodeField.SUBS];
 				if (subs !== 0) {
 					shallowPropagate(subs);
 				}
@@ -1309,17 +1309,17 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (activeSub !== 0) {
 			link(s, activeSub, cycle);
 		}
-		return vals[s >> Arena.ID_TO_VALUE_SHIFT];
+		return vals[s >> RecordGeom.ID_TO_VALUE_SHIFT];
 	}
 
 	// signalOper write path; the WRAPPER flushes (iff this returns true), so
 	// growth can happen between queue effects at the top level (upstream
 	// flushes inline here, only when the changed signal had subscribers).
 	function write(s: NodeId, value: unknown): boolean {
-		const p: ValueIndex = (s >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET;
+		const p: ValueIndex = (s >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET;
 		if (vals[p] !== (vals[p] = value)) {
-			M[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE | NodeFlag.DIRTY;
-			const subs = M[s + NodeField.SUBS];
+			memory[s + NodeField.FLAGS] = NodeFlag.K_SIGNAL | NodeFlag.MUTABLE | NodeFlag.DIRTY;
+			const subs = memory[s + NodeField.SUBS];
 			if (subs !== 0) {
 				propagate(subs, runDepth !== 0);
 				return true;
@@ -1336,7 +1336,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// dirty/pending revalidation, first evaluation, boxed cache (D3) — to the
 	// out-of-line slow path.
 	function computedRead(c: NodeId): unknown {
-		const flags = M[c + NodeField.FLAGS];
+		const flags = memory[c + NodeField.FLAGS];
 		if (
 			flags & (NodeFlag.RECURSED_CHECK | NodeFlag.DIRTY | NodeFlag.PENDING | NodeFlag.HAS_BOX)
 			|| !(flags & NodeFlag.MUTABLE) // never evaluated (upstream `!flags`; exact-compare broke when HOST_OWNED joined the word)
@@ -1346,7 +1346,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		if (activeSub !== 0) {
 			link(c, activeSub, cycle);
 		}
-		return vals[c >> Arena.ID_TO_VALUE_SHIFT];
+		return vals[c >> RecordGeom.ID_TO_VALUE_SHIFT];
 	}
 
 	// The full computedRead decision chain, out of line (recompute/first-eval/boxed).
@@ -1362,31 +1362,31 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			|| (
 				flags & NodeFlag.PENDING
 				&& (
-					checkDirty(M[c + NodeField.DEPS], c)
-					|| (M[c + NodeField.FLAGS] = flags & ~NodeFlag.PENDING, false)
+					checkDirty(memory[c + NodeField.DEPS], c)
+					|| (memory[c + NodeField.FLAGS] = flags & ~NodeFlag.PENDING, false)
 				)
 			)
 		) {
 			if (updateComputed(c)) {
-				const subs = M[c + NodeField.SUBS];
+				const subs = memory[c + NodeField.SUBS];
 				if (subs !== 0) {
 					shallowPropagate(subs);
 				}
 			}
 		} else if (!(flags & NodeFlag.MUTABLE)) { // upstream `!flags`: never evaluated
-			M[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
+			memory[c + NodeField.FLAGS] = NodeFlag.K_COMPUTED | NodeFlag.MUTABLE | NodeFlag.RECURSED_CHECK
 				| (flags & NodeFlag.HOST_OWNED);
 			const prevSub = activeSub;
 			activeSub = c;
 			++enterDepth;
 			try {
-				vals[c >> Arena.ID_TO_VALUE_SHIFT] = (fnTab[c >> Arena.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx);
+				vals[c >> RecordGeom.ID_TO_VALUE_SHIFT] = (fnTab[c >> RecordGeom.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown)(evalCtx);
 			} catch (e) {
-				M[c + NodeField.FLAGS] |= storeThrown(c, e, undefined, 0); // D3 (cold; first eval — no previous outcome)
+				memory[c + NodeField.FLAGS] |= storeThrown(c, e, undefined, 0); // D3 (cold; first eval — no previous outcome)
 			} finally {
 				--enterDepth;
 				activeSub = prevSub;
-				M[c + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
+				memory[c + NodeField.FLAGS] &= ~NodeFlag.RECURSED_CHECK;
 			}
 		}
 		const sub = activeSub;
@@ -1397,11 +1397,11 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		// settled suspensions self-heal, pending suspensions throw the
 		// thenable's stable SuspendedRead. The link above already registered
 		// the subscription, so recovery re-notifies whoever observed the throw.
-		const f = M[c + NodeField.FLAGS];
+		const f = memory[c + NodeField.FLAGS];
 		if (f & NodeFlag.HAS_BOX) {
 			return boxedRead(c, f);
 		}
-		return vals[c >> Arena.ID_TO_VALUE_SHIFT];
+		return vals[c >> RecordGeom.ID_TO_VALUE_SHIFT];
 	}
 
 	// D5: settlement-invalidate primitive. Marks the computed stale exactly the
@@ -1409,12 +1409,12 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// wrapper flushes. Cold: called from settle listeners and read-site
 	// self-heal only.
 	function invalidateComputed(c: NodeId): boolean {
-		const flags = M[c + NodeField.FLAGS];
+		const flags = memory[c + NodeField.FLAGS];
 		if (!(flags & NodeFlag.K_COMPUTED)) {
 			return false;
 		}
-		M[c + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
-		const subs = M[c + NodeField.SUBS];
+		memory[c + NodeField.FLAGS] = flags | NodeFlag.DIRTY;
+		const subs = memory[c + NodeField.SUBS];
 		if (subs !== 0) {
 			propagate(subs, runDepth !== 0);
 			return true;
@@ -1427,18 +1427,18 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// lifecycle dep fired +1 at insert, and its eventual unlink will skip the
 	// -1 (the flag reads at unlink time) — so release those refs here, once.
 	function markHostOwnedOp(c: NodeId): void {
-		const flags = M[c + NodeField.FLAGS];
+		const flags = memory[c + NodeField.FLAGS];
 		if (!(flags & NodeFlag.K_COMPUTED) || flags & NodeFlag.HOST_OWNED) {
 			return;
 		}
-		M[c + NodeField.FLAGS] = flags | NodeFlag.HOST_OWNED;
-		let l = M[c + NodeField.DEPS];
+		memory[c + NodeField.FLAGS] = flags | NodeFlag.HOST_OWNED;
+		let l = memory[c + NodeField.DEPS];
 		while (l !== 0) {
-			const dep = M[l + LinkField.DEP];
-			if (M[dep + NodeField.LIFECYCLE] !== 0) {
+			const dep = memory[l + LinkField.DEP];
+			if (memory[dep + NodeField.LIFECYCLE] !== 0) {
 				lifecycleUnwatched(dep);
 			}
-			l = M[l + LinkField.NEXT_DEP];
+			l = memory[l + LinkField.NEXT_DEP];
 		}
 	}
 
@@ -1451,14 +1451,14 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	// boundary exactly like effect/scope disposal (in-flight walks may still
 	// hold the id), where freeNode bumps GEN — the id-tenancy stamp (§4.5.3).
 	function disposeComputedOp(c: NodeId): void {
-		if (!(M[c + NodeField.FLAGS] & NodeFlag.K_COMPUTED)) {
+		if (!(memory[c + NodeField.FLAGS] & NodeFlag.K_COMPUTED)) {
 			return; // not a computed / already disposed
 		}
-		M[c + NodeField.FLAGS] = 0;
+		memory[c + NodeField.FLAGS] = 0;
 		disposeAllDepsInReverse(c);
-		let l = M[c + NodeField.SUBS];
+		let l = memory[c + NodeField.SUBS];
 		while (l !== 0) {
-			const next = M[l + LinkField.NEXT_SUB];
+			const next = memory[l + LinkField.NEXT_SUB];
 			unlink(l);
 			l = next;
 		}
@@ -1481,7 +1481,7 @@ const initialRecords = (() => {
 })();
 
 // D6: configure({initialRecords}) raises this floor; the growth loop honors it.
-let desiredRecords: RecordCount = initialRecords * Arena.RECORDS_PER_UNIT;
+let desiredRecords: RecordCount = initialRecords * RecordGeom.RECORDS_PER_UNIT;
 
 /**
  * The fold-purity table (see runFold): every operation throws the fold error
@@ -1518,9 +1518,9 @@ const POISON: Engine = {
 	activeIsComputed: foldPoisonOp as never,
 };
 
-// Arena capacity: 3x initialRecords shared records, budgeted as
+// RecordGeom capacity: 3x initialRecords shared records, budgeted as
 // initialRecords node records + 2x initialRecords link records in one arena.
-let E: Engine = createEngine(initialRecords * Arena.RECORDS_PER_UNIT);
+let E: Engine = createEngine(initialRecords * RecordGeom.RECORDS_PER_UNIT);
 
 // ---- the host seams -------------------------------------------------------------
 // ONE CORE: there is exactly one engine and one write/read path. The
@@ -1636,8 +1636,8 @@ export function __kernelComputedRead(c: Computed<unknown>): unknown {
  * must clear all three, or freed records pin dead values/closures for the
  * arena's life; tests/leak-audit.spec.ts probes exactly that. Read-only. */
 export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: unknown; fn: Function | undefined } {
-	const v: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
-	return { value: values[v], aux: values[v + Arena.AUX_VALUE_OFFSET], fn: fns[id >> Arena.ID_TO_FN_SHIFT] };
+	const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
+	return { value: values[v], aux: values[v + RecordGeom.AUX_VALUE_OFFSET], fn: fns[id >> RecordGeom.ID_TO_FN_SHIFT] };
 }
 
 /**
@@ -1683,7 +1683,7 @@ export function __hostMarkComputedOwned(c: Computed<unknown>): void {
  * same fn the kernel would have run. @internal
  */
 export function __hostWrapComputedFn(id: NodeId, wrap: (inner: (ctx: unknown) => unknown) => (ctx: unknown) => unknown): void {
-	fns[id >> Arena.ID_TO_FN_SHIFT] = wrap(fns[id >> Arena.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown);
+	fns[id >> RecordGeom.ID_TO_FN_SHIFT] = wrap(fns[id >> RecordGeom.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown);
 }
 
 function maybeBoundary(): void {
@@ -1703,7 +1703,7 @@ function boundaryWork(): void {
 	if (growPending) {
 		growPending = false;
 		let records = E.records;
-		while (records < desiredRecords || recNext > Math.min((records * Arena.STRIDE) >> Arena.HALF_ARENA_SHIFT, (records - Arena.REC_SLACK) * Arena.STRIDE)) {
+		while (records < desiredRecords || recNext > Math.min((records * RecordGeom.STRIDE) >> RecordGeom.HALF_ARENA_SHIFT, (records - RecordGeom.REC_SLACK) * RecordGeom.STRIDE)) {
 			records *= 2;
 		}
 		if (records !== E.records) {
@@ -1716,7 +1716,7 @@ function flush(): void {
 	// Boundary-lite: growth/reclamation only BEFORE the flush loop, not between
 	// effects. Safe because (a) all user code during flush runs at
 	// enterDepth >= 1, so E cannot be swapped mid-loop (the `engine` hoist is
-	// sound), and (b) the watermark guarantees >= Arena.REC_SLACK (1280) free records
+	// sound), and (b) the watermark guarantees >= RecordGeom.REC_SLACK (1280) free records
 	// at flush start while cascade re-runs re-track through the link() fast
 	// path / free lists (net new records per flush audited at ~tens across the
 	// conformance suite and benchmark workloads; a pathological cascade that
@@ -1898,7 +1898,7 @@ function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | 
 	// values.) Policy equality
 	// against the newest (pending) value here; the kernel's own identity
 	// compare covers the default.
-	if (isEqual !== undefined && isEqual(values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET], value)) {
+	if (isEqual !== undefined && isEqual(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET], value)) {
 		return;
 	}
 	maybeBoundary();
@@ -1957,7 +1957,7 @@ function ctxPrevious(): unknown {
 	if ((E.buffer()[c + NodeField.FLAGS]! & (NodeFlag.K_COMPUTED | NodeFlag.HAS_BOX)) !== NodeFlag.K_COMPUTED) {
 		return undefined;
 	}
-	return values[c >> Arena.ID_TO_VALUE_SHIFT];
+	return values[c >> RecordGeom.ID_TO_VALUE_SHIFT];
 }
 
 /**
@@ -2101,7 +2101,7 @@ export function __ctxUse(
  */
 function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | undefined): unknown {
 	const c = activeSub;
-	const owner = c !== 0 ? values[(c >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] : undefined;
+	const owner = c !== 0 ? values[(c >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] : undefined;
 	if (!(owner instanceof Computed)) {
 		throw new Error('cosignal: ctx.use may only be called during a computed evaluation.');
 	}
@@ -2120,7 +2120,7 @@ function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | un
  * listener-stable.
  */
 function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
-	const v: ValueIndex = c >> Arena.ID_TO_VALUE_SHIFT;
+	const v: ValueIndex = c >> RecordGeom.ID_TO_VALUE_SHIFT;
 	if (e instanceof SuspendedRead) {
 		const t = e.thenable as InstrumentedThenable;
 		values[v] = t;
@@ -2144,7 +2144,7 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
 	const onSettle = (): void => {
 		if (
 			(E.buffer()[c + NodeField.FLAGS]! & NodeFlag.BOX_SUSPENDED) === 0
-			|| values[c >> Arena.ID_TO_VALUE_SHIFT] !== t
+			|| values[c >> RecordGeom.ID_TO_VALUE_SHIFT] !== t
 		) {
 			return;
 		}
@@ -2178,7 +2178,7 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
  * this synchronous frame.
  */
 function boxedRead(c: NodeId, flags: NodeFlags): unknown {
-	const v: ValueIndex = c >> Arena.ID_TO_VALUE_SHIFT;
+	const v: ValueIndex = c >> RecordGeom.ID_TO_VALUE_SHIFT;
 	if ((flags & NodeFlag.BOX_SUSPENDED) === 0) {
 		throw values[v];
 	}
@@ -2340,7 +2340,7 @@ export class Atom<T> {
 			return;
 		}
 		const id = this._id;
-		const next = runFold(() => fn(values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] as T));
+		const next = runFold(() => fn(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] as T));
 		writeAtom(id, this._isEqual, next);
 	}
 }
@@ -2400,15 +2400,15 @@ export class Computed<T> {
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);
 		this._id = id;
 		// D4: the aux value slot carries the owning instance (policy state).
-		values[(id >> Arena.ID_TO_VALUE_SHIFT) + Arena.AUX_VALUE_OFFSET] = this;
+		values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] = this;
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
 			// The wrapper runs inside the evaluation, where the eval-start
 			// rewrite preserved the exceptional bits — HAS_BOX set means `prev`
 			// is a residual error/thenable payload, not a comparable value.
-			const iv: ValueIndex = id >> Arena.ID_TO_VALUE_SHIFT;
-			fns[id >> Arena.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
+			const iv: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
+			fns[id >> RecordGeom.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 				const prev = values[iv];
 				const next = (fn as (ctx: unknown) => unknown)(ctxArg);
 				if (prev === undefined || (E.buffer()[id + NodeField.FLAGS]! & NodeFlag.HAS_BOX) !== 0) {
@@ -2544,7 +2544,7 @@ export function configure(options: ConfigureOptions): void {
 		if (!Number.isFinite(n) || n < MIN_INITIAL_RECORDS) {
 			throw new Error(`cosignal: configure({ initialRecords }) must be a number >= ${MIN_INITIAL_RECORDS}.`);
 		}
-		const target = Math.ceil(n) * Arena.RECORDS_PER_UNIT;
+		const target = Math.ceil(n) * RecordGeom.RECORDS_PER_UNIT;
 		if (target > desiredRecords) {
 			desiredRecords = target;
 		}

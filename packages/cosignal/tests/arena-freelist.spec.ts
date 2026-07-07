@@ -1,15 +1,15 @@
 /**
- * Shadow-arena twin of the kernel link free-list discipline (dalien port
- * study row 2, second instance): concurrent.ts shadow arenas must thread
- * `a.linkFree` through a genuinely spare link field (L_VER — freed links
- * never serve a version), never through L_NEXT_DEP, because aCheckDirty
- * reads L_NEXT_DEP off links that a mid-walk purge (aPurgeDeps epilogues,
- * aUnlink's unwatched-computed cascade, shadowFor's dead-tenancy purge) has
+ * World-arena twin of the kernel link free-list discipline (dalien port
+ * study row 2, second instance): concurrent.ts world arenas must thread
+ * `a.linkFree` through a genuinely spare link field (VERSION — freed links
+ * never serve a version), never through NEXT_DEP, because arenaCheckDirty
+ * reads NEXT_DEP off links that a mid-walk purge (arenaPurgeDeps epilogues,
+ * arenaUnlink's unwatched-computed cascade, shadowFor's dead-tenancy purge) has
  * already freed — those stale pointers must keep naming former neighbors,
  * never the free list.
  *
  * Test 1 pins the field discipline directly (mutation-style: fails when the
- * free list threads through L_NEXT_DEP). Test 2 is the behavioral companion:
+ * free list threads through NEXT_DEP). Test 2 is the behavioral companion:
  * the mid-walk-free schedule runs end-to-end with the S-A divergence check
  * armed (arena-served ≡ memo-served after every public operation).
  */
@@ -38,8 +38,8 @@ function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 	b.retire(t.id);
 }
 
-describe('shadow-arena link free list threads through a spare field (row 2 twin)', () => {
-	it('freed links keep L_NEXT_DEP naming former neighbors — never the free list', () => {
+describe('world-arena link free list threads through a spare field (row 2 twin)', () => {
+	it('freed links keep NEXT_DEP naming former neighbors — never the free list', () => {
 		// Checker deliberately DISARMED: the armed epilogue refolds every
 		// dirty shadow, re-allocating the freed records this test inspects.
 		const b = bridge(false);
@@ -69,12 +69,12 @@ describe('shadow-arena link free list threads through a spare field (row 2 twin)
 		expect(lVp).not.toBe(0);
 		expect(lSv).not.toBe(0);
 
-		// Tear the spare cone: parent2 drops spareC → aPurgeDeps frees
+		// Tear the spare cone: parent2 drops spareC → arenaPurgeDeps frees
 		// (spareC→parent2); the unwatched-computed cascade frees
 		// (spareAtom→spareC). The free list is now non-empty.
 		commitWrite(b, gate2, 1);
 		// (spareAtom→spareC) was spareC's ONLY dep: former nextDep = 0. With
-		// the free list threaded through L_NEXT_DEP this reads the link freed
+		// the free list threaded through NEXT_DEP this reads the link freed
 		// just before it instead.
 		expect(b.__arenaLinkNextDepForTest('R', lAsp)).toBe(0);
 
@@ -103,16 +103,16 @@ describe('shadow-arena link free list threads through a spare field (row 2 twin)
 		expect(b.committedValue(parent, 'R')).toBe(11);
 	});
 
-	it('mid-walk dep drop under aCheckDirty (the #203-analog schedule) stays lockstep with the check armed', () => {
+	it('mid-walk dep drop under arenaCheckDirty (the #203-analog schedule) stays lockstep with the check armed', () => {
 		// Armed throughout: every public op's epilogue serves every shadow
-		// FROM THE ARENA (aCheckDirty walks included) and compares against
+		// FROM THE ARENA (arenaCheckDirty walks included) and compares against
 		// the memo-served value; the structural validator runs first.
 		const b = bridge(true);
 		const s = b.atom('s', 0);
 		const s3 = b.atom('s3', 0);
 		let phase2 = false;
-		// m1 exists to be DROPPED mid-walk: c0's refold under aCheckDirty's
-		// unwind stops reading it; aPurgeDeps frees (m1→c0) and the
+		// m1 exists to be DROPPED mid-walk: c0's refold under arenaCheckDirty's
+		// unwind stops reading it; arenaPurgeDeps frees (m1→c0) and the
 		// unwatched cascade frees (s3→m1) while the walk holds cursors.
 		const m1 = b.computed('m1', (read) => {
 			read(s3);
@@ -138,7 +138,7 @@ describe('shadow-arena link free list threads through a spare field (row 2 twin)
 		commitWrite(b, gateP, 1);
 
 		// The schedule: flip the phase, then write s. The armed epilogue's
-		// serve of `top` runs aCheckDirty over live cursors while c0's
+		// serve of `top` runs arenaCheckDirty over live cursors while c0's
 		// refold (in the unwind) drops m1 — links freed mid-walk. Must not
 		// crash, must not diverge, must not spuriously refold beyond the
 		// cone (the armed check + validator police it at every boundary).
