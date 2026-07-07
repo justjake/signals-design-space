@@ -1,10 +1,11 @@
 # The Great Refactor — one always-concurrent engine, composed mechanisms
 
-STATUS: REVISION 2, for re-review. Revision 1 was reviewed adversarially by
-codex (not-ready: 7 blockers, 4 majors) and an independent max-effort reviewer
-(another-pass: 2 blockers, 6 majors); every finding is resolved in this text,
-and the owner ruled on the six items that needed him (2026-07-07, §1a). No
-code moves until the re-review round's findings are discussed with the owner.
+STATUS: REVISION 3, for the verification pass. Round 1 (codex 7 blockers +
+4 majors; independent reviewer 2 blockers + 6 majors) is fully resolved and
+was verified resolved by round 2. Round 2 (codex not-ready; independent
+another-pass) converged on plan-text items — all resolved in this text; no
+new owner rulings were needed beyond §1a. No code moves until the
+verification pass's findings are discussed with the owner.
 
 ## 1. Mandate (owner rulings, 2026-07-07)
 
@@ -24,8 +25,10 @@ code moves until the re-review round's findings are discussed with the owner.
   `BridgeEvent`→**TraceEvent** with the packed view renamed **TraceRecord**
   (both owned by trace.ts, beside the decoder);
   **BANNED WORDS: "plane", "mint/minting/minted"** (use create/created;
-  `mintSeq`→`nextSeq`, the fork's `getOrMintBatchToken`→
-  `getOrCreateBatchToken`).
+  `mintSeq`→`nextSeq`); "token" dies in the FORK too (vendor is ours):
+  `getOrMintBatchToken`→`getOrCreateBatchId`, `slot.token`→`slot.batchId`,
+  and the registry's prose — the old names appear in this plan only inside
+  rename instructions.
 - Files: main-type modules are `MainType.ts`; mechanism modules lowercase.
 - vendor/react is unprotected; evergreen; protocol v2 approved (§3.4).
 
@@ -44,10 +47,11 @@ R-3 Effect writes observed during the eager apply CLASSIFY NORMALLY
     recording — a latent bug (`bridgeApplying` suppression, reproduced by
     review); the merge fixes it. The model's core effects gain a write op so
     the corpus referees the fixed semantics.
-R-4 Column density: the graph stores a NODE ORDINAL in each node record's
-    memory at allocation (a field, written once — an internal packing
-    detail, never an identity, never a map). Engine columns index by
-    ordinal; identity remains the kernel record id alone.
+R-4 Column density: the graph stores a NODE INDEX (`nodeIndex` — renamed
+    from revision 2's "ordinal", which collides with the kernel's existing
+    record-ordinal vocabulary) in each node record's memory at allocation —
+    an internal packing detail, never an identity, never a map. Engine
+    columns index by nodeIndex; identity remains the kernel record id.
 R-5 `openBatch` with no driver attached: devChecks throws; the documented
     contract is "hosts that open batches must retire them" (it is the
     host-agnostic embedding surface).
@@ -77,7 +81,7 @@ R-6 `__resetEngineForTest` is a watermark-bounded scrub (the arena-release
 
 | File | Main export / contents | State it owns |
 |---|---|---|
-| `graph.ts` | packed dependency graph: NodeField/LinkField/NodeFlag/RecordGeom enums (RecordGeom is the renamed kernel `Arena` geometry — frees the word), allocation (records carry the R-4 node ordinal), link/unlink, propagate/checkDirty family, update/notify/run/dispose, flush queue, growth/rebuild, `nextSeq` | `memory`, `watermark`, allocator heads, `values`/`fns` columns, walk scratch, `queued`, `cycle`, `activeSub`, `batchDepth` (the SYNCHRONOUS `batch()` effect-flush counter — kernel-native, unrelated to Batch.ts; review finding, now owned) |
+| `graph.ts` | packed dependency graph: NodeField/LinkField/NodeFlag/RecordGeom enums (RecordGeom is the renamed kernel `Arena` geometry — frees the word), allocation (records carry the R-4 nodeIndex), link/unlink, propagate/checkDirty family, update/notify/run/dispose, flush queue, growth/rebuild, `nextSeq` | `memory`, `watermark`, allocator heads, `values`/`fns` columns, walk scratch, `queued`, `cycle`, `activeSub`, `batchDepth` (the SYNCHRONOUS `batch()` effect-flush counter — kernel-native, unrelated to Batch.ts; review finding, now owned) |
 | `WriteLog.ts` | `WriteLog`, `WriteLogEntry`, compaction, rebase | per-atom logs, `uncompactedAtoms`, compaction cursors |
 | `Batch.ts` | `Batch`, `BatchId`, `BatchSlot`/`BatchSlotSet` (internal), open/retire/settle lifecycle, slot interning + reclamation, committed-bits rebuild | `idToBatch`, slot table, live count, ambient batch |
 | `World.ts` | `World`, `visibleAt`, `foldAtom`, `applyOp`, `eqAtom` (R-2 semantics), `evaluate`, read routing | active world, routing state, eval marks/depth, fold-callback guard |
@@ -97,7 +101,7 @@ R-6 `__resetEngineForTest` is a watermark-bounded scrub (the arena-release
 Const-enum discipline: each module owns its hot enums same-file. Known
 cross-module warm sites are enumerated and bench-checked: `applyOp`'s
 WriteKind comparison in World.ts (falls back to the documented same-file twin
-pattern if the gate objects); column indexing uses the R-4 ordinal (read from
+pattern if the gate objects); column indexing uses the R-4 nodeIndex (read from
 record memory), NOT a cross-module RecordGeom shift — the shift appears only
 inside graph.ts and the checker seam's data handoff.
 
@@ -108,9 +112,17 @@ NOT bare module `let`s — hot functions capture `memory` as a closure constant
 inside a rebuilt op table whose unique hidden class is measured worth 15-25%.
 The mechanism modules keep exactly that pattern: each exports a factory that
 closes over its state and returns its op table; engine.ts composes the
-factories and holds the swap point (growth rebuild and `__resetEngineForTest`
-re-run factories and re-link tables — the existing `createEngine`/carry
-mechanism, generalized). Cross-module reads are table calls; cross-module
+factories and holds the swap point. REBUILD SCOPE (round-2 correction — the
+two rebuild events differ): GROWTH re-runs the GRAPH factory ONLY (the
+existing `createEngine`/carry mechanism: memory doubles, records copy,
+ids/GEN stable — verified not a resurrection axis); growth fires at
+operation boundaries INSIDE open episodes, so no other mechanism's state may
+evaporate — durable cross-rebuild scalars stay module-level exactly as the
+kernel keeps them today, and every cross-module reference to the graph table
+reads through the one mutable table slot the rebuild re-links, never a
+captured stale table. RESET (`__resetEngineForTest`, R-6) re-runs ALL
+factories, behind preconditions (§10 S5). Cross-module reads are table
+calls; cross-module
 MUTATION of another mechanism's clocks/state goes through table functions,
 never exported `let`s (review finding: ESM live bindings are read-only from
 importers; also avoids init-order/TDZ hazards, which the composition root
@@ -142,19 +154,42 @@ kernel-current, and the pre-adoption-era semantics with its scar tests
 Batch context is no longer pulled per write: with protocol v2 the classified
 write reads the fork's current batch id directly (one foreign call, no map).
 
+THE DRIVER CONTRACT (round-2 additions):
+- Single driver: a second `attachDriver` throws (replacing the dying
+  `publiclyRegistered` once-latch as the enforcement).
+- `allocateBatchId` envelope: ALLOCATION-ONLY — increments a counter and
+  returns; no operation epilogue, no drains, no engine mutation beyond the
+  counter. It must be legal at `opDepth > 0`, inside open render frames,
+  and mid-commit (the fork demonstrably creates batch identity in all three
+  positions), and ids retire out of order (≥2 outstanding is fork-pinned).
+- BatchIds are MONOTONIC ACROSS RESETS (the counter survives
+  `__resetEngineForTest`): the fork's lane table can legally hold an id
+  across an engine reset, and monotonicity guarantees a stale id can never
+  collide with a post-reset batch.
+
 ### 3.4 Protocol v2 (fork change; design corrected per review)
 
-The fork's batch registry keeps a stable per-batch Slot on every creation
-path (verified: render-phase, transition, discrete/sync all funnel through
-one creation site). v2 changes:
+The fork's batch registry keeps ONE PERSISTENT SLOT PER LANE; batch identity
+is created when a write finds the slot's batch field empty (retirement
+clears the field and keeps the Slot; all creation paths — render-phase,
+transition, discrete/sync — funnel through the one creation site). v2
+changes:
 
-- At Slot creation the fork calls the driver's REGISTERED ALLOCATOR
-  (`allocateBatchId(deferred)`) — the driver→React id-allocation edge the
-  revision-1 sketch lacked (the listener bus is void broadcast and cannot
-  return values; the allocator is a dedicated registration, not a listener).
-- `slot.token` stores the returned BatchId; every protocol surface
-  (`getCurrentWriteBatch`, `runInBatch`, retirement + commit reports) speaks
-  it. `getOrMintBatchToken` → `getOrCreateBatchToken`.
+- At BATCH-IDENTITY creation (the empty-slot-field arm — round-2
+  correction: NOT "Slot creation", which happens once per lane) the fork
+  calls the driver's REGISTERED ALLOCATOR (`allocateBatchId(deferred)`) —
+  the driver→React id-allocation edge the revision-1 sketch lacked (the
+  listener bus is void broadcast and cannot return values; the allocator is
+  a dedicated registration, not a listener).
+- `slot.batchId` (the field currently named `slot.token`) stores the
+  returned BatchId; every protocol surface (`getCurrentWriteBatch`,
+  `runInBatch`, retirement + commit reports) speaks it.
+  `getOrMintBatchToken` → `getOrCreateBatchId`; the registry's own
+  vocabulary renames with it (S3 rewrites these lines anyway).
+- Test seam: the fork gains a protocol reset hook that clears every lane's
+  batch field (used by `__resetEngineForTest`'s precondition, never
+  production); with monotonic BatchIds this is belt-and-suspenders against
+  stale lane entries crossing a reset.
 - The deferred flag becomes a STORED FIELD on the Slot. The three load-
   bearing low-bit reads convert (enumerated; review finding): the fork's
   run-in-batch scheduling branch, the fork's async-action park decision at
@@ -193,11 +228,25 @@ Computed.state  → activeSub ? graph.computedRead : routingActive ? routedCompu
 ## 5. One id space
 
 The kernel record id is THE `NodeId`, package-wide (`KernelId` merges into
-it). Engine columns index by the R-4 NODE ORDINAL stored in record memory —
-dense in node count, immune to the shared node/link allocator's holes
-(review finding: link records dominate the id space ~3:1; ordinal indexing
-keeps columns packed-SMI where record-id indexing would go holey/dictionary
-on hot read paths, multiplied per arena).
+it). Engine columns index by the R-4 NODE INDEX (`nodeIndex`) stored in the
+node record's spare field (field 7 — verified spare; the shared stride is
+untouched, so links pay nothing) — dense in node count, immune to the shared
+node/link allocator's holes (review finding: link records dominate the id
+space ~3:1; nodeIndex indexing keeps columns packed-SMI where record-id
+indexing would go holey/dictionary on hot read paths, multiplied per arena).
+
+NODE-INDEX LIFECYCLE (round-2 blocker, resolved): the nodeIndex RECYCLES
+with the record slot — it persists in field 7 across node-slot reuse (node
+free lists thread through a different field, so the value survives free)
+and a reused record inherits its slot's index. Every nodeIndex-keyed column
+is therefore SCRUBBED AT THE RECORD-FREE BOUNDARY: one shared free hook that
+each column-owning module registers its clear into (use-cache, observation
+refs, watcher-index rows, walk stamps, per-arena node lookups). This is what
+bounds columns by node count (no fresh-index-forever growth under
+create/drop churn) and prevents a new tenant being served the previous
+tenant's rows. Consumer cost (round-2): node objects cache their nodeIndex;
+raw id-driven walks read it from record memory — one extra Int32 load per
+visited node on hot walks, priced by the bench trio.
 
 Deleted: the dense id allocator (`nextNode`), `nodeGen`, `byKernelId`,
 `indexNode`'s allocation half, `_hostStamp`.
@@ -211,7 +260,8 @@ Proof obligations (S2 gates, tests first):
   (dispose → id reuse → late commit) becomes a pinned regression test.
 - P2 column shape: columns stay packed (elements-kind probes, the
   monomorphic-array spot-check methodology) and bounded by node count via
-  the ordinal; per-arena `nodeToShadow` re-keys by ordinal.
+  nodeIndex recycling + the free-hook scrub; per-arena `nodeToShadow`
+  re-keys by nodeIndex.
 - P3 the GEN test seam: S2 introduces the kernel-GEN referee reads the old
   `nodeGen` seams provided (`__bumpNodeGenForTest` equivalent against
   kernel GEN — sequenced WITH S2, not deleted-then-reintroduced).
@@ -235,7 +285,7 @@ INLINE (single caller or trivial single-expression, per the structure map):
 `makeKernelGetter`, `makeAdoptedKernelGetter`, `makeCtxWorldFn`,
 `routedRead`, `boundaryWork`, `throwFold`, `scheduleLifecycleFlush`,
 `attachSettle`, `consumerCount`, `arenaQuiesceSweep`'s wrapper layer, the
-trivial delegate methods (`token`, `nodeById`, `pass`, `quiescent`,
+trivial delegate methods (the batch/node/render lookups, `quiescent`,
 `oneAtomBuf`), and every `__host*`/`__kernel*` seam function that collapses
 into a same-module call site at the merge.
 
@@ -330,34 +380,71 @@ The audit's full fix list, mapped:
   nextSeq + mint sweep, map convention, misc). Class renames skipped
   (the class dies in S5).
 - **S2 one id space** (monolith) — P1(both halves)/P2/P3 tests first, the
-  merge of id spaces, the ordinal column re-key, AND the harness
+  merge of id spaces, the nodeIndex column re-key, AND the harness
   co-evolution IN-STAGE (review blocker): the twin's id-equality assertions
-  become ordinal/name-keyed, the checker and decode layers audited for
+  become nodeIndex/name-keyed, the checker and decode layers audited for
   id-shape assumptions, leak probes + bench trio + elements-kind probes.
 - **S3 protocol v2** (fork + driver) — the allocator registration, Slot
-  field, the three converted flag sites, `getOrCreateBatchToken`, mapping
+  field, the three converted flag sites, `getOrCreateBatchId` + the
+  registry vocabulary rename, mapping
   tables deleted, fork tests updated.
-- **S4 extraction** — grouped by the REAL dependency structure (review
-  finding: worlds/arenas/settlement/retirement are strongly connected):
-  E1 errors + deliver's queue; E2 observation; E3 WriteLog; E4 Batch;
-  E5 the SCC group {World, WorldArena, settlement} extracted together as
-  factories with one internal table; E6 Subscription; E7 RenderPass (+ the
-  retirement orchestration's cross-module mutation converted to table
-  calls); E8 graph.ts + suspense.ts + lifecycle.ts out of index.ts;
-  E9 engine.ts assembly. Pure moves + in-scope inlining; each E gate-green.
-- **S5 the merge** — hooks die, §4 shapes land, attachDriver, adoption
-  family deleted, R-2 equality unification (pinned tests), R-3 effect-write
-  classification (corpus vocabulary + coverage), the class dissolves,
-  `__resetEngineForTest` (R-6: watermark scrub + epoch), THE ORACLE EDIT
-  LIST (R-1 license): delete model `registered`/register-op/guards/quiet
-  clause; add writing-core-effect ops; equality order/count alignment.
+- **S4 extraction** — grouped by the REAL dependency structure, with a
+  RESIDENCY RULE for the orchestrators (round-2: retirement fans across six
+  groups and render-commit calls retirement back — no ordering makes those
+  pure moves): E1 errors + deliver's queue; E2 observation; E3 WriteLog
+  MECHANISM (compaction's batch-state edge — the live-entry decrement and
+  reclaim check — stays resident); E4 Batch MECHANISM only (ids, slots,
+  interning, committed-bits; retirement stays resident); E5 the SCC group
+  {World, WorldArena, settlement} as factories with one internal table;
+  E6 Subscription; E7 THE ORCHESTRATION CONVERSION: retirement, render
+  commit/end, and the compaction→batch edge move together, with their
+  cross-module mutation converted to table calls — the one stage whose
+  commits are rewires rather than pure moves, reviewed as such;
+  E8 graph.ts + suspense.ts + lifecycle.ts out of index.ts; E9 engine.ts
+  assembly. Each E gate-green.
+- **S5 the merge** — hooks die, §4 shapes land, attachDriver (with the
+  §3.3 contract), adoption family deleted, the class dissolves.
+  R-2 EQUALITY, full inventory (round-2: the flip is not quiet-only):
+  engine sites — quiet fold, writeInner's drop check AND eager apply,
+  compactAtom — align to kernel order; model sites — write path AND
+  foldAtom, shadowFoldAtom, compactAtom — align in the same commit (a
+  shadow-fold lag breaks the retention invariant for asymmetric
+  comparators). The "once" contract is scoped to THE ACCEPTANCE DECISION
+  (folds and compaction re-invoke per entry by design — documented).
+  Pinned matrix: {standalone, quiet, recorded} × {set, update, dispatch} ×
+  {empty, nonempty log}, order pinned by an asymmetric comparator, count
+  by a counting comparator. The corpus gains a CUSTOM-EQUALS topology
+  member (asymmetric + counting) — without it R-2 is lockstep-invisible
+  (today zero oracle atoms carry custom equality).
+  R-3 EFFECT WRITES, three obligations beyond vocabulary (round-2): the
+  new schedule band preserves historical seed streams (reuse a band /
+  discarded draws, the retire-flag precedent); writing core effects are
+  convergent by construction (the model's flush re-enters write — no
+  guard exists, so op generation must not create infinite cascades);
+  classification is refereed directly (snapshot + event placement).
+  `__resetEngineForTest` (R-6): watermark scrub + engine epoch + PRE-
+  CONDITION ASSERTS (quiescent; batchDepth/opDepth/enterDepth === 0 — a
+  test that threw mid-batch must fail loudly here, not corrupt the next),
+  and the scrub checklist (round-2 additions in CAPS): kernel allocator
+  heads and counters, queued/pendingFree, VALUES/FNS SIDE COLUMNS (stale
+  ctx.previous and wrapper closures otherwise survive id reuse), walk
+  scratch, configure state incl. DESIREDRECORDS, forbidWrites, lifecycle
+  map + queue + its SCHEDULED FLUSH MICROTASK, THE SETTLE-DRAIN MICROTASK,
+  settleTap, THE THENABLE LISTENERS' UNHANDLED-RETHROW MICROTASK (inert
+  only once memory AND values are both scrubbed — asserted), PROBES
+  COUNTERS, trace attachment, armed checker state, every engine field,
+  and reclamation's registry/queues (per its plan §2). THE ORACLE EDIT
+  LIST (R-1 license, complete): delete model registered/register-guards/
+  quiet-clause; equality alignment at the three model sites above; add
+  writing-core-effect ops + the custom-equals topology.
   Test-scope workstream (review-expanded): TwinDriver + oracle-adapter +
   react harness + one-core's zero-cost probes and once-per-process pins
   (die with their concepts, replaced by driver-attach pins) + the
   pre-registration scar (dies with the era) + per-instance options become
   reset parameters (devChecks, arenaInitInts) + the ~15 direct-construction
-  spec files + the harness WeakMap ordinal keying and the debounced-
-  unsubscribe cross-reset microtask (guard by engine epoch).
+  spec files + the harness WeakMap keying and ALL cross-reset microtasks
+  (debounced unsubscribe, settle drain, lifecycle flush — engine-epoch
+  guarded).
 - **S6 comments + guide** — headers, the index.ts introduction, READMEs,
   graphviz glossary, banned-word grep gates.
 - **S7 final** — bytecode strategy REPLACED (review finding: name-keyed
@@ -380,18 +467,17 @@ co-evolutions throughout; the R-1 semantic list in S5 only. Bytecode: unique
 budgeted names + collision assertion (§10 S7); rows deleted with inlined
 functions, each justified.
 
-## 12. Standing risks for the re-review
+## 12. Standing risks for the verification pass
 
-1. The E5 SCC-group extraction — is the {World, WorldArena, settlement}
-   grouping sufficient, or does retirement (E7) belong inside it?
-2. R-4 ordinal: allocation-site cost (one extra memory write per node
-   record) and any consumer the ordinal misses.
-3. The S5 oracle edit list — complete? (Attack: any model semantics beyond
-   registration/equality/effect-writes that the merge implicitly changes.)
-4. The reset scrub — state it would miss (fable's checklist is folded in:
-   kernel lets, configure leakage, lifecycle queue + its scheduled
-   microtask, settleTap, trace attachment, armed epilogue checks; find
-   more).
-5. Protocol v2's allocator registration — reentrancy (allocator called
-   during a React render? during commit?), multiple-driver guard.
-6. R-2/R-3 pinned-test sufficiency for the two sanctioned behavior changes.
+1. The nodeIndex lifecycle — a column the free-hook scrub misses, or a
+   consumer that reads a stale cached nodeIndex off a node object after
+   reuse.
+2. The E7 orchestration conversion — transient seams during its rewires
+   that a gate can't see (ordering invariants across the retirement fan).
+3. The R-2 matrix and the custom-equals topology — sufficient to referee
+   order AND count at every aligned site?
+4. The R-6 precondition + scrub checklist — anything still missing.
+5. Protocol v2's allocator envelope — a fork call position outside the
+   documented three (render, commit, settlement listeners).
+6. The rebuild-scope split (growth = graph only) — any mechanism state
+   that growth's mid-episode timing can still invalidate.
