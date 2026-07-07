@@ -31,7 +31,7 @@ import {
 } from '../../cosignal-oracle/src/model.js';
 import {
 	__newBridgeForTest,
-	BridgeScheduleError,
+	ScheduleError as EScheduleError,
 	type AnyNode as ENode,
 	type AtomNode as EAtomNode,
 	type CosignalBridge,
@@ -59,7 +59,7 @@ type Thrown = { threw: false; value: unknown } | { threw: true; error: unknown }
  * eagerly refreshed union closure — the same union-conservative
  * over-approximation as deliveries. The "at least what correctness
  * requires" floor for correctives is enforced in-engine: an internal audit
- * throws BridgeInvariantViolation whenever divergence hidden by the mount
+ * throws InvariantViolation whenever divergence hidden by the mount
  * fast-out is not exactly covered by a corrective.
  */
 function isDeliveryish(e: ModelEvent): boolean {
@@ -245,7 +245,7 @@ export class TwinDriver {
 		}
 		if (m.threw && e.threw) {
 			const mSched = (m.error as object) instanceof ScheduleError;
-			const eSched = (e.error as object) instanceof BridgeScheduleError;
+			const eSched = (e.error as object) instanceof EScheduleError;
 			if (mSched !== eSched) {
 				expect.fail(`twin ${label}: error class diverged (model ${String(m.error)}, engine ${String(e.error)})`);
 			}

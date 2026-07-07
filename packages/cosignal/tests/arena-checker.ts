@@ -18,7 +18,7 @@
  * The newest world is pinned separately (K0 parity in the twin's verify).
  */
 import {
-	BridgeInvariantViolation,
+	InvariantViolation,
 	type AnyNode,
 	type ArenaCheckerInternals,
 	type CosignalBridge,
@@ -110,13 +110,13 @@ function runCheck(st: CheckerState): void {
 						mThrew = err;
 					}
 					if (aDidThrow !== mDidThrow) {
-						throw new BridgeInvariantViolation(
+						throw new InvariantViolation(
 							`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena ${aDidThrow ? `threw ${String(aThrew)}` : `served ${String(aVal!)}`} but fold-truth ${mDidThrow ? `threw ${String(mThrew)}` : `served ${String(mVal!)}`}`,
 						);
 					}
 					if (aDidThrow) {
 						if (String(aThrew) !== String(mThrew)) {
-							throw new BridgeInvariantViolation(`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but fold-truth threw ${String(mThrew)}`);
+							throw new InvariantViolation(`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but fold-truth threw ${String(mThrew)}`);
 						}
 					} else {
 						// §4.5.3 (S-C): a custom-equality computed's arena slot keeps
@@ -130,7 +130,7 @@ function runCheck(st: CheckerState): void {
 							? node.isEqual : undefined; // sentinels compare by identity (16d), never through user comparators
 						const same = ceq === undefined ? Object.is(aVal!, mVal!) : v.inCallback(() => ceq(aVal!, mVal!));
 						if (!same) {
-							throw new BridgeInvariantViolation(
+							throw new InvariantViolation(
 								`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
 							);
 						}
@@ -196,29 +196,29 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 	for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
 		const sh = a.nodeToShadow[nid] ?? 0;
 		if (sh === 0) continue;
-		if (memory[sh + ArenaField.NODE] !== nid) throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
+		if (memory[sh + ArenaField.NODE] !== nid) throw new InvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
 		// A dead-GEN shadow is legal COLD residue (§4.5.3): the invariant is
 		// that it never SERVES — enforced at shadowFor (re-tenant on consult),
 		// which every serve/link path routes through. No assert here.
 		const flags = memory[sh + ArenaField.FLAGS]!;
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {
 			const slot = a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
-			if (slot === 0 || a.suspended[slot - 1] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`);
+			if (slot === 0 || a.suspended[slot - 1] !== sh) throw new InvariantViolation(`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`);
 			suspSeen++;
 		} else if ((a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0) {
-			throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} holds a suspended index without the bit`);
+			throw new InvariantViolation(`arena ${a.root}: shadow ${sh} holds a suspended index without the bit`);
 		}
 		if ((flags & ArenaFlag.DIRTY) !== 0 && !a.dirty.includes(sh)) {
-			throw new BridgeInvariantViolation(`arena ${a.root}: DIRTY shadow ${sh} missing from the dirty list`);
+			throw new InvariantViolation(`arena ${a.root}: DIRTY shadow ${sh} missing from the dirty list`);
 		}
 		// deps list symmetry
 		let cur = memory[sh + ArenaField.DEPS]!;
 		let prev = 0;
 		let steps = 0;
 		while (cur !== 0) {
-			if (++steps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: deps list of shadow ${sh} exceeds ${CAP} steps (cycle)`);
-			if (memory[cur + ArenaLinkField.SUB] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
-			if (memory[cur + ArenaLinkField.PREV_DEP] !== prev) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
+			if (++steps > CAP) throw new InvariantViolation(`arena ${a.root}: deps list of shadow ${sh} exceeds ${CAP} steps (cycle)`);
+			if (memory[cur + ArenaLinkField.SUB] !== sh) throw new InvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
+			if (memory[cur + ArenaLinkField.PREV_DEP] !== prev) throw new InvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
 			const dep = memory[cur + ArenaLinkField.DEP]!;
 			// Weak symmetry: the link must sit on its MODE's subs list —
 			// a weak-flagged link on the strong list (or vice versa) makes
@@ -227,17 +227,17 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 			let found = false;
 			let ssteps = 0;
 			while (s !== 0) {
-				if (++ssteps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: subs list of shadow ${dep} exceeds ${CAP} steps (cycle)`);
+				if (++ssteps > CAP) throw new InvariantViolation(`arena ${a.root}: subs list of shadow ${dep} exceeds ${CAP} steps (cycle)`);
 				if (s === cur) {
 					found = true;
 					break;
 				}
 				s = memory[s + ArenaLinkField.NEXT_SUB]!;
 			}
-			if (!found) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} missing from dep subs list (asymmetry)`);
+			if (!found) throw new InvariantViolation(`arena ${a.root}: link ${cur} missing from dep subs list (asymmetry)`);
 			prev = cur;
 			cur = memory[cur + ArenaLinkField.NEXT_DEP]!;
 		}
 	}
-	if (suspSeen !== a.suspended.length) throw new BridgeInvariantViolation(`arena ${a.root}: suspended list holds ${a.suspended.length} entries but ${suspSeen} shadows carry the bit`);
+	if (suspSeen !== a.suspended.length) throw new InvariantViolation(`arena ${a.root}: suspended list holds ${a.suspended.length} entries but ${suspSeen} shadows carry the bit`);
 }

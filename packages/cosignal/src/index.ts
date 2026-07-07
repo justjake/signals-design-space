@@ -2598,8 +2598,8 @@ export function configure(options: ConfigureOptions): void {
 export {
 	registerReactBridge,
 	CosignalBridge,
-	BridgeScheduleError,
-	BridgeInvariantViolation,
+	ScheduleError,
+	InvariantViolation,
 	// The reserved "no batch context" BatchId (0). The React bindings and the
 	// patched React build name the same sentinel — protocol v2 shares ONE
 	// batch-id space, so the sentinel is shared too.

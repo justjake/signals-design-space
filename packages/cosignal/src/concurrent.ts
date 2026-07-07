@@ -164,20 +164,17 @@
  *     never be skipped. The B1 read-before-pending pin is the tripwire.
  */
 
-import { Atom, Computed, CycleError, LinkField, NodeField, NodeFlag, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain, __setHostComputedRead, __setHostRead, __setHostWrite, __setRecordFreeHook, __setSettleTap, __HOST_MISS, type ComputedCtx, type WriteKind as KernelWriteKind } from './index.js';
+import { Atom, Computed, CycleError, LinkField, NodeField, NodeFlag, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __setHostComputedRead, __setHostRead, __setHostWrite, __setRecordFreeHook, __setSettleTap, __HOST_MISS, type ComputedCtx, type WriteKind as KernelWriteKind } from './index.js';
+import { InvariantViolation, ScheduleError } from './errors.js';
+import { probes } from './probes.js';
+import { createDeliver, type DeliverTable, type NotifyState } from './deliver.js';
+import { createObservation, type ObservationTable } from './observation.js';
+import { WriteLog, createCompaction, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
+import { BATCH_NONE, createBatch, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchTable } from './Batch.js';
 
-// ---- error carriers -------------------------------------------------------------
+// ---- error carriers (errors.ts; re-exported — they are public surface) -----------
 
-/**
- * An operation that is illegal in the engine's current state (a write into a
- * retired batch, a resume of a non-yielded render, …). Schedule drivers — the
- * React bindings and the test harnesses simulating them — treat it as "this
- * call must not happen here", never as data corruption.
- */
-export class BridgeScheduleError extends Error {}
-
-/** An engine self-check failed — always a bug; never catch this. */
-export class BridgeInvariantViolation extends Error {}
+export { InvariantViolation, ScheduleError } from './errors.js';
 
 // ---- bridge-surface types (structurally mirror the reference model's) ------------
 
@@ -195,14 +192,10 @@ export type NodeId = number;
 type NodeIndex = number;
 /** A kernel record's GEN field value: the id-tenancy stamp, bumped at free. */
 type Generation = number;
-export type BatchId = number;
-/** The reserved "no batch context" BatchId. Never allocated (batch ids start
- * at 1): `getCurrentWriteBatch() === BATCH_NONE` means no renderer provider
- * has registered, and a classified write carrying it has no batch to join.
- * The React fork names the same sentinel on its side (protocol v2 shares ONE
- * id space between the engine and React, so the sentinel must too). */
-export const BATCH_NONE: BatchId = 0;
-export type BatchSlot = number;
+// Batch identity, slots, and slot sets live in Batch.ts (the batch
+// MECHANISM module); re-exported here — they are bridge surface.
+export { BATCH_NONE } from './Batch.js';
+export type { Batch, BatchId, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
 export type RootId = string;
 export type RenderPassId = number;
 export type WatcherId = number;
@@ -214,35 +207,15 @@ export type Seq = number;
 export type Epoch = number;
 /** A root's commit generation (bumped at every per-root commit). */
 export type CommitGen = number;
-/** A 31-bit slot set: bit i = slot i (mask/included/committed/dedup words). */
-export type BatchSlotSet = number;
 /** Per-walk visited generation (walk termination without Set allocations). */
 type WalkGen = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
 
-/**
- * A log entry: one recorded write — {op, slot, seq} appended at the write,
- * retiredSeq stamped at the batch's retirement. Log entries denormalize their
- * slot at creation: slots are recycled identities, so visibility checks must read
- * the slot the write happened under, not the batch's current slot (which may
- * already be released); the batch id is carried for invariants and event
- * logs only. Log entries live int-packed in per-atom `WriteLog` columns ({kind,
- * slot, seq, retiredSeq, batch} parallel number columns + one unknown[]
- * payload side column); this materialized object shape — including the
- * object-shaped `op` (a write operation: set/update; a ReducerAtom dispatch
- * records as an update whose closure captures the reducer and the action) —
- * is the test/trace surface only (`WriteLog.materialize()`, trace `logEntry`
- * hook). The write path itself carries the (kind, payload) scalar pair end
- * to end and never builds it.
- */
-export type WriteLogEntry = {
-	op: { kind: 'set'; value: Value } | { kind: 'update'; fn: (prev: Value) => Value };
-	batch: BatchId;
-	slot: BatchSlot;
-	seq: Seq;
-	retiredSeq: Seq | undefined;
-};
+// The per-atom write log and its compaction mechanism live in WriteLog.ts;
+// re-exported here — the class and the entry shape are bridge surface.
+export { WriteLog } from './WriteLog.js';
+export type { WriteLogEntry } from './WriteLog.js';
 
 /** Write-kind tags: the packed log entry column AND the write surface's kind
  * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the
@@ -251,97 +224,14 @@ export type WriteLogEntry = {
  * declarations share the 0/1 encoding by construction, 0/1 literals are
  * assignable here so cross-file callers never name this type, and the
  * engine merge collapses them into one definition). Same-file const enum so
- * every esbuild-based toolchain inlines the codes as literals. */
+ * every esbuild-based toolchain inlines the codes as literals; exported
+ * TYPE-ONLY (WriteLog.ts types its column and deps with it — its one value
+ * comparison over there uses the shared 0/1 codes directly). */
 const enum WriteKind {
 	SET = 0,
 	UPDATE = 1,
 }
-
-/** Bounds the dead prefix a WriteLog carries before drop() rebases the arrays
- * (the rebase amortization threshold). */
-const WRITE_LOG_REBASE_THRESHOLD = 1024;
-
-/**
- * Int-packed log entry columns: recording a write is a few integer stores, not
- * an object allocation. Plain number arrays stay SMI-packed (V8's fast
- * small-integer array representation) and grow in place; the arrays
- * themselves are the pool — no per-entry objects ever exist on the hot
- * path.
- */
-export class WriteLog {
-	/** Live window: entries [start, n). Compaction advances `start`; the
-	 * arrays rebase (fresh packed slices) only when the dead prefix crosses
-	 * the amortization threshold — never a per-retirement memmove
-	 * (shrink-in-place cycling drops V8 arrays into dictionary mode, its
-	 * slow hash-map representation; measured at ~10µs per drop). */
-	start = 0;
-	n = 0;
-	kinds: WriteKind[] = [];
-	slots: BatchSlot[] = [];
-	seqs: Seq[] = [];
-	/** 0 = unretired (sequences start at 1). */
-	retired: Seq[] = [];
-	batches: BatchId[] = [];
-	payloads: unknown[] = [];
-
-	get length(): number {
-		return this.n - this.start;
-	}
-
-	push(kind: WriteKind, slot: BatchSlot, seq: Seq, batch: BatchId, payload: unknown): void {
-		probes.logEntries++; // One Core probe (referee surface)
-		this.kinds.push(kind);
-		this.slots.push(slot);
-		this.seqs.push(seq);
-		this.retired.push(0);
-		this.batches.push(batch);
-		this.payloads.push(payload);
-		this.n++;
-	}
-
-	opAt(i: number): WriteLogEntry['op'] {
-		const k = this.kinds[i]!;
-		if (k === WriteKind.SET) return { kind: 'set', value: this.payloads[i] };
-		return { kind: 'update', fn: this.payloads[i] as (prev: Value) => Value };
-	}
-
-	entryAt(i: number): WriteLogEntry {
-		const r = this.retired[i]!;
-		return { op: this.opAt(i), batch: this.batches[i]!, slot: this.slots[i]!, seq: this.seqs[i]!, retiredSeq: r === 0 ? undefined : r };
-	}
-
-	materialize(): WriteLogEntry[] {
-		const out: WriteLogEntry[] = [];
-		for (let i = this.start; i < this.n; i++) out.push(this.entryAt(i));
-		return out;
-	}
-
-	/** Drop the compacted prefix (advance the window; rebase amortized). */
-	drop(cut: number): void {
-		this.start += cut;
-		if (this.start >= WRITE_LOG_REBASE_THRESHOLD && this.start >= this.n - this.start) {
-			const from = this.start;
-			this.kinds = this.kinds.slice(from);
-			this.slots = this.slots.slice(from);
-			this.seqs = this.seqs.slice(from);
-			this.retired = this.retired.slice(from);
-			this.batches = this.batches.slice(from);
-			this.payloads = this.payloads.slice(from);
-			this.n -= from;
-			this.start = 0;
-		} else if (this.start === this.n) {
-			// Empty window: reset cheaply (length-0 keeps the packed kind).
-			this.kinds.length = 0;
-			this.slots.length = 0;
-			this.seqs.length = 0;
-			this.retired.length = 0;
-			this.batches.length = 0;
-			this.payloads.length = 0;
-			this.n = 0;
-			this.start = 0;
-		}
-	}
-}
+export type { WriteKind };
 
 export type Equals = (a: Value, b: Value) => boolean;
 
@@ -426,50 +316,8 @@ export type ComputedNode = {
 
 export type AnyNode = AtomNode | ComputedNode;
 
-export type Batch = {
-	id: BatchId;
-	action: boolean;
-	parked: boolean;
-	/** The React-side classification told to the driver's batch-id allocator
-	 * at creation (true = transition-like: renders don't block paint and the
-	 * batch commits later). A DRIVER-owned annotation stored on the shared
-	 * record so the driver needs no side table — the engine itself never
-	 * branches on it (scheduling stays React's). False for engine-created
-	 * batches (ambient, tests) that no allocator classified. */
-	deferred: boolean;
-	state: 'live' | 'retired';
-	slot: BatchSlot | undefined;
-	retiredSeq: Seq | undefined;
-	/** Sequence of this batch's last log entry (0 = none). The mount fixup's
-	 * fast-path clock check reads this per committing-render member batch,
-	 * because a batch whose first write landed mid-render has no slot in the
-	 * render's captured slot sets (see mountFixup). */
-	lastWriteSeq: Seq;
-	/** Atoms this batch appended to (may hold benign duplicates; deduped at retirement). */
-	atomsTouched: AtomNode[];
-	/** Un-compacted log entries still on write logs. Log entries reference batches by id,
-	 * so the batch record must outlive them (reclamation gate). */
-	liveLogEntries: number;
-	ambient: boolean;
-};
-
-/** One entry of the 31-slot recycling table a written batch occupies (see
- * the header's SLOT/INTERN/TENANT definitions). */
-export type BatchSlotMeta = {
-	id: BatchSlot;
-	tenant: BatchId | undefined;
-	/** Claim sequence — a point on the shared timeline created at every
-	 * intern (the creation itself is load-bearing for model parity: both sides
-	 * spend one sequence per claim). The engine never reads the stored
-	 * value; the oracle's `checkInvariants` tenancy orderings consult it
-	 * through the test-side model view. */
-	claimSeq: Seq;
-	/** Sequence of the last write under this slot; zeroed when a new tenant
-	 * claims it (the mount fixup's clock conjunct compares it against
-	 * snapshot pins). */
-	writeClock: Seq;
-	releasePending: boolean;
-};
+// (The `Batch` record and `BatchSlotMeta` slot-table entry types live in
+// Batch.ts with the batch mechanism; re-exported above.)
 
 export type RenderPassState = 'open' | 'yielded' | 'ended';
 
@@ -784,7 +632,7 @@ export type TraceHooks = {
 	opEnd(): void;
 };
 
-const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and slot sets fit one int bit mask.
+// (SLOT_COUNT — the 31-slot table bound — lives in Batch.ts with the slot table.)
 
 // ---- module state + the concurrent operation table ------------------------------
 
@@ -797,13 +645,12 @@ let bridgeApplying = false;
 let publiclyRegistered = false;
 
 // ---- One Core probes (referee surface) --------------------------------------------
-// One module-wide counter record proving the zero-cost promise behaviorally:
-// with no bridge registered, heavy signal traffic must leave every field at
-// its baseline (tests/one-core.spec.ts). Engine logic never reads them.
-// (The old bridgeEvents probe died with the object-event channel: events are
-// packed trace records now, created only behind each site's tracer guard —
-// with no tracer attached there is no event machinery left to count.)
-const probes = { logEntries: 0, batches: 0, worldEvals: 0, bridges: 0 };
+// The counter record lives in probes.ts (its mutation sites now span
+// WriteLog.ts, Batch.ts, and this file — see the probes.ts header); engine
+// logic never reads it. (The old bridgeEvents probe died with the
+// object-event channel: events are packed trace records now, created only
+// behind each site's tracer guard — with no tracer attached there is no
+// event machinery left to count.)
 
 /** Referee surface — a snapshot of the engine-activity counters for the zero-cost test. @internal */
 export function __coreProbes(): { logEntries: number; batches: number; worldEvals: number; bridges: number } {
@@ -1407,7 +1254,7 @@ function arenaPurgeDeps(a: WorldArena, sub: number): void {
 	let dep = depsTail !== 0 ? a.memory[depsTail + ArenaLinkField.NEXT_DEP]! : a.memory[sub + ArenaField.DEPS]!;
 	let guard = 0;
 	while (dep !== 0) {
-		if (++guard > ArenaWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`arenaPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
+		if (++guard > ArenaWalk.CYCLE_CAP) throw new InvariantViolation(`arenaPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
 		dep = arenaUnlink(a, dep, sub);
 	}
 }
@@ -1425,7 +1272,7 @@ let arenaCheckSp = 0;
 /** Out-of-line cycle-cap thrower (keeps the walk arms' inline bytecode
  * free of the message-building code — cold by definition). */
 function arenaWalkCycle(site: string, cur: number): never {
-	throw new BridgeInvariantViolation(`${site}: walk exceeded ${ArenaWalk.CYCLE_CAP} steps (cycle) at link ${cur}`);
+	throw new InvariantViolation(`${site}: walk exceeded ${ArenaWalk.CYCLE_CAP} steps (cycle) at link ${cur}`);
 }
 
 /** Propagate PENDING over strong AND weak links
@@ -1518,7 +1365,7 @@ function arenaShallowPropagate(a: WorldArena, startLink: number): void {
 	let cur = startLink;
 	let guard = 0;
 	do {
-		if (++guard > ArenaWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`arenaShallowPropagate: subs chain cycle at link ${cur}`);
+		if (++guard > ArenaWalk.CYCLE_CAP) throw new InvariantViolation(`arenaShallowPropagate: subs chain cycle at link ${cur}`);
 		const sub = memory[cur + ArenaLinkField.SUB]!;
 		const flags = memory[sub + ArenaField.FLAGS]!;
 		if ((flags & (ArenaFlag.PENDING | ArenaFlag.DIRTY)) === ArenaFlag.PENDING) {
@@ -1547,7 +1394,7 @@ function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolea
 	let cur = memory[sub + ArenaField.DEPS_TAIL]!;
 	let guard = 0;
 	while (cur !== 0) {
-		if (++guard > ArenaWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`arenaIsValidLink: prev-dep chain cycle at link ${cur}`);
+		if (++guard > ArenaWalk.CYCLE_CAP) throw new InvariantViolation(`arenaIsValidLink: prev-dep chain cycle at link ${cur}`);
 		if (cur === checkLink) return true;
 		cur = memory[cur + ArenaLinkField.PREV_DEP]!;
 	}
@@ -1633,7 +1480,7 @@ export type ArenaCheckerInternals = {
 	foldTruthFrame<T>(world: World, fn: () => T): T;
 	/** The bridge's ONE cycle-error construction — the naive side's cycle
 	 * throws must compare string-equal to the arena side's. */
-	cycleError(name: string): BridgeScheduleError;
+	cycleError(name: string): ScheduleError;
 	/** The fold-purity bracket: the checker runs user equality comparators
 	 * under it, exactly like every other comparator call site. */
 	inCallback<T>(fn: () => T): T;
@@ -1670,8 +1517,11 @@ export class CosignalBridge {
 	 * id, one id space. `disposeComputed` and the record-free scrub clear
 	 * rows, so a REUSED record id can never resolve to a dead tenant. */
 	idToNode = new Map<NodeId, AnyNode>();
-	idToBatch = new Map<BatchId, Batch>();
-	slots: BatchSlotMeta[] = [];
+	/** Batch records by id (alias of Batch.ts's registry, by identity — the
+	 * resident orchestration and the tests read it in place). */
+	idToBatch: Map<BatchId, Batch>;
+	/** The 31-entry recycling slot table (alias of Batch.ts's, by identity). */
+	slots: BatchSlotMeta[];
 	idToRenderPass = new Map<RenderPassId, RenderPass>();
 	roots = new Map<RootId, RootState>();
 	watchers = new Map<WatcherId, Watcher>();
@@ -1703,63 +1553,12 @@ export class CosignalBridge {
 	/** An urgent pre-paint correction (mount window / committed-truth drift). */
 	onCorrection: ((w: Watcher) => void) | undefined;
 
-	// Queued-notification columns (reused across operations; no per-notify objects).
-	private notifyKinds: number[] = []; // 0 delivery, 1 mount-corrective, 2 correction, 3 subscription refire
-	private notifyWs: (Watcher | undefined)[] = [];
-	private notifyBatches: (Batch | undefined)[] = [];
-	private notifySlots: BatchSlot[] = [];
-	private notifySubs: (Subscription | undefined)[] = [];
-	private notifyN = 0;
-	private notifyFlushing = false;
-
-	private queueNotify(kind: number, w: Watcher | undefined, t: Batch | undefined, slot: BatchSlot, sub?: Subscription): void {
-		const i = this.notifyN++;
-		this.notifyKinds[i] = kind;
-		this.notifyWs[i] = w;
-		this.notifyBatches[i] = t;
-		this.notifySlots[i] = slot;
-		this.notifySubs[i] = sub;
-	}
-
-	/** Invokes queued listeners at the end of the public operation. A nested
-	 * public operation started BY a listener appends behind the live bound
-	 * and drains in the same sweep (the flushing flag stops nested sweeps). */
-	private flushNotify(): void {
-		if (this.notifyN === 0 || this.notifyFlushing) return;
-		this.notifyFlushing = true;
-		try {
-			for (let i = 0; i < this.notifyN; i++) {
-				const kind = this.notifyKinds[i]!;
-				const w = this.notifyWs[i];
-				const t = this.notifyBatches[i];
-				const s = this.notifySubs[i];
-				this.notifyWs[i] = undefined; // release object refs eagerly
-				this.notifyBatches[i] = undefined;
-				this.notifySubs[i] = undefined;
-				if (kind === 0) {
-					const l = this.onDelivery;
-					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
-				} else if (kind === 1) {
-					const l = this.onMountCorrective;
-					if (l !== undefined) l(w!, t!, this.notifySlots[i]!);
-				} else if (kind === 2) {
-					const l = this.onCorrection;
-					if (l !== undefined) l(w!);
-				} else if (s !== undefined && s.live) {
-					// Subscription refire (adapter-registered): the value gate
-					// already passed at the boundary scan; the adapter owns the
-					// body run (cleanup + fire + re-capture) and any React-phase
-					// deferral. Removal flips `live`, so nothing runs after
-					// teardown (RCC-OL2).
-					const r = s.refire;
-					if (r !== undefined) r();
-				}
-			}
-		} finally {
-			this.notifyN = 0;
-			this.notifyFlushing = false;
-		}
-	}
+	// The notification queue mechanism (deliver.ts): columns + enqueue/flush,
+	// composed per bridge in the constructor. `notifyState` aliases the
+	// table's two live scalars so the resident hot checks (the quiet-write
+	// flush guard, the settle tap's flushing guard) stay plain field reads.
+	private readonly notify: DeliverTable;
+	private readonly notifyState: NotifyState;
 
 	/** Flipped once by registerBridge(). There is no bridge-level
 	 * pre-registration era: production writes reach a bridge only through the
@@ -1798,30 +1597,35 @@ export class CosignalBridge {
 	/** Nodes by nodeIndex (dense array twin of `idToNode`). */
 	private nodesArr: (AnyNode | undefined)[] = [undefined];
 	// ---- the observed closure (transitive observation retains) ----
-	// A node is OBSERVED while a live watcher consumes it — directly, or
-	// transitively through the strong (tracked) dep edges of observed overlay
-	// computeds. Observed ATOMS hold exactly one retain on the kernel's
-	// observed-lifecycle union (AtomOptions.effect); the kernel's
-	// lifecycleShift is a Map-miss no-op for atoms without the option, and
-	// these shifts fire only at closure-membership EDGES (never per
-	// evaluation), so routing every closure atom through it costs nothing
-	// measurable and needs no second has-lifecycle registry here. obsDeps
-	// snapshots follow the CURRENT edge set — each fn re-run of an observed
-	// computed (overlay newest runs AND arena world refolds — §4.7/M6 carry
-	// the capture into the arena walks) re-points its retains (dep flips
-	// move them; the kernel's microtask flush coalesces same-tick flaps) —
-	// and the observation index deliberately survives quiescence: the
-	// closure is a property of live watchers, not of the episode.
+	// The observation index — the refcount/retained-dep columns and every
+	// closure-membership transition — lives in observation.ts (its module
+	// header carries the full story), composed per bridge in the
+	// constructor. `obsRefs`/`obsDeps` alias the table's columns BY IDENTITY
+	// (the kernel's shared-side-column pattern): the hot evaluation frames
+	// probe `obsRefs[ix] > 0` per observed run, and indexNode's gap-fill and
+	// the record-free scrub maintain rows in the same loop as the other
+	// dense columns.
+	private readonly obs: ObservationTable;
+	/** The table's dep-snapshot re-pointer, aliased as an own field: the
+	 * evaluation-frame epilogues call it (evaluate sits at the V8 inline
+	 * cliff — 460 bytecodes — and the two-load `this.obs.syncDeps` chain
+	 * pushed it over; the alias keeps the one-load call shape the method
+	 * form had). */
+	private readonly obsSyncDeps: ObservationTable['syncDeps'];
 	/** Observed-consumer refcount per nodeIndex: +1 per live watcher on the
-	 * node, +1 per observed computed currently holding it in obsDeps. */
-	private obsRefs: number[] = [0];
+	 * node, +1 per observed computed currently holding it in obsDeps.
+	 * (Alias of observation.ts's column — see above.) */
+	private readonly obsRefs: number[];
 	/** Per OBSERVED computed (by nodeIndex): the retained direct strong-dep
 	 * set as of its last fn run (undefined while unobserved — unwatched nodes
-	 * store nothing). Sets hold node OBJECTS — see Subscription.obsDeps. */
-	private obsDeps: (Set<AnyNode> | undefined)[] = [undefined];
+	 * store nothing). Sets hold node OBJECTS — see Subscription.obsDeps.
+	 * (Alias of observation.ts's column — see above.) */
+	private readonly obsDeps: (Set<AnyNode> | undefined)[];
 	/** Strong-dep capture list of the innermost evaluation frame, undefined
 	 * unless that frame's node is observed — the one field unwatched
-	 * evaluations pay for (a check per recorded edge). */
+	 * evaluations pay for (a check per recorded edge). (Evaluation-frame
+	 * state, so it stays beside the frames that own it — the observed
+	 * closure itself lives in observation.ts.) */
 	private obsCapture: AnyNode[] | undefined = undefined;
 	/** The watcher liveness seam (one closure per bridge; Watcher._observationShift):
 	 * generation-checked — a stale watcher's liveness flips shift nothing
@@ -1829,7 +1633,7 @@ export class CosignalBridge {
 	 * can never re-validate between a skipped retain and its release). */
 	private watcherObs = (w: Watcher, delta: 1 | -1): void => {
 		const node = this.resolveWatcherNode(w);
-		if (node !== undefined) this.obsShift(node, delta);
+		if (node !== undefined) this.obs.shift(node, delta);
 	};
 	/** Watchers by nodeIndex (the routing walks' collection rows). */
 	private nodeToWatchers: (Watcher[] | undefined)[] = [undefined];
@@ -1840,13 +1644,26 @@ export class CosignalBridge {
 	 * the dep snapshot. Replaces the adapter's effectCapture + readObserver
 	 * seam + the world provider's committed arm (plan §2.2.2). */
 	private captureFrame: { sub: Subscription; deps: { node: AnyNode; value: Value }[] } | undefined = undefined;
-	/** Atoms with a non-empty write log (compaction candidates). */
-	private uncompactedAtoms = new Set<AtomNode>();
+	// The write-log compaction mechanism (WriteLog.ts), composed per bridge
+	// in the constructor; the batch-state edge of a compaction stays here
+	// (the releaseLogEntry dep the constructor provides).
+	private readonly compaction: CompactionTable;
+	/** Atoms with a non-empty write log (compaction candidates). (Alias of
+	 * WriteLog.ts's set, by identity — the write path's membership add and
+	 * the quiet derivation's size check stay plain field reads.) */
+	private readonly uncompactedAtoms: Set<AtomNode>;
 	/** The one open (non-ended) render per root — React renders one tree per
 	 * root at a time; a same-root restart is a new render. */
 	private rootToOpenRender = new Map<RootId, RenderPass>();
-	private liveBatchCount = 0;
-	/** Last-batch cache (windowed writes hit one batch repeatedly). */
+	// The batch mechanism (Batch.ts): batch identity, the slot table,
+	// interning/release/backstop, committed-bits rebuild, live-count
+	// bookkeeping — composed per bridge in the constructor. Retirement and
+	// the render-close orchestration stay resident and reach it through
+	// this table.
+	private readonly batchOps: BatchTable;
+	/** Last-batch cache (windowed writes hit one batch repeatedly) — the
+	 * write path's cache over the mechanism's registry, so it stays beside
+	 * the write path. */
 	private lastBatchId = 0;
 	private lastBatchRef: Batch | undefined = undefined;
 	/** Optional compaction observer (referee/diagnostics seam): called once
@@ -1884,7 +1701,7 @@ export class CosignalBridge {
 		// unregistered test bridge (its write path throws).
 		this.quiet =
 			this._registered
-			&& this.liveBatchCount === 0
+			&& this.batchOps.liveBatchCount() === 0
 			&& this.rootToOpenRender.size === 0
 			&& this.uncompactedAtoms.size === 0;
 	}
@@ -1967,15 +1784,8 @@ export class CosignalBridge {
 	 * on it. */
 	readonly devChecks: boolean;
 
-	/** BatchId source — MONOTONIC for this engine's whole life, never reused
-	 * and never rewound (ids start at 1; BATCH_NONE = 0 is never allocated).
-	 * With protocol v2 these ids are stored verbatim in React's batch
-	 * registry, so monotonicity is what keeps a stale fork-side id from ever
-	 * colliding with a later batch. (Surviving `__resetEngineForTest` — ids
-	 * monotonic ACROSS engine resets — is the great-refactor S5 rule, noted
-	 * here so the reset work keeps it; per-test bridges today get fresh
-	 * counters and rely on the fork's test-only registry reset instead.) */
-	private nextBatchId = 1;
+	// (The BatchId source — monotonic, never rewound — lives in Batch.ts's
+	// closure with the rest of the batch mechanism.)
 	private nextRenderPassId = 1;
 	private nextWatcher = 1;
 	private nextEffect = 1;
@@ -1989,15 +1799,62 @@ export class CosignalBridge {
 		this.arenaInitInts = options?.arenaInitInts ?? 8192;
 		this.devChecks = options?.devChecks ?? false;
 		probes.bridges++; // One Core probe (referee surface)
-		for (let i = 0; i < SLOT_COUNT; i++) {
-			this.slots.push({
-				id: i,
-				tenant: undefined,
-				claimSeq: 0,
-				writeClock: 0,
-				releasePending: false,
-			});
-		}
+		// ---- the composition site: build the mechanism tables in dependency
+		// order (each factory closes over its own state — the kernel's
+		// createEngine pattern — and receives its resident-state edges as
+		// thin arrows over this instance), then alias the shared columns the
+		// resident hot paths and the tests read in place.
+		this.notify = createDeliver({
+			onDelivery: () => this.onDelivery,
+			onMountCorrective: () => this.onMountCorrective,
+			onCorrection: () => this.onCorrection,
+		});
+		this.notifyState = this.notify.state;
+		this.obs = createObservation({
+			nodeAt: (ix) => this.nodesArr[ix],
+			kernelStrongDepsOf: (node) => this.kernelStrongDepsOf(node),
+		});
+		this.obsRefs = this.obs.refs;
+		this.obsDeps = this.obs.deps;
+		this.obsSyncDeps = this.obs.syncDeps;
+		this.compaction = createCompaction({
+			minLivePin: () => this.minLivePin(),
+			applyOp: (atom, kind, payload, prev) => this.applyOp(atom, kind, payload, prev),
+			eqAtom: (atom, a, b) => this.eqAtom(atom, a, b),
+			onCompact: () => this.onCompact,
+			// The batch-state edge of compaction (resident orchestration —
+			// WriteLog.ts never imports batch state): a compacted log entry
+			// stops pinning its batch record.
+			releaseLogEntry: (batchId) => {
+				const batch = this.idToBatch.get(batchId);
+				if (batch !== undefined) {
+					batch.liveLogEntries--;
+					if (batch.liveLogEntries === 0) this.maybeReclaimBatch(batch);
+				}
+			},
+		});
+		this.uncompactedAtoms = this.compaction.uncompactedAtoms;
+		this.batchOps = createBatch({
+			isRegistered: () => this._registered,
+			nextSeq: () => this.nextSeq(),
+			recomputeQuiet: () => this.recomputeQuiet(),
+			trace: () => this.trace,
+			// Slot-claim housekeeping over resident state, in claim order.
+			slotClaimHousekeeping: (batch, slotId) => {
+				// A committed-but-slotless batch (late first write — e.g. a member
+				// write landing after a root committed the batch) interns here — its
+				// root's membership bits gain the slot NOW so the committed world's
+				// membership clause sees the coming log entries.
+				for (const r of this.roots.values()) {
+					if (r.committedBatches.has(batch.id)) r.committedBits |= 1 << slotId;
+				}
+				const clear = ~(1 << slotId);
+				for (const w of this.watchers.values()) w.dedupBits &= clear; // dedup clear at re-intern
+			},
+			maybeReclaimBatch: (t) => this.maybeReclaimBatch(t),
+		});
+		this.idToBatch = this.batchOps.idToBatch;
+		this.slots = this.batchOps.slots;
 	}
 
 	/** Central activeWorld setter — keeps the read-routing seams in sync. */
@@ -2035,7 +1892,7 @@ export class CosignalBridge {
 		// Fold purity: replayed updaters/reducers (and equals callbacks) must
 		// not read signals — world routing would otherwise serve them silently.
 		if (this.inFoldCallback) {
-			throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+			throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		}
 		this.routedCap = undefined;
 		const world = this.activeWorld;
@@ -2125,9 +1982,9 @@ export class CosignalBridge {
 	/** Activates the concurrent engine, once, monotonically; arms the table seam. */
 	registerBridge(): void {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
-			throw new BridgeScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
+			throw new ScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
 		}
-		if (this._registered) throw new BridgeScheduleError('bridge already registered — registration happens exactly once');
+		if (this._registered) throw new ScheduleError('bridge already registered — registration happens exactly once');
 		this._registered = true;
 		activeBridge = this;
 		__setHostWrite(hostWriteImpl); // whole-op capture in the public methods
@@ -2273,9 +2130,9 @@ export class CosignalBridge {
 			const ix = node.ix;
 			const ws = this.nodeToWatchers[ix];
 			if (ws !== undefined && ws.some((w) => w.live)) {
-				throw new BridgeScheduleError(`disposeComputed(${node.name}): live watchers still subscribe — re-key them to the replacement first`);
+				throw new ScheduleError(`disposeComputed(${node.name}): live watchers still subscribe — re-key them to the replacement first`);
 			}
-			if (this.obsRefs[ix]! > 0) this.obsExit(node); // release any retained closure (defensive)
+			if (this.obsRefs[ix]! > 0) this.obs.exit(node); // release any retained closure (defensive)
 			this.purgeNodeFromArenas(ix);
 			this.idToNode.delete(node.id);
 			this.nodesArr[ix] = undefined;
@@ -2330,7 +2187,7 @@ export class CosignalBridge {
 			// Un-torn-down engine node (freed without bridge disposal): release
 			// its outgoing observation retains before the rows clear, so its
 			// retained deps do not leak closure membership.
-			if (resident !== undefined && this.obsRefs[ix]! > 0) this.obsExit(resident);
+			if (resident !== undefined && this.obsRefs[ix]! > 0) this.obs.exit(resident);
 			this.nodesArr[ix] = undefined;
 			this.lastWalk[ix] = 0;
 			this.evalMark[ix] = 0;
@@ -2441,8 +2298,8 @@ export class CosignalBridge {
 
 	/** The bridge's ONE cross-world cycle error (every construction site
 	 * builds it here so the surface message can never fork). */
-	private cycleError(name: string): BridgeScheduleError {
-		return new BridgeScheduleError(`cyclic evaluation of ${name} within one world — a computed may not depend on itself`);
+	private cycleError(name: string): ScheduleError {
+		return new ScheduleError(`cyclic evaluation of ${name} within one world — a computed may not depend on itself`);
 	}
 
 	/** The kernel-way dep read both kernel-frame readers share: atoms off the
@@ -2674,7 +2531,7 @@ export class CosignalBridge {
 	 */
 	evaluate(node: AnyNode, world: World): Value {
 		probes.worldEvals++; // One Core probe (referee surface)
-		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
+		if (this.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
 		const route = this.serveOverride; // no-override fast-out is the ONE hot test; FOLD_TRUTH falls through (fold-truth computeds re-run checker-side, never here)
 		if (route !== undefined && route !== FOLD_TRUTH) return this.arenaServe(route, node); // arena-refold routing override
 		if (world.kind === 'render' || world.kind === 'committed') {
@@ -2880,7 +2737,7 @@ export class CosignalBridge {
 	private arenaOf(world: World): WorldArena | undefined {
 		if (world.kind === 'render') {
 			const a = world.render.arena;
-			if (a !== undefined && !a.alive) throw new BridgeInvariantViolation(`arena of render pass ${world.render.id} was reclaimed while still reachable (m2)`);
+			if (a !== undefined && !a.alive) throw new InvariantViolation(`arena of render pass ${world.render.id} was reclaimed while still reachable (m2)`);
 			return a;
 		}
 		if (world.kind !== 'committed') return undefined;
@@ -3351,7 +3208,7 @@ export class CosignalBridge {
 	 * resource settlement (`fromSettlement`). */
 	private fanAtomsToArena(a: WorldArena, atoms: AtomNode[], fromSettlement: boolean): void {
 		if (a.kind === 'render' && !fromSettlement) {
-			throw new BridgeInvariantViolation('log-entry-flip fanout reached a render arena — render-world values are pin-frozen (§4.3)');
+			throw new InvariantViolation('log-entry-flip fanout reached a render arena — render-world values are pin-frozen (§4.3)');
 		}
 		const memory = a.memory;
 		for (let i = 0; i < atoms.length; i++) {
@@ -3453,7 +3310,7 @@ export class CosignalBridge {
 		if (this.pendingSettleSet.has(suspendSentinel)) return; // queued bit
 		this.pendingSettleSet.add(suspendSentinel);
 		this.pendingSettle.push(suspendSentinel);
-		if (this.settleDraining || this.notifyFlushing || this.opDepth !== 0 || this.evalDepth !== 0 || this.inFoldCallback) {
+		if (this.settleDraining || this.notifyState.flushing || this.opDepth !== 0 || this.evalDepth !== 0 || this.inFoldCallback) {
 			// Mid-operation: the enclosing operation's epilogue (or the drain's
 			// own next iteration) consumes it. Read-context settlement (S-A
 			// step 0): an epilogue-less read frame — standalone committedValue/
@@ -3464,7 +3321,7 @@ export class CosignalBridge {
 				this.settleDrainScheduled = true;
 				queueMicrotask(() => {
 					this.settleDrainScheduled = false;
-					if (this.pendingSettle.length !== 0 && this.opDepth === 0 && this.evalDepth === 0 && !this.settleDraining && !this.notifyFlushing) {
+					if (this.pendingSettle.length !== 0 && this.opDepth === 0 && this.evalDepth === 0 && !this.settleDraining && !this.notifyState.flushing) {
 						this.settlementDrain();
 					}
 				});
@@ -3494,7 +3351,7 @@ export class CosignalBridge {
 			let iter = 0;
 			while (this.pendingSettle.length !== 0) {
 				if (++iter > this.settleCap) {
-					throw new BridgeInvariantViolation(
+					throw new InvariantViolation(
 						`settlement drain exceeded ${this.settleCap} iterations — a settlement chain is synchronously settling ever-new thenables (user feedback, the effect-loop equivalent)`,
 					);
 				}
@@ -3550,7 +3407,7 @@ export class CosignalBridge {
 				// (Core effect()s need nothing here: settlements move world
 				// visibility, never newest values, so the kernel is untouched.)
 				if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
-				this.flushNotify();
+				this.notify.flushNotify();
 			}
 		} finally {
 			this.opDepth--;
@@ -3753,116 +3610,12 @@ export class CosignalBridge {
 		}
 	}
 
-	// ---- observed-closure maintenance (see the observation index's fields above) ----
-
-	/** Shift a node's observed-consumer refcount; enter/exit fire on the
-	 * 0↔1 edges only, so shared consumers (two watchers on one derived node,
-	 * two observed dependents of one dep) hold ONE closure membership.
-	 * IDENTITY-GUARDED: shifts take the node OBJECT and no-op when the dense
-	 * row no longer holds it — a stale reference (an obsDeps entry naming a
-	 * freed node whose record — and nodeIndex — a new tenant inherited) must
-	 * never move the new tenant's count. Skips pair up: once stale, forever
-	 * stale (rows only move at record free, and re-registration installs a
-	 * different object). */
-	private obsShift(node: AnyNode, delta: 1 | -1): void {
-		const ix = node.ix;
-		if (this.nodesArr[ix] !== node) return;
-		const refs = this.obsRefs[ix]! + delta;
-		this.obsRefs[ix] = refs;
-		if (refs === 1 && delta === 1) this.obsEnter(node);
-		else if (refs === 0 && delta === -1) this.obsExit(node);
-	}
-
-	/**
-	 * A node joined the live-watcher closure. Atoms retain their kernel
-	 * observed lifecycle (the watcher half of the observation union — the
-	 * kernel liveness bit is the other). Computeds must discover their
-	 * CURRENT strong dep set: since S-C that IS the kernel's dep-link list
-	 * (tracked-only by construction, per-last-evaluation) — force one
-	 * kernel read so the record has evaluated at least once, then retain
-	 * the links it holds. The read runs under kernel `untracked()`: entry
-	 * can fire inside an open kernel evaluation frame (a getter epilogue's
-	 * dep sync), and the discovery is not a READ by that frame — a link
-	 * would corrupt its dep list. A getter that throws keeps its
-	 * throw-on-demand behavior; the deps it read before throwing ARE
-	 * retained (the kernel keeps the partial link prefix).
-	 */
-	private obsEnter(node: AnyNode): void {
-		if (node.kind === 'atom') {
-			__lifecycleRetain(node.id);
-			return;
-		}
-		try {
-			untracked(() => __kernelComputedRead(node.handle));
-		} catch {
-			// partial dep prefix retained below
-		}
-		this.obsSyncDeps(node, this.kernelStrongDepsOf(node));
-	}
-
-	/** The last observed consumer left: release the whole retained closure.
-	 * obsDeps clears BEFORE the child shifts so a degenerate cyclic dep
-	 * record (possible only via throwing getters) cannot re-release. (The
-	 * node's kernel record keeps its links and cache: HOST_OWNED records
-	 * never feed the D1 lifecycle union, and stripping them would force an
-	 * untracked re-sample at the next read — an eager refresh the ruling
-	 * forbids [2026-07-06].) */
-	private obsExit(node: AnyNode): void {
-		if (node.kind === 'atom') {
-			__lifecycleRelease(node.id);
-			return;
-		}
-		const deps = this.obsDeps[node.ix];
-		if (deps === undefined) return;
-		this.obsDeps[node.ix] = undefined;
-		for (const dep of deps) this.obsShift(dep, -1);
-	}
-
-	/**
-	 * An observed computed's fn just ran (fully, or up to a throw): re-point
-	 * its retains at the strong deps THIS evaluation recorded. Retain-new
-	 * before release-old; deps present in both snapshots never shift, and
-	 * an A→B→A flip within one tick nets out in the kernel's microtask
-	 * flush. Skipped if observation left mid-evaluation (the exit already
-	 * released the old snapshot; installing a new one would leak).
-	 */
-	private obsSyncDeps(node: AnyNode, list: AnyNode[]): void {
-		if (this.obsRefs[node.ix]! === 0) return;
-		const prev = this.obsDeps[node.ix];
-		const next = new Set(list);
-		this.obsDeps[node.ix] = next;
-		for (const dep of next) {
-			if (prev === undefined || !prev.delete(dep)) this.obsShift(dep, 1);
-		}
-		if (prev !== undefined) {
-			for (const dep of prev) this.obsShift(dep, -1);
-		}
-	}
-
-	/**
-	 * A committed subscription's run just installed a new dep snapshot:
-	 * re-point its observation retains (RCC-OL1 — effect dep snapshots count
-	 * toward the observation union exactly like watcher closures: one retain
-	 * per snapshot node through the obsShift observation index; an atom retains its
-	 * kernel lifecycle, an observed computed retains its current strong deps
-	 * transitively). Retain-new before release-old; same-tick flaps coalesce
-	 * in the kernel's microtask flush. (The snapshot's routing coverage
-	 * needs no counts since S-B: the capture's committed evaluations
-	 * populate the root's arena, whose marks the re-checks validate
-	 * through — §4.0's subDepRefs dissolution.)
-	 */
-	private syncSubObs(e: Subscription): void {
-		const prev = e.obsDeps;
-		const next = new Set<AnyNode>();
-		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node);
-		e.obsDeps = next;
-		for (const dep of next) {
-			if (prev === undefined || !prev.delete(dep)) this.obsShift(dep, 1);
-		}
-		if (prev !== undefined) {
-			for (const dep of prev) this.obsShift(dep, -1);
-		}
-	}
+	// ---- observed-closure maintenance ----
+	// The observation index — obsShift/obsEnter/obsExit and the two dep-
+	// snapshot re-pointers — lives in observation.ts (composed as `this.obs`;
+	// the columns are aliased above). Resident consumers call through the
+	// table: the watcher liveness seam, disposal/record-free teardown,
+	// evaluation-frame epilogues, and subscription capture.
 
 	// ---- the routing walks (S-B: arenas route; §4.4.3/§4.4.6/§4.4.7) ----
 
@@ -3950,9 +3703,19 @@ export class CosignalBridge {
 	}
 
 	// -------------------------------------------------- batches and slots
+	// The batch MECHANISM — openBatch, batchById, slot interning/release/
+	// backstop, committed-bits rebuild, live-count bookkeeping — lives in
+	// Batch.ts (composed as `this.batchOps`; `idToBatch`/`slots` aliased
+	// above). Retirement and the render-close orchestration stay here and
+	// call through the table. The public surface keeps thin delegates.
+
+	/** Create a batch (the public/referee surface — see Batch.ts openBatch). */
+	openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
+		return this.batchOps.openBatch(opts);
+	}
 
 	liveBatches(): Batch[] {
-		return [...this.idToBatch.values()].filter((t) => t.state === 'live');
+		return this.batchOps.liveBatches();
 	}
 
 	private minLivePin(): Seq {
@@ -3961,116 +3724,15 @@ export class CosignalBridge {
 		return min;
 	}
 
-	/** Create a batch. At most 31 live at once — React schedules each
-	 * batch on one of its 31 lanes, so more can never be in flight. (The
-	 * lane/priority itself stays React's: the engine never consults it —
-	 * with protocol v2 the driver's batch-id allocator opens the batch and
-	 * hands its id straight to React, one shared number space, no map.)
-	 *
-	 * ALLOCATION-ONLY envelope (the driver's allocator calls this from
-	 * React's batch-creation site, which can sit mid-render, mid-commit, or
-	 * inside protocol listeners — i.e. at opDepth > 0): bookkeeping only —
-	 * counter, registry map, quiet recompute, probes/trace records. No
-	 * operation epilogue, no drains, no kernel mutation, no user code. */
-	openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
-		if (!this._registered) throw new BridgeScheduleError('batches require a registered bridge — register the React bridge first');
-		if (this.liveBatchCount >= SLOT_COUNT) {
-			throw new BridgeScheduleError('at most 31 batches may be live at once (one per React lane)');
-		}
-		const parked = opts?.action ?? false;
-		probes.batches++; // One Core probe (referee surface)
-		const batch: Batch = {
-			id: this.nextBatchId++,
-			action: opts?.action ?? false,
-			parked, // async-action batches park (cannot retire) until their promise settles
-			deferred: opts?.deferred ?? false, // driver-owned annotation (see Batch.deferred)
-			state: 'live', slot: undefined,
-			retiredSeq: undefined, lastWriteSeq: 0, atomsTouched: [], liveLogEntries: 0,
-			ambient: opts?.ambient ?? false,
-		};
-		this.idToBatch.set(batch.id, batch);
-		this.liveBatchCount++;
-		this.recomputeQuiet(); // a live batch: the pipeline is armed until the last retirement
-		const tr = this.trace;
-		if (tr !== undefined) tr.batchOpen(batch);
-		return batch;
-	}
-
 	/** Look up an id or throw the schedule error every resolver shares. */
 	private mustGet<K, V>(map: Map<K, V>, id: K, what: string): V {
 		const v = map.get(id);
-		if (v === undefined) throw new BridgeScheduleError(`unknown ${what} ${id}`);
+		if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`);
 		return v;
-	}
-
-	private batchById(id: BatchId): Batch {
-		return this.mustGet(this.idToBatch, id, 'batch');
 	}
 
 	nodeById(id: NodeId): AnyNode {
 		return this.mustGet(this.idToNode, id, 'node');
-	}
-
-	/**
-	 * Intern the batch's slot, claiming a free one on its first write.
-	 * Claim housekeeping: the write clock zeroes; per-(watcher, slot) dedup
-	 * bits clear (the bit now means a different batch).
-	 */
-	private internSlot(batch: Batch): BatchSlotMeta {
-		if (batch.slot !== undefined) return this.slots[batch.slot]!;
-		let free = this.slots.find((s) => s.tenant === undefined);
-		if (free === undefined) {
-			// Backstop: release the oldest mask-retained retired slot anyway,
-			// loudly — starving new batches would deadlock the scheduler, and
-			// the affected paused render self-corrects through drains/fixup.
-			const candidates = this.slots.filter((s) => s.releasePending);
-			if (candidates.length === 0) {
-				throw new BridgeScheduleError('slot table full of live tenants — unreachable under the 31-live-batch guard');
-			}
-			candidates.sort((a, b) => {
-				const ra = this.batchById(a.tenant!).retiredSeq ?? 0;
-				const rb = this.batchById(b.tenant!).retiredSeq ?? 0;
-				return ra - rb;
-			});
-			const victim = candidates[0]!;
-			const tr = this.trace;
-			if (tr !== undefined) tr.slotBackstopReleased(victim.id, victim.tenant!);
-			this.releaseSlot(victim);
-			free = victim;
-		}
-		free.tenant = batch.id;
-		free.claimSeq = this.nextSeq(); // claim-after-release gets its own point on the timeline
-		free.writeClock = 0;
-		free.releasePending = false;
-		batch.slot = free.id;
-		// A committed-but-slotless batch (late first write — e.g. a member
-		// write landing after a root committed the batch) interns here — its
-		// root's membership bits gain the slot NOW so the committed world's
-		// membership clause sees the coming log entries.
-		for (const r of this.roots.values()) {
-			if (r.committedBatches.has(batch.id)) r.committedBits |= 1 << free.id;
-		}
-		{
-			const clear = ~(1 << free.id);
-			for (const w of this.watchers.values()) w.dedupBits &= clear; // dedup clear at re-intern
-		}
-		{
-			const tr = this.trace;
-			if (tr !== undefined) tr.slotClaimed(free.id, batch.id);
-		}
-		return free;
-	}
-
-	private releaseSlot(slot: BatchSlotMeta): void {
-		const tenant = slot.tenant === undefined ? undefined : this.batchById(slot.tenant);
-		if (tenant !== undefined) {
-			tenant.slot = undefined; // identity release; log entries keep their denormalized slot
-			const tr = this.trace;
-			if (tr !== undefined) tr.slotReleased(slot.id, tenant.id);
-		}
-		slot.tenant = undefined;
-		slot.releasePending = false;
-		if (tenant !== undefined) this.maybeReclaimBatch(tenant); // identity gone; mask/log-entry gates re-check
 	}
 
 	// ------------------------------------------------------ the write path
@@ -4097,8 +3759,8 @@ export class CosignalBridge {
 	 * is no batch to attribute a drop to). @internal
 	 */
 	__quietWrite(node: AtomNode, kind: WriteKind, payload: unknown): void {
-		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
-		if (this.inFoldCallback) throw new BridgeScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
+		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
+		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		const prev = node.base;
 		// Fast arm — bench-pinned, do not fold into the eqAtom general arm
 		// (spkw-quiet A/B, 2026-07: folding cost +37% on the bare quiet fold,
@@ -4132,7 +3794,7 @@ export class CosignalBridge {
 		// (quiet ⇔ no open renders, so no frame can defer the re-check).
 		if (this.committedSubCount !== 0) this.revalidateCommittedSubs(undefined);
 		for (const a of this.rootToArena.values()) this.arenaDecay(a); // NF2 S-A boundary decay
-		if (this.notifyN !== 0) this.flushNotify();
+		if (this.notifyState.n !== 0) this.notify.flushNotify();
 		this.arenaOpEpilogue();
 	}
 
@@ -4161,7 +3823,7 @@ export class CosignalBridge {
 		}
 		let ambient = this.ambientBatch === undefined ? undefined : this.idToBatch.get(this.ambientBatch);
 		if (ambient === undefined || ambient.state !== 'live') {
-			ambient = this.openBatch({ ambient: true });
+			ambient = this.batchOps.openBatch({ ambient: true });
 			this.ambientBatch = ambient.id;
 		}
 		// The post-await dev-warning heuristic lives adapter-side only
@@ -4176,7 +3838,7 @@ export class CosignalBridge {
 	private endOp(): void {
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
-		this.flushNotify();
+		this.notify.flushNotify();
 	}
 
 	/**
@@ -4190,9 +3852,9 @@ export class CosignalBridge {
 	 * walk → newest-subscription flush after the walk returns.
 	 */
 	write(batchId: BatchId | undefined, node: AtomNode, kind: WriteKind, payload: unknown): void {
-		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
-		if (this.inFoldCallback) throw new BridgeScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
-		if (node.kind !== 'atom') throw new BridgeScheduleError('writes target atoms');
+		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
+		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
+		if (node.kind !== 'atom') throw new ScheduleError('writes target atoms');
 		// NF2 S-A: public-operation frame — settlements landing anywhere
 		// inside (walks, effect bodies, notify callbacks) enqueue and the
 		// epilogue drains to empty (§4.5.4's fixed point).
@@ -4206,7 +3868,7 @@ export class CosignalBridge {
 	}
 
 	private writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKind, payload: unknown): void {
-		if (!this._registered) throw new BridgeScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
+		if (!this._registered) throw new ScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
 		if (batchId === undefined) {
 			this.bareWrite(node, kind, payload);
 			return;
@@ -4216,11 +3878,11 @@ export class CosignalBridge {
 		if (batchId === this.lastBatchId && this.lastBatchRef !== undefined) {
 			batch = this.lastBatchRef;
 		} else {
-			batch = this.batchById(batchId);
+			batch = this.batchOps.batchById(batchId);
 			this.lastBatchId = batchId;
 			this.lastBatchRef = batch;
 		}
-		if (batch.state !== 'live') throw new BridgeScheduleError(`write into retired batch ${batchId} — a retired batch accepts no new writes`);
+		if (batch.state !== 'live') throw new ScheduleError(`write into retired batch ${batchId} — a retired batch accepts no new writes`);
 
 		const log = node.log;
 		// Drop check: only when the write log is empty AND the op evaluates equal
@@ -4252,7 +3914,7 @@ export class CosignalBridge {
 		}
 
 		// Intern slot, append log entry, bump the slot write clock.
-		const slot = batch.slot !== undefined ? this.slots[batch.slot]! : this.internSlot(batch);
+		const slot = batch.slot !== undefined ? this.slots[batch.slot]! : this.batchOps.internSlot(batch);
 		const seq = this.nextSeq();
 		log.push(kind, slot.id, seq, batch.id, payload);
 		batch.lastWriteSeq = seq;
@@ -4337,7 +3999,7 @@ export class CosignalBridge {
 		if ((w.dedupBits & bit) === 0) {
 			w.dedupBits |= bit;
 			if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, false);
-			if (this.onDelivery !== undefined) this.queueNotify(0, w, batch, slot.id);
+			if (this.onDelivery !== undefined) this.notify.queueNotify(0, w, batch, slot.id);
 			return;
 		}
 		// Bit set: suppress iff NO started-and-uncommitted render on the
@@ -4348,7 +4010,7 @@ export class CosignalBridge {
 		const p = this.rootToOpenRender.get(w.root);
 		if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
 			if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, true);
-			if (this.onDelivery !== undefined) this.queueNotify(0, w, batch, slot.id);
+			if (this.onDelivery !== undefined) this.notify.queueNotify(0, w, batch, slot.id);
 		} else {
 			if (tr !== undefined) tr.suppressed(w, batch.id, slot.id, seq);
 		}
@@ -4380,13 +4042,13 @@ export class CosignalBridge {
 	 */
 	renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass {
 		if (this.rootToOpenRender.has(rootId)) {
-			throw new BridgeScheduleError(`root ${rootId} already has an open render — one render pass per root at a time`);
+			throw new ScheduleError(`root ${rootId} already has an open render — one render pass per root at a time`);
 		}
 		const maskBatches = new Set<BatchId>();
 		let maskBits = 0;
 		for (const id of includeBatches) {
-			const t = this.batchById(id);
-			if (t.state !== 'live') throw new BridgeScheduleError('mask captures live batches only — a retired batch is already permanent history');
+			const t = this.batchOps.batchById(id);
+			if (t.state !== 'live') throw new ScheduleError('mask captures live batches only — a retired batch is already permanent history');
 			maskBatches.add(id);
 			// A live batch with no slot never wrote; if it writes later, those
 			// log entries postdate this render's pin and the visibility rule's
@@ -4423,7 +4085,7 @@ export class CosignalBridge {
 	 * handlers, other renders) is "not in render" for this render. */
 	renderYield(id: RenderPassId): void {
 		const p = this.renderPassById(id);
-		if (p.state !== 'open') throw new BridgeScheduleError('yield requires an open (running) render');
+		if (p.state !== 'open') throw new ScheduleError('yield requires an open (running) render');
 		p.state = 'yielded';
 		const tr = this.trace;
 		if (tr !== undefined) {
@@ -4434,7 +4096,7 @@ export class CosignalBridge {
 
 	renderResume(id: RenderPassId): void {
 		const p = this.renderPassById(id);
-		if (p.state !== 'yielded') throw new BridgeScheduleError('resume requires a yielded render');
+		if (p.state !== 'yielded') throw new ScheduleError('resume requires a yielded render');
 		p.state = 'open';
 		const tr = this.trace;
 		if (tr !== undefined) {
@@ -4446,7 +4108,7 @@ export class CosignalBridge {
 	/** Mount a new watcher inside an open render; it renders in the render's world. */
 	mountWatcher(renderPassId: RenderPassId, node: AnyNode, name: string): Watcher {
 		const p = this.renderPassById(renderPassId);
-		if (p.state === 'ended') throw new BridgeScheduleError('mount requires an open render');
+		if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
 		const value = this.evaluate(node, { kind: 'render', render: p });
 		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, node.ix, kernelGenOf(node.id), this.watcherObs, value, {
 			renderPassId: p.id, pin: p.pin,
@@ -4479,9 +4141,9 @@ export class CosignalBridge {
 
 	adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const adopter = this.renderPassById(renderPassId);
-		if (adopter.state === 'ended') throw new BridgeScheduleError('adopting render must be open');
+		if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open');
 		const w = this.mustGet(this.watchers, watcherId, 'watcher');
-		if (w.root !== adopter.root) throw new BridgeScheduleError('reveal stays on the watcher root');
+		if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root');
 		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId);
 			if (i >= 0) p.mounted.splice(i, 1);
@@ -4493,10 +4155,10 @@ export class CosignalBridge {
 	 * render (the queued work the bits stood for has now started). */
 	renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const p = this.renderPassById(renderPassId);
-		if (p.state === 'ended') throw new BridgeScheduleError('render requires an open render');
+		if (p.state === 'ended') throw new ScheduleError('render requires an open render');
 		const w = this.watchers.get(watcherId);
-		if (w === undefined || !w.live) throw new BridgeScheduleError('render targets a live watcher');
-		if (w.root !== p.root) throw new BridgeScheduleError('watcher belongs to another root');
+		if (w === undefined || !w.live) throw new ScheduleError('render targets a live watcher');
+		if (w.root !== p.root) throw new ScheduleError('watcher belongs to another root');
 		w.dedupBits = 0;
 		p.rendered.add(watcherId);
 	}
@@ -4555,7 +4217,7 @@ export class CosignalBridge {
 	 */
 	mountCommittedObserver(rootId: RootId, name: string, refire?: () => void): Subscription {
 		if (this.evalDepth > 0 || this.inFoldCallback) {
-			throw new BridgeScheduleError('effect registration is illegal inside an open evaluation/fold frame');
+			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame');
 		}
 		const sub: Subscription = {
 			id: this.nextEffect++, name, root: rootId,
@@ -4588,9 +4250,9 @@ export class CosignalBridge {
 	 */
 	captureRun(id: EffectId, body: () => void): void {
 		const sub = this.idToSubscription.get(id);
-		if (sub === undefined) throw new BridgeScheduleError(`unknown committed subscription ${id}`);
-		if (this.captureFrame !== undefined) throw new BridgeScheduleError('captureRun frames do not nest — one effect body runs at a time');
-		if (this.evalDepth > 0) throw new BridgeScheduleError('captureRun is illegal inside an open evaluation frame');
+		if (sub === undefined) throw new ScheduleError(`unknown committed subscription ${id}`);
+		if (this.captureFrame !== undefined) throw new ScheduleError('captureRun frames do not nest — one effect body runs at a time');
+		if (this.evalDepth > 0) throw new ScheduleError('captureRun is illegal inside an open evaluation frame');
 		const frame = { sub, deps: [] as { node: AnyNode; value: Value }[] };
 		this.captureFrame = frame;
 		this.syncReadRouting();
@@ -4603,7 +4265,7 @@ export class CosignalBridge {
 			sub.lastValue = frame.deps.length === 0 ? undefined : frame.deps[frame.deps.length - 1]!.value;
 			// Observation re-point AFTER the frame closes, so discovery
 			// evaluations run on a clean frame stack (same rule as obsSyncDeps).
-			this.syncSubObs(sub);
+			this.obs.syncSubObs(sub);
 		}
 	}
 
@@ -4612,7 +4274,7 @@ export class CosignalBridge {
 	 * host read seams instead, which push the same dep-snapshot entries). */
 	captureRead(node: AnyNode): Value {
 		const frame = this.captureFrame;
-		if (frame === undefined) throw new BridgeScheduleError('captureRead requires an open captureRun frame');
+		if (frame === undefined) throw new ScheduleError('captureRead requires an open captureRun frame');
 		const v = this.evaluate(node, { kind: 'committed', root: frame.sub.root });
 		frame.deps.push({ node, value: v });
 		return v;
@@ -4637,7 +4299,7 @@ export class CosignalBridge {
 		const held = sub.obsDeps;
 		if (held !== undefined) {
 			sub.obsDeps = undefined;
-			for (const dep of held) this.obsShift(dep, -1);
+			for (const dep of held) this.obs.shift(dep, -1);
 		}
 	}
 
@@ -4646,12 +4308,12 @@ export class CosignalBridge {
 	 * render frame (React double-invokes effects post-commit, never mid-render). */
 	replayReactEffect(id: EffectId): void {
 		const sub = this.idToSubscription.get(id);
-		if (sub === undefined) throw new BridgeScheduleError(`unknown react effect ${id}`);
+		if (sub === undefined) throw new ScheduleError(`unknown react effect ${id}`);
 		if (this.rootToOpenRender.has(sub.root)) {
-			throw new BridgeScheduleError('replay requires the effect root to have no open render frame');
+			throw new ScheduleError('replay requires the effect root to have no open render frame');
 		}
 		this.runCommittedSub(sub);
-		this.flushNotify();
+		this.notify.flushNotify();
 	}
 
 	/** The referee re-fire: cleanup + body re-run through the REAL capture
@@ -4659,7 +4321,7 @@ export class CosignalBridge {
 	 * refire to the operation boundary — the adapter owns the body run). */
 	private runCommittedSub(sub: Subscription): void {
 		if (sub.refire !== undefined) {
-			this.queueNotify(3, undefined, undefined, 0, sub);
+			this.notify.queueNotify(3, undefined, undefined, 0, sub);
 			return;
 		}
 		sub.cleanups++;
@@ -4803,20 +4465,20 @@ export class CosignalBridge {
 
 	private renderEndInner(id: RenderPassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
 		const render = this.renderPassById(id);
-		if (render.state === 'ended') throw new BridgeScheduleError('render already ended');
+		if (render.state === 'ended') throw new ScheduleError('render already ended');
 		if (kind === 'commit') {
 			for (const tid of opts?.retireAtCommit ?? []) {
-				const t = this.batchById(tid); // throws on unknown ids before any mutation
+				const t = this.batchOps.batchById(tid); // throws on unknown ids before any mutation
 				if (!render.maskBatches.has(tid)) {
 					// A retirement folded inside a commit must belong to a batch
 					// this commit rendered: folding a foreign batch's log entries here
 					// would advance committed truth past what this commit actually
 					// put on screen. Foreign batches retire at their own closure —
 					// the protocol host never sends this shape; guarded anyway.
-					throw new BridgeScheduleError(`batch ${tid} is not rendered by render pass ${render.id}; its retirement cannot be due at this commit`);
+					throw new ScheduleError(`batch ${tid} is not rendered by render pass ${render.id}; its retirement cannot be due at this commit`);
 				}
 				if (t.state !== 'live' || t.parked) {
-					throw new BridgeScheduleError(`batch ${tid} cannot retire at this commit (already retired, or parked)`);
+					throw new ScheduleError(`batch ${tid} cannot retire at this commit (already retired, or parked)`);
 				}
 			}
 		}
@@ -4826,7 +4488,7 @@ export class CosignalBridge {
 		// mountFixup for why batches, not captured slots).
 		const maskBatchRecords: Batch[] = [];
 		if (kind === 'commit') {
-			for (const tid of render.maskBatches) maskBatchRecords.push(this.batchById(tid));
+			for (const tid of render.maskBatches) maskBatchRecords.push(this.batchOps.batchById(tid));
 		}
 		render.state = 'ended';
 		render.endKind = kind;
@@ -4874,7 +4536,7 @@ export class CosignalBridge {
 		// lock-in — including step (3), each newly committed batch's durable
 		// drain — is commitBatchesInner, THE single owner of the transition
 		// (W11); the bindings' root-commit report handler is its other caller.
-		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.batchById(tid));
+		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.batchOps.batchById(tid));
 		this.commitBatchesInner(render.root, render.maskBatches);
 		// (4) layout: subscribe, then mount fixup (matching React's layout-
 		// effect phase: after commit, before paint).
@@ -4933,7 +4595,7 @@ export class CosignalBridge {
 				const w = this.watchers.get(wid);
 				if (w === undefined || !w.live) continue;
 				if (ra === undefined || (w.nodeIx < ra.nodeToShadow.length ? ra.nodeToShadow[w.nodeIx]! : 0) === 0) {
-					throw new BridgeInvariantViolation(`population rule (§4.4.2): watcher ${w.name} has no shadow in root ${render.root}'s committed arena after commit`);
+					throw new InvariantViolation(`population rule (§4.4.2): watcher ${w.name} has no shadow in root ${render.root}'s committed arena after commit`);
 				}
 			}
 		}
@@ -4993,10 +4655,10 @@ export class CosignalBridge {
 	private reevaluateDeferredReleases(): void {
 		for (const s of this.slots) {
 			if (!s.releasePending) continue;
-			if (!this.slotRetainedByOpenMask(s.id)) this.releaseSlot(s);
+			if (!this.slotRetainedByOpenMask(s.id)) this.batchOps.releaseSlot(s);
 		}
 		// A render ending releases its pin, which can unblock pin-gated compaction.
-		this.compactAll();
+		this.compaction.compactAll();
 	}
 
 	private slotRetainedByOpenMask(slot: BatchSlot): boolean {
@@ -5039,9 +4701,9 @@ export class CosignalBridge {
 	/** Retirement fires exactly once per batch; parked async actions retire
 	 * only at settlement (their pending state must stay pending until then). */
 	retire(batchId: BatchId): void {
-		const t = this.batchById(batchId);
-		if (t.state === 'retired') throw new BridgeScheduleError('retirement fires exactly once per batch');
-		if (t.parked) throw new BridgeScheduleError('parked action batches retire only at settlement');
+		const t = this.batchOps.batchById(batchId);
+		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per batch');
+		if (t.parked) throw new ScheduleError('parked action batches retire only at settlement');
 		this.opDepth++; // NF2 S-A: public-operation frame (see write)
 		try {
 			this.retireInternal(t);
@@ -5057,9 +4719,9 @@ export class CosignalBridge {
 
 	/** The async action's promise settled; the protocol host then retires the batch. */
 	settleAction(batchId: BatchId): void {
-		const t = this.batchById(batchId);
-		if (!t.action) throw new BridgeScheduleError('settle targets an action batch');
-		if (!t.parked || t.state !== 'live') throw new BridgeScheduleError('action already settled');
+		const t = this.batchOps.batchById(batchId);
+		if (!t.action) throw new ScheduleError('settle targets an action batch');
+		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled');
 		this.opDepth++; // NF2 S-A: public-operation frame (see write)
 		try {
 			t.parked = false;
@@ -5088,7 +4750,7 @@ export class CosignalBridge {
 	 */
 	private retireInternal(batch: Batch): void {
 		if (batch.state === 'live') {
-			this.liveBatchCount--;
+			this.batchOps.decLiveBatchCount();
 		}
 		batch.state = 'retired';
 		batch.parked = false;
@@ -5119,8 +4781,8 @@ export class CosignalBridge {
 			}
 		}
 		if (touchedAny) this.committedAdvance = this.nextSeq();
-		// Fold/compaction (see compactAll for the two-clause predicate).
-		this.compactAll();
+		// Fold/compaction (see WriteLog.ts compactAll for the two-clause predicate).
+		this.compaction.compactAll();
 		// NF2 S-A flip site (a): retirement — after stamps + committedAdvance + compaction,
 		// BEFORE the drain loop (§4.3's ordering joint: mutate → fan → drain),
 		// fan the retiring batch's touched atoms into EVERY committed arena.
@@ -5149,7 +4811,7 @@ export class CosignalBridge {
 		// Clear per-root rows (the retired clause subsumes membership now),
 		// THEN release the slot unless an open render mask names it.
 		for (const r of this.roots.values()) {
-			if (r.committedBatches.delete(batch.id)) this.rebuildCommittedBits(r);
+			if (r.committedBatches.delete(batch.id)) this.batchOps.rebuildCommittedBits(r);
 		}
 		if (batch.slot !== undefined) {
 			const slot = this.slots[batch.slot]!;
@@ -5158,7 +4820,7 @@ export class CosignalBridge {
 				const tr = this.trace;
 				if (tr !== undefined) tr.slotReleaseDeferred(slot.id, batch.id);
 			} else {
-				this.releaseSlot(slot);
+				this.batchOps.releaseSlot(slot);
 			}
 		}
 		if (this.ambientBatch === batch.id) this.ambientBatch = undefined;
@@ -5166,61 +4828,9 @@ export class CosignalBridge {
 		this.recomputeQuiet(); // the LAST retirement (with every write log compacted) re-arms quiet
 	}
 
-	private rebuildCommittedBits(r: RootState): void {
-		let bits = 0;
-		for (const tid of r.committedBatches) {
-			const batch = this.idToBatch.get(tid);
-			if (batch !== undefined && batch.slot !== undefined) bits |= 1 << batch.slot;
-		}
-		r.committedBits = bits;
-	}
-
-	/**
-	 * Compaction consumes a sequence-order prefix of the write log: entry e
-	 * compacts iff every entry with seq ≤ e.seq is retired (folding out of
-	 * order would change replay results) AND e.retiredSeq ≤ min(live pins)
-	 * (a render pinned earlier still folds from base, so base must not move
-	 * past it). Compacted entries fold into base and are reclaimed (kept in
-	 * observed by the optional `onCompact` hook).
-	 */
-	private compactAll(): void {
-		if (this.uncompactedAtoms.size === 0) return;
-		const minPin = this.minLivePin();
-		for (const n of this.uncompactedAtoms) {
-			this.compactAtom(n, minPin);
-			if (n.log.n === n.log.start) this.uncompactedAtoms.delete(n);
-		}
-	}
-
-	private compactAtom(atom: AtomNode, minPin: Seq): void {
-		const log = atom.log;
-		const n = log.n;
-		const retired = log.retired;
-		const from = log.start;
-		let cut = 0;
-		while (from + cut < n) {
-			const r = retired[from + cut]!;
-			if (r === 0) break; // prefix clause: an unretired earlier entry blocks everything after
-			if (r > minPin) break; // pin clause: every live pin already sees e via the retired clause
-			cut++;
-		}
-		if (cut === 0) return;
-		const onCompact = this.onCompact;
-		for (let k = 0; k < cut; k++) {
-			const i = from + k;
-			const next = this.applyOp(atom, log.kinds[i]!, log.payloads[i], atom.base);
-			if (!this.eqAtom(atom, next, atom.base)) atom.base = next;
-			atom.baseSeq = log.seqs[i]!;
-			if (onCompact !== undefined) onCompact(atom, log.entryAt(i));
-			// A compacted log entry stops pinning its batch record.
-			const batch = this.idToBatch.get(log.batches[i]!);
-			if (batch !== undefined) {
-				batch.liveLogEntries--;
-				if (batch.liveLogEntries === 0) this.maybeReclaimBatch(batch);
-			}
-		}
-		log.drop(cut);
-	}
+	// (rebuildCommittedBits lives in Batch.ts; compactAll/compactAtom live in
+	// WriteLog.ts — the compaction→batch edge stays here as the constructor's
+	// releaseLogEntry dep.)
 
 	/**
 	 * Durable drain at a committed-truth flip (a retirement or per-root
@@ -5293,7 +4903,7 @@ export class CosignalBridge {
 		}
 		w.lastRenderedValue = now; // the urgent pre-paint re-render
 		w.dedupBits = 0; // dedup bits re-arm at the watcher's render
-		if (this.onCorrection !== undefined) this.queueNotify(2, w, undefined, 0);
+		if (this.onCorrection !== undefined) this.notify.queueNotify(2, w, undefined, 0);
 		return true;
 	}
 
@@ -5423,7 +5033,7 @@ export class CosignalBridge {
 			if (tr !== undefined) tr.mountCorrective(w, batch.id, slot.id);
 			correctives++;
 			w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into the batch's lane (the protocol's runInBatch)
-			if (this.onMountCorrective !== undefined) this.queueNotify(1, w, batch, slot.id);
+			if (this.onMountCorrective !== undefined) this.notify.queueNotify(1, w, batch, slot.id);
 		}
 		// RT6 second half — the four-condition test, decided before any
 		// evaluation: same render, no committed-truth advance, no per-root
@@ -5571,7 +5181,7 @@ export class CosignalBridge {
 	}
 
 	quiescent(): boolean {
-		return this.liveBatchCount === 0 && this.rootToOpenRender.size === 0;
+		return this.batchOps.liveBatchCount() === 0 && this.rootToOpenRender.size === 0;
 	}
 
 	/**
@@ -5600,11 +5210,11 @@ export class CosignalBridge {
 	 * 2^31-1 created sequences.
 	 */
 	quiesce(): void {
-		if (!this.quiescent()) throw new BridgeScheduleError('quiescence requires no live batches, pins, or parked actions');
+		if (!this.quiescent()) throw new ScheduleError('quiescence requires no live batches, pins, or parked actions');
 		// Residue check: with no live pins, the last retirement compacted every write log.
 		for (const n of this.idToNode.values()) {
 			if (n.kind === 'atom' && n.log.n > n.log.start) {
-				throw new BridgeInvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.log.n - n.log.start} log entries`);
+				throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.log.n - n.log.start} log entries`);
 			}
 		}
 		this.epoch++;

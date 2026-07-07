@@ -31,6 +31,11 @@ import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+/** The concurrent engine's module set (the one entry plus its extracted
+ * mechanism modules) — every source-discipline scan below covers all of
+ * them, so an extraction can never silently exit the zero-cost contract. */
+const ENGINE_MODULES = ['src/concurrent.ts', 'src/errors.ts', 'src/probes.ts', 'src/deliver.ts', 'src/observation.ts', 'src/WriteLog.ts', 'src/Batch.ts'];
+
 function src(rel: string): string {
 	return readFileSync(join(pkgDir, rel), 'utf8')
 		.replace(/\/\*[\s\S]*?\*\//g, '')
@@ -54,31 +59,39 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		expect(direct).not.toMatch(/TraceHooks|attachTracer|\btracer\b|\.trace\b/);
 	});
 
-	it('the engine module never imports the trace or graphviz entries (lazy-loadability)', () => {
-		const engineSrc = src('src/concurrent.ts');
-		expect(engineSrc).not.toMatch(/from '\.\/trace\.js'|from '\.\/graphviz\.js'/);
+	it('the engine modules never import the trace or graphviz entries (lazy-loadability)', () => {
+		for (const rel of ENGINE_MODULES) {
+			const engineSrc = src(rel);
+			expect(engineSrc, rel).not.toMatch(/from '\.\/trace\.js'|from '\.\/graphviz\.js'/);
+		}
 	});
 
 	it("the engine's only tracing state is the one nullable slot, captured locally", () => {
+		// Mechanism modules receive the slot through their deps as
+		// `trace(): TraceHooks | undefined` and capture it locally per site
+		// (`const tr = deps.trace();`) — the engine-side arrow that feeds
+		// them is the composition site's one additional read form.
 		const lines = src('src/concurrent.ts').split('\n');
 		for (const line of lines) {
 			if (!line.includes('this.trace')) continue;
 			const t = line.trim();
 			expect(
-				t === 'trace: TraceHooks | undefined = undefined;' || t.startsWith('const tr = this.trace;'),
+				t === 'trace: TraceHooks | undefined = undefined;' || t.startsWith('const tr = this.trace;') || t === 'trace: () => this.trace,',
 				`unexpected use of the trace slot: ${t}`,
 			).toBe(true);
 		}
 	});
 
 	it('every hook invocation sits behind a single tr !== undefined check', () => {
-		const lines = src('src/concurrent.ts').split('\n');
-		for (let i = 0; i < lines.length; i++) {
-			const t = lines[i]!.trim();
-			if (!/(^|[^.\w])tr\.\w+\(/.test(t)) continue;
-			const guardedInline = /^if \(tr !== undefined\) tr\.\w+\(/.test(t);
-			const guardedBlock = lines.slice(Math.max(0, i - 3), i).some((l) => l.includes('if (tr !== undefined) {'));
-			expect(guardedInline || guardedBlock, `unguarded trace hook call: ${t}`).toBe(true);
+		for (const rel of ENGINE_MODULES) {
+			const lines = src(rel).split('\n');
+			for (let i = 0; i < lines.length; i++) {
+				const t = lines[i]!.trim();
+				if (!/(^|[^.\w])tr\.\w+\(/.test(t)) continue;
+				const guardedInline = /^if \(tr !== undefined\) tr\.\w+\(/.test(t);
+				const guardedBlock = lines.slice(Math.max(0, i - 3), i).some((l) => l.includes('if (tr !== undefined) {'));
+				expect(guardedInline || guardedBlock, `unguarded trace hook call in ${rel}: ${t}`).toBe(true);
+			}
 		}
 	});
 

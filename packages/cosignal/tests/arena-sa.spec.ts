@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { __newBridgeForTest, BridgeInvariantViolation, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
+import { __newBridgeForTest, InvariantViolation, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
@@ -226,7 +226,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		b.onCorrection = () => {
 			if (++chain < K) gates[chain]!.settle(`v${chain}`); // each iteration creates the next settlement
 		};
-		expect(() => gates[0]!.settle('v0')).toThrow(BridgeInvariantViolation);
+		expect(() => gates[0]!.settle('v0')).toThrow(InvariantViolation);
 		expect(chain).toBeGreaterThanOrEqual(8); // the loop made real progress up to the cap
 		expect(watchers[0]!.lastRenderedValue).toBe('v0');
 	});

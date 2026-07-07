@@ -12,13 +12,13 @@
  * including the entity indexing (creation order over the live maps), the
  * write-kind coercions, and the `${events}.${seq}.${epoch}` uniq naming —
  * but resolves everything against the ENGINE's state and treats
- * `BridgeScheduleError` as the skip signal, so legality decisions are
+ * `ScheduleError` as the skip signal, so legality decisions are
  * computed independently on each side and then diffed.
  */
 
 import {
 	__newBridgeForTest,
-	BridgeScheduleError,
+	ScheduleError,
 	type AtomNode,
 	type CosignalBridge,
 } from '../src/concurrent.js';
@@ -73,19 +73,19 @@ function registryOf(b: CosignalBridge): EntityRegistry {
 
 function batchAt(b: CosignalBridge, index: number): number | undefined {
 	const ids = registryOf(b).batches;
-	if (ids.length === 0) throw new BridgeScheduleError('no batches yet');
+	if (ids.length === 0) throw new ScheduleError('no batches yet');
 	return ids[index % ids.length];
 }
 
 function renderPassAt(b: CosignalBridge, index: number): number {
 	const ids = registryOf(b).renderPasses;
-	if (ids.length === 0) throw new BridgeScheduleError('no render passes yet');
+	if (ids.length === 0) throw new ScheduleError('no render passes yet');
 	return ids[index % ids.length]!;
 }
 
 function watcherAt(b: CosignalBridge, index: number): number {
 	const ids = [...b.watchers.keys()];
-	if (ids.length === 0) throw new BridgeScheduleError('no watchers yet');
+	if (ids.length === 0) throw new ScheduleError('no watchers yet');
 	return ids[index % ids.length]!;
 }
 
@@ -97,7 +97,7 @@ function watcherAt(b: CosignalBridge, index: number): number {
 function effectAt(b: CosignalBridge, index: number): number {
 	const ids: number[] = [];
 	for (const s of b.idToSubscription.values()) ids.push(s.id);
-	if (ids.length === 0) throw new BridgeScheduleError('no react effects yet');
+	if (ids.length === 0) throw new ScheduleError('no react effects yet');
 	return ids[index % ids.length]!;
 }
 
@@ -184,7 +184,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 		}
 		return true;
 	} catch (err) {
-		if (err instanceof BridgeScheduleError) return false;
+		if (err instanceof ScheduleError) return false;
 		throw err;
 	}
 }
@@ -256,7 +256,7 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 //     — mode/seq excluded (an edge-add replay carries the replay sequence).
 // The ⊇-required floor is enforced indirectly: exact snapshots, exact
 // value-gated corrections/effect-runs, and an audit inside the engine that
-// throws BridgeInvariantViolation whenever divergence hidden by a mount
+// throws InvariantViolation whenever divergence hidden by a mount
 // fast-out is not covered by correctives.
 
 const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);

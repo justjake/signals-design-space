@@ -250,7 +250,7 @@ could implement the same contract. A host driver's responsibilities:
   decides who must re-render; the host only schedules.
 
 The remaining engine exports (`CosignalBridge`, the node/render-pass/batch
-types, `BridgeScheduleError`, `BridgeInvariantViolation`) are that seam;
+types, `ScheduleError`, `InvariantViolation`) are that seam;
 applications normally touch only `registerReactBridge()`, indirectly,
 via `cosignal-react`.
 
