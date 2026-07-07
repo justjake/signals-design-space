@@ -16,7 +16,8 @@
  *  5. Int32 clock-wrap renumbers (the S-D hardening): readClock stamps
  *     into AF.MARK and cycle stamps into L_VER — Int32Array fields that
  *     would truncate past 2^31-1. The bump helpers renumber at
- *     A_CLOCK_LIMIT (0x7fff0000, mirrored below): stamps reset to 0
+ *     A_CLOCK_LIMIT (read off the checker seam's layout, CLOCK_LIMIT):
+ *     stamps reset to 0
  *     (= stale, the conservative fail-open direction), clocks restart, and
  *     values stay EXACT across the boundary (armed divergence check).
  *     Same-eval link dedup keeps deps chains duplicate-free through the
@@ -31,11 +32,6 @@ import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
 import { __newBridgeForTest, type AnyNode, type BridgeOptions, type CosignalBridge } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
-
-/** Mirror of concurrent.ts's private A_CLOCK_LIMIT (0x7fff0000): stores of
- * the limit itself still fit Int32 (65535 under 2^31-1); the renumber fires
- * on the bump that would pass it. */
-const A_CLOCK_LIMIT = 0x7fff0000;
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
@@ -257,7 +253,8 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		const c = b.computed('c', (read) => (read(a0) as number) + (read(gatee) as number));
 		const w = mount(b, 'R', c, 'W');
 		const shell = b.__arenaForTest('R')!;
-		shell.readClock = A_CLOCK_LIMIT - 3; // a hair under the ceiling
+		const layout = b.__checkerInternals().layout; // the engine-owned constants (no hand copies)
+		shell.readClock = layout.CLOCK_LIMIT - 3; // a hair under the ceiling
 		for (let i = 1; i <= 6; i++) {
 			commitWrite(b, a0, i); // each write: fan (stamps MARK = clock) + serves (bump the clock)
 			expect(w.lastRenderedValue).toBe(100 + i); // exact through the renumber
@@ -267,7 +264,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		// Every live MARK stamp is again a small post-renumber value (Int32-exact).
 		for (let nid = 0; nid < shell.byNode.length; nid++) {
 			const sh = shell.byNode[nid]!;
-			if (sh !== 0) expect(shell.W[sh + 7]).toBeLessThanOrEqual(shell.readClock); // AF.MARK = 7
+			if (sh !== 0) expect(shell.W[sh + layout.AF.MARK]).toBeLessThanOrEqual(shell.readClock);
 		}
 	});
 
@@ -289,7 +286,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		expect(w.lastRenderedValue).toBe(112);
 		expect(depsChainLen(b, 'R', x, c)).toBe(3); // x, y, z — the duplicate read reused, not re-minted
 		const shell = b.__arenaForTest('R')!;
-		shell.cycle = A_CLOCK_LIMIT - 2;
+		shell.cycle = b.__checkerInternals().layout.CLOCK_LIMIT - 2;
 		for (let i = 2; i <= 6; i++) {
 			commitWrite(b, x, i); // re-evals bump the cycle across the ceiling
 			expect(w.lastRenderedValue).toBe(2 * i + 110);

@@ -444,12 +444,15 @@ const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the 
 const values: unknown[] = [undefined, undefined];
 const fns: (Function | undefined)[] = [undefined];
 
+/** Seed capacity (entries) of the walk scratch stacks below (they double on demand). */
+const WALK_STACK_SEED = 4096;
+
 // Persistent scratch stacks: module-level Int32Arrays reused by every graph
 // walk, replacing the linked-list stack upstream allocates per walk.
 // Re-entrant walks push above the caller's base and restore it on exit.
-let propStack = new Int32Array(4096);
+let propStack = new Int32Array(WALK_STACK_SEED);
 let propSp = 0;
-let checkStack = new Int32Array(4096);
+let checkStack = new Int32Array(WALK_STACK_SEED);
 let checkSp = 0;
 
 // ---- the engine (the operation table) -----------------------------------------
@@ -1465,11 +1468,16 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 // ---- engine instance + growth ------------------------------------------------
 
+/** Default capacity floor, in records, when neither the env var nor configure() sets one. */
+const DEFAULT_INITIAL_RECORDS = 1 << 20;
+/** Smallest legal capacity floor, in records — the env parse and configure() validation both enforce it. */
+const MIN_INITIAL_RECORDS = 2;
+
 const initialRecords = (() => {
 	const env = (globalThis as { process?: { env?: Record<string, string | undefined> } })
 		.process?.env?.COSIGNAL_INITIAL_RECORDS;
 	const n = env !== undefined ? Number(env) : NaN;
-	return Number.isFinite(n) && n >= 2 ? Math.ceil(n) : 1 << 20;
+	return Number.isFinite(n) && n >= MIN_INITIAL_RECORDS ? Math.ceil(n) : DEFAULT_INITIAL_RECORDS;
 })();
 
 // D6: configure({initialRecords}) raises this floor; the growth loop honors it.
@@ -1622,11 +1630,6 @@ export function __hostReadNewest(atom: Atom<unknown>): unknown {
  */
 export function __kernelComputedRead(c: Computed<unknown>): unknown {
 	return E.computedRead(c._id);
-}
-
-/** @internal Current GEN of a kernel record (id-tenancy validation, §4.5.3). */
-export function __kernelGen(id: NodeId): Generation {
-	return E.gen(id);
 }
 
 /** @internal Test seam (leak audit): a record's side-column slots. freeNode
@@ -2538,8 +2541,8 @@ export function configure(options: ConfigureOptions): void {
 	}
 	const n = options.initialRecords;
 	if (n !== undefined) {
-		if (!Number.isFinite(n) || n < 2) {
-			throw new Error('cosignal: configure({ initialRecords }) must be a number >= 2.');
+		if (!Number.isFinite(n) || n < MIN_INITIAL_RECORDS) {
+			throw new Error(`cosignal: configure({ initialRecords }) must be a number >= ${MIN_INITIAL_RECORDS}.`);
 		}
 		const target = Math.ceil(n) * Arena.RECORDS_PER_UNIT;
 		if (target > desiredRecords) {

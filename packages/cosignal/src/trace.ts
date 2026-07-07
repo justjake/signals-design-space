@@ -313,6 +313,9 @@ export type TraceStats = {
 	refsCaptured: number;
 };
 
+/** Floor for the pow2-rounded capacities (ring, session chunk, ref ring). */
+const POW2_CAPACITY_FLOOR = 8;
+
 function pow2AtLeast(n: number, min: number): number {
 	let c = min;
 	while (c < n) c *= 2;
@@ -322,6 +325,10 @@ function pow2AtLeast(n: number, min: number): number {
 function defaultNow(): number {
 	return performance.now() * 1000;
 }
+
+/** Depth (entries) of the preallocated eval-pairing stacks — the three stack
+ * columns below must stay equal; overflow degrades gracefully. */
+const EVAL_STACK_DEPTH = 1024;
 
 // ---- the tracer ------------------------------------------------------------------
 
@@ -346,9 +353,9 @@ export class Tracer implements TraceHooks {
 	private refs: unknown[];
 	private refHead: RefId = 0;
 	// eval pairing stack (preallocated; overflow degrades gracefully)
-	private evalSubj = new Int32Array(1024);
-	private evalWorld = new Int32Array(1024);
-	private evalT0: Microseconds[] = new Array<number>(1024).fill(0);
+	private evalSubj = new Int32Array(EVAL_STACK_DEPTH);
+	private evalWorld = new Int32Array(EVAL_STACK_DEPTH);
+	private evalT0: Microseconds[] = new Array<number>(EVAL_STACK_DEPTH).fill(0);
 	private evalSp = 0;
 	private evalOverflow = 0;
 
@@ -356,12 +363,12 @@ export class Tracer implements TraceHooks {
 		this.bridge = bridge;
 		this.mode = opts?.mode ?? 'ring';
 		this.cap = this.mode === 'ring'
-			? pow2AtLeast(opts?.capacity ?? 1 << 16, 8)
-			: pow2AtLeast(opts?.chunkSize ?? 1 << 14, 8);
+			? pow2AtLeast(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
+			: pow2AtLeast(opts?.chunkSize ?? 1 << 14, POW2_CAPACITY_FLOOR);
 		this.capMask = this.cap - 1;
 		this.capLog = Math.log2(this.cap);
 		this.maxBytes = opts?.maxBytes ?? 128 * 1024 * 1024;
-		this.refCap = opts?.refCapacity === undefined ? 256 : pow2AtLeast(Math.max(opts.refCapacity, 0), opts.refCapacity === 0 ? 0 : 8);
+		this.refCap = opts?.refCapacity === undefined ? 256 : pow2AtLeast(Math.max(opts.refCapacity, 0), opts.refCapacity === 0 ? 0 : POW2_CAPACITY_FLOOR);
 		this.refs = new Array<unknown>(this.refCap);
 		this.now = opts?.now ?? defaultNow;
 		this.lastUs = this.now();
@@ -574,7 +581,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	receipt(node: AtomNode, r: Receipt): void {
-		const op = r.op.kind === 'set' ? 0 : 1;
+		const op = OP_NAMES.indexOf(r.op.kind); // encoder and decoder share OP_NAMES (cold path)
 		this.rec(K.write, this.label(node.name), r.token, r.slot, r.seq, op);
 	}
 

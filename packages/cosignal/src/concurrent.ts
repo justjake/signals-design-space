@@ -242,6 +242,10 @@ const enum OpKind {
 	UPDATE = 1,
 }
 
+/** Bounds the dead prefix a Tape carries before drop() rebases the arrays
+ * (the rebase amortization threshold). */
+const TAPE_REBASE_THRESHOLD = 1024;
+
 /**
  * Int-packed receipt columns: recording a write is a few integer stores, not
  * an object allocation. Plain number arrays stay SMI-packed (V8's fast
@@ -300,7 +304,7 @@ export class Tape {
 	/** Drop the compacted prefix (advance the window; rebase amortized). */
 	drop(cut: number): void {
 		this.start += cut;
-		if (this.start >= 1024 && this.start >= this.n - this.start) {
+		if (this.start >= TAPE_REBASE_THRESHOLD && this.start >= this.n - this.start) {
 			const from = this.start;
 			this.kinds = this.kinds.slice(from);
 			this.slots = this.slots.slice(from);
@@ -965,6 +969,8 @@ const enum AFlag {
 
 const A_STRIDE = 8;
 const A_SHIFT = 3; // record id >> A_SHIFT = value/susp column index
+/** Bounds the arena pool: releaseArena keeps at most this many scrubbed shells (further releases drop the shell). */
+const ARENA_POOL_CAP = 8;
 const EMPTY_I32 = new Int32Array(0);
 
 /**
@@ -1304,28 +1310,39 @@ function aDisposeAllDepsInReverse(a: ShadowArena, sub: number): void {
 	}
 }
 
+/** Bounds every arena chain/graph walk's step count — a longer walk can only
+ * be a corrupted-list cycle, so the guards throw. Same-file const enum member
+ * (not a module const): the comparison sits inside the hot walk loops and
+ * must inline as a literal. */
+const enum AWalk {
+	CYCLE_CAP = 1_000_000,
+}
+
 /** Purge links not re-tracked by the current evaluation (kernel discipline). */
 function aPurgeDeps(a: ShadowArena, sub: number): void {
 	const depsTail = a.W[sub + AF.DEPS_TAIL]!;
 	let dep = depsTail !== 0 ? a.W[depsTail + AF.L_NEXT_DEP]! : a.W[sub + AF.DEPS]!;
 	let guard = 0;
 	while (dep !== 0) {
-		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
+		if (++guard > AWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`aPurgeDeps: deps chain cycle at link ${dep} (shadow ${sub})`);
 		dep = aUnlink(a, dep, sub);
 	}
 }
 
+/** Seed capacity (entries) of the walk scratch stacks below (they double on demand). */
+const WALK_STACK_SEED = 4096;
+
 // Arena-walk scratch stacks (module-owned; the routing walks use the
 // bridge's own buffers instead).
-let aPropStack = new Int32Array(4096);
+let aPropStack = new Int32Array(WALK_STACK_SEED);
 let aPropSp = 0;
-let aCheckStack = new Int32Array(4096);
+let aCheckStack = new Int32Array(WALK_STACK_SEED);
 let aCheckSp = 0;
 
 /** Out-of-line cycle-cap thrower (keeps the walk arms' inline bytecode
  * free of the message-building code — cold by definition). */
 function aWalkCycle(site: string, cur: number): never {
-	throw new BridgeInvariantViolation(`${site}: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+	throw new BridgeInvariantViolation(`${site}: walk exceeded ${AWalk.CYCLE_CAP} steps (cycle) at link ${cur}`);
 }
 
 /** Propagate PENDING over strong AND weak links (spike `wPropagate`;
@@ -1341,7 +1358,7 @@ function aPropagate(a: ShadowArena, startLink: number): void {
 	const stackBase = aPropSp;
 	let guard = 0;
 	top: do {
-		if (++guard > 1_000_000) aWalkCycle('aPropagate', cur);
+		if (++guard > AWalk.CYCLE_CAP) aWalkCycle('aPropagate', cur);
 		const sub = W[cur + AF.L_SUB]!;
 		let flags = W[sub + AF.FLAGS]!;
 		if (!(flags & (AFlag.RECURSED_CHECK | AFlag.RECURSED | AFlag.DIRTY | AFlag.PENDING))) {
@@ -1418,7 +1435,7 @@ function aShallowPropagate(a: ShadowArena, startLink: number): void {
 	let cur = startLink;
 	let guard = 0;
 	do {
-		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aShallowPropagate: subs chain cycle at link ${cur}`);
+		if (++guard > AWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`aShallowPropagate: subs chain cycle at link ${cur}`);
 		const sub = W[cur + AF.L_SUB]!;
 		const flags = W[sub + AF.FLAGS]!;
 		if ((flags & (AFlag.PENDING | AFlag.DIRTY)) === AFlag.PENDING) {
@@ -1447,7 +1464,7 @@ function aIsValidLink(a: ShadowArena, checkLink: number, sub: number): boolean {
 	let cur = W[sub + AF.DEPS_TAIL]!;
 	let guard = 0;
 	while (cur !== 0) {
-		if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aIsValidLink: prev-dep chain cycle at link ${cur}`);
+		if (++guard > AWalk.CYCLE_CAP) throw new BridgeInvariantViolation(`aIsValidLink: prev-dep chain cycle at link ${cur}`);
 		if (cur === checkLink) return true;
 		cur = W[cur + AF.L_PREV_DEP]!;
 	}
@@ -1486,11 +1503,14 @@ export type ArenaCheckerInternals = {
 	 * independent walkers and is therefore exported from index.ts —
 	 * NodeField/LinkField/NodeFlag.) AF entries are Int32 word offsets
 	 * within a record; AFlag entries are FLAGS bits; A_SHIFT converts a
-	 * record id to its side-column index. */
+	 * record id to its side-column index; CLOCK_LIMIT is the Int32 clock-wrap
+	 * renumber ceiling (readClock/cycle). */
 	readonly layout: {
 		readonly A_SHIFT: number;
+		readonly CLOCK_LIMIT: number;
 		readonly AF: {
 			readonly NODE: number;
+			readonly MARK: number;
 			readonly FLAGS: number;
 			readonly DEPS: number;
 			readonly SUBS: number;
@@ -2673,7 +2693,7 @@ export class CosignalBridge {
 		a.links = 0;
 		a.readClock = 0;
 		a.cycle = 0;
-		if (this.arenaPool.length < 8) this.arenaPool.push(a);
+		if (this.arenaPool.length < ARENA_POOL_CAP) this.arenaPool.push(a);
 	}
 
 	/** The arena of a world: pass arenas ride the pass record (claimed at
@@ -3080,7 +3100,7 @@ export class CosignalBridge {
 		let dirty = false;
 		let guard = 0;
 		top: do {
-			if (++guard > 1_000_000) throw new BridgeInvariantViolation(`aCheckDirty: walk exceeded 1e6 steps (cycle) at link ${cur}`);
+			if (++guard > AWalk.CYCLE_CAP) aWalkCycle('aCheckDirty', cur);
 			const W = a.W;
 			const dep = W[cur + AF.L_DEP]!;
 			const depFlags = W[dep + AF.FLAGS]!;
@@ -3410,7 +3430,8 @@ export class CosignalBridge {
 		return {
 			layout: {
 				A_SHIFT,
-				AF: { NODE: AF.NODE, FLAGS: AF.FLAGS, DEPS: AF.DEPS, SUBS: AF.SUBS, L_DEP: AF.L_DEP, L_SUB: AF.L_SUB, L_PREV_DEP: AF.L_PREV_DEP, L_NEXT_DEP: AF.L_NEXT_DEP, L_NEXT_SUB: AF.L_NEXT_SUB, L_MODE: AF.L_MODE },
+				CLOCK_LIMIT: A_CLOCK_LIMIT,
+				AF: { NODE: AF.NODE, MARK: AF.MARK, FLAGS: AF.FLAGS, DEPS: AF.DEPS, SUBS: AF.SUBS, L_DEP: AF.L_DEP, L_SUB: AF.L_SUB, L_PREV_DEP: AF.L_PREV_DEP, L_NEXT_DEP: AF.L_NEXT_DEP, L_NEXT_SUB: AF.L_NEXT_SUB, L_MODE: AF.L_MODE },
 				AFlag: { DIRTY: AFlag.DIRTY, BOX_SUSPENDED: AFlag.BOX_SUSPENDED },
 			},
 			get evalDepth(): number {
@@ -4392,11 +4413,6 @@ export class CosignalBridge {
 		const v = this.evaluate(node, { kind: 'committed', root: frame.sub.root });
 		frame.deps.push({ node, value: v });
 		return v;
-	}
-
-	/** True while a captureRun frame is open (bindings' read-routing check). */
-	captureActive(): boolean {
-		return this.captureFrame !== undefined;
 	}
 
 	/**
