@@ -9,8 +9,8 @@
  */
 declare module 'react' {
 	export interface ExternalRuntimeListener {
-		/** A render pass opened on a root. `includedBatches` = the live batch tokens this pass renders; `lineageId` is stable per (root × included-batch set), so a restarted pass over the same batches keeps its lineage. */
-		onRenderPassStart?: (container: unknown, includedBatches: readonly number[], lineageId: number) => void;
+		/** A render pass opened on a root. `includedBatches` = the live batch tokens this pass renders. */
+		onRenderPassStart?: (container: unknown, includedBatches: readonly number[]) => void;
 		onRenderPassYield?: (container: unknown) => void;
 		onRenderPassResume?: (container: unknown) => void;
 		/** The pass frame closed, exactly once per open; committed=true fires inside the commit, BEFORE the same commit's onRootCommitted — the point where an external store can still snapshot committed state as a baseline. */

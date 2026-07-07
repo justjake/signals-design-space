@@ -11,8 +11,8 @@
  *    entry points simply don't exist there). Degrading silently would
  *    reintroduce tearing (a single rendered frame mixing old and new
  *    state) later, with no error pointing at the cause.
- *  - protocol events -> bridge: onRenderPassStart(includedBatches,
- *    lineageId) -> passStart; yield/resume -> passYield/passResume;
+ *  - protocol events -> bridge: onRenderPassStart(includedBatches) ->
+ *    passStart; yield/resume -> passYield/passResume;
  *    onRenderPassEnd(committed) -> passEnd('commit') at the moment the
  *    pass commits — before that commit's per-root report and before any
  *    retirement, which is what lets the bridge snapshot committed state as
@@ -226,8 +226,8 @@ export class Shim {
 		bridge.onMountCorrective = (w, token) => this.guard(() => this.bumpInBatch(w.id, token.id)); // join a still-live batch this mount's render missed
 		bridge.onCorrection = (w) => this.guard(() => this.bumpInBatch(w.id, undefined)); // urgent pre-paint fix: discrete-urgent fallback lane
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
-			onRenderPassStart: (container, includedBatches, lineageId) =>
-				this.guard(() => this.handlePassStart(container, includedBatches, lineageId)),
+			onRenderPassStart: (container, includedBatches) =>
+				this.guard(() => this.handlePassStart(container, includedBatches)),
 			onRenderPassYield: (container) => this.guard(() => this.handleYield(container)),
 			onRenderPassResume: (container) => this.guard(() => this.handleResume(container)),
 			onRenderPassEnd: (container, committed) => this.guard(() => this.handlePassEnd(container, committed)),
@@ -330,7 +330,7 @@ export class Shim {
 
 	// ---- protocol listener -> bridge --------------------------------------------
 
-	private handlePassStart(container: unknown, includedBatches: readonly number[], _lineageId: number): void {
+	private handlePassStart(container: unknown, includedBatches: readonly number[]): void {
 		const rec = this.rootRec(container);
 		if (rec.pass !== undefined && rec.pass.state !== 'ended') {
 			// Defensive: the protocol host ends a pass frame before restarting it,

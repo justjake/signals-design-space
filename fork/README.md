@@ -23,6 +23,9 @@ clean, zero drift:
 1. `Add external-runtime introspection channel for external state libraries`
 2. `Add batch-token registry to the external-runtime channel`
 3. `Add unstable_isCurrentWriteDeferred: pure write classification, no minting`
+   — LATER REMOVED (consumers read the deferred flag from
+   `getCurrentWriteBatch()`'s low bit; render lineage ids, S4, were
+   removed at the same time for having no consumer)
 4. `Slim the external-runtime surface to the token protocol`
 5. `Trim external-runtime surface: drop onCommit and renderLanes`
 6. `Batch registry: async-action parking + per-root commit lock-in`

@@ -70,9 +70,8 @@ scheduled-but-unstarted work will fold anyway.
 **The seam is seven fork facts**: which batch is writing right now; pass
 lifecycle with yield and resume edges (handlers in yield gaps are
 correctly "not in render"); retirement exactly once per batch plus each
-root's commit of it; scheduling updates into an existing batch's lanes; a
-stable render-lineage identity; the DOM mutation window; loud fork
-detection. Mounts reconcile late: a value-blind corrective joins each live
+root's commit of it; scheduling updates into an existing batch's lanes;
+the DOM mutation window; loud fork detection. Mounts reconcile late: a value-blind corrective joins each live
 non-included batch that touched the node, then one comparison against the
 mount's own world fast-forwarded to committed-now catches whatever retired
 or locked in during the window — before paint.
@@ -180,9 +179,11 @@ document uses these words with exactly these meanings.
 - **watcher** — a mounted component's subscription record: node,
   `setState`, last rendered value, rendered-world snapshot, per-slot dedup
   bits.
-- **lineage** — the fork-minted render-lineage identity: stable per
-  (root × batch-set) across restarts, replays, and Suspense retries; dead
-  at commit or abandonment. Suspense caches key on it.
+- **lineage** — REMOVED (2026-07-06). Was: the fork-minted render-lineage
+  identity, stable per (root × batch-set), intended as the Suspense-cache
+  key. The shipped implementation keys `ctx.use` caches per-node (scoped
+  to the living node), so no consumer existed and the fork no longer
+  mints lineage ids.
 - **newest-equivalent pass** — a pass classification meaning "no live
   divergence can reach this pass, its world is the newest world"; such
   passes read the kernel directly until the first receipt-creating write
@@ -420,11 +421,13 @@ with it, rather than minting a fresh transition React would never entangle
 completed (but not committed) forces a pre-commit restart — React's
 interleaved-update behavior, asserted by test.
 
-**Fact 5 — render lineage id.** Stable per (root × batch-set) across
-restarts, replays, and Suspense retries; dead at commit or abandonment.
-Suspense capsules key on it. Single tokens, mask unions, and pass serial
-numbers are all wrong keys (they drift, churn, or refetch forever) — the
-lineage id is the settled answer.
+**Fact 5 — render lineage id. REMOVED (2026-07-06).** Was: an id stable
+per (root × batch-set) across restarts, replays, and Suspense retries,
+dead at commit or abandonment, meant to key Suspense capsules. The
+shipped bindings key `ctx.use` caches per-node instead (the cache lives
+and dies with the node), which needs no cross-pass identity from the
+fork; `onRenderPassStart` reports `(container, includedBatches)` only.
+§5.8's lineage-capsule analysis describes the superseded design.
 
 **Fact 6 — DOM mutation window.** Commit-phase mutation boundary
 callbacks (kept per the fork charter; used by devtools/tracing, not by
@@ -454,8 +457,7 @@ Within one commit, in order:
 "React renamed lanes / moved commit phases / rewrote update-queue
 internals — what moves in the signals library?" **Nothing.** The library
 consumes tokens, pass edges, retirement/commit edges plus the baseline
-capture, `runInBatch`, and lineage ids — all re-implementable protocol
-facts. Lane renames touch fact 1's internal minting; commit-phase moves
+capture, and `runInBatch` — all re-implementable protocol facts. Lane renames touch fact 1's internal minting; commit-phase moves
 re-anchor facts 3 and the ordering clause to the events "root committed" /
 "before folds/layout"; update-queue changes touch nothing (the library
 never sees queues). Each fact carries its invariant in place and a
@@ -478,8 +480,7 @@ transition spanning both; these are the existence proofs the current
 React generation has never been asked for — schedule them first).
 18: `runInBatch` joins the token's lanes.
 19: `runInBatch` retired-token urgent fallback.
-20: lineage id stable across restart, replay, retry; dead at
-commit/abandon.
+20: REMOVED with fact 5 (render lineage ids).
 21: a discarded pass can never later commit.
 22: a same-root urgent commit discards an older yielded same-root pass
 before any committed-view advance (serialization fact).
