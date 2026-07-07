@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "arrayd",
+  "timestamp": "2026-07-06T23-25-33",
+  "node": "v24.16.0",
+  "loadavg": [
+    8.1435546875,
+    7.03564453125,
+    5.22119140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "arrayd",
+      "metric": "signals-10k",
+      "kb": 3850.39
+    },
+    {
+      "framework": "arrayd",
+      "metric": "computeds-10k",
+      "kb": 4157.99
+    },
+    {
+      "framework": "arrayd",
+      "metric": "effects-10k",
+      "kb": 2937.78
+    },
+    {
+      "framework": "arrayd",
+      "metric": "grid-100x100",
+      "kb": 7489.81
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-06T14-02-28",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    4.75830078125,
+    4.0244140625,
+    4.015625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "avoidablePropagation",
+      "time": 91.239417
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "broadPropagation",
+      "time": 74.6116035
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "deepPropagation",
+      "time": 32.73879199999999
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "diamond",
+      "time": 81.81266649999998
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "mux",
+      "time": 76.81077049999999
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "repeatedObservers",
+      "time": 12.620874500000127
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "triangle",
+      "time": 26.61181300000021
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "unstable",
+      "time": 13.073417000000063
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "molBench",
+      "time": 15.331125000000156
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createSignals",
+      "time": 9.285562499999997
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createComputations",
+      "time": 73.03802200000001
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "updateSignals",
+      "time": 315.5331859999999
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx1000",
+      "time": 5.929791999999999
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx2500",
+      "time": 14.49558500000002
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "2-10x5 - lazy80%",
+      "time": 157.70137499999998
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 145.65329200000042
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "4-1000x12 - dyn5%",
+      "time": 345.89116599999943
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "25-1000x5",
+      "time": 424.0591659999991
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "3-5x500",
+      "time": 101.51291599999968
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-100x15 - dyn50%",
+      "time": 205.0768339999995
+    }
+  ]
+}

@@ -9,6 +9,8 @@ export const contenderNames = [
 	'dalien-uses',
 	'baseline-context',
 	'baseline-local',
+	'alt-a-uses',
+	'alt-b-uses',
 ] as const;
 
 export type ContenderName = (typeof contenderNames)[number];

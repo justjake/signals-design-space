@@ -1,0 +1,142 @@
+{
+  "kind": "bench",
+  "framework": "arena-host-fused",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-06T14-20-11",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    6.11865234375,
+    5.673828125,
+    5.734375
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "avoidablePropagation",
+      "time": 117.29704150000003
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "broadPropagation",
+      "time": 89.38335399999994
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "deepPropagation",
+      "time": 39.049125000000004
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "diamond",
+      "time": 86.41745800000012
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "mux",
+      "time": 75.87597950000008
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "repeatedObservers",
+      "time": 17.156208499999593
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "triangle",
+      "time": 26.62512499999957
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "unstable",
+      "time": 18.83349999999973
+    },
+    {
+      "suite": "kairo",
+      "framework": "arena-host-fused",
+      "test": "molBench",
+      "time": 14.239291499999581
+    },
+    {
+      "suite": "sbench",
+      "framework": "arena-host-fused",
+      "test": "createSignals",
+      "time": 5.748271500000001
+    },
+    {
+      "suite": "sbench",
+      "framework": "arena-host-fused",
+      "test": "createComputations",
+      "time": 123.15316600000017
+    },
+    {
+      "suite": "sbench",
+      "framework": "arena-host-fused",
+      "test": "updateSignals",
+      "time": 287.5878129999983
+    },
+    {
+      "suite": "cellx",
+      "framework": "arena-host-fused",
+      "test": "cellx1000",
+      "time": 5.671085000000026
+    },
+    {
+      "suite": "cellx",
+      "framework": "arena-host-fused",
+      "test": "cellx2500",
+      "time": 14.819539000000049
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-host-fused",
+      "test": "2-10x5 - lazy80%",
+      "time": 145.25816700000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-host-fused",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 104.38491700000009
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-host-fused",
+      "test": "4-1000x12 - dyn5%",
+      "time": 312.72029099999963
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-host-fused",
+      "test": "25-1000x5",
+      "time": 329.02258299999994
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-host-fused",
+      "test": "3-5x500",
+      "time": 79.8719170000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "arena-host-fused",
+      "test": "6-100x15 - dyn50%",
+      "time": 177.13320799999929
+    }
+  ]
+}

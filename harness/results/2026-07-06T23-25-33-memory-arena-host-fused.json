@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "arena-host-fused",
+  "timestamp": "2026-07-06T23-25-33",
+  "node": "v24.16.0",
+  "loadavg": [
+    8.1435546875,
+    7.03564453125,
+    5.22119140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "arena-host-fused",
+      "metric": "signals-10k",
+      "kb": 3783.57
+    },
+    {
+      "framework": "arena-host-fused",
+      "metric": "computeds-10k",
+      "kb": 4036.05
+    },
+    {
+      "framework": "arena-host-fused",
+      "metric": "effects-10k",
+      "kb": 2798.09
+    },
+    {
+      "framework": "arena-host-fused",
+      "metric": "grid-100x100",
+      "kb": 6492.47
+    }
+  ]
+}

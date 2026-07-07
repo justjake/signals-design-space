@@ -1,0 +1,143 @@
+23:25  up 5 days, 10:15, 1 user, load averages: 8.14 7.04 5.22
+
+> @lab/harness@0.0.0 memory /Users/jitl/src/alien-signals-opt/harness
+> tsx memory/run.ts
+
+
+=== memory probe: alien-v3 ===
+signals-10k: 3059.69 KB
+computeds-10k: 3535.08 KB
+effects-10k: 3861.07 KB
+grid-100x100: 7120.87 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-alien-v3.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-alien-v3.csv
+
+=== memory probe: control ===
+signals-10k: 3059.69 KB
+computeds-10k: 3613.49 KB
+effects-10k: 3862.28 KB
+grid-100x100: 7206.02 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-control.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-control.csv
+
+=== memory probe: sweep ===
+signals-10k: 2824.23 KB
+computeds-10k: 3848.33 KB
+effects-10k: 5593.27 KB
+grid-100x100: 9077.52 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-sweep.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-sweep.csv
+
+=== memory probe: arrayd ===
+signals-10k: 3850.39 KB
+computeds-10k: 4157.99 KB
+effects-10k: 2937.78 KB
+grid-100x100: 7489.81 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arrayd.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arrayd.csv
+
+=== memory probe: arena ===
+signals-10k: 3262.75 KB
+computeds-10k: 3561.09 KB
+effects-10k: 2838.02 KB
+grid-100x100: 6051.44 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena.csv
+
+=== memory probe: arena-links ===
+signals-10k: 3294.36 KB
+computeds-10k: 3612.62 KB
+effects-10k: 2654.70 KB
+grid-100x100: 5875.19 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-links.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-links.csv
+
+=== memory probe: arena-masked ===
+signals-10k: 3264.77 KB
+computeds-10k: 3561.06 KB
+effects-10k: 2396.63 KB
+grid-100x100: 5486.09 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-masked.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-masked.csv
+
+=== memory probe: arena-host ===
+signals-10k: 3783.74 KB
+computeds-10k: 4036.13 KB
+effects-10k: 2814.40 KB
+grid-100x100: 6531.66 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-host.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-host.csv
+
+=== memory probe: arena-host-fused ===
+signals-10k: 3783.57 KB
+computeds-10k: 4036.05 KB
+effects-10k: 2798.09 KB
+grid-100x100: 6492.47 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-host-fused.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-host-fused.csv
+
+=== memory probe: arena-spkh ===
+signals-10k: 3262.77 KB
+computeds-10k: 3561.09 KB
+effects-10k: 2836.73 KB
+grid-100x100: 6042.95 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-spkh.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-spkh.csv
+
+=== memory probe: arena-spkq ===
+signals-10k: 3262.82 KB
+computeds-10k: 3561.13 KB
+effects-10k: 2845.53 KB
+grid-100x100: 6050.26 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-spkq.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-arena-spkq.csv
+
+=== memory probe: dalien ===
+signals-10k: 3923.67 KB
+computeds-10k: 3642.90 KB
+effects-10k: 3553.16 KB
+grid-100x100: 6832.09 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-dalien.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-dalien.csv
+
+=== memory probe: cosignal ===
+signals-10k: 2798.24 KB
+computeds-10k: 3330.59 KB
+effects-10k: 2851.72 KB
+grid-100x100: 5821.84 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignal.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignal.csv
+
+=== memory probe: cosignal-concurrent ===
+signals-10k: 2799.36 KB
+computeds-10k: 3330.59 KB
+effects-10k: 2853.05 KB
+grid-100x100: 5821.89 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignal-concurrent.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignal-concurrent.csv
+
+=== memory probe: cosignals-alt-a ===
+signals-10k: 11738.84 KB
+computeds-10k: 13604.39 KB
+effects-10k: 3891.73 KB
+grid-100x100: 17783.96 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignals-alt-a.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignals-alt-a.csv
+
+=== memory probe: cosignals-alt-b ===
+signals-10k: 3759.16 KB
+computeds-10k: 6134.70 KB
+effects-10k: 4407.09 KB
+grid-100x100: 11029.91 KB
+results: /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignals-alt-b.json
+         /Users/jitl/src/alien-signals-opt/harness/results/2026-07-06T23-25-33-memory-cosignals-alt-b.csv
+
+retained heap in KB (measured through the shared adapter; lower is better)
+
+metric        |            alien-v3 |             control |               sweep |              arrayd |               arena |         arena-links |        arena-masked |          arena-host |    arena-host-fused |          arena-spkh |          arena-spkq |              dalien |            cosignal | cosignal-concurrent |     cosignals-alt-a |     cosignals-alt-b
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+signals-10k   |             3059.69 |             3059.69 |             2824.23 |             3850.39 |             3262.75 |             3294.36 |             3264.77 |             3783.74 |             3783.57 |             3262.77 |             3262.82 |             3923.67 |             2798.24 |             2799.36 |            11738.84 |             3759.16
+computeds-10k |             3535.08 |             3613.49 |             3848.33 |             4157.99 |             3561.09 |             3612.62 |             3561.06 |             4036.13 |             4036.05 |             3561.09 |             3561.13 |             3642.90 |             3330.59 |             3330.59 |            13604.39 |             6134.70
+effects-10k   |             3861.07 |             3862.28 |             5593.27 |             2937.78 |             2838.02 |             2654.70 |             2396.63 |             2814.40 |             2798.09 |             2836.73 |             2845.53 |             3553.16 |             2851.72 |             2853.05 |             3891.73 |             4407.09
+grid-100x100  |             7120.87 |             7206.02 |             9077.52 |             7489.81 |             6051.44 |             5875.19 |             5486.09 |             6531.66 |             6492.47 |             6042.95 |             6050.26 |             6832.09 |             5821.84 |             5821.89 |            17783.96 |            11029.91
+exit=0

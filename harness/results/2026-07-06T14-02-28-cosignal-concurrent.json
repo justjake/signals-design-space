@@ -1,0 +1,142 @@
+{
+  "kind": "bench",
+  "framework": "cosignal-concurrent",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-06T14-02-28",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    6.57763671875,
+    6.65380859375,
+    5.6884765625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "avoidablePropagation",
+      "time": 111.68964600000001
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "broadPropagation",
+      "time": 71.77970799999991
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "deepPropagation",
+      "time": 29.392666500000132
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "diamond",
+      "time": 89.4286874999998
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "mux",
+      "time": 67.00549999999998
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "repeatedObservers",
+      "time": 14.860312499999736
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "triangle",
+      "time": 26.546707999999853
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "unstable",
+      "time": 18.07166700000016
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignal-concurrent",
+      "test": "molBench",
+      "time": 15.999333000000206
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal-concurrent",
+      "test": "createSignals",
+      "time": 2.561916499999988
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal-concurrent",
+      "test": "createComputations",
+      "time": 35.01327049999975
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal-concurrent",
+      "test": "updateSignals",
+      "time": 245.69270799999913
+    },
+    {
+      "suite": "cellx",
+      "framework": "cosignal-concurrent",
+      "test": "cellx1000",
+      "time": 4.544665000000002
+    },
+    {
+      "suite": "cellx",
+      "framework": "cosignal-concurrent",
+      "test": "cellx2500",
+      "time": 11.449249000000009
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal-concurrent",
+      "test": "2-10x5 - lazy80%",
+      "time": 138.82741700000008
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal-concurrent",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 97.39799999999991
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal-concurrent",
+      "test": "4-1000x12 - dyn5%",
+      "time": 275.388375
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal-concurrent",
+      "test": "25-1000x5",
+      "time": 287.8161249999994
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal-concurrent",
+      "test": "3-5x500",
+      "time": 65.04120800000055
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal-concurrent",
+      "test": "6-100x15 - dyn50%",
+      "time": 160.29824999999983
+    }
+  ]
+}

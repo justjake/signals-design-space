@@ -1,0 +1,142 @@
+{
+  "kind": "bench",
+  "framework": "dalien",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-06T14-02-28",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    6.5107421875,
+    6.63720703125,
+    5.62451171875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "avoidablePropagation",
+      "time": 107.74622950000007
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "broadPropagation",
+      "time": 73.68406249999998
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "deepPropagation",
+      "time": 32.083458000000064
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "diamond",
+      "time": 89.42533299999991
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "mux",
+      "time": 68.58749999999986
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "repeatedObservers",
+      "time": 13.302395999999817
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "triangle",
+      "time": 28.68787499999962
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "unstable",
+      "time": 17.58122900000035
+    },
+    {
+      "suite": "kairo",
+      "framework": "dalien",
+      "test": "molBench",
+      "time": 14.58529150000004
+    },
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "createSignals",
+      "time": 5.3834794999999644
+    },
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "createComputations",
+      "time": 43.556458000000475
+    },
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "updateSignals",
+      "time": 245.1596040000013
+    },
+    {
+      "suite": "cellx",
+      "framework": "dalien",
+      "test": "cellx1000",
+      "time": 5.727165000000014
+    },
+    {
+      "suite": "cellx",
+      "framework": "dalien",
+      "test": "cellx2500",
+      "time": 16.820039999999977
+    },
+    {
+      "suite": "dynamic",
+      "framework": "dalien",
+      "test": "2-10x5 - lazy80%",
+      "time": 154.7640419999999
+    },
+    {
+      "suite": "dynamic",
+      "framework": "dalien",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 108.89562500000011
+    },
+    {
+      "suite": "dynamic",
+      "framework": "dalien",
+      "test": "4-1000x12 - dyn5%",
+      "time": 298.06787499999973
+    },
+    {
+      "suite": "dynamic",
+      "framework": "dalien",
+      "test": "25-1000x5",
+      "time": 335.47662500000024
+    },
+    {
+      "suite": "dynamic",
+      "framework": "dalien",
+      "test": "3-5x500",
+      "time": 85.0780420000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "dalien",
+      "test": "6-100x15 - dyn50%",
+      "time": 166.93825000000106
+    }
+  ]
+}

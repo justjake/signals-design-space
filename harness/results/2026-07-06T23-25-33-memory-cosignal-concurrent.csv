@@ -1,0 +1,5 @@
+framework,metric,kb
+cosignal-concurrent,signals-10k,2799.36
+cosignal-concurrent,computeds-10k,3330.59
+cosignal-concurrent,effects-10k,2853.05
+cosignal-concurrent,grid-100x100,5821.89

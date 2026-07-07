@@ -1,0 +1,292 @@
+# Full-field CI for the signal-library lab: conformance gate + ratio bench.
+#
+# Named field-bench because bench.yml already exists (the cosignal family-B
+# gate benches); this workflow owns the FIELD-WIDE view instead: every
+# framework registered in harness/adapters/index.ts.
+#
+# Jobs:
+#   plan        — reads the adapter registry so the matrix can never drift
+#                 from the code.
+#   conformance — 179-case reactive-framework-test-suite per framework, as a
+#                 matrix. THIS is the gate worth blocking on: any conformance
+#                 regression fails the job (vitest exit code).
+#   bench       — kairo suite (per-process, harness/bench/run.ts) + tier-0
+#                 shapes for every framework, SINGLE pass. Shared runners are
+#                 noisy, so the job publishes RATIOS vs alien-v3 (same-machine
+#                 robust; see harness/README.md methodology notes) and NEVER
+#                 gates on absolute thresholds. Raw JSON/CSV go to artifacts;
+#                 the ratio table goes to the job summary.
+#   react-seam  — optional (workflow_dispatch input): the react-seam-bench
+#                 field against the vendored React fork. Needs the fork build,
+#                 so it inits vendor/react and runs fork/build-react.sh first.
+#
+# Submodules: checkout uses submodules: false, then a targeted
+# `git submodule update --init` for exactly what each job needs —
+# milomg-reactivity-benchmark (bench suites import its TS source),
+# upstream-alien-signals (the alien-v3 baseline; harness deps carry a file:
+# dep on it, so it must exist AND be built before pnpm install copies it),
+# and packages/dalien-signals (the `dalien` adapter imports its src/ directly
+# and the root lockfile carries its workspace importer). This avoids cloning
+# the ~12 vendor/ study submodules.
+name: field-bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      react_seam:
+        description: 'Also run react-seam-bench (builds the vendored React fork)'
+        type: boolean
+        required: false
+        default: false
+      shapes_reps:
+        description: 'Reps per shape for the tier-0 shapes bench'
+        required: false
+        default: '5'
+  schedule:
+    # Weekly, Monday 06:17 UTC (off the top of the hour to dodge cron rushes).
+    - cron: '17 6 * * 1'
+
+concurrency:
+  group: field-bench-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BASELINE: alien-v3
+  # The three submodules the harness path needs (see header comment).
+  HARNESS_SUBMODULES: milomg-reactivity-benchmark upstream-alien-signals packages/dalien-signals
+
+jobs:
+  # Read the adapter registry once; conformance/bench matrices derive from it.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      frameworks: ${{ steps.list.outputs.frameworks }}
+      frameworks_csv: ${{ steps.list.outputs.frameworks_csv }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: List registered frameworks from harness/adapters/index.ts
+        id: list
+        run: |
+          list=$(sed -n "/adapterNames = \[/,/\] as const/p" harness/adapters/index.ts \
+            | grep -oE "'[a-z0-9-]+'" | tr -d "'")
+          test -n "$list" # registry parse must never silently produce an empty matrix
+          json=$(printf '%s\n' "$list" | jq -R . | jq -sc .)
+          csv=$(printf '%s\n' "$list" | paste -sd, -)
+          echo "frameworks=$json" >> "$GITHUB_OUTPUT"
+          echo "frameworks_csv=$csv" >> "$GITHUB_OUTPUT"
+          echo "registered frameworks: $csv"
+
+  # THE GATE: full conformance per framework; any failure fails the job.
+  conformance:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ${{ fromJSON(needs.plan.outputs.frameworks) }}
+    name: conformance-${{ matrix.framework }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init harness submodules (targeted)
+        run: |
+          # shellcheck disable=SC2086  # HARNESS_SUBMODULES is a deliberate space-separated list
+          git submodule update --init $HARNESS_SUBMODULES
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # esm/ + types/ are local build artifacts of the submodule; they must
+      # exist BEFORE the root install because the harness consumes
+      # alien-signals via the file: protocol (pnpm copies at install time).
+      - name: Build upstream alien-signals
+        working-directory: upstream-alien-signals
+        run: |
+          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm run build
+
+      # Filtered install from the root: the harness dependency closure only.
+      # A full unfiltered install would materialize the react link: overrides
+      # that point into the (absent) vendor/react fork build.
+      - name: Install (root, filtered to the harness closure)
+        run: pnpm install --frozen-lockfile --filter "@lab/harness..."
+
+      - name: Conformance — ${{ matrix.framework }} (fails the job on any regression)
+        working-directory: harness
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+        run: pnpm run conformance
+
+  # Ratio bench: kairo + tier-0 shapes, all frameworks, one pass, one runner.
+  # Never split frameworks across runners: cross-machine times don't compare.
+  bench:
+    needs: [plan, conformance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init harness submodules (targeted)
+        run: |
+          # shellcheck disable=SC2086  # HARNESS_SUBMODULES is a deliberate space-separated list
+          git submodule update --init $HARNESS_SUBMODULES
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build upstream alien-signals
+        working-directory: upstream-alien-signals
+        run: |
+          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm run build
+
+      - name: Install (root, filtered to the harness closure)
+        run: pnpm install --frozen-lockfile --filter "@lab/harness..."
+
+      - name: Record machine conditions
+        run: |
+          echo "runner: $(uname -a)"
+          echo "node: $(node --version)"
+          uptime || true
+
+      # harness/results ships committed baselines recorded on the lab
+      # machine; clear them (CI workspace only) so the ratio table and the
+      # artifact contain exclusively same-runner numbers.
+      - name: Clear committed baseline results from the workspace
+        run: find harness/results -type f ! -name .gitkeep -delete
+
+      - name: Bench — kairo, all frameworks, single pass (per-process)
+        working-directory: harness
+        run: pnpm run bench --suites kairo --timeout 900000 2>&1 | tee "$GITHUB_WORKSPACE/kairo.log"
+
+      - name: Bench — tier-0 shapes, all frameworks (all shapes)
+        working-directory: harness
+        env:
+          FRAMEWORKS_CSV: ${{ needs.plan.outputs.frameworks_csv }}
+          SHAPES_REPS: ${{ inputs.shapes_reps || '5' }}
+        run: |
+          pnpm exec tsx bench/shapes.ts \
+            --frameworks "$FRAMEWORKS_CSV" \
+            --reps "$SHAPES_REPS" 2>&1 | tee "$GITHUB_WORKSPACE/shapes.log"
+
+      # RATIOS vs alien-v3, not absolute thresholds: hosted runners are too
+      # noisy for absolute gates, but same-invocation ratios hold up.
+      - name: Ratio table -> job summary
+        run: |
+          {
+            echo "## field-bench @ ${GITHUB_SHA} ($(uname -m), $(node --version))"
+            echo ""
+            echo "Single pass on a shared runner: read RATIOS vs ${BASELINE}, not the absolute ms."
+            echo ""
+            echo "### kairo (per-process, fastest-of-N; ratio vs ${BASELINE})"
+            echo ""
+            node harness/util/ratio-table.mjs --baseline "$BASELINE" harness/results/*.json
+            echo ""
+            echo "### tier-0 shapes (min-of-reps; ratios vs ${BASELINE} are printed inline)"
+            echo ""
+            echo '```'
+            sed -n '/^shape /,$p' shapes.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: field-bench-${{ github.sha }}
+          path: |
+            harness/results/*.json
+            harness/results/*.csv
+            kairo.log
+            shapes.log
+          if-no-files-found: error
+
+  # Optional: the React-seam field. Heavy (yarn install + React fork build),
+  # so it only runs when explicitly requested via the dispatch input.
+  react-seam:
+    needs: conformance
+    if: github.event_name == 'workflow_dispatch' && inputs.react_seam
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init submodules (harness set + vendor/react for the fork build)
+        run: |
+          # shellcheck disable=SC2086  # HARNESS_SUBMODULES is a deliberate space-separated list
+          git submodule update --init $HARNESS_SUBMODULES vendor/react
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build upstream alien-signals
+        working-directory: upstream-alien-signals
+        run: |
+          pnpm install --ignore-workspace --frozen-lockfile
+          pnpm run build
+
+      # The React fork build (fork/build-react.sh) runs the fork's own rollup
+      # pipeline; it needs vendor/react's yarn dependency tree.
+      - name: Install vendor/react deps (yarn)
+        working-directory: vendor/react
+        run: yarn install --frozen-lockfile
+
+      - name: Build the React fork (vendor/react -> build/oss-experimental)
+        run: fork/build-react.sh
+
+      # Full root install: with the fork build present, the react link:
+      # overrides resolve. Fall back to non-frozen in case a contender-only
+      # manifest change landed ahead of its lockfile update.
+      - name: Install (root, full)
+        run: |
+          pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
+
+      - name: Build react-seam-bench
+        working-directory: packages/react-seam-bench
+        run: pnpm run build
+
+      - name: Run the react-seam-bench field (interleaved rounds, medians)
+        working-directory: packages/react-seam-bench
+        run: node dist/isolated.js > "$GITHUB_WORKSPACE/react-seam.csv"
+
+      - name: Seam results -> job summary
+        run: |
+          {
+            echo "## react-seam-bench @ ${GITHUB_SHA} ($(uname -m), $(node --version))"
+            echo ""
+            echo "Medians of interleaved isolated rounds; jsdom = JS-side cost only."
+            echo ""
+            echo '```'
+            cat react-seam.csv
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: react-seam-${{ github.sha }}
+          path: react-seam.csv
+          if-no-files-found: error

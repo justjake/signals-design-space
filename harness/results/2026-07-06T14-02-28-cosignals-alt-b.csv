@@ -1,0 +1,21 @@
+framework,suite,test,time
+cosignals-alt-b,kairo,avoidablePropagation,143.92470849999995
+cosignals-alt-b,kairo,broadPropagation,111.70918799999981
+cosignals-alt-b,kairo,deepPropagation,48.655062499999985
+cosignals-alt-b,kairo,diamond,108.80322949999982
+cosignals-alt-b,kairo,mux,90.39585399999987
+cosignals-alt-b,kairo,repeatedObservers,17.059146000000055
+cosignals-alt-b,kairo,triangle,32.94212500000003
+cosignals-alt-b,kairo,unstable,23.49985400000014
+cosignals-alt-b,kairo,molBench,15.726145499999802
+cosignals-alt-b,sbench,createSignals,10.481791999999956
+cosignals-alt-b,sbench,createComputations,58.15793749999875
+cosignals-alt-b,sbench,updateSignals,263.99360349999733
+cosignals-alt-b,cellx,cellx1000,6.714957000000027
+cosignals-alt-b,cellx,cellx2500,25.726916999999986
+cosignals-alt-b,dynamic,2-10x5 - lazy80%,204.1591249999999
+cosignals-alt-b,dynamic,6-10x10 - dyn25% - lazy80%,126.79770800000006
+cosignals-alt-b,dynamic,4-1000x12 - dyn5%,359.0300420000003
+cosignals-alt-b,dynamic,25-1000x5,390.3572090000007
+cosignals-alt-b,dynamic,3-5x500,103.25162499999897
+cosignals-alt-b,dynamic,6-100x15 - dyn50%,219.84283399999913

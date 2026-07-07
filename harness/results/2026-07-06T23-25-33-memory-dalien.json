@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "dalien",
+  "timestamp": "2026-07-06T23-25-33",
+  "node": "v24.16.0",
+  "loadavg": [
+    8.1435546875,
+    7.03564453125,
+    5.22119140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "dalien",
+      "metric": "signals-10k",
+      "kb": 3923.67
+    },
+    {
+      "framework": "dalien",
+      "metric": "computeds-10k",
+      "kb": 3642.9
+    },
+    {
+      "framework": "dalien",
+      "metric": "effects-10k",
+      "kb": 3553.16
+    },
+    {
+      "framework": "dalien",
+      "metric": "grid-100x100",
+      "kb": 6832.09
+    }
+  ]
+}

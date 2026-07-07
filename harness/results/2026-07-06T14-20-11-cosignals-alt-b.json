@@ -1,0 +1,142 @@
+{
+  "kind": "bench",
+  "framework": "cosignals-alt-b",
+  "suites": [
+    "kairo",
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-06T14-20-11",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    5.19384765625,
+    5.4423828125,
+    5.61328125
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "avoidablePropagation",
+      "time": 136.85243749999995
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "broadPropagation",
+      "time": 110.92735400000004
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "deepPropagation",
+      "time": 49.13752049999994
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "diamond",
+      "time": 105.56927050000013
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "mux",
+      "time": 88.18347900000026
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "repeatedObservers",
+      "time": 16.953208500000528
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "triangle",
+      "time": 32.74108350000006
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "unstable",
+      "time": 23.317062000000078
+    },
+    {
+      "suite": "kairo",
+      "framework": "cosignals-alt-b",
+      "test": "molBench",
+      "time": 14.581436999999823
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignals-alt-b",
+      "test": "createSignals",
+      "time": 10.80952099999999
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignals-alt-b",
+      "test": "createComputations",
+      "time": 58.263126500000226
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignals-alt-b",
+      "test": "updateSignals",
+      "time": 262.4377295000013
+    },
+    {
+      "suite": "cellx",
+      "framework": "cosignals-alt-b",
+      "test": "cellx1000",
+      "time": 6.569960999999992
+    },
+    {
+      "suite": "cellx",
+      "framework": "cosignals-alt-b",
+      "test": "cellx2500",
+      "time": 22.820707000000027
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignals-alt-b",
+      "test": "2-10x5 - lazy80%",
+      "time": 199.02300000000002
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignals-alt-b",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 126.32495799999992
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignals-alt-b",
+      "test": "4-1000x12 - dyn5%",
+      "time": 349.7624169999999
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignals-alt-b",
+      "test": "25-1000x5",
+      "time": 390.0879590000004
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignals-alt-b",
+      "test": "3-5x500",
+      "time": 92.55000000000109
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignals-alt-b",
+      "test": "6-100x15 - dyn50%",
+      "time": 217.0427920000002
+    }
+  ]
+}

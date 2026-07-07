@@ -1,0 +1,21 @@
+framework,suite,test,time
+arena-spkh,kairo,avoidablePropagation,119.31929199999996
+arena-spkh,kairo,broadPropagation,85.86908299999993
+arena-spkh,kairo,deepPropagation,37.97152099999994
+arena-spkh,kairo,diamond,86.86577050000005
+arena-spkh,kairo,mux,78.07072900000003
+arena-spkh,kairo,repeatedObservers,16.143270999999913
+arena-spkh,kairo,triangle,27.404124999999567
+arena-spkh,kairo,unstable,18.189686999999594
+arena-spkh,kairo,molBench,15.61362550000058
+arena-spkh,sbench,createSignals,3.754374999999996
+arena-spkh,sbench,createComputations,36.73516600000016
+arena-spkh,sbench,updateSignals,280.5708949999994
+arena-spkh,cellx,cellx1000,5.007917000000013
+arena-spkh,cellx,cellx2500,12.625334000000024
+arena-spkh,dynamic,2-10x5 - lazy80%,141.50104199999998
+arena-spkh,dynamic,6-10x10 - dyn25% - lazy80%,100.71791699999994
+arena-spkh,dynamic,4-1000x12 - dyn5%,311.82708300000013
+arena-spkh,dynamic,25-1000x5,317.78650000000016
+arena-spkh,dynamic,3-5x500,74.55395800000042
+arena-spkh,dynamic,6-100x15 - dyn50%,168.49291699999958

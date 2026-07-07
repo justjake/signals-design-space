@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "sweep",
+  "timestamp": "2026-07-06T23-25-33",
+  "node": "v24.16.0",
+  "loadavg": [
+    8.1435546875,
+    7.03564453125,
+    5.22119140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "sweep",
+      "metric": "signals-10k",
+      "kb": 2824.23
+    },
+    {
+      "framework": "sweep",
+      "metric": "computeds-10k",
+      "kb": 3848.33
+    },
+    {
+      "framework": "sweep",
+      "metric": "effects-10k",
+      "kb": 5593.27
+    },
+    {
+      "framework": "sweep",
+      "metric": "grid-100x100",
+      "kb": 9077.52
+    }
+  ]
+}

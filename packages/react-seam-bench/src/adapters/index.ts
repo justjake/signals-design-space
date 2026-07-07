@@ -15,6 +15,8 @@ const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
 	'dalien-uses': () => import('./dalien.js'),
 	'baseline-context': () => import('./baselineContext.js'),
 	'baseline-local': () => import('./baselineLocal.js'),
+	'alt-a-uses': () => import('./altA.js'),
+	'alt-b-uses': () => import('./altB.js'),
 };
 
 export async function loadContender(name: string): Promise<Contender> {

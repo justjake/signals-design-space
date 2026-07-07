@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "cosignals-alt-b",
+  "timestamp": "2026-07-06T23-25-33",
+  "node": "v24.16.0",
+  "loadavg": [
+    8.1435546875,
+    7.03564453125,
+    5.22119140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "cosignals-alt-b",
+      "metric": "signals-10k",
+      "kb": 3759.16
+    },
+    {
+      "framework": "cosignals-alt-b",
+      "metric": "computeds-10k",
+      "kb": 6134.7
+    },
+    {
+      "framework": "cosignals-alt-b",
+      "metric": "effects-10k",
+      "kb": 4407.09
+    },
+    {
+      "framework": "cosignals-alt-b",
+      "metric": "grid-100x100",
+      "kb": 11029.91
+    }
+  ]
+}

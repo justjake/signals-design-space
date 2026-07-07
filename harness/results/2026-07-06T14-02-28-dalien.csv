@@ -1,0 +1,21 @@
+framework,suite,test,time
+dalien,kairo,avoidablePropagation,107.74622950000007
+dalien,kairo,broadPropagation,73.68406249999998
+dalien,kairo,deepPropagation,32.083458000000064
+dalien,kairo,diamond,89.42533299999991
+dalien,kairo,mux,68.58749999999986
+dalien,kairo,repeatedObservers,13.302395999999817
+dalien,kairo,triangle,28.68787499999962
+dalien,kairo,unstable,17.58122900000035
+dalien,kairo,molBench,14.58529150000004
+dalien,sbench,createSignals,5.3834794999999644
+dalien,sbench,createComputations,43.556458000000475
+dalien,sbench,updateSignals,245.1596040000013
+dalien,cellx,cellx1000,5.727165000000014
+dalien,cellx,cellx2500,16.820039999999977
+dalien,dynamic,2-10x5 - lazy80%,154.7640419999999
+dalien,dynamic,6-10x10 - dyn25% - lazy80%,108.89562500000011
+dalien,dynamic,4-1000x12 - dyn5%,298.06787499999973
+dalien,dynamic,25-1000x5,335.47662500000024
+dalien,dynamic,3-5x500,85.0780420000001
+dalien,dynamic,6-100x15 - dyn50%,166.93825000000106

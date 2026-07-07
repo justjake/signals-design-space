@@ -1,0 +1,5 @@
+framework,metric,kb
+arena-host-fused,signals-10k,3783.57
+arena-host-fused,computeds-10k,4036.05
+arena-host-fused,effects-10k,2798.09
+arena-host-fused,grid-100x100,6492.47

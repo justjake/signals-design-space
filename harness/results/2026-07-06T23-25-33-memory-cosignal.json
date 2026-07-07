@@ -1,0 +1,35 @@
+{
+  "kind": "memory",
+  "framework": "cosignal",
+  "timestamp": "2026-07-06T23-25-33",
+  "node": "v24.16.0",
+  "loadavg": [
+    8.1435546875,
+    7.03564453125,
+    5.22119140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "framework": "cosignal",
+      "metric": "signals-10k",
+      "kb": 2798.24
+    },
+    {
+      "framework": "cosignal",
+      "metric": "computeds-10k",
+      "kb": 3330.59
+    },
+    {
+      "framework": "cosignal",
+      "metric": "effects-10k",
+      "kb": 2851.72
+    },
+    {
+      "framework": "cosignal",
+      "metric": "grid-100x100",
+      "kb": 5821.84
+    }
+  ]
+}
