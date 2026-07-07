@@ -6,7 +6,7 @@
  * READING ORDER for the package: this header (vocabulary), then graph.ts
  * (the kernel), then concurrent.ts (the engine and its vocabulary), then the
  * mechanism modules it composes — WriteLog.ts, Batch.ts, World.ts,
- * WorldArena.ts, RenderPass.ts, Subscription.ts, deliver.ts, observation.ts,
+ * WorldArena.ts, RenderPass.ts, SubscriptionManager.ts, deliver.ts, observation.ts,
  * settlement.ts, engine.ts (the composition root) — with suspense.ts and
  * lifecycle.ts beside the policy layer, and errors.ts/trace.ts/graphviz.ts
  * self-contained.

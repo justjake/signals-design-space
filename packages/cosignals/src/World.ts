@@ -21,7 +21,7 @@
  *
  * THE SHARED ENGINE CORE RECORD (`EngineCore`) is declared here: the one
  * deps/table record the strongly-connected mechanisms — World, WorldArena,
- * settlement (and the Subscription boundary revalidation) — are wired
+ * settlement (and the subscription manager's boundary revalidation) — are wired
  * through. `createEngineCore` builds it at the composition site with the
  * resident-state edges filled and every factory slot stubbed; each factory
  * then assigns its operation table onto the record, and every cross-module
@@ -36,12 +36,14 @@
 import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js';
 import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './graph.js';
 import { ScheduleError } from './errors.js';
-import { probes } from './engine.js';
+import { probes, type ConcurrentEngineHost } from './engine.js';
 import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
-import type { Batch, BatchSlot, BatchSlotMeta, BatchSlotSet, BatchTable } from './Batch.js';
+import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
 import type { AnyNode, ArenaInitInts, AtomNode, ComputedNode, NodeId, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
-import type { CaptureFrame } from './Subscription.js';
-import type { DeliverTable, NotifyState } from './deliver.js';
+import type { ObservationIndex } from './observation.js';
+import type { CaptureFrame, SubscriptionManager } from './SubscriptionManager.js';
+import type { CompactionTable } from './WriteLog.js';
+import type { NotificationQueue, NotifyState } from './deliver.js';
 
 /** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
 type NodeIndex = number;
@@ -73,7 +75,7 @@ export const NOT_ROUTED: { readonly notRouted: true } = { notRouted: true };
  *    resident orchestration) reads/writes — each field's home mechanism is
  *    noted;
  *  - late-bound operation slots: assigned by createWorld / createWorldArena /
- *    createSettlement (and the Subscription factory for its one boundary
+ *    createSettlement (and the subscription manager factory for its one boundary
  *    slot), read at call time.
  */
 export type EngineCore = {
@@ -88,8 +90,8 @@ export type EngineCore = {
 	lastWalk: number[];
 	/** Observed-consumer refcount column (identity alias of observation.ts's). */
 	obsRefs: number[];
-	/** The observation table's dep-snapshot re-pointer (observation.ts syncDeps). */
-	obsSyncDeps: (node: AnyNode, list: AnyNode[]) => void;
+	/** The observation index's dep-snapshot re-pointer (observation.ts). */
+	syncObservedDeps: ObservationIndex['syncObservedDeps'];
 	/** Watchers by id (identity alias). */
 	watchers: Map<WatcherId, Watcher>;
 	/** RenderPass records by id (identity alias — RenderPass.ts owns every
@@ -100,40 +102,42 @@ export type EngineCore = {
 	/** Root records by id (identity alias; arenaOf PROBES it — creation stays `root`). */
 	roots: Map<RootId, RootState>;
 	/** The notification queue mechanism (deliver.ts table + its live scalars). */
-	notify: DeliverTable;
+	notify: NotificationQueue;
 	notifyState: NotifyState;
-	/** Root record lookup-or-create (resident: the committed/mountFix
+	/** Root record lookup-or-create (the engine host's — resident: the
+	 * committed/mountFix
 	 * membership consults materialize the root record — reference-model parity). */
-	root(id: RootId): RootState;
-	/** Public-handle resolution (engine.ts content allocation — a handle with
+	root: ConcurrentEngineHost['root'];
+	/** Public-handle resolution (the engine host's — content allocation: a
+	 * handle with
 	 * no engine content gets its node record on first participation; base
 	 * seeds from kernel-current, which IS its full committed history by the
 	 * quiet invariant). */
-	nodeForAtom(atom: Atom<unknown>): AtomNode;
-	nodeForComputed(c: Computed<unknown>): ComputedNode;
-	/** Quiet-state recompute at pipeline transitions (resident derivation until
-	 * the engine composition owns it — batch open/retire, render start/end). */
+	nodeForAtom: ConcurrentEngineHost['nodeForAtom'];
+	nodeForComputed: ConcurrentEngineHost['nodeForComputed'];
+	/** Quiet-state recompute at pipeline transitions (the composition-owned
+	 * derivation — batch open/retire, render start/end). */
 	recomputeQuiet(): void;
-	/** The one global sequence clock (resident fields until the engine
-	 * composition owns them): increment-and-read, plain read (render pins),
+	/** The one global sequence clock (the engine host's module fields):
+	 * increment-and-read, plain read (render pins),
 	 * the committed-advance read (mount-fixup baselines), and the
 	 * committed-advance bump (per-root commits, history-changing retirements). */
-	nextSeq(): Seq;
-	getSeq(): Seq;
-	getCommittedAdvance(): Seq;
-	advanceCommitted(): void;
+	nextSeq: ConcurrentEngineHost['nextSeq'];
+	getSeq: ConcurrentEngineHost['getSeq'];
+	getCommittedAdvance: ConcurrentEngineHost['getCommittedAdvance'];
+	advanceCommitted: ConcurrentEngineHost['advanceCommitted'];
 	/** Initial arena buffer size in ints (EngineResetOptions knob). */
 	arenaInitInts: ArenaInitInts;
 
 	// ---- composition-assigned tables (assigned by the composition site right
 	// after their factories run — before any operation can call them; they are
 	// not creation deps because their factories take the core record) ----
-	/** The batch mechanism + retirement table (Batch.ts — the render-close
+	/** The batch manager (Batch.ts — the render-close
 	 * orchestration and the resident write path reach it here). */
-	batch: BatchTable;
+	batch: BatchManager;
 	/** Write-log compaction over every candidate atom (WriteLog.ts
 	 * compactAll — retirement's fold step and the render-close pin release). */
-	compactAll(): void;
+	compactAll: CompactionTable['compactAll'];
 
 	// ---- shared mutable state ----
 	/** The trace recorder slot — the engine's ONLY instrumentation output
@@ -155,8 +159,9 @@ export type EngineCore = {
 	evalDepth: number;
 	/** True inside an updater/reducer/equals callback (reads+writes throw). (World) */
 	inFoldCallback: boolean;
-	/** The core capture frame `captureRun` opens (Subscription state; the
-	 * routing resolution consults it per routed read — see Subscription.ts). */
+	/** The core capture frame `captureRun` opens (subscription-manager state;
+	 * the routing resolution consults it per routed read — see
+	 * SubscriptionManager.ts). */
 	captureFrame: CaptureFrame | undefined;
 	/** >0 while a hook-initiated evaluation may legally suspend the render
 	 * (the bindings' `evaluateSuspending` bumps it via the class accessor);
@@ -185,7 +190,7 @@ export type EngineCore = {
 	/** Per-walk visited generation source (delivery walk, drains, closures). */
 	walkGen: number;
 	/** Live subscription count (fast bail on the boundary-scan paths — owned
-	 * by the Subscription factory; resident/settlement pre-checks read it). */
+	 * by the subscription manager; resident/settlement pre-checks read it). */
 	committedSubCount: number;
 	// ---- direct listeners (the bindings' consumption surface — assigned
 	// through the class accessor pair; the delivery/fixup/correction sites
@@ -224,7 +229,8 @@ export type EngineCore = {
 	syncReadRouting(): void;
 	setWorldProvider(provider: (() => World | undefined) | undefined): void;
 	/** Assigns the capture frame AND re-syncs the read-routing arming (the
-	 * two-step every captureRun edge performs — Subscription's one writer). */
+	 * two-step every captureRun edge performs — the subscription manager's
+	 * one writer). */
 	setCaptureFrame(f: CaptureFrame | undefined): void;
 	routedRead(atom: AtomNode, world: World): Value;
 	/** The public `.state` routed-read bodies (index.ts calls the module
@@ -260,10 +266,10 @@ export type EngineCore = {
 	arenaOpEpilogue(): void;
 	endOp(): void;
 	setSettleCap(n: number): void;
-	pendingSettleCount(): number;
+	getPendingSettleCount(): number;
 
-	// ---- late-bound: Subscription ----
-	revalidateCommittedSubs(rootFilter: RootId | undefined): void;
+	// ---- late-bound: the subscription manager ----
+	revalidateCommittedSubscriptions: SubscriptionManager['revalidateCommittedSubscriptions'];
 
 	// ---- late-bound: deliver (the walk orchestration) ----
 	/** The ONE urgent pre-paint watcher correction (deliver.ts). */
@@ -276,7 +282,7 @@ export type EngineCore = {
 	/** THE watcher→node resolution (RenderPass.ts — generation-checked). */
 	resolveWatcherNode(w: Watcher): AnyNode | undefined;
 	/** The minimum live render pin (compaction's pin clause floor). */
-	minLivePin(): Seq;
+	getMinLivePin(): Seq;
 };
 
 /** The resident-provided slice of the core record (what the composition site
@@ -289,7 +295,7 @@ export type EngineCoreDeps = Pick<
 	| 'nodeToWatchers'
 	| 'lastWalk'
 	| 'obsRefs'
-	| 'obsSyncDeps'
+	| 'syncObservedDeps'
 	| 'watchers'
 	| 'idToRenderPass'
 	| 'rootToOpenRender'
@@ -384,9 +390,9 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		arenaOpEpilogue: LATE,
 		endOp: LATE,
 		setSettleCap: LATE,
-		pendingSettleCount: LATE,
-		// late-bound: Subscription
-		revalidateCommittedSubs: LATE,
+		getPendingSettleCount: LATE,
+		// late-bound: the subscription manager
+		revalidateCommittedSubscriptions: LATE,
 		// late-bound: deliver
 		correctWatcher: LATE,
 		quietDrain: LATE,
@@ -394,7 +400,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		deliveryWalk: LATE,
 		// late-bound: RenderPass
 		resolveWatcherNode: LATE,
-		minLivePin: LATE,
+		getMinLivePin: LATE,
 	};
 }
 
@@ -409,7 +415,7 @@ export function createWorld(core: EngineCore): void {
 	const idToNode = core.idToNode;
 	const roots = core.roots;
 	const obsRefs = core.obsRefs;
-	const obsSyncDeps = core.obsSyncDeps;
+	const syncObservedDeps = core.syncObservedDeps;
 	/** Mark column (by nodeIndex) + generation for per-world cycle detection (no Set allocs). */
 	const evalMark = core.evalMark;
 	let evalGen: EvalGen = 0;
@@ -454,7 +460,7 @@ export function createWorld(core: EngineCore): void {
 		__setRoutingActive(c.activeWorld !== undefined || worldProvider !== undefined || c.captureFrame !== undefined);
 	}
 
-	/** Assigns the capture frame and re-syncs the arming (Subscription's
+	/** Assigns the capture frame and re-syncs the arming (the subscription manager's
 	 * captureRun edges — both the open and the close perform exactly this pair). */
 	function setCaptureFrame(f: CaptureFrame | undefined): void {
 		core.captureFrame = f;
@@ -785,7 +791,7 @@ export function createWorld(core: EngineCore): void {
 			// evaluations the sync may trigger run on a clean frame stack. On
 			// a throw the list holds the deps recorded up to it (see obsEnter
 			// for the rule).
-			if (obsCaptured !== undefined) obsSyncDeps(node, obsCaptured);
+			if (obsCaptured !== undefined) syncObservedDeps(node, obsCaptured);
 		}
 	}
 

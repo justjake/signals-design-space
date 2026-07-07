@@ -45,7 +45,7 @@ const ENGINE_MODULES = [
 	'src/World.ts',
 	'src/WorldArena.ts',
 	'src/settlement.ts',
-	'src/Subscription.ts',
+	'src/SubscriptionManager.ts',
 	'src/RenderPass.ts',
 	'src/graph.ts',
 	'src/suspense.ts',

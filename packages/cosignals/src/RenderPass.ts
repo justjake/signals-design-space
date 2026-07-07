@@ -23,7 +23,8 @@
  *    components — with its dependency-closure walks (arena legs through the
  *    core record; the kernel leg walks the kernel's own exported layout).
  *
- * `createRenderPass` is a factory in the kernel's own style: it closes over
+ * `createRenderPassManager` is a factory in the kernel's own style: it
+ * closes over
  * its state (the render/watcher id counters, the stale-skip diagnostic) and
  * reaches every other mechanism through the shared engine core record's
  * late-bound slots at call time (World evaluation, arena claim/decay/fanout,
@@ -39,6 +40,7 @@ import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
 import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
 import { kernelGenOf, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
+import type { ObservationIndex } from './observation.js';
 import type { EngineCore } from './World.js';
 import type { AnyNode, CommitGen, NodeId, RenderPassId, RootId, Seq, Value, WatcherId } from './concurrent.js';
 
@@ -102,7 +104,8 @@ export class Watcher {
 	 * loudly on mismatch — a dormant watcher whose node died must never bind
 	 * the record's next tenant. */
 	readonly nodeRecordGen: Generation;
-	/** The engine's observed-closure shift (see obsShift): the `live`
+	/** The engine's observed-closure shift (the observation index's
+	 * shiftObservedCount): the `live`
 	 * setter feeds the watched node's observed-consumer refcount through it
 	 * (generation-checked engine-side — a stale watcher's flips shift
 	 * nothing), and the observation index propagates retains transitively
@@ -133,7 +136,7 @@ export class Watcher {
 	 * Subscribed-for-delivery bit. The setter is the watcher half of the
 	 * observation union (AtomOptions.effect): a live watcher holds one
 	 * observed-consumer ref on its node, and the engine's observation
-	 * index (obsShift) carries that ref transitively — a watcher over an
+	 * index (shiftObservedCount) carries that ref transitively — a watcher over an
 	 * atom node retains that atom's lifecycle directly; a watcher over an
 	 * engine computed retains every atom the computed's current evaluation
 	 * (transitively) reads. EVERY liveness site routes through here — the
@@ -157,14 +160,15 @@ export class Watcher {
 }
 
 /** The resident-state edges the render lifecycle consumes (provided by the
- * engine's composition site). */
-export type RenderPassDeps = {
-	/** The observation index's refcount shift (observation.ts `shift`) — the
+ * engine's composition site), as a named slice of the observation index's
+ * record type. */
+export type RenderPassManagerDeps = {
+	/** The observation index (observation.ts): its refcount shift — the
 	 * watcher liveness seam feeds it, generation-checked. */
-	obsShift(node: AnyNode, delta: 1 | -1): void;
+	observation: Pick<ObservationIndex, 'shiftObservedCount'>;
 };
 
-export type RenderPassTable = {
+export type RenderPassManager = {
 	renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass;
 	renderYield(id: RenderPassId): void;
 	renderResume(id: RenderPassId): void;
@@ -178,11 +182,13 @@ export type RenderPassTable = {
 	dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId>;
 	/** Stale-watcher loud skips (the dormant-watcher aliasing pin) —
 	 * diagnostics/test surface. */
-	staleWatcherSkips(): number;
+	getStaleWatcherSkips(): number;
 };
 
-export function createRenderPass(core: EngineCore, deps: RenderPassDeps): RenderPassTable {
-	// Stable resident containers and tables, aliased once (identity-shared).
+export function createRenderPassManager(core: EngineCore, deps: RenderPassManagerDeps): RenderPassManager {
+	// Stable resident containers and tables, aliased once (identity-shared);
+	// the observation shift binds once at composition (the codegen doctrine).
+	const { shiftObservedCount } = deps.observation;
 	const idToNode = core.idToNode;
 	const idToRenderPass = core.idToRenderPass;
 	const rootToOpenRender = core.rootToOpenRender;
@@ -226,12 +232,12 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 	 * generation-checked — a stale watcher's liveness flips shift nothing
 	 * (skips pair up: tenancy generations only ever grow, so a stale stamp
 	 * can never re-validate between a skipped retain and its release). */
-	const watcherObs = (w: Watcher, delta: 1 | -1): void => {
+	const shiftWatcherObservation = (w: Watcher, delta: 1 | -1): void => {
 		const node = resolveWatcherNode(w);
-		if (node !== undefined) deps.obsShift(node, delta);
+		if (node !== undefined) shiftObservedCount(node, delta);
 	};
 
-	function minLivePin(): Seq {
+	function getMinLivePin(): Seq {
 		let min = Number.POSITIVE_INFINITY;
 		for (const p of rootToOpenRender.values()) if (p.pin < min) min = p.pin;
 		return min;
@@ -315,7 +321,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 		const p = renderPassById(renderPassId);
 		if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
 		const value = core.evaluate(node, { kind: 'render', render: p });
-		const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, kernelGenOf(node.id), watcherObs, value, {
+		const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, kernelGenOf(node.id), shiftWatcherObservation, value, {
 			renderPassId: p.id, pin: p.pin,
 			maskBits: p.maskBits, includedBits: p.includedBits,
 			rootCommitGen: core.root(p.root).commitGen,
@@ -439,7 +445,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 			// re-check from renderEnd's own boundary; here the call IS the
 			// boundary). A no-op call re-checks nothing — the report's common
 			// case re-names batches the sweep already locked in.
-			if (changed) core.revalidateCommittedSubs(rootId);
+			if (changed) core.revalidateCommittedSubscriptions(rootId);
 			core.endOp();
 		} finally {
 			core.opDepth--;
@@ -548,7 +554,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 			// Boundary rule: the frame close is the deferred flush point for
 			// boundaries that occurred while this root's frame was open (the discard
 			// itself advances nothing; committed truth may already have moved).
-			core.revalidateCommittedSubs(render.root);
+			core.revalidateCommittedSubscriptions(render.root);
 			core.endOp();
 			return;
 		}
@@ -664,7 +670,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 		// re-checks once, not per batch.
 		// Retirements folded into this commit moved committed truth for every
 		// root, so the scan widens (each root still open-frame-deferred).
-		core.revalidateCommittedSubs((opts?.retireAtCommit ?? []).length > 0 ? undefined : render.root);
+		core.revalidateCommittedSubscriptions((opts?.retireAtCommit ?? []).length > 0 ? undefined : render.root);
 		core.endOp();
 	}
 
@@ -861,7 +867,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 
 	// ---- the operation table (late-bound onto the shared core record) ----
 	core.resolveWatcherNode = resolveWatcherNode;
-	core.minLivePin = minLivePin;
+	core.getMinLivePin = getMinLivePin;
 
 	return {
 		renderStart,
@@ -875,6 +881,6 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 		commitBatches,
 		renderEnd,
 		dependencyClosureOf,
-		staleWatcherSkips: () => staleWatcherSkips,
+		getStaleWatcherSkips: () => staleWatcherSkips,
 	};
 }

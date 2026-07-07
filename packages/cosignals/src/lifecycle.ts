@@ -4,7 +4,8 @@
  * the UNION of consumer kinds — kernel subscribers (live computed chains,
  * core effect()s: one ref per non-engine-owned kernel link to the atom, fed
  * by the kernel's linkInsert/unlink through
- * `lifecycleWatched`/`lifecycleUnwatched`) and watchers (subscribed UI
+ * `lifecycleWatched`/`lifecycleUnwatched`, each a strict edge into
+ * `shiftLifecycleCount`) and watchers (subscribed UI
  * components: one ref per live watcher, fed by the concurrent engine's
  * observation index through `__lifecycleRetain`/`__lifecycleRelease`). The
  * effect runs on the union's
@@ -129,7 +130,7 @@ function maybeDropDormant(state: LifecycleState): void {
 
 /** The active context — built at rehydration, id-keyed, handle-free (see
  * the module header). */
-function makeLifecycleCtx(id: NodeId): AtomCtx<unknown> {
+function createLifecycleContext(id: NodeId): AtomCtx<unknown> {
 	return {
 		get state(): unknown {
 			return untracked(() => E.read(id));
@@ -143,7 +144,7 @@ function makeLifecycleCtx(id: NodeId): AtomCtx<unknown> {
 	};
 }
 
-function lifecycleShift(id: NodeId, delta: -1 | 1): void {
+function shiftLifecycleCount(id: NodeId, delta: -1 | 1): void {
 	let state = lifecycleStates.get(id);
 	if (state === undefined) {
 		if (delta < 0) {
@@ -165,7 +166,7 @@ function lifecycleShift(id: NodeId, delta: -1 | 1): void {
 		state = {
 			id,
 			effect: fn as (ctx: AtomCtx<unknown>) => void | (() => void),
-			ctx: makeLifecycleCtx(id),
+			ctx: createLifecycleContext(id),
 			cleanup: undefined,
 			refs: 0,
 			wantMounted: false,
@@ -193,11 +194,11 @@ function lifecycleShift(id: NodeId, delta: -1 | 1): void {
 // of the liveness bit (SUBS empty↔non-empty), so the kernel's contribution
 // to the union refcount is exactly 0 or 1.
 export function lifecycleWatched(id: NodeId): void {
-	lifecycleShift(id, 1);
+	shiftLifecycleCount(id, 1);
 }
 
 export function lifecycleUnwatched(id: NodeId): void {
-	lifecycleShift(id, -1);
+	shiftLifecycleCount(id, -1);
 }
 
 /**
@@ -209,10 +210,10 @@ export function lifecycleUnwatched(id: NodeId): void {
  * never enter the engine's trace stream. @internal
  */
 export function __lifecycleRetain(id: NodeId): void {
-	lifecycleShift(id, 1);
+	shiftLifecycleCount(id, 1);
 }
 
 /** @internal */
 export function __lifecycleRelease(id: NodeId): void {
-	lifecycleShift(id, -1);
+	shiftLifecycleCount(id, -1);
 }

@@ -3,8 +3,8 @@
  * A node is OBSERVED while a live watcher consumes it — directly, or
  * transitively through the strong (tracked) dep edges of observed
  * computeds. Observed ATOMS hold exactly one retain on the kernel's
- * observed-lifecycle union (AtomOptions.effect); the kernel's lifecycleShift
- * is a Map-miss no-op for atoms without the option, and these shifts fire
+ * observed-lifecycle union (AtomOptions.effect); the kernel's
+ * shiftLifecycleCount is a Map-miss no-op for atoms without the option, and these shifts fire
  * only at closure-membership EDGES (never per evaluation), so routing every
  * closure atom through it costs nothing measurable and needs no second
  * has-lifecycle registry here. obsDeps snapshots follow the CURRENT edge set
@@ -14,7 +14,7 @@
  * observation index deliberately survives quiescence: the closure is a
  * property of live watchers, not of the episode.
  *
- * `createObservation` is a factory in the kernel's own style (index.ts
+ * `createObservationIndex` is a factory in the kernel's own style (index.ts
  * `createEngine`): it closes over the two dense per-nodeIndex columns and
  * returns its operation table. The columns are exposed on the table by
  * IDENTITY (the kernel's shared-side-column pattern): the engine aliases
@@ -28,22 +28,21 @@
 
 import { untracked, __lifecycleRelease, __lifecycleRetain } from './index.js';
 import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
-import type { AnyNode, ComputedNode, Subscription } from './concurrent.js';
+import type { AnyNode, Subscription } from './concurrent.js';
+import type { ConcurrentEngineHost } from './engine.js';
 
 /** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
 type NodeIndex = number;
 
-export type ObservationDeps = {
-	/** The dense node row by NODE INDEX (the identity guard's authority: a
-	 * stale node object whose record re-tenanted must never shift the new
-	 * tenant's count). */
-	nodeAt(ix: NodeIndex): AnyNode | undefined;
-	/** The engine nodes among a computed's CURRENT kernel deps
-	 * (tracked-only by construction — obsEnter's discovery source). */
-	kernelStrongDepsOf(node: ComputedNode): AnyNode[];
+export type ObservationIndexDeps = {
+	/** The engine host's resident slice: the dense node column (the identity
+	 * guard's authority — a stale node object whose record re-tenanted must
+	 * never shift the new tenant's count) and the kernel strong-dep walk
+	 * (tracked-only by construction — enterObservation's discovery source). */
+	host: Pick<ConcurrentEngineHost, 'nodesArr' | 'kernelStrongDepsOf'>;
 };
 
-export type ObservationTable = {
+export type ObservationIndex = {
 	/** Observed-consumer refcount per nodeIndex: +1 per live watcher on the
 	 * node, +1 per observed computed currently holding it in obsDeps.
 	 * (Shared identity — the engine aliases it; see the module header.) */
@@ -53,13 +52,17 @@ export type ObservationTable = {
 	 * store nothing). Sets hold node OBJECTS — see Subscription.obsDeps.
 	 * (Shared identity — the engine aliases it.) */
 	deps: (Set<AnyNode> | undefined)[];
-	shift(node: AnyNode, delta: 1 | -1): void;
-	exit(node: AnyNode): void;
-	syncDeps(node: AnyNode, list: AnyNode[]): void;
-	syncSubObs(sub: Subscription): void;
+	shiftObservedCount(node: AnyNode, delta: 1 | -1): void;
+	exitObservation(node: AnyNode): void;
+	syncObservedDeps(node: AnyNode, list: AnyNode[]): void;
+	syncSubscriptionObservation(sub: Subscription): void;
 };
 
-export function createObservation(deps: ObservationDeps): ObservationTable {
+export function createObservationIndex(deps: ObservationIndexDeps): ObservationIndex {
+	// Composition-time locals (the codegen doctrine): the dense node column is
+	// aliased by identity; the kernel walk binds once.
+	const nodesArr = deps.host.nodesArr;
+	const { kernelStrongDepsOf } = deps.host;
 	const obsRefs: number[] = [0];
 	const obsDeps: (Set<AnyNode> | undefined)[] = [undefined];
 
@@ -72,14 +75,14 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * never move the new tenant's count. Skips pair up: once stale, forever
 	 * stale (rows only move at record free, and re-registration installs a
 	 * different object). */
-	function obsShift(node: AnyNode, delta: 1 | -1): void {
+	function shiftObservedCount(node: AnyNode, delta: 1 | -1): void {
 		const ix = node.ix;
-		if (deps.nodeAt(ix) !== node) return;
+		if (nodesArr[ix] !== node) return;
 		const refs = obsRefs[ix]! + delta;
 		obsRefs[ix] = refs;
-		if (refs === 1 && delta === 1) obsEnter(node);
+		if (refs === 1 && delta === 1) enterObservation(node);
 		else if (refs === 0 && delta === -1) {
-			obsExit(node);
+			exitObservation(node);
 			// Reclamation retry trigger — the obsRefs guard row's clearing
 			// site is THE release-to-zero edge itself, wherever it fires
 			// (dependency recapture, subscription teardown, watcher release).
@@ -101,7 +104,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * throw-on-demand behavior; the deps it read before throwing ARE
 	 * retained (the kernel keeps the partial link prefix).
 	 */
-	function obsEnter(node: AnyNode): void {
+	function enterObservation(node: AnyNode): void {
 		if (node.kind === 'atom') {
 			__lifecycleRetain(node.id);
 			return;
@@ -111,7 +114,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 		} catch {
 			// partial dep prefix retained below
 		}
-		obsSyncDeps(node, deps.kernelStrongDepsOf(node));
+		syncObservedDeps(node, kernelStrongDepsOf(node));
 	}
 
 	/** The last observed consumer left: release the whole retained closure.
@@ -122,7 +125,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * untracked re-sample at the next read — an eager refresh the
 	 * untracked-sampling rule forbids: untracked reads are point-in-time
 	 * samples taken only at tracked re-derivations.) */
-	function obsExit(node: AnyNode): void {
+	function exitObservation(node: AnyNode): void {
 		if (node.kind === 'atom') {
 			__lifecycleRelease(node.id);
 			return;
@@ -130,7 +133,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 		const held = obsDeps[node.ix];
 		if (held === undefined) return;
 		obsDeps[node.ix] = undefined;
-		for (const dep of held) obsShift(dep, -1);
+		for (const dep of held) shiftObservedCount(dep, -1);
 	}
 
 	/**
@@ -141,16 +144,16 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * flush. Skipped if observation left mid-evaluation (the exit already
 	 * released the old snapshot; installing a new one would leak).
 	 */
-	function obsSyncDeps(node: AnyNode, list: AnyNode[]): void {
+	function syncObservedDeps(node: AnyNode, list: AnyNode[]): void {
 		if (obsRefs[node.ix]! === 0) return;
 		const prev = obsDeps[node.ix];
 		const next = new Set(list);
 		obsDeps[node.ix] = next;
 		for (const dep of next) {
-			if (prev === undefined || !prev.delete(dep)) obsShift(dep, 1);
+			if (prev === undefined || !prev.delete(dep)) shiftObservedCount(dep, 1);
 		}
 		if (prev !== undefined) {
-			for (const dep of prev) obsShift(dep, -1);
+			for (const dep of prev) shiftObservedCount(dep, -1);
 		}
 	}
 
@@ -158,7 +161,8 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * A committed subscription's run just installed a new dep snapshot:
 	 * re-point its observation retains (effect dep snapshots count
 	 * toward the observation union exactly like watcher closures: one retain
-	 * per snapshot node through the obsShift observation index; an atom retains its
+	 * per snapshot node through the observation index's shiftObservedCount; an
+	 * atom retains its
 	 * kernel lifecycle, an observed computed retains its current strong deps
 	 * transitively). Retain-new before release-old; same-tick flaps coalesce
 	 * in the kernel's microtask flush. (The snapshot's routing coverage
@@ -166,18 +170,18 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 	 * populate the root's arena, whose marks the re-checks validate
 	 * through.)
 	 */
-	function syncSubObs(e: Subscription): void {
+	function syncSubscriptionObservation(e: Subscription): void {
 		const prev = e.obsDeps;
 		const next = new Set<AnyNode>();
 		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node);
 		e.obsDeps = next;
 		for (const dep of next) {
-			if (prev === undefined || !prev.delete(dep)) obsShift(dep, 1);
+			if (prev === undefined || !prev.delete(dep)) shiftObservedCount(dep, 1);
 		}
 		if (prev !== undefined) {
-			for (const dep of prev) obsShift(dep, -1);
+			for (const dep of prev) shiftObservedCount(dep, -1);
 		}
 	}
 
-	return { refs: obsRefs, deps: obsDeps, shift: obsShift, exit: obsExit, syncDeps: obsSyncDeps, syncSubObs };
+	return { refs: obsRefs, deps: obsDeps, shiftObservedCount, exitObservation, syncObservedDeps, syncSubscriptionObservation };
 }

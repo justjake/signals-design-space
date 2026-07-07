@@ -87,7 +87,7 @@ const BUDGETS: Record<string, number> = {
 	// added the §4.5.3 comparator arm (custom-equality computeds compare
 	// against the ARENA-local previous, HEAD order; the user-fn call itself
 	// is out of line in arenaEqCold, so the hot default arm stays closure-free)
-	arenaSyncObsAfterRefold: 90, // 65: S-B out-of-line obs epilogue (observed nodes only)
+	arenaSyncObservationAfterRefold: 90, // 65: S-B out-of-line observation epilogue (observed nodes only)
 };
 
 // Functions over the V8 inline budget, pinned at current size — B2 emptied
@@ -106,7 +106,8 @@ const OVER_LIMIT_PINS: Record<string, number> = {
 	// a DYNAMIC user-fn call, so inlining the wrapper is not load-bearing
 	// (B2's exit criterion tracked the WALK ARMS — arenaCheckDirty/-Loop,
 	// arenaUpdateShadow, arenaUpdateAndShallow — which all stay inside the budget);
-	// the obs sync epilogue is already out of line (arenaSyncObsAfterRefold).
+	// the observation sync epilogue is already out of line
+	// (arenaSyncObservationAfterRefold).
 };
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

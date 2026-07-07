@@ -148,7 +148,8 @@
  *     operation, at the boundary value, never while the subscription's own
  *     root has an open render frame; cleanup guaranteed at removal.
  *     Their dep snapshots also join the observation union (one
- *     retain per snapshot node through the obsShift observation index).
+ *     retain per snapshot node through the observation index's
+ *     shiftObservedCount).
  *   - episodes / quiescence (epoch reset), as defined above.
  *
  * The engine surface consumes the external-runtime protocol's event shapes
@@ -174,14 +175,14 @@ import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleT
 import { __setReclaimGuardHook, __setRecordFreeHook } from './graph.js';
 import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
 import { createConcurrentEngine, probes, type ConcurrentEngine, type WriteKind } from './engine.js';
-import type { DeliverTable, NotifyState } from './deliver.js';
-import type { ObservationTable } from './observation.js';
+import type { NotificationQueue, NotifyState } from './deliver.js';
+import type { ObservationIndex } from './observation.js';
 import { WriteLog, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
-import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchTable } from './Batch.js';
+import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchManager } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
 import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, kernelNodeIndexOf } from './WorldArena.js';
-import type { Subscription } from './Subscription.js';
-import { Watcher, type RenderPass, type RenderPassTable } from './RenderPass.js';
+import type { Subscription } from './SubscriptionManager.js';
+import { Watcher, type RenderPass, type RenderPassManager } from './RenderPass.js';
 
 // ---- error carriers (errors.ts; re-exported — they are public surface) -----------
 
@@ -381,12 +382,13 @@ export type RootState = {
 
 // The committed `run`-action Subscription record and its whole lifecycle
 // (registration, capture frame, removal, replay, boundary revalidation)
-// live in Subscription.ts; the type is re-exported here — it is engine
+// live in SubscriptionManager.ts; the type is re-exported here — it is
+// engine
 // surface. The `World` type — one self-consistent assignment of values to
 // all atoms — and the fold/evaluation/read-routing machinery live in
 // World.ts, beside the one shared engine-core record the strongly-connected
 // mechanism factories are wired through.
-export type { Subscription } from './Subscription.js';
+export type { Subscription } from './SubscriptionManager.js';
 export type { World } from './World.js';
 
 /** The DECODED shape of the engine's observable events (same shapes as the
@@ -875,7 +877,7 @@ let idToRenderPass: Map<RenderPassId, RenderPass>;
 let roots: Map<RootId, RootState>;
 let watchers: Map<WatcherId, Watcher>;
 /** The committed `run`-action subscription store (alias of
- * Subscription.ts's, by identity). */
+ * SubscriptionManager.ts's, by identity). */
 let idToSubscription: Map<EffectId, Subscription>;
 // (The trace recorder slot and the direct listeners live on the shared
 // engine core record; the `engine` surface object at the bottom of this
@@ -884,7 +886,7 @@ let idToSubscription: Map<EffectId, Subscription>;
 // The notification queue mechanism (deliver.ts): columns + enqueue/flush.
 // `notifyState` aliases the table's two live scalars so the resident hot
 // checks (the quiet-write flush guard) stay plain field reads.
-let notifyOps: DeliverTable;
+let notifyOps: NotificationQueue;
 let notifyState: NotifyState;
 
 /** The one global sequence line every log entry/pin/stamp is a point on. */
@@ -922,10 +924,10 @@ let nodesArr: (AnyNode | undefined)[];
 // evaluation frames probe `obsRefs[ix] > 0` per observed run, and
 // indexNode's gap-fill and the record-free scrub maintain rows in the
 // same loop as the other dense columns.
-let obs: ObservationTable;
+let obs: ObservationIndex;
 let obsRefs: number[];
 let obsDeps: (Set<AnyNode> | undefined)[];
-let obsSyncDeps: ObservationTable['syncDeps'];
+let syncObservedDeps: ObservationIndex['syncObservedDeps'];
 /** Watchers by nodeIndex (the routing walks' collection rows). */
 let nodeToWatchers: (Watcher[] | undefined)[];
 // The write-log compaction mechanism (WriteLog.ts); the batch-state edge of
@@ -937,8 +939,8 @@ let uncompactedAtoms: Set<AtomNode>;
 /** The one open (non-ended) render per root — React renders one tree per
  * root at a time; a same-root restart is a new render. */
 let rootToOpenRender: Map<RootId, RenderPass>;
-// The batch mechanism + retirement lifecycle (Batch.ts).
-let batchOps: BatchTable;
+// The batch manager + retirement lifecycle (Batch.ts).
+let batchOps: BatchManager;
 /** Last-batch cache (windowed writes hit one batch repeatedly) — the
  * write path's cache over the mechanism's registry. */
 let lastBatchId = 0;
@@ -980,8 +982,8 @@ let captureRun: (id: EffectId, body: () => void) => void;
 let captureRead: (node: AnyNode) => Value;
 let removeSubscription: (id: EffectId) => void;
 let replayReactEffect: (id: EffectId) => void;
-let revalidateCommittedSubs: (rootFilter: RootId | undefined) => void;
-let renderOps: RenderPassTable;
+let revalidateCommittedSubscriptions: (rootFilter: RootId | undefined) => void;
+let renderOps: RenderPassManager;
 let kernelTrackedReader: Reader;
 
 /**
@@ -1022,9 +1024,9 @@ function composeEngine(options?: EngineResetOptions): void {
 		nodeForComputed,
 		kernelStrongDepsOf,
 		kernelReadOf,
-		onCompact: () => onCompact,
-		hasDriver: () => driver !== undefined,
-		devChecksOn: () => devChecks,
+		getOnCompact: () => onCompact,
+		isDriverAttached: () => driver !== undefined,
+		isDevChecksEnabled: () => devChecks,
 		setQuiet: (q) => {
 			quiet = q;
 			__setStandaloneQuiet(q && driver === undefined);
@@ -1048,7 +1050,7 @@ function composeEngine(options?: EngineResetOptions): void {
 	obs = eng.obs;
 	obsRefs = eng.obs.refs;
 	obsDeps = eng.obs.deps;
-	obsSyncDeps = eng.obs.syncDeps;
+	syncObservedDeps = eng.obs.syncObservedDeps;
 	compaction = eng.compaction;
 	uncompactedAtoms = eng.compaction.uncompactedAtoms;
 	batchOps = eng.batch;
@@ -1061,7 +1063,7 @@ function composeEngine(options?: EngineResetOptions): void {
 	captureRead = eng.subs.captureRead;
 	removeSubscription = eng.subs.removeSubscription;
 	replayReactEffect = eng.subs.replayReactEffect;
-	revalidateCommittedSubs = eng.subs.revalidateCommittedSubs;
+	revalidateCommittedSubscriptions = eng.subs.revalidateCommittedSubscriptions;
 	kernelTrackedReader = eng.kernelTrackedReader;
 	evaluate = core.evaluate;
 	foldAtomOp = core.foldAtom;
@@ -1264,7 +1266,7 @@ export function nodeForComputed(c: Computed<unknown>): ComputedNode {
 			} finally {
 				core.evalDepth--;
 				if (tr !== undefined) tr.evalEnd();
-				if (obsRefs[node.ix]! > 0) obsSyncAfterKernelRun(node, kernelStrongDepsOf(node));
+				if (obsRefs[node.ix]! > 0) syncObservationAfterKernelRun(node, kernelStrongDepsOf(node));
 			}
 		};
 	}
@@ -1296,7 +1298,7 @@ export function disposeComputed(handle: Computed<unknown>): void {
 		if (ws !== undefined && ws.some((w) => w.live)) {
 			throw new ScheduleError(`disposeComputed(${node.name}): live watchers still subscribe — re-key them to the replacement first`);
 		}
-		if (obsRefs[ix]! > 0) obs.exit(node); // release any retained closure (defensive)
+		if (obsRefs[ix]! > 0) obs.exitObservation(node); // release any retained closure (defensive)
 		purgeNodeFromArenas(ix);
 		idToNode.delete(node.id);
 		nodesArr[ix] = undefined;
@@ -1333,7 +1335,7 @@ function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 		// Un-torn-down engine node (freed without engine disposal): release
 		// its outgoing observation retains before the rows clear, so its
 		// retained deps do not leak closure membership.
-		if (resident !== undefined && obsRefs[ix]! > 0) obs.exit(resident);
+		if (resident !== undefined && obsRefs[ix]! > 0) obs.exitObservation(resident);
 		if (resident !== undefined && resident.kind === 'computed') clearHandleBacklink(resident);
 		nodesArr[ix] = undefined;
 		lastWalk[ix] = 0;
@@ -1403,7 +1405,7 @@ function makeKernelGetter(node: ComputedNode): () => Value {
 			const captured = c.obsCapture;
 			c.obsCapture = savedCapture;
 			if (tr !== undefined) tr.evalEnd();
-			if (captured !== undefined) obsSyncAfterKernelRun(node, captured);
+			if (captured !== undefined) syncObservationAfterKernelRun(node, captured);
 		}
 	};
 }
@@ -1429,11 +1431,12 @@ function kernelReadOf(dep: AnyNode): Value {
 const kernelUntrackedReader: Reader = (dep) => untracked(() => kernelReadOf(dep));
 
 /** Observation re-point after a KERNEL re-run, inside the still-open
- * kernel frame: discovery evaluations (obsEnter forcing dep reads) must
+ * kernel frame: discovery evaluations (enterObservation forcing dep reads) must
  * not link into that frame — kernel `untracked()` clears it around the
- * sync (the arena twin clears `serveOverride` instead — arenaSyncObsAfterRefold). */
-function obsSyncAfterKernelRun(node: AnyNode, captured: AnyNode[]): void {
-	untracked(() => obsSyncDeps(node, captured));
+ * sync (the arena twin clears `serveOverride` instead —
+ * arenaSyncObservationAfterRefold). */
+function syncObservationAfterKernelRun(node: AnyNode, captured: AnyNode[]): void {
+	untracked(() => syncObservedDeps(node, captured));
 }
 
 /** The engine nodes among a computed's CURRENT kernel deps (tracked-only by
@@ -1593,7 +1596,7 @@ export function __arenaStats(): { committed: number; renders: number; pooled: nu
 	eachArena((a) => {
 		dirty += a.dirty.length;
 	});
-	return { committed: rootToArena.size, renders, pooled: core.arenaPool.length, suspended: core.suspendedCount, pendingSettlements: core.pendingSettleCount(), dirty };
+	return { committed: rootToArena.size, renders, pooled: core.arenaPool.length, suspended: core.suspendedCount, pendingSettlements: core.getPendingSettleCount(), dirty };
 }
 
 /** Test seam: a committed arena's (dep → sub) link mode, or undefined
@@ -1622,7 +1625,8 @@ export function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): numbe
 // WorldArena.ts with the serve-override state; __checkerInternals wires it.)
 
 // ---- observed-closure maintenance ----
-// The observation index — obsShift/obsEnter/obsExit and the two dep-
+// The observation index — shiftObservedCount/enterObservation/
+// exitObservation and the two dep-
 // snapshot re-pointers — lives in observation.ts (composed as `obs`; the
 // columns are aliased above). Consumers call through the table: the watcher
 // liveness seam, disposal/record-free teardown, evaluation-frame epilogues,
@@ -1738,7 +1742,7 @@ function quietWriteInner(node: AtomNode, kind: WriteKind, payload: unknown): voi
 	if (watchers.size !== 0) c.quietDrain();
 	// A quiet fold moves committed truth for every root — a boundary
 	// operation (quiet ⇔ no open renders, so no frame can defer the re-check).
-	if (c.committedSubCount !== 0) revalidateCommittedSubs(undefined);
+	if (c.committedSubCount !== 0) revalidateCommittedSubscriptions(undefined);
 	for (const a of rootToArena.values()) arenaDecay(a); // boundary mark decay
 	if (notifyState.n !== 0) notifyOps.flushNotify();
 }
@@ -1752,11 +1756,11 @@ export function bareWrite(node: AtomNode, kind: WriteKind, payload: unknown): vo
 		quietWrite(node, kind, payload);
 		return;
 	}
-	const ambientId = batchOps.ambient();
+	const ambientId = batchOps.getAmbientBatch();
 	let ambient = ambientId === undefined ? undefined : idToBatch.get(ambientId);
 	if (ambient === undefined || ambient.state !== 'live') {
 		ambient = batchOps.openBatch({ ambient: true });
-		batchOps.setAmbient(ambient.id);
+		batchOps.setAmbientBatch(ambient.id);
 	}
 	// The post-await dev-warning heuristic lives driver-side only
 	// (cosignals-react's currentBatch) — the engine stays lint-free.
@@ -2016,7 +2020,7 @@ export function discardAllWip(): void {
 }
 
 export function quiescent(): boolean {
-	return batchOps.liveBatchCount() === 0 && rootToOpenRender.size === 0;
+	return batchOps.getLiveBatchCount() === 0 && rootToOpenRender.size === 0;
 }
 
 /**
@@ -2283,7 +2287,7 @@ export const engine = {
 		return devChecks;
 	},
 	get ambientBatch(): BatchId | undefined {
-		return batchOps.ambient();
+		return batchOps.getAmbientBatch();
 	},
 	get inFoldCallback(): boolean {
 		return core.inFoldCallback;
@@ -2343,7 +2347,7 @@ export const engine = {
 	},
 	/** Stale-watcher loud skips (the dormant-watcher aliasing pin). @internal */
 	get __staleWatcherSkips(): number {
-		return renderOps.staleWatcherSkips();
+		return renderOps.getStaleWatcherSkips();
 	},
 };
 

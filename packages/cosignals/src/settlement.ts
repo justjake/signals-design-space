@@ -150,7 +150,7 @@ export function createSettlement(core: EngineCore): void {
 				// Boundary subscription scan + the flush the loop OWNS.
 				// (Core effect()s need nothing here: settlements move world
 				// visibility, never newest values, so the kernel is untouched.)
-				if (c.committedSubCount !== 0) c.revalidateCommittedSubs(undefined);
+				if (c.committedSubCount !== 0) c.revalidateCommittedSubscriptions(undefined);
 				notify.flushNotify();
 			}
 		} finally {
@@ -187,7 +187,7 @@ export function createSettlement(core: EngineCore): void {
 	}
 
 	/** Queue depth (diagnostics — the engine's __arenaStats). */
-	function pendingSettleCount(): number {
+	function getPendingSettleCount(): number {
 		return pendingSettle.length;
 	}
 
@@ -196,5 +196,5 @@ export function createSettlement(core: EngineCore): void {
 	core.arenaOpEpilogue = arenaOpEpilogue;
 	core.endOp = endOp;
 	core.setSettleCap = setSettleCap;
-	core.pendingSettleCount = pendingSettleCount;
+	core.getPendingSettleCount = getPendingSettleCount;
 }

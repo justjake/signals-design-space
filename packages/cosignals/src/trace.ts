@@ -927,7 +927,7 @@ export function attachTracer(bridge: CosignalEngine, opts?: TracerOptions): Trac
 
 // ---- human formatting ---------------------------------------------------------------
 
-function fmtValue(v: unknown): string {
+function formatValue(v: unknown): string {
 	if (v === REF_DROPPED) return '«dropped»';
 	if (typeof v === 'string') return /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v);
 	return String(v);
@@ -941,13 +941,13 @@ function fmtValue(v: unknown): string {
 export function formatTraceRecord(e: TraceRecord): string {
 	const entries = Object.entries(e.data);
 	// the first field is the subject, rendered inside the parens
-	const head = entries.length > 0 ? fmtSubject(entries[0]![1]) : '';
-	const rest = entries.slice(1).map(([k, v]) => `${k}=${fmtValue(v)}`).join(' ');
+	const head = entries.length > 0 ? formatSubject(entries[0]![1]) : '';
+	const rest = entries.slice(1).map(([k, v]) => `${k}=${formatValue(v)}`).join(' ');
 	const cause = e.cause === undefined ? '' : ` <- #${e.cause}`;
 	return `#${e.id} +${e.dt}µs ${e.kind}(${head})${rest.length > 0 ? ` ${rest}` : ''}${cause}`;
 }
 
-function fmtSubject(v: unknown): string {
+function formatSubject(v: unknown): string {
 	return typeof v === 'string' ? v : String(v);
 }
 

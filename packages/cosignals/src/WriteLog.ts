@@ -8,10 +8,10 @@
  *
  * Mechanism only: the batch-state edge of compaction — a compacted entry
  * stops pinning its batch record (the live-entry decrement and the reclaim
- * re-check) — is resident orchestration and comes in through
- * `deps.releaseLogEntry`; this module never imports batch state. The fold
+ * re-check) — is resident orchestration and comes in through the batch
+ * manager slice of `deps`; this module never imports batch state. The fold
  * machinery a compaction replays (`applyOp`, the atom's equality rule) and
- * the pin floor (`minLivePin`) come in through `deps` the same way.
+ * the pin floor (`getMinLivePin`) come in through `deps` the same way.
  *
  * `createCompaction` is a factory in the kernel's own style (index.ts
  * `createEngine`): it closes over `uncompactedAtoms` (the compaction
@@ -20,9 +20,10 @@
  * its one-branch membership add and the quiet derivation its size check.
  */
 
-import { probes } from './engine.js';
+import { probes, type ConcurrentEngineHost } from './engine.js';
 import { noteReclaimRetry, reclaimSkippedN } from './graph.js';
-import type { BatchId, BatchSlot } from './Batch.js';
+import type { BatchManager, BatchId, BatchSlot } from './Batch.js';
+import type { EngineCore } from './World.js';
 import type { AtomNode, Seq, Value, WriteKind } from './concurrent.js';
 
 /**
@@ -138,21 +139,20 @@ export class WriteLog {
 }
 
 /** The resident-state edges compaction consumes (provided by the engine's
- * composition site; each is a thin arrow over engine state or orchestration). */
+ * composition site), as named slices of the providers' own record types. */
 export type CompactionDeps = {
-	/** The minimum live render pin (compaction's pin clause floor). */
-	minLivePin(): Seq;
-	/** Apply one op over `prev` under the fold-purity guards (concurrent.ts's
-	 * one op-application rule). */
-	applyOp(atom: AtomNode, kind: WriteKind, payload: unknown, prev: Value): Value;
-	/** The atom's one equality rule (concurrent.ts's eqAtom). */
-	eqAtom(atom: AtomNode, a: Value, b: Value): boolean;
-	/** The optional compaction observer (the engine's public `onCompact` slot). */
-	onCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined;
-	/** The batch-state edge, resident orchestration (a compacted log entry
+	/** The shared engine core record's fold slice: the minimum live render
+	 * pin (compaction's pin clause floor — a LATE-BOUND core slot, read at
+	 * call time), one-op application under the fold-purity guards, and the
+	 * atom's one equality rule. */
+	core: Pick<EngineCore, 'getMinLivePin' | 'applyOp' | 'eqAtom'>;
+	/** The engine host's slice: the optional compaction observer (the
+	 * engine's public `onCompact` slot). */
+	host: Pick<ConcurrentEngineHost, 'getOnCompact'>;
+	/** The batch manager's slice: the batch-state edge (a compacted log entry
 	 * stops pinning its batch record: live-entry decrement + reclaim
 	 * re-check) — this module never imports batch state. */
-	releaseLogEntry(batch: BatchId): void;
+	batch: Pick<BatchManager, 'releaseLogEntry'>;
 };
 
 export type CompactionTable = {
@@ -163,6 +163,15 @@ export type CompactionTable = {
 };
 
 export function createCompaction(deps: CompactionDeps): CompactionTable {
+	// Composition-time locals (the codegen doctrine): the per-entry fold
+	// calls bind once (applyOp/eqAtom are assigned before this factory runs,
+	// as is the batch table); `getMinLivePin` is a LATE-BOUND core slot
+	// (assigned by the render-pass factory, which composes after this one),
+	// so it stays a call-time read off the aliased core record.
+	const core = deps.core;
+	const { applyOp, eqAtom } = core;
+	const { getOnCompact } = deps.host;
+	const { releaseLogEntry } = deps.batch;
 	const uncompactedAtoms = new Set<AtomNode>();
 
 	/**
@@ -175,7 +184,7 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 	 */
 	function compactAll(): void {
 		if (uncompactedAtoms.size === 0) return;
-		const minPin = deps.minLivePin();
+		const minPin = core.getMinLivePin();
 		for (const n of uncompactedAtoms) {
 			compactAtom(n, minPin);
 			if (n.log.n === n.log.start) {
@@ -202,17 +211,17 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 			cut++;
 		}
 		if (cut === 0) return;
-		const onCompact = deps.onCompact();
+		const onCompact = getOnCompact();
 		for (let k = 0; k < cut; k++) {
 			const i = from + k;
-			const next = deps.applyOp(atom, log.kinds[i]!, log.payloads[i], atom.base);
+			const next = applyOp(atom, log.kinds[i]!, log.payloads[i], atom.base);
 			// Equality order: isEqual(current, incoming) — per compacted entry
 			// (compaction re-invokes per entry by design).
-			if (!deps.eqAtom(atom, atom.base, next)) atom.base = next;
+			if (!eqAtom(atom, atom.base, next)) atom.base = next;
 			atom.baseSeq = log.seqs[i]!;
 			if (onCompact !== undefined) onCompact(atom, log.entryAt(i));
 			// A compacted log entry stops pinning its batch record.
-			deps.releaseLogEntry(log.batches[i]!);
+			releaseLogEntry(log.batches[i]!);
 		}
 		log.drop(cut);
 	}

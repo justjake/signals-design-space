@@ -710,7 +710,7 @@ export function createWorldArena(core: EngineCore): void {
 	const nodeToWatchers = core.nodeToWatchers;
 	const lastWalk = core.lastWalk;
 	const obsRefs = core.obsRefs;
-	const obsSyncDeps = core.obsSyncDeps;
+	const syncObservedDeps = core.syncObservedDeps;
 	const roots = core.roots;
 	const rootToOpenRender = core.rootToOpenRender;
 	/** Committed arenas, by root (consumer-populated life). */
@@ -1082,7 +1082,7 @@ export function createWorldArena(core: EngineCore): void {
 			a.memory[sh + ArenaField.FLAGS] = a.memory[sh + ArenaField.FLAGS]! & ~ArenaFlag.RECURSED_CHECK;
 			arenaPurgeDeps(a, sh);
 			arenaBumpReadClock(a);
-			if (obsCaptured !== undefined) arenaSyncObsAfterRefold(node, obsCaptured);
+			if (obsCaptured !== undefined) arenaSyncObservationAfterRefold(node, obsCaptured);
 		}
 	}
 
@@ -1092,11 +1092,11 @@ export function createWorldArena(core: EngineCore): void {
 	 * stack. A NESTED refold (inside an outer walk) has serveOverride
 	 * restored to the OUTER arena; clear it around the sync so discovery's
 	 * newest evaluations route newest. */
-	function arenaSyncObsAfterRefold(node: AnyNode, captured: AnyNode[]): void {
+	function arenaSyncObservationAfterRefold(node: AnyNode, captured: AnyNode[]): void {
 		const so = core.serveOverride;
 		core.serveOverride = undefined;
 		try {
-			obsSyncDeps(node, captured);
+			syncObservedDeps(node, captured);
 		} finally {
 			core.serveOverride = so;
 		}

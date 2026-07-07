@@ -27,7 +27,8 @@
 import type { CosignalEngine } from './concurrent.js';
 import type { TraceRecord, TraceKind } from './trace.js';
 
-function q(s: string): string {
+/** Escape + quote a string as a DOT-source string literal. */
+function quoteDotString(s: string): string {
 	return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
@@ -37,9 +38,9 @@ export function dependencyGraphToDot(bridge: CosignalEngine): string {
 	for (const n of bridge.idToNode.values()) {
 		if (n.kind === 'atom') {
 			const log = n.log.length > 0 ? `|log:${n.log.length}` : '';
-			lines.push(`\tn${n.id} [shape=box, label=${q(`${n.name}#${n.id}${log}`)}];`);
+			lines.push(`\tn${n.id} [shape=box, label=${quoteDotString(`${n.name}#${n.id}${log}`)}];`);
 		} else {
-			lines.push(`\tn${n.id} [shape=ellipse, label=${q(`${n.name}#${n.id}`)}];`);
+			lines.push(`\tn${n.id} [shape=ellipse, label=${quoteDotString(`${n.name}#${n.id}`)}];`);
 		}
 	}
 	for (const [dep, outs] of bridge.dependencyEdges) {
@@ -47,11 +48,11 @@ export function dependencyGraphToDot(bridge: CosignalEngine): string {
 	}
 	for (const w of bridge.watchers.values()) {
 		if (!w.live) continue;
-		lines.push(`\tw${w.id} [shape=house, label=${q(`${w.name}@${w.root}`)}];`);
+		lines.push(`\tw${w.id} [shape=house, label=${quoteDotString(`${w.name}@${w.root}`)}];`);
 		lines.push(`\tn${w.node} -> w${w.id} [style=dashed];`);
 	}
 	for (const sub of bridge.idToSubscription.values()) {
-		lines.push(`\te${sub.id} [shape=cds, label=${q(`${sub.name}@${sub.root} runs:${sub.runs}`)}];`);
+		lines.push(`\te${sub.id} [shape=cds, label=${quoteDotString(`${sub.name}@${sub.root} runs:${sub.runs}`)}];`);
 		for (const d of sub.deps) lines.push(`\tn${d.node.id} -> e${sub.id} [style=dotted];`);
 	}
 	lines.push('}');
@@ -79,7 +80,7 @@ export function traceToDot(events: TraceRecord[], filter?: (e: TraceRecord) => b
 		const label = `#${e.id} ${e.kind}(${typeof subject === 'string' ? subject : String(subject)})`;
 		const fill = shade[e.kind];
 		const style = fill === undefined ? '' : `, style=filled, fillcolor=${fill}`;
-		lines.push(`\tt${e.id} [label=${q(label)}${style}];`);
+		lines.push(`\tt${e.id} [label=${quoteDotString(label)}${style}];`);
 	}
 	for (const e of kept) {
 		if (e.cause !== undefined && ids.has(e.cause)) lines.push(`\tt${e.cause} -> t${e.id};`);

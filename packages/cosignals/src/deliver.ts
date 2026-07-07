@@ -2,15 +2,17 @@
  * DELIVERY — the notification queue AND the walk orchestration that decides
  * who gets notified. Two layers, two factories:
  *
- *  - `createDeliver`: the queue mechanism — listener callbacks queued during
- *    a public operation's own mutations and DELIVERED AT THE OPERATION
- *    BOUNDARY (queued into reusable columns during the walk and invoked
+ *  - `createNotificationQueue`: the queue mechanism — listener callbacks
+ *    queued during a public operation's own mutations and DELIVERED AT THE
+ *    OPERATION BOUNDARY (queued into reusable columns during the walk and
+ *    invoked
  *    after the operation's mutations complete, so a listener can never
  *    re-enter a half-finished operation). The listener slots themselves
  *    (`onDelivery` / `onMountCorrective` / `onCorrection` — the bindings'
  *    consumption surface) live on the shared engine core record and come in
- *    through `deps` getters here (the queue is built before the core record
- *    exists).
+ *    through the `getCore` dep here (the queue is built before the core
+ *    record exists, so the record arrives through a getter, read at flush
+ *    time).
  *  - `createDeliverWalks`: the ORCHESTRATION over the shared engine core
  *    record — the value-blind per-write delivery walk (which calls
  *    WorldArena's strong-link walks through the core's late-bound slots),
@@ -46,22 +48,24 @@ const enum NotifyKind {
 /** The two live queue scalars (shared record — see the module header). */
 export type NotifyState = { n: number; flushing: boolean };
 
-export type DeliverDeps = {
-	/** A value-blind delivery reached a live watcher (fresh or interleaved). */
-	onDelivery(): ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined;
-	/** Mount fixup scheduled a corrective re-render into a live batch's lane. */
-	onMountCorrective(): ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined;
-	/** An urgent pre-paint correction (mount window / committed-truth drift). */
-	onCorrection(): ((w: Watcher) => void) | undefined;
+export type NotificationQueueDeps = {
+	/** The shared core record's listener slice (`onDelivery` — a value-blind
+	 * delivery reached a live watcher; `onMountCorrective` — mount fixup
+	 * scheduled a corrective re-render into a live batch's lane;
+	 * `onCorrection` — an urgent pre-paint correction). A getter because the
+	 * queue is composed before the core record exists; the flush reads the
+	 * slots per queued item, so a listener detaching mid-flush takes effect
+	 * for the remaining items. */
+	getCore(): Pick<EngineCore, 'onDelivery' | 'onMountCorrective' | 'onCorrection'>;
 };
 
-export type DeliverTable = {
+export type NotificationQueue = {
 	state: NotifyState;
 	queueNotify(kind: NotifyKind, w: Watcher | undefined, t: Batch | undefined, slot: BatchSlot, sub?: Subscription): void;
 	flushNotify(): void;
 };
 
-export function createDeliver(deps: DeliverDeps): DeliverTable {
+export function createNotificationQueue(deps: NotificationQueueDeps): NotificationQueue {
 	// Queued-notification columns (reused across operations; no per-notify objects).
 	const notifyKinds: number[] = [];
 	const notifyWs: (Watcher | undefined)[] = [];
@@ -84,6 +88,10 @@ export function createDeliver(deps: DeliverDeps): DeliverTable {
 	 * and drains in the same sweep (the flushing flag stops nested sweeps). */
 	function flushNotify(): void {
 		if (state.n === 0 || state.flushing) return;
+		// The core record's identity is stable for the whole composition; the
+		// listener SLOTS are read per item below (live reads — a listener
+		// detaching mid-flush takes effect for the remaining items).
+		const core = deps.getCore();
 		state.flushing = true;
 		try {
 			for (let i = 0; i < state.n; i++) {
@@ -95,13 +103,13 @@ export function createDeliver(deps: DeliverDeps): DeliverTable {
 				notifyBatches[i] = undefined;
 				notifySubs[i] = undefined;
 				if (kind === NotifyKind.DELIVERY) {
-					const l = deps.onDelivery();
+					const l = core.onDelivery;
 					if (l !== undefined) l(w!, t!, notifySlots[i]!);
 				} else if (kind === NotifyKind.MOUNT_CORRECTIVE) {
-					const l = deps.onMountCorrective();
+					const l = core.onMountCorrective;
 					if (l !== undefined) l(w!, t!, notifySlots[i]!);
 				} else if (kind === NotifyKind.CORRECTION) {
-					const l = deps.onCorrection();
+					const l = core.onCorrection;
 					if (l !== undefined) l(w!);
 				} else if (s !== undefined && s.live) {
 					// Subscription refire (adapter-registered): the value gate
@@ -235,7 +243,7 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * moved for every root, and no slot/walk state exists to scope candidates,
 	 * so every live watcher re-checks directly — the same compare-and-correct
 	 * block as drainCommittedObservers. (Committed subscriptions re-check via
-	 * revalidateCommittedSubs at the same boundary.) */
+	 * revalidateCommittedSubscriptions at the same boundary.) */
 	function quietDrain(): void {
 		const c = core; // one context load; slot reads below stay one-load
 		for (const w of watchers.values()) {
@@ -263,7 +271,7 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * conservatively — extras are value-gated no-ops, exactly as the old
 	 * slot touched lists were. Committed SUBSCRIPTIONS do not drain here:
 	 * their re-check is once per boundary operation
-	 * (revalidateCommittedSubs).
+	 * (revalidateCommittedSubscriptions).
 	 */
 	function drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
 		const c = core; // one context load; slot/field reads below stay one-load

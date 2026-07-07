@@ -17,10 +17,11 @@
  *   3. World, WorldArena, settlement — the strongly-connected trio;
  *   4. Batch (mechanism + retirement — captures core);
  *   5. compaction (its fold deps are World's now-assigned slots; its batch
- *      edge is the batch table's releaseLogEntry);
- *   6. deliver's walk orchestration, then RenderPass (each assigns its
- *      late-bound slots);
- *   7. Subscription (its boundary revalidation joins the core table).
+ *      edge is the batch manager's releaseLogEntry);
+ *   6. deliver's walk orchestration, then the render-pass manager (each
+ *      assigns its late-bound slots);
+ *   7. the subscription manager (its boundary revalidation joins the core
+ *      table).
  *
  * The QUIET derivation lives here: quiet ⇔ zero live batches AND zero open
  * renders AND every write log compacted — recomputed only at pipeline
@@ -35,15 +36,15 @@
  * reset, while GROWTH re-runs only the kernel's graph factory.
  */
 
-import { createDeliver, createDeliverWalks, type DeliverTable } from './deliver.js';
-import { createObservation, type ObservationTable } from './observation.js';
+import { createNotificationQueue, createDeliverWalks, type NotificationQueue } from './deliver.js';
+import { createObservationIndex, type ObservationIndex } from './observation.js';
 import { createCompaction, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
-import { createBatch, type BatchId, type BatchTable } from './Batch.js';
+import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
 import { createWorldArena } from './WorldArena.js';
 import { createSettlement } from './settlement.js';
-import { createSubscription, type SubscriptionTable } from './Subscription.js';
-import { createRenderPass, type RenderPass, type RenderPassTable, type Watcher } from './RenderPass.js';
+import { createSubscriptionManager, type SubscriptionManager } from './SubscriptionManager.js';
+import { createRenderPassManager, type RenderPass, type RenderPassManager, type Watcher } from './RenderPass.js';
 import type { Atom, Computed } from './index.js';
 import type { AnyNode, AtomNode, ComputedNode, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
 
@@ -94,11 +95,11 @@ export type ConcurrentEngineHost = {
 	kernelStrongDepsOf(node: ComputedNode): AnyNode[];
 	kernelReadOf(dep: AnyNode): Value;
 	/** The optional compaction observer slot (the engine's public `onCompact`). */
-	onCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined;
+	getOnCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined;
 	/** The driver slot's presence + the devChecks switch (openBatch's
 	 * dev-time guard reads both). */
-	hasDriver(): boolean;
-	devChecksOn(): boolean;
+	isDriverAttached(): boolean;
+	isDevChecksEnabled(): boolean;
 	/** The quiet flag's one writer (the flags stay module lets — the write
 	 * path's hot reads; this module owns the rule). */
 	setQuiet(quiet: boolean): void;
@@ -116,12 +117,12 @@ export type ConcurrentEngineHost = {
  * class shell aliases the hot entries as own fields. */
 export type ConcurrentEngine = {
 	core: EngineCore;
-	notify: DeliverTable;
-	obs: ObservationTable;
+	notify: NotificationQueue;
+	obs: ObservationIndex;
 	compaction: CompactionTable;
-	batch: BatchTable;
-	render: RenderPassTable;
-	subs: SubscriptionTable;
+	batch: BatchManager;
+	render: RenderPassManager;
+	subs: SubscriptionManager;
 	/** The quiet derivation (composition-owned; see the module header). */
 	recomputeQuiet(): void;
 	/** Kernel-frame tracked reader (engine-created computeds' newest runs):
@@ -145,15 +146,12 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// pattern — and receives its resident-state edges as thin arrows), then
 	// the class shell aliases the shared columns its resident hot paths and
 	// the tests read in place.
-	const notify = createDeliver({
-		onDelivery: () => core.onDelivery,
-		onMountCorrective: () => core.onMountCorrective,
-		onCorrection: () => core.onCorrection,
+	const notify = createNotificationQueue({
+		// The queue composes before the core record exists; the getter reads
+		// the binding assigned below (every flush runs post-composition).
+		getCore: () => core,
 	});
-	const obs = createObservation({
-		nodeAt: (ix) => nodesArr[ix],
-		kernelStrongDepsOf: (node) => host.kernelStrongDepsOf(node),
-	});
+	const obs = createObservationIndex({ host });
 	/**
 	 * The ARMED quiet state derivation — quiet ⇔ zero live batches AND zero
 	 * open renders AND every write log compacted — recomputed only at state
@@ -165,7 +163,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	 */
 	function recomputeQuiet(): void {
 		host.setQuiet(
-			batchOps.liveBatchCount() === 0
+			batchOps.getLiveBatchCount() === 0
 			&& rootToOpenRender.size === 0
 			&& compaction.uncompactedAtoms.size === 0,
 		);
@@ -181,14 +179,14 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 		nodeToWatchers: host.nodeToWatchers,
 		lastWalk: host.lastWalk,
 		obsRefs: obs.refs,
-		obsSyncDeps: obs.syncDeps,
+		syncObservedDeps: obs.syncObservedDeps,
 		watchers: host.watchers,
 		idToRenderPass: host.idToRenderPass,
 		rootToOpenRender,
 		roots: host.roots,
 		notify,
 		notifyState: notify.state,
-		root: (id) => host.root(id),
+		root: host.root,
 		// Handle resolution (content allocation on first participation —
 		// record reuse can never serve a dead tenant: disposal and the
 		// record-free scrub clear the handle link and the rows, so a reused
@@ -208,30 +206,20 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	createWorld(core);
 	createWorldArena(core);
 	createSettlement(core);
-	// ---- the batch mechanism + retirement (the batch lifecycle owns its
-	// terminal transition; the fan reads the core's late-bound slots).
-	const batchOps = createBatch(core, {
-		hasDriver: host.hasDriver,
-		devChecksOn: host.devChecksOn,
-		// The write path's last-batch cache must not outlive a reclaimed
-		// record (the cache stays resident beside the write path).
-		invalidateBatchCache: host.invalidateBatchCache,
-	});
+	// ---- the batch manager + retirement (the batch lifecycle owns its
+	// terminal transition; the fan reads the core's late-bound slots). The
+	// host slice carries the driver/devChecks probes and the write path's
+	// last-batch cache clear (the cache must not outlive a reclaimed record).
+	const batchOps = createBatchManager(core, { host });
 	core.batch = batchOps;
 	// ---- write-log compaction (after createWorld: its fold deps are the
-	// core's now-assigned World slots; the batch edge is the batch table's).
-	const compaction = createCompaction({
-		minLivePin: () => core.minLivePin(),
-		applyOp: core.applyOp,
-		eqAtom: core.eqAtom,
-		onCompact: host.onCompact,
-		releaseLogEntry: batchOps.releaseLogEntry,
-	});
+	// core's now-assigned World slots; the batch edge is the batch manager's).
+	const compaction = createCompaction({ core, host, batch: batchOps });
 	core.compactAll = compaction.compactAll;
 	// ---- the walk orchestration (deliver.ts) + render lifecycle
 	// (RenderPass.ts) — each assigns its late-bound core slots.
 	createDeliverWalks(core);
-	const render = createRenderPass(core, { obsShift: obs.shift });
+	const render = createRenderPassManager(core, { observation: obs });
 	// Kernel-frame tracked reader: captures `core` directly (see the
 	// ConcurrentEngine declaration comment).
 	const kernelTrackedReader: Reader = (dep) => {
@@ -239,27 +227,12 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 		if (oc !== undefined) oc.push(dep);
 		return host.kernelReadOf(dep);
 	};
-	// ---- the subscription mechanism (its boundary revalidation joins the
+	// ---- the subscription manager (its boundary revalidation joins the
 	// core table — the orchestration and the settlement drain reach it as
-	// table calls).
-	const subs = createSubscription({
-		evaluate: core.evaluate,
-		changedValue: core.changedValue,
-		root: (id) => host.root(id),
-		rootToOpenRender,
-		notify,
-		trace: () => core.trace,
-		syncSubObs: obs.syncSubObs,
-		obsShift: obs.shift,
-		setCaptureFrame: core.setCaptureFrame,
-		captureFrame: () => core.captureFrame,
-		evalDepth: () => core.evalDepth,
-		inFoldCallback: () => core.inFoldCallback,
-		subCountShift: (delta) => {
-			core.committedSubCount += delta;
-		},
-		committedSubCount: () => core.committedSubCount,
-	});
-	core.revalidateCommittedSubs = subs.revalidateCommittedSubs;
+	// table calls). The manager takes its core and observation slices whole:
+	// its factory binds the stable operations once and reads the mutable
+	// core fields (trace, captureFrame, guards, the live count) in place.
+	const subs = createSubscriptionManager({ core, observation: obs });
+	core.revalidateCommittedSubscriptions = subs.revalidateCommittedSubscriptions;
 	return { core, notify, obs, compaction, batch: batchOps, render, subs, recomputeQuiet, kernelTrackedReader };
 }

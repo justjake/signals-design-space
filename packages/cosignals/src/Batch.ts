@@ -12,20 +12,21 @@
  * integer word (a `BatchSlotSet`) — the vocabulary is defined in full at the
  * top of concurrent.ts.
  *
- * `createBatch` is a factory in the kernel's own style (index.ts
+ * `createBatchManager` is a factory in the kernel's own style (index.ts
  * `createEngine`): it closes over its state and returns its operation
- * table; the engine runs it once per composition (module initialization,
+ * table (the `BatchManager`); the engine runs it once per composition
+ * (module initialization,
  * test resets) and keeps `idToBatch`/`slots`
  * aliased for its resident readers (the shared-array pattern the kernel
  * uses for its `values`/`fns` side columns). It takes the shared core
  * record for retirement's cross-module fan (every such call reads its
- * late-bound slot at call time); the two remaining resident-state edges
+ * late-bound slot at call time); the remaining resident-state edges
  * (the driver/devChecks presence, the write path's last-batch cache) come
- * in through `deps`.
+ * in through `deps` as a host slice.
  */
 
 import { ScheduleError } from './errors.js';
-import { probes } from './engine.js';
+import { probes, type ConcurrentEngineHost } from './engine.js';
 import type { AtomNode, RootState, Seq, TraceHooks } from './concurrent.js';
 import type { EngineCore } from './World.js';
 
@@ -103,28 +104,27 @@ export function __peekNextBatchIdForTest(): BatchId {
 	return nextBatchId;
 }
 
-/** The resident-state edges the mechanism consumes (provided by the engine's
- * composition site; each is a thin arrow over engine state or orchestration). */
-export type BatchDeps = {
-	/** The driver slot's presence + the devChecks switch — openBatch's
-	 * dev guard: with devChecks armed, opening a batch with no driver attached
-	 * throws (the documented host contract is "hosts that open batches must
-	 * retire them"; the guard catches harnesses that forgot to attach). */
-	hasDriver(): boolean;
-	devChecksOn(): boolean;
-	/** Reclamation's edge into the write path's last-batch cache: clear the
-	 * cache iff it names the reclaimed id (the cache stays resident beside
+/** The resident-state edges the manager consumes (provided by the engine's
+ * composition site), as a named slice of the engine host's record type. */
+export type BatchManagerDeps = {
+	/** The engine host's resident slice: the driver-attached probe + the
+	 * devChecks switch — openBatch's dev guard (with devChecks armed, opening
+	 * a batch with no driver attached
+	 * throws: the documented host contract is "hosts that open batches must
+	 * retire them"; the guard catches harnesses that forgot to attach) — and
+	 * reclamation's edge into the write path's last-batch cache (clear the
+	 * cache iff it names the reclaimed id; the cache stays resident beside
 	 * the write path that reads it per write). */
-	invalidateBatchCache(id: BatchId): void;
+	host: Pick<ConcurrentEngineHost, 'isDriverAttached' | 'isDevChecksEnabled' | 'invalidateBatchCache'>;
 };
 
-export type BatchTable = {
+export type BatchManager = {
 	/** Batch records by id (shared identity: the engine aliases it for its
 	 * resident readers — commits, mount fixup, tests). */
 	idToBatch: Map<BatchId, Batch>;
 	/** The 31-entry recycling slot table (shared identity, as above). */
 	slots: BatchSlotMeta[];
-	liveBatchCount(): number;
+	getLiveBatchCount(): number;
 	openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch;
 	batchById(id: BatchId): Batch;
 	liveBatches(): Batch[];
@@ -133,8 +133,8 @@ export type BatchTable = {
 	rebuildCommittedBits(r: RootState): void;
 	/** The ambient default batch for bare (context-free) writes — the id, or
 	 * undefined while none is live (retirement clears it). */
-	ambient(): BatchId | undefined;
-	setAmbient(id: BatchId): void;
+	getAmbientBatch(): BatchId | undefined;
+	setAmbientBatch(id: BatchId): void;
 	/** True iff any open render's mask names the slot (retirement's deferred
 	 * release + the render-close re-evaluation share the one predicate). */
 	slotRetainedByOpenMask(slot: BatchSlot): boolean;
@@ -151,10 +151,12 @@ export type BatchTable = {
 	releaseLogEntry(batch: BatchId): void;
 };
 
-export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
-	// Stable resident containers, aliased once (identity-shared).
+export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): BatchManager {
+	// Stable resident containers, aliased once (identity-shared); host
+	// functions bind once at composition (the codegen doctrine).
 	const roots = core.roots;
 	const rootToOpenRender = core.rootToOpenRender;
+	const { isDriverAttached, isDevChecksEnabled, invalidateBatchCache } = deps.host;
 
 	const idToBatch = new Map<BatchId, Batch>();
 	const slots: BatchSlotMeta[] = [];
@@ -188,7 +190,7 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 	 * must retire them", and a devChecks harness must attach its driver
 	 * before opening engine batches. */
 	function openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
-		if (deps.devChecksOn() && !deps.hasDriver()) {
+		if (isDevChecksEnabled() && !isDriverAttached()) {
 			throw new ScheduleError('openBatch with no driver attached — hosts that open batches must retire them; attach a driver first (devChecks)');
 		}
 		if (liveBatchCount >= SLOT_COUNT) {
@@ -325,7 +327,7 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 		if (t.id === ambientBatch) return;
 		if (batchMaskedByOpenRender(t.id)) return;
 		idToBatch.delete(t.id);
-		deps.invalidateBatchCache(t.id); // the write path's last-batch cache must not outlive the record
+		invalidateBatchCache(t.id); // the write path's last-batch cache must not outlive the record
 	}
 
 	/** The compaction→batch edge (WriteLog.ts's `releaseLogEntry` dep): a
@@ -351,7 +353,7 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 			retireInternal(t);
 			// Boundary rule: retirement is a guaranteed flush point for every root
 			// (a write-free retirement still flushes pending member-write flips).
-			core.revalidateCommittedSubs(undefined);
+			core.revalidateCommittedSubscriptions(undefined);
 			core.endOp();
 		} finally {
 			core.opDepth--;
@@ -370,7 +372,7 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 			const tr = core.trace;
 			if (tr !== undefined) tr.batchSettle(t);
 			retireInternal(t);
-			core.revalidateCommittedSubs(undefined); // boundary rule: settlement is a guaranteed flush point
+			core.revalidateCommittedSubscriptions(undefined); // boundary rule: settlement is a guaranteed flush point
 			core.endOp();
 		} finally {
 			core.opDepth--;
@@ -474,15 +476,15 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 	return {
 		idToBatch,
 		slots,
-		liveBatchCount: () => liveBatchCount,
+		getLiveBatchCount: () => liveBatchCount,
 		openBatch,
 		batchById,
 		liveBatches,
 		internSlot,
 		releaseSlot,
 		rebuildCommittedBits,
-		ambient: () => ambientBatch,
-		setAmbient: (id) => {
+		getAmbientBatch: () => ambientBatch,
+		setAmbientBatch: (id) => {
 			ambientBatch = id;
 		},
 		slotRetainedByOpenMask,
