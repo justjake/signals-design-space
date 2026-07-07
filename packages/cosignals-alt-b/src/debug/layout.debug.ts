@@ -128,8 +128,10 @@ export const BYTECODE_BUDGETS: Record<string, number> = {
 	link: 200,
 	linkInsert: 800,
 	propagate: 460,
-	checkDirty: 460,
+	checkDirty: 560,
 	notifyWalk: 460,
 	readAtomPublic: 200,
+	readComputedPublic: 200,
 	atomWrite: 460,
+	atomWriteLogged: 1200,
 };

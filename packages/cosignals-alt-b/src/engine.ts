@@ -2118,6 +2118,12 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 		}
 		return;
 	}
+	atomWriteLogged(a, op, payload);
+}
+
+// Out-of-line slow half (§18.3 discipline: the DIRECT fast path above stays
+// under the inline budget; this half runs only in LOGGED mode).
+function atomWriteLogged(a: number, op: number, payload: unknown): void {
 	// LOGGED: every write is logged (§9.1 always-log rule).
 	const f = fork;
 	if (f === undefined) {
@@ -2798,22 +2804,19 @@ function readAtomPublic(a: number): unknown {
 	if ((replayDepth | ovDepth) !== 0 || captureList !== undefined) {
 		return readAtomCold(a);
 	}
-	if (activeSub !== 0 && (M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
-		// Canonical evaluation reads W0 by construction (§10.1) and tracks.
-		const v = kernelAtomValue(a);
-		link(a, activeSub, cycle);
-		return v;
-	}
-	const flags = M[a + C.FLAGS];
-	if ((flags & C.LOGGED) === 0) {
-		const v = kernelAtomValue(a); // the fast path
-		if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+	if (activeSub !== 0) {
+		if ((M[activeSub + C.FLAGS] & C.K_COMPUTED) !== 0) {
+			// Canonical evaluation reads W0 by construction (§10.1) and tracks.
+			const v = kernelAtomValue(a);
+			link(a, activeSub, cycle);
+			return v;
+		}
+		if (currentCtx !== Ctx.RENDER) {
 			link(a, activeSub, cycle);
 		}
-		return v;
 	}
-	if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
-		link(a, activeSub, cycle);
+	if ((M[a + C.FLAGS] & C.LOGGED) === 0) {
+		return kernelAtomValue(a); // the fast path
 	}
 	return foldTape(a, worldOfCtx(currentCtx));
 }
@@ -3400,14 +3403,6 @@ function atomWriteEntry(node: number, op: number, payload: unknown): void {
 	boundary();
 }
 
-function readEntryAtom(node: number): unknown {
-	return hotReadAtom(node);
-}
-
-function readEntryComputed(node: number): unknown {
-	return hotReadComputed(node);
-}
-
 function peekEntry(node: number): unknown {
 	const prevSub = activeSub;
 	activeSub = 0;
@@ -3748,7 +3743,7 @@ export class Atom<T> {
 		E.registerHandle(this, id);
 	}
 	get state(): T {
-		return readEntryAtom(this.id) as T;
+		return hotReadAtom(this.id) as T;
 	}
 	peek(): T {
 		return peekEntry(this.id) as T;
@@ -3784,7 +3779,7 @@ export class ReducerAtom<S, A> {
 		E.registerHandle(this, id);
 	}
 	get state(): S {
-		return readEntryAtom(this.id) as S;
+		return hotReadAtom(this.id) as S;
 	}
 	peek(): S {
 		return peekEntry(this.id) as S;
@@ -3821,22 +3816,21 @@ export class Computed<T> {
 			label: options.label,
 		};
 		if (options.fn.length === 0 && options.isEqual === undefined) {
-			// Specialized kernel wrapper for the hot case (no ctx, identity
-			// equality): one call frame over the user fn, box-stable errors.
-			// Touches no plane buffers, so it is rebuild-safe by construction.
+			// Slim kernel wrapper for the hot case (no ctx, identity
+			// equality): one call frame over the user fn; only §11.3 error
+			// boxing remains, and only on the throw path. The kernel's own
+			// identity compare IS the §11.2 contract here, and the callers
+			// (updateComputed/firstEvalComputed) already hold the enterDepth
+			// growth guard. Touches no plane buffers: rebuild-safe.
 			const raw = options.fn as unknown as () => unknown;
 			fns[id >> 3] = (prev: unknown): unknown => {
-				++enterDepth;
 				try {
-					const next = raw();
-					return prev !== undefined && Object.is(prev, next) ? prev : next;
+					return raw();
 				} catch (e) {
 					if (isErrorBox(prev) && Object.is(prev.error, e)) {
 						return prev;
 					}
 					return { kind: 'error', error: e } as ErrorBox;
-				} finally {
-					--enterDepth;
 				}
 			};
 		} else {
@@ -3847,7 +3841,7 @@ export class Computed<T> {
 	}
 	/** Rethrows cached errors; throws the thenable while suspended (§11.3). */
 	get state(): T {
-		const v = readEntryComputed(this.id);
+		const v = hotReadComputed(this.id);
 		if (isErrorBox(v)) {
 			throw v.error;
 		}

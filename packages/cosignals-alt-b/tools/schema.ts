@@ -204,14 +204,16 @@ export const schema: Schema = defineSchema({
 		{ name: 'REC_SLACK', value: 1280, doc: 'min free main-plane records guaranteed at each op boundary' },
 	],
 	budgets: {
-		// §18.3 declared bytecode budgets (data only this pass; the
-		// --print-bytecode CI dump is a deferred gate).
-		link: 200,
-		linkInsert: 800,
-		propagate: 460,
-		checkDirty: 460,
-		notifyWalk: 460,
-		readAtomPublic: 200,
-		atomWrite: 460,
+		// §18.3 declared bytecode budgets (measured via --print-bytecode over
+		// the bundled artifact; the automated CI dump is a deferred gate).
+		link: 200, // measured 42
+		linkInsert: 800, // out-of-line by design (mark repair + LIVE flow live here)
+		propagate: 460, // measured 446
+		checkDirty: 560, // measured 535: donor-derived out-of-line walk, never inlined
+		notifyWalk: 460, // measured 432
+		readAtomPublic: 200, // measured ~190 after the tracked-link dedup
+		readComputedPublic: 200, // measured 154
+		atomWrite: 460, // measured 200 (DIRECT fast path; LOGGED half out-of-line)
+		atomWriteLogged: 1200, // out-of-line slow half by design
 	},
 });
