@@ -178,6 +178,11 @@ export class TwinDriver {
 	readonly mirror = new RefereeMirror();
 	/** The engine presented in the model's shape for the oracle's checkers. */
 	private readonly view = modelView(this.engine, this.mirror) as unknown as CosignalModel;
+	/** THE model→engine node mapping, registered at creation and resolved by
+	 * `toEngine` on every op. The two id spaces are unrelated: the model
+	 * allocates dense ids; the engine's NodeId is the kernel record id
+	 * (sparse — node and link records share one allocator, and freed record
+	 * ids recycle). Snapshots/events compare by NAME, never by id. */
 	private nodeMap = new Map<AnyNode, ENode>();
 	private idToEngineRenderPass = new Map<number, ERenderPass>();
 	/** Model react-effect id → engine subscription id. The id spaces diverge
@@ -302,8 +307,7 @@ export class TwinDriver {
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const mNode = this.model.atom(name, initial, equals);
 		const eNode = this.engine.atom(name, initial, equals);
-		expect(eNode.id, 'twin atom: node ids diverged').toBe(mNode.id);
-		this.nodeMap.set(mNode, eNode);
+		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
 		this.mirror.setOrigin(eNode as EAtomNode, initial);
 		return mNode;
 	}
@@ -318,9 +322,8 @@ export class TwinDriver {
 	adoptAtom(name: string, handle: Atom<unknown>): AtomNode {
 		const eNode = this.engine.adoptAtom(name, handle);
 		const mNode = this.model.atom(name, eNode.base);
-		expect(eNode.id, 'twin adoptAtom: node ids diverged').toBe(mNode.id);
 		expect(Object.is(mNode.base, eNode.base), 'twin adoptAtom: seeded base diverged').toBe(true);
-		this.nodeMap.set(mNode, eNode);
+		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
 		this.mirror.setOrigin(eNode, eNode.base);
 		return mNode;
 	}
@@ -330,8 +333,7 @@ export class TwinDriver {
 		const eNode = this.engine.computed(name, (read, untracked) =>
 			fn((d) => read(this.toEngine(d as AnyNode)), (d) => untracked(this.toEngine(d as AnyNode))),
 		);
-		expect(eNode.id).toBe(mNode.id);
-		this.nodeMap.set(mNode, eNode);
+		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
 		return mNode;
 	}
 

@@ -22,7 +22,6 @@ import {
 	type AnyNode,
 	type ArenaCheckerInternals,
 	type CosignalBridge,
-	type NodeId,
 	type Reader,
 	type WorldArena,
 	type Value,
@@ -41,8 +40,11 @@ type CheckerState = {
 	/** Re-entry latch (one check at a time; a serve inside the check can
 	 * run user fns, and nothing they reach may start a nested check). */
 	checking: boolean;
-	/** Naive-evaluation stack for per-check cycle detection. */
-	readonly naiveStack: Set<NodeId>;
+	/** Naive-evaluation stack for per-check cycle detection. Keyed by node
+	 * OBJECT: NodeIds are kernel record ids and recycle, so a dead tenant's
+	 * fn (reachable through a stale reference) must not collide with the
+	 * record's new tenant. */
+	readonly naiveStack: Set<AnyNode>;
 };
 
 const states = new WeakMap<CosignalBridge, CheckerState>();
@@ -81,7 +83,7 @@ function runCheck(st: CheckerState): void {
 		v.holdOp(() => {
 			v.eachArena((a) => {
 				validateArena(v, a);
-				const naiveMemo = new Map<NodeId, NaiveOutcome>();
+				const naiveMemo = new Map<AnyNode, NaiveOutcome>(); // object-keyed: record ids recycle
 				for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
 					const sh = a.nodeToShadow[nid] ?? 0;
 					if (sh === 0) continue;
@@ -155,27 +157,27 @@ function runCheck(st: CheckerState): void {
  * and nothing routes back into the arena under check. Thrown outcomes
  * memoize and rethrow (identity-stable).
  */
-function naiveValue(st: CheckerState, node: AnyNode, world: World, memo: Map<NodeId, NaiveOutcome>): Value {
+function naiveValue(st: CheckerState, node: AnyNode, world: World, memo: Map<AnyNode, NaiveOutcome>): Value {
 	if (node.kind === 'atom') return st.bridge.foldAtom(node, world);
-	const hit = memo.get(node.id);
+	const hit = memo.get(node);
 	if (hit !== undefined) {
 		if (hit.threw) throw hit.v;
 		return hit.v;
 	}
-	if (st.naiveStack.has(node.id)) {
+	if (st.naiveStack.has(node)) {
 		throw st.views.cycleError(node.name);
 	}
-	st.naiveStack.add(node.id);
+	st.naiveStack.add(node);
 	const reader: Reader = (dep) => naiveValue(st, dep, world, memo);
 	try {
 		const v = st.views.foldTruthFrame(world, () => node.fn(reader, reader));
-		memo.set(node.id, { threw: false, v });
+		memo.set(node, { threw: false, v });
 		return v;
 	} catch (err) {
-		memo.set(node.id, { threw: true, v: err });
+		memo.set(node, { threw: true, v: err });
 		throw err;
 	} finally {
-		st.naiveStack.delete(node.id);
+		st.naiveStack.delete(node);
 	}
 }
 

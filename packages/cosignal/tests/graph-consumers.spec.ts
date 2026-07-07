@@ -38,7 +38,7 @@
  *  A1 kernel value ≡ fold(base, log entries)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
  *  A2 newest memo fingerprints ≡ write logs (+retirement stamps) | lockstep values; scars S5 pins log-entry-after-read invalidation
  *  A3 quiet flag ≡ pending state (batches/renders/write logs) | quiet-mode.spec arming/disarming battery
- *  A4 adoption stamp ≡ kernelIdToNode registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
+ *  A4 handle resolution = per-bridge idToNode registry     | T8: resolution is each bridge's own registry probe by kernel record id; writes land on the ACTIVE bridge's node
  *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (tests/arena-checker.ts): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
  *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
@@ -252,16 +252,16 @@ describe('§1 rows 13/16/19 — the two watcher stores move together (removeWatc
 	});
 });
 
-describe('§2 A4 — adoption stamp vs registry', () => {
-	it('T8: a foreign bridge stamp never leaks — nodeFor validates against THIS bridge and writes land on the ACTIVE one', () => {
+describe('§2 A4 — handle resolution vs per-bridge registry', () => {
+	it('T8: registration on one bridge never leaks to another — nodeFor probes THIS bridge\'s registry and writes land on the ACTIVE one', () => {
 		const b1 = bridge();
 		const handle = new Atom(0);
 		const n1 = b1.adoptAtom('a', handle as Atom<unknown>);
-		const b2 = bridge(); // replaces the active routing; handle's stamp now points at b2 after re-adoption
+		const b2 = bridge(); // replaces the active routing
 		const n2 = b2.adoptAtom('a', handle as Atom<unknown>);
-		expect(b1.nodeFor(handle as Atom<unknown>)).toBe(n1); // registry probe backstops the foreign stamp
-		expect(b2.nodeFor(handle as Atom<unknown>)).toBe(n2); // (and re-stamps per bridge)
-		handle.set(1); // public write → the ACTIVE bridge's node, whatever the stamp said last
+		expect(b1.nodeFor(handle as Atom<unknown>)).toBe(n1); // each bridge resolves by ITS OWN idToNode row for the kernel id
+		expect(b2.nodeFor(handle as Atom<unknown>)).toBe(n2);
+		handle.set(1); // public write → the ACTIVE bridge's node
 		// b2 is at rest, so the write is a quiet fold: base advances on the
 		// ACTIVE bridge's node (no log entry is created while nothing is pending).
 		expect(n2.base).toBe(1);

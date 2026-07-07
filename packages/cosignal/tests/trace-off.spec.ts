@@ -147,9 +147,18 @@ describe('R11 runtime enable/disable', () => {
 		expect(traced.seq).toBe(plain.seq);
 		expect(traced.committedAdvance).toBe(plain.committedAdvance);
 		expect(traced.epoch).toBe(plain.epoch);
-		for (const [id, n] of plain.idToNode) {
+		// NodeIds are kernel record ids, and the two bridges share one kernel
+		// — same-position nodes carry DIFFERENT ids across the two runs, so
+		// the pairing is creation order (identical schedules), verified by name.
+		const tracedNodes = [...traced.idToNode.values()];
+		const plainNodes = [...plain.idToNode.values()];
+		expect(tracedNodes.length).toBe(plainNodes.length);
+		for (let i = 0; i < plainNodes.length; i++) {
+			const n = plainNodes[i]!;
+			const tn = tracedNodes[i]!;
+			expect(tn.name, 'node population diverged under tracing').toBe(n.name);
 			expect(
-				Object.is(traced.newestValue(traced.nodeById(id)), plain.newestValue(n)),
+				Object.is(traced.newestValue(tn), plain.newestValue(n)),
 				`newest(${n.name}) diverged under tracing`,
 			).toBe(true);
 		}

@@ -126,32 +126,42 @@ describe('1. KERNEL (index.ts arena)', () => {
 	});
 });
 
-describe('2. ENGINE REGISTRY (kernelIdToNode + dense per-node columns)', () => {
-	it('adopt/dispose churn returns kernelIdToNode + idToNode to baseline, recycles kernel ids, and leaves only cleared dense rows (RECLAIMED; monotone engine-node-id slots quantified as accepted residue)', () => {
+describe('2. ENGINE REGISTRY (idToNode + dense per-node columns)', () => {
+	it('adopt/dispose churn returns idToNode to baseline, recycles kernel ids AND their nodeIndexes, and the record-free scrub leaves only cleared dense rows (RECLAIMED; columns bounded by node count)', () => {
 		const b = bridge();
 		const at = new Atom(1);
 		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', (read) => read(an));
 		mount(b, 'R', keep, 'W');
+		// Warm one dispose→create cycle so the free list (and its recycled
+		// nodeIndex) is the steady state the baseline measures.
+		const warm = new Computed(() => (at.state as number) * 2);
+		b.committedValue(b.nodeForComputed(warm as unknown as Computed<unknown>), 'R');
+		b.disposeComputed(warm as unknown as Computed<unknown>);
 		const nodesBase = b.idToNode.size;
-		const kernelIdBase = b.kernelIdToNode.size;
 		const arrBase = priv<unknown[]>(b, 'nodesArr').length;
 		const kids = new Set<number>();
+		const indexes = new Set<number>();
+		let lastIx = 0;
 		const N = 200;
 		for (let i = 0; i < N; i++) {
 			const c = new Computed(() => (at.state as number) + i);
 			const node = b.nodeForComputed(c as unknown as Computed<unknown>);
 			expect(b.committedValue(node, 'R')).toBe(1 + i);
 			kids.add((c as unknown as { _id: number })._id);
+			lastIx = (node as unknown as { ix: number }).ix;
+			indexes.add(lastIx);
 			b.disposeComputed(c as unknown as Computed<unknown>);
 		}
-		expect(b.idToNode.size).toBe(nodesBase); // registry entries removed at dispose
-		expect(b.kernelIdToNode.size).toBe(kernelIdBase); // kernel-id rows removed at dispose
-		expect(kids.size).toBeLessThanOrEqual(2); // kernel records recycled (§4.5.3; arena-sc pins tenancy)
+		expect(b.idToNode.size).toBe(nodesBase); // registry entries removed at dispose (kernel-id keyed since the id merge)
+		expect(kids.size).toBeLessThanOrEqual(2); // kernel records recycled (arena-sc pins tenancy)
+		expect(indexes.size).toBeLessThanOrEqual(2); // a reused record inherits its slot's nodeIndex
 		const arr = priv<unknown[]>(b, 'nodesArr');
-		expect(arr.length).toBe(arrBase + N); // engine node ids are monotone: one dense slot per creation — a small scalar per column, no object retained…
-		for (let i = arrBase; i < arr.length; i++) expect(arr[i]).toBeUndefined(); // …and the row is cleared
-		expect(priv<number[]>(b, 'obsRefs')[arrBase + N - 1]).toBe(0);
+		expect(arr.length).toBe(arrBase); // nodeIndex recycling: the dense columns do NOT grow with creation count
+		expect(arr[lastIx]).toBeUndefined(); // the record-free scrub cleared the row
+		expect(priv<number[]>(b, 'obsRefs')[lastIx]).toBe(0);
+		expect(priv<number[]>(b, 'lastWalk')[lastIx]).toBe(0);
+		expect(priv<(unknown[] | undefined)[]>(b, 'nodeToWatchers')[lastIx]).toBeUndefined();
 	});
 });
 
@@ -189,9 +199,10 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		expect(shell.links).toBe(links0); // dep links recycled through the arena link free list
 		expect(shell.suspended.length).toBe(0);
 		expect(shell.dirty.length).toBeLessThanOrEqual(4);
-		// Accepted residue, quantified: nodeToShadow is engine-node-id-indexed and engine node
-		// ids never recycle — one Int32-sized slot per creation per live arena.
-		expect(shell.nodeToShadow.length).toBeGreaterThanOrEqual(N);
+		// The old accepted residue is GONE: nodeToShadow keys by nodeIndex,
+		// which recycles with the record slot — the lookup column is bounded
+		// by peak node count, not creation count.
+		expect(shell.nodeToShadow.length).toBeLessThan(N);
 		expect(w.live).toBe(true);
 		expect(b.__arenaStats().committed).toBe(1);
 	});

@@ -164,7 +164,7 @@
  *     never be skipped. The B1 read-before-pending pin is the tripwire.
  */
 
-import { Atom, Computed, CycleError, LinkField, NodeField, NodeFlag, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain, __setHostComputedRead, __setHostRead, __setHostWrite, __setSettleTap, __HOST_MISS, type ComputedCtx, type WriteKind as KernelWriteKind } from './index.js';
+import { Atom, Computed, CycleError, LinkField, NodeField, NodeFlag, SuspendedRead, untracked, __assertHostWritable, __ctxUse, __hostApplySet, __hostDisposeComputed, __hostReadNewest, __hostMarkComputedOwned, __hostRunFold, __hostWrapComputedFn, __kernelBuffer, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain, __setHostComputedRead, __setHostRead, __setHostWrite, __setRecordFreeHook, __setSettleTap, __HOST_MISS, type ComputedCtx, type WriteKind as KernelWriteKind } from './index.js';
 
 // ---- error carriers -------------------------------------------------------------
 
@@ -182,7 +182,19 @@ export class BridgeInvariantViolation extends Error {}
 // ---- bridge-surface types (structurally mirror the reference model's) ------------
 
 export type Value = unknown;
+/** THE node identity, package-wide: the premultiplied KERNEL record id (the
+ * Int32 arena index of the record's field 0 — index.ts vocabulary; also
+ * `Atom._id`/`Computed._id`). One id space: the engine allocates no ids of
+ * its own. Never dense over nodes — node and link records share the kernel's
+ * one allocator — so dense per-node columns key by NodeIndex instead. */
 export type NodeId = number;
+/** Dense per-node column key: the record's NodeField.NODE_INDEX, assigned by
+ * the kernel allocator and RECYCLED with the record slot (a reused record
+ * inherits its slot's index — the record-free scrub is what makes that
+ * sound). A packing detail, never an identity. */
+type NodeIndex = number;
+/** A kernel record's GEN field value: the id-tenancy stamp, bumped at free. */
+type Generation = number;
 export type BatchId = number;
 export type BatchSlot = number;
 export type RootId = string;
@@ -198,11 +210,6 @@ export type Epoch = number;
 export type CommitGen = number;
 /** A 31-bit slot set: bit i = slot i (mask/included/committed/dedup words). */
 export type BatchSlotSet = number;
-/** A premultiplied kernel record id — already multiplied by the kernel's
- * record stride so it indexes the kernel's arrays directly (index.ts
- * vocabulary). The base kernel's node id currency (`Atom._id`); distinct
- * from the engine's dense `NodeId`. */
-export type KernelId = number;
 /** Per-walk visited generation (walk termination without Set allocations). */
 type WalkGen = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
@@ -335,6 +342,11 @@ export type Equals = (a: Value, b: Value) => boolean;
 export class AtomNode {
 	readonly kind = 'atom' as const;
 	readonly id: NodeId;
+	/** Cached NodeField.NODE_INDEX of `id`'s record: object-carrying paths pay
+	 * one property read; raw id-driven walks read it from kernel memory. Stable
+	 * for the node's life (the index moves only when the record slot re-tenants,
+	 * which this node does not survive). @internal */
+	readonly ix: NodeIndex;
 	name: string;
 	/** The folded floor of the write log: retired, compacted history every world sees. */
 	base: Value;
@@ -357,8 +369,9 @@ export class AtomNode {
 	/** Last batch id that appended here (dedupe for batch.atomsTouched). */
 	lastTouchBatch: BatchId = 0;
 
-	constructor(id: NodeId, name: string, initial: Value, equals: Equals, eqIsDefault: boolean, handle: Atom<Value>) {
+	constructor(id: NodeId, ix: NodeIndex, name: string, initial: Value, equals: Equals, eqIsDefault: boolean, handle: Atom<Value>) {
 		this.id = id;
+		this.ix = ix;
 		this.name = name;
 		this.base = initial;
 		this.equals = equals;
@@ -384,6 +397,8 @@ export type ComputedFn = (read: Reader, untracked: Reader) => Value;
 export type ComputedNode = {
 	kind: 'computed';
 	id: NodeId;
+	/** Cached NodeField.NODE_INDEX of `id`'s record (see AtomNode.ix). @internal */
+	ix: NodeIndex;
 	name: string;
 	/** The WORLD evaluation function (arena refolds, mount-fix folds). */
 	fn: ComputedFn;
@@ -507,11 +522,22 @@ export class Watcher {
 	name: string;
 	readonly root: RootId;
 	readonly node: NodeId;
+	/** The node record's NODE_INDEX, cached at mount (valid exactly while
+	 * `nodeRecordGen` still matches the record). @internal */
+	readonly nodeIx: NodeIndex;
+	/** The node record's tenancy generation (kernel GEN) at mount. Bare ids
+	 * alias reused records: kernel record ids recycle through the free list,
+	 * so every watcher→node resolution generation-checks this stamp and skips
+	 * loudly on mismatch — a dormant watcher whose node died must never bind
+	 * the record's next tenant. */
+	readonly nodeRecordGen: Generation;
 	/** The owning bridge's observed-closure shift (see obsShift): the `live`
-	 * setter feeds the watched node's observed-consumer refcount through it,
-	 * and the bridge propagates retains transitively over the node's current
-	 * strong dep set down to lifecycle-registered atoms. @internal */
-	readonly _observationShift: (node: NodeId, delta: 1 | -1) => void;
+	 * setter feeds the watched node's observed-consumer refcount through it
+	 * (generation-checked bridge-side — a stale watcher's flips shift
+	 * nothing), and the bridge propagates retains transitively over the
+	 * node's current strong dep set down to lifecycle-registered atoms.
+	 * @internal */
+	readonly _observationShift: (w: Watcher, delta: 1 | -1) => void;
 	private _live = false;
 	lastRenderedValue: Value;
 	snapshot: WatcherSnapshot;
@@ -520,11 +546,13 @@ export class Watcher {
 	 * render will fold it anyway. */
 	dedupBits: BatchSlotSet = 0;
 
-	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, observationShift: (node: NodeId, delta: 1 | -1) => void, value: Value, snapshot: WatcherSnapshot) {
+	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, nodeIx: NodeIndex, nodeRecordGen: Generation, observationShift: (w: Watcher, delta: 1 | -1) => void, value: Value, snapshot: WatcherSnapshot) {
 		this.id = id;
 		this.name = name;
 		this.root = root;
 		this.node = node;
+		this.nodeIx = nodeIx;
+		this.nodeRecordGen = nodeRecordGen;
 		this._observationShift = observationShift;
 		this.lastRenderedValue = value;
 		this.snapshot = snapshot;
@@ -553,7 +581,7 @@ export class Watcher {
 			return;
 		}
 		this._live = value;
-		this._observationShift(this.node, value ? 1 : -1);
+		this._observationShift(this, value ? 1 : -1);
 	}
 }
 
@@ -596,8 +624,11 @@ export type Subscription = {
 	cleanups: number;
 	live: boolean;
 	/** RCC-OL1: snapshot nodes currently holding observation retains
-	 * (re-pointed per run exactly like watcher obsDeps; see obsShift). */
-	obsDeps: Set<NodeId> | undefined;
+	 * (re-pointed per run exactly like watcher obsDeps; see obsShift).
+	 * Node OBJECTS, not ids: a retained node's record can free and re-tenant
+	 * while the stale reference lingers, and obsShift's identity guard is
+	 * what keeps the eventual release from touching the new tenant. */
+	obsDeps: Set<AnyNode> | undefined;
 };
 
 /** A world: one self-consistent assignment of values to all atoms, computed
@@ -822,6 +853,28 @@ function settleTapImpl(t: PromiseLike<unknown>): void {
 	if (b !== undefined) b.__settleTap(t);
 }
 
+/** The record-free router (ONE closure per process, kernel-registered at
+ * bridge registration): the kernel's boundary sweep reports every freed node
+ * record; the active bridge scrubs its nodeIndex-keyed rows so the slot's
+ * next tenant (which inherits the index) starts clean. Abandoned test
+ * bridges keep stale rows — they never run again. */
+function recordFreeImpl(recordId: NodeId, nodeIndex: number): void {
+	const b = activeBridge;
+	if (b !== undefined) b.__onRecordFree(recordId, nodeIndex);
+}
+
+/** A node record's tenancy generation, read live from kernel memory. The
+ * buffer is re-fetched per read: kernel growth rebuilds swap it, and bridge
+ * operations span growth boundaries. */
+function kernelGenOf(id: NodeId): Generation {
+	return __kernelBuffer()[id + NodeField.GEN]!;
+}
+
+/** A node record's NODE_INDEX, read live from kernel memory. */
+function kernelNodeIndexOf(id: NodeId): NodeIndex {
+	return __kernelBuffer()[id + NodeField.NODE_INDEX]!;
+}
+
 /** An arena buffer capacity, counted in Int32 slots (stride-8 records: one
  * node shadow or one dependency link per record). */
 export type ArenaInitInts = number;
@@ -921,8 +974,8 @@ const enum ArenaField {
 	DEPS_TAIL = 2,
 	SUBS = 3,
 	SUBS_TAIL = 4,
-	NODE = 5, // the engine NodeId this shadows
-	NODE_GEN = 6, // id-tenancy stamp: bridge nodeGen[NODE] observed at recording (§4.5.3)
+	NODE = 5, // the nodeIndex this shadows (dense column key; identity is the kernel record id)
+	NODE_GEN = 6, // id-tenancy stamp: the node's KERNEL record GEN observed at recording
 	MARK = 7, // fanout read-clock dedup stamp (§4.3)
 }
 
@@ -1054,7 +1107,7 @@ export class WorldArena {
 	 * (tests/leak-audit.spec.ts pins the boundedness). */
 	shadowFree = 0;
 	links = 0;
-	/** engine NodeId → shadow record id (0 = none). */
+	/** nodeIndex → shadow record id (0 = none; index 0 is burned). */
 	nodeToShadow: number[] = [];
 	/** Marked-shadow list (record ids; appended on the DIRTY 0→1 edge). */
 	dirty: number[] = [];
@@ -1123,7 +1176,7 @@ function arenaGrow(a: WorldArena, need: number): void {
 	}
 }
 
-function arenaAllocShadow(a: WorldArena, nodeId: NodeId, flags: number, gen: number): number {
+function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: number): number {
 	let id = a.shadowFree;
 	if (id !== 0) {
 		// Reuse a dead-shadow record (see WorldArena.shadowFree): it was
@@ -1148,7 +1201,7 @@ function arenaAllocShadow(a: WorldArena, nodeId: NodeId, flags: number, gen: num
 	// tenant fields need stores. (The freelist re-issues LINK records, whose
 	// creation paths write every field — tests/arena-freelist.spec.ts.)
 	memory[id + ArenaField.FLAGS] = flags;
-	memory[id + ArenaField.NODE] = nodeId;
+	memory[id + ArenaField.NODE] = ix;
 	memory[id + ArenaField.NODE_GEN] = gen;
 	const v = id >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 	while (a.vals.length <= v) {
@@ -1158,8 +1211,8 @@ function arenaAllocShadow(a: WorldArena, nodeId: NodeId, flags: number, gen: num
 		a.weakSubs.push(0);
 		a.weakSubsTail.push(0);
 	}
-	while (a.nodeToShadow.length <= nodeId) a.nodeToShadow.push(0); // stay packed, never holey
-	a.nodeToShadow[nodeId] = id;
+	while (a.nodeToShadow.length <= ix) a.nodeToShadow.push(0); // stay packed, never holey
+	a.nodeToShadow[ix] = id;
 	return id;
 }
 
@@ -1552,9 +1605,10 @@ export type ArenaCheckerInternals = {
 	/** Every LIVE arena: committed arenas by root, then open-render arenas —
 	 * the check's iteration domain (the stores are private). */
 	eachArena(fn: (a: WorldArena) => void): void;
-	/** The node registry row, or undefined for a disposed id (an arena's
-	 * nodeToShadow rows can outlive their node — the checker skips those). */
-	nodeAt(id: NodeId): AnyNode | undefined;
+	/** The dense node row by NODE INDEX (the arenas' NODE-column key), or
+	 * undefined for a disposed index (an arena's nodeToShadow rows can
+	 * outlive their node — the checker skips those). */
+	nodeAt(ix: number): AnyNode | undefined;
 	/** `arenaServe` — THE arena serving entry (values, walks, refolds). The
 	 * checker serves the arena side FIRST, pinning the discipline that a
 	 * stale shadow is never refreshed by the reference side before the
@@ -1599,6 +1653,9 @@ export type ArenaCheckerInternals = {
  * creates but never reads.
  */
 export class CosignalBridge {
+	/** Registered nodes (atoms AND computeds) by NodeId — the kernel record
+	 * id, one id space. `disposeComputed` and the record-free scrub clear
+	 * rows, so a REUSED record id can never resolve to a dead tenant. */
 	idToNode = new Map<NodeId, AnyNode>();
 	idToBatch = new Map<BatchId, Batch>();
 	slots: BatchSlotMeta[] = [];
@@ -1711,14 +1768,21 @@ export class CosignalBridge {
 	epoch: Epoch = 0;
 
 	// ---- routing walk scratch (arena walks + collection dedup) ----
-	/** Per-NODE visited/collection generation column: one stamp per engine
-	 * node id, shared by the routing walks (delivery collection dedup across
+	// DENSE PER-NODE COLUMNS: keyed by nodeIndex (NodeField.NODE_INDEX — read
+	// off kernel record memory; node objects cache it as `.ix`), NEVER by
+	// NodeId — node and link records share the kernel's one allocator, so
+	// record-id keying would go holey where index keying stays packed. Each
+	// column's row for a freed record clears in __onRecordFree (the
+	// record-free scrub): indexes recycle with record slots, and the slot's
+	// next tenant must never see the old tenant's rows.
+	/** Per-NODE visited/collection generation column: one stamp per nodeIndex,
+	 * shared by the routing walks (delivery collection dedup across
 	 * arenas, drain candidate dedup) — arena TRAVERSAL termination uses the
 	 * per-arena `walk` side column instead, because the same node's cone
 	 * differs per arena and must be walked in each. */
 	private lastWalk: WalkGen[] = [0];
 	private walkGen: WalkGen = 0;
-	/** Nodes by id (dense array twin of `nodes`). */
+	/** Nodes by nodeIndex (dense array twin of `idToNode`). */
 	private nodesArr: (AnyNode | undefined)[] = [undefined];
 	// ---- the observed closure (transitive observation retains) ----
 	// A node is OBSERVED while a live watcher consumes it — directly, or
@@ -1735,19 +1799,27 @@ export class CosignalBridge {
 	// move them; the kernel's microtask flush coalesces same-tick flaps) —
 	// and the observation index deliberately survives quiescence: the
 	// closure is a property of live watchers, not of the episode.
-	/** Observed-consumer refcount per node id: +1 per live watcher on the
+	/** Observed-consumer refcount per nodeIndex: +1 per live watcher on the
 	 * node, +1 per observed computed currently holding it in obsDeps. */
 	private obsRefs: number[] = [0];
-	/** Per OBSERVED computed: the retained direct strong-dep set as of its
-	 * last fn run (undefined while unobserved — unwatched nodes store nothing). */
-	private obsDeps: (Set<NodeId> | undefined)[] = [];
+	/** Per OBSERVED computed (by nodeIndex): the retained direct strong-dep
+	 * set as of its last fn run (undefined while unobserved — unwatched nodes
+	 * store nothing). Sets hold node OBJECTS — see Subscription.obsDeps. */
+	private obsDeps: (Set<AnyNode> | undefined)[] = [undefined];
 	/** Strong-dep capture list of the innermost evaluation frame, undefined
 	 * unless that frame's node is observed — the one field unwatched
 	 * evaluations pay for (a check per recorded edge). */
-	private obsCapture: NodeId[] | undefined = undefined;
-	/** The watcher liveness seam (one closure per bridge; Watcher._observationShift). */
-	private watcherObs = (node: NodeId, delta: 1 | -1): void => this.obsShift(node, delta);
-	private nodeToWatchers: (Watcher[] | undefined)[] = [];
+	private obsCapture: AnyNode[] | undefined = undefined;
+	/** The watcher liveness seam (one closure per bridge; Watcher._observationShift):
+	 * generation-checked — a stale watcher's liveness flips shift nothing
+	 * (skips pair up: tenancy generations only ever grow, so a stale stamp
+	 * can never re-validate between a skipped retain and its release). */
+	private watcherObs = (w: Watcher, delta: 1 | -1): void => {
+		const node = this.resolveWatcherNode(w);
+		if (node !== undefined) this.obsShift(node, delta);
+	};
+	/** Watchers by nodeIndex (the routing walks' collection rows). */
+	private nodeToWatchers: (Watcher[] | undefined)[] = [undefined];
 	/** Live subscription count (fast bail on the boundary-scan paths). */
 	private committedSubCount = 0;
 	/** The core capture frame `captureRun` opens: while set (and no evaluation
@@ -1806,7 +1878,7 @@ export class CosignalBridge {
 
 	/**
 	 * Referee surface — not consulted by engine logic. The recorded
-	 * dependency edges as dep → dependents (engine node ids), materialized
+	 * dependency edges as dep → dependents (NodeIds — kernel record ids), materialized
 	 * as the union of every live arena's links (strong AND weak-flagged —
 	 * the current structure the routing walks consult); read by: graphviz,
 	 * twin tests, soak metrics. (Replaced the K1 episode-edge snapshot at
@@ -1816,19 +1888,24 @@ export class CosignalBridge {
 		const out = new Map<NodeId, Set<NodeId>>();
 		this.eachArena((a) => {
 			const memory = a.memory;
-			for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
-				const sh = a.nodeToShadow[nid]!;
+			for (let ix = 0; ix < a.nodeToShadow.length; ix++) {
+				const sh = a.nodeToShadow[ix]!;
 				if (sh === 0) continue;
+				const depNode = this.nodesArr[ix];
+				if (depNode === undefined) continue; // dead residue: not part of the live graph
 				for (let list = 0; list < 2; list++) {
 					let l = arenaSubsHead(a, sh, list);
 					while (l !== 0) {
 						const sub = memory[l + ArenaLinkField.SUB]!;
-						let s = out.get(nid);
-						if (s === undefined) {
-							s = new Set();
-							out.set(nid, s);
+						const subNode = this.nodesArr[memory[sub + ArenaField.NODE]!];
+						if (subNode !== undefined) {
+							let s = out.get(depNode.id);
+							if (s === undefined) {
+								s = new Set();
+								out.set(depNode.id, s);
+							}
+							s.add(subNode.id);
 						}
-						s.add(memory[sub + ArenaField.NODE]!);
 						l = memory[l + ArenaLinkField.NEXT_SUB]!;
 					}
 				}
@@ -1840,11 +1917,6 @@ export class CosignalBridge {
 	/** Ambient default batch for bare (context-free) writes. */
 	ambientBatch: BatchId | undefined;
 
-	/** Registered kernel-backed nodes (atoms AND computeds since S-C), by
-	 * kernel record id (concurrent-table routing + the kernel-link walks'
-	 * id mapping). `disposeComputed` clears rows, so a REUSED kernel id can
-	 * never resolve to a dead tenant (§4.5.3 id tenancy). */
-	kernelIdToNode = new Map<KernelId, AnyNode>();
 	/** The world an overlay evaluation frame is folding in (concurrent-table read routing). */
 	activeWorld: World | undefined;
 	/**
@@ -1882,7 +1954,6 @@ export class CosignalBridge {
 	 * on it. */
 	readonly devChecks: boolean;
 
-	private nextNode = 1;
 	private nextBatchId = 1;
 	private nextRenderPassId = 1;
 	private nextWatcher = 1;
@@ -1969,7 +2040,7 @@ export class CosignalBridge {
 			return __HOST_MISS;
 		}
 		const cap = this.routedCap;
-		let node = this.kernelIdToNode.get(atom._id);
+		let node = this.idToNode.get(atom._id);
 		if (node === undefined) {
 			const adopt = this.readAdopter;
 			if (adopt === undefined) {
@@ -2004,7 +2075,7 @@ export class CosignalBridge {
 		// the seam is their capture site (mirrors routedRead's atom half).
 		if (this.currentSink !== 0) {
 			const oc = this.obsCapture;
-			if (oc !== undefined) oc.push(node.id);
+			if (oc !== undefined) oc.push(node);
 		}
 		const v = this.evaluate(node, world);
 		if (cap !== undefined) cap.deps.push({ node, value: v });
@@ -2013,30 +2084,15 @@ export class CosignalBridge {
 
 	/**
 	 * Resolve a public Computed handle to its registered node, adopting on
-	 * first sight — `resolveStamped`'s computed face.
+	 * first sight — `nodeFor`'s computed face. One id space: resolution is
+	 * the `idToNode` probe by the handle's own kernel record id. Record
+	 * reuse can never serve a dead tenant: disposal (and the record-free
+	 * scrub) clears the row, so a reused id resolves fresh.
 	 */
 	nodeForComputed(c: Computed<unknown>): ComputedNode {
-		return (this.resolveStamped(c, 'computed') as ComputedNode | undefined)
-			?? this.adoptComputed(c.label ?? `computed#${c._id}`, c);
-	}
-
-	/**
-	 * The ONE stamp-validate + registry-probe + re-stamp rule behind handle
-	 * resolution (`nodeFor` and `nodeForComputed` are its two kind-typed
-	 * faces). Adoption stamps `{b, n}` on the handle, so the steady state is
-	 * one property load + identity compare; the Map probe runs only for
-	 * un-stamped handles (or a stamp from a replaced bridge — test drivers
-	 * swap bridges; the stamp validates against THIS bridge and re-stamps on
-	 * a registry hit). Kernel id reuse can never serve a dead tenant:
-	 * disposal clears the stamp and the kernelIdToNode row (§4.5.3 id tenancy).
-	 */
-	private resolveStamped(handle: Atom<unknown> | Computed<unknown>, kind: 'atom' | 'computed'): AnyNode | undefined {
-		const stamp = handle._hostStamp;
-		if (stamp !== undefined && stamp.b === this) return stamp.n as AnyNode;
-		const hit = this.kernelIdToNode.get(handle._id);
-		if (hit === undefined || hit.kind !== kind) return undefined;
-		handle._hostStamp = { b: this, n: hit }; // re-stamp after a bridge swap
-		return hit;
+		const hit = this.idToNode.get(c._id);
+		if (hit !== undefined && hit.kind === 'computed') return hit;
+		return this.adoptComputed(c.label ?? `computed#${c._id}`, c);
 	}
 
 	private nextSeq(): Seq {
@@ -2057,38 +2113,58 @@ export class CosignalBridge {
 		// NF2 S-A: arm the settlement tap (ONE closure; consulted at FIRE
 		// time, routed to the active bridge — §4.5.4 push half).
 		__setSettleTap(settleTapImpl);
+		// One id space: the kernel's boundary sweep reports freed node records
+		// so the nodeIndex-keyed columns scrub at exactly the reuse boundary.
+		__setRecordFreeHook(recordFreeImpl);
 		this.syncReadRouting();
 		this.recomputeQuiet(); // registered + nothing pending: quiet arms here
 	}
 
-	/** Registers a node id in the dense side columns. */
+	/** Registers a node in the dense side columns (keyed by its nodeIndex).
+	 * Gap-fill keeps every column PACKED: unregistered kernel nodes (plain
+	 * effects/scopes/handles) consume indexes between registrations, and a
+	 * write past a plain array's length would drop it to a holey kind. */
 	private indexNode(node: AnyNode): void {
-		const id = node.id;
-		this.idToNode.set(id, node);
-		this.nodesArr[id] = node;
-		this.lastWalk[id] = 0;
-		this.evalMark[id] = 0;
-		this.obsRefs[id] = 0;
-		this.nodeGen[id] = this.nodeGen[id] ?? 0; // dense: shadowFor loads it in-bounds on every probe
+		const ix = node.ix;
+		this.idToNode.set(node.id, node);
+		while (this.nodesArr.length <= ix) {
+			this.nodesArr.push(undefined);
+			this.lastWalk.push(0);
+			this.evalMark.push(0);
+			this.obsRefs.push(0);
+			this.obsDeps.push(undefined);
+			this.nodeToWatchers.push(undefined);
+		}
+		this.nodesArr[ix] = node;
+		this.lastWalk[ix] = 0;
+		this.evalMark[ix] = 0;
+		this.obsRefs[ix] = 0;
+		// Any row already here is a dead tenant's by construction (a fresh
+		// registration means the slot's previous tenant freed) — normally the
+		// record-free scrub already cleared it; this covers the multi-bridge
+		// referee shape where the free was reported to a DIFFERENT active
+		// bridge and this one kept operating.
+		this.obsDeps[ix] = undefined;
+		this.nodeToWatchers[ix] = undefined;
 	}
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const eq = equals ?? Object.is;
 		const handle = new Atom<Value>(initial, equals === undefined ? undefined : { isEqual: equals });
-		const node = new AtomNode(this.nextNode++, name, initial, eq, equals === undefined, handle);
+		const node = new AtomNode(handle._id, kernelNodeIndexOf(handle._id), name, initial, eq, equals === undefined, handle);
 		this.indexNode(node);
-		this.kernelIdToNode.set(handle._id, node);
-		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
 		return node;
 	}
 
 	/**
-	 * Resolve a public handle to its registered node — `resolveStamped`'s
-	 * atom face, shared by the host write seam and the bindings' handle
-	 * resolution.
+	 * Resolve a public handle to its registered node — the atom face of
+	 * handle resolution (see nodeForComputed), shared by the host write seam
+	 * and the bindings' handle resolution: one `idToNode` probe by the
+	 * handle's kernel record id.
 	 */
 	nodeFor(atom: Atom<unknown>): AtomNode | undefined {
-		return this.resolveStamped(atom, 'atom') as AtomNode | undefined;
+		const hit = this.idToNode.get(atom._id);
+		return hit !== undefined && hit.kind === 'atom' ? hit : undefined;
 	}
 
 	/**
@@ -2099,10 +2175,8 @@ export class CosignalBridge {
 	 */
 	adoptAtom(name: string, handle: Atom<Value>, equals?: Equals): AtomNode {
 		const current = this.kernelValueOf(handle);
-		const node = new AtomNode(this.nextNode++, name, current, equals ?? Object.is, equals === undefined, handle);
+		const node = new AtomNode(handle._id, kernelNodeIndexOf(handle._id), name, current, equals ?? Object.is, equals === undefined, handle);
 		this.indexNode(node);
-		this.kernelIdToNode.set(handle._id, node);
-		handle._hostStamp = { b: this, n: node }; // per-write registry fast path
 		return node;
 	}
 
@@ -2117,15 +2191,17 @@ export class CosignalBridge {
 	 * the ARENA readers through `arenaUpdateComputed`.
 	 */
 	computed(name: string, fn: ComputedFn, equals?: Equals): ComputedNode {
+		// id/ix land after the kernel record exists (the getter closure needs
+		// the node object first); nothing reads them in between.
 		const node: ComputedNode = {
-			kind: 'computed', id: this.nextNode++, name, fn,
+			kind: 'computed', id: 0, ix: 0, name, fn,
 			handle: undefined as never, ctxShaped: false, isEqual: equals, prevCell: { value: undefined },
 		};
 		node.handle = new Computed<unknown>(this.makeKernelGetter(node) as (ctx: ComputedCtx<unknown>) => Value, equals === undefined ? { label: name } : { label: name, isEqual: equals });
+		node.id = node.handle._id;
+		node.ix = kernelNodeIndexOf(node.id);
 		__hostMarkComputedOwned(node.handle); // its links carry no D1 lifecycle refs — the obs index is its arm
 		this.indexNode(node);
-		this.kernelIdToNode.set(node.handle._id, node);
-		node.handle._hostStamp = { b: this, n: node };
 		return node;
 	}
 
@@ -2143,18 +2219,16 @@ export class CosignalBridge {
 	 * rethrow — `suspendDepth`).
 	 */
 	adoptComputed(name: string, handle: Computed<unknown>): ComputedNode {
-		const existing = this.kernelIdToNode.get(handle._id);
+		const existing = this.idToNode.get(handle._id);
 		if (existing !== undefined && existing.kind === 'computed') return existing;
 		const node: ComputedNode = {
-			kind: 'computed', id: this.nextNode++, name, fn: undefined as never,
+			kind: 'computed', id: handle._id, ix: kernelNodeIndexOf(handle._id), name, fn: undefined as never,
 			handle, ctxShaped: true, isEqual: handle._isEqual, prevCell: { value: undefined },
 		};
 		node.fn = this.makeCtxWorldFn(node);
 		__hostWrapComputedFn(handle._id, (inner) => this.makeAdoptedKernelGetter(node, inner));
 		__hostMarkComputedOwned(handle); // retro-releases any pre-adoption lifecycle refs its links held
 		this.indexNode(node);
-		this.kernelIdToNode.set(handle._id, node);
-		handle._hostStamp = { b: this, n: node };
 		return node;
 	}
 
@@ -2163,47 +2237,112 @@ export class CosignalBridge {
 	 * path: the superseded node's kernel record frees and its id becomes
 	 * reusable). The caller owns the discipline that the node is SUPERSEDED
 	 * (its watchers re-keyed to the replacement; live watchers here throw).
-	 * Order matters for §4.5.3 id tenancy: the bridge-side tenancy moves
-	 * FIRST — nodeGen bumps (dead-GEN shadows never serve), every live
-	 * arena's shadow purges eagerly (walks traverse links without per-hop
-	 * GEN checks, so links through the dead shadow must go now), the
-	 * kernel-id row and handle stamp clear (a reused kernel id resolves
-	 * fresh, never to the dead tenant) — then the kernel record disposes.
+	 * Order matters for id tenancy: the bridge-side teardown runs FIRST —
+	 * every live arena's shadow purges eagerly (walks traverse links without
+	 * per-hop GEN checks, so links through the dead shadow must go now), the
+	 * registry row and dense node row clear (a reused record id resolves
+	 * fresh, never to the dead tenant) — then the kernel record disposes:
+	 * its GEN bumps at the boundary sweep, which also fires the record-free
+	 * scrub (__onRecordFree) clearing every remaining nodeIndex-keyed row
+	 * before the slot's index can be inherited by a new tenant.
 	 */
 	disposeComputed(handle: Computed<unknown>): void {
-		const node = this.kernelIdToNode.get(handle._id);
+		const node = this.idToNode.get(handle._id);
 		if (node !== undefined && node.kind === 'computed' && node.handle === handle) {
-			const nid = node.id;
-			const ws = this.nodeToWatchers[nid];
+			const ix = node.ix;
+			const ws = this.nodeToWatchers[ix];
 			if (ws !== undefined && ws.some((w) => w.live)) {
 				throw new BridgeScheduleError(`disposeComputed(${node.name}): live watchers still subscribe — re-key them to the replacement first`);
 			}
-			if (this.obsRefs[nid]! > 0) this.obsExit(nid); // release any retained closure (defensive)
-			this.nodeGen[nid] = (this.nodeGen[nid] ?? 0) + 1;
-			this.eachArena((a) => {
-				const sh = nid < a.nodeToShadow.length ? a.nodeToShadow[nid]! : 0;
-				if (sh === 0) return;
-				this.arenaEvictShadow(a, sh);
-				// Zero the record and unindex: dirty-list residue reads an inert
-				// record (FLAGS 0 — decay drops it); nothing routes here again.
-				for (let f = 0; f < ArenaGeom.STRIDE; f++) a.memory[sh + f] = 0;
-				a.nodeToShadow[nid] = 0;
-				// Leak audit: thread the orphaned record onto the arena's
-				// dead-shadow free list so recreation churn (the useComputed
-				// dispose→create pattern) reuses it instead of growing a live
-				// arena's record plane without bound. Stale dirty-list entries
-				// naming it stay benign: pre-reuse they read FLAGS 0 (dropped),
-				// post-reuse they alias the new tenant's listed entry (decay
-				// re-checks flags per entry; duplicates cannot amplify).
-				a.memory[sh + ArenaField.DEPS] = a.shadowFree;
-				a.shadowFree = sh;
-			});
-			this.kernelIdToNode.delete(handle._id);
-			this.idToNode.delete(nid);
-			this.nodesArr[nid] = undefined;
-			handle._hostStamp = undefined;
+			if (this.obsRefs[ix]! > 0) this.obsExit(node); // release any retained closure (defensive)
+			this.purgeNodeFromArenas(ix);
+			this.idToNode.delete(node.id);
+			this.nodesArr[ix] = undefined;
 		}
-		__hostDisposeComputed(handle); // kernel: deps unlink, subs detach, deferred free (GEN bump at the sweep)
+		__hostDisposeComputed(handle); // kernel: deps unlink, subs detach, deferred free (GEN bump + record-free scrub at the sweep)
+	}
+
+	/** Purge one nodeIndex's shadow from every live arena: evict, zero the
+	 * record, unindex, and thread it onto the arena's dead-shadow free list.
+	 * Shared by disposeComputed's eager teardown (the dispose→sweep window
+	 * must not route through the dead shadow) and the record-free scrub
+	 * (idempotent — an already-purged index reads shadow 0 and skips). */
+	private purgeNodeFromArenas(ix: NodeIndex): void {
+		this.eachArena((a) => {
+			const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
+			if (sh === 0) return;
+			this.arenaEvictShadow(a, sh);
+			// Zero the record and unindex: dirty-list residue reads an inert
+			// record (FLAGS 0 — decay drops it); nothing routes here again.
+			for (let f = 0; f < ArenaGeom.STRIDE; f++) a.memory[sh + f] = 0;
+			a.nodeToShadow[ix] = 0;
+			// Leak audit: thread the orphaned record onto the arena's
+			// dead-shadow free list so recreation churn (the useComputed
+			// dispose→create pattern) reuses it instead of growing a live
+			// arena's record plane without bound. Stale dirty-list entries
+			// naming it stay benign: pre-reuse they read FLAGS 0 (dropped),
+			// post-reuse they alias the new tenant's listed entry (decay
+			// re-checks flags per entry; duplicates cannot amplify).
+			a.memory[sh + ArenaField.DEPS] = a.shadowFree;
+			a.shadowFree = sh;
+		});
+	}
+
+	/**
+	 * THE RECORD-FREE SCRUB (registered kernel-side via __setRecordFreeHook,
+	 * routed here for the active bridge): a node record freed at the kernel's
+	 * boundary sweep surrenders its slot — and the slot's NODE_INDEX — to a
+	 * future tenant, so every nodeIndex-keyed row must clear NOW. For
+	 * bridge-disposed computeds this re-runs teardown idempotently; its
+	 * load-bearing case is everything disposeComputed does not cover — the
+	 * watcher-index row a dormant mount left behind, observation refs held
+	 * transitively at free, walk/eval stamps, and node records freed without
+	 * bridge-side teardown (a direct __hostDisposeComputed, or a slot whose
+	 * tenant was never registered). Bound-checked: an index past a column's
+	 * length has no row, and writing there would drop the column to a holey
+	 * kind. @internal
+	 */
+	__onRecordFree(recordId: NodeId, ix: NodeIndex): void {
+		this.idToNode.delete(recordId);
+		if (ix < this.nodesArr.length) {
+			const resident = this.nodesArr[ix];
+			// Un-torn-down engine node (freed without bridge disposal): release
+			// its outgoing observation retains before the rows clear, so its
+			// retained deps do not leak closure membership.
+			if (resident !== undefined && this.obsRefs[ix]! > 0) this.obsExit(resident);
+			this.nodesArr[ix] = undefined;
+			this.lastWalk[ix] = 0;
+			this.evalMark[ix] = 0;
+			this.obsRefs[ix] = 0;
+			this.obsDeps[ix] = undefined;
+			this.nodeToWatchers[ix] = undefined;
+		}
+		this.purgeNodeFromArenas(ix);
+	}
+
+	/** Stale-watcher loud skips (the P1 aliasing pin): every watcher→node
+	 * resolution that MISSED — the watcher's record tenancy moved (freed,
+	 * possibly reused) — and was skipped instead of silently binding the
+	 * record's current tenant. Diagnostics/referee surface. @internal */
+	__staleWatcherSkips = 0;
+
+	/**
+	 * THE watcher→node resolution: the idToNode probe plus the generation
+	 * check against the watcher's mount-time stamp. Every consumer site
+	 * (commit activation, mount fixup, drains, deliveries' correction loops,
+	 * observation flips) resolves through here; a miss means the watcher's
+	 * node record died (and its id may already name a NEW tenant — the
+	 * dormant-watcher aliasing case), so the site must skip, loudly, never
+	 * bind. Tenancy generations only grow, so a stale stamp never
+	 * re-validates.
+	 */
+	private resolveWatcherNode(w: Watcher): AnyNode | undefined {
+		const node = this.idToNode.get(w.node);
+		if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) {
+			this.__staleWatcherSkips++;
+			return undefined;
+		}
+		return node;
 	}
 
 	/** >0 while a hook-initiated evaluation may legally suspend the render
@@ -2215,7 +2354,7 @@ export class CosignalBridge {
 	private makeKernelGetter(node: ComputedNode): () => Value {
 		return () => {
 			const savedCapture = this.obsCapture;
-			this.obsCapture = this.obsRefs[node.id]! > 0 ? [] : undefined;
+			this.obsCapture = this.obsRefs[node.ix]! > 0 ? [] : undefined;
 			this.evalDepth++; // writes during a newest evaluation throw, as in every world
 			const tr = this.trace;
 			if (tr !== undefined) tr.evalStart(node, NEWEST);
@@ -2226,7 +2365,7 @@ export class CosignalBridge {
 				const captured = this.obsCapture;
 				this.obsCapture = savedCapture;
 				if (tr !== undefined) tr.evalEnd();
-				if (captured !== undefined) this.obsSyncAfterKernelRun(node.id, captured);
+				if (captured !== undefined) this.obsSyncAfterKernelRun(node, captured);
 			}
 		};
 	}
@@ -2246,7 +2385,7 @@ export class CosignalBridge {
 			} finally {
 				this.evalDepth--;
 				if (tr !== undefined) tr.evalEnd();
-				if (this.obsRefs[node.id]! > 0) this.obsSyncAfterKernelRun(node.id, this.kernelStrongDepsOf(node));
+				if (this.obsRefs[node.ix]! > 0) this.obsSyncAfterKernelRun(node, this.kernelStrongDepsOf(node));
 			}
 		};
 	}
@@ -2303,7 +2442,7 @@ export class CosignalBridge {
 	 * the shared kernel read plus the pre-dedup observation capture. */
 	private kernelTrackedReader: Reader = (dep) => {
 		const oc = this.obsCapture;
-		if (oc !== undefined) oc.push(dep.id);
+		if (oc !== undefined) oc.push(dep);
 		return this.kernelReadOf(dep);
 	};
 
@@ -2317,8 +2456,8 @@ export class CosignalBridge {
 	 * kernel frame: discovery evaluations (obsEnter forcing dep reads) must
 	 * not link into that frame — kernel `untracked()` clears it around the
 	 * sync (the arena twin clears `serveOverride` instead — arenaSyncObsAfterRefold). */
-	private obsSyncAfterKernelRun(nid: NodeId, captured: NodeId[]): void {
-		untracked(() => this.obsSyncDeps(nid, captured));
+	private obsSyncAfterKernelRun(node: AnyNode, captured: AnyNode[]): void {
+		untracked(() => this.obsSyncDeps(node, captured));
 	}
 
 	/** The registered bridge nodes among a computed's CURRENT kernel deps
@@ -2326,13 +2465,13 @@ export class CosignalBridge {
 	 * Walked off the raw kernel arena with the kernel's own exported layout
 	 * enums — a kernel field reorder flows through the import instead of
 	 * silently corrupting this walk. */
-	private kernelStrongDepsOf(node: ComputedNode): NodeId[] {
+	private kernelStrongDepsOf(node: ComputedNode): AnyNode[] {
 		const memory = __kernelBuffer();
-		const out: NodeId[] = [];
-		let l = memory[node.handle._id + NodeField.DEPS]!;
+		const out: AnyNode[] = [];
+		let l = memory[node.id + NodeField.DEPS]!;
 		while (l !== 0) {
-			const dep = this.kernelIdToNode.get(memory[l + LinkField.DEP]!);
-			if (dep !== undefined) out.push(dep.id);
+			const dep = this.idToNode.get(memory[l + LinkField.DEP]!);
+			if (dep !== undefined) out.push(dep);
 			l = memory[l + LinkField.NEXT_DEP]!;
 		}
 		return out;
@@ -2454,10 +2593,10 @@ export class CosignalBridge {
 	}
 
 	// ---- fold-through frame state (mountFix / unmaterialized-root folds) ----
-	/** The node id whose fold-through evaluation frame is open (raw-handle
+	/** The nodeIndex whose fold-through evaluation frame is open (raw-handle
 	 * reads gate their observation capture on it; the untracked reader
-	 * clears it around the dep — sink 0 ⇔ weak). */
-	private currentSink: NodeId = 0;
+	 * clears it around the dep — sink 0 ⇔ weak; index 0 is burned). */
+	private currentSink: NodeIndex = 0;
 
 	/**
 	 * Raw-handle reads: a registered atom read reached the operation table
@@ -2471,7 +2610,7 @@ export class CosignalBridge {
 	routedRead(atom: AtomNode, world: World): Value {
 		if (this.currentSink !== 0) {
 			const oc = this.obsCapture;
-			if (oc !== undefined) oc.push(atom.id);
+			if (oc !== undefined) oc.push(atom);
 		}
 		return this.atomValue(atom, world);
 	}
@@ -2528,11 +2667,11 @@ export class CosignalBridge {
 		// Per-world cycle detection via the mark column: marks carry the
 		// current top-level evaluation generation.
 		const marks = this.evalMark;
-		if (marks[node.id] === this.evalGen && this.evalDepth > 0) {
+		if (marks[node.ix] === this.evalGen && this.evalDepth > 0) {
 			throw this.cycleError(node.name);
 		}
 		if (this.evalDepth === 0) this.evalGen++;
-		marks[node.id] = this.evalGen;
+		marks[node.ix] = this.evalGen;
 		this.evalDepth++;
 		const savedWorld = this.activeWorld;
 		this.setWorld(world);
@@ -2540,8 +2679,8 @@ export class CosignalBridge {
 		const savedObsCapture = this.obsCapture;
 		// Observed nodes capture the strong deps of this run (the readers
 		// push); everyone else pays this one check.
-		this.obsCapture = this.obsRefs[node.id]! > 0 ? [] : undefined;
-		this.currentSink = node.id;
+		this.obsCapture = this.obsRefs[node.ix]! > 0 ? [] : undefined;
+		this.currentSink = node.ix;
 		const tr = this.trace; // paired eval hooks; end fires on throw too
 		if (tr !== undefined) tr.evalStart(node, world);
 		try {
@@ -2552,13 +2691,13 @@ export class CosignalBridge {
 			this.currentSink = savedSink;
 			this.setWorld(savedWorld);
 			this.evalDepth--;
-			marks[node.id] = 0;
+			marks[node.ix] = 0;
 			if (tr !== undefined) tr.evalEnd();
 			// Observed-closure sync — after every restore, so the discovery
 			// evaluations the sync may trigger run on a clean frame stack. On
 			// a throw the list holds the deps recorded up to it (see obsEnter
 			// for the rule).
-			if (obsCaptured !== undefined) this.obsSyncDeps(node.id, obsCaptured);
+			if (obsCaptured !== undefined) this.obsSyncDeps(node, obsCaptured);
 		}
 	}
 
@@ -2591,7 +2730,7 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Mark column + generation for per-world cycle detection (no Set allocs). */
+	/** Mark column (by nodeIndex) + generation for per-world cycle detection (no Set allocs). */
 	private evalMark: EvalGen[] = [0];
 	private evalGen: EvalGen = 0;
 
@@ -2602,7 +2741,7 @@ export class CosignalBridge {
 	 * the frame's world. */
 	private trackedReader: Reader = (dep) => {
 		const oc = this.obsCapture;
-		if (oc !== undefined) oc.push(dep.id);
+		if (oc !== undefined) oc.push(dep);
 		return this.evaluate(dep, this.activeWorld!);
 	};
 
@@ -2633,9 +2772,6 @@ export class CosignalBridge {
 	private arenaPool: WorldArena[] = [];
 	/** Initial arena size in ints (BridgeOptions knob; tests shrink it to force mid-op growth — §4.5.9). */
 	private readonly arenaInitInts: ArenaInitInts;
-	/** Engine node id-tenancy generations (§4.5.3: engine node ids are never freed
-	 * pre-S-C, so these move only via the test seam; shadows stamp + validate). */
-	private nodeGen: number[] = [0];
 	/** Open arena evaluation frame (piggybacked on the overlay evaluation OR
 	 * an arena-only refold): links record into arenaFrame at arenaFrameCycle.
 	 * Flattened to scalars — one object per evaluation showed up in the
@@ -2744,11 +2880,13 @@ export class CosignalBridge {
 		}
 	}
 
-	/** Shadow lookup/create with the §4.5.3 GEN id-tenancy validation: a
-	 * dead-GEN shadow never serves — it is reset cold and re-tenanted. */
-	private shadowFor(a: WorldArena, nid: NodeId, kindFlags: number): number {
-		let sh = nid < a.nodeToShadow.length ? a.nodeToShadow[nid]! : 0;
-		const gen = this.nodeGen[nid]!; // dense (indexNode) — no OOB/?? probe on the hot path
+	/** Shadow lookup/create with the GEN id-tenancy validation (the stamp is
+	 * the KERNEL record generation since the id-space merge): a dead-GEN
+	 * shadow never serves — it is reset cold and re-tenanted. */
+	private shadowFor(a: WorldArena, node: AnyNode, kindFlags: number): number {
+		const ix = node.ix;
+		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
+		const gen = kernelGenOf(node.id); // one kernel-memory load per consult (priced by the bench trio)
 		if (sh !== 0) {
 			if (a.memory[sh + ArenaField.NODE_GEN] === gen) return sh;
 			// Dead tenancy: evict, purge links (both directions, both subs
@@ -2760,7 +2898,7 @@ export class CosignalBridge {
 			a.memory[sh + ArenaField.MARK] = 0;
 			return sh;
 		}
-		sh = arenaAllocShadow(a, nid, kindFlags, gen);
+		sh = arenaAllocShadow(a, ix, kindFlags, gen);
 		return sh;
 	}
 
@@ -2790,11 +2928,11 @@ export class CosignalBridge {
 		if (a === undefined) return;
 		if (!weak) {
 			const oc = this.obsCapture;
-			if (oc !== undefined) oc.push(dep.id);
+			if (oc !== undefined) oc.push(dep);
 		}
 		const sh = dep.kind === 'atom'
-			? this.shadowFor(a, dep.id, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE)
-			: this.shadowFor(a, dep.id, ArenaFlag.K_COMPUTED);
+			? this.shadowFor(a, dep, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE)
+			: this.shadowFor(a, dep, ArenaFlag.K_COMPUTED);
 		arenaLink(a, sh, this.arenaFrameShadow, this.arenaFrameCycle, weak);
 	}
 
@@ -2864,7 +3002,7 @@ export class CosignalBridge {
 	 * sites feed the observation capture (raw reads have no reader hook). */
 	private arenaServe(a: WorldArena, node: AnyNode): Value {
 		if (node.kind === 'atom') {
-			const sh = this.shadowFor(a, node.id, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE);
+			const sh = this.shadowFor(a, node, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE);
 			const memory = a.memory;
 			const flags = memory[sh + ArenaField.FLAGS]!;
 			if ((flags & ArenaFlag.VALID) === 0 || (flags & ArenaFlag.DIRTY) !== 0) {
@@ -2876,11 +3014,11 @@ export class CosignalBridge {
 			if (this.arenaFrame === a) {
 				arenaLink(a, sh, this.arenaFrameShadow, this.arenaFrameCycle, false);
 				const oc = this.obsCapture;
-				if (oc !== undefined) oc.push(node.id);
+				if (oc !== undefined) oc.push(node);
 			}
 			return a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
 		}
-		const sh = this.shadowFor(a, node.id, ArenaFlag.K_COMPUTED);
+		const sh = this.shadowFor(a, node, ArenaFlag.K_COMPUTED);
 		const memory = a.memory;
 		let flags = memory[sh + ArenaField.FLAGS]!;
 		if ((flags & ArenaFlag.RECURSED_CHECK) !== 0) {
@@ -2915,7 +3053,7 @@ export class CosignalBridge {
 		if (this.arenaFrame === a) {
 			arenaLink(a, sh, this.arenaFrameShadow, this.arenaFrameCycle, false);
 			const oc = this.obsCapture;
-			if (oc !== undefined) oc.push(node.id);
+			if (oc !== undefined) oc.push(node);
 		}
 		const outFlags = a.memory[sh + ArenaField.FLAGS]!;
 		// The boxedRead-style rethrow discipline (arenas serve real reads at
@@ -2934,7 +3072,7 @@ export class CosignalBridge {
 	private arenaUpdateShadow(a: WorldArena, sh: number): boolean {
 		const flags = a.memory[sh + ArenaField.FLAGS]!;
 		if ((flags & ArenaFlag.K_COMPUTED) !== 0) return this.arenaUpdateComputed(a, sh);
-		const nid = a.memory[sh + ArenaField.NODE]!;
+		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
 		const atom = this.nodesArr[nid] as AtomNode;
 		// §4.2 (iii): marked ⇒ REFOLD unconditionally — no fingerprint
 		// consulted (the fp side channel was deleted at S-D).
@@ -2958,7 +3096,7 @@ export class CosignalBridge {
 	 * of this run and re-point their retains afterward (§4.7/M6: the
 	 * world-path retain re-point, carried into the arena walks at S-B). */
 	private arenaUpdateComputed(a: WorldArena, sh: number): boolean {
-		const nid = a.memory[sh + ArenaField.NODE]!;
+		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
 		const node = this.nodesArr[nid] as ComputedNode;
 		a.memory[sh + ArenaField.DEPS_TAIL] = 0;
 		a.memory[sh + ArenaField.FLAGS] = (a.memory[sh + ArenaField.FLAGS]! | ArenaFlag.MUTABLE | ArenaFlag.RECURSED_CHECK) & ~(ArenaFlag.RECURSED | ArenaFlag.DIRTY | ArenaFlag.PENDING);
@@ -2974,7 +3112,7 @@ export class CosignalBridge {
 		this.arenaFrameCycle = arenaBumpCycle(a);
 		this.serveOverride = a;
 		this.currentSink = 0;
-		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined;
+		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined; // nid IS the nodeIndex (the NODE column)
 		this.setWorld(a.world);
 		this.evalDepth++;
 		const tr = this.trace; // paired eval hooks; end fires on throw too
@@ -2998,7 +3136,7 @@ export class CosignalBridge {
 			a.memory[sh + ArenaField.FLAGS] = a.memory[sh + ArenaField.FLAGS]! & ~ArenaFlag.RECURSED_CHECK;
 			arenaPurgeDeps(a, sh);
 			arenaBumpReadClock(a);
-			if (obsCaptured !== undefined) this.arenaSyncObsAfterRefold(nid, obsCaptured);
+			if (obsCaptured !== undefined) this.arenaSyncObsAfterRefold(node, obsCaptured);
 		}
 	}
 
@@ -3008,11 +3146,11 @@ export class CosignalBridge {
 	 * stack. A NESTED refold (inside an outer walk) has serveOverride
 	 * restored to the OUTER arena; clear it around the sync so discovery's
 	 * newest evaluations route newest. */
-	private arenaSyncObsAfterRefold(nid: NodeId, captured: NodeId[]): void {
+	private arenaSyncObsAfterRefold(node: AnyNode, captured: AnyNode[]): void {
 		const so = this.serveOverride;
 		this.serveOverride = undefined;
 		try {
-			this.obsSyncDeps(nid, captured);
+			this.obsSyncDeps(node, captured);
 		} finally {
 			this.serveOverride = so;
 		}
@@ -3196,7 +3334,7 @@ export class CosignalBridge {
 		}
 		const memory = a.memory;
 		for (let i = 0; i < atoms.length; i++) {
-			const sh = a.nodeToShadow[atoms[i]!.id] ?? 0;
+			const sh = a.nodeToShadow[atoms[i]!.ix] ?? 0;
 			if (sh === 0) continue; // no shadow: nothing consumes this atom here
 			const flags = memory[sh + ArenaField.FLAGS]!;
 			if ((flags & ArenaFlag.DIRTY) !== 0 && memory[sh + ArenaField.MARK] === a.readClock) continue; // dedup
@@ -3382,7 +3520,8 @@ export class CosignalBridge {
 					if (this.rootToOpenRender.has(rootId)) continue;
 					for (const w of this.watchers.values()) {
 						if (!w.live || w.root !== rootId) continue;
-						const wNode = this.nodeById(w.node);
+						const wNode = this.resolveWatcherNode(w);
+						if (wNode === undefined) continue; // loud skip: record tenancy moved
 						this.correctWatcher(w, wNode, this.evaluate(wNode, { kind: 'committed', root: rootId }), 'retirement');
 					}
 				}
@@ -3462,7 +3601,7 @@ export class CosignalBridge {
 				return self.inFoldCallback;
 			},
 			eachArena: (fn) => this.eachArena(fn),
-			nodeAt: (id) => this.nodesArr[id],
+			nodeAt: (ix) => this.nodesArr[ix],
 			serve: (a, node) => this.arenaServe(a, node),
 			foldTruthFrame: (world, fn) => this.foldTruthFrame(world, fn),
 			cycleError: (name) => this.cycleError(name),
@@ -3494,9 +3633,13 @@ export class CosignalBridge {
 		return this.arenaPool;
 	}
 
-	/** Test seam: force an id-tenancy generation bump (§4.5.3 GEN pin). @internal */
+	/** Test seam: force an id-tenancy generation bump — the kernel-GEN referee
+	 * seam. Tenancy IS the kernel record generation since the id-space merge,
+	 * so the bump writes the LIVE record's GEN field in kernel memory: arena
+	 * shadows re-tenant cold at their next consult and watcher stamps go
+	 * stale, exactly as a real free+reuse would move them. @internal */
 	__bumpNodeGenForTest(id: NodeId): void {
-		this.nodeGen[id] = (this.nodeGen[id] ?? 0) + 1;
+		__kernelBuffer()[id + NodeField.GEN]++;
 	}
 
 	/** Arena stats (tests/bench). @internal */
@@ -3517,8 +3660,8 @@ export class CosignalBridge {
 	__arenaLinkMode(rootId: RootId, dep: AnyNode, sub: AnyNode): 'strong' | 'weak' | undefined {
 		const a = this.rootToArena.get(rootId);
 		if (a === undefined) return undefined;
-		const depSh = a.nodeToShadow[dep.id] ?? 0;
-		const subSh = a.nodeToShadow[sub.id] ?? 0;
+		const depSh = a.nodeToShadow[dep.ix] ?? 0;
+		const subSh = a.nodeToShadow[sub.ix] ?? 0;
 		if (depSh === 0 || subSh === 0) return undefined;
 		let cur = a.memory[subSh + ArenaField.DEPS]!;
 		while (cur !== 0) {
@@ -3534,8 +3677,8 @@ export class CosignalBridge {
 	__arenaLinkIdForTest(rootId: RootId, dep: AnyNode, sub: AnyNode): number {
 		const a = this.rootToArena.get(rootId);
 		if (a === undefined) return 0;
-		const depSh = a.nodeToShadow[dep.id] ?? 0;
-		const subSh = a.nodeToShadow[sub.id] ?? 0;
+		const depSh = a.nodeToShadow[dep.ix] ?? 0;
+		const subSh = a.nodeToShadow[sub.ix] ?? 0;
 		if (depSh === 0 || subSh === 0) return 0;
 		let cur = a.memory[subSh + ArenaField.DEPS]!;
 		while (cur !== 0) {
@@ -3593,12 +3736,20 @@ export class CosignalBridge {
 
 	/** Shift a node's observed-consumer refcount; enter/exit fire on the
 	 * 0↔1 edges only, so shared consumers (two watchers on one derived node,
-	 * two observed dependents of one dep) hold ONE closure membership. */
-	private obsShift(id: NodeId, delta: 1 | -1): void {
-		const refs = this.obsRefs[id]! + delta;
-		this.obsRefs[id] = refs;
-		if (refs === 1 && delta === 1) this.obsEnter(id);
-		else if (refs === 0 && delta === -1) this.obsExit(id);
+	 * two observed dependents of one dep) hold ONE closure membership.
+	 * IDENTITY-GUARDED: shifts take the node OBJECT and no-op when the dense
+	 * row no longer holds it — a stale reference (an obsDeps entry naming a
+	 * freed node whose record — and nodeIndex — a new tenant inherited) must
+	 * never move the new tenant's count. Skips pair up: once stale, forever
+	 * stale (rows only move at record free, and re-registration installs a
+	 * different object). */
+	private obsShift(node: AnyNode, delta: 1 | -1): void {
+		const ix = node.ix;
+		if (this.nodesArr[ix] !== node) return;
+		const refs = this.obsRefs[ix]! + delta;
+		this.obsRefs[ix] = refs;
+		if (refs === 1 && delta === 1) this.obsEnter(node);
+		else if (refs === 0 && delta === -1) this.obsExit(node);
 	}
 
 	/**
@@ -3615,10 +3766,9 @@ export class CosignalBridge {
 	 * throw-on-demand behavior; the deps it read before throwing ARE
 	 * retained (the kernel keeps the partial link prefix).
 	 */
-	private obsEnter(id: NodeId): void {
-		const node = this.nodesArr[id]!;
+	private obsEnter(node: AnyNode): void {
 		if (node.kind === 'atom') {
-			__lifecycleRetain(node.handle._id);
+			__lifecycleRetain(node.id);
 			return;
 		}
 		try {
@@ -3626,7 +3776,7 @@ export class CosignalBridge {
 		} catch {
 			// partial dep prefix retained below
 		}
-		this.obsSyncDeps(id, this.kernelStrongDepsOf(node));
+		this.obsSyncDeps(node, this.kernelStrongDepsOf(node));
 	}
 
 	/** The last observed consumer left: release the whole retained closure.
@@ -3636,15 +3786,14 @@ export class CosignalBridge {
 	 * never feed the D1 lifecycle union, and stripping them would force an
 	 * untracked re-sample at the next read — an eager refresh the ruling
 	 * forbids [2026-07-06].) */
-	private obsExit(id: NodeId): void {
-		const node = this.nodesArr[id]!;
+	private obsExit(node: AnyNode): void {
 		if (node.kind === 'atom') {
-			__lifecycleRelease(node.handle._id);
+			__lifecycleRelease(node.id);
 			return;
 		}
-		const deps = this.obsDeps[id];
+		const deps = this.obsDeps[node.ix];
 		if (deps === undefined) return;
-		this.obsDeps[id] = undefined;
+		this.obsDeps[node.ix] = undefined;
 		for (const dep of deps) this.obsShift(dep, -1);
 	}
 
@@ -3656,11 +3805,11 @@ export class CosignalBridge {
 	 * flush. Skipped if observation left mid-evaluation (the exit already
 	 * released the old snapshot; installing a new one would leak).
 	 */
-	private obsSyncDeps(id: NodeId, list: NodeId[]): void {
-		if (this.obsRefs[id]! === 0) return;
-		const prev = this.obsDeps[id];
+	private obsSyncDeps(node: AnyNode, list: AnyNode[]): void {
+		if (this.obsRefs[node.ix]! === 0) return;
+		const prev = this.obsDeps[node.ix];
 		const next = new Set(list);
-		this.obsDeps[id] = next;
+		this.obsDeps[node.ix] = next;
 		for (const dep of next) {
 			if (prev === undefined || !prev.delete(dep)) this.obsShift(dep, 1);
 		}
@@ -3683,8 +3832,8 @@ export class CosignalBridge {
 	 */
 	private syncSubObs(e: Subscription): void {
 		const prev = e.obsDeps;
-		const next = new Set<NodeId>();
-		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node.id);
+		const next = new Set<AnyNode>();
+		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node);
 		e.obsDeps = next;
 		for (const dep of next) {
 			if (prev === undefined || !prev.delete(dep)) this.obsShift(dep, 1);
@@ -3701,8 +3850,8 @@ export class CosignalBridge {
 	private walkStack: NodeId[] = [];
 	private walkWatchers: Watcher[] = [];
 
-	/** Collect the live watchers subscribed on one node (delivery walk). */
-	private collectWatchersAt(nid: NodeId, found: Watcher[]): void {
+	/** Collect the live watchers subscribed on one node, by nodeIndex (delivery walk). */
+	private collectWatchersAt(nid: NodeIndex, found: Watcher[]): void {
 		const ws = this.nodeToWatchers[nid];
 		if (ws !== undefined) {
 			for (let i = 0; i < ws.length; i++) {
@@ -3728,15 +3877,16 @@ export class CosignalBridge {
 	 * held by no live arena lane-degrades to a drain correction (§4.4.5,
 	 * S-NF2-D1).
 	 */
-	private deliveryWalk(from: NodeId, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
+	private deliveryWalk(from: AtomNode, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
 		const gen = ++this.walkGen;
 		const found = this.walkWatchers;
 		found.length = 0;
-		this.lastWalk[from] = gen;
-		this.collectWatchersAt(from, found);
-		for (const a of this.rootToArena.values()) this.walkArenaStrong(a, from, gen, found);
+		const kGen = kernelGenOf(from.id); // one read per walk: seeds validate tenancy against it
+		this.lastWalk[from.ix] = gen;
+		this.collectWatchersAt(from.ix, found);
+		for (const a of this.rootToArena.values()) this.walkArenaStrong(a, from.ix, kGen, gen, found);
 		for (const p of this.rootToOpenRender.values()) {
-			if (p.arena !== undefined) this.walkArenaStrong(p.arena, from, gen, found);
+			if (p.arena !== undefined) this.walkArenaStrong(p.arena, from.ix, kGen, gen, found);
 		}
 		if (found.length > 1) found.sort((a, b) => a.id - b.id);
 		for (let i = 0; i < found.length; i++) this.deliver(found[i]!, batch, slot, seq);
@@ -3748,10 +3898,10 @@ export class CosignalBridge {
 	 * gate's prize) with per-arena shadow stamps for traversal termination
 	 * and the global per-node stamps for collection dedup. Dead-GEN residue
 	 * never routes (§4.5.3). Never allocates or folds: a.memory/a.walk stable. */
-	private walkArenaStrong(a: WorldArena, from: NodeId, gen: WalkGen, found: Watcher[]): void {
+	private walkArenaStrong(a: WorldArena, from: NodeIndex, kGen: Generation, gen: WalkGen, found: Watcher[]): void {
 		const start = from < a.nodeToShadow.length ? a.nodeToShadow[from]! : 0;
 		if (start === 0) return;
-		if (a.memory[start + ArenaField.NODE_GEN] !== this.nodeGen[from]!) return;
+		if (a.memory[start + ArenaField.NODE_GEN] !== kGen) return;
 		const memory = a.memory;
 		const walk = a.walk;
 		const lastWalk = this.lastWalk;
@@ -3965,7 +4115,8 @@ export class CosignalBridge {
 	private quietDrain(): void {
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
-			const wNode = this.nodeById(w.node);
+			const wNode = this.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip: record tenancy moved
 			this.correctWatcher(w, wNode, this.evaluate(wNode, { kind: 'committed', root: w.root }), 'quiet');
 		}
 	}
@@ -4128,7 +4279,7 @@ export class CosignalBridge {
 		// The value-blind delivery walk (arena strong links), synchronously in
 		// the writer's stack. (Core effect()s are kernel subscribers: the
 		// eager kernel apply above already flushed them.)
-		this.deliveryWalk(node.id, batch, slot, seq);
+		this.deliveryWalk(node, batch, slot, seq);
 		this.endOp();
 	}
 
@@ -4268,16 +4419,16 @@ export class CosignalBridge {
 		const p = this.renderPassById(renderPassId);
 		if (p.state === 'ended') throw new BridgeScheduleError('mount requires an open render');
 		const value = this.evaluate(node, { kind: 'render', render: p });
-		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, this.watcherObs, value, {
+		const watcher = new Watcher(this.nextWatcher++, name, p.root, node.id, node.ix, kernelGenOf(node.id), this.watcherObs, value, {
 			renderPassId: p.id, pin: p.pin,
 			maskBits: p.maskBits, includedBits: p.includedBits,
 			rootCommitGen: this.root(p.root).commitGen,
 		});
 		this.watchers.set(watcher.id, watcher);
-		let nodeWatchers = this.nodeToWatchers[node.id];
+		let nodeWatchers = this.nodeToWatchers[node.ix];
 		if (nodeWatchers === undefined) {
 			nodeWatchers = [];
-			this.nodeToWatchers[node.id] = nodeWatchers;
+			this.nodeToWatchers[node.ix] = nodeWatchers;
 		}
 		nodeWatchers.push(watcher);
 		p.mounted.push(watcher.id); // mounts never join `rendered` (the collections are disjoint)
@@ -4351,7 +4502,9 @@ export class CosignalBridge {
 		// (edge-filtered no-op otherwise).
 		w.live = false;
 		this.watchers.delete(wid);
-		const nodeWatchers = this.nodeToWatchers[w.node];
+		// The cached index is safe here even when stale: a scrubbed row is
+		// undefined, and a re-tenanted row cannot contain this watcher.
+		const nodeWatchers = this.nodeToWatchers[w.nodeIx];
 		if (nodeWatchers !== undefined) {
 			const i = nodeWatchers.indexOf(w);
 			if (i >= 0) nodeWatchers.splice(i, 1);
@@ -4678,7 +4831,9 @@ export class CosignalBridge {
 		for (const wid of render.rendered) {
 			const w = this.watchers.get(wid);
 			if (w === undefined) continue; // removed mid-render
-			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'render', render });
+			const wNode = this.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip: record tenancy moved mid-render
+			w.lastRenderedValue = this.evaluate(wNode, { kind: 'render', render });
 			w.snapshot = {
 				renderPassId: render.id, pin: render.pin, maskBits: render.maskBits,
 				includedBits: render.includedBits, rootCommitGen: this.root(render.root).commitGen,
@@ -4697,8 +4852,15 @@ export class CosignalBridge {
 		for (const wid of render.mounted) {
 			const w = this.watchers.get(wid);
 			if (w === undefined) continue;
+			// THE dormant-watcher aliasing pin: the watcher was mounted in this
+			// render, but its node's record may have died (and been REUSED)
+			// before this commit — the generation stamp decides. A stale
+			// watcher never activates: binding it here would subscribe it to
+			// the record's new tenant.
+			const wNode = this.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip (counted)
 			w.live = true;
-			this.mountFixup(w, render, baseline, maskBatchRecords);
+			this.mountFixup(w, wNode, render, baseline, maskBatchRecords);
 		}
 		// The §4.4.2 populator domain — the EXPLICIT union of this render's
 		// re-renders and its OWN mounts (`rendered` and `mounted` are
@@ -4727,7 +4889,8 @@ export class CosignalBridge {
 		for (const wid of populated) {
 			const w = this.watchers.get(wid);
 			if (w === undefined || !w.live) continue;
-			const wNode = this.nodeById(w.node);
+			const wNode = this.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip (live ⇒ alive in practice; belt for binding-side flips)
 			const committedNow = this.evaluate(wNode, { kind: 'committed', root: render.root });
 			if (this.changedValue(wNode, w.lastRenderedValue, committedNow)) this.markRestaled(w);
 		}
@@ -4740,7 +4903,7 @@ export class CosignalBridge {
 			for (const wid of populated) {
 				const w = this.watchers.get(wid);
 				if (w === undefined || !w.live) continue;
-				if (ra === undefined || (w.node < ra.nodeToShadow.length ? ra.nodeToShadow[w.node]! : 0) === 0) {
+				if (ra === undefined || (w.nodeIx < ra.nodeToShadow.length ? ra.nodeToShadow[w.nodeIx]! : 0) === 0) {
 					throw new BridgeInvariantViolation(`population rule (§4.4.2): watcher ${w.name} has no shadow in root ${render.root}'s committed arena after commit`);
 				}
 			}
@@ -4756,8 +4919,9 @@ export class CosignalBridge {
 		for (const wid of [...render.rendered, ...render.mounted]) {
 			const w = this.watchers.get(wid);
 			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) continue;
-			const node = this.nodesArr[w.node];
-			if (node !== undefined && node.kind === 'computed') node.prevCell.value = w.lastRenderedValue;
+			const node = this.idToNode.get(w.node);
+			if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) continue; // stale: no hint to update (not a resolution consumers observe — uncounted)
+			if (node.kind === 'computed') node.prevCell.value = w.lastRenderedValue;
 		}
 		{
 			const ra = this.rootToArena.get(render.root);
@@ -5068,8 +5232,8 @@ export class CosignalBridge {
 		set.add(w);
 	}
 
-	/** Collect the live same-root watchers subscribed on one node (drains). */
-	private collectRootWatchersAt(nid: NodeId, rootId: RootId, ws: Watcher[]): void {
+	/** Collect the live same-root watchers subscribed on one node, by nodeIndex (drains). */
+	private collectRootWatchersAt(nid: NodeIndex, rootId: RootId, ws: Watcher[]): void {
 		const nw = this.nodeToWatchers[nid];
 		if (nw !== undefined) {
 			for (let j = 0; j < nw.length; j++) {
@@ -5157,7 +5321,7 @@ export class CosignalBridge {
 			if (re !== undefined && re.size > 0) {
 				for (const w of re) {
 					if (!w.live) continue;
-					if (lastWalk[w.node] === gen) continue; // its node was already listed
+					if (lastWalk[w.nodeIx] === gen) continue; // its node was already listed (cached index; valid while the gen-checked fire below resolves)
 					ws.push(w);
 				}
 				re.clear();
@@ -5166,7 +5330,8 @@ export class CosignalBridge {
 		if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
 		for (let i = 0; i < ws.length; i++) {
 			const w = ws[i]!;
-			const wNode = this.nodeById(w.node);
+			const wNode = this.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip: record tenancy moved
 			this.correctWatcher(w, wNode, this.evaluate(wNode, world), cause);
 		}
 		ws.length = 0;
@@ -5211,8 +5376,7 @@ export class CosignalBridge {
 	 * write landed mid-render interned its slot after the capture, so the
 	 * slot-quantified form would miss its writes).
 	 */
-	private mountFixup(w: Watcher, committingRender: RenderPass, baseline: { committedAdvance: Seq; rootCommitGen: CommitGen }, maskBatchRecords: Batch[]): void {
-		const node = this.nodeById(w.node);
+	private mountFixup(w: Watcher, node: AnyNode, committingRender: RenderPass, baseline: { committedAdvance: Seq; rootCommitGen: CommitGen }, maskBatchRecords: Batch[]): void {
 		const closure = this.dependencyClosureOf(w.node, committingRender);
 		const tr = this.trace; // one load covers the corrective records + the disposition record
 		// RT6 first half — per-batch catch-up loop: every LIVE written batch
@@ -5280,39 +5444,42 @@ export class CosignalBridge {
 	 * this). */
 	dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
+		const node = this.idToNode.get(nodeId);
+		if (node === undefined) return closure; // unregistered/dead id: nothing routes
 		const pa = render?.arena;
-		if (pa !== undefined) this.closureOverArena(pa, nodeId, closure);
+		if (pa !== undefined) this.closureOverArena(pa, node, closure);
 		if (render !== undefined) {
 			const ca = this.rootToArena.get(render.root);
-			if (ca !== undefined) this.closureOverArena(ca, nodeId, closure);
+			if (ca !== undefined) this.closureOverArena(ca, node, closure);
 		}
-		const node = this.nodesArr[nodeId];
-		if (node !== undefined) this.closureOverKernel(node.handle._id, closure, new Set());
+		this.closureOverKernel(node.id, closure, new Set());
 		return closure;
 	}
 
 	/** The kernel leg of the fixup closure (S-C): reverse walk over the
 	 * kernel's dep links off the raw arena view (the kernel's own exported
-	 * layout enums). */
-	private closureOverKernel(kernelId: KernelId, closure: Set<NodeId>, seen: Set<KernelId>): void {
+	 * layout enums). One id space: a visited record's id IS the NodeId —
+	 * registered deps join the closure directly. */
+	private closureOverKernel(kernelId: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
 		if (seen.has(kernelId)) return;
 		seen.add(kernelId);
 		const memory = __kernelBuffer();
 		let l = memory[kernelId + NodeField.DEPS]!;
 		while (l !== 0) {
 			const depKernelId = memory[l + LinkField.DEP]!;
-			const dep = this.kernelIdToNode.get(depKernelId);
-			if (dep !== undefined) closure.add(dep.id);
+			if (this.idToNode.has(depKernelId)) closure.add(depKernelId);
 			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) this.closureOverKernel(depKernelId, closure, seen);
 			l = memory[l + LinkField.NEXT_DEP]!;
 		}
 	}
 
-	/** One arena's reverse-deps half of the fixup closure (strong links). */
-	private closureOverArena(a: WorldArena, nodeId: NodeId, closure: Set<NodeId>): void {
-		const start = nodeId < a.nodeToShadow.length ? a.nodeToShadow[nodeId]! : 0;
+	/** One arena's reverse-deps half of the fixup closure (strong links).
+	 * The arena's NODE column stores nodeIndexes (dense column keys), so
+	 * visited shadows map back to NodeIds through the dense node row. */
+	private closureOverArena(a: WorldArena, node: AnyNode, closure: Set<NodeId>): void {
+		const start = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0;
 		if (start === 0) return;
-		if (a.memory[start + ArenaField.NODE_GEN] !== this.nodeGen[nodeId]!) return; // dead-tenancy residue never routes
+		if (a.memory[start + ArenaField.NODE_GEN] !== kernelGenOf(node.id)) return; // dead-tenancy residue never routes
 		const gen = ++this.walkGen;
 		const memory = a.memory;
 		const walk = a.walk;
@@ -5328,7 +5495,8 @@ export class CosignalBridge {
 					const dep = memory[l + ArenaLinkField.DEP]!;
 					if (walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 						walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
-						closure.add(memory[dep + ArenaField.NODE]!);
+						const depNode = this.nodesArr[memory[dep + ArenaField.NODE]!];
+						if (depNode !== undefined) closure.add(depNode.id);
 						stack[sp++] = dep;
 					}
 				}

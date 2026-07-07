@@ -47,7 +47,7 @@ describe('root-commit report reconciliation (W11)', () => {
 		const shim = h.handle.shim as unknown as ShimPrivate;
 		expect(shim.rootsByContainer.size).toBe(1);
 		const [rootContainer, rec] = [...shim.rootsByContainer.entries()][0]!;
-		const node = h.bridge.kernelIdToNode.get(a._id) as AtomNode;
+		const node = h.bridge.idToNode.get(a._id) as AtomNode;
 
 		await act(async () => {
 			// A REAL protocol batch: the transition write classifies into it and

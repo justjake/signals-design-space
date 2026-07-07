@@ -327,7 +327,15 @@ export const enum NodeField {
 	SUBS_TAIL = 4,
 	GEN = 5, // bumped on free; disposers capture it to defuse stale ids
 	LIFECYCLE = 6, // D1: 1 iff the node is an atom with an observed-lifecycle effect
-	// field 7 spare (pad to one cache line per record)
+	/** The record's NODE INDEX: a dense per-node ordinal (never an identity)
+	 * assigned once when a slot first hosts a node and INHERITED by every
+	 * later tenant of the slot (the node free list threads through DEPS, so
+	 * freeNode leaves this field untouched). Consumers key dense per-node
+	 * side tables by it: node and link records share one allocator, so
+	 * record-ID-keyed tables would go holey where index-keyed ones stay
+	 * packed. Node records only — link records use field 7 as FREE_NEXT
+	 * (the two record kinds already interpret fields differently). */
+	NODE_INDEX = 7,
 }
 
 /** Field offsets within a LINK record (link records share the arena, stride,
@@ -420,6 +428,7 @@ const enum RecordGeom {
 // exactly where the old one stopped; only the buffer bindings live in the
 // engine closure.
 let recNext: RecordId = RecordGeom.STRIDE; // bump pointer, shared by nodes and links (record 0 burned)
+let nextNodeIndex = 1; // next NodeField.NODE_INDEX for a never-yet-node slot (0 burned: consumers use it as "none")
 let nodeFreeHead: NodeId = 0; // free list threaded through memory[id + NodeField.DEPS]
 let linkFreeHead: LinkId = 0; // free list threaded through memory[id + LinkField.FREE_NEXT] (spare field 7: freed links keep NEXT_DEP/NEXT_SUB intact for mid-walk stale reads)
 let growPending = false;
@@ -539,6 +548,9 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	function allocNode(flags: NodeFlags): NodeId {
 		let id: NodeId;
 		if (nodeFreeHead !== 0) {
+			// Reused slot: it KEEPS its NODE_INDEX (freeNode never touches
+			// field 7) — the new tenant inherits the slot's index, which is
+			// what bounds index-keyed side tables by peak node count.
 			id = nodeFreeHead;
 			nodeFreeHead = memory[id + NodeField.DEPS];
 			memory[id + NodeField.DEPS] = 0;
@@ -551,6 +563,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 			if (recNext > watermark) {
 				growPending = true;
 			}
+			memory[id + NodeField.NODE_INDEX] = nextNodeIndex++; // a never-yet-node slot gets a fresh index
 		}
 		memory[id + NodeField.FLAGS] = flags;
 		const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
@@ -574,8 +587,17 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		vals[v] = undefined;
 		vals[v + RecordGeom.AUX_VALUE_OFFSET] = undefined;
 		fnTab[id >> RecordGeom.ID_TO_FN_SHIFT] = undefined;
-		memory[id + NodeField.DEPS] = nodeFreeHead;
+		memory[id + NodeField.DEPS] = nodeFreeHead; // NODE_INDEX (field 7) deliberately survives — see NodeField
 		nodeFreeHead = id;
+		// The record-free hook: hosts keying dense side tables by NODE_INDEX
+		// scrub the freed record's rows here, so the slot's next tenant (which
+		// inherits the index) can never be served the old tenant's rows. Fires
+		// only from the boundary sweep (freeNode's one caller), after the GEN
+		// bump — the hook may observe the new tenancy generation.
+		const hook = recordFreeHook;
+		if (hook !== undefined) {
+			hook(id, memory[id + NodeField.NODE_INDEX]);
+		}
 	}
 
 	function sweepPendingFree(): void {
@@ -1581,6 +1603,22 @@ export function __setHostComputedRead(fn: ((c: Computed<unknown>) => unknown) | 
 }
 
 /**
+ * Record-free hook (one hook; see freeNode): invoked at the boundary sweep
+ * for every freed NODE record with (recordId, nodeIndex). Hosts that key
+ * dense per-node side tables by NodeField.NODE_INDEX register their scrub
+ * here — a freed slot's index is inherited by the slot's next tenant, so
+ * every index-keyed row must clear at exactly this boundary. The hook runs
+ * at an operation boundary and must not allocate or free kernel records.
+ * @internal
+ */
+let recordFreeHook: ((recordId: NodeId, nodeIndex: number) => void) | undefined;
+
+/** Registers/clears the record-free hook (host seam). @internal */
+export function __setRecordFreeHook(fn: ((recordId: NodeId, nodeIndex: number) => void) | undefined): void {
+	recordFreeHook = fn;
+}
+
+/**
  * The host's fold guard: runs a host-side updater/reducer replay under the
  * same POISON table the base `update()`/`dispatch()` use, so raw kernel
  * reads/writes inside a replayed op throw identically in every mode. @internal
@@ -2246,11 +2284,6 @@ export class Atom<T> {
 	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
-	/** Host adoption stamp — `{ b: theBridge, n: itsAtomNode }`, written by the
-	 * host at registration/adoption so the per-write registry lookup is one
-	 * property load + identity compare instead of a Map probe. Declared here
-	 * (and initialized) so every Atom shares one hidden class. @internal */
-	_hostStamp: { b: unknown; n: unknown } | undefined;
 	readonly label: string | undefined;
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
@@ -2258,7 +2291,6 @@ export class Atom<T> {
 		const id = E.newSignal(initialState);
 		this._id = id;
 		this._isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
-		this._hostStamp = undefined;
 		this.label = options?.label;
 		const effect = options?.effect;
 		if (effect !== undefined) {
@@ -2385,15 +2417,12 @@ export class Computed<T> {
 	readonly _fn: (ctx: ComputedCtx<T>) => T;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
-	/** Host adoption stamp (same shape and rule as Atom._hostStamp). @internal */
-	_hostStamp: { b: unknown; n: unknown } | undefined;
 	readonly label: string | undefined;
 
 	constructor(fn: (ctx: ComputedCtx<T>) => T, options?: ComputedOptions<T>) {
 		maybeBoundary();
 		this._useCache = undefined;
 		this._fn = fn;
-		this._hostStamp = undefined;
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		this._isEqual = isEqual;
@@ -2613,5 +2642,4 @@ export type {
 	Epoch,
 	CommitGen,
 	BatchSlotSet,
-	KernelId,
 } from './concurrent.js';
