@@ -19,7 +19,7 @@
 
 import * as React from 'react';
 import { Atom, BATCH_NONE, Computed, ReducerAtom, engine } from 'cosignals';
-import type { AnyNode, CosignalEngine, RootId } from 'cosignals';
+import type { AnyInternals, CosignalEngine, RootId } from 'cosignals';
 import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------
@@ -76,16 +76,16 @@ export function requireShim(): Shim {
 
 export type SignalSource<T> = Atom<T> | ReducerAtom<T, unknown> | Computed<T>;
 
-function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyNode {
-	if (signal instanceof Atom) return shim.nodeForAtom(signal as Atom<unknown>);
-	if (signal instanceof Computed) return shim.bridge.nodeForComputed(signal as Computed<unknown>);
+function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
+	if (signal instanceof Atom) return shim.internalsForAtom(signal as Atom<unknown>);
+	if (signal instanceof Computed) return shim.bridge.internalsForComputed(signal as Computed<unknown>);
 	throw new Error('cosignals-react: useSignal accepts Atom/ReducerAtom/Computed handles (useComputed results are Computed handles).');
 }
 
 // ---- useSignal --------------------------------------------------------------------------
 
 type SignalRec = {
-	node: AnyNode;
+	node: AnyInternals;
 	watcherId: number | undefined;
 	target: WatcherTarget;
 	pendingUnsub: boolean;
@@ -95,7 +95,7 @@ type SignalRec = {
 
 type SignalRefState = { current: SignalRec | null; retired: SignalRec[] };
 
-function makeRec(node: AnyNode, bump: () => void): SignalRec {
+function makeRec(node: AnyInternals, bump: () => void): SignalRec {
 	return {
 		node,
 		watcherId: undefined,
@@ -250,7 +250,7 @@ export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unkno
 	const handle = React.useMemo(
 		() => {
 			const c = new Computed<T>(fn, { label: `useComputed#${nextComputedSerial++}` });
-			shim.bridge.nodeForComputed(c as Computed<unknown>); // allocate engine content + wrap for world evaluation
+			shim.bridge.internalsForComputed(c as Computed<unknown>); // allocate engine content + wrap for world evaluation
 			return c;
 		},
 		// The user's deps ARE the memo key: a changed fn takes effect only with changed deps.

@@ -86,8 +86,8 @@
 import * as React from 'react';
 import { Atom, BATCH_NONE, SuspendedRead, attachDriver, engine, type ComputedCtx } from 'cosignals';
 import type {
-	AnyNode,
-	AtomNode,
+	AnyInternals,
+	AtomInternals,
 	CosignalEngine,
 	EngineDriver,
 	RenderPass,
@@ -635,14 +635,14 @@ export class Shim {
 	// ---- node resolution --------------------------------------------------------
 
 	/**
-	 * The engine node for a public Atom/ReducerAtom — a delegate to the
+	 * The engine internals for a public Atom/ReducerAtom — a delegate to the
 	 * engine's own resolution, which allocates content on the atom's first
 	 * engine participation (seeding base from kernel-current — the atom's
 	 * full committed history — and carrying the handle's own equality).
 	 * Kept as a method so the hooks and the suites name ONE resolution point.
 	 */
-	nodeForAtom(atom: Atom<unknown>): AtomNode {
-		return this.bridge.nodeForAtom(atom);
+	internalsForAtom(atom: Atom<unknown>): AtomInternals {
+		return this.bridge.internalsForAtom(atom);
 	}
 
 	// ---- suspense translation ----------------------------------------------------------
@@ -677,7 +677,7 @@ export class Shim {
 	// ---- watcher claim / unsubscribe ------------------------------------------------
 
 	/** Layout-effect claim: the committed hook instance owns this watcher. */
-	claimWatcher(rec: { node: AnyNode; watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean; root: RootId | undefined; lastValue: unknown }): void {
+	claimWatcher(rec: { node: AnyInternals; watcherId: number | undefined; target: WatcherTarget; pendingUnsub: boolean; root: RootId | undefined; lastValue: unknown }): void {
 		rec.pendingUnsub = false;
 		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
@@ -693,7 +693,7 @@ export class Shim {
 		this.targets.set(w.id, rec.target);
 	}
 
-	private resubscribeAtLayout(rec: { node: AnyNode; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
+	private resubscribeAtLayout(rec: { node: AnyInternals; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
 		const root = rec.root ?? ROOT_UNKNOWN;
 		const render = this.bridge.renderStart(root, []);
 		let created: Watcher | undefined;
