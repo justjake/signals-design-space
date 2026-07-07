@@ -4426,15 +4426,6 @@ export class CosignalBridge {
 	 * END of the boundary operation, after every committed-side mutation of
 	 * the boundary has landed (ordering joint, plan amendment 6).
 	 */
-	/** Host-initiated boundary re-check (public form of the scan below): the
-	 * bindings call it when THEY advance a root's committed table out of band
-	 * (the root-commit report's defensive delta reconciliation) — an advance
-	 * the engine's own boundary sites never saw. */
-	revalidateCommittedObservers(rootId: RootId): void {
-		this.revalidateCommittedSubs(rootId);
-		this.flushNotify();
-	}
-
 	private revalidateCommittedSubs(rootFilter: RootId | undefined): void {
 		if (this.committedSubCount === 0) return;
 		for (const e of [...this.subs.values()]) {
@@ -4459,6 +4450,76 @@ export class CosignalBridge {
 			}
 			if (changed) this.runCommittedSub(e);
 		}
+	}
+
+	/**
+	 * Per-root commit lock-in — THE single owner of a root's committed-state
+	 * transition (W11). For each named token that is still live and not yet a
+	 * committed member of this root, one unit moves TOGETHER: the committed-
+	 * token set, its bit-mask twin (`committedBits` — what the committed-world
+	 * visibility check reads), the root's commit generation, the committed-
+	 * advance clock, this root's arena fan-out of the token's touched atoms,
+	 * and the durable watcher drain. Already-committed, retired/reclaimed, and
+	 * unknown tokens skip: the protocol's per-root commit report is a delta,
+	 * and re-reporting a batch is defined as an idempotent set-add.
+	 *
+	 * Callers: passEnd's lock-in sweep (already inside its own operation
+	 * frame, via the inner form) and the bindings' root-commit report handler
+	 * (this public form — the report can name a live batch the pass-end sweep
+	 * missed). Returns whether any token was newly locked in.
+	 */
+	commitTokens(rootId: RootId, tokens: Iterable<TokenId>): boolean {
+		let changed = false;
+		this.opDepth++; // NF2 S-A: public-operation frame (see write)
+		try {
+			changed = this.commitTokensInner(rootId, tokens);
+			// EF2 boundary: a per-root commit is a boundary operation. When this
+			// call moved committed truth, re-check the root's committed
+			// subscriptions at the boundary value (passEnd's sweep gets the same
+			// re-check from passEnd's own boundary; here the call IS the
+			// boundary). A no-op call re-checks nothing — the report's common
+			// case re-names tokens the sweep already locked in.
+			if (changed) this.revalidateCommittedSubs(rootId);
+			this.endOp();
+		} finally {
+			this.opDepth--;
+		}
+		this.arenaOpEpilogue();
+		return changed;
+	}
+
+	private commitTokensInner(rootId: RootId, tokens: Iterable<TokenId>): boolean {
+		const root = this.root(rootId);
+		const tr = this.trace;
+		let changed = false;
+		for (const tid of tokens) {
+			const t = this.tokens.get(tid);
+			if (t === undefined || t.state !== 'live') continue; // retired (or reclaimed): the retired clause subsumes membership
+			if (root.committedTokens.has(t.id)) continue; // idempotent set-add: already a member
+			root.committedTokens.add(t.id);
+			if (t.slot !== undefined) root.committedBits |= 1 << t.slot;
+			root.commitGen++;
+			this.cas = this.mintSeq(); // committed-advance: every per-root commit bumps it
+			// NF2 S-A flip site (b): per-root lock-in — inside the per-token
+			// loop (m4: commits lock in SETS of tokens), immediately after the
+			// membership/gen/cas mutation and before this token's drain, fan
+			// THAT token's touched atoms into THIS root's arena.
+			{
+				const ra = this.arenaByRoot.get(rootId);
+				if (ra !== undefined) this.fanAtomsToArena(ra, t.atomsTouched, false);
+			}
+			if (tr !== undefined) tr.perRootCommit(rootId, t.id, root.commitGen);
+			// Durable drain, gated exactly as before: an advanced slot or
+			// member-slot write drift (or restaled leftovers) means the root's
+			// committed truth moved — candidates come from the arena's dirty
+			// list, which site-(b)/(c) fanout just fed.
+			const bits = (t.slot !== undefined ? 1 << t.slot : 0) | root.committedDirtySlots;
+			root.committedDirtySlots = 0;
+			const re = this.restaled.get(rootId);
+			if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(rootId, 'per-root-commit');
+			changed = true;
+		}
+		return changed;
 	}
 
 	/**
@@ -4548,35 +4609,12 @@ export class CosignalBridge {
 		}
 		// (2) retirement folds due at this commit; then the per-root commit
 		// (lock-in) of every still-live mask token: this root now shows those
-		// batches' writes, so its committed world must include them.
+		// batches' writes, so its committed world must include them. The
+		// lock-in — including step (3), each newly committed token's durable
+		// drain — is commitTokensInner, THE single owner of the transition
+		// (W11); the bindings' root-commit report handler is its other caller.
 		for (const tid of opts?.retireAtCommit ?? []) this.retireInternal(this.token(tid));
-		for (const t of maskTokenRecords) {
-			if (t.state !== 'live') continue; // fully retired above: the retired clause subsumes membership
-			const root = this.root(p.root);
-			if (!root.committedTokens.has(t.id)) {
-				root.committedTokens.add(t.id);
-				if (t.slot !== undefined) root.committedBits |= 1 << t.slot;
-				root.commitGen++;
-				this.cas = this.mintSeq(); // committed-advance: every per-root commit bumps it
-				// NF2 S-A flip site (b): per-root lock-in — inside the per-token
-				// loop (m4: commits lock in SETS of tokens), immediately after
-				// the membership/gen/cas mutation and before this token's drain,
-				// fan THAT token's touched atoms into THIS root's arena.
-				{
-					const ra = this.arenaByRoot.get(p.root);
-					if (ra !== undefined) this.fanAtomsToArena(ra, t.atomsTouched, false);
-				}
-				if (tr !== undefined) tr.perRootCommit(p.root, t.id, root.commitGen);
-				// (3) durable drain, gated exactly as before: an advanced slot
-				// or member-slot write drift (or restaled leftovers) means the
-				// root's committed truth moved — candidates come from the
-				// arena's dirty list, which site-(b)/(c) fanout just fed.
-				const bits = (t.slot !== undefined ? 1 << t.slot : 0) | root.committedDirtySlots;
-				root.committedDirtySlots = 0;
-				const re = this.restaled.get(p.root);
-				if (bits !== 0 || (re !== undefined && re.size > 0)) this.drainCommittedObservers(p.root, 'per-root-commit');
-			}
-		}
+		this.commitTokensInner(p.root, p.maskTokens);
 		// (4) layout: subscribe, then mount fixup (matching React's layout-
 		// effect phase: after commit, before paint).
 		for (const wid of p.mounted) {

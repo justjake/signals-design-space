@@ -472,28 +472,26 @@ export class Shim {
 		// root's committed table at passEnd(commit). The protocol's per-root
 		// commit report is a delta (one batch's work can reach the screen
 		// across more than one flush), and re-reporting a batch is defined as
-		// idempotent set-add — so reconcile any reported batch the passEnd
-		// sweep missed. Defensive: for batches with bridge tokens the pass's
-		// set already covers the delta by construction.
-		const root = this.bridge.root(rec.id);
-		let reconciled = false;
+		// idempotent set-add — so hand every reported batch with a bridge
+		// token to the engine's commitTokens, THE single owner of the per-root
+		// commit transition (W11): already-committed tokens skip; a live token
+		// the passEnd sweep missed locks in COMPLETELY (token set, committed
+		// bit mask, generation, commit clock, arena fan-out, drain — never a
+		// partial table write from here). Defensive: for batches with bridge
+		// tokens the pass's set already covers the delta by construction.
+		const reported: TokenId[] = [];
 		for (const forkToken of committedBatches) {
 			const mapped = this.bridgeTokenByFork.get(forkToken);
-			if (mapped === undefined) continue;
-			const t = this.bridge.tokens.get(mapped);
-			if (t === undefined || t.state !== 'live' || root.committedTokens.has(mapped)) continue;
-			root.committedTokens.add(mapped);
-			root.commitGen++;
-			reconciled = true;
+			if (mapped !== undefined) reported.push(mapped);
 		}
+		if (reported.length !== 0) this.bridge.commitTokens(rec.id, reported);
 		// The root-commit REPORT is where the commit's effect refires run
 		// (React's re-pend classification is behind us; CR5 puts no user code
 		// between the frame close and this report, so the boundary values are
-		// unchanged). The defensive reconciliation above is itself a
-		// committed-truth advance the engine's own boundary scan never saw —
-		// re-check that root if it actually added anything.
+		// unchanged). commitTokens is itself an EF2 boundary: when the report
+		// actually moved committed truth, the engine re-checked that root's
+		// committed observers inside the call.
 		this.flushHeldRefires();
-		if (reconciled) this.bridge.revalidateCommittedObservers(rec.id);
 	}
 
 	/** Runs commit-held effect refires (see holdingRefires). */
