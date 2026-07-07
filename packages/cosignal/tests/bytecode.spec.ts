@@ -37,7 +37,7 @@ const BUDGETS: Record<string, number> = {
 	// LIFECYCLE load + host-owned gate — the kernel arm became a refcount so
 	// bridge computeds' links could be excluded; see index.ts D1)
 	propagate: 460, // 426: already close to the limit — watch it
-	checkDirty: 440, // 414: B2 split — entry wrapper + shallow/two-level fast
+	checkDirty: 440, // 426: B2 split — entry wrapper + shallow/two-level fast
 	// paths + chainCheck dispatch (was the 537 monolith pinned below); inside
 	// the inline limit so run()/computedReadSlow can absorb it
 	checkDirtyLoop: 460, // 411: the general walk, out of line — at the limit
@@ -56,38 +56,38 @@ const BUDGETS: Record<string, number> = {
 	freeLink: 40, // 27: threads the free list through spare field 7 (row 2)
 	// public read/write paths
 	read: 120, // 98
-	write: 180, // 152
-	computedRead: 110, // 86: hot/cold split entry
+	write: 130, // 96
+	computedRead: 110, // 84: hot/cold split entry
 	computedReadSlow: 460, // 418: the out-of-line ladder — near the limit (S-C: never-evaluated probe reads MUTABLE; HOST_OWNED carried)
-	writeAtom: 120, // 100
+	writeAtom: 90, // 67
 	flush: 170, // 139
 	// concurrency engine (src/concurrent.ts world arenas)
-	arenaLink: 230, // 189
-	arenaLinkInsert: 380, // 325
-	arenaUnlink: 380, // 321
+	arenaLink: 230, // 179
+	arenaLinkInsert: 380, // 302
+	arenaUnlink: 340, // 276
 	arenaPropagate: 460, // 453: S-B segregated-list interleave — each descended sub
 	// contributes its weak head as a parked continuation (one shared grow
 	// block; the cycle-cap thrower moved out of line) — AT the inline limit,
 	// exactly like checkDirtyLoop; watch it
-	arenaShallowPropagate: 140, // 112
+	arenaShallowPropagate: 160, // 127
 	arenaPurgeDeps: 170, // 137
 	arenaAllocLink: 90, // 71
 	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (row 2 twin)
-	shadowFor: 310, // 261
-	foldAtom: 350, // 290: S-D deleted the lastFoldFp fingerprint scan (its
+	shadowFor: 210, // 163
+	foldAtom: 190, // 142: S-D deleted the lastFoldFp fingerprint scan (its
 	// last reader died with the memo ladder at S-C) — budget tightened with it
-	arenaUpdateShadow: 230, // 185 (S-D: the readClock bump routed through arenaBumpReadClock)
-	arenaBumpReadClock: 60, // 31: S-D Int32 wrap guard on the consumption bump path
-	arenaBumpCycle: 60, // 33: S-D Int32 wrap guard on the evaluation-cycle bump
-	arenaCheckDirty: 100, // 68: B2 split — entry wrapper owning the arenaCheckSp restore
+	arenaUpdateShadow: 230, // 173 (S-D: the readClock bump routed through arenaBumpReadClock)
+	arenaBumpReadClock: 60, // 35: S-D Int32 wrap guard on the consumption bump path
+	arenaBumpCycle: 60, // 37: S-D Int32 wrap guard on the evaluation-cycle bump
+	arenaCheckDirty: 100, // 67: B2 split — entry wrapper owning the arenaCheckSp restore
 	// (was the 567 walk monolith pinned below)
 	arenaCheckDirtyLoop: 450, // 407: the general arena walk, out of line
-	arenaUpdateAndShallow: 110, // 59: refold + sibling Pending->Dirty upgrade
-	arenaFoldOutcome: 340, // 322: fold-outcome classification, out of line — S-C
+	arenaUpdateAndShallow: 110, // 74: refold + sibling Pending->Dirty upgrade
+	arenaFoldOutcome: 340, // 313: fold-outcome classification, out of line — S-C
 	// added the §4.5.3 comparator arm (custom-equality computeds compare
 	// against the ARENA-local previous, HEAD order; the user-fn call itself
 	// is out of line in arenaEqCold, so the hot default arm stays closure-free)
-	arenaSyncObsAfterRefold: 130, // 92: S-B out-of-line obs epilogue (observed nodes only)
+	arenaSyncObsAfterRefold: 90, // 65: S-B out-of-line obs epilogue (observed nodes only)
 };
 
 // Functions over the V8 inline budget, pinned at current size — B2 emptied
@@ -96,7 +96,7 @@ const BUDGETS: Record<string, number> = {
 // limit gets pinned here (deliberately, justified in the PR); a pin that
 // drops back under it moves into BUDGETS.
 const OVER_LIMIT_PINS: Record<string, number> = {
-	arenaUpdateComputed: 530, // 486 (re-checked at S-D: the wrap-guarded arenaBumpCycle
+	arenaUpdateComputed: 530, // 479 (re-checked at S-D: the wrap-guarded arenaBumpCycle
 	// call replaced the inline cycle increment, -9; items 1-2's other shaves
 	// landed in foldAtom, not here — still over the 460 inline limit, so the
 	// pin STANDS, not promoted): S-B made the
@@ -157,6 +157,18 @@ describe.skipIf(NODE_MAJOR !== 24)('bytecode budgets (esbuild-bundled smoke, Nod
 	test('smoke exercises every budgeted function', () => {
 		const missing = [...Object.keys(BUDGETS), ...Object.keys(OVER_LIMIT_PINS)].filter((name) => !sizes.has(name));
 		expect(missing).toEqual([]);
+	});
+
+	test('no budgeted name was renamed by esbuild scope-merge', () => {
+		// When two module-level functions share a name, esbuild renames one to
+		// `name2`/`name3` in the bundle — and this suite would then measure the
+		// WRONG symbol (or a bootstrap function) under the bare name while the
+		// budgeted function escapes measurement. A `name2` in the dump for any
+		// budgeted name means measurement integrity is broken: rename one of
+		// the colliding source functions.
+		const budgeted = [...Object.keys(BUDGETS), ...Object.keys(OVER_LIMIT_PINS)];
+		const collided = budgeted.filter((name) => sizes.has(`${name}2`) || sizes.has(`${name}3`));
+		expect(collided).toEqual([]);
 	});
 
 	for (const [name, budget] of Object.entries(BUDGETS)) {

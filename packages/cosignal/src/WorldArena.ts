@@ -796,7 +796,7 @@ export function createWorldArena(core: EngineCore): void {
 	function arenaOf(world: World): WorldArena | undefined {
 		if (world.kind === 'render') {
 			const a = world.render.arena;
-			if (a !== undefined && !a.alive) throw new InvariantViolation(`arena of render pass ${world.render.id} was reclaimed while still reachable (m2)`);
+			if (a !== undefined && !a.alive) throw new InvariantViolation(`arena of render ${world.render.id} was reclaimed while still reachable`);
 			return a;
 		}
 		if (world.kind !== 'committed') return undefined;
@@ -1278,7 +1278,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * source is resource settlement (`fromSettlement`). */
 	function fanAtomsToArena(a: WorldArena, atoms: AtomNode[], fromSettlement: boolean): void {
 		if (a.kind === 'render' && !fromSettlement) {
-			throw new InvariantViolation('log-entry-flip fanout reached a render arena — render-world values are pin-frozen (§4.3)');
+			throw new InvariantViolation('log-entry-flip fanout reached a render arena — render-world values are pin-frozen');
 		}
 		const memory = a.memory;
 		for (let i = 0; i < atoms.length; i++) {

@@ -634,7 +634,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 				const w = watchers.get(wid);
 				if (w === undefined || !w.live) continue;
 				if (ra === undefined || (w.nodeIx < ra.nodeToShadow.length ? ra.nodeToShadow[w.nodeIx]! : 0) === 0) {
-					throw new InvariantViolation(`population rule (§4.4.2): watcher ${w.name} has no shadow in root ${render.root}'s committed arena after commit`);
+					throw new InvariantViolation(`watcher-population rule: watcher ${w.name} has no shadow in root ${render.root}'s committed arena after commit`);
 				}
 			}
 		}

@@ -26,6 +26,13 @@ function acquireEngine() {
 	if (typeof mod.__newBridgeForTest === 'function') {
 		const b = mod.__newBridgeForTest();
 		b.registerBridge();
+		// Pre-rename trees expose the render frame as pass*: alias so one
+		// script drives both sides of the A/B.
+		if (b.renderStart === undefined) {
+			b.renderStart = b.passStart;
+			b.renderEnd = b.passEnd;
+			b.renderValue = b.passValue;
+		}
 		return b;
 	}
 	const e = mod.engine;
