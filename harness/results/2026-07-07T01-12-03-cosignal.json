@@ -1,0 +1,87 @@
+{
+  "kind": "bench",
+  "framework": "cosignal",
+  "suites": [
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-07T01-12-03",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    3.4365234375,
+    3.3359375,
+    3.3369140625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "cosignal",
+      "test": "createSignals",
+      "time": 2.609812500000011
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal",
+      "test": "createComputations",
+      "time": 35.33312600000042
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal",
+      "test": "updateSignals",
+      "time": 244.36581249999972
+    },
+    {
+      "suite": "cellx",
+      "framework": "cosignal",
+      "test": "cellx1000",
+      "time": 4.643415999999988
+    },
+    {
+      "suite": "cellx",
+      "framework": "cosignal",
+      "test": "cellx2500",
+      "time": 12.383167000000029
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal",
+      "test": "2-10x5 - lazy80%",
+      "time": 133.0195
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 92.43895799999996
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal",
+      "test": "4-1000x12 - dyn5%",
+      "time": 273.914542
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal",
+      "test": "25-1000x5",
+      "time": 284.7239159999999
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal",
+      "test": "3-5x500",
+      "time": 66.02833400000054
+    },
+    {
+      "suite": "dynamic",
+      "framework": "cosignal",
+      "test": "6-100x15 - dyn50%",
+      "time": 160.7626250000003
+    }
+  ]
+}

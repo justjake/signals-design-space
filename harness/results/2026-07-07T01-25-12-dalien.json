@@ -1,0 +1,37 @@
+{
+  "kind": "bench",
+  "framework": "dalien",
+  "suites": [
+    "sbench"
+  ],
+  "timestamp": "2026-07-07T01-25-12",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    5.36572265625,
+    4.06787109375,
+    3.57666015625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "createSignals",
+      "time": 5.639895999999993
+    },
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "createComputations",
+      "time": 45.101728999998386
+    },
+    {
+      "suite": "sbench",
+      "framework": "dalien",
+      "test": "updateSignals",
+      "time": 243.0975625000019
+    }
+  ]
+}

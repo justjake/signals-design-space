@@ -1,0 +1,12 @@
+framework,suite,test,time
+cosignal,sbench,createSignals,2.609812500000011
+cosignal,sbench,createComputations,35.33312600000042
+cosignal,sbench,updateSignals,244.36581249999972
+cosignal,cellx,cellx1000,4.643415999999988
+cosignal,cellx,cellx2500,12.383167000000029
+cosignal,dynamic,2-10x5 - lazy80%,133.0195
+cosignal,dynamic,6-10x10 - dyn25% - lazy80%,92.43895799999996
+cosignal,dynamic,4-1000x12 - dyn5%,273.914542
+cosignal,dynamic,25-1000x5,284.7239159999999
+cosignal,dynamic,3-5x500,66.02833400000054
+cosignal,dynamic,6-100x15 - dyn50%,160.7626250000003

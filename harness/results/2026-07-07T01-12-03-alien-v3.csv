@@ -1,0 +1,12 @@
+framework,suite,test,time
+alien-v3,sbench,createSignals,9.380312500000002
+alien-v3,sbench,createComputations,75.19945800000002
+alien-v3,sbench,updateSignals,307.74891549999984
+alien-v3,cellx,cellx1000,5.576793000000009
+alien-v3,cellx,cellx2500,15.598749999999981
+alien-v3,dynamic,2-10x5 - lazy80%,140.4547910000001
+alien-v3,dynamic,6-10x10 - dyn25% - lazy80%,117.76604199999997
+alien-v3,dynamic,4-1000x12 - dyn5%,315.68712499999947
+alien-v3,dynamic,25-1000x5,403.8319590000001
+alien-v3,dynamic,3-5x500,88.66495799999939
+alien-v3,dynamic,6-100x15 - dyn50%,195.96566600000006

@@ -1,0 +1,37 @@
+{
+  "kind": "bench",
+  "framework": "cosignal",
+  "suites": [
+    "sbench"
+  ],
+  "timestamp": "2026-07-07T01-25-12",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    5.837890625,
+    4.212890625,
+    3.6337890625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "cosignal",
+      "test": "createSignals",
+      "time": 3.523958499999999
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal",
+      "test": "createComputations",
+      "time": 35.8138954999996
+    },
+    {
+      "suite": "sbench",
+      "framework": "cosignal",
+      "test": "updateSignals",
+      "time": 243.91462500000034
+    }
+  ]
+}

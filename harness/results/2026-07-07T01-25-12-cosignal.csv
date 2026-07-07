@@ -1,0 +1,4 @@
+framework,suite,test,time
+cosignal,sbench,createSignals,3.523958499999999
+cosignal,sbench,createComputations,35.8138954999996
+cosignal,sbench,updateSignals,243.91462500000034

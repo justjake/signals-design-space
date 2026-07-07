@@ -1,0 +1,12 @@
+framework,suite,test,time
+dalien,sbench,createSignals,5.582541999999933
+dalien,sbench,createComputations,45.185957500000995
+dalien,sbench,updateSignals,244.86489599999823
+dalien,cellx,cellx1000,5.580667000000009
+dalien,cellx,cellx2500,14.943500000000029
+dalien,dynamic,2-10x5 - lazy80%,155.0530000000001
+dalien,dynamic,6-10x10 - dyn25% - lazy80%,109.39408299999991
+dalien,dynamic,4-1000x12 - dyn5%,297.71054200000026
+dalien,dynamic,25-1000x5,335.60962500000005
+dalien,dynamic,3-5x500,84.03858299999956
+dalien,dynamic,6-100x15 - dyn50%,165.42712500000016

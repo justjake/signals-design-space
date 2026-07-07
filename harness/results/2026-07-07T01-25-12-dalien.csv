@@ -1,0 +1,4 @@
+framework,suite,test,time
+dalien,sbench,createSignals,5.639895999999993
+dalien,sbench,createComputations,45.101728999998386
+dalien,sbench,updateSignals,243.0975625000019

@@ -1,0 +1,87 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "sbench",
+    "cellx",
+    "dynamic"
+  ],
+  "timestamp": "2026-07-07T01-12-03",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    3.55126953125,
+    3.353515625,
+    3.3447265625
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createSignals",
+      "time": 9.380312500000002
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "createComputations",
+      "time": 75.19945800000002
+    },
+    {
+      "suite": "sbench",
+      "framework": "alien-v3",
+      "test": "updateSignals",
+      "time": 307.74891549999984
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx1000",
+      "time": 5.576793000000009
+    },
+    {
+      "suite": "cellx",
+      "framework": "alien-v3",
+      "test": "cellx2500",
+      "time": 15.598749999999981
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "2-10x5 - lazy80%",
+      "time": 140.4547910000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-10x10 - dyn25% - lazy80%",
+      "time": 117.76604199999997
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "4-1000x12 - dyn5%",
+      "time": 315.68712499999947
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "25-1000x5",
+      "time": 403.8319590000001
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "3-5x500",
+      "time": 88.66495799999939
+    },
+    {
+      "suite": "dynamic",
+      "framework": "alien-v3",
+      "test": "6-100x15 - dyn50%",
+      "time": 195.96566600000006
+    }
+  ]
+}
