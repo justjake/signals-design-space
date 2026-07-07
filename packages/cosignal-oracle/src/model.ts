@@ -170,9 +170,11 @@ export type Pass = {
 	capturedCommittedSlots: Set<SlotId>;
 	state: PassState;
 	endKind: 'commit' | 'discard' | undefined;
-	/** Watchers first mounted by this pass (they subscribe + reconcile at its commit). */
+	/** Watchers first mounted by this pass (they subscribe + reconcile at its commit).
+	 * Disjoint from `rendered`. */
 	mounted: WatcherId[];
-	/** Existing watchers re-rendered by this pass (lastRenderedValue updates at commit only). */
+	/** Existing watchers re-rendered by this pass (lastRenderedValue updates at
+	 * commit only) — re-renders ONLY, disjoint from `mounted`. */
 	rendered: Set<WatcherId>;
 };
 
@@ -989,8 +991,7 @@ export class CosignalModel {
 			dedup: new Set(),
 		};
 		this.watchers.set(watcher.id, watcher);
-		p.mounted.push(watcher.id);
-		p.rendered.add(watcher.id);
+		p.mounted.push(watcher.id); // mounts never join `rendered` (the collections are disjoint)
 		return watcher;
 	}
 
@@ -1206,7 +1207,7 @@ export class CosignalModel {
 		// committed-truth reconciliation checks against.
 		for (const wid of p.rendered) {
 			const w = this.watchers.get(wid);
-			if (w === undefined || p.mounted.includes(wid)) continue;
+			if (w === undefined) continue; // removed mid-pass
 			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'pass', pass: p });
 			w.snapshot = {
 				passId: p.id, pin: p.pin, maskSlots: new Set(p.maskSlots),

@@ -455,7 +455,12 @@ export type Pass = {
 	includedBits: SlotSet;
 	state: PassState;
 	endKind: 'commit' | 'discard' | undefined;
+	/** Watchers whose layout effects (subscribe + fixup) fire at this pass's
+	 * commit: its own mounts plus adopted reveals. Disjoint from `rendered`. */
 	mounted: WatcherId[];
+	/** Existing live watchers re-rendered by this pass — re-renders ONLY
+	 * (disjoint from `mounted`; where pass-end means the union it writes the
+	 * union explicitly). */
 	rendered: Set<WatcherId>;
 	/** NF2: the pass world's shadow arena — its value+invalidation+routing
 	 * layer (claimed at passStart, dropped in reclaimAfterPassEnd —
@@ -4197,8 +4202,7 @@ export class CosignalBridge {
 			this.watchersByNode[node.id] = byNode;
 		}
 		byNode.push(watcher);
-		p.mounted.push(watcher.id);
-		p.rendered.add(watcher.id);
+		p.mounted.push(watcher.id); // mounts never join `rendered` (the collections are disjoint)
 		return watcher;
 	}
 
@@ -4600,7 +4604,7 @@ export class CosignalBridge {
 		// against.
 		for (const wid of p.rendered) {
 			const w = this.watchers.get(wid);
-			if (w === undefined || p.mounted.includes(wid)) continue;
+			if (w === undefined) continue; // removed mid-pass
 			w.lastRenderedValue = this.evaluate(this.nodeById(w.node), { kind: 'pass', pass: p });
 			w.snapshot = {
 				passId: p.id, pin: p.pin, maskBits: p.maskBits,
@@ -4623,15 +4627,31 @@ export class CosignalBridge {
 			w.live = true;
 			this.mountFixup(w, p, baseline, maskTokenRecords);
 		}
+		// The §4.4.2 populator domain — the EXPLICIT union of this pass's
+		// re-renders and its OWN mounts (`rendered` and `mounted` are
+		// disjoint). Adopted reveals stay out: their snapshot rides the
+		// original hidden pass (`snapshot.passId !== p.id` — the same
+		// same-pass conjunct the mount fixup's fast path tests), and their
+		// population keeps its pre-existing timing (a later committed
+		// evaluation), not the adopting commit's.
+		const populated: WatcherId[] = [...p.rendered];
+		for (const wid of p.mounted) {
+			const w = this.watchers.get(wid);
+			if (w !== undefined && w.snapshot.passId === p.id) populated.push(wid);
+		}
 		// Re-staled detection: a re-rendered watcher whose committed value
 		// moved past its pin is stale again the moment its commit reset
 		// lastRenderedValue; the NEXT durable drain reconciles it (the
 		// reference model's full scan does the same, one drain later than
 		// the flip). This loop is DECLARED LOAD-BEARING FOR ROUTING (§4.4.2,
-		// M1): its committed evaluations populate the root's arena with every
-		// rendered watcher's full committed dep cone (strong + weak) before
-		// passEnd returns — i.e., before any post-commit write needs routing.
-		for (const wid of p.rendered) {
+		// M1): its committed evaluations populate the root's arena with the
+		// full committed dep cone (strong + weak) of every watcher this pass
+		// re-rendered or mounted, before passEnd returns — i.e., before any
+		// post-commit write needs routing. (For a freshly mounted watcher the
+		// value check is provably a no-op — mountFixup just reconciled it —
+		// but the evaluation is its cone's one populator: the fixup's
+		// fast-out path never evaluates, and mountFix folds are arena-free.)
+		for (const wid of populated) {
 			const w = this.watchers.get(wid);
 			if (w === undefined || !w.live) continue;
 			const wNode = this.nodeById(w.node);
@@ -4639,12 +4659,12 @@ export class CosignalBridge {
 			if (this.changedValue(wNode, w.lastRenderedValue, committedNow)) this.markRestaled(w);
 		}
 		// §4.4.2's population dev assert: after a commit of pass P, every
-		// live rendered watcher has a shadow for its node in the root's
-		// committed arena (the populator above ran; a miss here means a
-		// future re-ordering broke the routing coverage argument).
+		// live watcher P re-rendered or mounted has a shadow for its node in
+		// the root's committed arena (the populator above ran; a miss here
+		// means a future re-ordering broke the routing coverage argument).
 		{
 			const ra = this.arenaByRoot.get(p.root);
-			for (const wid of p.rendered) {
+			for (const wid of populated) {
 				const w = this.watchers.get(wid);
 				if (w === undefined || !w.live) continue;
 				if (ra === undefined || (w.node < ra.byNode.length ? ra.byNode[w.node]! : 0) === 0) {
@@ -4656,8 +4676,10 @@ export class CosignalBridge {
 		// ctx.previous cells hold the last COMMITTED value — a pending
 		// render's value must never leak into the hint, because a pending
 		// transition may still be discarded — so update them from every
-		// watcher this commit rendered or mounted (S-C: the cells moved from
-		// the shim onto the bridge computed nodes with the ctx adapter).
+		// watcher this commit re-rendered or mounted: the explicit union of
+		// the two disjoint collections, each watcher visited once (S-C: the
+		// cells moved from the shim onto the bridge computed nodes with the
+		// ctx adapter).
 		for (const wid of [...p.rendered, ...p.mounted]) {
 			const w = this.watchers.get(wid);
 			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) continue;
