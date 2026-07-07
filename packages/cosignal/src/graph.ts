@@ -63,7 +63,7 @@
  */
 
 import { CycleError } from './index.js';
-import { lifecycleUnwatched, lifecycleWatched } from './lifecycle.js';
+import { lifecycleStates, lifecycleUnwatched, lifecycleWatched } from './lifecycle.js';
 import { boxedRead, ctxPrevious, ctxUse, storeThrown } from './suspense.js';
 import type { ComputedCtx, UseKey } from './index.js';
 
@@ -304,8 +304,8 @@ let checkSp = 0;
 export interface Engine {
 	records: RecordCount;
 	buffer(): Int32Array;
-	newSignal(value: unknown): NodeId;
-	newComputed(getter: (ctx: unknown) => unknown): NodeId;
+	newSignal(value: unknown, target: object): NodeId;
+	newComputed(getter: (ctx: unknown) => unknown, target: object): NodeId;
 	newEffect(fn: () => (() => void) | void): NodeId;
 	newScope(fn: () => void): NodeId;
 	gen(id: NodeId): Generation;
@@ -316,6 +316,12 @@ export interface Engine {
 	requeueAbort(e: NodeId): void;
 	dispose(e: NodeId): void;
 	sweepPendingFree(): void;
+	/** Reclamation's structural phase (cold; signal-reclamation plan §4):
+	 * tear down the record's kernel structure — flags zeroed, a computed's
+	 * deps disposed in reverse, residual subs defensively detached — WITHOUT
+	 * freeing the record: the caller owns free ordering (pendingFree now, or
+	 * queued behind the record's deferred user cleanups). */
+	reclaimStructure(id: NodeId): void;
 	// D5: cold policy ops (never called from the hot walks).
 	/** Marks a computed stale and propagates to its subs (settlement-invalidate). */
 	invalidateComputed(c: NodeId): boolean;
@@ -369,6 +375,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		requeueAbort,
 		dispose,
 		sweepPendingFree,
+		reclaimStructure: reclaimStructureOp,
 		invalidateComputed,
 		disposeComputed: disposeComputedOp,
 		markHostOwned: markHostOwnedOp,
@@ -929,9 +936,19 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 					| (flags & NodeFlag.HOST_OWNED); // ownership survives the rewrite (S-C)
 				disposeAllDepsInReverse(node);
 			}
+			// Reclamation retry trigger — the kernel-SUBS guard row's clearing
+			// site (signal-reclamation plan §4): a GC-skipped reclaim blocked
+			// on "something reads this record" re-attempts when the last
+			// subscriber unlinks. Size-0 bail on the module var.
+			if (reclaimSkippedN !== 0) {
+				noteReclaimRetry(node);
+			}
 		} else if (flags & NodeFlag.K_SIGNAL) {
-			// (D1 releases per-link inside unlink since S-C — nothing left to
-			// do at the subs-empty edge for signals.)
+			// (D1 releases per-link inside unlink since S-C.) Reclamation
+			// retry trigger — the kernel-SUBS guard row for signals.
+			if (reclaimSkippedN !== 0) {
+				noteReclaimRetry(node);
+			}
 		} else if (flags & (NodeFlag.K_EFFECT | NodeFlag.K_SCOPE)) {
 			dispose(node);
 		}
@@ -1099,17 +1116,34 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 
 	// ---- operations dispatched from the public wrappers ------------------------
 
-	function newSignal(value: unknown): NodeId {
+	// RECLAMATION registration rides the allocation op (the handle classes
+	// pass themselves as `target`): the closure owns `memory`, so the gen
+	// read is one indexed load on the record just touched, and the register
+	// call is the only per-construction reclamation cost (see reclaimNode).
+	// heldValue packing: bare id while gen = 0; gen·2^32 + id while
+	// 0 < gen < 2^21 (exact ≤ 2^53−1); {id, gen} object beyond — including
+	// wrapped/negative Int32 gens, which cannot round-trip the packed form.
+	function registerReclaim(target: object, id: NodeId): void {
+		const reg = reclaimRegistry;
+		if (reg !== undefined) {
+			const gen: Generation = memory[id + NodeField.GEN];
+			reg.register(target, gen === 0 ? id : gen > 0 && gen < 0x200000 ? gen * 0x100000000 + id : { id, gen });
+		}
+	}
+
+	function newSignal(value: unknown, target: object): NodeId {
 		const id = allocNode(NodeFlag.K_SIGNAL | NodeFlag.MUTABLE);
 		const v: ValueIndex = id >> RecordGeom.ID_TO_VALUE_SHIFT;
 		vals[v] = value; // currentValue
 		vals[v + RecordGeom.AUX_VALUE_OFFSET] = value; // pendingValue
+		registerReclaim(target, id);
 		return id;
 	}
 
-	function newComputed(getter: (ctx: unknown) => unknown): NodeId {
+	function newComputed(getter: (ctx: unknown) => unknown, target: object): NodeId {
 		const id = allocNode(NodeFlag.K_COMPUTED);
 		fnTab[id >> RecordGeom.ID_TO_FN_SHIFT] = getter;
+		registerReclaim(target, id);
 		return id;
 	}
 
@@ -1299,6 +1333,29 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 		}
 	}
 
+	// Reclamation's structural phase (see the Engine interface doc): the
+	// caller (reclaimNode below, module scope) verified epoch+gen+guards and
+	// that no kernel frame is open. Flags zero FIRST (mirrors
+	// disposeComputedOp: the record is dead before any unlink probe can see
+	// it); a computed's outgoing deps DISPOSE — the plan's "never-subscribed
+	// evaluated computed reclaims and disposes its deps" row — and any
+	// residual subs detach defensively (the SUBS guard makes them
+	// unreachable in practice). Signals have no outgoing structure: their
+	// links live on subscriber records, and SUBS-empty is a guard.
+	function reclaimStructureOp(id: NodeId): void {
+		const flags = memory[id + NodeField.FLAGS];
+		memory[id + NodeField.FLAGS] = 0;
+		if (flags & NodeFlag.K_COMPUTED) {
+			disposeAllDepsInReverse(id);
+			let l = memory[id + NodeField.SUBS];
+			while (l !== 0) {
+				const next = memory[l + LinkField.NEXT_SUB];
+				unlink(l);
+				l = next;
+			}
+		}
+	}
+
 	// S-C: computed disposal (the useComputed deps-change reclamation path;
 	// cold — reached only through the __hostDisposeComputed seam). Flags zero
 	// FIRST so the last sub unlink's unwatched() probe sees a dead record;
@@ -1368,6 +1425,7 @@ const POISON: Engine = {
 	requeueAbort: foldNoop as never,
 	dispose: foldPoisonOp as never,
 	sweepPendingFree: foldPoisonOp as never,
+	reclaimStructure: foldPoisonOp as never,
 	invalidateComputed: foldPoisonOp as never,
 	disposeComputed: foldPoisonOp as never,
 	markHostOwned: foldPoisonOp as never,
@@ -1395,8 +1453,406 @@ export function __setRecordFreeHook(fn: ((recordId: NodeId, nodeIndex: number) =
 	recordFreeHook = fn;
 }
 
+// ---- SIGNAL RECLAMATION (plans/2026-07-07-signal-reclamation.md) ------------------
+// FinalizationRegistry-driven recovery of atom/computed records whose public
+// handles were garbage-collected. The kernel owns the machinery because its
+// hottest trigger site (unwatched's last-subscriber edge) is kernel code: the
+// size-0 bail there is a same-module `var` read. Engine-side liveness (the
+// watcher index, arenas, observation, write logs) is consulted through ONE
+// registered hook; every clearing site of a guard files a per-id retry.
+// Registration cost lives in the Atom/Computed CONSTRUCTORS (index.ts calls
+// reclaimRegister) — never on read/write paths.
+
+/** A GC-skipped reclaim's retry ticket: the tenancy generation and engine
+ * epoch the finalizer carried (re-verified when the guard clears). */
+type ReclaimRetryEntry = { gen: Generation; epoch: number };
+
+/** A reclaimed record's deferred user cleanups (owned child effects): run at
+ * the next boundary sweep under reportError isolation; the record's free is
+ * queued BEHIND the entry (free-list insertion is the last step per entry). */
+type DeferredCleanupEntry = { id: NodeId; gen: Generation; cleanups: (() => void)[] };
+
+/** Packed finalizer heldValue: bare id while gen = 0; gen·2^32 + id while
+ * 0 < gen < 2^21 (exact ≤ 2^53−1); the {id, gen} object beyond — including
+ * wrapped (negative) Int32 generations, so defusing always compares the raw
+ * int32 generation by EQUALITY. */
+type ReclaimHeld = number | { id: NodeId; gen: Generation };
+
+/**
+ * GC-skipped reclaims awaiting their blocking guard to clear, keyed by id.
+ * Never globally scanned: each guard's clearing site consults its own id
+ * (noteReclaimRetry) or drains the map wholesale at whole-arena teardown
+ * (reclaimRetryAllSkipped) — retries re-verify every guard, so a wholesale
+ * drain is conservative, never wrong.
+ */
+const reclaimSkipped = new Map<NodeId, ReclaimRetryEntry>();
+
+/** reclaimSkipped.size mirrored as a module `var`: the size-0 bail every
+ * warm trigger site opens with (a `var` read compares `!== 0` — no Map.size
+ * getter call, no let-slot hole check on the kernel's unwatched edge).
+ * Cross-module trigger sites import the live binding. @internal */
+// eslint-disable-next-line no-var
+export var reclaimSkippedN = 0;
+
+/** Ids whose blocking guard JUST cleared (clearing sites push; the boundary
+ * drain re-attempts). */
+const reclaimRetries: NodeId[] = [];
+
+/** Deferred-cleanup queue (phase 2 input). Swapped wholesale by the drain
+ * (take-before-call), so `let` — cold path, never read per-call. */
+let deferredCleanups: DeferredCleanupEntry[] = [];
+
+/** ONE flag maybeBoundary tests for both queues (`var`: hot module flag). */
+// eslint-disable-next-line no-var
+var reclaimWorkPending = false;
+
+/** The deferred-cleanup DRAIN GUARD (plan §4 take-before-call): set while
+ * phase 2 runs taken entries; a reentrant boundary (a cleanup writing an
+ * atom) finds it set and does no cleanup work. Joins `__resetEngineForTest`'s
+ * assertIdle preconditions. */
+// eslint-disable-next-line no-var
+var reclaimDrainGuard = false;
+
+/** Coalesced post-trigger nudge: a guard can clear (or a finalizer can file
+ * work) with no public operation following — an epoch-guarded microtask runs
+ * maybeBoundary so an unreachable, unobserved record frees even at idle. */
+// eslint-disable-next-line no-var
+var reclaimNudgeScheduled = false;
+
+/** Engine-side liveness for the reclaim guards (registered per composition
+ * by concurrent.ts): watcher-index membership, open-render arena membership,
+ * any arena's suspended-list membership, observation retains, and a
+ * non-empty write log. */
+let reclaimGuardHook: ((id: NodeId, nodeIndex: number) => boolean) | undefined;
+
+/** Registers/clears the engine guard hook (host seam). @internal */
+export function __setReclaimGuardHook(fn: ((id: NodeId, nodeIndex: number) => boolean) | undefined): void {
+	reclaimGuardHook = fn;
+}
+
+/**
+ * THE PER-EPOCH REGISTRY: the engine epoch lives in the registry's CLOSURE —
+ * heldValues carry no epoch. `__resetKernelForTest` DROPS the registry and
+ * constructs a fresh one: an unreachable registry's pending callbacks are
+ * never delivered (mass cancellation by dropping one object, no per-handle
+ * unregister), and a callback already extracted before the drop no-ops on
+ * the closure epoch compare — belt and suspenders. Production never resets:
+ * one registry for the process lifetime.
+ */
+function makeReclaimRegistry(): FinalizationRegistry<ReclaimHeld> | undefined {
+	if (typeof FinalizationRegistry !== 'function') {
+		return undefined; // no-FR host: dropped handles keep the documented bounded retention
+	}
+	const epoch = engineEpoch;
+	return new FinalizationRegistry<ReclaimHeld>((held) => {
+		if (typeof held === 'number') {
+			if (held < 0x100000000) {
+				reclaimNode(held, 0, epoch);
+			} else {
+				const gen = Math.floor(held / 0x100000000);
+				reclaimNode(held - gen * 0x100000000, gen, epoch);
+			}
+		} else {
+			reclaimNode(held.id, held.gen, epoch);
+		}
+		// Phase 2 (deferred cleanups + the free sweep) never runs in the GC
+		// job: it lands at the nudge microtask's boundary.
+		scheduleReclaimNudge();
+	});
+}
+
+// eslint-disable-next-line no-var
+var reclaimRegistry = makeReclaimRegistry();
+
+/**
+ * Registers a public handle for reclamation — called by the Atom/Computed
+ * constructors (the priced creation cost; registration never appears on
+ * read/write paths). LEAN-INSTANCE DIRECT REGISTRATION for all three classes
+ * (Atom, ReducerAtom, Computed): the instances are flat field records
+ * (methods live on prototypes; user closures are referents, not shape), the
+ * donor-measured cheap death shape. Measured rejects (binding): per-handle
+ * unregister tokens (+103ns), WeakRef schemes (+93ns), deferred/batched and
+ * lazy registration. Deterministic dispose paths do NOT unregister —
+ * epoch+gen defusing covers their finalizers. Registration itself lives on
+ * the allocation ops (registerReclaim inside createEngine — the closure owns
+ * the buffer, so the gen read has no op-table indirection): constructors
+ * pass `this` to E.newSignal/E.newComputed. @internal
+ */
+
+function reclaimFileSkip(id: NodeId, gen: Generation, epoch: number): void {
+	if (!reclaimSkipped.has(id)) {
+		reclaimSkipped.set(id, { gen, epoch });
+		reclaimSkippedN = reclaimSkipped.size;
+	}
+}
+
+/** Drop a skip ticket iff it names THIS tenancy — a stale finalizer for a
+ * reused id must never cancel the new tenant's pending retry. */
+function reclaimDropSkip(id: NodeId, gen: Generation): void {
+	if (reclaimSkippedN !== 0) {
+		const e = reclaimSkipped.get(id);
+		if (e !== undefined && e.gen === gen && reclaimSkipped.delete(id)) {
+			reclaimSkippedN = reclaimSkipped.size;
+		}
+	}
+}
+
+/**
+ * Per-id retry filing — every guard row's clearing site calls this (after
+ * its own `reclaimSkippedN !== 0` bail where the site is warm). Edge work
+ * only queues: the re-attempt itself runs at the next operation boundary
+ * (clearing sites fire mid-walk, where structural teardown is unsafe).
+ * @internal
+ */
+export function noteReclaimRetry(id: NodeId): void {
+	if (reclaimSkippedN === 0 || !reclaimSkipped.has(id)) {
+		return;
+	}
+	reclaimRetries.push(id);
+	if (reclaimWorkPending === false) {
+		reclaimWorkPending = true;
+	}
+	scheduleReclaimNudge();
+}
+
+/**
+ * Wholesale re-attempt of every skipped id — the whole-arena teardown drains
+ * (render end, settlement drain, arena release/quiesce), where many
+ * memberships clear at once. Conservative by construction: each retry
+ * re-verifies all guards and re-files if still blocked. @internal
+ */
+export function reclaimRetryAllSkipped(): void {
+	if (reclaimSkippedN === 0) {
+		return;
+	}
+	for (const id of reclaimSkipped.keys()) {
+		reclaimRetries.push(id);
+	}
+	if (reclaimWorkPending === false) {
+		reclaimWorkPending = true;
+	}
+	scheduleReclaimNudge();
+}
+
+function scheduleReclaimNudge(): void {
+	if (reclaimNudgeScheduled === true) {
+		return;
+	}
+	reclaimNudgeScheduled = true;
+	// ENGINE-EPOCH GUARD (cross-reset microtask discipline).
+	const epoch = engineEpoch;
+	queueMicrotask(() => {
+		reclaimNudgeScheduled = false;
+		if (epoch !== engineEpoch) {
+			return;
+		}
+		maybeBoundary();
+	});
+}
+
+/** reportError isolation for phase-2 cleanups: a throwing cleanup is
+ * surfaced globally and the sweep completes. */
+function reportReclaimError(err: unknown): void {
+	const report = (globalThis as { reportError?: (e: unknown) => void }).reportError;
+	if (report !== undefined) {
+		report(err);
+		return;
+	}
+	const epoch = engineEpoch;
+	queueMicrotask(() => {
+		if (epoch === engineEpoch) {
+			throw err;
+		}
+	});
+}
+
+/**
+ * PHASE 1 — the finalizer body (also the retry body and the test seam's):
+ * verify epoch (registry-closure carried) and tenancy generation (raw int32
+ * EQUALITY — wrap-safe), verify every guard, then tear down structure and
+ * dispose owned deps. User code NEVER runs here: owned child effects' pending
+ * cleanups are extracted into a deferred-cleanup entry and the record's free
+ * queues behind it; guard-blocked reclaims file a per-id retry ticket instead
+ * (its guard's clearing site re-attempts).
+ */
+function reclaimNode(id: NodeId, gen: Generation, epoch: number): void {
+	if (epoch !== engineEpoch) {
+		return; // a dead epoch's callback (the belt behind the registry drop)
+	}
+	const memory = E.buffer();
+	if (memory[id + NodeField.GEN] !== gen) {
+		reclaimDropSkip(id, gen); // tenancy moved: this reclaim's target is already gone
+		return;
+	}
+	const flags: NodeFlags = memory[id + NodeField.FLAGS];
+	if ((flags & (NodeFlag.K_SIGNAL | NodeFlag.K_COMPUTED)) === 0) {
+		reclaimDropSkip(id, gen); // already disposed (free pending at this gen) — nothing to do
+		return;
+	}
+	if (enterDepth !== 0) {
+		// Defensive: real FR delivery is task-scheduled (kernel-idle by
+		// construction); a mid-frame arrival files itself for the boundary.
+		reclaimFileSkip(id, gen, epoch);
+		reclaimRetries.push(id);
+		if (reclaimWorkPending === false) {
+			reclaimWorkPending = true;
+		}
+		scheduleReclaimNudge();
+		return;
+	}
+	// The guard table (plan §4). Kernel SUBS; lifecycle ACTIVE (the id-keyed
+	// active record — the dormant fns-slot callback is column state, not a
+	// guard); the engine hook covers watcher-index membership, open-render
+	// arena membership, any arena's suspended list, obsRefs, and a non-empty
+	// write log. NOT guards: outgoing deps (disposed below), HOST_OWNED, the
+	// lifecycle marker.
+	const hook = reclaimGuardHook;
+	if (
+		memory[id + NodeField.SUBS] !== 0
+		|| (lifecycleStates.size !== 0 && lifecycleStates.has(id))
+		|| (hook !== undefined && hook(id, memory[id + NodeField.NODE_INDEX]))
+	) {
+		reclaimFileSkip(id, gen, epoch);
+		return;
+	}
+	reclaimDropSkip(id, gen);
+	if (flags & NodeFlag.K_COMPUTED) {
+		// Owned child effects' cleanups defer (extracted BEFORE the cascade,
+		// so the structural teardown's dispose path finds nothing to run).
+		const cleanups = collectOwnedCleanups(id);
+		E.reclaimStructure(id);
+		if (cleanups !== undefined) {
+			deferredCleanups.push({ id, gen, cleanups });
+			if (reclaimWorkPending === false) {
+				reclaimWorkPending = true;
+			}
+			scheduleReclaimNudge();
+			return; // the free queues BEHIND the entry (phase 2 inserts it)
+		}
+	} else {
+		E.reclaimStructure(id);
+	}
+	pendingFree.push(id); // swept at the boundary (freeNode: GEN bump + column clears + the record-free scrub)
+}
+
+/**
+ * Extract the pending user cleanups of a dying computed's OWNED effect
+ * subtree (child effects/scopes link as deps of their creator), depth-first
+ * in reverse dep order — the order deterministic disposal would have run
+ * them. Extraction clears each aux slot, so the structural cascade's
+ * dispose() finds no cleanup to run. Returns undefined when none exist (the
+ * common shape: plain computeds free without a deferred entry).
+ */
+function collectOwnedCleanups(id: NodeId): (() => void)[] | undefined {
+	let out: (() => void)[] | undefined;
+	const memory = E.buffer();
+	const walk = (node: NodeId): void => {
+		let l = memory[node + NodeField.DEPS_TAIL];
+		while (l !== 0) {
+			const dep = memory[l + LinkField.DEP];
+			const depFlags = memory[dep + NodeField.FLAGS];
+			if (depFlags & (NodeFlag.K_EFFECT | NodeFlag.K_SCOPE)) {
+				walk(dep); // grandchildren first (dispose runs deps before the own cleanup)
+				if (depFlags & NodeFlag.K_EFFECT) {
+					const cv: ValueIndex = (dep >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET;
+					const cleanup = values[cv];
+					if (typeof cleanup === 'function') {
+						values[cv] = undefined;
+						(out ??= []).push(cleanup as () => void);
+					}
+				}
+			}
+			l = memory[l + LinkField.PREV_DEP];
+		}
+	};
+	walk(id);
+	return out;
+}
+
+/**
+ * The boundary drain (phase 2 + retry processing; called from boundaryWork).
+ * Retries first — structural only, and their deferred entries join THIS
+ * take. Then TAKE-BEFORE-CALL: the queue swaps for empty, the drain guard
+ * sets, taken entries run under reportError isolation, and each record's
+ * free-list insertion is the last step per entry. Reentrant boundaries (a
+ * cleanup writing an atom re-enters maybeBoundary) find the guard set and do
+ * no cleanup work; entries filed during a cleanup land in the fresh queue
+ * for the next boundary.
+ */
+function drainReclaimWork(): void {
+	if (reclaimDrainGuard === true) {
+		return; // reentrant boundary during a cleanup: the outer drain owns the batch
+	}
+	reclaimDrainGuard = true;
+	try {
+		reclaimWorkPending = false;
+		while (reclaimRetries.length !== 0) {
+			const id = reclaimRetries.pop()!;
+			const entry = reclaimSkipped.get(id);
+			if (entry !== undefined) {
+				reclaimNode(id, entry.gen, entry.epoch);
+			}
+		}
+		if (deferredCleanups.length !== 0) {
+			const taken = deferredCleanups;
+			deferredCleanups = [];
+			for (let i = 0; i < taken.length; i++) {
+				const entry = taken[i]!;
+				const cleanups = entry.cleanups;
+				for (let k = 0; k < cleanups.length; k++) {
+					try {
+						cleanups[k]!();
+					} catch (err) {
+						reportReclaimError(err);
+					}
+				}
+				pendingFree.push(entry.id); // free queued last, after this entry's own cleanups
+			}
+		}
+	} finally {
+		reclaimDrainGuard = false;
+	}
+	if (reclaimRetries.length !== 0 || deferredCleanups.length !== 0) {
+		// Work filed during the drain (reentrant cleanups): next boundary.
+		if (reclaimWorkPending === false) {
+			reclaimWorkPending = true;
+		}
+	}
+}
+
+/**
+ * Deterministic reclaim seam (test-only): real GC cannot schedule a stale
+ * finalizer deterministically, so the ABA/epoch probes drive this instead.
+ * Defaults simulate a CURRENT-tenancy, current-epoch finalizer; pass a stale
+ * `gen` (P-ABA) or a stale `epoch` (P-EPOCH) to pin the defusing compares.
+ * Runs the trailing boundary so phase 2 lands synchronously. @internal
+ */
+export function __simulateReclaimForTest(id: NodeId, gen?: Generation, epoch?: number): void {
+	reclaimNode(id, gen ?? E.buffer()[id + NodeField.GEN], epoch ?? engineEpoch);
+	maybeBoundary();
+}
+
+/** Reclamation observability (test-only). @internal */
+export function __reclaimStatsForTest(): {
+	skipped: number;
+	retryQueue: number;
+	deferredCleanups: number;
+	pendingFree: number;
+	recNext: RecordId;
+	registryPresent: boolean;
+} {
+	return {
+		skipped: reclaimSkipped.size,
+		retryQueue: reclaimRetries.length,
+		deferredCleanups: deferredCleanups.length,
+		pendingFree: pendingFree.length,
+		recNext,
+		registryPresent: reclaimRegistry !== undefined,
+	};
+}
+
 export function maybeBoundary(): void {
-	if (enterDepth === 0 && (growPending || pendingFree.length !== 0)) {
+	if (enterDepth === 0 && (growPending || pendingFree.length !== 0 || reclaimWorkPending === true)) {
 		boundaryWork();
 	}
 }
@@ -1432,6 +1888,16 @@ export function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => bool
 }
 
 function boundaryWork(): void {
+	// Reclamation work first (signal-reclamation plan §4 free-path ordering):
+	// queued guard-cleared retries run their structural phase (feeding
+	// pendingFree / the deferred-cleanup queue), then the deferred user
+	// cleanups run under the drain guard — each record's free-list insertion
+	// is the last step per entry — so the sweep below frees everything this
+	// boundary produced. Reentrant boundaries (a cleanup writing an atom)
+	// find the drain guard set and skip.
+	if (reclaimWorkPending === true) {
+		drainReclaimWork();
+	}
 	// Sweep only while the effect queue is empty: an un-flushed queue (e.g. a
 	// read's shallowPropagate notified an effect after the last flush) may
 	// still reference a disposed record, and freeing it here would let a new
@@ -1594,6 +2060,7 @@ export function __assertKernelIdleForReset(): void {
 	if (runDepth !== 0) throw new Error('cosignal: __resetEngineForTest inside an effect run');
 	if (queuedLength !== notifyIndex) throw new Error('cosignal: __resetEngineForTest with queued effects unflushed');
 	if (E === POISON) throw new Error('cosignal: __resetEngineForTest inside a fold-purity frame');
+	if (reclaimDrainGuard === true) throw new Error('cosignal: __resetEngineForTest inside the deferred-cleanup drain (a reclaimed record\'s user cleanup is on the stack)');
 }
 
 /**
@@ -1637,4 +2104,16 @@ export function __resetKernelForTest(): void {
 	// DESIREDRECORDS clause).
 	desiredRecords = initialRecords * RecordGeom.RECORDS_PER_UNIT;
 	routingActive = false;
+	// Reclamation scrub (the reset checklist's reclamation clause): DROP the
+	// old per-epoch registry — an unreachable registry's pending callbacks
+	// are never delivered (mass cancellation), and any callback extracted
+	// before the drop no-ops on its closure epoch compare (bumped above).
+	// The skip map, retry queue, and deferred-cleanup queue die with the
+	// epoch (their tickets carry it and would defuse anyway).
+	reclaimRegistry = makeReclaimRegistry();
+	reclaimSkipped.clear();
+	reclaimSkippedN = 0;
+	reclaimRetries.length = 0;
+	deferredCleanups = [];
+	reclaimWorkPending = false;
 }

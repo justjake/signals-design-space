@@ -19,7 +19,7 @@
  */
 
 import { SuspendedRead } from './index.js';
-import { engineEpoch } from './graph.js';
+import { engineEpoch, reclaimRetryAllSkipped } from './graph.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore } from './World.js';
 import type { RootId } from './concurrent.js';
@@ -157,6 +157,10 @@ export function createSettlement(core: EngineCore): void {
 			c.opDepth--;
 			settleDraining = false;
 		}
+		// Reclamation retry trigger — the settlement drain is one of the
+		// suspended-row's whole-teardown drains (§4): settlements just moved
+		// suspension state across every arena. Size-0 bail inside.
+		reclaimRetryAllSkipped();
 	}
 
 	/** Public-operation epilogue (S-A): drain queued settlements to empty

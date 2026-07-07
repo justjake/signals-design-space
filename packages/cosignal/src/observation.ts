@@ -27,7 +27,7 @@
  */
 
 import { untracked, __lifecycleRelease, __lifecycleRetain } from './index.js';
-import { E } from './graph.js';
+import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
 import type { AnyNode, ComputedNode, Subscription } from './concurrent.js';
 
 /** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
@@ -78,7 +78,13 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 		const refs = obsRefs[ix]! + delta;
 		obsRefs[ix] = refs;
 		if (refs === 1 && delta === 1) obsEnter(node);
-		else if (refs === 0 && delta === -1) obsExit(node);
+		else if (refs === 0 && delta === -1) {
+			obsExit(node);
+			// Reclamation retry trigger — the obsRefs guard row's clearing
+			// site is THE release-to-zero edge itself, wherever it fires
+			// (dependency recapture, subscription teardown, watcher release).
+			if (reclaimSkippedN !== 0) noteReclaimRetry(node.id);
+		}
 	}
 
 	/**
@@ -101,7 +107,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 			return;
 		}
 		try {
-			untracked(() => E.computedRead(node.handle._id));
+			untracked(() => E.computedRead(node.id));
 		} catch {
 			// partial dep prefix retained below
 		}

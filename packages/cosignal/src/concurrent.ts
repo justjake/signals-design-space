@@ -171,7 +171,7 @@
 import { Atom, Computed, CycleError, SuspendedRead, untracked, __plainAtomWrite, __resetPolicyForTest, __setStandaloneQuiet, type ComputedCtx } from './index.js';
 import { E, LinkField, NodeField, RecordGeom, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch } from './graph.js';
 import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleTap } from './suspense.js';
-import { __setRecordFreeHook } from './graph.js';
+import { __setReclaimGuardHook, __setRecordFreeHook } from './graph.js';
 import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
 import { createConcurrentEngine, probes, type ConcurrentEngine, type WriteKind } from './engine.js';
 import type { DeliverTable, NotifyState } from './deliver.js';
@@ -179,7 +179,7 @@ import type { ObservationTable } from './observation.js';
 import { WriteLog, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
 import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchTable } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
-import { WorldArena, arenaCheckerLayout, arenaRenumberMarks, kernelNodeIndexOf } from './WorldArena.js';
+import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, kernelNodeIndexOf } from './WorldArena.js';
 import type { Subscription } from './Subscription.js';
 import { Watcher, type RenderPass, type RenderPassTable } from './RenderPass.js';
 
@@ -261,19 +261,34 @@ export class AtomNode {
 	 * Sole remaining consumer: retireInternal's duplicate-touch dedup (the
 	 * memo ladder that read it as a fingerprint clock is deleted — S-C/S-D). */
 	retirementStamp: Seq = 0;
-	/** The kernel-backed newest-world storage this overlay rides. */
-	handle: Atom<Value>;
+	/** The public handle this overlay rides — STRONG for referee/embedding-
+	 * created nodes (engine.atom: the NODE is the public object and owns its
+	 * handle), a WEAKREF for handle-resolved nodes (nodeForAtom). RECLAMATION
+	 * (plan §1 L2): the engine must never pin a public handle — the handle
+	 * pins the node (`Atom._node`), never the reverse — or a content-ful
+	 * handle could never become unreachable and its record could never free.
+	 * Warm paths never read this slot: they use the `id` copy (identical by
+	 * construction); the cold consumers go through the `handle` getter.
+	 * @internal */
+	_h: Atom<Value> | WeakRef<Atom<Value>>;
 	/** Last batch id that appended here (dedupe for batch.atomsTouched). */
 	lastTouchBatch: BatchId = 0;
 
-	constructor(id: NodeId, ix: NodeIndex, name: string, initial: Value, equals: Equals, eqIsDefault: boolean, handle: Atom<Value>) {
+	/** The public handle (cold accessor — see `_h`; typed live: every caller
+	 * that can observe a dead handle goes through `_h` directly). */
+	get handle(): Atom<Value> {
+		const h = this._h;
+		return h instanceof WeakRef ? (h.deref() as Atom<Value>) : h;
+	}
+
+	constructor(id: NodeId, ix: NodeIndex, name: string, initial: Value, equals: Equals, eqIsDefault: boolean, h: Atom<Value> | WeakRef<Atom<Value>>) {
 		this.id = id;
 		this.ix = ix;
 		this.name = name;
 		this.base = initial;
 		this.equals = equals;
 		this.eqIsDefault = eqIsDefault;
-		this.handle = handle;
+		this._h = h;
 	}
 }
 
@@ -291,16 +306,20 @@ export type ComputedFn = (read: Reader, untracked: Reader) => Value;
  * (committed `previous` cell, `use` over the handle's own `_useCache`,
  * background-suspension fold) around the handle's raw fn.
  */
-export type ComputedNode = {
-	kind: 'computed';
+export class ComputedNode {
+	readonly kind = 'computed' as const;
 	id: NodeId;
 	/** Cached NodeField.NODE_INDEX of `id`'s record (see AtomNode.ix). @internal */
 	ix: NodeIndex;
 	name: string;
 	/** The WORLD evaluation function (arena refolds, mount-fix folds). */
 	fn: ComputedFn;
-	/** The kernel record this node rides (newest serving + kernel links). */
-	handle: Computed<unknown>;
+	/** The public handle whose kernel record this node rides — STRONG for
+	 * engine-created computeds (`computed()`: the node owns its handle), a
+	 * WEAKREF for resolved public handles (nodeForComputed). Same reclamation
+	 * rule as AtomNode._h: the engine never pins a public handle; warm paths
+	 * read the `id` copy. @internal */
+	_h: Computed<unknown> | WeakRef<Computed<unknown>>;
 	/** True for adopted public handles (ctx-shaped raw fns): their world fn
 	 * is the bridge's ctx adapter, and background newest reads fold pending
 	 * suspensions to sentinel values (the old React-bindings wrapper translation). */
@@ -312,8 +331,24 @@ export type ComputedNode = {
 	/** ctx.previous cell for adopted ctx-shaped fns: the node's last
 	 * COMMITTED value (a best-effort hint; may be stale or undefined),
 	 * updated at render commits from the watchers that rendered it. */
-	prevCell: { value: Value };
-};
+	prevCell: { value: Value } = { value: undefined };
+
+	/** The public handle (cold accessor — see `_h`). */
+	get handle(): Computed<unknown> {
+		const h = this._h;
+		return h instanceof WeakRef ? (h.deref() as Computed<unknown>) : h;
+	}
+
+	constructor(id: NodeId, ix: NodeIndex, name: string, fn: ComputedFn, h: Computed<unknown> | WeakRef<Computed<unknown>>, ctxShaped: boolean, isEqual: Equals | undefined) {
+		this.id = id;
+		this.ix = ix;
+		this.name = name;
+		this.fn = fn;
+		this._h = h;
+		this.ctxShaped = ctxShaped;
+		this.isEqual = isEqual;
+	}
+}
 
 export type AnyNode = AtomNode | ComputedNode;
 
@@ -1045,11 +1080,13 @@ function composeEngine(options?: EngineResetOptions): void {
 	arenaOpEpilogue = core.arenaOpEpilogue;
 	endOp = core.endOp;
 	// The kernel seams, armed once per composition: the settlement tap
-	// (consulted at thenable-settle FIRE time) and the record-free scrub
+	// (consulted at thenable-settle FIRE time), the record-free scrub
 	// (the boundary sweep reports freed node records so the nodeIndex-keyed
-	// columns clear at exactly the reuse boundary).
+	// columns clear at exactly the reuse boundary), and the reclaim guards
+	// (the engine-side rows of the reclamation guard table).
 	__setSettleTap(settleTapImpl);
 	__setRecordFreeHook(recordFreeImpl);
+	__setReclaimGuardHook(reclaimGuardsImpl);
 	core.syncReadRouting();
 	eng.recomputeQuiet(); // nothing pending at composition: quiet arms here
 }
@@ -1080,7 +1117,11 @@ function nodeForAtom(atom: Atom<unknown>): AtomNode {
 		current,
 		(atom._isEqual as Equals | undefined) ?? Object.is,
 		atom._isEqual === undefined,
-		atom as Atom<Value>,
+		// WEAK handle slot (reclamation): content must not pin the public
+		// handle — the handle pins the node (atom._node below). One WeakRef
+		// per CONTENT allocation (cold, once per participating node — not the
+		// rejected per-construction registration scheme).
+		new WeakRef(atom as Atom<Value>),
 	);
 	atom._node = node;
 	indexNode(node);
@@ -1142,15 +1183,15 @@ export function atom(name: string, initial: Value, equals?: Equals): AtomNode {
  */
 export function computed(name: string, fn: ComputedFn, equals?: Equals): ComputedNode {
 	// id/ix land after the kernel record exists (the getter closure needs
-	// the node object first); nothing reads them in between.
-	const node: ComputedNode = {
-		kind: 'computed', id: 0, ix: 0, name, fn,
-		handle: undefined as never, ctxShaped: false, isEqual: equals, prevCell: { value: undefined },
-	};
-	node.handle = new Computed<unknown>(makeKernelGetter(node) as (ctx: ComputedCtx<unknown>) => Value, equals === undefined ? { label: name } : { label: name, isEqual: equals });
-	node.id = node.handle._id;
+	// the node object first); nothing reads them in between. The handle slot
+	// is STRONG: the referee/embedding node IS the public object and owns
+	// its handle for its own lifetime.
+	const node = new ComputedNode(0, 0, name, fn, undefined as never, false, equals);
+	const handle = new Computed<unknown>(makeKernelGetter(node) as (ctx: ComputedCtx<unknown>) => Value, equals === undefined ? { label: name } : { label: name, isEqual: equals });
+	node._h = handle;
+	node.id = handle._id;
 	node.ix = kernelNodeIndexOf(node.id);
-	(node.handle as Computed<unknown>)._node = node;
+	handle._node = node;
 	E.markHostOwned(node.id); // its links carry no D1 lifecycle refs — the obs index is its arm
 	indexNode(node);
 	return node;
@@ -1174,10 +1215,10 @@ export function nodeForComputed(c: Computed<unknown>): ComputedNode {
 	const hit = c._node;
 	if (hit !== undefined) return hit;
 	const name = c.label ?? `computed#${c._id}`;
-	const node: ComputedNode = {
-		kind: 'computed', id: c._id, ix: kernelNodeIndexOf(c._id), name, fn: undefined as never,
-		handle: c, ctxShaped: true, isEqual: c._isEqual, prevCell: { value: undefined },
-	};
+	// WEAK handle slot (reclamation): see nodeForAtom — content never pins
+	// the public handle. The world fn below closes over the RAW authored fn
+	// (c._fn) and this node, never the handle itself.
+	const node = new ComputedNode(c._id, kernelNodeIndexOf(c._id), name, undefined as never, new WeakRef(c), true, c._isEqual);
 	// The (read, untracked)-shaped WORLD evaluation fn of a ctx-shaped
 	// public computed (the readers are unused — the raw fn reads through
 	// the `.state` seams, which the open arena frame routes and links).
@@ -1246,7 +1287,7 @@ export function nodeForComputed(c: Computed<unknown>): ComputedNode {
  */
 export function disposeComputed(handle: Computed<unknown>): void {
 	const node = idToNode.get(handle._id);
-	if (node !== undefined && node.kind === 'computed' && node.handle === handle) {
+	if (node !== undefined && node.kind === 'computed' && handle._node === node) {
 		const ix = node.ix;
 		const ws = nodeToWatchers[ix];
 		if (ws !== undefined && ws.some((w) => w.live)) {
@@ -1282,7 +1323,7 @@ export function disposeComputed(handle: Computed<unknown>): void {
  */
 function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 	const resident0 = idToNode.get(recordId);
-	if (resident0 !== undefined && resident0.kind === 'atom') resident0.handle._node = undefined;
+	if (resident0 !== undefined && resident0.kind === 'atom') clearHandleBacklink(resident0);
 	idToNode.delete(recordId);
 	if (ix < nodesArr.length) {
 		const resident = nodesArr[ix];
@@ -1290,7 +1331,7 @@ function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 		// its outgoing observation retains before the rows clear, so its
 		// retained deps do not leak closure membership.
 		if (resident !== undefined && obsRefs[ix]! > 0) obs.exit(resident);
-		if (resident !== undefined && resident.kind === 'computed') resident.handle._node = undefined;
+		if (resident !== undefined && resident.kind === 'computed') clearHandleBacklink(resident);
 		nodesArr[ix] = undefined;
 		lastWalk[ix] = 0;
 		evalMark[ix] = 0;
@@ -1300,6 +1341,46 @@ function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 	}
 	__clearUseCacheForIndex(ix); // the id-keyed ctx.use request cache (suspense.ts column)
 	purgeNodeFromArenas(ix);
+}
+
+/** A freed record's handle backlink (`_node`) must clear when the handle is
+ * STILL ALIVE (deterministic disposal, reset orphans): a live handle whose
+ * cached node names a re-tenanted record would write through a stale id.
+ * Reclamation-freed records have dead handles — the deref is undefined and
+ * there is nothing to clear. */
+function clearHandleBacklink(node: AnyNode): void {
+	const h = node._h;
+	const live = h instanceof WeakRef ? h.deref() : h;
+	if (live !== undefined) live._node = undefined;
+}
+
+/**
+ * ENGINE-SIDE RECLAIM GUARDS (registered kernel-side per composition — the
+ * signal-reclamation plan's §4 table rows the kernel cannot see): watcher-
+ * index membership (covers live, mounted-in-an-open-render, and reveal-
+ * deferred watchers uniformly), observation retains (obsRefs > 0), a
+ * non-empty write log, membership in any OPEN RENDER's arena, and membership
+ * in any arena's suspended list (committed arenas' plain membership is NOT a
+ * guard: the record-free scrub purges their shadows). Cold: runs once per
+ * finalizer fire / retry.
+ */
+function reclaimGuardsImpl(id: NodeId, ix: NodeIndex): boolean {
+	if (ix < nodeToWatchers.length) {
+		const ws = nodeToWatchers[ix];
+		if (ws !== undefined && ws.length !== 0) return true;
+		if (obsRefs[ix]! > 0) return true;
+	}
+	const node = idToNode.get(id);
+	if (node !== undefined && node.kind === 'atom' && node.log.n !== node.log.start) return true;
+	for (const p of rootToOpenRender.values()) {
+		const a = p.arena;
+		if (a !== undefined && ix < a.nodeToShadow.length && a.nodeToShadow[ix] !== 0) return true;
+	}
+	let suspended = false;
+	eachArena((a) => {
+		if (!suspended && arenaHoldsSuspended(a, ix)) suspended = true;
+	});
+	return suspended;
 }
 
 /** The kernel getter of an engine-created computed (see `computed`). The
@@ -1329,9 +1410,9 @@ function makeKernelGetter(node: ComputedNode): () => Value {
  * E.computedRead link the dep to any open kernel frame), kernel
  * CycleErrors translated to the engine's. */
 function kernelReadOf(dep: AnyNode): Value {
-	if (dep.kind === 'atom') return E.read(dep.handle._id);
+	if (dep.kind === 'atom') return E.read(dep.id);
 	try {
-		return E.computedRead(dep.handle._id);
+		return E.computedRead(dep.id);
 	} catch (err) {
 		if (err instanceof CycleError) throw core.cycleError(dep.name);
 		throw err;
@@ -1644,8 +1725,9 @@ function quietWriteInner(node: AtomNode, kind: WriteKind, payload: unknown): voi
 	// Direct kernel apply: the plain write tail, no public-method re-entry
 	// (policy checked, op folded, acceptance decided — R-2's "once").
 	// Effects flushed by it re-enter the public write path and classify
-	// normally (R-3).
-	writeNewest(node.handle._id, next);
+	// normally (R-3). `node.id` IS the kernel record id (never through the
+	// handle slot — reclamation keeps it weak for resolved nodes).
+	writeNewest(node.id, next);
 	// NF2 S-A flip site (d): quiet fold — after the base/committedAdvance advance,
 	// before quietDrain and the sub scan (§4.1.2; the rootToArena.size
 	// check is the one scalar branch PR1's ledger documents).
@@ -1800,13 +1882,13 @@ function writeInner(batchId: BatchId | undefined, node: AtomNode, kind: WriteKin
 		// equality applies unconditionally: the kernel's own
 		// store-compare gates propagation, which beats paying
 		// kernelValueOf + Object.is up front on every EFFECTIVE write.
-		writeNewest(node.handle._id, payload);
+		writeNewest(node.id, payload);
 	} else {
-		const prevNewest = E.read(node.handle._id);
+		const prevNewest = E.read(node.id);
 		const nextNewest = applyOp(node, kind, payload, prevNewest);
 		if (!eqAtom(node, prevNewest, nextNewest)) {
 			// R-2 order: (current, incoming) — the eager-advance site.
-			writeNewest(node.handle._id, nextNewest);
+			writeNewest(node.id, nextNewest);
 		}
 	}
 

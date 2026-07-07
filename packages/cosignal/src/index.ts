@@ -181,9 +181,12 @@
  *
  * Everything else — GROWTH (closure rebuild over doubled buffers, swap at
  * operation boundaries only) and RECLAMATION (deferred free of disposed
- * effect/scope records; signal/computed records are owned by their handles
- * and are not reclaimed) — is kernel-wide behavior, bridge registered or
- * not, documented at its implementation sites in graph.ts.
+ * effect/scope records, plus FinalizationRegistry-driven recovery of
+ * atom/computed records whose handles were garbage-collected — the guard
+ * table, retry triggers, and two-phase free path live in graph.ts's
+ * reclamation section per plans/2026-07-07-signal-reclamation.md) — is
+ * kernel-wide behavior, bridge registered or not, documented at its
+ * implementation sites in graph.ts.
  */
 
 import { E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, RecordGeom, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom } from './graph.js';
@@ -527,7 +530,14 @@ export class Atom<T> {
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
 		maybeBoundary();
-		const id = E.newSignal(initialState);
+		// RECLAMATION (plans/2026-07-07-signal-reclamation.md): a dropped
+		// handle's record recovers via the finalizer; registration rides the
+		// allocation op. Direct lean-instance registration — Atom (and
+		// ReducerAtom, which registers here through super() and completes
+		// its shape with one post-constructor field — flagged for the
+		// per-class creation profile) is a flat field record, the
+		// donor-measured cheap GC-death shape. Constructor-only cost.
+		const id = E.newSignal(initialState, this);
 		this._id = id;
 		this._isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		this.label = options?.label;
@@ -661,7 +671,11 @@ export class Computed<T> {
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		this._isEqual = isEqual;
-		const id = E.newComputed(fn as (ctx: unknown) => unknown);
+		// RECLAMATION: direct lean-instance registration, riding the
+		// allocation op (see Atom's note). The instance's fields REFER to
+		// user closures (_fn) but the dying target's own shape stays flat —
+		// the cheap GC-death shape.
+		const id = E.newComputed(fn as (ctx: unknown) => unknown, this);
 		this._id = id;
 		// (The old D4 aux-slot instance backref died at the merge: ctx.use
 		// owner resolution is ID-KEYED now — suspense.ts resolves the

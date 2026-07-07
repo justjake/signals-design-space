@@ -21,6 +21,7 @@
  */
 
 import { probes } from './engine.js';
+import { noteReclaimRetry, reclaimSkippedN } from './graph.js';
 import type { BatchId, BatchSlot } from './Batch.js';
 import type { AtomNode, Seq, Value, WriteKind } from './concurrent.js';
 
@@ -177,7 +178,14 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 		const minPin = deps.minLivePin();
 		for (const n of uncompactedAtoms) {
 			compactAtom(n, minPin);
-			if (n.log.n === n.log.start) uncompactedAtoms.delete(n);
+			if (n.log.n === n.log.start) {
+				uncompactedAtoms.delete(n);
+				// Reclamation retry trigger — the WriteLog guard row clears at
+				// compaction's tape-empty transition (edge-triggered: filed on
+				// the transition, so the warm compaction path otherwise pays
+				// only the size-0 bail).
+				if (reclaimSkippedN !== 0) noteReclaimRetry(n.id);
+			}
 		}
 	}
 

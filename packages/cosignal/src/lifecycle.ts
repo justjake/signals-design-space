@@ -38,7 +38,7 @@
  *    closure captures, exactly as long as the RECORD lives.
  */
 
-import { E, NodeField, RecordGeom, engineEpoch, fns, untracked } from './graph.js';
+import { E, NodeField, RecordGeom, engineEpoch, fns, noteReclaimRetry, reclaimSkippedN, untracked } from './graph.js';
 import { __lifecycleWrite, type AtomCtx } from './index.js';
 import type { NodeId } from './graph.js';
 
@@ -118,6 +118,10 @@ function scheduleLifecycleFlush(): void {
 function maybeDropDormant(state: LifecycleState): void {
 	if (state.refs <= 0 && !state.isMounted && !state.scheduled) {
 		lifecycleStates.delete(state.id);
+		// Reclamation retry trigger — the lifecycle-ACTIVE guard row's
+		// clearing site is exactly this deletion (cleanup ran, no pending
+		// shift). Size-0 bail first.
+		if (reclaimSkippedN !== 0) noteReclaimRetry(state.id);
 	}
 }
 

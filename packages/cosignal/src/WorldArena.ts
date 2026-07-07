@@ -28,7 +28,7 @@
  */
 
 import { NodeField, SuspendedRead } from './index.js';
-import { E } from './graph.js';
+import { E, noteReclaimRetry, reclaimRetryAllSkipped, reclaimSkippedN } from './graph.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore, World } from './World.js';
 import type { AnyNode, AtomNode, ComputedNode, ArenaInitInts, Equals, NodeId, Reader, RootId, Value, Watcher } from './concurrent.js';
@@ -242,6 +242,15 @@ export class WorldArena {
 		this.root = root;
 		this.memory = buf;
 	}
+}
+
+/** Reclamation guard probe (the §4 suspended-list row, engine hook side):
+ * whether this arena's suspended list holds the node's shadow. Same-file
+ * with the layout enums; cold — one probe per arena per finalizer
+ * fire/retry. */
+export function arenaHoldsSuspended(a: WorldArena, ix: number): boolean {
+	const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
+	return sh !== 0 && (a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0;
 }
 
 /** Renumber the read clock: MARK → 0 on every live shadow record, clock
@@ -777,6 +786,11 @@ export function createWorldArena(core: EngineCore): void {
 		a.readClock = 0;
 		a.cycle = 0;
 		if (arenaPool.length < ARENA_POOL_CAP) arenaPool.push(a);
+		// Reclamation retry trigger — whole-arena teardown clears open-render
+		// membership and suspended-list membership for every member at once
+		// (render end, arena release, quiesce sweep): re-attempt everything
+		// skipped; each retry re-verifies all guards. Size-0 bail inside.
+		reclaimRetryAllSkipped();
 	}
 
 	/** The arena of a world: render arenas ride the render record (claimed at
@@ -898,6 +912,14 @@ export function createWorldArena(core: EngineCore): void {
 		a.suspended.pop();
 		a.suspIdx[vi] = 0;
 		core.suspendedCount--;
+		// Reclamation retry trigger — the suspended-list guard row clears at
+		// THE removal operation itself (unsuspension also happens during
+		// ordinary refolds and dirty-list decay; carrying the check here
+		// covers every exit path). Size-0 bail first.
+		if (reclaimSkippedN !== 0) {
+			const node = nodesArr[a.memory[sh + ArenaField.NODE]!];
+			if (node !== undefined) noteReclaimRetry(node.id);
+		}
 	}
 
 	/** Exceptional outcome of an arena fn run (arenaUpdateComputed's catch):

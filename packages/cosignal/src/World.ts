@@ -712,7 +712,9 @@ export function createWorld(core: EngineCore): void {
 		}
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
-			return E.read(atom.handle._id);
+			// (`atom.id` IS the record id — never through the handle slot,
+			// which reclamation keeps weak for resolved nodes.)
+			return E.read(atom.id);
 		}
 		if (world.kind === 'render' || world.kind === 'committed') {
 			const a = c.arenaOf(world);
@@ -806,7 +808,7 @@ export function createWorld(core: EngineCore): void {
 	 */
 	function kernelComputed(node: ComputedNode): Value {
 		try {
-			return E.computedRead(node.handle._id);
+			return E.computedRead(node.id);
 		} catch (err) {
 			if (err instanceof CycleError) {
 				throw cycleError(node.name);

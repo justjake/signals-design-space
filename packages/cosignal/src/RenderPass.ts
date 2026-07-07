@@ -36,7 +36,7 @@
 
 import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
 import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
-import { E } from './graph.js';
+import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
 import { kernelGenOf, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
 import type { EngineCore } from './World.js';
@@ -402,6 +402,11 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 		if (nodeWatchers !== undefined) {
 			const i = nodeWatchers.indexOf(w);
 			if (i >= 0) nodeWatchers.splice(i, 1);
+			// Reclamation retry trigger — the watcher-index guard row clears
+			// here (removeWatcher, unmount/discard teardown all funnel through
+			// this unlink). Edge-triggered: only the row's LAST entry leaving
+			// clears the guard. Size-0 bail first.
+			if (reclaimSkippedN !== 0 && nodeWatchers.length === 0) noteReclaimRetry(w.node);
 		}
 	}
 
