@@ -30,16 +30,29 @@ refactor's S5 design.
   active lifecycle effect is observable machinery whose cleanup MUST run
   at unmount regardless of handle reachability (current semantics, kept).
   At the dormancy transition (cleanup ran, no pending shift) the engine
-  DELETES the entry — releasing the record, the user callback, and any
-  handle the user's closure captured — and that deletion site is the
-  reclamation retry trigger for lifecycle atoms. What actually fixes the
-  original pin (L3): the STORED CONTEXT routes set/update BY ID through
-  the engine write path (post-merge these are direct calls) — the engine
-  never stores a handle reference of its own; only the user's callback
-  may capture one, and only for the active window. No WeakRef anywhere;
-  the rejects list stands untouched.
-  RECLAMATION INTERPLAY: lifecycle-ACTIVE is a GUARD (the map entry's
-  existence); its clearing site (the dormancy deletion) is its TRIGGER.
+  DELETES the active entry — releasing the pending cleanup and the active
+  context — and that deletion site is the reclamation retry trigger for
+  lifecycle atoms.
+  THE DORMANT OWNER + REHYDRATION (round-4: current behavior re-observes
+  the same live handle after a cleanup, pinned by the kernel suite — the
+  callback must survive dormancy without pinning the handle): the USER'S
+  CALLBACK is stored in the atom's own record `fns` COLUMN SLOT at
+  construction (atoms never use that slot; it is engine memory, addressed
+  by id, cleared by the record-free path like every column). A watched
+  transition on a lifecycle-flagged record with no active entry
+  REHYDRATES: reads the callback from the fns slot and creates a fresh
+  active entry. This pins only what the user's closure captures, exactly
+  as long as the RECORD lives — and record liveness is what reclamation
+  already governs (an unwatched, unreferenced lifecycle atom reclaims;
+  the free clears the slot). Re-observation without a live handle cannot
+  occur (observation is a tracked read, which is handle-mediated), so
+  rehydration is always sound. What fixes the original pin (L3): the
+  ACTIVE CONTEXT routes set/update BY ID through the engine write path —
+  the engine never stores a handle reference of its own. No WeakRef
+  anywhere; the rejects list stands untouched.
+  RECLAMATION INTERPLAY: lifecycle-ACTIVE is a GUARD (the active entry's
+  existence); its clearing site (the dormancy deletion) is its TRIGGER;
+  the dormant callback in the fns slot is column state, not a guard.
 - `__resetEngineForTest` provides the ENGINE EPOCH (refactor R-6), and the
   reclamation state below is part of R-6's scrub checklist (registry swap,
   retry queues, deferred-cleanup queue).

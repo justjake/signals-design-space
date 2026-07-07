@@ -434,10 +434,12 @@ The audit's full fix list, mapped:
   trigger, then drops. Classification is refereed directly (snapshot +
   event placement, engine vs model).
   `__resetEngineForTest` (R-6): watermark scrub + engine epoch + PRE-
-  CONDITION ASSERTS via one exhaustive assertIdle (round-3): quiescent;
-  batchDepth/opDepth/enterDepth === 0; evalDepth === 0; no capture frame;
-  no arena evaluation frame; no settle or notify drain in progress — a
-  test that threw mid-batch or resets from inside a subscription body
+  CONDITION ASSERTS via one exhaustive assertIdle (round-4 complete):
+  quiescent; batchDepth/opDepth/enterDepth === 0; evalDepth === 0;
+  inFoldCallback === false (updater/equality callbacks are their own
+  frame); no capture frame; no arena evaluation frame; no settle or
+  notify drain in progress; S5R's deferred-cleanup drain guard clear — a
+  test that threw mid-batch or resets from inside any user-code frame
   must fail loudly here, not corrupt the next test),
   and the scrub checklist (round-2 additions in CAPS): kernel allocator
   heads and counters, queued/pendingFree, VALUES/FNS SIDE COLUMNS (stale
