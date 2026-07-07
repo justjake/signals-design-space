@@ -232,7 +232,7 @@ export type Receipt = {
 };
 
 /** Op-kind tags: the packed receipt column AND the write surface's kind
- * argument (`write`/`bareWrite`/`scopeWrite`) — 0 = set, 1 = update, the
+ * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the
  * same codes the kernel's host write hook captures (`HostOpKind`; the two
  * share the 0/1 encoding by construction, and 0/1 literals are assignable
  * here, so cross-file callers never name this type). Same-file const enum so
@@ -3781,9 +3781,10 @@ export class CosignalBridge {
 		free.writeClock = 0;
 		free.releasePending = false;
 		token.slot = free.id;
-		// A committed-but-slotless token (action scope / late first write)
-		// interns here — its root's membership bits gain the slot NOW so the
-		// committed world's membership clause sees the coming receipts.
+		// A committed-but-slotless token (late first write — e.g. a member
+		// write landing after a root committed the token) interns here — its
+		// root's membership bits gain the slot NOW so the committed world's
+		// membership clause sees the coming receipts.
 		for (const r of this.roots.values()) {
 			if (r.committedTokens.has(token.id)) r.committedBits |= 1 << free.id;
 		}
@@ -3913,15 +3914,6 @@ export class CosignalBridge {
 		const tr = this.trace;
 		if (tr !== undefined) tr.opEnd();
 		this.flushNotify();
-	}
-
-	/** Action-scope write: classifies into the action's batch explicitly
-	 * (usable after an await); throws once the action has settled. */
-	scopeWrite(tokenId: TokenId, node: AtomNode, kind: OpKind, payload: unknown): void {
-		const t = this.token(tokenId);
-		if (!t.action) throw new BridgeScheduleError('scope writes require an action token');
-		if (t.state !== 'live') throw new BridgeScheduleError('ActionScope closed — the action already settled');
-		this.write(tokenId, node, kind, payload);
 	}
 
 	/**

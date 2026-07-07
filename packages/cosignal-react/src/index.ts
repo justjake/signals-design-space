@@ -13,7 +13,6 @@ export {
 	useReducerAtom,
 	useSignalEffect,
 	startSignalTransition,
-	type ActionScope,
 	type CosignalReactHandle,
 	type SignalSource,
 } from './hooks.js';

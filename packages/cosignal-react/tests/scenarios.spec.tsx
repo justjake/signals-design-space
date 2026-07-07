@@ -326,11 +326,11 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		expect(h.events.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
 	});
 
-	test('R12: async action parity — parked prefix, ambient post-await raw write, scope write at settle', async () => {
+	test('R12: async action parity — parked prefix, ambient post-await raw write, engine-level member write at settle', async () => {
 		h = makeHarness();
 		const a = new Atom(0); // sync-prefix write (parks with the action)
 		const b = new Atom(0); // raw post-await write (ambient — commits early)
-		const c = new Atom(0); // scope write (parks with the action)
+		const c = new Atom(0); // member write into the action's still-live token (parks with the action)
 		const io = deferred<void>();
 		const settled = deferred<void>();
 		const { container } = await h.mount(
@@ -340,14 +340,22 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 				<Reader id="c" atom={c} />
 			</>,
 		);
+		// W20 deleted the ActionScope: post-await writes classify like any
+		// write at that moment. The batch-attributed late write remains an
+		// engine-level surface (lane merges, runInBatch deliveries) — driven
+		// here through the action's bridge token to pin its fold-at-settlement
+		// semantics end to end.
+		const cNode = h.handle.shim.nodeForAtom(c as Atom<unknown>);
+		let actionToken: number | undefined;
 		await act(async () => {
-			startSignalTransition(async (scope) => {
+			startSignalTransition(async () => {
 				a.set(1); // transition context: the action's token
 				await io.promise;
-				b.set(2); // bare continuation: ambient default (React parity)
-				scope.set(c, 3); // explicit: the action's token
+				b.set(2); // bare continuation: urgent protocol batch (React parity)
+				h.bridge.write(actionToken!, cNode, 0, 3); // attributed to the action's token
 				settled.resolve();
 			});
+			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
 		});
 		expect(text(container)).toBe('a:0;b:0;c:0;'); // parked: nothing committed
 		await act(async () => {

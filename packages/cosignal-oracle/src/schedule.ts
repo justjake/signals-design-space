@@ -39,7 +39,6 @@ export type ScheduleOp =
 	| { t: 'open'; action: boolean }
 	| { t: 'write'; token: number; atom: number; kind: WriteKind; value: number }
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
-	| { t: 'scopeWrite'; token: number; atom: number; value: number }
 	| { t: 'settle'; token: number }
 	| { t: 'retire'; token: number }
 	| { t: 'passStart'; root: string; include: number[] }
@@ -117,11 +116,6 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'bareWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
 				m.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length));
-				break;
-			}
-			case 'scopeWrite': {
-				const atom = atoms[op.atom % atoms.length]!;
-				m.scopeWrite(tokenAt(m, op.token), atom, { kind: 'set', value: op.value });
 				break;
 			}
 			case 'settle': m.settleAction(tokenAt(m, op.token)); break;
@@ -207,7 +201,15 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			while (bool(0.4)) ops.push({ t: 'write', token, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		}
 		else if (roll < 0.38) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
-		else if (roll < 0.41) ops.push({ t: 'scopeWrite', token: pick(34), atom: pick(4), value: pick(10) });
+		// This band emitted the deleted scope-write op (the action-scope write
+		// channel is gone: writes attributed to an action's batch are ordinary
+		// writes now). Same three draws, now feeding an ordinary write with
+		// the old op's fixed payload shape (kind pinned to 'set') — the seed
+		// stream stays byte-for-byte identical, so every other op in every
+		// historical schedule is unchanged. Replay legality widens by design:
+		// the old op skipped on non-action tokens; a write applies to any live
+		// token — both sides of the lockstep harness widen together.
+		else if (roll < 0.41) ops.push({ t: 'write', token: pick(34), atom: pick(4), kind: 'set', value: pick(10) });
 		else if (roll < 0.45) {
 			const token = pick(34);
 			bool(0.7); // discarded draw — preserves the historical seed stream byte-for-byte (it fed the deleted settle committed flag; the model never branched on it)

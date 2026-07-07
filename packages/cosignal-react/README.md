@@ -193,28 +193,29 @@ settling. Cleanup-then-run ordering and `deps` behave like `useEffect`.
 ### `startSignalTransition(fn)`
 
 Transition integration with the exact rule React's own `startTransition`
-has. `fn` receives an **action scope**:
+has. `fn` takes no arguments — writes inside it are ordinary writes:
 
 ```ts
-startSignalTransition(async (scope) => {
+startSignalTransition(async () => {
   filter.set(draft);            // synchronous part: joins the transition batch
   const data = await fetchResults(draft);
-  scope.set(results, data);     // after await: use the scope to stay in the batch
+  startSignalTransition(() => { // after await: re-enter, same as React
+    results.set(data);
+  });
 });
 ```
 
 - Writes in the **synchronous part** of `fn` are classified into the
   transition's batch — they render at transition priority as one pending
-  update.
-- Writes **after an `await`** are urgent/ambient unless re-wrapped,
-  because the async continuation runs on a fresh call stack with no
-  ambient transition context — the same rule and the same reason as
-  React's own transitions. The library warns in development when a bare
-  write lands while an async action is pending.
-- `scope.set(atom, value)` / `scope.dispatch(reducerAtom, action)`
-  classify a write into the action's batch explicitly, from anywhere —
-  including after `await`. Once the action settles, the scope is closed
-  and its methods throw.
+  update. No special API is needed: inside the callback, the transition
+  is the ambient batch context, so plain `set`/`update`/`dispatch` land
+  in it.
+- Writes **after an `await`** are urgent/ambient unless re-wrapped in
+  another `startSignalTransition` call, because the async continuation
+  runs on a fresh call stack with no ambient transition context — the
+  same rule, the same fix, and the same reason as React's own
+  transitions. The library warns in development when a bare write lands
+  while an async action is pending.
 
 Returning a promise from `fn` parks the transition until it settles
 (React async-action semantics), so the pending state stays pending across

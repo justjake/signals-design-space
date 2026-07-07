@@ -175,7 +175,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 	it('action settlement: batch-settle is the root; its retirement chains under it', () => {
 		const act = b.openBatch({ action: true });
 		expect(last(tr, 'batch-open').data).toMatchObject({ token: act.id, action: true });
-		b.scopeWrite(act.id, bb, 0, 3);
+		b.write(act.id, bb, 0, 3);
 		b.settleAction(act.id);
 		const settle = last(tr, 'batch-settle');
 		expect(settle.data).toEqual({ token: act.id });

@@ -371,11 +371,6 @@ export class TwinDriver {
 		}
 	}
 
-	scopeWrite(tokenId: number, node: AtomNode, op: Op): void {
-		this.both('scopeWrite', () => this.model.scopeWrite(tokenId, node, op), () =>
-			this.engine.scopeWrite(tokenId, this.toEngine(node) as never, ...opScalars(op)));
-	}
-
 	settleAction(tokenId: number): void {
 		this.both('settleAction', () => this.model.settleAction(tokenId), () =>
 			this.engine.settleAction(tokenId));

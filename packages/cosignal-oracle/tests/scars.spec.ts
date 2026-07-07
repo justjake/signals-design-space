@@ -293,13 +293,13 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
 		const t = m.openBatch({ action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.renderWatcher(pA.id, w.id);
 		m.passEnd(pA.id, 'commit'); // A commits T (lock-in); T parks on, still live
 		expect(w.lastRenderedValue).toBe(1);
 		const mark = m.events.length;
-		m.scopeWrite(t.id, a, set(2)); // post-await, post-commit scope write
+		m.write(t.id, a, set(2)); // post-await, post-commit member write (the action's token is still live)
 		// visible to A's committed world immediately (membership: A committed T)…
 		expect(m.committedValue(c, 'A')).toBe(2);
 		// …and the corrective (the value-blind delivery in T's own lane) is scheduled
@@ -350,7 +350,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const k = m.openBatch({ action: true }); // parked
-		m.scopeWrite(k.id, a, set(1));
+		m.write(k.id, a, set(1));
 		const x = m.openBatch();
 		m.write(x.id, m.atom('unrelated', 0), set(1));
 		m.retire(x.id); // an earlier unrelated retirement "consumes the queue entry"
@@ -454,12 +454,12 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
 		const t = m.openBatch({ action: true });
-		m.scopeWrite(t.id, a, set(1)); // bit set, setState delivered
+		m.write(t.id, a, set(1)); // bit set, setState delivered
 		expect(w.dedup.size).toBe(1);
 		const pt = pass(m, 'A', [t]); // T's pass pins and yields BEFORE the watcher renders
 		m.passYield(pt.id);
 		const mark = m.events.length;
-		m.scopeWrite(t.id, a, set(2)); // carried continuation writes post-pin
+		m.write(t.id, a, set(2)); // carried continuation writes post-pin
 		// the dead design suppressed the only setState; the pass-aware rule delivers interleaved
 		const d = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
 		expect(d).toHaveLength(1);
@@ -482,7 +482,7 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => (read(flag) ? read(a) : read(b)));
 		const w = mountCommitted(m, 'A', c, 'W');
 		const k = m.openBatch({ action: true }); // parked K
-		m.scopeWrite(k.id, flag, set(1)); // walk reaches W
+		m.write(k.id, flag, set(1)); // walk reaches W
 		const pk = pass(m, 'A', [k]); // K's pass pins…
 		m.renderWatcher(pk.id, w.id);
 		m.passYield(pk.id); // …and yields

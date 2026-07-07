@@ -100,14 +100,6 @@ export function assertForkPresent(): void {
 
 // ---- shim types ------------------------------------------------------------------
 
-/** The op-literal shape `scopeWrite` accepts at its boundary (hooks.ts
- * spells whole operations as these literals); converted to the engine's
- * scalar (kind, payload) pair at entry — the engine itself has no op
- * object anywhere on its write path. */
-export type ScopeWriteOp =
-	| { kind: 'set'; value: Value }
-	| { kind: 'update'; fn: (prev: Value) => Value };
-
 /** A live delivery target: the shim-side handle for one watcher (the
  * engine's record of one subscribed component instance) that can re-render
  * the owning component. */
@@ -569,13 +561,13 @@ export class Shim {
 			// Dev-warning heuristic. After an await, code runs on a fresh call
 			// stack with no ambient transition context, so a bare write lands
 			// urgent — while an async action is pending that is usually a bug
-			// (the author meant the write to join the action; the fix is the
-			// action scope or a fresh startTransition). Warn on a non-deferred
-			// write while any action is parked. The protocol exposes only one
-			// bit (deferred or not), which cannot distinguish a discrete
-			// handler's token from a timer's ambient token, so this lint can
-			// over-trigger on genuine handler writes during someone else's
-			// action — accepted imprecision for a dev-only warning.
+			// (the author meant the write to join the action; the fix is a
+			// fresh startTransition). Warn on a non-deferred write while any
+			// action is parked. The protocol exposes only one bit (deferred or
+			// not), which cannot distinguish a discrete handler's token from a
+			// timer's ambient token, so this lint can over-trigger on genuine
+			// handler writes during someone else's action — accepted
+			// imprecision for a dev-only warning.
 			const t = this.bridge.tokens.get(tokenId);
 			if (
 				t !== undefined &&
@@ -583,7 +575,7 @@ export class Shim {
 				(forkToken & 1) === 0 &&
 				this.bridge.liveTokens().some((lt) => lt.parked)
 			) {
-				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition or use the action scope');
+				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
 			}
 			this.bridge.write(tokenId, node, kind, payload);
 		}
@@ -594,20 +586,6 @@ export class Shim {
 		// (retirement, settlement, per-root commit — or this root's frame
 		// close if one is open), coalescing every member write before it to
 		// one run at the boundary value. Nothing to do here.
-	}
-
-	/** Action-scope writes: classify into the action's batch explicitly, from
-	 * anywhere — including after an await. This entry accepts the op as an
-	 * object literal (its callers in hooks.ts spell the whole operation at
-	 * the call site) and converts to the engine's scalar (kind, payload)
-	 * pair immediately — no op object travels past this boundary. */
-	scopeWrite(bridgeToken: TokenId, node: AtomNode, op: ScopeWriteOp): void {
-		if (React.unstable_getRenderContext() !== null) {
-			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
-		}
-		// Member-write effect timing: see classifyWrite — boundary semantics.
-		if (op.kind === 'set') this.bridge.scopeWrite(bridgeToken, node, 0, op.value);
-		else this.bridge.scopeWrite(bridgeToken, node, 1, op.fn);
 	}
 
 	// ---- useSignalEffect timing shell -------------------------------------------------

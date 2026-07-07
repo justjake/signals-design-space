@@ -500,7 +500,7 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		const w = m.mountWatcher(pk.id, a, 'W');
 		expect(w.lastRenderedValue).toBe(1);
 		m.passYield(pk.id);
-		m.write(k.id, a, set(2)); // k-attributed write @s2 > pin lands mid-yield (e.g. scope.set)
+		m.write(k.id, a, set(2)); // k-attributed write @s2 > pin lands mid-yield (e.g. a runInBatch-delivered member write)
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit', { retireAtCommit: [k.id] }); // k retires AT P_k's commit
 		const fix = m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W');
@@ -672,16 +672,16 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		selfCheck(m);
 	});
 
-	it('scope variant: both writes carry T; fold lands only at settlement', () => {
+	it('member-write variant: both writes carry T; fold lands only at settlement', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
-		m.scopeWrite(t.id, a, set(2)); // post-await, via the scope handle
+		m.write(t.id, a, set(1));
+		m.write(t.id, a, set(2)); // post-await member write, attributed to the action's still-live token
 		expect(m.committedValue(a, 'A')).toBe(0); // not before settlement
 		m.settleAction(t.id);
 		expect(m.committedValue(a, 'A')).toBe(2);
-		expect(() => m.scopeWrite(t.id, a, set(3))).toThrow(/ActionScope closed/); // a settled action's scope is closed: its methods throw
+		expect(() => m.write(t.id, a, set(3))).toThrow(/retired token/); // a settled action's batch fails loudly — never silently urgent
 		selfCheck(m);
 	});
 });
@@ -838,15 +838,15 @@ describe('case 16 — effects observe committed state only', () => {
 	it('16b — a committed-member write NEVER re-fires under an open same-root frame; the flip flushes at the frame close (kills immediate revalidation — codex finding 2)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred', { action: true }); // parked action exposes its scope
-		m.scopeWrite(t.id, a, set(1));
+		const t = m.openBatch('deferred', { action: true }); // parked action: its token stays live for member writes
+		m.write(t.id, a, set(1));
 		const p0 = pass(m, 'A', [t]);
 		m.passEnd(p0.id, 'commit'); // t locks into A (still live, parked)
 		const e = m.mountReactEffect('A', a, 'E'); // snapshot: a@1
 		expect(e.lastValue).toBe(1);
 		const p1 = pass(m, 'A', []); // A opens a new frame pinned at a=1…
 		m.passYield(p1.id);
-		m.scopeWrite(t.id, a, set(2)); // …and committed truth for A moves NOW (membership clause)
+		m.write(t.id, a, set(2)); // …and committed truth for A moves NOW (membership clause)
 		expect(e.runs).toBe(0); // the effect must NOT run ahead of A's own open frame (EF1/CR4)
 		const x = m.openBatch('urgent');
 		m.write(x.id, m.atom('other', 0), set(1));
@@ -865,13 +865,13 @@ describe('case 16 — effects observe committed state only', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const p = pass(m, 'A', [t]);
 		m.passEnd(p.id, 'commit'); // t committed into A
 		const e = m.mountReactEffect('A', a, 'E'); // snapshot a@1
-		m.scopeWrite(t.id, a, set(2));
-		m.scopeWrite(t.id, a, set(3));
-		m.scopeWrite(t.id, a, set(4)); // three member writes, no boundary between
+		m.write(t.id, a, set(2));
+		m.write(t.id, a, set(3));
+		m.write(t.id, a, set(4)); // three member writes, no boundary between
 		expect(e.runs).toBe(0); // never mid-write (the old adapter fired here, three times)
 		m.settleAction(t.id); // ONE boundary
 		expect(e.runs).toBe(1); // ONE cleanup+run…
@@ -884,11 +884,11 @@ describe('case 16 — effects observe committed state only', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const p = pass(m, 'A', [t]);
 		m.passEnd(p.id, 'commit');
 		const e = m.mountReactEffect('A', a, 'E'); // snapshot a@1
-		m.scopeWrite(t.id, a, set(2)); // a durable flip while the effect is live…
+		m.write(t.id, a, set(2)); // a durable flip while the effect is live…
 		m.removeReactEffect(e.id); // …but the effect unmounts before any boundary
 		expect(e.cleanups).toBe(1); // cleanup is GUARANTEED at unmount
 		const runsBefore = m.eventsOfType('react-effect-run').length;
@@ -935,11 +935,11 @@ describe('case 16 — effects observe committed state only', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const p = pass(m, 'A', [t]);
 		m.passEnd(p.id, 'commit');
 		const e = m.mountReactEffect('A', a, 'E');
-		m.scopeWrite(t.id, a, set(2)); // pending flip, no boundary yet
+		m.write(t.id, a, set(2)); // pending flip, no boundary yet
 		const y = m.openBatch('urgent'); // never writes
 		m.retire(y.id); // write-free retirement: STILL a boundary
 		expect(e.runs).toBe(1);

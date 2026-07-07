@@ -22,8 +22,10 @@ makes a batch's writes permanent history.
 
 An async-action batch can be *committed into a root* (UI rendered from it
 is on screen) while remaining *live* (it retires only when the action
-settles). A scoped write the action makes after that commit lands on a
-committed member — and behaves coherently:
+settles). A write attributed to that still-live token after the commit (a
+late member write — e.g. one delivered through the protocol's run-in-batch
+primitive or the renderer's lane-merge rule) lands on a committed member —
+and behaves coherently:
 
 - the write is visible to that root's committed world **immediately**,
   via membership — the root must keep agreeing with its own screen;

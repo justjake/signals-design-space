@@ -12,18 +12,18 @@
 import { describe, expect, it } from 'vitest';
 import { concurrent, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
 
-describe('flag 3 — write-set closure at commit (ActionScope late-write surface)', () => {
-	it('a late scope write on a committed, live token is membership-visible, corrected, and lifecycle-clean', () => {
+describe('flag 3 — write-set closure at commit (late member-write surface)', () => {
+	it('a late member write on a committed, live token is membership-visible, corrected, and lifecycle-clean', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const w = mountCommitted(m, 'A', a, 'W');
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.renderWatcher(pA.id, w.id);
 		m.passEnd(pA.id, 'commit'); // A commits t; t parks on (live)
 		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(true);
-		m.scopeWrite(t.id, a, set(2)); // the surviving late-write surface
+		m.write(t.id, a, set(2)); // the surviving late-write surface
 		expect(m.committedValue(a, 'A')).toBe(2); // visible immediately: a root's committed world closes over every write of a token it committed
 		// the corrective rides the batch's own lanes (value-blind delivery to A's watchers)
 		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === t.id).length).toBeGreaterThanOrEqual(1);
@@ -42,13 +42,13 @@ describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted �
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.passEnd(pA.id, 'commit'); // A's committed set now holds t (still live, parked)
 		const p2 = pass(m, 'A', []); // mask ∅, capturedCommitted ∋ slot(t)
 		expect(m.passValue(a, p2)).toBe(1); // membership admits the pre-pin write
 		m.passYield(p2.id);
-		m.scopeWrite(t.id, a, set(9)); // committed-member write AFTER p2's pin
+		m.write(t.id, a, set(9)); // committed-member write AFTER p2's pin
 		m.passResume(p2.id);
 		// WITHOUT the pin cap on the membership clause, a committed-member write
 		// with seq > pin would be admitted and the yielded pass's world would

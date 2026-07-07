@@ -572,7 +572,10 @@ describe('battery (spec §6) at React level', () => {
 		// API snapshot: no rollback/truncation affordance is exported.
 		const names = Object.keys(CosignalReact);
 		expect(names.filter((n) => /truncat|rollback|revert|restore/i.test(n))).toEqual([]);
-		// The documented pattern: render optimistic ?? base; clear at settle.
+		// The documented pattern: render optimistic ?? base; clear when the
+		// result arrives. Post-await writes classify like any write at that
+		// moment (React's own async-transition rule) — both land in the same
+		// continuation, so they share one urgent batch and apply atomically.
 		const base = new Atom<string>('saved-0');
 		const optimistic = new Atom<string | null>(null);
 		const io = deferred<void>();
@@ -586,10 +589,10 @@ describe('battery (spec §6) at React level', () => {
 		expect(text(container)).toBe('saved-0');
 		await act(async () => {
 			optimistic.set('pending-1'); // urgent optimistic write
-			startSignalTransition(async (scope) => {
+			startSignalTransition(async () => {
 				await io.promise;
-				scope.set(base, 'saved-1'); // real result rides the action
-				scope.set(optimistic, null); // clear at settle
+				base.set('saved-1'); // real result: ordinary post-await writes…
+				optimistic.set(null); // …clear + result share one urgent batch
 				settled.resolve();
 			});
 		});
@@ -599,7 +602,49 @@ describe('battery (spec §6) at React level', () => {
 			await settled.promise;
 		});
 		await act(async () => {});
-		expect(text(container)).toBe('saved-1'); // settled atomically
+		expect(text(container)).toBe('saved-1'); // applied atomically
+	});
+});
+
+describe('W20 — startSignalTransition passes nothing to fn; the settled action fails loudly', () => {
+	test('fn receives zero arguments; sync writes classify into the action; the settled token accepts no writes', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const { container } = await h.mount(<Reader id="a" atom={a} />);
+		const io = deferred<void>();
+		const settled = deferred<void>();
+		const argCounts: number[] = [];
+		let actionToken: number | undefined;
+		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
+		await act(async () => {
+			startSignalTransition(async function (...args: unknown[]) {
+				argCounts.push(args.length); // the action callback gets NO scope object — nothing at all
+				a.set(1); // ordinary write, classified into the action's batch by the one classifier
+				await io.promise;
+				settled.resolve();
+			});
+			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
+		});
+		expect(argCounts).toEqual([0]);
+		expect(actionToken).toBeDefined(); // the action's batch opened parked, eagerly
+		expect(text(container)).toBe('a:0;'); // parked: the sync write renders pending, commits nothing durable
+		await act(async () => {
+			io.resolve();
+			await settled.promise;
+		});
+		await act(async () => {});
+		expect(text(container)).toBe('a:1;'); // the action settled: its batch folded
+		// KEEP AND RE-PIN: "the action's batch is gone" still fails loudly.
+		// The scope object is deleted, so no userspace handle can outlive the
+		// action — the one remaining way to name the settled batch is its
+		// bridge token, and the engine's write guard throws rather than
+		// silently classifying the write urgent: 'write into retired token'
+		// while the retired record lingers, 'unknown token' once the engine
+		// reclaims it (mid-episode token reclamation frees fully-drained
+		// retired records).
+		const settledState = h.bridge.tokens.get(actionToken!)?.state;
+		expect(settledState === undefined || settledState === 'retired').toBe(true);
+		expect(() => h.bridge.write(actionToken!, aNode, 0, 9)).toThrow(/retired token|unknown token/);
 	});
 });
 
@@ -618,9 +663,9 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		const { container } = await h.mount(<Reader id="a" atom={a} />);
 		expect(h.bridge.quiet).toBe(true);
 		await act(async () => {
-			startSignalTransition(async (scope) => {
+			startSignalTransition(async () => {
 				await io.promise;
-				scope.set(a, 1);
+				a.set(1); // post-await: classifies like any write at that moment (urgent protocol batch)
 				settled.resolve();
 			});
 		});
@@ -662,9 +707,9 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		const settled = deferred<void>();
 		const { container } = await h.mount(<Reader id="a" atom={a} />);
 		await act(async () => {
-			startSignalTransition(async (scope) => {
+			startSignalTransition(async () => {
 				await io.promise;
-				scope.set(a, 1);
+				a.set(1); // post-await: classifies like any write at that moment (urgent protocol batch)
 				settled.resolve();
 			});
 		});
@@ -721,16 +766,24 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const gate = deferred<void>();
 		const wrote = deferred<void>();
 		const hold = deferred<void>();
+		// Post-await writes no longer rejoin the action (W20: fn gets no scope;
+		// React's own async-transition rule applies), so the member writes are
+		// driven at the engine level — writes attributed to the action's
+		// still-live bridge token, the shape a protocol lane merge or a
+		// runInBatch-delivered write produces.
+		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
+		let actionToken: number | undefined;
 		await act(async () => {
-			startSignalTransition(async (scope) => {
-				scope.set(b, 1); // sync part: the transition renders + commits (locks in) while parked
+			startSignalTransition(async () => {
+				b.set(1); // sync part classifies into the action's batch: the transition renders + commits (locks in) while parked
 				await gate.promise;
-				scope.set(a, 1); // member writes: committed truth moves at each…
-				scope.set(a, 2);
-				scope.set(a, 3);
+				h.bridge.write(actionToken!, aNode, 0, 1); // member writes: committed truth moves at each…
+				h.bridge.write(actionToken!, aNode, 0, 2);
+				h.bridge.write(actionToken!, aNode, 0, 3);
 				wrote.resolve();
 				await hold.promise; // …but the action stays parked past the assertion
 			});
+			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
 		});
 		expect(runs).toEqual([0]); // b's lock-in commit: value gate holds (a unchanged)
 		await act(async () => {
@@ -773,14 +826,19 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const gate = deferred<void>();
 		const wrote = deferred<void>();
 		const hold = deferred<void>();
+		// Engine-level member write into the action's still-live token (see the
+		// coalescing test above for why the React surface no longer spells this).
+		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
+		let actionToken: number | undefined;
 		await act(async () => {
-			startSignalTransition(async (scope) => {
-				scope.set(b, 1);
+			startSignalTransition(async () => {
+				b.set(1);
 				await gate.promise;
-				scope.set(a, 7); // the write lands while the effect is live…
+				h.bridge.write(actionToken!, aNode, 0, 7); // the member write lands while the effect is live…
 				wrote.resolve();
 				await hold.promise; // …but its durable flip is the settlement, later
 			});
+			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
 		});
 		await act(async () => {
 			gate.resolve();

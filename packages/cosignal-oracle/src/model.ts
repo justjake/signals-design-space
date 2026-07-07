@@ -800,14 +800,6 @@ export class CosignalModel {
 		this.write(ambient.id, node, op);
 	}
 
-	/** Action-scope write: classifies into the action's token explicitly (works after await); throws once settled. */
-	scopeWrite(tokenId: TokenId, node: AtomNode, op: Op): void {
-		const t = this.token(tokenId);
-		if (!t.action) throw new ScheduleError('scope writes require an action token');
-		if (t.state !== 'live') throw new ScheduleError('ActionScope closed — the action already settled');
-		this.write(tokenId, node, op);
-	}
-
 	/**
 	 * The write path (registered bridges only — an unregistered model
 	 * throws, mirroring the engine: pre-registration writes are plain kernel

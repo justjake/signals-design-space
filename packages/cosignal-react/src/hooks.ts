@@ -324,46 +324,45 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 
 // ---- startSignalTransition ------------------------------------------------------------------
 
-export type ActionScope = {
-	/** Classifies the write into the action's batch, from anywhere — including after an await. Throws once the action has settled. */
-	set<T>(atom: Atom<T>, value: T): void;
-	dispatch<S, A>(atom: ReducerAtom<S, A>, action: A): void;
-};
-
 /**
  * Starts a transition action with the exact rule React's own startTransition
  * has. (A transition marks an update as non-urgent: React renders it in the
  * background while urgent updates keep landing and committing in between.)
- * Writes in the synchronous part of `fn` classify into the transition's
- * batch and render as one pending update. Returning a promise parks the
- * batch until it settles (React async-action semantics), so pending state
- * stays pending across the whole action. Writes after an `await` are
- * urgent/ambient unless re-wrapped, because the async continuation runs on
- * a fresh call stack with no ambient transition context — the same rule,
- * for the same reason, as React's own transitions; use the ActionScope
- * passed to `fn` (`scope.set` / `scope.dispatch`) to classify them into the
- * action's batch explicitly. Scope methods throw once the action settles.
+ * `fn` receives no arguments and needs no special API: inside its
+ * synchronous part the protocol's write-batch context IS the action's batch,
+ * so ordinary `atom.set` / `atom.update` / `ReducerAtom.dispatch` calls
+ * classify into it through the one write classifier — exactly like every
+ * other write. Returning a promise parks the batch until it settles (React
+ * async-action semantics), so pending state stays pending across the whole
+ * action. Writes after an `await` classify like any other write at that
+ * moment — urgent unless re-wrapped in a fresh startTransition — because
+ * the async continuation runs on a fresh call stack with no ambient
+ * transition context: the same rule, for the same reason, as React's own
+ * transitions (a bare post-await write while an action is pending gets a
+ * development warning).
  */
-export function startSignalTransition(fn: (scope: ActionScope) => unknown): void {
+export function startSignalTransition(fn: () => unknown): void {
 	const shim = requireShim();
 	React.startTransition((): void => {
+		// The action's batch context is React's own transition scope: inside
+		// this callback unstable_getCurrentWriteBatch() returns the
+		// transition's batch token, and the shim's classifier routes every
+		// write executed here into that batch. Token 0 ("no renderer
+		// provider") is unreachable once a renderer has loaded — fail as
+		// loudly as the old per-write guard did rather than let the action's
+		// writes silently classify ambient.
 		const forkToken = React.unstable_getCurrentWriteBatch();
-		const tokenId = forkToken === 0 ? undefined : shim.bridgeTokenFor(forkToken, { action: true });
-		const scope: ActionScope = {
-			set: (atom, value) => {
-				if (tokenId === undefined) throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
-				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as Atom<unknown>), { kind: 'set', value });
-			},
-			dispatch: (atom, action) => {
-				if (tokenId === undefined) throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
-				// The closure form dispatch records everywhere: update(s => reduce(s, action)).
-				const reduce = atom.reduce as (state: unknown, a: unknown) => unknown;
-				shim.scopeWrite(tokenId, shim.nodeForAtom(atom as unknown as Atom<unknown>), { kind: 'update', fn: (s) => reduce(s, action) });
-			},
-		};
+		if (forkToken === 0) {
+			throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
+		}
+		// Upgrade the batch to action semantics NOW (parked — kept pending —
+		// until the action settles), before fn writes anything: the parked
+		// token holds the pending window open for the action's whole life,
+		// even for an action that only writes after its first await.
+		shim.bridgeTokenFor(forkToken, { action: true });
 		// Returning fn's thenable keeps the transition pending until it settles
 		// (React async-action semantics); the protocol host retires the batch
 		// at settlement, which is when its writes become permanent history.
-		return fn(scope) as undefined;
+		return fn() as undefined;
 	});
 }

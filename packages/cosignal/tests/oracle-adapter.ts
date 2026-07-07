@@ -154,11 +154,6 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 				syncAmbient();
 				break;
 			}
-			case 'scopeWrite': {
-				const atom = atoms[op.atom % atoms.length]!;
-				b.scopeWrite(tokenAt(b, op.token)!, atom, 0, op.value);
-				break;
-			}
 			case 'settle': b.settleAction(tokenAt(b, op.token)!); break;
 			case 'retire': b.retire(tokenAt(b, op.token)!); break;
 			case 'passStart': reg.passes.push(b.passStart(op.root, op.include.map((i) => tokenAt(b, i)!)).id); break;

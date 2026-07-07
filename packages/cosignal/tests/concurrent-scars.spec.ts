@@ -295,13 +295,13 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1));
+		m.write(t.id, a, set(1));
 		const pA = pass(m, 'A', [t]);
 		m.renderWatcher(pA.id, w.id);
 		m.passEnd(pA.id, 'commit'); // A commits T (lock-in); T parks on, still live
 		expect(w.lastRenderedValue).toBe(1);
 		const mark = m.events.length;
-		m.scopeWrite(t.id, a, set(2)); // post-await, post-commit scope write
+		m.write(t.id, a, set(2)); // post-await, post-commit member write (the action's token is still live)
 		// visible to A's committed world immediately (the committed world closes
 		// over every write of a token the root committed)…
 		expect(m.committedValue(c, 'A')).toBe(2);
@@ -353,7 +353,7 @@ describe('pinned scars (model-expressible)', () => {
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');
 		const k = m.openBatch('deferred', { action: true }); // parked
-		m.scopeWrite(k.id, a, set(1));
+		m.write(k.id, a, set(1));
 		const x = m.openBatch('urgent');
 		m.write(x.id, m.atom('unrelated', 0), set(1));
 		m.retire(x.id); // an earlier unrelated retirement "consumes the queue entry"
@@ -457,12 +457,12 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
 		const t = m.openBatch('deferred', { action: true });
-		m.scopeWrite(t.id, a, set(1)); // bit set, setState delivered
+		m.write(t.id, a, set(1)); // bit set, setState delivered
 		expect(w.dedup.size).toBe(1);
 		const pt = pass(m, 'A', [t]); // T's pass pins and yields BEFORE the watcher renders
 		m.passYield(pt.id);
 		const mark = m.events.length;
-		m.scopeWrite(t.id, a, set(2)); // carried continuation writes post-pin
+		m.write(t.id, a, set(2)); // carried continuation writes post-pin
 		// the dead design suppressed the only setState; the pass-aware rule delivers interleaved
 		const d = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
 		expect(d).toHaveLength(1);
@@ -485,7 +485,7 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => (read(flag) ? read(a) : read(b)));
 		const w = mountCommitted(m, 'A', c, 'W');
 		const k = m.openBatch('deferred', { action: true }); // parked K
-		m.scopeWrite(k.id, flag, set(1)); // walk reaches W
+		m.write(k.id, flag, set(1)); // walk reaches W
 		const pk = pass(m, 'A', [k]); // K's pass pins…
 		m.renderWatcher(pk.id, w.id);
 		m.passYield(pk.id); // …and yields
@@ -533,11 +533,11 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const k = m.openBatch('deferred', { action: true }); // spanning transition, stays live
-		m.scopeWrite(k.id, a, set(1)); // pre-pin
+		m.write(k.id, a, set(1)); // pre-pin
 		const p = pass(m, 'A', [k]);
 		const w = m.mountWatcher(p.id, a, 'W'); // renders the pass world: 1
 		expect(w.lastRenderedValue).toBe(1);
-		m.scopeWrite(k.id, a, set(2)); // post-pin write in the SAME rendered batch
+		m.write(k.id, a, set(2)); // post-pin write in the SAME rendered batch
 		m.passEnd(p.id, 'commit'); // locks k into A: committed-now folds a=2; the fast-out's clocks are loud
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(2); // urgent pre-paint correction to committed-now
