@@ -140,9 +140,9 @@
  */
 
 import type {
-	AtomNode,
+	AtomInternals,
 	CommitGen,
-	ComputedNode,
+	ComputedInternals,
 	CosignalEngine,
 	Epoch,
 	RenderPass,
@@ -489,11 +489,11 @@ export class Tracer implements TraceHooks {
 	// layout the old object→packed re-encoding produced, so recordings stay
 	// decode-compatible across the migration.
 
-	writeDropped(node: AtomNode, batch: BatchId): void {
+	writeDropped(node: AtomInternals, batch: BatchId): void {
 		this.rec(K.writeDropped, this.label(node.name), batch, 0, 0, 0);
 	}
 
-	quietWrite(node: AtomNode, seq: Seq): void {
+	quietWrite(node: AtomInternals, seq: Seq): void {
 		// Packed like a write, minus the batch attribution a quiet fold does
 		// not have. Deliberately NOT a cause-claiming kind: the quiet fold's
 		// operation does not emit an opEnd, so claiming the register here
@@ -581,7 +581,7 @@ export class Tracer implements TraceHooks {
 		this.rec(K.epochReset, epoch, 0, 0, 0, 0);
 	}
 
-	logEntry(node: AtomNode, entry: WriteLogEntry): void {
+	logEntry(node: AtomInternals, entry: WriteLogEntry): void {
 		const op = OP_NAMES.indexOf(entry.op.kind); // encoder and decoder share OP_NAMES (cold path)
 		this.rec(K.write, this.label(node.name), entry.batch, entry.slot, entry.seq, op);
 	}
@@ -618,7 +618,7 @@ export class Tracer implements TraceHooks {
 		this.rec(K.renderEnd | (kind === 'commit' ? KindBits.FLAG_A : 0), p.id, this.label(p.root), 0, 0, 0);
 	}
 
-	evalStart(node: ComputedNode, world: World): void {
+	evalStart(node: ComputedInternals, world: World): void {
 		if (this.evalSp >= this.evalSubj.length) {
 			this.evalOverflow++; // deeper than the preallocated stack: skip, stay paired
 			return;

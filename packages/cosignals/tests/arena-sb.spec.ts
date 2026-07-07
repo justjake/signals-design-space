@@ -22,7 +22,7 @@
  * clean under the S-B checker while exhibiting the pinned lane outcomes.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
@@ -41,7 +41,7 @@ function bridge(): CosignalEngine {
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
-function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');

@@ -27,7 +27,7 @@ const a = new Atom(0);
 // resolves the node, which allocates content seeded from kernel-current).
 const node = bridge.adoptAtom
 	? bridge.adoptAtom('a', a)
-	: (() => { const n = bridge.nodeForAtom(a); n.name = 'a'; return n; })();
+	: ((() => { const f = bridge.internalsForAtom ?? bridge.nodeForAtom; const n = f.call(bridge, a); n.name = 'a'; return n; })());
 let top; // deepest/last computed, read for checksum
 
 if (SHAPE === 'chain3') {

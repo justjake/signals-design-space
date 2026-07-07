@@ -199,7 +199,7 @@ describe('R11 runtime enable/disable', () => {
 				epoch: b.epoch,
 				// NodeIds line up exactly across resets (the kernel scrubs at
 				// reset, so identical schedules allocate identical record ids).
-				nodes: [...b.idToNode.values()].map((n) => ({ id: n.id, name: n.name, newest: b.newestValue(n) })),
+				nodes: [...b.idToInternals.values()].map((n) => ({ id: n.id, name: n.name, newest: b.newestValue(n) })),
 			};
 			tr?.stop();
 			return snapshot;

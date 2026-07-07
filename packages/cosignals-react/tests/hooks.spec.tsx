@@ -6,7 +6,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom, BATCH_NONE, __resetEngineForTest, attachDriver, type AtomNode } from 'cosignals';
+import { Atom, ReducerAtom, BATCH_NONE, __internalsByIdForTest, __resetEngineForTest, attachDriver, type AtomInternals } from 'cosignals';
 import { registerCosignalReact, requireShim, useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
@@ -43,7 +43,7 @@ describe('useSignal', () => {
 		expect(text(container)).toBe('15');
 		// The log entry holds the updater function itself, not a pre-folded value,
 		// so each world can replay it against its own view.
-		const node = h.bridge.idToNode.get(a._id) as AtomNode;
+		const node = __internalsByIdForTest(a._id) as AtomInternals;
 		const ops = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
 		expect(ops).toContain('update');
 	});
@@ -227,7 +227,7 @@ describe('useReducerAtom (§3.2)', () => {
 			r.dispatch(7);
 		});
 		expect(text(container)).toBe('107');
-		const node = h.bridge.idToNode.get(r._id) as AtomNode;
+		const node = __internalsByIdForTest(r._id) as AtomInternals;
 		const kinds = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
 		expect(kinds).toContain('update'); // re-pinned: dispatch → update(s => reduce(s, action))
 	});

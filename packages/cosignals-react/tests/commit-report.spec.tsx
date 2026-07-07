@@ -19,7 +19,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, type AtomNode } from 'cosignals';
+import { Atom, __internalsByIdForTest, type AtomInternals } from 'cosignals';
 import { useSignal } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
@@ -47,7 +47,7 @@ describe('root-commit report reconciliation (W11)', () => {
 		const shim = h.handle.shim as unknown as ShimPrivate;
 		expect(shim.rootsByContainer.size).toBe(1);
 		const [rootContainer, rec] = [...shim.rootsByContainer.entries()][0]!;
-		const node = h.bridge.idToNode.get(a._id) as AtomNode;
+		const node = __internalsByIdForTest(a._id) as AtomInternals;
 
 		await act(async () => {
 			// A REAL protocol batch: the transition write classifies into it and

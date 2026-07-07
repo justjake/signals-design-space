@@ -7,7 +7,7 @@
  * check armed (arena-served ≡ memo-served after every public operation).
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 
 function bridge(options?: EngineResetOptions): CosignalEngine {
@@ -23,7 +23,7 @@ function bridge(options?: EngineResetOptions): CosignalEngine {
 	return b;
 }
 
-function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
@@ -31,7 +31,7 @@ function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
-function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);

@@ -101,9 +101,9 @@ describe('pinned scars (model-expressible)', () => {
 		expect(a.log).toHaveLength(0); // ...with no log entries
 		expect(m.events).toHaveLength(0); // ...no engine events
 		expect(m.idToBatch.size).toBe(0); // ...and no batches
-		const eNode = m.engine.nodeForAtom(handle2); // engine face of the same emptiness
-		expect(eNode.base).toBe(1);
-		expect(eNode.log.materialize()).toHaveLength(0);
+		const eInternals = m.engine.internalsForAtom(handle2); // engine face of the same emptiness
+		expect(eInternals.base).toBe(1);
+		expect(eInternals.log.materialize()).toHaveLength(0);
 		const c = m.computed('c', (read) => read(a));
 		const w = mountCommitted(m, 'A', c, 'W');
 		expect(w.lastRenderedValue).toBe(1); // committed-only value; urgent renders cannot leak a "transition"
@@ -438,8 +438,8 @@ describe('pinned scars (model-expressible)', () => {
 		const m = concurrent();
 		const x = m.atom('x', 0);
 		const u = m.computed('u', (read) => (read(x) as number) + 1);
-		const wNode = m.computed('w', (read) => (read(u) as number) + 1);
-		const watcher = mountCommitted(m, 'A', wNode, 'W');
+		const wInternals = m.computed('w', (read) => (read(u) as number) + 1);
+		const watcher = mountCommitted(m, 'A', wInternals, 'W');
 		const t0 = m.openBatch('deferred');
 		m.write(t0.id, x, set(1));
 		commitAndRetire(m, 'A', t0, [watcher]);

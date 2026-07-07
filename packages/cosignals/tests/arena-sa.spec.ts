@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { engine, __resetEngineForTest, InvariantViolation, type AnyNode, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, InvariantViolation, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
@@ -31,9 +31,9 @@ function bridge(): CosignalEngine {
 	return b;
 }
 
-/** The shim-wrapper analog (`makeComputedNode`): a background suspension
+/** The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
  * folds to the thenable's stable sentinel VALUE instead of unwinding. */
-function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
+function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyInternals {
 	return b.computed(name, (read, untracked) => {
 		try {
 			return fn(read, untracked);
@@ -66,7 +66,7 @@ function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
-function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
@@ -81,7 +81,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('at-rest background settlement: the drain itself delivers the correction — NO subsequent operation', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const c: AnyNode = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => gate.promise));
+		const c: AnyInternals = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => gate.promise));
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead); // sentinel cached (arena box-suspended)
 		expect(b.__arenaStats().suspended).toBe(1);
@@ -100,7 +100,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const b = bridge();
 		const m1 = manual<string>();
 		const key = b.atom('key', 0);
-		const c: AnyNode = suspending(b, 'c', (read) => {
+		const c: AnyInternals = suspending(b, 'c', (read) => {
 			read(key);
 			return __ctxUse(c.ix, 'k', () => m1.t);
 		});
@@ -134,8 +134,8 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const b = bridge();
 		const g1 = deferred<string>();
 		const m2 = manual<string>();
-		const c1: AnyNode = suspending(b, 'c1', () => __ctxUse(c1.ix, 'k1', () => g1.promise));
-		const c2: AnyNode = suspending(b, 'c2', () => __ctxUse(c2.ix, 'k2', () => m2.t));
+		const c1: AnyInternals = suspending(b, 'c1', () => __ctxUse(c1.ix, 'k1', () => g1.promise));
+		const c2: AnyInternals = suspending(b, 'c2', () => __ctxUse(c2.ix, 'k2', () => m2.t));
 		const w1 = mount(b, 'R', c1, 'W1');
 		const w2 = mount(b, 'R', c2, 'W2');
 		expect(b.__arenaStats().suspended).toBe(2);
@@ -161,7 +161,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('read-context microtask drain (step 0): a sync thenable settling during standalone committedValue strands nothing — the coalesced queueMicrotask drain consumes it', async () => {
 		const b = bridge();
 		const m1 = manual<string>();
-		const c: AnyNode = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => m1.t));
+		const c: AnyInternals = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => m1.t));
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
 		// Settle synchronously while ONLY a read frame is open: no public
@@ -182,7 +182,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('read-after-await self-heal (pull half): committedValue observes the settled outcome deterministically, before any drain', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const c: AnyNode = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => gate.promise));
+		const c: AnyInternals = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => gate.promise));
 		mount(b, 'R', c, 'W');
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
 		gate.resolve('HEALED');
@@ -195,7 +195,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const b = bridge();
 		const gateA = deferred<string>();
 		const kick = b.atom('kick', 0);
-		const c: AnyNode = suspending(b, 'c', (read) => {
+		const c: AnyInternals = suspending(b, 'c', (read) => {
 			const key = (read(kick) as number) === 0 ? 'A' : 'B';
 			return __ctxUse(c.ix, key, () => (key === 'A' ? gateA.promise : ({ then: () => undefined as never, status: 'fulfilled', value: 'B!' } as PromiseLike<string>)));
 		});
@@ -216,7 +216,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const K = 12; // chain length > cap
 		const gates = Array.from({ length: K }, () => manual<string>());
 		const watchers = gates.map((g, i) => {
-			const c: AnyNode = suspending(b, `c${i}`, () => __ctxUse(c.ix, `k${i}`, () => g.t));
+			const c: AnyInternals = suspending(b, `c${i}`, () => __ctxUse(c.ix, `k${i}`, () => g.t));
 			return mount(b, 'R', c, `W${i}`);
 		});
 		expect(b.__arenaStats().suspended).toBe(K);
@@ -233,7 +233,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const b = bridge();
 		const gs = [deferred<string>(), deferred<string>(), deferred<string>()];
 		const keyAtom = b.atom('key', 0);
-		const cs: AnyNode[] = gs.map((g, i) =>
+		const cs: AnyInternals[] = gs.map((g, i) =>
 			suspending(b, `c${i}`, (read) => {
 				const gen = read(keyAtom) as number;
 				return __ctxUse(cs[i]!.ix, `k${i}-${gen}`, () => (gen === 0 ? g.promise : deferred<string>().promise));

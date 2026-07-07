@@ -20,7 +20,7 @@
 
 import { SuspendedRead } from './index.js';
 import { ScheduleError } from './errors.js';
-import type { AnyNode, EffectId, RootId, Value } from './concurrent.js';
+import type { AnyInternals, SubscriptionId, RootId, Value } from './concurrent.js';
 import type { EngineCore, World } from './World.js';
 import type { ObservationIndex } from './observation.js';
 
@@ -47,12 +47,12 @@ import type { ObservationIndex } from './observation.js';
  * flushed by the eager kernel apply (see logCoreEffectRun).
  */
 export type Subscription = {
-	id: EffectId;
+	id: SubscriptionId;
 	name: string;
 	/** Owning root. */
 	root: RootId;
 	/** Dep snapshot: the routed reads of the last run, in read order. */
-	deps: { node: AnyNode; value: Value }[];
+	deps: { node: AnyInternals; value: Value }[];
 	/** Adapter-owned refire (cleanup + body scheduling), queued at the
 	 * operation boundary; undefined for test-configured subscriptions. */
 	refire: (() => void) | undefined;
@@ -70,7 +70,7 @@ export type Subscription = {
 	 * while the stale reference lingers, and shiftObservedCount's identity
 	 * guard is
 	 * what keeps the eventual release from touching the new tenant. */
-	obsDeps: Set<AnyNode> | undefined;
+	obsDeps: Set<AnyInternals> | undefined;
 };
 
 /** The core capture frame `captureRun` opens: while set (and no evaluation
@@ -79,7 +79,7 @@ export type Subscription = {
  * on the shared engine core record (the read-routing resolution consults it
  * per routed read); this module is its one writer, through the core's
  * `setCaptureFrame`. */
-export type CaptureFrame = { sub: Subscription; deps: { node: AnyNode; value: Value }[] };
+export type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value }[] };
 
 /** The resident-state edges the manager consumes (provided by the engine's
  * composition site), as named slices of the providers' own record types:
@@ -115,12 +115,12 @@ export type SubscriptionManagerDeps = {
 export type SubscriptionManager = {
 	/** The committed `run`-action subscription store (shared identity: the
 	 * engine aliases it for its resident readers — quiesce sweep, tests). */
-	idToSubscription: Map<EffectId, Subscription>;
+	idToSubscription: Map<SubscriptionId, Subscription>;
 	mountCommittedObserver(rootId: RootId, name: string, refire?: () => void): Subscription;
-	captureRun(id: EffectId, body: () => void): void;
-	captureRead(node: AnyNode): Value;
-	removeSubscription(id: EffectId): void;
-	replayReactEffect(id: EffectId): void;
+	captureRun(id: SubscriptionId, body: () => void): void;
+	captureRead(node: AnyInternals): Value;
+	removeSubscription(id: SubscriptionId): void;
+	replayReactEffect(id: SubscriptionId): void;
 	revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void;
 };
 
@@ -133,8 +133,8 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	const rootToOpenRender = core.rootToOpenRender;
 	const { queueNotify, flushNotify } = core.notify;
 	const { syncSubscriptionObservation, shiftObservedCount } = deps.observation;
-	const idToSubscription = new Map<EffectId, Subscription>();
-	let nextEffect = 1;
+	const idToSubscription = new Map<SubscriptionId, Subscription>();
+	let nextSubscriptionId = 1;
 
 	/**
 	 * Register a committed observer (the production `useSignalEffect`
@@ -150,7 +150,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame');
 		}
 		const sub: Subscription = {
-			id: nextEffect++, name, root: rootId,
+			id: nextSubscriptionId++, name, root: rootId,
 			deps: [], refire, body: undefined, lastValue: undefined,
 			runs: 0, cleanups: 0, live: true, obsDeps: undefined,
 		};
@@ -179,12 +179,12 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	 * exactly like watcher closures — the observation index's
 	 * shiftObservedCount).
 	 */
-	function captureRun(id: EffectId, body: () => void): void {
+	function captureRun(id: SubscriptionId, body: () => void): void {
 		const sub = idToSubscription.get(id);
 		if (sub === undefined) throw new ScheduleError(`unknown committed subscription ${id}`);
 		if (core.captureFrame !== undefined) throw new ScheduleError('captureRun frames do not nest — one effect body runs at a time');
 		if (core.evalDepth > 0) throw new ScheduleError('captureRun is illegal inside an open evaluation frame');
-		const frame = { sub, deps: [] as { node: AnyNode; value: Value }[] };
+		const frame = { sub, deps: [] as { node: AnyInternals; value: Value }[] };
 		setCaptureFrame(frame);
 		try {
 			body();
@@ -202,7 +202,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	/** A routed read inside an open capture frame (node form: test-configured
 	 * bodies land here; raw kernel atom AND computed reads route through the
 	 * routed-read seams instead, which push the same dep-snapshot entries). */
-	function captureRead(node: AnyNode): Value {
+	function captureRead(node: AnyInternals): Value {
 		const frame = core.captureFrame;
 		if (frame === undefined) throw new ScheduleError('captureRead requires an open captureRun frame');
 		const v = evaluate(node, { kind: 'committed', root: frame.sub.root });
@@ -217,7 +217,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	 * fire is not. Nothing may run after teardown:
 	 * `live` flips so queued refires no-op.
 	 */
-	function removeSubscription(id: EffectId): void {
+	function removeSubscription(id: SubscriptionId): void {
 		const sub = idToSubscription.get(id);
 		if (sub === undefined) throw new ScheduleError(`unknown subscription ${id}`);
 		sub.live = false;
@@ -237,7 +237,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	/** Test surface — StrictMode-style replay: cleanup + unconditional
 	 * re-run + recapture. Illegal while the subscription's root has an open
 	 * render frame (React double-invokes effects post-commit, never mid-render). */
-	function replayReactEffect(id: EffectId): void {
+	function replayReactEffect(id: SubscriptionId): void {
 		const sub = idToSubscription.get(id);
 		if (sub === undefined) throw new ScheduleError(`unknown react effect ${id}`);
 		if (rootToOpenRender.has(sub.root)) {

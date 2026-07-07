@@ -30,7 +30,7 @@
 
 import { kernelGenOf } from './WorldArena.js';
 import type { Batch, BatchSlot, BatchSlotMeta } from './Batch.js';
-import type { AnyNode, AtomNode, RootId, Seq, Subscription, Value, Watcher } from './concurrent.js';
+import type { AnyInternals, AtomInternals, RootId, Seq, Subscription, Value, Watcher } from './concurrent.js';
 import type { EngineCore, World } from './World.js';
 
 /** The queued-notification kinds (the notify columns' kind codes). Same-file
@@ -168,7 +168,7 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * held by no live arena is still corrected — it degrades to the
 	 * committed-truth drain instead of a live delivery.
 	 */
-	function deliveryWalk(from: AtomNode, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
+	function deliveryWalk(from: AtomInternals, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
 		const c = core; // one context load; slot/field reads below stay one-load
 		const gen = ++c.walkGen;
 		const found = walkWatchers;
@@ -224,8 +224,8 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * own quiet-write record is the whole quiet stream, and the reference
 	 * model's mirrored quiet corrections are silent too, so the streams stay
 	 * comparable. Returns true iff a correction fired. */
-	function correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
-		if (!core.changedValue(wNode, w.lastRenderedValue, now)) return false;
+	function correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
+		if (!core.changedValue(wInternals, w.lastRenderedValue, now)) return false;
 		if (cause !== 'quiet') {
 			const tr = core.trace;
 			if (tr !== undefined) {
@@ -248,9 +248,9 @@ export function createDeliverWalks(core: EngineCore): void {
 		const c = core; // one context load; slot reads below stay one-load
 		for (const w of watchers.values()) {
 			if (!w.live) continue;
-			const wNode = c.resolveWatcherNode(w);
-			if (wNode === undefined) continue; // loud skip: record tenancy moved
-			correctWatcher(w, wNode, c.evaluate(wNode, { kind: 'committed', root: w.root }), 'quiet');
+			const wInternals = c.resolveWatcherInternals(w);
+			if (wInternals === undefined) continue; // loud skip: record tenancy moved
+			correctWatcher(w, wInternals, c.evaluate(wInternals, { kind: 'committed', root: w.root }), 'quiet');
 		}
 	}
 
@@ -301,9 +301,9 @@ export function createDeliverWalks(core: EngineCore): void {
 		if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
 		for (let i = 0; i < ws.length; i++) {
 			const w = ws[i]!;
-			const wNode = c.resolveWatcherNode(w);
-			if (wNode === undefined) continue; // loud skip: record tenancy moved
-			correctWatcher(w, wNode, c.evaluate(wNode, world), cause);
+			const wInternals = c.resolveWatcherInternals(w);
+			if (wInternals === undefined) continue; // loud skip: record tenancy moved
+			correctWatcher(w, wInternals, c.evaluate(wInternals, world), cause);
 		}
 		ws.length = 0;
 	}

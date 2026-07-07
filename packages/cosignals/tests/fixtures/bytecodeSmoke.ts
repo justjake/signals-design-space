@@ -17,7 +17,7 @@ import {
 	effect,
 	effectScope,
 	untracked,
-	type AnyNode,
+	type AnyInternals,
 	type WorldArena,
 } from '../../src/index';
 import { armArenaCheck } from '../arena-checker';
@@ -118,7 +118,7 @@ const at2 = bridge.atom('at2', 2);
 const cc = bridge.computed('cc', (read) => (read(at) as number) + (read(at2) as number));
 const cc2 = bridge.computed('cc2', (read, untrackedRead) => (read(cc) as number) + (untrackedRead(at) as number));
 const render = bridge.renderStart('R', []);
-bridge.mountWatcher(render.id, cc2 as AnyNode, 'W');
+bridge.mountWatcher(render.id, cc2 as AnyInternals, 'W');
 bridge.renderEnd(render.id, 'commit');
 for (let i = 0; i < 50; i++) {
 	const t = bridge.openBatch();
@@ -130,7 +130,7 @@ const t2 = bridge.openBatch();
 bridge.write(t2.id, at2 as never, 0, 100);
 bridge.retire(t2.id);
 
-function commitWrite(node: AnyNode, value: unknown): void {
+function commitWrite(node: AnyInternals, value: unknown): void {
 	const t = bridge.openBatch();
 	bridge.write(t.id, node as never, 0, value);
 	bridge.retire(t.id);
@@ -147,11 +147,11 @@ const cGate = bridge.computed('cGate', (read) => {
 });
 const top2 = bridge.computed('top2', (read) => read(cGate));
 const p2 = bridge.renderStart('R2', []);
-const w2 = bridge.mountWatcher(p2.id, top2 as AnyNode, 'W2');
+const w2 = bridge.mountWatcher(p2.id, top2 as AnyInternals, 'W2');
 bridge.renderEnd(p2.id, 'commit');
 w2.live = false;
-commitWrite(atG as AnyNode, 1);
-commitWrite(atG as AnyNode, 2);
+commitWrite(atG as AnyInternals, 1);
+commitWrite(atG as AnyInternals, 2);
 
 // B2 arenaCheckDirtyLoop walk shapes. The cone's TOP gets the lowest node id
 // (created first; its fn closes over later-declared handles, resolved at
@@ -172,11 +172,11 @@ const cK = bridge.computed('cK', (read) => {
 });
 const atK = bridge.atom('atK', 0);
 const p5 = bridge.renderStart('R5', []);
-const w5 = bridge.mountWatcher(p5.id, topK as AnyNode, 'W5');
+const w5 = bridge.mountWatcher(p5.id, topK as AnyInternals, 'W5');
 bridge.renderEnd(p5.id, 'commit');
 w5.live = false;
-commitWrite(atK as AnyNode, 1);
-commitWrite(atK as AnyNode, 2);
+commitWrite(atK as AnyInternals, 1);
+commitWrite(atK as AnyInternals, 2);
 // arenaCheckDirtyLoop's update arms (arenaUpdateAndShallow, descend + unwind): at
 // S-A no PUBLIC flow reaches them — arena-authoritative serves happen only
 // inside the armed epilogue, whose aValidate/memo-evaluate pass consumes
@@ -190,7 +190,7 @@ commitWrite(atK as AnyNode, 2);
 bridge.__eachArenaForTest((a: WorldArena) => {
 	if (a.root !== 'R5' || a.kind !== 'committed') return;
 	bridge.__fanAtomsToArenaForTest(a, [atK], false);
-	bridge.__arenaServeForTest(a, topK as AnyNode);
+	bridge.__arenaServeForTest(a, topK as AnyInternals);
 });
 
 // In-arena dynamic dep drop + re-link: arenaUnlink, arenaFreeLink, then arenaAllocLink
@@ -199,10 +199,10 @@ const gateB = bridge.atom('gateB', 0);
 const extra = bridge.atom('extra', 5);
 const cDyn = bridge.computed('cDyn', (read) => ((read(gateB) as number) === 0 ? read(extra) : 0));
 const p3 = bridge.renderStart('R3', []);
-bridge.mountWatcher(p3.id, cDyn as AnyNode, 'W3');
+bridge.mountWatcher(p3.id, cDyn as AnyInternals, 'W3');
 bridge.renderEnd(p3.id, 'commit');
-commitWrite(gateB as AnyNode, 1);
-commitWrite(gateB as AnyNode, 0);
-commitWrite(extra as AnyNode, 6);
+commitWrite(gateB as AnyInternals, 1);
+commitWrite(gateB as AnyInternals, 0);
+commitWrite(extra as AnyInternals, 6);
 
-process.stdout.write(`@@SMOKE-OK ${c3.state} ${String(bridge.committedValue(cc2 as AnyNode, 'R'))} ${String(bridge.committedValue(cDyn as AnyNode, 'R3'))}\n`);
+process.stdout.write(`@@SMOKE-OK ${c3.state} ${String(bridge.committedValue(cc2 as AnyInternals, 'R'))} ${String(bridge.committedValue(cDyn as AnyInternals, 'R3'))}\n`);

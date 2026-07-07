@@ -39,14 +39,12 @@ import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './engine.js';
 import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
-import type { AnyNode, ArenaInitInts, AtomNode, ComputedNode, NodeId, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
+import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { ObservationIndex } from './observation.js';
 import type { CaptureFrame, SubscriptionManager } from './SubscriptionManager.js';
 import type { CompactionTable } from './WriteLog.js';
 import type { NotificationQueue, NotifyState } from './deliver.js';
 
-/** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
-type NodeIndex = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
 
@@ -80,10 +78,9 @@ export const NOT_ROUTED: { readonly notRouted: true } = { notRouted: true };
  */
 export type EngineCore = {
 	// ---- resident-provided deps (filled at creation) ----
-	/** Registered nodes by NodeId (identity alias of the engine's registry). */
-	idToNode: Map<NodeId, AnyNode>;
-	/** Nodes by nodeIndex (identity alias of the engine's dense column). */
-	nodesArr: (AnyNode | undefined)[];
+	/** THE node registry: nodes by nodeIndex (identity alias of the engine's
+	 * dense column; bare ids resolve via the record's live NODE_INDEX). */
+	nodeIndexToInternals: (AnyInternals | undefined)[];
 	/** Watchers by nodeIndex (identity alias — the routing walks' collection rows). */
 	nodeToWatchers: (Watcher[] | undefined)[];
 	/** Per-node visited/collection stamps (identity alias — see concurrent.ts). */
@@ -113,8 +110,8 @@ export type EngineCore = {
 	 * no engine content gets its node record on first participation; base
 	 * seeds from kernel-current, which IS its full committed history by the
 	 * quiet invariant). */
-	nodeForAtom: ConcurrentEngineHost['nodeForAtom'];
-	nodeForComputed: ConcurrentEngineHost['nodeForComputed'];
+	internalsForAtom: ConcurrentEngineHost['internalsForAtom'];
+	internalsForComputed: ConcurrentEngineHost['internalsForComputed'];
 	/** Quiet-state recompute at pipeline transitions (the composition-owned
 	 * derivation — batch open/retire, render start/end). */
 	recomputeQuiet(): void;
@@ -154,7 +151,7 @@ export type EngineCore = {
 	 * unless that frame's node is observed — the one field unwatched
 	 * evaluations pay for (a check per recorded edge). (World frame state;
 	 * arena refolds and the resident kernel getters open/close it too.) */
-	obsCapture: AnyNode[] | undefined;
+	obsCapture: AnyInternals[] | undefined;
 	/** >0 while a world evaluation is on stack (renders must not write). (World) */
 	evalDepth: number;
 	/** True inside an updater/reducer/equals callback (reads+writes throw). (World) */
@@ -218,11 +215,11 @@ export type EngineCore = {
 	restaled: Map<RootId, Set<Watcher>>;
 
 	// ---- late-bound: World ----
-	evaluate(node: AnyNode, world: World): Value;
-	foldAtom(atom: AtomNode, world: World): Value;
-	applyOp(atom: AtomNode, kind: WriteKind, payload: unknown, prev: Value): Value;
-	eqAtom(atom: AtomNode, a: Value, b: Value): boolean;
-	changedValue(node: AnyNode, prev: Value, next: Value): boolean;
+	evaluate(node: AnyInternals, world: World): Value;
+	foldAtom(atom: AtomInternals, world: World): Value;
+	applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value;
+	eqAtom(atom: AtomInternals, a: Value, b: Value): boolean;
+	changedValue(node: AnyInternals, prev: Value, next: Value): boolean;
 	inCallback<T>(fn: () => T): T;
 	cycleError(name: string): ScheduleError;
 	setWorld(w: World | undefined): void;
@@ -232,7 +229,7 @@ export type EngineCore = {
 	 * two-step every captureRun edge performs — the subscription manager's
 	 * one writer). */
 	setCaptureFrame(f: CaptureFrame | undefined): void;
-	routedRead(atom: AtomNode, world: World): Value;
+	routedRead(atom: AtomInternals, world: World): Value;
 	/** The public `.state` routed-read bodies (index.ts calls the module
 	 * trampolines in engine.ts, which read these slots): NOT_ROUTED declines
 	 * to the plain kernel path. */
@@ -244,21 +241,21 @@ export type EngineCore = {
 	releaseArena(a: WorldArena): void;
 	arenaOf(world: World): WorldArena | undefined;
 	eachArena(fn: (a: WorldArena) => void): void;
-	arenaServe(a: WorldArena, node: AnyNode): Value;
-	fanAtomsToArena(a: WorldArena, atoms: AtomNode[], fromSettlement: boolean): void;
-	fanAtomsToCommittedArenas(atoms: AtomNode[]): void;
-	oneAtomBuf(atom: AtomNode): AtomNode[];
+	arenaServe(a: WorldArena, node: AnyInternals): Value;
+	fanAtomsToArena(a: WorldArena, atoms: AtomInternals[], fromSettlement: boolean): void;
+	fanAtomsToCommittedArenas(atoms: AtomInternals[]): void;
+	oneAtomBuf(atom: AtomInternals): AtomInternals[];
 	arenaDecay(a: WorldArena): void;
 	purgeNodeFromArenas(ix: NodeIndex): void;
 	arenaInvalidateSettled(a: WorldArena, suspendSentinel: SuspendedRead): boolean;
 	walkArenaStrong(a: WorldArena, from: NodeIndex, kGen: number, gen: number, found: Watcher[]): void;
 	collectWatchersAt(nid: NodeIndex, found: Watcher[]): void;
 	arenaCollectDrainCandidates(a: WorldArena, gen: number, rootId: RootId, ws: Watcher[]): void;
-	closureOverArena(a: WorldArena, node: AnyNode, closure: Set<NodeId>): void;
+	closureOverArena(a: WorldArena, node: AnyInternals, closure: Set<NodeId>): void;
 	foldTruthFrame<T>(world: World, fn: () => T): T;
 	dependencyEdges(): Map<NodeId, Set<NodeId>>;
-	__arenaLinkMode(rootId: RootId, dep: AnyNode, sub: AnyNode): 'strong' | 'weak' | undefined;
-	__arenaLinkIdForTest(rootId: RootId, dep: AnyNode, sub: AnyNode): number;
+	__arenaLinkMode(rootId: RootId, dep: AnyInternals, sub: AnyInternals): 'strong' | 'weak' | undefined;
+	__arenaLinkIdForTest(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number;
 	__arenaLinkNextDepForTest(rootId: RootId, linkId: number): number;
 
 	// ---- late-bound: settlement ----
@@ -273,14 +270,14 @@ export type EngineCore = {
 
 	// ---- late-bound: deliver (the walk orchestration) ----
 	/** The ONE urgent pre-paint watcher correction (deliver.ts). */
-	correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean;
+	correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean;
 	quietDrain(): void;
 	drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void;
-	deliveryWalk(from: AtomNode, batch: Batch, slot: BatchSlotMeta, seq: Seq): void;
+	deliveryWalk(from: AtomInternals, batch: Batch, slot: BatchSlotMeta, seq: Seq): void;
 
 	// ---- late-bound: RenderPass ----
 	/** THE watcher→node resolution (RenderPass.ts — generation-checked). */
-	resolveWatcherNode(w: Watcher): AnyNode | undefined;
+	resolveWatcherInternals(w: Watcher): AnyInternals | undefined;
 	/** The minimum live render pin (compaction's pin clause floor). */
 	getMinLivePin(): Seq;
 };
@@ -290,8 +287,7 @@ export type EngineCore = {
  * factories assign). */
 export type EngineCoreDeps = Pick<
 	EngineCore,
-	| 'idToNode'
-	| 'nodesArr'
+	| 'nodeIndexToInternals'
 	| 'nodeToWatchers'
 	| 'lastWalk'
 	| 'obsRefs'
@@ -303,8 +299,8 @@ export type EngineCoreDeps = Pick<
 	| 'notify'
 	| 'notifyState'
 	| 'root'
-	| 'nodeForAtom'
-	| 'nodeForComputed'
+	| 'internalsForAtom'
+	| 'internalsForComputed'
 	| 'recomputeQuiet'
 	| 'nextSeq'
 	| 'getSeq'
@@ -399,7 +395,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		drainCommittedObservers: LATE,
 		deliveryWalk: LATE,
 		// late-bound: RenderPass
-		resolveWatcherNode: LATE,
+		resolveWatcherInternals: LATE,
 		getMinLivePin: LATE,
 	};
 }
@@ -412,7 +408,6 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
  */
 export function createWorld(core: EngineCore): void {
 	// Stable resident containers, aliased once (identity-shared).
-	const idToNode = core.idToNode;
 	const roots = core.roots;
 	const obsRefs = core.obsRefs;
 	const syncObservedDeps = core.syncObservedDeps;
@@ -508,7 +503,7 @@ export function createWorld(core: EngineCore): void {
 			return NOT_ROUTED;
 		}
 		const cap = routedCap;
-		const node = core.nodeForAtom(atom);
+		const node = core.internalsForAtom(atom);
 		const v = routedRead(node, world);
 		if (cap !== undefined) cap.deps.push({ node, value: v });
 		return v;
@@ -529,7 +524,7 @@ export function createWorld(core: EngineCore): void {
 			return NOT_ROUTED; // the plain kernel path is newest serving
 		}
 		const cap = routedCap;
-		const node = core.nodeForComputed(c);
+		const node = core.internalsForComputed(c);
 		// The pre-dedup observation capture rides tracked reads;
 		// raw handle reads inside world evaluations have no reader hook, so
 		// the seam is their capture site (mirrors routedRead's atom half).
@@ -560,7 +555,7 @@ export function createWorld(core: EngineCore): void {
 	 * stepwise equality (an equal step keeps the old reference). Runs over
 	 * the packed columns.
 	 */
-	function foldAtom(atom: AtomNode, world: World): Value {
+	function foldAtom(atom: AtomInternals, world: World): Value {
 		const log = atom.log;
 		const n = log.n;
 		let value = atom.base;
@@ -636,7 +631,7 @@ export function createWorld(core: EngineCore): void {
 	 * concurrent.ts's const enum, imported type-only: this one comparison
 	 * uses the bare 0/1 codes the two declarations share by construction —
 	 * the WriteLog.ts pattern.) */
-	function applyOp(atom: AtomNode, kind: WriteKind, payload: unknown, prev: Value): Value {
+	function applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value {
 		if (kind === 0 /* WriteKind.SET */) return payload;
 		return inCallback(() => {
 			// The kernel's fold-purity POISON table guards the replay exactly
@@ -656,7 +651,7 @@ export function createWorld(core: EngineCore): void {
 	 * the atom carries the default, otherwise the atom's custom comparator
 	 * under the fold-purity guard (equality callbacks replay per world, so
 	 * signal reads/writes inside them throw — the updater contract). */
-	function eqAtom(atom: AtomNode, a: Value, b: Value): boolean {
+	function eqAtom(atom: AtomInternals, a: Value, b: Value): boolean {
 		return atom.eqIsDefault ? Object.is(a, b) : inCallback(() => atom.equals(a, b));
 	}
 
@@ -669,7 +664,7 @@ export function createWorld(core: EngineCore): void {
 	 * cross the gate (sentinels compare by identity — pinned in
 	 * tests/concurrent-battery.spec.ts).
 	 * Default-equality nodes compare by identity. */
-	function changedValue(node: AnyNode, prev: Value, next: Value): boolean {
+	function changedValue(node: AnyInternals, prev: Value, next: Value): boolean {
 		if (
 			node.kind === 'computed' && node.isEqual !== undefined
 			&& !(prev instanceof SuspendedRead) && !(next instanceof SuspendedRead)
@@ -694,7 +689,7 @@ export function createWorld(core: EngineCore): void {
 	 * capture rides the tracked read path.
 	 * @internal (called from the concurrent table wrapper)
 	 */
-	function routedRead(atom: AtomNode, world: World): Value {
+	function routedRead(atom: AtomInternals, world: World): Value {
 		if (core.currentSink !== 0) {
 			const oc = core.obsCapture;
 			if (oc !== undefined) oc.push(atom);
@@ -706,7 +701,7 @@ export function createWorld(core: EngineCore): void {
 	 * render/committed, a plain fold for mountFix and unmaterialized roots.
 	 * (The newest read is the direct kernel read `E.read` — world routing
 	 * can never intercept it.) */
-	function atomValue(atom: AtomNode, world: World): Value {
+	function atomValue(atom: AtomInternals, world: World): Value {
 		const c = core; // one context load; field accesses below keep the one-load shape
 		const route = c.serveOverride; // ONE override test on the routed-read path
 		if (route !== undefined) {
@@ -744,7 +739,7 @@ export function createWorld(core: EngineCore): void {
 	 * (updaters/reducers must be pure); per-world cycles throw instead of
 	 * recursing.
 	 */
-	function evaluate(node: AnyNode, world: World): Value {
+	function evaluate(node: AnyInternals, world: World): Value {
 		const c = core; // one context load; field accesses below keep the one-load shape
 		probes.worldEvals++; // engine-activity counter (tests/one-core.spec.ts's zero-cost check)
 		if (c.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
@@ -810,7 +805,7 @@ export function createWorld(core: EngineCore): void {
 	 * suspensions self-heal inside the kernel's boxedRead before this frame
 	 * ever sees them (read-after-await determinism).
 	 */
-	function kernelComputed(node: ComputedNode): Value {
+	function kernelComputed(node: ComputedInternals): Value {
 		try {
 			return E.computedRead(node.id);
 		} catch (err) {

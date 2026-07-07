@@ -25,7 +25,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Atom, Computed } from '../src/index.js';
-import { attachDriver, BATCH_NONE, engine, __resetEngineForTest, type AnyNode, type AtomNode, type CosignalEngine, type Watcher } from '../src/concurrent.js';
+import { attachDriver, BATCH_NONE, engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type CosignalEngine, type Watcher } from '../src/concurrent.js';
 import { kernelGenOf, kernelNodeIndexOf } from '../src/WorldArena.js';
 import { armArenaCheck } from './arena-checker.js';
 
@@ -42,14 +42,14 @@ function bridge(): CosignalEngine {
 	return engine;
 }
 
-function mount(b: CosignalEngine, root: string, node: AnyNode, name: string): Watcher {
+function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string): Watcher {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function commitWrite(b: CosignalEngine, node: AtomNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AtomInternals, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, 0, value);
 	b.retire(t.id);
@@ -127,28 +127,28 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		const b = bridge();
 		armArenaCheck(b);
 		const at = new Atom(1);
-		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', (read) => read(an));
 		mount(b, 'R', keep, 'W');
 		// Warm one full dispose→create cycle so the steady state is the baseline.
 		const warm = new Computed(() => (at.state as number) * 2);
-		b.committedValue(b.nodeForComputed(warm as unknown as Computed<unknown>), 'R');
+		b.committedValue(b.internalsForComputed(warm as unknown as Computed<unknown>), 'R');
 		b.disposeComputed(warm as unknown as Computed<unknown>);
 
-		const arrBase = cols(b).nodesArr.length;
+		const arrBase = cols(b).nodeIndexToInternals.length;
 		const shell = b.__arenaForTest('R')!;
 		const shadowBase = shell.nodeToShadow.length;
 		const indexes = new Set<number>();
 		const N = 200;
 		for (let i = 0; i < N; i++) {
 			const c = new Computed(() => (at.state as number) + i);
-			const node = b.nodeForComputed(c as unknown as Computed<unknown>);
+			const node = b.internalsForComputed(c as unknown as Computed<unknown>);
 			expect(b.committedValue(node, 'R')).toBe(1 + i);
 			indexes.add(ixOf(c._id));
 			b.disposeComputed(c as unknown as Computed<unknown>);
 		}
 		expect(indexes.size).toBeLessThanOrEqual(2); // the slot's index recycles with the record
-		expect(cols(b).nodesArr.length).toBe(arrBase); // columns bounded by node count — not creation count
+		expect(cols(b).nodeIndexToInternals.length).toBe(arrBase); // columns bounded by node count — not creation count
 		expect(cols(b).lastWalk.length).toBe(arrBase);
 		expect(cols(b).obsRefs.length).toBe(arrBase);
 		expect(shell.nodeToShadow.length).toBe(shadowBase); // per-arena lookup bounded too
@@ -158,8 +158,8 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		const b = bridge();
 		const c1 = new Computed(() => 1);
 		const c2 = new Computed(() => 2);
-		b.nodeForComputed(c1 as unknown as Computed<unknown>);
-		b.nodeForComputed(c2 as unknown as Computed<unknown>);
+		b.internalsForComputed(c1 as unknown as Computed<unknown>);
+		b.internalsForComputed(c2 as unknown as Computed<unknown>);
 		expect(ixOf(c1._id)).not.toBe(0); // index 0 is burned (the arenas' "none" sentinel)
 		expect(ixOf(c2._id)).not.toBe(0);
 		expect(ixOf(c1._id)).not.toBe(ixOf(c2._id));
@@ -199,14 +199,14 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 		b.disposeComputed(cOld.handle);
 
 		// The scrub: every nodeIndex-keyed row for the freed record is cleared.
-		expect(cols(b).nodesArr[ix]).toBeUndefined();
+		expect(cols(b).nodeIndexToInternals[ix]).toBeUndefined();
 		expect(cols(b).nodeToWatchers[ix]).toBeUndefined();
 		expect(cols(b).obsRefs[ix]).toBe(0);
 		expect(cols(b).obsDeps[ix]).toBeUndefined();
 		expect(cols(b).lastWalk[ix]).toBe(0);
 		expect(cols(b).evalMark[ix]).toBe(0);
 		expect(b.__arenaForTest('R')!.nodeToShadow[ix] ?? 0).toBe(0);
-		expect(b.idToNode.has(oldId)).toBe(false);
+		expect(b.idToInternals.has(oldId)).toBe(false);
 
 		// New tenant at the same index: fresh rows only.
 		const cNew = b.computed('cNew', (read) => (read(a) as number) + 100);

@@ -203,8 +203,8 @@
 import { E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, RecordGeom, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom } from './graph.js';
 import { __resetLifecycleForTest } from './lifecycle.js';
 import { NOT_ROUTED } from './World.js';
-import { engineWrite, __engineAtomNodeById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
-import type { AtomNode, ComputedNode } from './concurrent.js';
+import { engineWrite, __engineAtomInternalsById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
+import type { AtomInternals, ComputedInternals } from './concurrent.js';
 import type { NodeId, ValueIndex } from './graph.js';
 
 // ---- sentinels ----------------------------------------------------------------
@@ -325,7 +325,7 @@ export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: u
 
 /**
  * The plain-path write tail shared by the standalone fast arm and the
- * engine's node-less arm: fold the op (updaters under the fold-purity
+ * engine's internals-less arm: fold the op (updaters under the fold-purity
  * guard), then `writeAtom` — which applies the policy equality ONCE
  * (kernel order: `isEqual(current, incoming)`) at the acceptance decision
  * and takes the kernel write + flush. @internal
@@ -344,14 +344,14 @@ export function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: 
  * the same policy assert as the public methods, then the engine dispatch
  * over the id-resolved node; an atom with no engine content takes the
  * plain kernel path (its comparator lives on the unreachable handle, so
- * the kernel's identity compare is the only equality — the engine node,
+ * the kernel's identity compare is the only equality — the engine internals,
  * once content exists, carries the comparator). @internal
  */
 export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown): void {
 	if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 		throw new Error('cosignals: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
 	}
-	const node = __engineAtomNodeById(id);
+	const node = __engineAtomInternalsById(id);
 	if (node !== undefined) {
 		__engineWriteNode(node, kind, payload);
 		return;
@@ -533,13 +533,13 @@ export class Atom<T> {
 	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
-	/** The engine node, once this handle has ENGINE CONTENT (a log entry, a
+	/** The engine internals, once this handle has ENGINE CONTENT (a log entry, a
 	 * watcher, arena presence, a routed read) — undefined until then. The
 	 * handle-node link is 1:1 for the handle's life; the record-free scrub
 	 * clears it. Creation is ONE STEP: the constructor makes the kernel
 	 * record, and the engine resolves the handle by its id — content
 	 * allocates lazily, never through any user-facing extra step. @internal */
-	_node: AtomNode | undefined = undefined;
+	_internals: AtomInternals | undefined = undefined;
 	readonly label: string | undefined;
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
@@ -610,7 +610,7 @@ export class Atom<T> {
 		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 			throw new Error('cosignals: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
 		}
-		if (this._node === undefined && standaloneQuiet === true) {
+		if (this._internals === undefined && standaloneQuiet === true) {
 			writeAtom(this._id, this._isEqual, value);
 			return;
 		}
@@ -628,7 +628,7 @@ export class Atom<T> {
 		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 			throw new Error('cosignals: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
 		}
-		if (this._node === undefined && standaloneQuiet === true) {
+		if (this._internals === undefined && standaloneQuiet === true) {
 			const id = this._id;
 			const next = runFold(() => fn(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] as T));
 			writeAtom(id, this._isEqual, next);
@@ -666,9 +666,9 @@ export class ReducerAtom<S, A> extends Atom<S> {
 export class Computed<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignals-react`). @internal */
 	readonly _id: NodeId;
-	/** The engine node, once this handle has ENGINE CONTENT (see Atom._node —
+	/** The engine internals, once this handle has ENGINE CONTENT (see Atom._internals —
 	 * same one-step-creation, content-lazy rule). @internal */
-	_node: ComputedNode | undefined = undefined;
+	_internals: ComputedInternals | undefined = undefined;
 	/** Retention columns: the RAW authored fn and the policy
 	 * comparator, kept on the owning instance (GC-owned, so a reused kernel
 	 * id can never serve another tenant's fn/comparator) — the engine's
@@ -837,6 +837,8 @@ export {
 	// one-core.spec proves the zero-cost promise through the probes):
 	__resetEngineForTest,
 	__coreProbes,
+	__internalsByIdForTest,
+	__eachInternalsForTest,
 } from './concurrent.js';
 export type {
 	// the driver seam + the engine surface's type + reset options
@@ -844,11 +846,11 @@ export type {
 	CosignalEngine,
 	EngineResetOptions,
 	// entities (type-only: the classes construct nowhere outside the engine)
-	AtomNode,
+	AtomInternals,
 	Watcher,
 	WorldArena,
-	ComputedNode,
-	AnyNode,
+	ComputedInternals,
+	AnyInternals,
 	Batch,
 	RenderPass,
 	RenderPassState,
@@ -875,7 +877,7 @@ export type {
 	RootId,
 	RenderPassId,
 	WatcherId,
-	EffectId,
+	SubscriptionId,
 	Seq,
 	Epoch,
 	CommitGen,

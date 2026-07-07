@@ -24,7 +24,7 @@ import { probes, type ConcurrentEngineHost } from './engine.js';
 import { noteReclaimRetry, reclaimSkippedN } from './graph.js';
 import type { BatchManager, BatchId, BatchSlot } from './Batch.js';
 import type { EngineCore } from './World.js';
-import type { AtomNode, Seq, Value, WriteKind } from './concurrent.js';
+import type { AtomInternals, Seq, Value, WriteKind } from './concurrent.js';
 
 /**
  * A log entry: one recorded write — {op, slot, seq} appended at the write,
@@ -158,7 +158,7 @@ export type CompactionDeps = {
 export type CompactionTable = {
 	/** Atoms with a non-empty write log (compaction candidates — shared
 	 * identity: the engine aliases it; see the module header). */
-	uncompactedAtoms: Set<AtomNode>;
+	uncompactedAtoms: Set<AtomInternals>;
 	compactAll(): void;
 };
 
@@ -172,7 +172,7 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 	const { applyOp, eqAtom } = core;
 	const { getOnCompact } = deps.host;
 	const { releaseLogEntry } = deps.batch;
-	const uncompactedAtoms = new Set<AtomNode>();
+	const uncompactedAtoms = new Set<AtomInternals>();
 
 	/**
 	 * Compaction consumes a sequence-order prefix of the write log: entry e
@@ -198,7 +198,7 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 		}
 	}
 
-	function compactAtom(atom: AtomNode, minPin: Seq): void {
+	function compactAtom(atom: AtomInternals, minPin: Seq): void {
 		const log = atom.log;
 		const n = log.n;
 		const retired = log.retired;

@@ -19,7 +19,7 @@
  * returns its operation table. The columns are exposed on the table by
  * IDENTITY (the kernel's shared-side-column pattern): the engine aliases
  * them for its hot readers (evaluation frames probe `refs[ix] > 0` per
- * observed run) and its row maintenance (indexNode's gap-fill, the
+ * observed run) and its row maintenance (indexInternals's gap-fill, the
  * record-free scrub), while every closure-membership transition routes
  * through the table's functions. The kernel retain seams
  * (`__lifecycleRetain`/`__lifecycleRelease`, the forced discovery read) are
@@ -28,7 +28,7 @@
 
 import { untracked, __lifecycleRelease, __lifecycleRetain } from './index.js';
 import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
-import type { AnyNode, Subscription } from './concurrent.js';
+import type { AnyInternals, Subscription } from './concurrent.js';
 import type { ConcurrentEngineHost } from './engine.js';
 
 /** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
@@ -36,10 +36,10 @@ type NodeIndex = number;
 
 export type ObservationIndexDeps = {
 	/** The engine host's resident slice: the dense node column (the identity
-	 * guard's authority — a stale node object whose record re-tenanted must
+	 * guard's authority — a stale internals object whose record re-tenanted must
 	 * never shift the new tenant's count) and the kernel strong-dep walk
 	 * (tracked-only by construction — enterObservation's discovery source). */
-	host: Pick<ConcurrentEngineHost, 'nodesArr' | 'kernelStrongDepsOf'>;
+	host: Pick<ConcurrentEngineHost, 'nodeIndexToInternals' | 'kernelStrongDepsOf'>;
 };
 
 export type ObservationIndex = {
@@ -51,20 +51,20 @@ export type ObservationIndex = {
 	 * set as of its last fn run (undefined while unobserved — unwatched nodes
 	 * store nothing). Sets hold node OBJECTS — see Subscription.obsDeps.
 	 * (Shared identity — the engine aliases it.) */
-	deps: (Set<AnyNode> | undefined)[];
-	shiftObservedCount(node: AnyNode, delta: 1 | -1): void;
-	exitObservation(node: AnyNode): void;
-	syncObservedDeps(node: AnyNode, list: AnyNode[]): void;
+	deps: (Set<AnyInternals> | undefined)[];
+	shiftObservedCount(node: AnyInternals, delta: 1 | -1): void;
+	exitObservation(node: AnyInternals): void;
+	syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void;
 	syncSubscriptionObservation(sub: Subscription): void;
 };
 
 export function createObservationIndex(deps: ObservationIndexDeps): ObservationIndex {
 	// Composition-time locals (the codegen doctrine): the dense node column is
 	// aliased by identity; the kernel walk binds once.
-	const nodesArr = deps.host.nodesArr;
+	const nodeIndexToInternals = deps.host.nodeIndexToInternals;
 	const { kernelStrongDepsOf } = deps.host;
 	const obsRefs: number[] = [0];
-	const obsDeps: (Set<AnyNode> | undefined)[] = [undefined];
+	const obsDeps: (Set<AnyInternals> | undefined)[] = [undefined];
 
 	/** Shift a node's observed-consumer refcount; enter/exit fire on the
 	 * 0↔1 edges only, so shared consumers (two watchers on one derived node,
@@ -75,9 +75,9 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	 * never move the new tenant's count. Skips pair up: once stale, forever
 	 * stale (rows only move at record free, and re-registration installs a
 	 * different object). */
-	function shiftObservedCount(node: AnyNode, delta: 1 | -1): void {
+	function shiftObservedCount(node: AnyInternals, delta: 1 | -1): void {
 		const ix = node.ix;
-		if (nodesArr[ix] !== node) return;
+		if (nodeIndexToInternals[ix] !== node) return;
 		const refs = obsRefs[ix]! + delta;
 		obsRefs[ix] = refs;
 		if (refs === 1 && delta === 1) enterObservation(node);
@@ -104,7 +104,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	 * throw-on-demand behavior; the deps it read before throwing ARE
 	 * retained (the kernel keeps the partial link prefix).
 	 */
-	function enterObservation(node: AnyNode): void {
+	function enterObservation(node: AnyInternals): void {
 		if (node.kind === 'atom') {
 			__lifecycleRetain(node.id);
 			return;
@@ -125,7 +125,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	 * untracked re-sample at the next read — an eager refresh the
 	 * untracked-sampling rule forbids: untracked reads are point-in-time
 	 * samples taken only at tracked re-derivations.) */
-	function exitObservation(node: AnyNode): void {
+	function exitObservation(node: AnyInternals): void {
 		if (node.kind === 'atom') {
 			__lifecycleRelease(node.id);
 			return;
@@ -144,7 +144,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	 * flush. Skipped if observation left mid-evaluation (the exit already
 	 * released the old snapshot; installing a new one would leak).
 	 */
-	function syncObservedDeps(node: AnyNode, list: AnyNode[]): void {
+	function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
 		if (obsRefs[node.ix]! === 0) return;
 		const prev = obsDeps[node.ix];
 		const next = new Set(list);
@@ -172,7 +172,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	 */
 	function syncSubscriptionObservation(e: Subscription): void {
 		const prev = e.obsDeps;
-		const next = new Set<AnyNode>();
+		const next = new Set<AnyInternals>();
 		for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node);
 		e.obsDeps = next;
 		for (const dep of next) {

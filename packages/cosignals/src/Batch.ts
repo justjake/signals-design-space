@@ -27,19 +27,29 @@
 
 import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './engine.js';
-import type { AtomNode, RootState, Seq, TraceHooks } from './concurrent.js';
+import type { IdBrand } from './graph.js';
+import type { AtomInternals, RootState, Seq, TraceHooks } from './concurrent.js';
 import type { EngineCore } from './World.js';
 
-export type BatchId = number;
+// Leniently branded batch scalars (the kernel's one-symbol IdBrand —
+// graph.ts, ported from dalien-signals src/system.ts:525-535): plain
+// numbers assign in cast-free (`1 << slot` builds a BatchSlotSet with no
+// ceremony), but the brands are mutually exclusive — in particular a SLOT
+// ORDINAL handed where a slot-set BIT MASK belongs (or vice versa) is a
+// compile error, the exact swap that would otherwise type-check at every
+// `1 << slot.id` site.
+
+export type BatchId = number & IdBrand<'batch'>;
 /** The reserved "no batch context" BatchId. Never allocated (batch ids start
  * at 1): `driver.currentBatch() === BATCH_NONE` means the write executes in
  * no host batch context, so it has no batch to join.
  * The React fork names the same sentinel on its side (protocol v2 shares ONE
  * id space between the engine and React, so the sentinel must too). */
 export const BATCH_NONE: BatchId = 0;
-export type BatchSlot = number;
+/** A slot ORDINAL (0–30): the batch's position in the recycling table. */
+export type BatchSlot = number & IdBrand<'batchSlot'>;
 /** A 31-bit slot set: bit i = slot i (mask/included/committed/dedup words). */
-export type BatchSlotSet = number;
+export type BatchSlotSet = number & IdBrand<'batchSlotSet'>;
 
 export type Batch = {
 	id: BatchId;
@@ -61,7 +71,7 @@ export type Batch = {
 	 * render's captured slot sets (see mountFixup). */
 	lastWriteSeq: Seq;
 	/** Atoms this batch appended to (may hold benign duplicates; deduped at retirement). */
-	atomsTouched: AtomNode[];
+	atomsTouched: AtomInternals[];
 	/** Un-compacted log entries still on write logs. Log entries reference batches by id,
 	 * so the batch record must outlive them (reclamation gate). */
 	liveLogEntries: number;

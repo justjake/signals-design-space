@@ -15,7 +15,7 @@
  *    recompute → subscription revalidation);
  *  - the `Watcher` record: mount/defer/reveal/re-render/removal, the
  *    rendered-world snapshot, and THE watcher→node resolution
- *    (`resolveWatcherNode`, generation-checked — a dormant watcher whose
+ *    (`resolveWatcherInternals`, generation-checked — a dormant watcher whose
  *    node record died must never bind the record's next tenant);
  *  - per-root commit lock-in (`commitBatches`) — THE single owner of a
  *    root's committed-state transition;
@@ -38,14 +38,12 @@
 import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
 import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
 import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
-import { kernelGenOf, type WorldArena } from './WorldArena.js';
+import { kernelGenOf, kernelNodeIndexOf, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
 import type { ObservationIndex } from './observation.js';
 import type { EngineCore } from './World.js';
-import type { AnyNode, CommitGen, NodeId, RenderPassId, RootId, Seq, Value, WatcherId } from './concurrent.js';
+import type { AnyInternals, CommitGen, NodeId, NodeIndex, RenderPassId, RootId, Seq, Value, WatcherId } from './concurrent.js';
 
-/** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
-type NodeIndex = number;
 /** A kernel record's GEN field value: the id-tenancy stamp, bumped at free. */
 type Generation = number;
 
@@ -172,7 +170,7 @@ export type RenderPassManager = {
 	renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass;
 	renderYield(id: RenderPassId): void;
 	renderResume(id: RenderPassId): void;
-	mountWatcher(renderPassId: RenderPassId, node: AnyNode, name: string): Watcher;
+	mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: string): Watcher;
 	deferMountEffects(watcherId: WatcherId): void;
 	adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void;
 	renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void;
@@ -189,7 +187,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	// Stable resident containers and tables, aliased once (identity-shared);
 	// the observation shift binds once at composition (the codegen doctrine).
 	const { shiftObservedCount } = deps.observation;
-	const idToNode = core.idToNode;
+	const nodeIndexToInternals = core.nodeIndexToInternals;
 	const idToRenderPass = core.idToRenderPass;
 	const rootToOpenRender = core.rootToOpenRender;
 	const watchers = core.watchers;
@@ -210,17 +208,20 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	let staleWatcherSkips = 0;
 
 	/**
-	 * THE watcher→node resolution: the idToNode probe plus the generation
-	 * check against the watcher's mount-time stamp. Every consumer site
-	 * (commit activation, mount fixup, drains, deliveries' correction loops,
-	 * observation flips) resolves through here; a miss means the watcher's
-	 * node record died (and its id may already name a NEW tenant — the
-	 * dormant-watcher aliasing case), so the site must skip, loudly, never
+	 * THE watcher→node resolution: the dense-row probe (by the watcher's
+	 * mount-cached NODE_INDEX — record id and index are slot-tied, so the
+	 * row is exactly what an id-keyed probe would have found) plus the
+	 * generation check against the watcher's mount-time stamp. Every
+	 * consumer site (commit activation, mount fixup, drains, deliveries'
+	 * correction loops, observation flips) resolves through here; a miss
+	 * means the watcher's node record died (a scrubbed row) — and its slot
+	 * may already host a NEW tenant (the dormant-watcher aliasing case,
+	 * which the GEN check catches) — so the site must skip, loudly, never
 	 * bind. Tenancy generations only grow, so a stale stamp never
 	 * re-validates.
 	 */
-	function resolveWatcherNode(w: Watcher): AnyNode | undefined {
-		const node = idToNode.get(w.node);
+	function resolveWatcherInternals(w: Watcher): AnyInternals | undefined {
+		const node = w.nodeIx < nodeIndexToInternals.length ? nodeIndexToInternals[w.nodeIx] : undefined;
 		if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) {
 			staleWatcherSkips++;
 			return undefined;
@@ -233,7 +234,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	 * (skips pair up: tenancy generations only ever grow, so a stale stamp
 	 * can never re-validate between a skipped retain and its release). */
 	const shiftWatcherObservation = (w: Watcher, delta: 1 | -1): void => {
-		const node = resolveWatcherNode(w);
+		const node = resolveWatcherInternals(w);
 		if (node !== undefined) shiftObservedCount(node, delta);
 	};
 
@@ -317,7 +318,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	}
 
 	/** Mount a new watcher inside an open render; it renders in the render's world. */
-	function mountWatcher(renderPassId: RenderPassId, node: AnyNode, name: string): Watcher {
+	function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: string): Watcher {
 		const p = renderPassById(renderPassId);
 		if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
 		const value = core.evaluate(node, { kind: 'render', render: p });
@@ -567,9 +568,9 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		for (const wid of render.rendered) {
 			const w = watchers.get(wid);
 			if (w === undefined) continue; // removed mid-render
-			const wNode = resolveWatcherNode(w);
-			if (wNode === undefined) continue; // loud skip: record tenancy moved mid-render
-			w.lastRenderedValue = core.evaluate(wNode, { kind: 'render', render });
+			const wInternals = resolveWatcherInternals(w);
+			if (wInternals === undefined) continue; // loud skip: record tenancy moved mid-render
+			w.lastRenderedValue = core.evaluate(wInternals, { kind: 'render', render });
 			w.snapshot = {
 				renderPassId: render.id, pin: render.pin, maskBits: render.maskBits,
 				includedBits: render.includedBits, rootCommitGen: core.root(render.root).commitGen,
@@ -593,10 +594,10 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			// before this commit — the generation stamp decides. A stale
 			// watcher never activates: binding it here would subscribe it to
 			// the record's new tenant.
-			const wNode = resolveWatcherNode(w);
-			if (wNode === undefined) continue; // loud skip (counted)
+			const wInternals = resolveWatcherInternals(w);
+			if (wInternals === undefined) continue; // loud skip (counted)
 			w.live = true;
-			mountFixup(w, wNode, render, baseline, maskBatchRecords);
+			mountFixup(w, wInternals, render, baseline, maskBatchRecords);
 		}
 		// The populator domain — the EXPLICIT union of this render's
 		// re-renders and its OWN mounts (`rendered` and `mounted` are
@@ -625,10 +626,10 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		for (const wid of populated) {
 			const w = watchers.get(wid);
 			if (w === undefined || !w.live) continue;
-			const wNode = resolveWatcherNode(w);
-			if (wNode === undefined) continue; // loud skip (live ⇒ alive in practice; belt for binding-side flips)
-			const committedNow = core.evaluate(wNode, { kind: 'committed', root: render.root });
-			if (core.changedValue(wNode, w.lastRenderedValue, committedNow)) markRestaled(w);
+			const wInternals = resolveWatcherInternals(w);
+			if (wInternals === undefined) continue; // loud skip (live ⇒ alive in practice; belt for binding-side flips)
+			const committedNow = core.evaluate(wInternals, { kind: 'committed', root: render.root });
+			if (core.changedValue(wInternals, w.lastRenderedValue, committedNow)) markRestaled(w);
 		}
 		// The population dev assert: after a commit of render P, every
 		// live watcher P re-rendered or mounted has a shadow for its node in
@@ -645,18 +646,18 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			}
 		}
 		if (tr !== undefined) tr.renderCommitted(render);
-		// ctx.previous cells hold the last COMMITTED value — a pending
+		// ctx.previous fields hold the last COMMITTED value — a pending
 		// render's value must never leak into the hint, because a pending
 		// transition may still be discarded — so update them from every
 		// watcher this commit re-rendered or mounted: the explicit union of
-		// the two disjoint collections, each watcher visited once (the cells
-		// live on the engine's computed nodes, beside their ctx adapter).
+		// the two disjoint collections, each watcher visited once (the field
+		// lives on the engine's computed internals, beside their ctx adapter).
 		for (const wid of [...render.rendered, ...render.mounted]) {
 			const w = watchers.get(wid);
 			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) continue;
-			const node = idToNode.get(w.node);
-			if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) continue; // stale: no hint to update (not a resolution consumers observe — uncounted)
-			if (node.kind === 'computed') node.prevCell.value = w.lastRenderedValue;
+			const node = w.nodeIx < nodeIndexToInternals.length ? nodeIndexToInternals[w.nodeIx] : undefined;
+			if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) continue; // stale: no hint to update (gen-checked exactly as resolveWatcherInternals; uncounted — not a resolution consumers observe)
+			if (node.kind === 'computed') node.prevCommitted = w.lastRenderedValue;
 		}
 		{
 			const ra = core.rootToArena.get(render.root);
@@ -760,7 +761,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	 * write landed mid-render interned its slot after the capture, so the
 	 * slot-quantified form would miss its writes).
 	 */
-	function mountFixup(w: Watcher, node: AnyNode, committingRender: RenderPass, baseline: { committedAdvance: Seq; rootCommitGen: CommitGen }, maskBatchRecords: Batch[]): void {
+	function mountFixup(w: Watcher, node: AnyInternals, committingRender: RenderPass, baseline: { committedAdvance: Seq; rootCommitGen: CommitGen }, maskBatchRecords: Batch[]): void {
 		const closure = dependencyClosureOf(w.node, committingRender);
 		const tr = core.trace; // one load covers the corrective records + the disposition record
 		// Catch-up half — per-batch catch-up loop: every LIVE written batch
@@ -814,7 +815,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	 * ∪ the root's committed arena. The kernel leg walks the KERNEL's own
 	 * dep links (tracked-only by construction, evaluation-lagged
 	 * exactly like every other recorded structure), mapping visited kernel
-	 * records back to engine nodes; unregistered intermediates
+	 * records back to engine internals; unregistered intermediates
 	 * are traversed but contribute nothing (only engine-written atoms can
 	 * appear in batch touch sets). STRONG links only (weak deps never
 	 * joined the closure — they can't deliver, so correctives never target
@@ -828,8 +829,12 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	 * exactly this). */
 	function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
-		const node = idToNode.get(nodeId);
-		if (node === undefined) return closure; // unregistered/dead id: nothing routes
+		// Public/diagnostic entry: the id is not provably a node record id,
+		// so the row resolution carries the identity check the Map's
+		// key-presence used to provide (see concurrent.ts residentInternalsOf).
+		const ix = kernelNodeIndexOf(nodeId);
+		const node = ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined;
+		if (node === undefined || node.id !== nodeId) return closure; // unregistered/dead id: nothing routes
 		const pa = render?.arena;
 		if (pa !== undefined) core.closureOverArena(pa, node, closure);
 		if (render !== undefined) {
@@ -851,7 +856,11 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		let l = memory[kernelId + NodeField.DEPS]!;
 		while (l !== 0) {
 			const depKernelId = memory[l + LinkField.DEP]!;
-			if (idToNode.has(depKernelId)) closure.add(depKernelId);
+			// Dep ids come off live kernel links, so a defined dense row by
+			// the dep's live NODE_INDEX ⇔ the dep has engine content (the old
+			// Map.has, by the registry lockstep).
+			const depIx = memory[depKernelId + NodeField.NODE_INDEX]!;
+			if (depIx < nodeIndexToInternals.length && nodeIndexToInternals[depIx] !== undefined) closure.add(depKernelId);
 			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) closureOverKernel(depKernelId, closure, seen);
 			l = memory[l + LinkField.NEXT_DEP]!;
 		}
@@ -866,7 +875,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	}
 
 	// ---- the operation table (late-bound onto the shared core record) ----
-	core.resolveWatcherNode = resolveWatcherNode;
+	core.resolveWatcherInternals = resolveWatcherInternals;
 	core.getMinLivePin = getMinLivePin;
 
 	return {

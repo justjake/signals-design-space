@@ -10,7 +10,7 @@
  * in this bundled module otherwise).
  */
 import { Atom, Computed, effect } from '../../src/index';
-import { engine, __columnsForTest, type AtomNode, type CosignalEngine, type Watcher } from '../../src/concurrent';
+import { engine, __columnsForTest, type AtomInternals, type CosignalEngine, type Watcher } from '../../src/concurrent';
 
 const hasHoley = new Function('a', 'return %HasHoleyElements(a);') as (a: unknown) => boolean;
 const isSmi = new Function('a', 'return %HasSmiElements(a);') as (a: unknown) => boolean;
@@ -32,7 +32,7 @@ function mount(b: CosignalEngine, root: string, node: unknown, name: string): Wa
 	return w;
 }
 
-function commitWrite(b: CosignalEngine, node: AtomNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AtomInternals, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, 0, value);
 	b.retire(t.id);
@@ -66,7 +66,7 @@ for (let i = 1; i <= 50; i++) commitWrite(b, atoms[i % atoms.length]!, i * 3);
 const base = new Atom(1);
 for (let i = 0; i < 120; i++) {
 	const c = new Computed(() => (base.state as number) + i);
-	const node = b.nodeForComputed(c as unknown as Computed<unknown>);
+	const node = b.internalsForComputed(c as unknown as Computed<unknown>);
 	b.committedValue(node, 'R');
 	b.disposeComputed(c as unknown as Computed<unknown>);
 }
@@ -77,7 +77,7 @@ for (const w of watchers) b.removeWatcher(w.id);
 type Probe = { name: string; arr: unknown; smi: boolean };
 const columns = __columnsForTest();
 const probes: Probe[] = [
-	{ name: 'nodesArr', arr: columns.nodesArr, smi: false },
+	{ name: 'nodeIndexToInternals', arr: columns.nodeIndexToInternals, smi: false },
 	{ name: 'lastWalk', arr: columns.lastWalk, smi: true },
 	{ name: 'evalMark', arr: columns.evalMark, smi: true },
 	{ name: 'obsRefs', arr: columns.obsRefs, smi: true },

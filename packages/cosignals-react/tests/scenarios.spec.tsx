@@ -345,7 +345,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		// engine-level surface (lane merges, runInBatch deliveries) — driven
 		// here through the action's engine batch to pin its fold-at-settlement
 		// semantics end to end.
-		const cNode = h.handle.shim.nodeForAtom(c as Atom<unknown>);
+		const cNode = h.handle.shim.internalsForAtom(c as Atom<unknown>);
 		let actionBatch: number | undefined;
 		await act(async () => {
 			startSignalTransition(async () => {

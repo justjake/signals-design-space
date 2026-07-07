@@ -19,7 +19,7 @@
  */
 import {
 	InvariantViolation,
-	type AnyNode,
+	type AnyInternals,
 	type ArenaCheckerInternals,
 	type CosignalEngine,
 	type Reader,
@@ -49,7 +49,7 @@ type CheckerState = {
 	 * OBJECT: NodeIds are kernel record ids and recycle, so a dead tenant's
 	 * fn (reachable through a stale reference) must not collide with the
 	 * record's new tenant. */
-	readonly naiveStack: Set<AnyNode>;
+	readonly naiveStack: Set<AnyInternals>;
 };
 
 const states = new WeakMap<CosignalEngine, CheckerState>();
@@ -88,11 +88,11 @@ function runCheck(st: CheckerState): void {
 		v.holdOp(() => {
 			v.eachArena((a) => {
 				validateArena(v, a);
-				const naiveMemo = new Map<AnyNode, NaiveOutcome>(); // object-keyed: record ids recycle
+				const naiveMemo = new Map<AnyInternals, NaiveOutcome>(); // object-keyed: record ids recycle
 				for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
 					const sh = a.nodeToShadow[nid] ?? 0;
 					if (sh === 0) continue;
-					const node = v.nodeAt(nid);
+					const node = v.internalsAt(nid);
 					if (node === undefined) continue;
 					// The arena answer is computed BEFORE the fold-truth side runs:
 					// folding first could refresh the very state under measurement.
@@ -162,7 +162,7 @@ function runCheck(st: CheckerState): void {
  * and nothing routes back into the arena under check. Thrown outcomes
  * memoize and rethrow (identity-stable).
  */
-function naiveValue(st: CheckerState, node: AnyNode, world: World, memo: Map<AnyNode, NaiveOutcome>): Value {
+function naiveValue(st: CheckerState, node: AnyInternals, world: World, memo: Map<AnyInternals, NaiveOutcome>): Value {
 	if (node.kind === 'atom') return st.bridge.foldAtom(node, world);
 	const hit = memo.get(node);
 	if (hit !== undefined) {

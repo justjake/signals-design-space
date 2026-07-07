@@ -83,16 +83,48 @@ const POLICY_CTX: ComputedCtx<unknown> = {
 };
 
 // ---- semantic number types ------------------------------------------------------
-// Plain type aliases — zero runtime cost, no branding, no casts. They name what
-// each number MEANS so signatures read as the layout docs above.
+// LENIENTLY BRANDED id types (zero runtime cost — the brand is an OPTIONAL
+// unique-symbol property, erased at emit): any plain `number` assigns freely
+// INTO a brand, so arena reads and index arithmetic need no casts anywhere
+// (`const dep: NodeId = memory[l + LinkField.DEP]` just works) — but the
+// brands are mutually exclusive by payload, so a NodeId handed where a
+// LinkId belongs is a compile error. Technique ported from dalien-signals
+// src/system.ts:525-535 (SignalId/LinkId/SignalGen). ONE symbol carries
+// every brand in the package (`IdBrand` below — the other layout-owning
+// modules build their brands from it): brands under one key are exclusive
+// by payload conflict, whereas brands under per-module symbols are silently
+// mutually ASSIGNABLE (two different optional keys never conflict), which
+// would void exactly the cross-layer protection this exists for. The
+// un-branded aliases below the branded group stay plain deliberately: they
+// are either the shared-allocator escape hatch (RecordId — both id kinds
+// draw from one bump pointer, so a value that is legitimately "either kind"
+// needs a home) or arithmetic-dominated values (flags, counters) whose
+// every use is a mask/compare where a brand adds nothing.
+
+declare const IdOf: unique symbol;
+
+/** The lenient brand carrier: intersect with `number` and a payload naming
+ * the id space. Optional key ⇒ plain numbers assign in (no casts anywhere);
+ * one shared key ⇒ distinct payloads are mutually exclusive. */
+export type IdBrand<P extends string> = { [IdOf]?: P };
 
 /** Premultiplied node record id: the Int32 arena index of the record's field 0
  * (id = record ordinal × RecordGeom.STRIDE). 0 = "none" (record 0 is burned). */
-export type NodeId = number;
+export type NodeId = number & IdBrand<'node'>;
 /** Premultiplied link record id (links share the arena and stride with nodes). 0 = "none". */
-export type LinkId = number;
-/** A premultiplied record id of either kind (the shared bump pointer / allocators). */
+export type LinkId = number & IdBrand<'link'>;
+/** A premultiplied record id of either kind (the shared bump pointer / allocators).
+ * Deliberately UN-branded — the escape hatch both NodeId and LinkId accept
+ * from and assign to (allocNode/allocLink both draw from `recNext`). */
 export type RecordId = number;
+/** The record's dense per-node ordinal (NodeField.NODE_INDEX): assigned once
+ * when a slot first hosts a node, INHERITED by every later tenant of the
+ * slot, and never an identity. Dense per-node side tables key by it (node
+ * and link records share one allocator, so record-ID-keyed tables would go
+ * holey where index-keyed ones stay packed). Branded: a NodeIndex is not a
+ * NodeId, and mixing them is the package's most plausible silent-corruption
+ * class. */
+export type NodeIndex = number & IdBrand<'nodeIndex'>;
 /** A node's FLAGS field value: a bitwise OR of NodeFlag members. */
 export type NodeFlags = number;
 /** The global evaluation cycle counter, stamped into link VERSION fields on re-track. */
@@ -102,7 +134,7 @@ export type Generation = number;
 /** A count of fixed-stride records (nodes and links draw from one shared pool). */
 export type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see RecordGeom). */
-export type ValueIndex = number;
+export type ValueIndex = number & IdBrand<'valueIndex'>;
 
 // ---- record layout + flags as const enums ---------------------------------------
 // Const enums (not module-level `const`s) so every consumer toolchain inlines
@@ -1448,10 +1480,10 @@ export let E: Engine = createEngine(initialRecords * RecordGeom.RECORDS_PER_UNIT
  * at an operation boundary and must not allocate or free kernel records.
  * @internal
  */
-let recordFreeHook: ((recordId: NodeId, nodeIndex: number) => void) | undefined;
+let recordFreeHook: ((recordId: NodeId, nodeIndex: NodeIndex) => void) | undefined;
 
 /** Installs/clears the record-free hook (engine seam). @internal */
-export function __setRecordFreeHook(fn: ((recordId: NodeId, nodeIndex: number) => void) | undefined): void {
+export function __setRecordFreeHook(fn: ((recordId: NodeId, nodeIndex: NodeIndex) => void) | undefined): void {
 	recordFreeHook = fn;
 }
 
@@ -1525,10 +1557,10 @@ var reclaimNudgeScheduled = false;
  * by concurrent.ts): watcher-index membership, open-render arena membership,
  * any arena's suspended-list membership, observation retains, and a
  * non-empty write log. */
-let reclaimGuardHook: ((id: NodeId, nodeIndex: number) => boolean) | undefined;
+let reclaimGuardHook: ((id: NodeId, nodeIndex: NodeIndex) => boolean) | undefined;
 
 /** Installs/clears the engine guard hook (engine seam). @internal */
-export function __setReclaimGuardHook(fn: ((id: NodeId, nodeIndex: number) => boolean) | undefined): void {
+export function __setReclaimGuardHook(fn: ((id: NodeId, nodeIndex: NodeIndex) => boolean) | undefined): void {
 	reclaimGuardHook = fn;
 }
 
@@ -1862,7 +1894,7 @@ export function maybeBoundary(): void {
 
 /**
  * The plain kernel write (no engine content): the tail of Atom.set/update's
- * standalone fast arm, the engine's node-less arm, and the lifecycle
+ * standalone fast arm, the engine's internals-less arm, and the lifecycle
  * context's handle-free path. Lives HERE, not in the policy layer: every
  * binding it touches per call — values, maybeBoundary, E, batchDepth,
  * flush — is this module's state, and a hot read of a cyclic module's

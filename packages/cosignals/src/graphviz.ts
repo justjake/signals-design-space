@@ -35,7 +35,7 @@ function quoteDotString(s: string): string {
 /** Snapshot of the live dependency graph: nodes, recorded dependency edges, observers. */
 export function dependencyGraphToDot(bridge: CosignalEngine): string {
 	const lines: string[] = ['digraph cosignals {', '\trankdir=LR;', '\tnode [fontname="monospace"];'];
-	for (const n of bridge.idToNode.values()) {
+	for (const n of bridge.idToInternals.values()) {
 		if (n.kind === 'atom') {
 			const log = n.log.length > 0 ? `|log:${n.log.length}` : '';
 			lines.push(`\tn${n.id} [shape=box, label=${quoteDotString(`${n.name}#${n.id}${log}`)}];`);

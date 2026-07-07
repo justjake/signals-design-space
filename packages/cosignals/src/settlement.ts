@@ -142,9 +142,9 @@ export function createSettlement(core: EngineCore): void {
 					if (rootToOpenRender.has(rootId)) continue;
 					for (const w of watchers.values()) {
 						if (!w.live || w.root !== rootId) continue;
-						const wNode = c.resolveWatcherNode(w);
-						if (wNode === undefined) continue; // loud skip: record tenancy moved
-						c.correctWatcher(w, wNode, c.evaluate(wNode, { kind: 'committed', root: rootId }), 'retirement');
+						const wInternals = c.resolveWatcherInternals(w);
+						if (wInternals === undefined) continue; // loud skip: record tenancy moved
+						c.correctWatcher(w, wInternals, c.evaluate(wInternals, { kind: 'committed', root: rootId }), 'retirement');
 					}
 				}
 				// Boundary subscription scan + the flush the loop OWNS.

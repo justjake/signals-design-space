@@ -28,17 +28,26 @@
  */
 
 import { NodeField, SuspendedRead } from './index.js';
-import { E, noteReclaimRetry, reclaimRetryAllSkipped, reclaimSkippedN } from './graph.js';
+import { E, noteReclaimRetry, reclaimRetryAllSkipped, reclaimSkippedN, type IdBrand } from './graph.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore, World } from './World.js';
-import type { AnyNode, AtomNode, ComputedNode, ArenaInitInts, Equals, NodeId, Reader, RootId, Value, Watcher } from './concurrent.js';
+import type { AnyInternals, AtomInternals, ComputedInternals, ArenaInitInts, Equals, NodeId, NodeIndex, Reader, RootId, Value, Watcher } from './concurrent.js';
 
-/** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
-type NodeIndex = number;
 /** A kernel record's GEN field value (id-tenancy stamp — see concurrent.ts). */
 type Generation = number;
 /** Per-walk visited generation (walk termination without Set allocations). */
 type WalkGen = number;
+
+/** A SHADOW record id: the premultiplied index of a record inside ONE world
+ * arena's own buffer (this module's third id space — not a kernel NodeId,
+ * not a NodeIndex; the arena walks consult kernel memory mid-walk, which is
+ * exactly where mixing would silently corrupt). Leniently branded on the
+ * kernel's one-symbol IdBrand (graph.ts): plain numbers — every
+ * `a.memory[...]` read — assign in cast-free; cross-brand assignment
+ * errors. 0 = none (record 0 burned). Arena LINK record ids share the pool
+ * and stay plain numbers (the shared-allocator escape hatch, exactly like
+ * the kernel's RecordId). */
+type ShadowId = number & IdBrand<'arenaShadow'>;
 
 /** A node record's tenancy generation, read live from kernel memory. The
  * buffer is re-fetched per read: kernel growth rebuilds swap it, and engine
@@ -219,14 +228,14 @@ export class WorldArena {
 	 * re-issues it; without this list the bump pointer grew a LIVE arena by
 	 * one record per useComputed recreation, forever
 	 * (tests/leak-audit.spec.ts pins the boundedness). */
-	shadowFree = 0;
+	shadowFree: ShadowId = 0;
 	links = 0;
 	/** nodeIndex → shadow record id (0 = none; index 0 is burned). */
-	nodeToShadow: number[] = [];
+	nodeToShadow: ShadowId[] = [];
 	/** Marked-shadow list (record ids; appended on the DIRTY 0→1 edge). */
-	dirty: number[] = [];
+	dirty: ShadowId[] = [];
 	/** Suspended-shadow list (record ids; dense — swap-remove compaction). */
-	suspended: number[] = [];
+	suspended: ShadowId[] = [];
 	/** Fanout dedup clock: bumped on every arena consumption. */
 	readClock = 0;
 	/** Per-arena evaluation cycle (link VERSION stamps). */
@@ -244,7 +253,7 @@ export class WorldArena {
  * whether this arena's suspended list holds the node's shadow. Same-file
  * with the layout enums; cold — one probe per arena per finalizer
  * fire/retry. */
-export function arenaHoldsSuspended(a: WorldArena, ix: number): boolean {
+export function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
 	const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
 	return sh !== 0 && (a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0;
 }
@@ -299,7 +308,7 @@ function arenaGrow(a: WorldArena, need: number): void {
 	}
 }
 
-function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: number): number {
+function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: number): ShadowId {
 	let id = a.shadowFree;
 	if (id !== 0) {
 		// Reuse a dead-shadow record (see WorldArena.shadowFree): it was
@@ -706,7 +715,7 @@ export function arenaCheckerLayout(): {
  */
 export function createWorldArena(core: EngineCore): void {
 	// Stable resident columns/registries, aliased once (identity-shared).
-	const nodesArr = core.nodesArr;
+	const nodeIndexToInternals = core.nodeIndexToInternals;
 	const nodeToWatchers = core.nodeToWatchers;
 	const lastWalk = core.lastWalk;
 	const obsRefs = core.obsRefs;
@@ -742,7 +751,7 @@ export function createWorldArena(core: EngineCore): void {
 		// Dense nodeToShadow: pre-size to the node population and keep it PACKED
 		// (holey reads cost on the cold-read hot path; shadowFor probes this
 		// per read). arenaAllocShadow grows it densely past this watermark.
-		const n = nodesArr.length;
+		const n = nodeIndexToInternals.length;
 		for (let i = a.nodeToShadow.length; i < n; i++) a.nodeToShadow.push(0);
 		return a;
 	}
@@ -820,7 +829,7 @@ export function createWorldArena(core: EngineCore): void {
 	/** Shadow lookup/create with the GEN id-tenancy validation (the stamp is
 	 * the KERNEL record generation since the id-space merge): a dead-GEN
 	 * shadow never serves — it is reset cold and re-tenanted. */
-	function shadowFor(a: WorldArena, node: AnyNode, kindFlags: number): number {
+	function shadowFor(a: WorldArena, node: AnyInternals, kindFlags: number): number {
 		const ix = node.ix;
 		let sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
 		const gen = kernelGenOf(node.id); // one kernel-memory load per consult (priced by the bench trio)
@@ -860,7 +869,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * reset + strong-dominates ride inside arenaLink. The pre-dedup
 	 * observation capture rides the STRONG arm only (the observation union
 	 * is strong-only). */
-	function arenaRecordDep(dep: AnyNode, weak: boolean): void {
+	function arenaRecordDep(dep: AnyInternals, weak: boolean): void {
 		const a = arenaFrame;
 		if (a === undefined) return;
 		if (!weak) {
@@ -913,7 +922,7 @@ export function createWorldArena(core: EngineCore): void {
 		// ordinary refolds and dirty-list decay; carrying the check here
 		// covers every exit path). Size-0 bail first.
 		if (reclaimSkippedN !== 0) {
-			const node = nodesArr[a.memory[sh + ArenaField.NODE]!];
+			const node = nodeIndexToInternals[a.memory[sh + ArenaField.NODE]!];
 			if (node !== undefined) noteReclaimRetry(node.id);
 		}
 	}
@@ -945,7 +954,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * demand it. Refolds run under the arena-only routing override so
 	 * raw-handle reads inside fns resolve to arena values too; frame-link
 	 * sites feed the observation capture (raw reads have no reader hook). */
-	function arenaServe(a: WorldArena, node: AnyNode): Value {
+	function arenaServe(a: WorldArena, node: AnyInternals): Value {
 		if (node.kind === 'atom') {
 			const sh = shadowFor(a, node, ArenaFlag.K_SIGNAL | ArenaFlag.MUTABLE);
 			const memory = a.memory;
@@ -1019,7 +1028,7 @@ export function createWorldArena(core: EngineCore): void {
 		const flags = a.memory[sh + ArenaField.FLAGS]!;
 		if ((flags & ArenaFlag.K_COMPUTED) !== 0) return arenaUpdateComputed(a, sh);
 		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
-		const atom = nodesArr[nid] as AtomNode;
+		const atom = nodeIndexToInternals[nid] as AtomInternals;
 		// Marked ⇒ REFOLD unconditionally — no fingerprint shortcut.
 		const next = core.foldAtom(atom, a.world);
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
@@ -1043,7 +1052,7 @@ export function createWorldArena(core: EngineCore): void {
 	function arenaUpdateComputed(a: WorldArena, sh: number): boolean {
 		const c = core; // one context load; field accesses below keep the one-load shape
 		const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
-		const node = nodesArr[nid] as ComputedNode;
+		const node = nodeIndexToInternals[nid] as ComputedInternals;
 		a.memory[sh + ArenaField.DEPS_TAIL] = 0;
 		a.memory[sh + ArenaField.FLAGS] = (a.memory[sh + ArenaField.FLAGS]! | ArenaFlag.MUTABLE | ArenaFlag.RECURSED_CHECK) & ~(ArenaFlag.RECURSED | ArenaFlag.DIRTY | ArenaFlag.PENDING);
 		const savedFrameArena = arenaFrame;
@@ -1092,7 +1101,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * stack. A NESTED refold (inside an outer walk) has serveOverride
 	 * restored to the OUTER arena; clear it around the sync so discovery's
 	 * newest evaluations route newest. */
-	function arenaSyncObservationAfterRefold(node: AnyNode, captured: AnyNode[]): void {
+	function arenaSyncObservationAfterRefold(node: AnyInternals, captured: AnyInternals[]): void {
 		const so = core.serveOverride;
 		core.serveOverride = undefined;
 		try {
@@ -1276,7 +1285,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * Render arenas receive NO log-entry-driven fanout, ever (render-world
 	 * values are pin-frozen) — dev-asserted here; the one pin-exempt mark
 	 * source is resource settlement (`fromSettlement`). */
-	function fanAtomsToArena(a: WorldArena, atoms: AtomNode[], fromSettlement: boolean): void {
+	function fanAtomsToArena(a: WorldArena, atoms: AtomInternals[], fromSettlement: boolean): void {
 		if (a.kind === 'render' && !fromSettlement) {
 			throw new InvariantViolation('log-entry-flip fanout reached a render arena — render-world values are pin-frozen');
 		}
@@ -1296,14 +1305,14 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/** Reused single-atom buffer for single-write fanout (no per-write alloc). */
-	const oneAtom: AtomNode[] = [];
-	function oneAtomBuf(atom: AtomNode): AtomNode[] {
+	const oneAtom: AtomInternals[] = [];
+	function oneAtomBuf(atom: AtomInternals): AtomInternals[] {
 		oneAtom[0] = atom;
 		return oneAtom;
 	}
 
 	/** Fan into EVERY live committed arena (retirement, quiet fold). */
-	function fanAtomsToCommittedArenas(atoms: AtomNode[]): void {
+	function fanAtomsToCommittedArenas(atoms: AtomInternals[]): void {
 		if (rootToArena.size === 0) return; // the one scalar check quiet writes pay
 		for (const a of rootToArena.values()) fanAtomsToArena(a, atoms, false);
 	}
@@ -1515,7 +1524,7 @@ export function createWorldArena(core: EngineCore): void {
 	/** One arena's reverse-deps half of the fixup closure (strong links).
 	 * The arena's NODE column stores nodeIndexes (dense column keys), so
 	 * visited shadows map back to NodeIds through the dense node row. */
-	function closureOverArena(a: WorldArena, node: AnyNode, closure: Set<NodeId>): void {
+	function closureOverArena(a: WorldArena, node: AnyInternals, closure: Set<NodeId>): void {
 		const start = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0;
 		if (start === 0) return;
 		if (a.memory[start + ArenaField.NODE_GEN] !== kernelGenOf(node.id)) return; // dead-tenancy residue never routes
@@ -1534,7 +1543,7 @@ export function createWorldArena(core: EngineCore): void {
 					const dep = memory[l + ArenaLinkField.DEP]!;
 					if (walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] !== gen) {
 						walk[dep >> ArenaGeom.ID_TO_COLUMN_SHIFT] = gen;
-						const depNode = nodesArr[memory[dep + ArenaField.NODE]!];
+						const depNode = nodeIndexToInternals[memory[dep + ArenaField.NODE]!];
 						if (depNode !== undefined) closure.add(depNode.id);
 						stack[sp++] = dep;
 					}
@@ -1593,13 +1602,13 @@ export function createWorldArena(core: EngineCore): void {
 			for (let ix = 0; ix < a.nodeToShadow.length; ix++) {
 				const sh = a.nodeToShadow[ix]!;
 				if (sh === 0) continue;
-				const depNode = nodesArr[ix];
+				const depNode = nodeIndexToInternals[ix];
 				if (depNode === undefined) continue; // dead residue: not part of the live graph
 				for (let list = 0; list < 2; list++) {
 					let l = arenaSubsHead(a, sh, list);
 					while (l !== 0) {
 						const sub = memory[l + ArenaLinkField.SUB]!;
-						const subNode = nodesArr[memory[sub + ArenaField.NODE]!];
+						const subNode = nodeIndexToInternals[memory[sub + ArenaField.NODE]!];
 						if (subNode !== undefined) {
 							let s = out.get(depNode.id);
 							if (s === undefined) {
@@ -1618,7 +1627,7 @@ export function createWorldArena(core: EngineCore): void {
 
 	/** Test seam: a committed arena's (dep → sub) link mode, or undefined
 	 * when no link exists (the mode-transition pins read it). @internal */
-	function __arenaLinkMode(rootId: RootId, dep: AnyNode, sub: AnyNode): 'strong' | 'weak' | undefined {
+	function __arenaLinkMode(rootId: RootId, dep: AnyInternals, sub: AnyInternals): 'strong' | 'weak' | undefined {
 		const a = rootToArena.get(rootId);
 		if (a === undefined) return undefined;
 		const depSh = a.nodeToShadow[dep.ix] ?? 0;
@@ -1635,7 +1644,7 @@ export function createWorldArena(core: EngineCore): void {
 	/** Test seam: a committed arena's live (dep → sub) link record id, or 0
 	 * when no link exists (freelist-discipline pins capture ids before a
 	 * teardown). @internal */
-	function __arenaLinkIdForTest(rootId: RootId, dep: AnyNode, sub: AnyNode): number {
+	function __arenaLinkIdForTest(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number {
 		const a = rootToArena.get(rootId);
 		if (a === undefined) return 0;
 		const depSh = a.nodeToShadow[dep.ix] ?? 0;

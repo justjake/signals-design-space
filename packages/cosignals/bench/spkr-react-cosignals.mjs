@@ -60,7 +60,7 @@ for (let r = 0; r < WARMUP; r++) await round();
 const times = [];
 for (let r = 0; r < ROUNDS; r++) times.push(await round());
 times.sort((x, y) => x - y);
-const node = oldTree ? bridge.kernelIdToNode.get(a._id) : bridge.idToNode.get(a._id);
+const node = oldTree ? bridge.kernelIdToNode.get(a._id) : bridge.idToNode !== undefined ? bridge.idToNode.get(a._id) : mod.__internalsByIdForTest(a._id);
 const checksum = container.textContent.length + Number(bridge.newestValue(node));
 row({
 	gate: 'SPK-R', config: 'react-cosignals', shape: `N${N}`,

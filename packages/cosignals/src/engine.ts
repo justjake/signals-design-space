@@ -46,7 +46,7 @@ import { createSettlement } from './settlement.js';
 import { createSubscriptionManager, type SubscriptionManager } from './SubscriptionManager.js';
 import { createRenderPassManager, type RenderPass, type RenderPassManager, type Watcher } from './RenderPass.js';
 import type { Atom, Computed } from './index.js';
-import type { AnyNode, AtomNode, ComputedNode, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
+import type { AnyInternals, AtomInternals, ComputedInternals, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
 
 /** Write-kind tags: the packed log entry column AND the write surface's kind
  * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the same codes
@@ -80,8 +80,9 @@ export const probes = { logEntries: 0, batches: 0, worldEvals: 0, bridges: 0 };
  * the sequence clocks, the quiet flag, the write path's last-batch cache,
  * and the driver/devChecks slots. */
 export type ConcurrentEngineHost = {
-	idToNode: Map<number, AnyNode>;
-	nodesArr: (AnyNode | undefined)[];
+	/** THE node registry: nodes by nodeIndex (dense; bare record ids resolve
+	 * through the record's live NODE_INDEX — see concurrent.ts). */
+	nodeIndexToInternals: (AnyInternals | undefined)[];
 	nodeToWatchers: (Watcher[] | undefined)[];
 	lastWalk: number[];
 	watchers: Map<WatcherId, Watcher>;
@@ -90,12 +91,12 @@ export type ConcurrentEngineHost = {
 	roots: Map<RootId, RootState>;
 	root(id: RootId): RootState;
 	/** Handle resolution (content allocation on first participation). */
-	nodeForAtom(atom: Atom<unknown>): AtomNode;
-	nodeForComputed(c: Computed<unknown>): ComputedNode;
-	kernelStrongDepsOf(node: ComputedNode): AnyNode[];
-	kernelReadOf(dep: AnyNode): Value;
+	internalsForAtom(atom: Atom<unknown>): AtomInternals;
+	internalsForComputed(c: Computed<unknown>): ComputedInternals;
+	kernelStrongDepsOf(node: ComputedInternals): AnyInternals[];
+	kernelReadOf(dep: AnyInternals): Value;
 	/** The optional compaction observer slot (the engine's public `onCompact`). */
-	getOnCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined;
+	getOnCompact(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined;
 	/** The driver slot's presence + the devChecks switch (openBatch's
 	 * dev-time guard reads both). */
 	isDriverAttached(): boolean;
@@ -135,8 +136,7 @@ export type ConcurrentEngine = {
 export function createConcurrentEngine(host: ConcurrentEngineHost, options?: EngineResetOptions): ConcurrentEngine {
 	probes.bridges++; // engine-activity counter: counts COMPOSITIONS (module init + resets; tests/one-core.spec.ts)
 	// Stable resident containers, aliased once (identity-shared).
-	const idToNode = host.idToNode;
-	const nodesArr = host.nodesArr;
+	const nodeIndexToInternals = host.nodeIndexToInternals;
 	const rootToOpenRender = host.rootToOpenRender;
 	// The core binding the pre-core factories' arrows close over (assigned
 	// below, read only at call time — every caller runs post-composition).
@@ -174,8 +174,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// their tables onto it (cycles resolve by reading the late-bound slots
 	// at call time, never at import time).
 	core = createEngineCore({
-		idToNode,
-		nodesArr,
+		nodeIndexToInternals,
 		nodeToWatchers: host.nodeToWatchers,
 		lastWalk: host.lastWalk,
 		obsRefs: obs.refs,
@@ -191,8 +190,8 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 		// record reuse can never serve a dead tenant: disposal and the
 		// record-free scrub clear the handle link and the rows, so a reused
 		// id resolves fresh).
-		nodeForAtom: host.nodeForAtom,
-		nodeForComputed: host.nodeForComputed,
+		internalsForAtom: host.internalsForAtom,
+		internalsForComputed: host.internalsForComputed,
 		// The quiet derivation is composition-owned (above); the sequence
 		// clocks are module lets in concurrent.ts (thin arrows — every one
 		// is a transition/boundary call, never a per-read hot path).

@@ -10,7 +10,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __resetEngineForTest, engine, type AtomNode, type CosignalEngine, type WriteLogEntry } from 'cosignals';
+import { __resetEngineForTest, engine, type AtomInternals, type CosignalEngine, type WriteLogEntry } from 'cosignals';
 import { attachRefereeStream, type RefereeStream } from '../../cosignals/tests/trace-events.js';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
@@ -23,7 +23,7 @@ export type Harness = {
 	events: RefereeStream;
 	/** Log entries as compaction folded them out of the write logs (op-replay-fidelity
 	 * assertions; fed by the engine's onCompact referee seam). */
-	compacted: Array<{ atom: AtomNode; entry: WriteLogEntry }>;
+	compacted: Array<{ atom: AtomInternals; entry: WriteLogEntry }>;
 	roots: Root[];
 	containers: HTMLElement[];
 	/** createRoot over a fresh container div. */
@@ -58,7 +58,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// trace slot starts empty) and before the first engine operation, so the
 	// session is complete from event 0.
 	const events = attachRefereeStream(engine);
-	const compacted: Array<{ atom: AtomNode; entry: WriteLogEntry }> = [];
+	const compacted: Array<{ atom: AtomInternals; entry: WriteLogEntry }> = [];
 	engine.onCompact = (atom, entry) => compacted.push({ atom, entry });
 	const handle = registerCosignalReact();
 	const roots: Root[] = [];

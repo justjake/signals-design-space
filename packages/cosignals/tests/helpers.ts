@@ -35,8 +35,8 @@ import {
 	BATCH_NONE,
 	__resetEngineForTest,
 	ScheduleError as EScheduleError,
-	type AnyNode as ENode,
-	type AtomNode as EAtomNode,
+	type AnyInternals as EInternals,
+	type AtomInternals as EAtomInternals,
 	type CosignalEngine,
 	type RenderPass as ERenderPass,
 	type Subscription as ESubscription,
@@ -103,7 +103,7 @@ function capture(fn: () => unknown): Thrown {
 
 /** Referee configuration — a single-node body (the engine twin of the
  * model's mountReactEffect). */
-export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: ENode, name: string): ESubscription {
+export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: EInternals, name: string): ESubscription {
 	const e = b.mountCommittedObserver(rootId, name);
 	e.body = () => void b.captureRead(node);
 	b.captureRun(e.id, e.body);
@@ -112,7 +112,7 @@ export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: 
 
 /** Referee configuration — a body that re-chooses deps CAUSALLY:
  * captureRead(sel) ? captureRead(a) : captureRead(b). */
-export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, sel: ENode, a: ENode, bb: ENode, name: string): ESubscription {
+export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, sel: EInternals, a: EInternals, bb: EInternals, name: string): ESubscription {
 	const e = b.mountCommittedObserver(rootId, name);
 	e.body = () => void (b.captureRead(sel) ? b.captureRead(a) : b.captureRead(bb));
 	b.captureRun(e.id, e.body);
@@ -149,7 +149,7 @@ const coreEffectMounts = new Map<number, number>();
  * intervening event/seq used to create the same `CE${events}.${seq}.${epoch}`
  * uniq) would make that comparison ambiguous.
  */
-export function mountEngineCoreEffect(b: CosignalEngine, node: ENode, name: string, writeTo?: EAtomNode): EngineCoreEffect {
+export function mountEngineCoreEffect(b: CosignalEngine, node: EInternals, name: string, writeTo?: EAtomInternals): EngineCoreEffect {
 	const ordinal = coreEffectMounts.get(engineEpoch) ?? 0;
 	coreEffectMounts.set(engineEpoch, ordinal + 1);
 	const rec: EngineCoreEffect = { name: `${name}#${ordinal}`, runs: 0, lastValue: undefined, dispose: () => {} };
@@ -210,7 +210,7 @@ export class TwinDriver {
 	 * allocates dense ids; the engine's NodeId is the kernel record id
 	 * (sparse — node and link records share one allocator, and freed record
 	 * ids recycle). Snapshots/events compare by NAME, never by id. */
-	private nodeMap = new Map<AnyNode, ENode>();
+	private nodeMap = new Map<AnyNode, EInternals>();
 	private idToEngineRenderPass = new Map<number, ERenderPass>();
 	/** Model react-effect id → engine subscription id. The id spaces diverge
 	 * once a core effect mounts: the model's `nextEffect` ticks for BOTH
@@ -244,7 +244,7 @@ export class TwinDriver {
 	get epoch(): number { return this.model.epoch; }
 	get ambientBatch(): number | undefined { return this.model.ambientBatch; }
 
-	private toEngine(node: AnyNode): ENode {
+	private toEngine(node: AnyNode): EInternals {
 		const e = this.nodeMap.get(node);
 		if (e === undefined) throw new Error(`twin: node ${node.name} was not created through the driver`);
 		return e;
@@ -342,9 +342,9 @@ export class TwinDriver {
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const mNode = this.model.atom(name, initial, equals);
-		const eNode = this.engine.atom(name, initial, equals);
-		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
-		this.mirror.setOrigin(eNode as EAtomNode, initial);
+		const eInternals = this.engine.atom(name, initial, equals);
+		this.nodeMap.set(mNode, eInternals); // ids live in different spaces — the mapping is the resolution
+		this.mirror.setOrigin(eInternals as EAtomInternals, initial);
 		return mNode;
 	}
 
@@ -357,21 +357,21 @@ export class TwinDriver {
 	 * a log entry, batch, or event.
 	 */
 	joinAtom(name: string, handle: Atom<unknown>): AtomNode {
-		const eNode = this.engine.nodeForAtom(handle);
-		eNode.name = name; // referee naming: streams compare by name
-		const mNode = this.model.atom(name, eNode.base);
-		expect(Object.is(mNode.base, eNode.base), 'twin joinAtom: seeded base diverged').toBe(true);
-		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
-		this.mirror.setOrigin(eNode, eNode.base);
+		const eInternals = this.engine.internalsForAtom(handle);
+		eInternals.name = name; // referee naming: streams compare by name
+		const mNode = this.model.atom(name, eInternals.base);
+		expect(Object.is(mNode.base, eInternals.base), 'twin joinAtom: seeded base diverged').toBe(true);
+		this.nodeMap.set(mNode, eInternals); // ids live in different spaces — the mapping is the resolution
+		this.mirror.setOrigin(eInternals, eInternals.base);
 		return mNode;
 	}
 
 	computed(name: string, fn: (read: (n: AnyNode) => Value, untracked: (n: AnyNode) => Value) => Value) {
 		const mNode = this.model.computed(name, fn);
-		const eNode = this.engine.computed(name, (read, untracked) =>
+		const eInternals = this.engine.computed(name, (read, untracked) =>
 			fn((d) => read(this.toEngine(d as AnyNode)), (d) => untracked(this.toEngine(d as AnyNode))),
 		);
-		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
+		this.nodeMap.set(mNode, eInternals); // ids live in different spaces — the mapping is the resolution
 		return mNode;
 	}
 
@@ -408,8 +408,8 @@ export class TwinDriver {
 	private mirrorQuietFold(node: AtomNode, op: Op, mark: number): void {
 		for (const e of this.model.events.slice(mark)) {
 			if (e.type !== 'quiet-write') continue;
-			const eNode = this.toEngine(node) as EAtomNode;
-			this.mirror.archiveOf(eNode).push({ op, batch: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
+			const eInternals = this.toEngine(node) as EAtomInternals;
+			this.mirror.archiveOf(eInternals).push({ op, batch: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
 		}
 	}
 
@@ -503,7 +503,7 @@ export class TwinDriver {
 
 	mountCoreEffect(node: AnyNode, name: string, writeTo?: AtomNode): CoreEffect {
 		return this.both('mountCoreEffect', () => this.model.mountCoreEffect(node, name, writeTo), () =>
-			mountEngineCoreEffect(this.engine, this.toEngine(node), name, writeTo === undefined ? undefined : this.toEngine(writeTo) as EAtomNode));
+			mountEngineCoreEffect(this.engine, this.toEngine(node), name, writeTo === undefined ? undefined : this.toEngine(writeTo) as EAtomInternals));
 	}
 
 	discardAllWip(): void {
@@ -579,7 +579,7 @@ export class TwinDriver {
 		checkInvariants(this.view);
 		// Eager-apply invariant: writes land in the kernel immediately, so the
 		// kernel's newest value must equal replaying the log entries over the base.
-		for (const n of this.engine.idToNode.values()) {
+		for (const n of this.engine.idToInternals.values()) {
 			if (n.kind !== 'atom') continue;
 			const folded = this.engine.foldAtom(n, { kind: 'newest' } as EWorld);
 			const kernel = this.engine.newestValue(n);

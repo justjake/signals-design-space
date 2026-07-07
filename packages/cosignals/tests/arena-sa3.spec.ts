@@ -19,7 +19,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
@@ -38,7 +38,7 @@ function bridge(): CosignalEngine {
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
-function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
@@ -46,15 +46,15 @@ function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
-function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
 }
 
-/** The shim-wrapper analog (`makeComputedNode`): a background suspension
+/** The shim-wrapper analog (`internalsForComputed`'s world fn): a background suspension
  * folds to the thenable's stable sentinel VALUE instead of unwinding. */
-function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
+function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyInternals {
 	return b.computed(name, (read, untracked) => {
 		try {
 			return fn(read, untracked);
@@ -78,8 +78,8 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		const b = bridge();
 		// TOP FIRST — lowest node id; the fn closures resolve the handles
 		// declared below (bodies only run at evaluation time).
-		let mid!: AnyNode;
-		let base!: AnyNode;
+		let mid!: AnyInternals;
+		let base!: AnyInternals;
 		const top = b.computed('top', (read) => read(mid));
 		mid = b.computed('mid', (read) => read(base));
 		base = b.atom('base', 2);
@@ -100,9 +100,9 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 	it('COMPUTED cold base: a settlement-marked suspended leaf decays cold under an unwatched cone — the top-first walk must refold through it', async () => {
 		const b = bridge();
 		// TOP FIRST again; the suspending leaf and the atom get the highest ids.
-		let mid!: AnyNode;
-		let leaf!: AnyNode;
-		let k!: AnyNode;
+		let mid!: AnyInternals;
+		let leaf!: AnyInternals;
+		let k!: AnyInternals;
 		const top = b.computed('top', (read) => `${String(read(mid))}:${String(read(k))}`);
 		mid = b.computed('mid', (read) => {
 			const v = read(leaf);

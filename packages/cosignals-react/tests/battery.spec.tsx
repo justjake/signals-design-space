@@ -17,7 +17,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom, ReducerAtom, SuspendedRead, effect, type AtomNode } from 'cosignals';
+import { Atom, ReducerAtom, SuspendedRead, effect, __internalsByIdForTest, type AtomInternals } from 'cosignals';
 import * as CosignalReact from '../src/index.js';
 import { useSignal, useComputed, useSignalEffect, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
@@ -64,7 +64,7 @@ describe('battery (spec §6) at React level', () => {
 		// Divergence window: committed world (and the DOM) hold the old value
 		// while the newest world already folded the pending write.
 		expect(text(container)).toBe('c:10;s:1;');
-		const node = h.bridge.idToNode.get(a._id) as AtomNode;
+		const node = __internalsByIdForTest(a._id) as AtomInternals;
 		expect(h.bridge.newestValue(node)).toBe(2);
 		gate.settled = true;
 		await act(async () => {
@@ -97,7 +97,7 @@ describe('battery (spec §6) at React level', () => {
 			flushSync(() => b.set(2)); // urgent synchronous commit excludes it
 			mid = text(container);
 			// Always-log: the excluded write already holds a log entry.
-			const node = h.bridge.idToNode.get(a._id) as AtomNode;
+			const node = __internalsByIdForTest(a._id) as AtomInternals;
 			expect(node.log.length).toBe(1);
 		});
 		expect(mid).toBe('a:0;b:2;');
@@ -218,7 +218,7 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:5;');
-		const node = h.bridge.idToNode.get(a._id) as AtomNode;
+		const node = __internalsByIdForTest(a._id) as AtomInternals;
 		// Both writes held log entries (the retained referee event log counts
 		// them; the log entries themselves compacted into base at retirement).
 		expect(h.events.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
@@ -350,7 +350,7 @@ describe('battery (spec §6) at React level', () => {
 		// The batch retired through the same disposition-blind path: fold
 		// happened. React's "abandoned" report survives only as the shim's
 		// source-created batch-disposition record — pin it with the right value.
-		const orphanNode = h.bridge.idToNode.get(orphan._id)!;
+		const orphanNode = __internalsByIdForTest(orphan._id)!;
 		expect(h.events.eventsOfType('retired').length).toBeGreaterThan(0);
 		const dispositions = h.events.tracer.events('batch-disposition');
 		expect(dispositions.some((d) => d.data['committed'] === false)).toBe(true);
@@ -615,7 +615,7 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 		const settled = deferred<void>();
 		const argCounts: number[] = [];
 		let actionBatch: number | undefined;
-		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
+		const aNode = h.handle.shim.internalsForAtom(a as Atom<unknown>);
 		await act(async () => {
 			startSignalTransition(async function (...args: unknown[]) {
 				argCounts.push(args.length); // the action callback gets NO scope object — nothing at all
@@ -691,7 +691,7 @@ describe('context-free writes (BATCH_NONE is unreachable once a renderer provide
 		expect(h.bridge.liveBatches()).toHaveLength(0);
 		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (write logs compacted)
 		expect(h.bridge.quiet).toBe(true); // quiet mode re-armed for the next episode
-		const flagNode = h.bridge.idToNode.get(flag._id)!;
+		const flagNode = __internalsByIdForTest(flag._id)!;
 		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // the write persisted (committed truth)
 		expect(text(container)).toBe('a:1;');
 	});
@@ -738,7 +738,7 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		// driven at the engine level — writes attributed to the action's
 		// still-live engine batch, the shape a protocol lane merge or a
 		// runInBatch-delivered write produces.
-		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
+		const aNode = h.handle.shim.internalsForAtom(a as Atom<unknown>);
 		let actionBatch: number | undefined;
 		await act(async () => {
 			startSignalTransition(async () => {
@@ -795,7 +795,7 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const hold = deferred<void>();
 		// Engine-level member write into the action's still-live batch (see the
 		// coalescing test above for why the React surface no longer spells this).
-		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
+		const aNode = h.handle.shim.internalsForAtom(a as Atom<unknown>);
 		let actionBatch: number | undefined;
 		await act(async () => {
 			startSignalTransition(async () => {

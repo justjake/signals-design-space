@@ -24,7 +24,7 @@ import {
 	SuspendedRead,
 	effect,
 } from '../src/index.js';
-import { engine, __resetEngineForTest, type AtomNode, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AtomInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
 import { E, engineEpoch, __reclaimStatsForTest, __simulateReclaimForTest } from '../src/graph.js';
 
 const hasGC = typeof globalThis.gc === 'function';
@@ -62,7 +62,7 @@ function mount(b: CosignalEngine, root: string, node: Parameters<CosignalEngine[
 	return w;
 }
 
-function commitWrite(b: CosignalEngine, node: AtomNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AtomInternals, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, 0, value);
 	b.retire(t.id);
@@ -108,7 +108,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('watcher-index row: skip while a watcher entry exists (live or dormant); removeWatcher retries and frees', async () => {
 		const b = bridge();
 		const at = new Atom(1);
-		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const w = mount(b, 'R', an, 'W');
 		await tick(); // let mount/lifecycle microtasks settle
 		const id = idOf(at);
@@ -125,7 +125,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('open-render arena membership row: skip while an open render arena holds the node; render end (arena release) retries and frees', async () => {
 		const b = bridge();
 		const at = new Atom(3);
-		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', () => 0); // no dep on the atom: isolates the membership row
 		const p = b.renderStart('R', []);
 		const w = b.mountWatcher(p.id, keep, 'W');
@@ -149,7 +149,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 		const b = bridge();
 		const gate = deferred<string>();
 		const pub = new Computed<unknown>((ctx) => ctx.use(gate.promise));
-		const cn = b.nodeForComputed(pub as unknown as Computed<unknown>);
+		const cn = b.internalsForComputed(pub as unknown as Computed<unknown>);
 		const keep = b.computed('keep', () => 0);
 		mount(b, 'R', keep, 'W'); // the committed arena lives without watching cn
 		expect(b.committedValue(cn, 'R')).toBeInstanceOf(SuspendedRead); // suspended in the committed arena
@@ -190,7 +190,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('obsRefs row: skip while a committed subscription snapshot retains the node; the release-to-zero site retries and frees', async () => {
 		const b = bridge();
 		const at = new Atom(5);
-		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const sub = b.mountCommittedObserver('R', 'obs');
 		b.captureRun(sub.id, () => { void b.captureRead(an); }); // snapshot retains `an` (RCC-OL1)
 		const id = idOf(at);
@@ -206,7 +206,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 	it('WriteLog row: skip while log entries exist; compaction tape-empty transition retries and frees', async () => {
 		const b = bridge();
 		const at = new Atom(0);
-		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const t = b.openBatch();
 		b.write(t.id, an, 0, 9);
 		const id = idOf(at);
@@ -416,25 +416,25 @@ describe.runIf(hasGC)('P-L1b: unwatch-then-drop computeds reclaim', () => {
 });
 
 describe.runIf(hasGC)('P-L2: engine columns and maps release with the record', () => {
-	it('content-ful dropped handles leave idToNode/nodesArr at baseline after GC', async () => {
+	it('content-ful dropped handles leave idToInternals/nodeIndexToInternals at baseline after GC', async () => {
 		const b = bridge();
 		const keep = b.computed('keep', () => 0);
 		mount(b, 'R', keep, 'W'); // a live committed arena, so content sees real machinery
 		const churn = (n: number): void => {
 			for (let i = 0; i < n; ++i) {
 				const at = new Atom(i);
-				const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+				const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 				commitWrite(b, an, i + 1); // log entry + retirement compaction (guard exercised and cleared)
 			}
 		};
 		churn(16);
 		await gcSettle();
-		const base = b.idToNode.size;
+		const base = b.idToInternals.size;
 		for (let round = 0; round < 4; ++round) {
 			churn(16);
 			await gcSettle();
 		}
-		expect(b.idToNode.size - base).toBeLessThanOrEqual(16); // one-round tolerance, never exact-baseline
+		expect(b.idToInternals.size - base).toBeLessThanOrEqual(16); // one-round tolerance, never exact-baseline
 		expect(stats().skipped).toBeLessThanOrEqual(16);
 	});
 });

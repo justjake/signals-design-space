@@ -22,10 +22,11 @@ import {
 	BATCH_NONE,
 	ScheduleError,
 	__resetEngineForTest,
-	type AtomNode,
+	type AtomInternals,
 	type CosignalEngine,
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
+import { __eachInternalsForTest, __internalsByIdForTest } from '../src/concurrent.js';
 import { engineEpoch } from '../src/graph.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
@@ -129,8 +130,8 @@ const appliedOps = new Map<number, number>();
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
  * so name parity requires the MODEL's count — the differ supplies it. */
 export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: number): boolean {
-	const allNodes = [...b.idToNode.values()];
-	const atoms = allNodes.filter((n): n is AtomNode => n.kind === 'atom').slice(0, 4);
+	const allNodes = __eachInternalsForTest();
+	const atoms = allNodes.filter((n): n is AtomInternals => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
 	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
 	 * pair (0 = set, 1 = update) — the adapter's op-literal twin of the
@@ -178,13 +179,13 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				break;
 			}
 			case 'writeQ': {
-				const q = allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === 'q')!;
+				const q = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'q')!;
 				b.write(batchAt(b, op.batch), q, ...(op.kind === 'equalNewest' ? ([0, b.newestValue(q)] as [0, unknown]) : writeScalarsFor(op.kind, op.value)));
 				syncAmbient(); // a writing core effect's nested bare write can create the ambient batch
 				break;
 			}
 			case 'bareWriteQ': {
-				const q = allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === 'q')!;
+				const q = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'q')!;
 				b.bareWrite(q, ...(op.kind === 'equalNewest' ? [0, b.newestValue(q)] as [0, unknown] : writeScalarsFor(op.kind, op.value)));
 				syncAmbient();
 				break;
@@ -214,7 +215,7 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				// sibling firing order is implementation-defined, so a shared
 				// output's final value would be order-dependent).
 				if (reg.outWriters.has(outName)) throw new ScheduleError(`output atom ${outName} already has a writing effect`);
-				const out = allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === outName)!;
+				const out = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === outName)!;
 				mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`, out);
 				reg.outWriters.add(outName);
 				break;
@@ -285,7 +286,16 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __s
 			namingEvents = n;
 		},
 		apply: (op) => (applyEngineOp(b, op, namingEvents) ? 'applied' : 'skipped'),
-		snapshot: () => snapshotModel(b as unknown as CosignalModel),
+		// snapshotModel reads the model shape structurally (idToNode, roots,
+		// value accessors). The engine surface satisfies all of it except the
+		// id map (deleted with the engine's Map registry), so delegate to the
+		// surface and overlay a Map built from the internals enumeration seam.
+		snapshot: () =>
+			snapshotModel(
+				Object.assign(Object.create(b as object), {
+					idToNode: new Map(__eachInternalsForTest().map((n) => [n.id, n])),
+				}) as unknown as CosignalModel,
+			),
 		drainEvents() {
 			const events = stream.events;
 			const out = comparableEvents(events.slice(drained) as ModelEvent[]).map((e) => {
@@ -545,7 +555,7 @@ class DeliveryPrecedesCorrection {
 					continue;
 				}
 				const w = [...b.watchers.values()].find((x) => x.name === name);
-				const node = w !== undefined ? b.idToNode.get(w.node) : undefined;
+				const node = w !== undefined ? __internalsByIdForTest(w.node) : undefined;
 				const untrackedConsumer = node !== undefined && node.name === 'cMix';
 				if (
 					singleBoundary &&

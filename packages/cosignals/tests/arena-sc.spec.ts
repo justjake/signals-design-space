@@ -26,7 +26,7 @@
  *    CACHED VALUE never serves and the refold runs the CURRENT fn cold.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { Atom, Computed, effect } from '../src/index.js';
 
@@ -56,14 +56,14 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log };
 }
 
-function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyInternals, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
@@ -74,9 +74,9 @@ describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)
 		const b = bridge();
 		const { atom: atomA, log: logA } = observedAtom(10);
 		const { atom: atomB, log: logB } = observedAtom(20);
-		const nA = b.nodeForAtom(atomA as Atom<unknown>);
+		const nA = b.internalsForAtom(atomA as Atom<unknown>);
 		nA.name = 'A';
-		const nB = b.nodeForAtom(atomB as Atom<unknown>);
+		const nB = b.internalsForAtom(atomB as Atom<unknown>);
 		nB.name = 'B';
 		const flag = b.atom('flag', 0);
 		// World-divergent deps: flag=0 → {flag, A}; flag=1 → {flag, B}.
@@ -290,11 +290,11 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 			seen.push(c.state);
 		});
 		expect(seen).toEqual([11]); // newest: flag=true → a=10 → 11
-		const nFlag = b.nodeForAtom(flag);
+		const nFlag = b.internalsForAtom(flag);
 		nFlag.name = 'flag';
-		b.nodeForAtom(a).name = 'a';
-		b.nodeForAtom(bb).name = 'bb';
-		const nC = b.nodeForComputed(c as Computed<unknown>);
+		b.internalsForAtom(a).name = 'a';
+		b.internalsForAtom(bb).name = 'bb';
+		const nC = b.internalsForComputed(c as Computed<unknown>);
 		nC.name = 'c';
 
 		// Two worlds with DIFFERENT flag values (the dep flip): w1 = the render
@@ -312,7 +312,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		// arena links. w2 folds it; newest is on the bb branch (kernel links
 		// exclude a — the write is delivery-silent there); w1's pin excludes it.
 		const t2 = b.openBatch();
-		b.write(t2.id, b.nodeForAtom(a), 0, 100);
+		b.write(t2.id, b.internalsForAtom(a), 0, 100);
 		b.retire(t2.id);
 		expect(seen).toEqual([11, 21]); // no newest re-run: a is off m's newest dep set (the ruling's tracked-only rule)
 		expect(b.committedValue(nC, 'R2')).toBe(101); // w2: flag=true (no t1) → a=100 → 101
@@ -338,13 +338,13 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 			poker.set((flag.state ? a.state : bb.state) as number); // a write during the world evaluation
 			return 0;
 		});
-		const nPokerWriter = b.nodeForComputed(pokerWriter as Computed<unknown>);
+		const nPokerWriter = b.internalsForComputed(pokerWriter as Computed<unknown>);
 		nPokerWriter.name = 'pokerWriter';
 		expect(() => b.renderValue(nPokerWriter, p1)).toThrow(/write during a world evaluation/); // render purity, era-free
 		expect(pokerSeen).toEqual([0]); // the rejected write left nothing behind
 		b.disposeComputed(pokerWriter as Computed<unknown>); // purge the boxed throw from every arena
 		const noisy = new Computed<number>(() => (flag.state ? a.state : bb.state) as number);
-		const nNoisy = b.nodeForComputed(noisy as Computed<unknown>);
+		const nNoisy = b.internalsForComputed(noisy as Computed<unknown>);
 		nNoisy.name = 'noisy';
 		expect(b.renderValue(nNoisy, p1)).toBe(20); // w1: flag=false → bb
 		expect(b.committedValue(nNoisy, 'R2')).toBe(100); // w2: flag=true → a=100
@@ -366,7 +366,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		disposeEff();
 		disposePoker();
 		const t4 = b.openBatch();
-		b.write(t4.id, b.nodeForAtom(a), 0, 7);
+		b.write(t4.id, b.internalsForAtom(a), 0, 7);
 		b.write(t4.id, nFlag, 0, true);
 		b.retire(t4.id);
 		expect(c.state).toBe(8); // kernel fully functional after dispose (lazy re-eval)
@@ -376,7 +376,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.retire(t1.id);
 		// Zero-world sync semantics intact after everything.
 		const t5 = b.openBatch();
-		b.write(t5.id, b.nodeForAtom(bb), 0, 99);
+		b.write(t5.id, b.internalsForAtom(bb), 0, 99);
 		b.write(t5.id, nFlag, 0, false);
 		b.retire(t5.id);
 		expect(c.state).toBe(100);

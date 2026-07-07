@@ -22,8 +22,8 @@
  */
 import { visible, type VisibilityHost, type World as ModelWorld } from '../../cosignals-oracle/src/model.js';
 import type {
-	AnyNode as ENode,
-	AtomNode,
+	AnyInternals as EInternals,
+	AtomInternals,
 	CosignalEngine,
 	RenderPass,
 	RenderPassId,
@@ -38,8 +38,8 @@ import type {
 
 /** The full-history mirror a twin driver owns and feeds. */
 export class RefereeMirror {
-	private origins = new Map<AtomNode, Value>();
-	private archives = new Map<AtomNode, WriteLogEntry[]>();
+	private origins = new Map<AtomInternals, Value>();
+	private archives = new Map<AtomInternals, WriteLogEntry[]>();
 
 	/** Install the compaction feed on a bridge (call once, at driver setup). */
 	attach(engine: CosignalEngine): void {
@@ -47,13 +47,13 @@ export class RefereeMirror {
 	}
 
 	/** Record an atom's origin (at creation; refreshed by originsFromBase). */
-	setOrigin(atom: AtomNode, value: Value): void {
+	setOrigin(atom: AtomInternals, value: Value): void {
 		this.origins.set(atom, value);
 	}
 
 	/** The quiescence episode reset sets origin to base (the model's episode reset twin). */
 	originsFromBase(engine: CosignalEngine): void {
-		for (const n of engine.idToNode.values()) {
+		for (const n of engine.idToInternals.values()) {
 			if (n.kind === 'atom') this.origins.set(n, n.base);
 		}
 	}
@@ -63,11 +63,11 @@ export class RefereeMirror {
 		this.archives.clear();
 	}
 
-	originOf(atom: AtomNode): Value {
+	originOf(atom: AtomInternals): Value {
 		return this.origins.get(atom);
 	}
 
-	archiveOf(atom: AtomNode): WriteLogEntry[] {
+	archiveOf(atom: AtomInternals): WriteLogEntry[] {
 		let a = this.archives.get(atom);
 		if (a === undefined) {
 			a = [];
@@ -85,9 +85,9 @@ type ViewAtom = {
 	readonly baseSeq: number;
 	readonly archive: WriteLogEntry[];
 	readonly origin: Value;
-	__engine: AtomNode;
+	__engine: AtomInternals;
 };
-type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: ENode };
+type ViewNode = ViewAtom | { kind: 'computed'; name: string; __engine: EInternals };
 
 /** A view render pass: the model-shaped face of one engine render pass — the Set-valued
  * `maskSlots` the oracle's tenancy check reads, derived from the bit form. */
@@ -126,7 +126,7 @@ function engineWorld(w: World): World {
  * reducers are pure by the fold-purity contract the engine enforces; the
  * object-shaped op is the materialized WriteLogEntry surface — engine truth is the
  * packed scalar pair). */
-function applyOp(atom: AtomNode, op: WriteLogEntry['op'], prev: Value): Value {
+function applyOp(atom: AtomInternals, op: WriteLogEntry['op'], prev: Value): Value {
 	switch (op.kind) {
 		case 'set':
 			return op.value;
@@ -141,7 +141,7 @@ function applyOp(atom: AtomNode, op: WriteLogEntry['op'], prev: Value): Value {
  * — it presents exactly the members those checkers read at runtime.
  */
 export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record<string, unknown> {
-	const viewNode = (n: ENode): ViewNode => {
+	const viewNode = (n: EInternals): ViewNode => {
 		if (n.kind !== 'atom') return { kind: 'computed', name: n.name, __engine: n };
 		return {
 			kind: 'atom',
@@ -175,7 +175,7 @@ export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record
 	return {
 		get idToNode(): Map<number, ViewNode> {
 			const out = new Map<number, ViewNode>();
-			for (const [id, n] of engine.idToNode) out.set(id, viewNode(n));
+			for (const [id, n] of engine.idToInternals) out.set(id, viewNode(n));
 			return out;
 		},
 		get idToRenderPass(): Map<RenderPassId, ViewRenderPass> {
@@ -196,14 +196,14 @@ export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record
 			return engine.seq;
 		},
 		quiescent: () => engine.quiescent(),
-		evaluate: (n: unknown, w: World) => engine.evaluate(unwrap<ENode>(n), engineWorld(w)),
-		foldAtom: (n: unknown, w: World) => engine.foldAtom(unwrap<ENode>(n) as AtomNode, engineWorld(w)),
-		newestValue: (n: unknown) => engine.newestValue(unwrap<ENode>(n)),
-		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap<ENode>(n), root),
-		renderValue: (n: unknown, p: unknown) => engine.renderValue(unwrap<ENode>(n), unwrap<RenderPass>(p)),
+		evaluate: (n: unknown, w: World) => engine.evaluate(unwrap<EInternals>(n), engineWorld(w)),
+		foldAtom: (n: unknown, w: World) => engine.foldAtom(unwrap<EInternals>(n) as AtomInternals, engineWorld(w)),
+		newestValue: (n: unknown) => engine.newestValue(unwrap<EInternals>(n)),
+		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap<EInternals>(n), root),
+		renderValue: (n: unknown, p: unknown) => engine.renderValue(unwrap<EInternals>(n), unwrap<RenderPass>(p)),
 		/** The retention invariant's full-history fold: origin + archive + write log. */
 		shadowFoldAtom(n: unknown, world: World): Value {
-			const atom = unwrap<ENode>(n) as AtomNode;
+			const atom = unwrap<EInternals>(n) as AtomInternals;
 			// The rule is WriteLogEntry/Set-shaped; worlds arrive bit-shaped (mountFix)
 			// or carrying view render passes (whose host lookups unwrap) — translate here.
 			const w: ModelWorld =

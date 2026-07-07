@@ -215,7 +215,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 			effectRuns++;
 		});
 		const rHandle = new ReducerAtom<number, number>((s, a) => s + a, 0);
-		const r = engine.nodeForAtom(rHandle as unknown as Atom<number>);
+		const r = engine.internalsForAtom(rHandle as unknown as Atom<number>);
 		r.name = 'regReducer';
 		// No reducer wiring: dispatch records as an update whose closure carries the reducer.
 		const before = __coreProbes();
@@ -244,7 +244,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 	it('standalone-era atoms join as committed-only base state (the node-less arm)', () => {
 		const handle = new Atom(41);
 		handle.set(42); // standalone history: the node-less arm (plain graph write)
-		const la = engine.nodeForAtom(handle); // content allocates; base seeds from kernel-current
+		const la = engine.internalsForAtom(handle); // content allocates; base seeds from kernel-current
 		la.name = 'joined';
 		expect(la.base).toBe(42);
 		expect(la.log.materialize()).toHaveLength(0);
