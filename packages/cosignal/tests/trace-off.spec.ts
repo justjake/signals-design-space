@@ -34,7 +34,19 @@ const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** The concurrent engine's module set (the one entry plus its extracted
  * mechanism modules) — every source-discipline scan below covers all of
  * them, so an extraction can never silently exit the zero-cost contract. */
-const ENGINE_MODULES = ['src/concurrent.ts', 'src/errors.ts', 'src/probes.ts', 'src/deliver.ts', 'src/observation.ts', 'src/WriteLog.ts', 'src/Batch.ts'];
+const ENGINE_MODULES = [
+	'src/concurrent.ts',
+	'src/errors.ts',
+	'src/probes.ts',
+	'src/deliver.ts',
+	'src/observation.ts',
+	'src/WriteLog.ts',
+	'src/Batch.ts',
+	'src/World.ts',
+	'src/WorldArena.ts',
+	'src/settlement.ts',
+	'src/Subscription.ts',
+];
 
 function src(rel: string): string {
 	return readFileSync(join(pkgDir, rel), 'utf8')
@@ -67,18 +79,34 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 	});
 
 	it("the engine's only tracing state is the one nullable slot, captured locally", () => {
-		// Mechanism modules receive the slot through their deps as
-		// `trace(): TraceHooks | undefined` and capture it locally per site
-		// (`const tr = deps.trace();`) — the engine-side arrow that feeds
-		// them is the composition site's one additional read form.
+		// The slot's STORAGE is the shared engine-core record's `trace` field
+		// (World.ts declares it; the class exposes the `bridge.trace` accessor
+		// pair over it). Mechanism modules capture it locally per site —
+		// `const tr = core.trace;` for the core-wired factories, or through a
+		// deps arrow (`const tr = deps.trace();`) for the arrow-wired ones —
+		// and the engine-side arrow that feeds the latter is the composition
+		// site's one additional read form.
 		const lines = src('src/concurrent.ts').split('\n');
 		for (const line of lines) {
 			if (!line.includes('this.trace')) continue;
 			const t = line.trim();
 			expect(
-				t === 'trace: TraceHooks | undefined = undefined;' || t.startsWith('const tr = this.trace;') || t === 'trace: () => this.trace,',
+				t.startsWith('const tr = this.trace;') || t === 'trace: () => this.trace,',
 				`unexpected use of the trace slot: ${t}`,
 			).toBe(true);
+		}
+		// The class accessor pair is the only surface over the core field.
+		expect(src('src/concurrent.ts')).toMatch(/return this\.core\.trace;/);
+		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts']) {
+			const lines2 = src(rel).split('\n');
+			for (const line of lines2) {
+				if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;
+				const t = line.trim();
+				expect(
+					t.startsWith('const tr = core.trace;') || t.startsWith('const tr = c.trace;') || t === 'trace: undefined,' || t.startsWith('trace: TraceHooks | undefined;'),
+					`unexpected use of the trace slot in ${rel}: ${t}`,
+				).toBe(true);
+			}
 		}
 	});
 
