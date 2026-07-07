@@ -30,7 +30,7 @@ const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
 // concurrency engine — including the freelist alloc/free pair the row-2 fix
 // rethreaded.
 const BUDGETS: Record<string, number> = {
-	// graph kernel (src/index.ts createEngine internals)
+	// graph kernel (src/graph.ts createEngine internals)
 	link: 180, // 154: re-track fast path
 	linkInsert: 380, // 346: out-of-line insertion tail (+ D1's per-link shift at S-C)
 	unlink: 350, // 308: S-C added D1's per-link lifecycle release (one dep

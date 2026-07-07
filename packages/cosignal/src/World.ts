@@ -33,10 +33,10 @@
 
 import { CycleError, SuspendedRead, __hostReadNewest, __hostRunFold, __kernelComputedRead, __setHostComputedRead, __setHostRead, __HOST_MISS, type Atom, type Computed } from './index.js';
 import { ScheduleError } from './errors.js';
-import { probes } from './probes.js';
+import { probes } from './engine.js';
 import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
-import type { BatchSlot, BatchSlotSet } from './Batch.js';
-import type { AnyNode, ArenaInitInts, AtomNode, ComputedNode, NodeId, Reader, RenderPass, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
+import type { Batch, BatchSlot, BatchSlotMeta, BatchSlotSet, BatchTable } from './Batch.js';
+import type { AnyNode, ArenaInitInts, AtomNode, ComputedNode, NodeId, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { CaptureFrame } from './Subscription.js';
 import type { DeliverTable, NotifyState } from './deliver.js';
 
@@ -84,6 +84,9 @@ export type EngineCore = {
 	obsSyncDeps: (node: AnyNode, list: AnyNode[]) => void;
 	/** Watchers by id (identity alias). */
 	watchers: Map<WatcherId, Watcher>;
+	/** RenderPass records by id (identity alias — RenderPass.ts owns every
+	 * transition; the resident quiescence sweep reads it in place). */
+	idToRenderPass: Map<RenderPassId, RenderPass>;
 	/** The one open render per root (identity alias). */
 	rootToOpenRender: Map<RootId, RenderPass>;
 	/** Root records by id (identity alias; arenaOf PROBES it — creation stays `root`). */
@@ -94,10 +97,6 @@ export type EngineCore = {
 	/** Root record lookup-or-create (resident: the committed/mountFix
 	 * membership consults materialize the root record — reference-model parity). */
 	root(id: RootId): RootState;
-	/** THE watcher→node resolution (resident — generation-checked; see concurrent.ts). */
-	resolveWatcherNode(w: Watcher): AnyNode | undefined;
-	/** The ONE urgent pre-paint watcher correction (resident). */
-	correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean;
 	/** The module-level host read hook targets (concurrent.ts's one-per-process
 	 * routers), passed as values for `syncReadRouting`'s arming. */
 	hostReadImpl(atom: Atom<unknown>): unknown;
@@ -106,8 +105,29 @@ export type EngineCore = {
 	readAdopter(): ((atom: Atom<unknown>) => AtomNode) | undefined;
 	/** Public-Computed-handle resolution (resident registry/adoption cluster). */
 	nodeForComputed(c: Computed<unknown>): ComputedNode;
+	/** Quiet-state recompute at pipeline transitions (resident derivation until
+	 * the engine composition owns it — batch open/retire, render start/end). */
+	recomputeQuiet(): void;
+	/** The one global sequence clock (resident fields until the engine
+	 * composition owns them): increment-and-read, plain read (render pins),
+	 * the committed-advance read (mount-fixup baselines), and the
+	 * committed-advance bump (per-root commits, history-changing retirements). */
+	nextSeq(): Seq;
+	getSeq(): Seq;
+	getCommittedAdvance(): Seq;
+	advanceCommitted(): void;
 	/** Initial arena buffer size in ints (BridgeOptions knob). */
 	arenaInitInts: ArenaInitInts;
+
+	// ---- composition-assigned tables (assigned by the composition site right
+	// after their factories run — before any operation can call them; they are
+	// not creation deps because their factories take the core record) ----
+	/** The batch mechanism + retirement table (Batch.ts — the render-close
+	 * orchestration and the resident write path reach it here). */
+	batch: BatchTable;
+	/** Write-log compaction over every candidate atom (WriteLog.ts
+	 * compactAll — retirement's fold step and the render-close pin release). */
+	compactAll(): void;
 
 	// ---- shared mutable state ----
 	/** True while this bridge is the module-level active bridge — the
@@ -170,6 +190,15 @@ export type EngineCore = {
 	/** Live subscription count (fast bail on the boundary-scan paths — owned
 	 * by the E6 subscription factory; resident/settlement pre-checks read it). */
 	committedSubCount: number;
+	// ---- direct listeners (the bindings' consumption surface — assigned
+	// through the class accessor pair; the delivery/fixup/correction sites
+	// read the fields off the captured core record, one load) ----
+	/** A value-blind delivery reached a live watcher (fresh or interleaved). */
+	onDelivery: ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined;
+	/** Mount fixup scheduled a corrective re-render into a live batch's lane. */
+	onMountCorrective: ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined;
+	/** An urgent pre-paint correction (mount window / committed-truth drift). */
+	onCorrection: ((w: Watcher) => void) | undefined;
 
 	// ---- core-created shared columns ----
 	/** Mark column (by nodeIndex) + generation for per-world cycle detection
@@ -181,12 +210,17 @@ export type EngineCore = {
 	rootToArena: Map<RootId, WorldArena>;
 	/** Pooled released arena shells (WorldArena-owned; test seam reads it). */
 	arenaPool: WorldArena[];
+	/** Watchers re-staled by their own commit, per root (RenderPass.ts's
+	 * re-staled loop writes; the durable drain consumes; retirement and the
+	 * commit lock-in read the size as their drain gate). */
+	restaled: Map<RootId, Set<Watcher>>;
 
 	// ---- late-bound: World ----
 	evaluate(node: AnyNode, world: World): Value;
 	foldAtom(atom: AtomNode, world: World): Value;
 	applyOp(atom: AtomNode, kind: WriteKind, payload: unknown, prev: Value): Value;
 	eqAtom(atom: AtomNode, a: Value, b: Value): boolean;
+	changedValue(node: AnyNode, prev: Value, next: Value): boolean;
 	inCallback<T>(fn: () => T): T;
 	cycleError(name: string): ScheduleError;
 	setWorld(w: World | undefined): void;
@@ -230,6 +264,19 @@ export type EngineCore = {
 
 	// ---- late-bound: Subscription (E6) ----
 	revalidateCommittedSubs(rootFilter: RootId | undefined): void;
+
+	// ---- late-bound: deliver (E7 — the walk orchestration) ----
+	/** The ONE urgent pre-paint watcher correction (deliver.ts). */
+	correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean;
+	quietDrain(): void;
+	drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void;
+	deliveryWalk(from: AtomNode, batch: Batch, slot: BatchSlotMeta, seq: Seq): void;
+
+	// ---- late-bound: RenderPass (E7) ----
+	/** THE watcher→node resolution (RenderPass.ts — generation-checked). */
+	resolveWatcherNode(w: Watcher): AnyNode | undefined;
+	/** The minimum live render pin (compaction's pin clause floor). */
+	minLivePin(): Seq;
 };
 
 /** The resident-provided slice of the core record (what the composition site
@@ -244,17 +291,21 @@ export type EngineCoreDeps = Pick<
 	| 'obsRefs'
 	| 'obsSyncDeps'
 	| 'watchers'
+	| 'idToRenderPass'
 	| 'rootToOpenRender'
 	| 'roots'
 	| 'notify'
 	| 'notifyState'
 	| 'root'
-	| 'resolveWatcherNode'
-	| 'correctWatcher'
 	| 'hostReadImpl'
 	| 'hostComputedReadImpl'
 	| 'readAdopter'
 	| 'nodeForComputed'
+	| 'recomputeQuiet'
+	| 'nextSeq'
+	| 'getSeq'
+	| 'getCommittedAdvance'
+	| 'advanceCommitted'
 	| 'arenaInitInts'
 >;
 
@@ -268,6 +319,9 @@ const LATE = undefined as never;
 export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 	return {
 		...deps,
+		// composition-assigned tables
+		batch: LATE,
+		compactAll: LATE,
 		// shared mutable state
 		isActive: false,
 		trace: undefined,
@@ -284,15 +338,20 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		opDepth: 0,
 		walkGen: 0,
 		committedSubCount: 0,
+		onDelivery: undefined,
+		onMountCorrective: undefined,
+		onCorrection: undefined,
 		// core-created shared columns
 		evalMark: [0],
 		rootToArena: new Map(),
 		arenaPool: [],
+		restaled: new Map(),
 		// late-bound: World
 		evaluate: LATE,
 		foldAtom: LATE,
 		applyOp: LATE,
 		eqAtom: LATE,
+		changedValue: LATE,
 		inCallback: LATE,
 		cycleError: LATE,
 		setWorld: LATE,
@@ -331,6 +390,14 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		pendingSettleCount: LATE,
 		// late-bound: Subscription (E6)
 		revalidateCommittedSubs: LATE,
+		// late-bound: deliver (E7)
+		correctWatcher: LATE,
+		quietDrain: LATE,
+		drainCommittedObservers: LATE,
+		deliveryWalk: LATE,
+		// late-bound: RenderPass (E7)
+		resolveWatcherNode: LATE,
+		minLivePin: LATE,
 	};
 }
 
@@ -588,6 +655,25 @@ export function createWorld(core: EngineCore): void {
 		return atom.eqIsDefault ? Object.is(a, b) : inCallback(() => atom.equals(a, b));
 	}
 
+	/** §4.5.3 (S-C): the value-change gate for compare-and-correct sites,
+	 * honoring a custom-equality computed's policy comparator — mountFix
+	 * fold-throughs (and evicted-then-refolded arena slots) create FRESH
+	 * references for comparator-equal values, which are NOT changes for a
+	 * custom-equality node (the kernel wrapper and the arena slot both keep
+	 * old references under the same policy). Exceptional payloads never
+	 * bridge the gate (sentinels compare by identity — battery 16d).
+	 * Default-equality nodes compare by identity, exactly as before. */
+	function changedValue(node: AnyNode, prev: Value, next: Value): boolean {
+		if (
+			node.kind === 'computed' && node.isEqual !== undefined
+			&& !(prev instanceof SuspendedRead) && !(next instanceof SuspendedRead)
+		) {
+			const eq = node.isEqual;
+			return !inCallback(() => eq(prev, next));
+		}
+		return !Object.is(prev, next);
+	}
+
 	/** The bridge's ONE cross-world cycle error (every construction site
 	 * builds it here so the surface message can never fork). */
 	function cycleError(name: string): ScheduleError {
@@ -765,6 +851,7 @@ export function createWorld(core: EngineCore): void {
 	core.foldAtom = foldAtom;
 	core.applyOp = applyOp;
 	core.eqAtom = eqAtom;
+	core.changedValue = changedValue;
 	core.inCallback = inCallback;
 	core.cycleError = cycleError;
 	core.setWorld = setWorld;

@@ -36,8 +36,8 @@ const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
  * them, so an extraction can never silently exit the zero-cost contract. */
 const ENGINE_MODULES = [
 	'src/concurrent.ts',
+	'src/engine.ts',
 	'src/errors.ts',
-	'src/probes.ts',
 	'src/deliver.ts',
 	'src/observation.ts',
 	'src/WriteLog.ts',
@@ -46,6 +46,10 @@ const ENGINE_MODULES = [
 	'src/WorldArena.ts',
 	'src/settlement.ts',
 	'src/Subscription.ts',
+	'src/RenderPass.ts',
+	'src/graph.ts',
+	'src/suspense.ts',
+	'src/lifecycle.ts',
 ];
 
 function src(rel: string): string {
@@ -97,13 +101,13 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		}
 		// The class accessor pair is the only surface over the core field.
 		expect(src('src/concurrent.ts')).toMatch(/return this\.core\.trace;/);
-		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts']) {
+		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/deliver.ts', 'src/RenderPass.ts', 'src/engine.ts']) {
 			const lines2 = src(rel).split('\n');
 			for (const line of lines2) {
 				if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;
 				const t = line.trim();
 				expect(
-					t.startsWith('const tr = core.trace;') || t.startsWith('const tr = c.trace;') || t === 'trace: undefined,' || t.startsWith('trace: TraceHooks | undefined;'),
+					t.startsWith('const tr = core.trace;') || t.startsWith('const tr = c.trace;') || t === 'trace: undefined,' || t === 'trace: () => core.trace,' || t.startsWith('trace: TraceHooks | undefined;'),
 					`unexpected use of the trace slot in ${rel}: ${t}`,
 				).toBe(true);
 			}

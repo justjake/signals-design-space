@@ -1,22 +1,35 @@
 /**
- * The notification queue: listener callbacks queued during a public
- * operation's own mutations and DELIVERED AT THE OPERATION BOUNDARY — queued
- * into reusable columns during the walk and invoked after the operation's
- * mutations complete, so a listener can never re-enter a half-finished
- * operation. The listener slots themselves (`onDelivery` /
- * `onMountCorrective` / `onCorrection` — the bindings' consumption surface)
- * live on the engine and come in through `deps`.
+ * DELIVERY — the notification queue AND the walk orchestration that decides
+ * who gets notified. Two layers, two factories:
  *
- * `createDeliver` is a factory in the kernel's own style (index.ts
- * `createEngine`): it closes over the queue columns and returns its
- * operation table. The two live scalars every enqueue/flush moves (`n`,
- * `flushing`) sit in one shared `state` record the engine aliases, so its
- * resident hot checks (the quiet-write flush guard, the settle tap's
- * flushing guard) stay plain field reads instead of calls.
+ *  - `createDeliver`: the queue mechanism — listener callbacks queued during
+ *    a public operation's own mutations and DELIVERED AT THE OPERATION
+ *    BOUNDARY (queued into reusable columns during the walk and invoked
+ *    after the operation's mutations complete, so a listener can never
+ *    re-enter a half-finished operation). The listener slots themselves
+ *    (`onDelivery` / `onMountCorrective` / `onCorrection` — the bindings'
+ *    consumption surface) live on the shared engine core record and come in
+ *    through `deps` getters here (the queue is built before the core record
+ *    exists).
+ *  - `createDeliverWalks`: the ORCHESTRATION over the shared engine core
+ *    record — the value-blind per-write delivery walk (which calls
+ *    WorldArena's strong-link walks through the core's late-bound slots),
+ *    the durable drain at committed-truth flips, the quiet-fold drain, and
+ *    `correctWatcher`, THE one urgent pre-paint correction every
+ *    compare-and-correct site shares.
+ *
+ * Both are factories in the kernel's own style (index.ts `createEngine`):
+ * each closes over its state and returns/assigns its operation table. The
+ * queue's two live scalars (`n`, `flushing`) sit in one shared `state`
+ * record the engine aliases, so its resident hot checks (the quiet-write
+ * flush guard, the settle tap's flushing guard) stay plain field reads
+ * instead of calls.
  */
 
-import type { Batch, BatchSlot } from './Batch.js';
-import type { Subscription, Watcher } from './concurrent.js';
+import { kernelGenOf } from './WorldArena.js';
+import type { Batch, BatchSlot, BatchSlotMeta } from './Batch.js';
+import type { AnyNode, AtomNode, RootId, Seq, Subscription, Value, Watcher } from './concurrent.js';
+import type { EngineCore, World } from './World.js';
 
 /** The queued-notification kinds (the notify columns' kind codes). Same-file
  * const enum with its one consumer, the flush loop; resident enqueue sites
@@ -107,4 +120,188 @@ export function createDeliver(deps: DeliverDeps): DeliverTable {
 	}
 
 	return { state, queueNotify, flushNotify };
+}
+
+/**
+ * The walk ORCHESTRATION (E7): the per-write delivery walk, the durable
+ * drain, the quiet-fold drain, and the one urgent correction — assigned onto
+ * the shared engine core record's late-bound slots (the arena walk halves it
+ * calls — `walkArenaStrong`, `collectWatchersAt`,
+ * `arenaCollectDrainCandidates` — live in WorldArena.ts, same-file with the
+ * layout enums; the watcher resolution lives in RenderPass.ts; all are read
+ * off the core record at call time).
+ */
+export function createDeliverWalks(core: EngineCore): void {
+	// Stable resident containers, aliased once (identity-shared).
+	const notify = core.notify;
+	const watchers = core.watchers;
+	const rootToOpenRender = core.rootToOpenRender;
+
+	/** Reused delivery-walk collection buffer (walks are never re-entrant). */
+	const walkWatchers: Watcher[] = [];
+
+	/** Reused durable-drain candidate buffer (drains are never re-entrant). */
+	const drainWatcherBuf: Watcher[] = [];
+
+	/**
+	 * The value-blind delivery walk (§4.4.3): reachability from the written
+	 * atom over EVERY live arena's STRONG links — render arenas included; the
+	 * walk visits structure, never values or marks, so the §4.3 pin
+	 * invariant is untouched. The weak bit is tested and weak links are
+	 * never traversed (untracked reads never notify — §4.4.1; the bit test
+	 * is the cost the untracked-fan gate prices). Kernel (K0) subscribers
+	 * are served by the eager kernel apply, not this walk. Value-blind: a
+	 * delivery announces "a write in this batch may affect you", never a
+	 * value — the receiving render folds its own world. Collected watchers
+	 * dedup globally per node (lastWalk) across arenas and deliver in id
+	 * order (the reference model's map order). Deliveries may be FEWER than
+	 * the model's union-conservative set, never more (the ⊆ bound): a cone
+	 * held by no live arena lane-degrades to a drain correction (§4.4.5,
+	 * S-NF2-D1).
+	 */
+	function deliveryWalk(from: AtomNode, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
+		const c = core; // one context load; slot/field reads below stay one-load
+		const gen = ++c.walkGen;
+		const found = walkWatchers;
+		found.length = 0;
+		const kGen = kernelGenOf(from.id); // one read per walk: seeds validate tenancy against it
+		c.lastWalk[from.ix] = gen;
+		c.collectWatchersAt(from.ix, found);
+		for (const a of c.rootToArena.values()) c.walkArenaStrong(a, from.ix, kGen, gen, found);
+		for (const p of rootToOpenRender.values()) {
+			if (p.arena !== undefined) c.walkArenaStrong(p.arena, from.ix, kGen, gen, found);
+		}
+		if (found.length > 1) found.sort((a, b) => a.id - b.id);
+		for (let i = 0; i < found.length; i++) deliver(found[i]!, batch, slot, seq);
+		found.length = 0;
+	}
+
+	/**
+	 * Delivery — per-write, value-blind, in the writer's stack. The
+	 * per-(watcher, slot) dedup bit suppresses a repeat delivery only when
+	 * scheduled-but-unstarted work will fold the write anyway; otherwise
+	 * deliver interleaved so no write can slip between renders unseen.
+	 */
+	function deliver(w: Watcher, batch: Batch, slot: BatchSlotMeta, seq: Seq): void {
+		const tr = core.trace; // one load covers this call's (at most two) record sites
+		const bit = 1 << slot.id;
+		if ((w.dedupBits & bit) === 0) {
+			w.dedupBits |= bit;
+			if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, false);
+			if (core.onDelivery !== undefined) notify.queueNotify(0, w, batch, slot.id);
+			return;
+		}
+		// Bit set: suppress iff NO started-and-uncommitted render on the
+		// watcher's root includes this slot (render mask) with pin < the
+		// write's sequence — such a render froze BEFORE this write, so it would
+		// fold without it and a fresh delivery is still required.
+		// One open render per root ⇒ one registry load + two compares.
+		const p = rootToOpenRender.get(w.root);
+		if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
+			if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, true);
+			if (core.onDelivery !== undefined) notify.queueNotify(0, w, batch, slot.id);
+		} else {
+			if (tr !== undefined) tr.suppressed(w, batch.id, slot.id, seq);
+		}
+	}
+
+	/** The ONE urgent pre-paint watcher correction (compare → record → resets →
+	 * notify). A correction must move `lastRenderedValue` AND re-arm the dedup
+	 * bits AND queue the kind-2 notify together — all four correction sites
+	 * (settlement drain, quiet drain, durable drain, mount fixup) share this
+	 * body so the triple can never drift. Records by cause: drains record
+	 * reconcile-correction; mounts record mount-correction (decoded as
+	 * 'mount-urgent-correction'); quiet folds record nothing here — the fold's
+	 * own quiet-write record is the whole quiet stream, and the oracle's
+	 * mirrored quiet corrections are silent too, so the streams stay
+	 * comparable. Returns true iff a correction fired. */
+	function correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
+		if (!core.changedValue(wNode, w.lastRenderedValue, now)) return false;
+		if (cause !== 'quiet') {
+			const tr = core.trace;
+			if (tr !== undefined) {
+				if (cause === 'mount') tr.mountCorrection(w, w.lastRenderedValue, now);
+				else tr.reconcileCorrection(w, w.root, w.lastRenderedValue, now, cause === 'per-root-commit');
+			}
+		}
+		w.lastRenderedValue = now; // the urgent pre-paint re-render
+		w.dedupBits = 0; // dedup bits re-arm at the watcher's render
+		if (core.onCorrection !== undefined) notify.queueNotify(2, w, undefined, 0);
+		return true;
+	}
+
+	/** Value-gated watcher reconciliation for a quiet fold: committed truth
+	 * moved for every root, and no slot/walk state exists to scope candidates,
+	 * so every live watcher re-checks directly — the same compare-and-correct
+	 * block as drainCommittedObservers. (Committed subscriptions re-check via
+	 * revalidateCommittedSubs at the same boundary.) */
+	function quietDrain(): void {
+		const c = core; // one context load; slot reads below stay one-load
+		for (const w of watchers.values()) {
+			if (!w.live) continue;
+			const wNode = c.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip: record tenancy moved
+			correctWatcher(w, wNode, c.evaluate(wNode, { kind: 'committed', root: w.root }), 'quiet');
+		}
+	}
+
+	/**
+	 * Durable drain at a committed-truth flip (a retirement or per-root
+	 * commit), §4.4.6: the candidate set is the root arena's DIRTY LIST —
+	 * the fanout sites' marks, whose cones the marks' PENDING propagation
+	 * already covers — expanded over ALL arena links, strong AND weak
+	 * (§4.4.1: drains expand over both; a weak hop's strong dependents
+	 * expand past it too, since the walk keeps going), collecting live
+	 * same-root watchers on visited nodes, unioned with the `restaled` set.
+	 * Reconcile-check each candidate (last rendered value vs
+	 * committed-for-root NOW; urgent pre-paint correction on real
+	 * difference — comparing values is legal here because both sides are
+	 * committed truth, whereas live-write delivery must stay value-blind).
+	 * Candidates fire in id order (the reference model's map order). List
+	 * entries persist until decay drops them, and consumed marks still seed
+	 * conservatively — extras are value-gated no-ops, exactly as the old
+	 * slot touched lists were. Committed SUBSCRIPTIONS do not drain here:
+	 * their re-check is once per boundary operation
+	 * (revalidateCommittedSubs) — RCC-EF2's amended boundary semantics.
+	 */
+	function drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
+		const c = core; // one context load; slot/field reads below stay one-load
+		const world: World = { kind: 'committed', root: rootId };
+		const gen = ++c.walkGen; // per-node collection dedup + per-arena traversal stamps
+		const lastWalk = c.lastWalk;
+		const ws = drainWatcherBuf;
+		ws.length = 0;
+		// Candidate collection (§4.4.6): the root arena's dirty list seeds a
+		// walk over ALL arena links — weak included (the walk itself lives in
+		// WorldArena.ts, same-file with the layout enums).
+		const a = c.rootToArena.get(rootId);
+		if (a !== undefined && a.dirty.length !== 0) {
+			c.arenaCollectDrainCandidates(a, gen, rootId, ws);
+		}
+		{
+			const re = c.restaled.get(rootId);
+			if (re !== undefined && re.size > 0) {
+				for (const w of re) {
+					if (!w.live) continue;
+					if (lastWalk[w.nodeIx] === gen) continue; // its node was already listed (cached index; valid while the gen-checked fire below resolves)
+					ws.push(w);
+				}
+				re.clear();
+			}
+		}
+		if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
+		for (let i = 0; i < ws.length; i++) {
+			const w = ws[i]!;
+			const wNode = c.resolveWatcherNode(w);
+			if (wNode === undefined) continue; // loud skip: record tenancy moved
+			correctWatcher(w, wNode, c.evaluate(wNode, world), cause);
+		}
+		ws.length = 0;
+	}
+
+	// ---- the operation table (late-bound onto the shared core record) ----
+	core.correctWatcher = correctWatcher;
+	core.quietDrain = quietDrain;
+	core.drainCommittedObservers = drainCommittedObservers;
+	core.deliveryWalk = deliveryWalk;
 }

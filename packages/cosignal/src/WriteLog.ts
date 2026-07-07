@@ -20,7 +20,7 @@
  * its one-branch membership add and the quiet derivation its size check.
  */
 
-import { probes } from './probes.js';
+import { probes } from './engine.js';
 import type { BatchId, BatchSlot } from './Batch.js';
 import type { AtomNode, Seq, Value, WriteKind } from './concurrent.js';
 
