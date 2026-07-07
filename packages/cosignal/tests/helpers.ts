@@ -43,6 +43,7 @@ import {
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';
+import { attachRefereeStream } from './trace-events.js';
 
 /** Scenario annotation only: the specs name each batch's React lane priority
  * for the reader; neither the engine nor the model consults it (the model's
@@ -167,6 +168,10 @@ export function mountEngineCoreEffect(b: CosignalBridge, node: ENode, name: stri
 export class TwinDriver {
 	readonly model = new CosignalModel();
 	readonly engine: CosignalBridge = __newBridgeForTest();
+	/** The engine's event stream: a lossless session tracer attached at
+	 * bridge birth, decoded to BridgeEvents on demand (the engine mints no
+	 * event objects — tests/trace-events.ts). */
+	readonly engineEvents = attachRefereeStream(this.engine);
 	/** Full-history mirror (archives via onCompact + origins) — the referee
 	 * retains it OUTSIDE the engine; see tests/model-view.ts. */
 	readonly mirror = new RefereeMirror();
@@ -266,15 +271,19 @@ export class TwinDriver {
 		expect(this.engine.seq, `twin ${label}: seq diverged`).toBe(this.model.seq);
 		expect(this.engine.cas, `twin ${label}: cas diverged`).toBe(this.model.cas);
 		expect(this.engine.epoch, `twin ${label}: epoch diverged`).toBe(this.model.epoch);
+		// The engine's stream is decoded from its packed trace records (the
+		// only event channel); the decode is incremental, so re-reading the
+		// cumulative stream after every op stays cheap.
+		const engineEvents = this.engineEvents.events as ModelEvent[];
 		const mRest = this.model.events.filter((e) => !isDeliveryish(e));
-		const eRest = (this.engine.events as ModelEvent[]).filter((e) => !isDeliveryish(e));
+		const eRest = engineEvents.filter((e) => !isDeliveryish(e));
 		const me = JSON.stringify(mRest);
 		const ee = JSON.stringify(eRest);
 		if (me !== ee) {
 			expect.fail(`twin ${label}: event streams diverged\nmodel  ${me}\nengine ${ee}`);
 		}
 		const pool = deliveryCounts(this.model.events);
-		const engineCounts = deliveryCounts(this.engine.events as ModelEvent[]);
+		const engineCounts = deliveryCounts(engineEvents);
 		for (const [key, n] of engineCounts) {
 			const avail = pool.get(key) ?? 0;
 			if (n > avail) {
@@ -506,7 +515,7 @@ export class TwinDriver {
 	eventsOfType<T extends ModelEvent['type']>(type: T): Extract<ModelEvent, { type: T }>[] {
 		const m = this.model.eventsOfType(type);
 		if (type !== 'delivery' && type !== 'suppressed' && type !== 'mount-corrective') {
-			const e = this.engine.eventsOfType(type as never);
+			const e = this.engineEvents.eventsOfType(type as never);
 			expect(JSON.stringify(e), `twin eventsOfType(${type}) diverged`).toBe(JSON.stringify(m));
 		}
 		// deliveryish types: covered cumulatively by compareStreams' ⊆ bound;

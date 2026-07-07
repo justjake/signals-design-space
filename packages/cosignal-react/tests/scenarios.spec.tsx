@@ -205,7 +205,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 
 		// The mount fixup joined r2 to the live transition batch:
 		// a value-blind corrective was scheduled in the batch's own lane.
-		expect(h.bridge.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
+		expect(h.events.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
 
 		// Settle the suspension: the transition retries and commits atomically.
 		gate.settled = true;
@@ -298,7 +298,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		});
 		expect(text(one.container)).toBe('one:7;');
 		expect(text(two.container)).toBe('two:7;');
-		const roots = new Set(h.bridge.eventsOfType('per-root-commit').map((e) => e.root));
+		const roots = new Set(h.events.eventsOfType('per-root-commit').map((e) => e.root));
 		expect(roots.size).toBeGreaterThanOrEqual(2);
 	});
 
@@ -323,7 +323,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		await act(async () => {});
 		// The transition's own render folded r2's corrective: one final world.
 		expect(text(container)).toBe('r1:1;r2:1;');
-		expect(h.bridge.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
+		expect(h.events.eventsOfType('mount-corrective').length).toBeGreaterThan(0);
 	});
 
 	test('R12: async action parity — parked prefix, ambient post-await raw write, scope write at settle', async () => {

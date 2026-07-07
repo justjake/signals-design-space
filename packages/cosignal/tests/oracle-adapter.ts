@@ -20,7 +20,6 @@ import {
 	__newBridgeForTest,
 	BridgeScheduleError,
 	type AtomNode,
-	type BridgeEvent,
 	type CosignalBridge,
 	type Op,
 } from '../src/concurrent.js';
@@ -34,19 +33,10 @@ import {
 import { CosignalModel, type ModelEvent } from '../../cosignal-oracle/src/model.js';
 import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
 import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
+import { attachRefereeStream } from './trace-events.js';
 
-// ---- BridgeEvent ≡ ModelEvent pin -------------------------------------------
-// The two unions are maintained BY HAND in two deliberately-independent
-// packages (importing would weaken the oracle as a referee) and the lockstep
-// differ compares them by JSON — so drift used to surface only as a fuzz
-// diff. This converts it into a typecheck failure. Non-distributive form on
-// purpose: the WHOLE union must assign in both directions.
-type _EventStreamPin = [
-	[BridgeEvent] extends [ModelEvent] ? true : never,
-	[ModelEvent] extends [BridgeEvent] ? true : never,
-];
-const _eventStreamPin: _EventStreamPin = [true, true];
-void _eventStreamPin;
+// (The BridgeEvent ≡ ModelEvent type-parity pin moved to trace-events.ts,
+// beside the decoder — the only producer of the engine-side shape now.)
 
 /** The reference model's fixed fuzz topology (buildTopology in its schedule.ts), rebuilt on the engine. */
 export function buildEngineTopology(b: CosignalBridge) {
@@ -112,8 +102,15 @@ function effectAt(b: CosignalBridge, index: number): number {
 	return ids[index % ids.length]!;
 }
 
+/** Per-bridge count of applyEngineOp calls: the tracer-independent uniq
+ * component that replaced the retained log's `b.events.length` when the
+ * object channel died. Only per-bridge uniqueness and run-to-run determinism
+ * matter here — when NAME PARITY with the model matters (lockstep), the
+ * differ supplies the model's own event count as `namingEvents`. */
+const appliedOps = new WeakMap<CosignalBridge, number>();
+
 /** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin).
- * `namingEvents` (when given) replaces the engine's own event count in the
+ * `namingEvents` (when given) replaces the engine's own op count in the
  * `${events}.${seq}.${epoch}` uniq: the model mints names off ITS stream
  * length, and since S-B the engine legitimately delivers FEWER deliveryish
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
@@ -130,7 +127,9 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'equalNewest': return { kind: 'set', value: b.newestValue(atoms[atomIdx]!) };
 		}
 	};
-	const uniq = `${namingEvents ?? b.events.length}.${b.seq}.${b.epoch}`;
+	const opIndex = (appliedOps.get(b) ?? 0) + 1;
+	appliedOps.set(b, opIndex);
+	const uniq = `${namingEvents ?? opIndex}.${b.seq}.${b.epoch}`;
 	const reg = registryOf(b);
 	/** bareWrite may mint the ambient token — mirror the model's map growth. */
 	const syncAmbient = (): void => {
@@ -203,6 +202,9 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
  */
 export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __syncNamingEvents(n: number): void } {
 	const b = __newBridgeForTest();
+	// The engine's event stream: a lossless session tracer decoded on demand
+	// (the packed records are the only event channel; tests/trace-events.ts).
+	const stream = attachRefereeStream(b);
 	// PRODUCTION write semantics: the bridge quiet-folds bare writes at rest
 	// and the model mirrors the same derivation and fold, so the corpus
 	// referees the real default write path ('quiet-write' is a compared
@@ -226,8 +228,9 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 		apply: (op) => (applyEngineOp(b, op, namingEvents) ? 'applied' : 'skipped'),
 		snapshot: () => snapshotModel(b as unknown as CosignalModel),
 		drainEvents() {
-			const out = comparableEvents(b.events.slice(drained) as ModelEvent[]);
-			drained = b.events.length;
+			const events = stream.events;
+			const out = comparableEvents(events.slice(drained) as ModelEvent[]);
+			drained = events.length;
 			return out;
 		},
 	};

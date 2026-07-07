@@ -2,8 +2,8 @@
 // apply + marking/delivery walks + effect flush) on the same shapes as the
 // base-build child; writes run in windows of WINDOW per batch, retired
 // between windows — retirement excluded from writeNs, included in amortNs.
-// bridge.events is truncated between reps so earlier reps cannot skew later ones.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
+// Observers are real kernel effect()s (the only core-effect form since W9).
+import { effect, registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
 const SHAPE = env('SHAPE', 'bare');
@@ -21,12 +21,12 @@ if (SHAPE === 'chain3') {
 	const c1 = b.computed('c1', (read) => { evals++; return read(a) + 1; });
 	const c2 = b.computed('c2', (read) => { evals++; return read(c1) + 1; });
 	const c3 = b.computed('c3', (read) => { evals++; return read(c2) + 1; });
-	b.mountCoreEffect(c3, 'e3');
+	effect(() => { void c3.handle.state; });
 	top = c3;
 } else if (SHAPE === 'fan8') {
 	for (let i = 0; i < 8; i++) {
 		const c = b.computed(`c${i}`, (read) => { evals++; return read(a) + 1; });
-		b.mountCoreEffect(c, `e${i}`);
+		effect(() => { void c.handle.state; });
 		top = c;
 	}
 } else if (SHAPE === 'watch1') {
@@ -61,21 +61,13 @@ for (let r = 0; r < WARMUP; r++) repOnce();
 const writes = [];
 const amorts = [];
 let evalsPerWrite = 0;
-let eventsPerWrite = 0;
-let deliveries = 0;
-let suppressed = 0;
 for (let r = 0; r < REPS; r++) {
-	b.events.length = 0;
 	globalThis.gc?.();
 	evals = 0;
 	const [w, am] = repOnce();
 	writes.push(w);
 	amorts.push(am);
 	evalsPerWrite = evals / WRITES;
-	const evs = b.events;
-	eventsPerWrite = evs.length / WRITES;
-	deliveries = evs.filter((e) => e.type === 'delivery').length / WRITES;
-	suppressed = evs.filter((e) => e.type === 'suppressed').length / WRITES;
 }
 writes.sort((x, y) => x - y);
 amorts.sort((x, y) => x - y);
@@ -84,6 +76,3 @@ const base = { gate: 'SPK-W', config: 'logged', shape: SHAPE, checksum };
 row({ ...base, metric: `writeNs:${SHAPE}`, value: writes[writes.length >> 1] });
 row({ ...base, metric: `amortNs:${SHAPE}`, value: amorts[amorts.length >> 1] });
 row({ ...base, metric: `evalsPerWrite:${SHAPE}`, value: evalsPerWrite });
-row({ ...base, metric: `eventsPerWrite:${SHAPE}`, value: eventsPerWrite });
-row({ ...base, metric: `deliveriesPerWrite:${SHAPE}`, value: deliveries });
-row({ ...base, metric: `suppressedPerWrite:${SHAPE}`, value: suppressed });

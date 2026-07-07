@@ -50,12 +50,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Atom, Computed, effect, effectScope, __newBridgeForTest, type CosignalBridge } from '../src/index.js';
+import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
-/** Fresh registered bridge in referee posture (events retained; quiet arms by the production derivation). */
+/** Fresh registered bridge in referee posture (a lossless session tracer is
+ * the event surface; quiet arms by the production derivation). */
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
+	attachRefereeStream(b);
 	b.registerBridge();
 	return b;
 }
@@ -169,11 +172,12 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 		const p = b.passStart('A', []);
 		b.mountWatcher(p.id, oc, 'W'); // K1 subscriber (edge a→oc recorded by the mount eval)
 		b.passEnd(p.id, 'commit');
-		const mark = b.eventCursor();
+		const stream = refereeStreamOf(b);
+		const mark = stream.cursor();
 		const t = b.openBatch();
 		b.write(t.id, node, { kind: 'set', value: 9 });
 		expect(kernelSeen).toBe(9); // K0: eager kernel apply flushed the effect
-		expect(b.eventsSince(mark).some((e) => e.type === 'delivery' && e.watcher === 'W')).toBe(true); // K1: delivery walk
+		expect(stream.eventsSince(mark).some((e) => e.type === 'delivery' && e.watcher === 'W')).toBe(true); // K1: delivery walk
 		b.retire(t.id, true);
 		dispose();
 	});
@@ -280,7 +284,7 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 		b.passEnd(p.id, 'commit');
 		b.retire(t.id, true); // site-(a) fanout marks `a`; the drain walks the dirty cone to the watcher
 		expect(w.lastRenderedValue).toBe(7);
-		expect(b.eventsOfType('reconcile-correction').length).toBeGreaterThan(0);
+		expect(refereeStreamOf(b).eventsOfType('reconcile-correction').length).toBeGreaterThan(0);
 		w.live = false;
 	});
 });

@@ -24,9 +24,11 @@
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
+import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
+	attachRefereeStream(b); // the decoded packed stream is the event surface
 	b.registerBridge();
 	armArenaCheck(b);
 	return b;
@@ -41,15 +43,15 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 }
 
 function deliveriesTo(b: CosignalBridge, watcher: string, token?: number) {
-	return b.eventsOfType('delivery').filter((e) => e.watcher === watcher && (token === undefined || e.token === token));
+	return refereeStreamOf(b).eventsOfType('delivery').filter((e) => e.watcher === watcher && (token === undefined || e.token === token));
 }
 
 function suppressionsTo(b: CosignalBridge, watcher: string, token?: number) {
-	return b.eventsOfType('suppressed').filter((e) => e.watcher === watcher && (token === undefined || e.token === token));
+	return refereeStreamOf(b).eventsOfType('suppressed').filter((e) => e.watcher === watcher && (token === undefined || e.token === token));
 }
 
 function correctionsTo(b: CosignalBridge, watcher: string) {
-	return b.eventsOfType('reconcile-correction').filter((e) => e.watcher === watcher);
+	return refereeStreamOf(b).eventsOfType('reconcile-correction').filter((e) => e.watcher === watcher);
 }
 
 /** The D1 topology: committed truth shows the b-branch; a parked action

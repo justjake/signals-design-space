@@ -42,9 +42,10 @@ function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
 	return attachTracer(__newBridgeForTest(), opts);
 }
 
-/** One record per call, with a recognizable payload. */
+/** One record per call, with a recognizable payload (the typed epoch-reset
+ * mint — the direct emit surface the engine's sites call). */
 function emitN(tr: Tracer, n: number, from = 0): void {
-	for (let i = from; i < from + n; i++) tr.event({ type: 'epoch-reset', epoch: i });
+	for (let i = from; i < from + n; i++) tr.epochReset(i);
 }
 
 describe('R11 zero-cost-when-off: source discipline', () => {
@@ -129,7 +130,7 @@ describe('R11 runtime enable/disable', () => {
 		tr2.stop();
 	});
 
-	it('tracing never perturbs semantics: identical schedules, identical event streams', () => {
+	it('tracing never perturbs semantics: identical schedules, identical counters and observable values', () => {
 		const run = (traced: boolean): CosignalBridge => {
 			const b = __newBridgeForTest();
 			buildEngineTopology(b);
@@ -140,10 +141,18 @@ describe('R11 runtime enable/disable', () => {
 		};
 		const plain = run(false);
 		const traced = run(true);
-		expect(JSON.stringify(traced.events)).toBe(JSON.stringify(plain.events));
+		// The engine's only event output is the tracer itself now, so the
+		// untraced run has no stream to diff — the perturbation check compares
+		// what exists on both sides: every clock and every observable value.
 		expect(traced.seq).toBe(plain.seq);
 		expect(traced.cas).toBe(plain.cas);
 		expect(traced.epoch).toBe(plain.epoch);
+		for (const [id, n] of plain.nodes) {
+			expect(
+				Object.is(traced.newestValue(traced.nodeById(id)), plain.newestValue(n)),
+				`newest(${n.name}) diverged under tracing`,
+			).toBe(true);
+		}
 	});
 });
 
@@ -209,7 +218,7 @@ describe('R11 recorder details', () => {
 
 	it('ref-ring: object payloads retained until overwritten; capacity 0 disables capture', () => {
 		const tr = bareTracer({ refCapacity: 8 });
-		for (let i = 0; i < 10; i++) tr.event({ type: 'core-effect-run', effect: 'E', value: i });
+		for (let i = 0; i < 10; i++) tr.coreEffectRun('E', i);
 		expect(tr.decode(0)!.data['value']).toBe(REF_DROPPED); // overwritten
 		expect(tr.decode(1)!.data['value']).toBe(REF_DROPPED);
 		expect(tr.decode(2)!.data['value']).toBe(2); // oldest survivor
@@ -217,7 +226,7 @@ describe('R11 recorder details', () => {
 		tr.stop();
 
 		const off = bareTracer({ refCapacity: 0 });
-		off.event({ type: 'core-effect-run', effect: 'E', value: 42 });
+		off.coreEffectRun('E', 42);
 		expect(off.decode(0)!.data['value']).toBe(REF_DROPPED); // events record, payloads drop
 		expect(off.stats().refsCaptured).toBe(0);
 		off.stop();

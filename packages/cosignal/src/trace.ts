@@ -7,8 +7,11 @@
  *  - when no tracer is attached, the engine's entire tracing cost is one
  *    nullable-field check per event site (asserted over the source by
  *    tests/trace-off.spec.ts);
- *  - recording an event allocates nothing: fixed-size integer records are
- *    written into preallocated buffers;
+ *  - recording an event allocates nothing: instrumentation sites pass
+ *    scalars straight into typed record methods, which write fixed-size
+ *    integer records into preallocated buffers (one documented exception:
+ *    a react-effect-run's dep-values array is built by its emit site — only
+ *    while a tracer is attached — because the referee compares it);
  *  - two capture modes — a ring (flight recorder) and a session (lossless
  *    capture up to a byte budget);
  *  - every record names the event that provoked it, so causality is
@@ -80,13 +83,18 @@
  *  suppressed           {watcher, token, slot, seq, reason}  delivery skipped: a scheduled-but-unstarted re-render will fold this write anyway ('dedup-pending-fold')
  *  eval                 {node, world, durationUs, depth}     one computed evaluation in one world (newest | pass:N | committed:root | mount-fix:root)
  *  mount-corrective     {watcher, token, slot}               at mount, a corrective re-render was scheduled for a live batch the mounting render did not include
- *  mount-fixup          {watcher, root, disposition, correctives}  how the post-mount audit resolved:
- *                       fast-out (provably nothing moved) | fast-out-covered (divergence exactly covered by
- *                       scheduled correctives) | compare-clean (values agree) | corrected (urgent fix applied)
+ *  mount-fixup          {watcher, root, disposition, correctives}  how the mount-window check resolved:
+ *                       fast-out (provably nothing moved; drift, if any, is exactly the live-batch writes
+ *                       already covered by scheduled correctives) | compare-clean (values agree) |
+ *                       corrected (urgent fix applied). Recordings from older engines may decode a fourth
+ *                       disposition, 'fast-out-covered', from a since-deleted audit path.
  *  mount-correction     {watcher, from, to}                  the urgent pre-paint fix: committed truth moved while the mounting render was in flight
  *  reconcile-correction {watcher, root, from, to, cause}     a retirement or root commit moved committed truth; this watcher's on-screen value had to follow
  *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
- *  react-effect-run     {effect, root, value}                a committed-world observer ran (it sees exactly what its root's UI shows)
+ *  react-effect-run     {effect, root, value, values?}       a committed-world observer ran (it sees exactly what its root's UI shows); values = its dep snapshot, when captured
+ *  react-effect-cleanup {effect, root}                       a committed-world observer's cleanup ran (before a re-run, or at removal)
+ *  pass-committed       {pass, root}                         referee marker: the commit's consequences (retirement folds, lock-ins, drains, fixups) have all landed
+ *  pass-discarded       {pass, root}                         referee marker: the discard's consequences have all landed
  *  epoch-reset          {epoch}                              quiescence: nothing in flight, so the engine reset its per-episode state
  *  clock-sync           {absoluteUs}                         emitted when DT saturates
  *  truncation           {boundaryId}                         SESSION budget crossed
@@ -128,15 +136,19 @@
 
 import type {
 	AtomNode,
-	BridgeEvent,
+	CommitGen,
 	ComputedNode,
 	CosignalBridge,
+	Epoch,
 	Pass,
 	Receipt,
+	RootId,
+	Seq,
 	SlotId,
 	Token,
 	TokenId,
 	TraceHooks,
+	Value,
 	Watcher,
 	World,
 } from './concurrent.js';
@@ -202,7 +214,10 @@ const enum WorldPack {
 
 const MAX_I32 = 0x7fffffff;
 
-/** Kind codes (record form). Public decoded events carry the NAME, not the code. */
+/** Kind codes (record form). Public decoded events carry the NAME, not the
+ * code. Codes are append-only (existing recordings decode forever): 28-30
+ * joined when the packed stream became the engine's ONLY event output — the
+ * referee kinds the deleted BridgeEvent object channel used to carry alone. */
 const K = {
 	write: 1, writeDropped: 2, batchOpen: 3, batchSettle: 4, batchRetire: 5,
 	slotClaim: 6, slotRelease: 7, slotReleaseDeferred: 8, slotBackstop: 9,
@@ -211,6 +226,7 @@ const K = {
 	mountCorrective: 18, mountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
 	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
 	clockSync: 25, truncation: 26, quietWrite: 27,
+	reactEffectCleanup: 28, passCommitted: 29, passDiscarded: 30,
 } as const;
 
 const KIND_NAMES = [
@@ -221,6 +237,7 @@ const KIND_NAMES = [
 	'mount-corrective', 'mount-fixup', 'mount-correction', 'reconcile-correction',
 	'core-effect-run', 'react-effect-run', 'epoch-reset',
 	'clock-sync', 'truncation', 'quiet-write',
+	'react-effect-cleanup', 'pass-committed', 'pass-discarded',
 ] as const;
 
 export type TraceKind = Exclude<(typeof KIND_NAMES)[number], ''>;
@@ -232,6 +249,9 @@ const CAUSE_SETTING = new Set<TraceKindCode>([
 ]);
 
 const OP_NAMES = ['set', 'update'] as const;
+/** Index 1 ('fast-out-covered') is decode-only: the engine can no longer
+ * emit it (the post-mount audit that produced it was deleted), but old
+ * recordings still decode. */
 const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const;
 
 /** Decoded payload placeholder for a ref-ring value that was overwritten (or capture disabled). */
@@ -447,79 +467,102 @@ export class Tracer implements TraceHooks {
 	}
 
 	// ------------------------------------------------- TraceHooks (the seam)
+	// The engine's instrumentation sites call these DIRECTLY with scalars and
+	// live engine objects — there is no intermediate event object and no
+	// second channel. Each method is one `rec()` call packing the same field
+	// layout the old object→packed re-encoding produced, so recordings stay
+	// decode-compatible across the migration.
 
-	/**
-	 * The BridgeEvent channel. 'write' is skipped (the richer `receipt` hook
-	 * records it with its op); 'pass-committed'/'pass-discarded' are skipped
-	 * (the `passEnd` hook records the disposition BEFORE its consequences).
-	 */
-	event(e: BridgeEvent): void {
-		switch (e.type) {
-			case 'write':
-			case 'pass-committed':
-			case 'pass-discarded':
-			case 'react-effect-cleanup': // the paired react-effect-run carries the causality
-				return;
-			case 'write-dropped':
-				this.rec(K.writeDropped, this.label(e.node), e.token, 0, 0, 0);
-				return;
-			case 'quiet-write':
-				// Packed like a write, minus the batch attribution a quiet fold
-				// does not have. Deliberately NOT a cause-claiming kind yet: the
-				// quiet fold's operation does not emit an opEnd, so claiming the
-				// register here would chain unrelated later operations to it
-				// (causality for quiet folds lands with the trace rewrite).
-				this.rec(K.quietWrite, this.label(e.node), 0, e.seq, 0, 0);
-				return;
-			case 'delivery':
-				this.rec(
-					K.delivery | (e.mode === 'interleaved' ? KindBits.FLAG_A : 0),
-					this.label(e.watcher), e.token, e.slot, e.seq, 0,
-				);
-				return;
-			case 'suppressed':
-				this.rec(K.suppressed, this.label(e.watcher), e.token, e.slot, e.seq, 0);
-				return;
-			case 'core-effect-run':
-				this.rec(K.coreEffectRun, this.label(e.effect), 0, this.ref(e.value), 0, 0);
-				return;
-			case 'react-effect-run':
-				this.rec(K.reactEffectRun, this.label(e.effect), this.label(e.root), this.ref(e.value), 0, 0);
-				return;
-			case 'reconcile-correction':
-				this.rec(
-					K.reconcileCorrection | (e.cause === 'per-root-commit' ? KindBits.FLAG_A : 0),
-					this.label(e.watcher), this.label(e.root), this.ref(e.from), this.ref(e.to), 0,
-				);
-				return;
-			case 'mount-corrective':
-				this.rec(K.mountCorrective, this.label(e.watcher), e.token, e.slot, 0, 0);
-				return;
-			case 'mount-urgent-correction':
-				this.rec(K.mountCorrection, this.label(e.watcher), 0, this.ref(e.from), this.ref(e.to), 0);
-				return;
-			case 'per-root-commit':
-				this.rec(
-					K.rootCommit, e.token, this.label(e.root),
-					this.bridge.roots.get(e.root)?.commitGen ?? 0, 0, 0,
-				);
-				return;
-			case 'retired':
-				this.rec(K.batchRetire | (e.committed ? KindBits.FLAG_A : 0), e.token, 0, e.retiredSeq, 0, 0);
-				return;
-			case 'slot-claimed':
-				this.rec(K.slotClaim, e.slot, e.token, 0, 0, 0);
-				return;
-			case 'slot-released':
-				this.rec(K.slotRelease, e.slot, e.token, 0, 0, 0);
-				return;
-			case 'slot-backstop-released':
-				this.rec(K.slotBackstop, e.slot, e.token, 0, 0, 0);
-				return;
-			case 'epoch-reset':
-				this.rec(K.epochReset, e.epoch, 0, 0, 0, 0);
-				return;
-		}
+	writeDropped(node: AtomNode, token: TokenId): void {
+		this.rec(K.writeDropped, this.label(node.name), token, 0, 0, 0);
+	}
+
+	quietWrite(node: AtomNode, seq: Seq): void {
+		// Packed like a write, minus the batch attribution a quiet fold does
+		// not have. Deliberately NOT a cause-claiming kind: the quiet fold's
+		// operation does not emit an opEnd, so claiming the register here
+		// would chain unrelated later operations to it.
+		this.rec(K.quietWrite, this.label(node.name), 0, seq, 0, 0);
+	}
+
+	delivery(w: Watcher, token: TokenId, slot: SlotId, seq: Seq, interleaved: boolean): void {
+		this.rec(
+			K.delivery | (interleaved ? KindBits.FLAG_A : 0),
+			this.label(w.name), token, slot, seq, 0,
+		);
+	}
+
+	suppressed(w: Watcher, token: TokenId, slot: SlotId, seq: Seq): void {
+		this.rec(K.suppressed, this.label(w.name), token, slot, seq, 0);
+	}
+
+	coreEffectRun(effect: string, value: Value): void {
+		this.rec(K.coreEffectRun, this.label(effect), 0, this.ref(value), 0, 0);
+	}
+
+	/** ARG1 stores ref(values)+1 — 0 means "not captured", so recordings made
+	 * before dep-value capture (ARG1 always 0) decode unchanged. The `values`
+	 * array is the one payload an emit site allocates (tracer-attached only):
+	 * the lockstep referee compares it entry by entry. */
+	reactEffectRun(effect: string, root: RootId, value: Value, values: Value[]): void {
+		this.rec(K.reactEffectRun, this.label(effect), this.label(root), this.ref(value), this.ref(values) + 1, 0);
+	}
+
+	reactEffectCleanup(effect: string, root: RootId): void {
+		this.rec(K.reactEffectCleanup, this.label(effect), this.label(root), 0, 0, 0);
+	}
+
+	reconcileCorrection(w: Watcher, root: RootId, from: Value, to: Value, perRootCommit: boolean): void {
+		this.rec(
+			K.reconcileCorrection | (perRootCommit ? KindBits.FLAG_A : 0),
+			this.label(w.name), this.label(root), this.ref(from), this.ref(to), 0,
+		);
+	}
+
+	mountCorrective(w: Watcher, token: TokenId, slot: SlotId): void {
+		this.rec(K.mountCorrective, this.label(w.name), token, slot, 0, 0);
+	}
+
+	mountCorrection(w: Watcher, from: Value, to: Value): void {
+		this.rec(K.mountCorrection, this.label(w.name), 0, this.ref(from), this.ref(to), 0);
+	}
+
+	/** The site passes the root's generation (already bumped) — the tracer no
+	 * longer reads engine state to enrich the record. */
+	perRootCommit(root: RootId, token: TokenId, commitGen: CommitGen): void {
+		this.rec(K.rootCommit, token, this.label(root), commitGen, 0, 0);
+	}
+
+	retired(token: TokenId, committed: boolean, retiredSeq: Seq): void {
+		this.rec(K.batchRetire | (committed ? KindBits.FLAG_A : 0), token, 0, retiredSeq, 0, 0);
+	}
+
+	slotClaimed(slot: SlotId, token: TokenId): void {
+		this.rec(K.slotClaim, slot, token, 0, 0, 0);
+	}
+
+	slotReleased(slot: SlotId, token: TokenId): void {
+		this.rec(K.slotRelease, slot, token, 0, 0, 0);
+	}
+
+	slotBackstopReleased(slot: SlotId, token: TokenId): void {
+		this.rec(K.slotBackstop, slot, token, 0, 0, 0);
+	}
+
+	/** Post-consequence referee markers (unlike `passEnd`, which fires BEFORE
+	 * the end's consequences so they can cite it as cause): these record after
+	 * every retirement fold / lock-in / drain / fixup of the pass end landed —
+	 * the stream position the reference model emits its pass events at. */
+	passCommitted(p: Pass): void {
+		this.rec(K.passCommitted, p.id, this.label(p.root), 0, 0, 0);
+	}
+
+	passDiscarded(p: Pass): void {
+		this.rec(K.passDiscarded, p.id, this.label(p.root), 0, 0, 0);
+	}
+
+	epochReset(epoch: Epoch): void {
+		this.rec(K.epochReset, epoch, 0, 0, 0, 0);
 	}
 
 	receipt(node: AtomNode, r: Receipt): void {
@@ -581,7 +624,7 @@ export class Tracer implements TraceHooks {
 		this.rec(K.slotReleaseDeferred, slot, token, 0, 0, 0);
 	}
 
-	mountFixup(w: Watcher, disposition: 'fast-out' | 'fast-out-covered' | 'compare-clean' | 'corrected', correctives: number): void {
+	mountFixup(w: Watcher, disposition: 'fast-out' | 'compare-clean' | 'corrected', correctives: number): void {
 		this.rec(K.mountFixup, this.label(w.name), this.label(w.root), DISPOSITION_NAMES.indexOf(disposition), correctives, 0);
 	}
 
@@ -711,6 +754,14 @@ export class Tracer implements TraceHooks {
 				break;
 			case K.reactEffectRun:
 				data = { effect: this.labelOf(subject), root: this.labelOf(world), value: this.refValue(a0) };
+				if (a1 !== 0) data['values'] = this.refValue(a1 - 1); // 0 = recorded before dep-value capture
+				break;
+			case K.reactEffectCleanup:
+				data = { effect: this.labelOf(subject), root: this.labelOf(world) };
+				break;
+			case K.passCommitted:
+			case K.passDiscarded:
+				data = { pass: subject, root: this.labelOf(world) };
 				break;
 			case K.epochReset:
 				data = { epoch: subject };

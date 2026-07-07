@@ -1,17 +1,24 @@
 /**
  * Shared harness: per-test bridge + shim registration (fresh
  * `__newBridgeForTest()` instances so cosignal's public once-rule stays
- * intact for real apps), react-dom/client roots, and act plumbing.
+ * intact for real apps), react-dom/client roots, and act plumbing. The
+ * engine's event stream is its packed trace records — the harness attaches
+ * the referee's lossless session tracer at bridge birth and exposes the
+ * decoded stream as `events` (the deleted object log's shape).
  */
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { __newBridgeForTest, type AtomNode, type CosignalBridge, type Receipt } from 'cosignal';
+import { attachRefereeStream, type RefereeStream } from '../../cosignal/tests/trace-events.js';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 export type Harness = {
 	handle: CosignalReactHandle;
 	bridge: CosignalBridge;
+	/** The decoded event stream (lossless session tracer attached at bridge
+	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads). */
+	events: RefereeStream;
 	/** Receipts as compaction folded them out of the tapes (op-replay-fidelity
 	 * assertions; fed by the engine's onCompact referee seam). */
 	compacted: Array<{ atom: AtomNode; entry: Receipt }>;
@@ -25,6 +32,7 @@ export type Harness = {
 
 export function makeHarness(): Harness {
 	const bridge = __newBridgeForTest();
+	const events = attachRefereeStream(bridge);
 	const compacted: Array<{ atom: AtomNode; entry: Receipt }> = [];
 	bridge.onCompact = (atom, entry) => compacted.push({ atom, entry });
 	const handle = registerCosignalReact({ bridge });
@@ -33,6 +41,7 @@ export function makeHarness(): Harness {
 	const h: Harness = {
 		handle,
 		bridge,
+		events,
 		compacted,
 		roots,
 		containers,

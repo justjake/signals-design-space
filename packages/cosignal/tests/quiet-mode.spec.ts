@@ -6,8 +6,8 @@
  * append, no batch token (the ambient batch is NOT minted), no delivery
  * walk. The pipeline arms while anything is pending and re-arms at the last
  * retirement / pass close. Observation never perturbs the derivation: an
- * event consumer (retained log, attached tracer) gets ONE 'quiet-write'
- * event per accepted fold and the write path stays the quiet one.
+ * attached tracer gets ONE quiet-write record per accepted fold and the
+ * write path stays the quiet one.
  *
  * The oracle mirrors the same derivation and fold, so the lockstep corpus
  * referees quiet semantics directly ('quiet-write' is a compared event);
@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
+import { attachRefereeStream } from './trace-events.js';
 import {
 	__coreProbes,
 	__newBridgeForTest,
@@ -25,18 +26,18 @@ import {
 	type CosignalBridge,
 } from '../src/index.js';
 
-/** A fresh bridge in PRODUCTION posture: no event retention (quiet arms by
- * derivation alone — there is no semantic switch to flip). */
+/** A fresh bridge in PRODUCTION posture — which is the only posture now: no
+ * event objects exist, and no tracer is attached (quiet arms by derivation
+ * alone — there is no semantic switch to flip). */
 function quietBridge(): CosignalBridge {
 	const b = __newBridgeForTest();
-	b.setRetainEvents(false);
 	b.registerBridge();
 	return b;
 }
 
 const probes = () => {
 	const p = __coreProbes();
-	return { receipts: p.receipts, tokens: p.tokens, events: p.bridgeEvents };
+	return { receipts: p.receipts, tokens: p.tokens };
 };
 
 describe('quiet-mode writes', () => {
@@ -202,27 +203,28 @@ describe('quiet-mode writes', () => {
 		expect(b.newestValue(a)).toBe(3);
 	});
 
-	it('event retention does not disarm quiet: writes still fold quietly AND their events appear', () => {
-		const b = __newBridgeForTest(); // events retained (referee posture)
+	it('an attached tracer does not disarm quiet: writes still fold quietly AND their records appear', () => {
+		const b = __newBridgeForTest();
+		const stream = attachRefereeStream(b); // referee posture: the packed stream is the event channel
 		b.registerBridge();
 		expect(b.quiet).toBe(true); // observation never changes which write path executes
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(1);
 		expect(b.ambientToken).toBeUndefined(); // NO ambient batch: the quiet fold ran
 		expect(a.tp.materialize()).toHaveLength(0); // no receipt
-		expect(b.eventsOfType('write').length).toBe(0);
-		expect(b.eventsOfType('quiet-write')).toEqual([{ type: 'quiet-write', node: 'a', seq: a.baseSeq }]);
+		expect(stream.eventsOfType('write').length).toBe(0);
+		expect(stream.eventsOfType('quiet-write')).toEqual([{ type: 'quiet-write', node: 'a', seq: a.baseSeq }]);
 		expect(b.newestValue(a)).toBe(1);
 		expect(b.committedValue(a, 'A')).toBe(1); // base advanced WITH the kernel
 		// The equality drop stays silent — no token exists to attribute a drop to.
 		(a.handle as Atom<number>).set(1);
-		expect(b.eventsOfType('quiet-write')).toHaveLength(1);
-		expect(b.eventsOfType('write-dropped')).toHaveLength(0);
-		// Armed semantics still mint receipts + 'write' events past the same consumer.
+		expect(stream.eventsOfType('quiet-write')).toHaveLength(1);
+		expect(stream.eventsOfType('write-dropped')).toHaveLength(0);
+		// Armed semantics still mint receipts + write records past the same consumer.
 		const t = b.openBatch();
 		expect(b.quiet).toBe(false);
 		(a.handle as Atom<number>).set(2);
-		expect(b.eventsOfType('write').length).toBe(1);
+		expect(stream.eventsOfType('write').length).toBe(1);
 		b.retire(b.ambientToken!, true);
 		b.retire(t.id, true);
 		expect(b.quiet).toBe(true); // and quiet re-arms with the consumer still attached

@@ -57,7 +57,7 @@ const med = perWrite[perWrite.length >> 1];
 // Quiet-mode invariants, asserted in the bench itself: zero pipeline
 // activity, committed == kernel == last write.
 const probes = __coreProbes();
-if (probes.receipts !== 0 || probes.tokens !== 0 || probes.bridgeEvents !== 0) {
+if (probes.receipts !== 0 || probes.tokens !== 0) {
 	throw new Error(`SPK-W quiet invariant: pipeline activity while quiet (${JSON.stringify(probes)})`);
 }
 if (bridge.ambientToken !== undefined) throw new Error('SPK-W quiet invariant: ambient batch minted');

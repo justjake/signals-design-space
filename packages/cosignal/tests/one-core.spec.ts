@@ -5,9 +5,11 @@
  *    no `./concurrent` entry exists.
  *  - ZERO COST WHEN UNUSED, asserted behaviorally: with no host attached,
  *    heavy create/write/read/effect traffic mints zero receipts, zero batch
- *    tokens, zero world evaluations, zero bridge events, zero bridges (the
- *    engine's referee-surface probes, `__coreProbes`). Sync-only apps pay
- *    one predictable branch per public read/write and nothing else.
+ *    tokens, zero world evaluations, zero bridges (the engine's
+ *    referee-surface probes, `__coreProbes`; events are packed trace records
+ *    behind per-site tracer guards — no tracer, no event machinery at all).
+ *    Sync-only apps pay one predictable branch per public read/write and
+ *    nothing else.
  *  - ATTACHED BUT QUIET ≡ SYNC: registering the bridge preserves direct
  *    semantics for everything not bridge-registered, while public writes to
  *    REGISTERED atoms classify into the ambient default batch as WHOLE ops
@@ -48,9 +50,12 @@ describe('one entry', () => {
 });
 
 describe('zero cost with no host attached (behavioral)', () => {
-	it('heavy sync-only traffic mints zero receipts/tokens/worlds/events/bridges', () => {
+	it('heavy sync-only traffic mints zero receipts/tokens/worlds/bridges', () => {
 		const before = __coreProbes();
-		expect(before).toEqual({ receipts: 0, tokens: 0, worldEvals: 0, bridgeEvents: 0, bridges: 0 });
+		// (No event probe anymore: events are packed trace records, minted only
+		// behind each site's tracer guard — the object channel is gone, so with
+		// no tracer there is no event machinery left to count.)
+		expect(before).toEqual({ receipts: 0, tokens: 0, worldEvals: 0, bridges: 0 });
 
 		// Heavy create/write/read/derive/effect traffic through the public API.
 		const atoms = Array.from({ length: 50 }, (_, i) => new Atom(i));
@@ -143,7 +148,6 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(after.receipts).toBe(before.receipts);
 		expect(after.tokens).toBe(before.tokens);
 		expect(after.worldEvals).toBe(before.worldEvals);
-		expect(after.bridgeEvents).toBe(before.bridgeEvents);
 	});
 
 	it('update/dispatch fold purity still throws through the POISON table', () => {
@@ -170,7 +174,6 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const afterQuiet = __coreProbes();
 		expect(afterQuiet.receipts).toBe(before.receipts);
 		expect(afterQuiet.tokens).toBe(before.tokens);
-		expect(afterQuiet.bridgeEvents).toBe(before.bridgeEvents);
 		// ARM the pipeline (a live batch exists): the same public writes now
 		// classify into the ambient default batch as WHOLE ops.
 		const t = bridge.openBatch();
@@ -193,13 +196,13 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(bridge.committedValue(la, 'A')).toBe(500);
 	});
 
-	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero receipts/tokens/events', () => {
+	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero receipts/tokens', () => {
 		// The Phase 1b population (the reviews' "wrong population" fix): atoms
 		// REGISTERED with the bridge, host attached, kernel derivations and
 		// effects subscribed — and NO transition, batch, or render pass ever
 		// open. Heavy public write/read traffic must leave the concurrency
-		// pipeline fully disarmed: zero receipts, zero batch tokens, zero
-		// bridge events.
+		// pipeline fully disarmed: zero receipts, zero batch tokens (and with
+		// no tracer attached, every record site is one dead branch).
 		const atoms = Array.from({ length: 20 }, (_, i) => bridge.atom(`reg${i}`, i));
 		const handles = atoms.map((n) => n.handle as Atom<number>);
 		const doubles = handles.map((h) => new Computed(() => h.state * 2));
@@ -227,7 +230,6 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const after = __coreProbes();
 		expect(after.receipts).toBe(before.receipts); // ZERO receipts
 		expect(after.tokens).toBe(before.tokens); // ZERO batch tokens (no ambient mint)
-		expect(after.bridgeEvents).toBe(before.bridgeEvents); // ZERO events
 		expect(bridge.ambientToken).toBeUndefined();
 		// And the folds are real: base == kernel == committed for every atom.
 		expect(bridge.newestValue(atoms[3]!)).toBe(49 * 1000 + 3 + 1);

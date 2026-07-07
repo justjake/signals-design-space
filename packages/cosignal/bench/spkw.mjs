@@ -23,9 +23,6 @@ for (const shape of SHAPES) {
 		amortNs: stat(lA),
 		ratio: (median(lW) / median(dW)).toFixed(1),
 		evalsPerWrite: stat(l.byMetric.get(`evalsPerWrite:${shape}`), 2),
-		eventsPerWrite: stat(l.byMetric.get(`eventsPerWrite:${shape}`), 2),
-		deliv: stat(l.byMetric.get(`deliveriesPerWrite:${shape}`) ?? [0], 3),
-		suppr: stat(l.byMetric.get(`suppressedPerWrite:${shape}`) ?? [0], 3),
 	});
 }
 console.log('\nSPK-W results (per-write ns; median [min..max] across processes)');

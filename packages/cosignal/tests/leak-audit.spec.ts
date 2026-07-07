@@ -24,7 +24,6 @@ import {
 	Atom,
 	Computed,
 	SuspendedRead,
-	__coreProbes,
 	__ctxUse,
 	__hostDisposeComputed,
 	__kernelBuffer,
@@ -281,14 +280,12 @@ describe('4. ARENA POOL', () => {
 });
 
 describe('5. TAPES / TOKENS / PASSES', () => {
-	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE, and no bridge event mints without a consumer (SPK-K1 regression: mid-episode reclamation + the log gate)', () => {
-		const b = __newBridgeForTest();
-		b.setRetainEvents(false); // production posture: no referee, no tracer
+	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE (SPK-K1 regression: mid-episode reclamation; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
+		const b = __newBridgeForTest(); // production posture: no referee, no tracer
 		b.registerBridge();
 		const an = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(an));
 		const w = mount(b, 'R', c, 'W');
-		const ev0 = __coreProbes().bridgeEvents;
 		for (let i = 1; i <= 400; i++) {
 			const t = b.openBatch();
 			b.write(t.id, an, { kind: 'set', value: i });
@@ -309,8 +306,7 @@ describe('5. TAPES / TOKENS / PASSES', () => {
 		expect(b.passes.size).toBe(0); // ended passes reclaimed at pass end
 		expect(an.tp.n - an.tp.start).toBe(0); // tapes fully compacted
 		expect(an.tp.kinds.length).toBe(0); // packed columns reset with the empty window
-		expect(b.events.length).toBe(0); // the event-minting gate: nothing consumes ⇒ nothing mints
-		expect(__coreProbes().bridgeEvents).toBe(ev0);
+		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing minted anywhere)
 		expect(b.__arenaStats().dirty).toBeLessThanOrEqual(4); // boundary decay keeps the dirty lists to live cones
 		expect(b.committedValue(c, 'R')).toBe(1400);
 	});

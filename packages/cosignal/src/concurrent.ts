@@ -596,8 +596,14 @@ export type World =
 /** The one newest-world singleton (hot paths never allocate world objects). */
 const NEWEST: World = { kind: 'newest' };
 
-/** The observable event stream (same shapes as the reference model's events,
- * so the two can be compared entry by entry). */
+/** The DECODED shape of the engine's observable events (same shapes as the
+ * reference model's events, so the two can be compared entry by entry). The
+ * engine constructs these objects NOWHERE: instrumentation sites mint packed
+ * trace records directly (see TraceHooks below), and the test-side decoder
+ * (tests/trace-events.ts) reconstructs this shape from an attached tracer's
+ * records for lockstep/referee comparison. The type stays declared and
+ * exported here because the package entry re-exports it (type-only) and the
+ * decoder/oracle parity pin is written against it. */
 export type BridgeEvent =
 	| { type: 'write'; node: string; token: TokenId; slot: SlotId; seq: Seq }
 	| { type: 'write-dropped'; node: string; token: TokenId }
@@ -634,23 +640,29 @@ export type BridgeEvent =
  *    (`const tr = this.trace; if (tr !== undefined) ...`) — that one check
  *    is the entire cost when no tracer is attached;
  *  - hooks receive the engine's own live objects and integers; they must not
- *    mutate them, and the recorder must not allocate per event.
+ *    mutate them, and the recorder must not allocate per event (one
+ *    documented exception: `reactEffectRun`'s dep-values array, built by its
+ *    site only under the guard — the lockstep referee compares it).
  *
- * Two channels: `event(e)` re-uses the always-allocated BridgeEvent stream at
- * its single `log()` waist (receipts/deliveries/retirements/commits/slots/
- * corrections/effects), and dedicated hooks cover semantics that stream does
- * not carry: batch open/settle, pass start/yield/resume/end (fired BEFORE
- * the end's consequences, unlike the pass-committed event), per-receipt ops,
+ * ONE channel: the packed trace stream. Every instrumentation site mints its
+ * record directly through a typed hook — scalars and live engine objects in,
+ * one fixed-size record out; no intermediate event object exists anywhere.
+ * The hook set covers the observable event vocabulary (`BridgeEvent`, decoded
+ * test-side) plus trace-only semantics: batch open/settle, pass
+ * start/yield/resume/end (fired BEFORE the end's consequences, unlike the
+ * post-consequence passCommitted/passDiscarded markers), per-receipt ops,
  * world evaluations, deferred slot release, and the mount fixup disposition
  * (fast-out vs compare vs correction). `opEnd()` marks the close of each
  * compound public operation so the recorder can scope causality (see
  * trace.ts `CAUSE`).
  */
 export type TraceHooks = {
-	/** Every BridgeEvent, from the one `log()` waist. */
-	event(e: BridgeEvent): void;
-	/** A receipt was minted (fires with the 'write' event; carries the op). */
+	/** A receipt was minted — THE write record (carries op/token/slot/seq). */
 	receipt(node: AtomNode, r: Receipt): void;
+	/** A write dropped without a receipt (empty tape + equal against base). */
+	writeDropped(node: AtomNode, token: TokenId): void;
+	/** A quiet-mode fold accepted (no token, no receipt; seq = the fold's clock). */
+	quietWrite(node: AtomNode, seq: Seq): void;
 	/** A batch token was minted. */
 	batchOpen(t: Token): void;
 	/** An async-action token settled (its retirement follows). */
@@ -660,6 +672,36 @@ export type TraceHooks = {
 	passYield(p: Pass): void;
 	passResume(p: Pass): void;
 	passEnd(p: Pass, kind: 'commit' | 'discard'): void;
+	/** Post-consequence referee markers: every retirement fold / lock-in /
+	 * drain / fixup of the pass end has landed (the reference model's stream
+	 * position for its pass events). */
+	passCommitted(p: Pass): void;
+	passDiscarded(p: Pass): void;
+	/** A value-blind delivery reached a live watcher. */
+	delivery(w: Watcher, token: TokenId, slot: SlotId, seq: Seq, interleaved: boolean): void;
+	/** Delivery skipped: scheduled-but-unstarted work will fold the write. */
+	suppressed(w: Watcher, token: TokenId, slot: SlotId, seq: Seq): void;
+	/** A core effect's value-gated run (via the bridge's logCoreEffectRun seam). */
+	coreEffectRun(effect: string, value: Value): void;
+	/** A committed-world observer ran; `values` is its dep snapshot (the one
+	 * per-event array a site builds, tracer-attached only — referee-compared). */
+	reactEffectRun(effect: string, root: RootId, value: Value, values: Value[]): void;
+	/** A committed-world observer's cleanup ran (pre-re-run or removal). */
+	reactEffectCleanup(effect: string, root: RootId): void;
+	/** A drain moved this watcher's on-screen value to follow committed truth. */
+	reconcileCorrection(w: Watcher, root: RootId, from: Value, to: Value, perRootCommit: boolean): void;
+	/** Mount catch-up: a corrective re-render joined a live batch's lane. */
+	mountCorrective(w: Watcher, token: TokenId, slot: SlotId): void;
+	/** The urgent pre-paint mount-window fix. */
+	mountCorrection(w: Watcher, from: Value, to: Value): void;
+	/** A root locked a batch in; commitGen is the root's (just-bumped) generation. */
+	perRootCommit(root: RootId, token: TokenId, commitGen: CommitGen): void;
+	/** The batch retired: its writes became permanent history. */
+	retired(token: TokenId, committed: boolean, retiredSeq: Seq): void;
+	/** Slot lifecycle (claim / identity release / loud backstop eviction). */
+	slotClaimed(slot: SlotId, token: TokenId): void;
+	slotReleased(slot: SlotId, token: TokenId): void;
+	slotBackstopReleased(slot: SlotId, token: TokenId): void;
 	/** A computed evaluation in a world opened/closed (paired; end fires on throw too). */
 	evalStart(node: ComputedNode, world: World): void;
 	evalEnd(): void;
@@ -671,6 +713,8 @@ export type TraceHooks = {
 		disposition: 'fast-out' | 'compare-clean' | 'corrected',
 		correctives: number,
 	): void;
+	/** Quiescence reset the engine's per-episode state. */
+	epochReset(epoch: Epoch): void;
 	/** A compound public operation (write / passEnd / retire / settle / quiesce) finished. */
 	opEnd(): void;
 };
@@ -691,10 +735,13 @@ let publiclyRegistered = false;
 // One module-wide counter record proving the zero-cost promise behaviorally:
 // with no bridge registered, heavy signal traffic must leave every field at
 // its baseline (tests/one-core.spec.ts). Engine logic never reads them.
-const probes = { receipts: 0, tokens: 0, worldEvals: 0, bridgeEvents: 0, bridges: 0 };
+// (The old bridgeEvents probe died with the object-event channel: events are
+// packed trace records now, minted only behind each site's tracer guard —
+// with no tracer attached there is no event machinery left to count.)
+const probes = { receipts: 0, tokens: 0, worldEvals: 0, bridges: 0 };
 
 /** Referee surface — a snapshot of the engine-activity counters for the zero-cost test. @internal */
-export function __coreProbes(): { receipts: number; tokens: number; worldEvals: number; bridgeEvents: number; bridges: number } {
+export function __coreProbes(): { receipts: number; tokens: number; worldEvals: number; bridges: number } {
 	return { ...probes };
 }
 
@@ -796,15 +843,14 @@ export function registerReactBridge(options?: BridgeOptions): CosignalBridge {
 /**
  * Test-only: a fresh, unregistered bridge instance (the per-schedule "fresh
  * model" analog — the module seam still arms only once per process; kernel
- * records of abandoned bridges are inert). @internal
+ * records of abandoned bridges are inert). Referees that need the event
+ * stream attach a lossless session tracer themselves (tests/trace-events.ts)
+ * — observation via the tracer does not perturb: the bridge keeps PRODUCTION
+ * write semantics (quiet folds while nothing is pending), and the oracle
+ * mirrors them, so lockstep referees the real default write path. @internal
  */
 export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
-	const b = new CosignalBridge(options);
-	b.setRetainEvents(true); // the referee/tests read the event log; production bridges keep it off
-	// Retention observes; it does not perturb: the bridge keeps PRODUCTION
-	// write semantics (quiet folds while nothing is pending), and the oracle
-	// mirrors them — lockstep referees the real default write path.
-	return b;
+	return new CosignalBridge(options);
 }
 
 // ---- NF2: per-world shadow arenas (plans/2026-07-06 §4) ---------------------------
@@ -1482,51 +1528,19 @@ export class CosignalBridge {
 	watchers = new Map<WatcherId, Watcher>();
 	/** The committed `run`-action subscription store (see Subscription). */
 	subs = new Map<EffectId, Subscription>();
-	/** The retained BridgeEvent log. Populated only while a referee retains
-	 * events (`setRetainEvents(true)`); a tracer attached without a referee
-	 * mints events but consumes them live at the `log()` waist, retaining
-	 * nothing here (fixed memory — the tracer's ring/session buffers hold the
-	 * capture). */
-	events: BridgeEvent[] = [];
-
 	/**
-	 * The trace recorder slot. `undefined` (the permanent state unless
-	 * `cosignal/trace` attaches): every site pays one check, nothing else.
-	 * Assigned only by `attachTracer`/`Tracer.stop` over there; the accessor
-	 * keeps `eventsOn` in sync (a live tracer consumes the event stream, so
-	 * events must mint while one is attached — consumed at the `log()` waist,
-	 * never retained on the tracer's behalf).
+	 * The trace recorder slot — the engine's ONLY instrumentation output.
+	 * `undefined` (the permanent state unless `cosignal/trace` attaches):
+	 * every instrumentation site pays one load + undefined check, nothing
+	 * else. Assigned only by `attachTracer`/`Tracer.stop` over there. Sites
+	 * mint fixed-size packed records straight through these hooks — no event
+	 * objects exist, and the engine retains nothing on the tracer's behalf
+	 * (the tracer's ring/session buffers hold the capture; referees decode
+	 * records on demand — tests/trace-events.ts). Attaching observes the
+	 * write path, it never changes which one runs (deliberately NO quiet
+	 * recompute here or in attachTracer).
 	 */
-	private _trace: TraceHooks | undefined = undefined;
-	get trace(): TraceHooks | undefined {
-		return this._trace;
-	}
-	set trace(v: TraceHooks | undefined) {
-		this._trace = v;
-		this.eventsOn = this._retainEvents || v !== undefined;
-		// Deliberately NO quiet recompute: attaching a tracer (or retaining
-		// events) observes the write path, it never changes which one runs.
-	}
-
-	/**
-	 * EVENT MINTING GATE. The BridgeEvent log is the referee/tracing surface
-	 * (oracle lockstep comparisons, tests, devtools); the bindings consume
-	 * direct listeners instead (below). Nothing consuming the log means no
-	 * event objects mint at all — this was the measured one-object-per-write
-	 * allocation floor. True while a referee retains events or a tracer is
-	 * attached; every `log()` call site is gated on it.
-	 */
-	eventsOn = false;
-	private _retainEvents = false;
-
-	/** Referee surface — retain the BridgeEvent log (tests/diagnostics).
-	 * Retention does NOT disarm quiet mode: quiet folds mint 'quiet-write'
-	 * events for whoever is listening, so the stream stays complete while
-	 * the write path stays the production one. */
-	setRetainEvents(on: boolean): void {
-		this._retainEvents = on;
-		this.eventsOn = on || this._trace !== undefined;
-	}
+	trace: TraceHooks | undefined = undefined;
 
 	// ---- direct listeners (the bindings' consumption surface; no allocation) ----
 	// Listener callbacks are DELIVERED AT THE OPERATION BOUNDARY — queued into
@@ -1710,10 +1724,6 @@ export class CosignalBridge {
 			&& this.openPassByRoot.size === 0
 			&& this.dirtyAtoms.size === 0;
 	}
-	/** Event-stream base offset (0 unless a capacity cap drops old events). */
-	private eventsBase = 0;
-	/** Optional event-stream capacity: oldest events drop past ~2× this. */
-	private eventCapacity: number | undefined = undefined;
 
 	/**
 	 * Referee surface — not consulted by engine logic. The recorded
@@ -1945,50 +1955,8 @@ export class CosignalBridge {
 		return hit;
 	}
 
-	private log(e: BridgeEvent): void {
-		probes.bridgeEvents++; // One Core probe (referee surface)
-		if (this._retainEvents) {
-			this.events.push(e);
-			const cap = this.eventCapacity;
-			if (cap !== undefined && this.events.length >= cap * 2) {
-				const drop = this.events.length - cap;
-				this.events.splice(0, drop);
-				this.eventsBase += drop;
-			}
-		} else {
-			// A tracer alone consumes events LIVE (the hook call below) into its
-			// own fixed-size buffers; nothing reads `this.events` later, so
-			// retaining here would grow memory for the life of the session.
-			// The absolute cursor still advances: a minted-but-unretained event
-			// counts as immediately dropped.
-			this.eventsBase++;
-		}
-		const tr = this.trace;
-		if (tr !== undefined) tr.event(e);
-	}
-
 	private mintSeq(): Seq {
 		return ++this.seq;
-	}
-
-	// ---- event-stream cursor/ring ----
-
-	/** Absolute cursor into the event stream (stable across ring drops). */
-	eventCursor(): number {
-		return this.eventsBase + this.events.length;
-	}
-
-	/**
-	 * Bound the RETAINED event log (the referee's `setRetainEvents(true)`
-	 * stream — a tracer-only consumer already retains nothing) so a
-	 * long-retaining diagnostic session doesn't grow it without limit: once
-	 * set, the oldest events drop in amortized batches past ~2× the capacity
-	 * and `eventCursor()`/`eventsSince()` marks stay stable. Unset by default —
-	 * lockstep referees need the complete stream. Diagnostics knob; exercised
-	 * by the SPK-K1 soak bench (research/experiments/cosignal-gates.md).
-	 */
-	setEventCapacity(cap: number | undefined): void {
-		this.eventCapacity = cap;
 	}
 
 	// ---------------------------------------------------------------- setup
@@ -3800,7 +3768,8 @@ export class CosignalBridge {
 				return ra - rb;
 			});
 			const victim = candidates[0]!;
-			if (this.eventsOn) this.log({ type: 'slot-backstop-released', slot: victim.id, token: victim.tenant! });
+			const tr = this.trace;
+			if (tr !== undefined) tr.slotBackstopReleased(victim.id, victim.tenant!);
 			this.releaseSlot(victim);
 			free = victim;
 		}
@@ -3819,7 +3788,10 @@ export class CosignalBridge {
 			const clear = ~(1 << free.id);
 			for (const w of this.watchers.values()) w.dedupBits &= clear; // dedup clear at re-intern
 		}
-		if (this.eventsOn) this.log({ type: 'slot-claimed', slot: free.id, token: token.id });
+		{
+			const tr = this.trace;
+			if (tr !== undefined) tr.slotClaimed(free.id, token.id);
+		}
 		return free;
 	}
 
@@ -3827,7 +3799,8 @@ export class CosignalBridge {
 		const tenant = slot.tenant === undefined ? undefined : this.token(slot.tenant);
 		if (tenant !== undefined) {
 			tenant.slot = undefined; // identity release; receipts keep their denormalized slot
-			if (this.eventsOn) this.log({ type: 'slot-released', slot: slot.id, token: tenant.id });
+			const tr = this.trace;
+			if (tr !== undefined) tr.slotReleased(slot.id, tenant.id);
 		}
 		slot.tenant = undefined;
 		slot.releasePending = false;
@@ -3852,11 +3825,10 @@ export class CosignalBridge {
 	 * watchers, re-runs for committed React effects; core effect()s are
 	 * kernel subscribers — the direct kernel apply itself flushes them).
 	 * No receipt, no token, no tape append, no delivery walk. Observation:
-	 * when an event consumer is listening (a referee retaining the log, an
-	 * attached tracer) the accepted fold mints ONE 'quiet-write' event
-	 * through the log() waist — with no consumer that is one dead branch,
-	 * and observation never changes which write path executes (equality
-	 * drops stay silent: there is no token to attribute a drop to). @internal
+	 * when a tracer is attached the accepted fold mints ONE quiet-write
+	 * record — with no tracer that is one dead branch, and observation never
+	 * changes which write path executes (equality drops stay silent: there
+	 * is no token to attribute a drop to). @internal
 	 */
 	__quietWrite(node: AtomNode, kind: OpKind, payload: unknown): void {
 		if (this.evalDepth > 0) throw new BridgeScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
@@ -3868,7 +3840,8 @@ export class CosignalBridge {
 		}
 		node.base = next;
 		node.baseSeq = this.cas = ++this.seq; // advance the base + committed-advance clocks together (mintSeq, inlined)
-		if (this.eventsOn) this.log({ type: 'quiet-write', node: node.name, seq: node.baseSeq });
+		const tr = this.trace;
+		if (tr !== undefined) tr.quietWrite(node, node.baseSeq);
 		// Direct kernel apply: the plain write tail, no public-method re-entry
 		// (the host seam already ran — policy checked, op folded).
 		__hostApplySet(node.handle, next);
@@ -3990,14 +3963,16 @@ export class CosignalBridge {
 		if (tp.n === tp.start) {
 			if (op.kind === 'set' && node.eqIsDefault) {
 				if (Object.is(op.value, node.base)) {
-					if (this.eventsOn) this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+					const tr = this.trace;
+					if (tr !== undefined) tr.writeDropped(node, tokenId);
 					this.endOp();
 					return;
 				}
 			} else {
 				const evaluated = this.applyOp(node, op, node.base);
 				if (this.inCallback(() => node.equals(evaluated, node.base))) {
-					if (this.eventsOn) this.log({ type: 'write-dropped', node: node.name, token: tokenId });
+					const tr = this.trace;
+					if (tr !== undefined) tr.writeDropped(node, tokenId);
 					this.endOp();
 					return;
 				}
@@ -4033,10 +4008,12 @@ export class CosignalBridge {
 			}
 		}
 		{
+			// ONE write record: the receipt hook carries node/op/token/slot/seq
+			// (the old object channel's separate 'write' event was the same
+			// instant with less information — sites report once now).
 			const tr = this.trace;
 			if (tr !== undefined) tr.receipt(node, tp.entryAt(tp.n - 1));
 		}
-		if (this.eventsOn) this.log({ type: 'write', node: node.name, token: token.id, slot: slot.id, seq });
 
 		// Apply to the kernel eagerly with stepwise equality, so the newest
 		// world stays directly readable off the kernel arena.
@@ -4077,10 +4054,11 @@ export class CosignalBridge {
 	 * deliver interleaved so no write can slip between renders unseen.
 	 */
 	private deliver(w: Watcher, token: Token, slot: SlotMeta, seq: Seq): void {
+		const tr = this.trace; // one load covers this call's (at most two) record sites
 		const bit = 1 << slot.id;
 		if ((w.dedupBits & bit) === 0) {
 			w.dedupBits |= bit;
-			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'fresh' });
+			if (tr !== undefined) tr.delivery(w, token.id, slot.id, seq, false);
 			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id);
 			return;
 		}
@@ -4091,10 +4069,10 @@ export class CosignalBridge {
 		// One open pass per root ⇒ one registry load + two compares.
 		const p = this.openPassByRoot.get(w.root);
 		if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
-			if (this.eventsOn) this.log({ type: 'delivery', watcher: w.name, token: token.id, slot: slot.id, seq, mode: 'interleaved' });
+			if (tr !== undefined) tr.delivery(w, token.id, slot.id, seq, true);
 			if (this.onDelivery !== undefined) this.queueNotify(0, w, token, slot.id);
 		} else {
-			if (this.eventsOn) this.log({ type: 'suppressed', watcher: w.name, token: token.id, slot: slot.id, seq });
+			if (tr !== undefined) tr.suppressed(w, token.id, slot.id, seq);
 		}
 	}
 
@@ -4103,14 +4081,15 @@ export class CosignalBridge {
 	 * effects (tests/helpers.ts `mountEngineCoreEffect` over the public
 	 * `effect()`), flushed by the eager kernel apply itself — the bridge
 	 * holds no record of them. Their wrappers report each value-gated run
-	 * here so `core-effect-run` events keep the retention/cursor/
-	 * trace-causality semantics of the one `log()` waist. Sibling firing
-	 * order under one operation is implementation-defined (kernel
-	 * subscriber-link order — owner ruling 2026-07-06); values and the
-	 * operation each run fires at are the contract (RCC-EF4).
+	 * here so core-effect-run records land in the one packed stream with
+	 * its causality register. Sibling firing order under one operation is
+	 * implementation-defined (kernel subscriber-link order — owner ruling
+	 * 2026-07-06); values and the operation each run fires at are the
+	 * contract (RCC-EF4).
 	 */
 	logCoreEffectRun(name: string, value: Value): void {
-		if (this.eventsOn) this.log({ type: 'core-effect-run', effect: name, value });
+		const tr = this.trace;
+		if (tr !== undefined) tr.coreEffectRun(name, value);
 	}
 
 	// ------------------------------------------------------ pass lifecycle
@@ -4378,7 +4357,8 @@ export class CosignalBridge {
 		this.subs.delete(id);
 		this.committedSubCount--;
 		e.cleanups++;
-		if (this.eventsOn) this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
+		const tr = this.trace;
+		if (tr !== undefined) tr.reactEffectCleanup(e.name, e.root);
 		// Release the snapshot's observation retains.
 		const held = e.obsDeps;
 		if (held !== undefined) {
@@ -4401,7 +4381,7 @@ export class CosignalBridge {
 	}
 
 	/** The referee re-fire: cleanup + body re-run through the REAL capture
-	 * frame + events (adapter-registered subscriptions instead queue their
+	 * frame + records (adapter-registered subscriptions instead queue their
 	 * refire to the operation boundary — the adapter owns the body run). */
 	private runCommittedSub(e: Subscription): void {
 		if (e.refire !== undefined) {
@@ -4409,15 +4389,14 @@ export class CosignalBridge {
 			return;
 		}
 		e.cleanups++;
-		if (this.eventsOn) this.log({ type: 'react-effect-cleanup', effect: e.name, root: e.root });
+		const tr = this.trace;
+		if (tr !== undefined) tr.reactEffectCleanup(e.name, e.root);
 		if (e.body !== undefined) this.captureRun(e.id, e.body);
 		e.runs++;
-		if (this.eventsOn) {
-			this.log({
-				type: 'react-effect-run', effect: e.name, root: e.root,
-				value: e.lastValue, values: e.deps.map((d) => d.value),
-			});
-		}
+		// The dep-values array is the ONE per-record payload a site allocates,
+		// and only under the guard: the lockstep referee compares it entry by
+		// entry, so the record must carry the real snapshot.
+		if (tr !== undefined) tr.reactEffectRun(e.name, e.root, e.lastValue, e.deps.map((d) => d.value));
 	}
 
 	/**
@@ -4517,16 +4496,16 @@ export class CosignalBridge {
 		p.state = 'ended';
 		p.endKind = kind;
 		this.openPassByRoot.delete(p.root);
-		{
-			// Trace-only pass-end: fires BEFORE the end's consequences (retirement
-			// folds, per-root commits, drains, fixups), unlike the pass-committed/
-			// pass-discarded events below, so consequences can cite it as cause.
-			const tr = this.trace;
-			if (tr !== undefined) tr.passEnd(p, kind);
-		}
+		// One load covers this operation's record sites: the disposition
+		// record here fires BEFORE the end's consequences (retirement folds,
+		// per-root commits, drains, fixups) so consequences can cite it as
+		// cause; the passCommitted/passDiscarded referee markers below fire
+		// AFTER them (the reference model's stream position).
+		const tr = this.trace;
+		if (tr !== undefined) tr.passEnd(p, kind);
 		if (kind === 'discard') {
 			for (const wid of p.mounted) this.dropWatcher(wid); // never subscribed; the tree died
-			if (this.eventsOn) this.log({ type: 'pass-discarded', pass: p.id, root: p.root });
+			if (tr !== undefined) tr.passDiscarded(p);
 			this.reevaluateDeferredReleases();
 			this.reclaimAfterPassEnd(p);
 			this.recomputeQuiet(); // pass closed (and its pin unblocked compaction): quiet may re-arm
@@ -4572,7 +4551,7 @@ export class CosignalBridge {
 					const ra = this.arenaByRoot.get(p.root);
 					if (ra !== undefined) this.fanAtomsToArena(ra, t.atomsTouched, false);
 				}
-				if (this.eventsOn) this.log({ type: 'per-root-commit', root: p.root, token: t.id });
+				if (tr !== undefined) tr.perRootCommit(p.root, t.id, root.commitGen);
 				// (3) durable drain, gated exactly as before: an advanced slot
 				// or member-slot write drift (or restaled leftovers) means the
 				// root's committed truth moved — candidates come from the
@@ -4620,7 +4599,7 @@ export class CosignalBridge {
 				}
 			}
 		}
-		if (this.eventsOn) this.log({ type: 'pass-committed', pass: p.id, root: p.root });
+		if (tr !== undefined) tr.passCommitted(p);
 		// ctx.previous cells hold the last COMMITTED value — a pending
 		// render's value must never leak into the hint, because a pending
 		// transition may still be discarded — so update them from every
@@ -4802,7 +4781,10 @@ export class CosignalBridge {
 		// BEFORE the drain loop (§4.3's ordering joint: mutate → fan → drain),
 		// fan the retiring token's touched atoms into EVERY committed arena.
 		if (touchedAny) this.fanAtomsToCommittedArenas(t.atomsTouched);
-		if (this.eventsOn) this.log({ type: 'retired', token: t.id, committed, retiredSeq });
+		{
+			const tr = this.trace;
+			if (tr !== undefined) tr.retired(t.id, committed, retiredSeq);
+		}
 		// Durable drains, per root, gated exactly as before (flipped slot or
 		// member-write drift or restaled leftovers): candidates come from
 		// each root arena's dirty list — the site-(a) fanout above marked
@@ -4950,21 +4932,24 @@ export class CosignalBridge {
 		}
 	}
 
-	/** The ONE urgent pre-paint watcher correction (compare → event → resets →
+	/** The ONE urgent pre-paint watcher correction (compare → record → resets →
 	 * notify). A correction must move `lastRenderedValue` AND re-arm the dedup
 	 * bits AND queue the kind-2 notify together — all four correction sites
 	 * (settlement drain, quiet drain, durable drain, mount fixup) share this
-	 * body so the triple can never drift. Events by cause: drains log
-	 * 'reconcile-correction'; mounts log 'mount-urgent-correction'; quiet
-	 * folds log nothing here — the fold's own 'quiet-write' event is the
-	 * whole quiet stream, and the oracle's mirrored quiet corrections are
-	 * silent too, so the streams stay comparable. Returns
-	 * true iff a correction fired. */
+	 * body so the triple can never drift. Records by cause: drains record
+	 * reconcile-correction; mounts record mount-correction (decoded as
+	 * 'mount-urgent-correction'); quiet folds record nothing here — the fold's
+	 * own quiet-write record is the whole quiet stream, and the oracle's
+	 * mirrored quiet corrections are silent too, so the streams stay
+	 * comparable. Returns true iff a correction fired. */
 	private correctWatcher(w: Watcher, wNode: AnyNode, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
 		if (!this.changedValue(wNode, w.lastRenderedValue, now)) return false;
-		if (this.eventsOn && cause !== 'quiet') {
-			if (cause === 'mount') this.log({ type: 'mount-urgent-correction', watcher: w.name, from: w.lastRenderedValue, to: now });
-			else this.log({ type: 'reconcile-correction', watcher: w.name, root: w.root, from: w.lastRenderedValue, to: now, cause });
+		if (cause !== 'quiet') {
+			const tr = this.trace;
+			if (tr !== undefined) {
+				if (cause === 'mount') tr.mountCorrection(w, w.lastRenderedValue, now);
+				else tr.reconcileCorrection(w, w.root, w.lastRenderedValue, now, cause === 'per-root-commit');
+			}
 		}
 		w.lastRenderedValue = now; // the urgent pre-paint re-render
 		w.dedupBits = 0; // dedup bits re-arm at the watcher's render
@@ -5082,6 +5067,7 @@ export class CosignalBridge {
 	private mountFixup(w: Watcher, committingPass: Pass, baseline: { cas: Seq; rootCommitGen: CommitGen }, maskTokenRecords: Token[]): void {
 		const node = this.nodeById(w.node);
 		const closure = this.dependencyClosureOf(w.node, committingPass);
+		const tr = this.trace; // one load covers the corrective records + the disposition record
 		// RT6 first half — per-token catch-up loop: every LIVE written token
 		// that touched the node. A premise of the condition test's soundness,
 		// not an optimization: a live committed member can write after the pin
@@ -5094,7 +5080,7 @@ export class CosignalBridge {
 			const slot = this.slots[t.slot]!;
 			// Fully included (slot ∈ included bits ∧ no post-pin write): skip — never by value.
 			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin) continue;
-			if (this.eventsOn) this.log({ type: 'mount-corrective', watcher: w.name, token: t.id, slot: slot.id });
+			if (tr !== undefined) tr.mountCorrective(w, t.id, slot.id);
 			correctives++;
 			w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into t's lane (the protocol's runInBatch)
 			if (this.onMountCorrective !== undefined) this.queueNotify(1, w, t, slot.id);
@@ -5114,7 +5100,6 @@ export class CosignalBridge {
 			baseline.cas <= w.snapshot.pin &&
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
-		const tr = this.trace; // one disposition record per mount fixup
 		if (fastOut) {
 			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctives);
 			return; // nothing committed or retired in the window: no evaluation, no comparison
@@ -5300,7 +5285,10 @@ export class CosignalBridge {
 			s.releasePending = false;
 		}
 		for (const w of this.watchers.values()) w.dedupBits = 0;
-		if (this.eventsOn) this.log({ type: 'epoch-reset', epoch: this.epoch });
+		{
+			const tr = this.trace;
+			if (tr !== undefined) tr.epochReset(this.epoch);
+		}
 		this.recomputeQuiet(); // quiescent by definition; re-derive from the new episode's state
 		this.endOp();
 		this.arenaOpEpilogue();
@@ -5323,17 +5311,6 @@ export class CosignalBridge {
 
 	passValue(node: AnyNode, pass: Pass): Value {
 		return this.evaluate(node, { kind: 'pass', pass });
-	}
-
-	/** Referee surface — read by twin tests and trace.spec; engine logic and
-	 * the shim consume `eventsSince`/`eventCursor` instead. */
-	eventsOfType<T extends BridgeEvent['type']>(type: T): Extract<BridgeEvent, { type: T }>[] {
-		return this.events.filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
-	}
-
-	/** Events appended after a caller-captured watermark (absolute cursor; test/shim surface). */
-	eventsSince(mark: number): BridgeEvent[] {
-		return this.events.slice(Math.max(0, mark - this.eventsBase));
 	}
 }
 

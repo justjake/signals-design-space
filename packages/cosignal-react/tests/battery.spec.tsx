@@ -136,7 +136,7 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:2;');
-		const retired = h.bridge.eventsOfType('retired');
+		const retired = h.events.eventsOfType('retired');
 		const byToken = new Map<number, number>();
 		for (const e of retired) byToken.set(e.token, (byToken.get(e.token) ?? 0) + 1);
 		for (const [, count] of byToken) expect(count).toBe(1); // exactly once per token
@@ -151,8 +151,8 @@ describe('battery (spec §6) at React level', () => {
 			a.set(11); // effective
 		});
 		expect(text(container)).toBe('a:11;');
-		expect(h.bridge.eventsOfType('write-dropped').length).toBe(1);
-		expect(h.bridge.eventsOfType('write').length).toBeGreaterThanOrEqual(1);
+		expect(h.events.eventsOfType('write-dropped').length).toBe(1);
+		expect(h.events.eventsOfType('write').length).toBeGreaterThanOrEqual(1);
 	});
 
 	test('case 6 — grouped writes in one handler: per-write receipts, one commit, consistent lane', async () => {
@@ -186,7 +186,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(renders).toBe(before + 1); // one commit for the event's writes
 		// Both writes carry batch attribution (receipts with tokens), no grouping
 		// machinery anywhere: two write events, each with a token.
-		const writes = h.bridge.eventsOfType('write');
+		const writes = h.events.eventsOfType('write');
 		expect(writes.length).toBe(2);
 		for (const w of writes) expect(w.token).toBeGreaterThan(0);
 	});
@@ -209,7 +209,7 @@ describe('battery (spec §6) at React level', () => {
 		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
 		// Both writes held receipts (the retained referee event log counts
 		// them; the receipts themselves compacted into base at retirement).
-		expect(h.bridge.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
+		expect(h.events.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
 	});
 
 	test('case 9(a) — mount inside the batch pass: k-world value on FIRST render, no correction', async () => {
@@ -240,8 +240,8 @@ describe('battery (spec §6) at React level', () => {
 		});
 		expect(text(container)).toBe('r1:1;f:1;'); // k-world value on first render
 		expect(freshRenders).toBe(1); // no double render for the included token
-		expect(h.bridge.eventsOfType('mount-urgent-correction').length).toBe(0);
-		expect(h.bridge.eventsOfType('mount-corrective').length).toBe(0); // fully included: skipped
+		expect(h.events.eventsOfType('mount-urgent-correction').length).toBe(0);
+		expect(h.events.eventsOfType('mount-corrective').length).toBe(0); // fully included: skipped
 	});
 
 	test('case 9(e) — Offscreen/Activity reveal takes the conservative compare and shows fresh truth', async () => {
@@ -301,12 +301,12 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('r1:1;r2:1;');
-		const k = h.bridge.eventsOfType('write')[0]!.token;
+		const k = h.events.eventsOfType('write')[0]!.token;
 		// The corrective re-render rode k's own lane — k committed exactly
 		// once on this root (a fresh transition would have produced a second).
-		const kCommits = h.bridge.eventsOfType('per-root-commit').filter((e) => e.token === k);
+		const kCommits = h.events.eventsOfType('per-root-commit').filter((e) => e.token === k);
 		expect(kCommits.length).toBe(1);
-		expect(h.bridge.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1);
+		expect(h.events.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1);
 	});
 
 	test('case 11 — one batch spanning two roots: per-root commits, one retirement, no cross-root contradiction', async () => {
@@ -320,10 +320,10 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		expect(text(one.container)).toBe('one:4;');
 		expect(text(two.container)).toBe('two:4;');
-		const k = h.bridge.eventsOfType('write')[0]!.token;
-		const roots = new Set(h.bridge.eventsOfType('per-root-commit').filter((e) => e.token === k).map((e) => e.root));
+		const k = h.events.eventsOfType('write')[0]!.token;
+		const roots = new Set(h.events.eventsOfType('per-root-commit').filter((e) => e.token === k).map((e) => e.root));
 		expect(roots.size).toBe(2); // each root's commit reported separately
-		expect(h.bridge.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1); // exactly once
+		expect(h.events.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1); // exactly once
 	});
 
 	test('case 12 — store-only transition persists (committed=false folds identically)', async () => {
@@ -337,7 +337,7 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		// The batch retired committed=false through the same path: fold happened.
 		const orphanNode = h.bridge.byKernelId.get(orphan._id)!;
-		const retired = h.bridge.eventsOfType('retired');
+		const retired = h.events.eventsOfType('retired');
 		expect(retired.some((e) => e.committed === false)).toBe(true);
 		expect(h.bridge.committedValue(orphanNode, 'root-1')).toBe(5); // persistence
 		expect(text(container)).toBe('s:0;'); // untouched subscriber unaffected
@@ -355,7 +355,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(text(container)).toBe('a:2;');
 		expect(h.bridge.quiescent()).toBe(true); // everything retired
 		h.bridge.quiesce(); // bumps the epoch and renumbers the counters
-		expect(h.bridge.eventsOfType('epoch-reset').length).toBe(1);
+		expect(h.events.eventsOfType('epoch-reset').length).toBe(1);
 		await act(async () => {
 			a.set(3); // life continues in the new episode
 		});
@@ -596,7 +596,6 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		// call stack — with a guaranteed close edge. So no write in the React
 		// path ever reaches bareWrite, and no ambient batch is ever minted.
 		h = makeHarness();
-		h.bridge.setRetainEvents(false); // production posture: no event consumer (quiet derives on its own)
 		const a = new Atom(0);
 		const flag = new Atom(0); // written outside any React context; observed by no component
 		const io = deferred<void>();
@@ -642,7 +641,6 @@ describe('ambient batch retirement (a context-free write must never wedge the pi
 		// the batch retires as soon as no live non-ambient token and no open
 		// pass remain (checked at bare writes, batch retirements, pass ends).
 		h = makeHarness();
-		h.bridge.setRetainEvents(false);
 		const a = new Atom(0);
 		const flag = new Atom(0);
 		const io = deferred<void>();

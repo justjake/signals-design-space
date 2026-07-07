@@ -13,11 +13,13 @@ import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
 import { __newBridgeForTest, BridgeInvariantViolation, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
+import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
+	attachRefereeStream(b); // the decoded packed stream is the event surface
 	b.registerBridge();
 	armArenaCheck(b);
 	return b;
@@ -66,7 +68,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 }
 
 function corrections(b: CosignalBridge, watcher: string): number {
-	return b.eventsOfType('reconcile-correction').filter((e) => (e as { watcher: string }).watcher === watcher).length;
+	return refereeStreamOf(b).eventsOfType('reconcile-correction').filter((e) => e.watcher === watcher).length;
 }
 
 describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {

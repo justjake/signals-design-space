@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { mountEngineReactEffectPick } from './helpers.js';
+import { attachRefereeStream } from './trace-events.js';
 import { __newBridgeForTest, Atom, effect, type CosignalBridge } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
@@ -30,8 +31,8 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log };
 }
 
-/** A fresh registered bridge in referee posture (events retained; retention
- * observes only — quiet arming follows the production derivation). */
+/** A fresh registered bridge (production posture — the only posture: no
+ * event objects exist; quiet arming follows the production derivation). */
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
@@ -156,8 +157,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('quiet mode: observation transitions need no armed pipeline (production posture)', async () => {
-		const b = __newBridgeForTest();
-		b.setRetainEvents(false); // production posture (quiet arms by derivation alone)
+		const b = __newBridgeForTest(); // production posture (quiet arms by derivation alone)
 		b.registerBridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
@@ -177,11 +177,12 @@ describe('observation union at the bridge', () => {
 		expect(b.quiet).toBe(true);
 	});
 
-	it('observation transitions are direct callbacks — never BridgeEvents (lockstep surface unchanged)', async () => {
-		const b = bridge(); // referee posture: the event log is retained
+	it('observation transitions are direct callbacks — never events (lockstep surface unchanged)', async () => {
+		const b = bridge();
+		const stream = attachRefereeStream(b); // referee posture: decode the packed stream
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
-		const before = b.events.length;
+		const before = stream.cursor();
 		const p = b.passStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		b.passEnd(p.id, 'commit');
@@ -189,7 +190,7 @@ describe('observation union at the bridge', () => {
 		w.live = false;
 		await tick();
 		expect(log).toEqual(['observe', 'unobserve']);
-		const minted = b.events.slice(before).map((e) => e.type);
+		const minted = stream.eventsSince(before).map((e) => e.type);
 		expect(minted.filter((t) => /observe|lifecycle/i.test(t))).toEqual([]);
 		expect(minted).toEqual(['pass-committed']); // pass bookkeeping only
 	});

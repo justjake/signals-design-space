@@ -1,10 +1,11 @@
 /**
  * Trace semantics coverage for cosignal/trace: every traced event class
  * fires with correct payloads on a representative schedule (a staged
- * narrative over one traced bridge, then a fuzz sweep cross-checking the
- * trace stream against the engine's BridgeEvent stream — the same event
- * vocabulary the reference model emits). Causality (CAUSE edges + queries)
- * and the stable human format are asserted here too.
+ * narrative over one traced bridge, then a fuzz sweep proving the capture's
+ * integrity — losslessness, total decode/format, terminating causality, and
+ * the referee decoder's coverage of the packed stream, which is the engine's
+ * ONLY event output). Causality (CAUSE edges + queries) and the stable human
+ * format are asserted here too.
  */
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
@@ -12,6 +13,7 @@ import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
 import { __newBridgeForTest, type BridgeEvent, type CosignalBridge } from '../src/concurrent.js';
 import { attachTracer, formatTrace, formatTraceEvent, Tracer, type TraceEvent, type TraceKind } from '../src/trace.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
+import { attachRefereeStream, decodeBridgeEvent, decodedBridgeEvents } from './trace-events.js';
 
 function tick(): () => number {
 	let t = 0;
@@ -27,6 +29,11 @@ function last(tr: Tracer, kind: TraceKind): TraceEvent {
 	const found = all(tr, kind);
 	expect(found.length, `expected at least one ${kind} event`).toBeGreaterThan(0);
 	return found[found.length - 1]!;
+}
+
+/** The referee's view of the same records (the deleted object log's shape). */
+function bevents<T extends BridgeEvent['type']>(tr: Tracer, type: T): Extract<BridgeEvent, { type: T }>[] {
+	return decodedBridgeEvents(tr).filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
 }
 
 describe('R11 event-class coverage (staged narrative, one traced bridge)', () => {
@@ -66,7 +73,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 		expect(all(tr, 'batch-open')[0]!.data).toEqual({ token: k.id, action: false, ambient: false });
 		expect(all(tr, 'slot-claim')[0]!.data).toEqual({ slot: 0, token: k.id });
-		const seq = b.eventsOfType('write')[0]!.seq; // the slot claim minted its own seq before the write's
+		const seq = bevents(tr, 'write')[0]!.seq; // the slot claim minted its own seq before the write's
 		const w1 = all(tr, 'write')[0]!;
 		expect(w1.data).toEqual({ node: 'flag', op: 'set', token: k.id, slot: 0, seq });
 		expect(w1.cause).toBeUndefined(); // operation root
@@ -89,7 +96,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		const w2 = all(tr, 'write')[1]!;
 		expect(w2.cause).toBeUndefined(); // opEnd isolated the previous write's chain
 		const s = all(tr, 'suppressed')[0]!;
-		expect(s.data).toEqual({ watcher: 'W', token: k, slot: 0, seq: b.eventsOfType('suppressed')[0]!.seq, reason: 'dedup-pending-fold' });
+		expect(s.data).toEqual({ watcher: 'W', token: k, slot: 0, seq: bevents(tr, 'suppressed')[0]!.seq, reason: 'dedup-pending-fold' });
 		expect(s.cause).toBe(w2.id);
 	});
 
@@ -105,7 +112,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 		b.write(1, a, { kind: 'set', value: 5 });
 		const d = last(tr, 'delivery');
-		const seq = b.eventsOfType('write')[2]!.seq;
+		const seq = bevents(tr, 'write')[2]!.seq;
 		expect(d.data).toEqual({ watcher: 'W', token: 1, slot: 0, seq, mode: 'interleaved' });
 
 		b.renderWatcher(p2.id, w.id);
@@ -116,7 +123,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		const end = all(tr, 'pass-end')[1]!;
 		expect(end.data['disposition']).toBe('commit');
 		const ret = all(tr, 'batch-retire')[0]!;
-		expect(ret.data).toEqual({ token: 1, retiredSeq: b.eventsOfType('retired')[0]!.retiredSeq, committed: true });
+		expect(ret.data).toEqual({ token: 1, retiredSeq: bevents(tr, 'retired')[0]!.retiredSeq, committed: true });
 		expect(ret.cause).toBe(end.id); // retirement folded inside the commit
 		const rel = all(tr, 'slot-release')[0]!;
 		expect(rel.data).toEqual({ slot: 0, token: 1 });
@@ -135,7 +142,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(rc.data).toEqual({ root: 'A', token: t2.id, commitGen: 1 });
 		expect(rc.cause).toBe(all(tr, 'pass-end')[2]!.id);
 		const re = all(tr, 'react-effect-run')[0]!;
-		expect(re.data).toEqual({ effect: 'RE', root: 'A', value: 7 });
+		expect(re.data).toEqual({ effect: 'RE', root: 'A', value: 7, values: [7] }); // values = the dep snapshot (referee-compared)
 		expect(re.cause).toBe(rc.id);
 		expect(tr.whyEffectRan('RE').map((e) => e.kind)).toEqual(['react-effect-run', 'root-commit', 'pass-end']);
 	});
@@ -297,47 +304,24 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(formatTraceEvent(rc)).toMatch(/^#\d+ \+\d+µs root-commit\(A\) token=2 commitGen=1 <- #\d+$/);
 	});
 
-	it('effectRunCount agrees with the bridge event stream', () => {
-		const expected = b.eventsOfType('react-effect-run').filter((e) => e.effect === 'RE').length;
+	it('effectRunCount agrees with the referee-decoded stream', () => {
+		const expected = bevents(tr, 'react-effect-run').filter((e) => e.effect === 'RE').length;
 		expect(tr.effectRunCount('RE')).toBe(expected);
 		expect(tr.effectRunCount('nope')).toBe(0);
 	});
 });
 
-// ---- trace stream ≡ BridgeEvent stream (cross-checked on generated schedules) ----
+// ---- fuzz sweep: capture integrity + referee-decode coverage ------------------
+// The packed stream is the engine's ONLY event output (the old cross-check
+// against a parallel object stream died with that stream — decoded-stream
+// correctness is now refereed where it matters, against the ORACLE, by
+// concurrent-fuzz.spec's lockstep differ). What this sweep still owns:
+// losslessness, total decode/format over every kind a real schedule
+// produces, terminating causality, and the structural pairing between
+// pre-consequence pass-end records and post-consequence pass markers.
 
-/** BridgeEvent → the trace record it must map to ('write' maps to the receipt-borne kind). */
-function expectedTraceOf(e: BridgeEvent): { kind: TraceKind; data: Record<string, unknown> } | undefined {
-	switch (e.type) {
-		case 'write': return { kind: 'write', data: { node: e.node, token: e.token, slot: e.slot, seq: e.seq } };
-		case 'write-dropped': return { kind: 'write-dropped', data: { node: e.node, token: e.token } };
-		case 'delivery': return { kind: 'delivery', data: { watcher: e.watcher, token: e.token, slot: e.slot, seq: e.seq, mode: e.mode } };
-		case 'suppressed': return { kind: 'suppressed', data: { watcher: e.watcher, token: e.token, slot: e.slot, seq: e.seq } };
-		case 'core-effect-run': return { kind: 'core-effect-run', data: { effect: e.effect } };
-		case 'react-effect-run': return { kind: 'react-effect-run', data: { effect: e.effect, root: e.root } };
-		case 'reconcile-correction': return { kind: 'reconcile-correction', data: { watcher: e.watcher, root: e.root, cause: e.cause } };
-		case 'mount-corrective': return { kind: 'mount-corrective', data: { watcher: e.watcher, token: e.token, slot: e.slot } };
-		case 'mount-urgent-correction': return { kind: 'mount-correction', data: { watcher: e.watcher } };
-		case 'per-root-commit': return { kind: 'root-commit', data: { root: e.root, token: e.token } };
-		case 'retired': return { kind: 'batch-retire', data: { token: e.token, committed: e.committed, retiredSeq: e.retiredSeq } };
-		case 'slot-claimed': return { kind: 'slot-claim', data: { slot: e.slot, token: e.token } };
-		case 'slot-released': return { kind: 'slot-release', data: { slot: e.slot, token: e.token } };
-		case 'slot-backstop-released': return { kind: 'slot-backstop-release', data: { slot: e.slot, token: e.token } };
-		case 'epoch-reset': return { kind: 'epoch-reset', data: { epoch: e.epoch } };
-		case 'pass-committed':
-		case 'pass-discarded':
-			return undefined; // mapped to the earlier pass-end record (asserted separately)
-	}
-}
-
-const MIRRORED = new Set<TraceKind>([
-	'write', 'write-dropped', 'delivery', 'suppressed', 'core-effect-run', 'react-effect-run',
-	'reconcile-correction', 'mount-corrective', 'mount-correction', 'root-commit', 'batch-retire',
-	'slot-claim', 'slot-release', 'slot-backstop-release', 'epoch-reset',
-]);
-
-describe('R11 fuzz cross-check: trace stream ≡ engine event stream (oracle schedules)', () => {
-	it('20 seeds × 60 steps: mirrored kinds match 1:1 in order with payloads; capture lossless; decode/format total', () => {
+describe('R11 fuzz sweep: lossless capture, total decode, terminating causality (oracle schedules)', () => {
+	it('20 seeds × 60 steps: session lossless; decode/format total; referee decode covers the stream; causality terminates', () => {
 		for (let seed = 1; seed <= 20; seed++) {
 			const b = __newBridgeForTest();
 			buildEngineTopology(b);
@@ -349,17 +333,21 @@ describe('R11 fuzz cross-check: trace stream ≡ engine event stream (oracle sch
 			const decoded = tr.events();
 			expect(decoded.length).toBe(tr.stats().recorded);
 
-			const expected = b.events.map(expectedTraceOf).filter((x) => x !== undefined);
-			const mirrored = decoded.filter((e) => MIRRORED.has(e.kind));
-			expect(mirrored.length, `seed ${seed}: mirrored event counts`).toBe(expected.length);
-			for (let i = 0; i < expected.length; i++) {
-				expect(mirrored[i]!.kind, `seed ${seed} event ${i}`).toBe(expected[i]!.kind);
-				expect(mirrored[i]!.data, `seed ${seed} event ${i} payload`).toMatchObject(expected[i]!.data);
-			}
-			// every pass end has exactly one disposition record, and it precedes its consequences
+			// the referee decoder maps every BridgeEvent-vocabulary record and
+			// nothing else (kind-for-kind agreement with a manual partition)
+			const bridgeEvents = decodedBridgeEvents(tr);
+			const mapped = decoded.filter((e) => decodeBridgeEvent(e) !== undefined);
+			expect(bridgeEvents.length, `seed ${seed}: referee coverage`).toBe(mapped.length);
+			// every pass end has exactly one disposition record BEFORE its
+			// consequences and exactly one referee marker after them
 			const passEnds = decoded.filter((e) => e.kind === 'pass-end');
-			const bridgeEnds = b.events.filter((e) => e.type === 'pass-committed' || e.type === 'pass-discarded');
-			expect(passEnds.length, `seed ${seed}: pass-end records`).toBe(bridgeEnds.length);
+			const markers = decoded.filter((e) => e.kind === 'pass-committed' || e.kind === 'pass-discarded');
+			expect(passEnds.length, `seed ${seed}: pass-end records`).toBe(markers.length);
+			for (const m of markers) {
+				expect(m.id, `seed ${seed}: marker #${m.id} must follow a pass-end`).toBeGreaterThan(
+					passEnds.find((e) => e.data['pass'] === m.data['pass'] && e.data['root'] === m.data['root'])!.id,
+				);
+			}
 			// causality always terminates at an operation root without leaving the capture
 			for (const e of decoded.slice(-50)) {
 				const chain = tr.causeChain(e.id);
@@ -398,10 +386,9 @@ describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)
 	});
 });
 
-describe('fixed memory under a tracer: the log retains nothing on the tracer’s behalf', () => {
-	it('production posture (no referee): hammering writes leaves bridge.events empty while the tracer records', () => {
-		const b = __newBridgeForTest();
-		b.setRetainEvents(false); // production posture: no referee — a tracer is the only consumer
+describe('fixed memory under a tracer: the engine retains nothing on the tracer’s behalf', () => {
+	it('production posture: hammering writes stores records ONLY in the tracer’s own fixed ring', () => {
+		const b = __newBridgeForTest(); // production posture — no event objects exist anywhere
 		b.registerBridge();
 		const a = b.atom('a', 0);
 		const tr = attachTracer(b, { mode: 'ring', capacity: 256, now: tick() });
@@ -411,25 +398,23 @@ describe('fixed memory under a tracer: the log retains nothing on the tracer’s
 			b.write(t.id, a, { kind: 'set', value: i + 1 });
 			b.retire(t.id, true);
 		}
-		expect(b.events.length).toBe(0); // the log retained NOTHING — fixed memory
-		expect(b.eventCursor()).toBeGreaterThanOrEqual(N * 3); // yet events minted (the cursor counts them as dropped)
-		expect(tr.stats().recorded).toBeGreaterThanOrEqual(N * 3); // and the tracer consumed every one, live
-		expect(tr.stats().retained).toBe(256); // into its own fixed ring
+		expect(tr.stats().recorded).toBeGreaterThanOrEqual(N * 3); // every site minted, live (open+claim+write+retire+release per loop)
+		expect(tr.stats().retained).toBe(256); // into the fixed ring — nothing engine-side grew
+		expect(tr.stats().bytes).toBe(256 * 8 * 4); // record storage stayed exactly one ring
 		tr.stop();
 	});
 
-	it('referee posture: retention is unchanged with a tracer attached (lockstep needs complete streams)', () => {
-		const b = __newBridgeForTest(); // retains events by default (referee mode)
+	it('referee posture: a lossless session decodes the complete stream (lockstep needs it)', () => {
+		const b = __newBridgeForTest();
+		const stream = attachRefereeStream(b, { now: tick() }); // the referee’s session tracer
 		b.registerBridge();
 		const a = b.atom('a', 0);
-		const tr = attachTracer(b, { mode: 'session', now: tick() });
 		const t = b.openBatch();
 		b.write(t.id, a, { kind: 'set', value: 1 });
 		b.retire(t.id, true);
-		expect(b.eventsOfType('write')).toHaveLength(1); // full stream retained for the referee
-		expect(b.eventsOfType('retired')).toHaveLength(1);
-		expect(b.events.length).toBe(b.eventCursor()); // nothing dropped
-		expect(tr.stats().recorded).toBeGreaterThan(0); // the tracer consumed the same stream
-		tr.stop();
+		expect(stream.eventsOfType('write')).toHaveLength(1); // full stream decodable for the referee
+		expect(stream.eventsOfType('retired')).toHaveLength(1);
+		expect(stream.tracer.verifyComplete().complete).toBe(true); // nothing dropped — provably
+		expect(stream.tracer.stats().recorded).toBeGreaterThan(0);
 	});
 });
