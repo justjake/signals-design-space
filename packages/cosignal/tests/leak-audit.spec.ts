@@ -33,6 +33,7 @@ import {
 	effectScope,
 } from '../src/index.js';
 import { __newBridgeForTest, type AnyNode, type AtomNode, type BridgeOptions, type ComputedNode, type CosignalBridge } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 
 // Mirrored kernel field offsets (index.ts const enums; asserted stable by the
 // suite's kernel-walk tests): NodeField.DEPS = 1, LinkField.NEXT_DEP = 6.
@@ -161,7 +162,7 @@ describe('2. ENGINE REGISTRY (byKernelId + dense per-node columns)', () => {
 describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 	it('kernel-node recreation churn (dispose → new node → re-evaluate) does NOT grow a LIVE committed arena: dead shadows recycle through the per-arena free list (LEAK-FIXED)', () => {
 		const b = bridge();
-		b.__setArenaCheck(true); // fold-truth divergence check armed across record reuse
+		armArenaCheck(b); // fold-truth divergence check armed across record reuse
 		const at = new Atom(1);
 		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
 		const other = b.atom('other', 0);
@@ -201,7 +202,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 
 	it('dispose-while-suspended purges the suspended-list entry and its byNode row from the live arena; a post-dispose settlement is inert (RECLAIMED)', async () => {
 		const b = bridge();
-		b.__setArenaCheck(true);
+		armArenaCheck(b);
 		const gate = deferred<string>();
 		const holder = { _useCache: undefined };
 		const c = b.computed('c', () => {
@@ -225,7 +226,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 
 	it('adversarial reuse interleaving: settle marks a shadow DIRTY-and-listed, dispose orphans it with the stale list entry outstanding, the record reuses, decay stays exact (LEAK-FIXED pin)', async () => {
 		const b = bridge();
-		b.__setArenaCheck(true);
+		armArenaCheck(b);
 		const at = new Atom(1);
 		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
 		const gate = deferred<string>();
@@ -340,7 +341,7 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 
 	it('suspend/settle churn drains the settlement queue and suspended lists to zero every cycle; the per-node ctx.use cache is bounded by node lifetime (RECLAIMED + noted contract)', async () => {
 		const b = bridge();
-		b.__setArenaCheck(true);
+		armArenaCheck(b);
 		const version = b.atom('v', 0);
 		const gates = Array.from({ length: 20 }, () => deferred<string>());
 		const holder = { _useCache: undefined as Map<string, unknown> | undefined };

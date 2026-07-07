@@ -39,7 +39,7 @@
  *  A2 newest memo fingerprints ≡ tapes (+retirement stamps) | lockstep values; scars S5 pins receipt-after-read invalidation
  *  A3 quiet flag ≡ pending state (tokens/passes/tapes) | quiet-mode.spec arming/disarming battery
  *  A4 adoption stamp ≡ byKernelId registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
- *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (__checkArenas): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
+ *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (tests/arena-checker.ts): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
  *  A7 committedBits ≡ committedTokens×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
  *  A8 pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's ONLY slot-set form (W1); model-view derives the oracle's Sets from the bits; lockstep pass worlds

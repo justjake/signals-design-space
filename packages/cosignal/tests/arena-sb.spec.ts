@@ -23,11 +23,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
-	b.__setArenaCheck(true);
+	armArenaCheck(b);
 	return b;
 }
 

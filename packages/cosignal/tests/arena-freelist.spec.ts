@@ -15,11 +15,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 
 function bridge(arm = false): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
-	if (arm) b.__setArenaCheck(true);
+	if (arm) armArenaCheck(b);
 	return b;
 }
 
@@ -97,7 +98,7 @@ describe('shadow-arena link free list threads through a spare field (row 2 twin)
 
 		// Arm the divergence check for a final lockstep sweep over the
 		// recycled records (validator + arena-served ≡ memo-served).
-		b.__setArenaCheck(true);
+		armArenaCheck(b);
 		commitWrite(b, s2, 11);
 		expect(b.committedValue(parent, 'R')).toBe(11);
 	});

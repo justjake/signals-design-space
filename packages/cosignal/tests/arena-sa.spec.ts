@@ -12,13 +12,14 @@
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
 import { __newBridgeForTest, BridgeInvariantViolation, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
-	b.__setArenaCheck(true);
+	armArenaCheck(b);
 	return b;
 }
 

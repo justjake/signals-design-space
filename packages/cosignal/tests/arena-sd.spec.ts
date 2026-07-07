@@ -30,6 +30,7 @@
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
 import { __newBridgeForTest, type AnyNode, type BridgeOptions, type CosignalBridge } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 
 /** Mirror of concurrent.ts's private A_CLOCK_LIMIT (0x7fff0000): stores of
  * the limit itself still fit Int32 (65535 under 2^31-1); the renumber fires
@@ -41,7 +42,7 @@ const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0))
 function bridge(options?: BridgeOptions): CosignalBridge {
 	const b = __newBridgeForTest(options);
 	b.registerBridge();
-	b.__setArenaCheck(true);
+	armArenaCheck(b);
 	return b;
 }
 

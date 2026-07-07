@@ -6,7 +6,7 @@
  * matched only MUTABLE|DIRTY / MUTABLE|PENDING, so a cold base was
  * INVISIBLE to a validation walk entered from above. Every suite that
  * creates atoms before readers is masked by node-id order: the armed
- * epilogue (__checkArenas) serves in ascending node id, so a bottom-first
+ * epilogue (arena-checker.ts) serves in ascending node id, so a bottom-first
  * cone self-heals base-up (serve of the cold base refolds it and
  * shallow-upgrades its subs). These pins create the TOP first (lowest
  * node id; fn closures resolve the later-declared handles), forcing the
@@ -20,13 +20,14 @@
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
 import { __newBridgeForTest, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
-	b.__setArenaCheck(true);
+	armArenaCheck(b);
 	return b;
 }
 

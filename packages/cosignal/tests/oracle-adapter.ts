@@ -24,6 +24,7 @@ import {
 	type CosignalBridge,
 	type Op,
 } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 import {
 	comparableEvents,
 	snapshotModel,
@@ -210,7 +211,7 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 	// every live arena's shadows from the arena's own walks and compares
 	// against fold-truth (plus the structural validator) — the corpus runs
 	// with the referee that owns the stage's STOP condition.
-	b.__setArenaCheck(true);
+	armArenaCheck(b);
 	buildEngineTopology(b);
 	b.registerBridge();
 	let drained = 0;

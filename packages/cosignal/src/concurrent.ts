@@ -819,8 +819,9 @@ export function __newBridgeForTest(options?: BridgeOptions): CosignalBridge {
 // at S-B; the newest memo table (the ladder's last arm) died at S-C, when
 // every bridge computed re-keyed onto a kernel `Computed` record — the
 // kernel serves newest, and the kernel's own dep links carry the newest
-// strong walks (subscription reach, the fixup closure's kernel leg). Behind
-// a test flag (`__setArenaCheck`), every
+// strong walks (subscription reach, the fixup closure's kernel leg). When
+// the test harness arms the divergence checker (tests/arena-checker.ts, fed
+// through `__checkerInternals`), every
 // public operation's epilogue serves each live arena's shadows FROM THE
 // ARENA (its own transliterated walks) and compares against FOLD-TRUTH — a
 // naive cache-free re-fold — ANY divergence throws. Layouts and walks are
@@ -1201,7 +1202,8 @@ function aUnlink(a: ShadowArena, id: number, sub: number = a.W[id + AF.L_SUB]!):
 		// this terminate).
 		if (W[dep + AF.DEPS_TAIL] !== 0) {
 			// Dirty-LIST append on the mark's 0→1 edge (the a.dirty contract;
-			// aValidate enforces DIRTY ⇒ listed, and decay drops the torn
+			// the armed validator — tests/arena-checker.ts — enforces DIRTY ⇒
+			// listed, and decay drops the torn
 			// shadow to cold from the list). This was the one DIRTY-setting
 			// site that skipped the append — the armed validator catches it
 			// the first time a last-sub unlink tears a computed with deps.
@@ -1373,6 +1375,84 @@ function aIsValidLink(a: ShadowArena, checkLink: number, sub: number): boolean {
 	}
 	return false;
 }
+
+/**
+ * The serve-override slot's non-arena occupant (W3): while `serveOverride`
+ * holds this marker, routed atom reads fold plain from their tapes in the
+ * frame's world — no arena, no kernel shortcut — the armed divergence
+ * checker's reference discipline (tests/arena-checker.ts compares arena
+ * serves against these folds, so its reads must never consult the state
+ * under check). Production never sets it; it exists so the routed-read hot
+ * path tests ONE override slot instead of two.
+ */
+const FOLD_TRUTH = Symbol('cosignal.foldTruth');
+
+/**
+ * The armed checker's window into the engine (W3) — returned by
+ * `CosignalBridge.__checkerInternals`, consumed only by the test-side
+ * referee (tests/arena-checker.ts: the divergence check and the structural
+ * validator). Readonly-shaped: live state getters plus bracket methods
+ * that keep every mutation's save/restore discipline engine-side.
+ * @internal
+ */
+export type ArenaCheckerInternals = {
+	/** Arena record layout as plain numbers, restricted to the fields the
+	 * structural validator reads. The engine's AF/AFlag/A_SHIFT are
+	 * same-file const enums (esbuild inlines them per file), so the values
+	 * are inlined HERE at construction and travel as data. AF entries are
+	 * Int32 word offsets within a record; AFlag entries are FLAGS bits;
+	 * A_SHIFT converts a record id to its side-column index. */
+	readonly layout: {
+		readonly A_SHIFT: number;
+		readonly AF: {
+			readonly NODE: number;
+			readonly FLAGS: number;
+			readonly DEPS: number;
+			readonly SUBS: number;
+			readonly L_DEP: number;
+			readonly L_SUB: number;
+			readonly L_PREV_DEP: number;
+			readonly L_NEXT_DEP: number;
+			readonly L_NEXT_SUB: number;
+			readonly L_MODE: number;
+		};
+		readonly AFlag: { readonly DIRTY: number; readonly BOX_SUSPENDED: number };
+	};
+	/** Open world-evaluation frames — the checker must not run inside one
+	 * (an epilogue can fire from a nested context; the check waits for the
+	 * next top-level boundary). */
+	readonly evalDepth: number;
+	/** An updater/reducer/equals fold callback is on the stack (same bar). */
+	readonly inFoldCallback: boolean;
+	/** Every LIVE arena: committed arenas by root, then open-pass arenas —
+	 * the check's iteration domain (the stores are private). */
+	eachArena(fn: (a: ShadowArena) => void): void;
+	/** The node registry row, or undefined for a disposed id (an arena's
+	 * byNode rows can outlive their node — the checker skips those). */
+	nodeAt(id: NodeId): AnyNode | undefined;
+	/** `aServe` — THE arena serving entry (values, walks, refolds). The
+	 * checker serves the arena side FIRST, pinning the discipline that a
+	 * stale shadow is never refreshed by the reference side before the
+	 * comparison reads it. */
+	serve(a: ShadowArena, node: AnyNode): Value;
+	/** One fold-truth fn run (see `foldTruthFrame`): world pinned, serve
+	 * override at FOLD_TRUTH, capture/sink closed, eval depth bumped —
+	 * everything restored on the way out. */
+	foldTruthFrame<T>(world: World, fn: () => T): T;
+	/** The bridge's ONE cycle-error construction — the naive side's cycle
+	 * throws must compare string-equal to the arena side's. */
+	cycleError(name: string): BridgeScheduleError;
+	/** The fold-purity bracket: the checker runs user equality comparators
+	 * under it, exactly like every other comparator call site. */
+	inCallback<T>(fn: () => T): T;
+	/** Op-depth bracket around one whole check pass: settle taps landing
+	 * mid-check enqueue for the epilogue's drain instead of draining
+	 * re-entrantly (the discipline the in-class check kept via opDepth). */
+	holdOp<T>(fn: () => T): T;
+	/** Install (or clear) the armed epilogue hook — fired after every
+	 * public operation's settlement fixed point. */
+	armEpilogueCheck(check: (() => void) | undefined): void;
+};
 
 // ---- the bridge -----------------------------------------------------------------
 
@@ -2184,7 +2264,7 @@ export class CosignalBridge {
 	/** Observation re-point after a KERNEL re-run, inside the still-open
 	 * kernel frame: discovery evaluations (obsEnter forcing dep reads) must
 	 * not link into that frame — kernel `untracked()` clears it around the
-	 * sync (the arena twin clears `aOnly` instead — aSyncObsAfterRefold). */
+	 * sync (the arena twin clears `serveOverride` instead — aSyncObsAfterRefold). */
 	private obsSyncAfterKernelRun(nid: NodeId, captured: NodeId[]): void {
 		untracked(() => this.obsSyncDeps(nid, captured));
 	}
@@ -2330,7 +2410,7 @@ export class CosignalBridge {
 	/**
 	 * Raw-handle reads: a registered atom read reached the operation table
 	 * while an overlay evaluation frame was open (newest/mountFix — arena
-	 * fn runs route through `aOnly` inside atomValue and link at `aServe`).
+	 * fn runs route through `serveOverride` inside atomValue and link at `aServe`).
 	 * The open frame's sink gates the observation capture — recordEdge's
 	 * surviving half (§4.8 S-B): the pre-dedup capture rides the tracked
 	 * read path.
@@ -2347,8 +2427,11 @@ export class CosignalBridge {
 	/** Atom value in a world: kernel for newest, the world's arena for
 	 * pass/committed, a plain fold for mountFix and unmaterialized roots. */
 	private atomValue(atom: AtomNode, world: World): Value {
-		if (this.aOnly !== undefined) return this.aServe(this.aOnly, atom); // arena-refold routing override
-		if (this.naiveFold !== undefined) return this.foldAtom(atom, world); // fold-truth reads (armed checker)
+		const route = this.serveOverride; // ONE override test on the routed-read path (W3)
+		if (route !== undefined) {
+			if (route !== FOLD_TRUTH) return this.aServe(route, atom); // arena-refold routing override
+			return this.foldAtom(atom, world); // fold-truth reads (armed checker)
+		}
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
 			return this.kernelValueOf(atom.handle);
@@ -2380,7 +2463,8 @@ export class CosignalBridge {
 	evaluate(node: AnyNode, world: World): Value {
 		probes.worldEvals++; // One Core probe (referee surface)
 		if (this.inFoldCallback) throw new BridgeScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
-		if (this.aOnly !== undefined) return this.aServe(this.aOnly, node); // arena-refold routing override
+		const route = this.serveOverride; // no-override fast-out is the ONE hot test; FOLD_TRUTH falls through (fold-truth computeds re-run checker-side, never here)
+		if (route !== undefined && route !== FOLD_TRUTH) return this.aServe(route, node); // arena-refold routing override
 		if (world.kind === 'pass' || world.kind === 'committed') {
 			const a = this.arenaOf(world);
 			if (a !== undefined) return this.aServe(a, node);
@@ -2507,16 +2591,23 @@ export class CosignalBridge {
 	private aFrameArena: ShadowArena | undefined = undefined;
 	private aFrameShadow = 0;
 	private aFrameCycle = 0;
-	/** Arena-only routing override: raw-handle reads serve from this arena. */
-	private aOnly: ShadowArena | undefined = undefined;
-	/** Fold-truth override (the armed checker's naive reads): while set,
-	 * atom reads fold plain in this world — no arenas, no memos, no caches. */
-	private naiveFold: World | undefined = undefined;
+	/** THE SERVE-OVERRIDE SLOT — the one override the routed-read path tests
+	 * (W3 merged the old two-slot pair; setters bracket save/restore, so the
+	 * innermost override wins). Occupants: a ShadowArena (arena-refold
+	 * routing — raw-handle reads inside arena fn runs serve from that arena)
+	 * or FOLD_TRUTH (the armed checker's naive reads — atom reads fold plain
+	 * in the frame's world: no arenas, no memos, no caches; test-armed only).
+	 * undefined ⇔ no override, the production steady state. */
+	private serveOverride: ShadowArena | typeof FOLD_TRUTH | undefined = undefined;
 	/** Global count of box-suspended shadows (tap fast-out). */
 	private suspendedCount = 0;
-	/** The armed divergence-check flag (test-enabled; STOP on any mismatch). */
-	private arenaCheckOn = false;
-	private inArenaCheck = false;
+	/** The armed divergence-check hook (W3): the referee-grade checker lives
+	 * in tests/arena-checker.ts and installs itself here through
+	 * `__checkerInternals().armEpilogueCheck`. Fired at every public
+	 * operation's epilogue after the settlement fixed point; ANY mismatch it
+	 * finds throws — a lockstep test failure. Production never installs one,
+	 * so the epilogue pays one undefined test. */
+	private epilogueCheck: (() => void) | undefined = undefined;
 
 	private claimArena(kind: 'pass' | 'committed', world: World, root: RootId): ShadowArena {
 		let a = this.arenaPool.pop();
@@ -2822,14 +2913,14 @@ export class CosignalBridge {
 		const savedFrameArena = this.aFrameArena;
 		const savedFrameShadow = this.aFrameShadow;
 		const savedFrameCycle = this.aFrameCycle;
-		const savedOnly = this.aOnly;
+		const savedRoute = this.serveOverride;
 		const savedWorld = this.activeWorld;
 		const savedSink = this.currentSink;
 		const savedObsCapture = this.obsCapture;
 		this.aFrameArena = a;
 		this.aFrameShadow = sh;
 		this.aFrameCycle = aBumpCycle(a);
-		this.aOnly = a;
+		this.serveOverride = a;
 		this.currentSink = 0;
 		this.obsCapture = this.obsRefs[nid]! > 0 ? [] : undefined;
 		this.setWorld(a.world);
@@ -2848,7 +2939,7 @@ export class CosignalBridge {
 			this.setWorld(savedWorld);
 			this.obsCapture = savedObsCapture;
 			this.currentSink = savedSink;
-			this.aOnly = savedOnly;
+			this.serveOverride = savedRoute;
 			this.aFrameArena = savedFrameArena;
 			this.aFrameShadow = savedFrameShadow;
 			this.aFrameCycle = savedFrameCycle;
@@ -2862,16 +2953,16 @@ export class CosignalBridge {
 	/** Observed-closure sync after an arena refold, out of line (keeps
 	 * aUpdateComputed under the V8 inline budget; observed nodes only) —
 	 * after every restore, so discovery evaluations run on a clean frame
-	 * stack. A NESTED refold (inside an outer walk) has aOnly restored to
-	 * the OUTER arena; clear it around the sync so discovery's newest
-	 * evaluations route newest. */
+	 * stack. A NESTED refold (inside an outer walk) has serveOverride
+	 * restored to the OUTER arena; clear it around the sync so discovery's
+	 * newest evaluations route newest. */
 	private aSyncObsAfterRefold(nid: NodeId, captured: NodeId[]): void {
-		const so = this.aOnly;
-		this.aOnly = undefined;
+		const so = this.serveOverride;
+		this.serveOverride = undefined;
 		try {
 			this.obsSyncDeps(nid, captured);
 		} finally {
-			this.aOnly = so;
+			this.serveOverride = so;
 		}
 	}
 
@@ -3259,10 +3350,12 @@ export class CosignalBridge {
 	 * (the fixed point), then the divergence check when armed. */
 	private arenaOpEpilogue(): void {
 		if (this.pendingSettle.length !== 0 && !this.settleDraining && this.opDepth === 0) this.settlementDrain();
-		if (this.arenaCheckOn) this.__checkArenas();
+		if (this.epilogueCheck !== undefined) this.epilogueCheck();
 	}
 
-	// ---- NF2 S-A: reclamation (§4.5.8), divergence check + validator (§4.9) ----
+	// ---- NF2 S-A: reclamation (§4.5.8) + the checker window (§4.9 — the
+	// divergence check and structural validator are TEST machinery and live
+	// in tests/arena-checker.ts, fed through __checkerInternals below) ----
 
 	/** The watcher-population refcount, derived (dev-assertable) form: live
 	 * watchers of the root + live committed subscriptions of the root. */
@@ -3292,65 +3385,46 @@ export class CosignalBridge {
 		for (const a of this.arenaByRoot.values()) aRenumberMarks(a);
 	}
 
-	/** Structural validator (§4.9.1, promoted from the spike): link-list
-	 * symmetry, suspended-list density/index integrity, dirty-list coverage,
-	 * GEN tenancy, cycle caps. Throws on corruption. */
-	private aValidate(a: ShadowArena): void {
-		const W = a.W;
-		const CAP = 100_000;
-		let suspSeen = 0;
-		for (let nid = 0; nid < a.byNode.length; nid++) {
-			const sh = a.byNode[nid] ?? 0;
-			if (sh === 0) continue;
-			if (W[sh + AF.NODE] !== nid) throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
-			// A dead-GEN shadow is legal COLD residue (§4.5.3): the invariant is
-			// that it never SERVES — enforced at shadowFor (re-tenant on consult),
-			// which every serve/link path routes through. No assert here.
-			const flags = W[sh + AF.FLAGS]!;
-			if ((flags & AFlag.BOX_SUSPENDED) !== 0) {
-				const slot = a.suspIdx[sh >> A_SHIFT]!;
-				if (slot === 0 || a.suspended[slot - 1] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: suspended-list index integrity broken for shadow ${sh}`);
-				suspSeen++;
-			} else if ((a.suspIdx[sh >> A_SHIFT] ?? 0) !== 0) {
-				throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} holds a suspended index without the bit`);
-			}
-			if ((flags & AFlag.DIRTY) !== 0 && !a.dirty.includes(sh)) {
-				throw new BridgeInvariantViolation(`arena ${a.root}: DIRTY shadow ${sh} missing from the dirty list`);
-			}
-			// deps list symmetry
-			let cur = W[sh + AF.DEPS]!;
-			let prev = 0;
-			let steps = 0;
-			while (cur !== 0) {
-				if (++steps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: deps list of shadow ${sh} exceeds ${CAP} steps (cycle)`);
-				if (W[cur + AF.L_SUB] !== sh) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} SUB != owner`);
-				if (W[cur + AF.L_PREV_DEP] !== prev) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} PREV_DEP broken`);
-				const dep = W[cur + AF.L_DEP]!;
-				// Weak symmetry: the link must sit on its MODE's subs list —
-				// a weak-flagged link on the strong list (or vice versa) makes
-				// this search miss and throw (the segregated-list invariant).
-				let s = (W[cur + AF.L_MODE]! & 1) !== 0 ? a.weakSubs[dep >> A_SHIFT]! : W[dep + AF.SUBS]!;
-				let found = false;
-				let ssteps = 0;
-				while (s !== 0) {
-					if (++ssteps > CAP) throw new BridgeInvariantViolation(`arena ${a.root}: subs list of shadow ${dep} exceeds ${CAP} steps (cycle)`);
-					if (s === cur) {
-						found = true;
-						break;
-					}
-					s = W[s + AF.L_NEXT_SUB]!;
+	/**
+	 * THE CHECKER WINDOW (W3): the one seam feeding the test-side referee —
+	 * tests/arena-checker.ts, which owns the armed divergence check
+	 * (arena-served values ≡ fold-truth) and the structural validator. The
+	 * views are readonly-shaped: live state getters plus bracket methods
+	 * that keep every mutation's save/restore discipline inside the engine.
+	 * Production code never calls this and installs no hook. @internal
+	 */
+	__checkerInternals(): ArenaCheckerInternals {
+		const self = this;
+		return {
+			layout: {
+				A_SHIFT,
+				AF: { NODE: AF.NODE, FLAGS: AF.FLAGS, DEPS: AF.DEPS, SUBS: AF.SUBS, L_DEP: AF.L_DEP, L_SUB: AF.L_SUB, L_PREV_DEP: AF.L_PREV_DEP, L_NEXT_DEP: AF.L_NEXT_DEP, L_NEXT_SUB: AF.L_NEXT_SUB, L_MODE: AF.L_MODE },
+				AFlag: { DIRTY: AFlag.DIRTY, BOX_SUSPENDED: AFlag.BOX_SUSPENDED },
+			},
+			get evalDepth(): number {
+				return self.evalDepth;
+			},
+			get inFoldCallback(): boolean {
+				return self.inFoldCallback;
+			},
+			eachArena: (fn) => this.eachArena(fn),
+			nodeAt: (id) => this.nodesArr[id],
+			serve: (a, node) => this.aServe(a, node),
+			foldTruthFrame: (world, fn) => this.foldTruthFrame(world, fn),
+			cycleError: (name) => this.cycleError(name),
+			inCallback: (fn) => this.inCallback(fn),
+			holdOp: (fn) => {
+				this.opDepth++;
+				try {
+					return fn();
+				} finally {
+					this.opDepth--;
 				}
-				if (!found) throw new BridgeInvariantViolation(`arena ${a.root}: link ${cur} missing from dep subs list (asymmetry)`);
-				prev = cur;
-				cur = W[cur + AF.L_NEXT_DEP]!;
-			}
-		}
-		if (suspSeen !== a.suspended.length) throw new BridgeInvariantViolation(`arena ${a.root}: suspended list holds ${a.suspended.length} entries but ${suspSeen} shadows carry the bit`);
-	}
-
-	/** Arms/disarms the S-A dual-bookkeeping divergence check. @internal */
-	__setArenaCheck(on: boolean): void {
-		this.arenaCheckOn = on;
+			},
+			armEpilogueCheck: (check) => {
+				this.epilogueCheck = check;
+			},
+		};
 	}
 
 	/** Test seam: the root's committed arena shell, if materialized — the
@@ -3429,134 +3503,35 @@ export class CosignalBridge {
 	}
 
 	/**
-	 * THE ARMED DIVERGENCE CHECK, S-B form (the routing/serving authority
-	 * flipped, so the comparison target changed — §4.8): for every live
-	 * arena, serve every shadow FROM THE ARENA (its own walks — the arena
-	 * side runs FIRST, pinning the discipline that a stale shadow must not
-	 * be refreshed by the reference side) and compare against FOLD-TRUTH — a
-	 * naive, cache-free re-derivation of the same node in the same world
-	 * (atoms fold their tapes; computed fns re-run over naive readers;
-	 * memoized per check pass, since fold-truth depends only on tape/
-	 * membership state the serves never mutate). ANY divergence throws — a
-	 * lockstep test failure, the stage's STOP condition. The newest world is
-	 * pinned separately (K0 parity in the twin's verify). @internal
+	 * One fold-truth evaluation frame (the armed checker's naive fn runs —
+	 * the evaluator itself lives in tests/arena-checker.ts and reaches this
+	 * only through `__checkerInternals`): the serve override becomes
+	 * FOLD_TRUTH, so routed atom reads inside `fn` fold plain from their
+	 * tapes and no arena-refold route survives into the frame — nothing
+	 * routes back into the arena under check; the world is pinned for those
+	 * folds' visibility; the fold-through sink and observation capture close
+	 * (a checker read must never join a capture); the eval depth bumps
+	 * (writes inside the frame throw, as in every world). Everything
+	 * restores on the way out, throw or return.
 	 */
-	__checkArenas(): void {
-		if (this.inArenaCheck || this.evalDepth > 0 || this.inFoldCallback) return;
-		this.inArenaCheck = true;
-		this.opDepth++;
-		try {
-			this.eachArena((a) => {
-				this.aValidate(a);
-				const naiveMemo = new Map<NodeId, { threw: boolean; v: Value }>();
-				for (let nid = 0; nid < a.byNode.length; nid++) {
-					const sh = a.byNode[nid] ?? 0;
-					if (sh === 0) continue;
-					const node = this.nodesArr[nid];
-					if (node === undefined) continue;
-					let aVal: Value;
-					let aThrew: unknown;
-					let aDidThrow = false;
-					try {
-						aVal = this.aServe(a, node);
-					} catch (err) {
-						aDidThrow = true;
-						aThrew = err;
-					}
-					let mVal: Value;
-					let mThrew: unknown;
-					let mDidThrow = false;
-					try {
-						mVal = this.naiveValue(node, a.world, naiveMemo);
-					} catch (err) {
-						mDidThrow = true;
-						mThrew = err;
-					}
-					if (aDidThrow !== mDidThrow) {
-						throw new BridgeInvariantViolation(
-							`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena ${aDidThrow ? `threw ${String(aThrew)}` : `served ${String(aVal!)}`} but fold-truth ${mDidThrow ? `threw ${String(mThrew)}` : `served ${String(mVal!)}`}`,
-						);
-					}
-					if (aDidThrow) {
-						if (String(aThrew) !== String(mThrew)) {
-							throw new BridgeInvariantViolation(`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but fold-truth threw ${String(mThrew)}`);
-						}
-					} else {
-						// §4.5.3 (S-C): a custom-equality computed's arena slot keeps
-						// the PREVIOUS reference on comparator-equal refolds — correct
-						// exactly when the retained value is equal BY THE NODE'S OWN
-						// COMPARATOR to the naive re-fold (the kernel slot keeps old
-						// references under the same policy). Default nodes compare by
-						// identity, bit for bit, as before.
-						const ceq = node.kind === 'computed' && node.isEqual !== undefined
-							&& !(aVal instanceof SuspendedRead) && !(mVal instanceof SuspendedRead)
-							? node.isEqual : undefined; // sentinels compare by identity (16d), never through user comparators
-						const same = ceq === undefined ? Object.is(aVal!, mVal!) : this.inCallback(() => ceq(aVal!, mVal!));
-						if (!same) {
-							throw new BridgeInvariantViolation(
-								`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
-							);
-						}
-					}
-				}
-				// Deliberately NO list compaction here: consumed entries stay
-				// listed until the next boundary's decay — the drain's seed
-				// coverage stands on that persistence (compacting at the armed
-				// epilogue was tried and cost a drain its candidates: the
-				// armed corpus caught the missed correction, seed 173).
-			});
-		} finally {
-			this.opDepth--;
-			this.inArenaCheck = false;
-		}
-	}
-
-	/** Fold-truth (the armed checker's reference side): a naive, cache-free
-	 * evaluation — atoms replay their tapes; computed fns re-run with naive
-	 * readers (tracked ≡ untracked: structure is not being recorded). Runs
-	 * under `naiveFold` so raw-handle reads inside fns fold plain too, and
-	 * with `aOnly` cleared so nothing routes back into the arena under
-	 * check. Thrown outcomes memoize and rethrow (identity-stable). */
-	private naiveStack = new Set<NodeId>();
-
-	private naiveValue(node: AnyNode, world: World, memo: Map<NodeId, { threw: boolean; v: Value }>): Value {
-		if (node.kind === 'atom') return this.foldAtom(node, world);
-		const hit = memo.get(node.id);
-		if (hit !== undefined) {
-			if (hit.threw) throw hit.v;
-			return hit.v;
-		}
-		if (this.naiveStack.has(node.id)) {
-			throw this.cycleError(node.name);
-		}
-		this.naiveStack.add(node.id);
+	private foldTruthFrame<T>(world: World, fn: () => T): T {
 		const savedWorld = this.activeWorld;
-		const savedOnly = this.aOnly;
-		const savedNaive = this.naiveFold;
+		const savedRoute = this.serveOverride;
 		const savedSink = this.currentSink;
 		const savedObsCapture = this.obsCapture;
 		this.setWorld(world);
-		this.aOnly = undefined;
-		this.naiveFold = world;
+		this.serveOverride = FOLD_TRUTH;
 		this.currentSink = 0;
 		this.obsCapture = undefined;
 		this.evalDepth++;
-		const reader: Reader = (dep) => this.naiveValue(dep, world, memo);
 		try {
-			const v = node.fn(reader, reader);
-			memo.set(node.id, { threw: false, v });
-			return v;
-		} catch (err) {
-			memo.set(node.id, { threw: true, v: err });
-			throw err;
+			return fn();
 		} finally {
 			this.evalDepth--;
 			this.obsCapture = savedObsCapture;
 			this.currentSink = savedSink;
-			this.naiveFold = savedNaive;
-			this.aOnly = savedOnly;
+			this.serveOverride = savedRoute;
 			this.setWorld(savedWorld);
-			this.naiveStack.delete(node.id);
 		}
 	}
 

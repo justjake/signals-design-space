@@ -27,6 +27,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { armArenaCheck } from './arena-checker.js';
 import { Atom, Computed, effect } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
@@ -34,7 +35,7 @@ const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res)
 function bridge(): CosignalBridge {
 	const b = __newBridgeForTest();
 	b.registerBridge();
-	b.__setArenaCheck(true); // armed: arena serves ≡ fold truth at every epilogue
+	armArenaCheck(b); // armed: arena serves ≡ fold truth at every epilogue
 	return b;
 }
 

@@ -19,6 +19,7 @@ import {
 	untracked,
 	type AnyNode,
 } from '../../src/index';
+import { armArenaCheck } from '../arena-checker';
 
 process.stdout.write('@@SMOKE-START\n');
 
@@ -110,7 +111,7 @@ base.set(2);
 // every arena shadow through the arena's own walks (aServe → aCheckDirty).
 const bridge = __newBridgeForTest();
 bridge.registerBridge();
-bridge.__setArenaCheck(true);
+armArenaCheck(bridge);
 const at = bridge.atom('at', 1);
 const at2 = bridge.atom('at2', 2);
 const cc = bridge.computed('cc', (read) => (read(at) as number) + (read(at2) as number));
