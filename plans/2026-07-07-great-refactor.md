@@ -231,30 +231,95 @@ upstream names (twin-drift protection). Maps: `<from>To<to>`.
 
 ## 7. Inlining policy
 
-As revision 1 (single-caller + trivial inline; keep-list: budget-pinned
-names, V8 split families, cold throwers, bench-pinned fast arms, hoisting-
-required policy functions, referee surface, `visibleAt` as the documented
-readability exception). Dead code deleted in S0: `__kernelGen` — NOTE
-(review): S2's P3 seam is a NEW kernel-GEN referee read designed with S2,
-not a resurrection; `captureActive`.
+INLINE (single caller or trivial single-expression, per the structure map):
+`makeKernelGetter`, `makeAdoptedKernelGetter`, `makeCtxWorldFn`,
+`routedRead`, `boundaryWork`, `throwFold`, `scheduleLifecycleFlush`,
+`attachSettle`, `consumerCount`, `arenaQuiesceSweep`'s wrapper layer, the
+trivial delegate methods (`token`, `nodeById`, `pass`, `quiescent`,
+`oneAtomBuf`), and every `__host*`/`__kernel*` seam function that collapses
+into a same-module call site at the merge.
+
+KEEP (load-bearing; each keep documented at the site):
+- every function whose name carries a bytecode budget or over-limit pin;
+- the V8 split families: link/linkInsert, checkDirty/chainCheck/
+  checkDirtyLoop, computedRead/computedReadSlow/boxedRead,
+  arenaCheckDirty/arenaCheckDirtyLoop, arenaFoldOutcome/arenaEqCold/
+  arenaSyncObsAfterRefold, and the cold walk-cycle throwers;
+- the three bench-pinned write-path fast arms (their comments carry the
+  measured regression numbers that forbid folding);
+- hoisting-required policy functions (`ctxPrevious`/`ctxUse` feeding the
+  shared context object);
+- the referee/test seams and the public operational surface the lockstep
+  harness drives (write/renderStart/renderEnd/retire/commitBatches/...);
+- `visibleAt` — single-caller but THE visibility rule; kept as a named
+  function deliberately (readability exception, documented at the site).
+
+Dead code deleted in S0: `__kernelGen` (zero callers; S2's P3 seam is a NEW
+kernel-GEN referee read designed with S2, not a resurrection) and
+`captureActive` (zero callers).
 
 ## 8. Comments, docs, and the guide
 
-As revision 1 (fresh self-contained module headers; the index.ts package
-guide; citation-token deletion; real prose at the shim's CR5 ordering
-guarantee, the K1 ghost, the "HEAD order" comment, the graphviz glossary),
-plus: the module headers are written in the final vocabulary from birth (no
-transitional prose), and the four banned/retired words (plane, mint, token,
-pass-standalone) are grep-gated in S6.
+- Every extracted module gets a fresh, self-contained header — what it is,
+  its terms defined locally or pointed at the package guide, how it
+  composes — written in the final vocabulary from birth (no transitional
+  prose, no old names).
+- index.ts carries the PACKAGE GUIDE: the reading order across modules, the
+  load-bearing concepts defined once (write log, batch, world, arena,
+  render pass, watcher, subscription, quiet), and the life-of-a-write
+  walkthrough from `atom.set` to paint.
+- CITATION-TOKEN DELETION (the jargon audit's full inventory rides S6):
+  ~130 offending comment sites in concurrent.ts, ~30 in index.ts, ~12 in
+  the shim, ~8 in trace.ts, ~5 each in hooks.ts and graphviz.ts. The
+  audit's key finding governs the method: at the vast majority of sites the
+  reasoning is already stated inline and the violation is a trailing
+  citation — so the fix is deletion or a one-phrase substitution, not a
+  rewrite. Categories swept: stage codes (S-A/S-B/S-C/S-D, ~102 hits),
+  plan §-references (~106), NF2 (~30), referee/lockstep/oracle/twin
+  (~60, including the shipped trace vocabulary), contract clause ids
+  (RT/EF/OL/UM/RCC/CR, ~30), dated ruling citations, review/bench item ids
+  (W*/B*/m*/M*), fuzz-seed citations-as-authority, test-file paths, and
+  research-spike references (the `w*` ghost names).
+- REAL PROSE at exactly four sites (the audit's exceptions where the
+  citation IS the content): the shim's CR5 ordering guarantee spelled out
+  in full; the K1 ghost paragraph (describes deleted machinery) rewritten
+  or deleted; the "HEAD order" comment rewritten; graphviz.ts gains a
+  four-line glossary header.
+- Shipped-vocabulary fixes: "referee marker" leaves the trace event table
+  (the two post-consequence kinds become commit checkpoint markers with
+  self-contained descriptions); graphviz's rendered `tape:` label becomes
+  `log:`; bench-pinned NUMBERS stay in comments, bench IDs go.
+- S6 closes with grep gates over shipped sources for the banned/retired
+  vocabulary: plane, mint/minting/minted, token, standalone "pass",
+  "donor", "shadow" (arena sense), the section-sign character, and stage
+  codes.
 
 ## 9. Magic numbers
 
-As revision 1, updated: `WriteKind` replaces the HostOp/OpKind twins
-(§1 ruling); `NotifyKind` in deliver.ts; the WEAK link-mode bit named in
-ArenaLinkField; ArenaGeom absorbs A_STRIDE/A_SHIFT/A_CLOCK_LIMIT; walk-guard
-cap named; the named-const list (tape rebase, pool cap, default/min records,
-scratch seeds, eval stack, pow2 floor); `BATCH_NONE`; checker-seam
-MARK/CLOCK_LIMIT extensions for the arena-sd hand-copies.
+The audit's full fix list, mapped:
+- `const enum WriteKind { SET, UPDATE }` replaces BOTH prior twins
+  (kernel `HostOpKind` literal union + engine `OpKind`) — owner ruling;
+  single definition beside the hot write path (§3.1 discipline).
+- `const enum NotifyKind` (delivery / mount-corrective / correction /
+  subscription-refire) in deliver.ts — today one comment names the 0-3
+  codes at eight bare sites.
+- The weak-link mode bit becomes a named ArenaLinkField member (today a
+  bare `& 1` at five sites).
+- `ArenaGeom` absorbs `A_STRIDE`/`A_SHIFT`/`A_CLOCK_LIMIT` (also closing
+  the module-const bundling-demotion exposure the kernel engineered away).
+- The arena walk-guard cap (1,000,000 — six value copies plus two prose
+  copies today) becomes one named constant that also feeds the two error
+  strings.
+- Named consts: the write-log rebase threshold (1024), the arena pool cap
+  (8), default initial records (1<<20), minimum records (2, plus its error
+  string), the walk-scratch seeds (4096 ×4), the tracer eval-stack depth
+  (1024 ×3, must-stay-equal), the pow2 capacity floor (8 ×3).
+- `BATCH_NONE = 0` names the protocol's no-context sentinel (both sides,
+  protocol v2).
+- trace.ts's op-code re-derivation (`'set' ? 0 : 1`) derives from
+  `OP_NAMES` instead of restating the pair.
+- The checker-internals seam gains MARK and CLOCK_LIMIT fields so the
+  arena-sd spec's two hand-copied constants die (S0).
 
 ## 10. Staging
 
