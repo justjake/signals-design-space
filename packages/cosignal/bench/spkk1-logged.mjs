@@ -3,7 +3,7 @@
 // full history compaction), the dependency topology rotates periodically so
 // stale recorded edges accumulate, and a frame loop of writes + periodic
 // committed render passes runs for DURATION_MS. Samples heap after gc(),
-// recorded-edge counts, receipt-history totals, token/pass map sizes, event
+// recorded-edge counts, receipt-history totals, batch/pass map sizes, event
 // counts, and write-latency window medians (degradation = last/first).
 // EVENTS=truncate zeroes the diagnostic event stream at each sample to
 // isolate the engine's retained state; EVENTS=retain leaves it in place to
@@ -72,7 +72,7 @@ function takeSample(now) {
 		t: (now - t0) / 1000, heap,
 		k1: k1EdgeCount(), k1Keys: b.dependencyEdges.size,
 		tape: tapeTotal(),
-		tokens: b.tokens.size, passes: b.passes.size,
+		batches: b.idToBatch.size, passes: b.passes.size,
 		events: b.events.length, eventsRate: eventsSinceSample,
 		writeNsMed: wMed,
 	});
@@ -92,22 +92,22 @@ while (Date.now() - t0 < DURATION_MS) {
 		holderA = holderB;
 		lastHold = now;
 	}
-	const tok = b.openBatch();
+	const batch = b.openBatch();
 	const preEvents = b.events.length;
 	for (let m = 0; m < 4; m++) {
 		const a = atoms[(frame + m * 13) % NA];
 		const s0 = process.hrtime.bigint();
-		b.write(tok.id, a, 0, ++v);
+		b.write(batch.id, a, 0, ++v);
 		const s1 = process.hrtime.bigint();
 		writeNsWindow.push(Number(s1 - s0));
 	}
 	eventsSinceSample += b.events.length - preEvents;
 	if (frame % 16 === 0) {
-		const p = b.passStart('R', b.liveTokens().map((t) => t.id));
+		const p = b.passStart('R', b.liveBatches().map((t) => t.id));
 		for (const w of watchers) b.renderWatcher(p.id, w.id);
 		b.passEnd(p.id, 'commit');
 	}
-	b.retire(tok.id);
+	b.retire(batch.id);
 	frame++;
 	if (now - lastSample >= SAMPLE_MS) { takeSample(now); lastSample = now; }
 }
@@ -135,8 +135,8 @@ row({ ...base, metric: 'writeNsFirstWin', value: first, checksum: 0 });
 row({ ...base, metric: 'writeNsLastWin', value: last, checksum: 0 });
 row({ ...base, metric: 'k1EdgesPerHour', value: perHour('k1'), checksum: end.k1 });
 row({ ...base, metric: 'tapeEnd', value: end.tape, checksum: 0 });
-row({ ...base, metric: 'tokensPerHour', value: perHour('tokens'), checksum: end.tokens });
+row({ ...base, metric: 'batchesPerHour', value: perHour('batches'), checksum: end.batches });
 row({ ...base, metric: 'passesPerHour', value: perHour('passes'), checksum: end.passes });
 row({ ...base, metric: 'eventsPerHour', value: (samples.slice(2).reduce((s, p) => s + p.eventsRate, 0) / (end.t - start.t)) * 3600, checksum: 0 });
 row({ ...base, metric: 'framesPerSec', value: frame / end.t, checksum: frame });
-console.log(`samples: ${JSON.stringify(samples.map((s) => ({ t: s.t, heapMB: +(s.heap / 1048576).toFixed(2), k1: s.k1, tape: s.tape, tokens: s.tokens, passes: s.passes, wNs: s.writeNsMed })))}`);
+console.log(`samples: ${JSON.stringify(samples.map((s) => ({ t: s.t, heapMB: +(s.heap / 1048576).toFixed(2), k1: s.k1, tape: s.tape, batches: s.batches, passes: s.passes, wNs: s.writeNsMed })))}`);

@@ -14,7 +14,7 @@
  *  - dispose→reuse id tenancy (§4.5.3):          tests/arena-sc.spec.ts
  *  - watcher dual-store rule (T7):               tests/graph-consumers.spec.ts
  *    + cosignal-react/tests/graph-consumers.spec.tsx (the shim-side fix)
- *  - never-quiescent soak that motivated mid-episode token/pass reclamation
+ *  - never-quiescent soak that motivated mid-episode batch/pass reclamation
  *    and the event-minting gate: research/experiments/cosignal-gates.md SPK-K1
  *  - KNOWN-HOLE-BY-RULING (not probed, not fixed): root records are immortal
  *    (RUL-6 — no root-teardown event exists; concurrent.ts arenaQuiesceSweep).
@@ -276,7 +276,7 @@ describe('4. ARENA POOL', () => {
 	});
 });
 
-describe('5. TAPES / TOKENS / PASSES', () => {
+describe('5. TAPES / BATCHES / PASSES', () => {
 	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE (SPK-K1 regression: mid-episode reclamation; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
 		const b = __newBridgeForTest(); // production posture: no referee, no tracer
 		b.registerBridge();
@@ -299,7 +299,7 @@ describe('5. TAPES / TOKENS / PASSES', () => {
 				b.settleAction(act.id); // …parks then settles
 			}
 		}
-		expect(b.tokens.size).toBe(0); // retired tokens reclaimed mid-episode — NO quiesce ran
+		expect(b.idToBatch.size).toBe(0); // retired batches reclaimed mid-episode — NO quiesce ran
 		expect(b.passes.size).toBe(0); // ended passes reclaimed at pass end
 		expect(an.tp.n - an.tp.start).toBe(0); // tapes fully compacted
 		expect(an.tp.kinds.length).toBe(0); // packed columns reset with the empty window

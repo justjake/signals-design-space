@@ -25,7 +25,7 @@ import {
 	type Op,
 	type Pass,
 	type ReactEffect,
-	type Token,
+	type Batch,
 	type Value,
 	type Watcher,
 } from '../../cosignal-oracle/src/model.js';
@@ -67,7 +67,7 @@ function isDeliveryish(e: ModelEvent): boolean {
 }
 
 /** Delivery-DECISION counts, pooled across the family's three modes per
- * (watcher, token, slot): "fewer decisions, never more" (plan §4.8 S-B).
+ * (watcher, batch, slot): "fewer decisions, never more" (plan §4.8 S-B).
  * Current-structure routing shifts modes WITHIN the family — a mount join
  * the accumulated model schedules as a corrective (arming its dedup, so
  * its later write logs 'suppressed') may not exist in any live arena; the
@@ -77,8 +77,8 @@ function deliveryCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>();
 	for (const e of events) {
 		if (!isDeliveryish(e)) continue;
-		const d = e as unknown as { watcher: string; token: number; slot: number };
-		const key = `${d.watcher}|${d.token}|${d.slot}`;
+		const d = e as unknown as { watcher: string; batch: number; slot: number };
+		const key = `${d.watcher}|${d.batch}|${d.slot}`;
 		out.set(key, (out.get(key) ?? 0) + 1);
 	}
 	return out;
@@ -202,7 +202,7 @@ export class TwinDriver {
 
 	// ---- state the test bodies read directly (model side; engine compared per op)
 	get events(): ModelEvent[] { return this.model.events; }
-	get tokens(): CosignalModel['tokens'] { return this.model.tokens; }
+	get idToBatch(): CosignalModel['idToBatch'] { return this.model.idToBatch; }
 	get slots(): CosignalModel['slots'] { return this.model.slots; }
 	get passes(): CosignalModel['passes'] { return this.model.passes; }
 	get roots(): CosignalModel['roots'] { return this.model.roots; }
@@ -210,7 +210,7 @@ export class TwinDriver {
 	get watchers(): CosignalModel['watchers'] { return this.model.watchers; }
 	get seq(): number { return this.model.seq; }
 	get epoch(): number { return this.model.epoch; }
-	get ambientToken(): number | undefined { return this.model.ambientToken; }
+	get ambientBatch(): number | undefined { return this.model.ambientBatch; }
 
 	private toEngine(node: AnyNode): ENode {
 		const e = this.nodeMap.get(node);
@@ -260,7 +260,7 @@ export class TwinDriver {
 	 * slots when an edge is added, so delivery/suppressed decisions may lag
 	 * the model's or drop when a never-materialized union path was the only
 	 * route. Comparator: 'delivery'/'suppressed' events are checked as
-	 * "engine ⊆ model, cumulatively, keyed by (type, watcher, token, slot)"
+	 * "engine ⊆ model, cumulatively, keyed by (type, watcher, batch, slot)"
 	 * (mode/seq excluded: a replayed delivery carries the replay sequence);
 	 * every other event type must match exactly, in order. The "at least
 	 * what correctness requires" floor is enforced indirectly: observable
@@ -313,7 +313,7 @@ export class TwinDriver {
 	 * the kernel-current value (adoptAtom — pre-registration history is
 	 * committed-only base state by construction); the model, which has no
 	 * kernel, mirrors adoption as construction-time seeding with that same
-	 * value. Neither side mints a receipt, token, or event.
+	 * value. Neither side mints a receipt, batch, or event.
 	 */
 	adoptAtom(name: string, handle: Atom<unknown>): AtomNode {
 		const eNode = this.engine.adoptAtom(name, handle);
@@ -335,20 +335,20 @@ export class TwinDriver {
 		return mNode;
 	}
 
-	openBatch(_priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Token {
+	openBatch(_priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Batch {
 		let eId: number | undefined;
 		const t = this.both('openBatch', () => this.model.openBatch(opts), () => {
 			eId = this.engine.openBatch(opts).id; // neither side mints a priority — scheduling stays React's (see the Priority annotation type)
 		});
-		expect(eId, 'twin openBatch: token ids diverged').toBe(t.id);
+		expect(eId, 'twin openBatch: batch ids diverged').toBe(t.id);
 		return t;
 	}
 
-	write(tokenId: number | undefined, node: AtomNode, op: Op): void {
+	write(batchId: number | undefined, node: AtomNode, op: Op): void {
 		const mark = this.model.events.length;
-		this.both('write', () => this.model.write(tokenId, node, op), () =>
-			this.engine.write(tokenId, this.toEngine(node) as never, ...opScalars(op)));
-		if (tokenId === undefined) this.mirrorQuietFold(node, op, mark);
+		this.both('write', () => this.model.write(batchId, node, op), () =>
+			this.engine.write(batchId, this.toEngine(node) as never, ...opScalars(op)));
+		if (batchId === undefined) this.mirrorQuietFold(node, op, mark);
 	}
 
 	bareWrite(node: AtomNode, op: Op): void {
@@ -369,24 +369,24 @@ export class TwinDriver {
 		for (const e of this.model.events.slice(mark)) {
 			if (e.type !== 'quiet-write') continue;
 			const eNode = this.toEngine(node) as EAtomNode;
-			this.mirror.archiveOf(eNode).push({ op, token: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
+			this.mirror.archiveOf(eNode).push({ op, batch: 0, slot: -1, seq: e.seq, retiredSeq: e.seq });
 		}
 	}
 
-	settleAction(tokenId: number): void {
-		this.both('settleAction', () => this.model.settleAction(tokenId), () =>
-			this.engine.settleAction(tokenId));
+	settleAction(batchId: number): void {
+		this.both('settleAction', () => this.model.settleAction(batchId), () =>
+			this.engine.settleAction(batchId));
 	}
 
-	retire(tokenId: number): void {
-		this.both('retire', () => this.model.retire(tokenId), () =>
-			this.engine.retire(tokenId));
+	retire(batchId: number): void {
+		this.both('retire', () => this.model.retire(batchId), () =>
+			this.engine.retire(batchId));
 	}
 
-	passStart(root: string, includeTokens: number[]): Pass {
+	passStart(root: string, includeBatches: number[]): Pass {
 		let ePass: EPass | undefined;
-		const mPass = this.both('passStart', () => this.model.passStart(root, includeTokens), () => {
-			ePass = this.engine.passStart(root, includeTokens);
+		const mPass = this.both('passStart', () => this.model.passStart(root, includeBatches), () => {
+			ePass = this.engine.passStart(root, includeBatches);
 			return ePass;
 		});
 		expect(ePass!.id, 'twin passStart: pass ids diverged').toBe(mPass.id);
@@ -562,16 +562,16 @@ export function mountCommitted(m: TwinDriver, root: string, node: AnyNode, name:
 	return w;
 }
 
-/** Render `token`'s pass on `root` (watchers re-rendered), commit, retire the token. */
-export function commitAndRetire(m: TwinDriver, root: string, token: Token, watchers: Watcher[] = []): void {
-	const p = m.passStart(root, [token.id]);
+/** Render `batch`'s pass on `root` (watchers re-rendered), commit, retire the batch. */
+export function commitAndRetire(m: TwinDriver, root: string, batch: Batch, watchers: Watcher[] = []): void {
+	const p = m.passStart(root, [batch.id]);
 	for (const w of watchers) m.renderWatcher(p.id, w.id);
-	m.passEnd(p.id, 'commit', { retireAtCommit: [token.id] });
+	m.passEnd(p.id, 'commit', { retireAtCommit: [batch.id] });
 }
 
-/** Open a pass including the given tokens. */
-export function pass(m: TwinDriver, root: string, tokens: Token[]): Pass {
-	return m.passStart(root, tokens.map((t) => t.id));
+/** Open a pass including the given batches. */
+export function pass(m: TwinDriver, root: string, batches: Batch[]): Pass {
+	return m.passStart(root, batches.map((t) => t.id));
 }
 
 /** Full twin verification (events, snapshots, invariants both sides, K0 parity). */

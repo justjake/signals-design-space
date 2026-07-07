@@ -51,15 +51,15 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 	const d = e.data;
 	switch (e.kind) {
 		case 'write': // the receipt-borne record; `op` is a trace-only enrichment
-			return { type: 'write', node: d['node'] as string, token: d['token'] as number, slot: d['slot'] as number, seq: d['seq'] as number };
+			return { type: 'write', node: d['node'] as string, batch: d['batch'] as number, slot: d['slot'] as number, seq: d['seq'] as number };
 		case 'write-dropped':
-			return { type: 'write-dropped', node: d['node'] as string, token: d['token'] as number };
+			return { type: 'write-dropped', node: d['node'] as string, batch: d['batch'] as number };
 		case 'quiet-write':
 			return { type: 'quiet-write', node: d['node'] as string, seq: d['seq'] as number };
 		case 'delivery':
-			return { type: 'delivery', watcher: d['watcher'] as string, token: d['token'] as number, slot: d['slot'] as number, seq: d['seq'] as number, mode: d['mode'] as 'fresh' | 'interleaved' };
+			return { type: 'delivery', watcher: d['watcher'] as string, batch: d['batch'] as number, slot: d['slot'] as number, seq: d['seq'] as number, mode: d['mode'] as 'fresh' | 'interleaved' };
 		case 'suppressed': // `reason` is a trace-only enrichment
-			return { type: 'suppressed', watcher: d['watcher'] as string, token: d['token'] as number, slot: d['slot'] as number, seq: d['seq'] as number };
+			return { type: 'suppressed', watcher: d['watcher'] as string, batch: d['batch'] as number, slot: d['slot'] as number, seq: d['seq'] as number };
 		case 'core-effect-run':
 			return { type: 'core-effect-run', effect: d['effect'] as string, value: d['value'] };
 		case 'react-effect-run':
@@ -72,19 +72,19 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 		case 'reconcile-correction':
 			return { type: 'reconcile-correction', watcher: d['watcher'] as string, root: d['root'] as string, from: d['from'], to: d['to'], cause: d['cause'] as 'retirement' | 'per-root-commit' };
 		case 'mount-corrective':
-			return { type: 'mount-corrective', watcher: d['watcher'] as string, token: d['token'] as number, slot: d['slot'] as number };
+			return { type: 'mount-corrective', watcher: d['watcher'] as string, batch: d['batch'] as number, slot: d['slot'] as number };
 		case 'mount-correction':
 			return { type: 'mount-urgent-correction', watcher: d['watcher'] as string, from: d['from'], to: d['to'] };
 		case 'root-commit': // `commitGen` is a trace-only enrichment
-			return { type: 'per-root-commit', root: d['root'] as string, token: d['token'] as number };
+			return { type: 'per-root-commit', root: d['root'] as string, batch: d['batch'] as number };
 		case 'batch-retire':
-			return { type: 'retired', token: d['token'] as number, retiredSeq: d['retiredSeq'] as number };
+			return { type: 'retired', batch: d['batch'] as number, retiredSeq: d['retiredSeq'] as number };
 		case 'slot-claim':
-			return { type: 'slot-claimed', slot: d['slot'] as number, token: d['token'] as number };
+			return { type: 'slot-claimed', slot: d['slot'] as number, batch: d['batch'] as number };
 		case 'slot-release':
-			return { type: 'slot-released', slot: d['slot'] as number, token: d['token'] as number };
+			return { type: 'slot-released', slot: d['slot'] as number, batch: d['batch'] as number };
 		case 'slot-backstop-release':
-			return { type: 'slot-backstop-released', slot: d['slot'] as number, token: d['token'] as number };
+			return { type: 'slot-backstop-released', slot: d['slot'] as number, batch: d['batch'] as number };
 		case 'pass-committed':
 			return { type: 'pass-committed', pass: d['pass'] as number, root: d['root'] as string };
 		case 'pass-discarded':

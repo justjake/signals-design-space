@@ -3,7 +3,7 @@
  *
  * This file NEVER imports react-dom, on purpose: the external-runtime
  * provider registers when a renderer module loads, so here
- * unstable_getCurrentWriteBatch() returns the real token 0 ("no renderer
+ * unstable_getCurrentWriteBatch() returns the real React batch id 0 ("no renderer
  * provider registered") — the exact state the integration contract makes
  * unreachable in an app. That lets these tests drive every guarded site
  * genuinely, with no mocking:
@@ -37,14 +37,14 @@ afterEach(() => {
 	handle = undefined;
 });
 
-describe('write classifier: no batch context (token 0)', () => {
+describe('write classifier: no batch context (React batch id 0)', () => {
 	test('armed: a context-free write throws a protocol violation, and no state moves', () => {
 		const h = register(true);
 		const a = new Atom(0);
 		expect(() => a.set(5)).toThrow(/protocol violation — signal write with no batch context/);
 		expect(a.state).toBe(0); // the classifier threw before any write landed
-		expect(h.bridge.liveTokens()).toHaveLength(0); // no token minted
-		expect(h.bridge.ambientToken).toBeUndefined(); // and never an ambient batch
+		expect(h.bridge.liveBatches()).toHaveLength(0); // no batch minted
+		expect(h.bridge.ambientBatch).toBeUndefined(); // and never an ambient batch
 	});
 
 	test('off: a context-free write classifies as an ordinary urgent write (no ambient batch, no fallback arm)', () => {
@@ -53,22 +53,22 @@ describe('write classifier: no batch context (token 0)', () => {
 		const b = new Atom(0);
 		a.set(5);
 		expect(a.state).toBe(5); // newest world: the write landed
-		// One ordinary batch token — NOT the engine's ambient default batch,
-		// not parked: token 0's low bit is clear, so the write is urgent.
-		expect(h.bridge.ambientToken).toBeUndefined();
-		const live = h.bridge.liveTokens();
+		// One ordinary batch — NOT the engine's ambient default batch,
+		// not parked: React batch id 0's low bit is clear, so the write is urgent.
+		expect(h.bridge.ambientBatch).toBeUndefined();
+		const live = h.bridge.liveBatches();
 		expect(live).toHaveLength(1);
 		expect(live[0]!.ambient).toBe(false);
 		expect(live[0]!.parked).toBe(false);
-		// Later context-free writes reuse the same bridge token (one fork
-		// token, one bridge token — the ordinary classifier rule).
+		// Later context-free writes reuse the same engine batch (one React
+		// batch id, one engine batch — the ordinary classifier rule).
 		b.set(7);
 		expect(b.state).toBe(7);
-		expect(h.bridge.liveTokens()).toHaveLength(1);
+		expect(h.bridge.liveBatches()).toHaveLength(1);
 	});
 });
 
-describe('startSignalTransition: no batch context (token 0)', () => {
+describe('startSignalTransition: no batch context (React batch id 0)', () => {
 	test('armed: throws to the caller, before React.startTransition swallows scope errors', () => {
 		register(true);
 		let ran = false;
@@ -87,10 +87,10 @@ describe('startSignalTransition: no batch context (token 0)', () => {
 			a.set(3);
 		});
 		expect(a.state).toBe(3);
-		// No parked action token was minted for token 0 — nothing could ever
-		// settle it; the write rode the ordinary token-0 batch instead.
-		expect(h.bridge.liveTokens().some((t) => t.parked)).toBe(false);
-		expect(h.bridge.liveTokens()).toHaveLength(1);
+		// No parked action batch was minted for React batch id 0 — nothing could ever
+		// settle it; the write rode the ordinary id-0 batch instead.
+		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(false);
+		expect(h.bridge.liveBatches()).toHaveLength(1);
 	});
 });
 

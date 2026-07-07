@@ -55,7 +55,7 @@
  *
  * ## Event vocabulary (kind → decoded `data` fields, in format order)
  * Terms as in the package README: a *receipt* records one write on the
- * written atom's history; a *batch* (identified by a token) groups the
+ * written atom's history; a *batch* (identified by a BatchId) groups the
  * writes of one UI update; a *slot* is one of 31 tracking entries a written
  * batch occupies while its writes can still matter (31 because React
  * schedules work on 31 "lanes" — its internal units of priority; slots are
@@ -64,29 +64,29 @@
  * one mounted UI subscription; *retirement* makes a batch's writes
  * permanent history; a *world* is one self-consistent view of all values.
  *
- *  write                {node, op, token, slot, seq}         a write was recorded: a receipt joined the atom's history
+ *  write                {node, op, batch, slot, seq}         a write was recorded: a receipt joined the atom's history
  *  quiet-write          {node, seq}                          a quiet-mode fold: nothing was pending, so the write folded straight into committed state (no batch, no receipt)
- *  write-dropped        {node, token}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
- *  batch-open           {token, action, ambient}             a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
- *  batch-settle         {token}                              an async action's promise settled; its retirement follows
- *  batch-retire         {token, retiredSeq}                  the batch retired: its writes became permanent history visible to every world
- *  batch-disposition    {token, committed}                   the React bindings' report, recorded at its source (the protocol handler):
+ *  write-dropped        {node, batch}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
+ *  batch-open           {batch, action, ambient}             a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
+ *  batch-settle         {batch}                              an async action's promise settled; its retirement follows
+ *  batch-retire         {batch, retiredSeq}                  the batch retired: its writes became permanent history visible to every world
+ *  batch-disposition    {batch, committed}                   the React bindings' report, recorded at its source (the protocol handler):
  *                       React committed (true) or abandoned (false) the batch. Diagnostic only — retirement behavior is identical
  *                       either way. The engine never mints this kind. (Recordings from older engines carried the flag as a bit on
  *                       batch-settle / batch-retire records instead; that bit is ignored at decode.)
- *  slot-claim           {slot, token}                        a batch's first write claimed a slot
- *  slot-release         {slot, token}
- *  slot-release-deferred{slot, token}                        release waited: an open render's mask still names the slot
- *  slot-backstop-release{slot, token}                        slot table full: the oldest deferred slot was released anyway, loudly
+ *  slot-claim           {slot, batch}                        a batch's first write claimed a slot
+ *  slot-release         {slot, batch}
+ *  slot-release-deferred{slot, batch}                        release waited: an open render's mask still names the slot
+ *  slot-backstop-release{slot, batch}                        slot table full: the oldest deferred slot was released anyway, loudly
  *  pass-start           {pass, root, pin, maskSize}          a render pass began; mask = the batches it may see
  *  pass-yield           {pass, root}                         the pass paused (concurrent rendering runs in interruptible slices)
  *  pass-resume          {pass, root}
  *  pass-end             {pass, root, disposition}            commit | discard; fires before its consequences
- *  root-commit          {root, token, commitGen}             the root locked in a batch: its committed world now includes those writes
- *  delivery             {watcher, token, slot, seq, mode}    a write told this watcher to re-render (deliveries are value-blind; fresh | interleaved, see below)
- *  suppressed           {watcher, token, slot, seq, reason}  delivery skipped: a scheduled-but-unstarted re-render will fold this write anyway ('dedup-pending-fold')
+ *  root-commit          {root, batch, commitGen}             the root locked in a batch: its committed world now includes those writes
+ *  delivery             {watcher, batch, slot, seq, mode}    a write told this watcher to re-render (deliveries are value-blind; fresh | interleaved, see below)
+ *  suppressed           {watcher, batch, slot, seq, reason}  delivery skipped: a scheduled-but-unstarted re-render will fold this write anyway ('dedup-pending-fold')
  *  eval                 {node, world, durationUs, depth}     one computed evaluation in one world (newest | pass:N | committed:root | mount-fix:root)
- *  mount-corrective     {watcher, token, slot}               at mount, a corrective re-render was scheduled for a live batch the mounting render did not include
+ *  mount-corrective     {watcher, batch, slot}               at mount, a corrective re-render was scheduled for a live batch the mounting render did not include
  *  mount-fixup          {watcher, root, disposition, correctives}  how the mount-window check resolved:
  *                       fast-out (provably nothing moved; drift, if any, is exactly the live-batch writes
  *                       already covered by scheduled correctives) | compare-clean (values agree) |
@@ -148,9 +148,9 @@ import type {
 	Receipt,
 	RootId,
 	Seq,
-	SlotId,
-	Token,
-	TokenId,
+	BatchSlot,
+	Batch,
+	BatchId,
 	TraceHooks,
 	Value,
 	Watcher,
@@ -183,7 +183,7 @@ const enum TraceField {
 	KIND = 0, // kind code (low 6 bits) | kind-specific flags (bits 6..7)
 	CAUSE = 1, // provoking event id + 1 (0 = operation root)
 	SUBJECT = 2, // label id or entity id, per kind
-	WORLD = 3, // world code, token id, or root label, per kind
+	WORLD = 3, // world code, batch id, or root label, per kind
 	DT = 4, // µs since the previous record (saturating; see clock-sync)
 	ARG0 = 5,
 	ARG1 = 6,
@@ -488,8 +488,8 @@ export class Tracer implements TraceHooks {
 	// layout the old object→packed re-encoding produced, so recordings stay
 	// decode-compatible across the migration.
 
-	writeDropped(node: AtomNode, token: TokenId): void {
-		this.rec(K.writeDropped, this.label(node.name), token, 0, 0, 0);
+	writeDropped(node: AtomNode, batch: BatchId): void {
+		this.rec(K.writeDropped, this.label(node.name), batch, 0, 0, 0);
 	}
 
 	quietWrite(node: AtomNode, seq: Seq): void {
@@ -500,15 +500,15 @@ export class Tracer implements TraceHooks {
 		this.rec(K.quietWrite, this.label(node.name), 0, seq, 0, 0);
 	}
 
-	delivery(w: Watcher, token: TokenId, slot: SlotId, seq: Seq, interleaved: boolean): void {
+	delivery(w: Watcher, batch: BatchId, slot: BatchSlot, seq: Seq, interleaved: boolean): void {
 		this.rec(
 			K.delivery | (interleaved ? KindBits.FLAG_A : 0),
-			this.label(w.name), token, slot, seq, 0,
+			this.label(w.name), batch, slot, seq, 0,
 		);
 	}
 
-	suppressed(w: Watcher, token: TokenId, slot: SlotId, seq: Seq): void {
-		this.rec(K.suppressed, this.label(w.name), token, slot, seq, 0);
+	suppressed(w: Watcher, batch: BatchId, slot: BatchSlot, seq: Seq): void {
+		this.rec(K.suppressed, this.label(w.name), batch, slot, seq, 0);
 	}
 
 	coreEffectRun(effect: string, value: Value): void {
@@ -534,8 +534,8 @@ export class Tracer implements TraceHooks {
 		);
 	}
 
-	mountCorrective(w: Watcher, token: TokenId, slot: SlotId): void {
-		this.rec(K.mountCorrective, this.label(w.name), token, slot, 0, 0);
+	mountCorrective(w: Watcher, batch: BatchId, slot: BatchSlot): void {
+		this.rec(K.mountCorrective, this.label(w.name), batch, slot, 0, 0);
 	}
 
 	mountCorrection(w: Watcher, from: Value, to: Value): void {
@@ -544,24 +544,24 @@ export class Tracer implements TraceHooks {
 
 	/** The site passes the root's generation (already bumped) — the tracer no
 	 * longer reads engine state to enrich the record. */
-	perRootCommit(root: RootId, token: TokenId, commitGen: CommitGen): void {
-		this.rec(K.rootCommit, token, this.label(root), commitGen, 0, 0);
+	perRootCommit(root: RootId, batch: BatchId, commitGen: CommitGen): void {
+		this.rec(K.rootCommit, batch, this.label(root), commitGen, 0, 0);
 	}
 
-	retired(token: TokenId, retiredSeq: Seq): void {
-		this.rec(K.batchRetire, token, 0, retiredSeq, 0, 0);
+	retired(batch: BatchId, retiredSeq: Seq): void {
+		this.rec(K.batchRetire, batch, 0, retiredSeq, 0, 0);
 	}
 
-	slotClaimed(slot: SlotId, token: TokenId): void {
-		this.rec(K.slotClaim, slot, token, 0, 0, 0);
+	slotClaimed(slot: BatchSlot, batch: BatchId): void {
+		this.rec(K.slotClaim, slot, batch, 0, 0, 0);
 	}
 
-	slotReleased(slot: SlotId, token: TokenId): void {
-		this.rec(K.slotRelease, slot, token, 0, 0, 0);
+	slotReleased(slot: BatchSlot, batch: BatchId): void {
+		this.rec(K.slotRelease, slot, batch, 0, 0, 0);
 	}
 
-	slotBackstopReleased(slot: SlotId, token: TokenId): void {
-		this.rec(K.slotBackstop, slot, token, 0, 0, 0);
+	slotBackstopReleased(slot: BatchSlot, batch: BatchId): void {
+		this.rec(K.slotBackstop, slot, batch, 0, 0, 0);
 	}
 
 	/** Post-consequence referee markers (unlike `passEnd`, which fires BEFORE
@@ -582,14 +582,14 @@ export class Tracer implements TraceHooks {
 
 	receipt(node: AtomNode, r: Receipt): void {
 		const op = OP_NAMES.indexOf(r.op.kind); // encoder and decoder share OP_NAMES (cold path)
-		this.rec(K.write, this.label(node.name), r.token, r.slot, r.seq, op);
+		this.rec(K.write, this.label(node.name), r.batch, r.slot, r.seq, op);
 	}
 
-	batchOpen(t: Token): void {
+	batchOpen(t: Batch): void {
 		this.rec(K.batchOpen | (t.action ? KindBits.FLAG_A : 0) | (t.ambient ? KindBits.FLAG_B : 0), t.id, 0, 0, 0, 0);
 	}
 
-	batchSettle(t: Token): void {
+	batchSettle(t: Batch): void {
 		this.rec(K.batchSettle, t.id, 0, 0, 0, 0);
 	}
 
@@ -597,12 +597,12 @@ export class Tracer implements TraceHooks {
 	 * protocol handler that received it) — the engine never calls this hook.
 	 * Not a cause-claiming kind: the retirement operation it precedes roots
 	 * its own chain, exactly as it did when the flag rode the engine call. */
-	batchDisposition(token: TokenId, committed: boolean): void {
-		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), token, 0, 0, 0, 0);
+	batchDisposition(batch: BatchId, committed: boolean): void {
+		this.rec(K.batchDisposition | (committed ? KindBits.FLAG_A : 0), batch, 0, 0, 0, 0);
 	}
 
 	passStart(p: Pass): void {
-		this.rec(K.passStart, p.id, this.label(p.root), p.pin, p.maskTokens.size, 0);
+		this.rec(K.passStart, p.id, this.label(p.root), p.pin, p.maskBatches.size, 0);
 	}
 
 	passYield(p: Pass): void {
@@ -643,8 +643,8 @@ export class Tracer implements TraceHooks {
 		);
 	}
 
-	slotReleaseDeferred(slot: SlotId, token: TokenId): void {
-		this.rec(K.slotReleaseDeferred, slot, token, 0, 0, 0);
+	slotReleaseDeferred(slot: BatchSlot, batch: BatchId): void {
+		this.rec(K.slotReleaseDeferred, slot, batch, 0, 0, 0);
 	}
 
 	mountFixup(w: Watcher, disposition: 'fast-out' | 'compare-clean' | 'corrected', correctives: number): void {
@@ -711,33 +711,33 @@ export class Tracer implements TraceHooks {
 		let data: Record<string, unknown>;
 		switch (kind) {
 			case K.write:
-				data = { node: this.labelOf(subject), op: OP_NAMES[a2], token: world, slot: a0, seq: a1 };
+				data = { node: this.labelOf(subject), op: OP_NAMES[a2], batch: world, slot: a0, seq: a1 };
 				break;
 			case K.writeDropped:
-				data = { node: this.labelOf(subject), token: world };
+				data = { node: this.labelOf(subject), batch: world };
 				break;
 			case K.quietWrite:
 				data = { node: this.labelOf(subject), seq: a0 };
 				break;
 			case K.batchOpen:
-				data = { token: subject, action: a, ambient: b };
+				data = { batch: subject, action: a, ambient: b };
 				break;
 			case K.batchSettle:
 				// (a FLAG_A bit here is a legacy committed flag from older
 				// recordings — ignored; see batch-disposition.)
-				data = { token: subject };
+				data = { batch: subject };
 				break;
 			case K.batchRetire:
-				data = { token: subject, retiredSeq: a0 }; // legacy FLAG_A ignored, as above
+				data = { batch: subject, retiredSeq: a0 }; // legacy FLAG_A ignored, as above
 				break;
 			case K.batchDisposition:
-				data = { token: subject, committed: a };
+				data = { batch: subject, committed: a };
 				break;
 			case K.slotClaim:
 			case K.slotRelease:
 			case K.slotReleaseDeferred:
 			case K.slotBackstop:
-				data = { slot: subject, token: world };
+				data = { slot: subject, batch: world };
 				break;
 			case K.passStart:
 				data = { pass: subject, root: this.labelOf(world), pin: a0, maskSize: a1 };
@@ -750,19 +750,19 @@ export class Tracer implements TraceHooks {
 				data = { pass: subject, root: this.labelOf(world), disposition: a ? 'commit' : 'discard' };
 				break;
 			case K.rootCommit:
-				data = { root: this.labelOf(world), token: subject, commitGen: a0 };
+				data = { root: this.labelOf(world), batch: subject, commitGen: a0 };
 				break;
 			case K.delivery:
-				data = { watcher: this.labelOf(subject), token: world, slot: a0, seq: a1, mode: a ? 'interleaved' : 'fresh' };
+				data = { watcher: this.labelOf(subject), batch: world, slot: a0, seq: a1, mode: a ? 'interleaved' : 'fresh' };
 				break;
 			case K.suppressed:
-				data = { watcher: this.labelOf(subject), token: world, slot: a0, seq: a1, reason: 'dedup-pending-fold' };
+				data = { watcher: this.labelOf(subject), batch: world, slot: a0, seq: a1, reason: 'dedup-pending-fold' };
 				break;
 			case K.evalDone:
 				data = { node: this.labelOf(subject), world: this.worldName(world, a), durationUs: a0, depth: a1 };
 				break;
 			case K.mountCorrective:
-				data = { watcher: this.labelOf(subject), token: world, slot: a0 };
+				data = { watcher: this.labelOf(subject), batch: world, slot: a0 };
 				break;
 			case K.mountFixup:
 				data = { watcher: this.labelOf(subject), root: this.labelOf(world), disposition: DISPOSITION_NAMES[a0], correctives: a1 };

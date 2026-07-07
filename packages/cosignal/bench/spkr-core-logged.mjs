@@ -35,13 +35,13 @@ let v = 0;
 function repOnce() {
 	b.events.length = 0;
 	const t0 = process.hrtime.bigint();
-	const toks = [];
-	for (let k = 0; k < K; k++) toks.push(b.openBatch());
+	const batches = [];
+	for (let k = 0; k < K; k++) batches.push(b.openBatch());
 	for (let k = 0; k < K; k++) {
-		for (let m = 0; m < M; m++) b.write(toks[k].id, atoms[m % 4], 0, ++v);
+		for (let m = 0; m < M; m++) b.write(batches[k].id, atoms[m % 4], 0, ++v);
 	}
 	const t1 = process.hrtime.bigint();
-	for (const t of toks) b.retire(t.id);
+	for (const t of batches) b.retire(t.id);
 	const t2 = process.hrtime.bigint();
 	return {
 		writeNsPerBatch: Number(t1 - t0) / K,

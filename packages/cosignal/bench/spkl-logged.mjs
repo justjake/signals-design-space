@@ -30,7 +30,7 @@ for (let r = 0; r < REPS; r++) {
 	times.push(Number(t1 - t0) / OPS);
 }
 times.sort((a, b) => a - b);
-if (bridge.liveTokens().length !== 0 || bridge.events.length !== 0) {
+if (bridge.liveBatches().length !== 0 || bridge.events.length !== 0) {
 	throw new Error('SPK-L invariant: the quiet workload must not touch the bridge');
 }
 row({

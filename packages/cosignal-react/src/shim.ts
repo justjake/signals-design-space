@@ -34,7 +34,7 @@
  *    so each corrective re-render is scheduled in the lane of the batch that
  *    caused it and the whole update renders and commits together. Deliveries
  *    are value-blind: the bridge decides who must re-render, the shim only
- *    schedules. Tokens with no live protocol counterpart take
+ *    schedules. Batches with no live protocol counterpart take
  *    unstable_runInBatch's discrete-urgent fallback. The protocol permits
  *    scheduling updates from its yield and commit callbacks, so listening
  *    at those points is legal (writes during render are not, and throw).
@@ -48,7 +48,7 @@
  *    hand them to the classifier this shim installs on the bridge
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
  *    write-context API (unstable_getCurrentWriteBatch, whose low bit is
- *    the deferred flag); token 0 (no provider registered) is unreachable
+ *    the deferred flag); React batch id 0 (no provider registered) is unreachable
  *    once a renderer has loaded — with dev checks armed
  *    (BridgeOptions.devChecks) it throws as a protocol violation, and
  *    without them it classifies as an ordinary urgent write. Raw `.state` reads
@@ -76,7 +76,7 @@ import type {
 	HostOpKind,
 	Pass,
 	RootId,
-	TokenId,
+	BatchId,
 	Value,
 	Watcher,
 } from 'cosignal';
@@ -163,8 +163,8 @@ export class Shim {
 
 	private unsubscribe: () => void;
 	private rootsByContainer = new Map<unknown, RootRec>();
-	private bridgeTokenByFork = new Map<number, TokenId>();
-	private forkTokenByBridge = new Map<TokenId, number>();
+	private reactBatchToBatch = new Map<number, BatchId>();
+	private batchToReactBatch = new Map<BatchId, number>();
 	/** watcher id -> delivery target (registered at render, claimed at layout). */
 	targets = new Map<number, WatcherTarget>();
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
@@ -221,8 +221,8 @@ export class Shim {
 		// window the hand-rolled try/catch these replaced lacked (post-dispose
 		// bridge callbacks are now no-ops instead of relying on the cleared
 		// `targets` map to degrade safely).
-		bridge.onDelivery = (w, token) => this.guard(() => this.bumpInBatch(w.id, token.id)); // re-render in the write's own batch
-		bridge.onMountCorrective = (w, token) => this.guard(() => this.bumpInBatch(w.id, token.id)); // join a still-live batch this mount's render missed
+		bridge.onDelivery = (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)); // re-render in the write's own batch
+		bridge.onMountCorrective = (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)); // join a still-live batch this mount's render missed
 		bridge.onCorrection = (w) => this.guard(() => this.bumpInBatch(w.id, undefined)); // urgent pre-paint fix: discrete-urgent fallback lane
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches) =>
@@ -230,7 +230,7 @@ export class Shim {
 			onRenderPassYield: (container) => this.guard(() => this.handleYield(container)),
 			onRenderPassResume: (container) => this.guard(() => this.handleResume(container)),
 			onRenderPassEnd: (container, committed) => this.guard(() => this.handlePassEnd(container, committed)),
-			onBatchRetired: (token, committed) => this.guard(() => this.handleBatchRetired(token, committed)),
+			onBatchRetired: (batch, committed) => this.guard(() => this.handleBatchRetired(batch, committed)),
 			onRootCommitted: (container, committedBatches, generation) =>
 				this.guard(() => this.handleRootCommitted(container, committedBatches, generation)),
 		});
@@ -275,7 +275,7 @@ export class Shim {
 		}
 	}
 
-	// ---- roots and tokens ----------------------------------------------------
+	// ---- roots and batches ----------------------------------------------------
 
 	rootRec(container: unknown): RootRec {
 		let rec = this.rootsByContainer.get(container);
@@ -291,16 +291,16 @@ export class Shim {
 		return rec;
 	}
 
-	/** The bridge batch token mirroring a protocol batch token (minted on first sight). */
-	bridgeTokenFor(forkToken: number, opts?: { action?: boolean }): TokenId {
-		const existing = this.bridgeTokenByFork.get(forkToken);
+	/** The engine batch mirroring a React batch (minted on first sight). */
+	batchForReactBatch(reactBatchId: number, opts?: { action?: boolean }): BatchId {
+		const existing = this.reactBatchToBatch.get(reactBatchId);
 		if (existing !== undefined) {
 			if (opts?.action === true) {
-				// Every transition started inside one event shares one protocol
-				// batch token, so the token may already exist when an action
+				// Every transition started inside one event shares one React
+				// batch, so the engine batch may already exist when an action
 				// starts: upgrade it in place to action semantics (parked — kept
 				// pending — until the action settles).
-				const t = this.bridge.tokens.get(existing);
+				const t = this.bridge.idToBatch.get(existing);
 				if (t !== undefined && t.state === 'live') {
 					t.action = true;
 					t.parked = true;
@@ -308,16 +308,16 @@ export class Shim {
 			}
 			return existing;
 		}
-		const token = this.bridge.openBatch({
+		const batch = this.bridge.openBatch({
 			action: opts?.action ?? false,
 		});
-		this.bridgeTokenByFork.set(forkToken, token.id);
-		this.forkTokenByBridge.set(token.id, forkToken);
-		return token.id;
+		this.reactBatchToBatch.set(reactBatchId, batch.id);
+		this.batchToReactBatch.set(batch.id, reactBatchId);
+		return batch.id;
 	}
 
-	forkTokenOf(bridgeToken: TokenId): number | undefined {
-		return this.forkTokenByBridge.get(bridgeToken);
+	reactBatchForBatch(batchId: BatchId): number | undefined {
+		return this.batchToReactBatch.get(batchId);
 	}
 
 	/** The root whose pass is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
@@ -347,14 +347,14 @@ export class Shim {
 			// engine's pending window forever.
 			this.bridge.passEnd(rec.pass.id, 'discard');
 		}
-		const known: TokenId[] = [];
-		for (const forkToken of includedBatches) {
-			// Only protocol batches carrying cosignal writes have bridge tokens.
+		const known: BatchId[] = [];
+		for (const reactBatchId of includedBatches) {
+			// Only React batches carrying cosignal writes have engine batches.
 			// A pure-React batch contributed no receipts, and a world is computed
 			// purely by replaying receipts, so leaving that batch out of the
 			// pass's batch set cannot change any value the pass observes.
-			const mapped = this.bridgeTokenByFork.get(forkToken);
-			if (mapped !== undefined && this.bridge.tokens.get(mapped)?.state === 'live') known.push(mapped);
+			const mapped = this.reactBatchToBatch.get(reactBatchId);
+			if (mapped !== undefined && this.bridge.idToBatch.get(mapped)?.state === 'live') known.push(mapped);
 		}
 		rec.pass = this.bridge.passStart(rec.id, known);
 		rec.minted = new Set();
@@ -428,11 +428,11 @@ export class Shim {
 		});
 	}
 
-	private handleBatchRetired(forkToken: number, committed: boolean): void {
+	private handleBatchRetired(reactBatchId: number, committed: boolean): void {
 		this.flushHeldRefires(); // defensive: nothing stays parked past its commit's own events
-		const mapped = this.bridgeTokenByFork.get(forkToken);
+		const mapped = this.reactBatchToBatch.get(reactBatchId);
 		if (mapped === undefined) return; // no cosignal writes rode this batch
-		const t = this.bridge.tokens.get(mapped);
+		const t = this.bridge.idToBatch.get(mapped);
 		if (t === undefined || t.state !== 'live') return;
 		// The committed/abandoned fact is BORN here — React's own report about
 		// its batch. Retirement is disposition-blind (recorded writes never
@@ -448,8 +448,8 @@ export class Shim {
 		// the same observable point as the old post-retire revalidation.
 		if (t.parked) this.bridge.settleAction(mapped); // async action reached settlement
 		else this.bridge.retire(mapped); // batch done everywhere: its writes become permanent history
-		this.bridgeTokenByFork.delete(forkToken);
-		this.forkTokenByBridge.delete(mapped);
+		this.reactBatchToBatch.delete(reactBatchId);
+		this.batchToReactBatch.delete(mapped);
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {
@@ -458,23 +458,23 @@ export class Shim {
 		// root's committed table at passEnd(commit). The protocol's per-root
 		// commit report is a delta (one batch's work can reach the screen
 		// across more than one flush), and re-reporting a batch is defined as
-		// idempotent set-add — so hand every reported batch with a bridge
-		// token to the engine's commitTokens, THE single owner of the per-root
-		// commit transition (W11): already-committed tokens skip; a live token
-		// the passEnd sweep missed locks in COMPLETELY (token set, committed
+		// idempotent set-add — so hand every reported batch with an engine
+		// batch to the engine's commitBatches, THE single owner of the per-root
+		// commit transition (W11): already-committed batches skip; a live batch
+		// the passEnd sweep missed locks in COMPLETELY (batch set, committed
 		// bit mask, generation, commit clock, arena fan-out, drain — never a
-		// partial table write from here). Defensive: for batches with bridge
-		// tokens the pass's set already covers the delta by construction.
-		const reported: TokenId[] = [];
-		for (const forkToken of committedBatches) {
-			const mapped = this.bridgeTokenByFork.get(forkToken);
+		// partial table write from here). Defensive: for React batches with
+		// engine batches the pass's set already covers the delta by construction.
+		const reported: BatchId[] = [];
+		for (const reactBatchId of committedBatches) {
+			const mapped = this.reactBatchToBatch.get(reactBatchId);
 			if (mapped !== undefined) reported.push(mapped);
 		}
-		if (reported.length !== 0) this.bridge.commitTokens(rec.id, reported);
+		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported);
 		// The root-commit REPORT is where the commit's effect refires run
 		// (React's re-pend classification is behind us; CR5 puts no user code
 		// between the frame close and this report, so the boundary values are
-		// unchanged). commitTokens is itself an EF2 boundary: when the report
+		// unchanged). commitBatches is itself an EF2 boundary: when the report
 		// actually moved committed truth, the engine re-checked that root's
 		// committed observers inside the call.
 		this.flushHeldRefires();
@@ -505,16 +505,16 @@ export class Shim {
 	/**
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
 	 * unstable_runInBatch, so the re-render renders and commits together with
-	 * the batch that caused it. Bridge tokens without a live protocol
+	 * the batch that caused it. Engine batches without a live protocol
 	 * counterpart (an already-retired batch, or an engine-minted batch no
-	 * protocol token mirrors) pass token 0, which unstable_runInBatch defines
-	 * as a discrete-urgent fallback.
+	 * React batch mirrors) pass React batch id 0, which unstable_runInBatch
+	 * defines as a discrete-urgent fallback.
 	 */
-	private bumpInBatch(watcherId: number, bridgeToken: TokenId | undefined): void {
+	private bumpInBatch(watcherId: number, batchId: BatchId | undefined): void {
 		const target = this.targets.get(watcherId);
 		if (target === undefined || !target.live) return;
-		const forkToken = bridgeToken === undefined ? 0 : (this.forkTokenByBridge.get(bridgeToken) ?? 0);
-		React.unstable_runInBatch(forkToken, () => target.bump());
+		const reactBatchId = batchId === undefined ? 0 : (this.batchToReactBatch.get(batchId) ?? 0);
+		React.unstable_runInBatch(reactBatchId, () => target.bump());
 	}
 
 	// ---- write classification -----------------------------------------------------
@@ -527,21 +527,21 @@ export class Shim {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
-		const forkToken = React.unstable_getCurrentWriteBatch();
-		// Token 0 is UNREACHABLE in practice: it means "no renderer provider
-		// registered" (ReactExternalRuntime returns 0 only then), and a
-		// renderer registers its provider at module load — after that,
-		// getCurrentWriteBatch() mints a token for EVERY write (any call
-		// context) with a guaranteed close edge, so no write in the React
+		const reactBatchId = React.unstable_getCurrentWriteBatch();
+		// React batch id 0 is UNREACHABLE in practice: it means "no renderer
+		// provider registered" (ReactExternalRuntime returns 0 only then),
+		// and a renderer registers its provider at module load — after that,
+		// getCurrentWriteBatch() mints a React batch id for EVERY write (any
+		// call context) with a guaranteed close edge, so no write in the React
 		// path is ever context-free. Dev checks make reaching it explode;
 		// without them it classifies below as an ordinary urgent write
-		// (token 0's low bit is clear = non-deferred).
-		if (this.devChecks && forkToken === 0) {
+		// (React batch id 0's low bit is clear = non-deferred).
+		if (this.devChecks && reactBatchId === 0) {
 			throw new Error(
 				'cosignal: protocol violation — signal write with no batch context after registration (the renderer provided no external-runtime write batch)',
 			);
 		}
-		const tokenId = this.bridgeTokenFor(forkToken);
+		const batchId = this.batchForReactBatch(reactBatchId);
 		if (this.devChecks) {
 			// Dev-warning heuristic. After an await, code runs on a fresh call
 			// stack with no ambient transition context, so a bare write lands
@@ -549,21 +549,21 @@ export class Shim {
 			// (the author meant the write to join the action; the fix is a
 			// fresh startTransition). Warn on a non-deferred write while any
 			// action is parked. The protocol exposes only one bit (deferred or
-			// not), which cannot distinguish a discrete handler's token from a
-			// timer's ambient token, so this lint can over-trigger on genuine
+			// not), which cannot distinguish a discrete handler's React batch
+			// from a timer's ambient one, so this lint can over-trigger on genuine
 			// handler writes during someone else's action — accepted
 			// imprecision for a dev-only warning.
-			const t = this.bridge.tokens.get(tokenId);
+			const t = this.bridge.idToBatch.get(batchId);
 			if (
 				t !== undefined &&
 				!t.action &&
-				(forkToken & 1) === 0 &&
-				this.bridge.liveTokens().some((lt) => lt.parked)
+				(reactBatchId & 1) === 0 &&
+				this.bridge.liveBatches().some((lt) => lt.parked)
 			) {
 				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
 			}
 		}
-		this.bridge.write(tokenId, node, kind, payload);
+		this.bridge.write(batchId, node, kind, payload);
 		// A write into a batch already locked into some root's committed table
 		// moves that root's committed world immediately — but effects are
 		// BOUNDARY consumers (RCC-EF2 amended, 2026-07-06): they never re-run

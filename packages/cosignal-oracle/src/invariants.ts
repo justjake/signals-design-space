@@ -19,10 +19,10 @@
  *    world: the base+tape fold equals the full-history
  *    (origin+archive+tape) fold for every live world, i.e. compaction never
  *    changed any live world's answer.
- * 5. quiescence residue is zero — whenever no live pins/tokens exist, every
+ * 5. quiescence residue is zero — whenever no live pins/batches exist, every
  *    tape has fully compacted into its base.
- * 6. structural coherence — at most 31 live batches, slot↔token bindings
- *    agree both ways, per-root commit rows never name retired tokens (rows
+ * 6. structural coherence — at most 31 live batches, slot↔batch bindings
+ *    agree both ways, per-root commit rows never name retired batches (rows
  *    clear at retirement, before slot release), one open pass per root.
  */
 
@@ -91,25 +91,25 @@ function checkTenancy(m: CosignalModel): void {
 				if (e.slot !== slot.id) continue;
 				if (e.retiredSeq === undefined) {
 					// Stamp-before-release: un-retired entries bearing slot s belong to exactly its current tenant.
-					if (tenant !== e.token) {
-						fail(`tenancy: un-retired receipt (seq ${e.seq}, token ${e.token}) bears slot ${slot.id} owned by ${String(tenant)}`);
+					if (tenant !== e.batch) {
+						fail(`tenancy: un-retired receipt (seq ${e.seq}, batch ${e.batch}) bears slot ${slot.id} owned by ${String(tenant)}`);
 					}
-				} else if (tenant !== undefined && tenant !== e.token) {
+				} else if (tenant !== undefined && tenant !== e.batch) {
 					// Claim-after-release: every retirement sequence of a previous tenant precedes the current claim.
 					if (e.retiredSeq >= slot.claimSeq) {
-						fail(`tenancy: old tenant ${e.token} retiredSeq ${e.retiredSeq} ≥ claim ${slot.claimSeq} of slot ${slot.id}`);
+						fail(`tenancy: old tenant ${e.batch} retiredSeq ${e.retiredSeq} ≥ claim ${slot.claimSeq} of slot ${slot.id}`);
 					}
 				}
-				if (tenant === e.token && e.seq <= slot.claimSeq) {
+				if (tenant === e.batch && e.seq <= slot.claimSeq) {
 					// Pin/seq-after-claim: any receipt of the current tenant has a sequence above the claim.
-					fail(`tenancy: tenant ${e.token} receipt seq ${e.seq} ≤ claim ${slot.claimSeq} of slot ${slot.id}`);
+					fail(`tenancy: tenant ${e.batch} receipt seq ${e.seq} ≤ claim ${slot.claimSeq} of slot ${slot.id}`);
 				}
 			}
 		}
 		// Pin-after-claim: any open pass whose mask means the CURRENT tenant pinned after the claim.
 		if (tenant !== undefined) {
 			for (const p of m.passes.values()) {
-				if (p.state === 'ended' || !p.maskTokens.has(tenant) || !p.maskSlots.has(slot.id)) continue;
+				if (p.state === 'ended' || !p.maskBatches.has(tenant) || !p.maskSlots.has(slot.id)) continue;
 				if (p.pin < slot.claimSeq) {
 					fail(`tenancy: pass ${p.id} pinned at ${p.pin} but masks slot ${slot.id} claimed at ${slot.claimSeq}`);
 				}
@@ -129,22 +129,22 @@ function checkMonotone(m: CosignalModel): void {
 			if (e.retiredSeq !== undefined && e.retiredSeq <= e.seq) {
 				fail(`monotone: retiredSeq ${e.retiredSeq} ≤ write seq ${e.seq} on ${atom.name}`);
 			}
-			const tok = m.tokens.get(e.token);
-			if (tok === undefined) fail(`receipt names unknown token ${e.token}`);
-			if (tok.state === 'retired') {
-				if (e.retiredSeq !== tok.retiredSeq) {
-					fail(`retired token ${tok.id} has receipt with retiredSeq ${String(e.retiredSeq)} ≠ token stamp ${String(tok.retiredSeq)}`);
+			const batch = m.idToBatch.get(e.batch);
+			if (batch === undefined) fail(`receipt names unknown batch ${e.batch}`);
+			if (batch.state === 'retired') {
+				if (e.retiredSeq !== batch.retiredSeq) {
+					fail(`retired batch ${batch.id} has receipt with retiredSeq ${String(e.retiredSeq)} ≠ batch stamp ${String(batch.retiredSeq)}`);
 				}
 			} else if (e.retiredSeq !== undefined) {
-				fail(`live token ${tok.id} has a retirement-stamped receipt`);
+				fail(`live batch ${batch.id} has a retirement-stamped receipt`);
 			}
 		}
 	}
 	for (const p of m.passes.values()) {
 		if (p.pin > m.seq) fail(`pass ${p.id} pin ${p.pin} above global counter ${m.seq}`);
 	}
-	for (const t of m.tokens.values()) {
-		if (t.parked && t.state === 'retired') fail(`token ${t.id} both parked and retired — parked tokens may not retire before settlement`);
+	for (const t of m.idToBatch.values()) {
+		if (t.parked && t.state === 'retired') fail(`batch ${t.id} both parked and retired — parked batches may not retire before settlement`);
 	}
 }
 
@@ -161,7 +161,7 @@ function checkRetention(m: CosignalModel): void {
 	}
 }
 
-/** Invariant 5 — with no live pins and no live tokens, every tape has compacted to base. */
+/** Invariant 5 — with no live pins and no live batches, every tape has compacted to base. */
 function checkResidue(m: CosignalModel): void {
 	if (!m.quiescent()) return;
 	for (const atom of atoms(m)) {
@@ -174,21 +174,21 @@ function checkResidue(m: CosignalModel): void {
 /** Invariant 6 — structural coherence. */
 function checkStructure(m: CosignalModel): void {
 	let liveCount = 0;
-	for (const t of m.tokens.values()) {
+	for (const t of m.idToBatch.values()) {
 		if (t.state === 'live') liveCount++;
 		if (t.slot !== undefined) {
 			const s = m.slots[t.slot];
 			if (s === undefined || s.tenant !== t.id) {
-				fail(`slot binding: token ${t.id} claims slot ${t.slot} but the table disagrees`);
+				fail(`slot binding: batch ${t.id} claims slot ${t.slot} but the table disagrees`);
 			}
 		}
 	}
-	if (liveCount > 31) fail(`more than 31 live tokens (${liveCount})`);
+	if (liveCount > 31) fail(`more than 31 live batches (${liveCount})`);
 	for (const root of m.roots.values()) {
-		for (const tid of root.committedTokens) {
-			const t = m.tokens.get(tid);
+		for (const tid of root.committedBatches) {
+			const t = m.idToBatch.get(tid);
 			if (t === undefined || t.state !== 'live') {
-				fail(`per-root row for root ${root.id} names non-live token ${tid} — per-root rows must clear at retirement`);
+				fail(`per-root row for root ${root.id} names non-live batch ${tid} — per-root rows must clear at retirement`);
 			}
 		}
 	}

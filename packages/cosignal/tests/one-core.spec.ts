@@ -5,7 +5,7 @@
  *    no `./concurrent` entry exists.
  *  - ZERO COST WHEN UNUSED, asserted behaviorally: with no host attached,
  *    heavy create/write/read/effect traffic mints zero receipts, zero batch
- *    tokens, zero world evaluations, zero bridges (the engine's
+ *    batches, zero world evaluations, zero bridges (the engine's
  *    referee-surface probes, `__coreProbes`; events are packed trace records
  *    behind per-site tracer guards — no tracer, no event machinery at all).
  *    Sync-only apps pay one predictable branch per public read/write and
@@ -50,12 +50,12 @@ describe('one entry', () => {
 });
 
 describe('zero cost with no host attached (behavioral)', () => {
-	it('heavy sync-only traffic mints zero receipts/tokens/worlds/bridges', () => {
+	it('heavy sync-only traffic mints zero receipts/batches/worlds/bridges', () => {
 		const before = __coreProbes();
 		// (No event probe anymore: events are packed trace records, minted only
 		// behind each site's tracer guard — the object channel is gone, so with
 		// no tracer there is no event machinery left to count.)
-		expect(before).toEqual({ receipts: 0, tokens: 0, worldEvals: 0, bridges: 0 });
+		expect(before).toEqual({ receipts: 0, batches: 0, worldEvals: 0, bridges: 0 });
 
 		// Heavy create/write/read/derive/effect traffic through the public API.
 		const atoms = Array.from({ length: 50 }, (_, i) => new Atom(i));
@@ -146,7 +146,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(sink).toBeGreaterThan(0);
 		const after = __coreProbes();
 		expect(after.receipts).toBe(before.receipts);
-		expect(after.tokens).toBe(before.tokens);
+		expect(after.batches).toBe(before.batches);
 		expect(after.worldEvals).toBe(before.worldEvals);
 	});
 
@@ -168,12 +168,12 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		la.handle.set(7); // application code writing through the public API, while QUIET
 		(la.handle as Atom<number>).update((n) => n + 1);
 		expect(la.tp.materialize()).toHaveLength(0); // no receipt
-		expect(bridge.ambientToken).toBeUndefined(); // ambient batch NOT minted while quiet
+		expect(bridge.ambientBatch).toBeUndefined(); // ambient batch NOT minted while quiet
 		expect(bridge.newestValue(la)).toBe(8); // kernel advanced
 		expect(bridge.committedValue(la, 'A')).toBe(8); // committed truth advanced WITH it
 		const afterQuiet = __coreProbes();
 		expect(afterQuiet.receipts).toBe(before.receipts);
-		expect(afterQuiet.tokens).toBe(before.tokens);
+		expect(afterQuiet.batches).toBe(before.batches);
 		// ARM the pipeline (a live batch exists): the same public writes now
 		// classify into the ambient default batch as WHOLE ops.
 		const t = bridge.openBatch();
@@ -182,9 +182,9 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(la.tp.materialize()).toHaveLength(2);
 		expect(la.tp.materialize()[0]!.op).toEqual({ kind: 'set', value: 100 });
 		expect(la.tp.materialize()[1]!.op.kind).toBe('update'); // replay fidelity: the updater itself
-		const ambient = bridge.ambientToken;
+		const ambient = bridge.ambientBatch;
 		expect(ambient).toBeDefined();
-		expect(la.tp.materialize()[0]!.token).toBe(ambient);
+		expect(la.tp.materialize()[0]!.batch).toBe(ambient);
 		expect(bridge.newestValue(la)).toBe(101); // writes apply to the kernel immediately
 		expect(bridge.committedValue(la, 'A')).toBe(8); // not committed yet: base still holds the quiet fold
 		bridge.retire(ambient!);
@@ -196,12 +196,12 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(bridge.committedValue(la, 'A')).toBe(500);
 	});
 
-	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero receipts/tokens', () => {
+	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero receipts/batches', () => {
 		// The Phase 1b population (the reviews' "wrong population" fix): atoms
 		// REGISTERED with the bridge, host attached, kernel derivations and
 		// effects subscribed — and NO transition, batch, or render pass ever
 		// open. Heavy public write/read traffic must leave the concurrency
-		// pipeline fully disarmed: zero receipts, zero batch tokens (and with
+		// pipeline fully disarmed: zero receipts, zero batches (and with
 		// no tracer attached, every record site is one dead branch).
 		const atoms = Array.from({ length: 20 }, (_, i) => bridge.atom(`reg${i}`, i));
 		const handles = atoms.map((n) => n.handle as Atom<number>);
@@ -229,8 +229,8 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(effectRuns).toBeGreaterThan(1); // kernel effects observed the quiet folds
 		const after = __coreProbes();
 		expect(after.receipts).toBe(before.receipts); // ZERO receipts
-		expect(after.tokens).toBe(before.tokens); // ZERO batch tokens (no ambient mint)
-		expect(bridge.ambientToken).toBeUndefined();
+		expect(after.batches).toBe(before.batches); // ZERO batches (no ambient mint)
+		expect(bridge.ambientBatch).toBeUndefined();
 		// And the folds are real: base == kernel == committed for every atom.
 		expect(bridge.newestValue(atoms[3]!)).toBe(49 * 1000 + 3 + 1);
 		expect(bridge.committedValue(atoms[3]!, 'A')).toBe(49 * 1000 + 3 + 1);

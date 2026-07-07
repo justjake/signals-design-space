@@ -4,7 +4,7 @@
  * `checkInvariants` / `snapshotModel` run against the engine without the
  * production class carrying mirror members. Everything the checkers read is
  * materialized on demand from load-bearing packed state (`tp`,
- * `openPassByRoot`-backed maps, slot/token/root registries) plus the one
+ * `openPassByRoot`-backed maps, slot/batch/root registries) plus the one
  * thing packed state cannot answer — the FULL history behind compaction —
  * which a driver-side mirror retains: per-atom archives fed by the engine's
  * `onCompact` hook and per-atom origins maintained at the ops that move them
@@ -30,8 +30,8 @@ import type {
 	Receipt,
 	RootId,
 	Seq,
-	SlotId,
-	SlotSet,
+	BatchSlot,
+	BatchSlotSet,
 	Value,
 	World,
 } from '../src/concurrent.js';
@@ -96,8 +96,8 @@ type ViewPass = {
 	root: RootId;
 	pin: Seq;
 	state: Pass['state'];
-	maskTokens: Pass['maskTokens'];
-	maskSlots: Set<SlotId>;
+	maskBatches: Pass['maskBatches'];
+	maskSlots: Set<BatchSlot>;
 	__engine: Pass;
 };
 
@@ -108,8 +108,8 @@ function unwrap<T>(n: unknown): T {
 }
 
 /** Slot-set bits → the model's Set form (bit i = slot i). */
-function slotsOf(bits: SlotSet): Set<SlotId> {
-	const out = new Set<SlotId>();
+function slotsOf(bits: BatchSlotSet): Set<BatchSlot> {
+	const out = new Set<BatchSlot>();
 	for (let s = 0; bits !== 0; s++, bits >>>= 1) {
 		if ((bits & 1) === 1) out.add(s);
 	}
@@ -163,7 +163,7 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 	};
 	const viewPass = (p: Pass): ViewPass => ({
 		id: p.id, root: p.root, pin: p.pin, state: p.state,
-		maskTokens: p.maskTokens, maskSlots: slotsOf(p.maskBits),
+		maskBatches: p.maskBatches, maskSlots: slotsOf(p.maskBits),
 		__engine: p,
 	});
 	/** The imported visibility rule's host, answered from the engine's bit
@@ -189,8 +189,8 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 		get slots() {
 			return engine.slots;
 		},
-		get tokens() {
-			return engine.tokens;
+		get idToBatch() {
+			return engine.idToBatch;
 		},
 		get seq() {
 			return engine.seq;

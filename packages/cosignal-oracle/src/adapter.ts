@@ -9,7 +9,7 @@
  *   - values: read(node, world) for the newest world, every open pass world,
  *     and committed-for-root(r) for every root;
  *   - deliveries: the value-blind decisions to schedule a watcher
- *     re-render, in order, with their {watcher, token, slot} attribution;
+ *     re-render, in order, with their {watcher, batch, slot} attribution;
  *   - corrections: committed-truth reconciliations, mount correctives, and
  *     urgent pre-paint mount corrections;
  *   - committed values at quiescence.

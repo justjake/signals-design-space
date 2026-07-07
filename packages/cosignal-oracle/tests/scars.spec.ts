@@ -40,7 +40,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(m.passValue(c, pk)).toBe(0); // the k-world evaluation records the REAL dep a→c
 		m.write(k.id, a, set(1)); // committed topology has no a→c edge — the trap
 		// the watcher IS notified in k's lane (interleaved: pass open, pin < seq)
-		const kDeliveries = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === k.id);
+		const kDeliveries = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === k.id);
 		expect(kDeliveries.length).toBeGreaterThanOrEqual(2);
 		m.passEnd(pk.id, 'discard');
 		const pk2 = pass(m, 'A', [k]);
@@ -99,7 +99,7 @@ describe('pinned scars (model-expressible)', () => {
 		expect(a.tape).toHaveLength(0); // pre-bridge history carries no receipts
 		expect(a.base).toBe(1); // ...it is committed-only base state
 		expect(m2.events).toHaveLength(0); // ...and minted no events
-		expect(m2.tokens.size).toBe(0); // ...and no tokens
+		expect(m2.idToBatch.size).toBe(0); // ...and no batches
 		const c = m2.computed('c', (read) => read(a));
 		const w = mountCommitted(m2, 'A', c, 'W');
 		expect(w.lastRenderedValue).toBe(1); // committed-only value; urgent renders cannot leak a "transition"
@@ -163,8 +163,8 @@ describe('pinned scars (model-expressible)', () => {
 		const c = m.computed('c', (read) => ((read(x1) as number) && (read(x2) as number)) as number);
 		const t1 = m.openBatch();
 		const t2 = m.openBatch();
-		m.write(t1.id, x1, set(1)); // per-token projection: 1&&0 = 0 == committed
-		m.write(t2.id, x2, set(1)); // per-token projection: 0&&1 = 0 == committed
+		m.write(t1.id, x1, set(1)); // per-batch projection: 1&&0 = 0 == committed
+		m.write(t2.id, x2, set(1)); // per-batch projection: 0&&1 = 0 == committed
 		const p = pass(m, 'A', []); // mount excludes both
 		const w = m.mountWatcher(p.id, c, 'W');
 		expect(w.lastRenderedValue).toBe(0);
@@ -172,7 +172,7 @@ describe('pinned scars (model-expressible)', () => {
 		// equality-filtered designs skipped both correctives (all projections equal committed);
 		// value-blind fixup schedules BOTH runInBatch correctives
 		const corr = m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W');
-		expect(corr.map((e) => e.token).sort()).toEqual([t1.id, t2.id].sort());
+		expect(corr.map((e) => e.batch).sort()).toEqual([t1.id, t2.id].sort());
 		// joint render {t1,t2} then shows 1 — no torn committed frame
 		const pj = pass(m, 'A', [t1, t2]);
 		m.renderWatcher(pj.id, w.id);
@@ -214,7 +214,7 @@ describe('pinned scars (model-expressible)', () => {
 		const u = m.openBatch();
 		m.write(u.id, a, set(4)); // equal to CANONICAL (newest 4): k0Changed false in the dead design
 		// delivery fires anyway — value-blind (interleaved for W: T's pass is open, pin < seq)
-		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === u.id)).toHaveLength(1);
+		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === u.id)).toHaveLength(1);
 		commitAndRetire(m, 'B', u);
 		m.passResume(pt.id);
 		m.passEnd(pt.id, 'discard'); // interleaved update forces the restart
@@ -237,7 +237,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.passYield(pt.id); // finished-but-uncommitted
 		const mark = m.events.length;
 		m.write(t.id, a, set(0)); // returns c to 0 == committed lastRendered 0 — the dead cutoff suppressed this
-		const late = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
+		const late = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.batch === t.id);
 		expect(late).toHaveLength(1); // delivered (bit re-armed at W's render); the stale finished subtree never commits as-is
 		m.passResume(pt.id);
 		m.passEnd(pt.id, 'discard');
@@ -261,7 +261,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.passEnd(pk.id, 'commit');
 		m.write(j.id, a, set(2)); // j's walk "overwrites the shared stamp" in the dead design
 		m.write(k.id, a, set(3)); // k's next write must still deliver
-		const kD = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === k.id);
+		const kD = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === k.id);
 		expect(kD.length).toBeGreaterThanOrEqual(2); // initial + post-re-arm delivery
 		m.retire(k.id);
 		m.retire(j.id);
@@ -299,11 +299,11 @@ describe('pinned scars (model-expressible)', () => {
 		m.passEnd(pA.id, 'commit'); // A commits T (lock-in); T parks on, still live
 		expect(w.lastRenderedValue).toBe(1);
 		const mark = m.events.length;
-		m.write(t.id, a, set(2)); // post-await, post-commit member write (the action's token is still live)
+		m.write(t.id, a, set(2)); // post-await, post-commit member write (the action's batch is still live)
 		// visible to A's committed world immediately (membership: A committed T)…
 		expect(m.committedValue(c, 'A')).toBe(2);
 		// …and the corrective (the value-blind delivery in T's own lane) is scheduled
-		const corr = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
+		const corr = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.batch === t.id);
 		expect(corr).toHaveLength(1);
 		const pA2 = pass(m, 'A', [t]); // the corrective render in the batch's own lanes
 		m.renderWatcher(pA2.id, w.id);
@@ -319,7 +319,7 @@ describe('pinned scars (model-expressible)', () => {
 		const t = m.openBatch({ action: true });
 		m.write(t.id, a, set(1)); // sync prefix
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack (the post-await lint is adapter-only)
-		const ambient = m.tokens.get(m.ambientToken!)!;
+		const ambient = m.idToBatch.get(m.ambientBatch!)!;
 		expect(ambient.ambient).toBe(true); // the auto-minted ambient default batch
 		m.retire(ambient.id);
 		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — exactly React's own transition rule
@@ -461,7 +461,7 @@ describe('pinned scars (model-expressible)', () => {
 		const mark = m.events.length;
 		m.write(t.id, a, set(2)); // carried continuation writes post-pin
 		// the dead design suppressed the only setState; the pass-aware rule delivers interleaved
-		const d = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.token === t.id);
+		const d = m.eventsSince(mark).filter((e) => e.type === 'delivery' && e.watcher === 'W' && e.batch === t.id);
 		expect(d).toHaveLength(1);
 		expect(d[0]!.type === 'delivery' && d[0]!.mode).toBe('interleaved');
 		m.passResume(pt.id);
@@ -489,7 +489,7 @@ describe('pinned scars (model-expressible)', () => {
 		const d = m.openBatch();
 		m.write(d.id, a, set(1)); // store-only default writes a (no committed edge a→c yet)
 		m.retire(d.id); // and retires; its slot releases immediately (S36's freed-slot half)
-		expect(m.eventsOfType('slot-released').some((e) => e.token === d.id)).toBe(true);
+		expect(m.eventsOfType('slot-released').some((e) => e.batch === d.id)).toBe(true);
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit'); // commits, locking K: committed-for-A = flag 1 (member), a 1 (retired) → c=1
 		// the pass itself rendered c=0 (its pin predates D); the ADVANCE must correct it now,

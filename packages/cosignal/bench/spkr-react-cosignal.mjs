@@ -62,6 +62,6 @@ row({
 });
 row({
 	gate: 'SPK-R', config: 'react-cosignal', shape: `N${N}`,
-	metric: `steadyTape:N${N}`, value: node.tp.length + bridge.liveTokens().length, checksum,
+	metric: `steadyTape:N${N}`, value: node.tp.length + bridge.liveBatches().length, checksum,
 });
 handle.dispose();

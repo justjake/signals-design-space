@@ -37,14 +37,14 @@
  * §2 DUAL-REPRESENTATION AGREEMENTS ─ pair | enforcement
  *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
  *  A2 newest memo fingerprints ≡ tapes (+retirement stamps) | lockstep values; scars S5 pins receipt-after-read invalidation
- *  A3 quiet flag ≡ pending state (tokens/passes/tapes) | quiet-mode.spec arming/disarming battery
+ *  A3 quiet flag ≡ pending state (batches/passes/tapes) | quiet-mode.spec arming/disarming battery
  *  A4 adoption stamp ≡ byKernelId registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
  *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (tests/arena-checker.ts): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
- *  A7 committedBits ≡ committedTokens×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
+ *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
  *  A8 pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's ONLY slot-set form (W1); model-view derives the oracle's Sets from the bits; lockstep pass worlds
- *  A9 token.atomsTouched ⊇ tape token columns          | retirement stamping via touch lists; quiesce residue BridgeInvariantViolation + lockstep retirement visibility
- * A10 token.liveReceipts ≡ un-compacted receipts       | T10 (new pin: token outlives pinned receipts, reclaims after compaction)
+ *  A9 batch.atomsTouched ⊇ tape batch columns          | retirement stamping via touch lists; quiesce residue BridgeInvariantViolation + lockstep retirement visibility
+ * A10 batch.liveReceipts ≡ un-compacted receipts       | T10 (new pin: batch outlives pinned receipts, reclaims after compaction)
  * A11 DIRTY flag ⇒ dirty-list membership (decay + drain seeding stand on it) | the structural validator at every armed epilogue; arena-sa2 decay pins
  * A12 shim previousCells ≡ last committed value        | cosignal-react hooks.spec 'ctx.previous returns the last committed value'
  */
@@ -289,16 +289,16 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 	});
 });
 
-describe('§2 A10 — token.liveReceipts gates reclamation against un-compacted receipts', () => {
-	it('T10: a retired token outlives its pin-blocked receipts and reclaims exactly when they compact', () => {
+describe('§2 A10 — batch.liveReceipts gates reclamation against un-compacted receipts', () => {
+	it('T10: a retired batch outlives its pin-blocked receipts and reclaims exactly when they compact', () => {
 		const b = bridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
 		const p = b.passStart('A', []); // live pin below the coming retirement blocks compaction
 		b.retire(t.id);
-		expect(b.tokens.has(t.id)).toBe(true); // receipts still on the tape reference the token by id
+		expect(b.idToBatch.has(t.id)).toBe(true); // receipts still on the tape reference the batch by id
 		b.passEnd(p.id, 'discard'); // pin released → compaction folds the receipt → gate opens
-		expect(b.tokens.has(t.id)).toBe(false);
+		expect(b.idToBatch.has(t.id)).toBe(false);
 	});
 });

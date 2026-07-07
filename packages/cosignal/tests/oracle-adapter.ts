@@ -51,29 +51,29 @@ export function buildEngineTopology(b: CosignalBridge) {
 }
 
 /**
- * Adapter-side entity registries. The MODEL retains dead token/pass records
+ * Adapter-side entity registries. The MODEL retains dead batch/pass records
  * until quiescence, and schedule ops resolve entities by index over those
  * maps; the engine reclaims dead records mid-episode (keeping them all
  * would grow memory with the episode), so the adapter mirrors the model's
  * population itself to keep op resolution identical on both sides. Purely
  * an indexing-fidelity shim — no tolerance.
  */
-type EntityRegistry = { tokens: number[]; passes: number[] };
+type EntityRegistry = { batches: number[]; passes: number[] };
 
 const registries = new WeakMap<CosignalBridge, EntityRegistry>();
 
 function registryOf(b: CosignalBridge): EntityRegistry {
 	let r = registries.get(b);
 	if (r === undefined) {
-		r = { tokens: [], passes: [] };
+		r = { batches: [], passes: [] };
 		registries.set(b, r);
 	}
 	return r;
 }
 
-function tokenAt(b: CosignalBridge, index: number): number | undefined {
-	const ids = registryOf(b).tokens;
-	if (ids.length === 0) throw new BridgeScheduleError('no tokens yet');
+function batchAt(b: CosignalBridge, index: number): number | undefined {
+	const ids = registryOf(b).batches;
+	if (ids.length === 0) throw new BridgeScheduleError('no batches yet');
 	return ids[index % ids.length];
 }
 
@@ -133,19 +133,19 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 	appliedOps.set(b, opIndex);
 	const uniq = `${namingEvents ?? opIndex}.${b.seq}.${b.epoch}`;
 	const reg = registryOf(b);
-	/** bareWrite may mint the ambient token — mirror the model's map growth. */
+	/** bareWrite may mint the ambient batch — mirror the model's map growth. */
 	const syncAmbient = (): void => {
-		const amb = b.ambientToken;
-		if (amb !== undefined && reg.tokens[reg.tokens.length - 1] !== amb && !reg.tokens.includes(amb)) {
-			reg.tokens.push(amb);
+		const amb = b.ambientBatch;
+		if (amb !== undefined && reg.batches[reg.batches.length - 1] !== amb && !reg.batches.includes(amb)) {
+			reg.batches.push(amb);
 		}
 	};
 	try {
 		switch (op.t) {
-			case 'open': reg.tokens.push(b.openBatch({ action: op.action }).id); break;
+			case 'open': reg.batches.push(b.openBatch({ action: op.action }).id); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
-				b.write(tokenAt(b, op.token), atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
+				b.write(batchAt(b, op.batch), atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
 			case 'bareWrite': {
@@ -154,12 +154,12 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 				syncAmbient();
 				break;
 			}
-			case 'settle': b.settleAction(tokenAt(b, op.token)!); break;
-			case 'retire': b.retire(tokenAt(b, op.token)!); break;
-			case 'passStart': reg.passes.push(b.passStart(op.root, op.include.map((i) => tokenAt(b, i)!)).id); break;
+			case 'settle': b.settleAction(batchAt(b, op.batch)!); break;
+			case 'retire': b.retire(batchAt(b, op.batch)!); break;
+			case 'passStart': reg.passes.push(b.passStart(op.root, op.include.map((i) => batchAt(b, i)!)).id); break;
 			case 'yield': b.passYield(passAt(b, op.pass)); break;
 			case 'resume': b.passResume(passAt(b, op.pass)); break;
-			case 'end': b.passEnd(passAt(b, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => tokenAt(b, i)!) }); break;
+			case 'end': b.passEnd(passAt(b, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(b, i)!) }); break;
 			case 'mount': b.mountWatcher(passAt(b, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
 			case 'render': b.renderWatcher(passAt(b, op.pass), watcherAt(b, op.watcher)); break;
 			case 'reactEffect': mountEngineReactEffect(b, op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
@@ -176,9 +176,9 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'discardAllWip': b.discardAllWip(); break;
 			case 'quiesce':
 				b.quiesce();
-				// The model drops every retired token and ended pass here; at
-				// quiescence that is all of them (no live tokens/passes remain).
-				reg.tokens.length = 0;
+				// The model drops every retired batch and ended pass here; at
+				// quiescence that is all of them (no live batches/passes remain).
+				reg.batches.length = 0;
 				reg.passes.length = 0;
 				break;
 		}
@@ -252,7 +252,7 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 //     implementation-defined [owner ruling 2026-07-06]; see
 //     canonicalizeCoreEffectBlocks);
 //   - delivery-decision events ('delivery'/'suppressed'/'mount-corrective'):
-//     cumulative multiset ⊆ the model's, keyed (type, watcher, token, slot)
+//     cumulative multiset ⊆ the model's, keyed (type, watcher, batch, slot)
 //     — mode/seq excluded (an edge-add replay carries the replay sequence).
 // The ⊇-required floor is enforced indirectly: exact snapshots, exact
 // value-gated corrections/effect-runs, and an audit inside the engine that
@@ -299,7 +299,7 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 }
 
 /** Delivery-DECISION counts, pooled across the family's three modes per
- * (watcher, token, slot). The bound is "fewer decisions, never more"
+ * (watcher, batch, slot). The bound is "fewer decisions, never more"
  * (plan §4.8 S-B): current-structure routing legitimately shifts modes
  * WITHIN the family — a mount join the accumulated model schedules as a
  * corrective (arming its dedup, so its write logs 'suppressed') may not
@@ -310,8 +310,8 @@ function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>();
 	for (const e of events) {
 		if (!DELIVERYISH.has(e.type)) continue;
-		const d = e as unknown as { watcher: string; token: number; slot: number };
-		const key = `${d.watcher}|${d.token}|${d.slot}`;
+		const d = e as unknown as { watcher: string; batch: number; slot: number };
+		const key = `${d.watcher}|${d.batch}|${d.slot}`;
 		out.set(key, (out.get(key) ?? 0) + 1);
 	}
 	return out;
@@ -381,11 +381,11 @@ export function diffAgainstModelTolerant(
 //   - quiet-mode corrections (a quiet fold's corrections mint no
 //     'reconcile-correction' event — the fold's own 'quiet-write' event is
 //     its whole stream — so DPC never sees them; and quiet requires zero
-//     live tokens, so no retire/settle boundary observes a quiet window);
+//     live batches, so no retire/settle boundary observes a quiet window);
 //   - mount-window repairs ('mount-urgent-correction' is a different type);
-//   - older-write visibility flips (the causing token's lastWriteSeq must
+//   - older-write visibility flips (the causing batch's lastWriteSeq must
 //     POSTDATE the watcher's window for the assert to arm);
-//   - the S-NF2-D1 family (any discard, parked token, or second boundary
+//   - the S-NF2-D1 family (any discard, parked batch, or second boundary
 //     inside the window disarms the assert — dead-arena lane degradation
 //     is legal and pinned separately in arena-sb.spec.ts);
 //   - §4.4.1's designed no-notification class (untracked-only reach):
@@ -399,7 +399,7 @@ type DpcMark = { seq: number; notified: boolean; disarmed: boolean; boundaries: 
 
 class DeliveryPrecedesCorrection {
 	private marks = new Map<string, DpcMark>();
-	private preOpTokenWriteSeq = 0;
+	private preOpBatchWriteSeq = 0;
 
 	constructor(private bridge: CosignalBridge) {}
 
@@ -416,16 +416,16 @@ class DeliveryPrecedesCorrection {
 		return mk;
 	}
 
-	/** Resolve the retiring token's last write seq BEFORE the op applies
+	/** Resolve the retiring batch's last write seq BEFORE the op applies
 	 * (retirement can reclaim the record). */
 	beforeOp(op: ScheduleOp): void {
-		this.preOpTokenWriteSeq = 0;
+		this.preOpBatchWriteSeq = 0;
 		if (op.t === 'retire' || op.t === 'settle') {
 			try {
-				const id = tokenAt(this.bridge, op.token);
-				this.preOpTokenWriteSeq = (id !== undefined ? this.bridge.tokens.get(id)?.lastWriteSeq : 0) ?? 0;
+				const id = batchAt(this.bridge, op.batch);
+				this.preOpBatchWriteSeq = (id !== undefined ? this.bridge.idToBatch.get(id)?.lastWriteSeq : 0) ?? 0;
 			} catch {
-				// no tokens yet: the op will skip
+				// no batches yet: the op will skip
 			}
 		}
 	}
@@ -452,10 +452,10 @@ class DeliveryPrecedesCorrection {
 					!mk.disarmed &&
 					mk.boundaries === 0 &&
 					!untrackedConsumer &&
-					this.preOpTokenWriteSeq > mk.seq &&
+					this.preOpBatchWriteSeq > mk.seq &&
 					!mk.notified
 				) {
-					return `delivery-precedes-correction violated: ${name} corrected at ${op.t} (token wrote at seq ${this.preOpTokenWriteSeq} > window ${mk.seq}) with no delivery/suppression/corrective since its window opened`;
+					return `delivery-precedes-correction violated: ${name} corrected at ${op.t} (batch wrote at seq ${this.preOpBatchWriteSeq} > window ${mk.seq}) with no delivery/suppression/corrective since its window opened`;
 				}
 				// A correction resets the engine's dedup bits: fresh window.
 				this.marks.set(name, { seq: b.seq, notified: false, disarmed: false, boundaries: 0 });
@@ -467,10 +467,10 @@ class DeliveryPrecedesCorrection {
 		} else if (singleBoundary) {
 			for (const mk of this.marks.values()) mk.boundaries++;
 		}
-		// A live parked token anywhere in the window disarms (D1 exclusion).
+		// A live parked batch anywhere in the window disarms (D1 exclusion).
 		let parked = false;
-		for (const tok of b.tokens.values()) {
-			if (tok.parked) {
+		for (const batch of b.idToBatch.values()) {
+			if (batch.parked) {
 				parked = true;
 				break;
 			}

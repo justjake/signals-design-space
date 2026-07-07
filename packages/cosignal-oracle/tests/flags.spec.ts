@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { concurrent, mountCommitted, pass, selfCheck, set, update } from './helpers.js';
 
 describe('flag 3 — write-set closure at commit (late member-write surface)', () => {
-	it('a late member write on a committed, live token is membership-visible, corrected, and lifecycle-clean', () => {
+	it('a late member write on a committed, live batch is membership-visible, corrected, and lifecycle-clean', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const w = mountCommitted(m, 'A', a, 'W');
@@ -24,23 +24,23 @@ describe('flag 3 — write-set closure at commit (late member-write surface)', (
 		const pA = pass(m, 'A', [t]);
 		m.renderWatcher(pA.id, w.id);
 		m.passEnd(pA.id, 'commit'); // A commits t; t parks on (live)
-		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(true);
+		expect(m.roots.get('A')!.committedBatches.has(t.id)).toBe(true);
 		m.write(t.id, a, set(2)); // the surviving late-write surface
 		expect(m.committedValue(a, 'A')).toBe(2); // visible immediately via membership (A committed t)
 		// the corrective rides the batch's own lanes (value-blind delivery to A's watchers)
-		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === t.id).length).toBeGreaterThanOrEqual(1);
-		// slot-lifecycle side is clean: a committed-but-live token cannot release its slot
-		expect(m.tokens.get(t.id)!.slot).toBeDefined();
-		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(0);
+		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === t.id).length).toBeGreaterThanOrEqual(1);
+		// slot-lifecycle side is clean: a committed-but-live batch cannot release its slot
+		expect(m.idToBatch.get(t.id)!.slot).toBeDefined();
+		expect(m.eventsOfType('slot-released').filter((e) => e.batch === t.id)).toHaveLength(0);
 		m.settleAction(t.id); // membership rows clear at retirement, strictly before slot release
-		expect(m.roots.get('A')!.committedTokens.has(t.id)).toBe(false);
-		expect(m.eventsOfType('slot-released').filter((e) => e.token === t.id)).toHaveLength(1);
+		expect(m.roots.get('A')!.committedBatches.has(t.id)).toBe(false);
+		expect(m.eventsOfType('slot-released').filter((e) => e.batch === t.id)).toHaveLength(1);
 		selfCheck(m);
 	});
 });
 
 describe('flag 4 — pass-world membership pin cap (slot ∈ capturedCommitted ∧ seq ≤ pin)', () => {
-	it('a committed-member token writing post-pin cannot drift a yielded pass\'s world', () => {
+	it('a committed-member batch writing post-pin cannot drift a yielded pass\'s world', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch({ action: true });
@@ -128,7 +128,7 @@ describe('flag 7 — backstop without the pass flag (keep-the-dirt disposal)', (
 		// visible by inclusion below the held pin; the new tenant's sequences postdate it
 		expect(m.passValue(a, held)).toBe(5);
 		// and the new tenant's own world folds the recycled slot's history in seq order
-		const lastLive = m.tokens.get(live[live.length - 1]!)!;
+		const lastLive = m.idToBatch.get(live[live.length - 1]!)!;
 		const q = pass(m, 'A', [lastLive]);
 		expect(m.passValue(a, q)).toBe(126); // 5 retired +1s → 5, then the last set(126)
 		m.passEnd(q.id, 'discard');

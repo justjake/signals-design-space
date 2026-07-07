@@ -330,7 +330,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		h = makeHarness();
 		const a = new Atom(0); // sync-prefix write (parks with the action)
 		const b = new Atom(0); // raw post-await write (urgent protocol batch — commits early)
-		const c = new Atom(0); // member write into the action's still-live token (parks with the action)
+		const c = new Atom(0); // member write into the action's still-live batch (parks with the action)
 		const io = deferred<void>();
 		const settled = deferred<void>();
 		const { container } = await h.mount(
@@ -343,19 +343,19 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		// W20 deleted the ActionScope: post-await writes classify like any
 		// write at that moment. The batch-attributed late write remains an
 		// engine-level surface (lane merges, runInBatch deliveries) — driven
-		// here through the action's bridge token to pin its fold-at-settlement
+		// here through the action's engine batch to pin its fold-at-settlement
 		// semantics end to end.
 		const cNode = h.handle.shim.nodeForAtom(c as Atom<unknown>);
-		let actionToken: number | undefined;
+		let actionBatch: number | undefined;
 		await act(async () => {
 			startSignalTransition(async () => {
-				a.set(1); // transition context: the action's token
+				a.set(1); // transition context: the action's batch
 				await io.promise;
 				b.set(2); // bare continuation: urgent protocol batch (React parity)
-				h.bridge.write(actionToken!, cNode, 0, 3); // attributed to the action's token
+				h.bridge.write(actionBatch!, cNode, 0, 3); // attributed to the action's batch
 				settled.resolve();
 			});
-			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
+			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
 		});
 		expect(text(container)).toBe('a:0;b:0;c:0;'); // parked: nothing committed
 		await act(async () => {
@@ -370,7 +370,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 	});
 
 	test('R12b: with devChecks off, the post-await orphan-write heuristic never runs — no warning, same values', async () => {
-		// Production posture: the whole heuristic (the liveTokens() allocation,
+		// Production posture: the whole heuristic (the liveBatches() allocation,
 		// the parked scan, the warn) sits behind the devChecks branch. The
 		// values are identical either way — the flag gates diagnostics only.
 		h = makeHarness({ devChecks: false });
@@ -386,7 +386,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		);
 		await act(async () => {
 			startSignalTransition(async () => {
-				a.set(1); // transition context: the action's token
+				a.set(1); // transition context: the action's batch
 				await io.promise;
 				b.set(2); // bare continuation: urgent protocol batch, outside the parked action
 				settled.resolve();

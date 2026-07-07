@@ -1,7 +1,7 @@
 // Measures the QUIET-MODE write price (Phase 1b): the bridge is registered
 // and the written atom is REGISTERED, but nothing is pending — no batches,
 // no passes — so every public `a.set(i)` takes the quiet fold (committed
-// base + kernel advance together; no receipt/token/walk/event). Same graph
+// base + kernel advance together; no receipt/batch/walk/event). Same graph
 // shapes and protocol as spkw-direct.mjs; compare per-write ns against it.
 import { Atom, Computed, effect, registerReactBridge, __coreProbes } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
@@ -57,10 +57,10 @@ const med = perWrite[perWrite.length >> 1];
 // Quiet-mode invariants, asserted in the bench itself: zero pipeline
 // activity, committed == kernel == last write.
 const probes = __coreProbes();
-if (probes.receipts !== 0 || probes.tokens !== 0) {
+if (probes.receipts !== 0 || probes.batches !== 0) {
 	throw new Error(`SPK-W quiet invariant: pipeline activity while quiet (${JSON.stringify(probes)})`);
 }
-if (bridge.ambientToken !== undefined) throw new Error('SPK-W quiet invariant: ambient batch minted');
+if (bridge.ambientBatch !== undefined) throw new Error('SPK-W quiet invariant: ambient batch minted');
 if (bridge.committedValue(node, 'A') !== i || bridge.newestValue(node) !== i) {
 	throw new Error('SPK-W quiet invariant: fold diverged from kernel');
 }

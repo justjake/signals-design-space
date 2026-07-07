@@ -42,12 +42,12 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 	return w;
 }
 
-function deliveriesTo(b: CosignalBridge, watcher: string, token?: number) {
-	return refereeStreamOf(b).eventsOfType('delivery').filter((e) => e.watcher === watcher && (token === undefined || e.token === token));
+function deliveriesTo(b: CosignalBridge, watcher: string, batch?: number) {
+	return refereeStreamOf(b).eventsOfType('delivery').filter((e) => e.watcher === watcher && (batch === undefined || e.batch === batch));
 }
 
-function suppressionsTo(b: CosignalBridge, watcher: string, token?: number) {
-	return refereeStreamOf(b).eventsOfType('suppressed').filter((e) => e.watcher === watcher && (token === undefined || e.token === token));
+function suppressionsTo(b: CosignalBridge, watcher: string, batch?: number) {
+	return refereeStreamOf(b).eventsOfType('suppressed').filter((e) => e.watcher === watcher && (batch === undefined || e.batch === batch));
 }
 
 function correctionsTo(b: CosignalBridge, watcher: string) {

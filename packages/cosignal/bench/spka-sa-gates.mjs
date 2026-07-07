@@ -3,7 +3,7 @@
 //
 //  - cold-pass: N=200 quiet computeds, first render — per-computed cold
 //    world read in a fresh pass (prices the §4.4.8 fast-path deletion).
-//  - wide-mask lock-in: one commit locking in a token with W=200
+//  - wide-mask lock-in: one commit locking in a batch with W=200
 //    atomsTouched against a committed arena shadowing all of them —
 //    end-to-end commit+drain cost (site-(b) fan + refold burst).
 //

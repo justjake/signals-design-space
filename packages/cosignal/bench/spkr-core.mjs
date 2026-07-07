@@ -45,6 +45,6 @@ for (const cell of CELLS) {
 		ratioTotal: (median(lT) / median(dB)).toFixed(1),
 	});
 }
-console.log('\nSPK-R core results (ns per batch/token; median [min..max] across processes)');
+console.log('\nSPK-R core results (ns per batch/batch; median [min..max] across processes)');
 console.table(out);
 console.log(JSON.stringify(out, null, 1));

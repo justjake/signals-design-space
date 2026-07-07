@@ -8,7 +8,7 @@ import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cos
 
 const SHAPE = env('SHAPE', 'bare');
 const WRITES = envInt('WRITES', 6400); // per rep
-const WINDOW = envInt('WINDOW', 64); // writes per token window
+const WINDOW = envInt('WINDOW', 64); // writes per batch window
 const REPS = envInt('REPS', 7);
 const WARMUP = envInt('WARMUP', 2);
 
@@ -46,12 +46,12 @@ function repOnce() {
 	const windows = Math.ceil(WRITES / WINDOW);
 	const t0 = process.hrtime.bigint();
 	for (let w = 0; w < windows; w++) {
-		const tok = b.openBatch();
+		const batch = b.openBatch();
 		const s0 = process.hrtime.bigint();
-		for (let k = 0; k < WINDOW; k++) b.write(tok.id, a, 0, ++i);
+		for (let k = 0; k < WINDOW; k++) b.write(batch.id, a, 0, ++i);
 		const s1 = process.hrtime.bigint();
 		writeNs += Number(s1 - s0);
-		b.retire(tok.id);
+		b.retire(batch.id);
 	}
 	const t1 = process.hrtime.bigint();
 	return [writeNs / (windows * WINDOW), Number(t1 - t0) / (windows * WINDOW)];

@@ -116,7 +116,7 @@
  * read/write methods (see "the host seams" section below). Sync-only apps
  * that never register a bridge keep both hooks undefined forever: the whole
  * concurrency feature costs one predictable `!== undefined` branch per
- * public read/write, and zero receipts, tokens, worlds, or bridge events are
+ * public read/write, and zero receipts, batches, worlds, or bridge events are
  * ever created (tests/one-core.spec.ts asserts this behaviorally with engine
  * probes). The only other swapped table is POISON (fold purity, below) —
  * reachable exclusively by erroring code.
@@ -2558,7 +2558,7 @@ export function configure(options: ConfigureOptions): void {
 // ---- the concurrent-worlds engine (the host) --------------------------------------
 // ONE public entry: the batch/world machinery lives in ./concurrent.ts and is
 // re-exported here — `registerReactBridge()`, `CosignalBridge`, the bridge
-// surface types (Seq, SlotSet, Receipt, BridgeEvent, …). Until
+// surface types (Seq, BatchSlotSet, Receipt, BridgeEvent, …). Until
 // registerReactBridge() runs, none of it executes: the host seams above stay
 // undefined and every read/write short-circuits into the plain kernel path.
 // CURATED (no `export *`): the engine's internals — the packed Tape class,
@@ -2582,11 +2582,11 @@ export type {
 	Watcher,
 	ComputedNode,
 	AnyNode,
-	Token,
+	Batch,
 	Pass,
 	PassState,
 	RootState,
-	SlotMeta,
+	BatchSlotMeta,
 	WatcherSnapshot,
 	Subscription,
 	// operations and worlds (the tracing hook types stay on the
@@ -2603,8 +2603,8 @@ export type {
 	// scalar brands
 	Value,
 	NodeId,
-	TokenId,
-	SlotId,
+	BatchId,
+	BatchSlot,
 	RootId,
 	PassId,
 	WatcherId,
@@ -2612,6 +2612,6 @@ export type {
 	Seq,
 	Epoch,
 	CommitGen,
-	SlotSet,
+	BatchSlotSet,
 	KernelId,
 } from './concurrent.js';

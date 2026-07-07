@@ -168,7 +168,7 @@ describe('observation union at the bridge', () => {
 		expect(b.quiet).toBe(true);
 		await tick();
 		expect(log).toEqual(['observe']); // fired with the pipeline fully quiet
-		atom.set(7); // quiet fold — still no receipts/tokens
+		atom.set(7); // quiet fold — still no receipts/batches
 		expect(b.newestValue(node)).toBe(7);
 		expect(b.quiet).toBe(true);
 		w.live = false;

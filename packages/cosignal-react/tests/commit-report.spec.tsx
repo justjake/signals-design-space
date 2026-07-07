@@ -5,14 +5,14 @@
  * defined as an idempotent set-add. When the report names a live batch the
  * engine's pass-end sweep did NOT lock in, the shim reconciles it — and that
  * reconciliation must be the engine's COMPLETE per-root commit transition
- * (committed-token set, the committed bit mask the visibility check reads,
+ * (committed-batch set, the committed bit mask the visibility check reads,
  * the commit generation, the committed-advance clock, arena fan-out, and the
  * watcher drain), not a partial one. The load-bearing consequence pinned
  * here: after the report is processed, committed-world reads for that root
- * INCLUDE the reported token's writes.
+ * INCLUDE the reported batch's writes.
  *
  * React never produces this shape on its own (for batches carrying bridge
- * tokens, the committing pass's own batch set covers the delta by
+ * batches, the committing pass's own batch set covers the delta by
  * construction), so the report is injected directly into the shim's
  * `onRootCommitted` handler while a REAL transition batch is live and not
  * yet locked in.
@@ -35,7 +35,7 @@ afterEach(async () => {
 });
 
 describe('root-commit report reconciliation (W11)', () => {
-	test("report names a live token pass-end didn't lock in — committed world includes its writes", async () => {
+	test("report names a live batch pass-end didn't lock in — committed world includes its writes", async () => {
 		h = makeHarness();
 		const a = new Atom(0);
 		function Reader() {
@@ -54,38 +54,38 @@ describe('root-commit report reconciliation (W11)', () => {
 			// it stays live — no pass has rendered or committed it yet, so
 			// pass-end has NOT locked it into the root's committed table.
 			React.startTransition(() => a.set(7));
-			const token = h.bridge.liveTokens().find((t) => !t.ambient);
-			expect(token).toBeDefined();
-			const tid = token!.id;
-			const forkToken = h.handle.shim.forkTokenOf(tid);
-			expect(forkToken).toBeDefined();
+			const batch = h.bridge.liveBatches().find((t) => !t.ambient);
+			expect(batch).toBeDefined();
+			const tid = batch!.id;
+			const reactBatchId = h.handle.shim.reactBatchForBatch(tid);
+			expect(reactBatchId).toBeDefined();
 			const root = h.bridge.root(rec.id);
-			expect(root.committedTokens.has(tid)).toBe(false); // pass-end never saw it
+			expect(root.committedBatches.has(tid)).toBe(false); // pass-end never saw it
 			const genBefore = root.commitGen;
 			expect(h.bridge.committedValue(node, rec.id)).toBe(0); // still pending for this root
 
 			// React's report names the live batch pass-end didn't lock in.
-			shim.handleRootCommitted(rootContainer, [forkToken!], 1);
+			shim.handleRootCommitted(rootContainer, [reactBatchId!], 1);
 
 			// The COMPLETE lock-in, not the half-job: committed-world reads for
-			// this root now include the token's writes...
+			// this root now include the batch's writes...
 			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
-			// ...because the committed-token set and the bit mask the visibility
+			// ...because the committed-batch set and the bit mask the visibility
 			// check reads moved TOGETHER, with the generation.
-			expect(root.committedTokens.has(tid)).toBe(true);
-			const slot = h.bridge.tokens.get(tid)!.slot;
+			expect(root.committedBatches.has(tid)).toBe(true);
+			const slot = h.bridge.idToBatch.get(tid)!.slot;
 			expect(slot).toBeDefined();
 			expect((root.committedBits >>> slot!) & 1).toBe(1);
 			expect(root.commitGen).toBe(genBefore + 1);
 
 			// Re-reporting the same batch is an idempotent set-add: no-op.
-			shim.handleRootCommitted(rootContainer, [forkToken!], 2);
+			shim.handleRootCommitted(rootContainer, [reactBatchId!], 2);
 			expect(root.commitGen).toBe(genBefore + 1);
 			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
 		});
 
 		// The act flush lets the transition render, commit, and retire through
-		// the REAL protocol events: pass-end's own sweep sees the token already
+		// the REAL protocol events: pass-end's own sweep sees the batch already
 		// committed (the other caller of the same idempotent operation), and the
 		// screen settles on the batch's value.
 		expect(text(container)).toBe('v:7;');

@@ -25,7 +25,7 @@ The model's authority comes from simplicity. Worlds are pure replays
 over visibility-filtered write records; derived values are memo-free
 recursive evaluation; notification reachability is recomputed from
 scratch at every write; React's render lifecycle is explicit
-token/pass/retirement bookkeeping. Wherever a real engine would use an
+batch/pass/retirement bookkeeping. Wherever a real engine would use an
 optimization (memo tables, dirty marking, fast paths), the model simply
 recomputes everything — so if the engine and the model disagree, the
 engine is wrong. The one exception is semantic, not an optimization: in
@@ -47,13 +47,13 @@ must reproduce. Terms are defined as they appear.
 
 - A **batch** is the group of writes belonging to one UI update (one
   event handler, one transition, one async action). Each batch is
-  identified by a **token**. At most 31 batches are live at once,
+  identified by a **BatchId**. At most 31 batches are live at once,
   mirroring React's 31 priority lanes; each live batch that has written
   occupies a **slot** in a 31-entry recycling table, and visibility
   bookkeeping is per-slot.
 - A **receipt** records one write: the operation (set / functional
   update — a reducer-style write records as an update whose closure
-  captures the action), the writing batch's token and slot, and a
+  captures the action), the writing batch's id and slot, and a
   position (**seq**) on one global timeline. Receipts append to the
   written atom's **tape**; older receipts eventually fold into the
   atom's **base** value (compaction).
@@ -198,7 +198,7 @@ RCC-EF2's amended BOUNDARY semantics (2026-07-06): once per boundary
 OPERATION — a per-root commit, a retirement (write-free ones included:
 retirement and settlement are guaranteed flush points), a settlement —
 at the boundary value (member writes coalesce; one pass locking in two
-tokens re-checks once), and never while the effect's own root has an
+batches re-checks once), and never while the effect's own root has an
 open render-pass frame (the deferred flip flushes when that frame
 closes, commit or discard). Cleanup runs before every re-fire and at
 removal; nothing runs after removal. StrictMode-style replay is an
@@ -211,7 +211,7 @@ tape has fully compacted. The model then resets per-episode dependency
 bookkeeping (epoch bump, dead-record drop, slot bookkeeping zeroes).
 Timeline values are never rewritten: sequence counters are plain JS
 numbers, exact to 2^53, only ever compared, so they simply keep
-climbing across episodes. Batch tokens are likewise monotone forever.
+climbing across episodes. Batch ids are likewise monotone forever.
 
 ## How an engine plugs in
 
@@ -228,7 +228,7 @@ type EngineAdapter = {
   // for every root, and every open pass's world.
   snapshot(): ObservableSnapshot;
   // Comparable events since the last drain, in order: deliveries and
-  // suppressions (value-blind, with {watcher, token, slot} attribution),
+  // suppressions (value-blind, with {watcher, batch, slot} attribution),
   // reconcile corrections, mount correctives, urgent mount corrections,
   // per-root commits, retirements, effect runs.
   drainEvents(): ModelEvent[];

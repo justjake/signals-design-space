@@ -137,9 +137,9 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		expect(text(container)).toBe('a:2;');
 		const retired = h.events.eventsOfType('retired');
-		const byToken = new Map<number, number>();
-		for (const e of retired) byToken.set(e.token, (byToken.get(e.token) ?? 0) + 1);
-		for (const [, count] of byToken) expect(count).toBe(1); // exactly once per token
+		const byBatch = new Map<number, number>();
+		for (const e of retired) byBatch.set(e.batch, (byBatch.get(e.batch) ?? 0) + 1);
+		for (const [, count] of byBatch) expect(count).toBe(1); // exactly once per batch
 		// React's committed/abandoned report is recorded AT ITS SOURCE (the
 		// shim's protocol handler) as a batch-disposition trace record — the
 		// engine's retirement is disposition-blind. Both transitions here
@@ -150,7 +150,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(dispositions.length).toBeGreaterThan(0);
 		for (const d of dispositions) {
 			expect(d.data['committed']).toBe(true);
-			expect(byToken.has(d.data['token'] as number)).toBe(true);
+			expect(byBatch.has(d.data['batch'] as number)).toBe(true);
 		}
 	});
 
@@ -196,11 +196,11 @@ describe('battery (spec §6) at React level', () => {
 		});
 		expect(text(container)).toBe('1,2');
 		expect(renders).toBe(before + 1); // one commit for the event's writes
-		// Both writes carry batch attribution (receipts with tokens), no grouping
-		// machinery anywhere: two write events, each with a token.
+		// Both writes carry batch attribution (receipts with batches), no grouping
+		// machinery anywhere: two write events, each with a batch.
 		const writes = h.events.eventsOfType('write');
 		expect(writes.length).toBe(2);
-		for (const w of writes) expect(w.token).toBeGreaterThan(0);
+		for (const w of writes) expect(w.batch).toBeGreaterThan(0);
 	});
 
 	test('case 8 — equality drops never lose receipts once history exists', async () => {
@@ -251,7 +251,7 @@ describe('battery (spec §6) at React level', () => {
 			});
 		});
 		expect(text(container)).toBe('r1:1;f:1;'); // k-world value on first render
-		expect(freshRenders).toBe(1); // no double render for the included token
+		expect(freshRenders).toBe(1); // no double render for the included batch
 		expect(h.events.eventsOfType('mount-urgent-correction').length).toBe(0);
 		expect(h.events.eventsOfType('mount-corrective').length).toBe(0); // fully included: skipped
 	});
@@ -313,12 +313,12 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('r1:1;r2:1;');
-		const k = h.events.eventsOfType('write')[0]!.token;
+		const k = h.events.eventsOfType('write')[0]!.batch;
 		// The corrective re-render rode k's own lane — k committed exactly
 		// once on this root (a fresh transition would have produced a second).
-		const kCommits = h.events.eventsOfType('per-root-commit').filter((e) => e.token === k);
+		const kCommits = h.events.eventsOfType('per-root-commit').filter((e) => e.batch === k);
 		expect(kCommits.length).toBe(1);
-		expect(h.events.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1);
+		expect(h.events.eventsOfType('retired').filter((e) => e.batch === k).length).toBe(1);
 	});
 
 	test('case 11 — one batch spanning two roots: per-root commits, one retirement, no cross-root contradiction', async () => {
@@ -332,10 +332,10 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		expect(text(one.container)).toBe('one:4;');
 		expect(text(two.container)).toBe('two:4;');
-		const k = h.events.eventsOfType('write')[0]!.token;
-		const roots = new Set(h.events.eventsOfType('per-root-commit').filter((e) => e.token === k).map((e) => e.root));
+		const k = h.events.eventsOfType('write')[0]!.batch;
+		const roots = new Set(h.events.eventsOfType('per-root-commit').filter((e) => e.batch === k).map((e) => e.root));
 		expect(roots.size).toBe(2); // each root's commit reported separately
-		expect(h.events.eventsOfType('retired').filter((e) => e.token === k).length).toBe(1); // exactly once
+		expect(h.events.eventsOfType('retired').filter((e) => e.batch === k).length).toBe(1); // exactly once
 	});
 
 	test('case 12 — store-only transition persists (an abandoned batch folds identically)', async () => {
@@ -607,14 +607,14 @@ describe('battery (spec §6) at React level', () => {
 });
 
 describe('W20 — startSignalTransition passes nothing to fn; the settled action fails loudly', () => {
-	test('fn receives zero arguments; sync writes classify into the action; the settled token accepts no writes', async () => {
+	test('fn receives zero arguments; sync writes classify into the action; the settled batch accepts no writes', async () => {
 		h = makeHarness();
 		const a = new Atom(0);
 		const { container } = await h.mount(<Reader id="a" atom={a} />);
 		const io = deferred<void>();
 		const settled = deferred<void>();
 		const argCounts: number[] = [];
-		let actionToken: number | undefined;
+		let actionBatch: number | undefined;
 		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
 		await act(async () => {
 			startSignalTransition(async function (...args: unknown[]) {
@@ -623,10 +623,10 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 				await io.promise;
 				settled.resolve();
 			});
-			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
+			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
 		});
 		expect(argCounts).toEqual([0]);
-		expect(actionToken).toBeDefined(); // the action's batch opened parked, eagerly
+		expect(actionBatch).toBeDefined(); // the action's batch opened parked, eagerly
 		expect(text(container)).toBe('a:0;'); // parked: the sync write renders pending, commits nothing durable
 		await act(async () => {
 			io.resolve();
@@ -637,27 +637,27 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 		// KEEP AND RE-PIN: "the action's batch is gone" still fails loudly.
 		// The scope object is deleted, so no userspace handle can outlive the
 		// action — the one remaining way to name the settled batch is its
-		// bridge token, and the engine's write guard throws rather than
-		// silently classifying the write urgent: 'write into retired token'
-		// while the retired record lingers, 'unknown token' once the engine
-		// reclaims it (mid-episode token reclamation frees fully-drained
+		// engine batch id, and the engine's write guard throws rather than
+		// silently classifying the write urgent: 'write into retired batch'
+		// while the retired record lingers, 'unknown batch' once the engine
+		// reclaims it (mid-episode batch reclamation frees fully-drained
 		// retired records).
-		const settledState = h.bridge.tokens.get(actionToken!)?.state;
+		const settledState = h.bridge.idToBatch.get(actionBatch!)?.state;
 		expect(settledState === undefined || settledState === 'retired').toBe(true);
-		expect(() => h.bridge.write(actionToken!, aNode, 0, 9)).toThrow(/retired token|unknown token/);
+		expect(() => h.bridge.write(actionBatch!, aNode, 0, 9)).toThrow(/retired batch|unknown batch/);
 	});
 });
 
-describe('context-free writes (token 0 is unreachable once a renderer provider exists)', () => {
-	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the token-0 state is unreachable', async () => {
+describe('context-free writes (React batch id 0 is unreachable once a renderer provider exists)', () => {
+	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the id-0 state is unreachable', async () => {
 		// Unreachability, proven on the happy path: once a renderer provider
 		// exists (the shim's handshake asserts one),
-		// unstable_getCurrentWriteBatch() mints a nonzero token for EVERY
+		// unstable_getCurrentWriteBatch() mints a nonzero React batch id for EVERY
 		// write — even from a bare timer-style call stack — with a guaranteed
-		// close edge. So the classifier's token-0 protocol-violation check
+		// close edge. So the classifier's id-0 protocol-violation check
 		// (devChecks, armed by this harness) never fires in the React path,
 		// and no ambient batch is ever minted. dev-checks.spec.ts drives the
-		// token-0 state itself in a renderer-less environment.
+		// id-0 state itself in a renderer-less environment.
 		h = makeHarness();
 		const a = new Atom(0);
 		const flag = new Atom(0); // written outside any React context; observed by no component
@@ -673,13 +673,13 @@ describe('context-free writes (token 0 is unreachable once a renderer provider e
 			});
 		});
 		// The action is parked: the pipeline is armed until it settles.
-		expect(h.bridge.liveTokens().some((t) => t.parked)).toBe(true);
+		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(true);
 		expect(h.bridge.quiet).toBe(false);
 		// The out-of-context write while the window is open: NOT ambient — the
 		// protocol supplies a real write batch (urgent), with a close edge.
 		flag.set(7);
-		expect(h.bridge.ambientToken).toBeUndefined(); // no ambient mint, ever
-		expect(h.bridge.liveTokens().some((t) => !t.parked && !t.ambient)).toBe(true); // it rode a protocol batch
+		expect(h.bridge.ambientBatch).toBeUndefined(); // no ambient mint, ever
+		expect(h.bridge.liveBatches().some((t) => !t.parked && !t.ambient)).toBe(true); // it rode a protocol batch
 		// The window closes: the action settles; the write's own batch closes
 		// via the protocol's guaranteed close edge. Nothing lives on.
 		await act(async () => {
@@ -687,7 +687,7 @@ describe('context-free writes (token 0 is unreachable once a renderer provider e
 			await settled.promise;
 		});
 		await act(async () => {});
-		expect(h.bridge.liveTokens()).toHaveLength(0);
+		expect(h.bridge.liveBatches()).toHaveLength(0);
 		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (tapes compacted)
 		expect(h.bridge.quiet).toBe(true); // quiet mode re-armed for the next episode
 		const flagNode = h.bridge.byKernelId.get(flag._id)!;
@@ -735,21 +735,21 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		// Post-await writes no longer rejoin the action (W20: fn gets no scope;
 		// React's own async-transition rule applies), so the member writes are
 		// driven at the engine level — writes attributed to the action's
-		// still-live bridge token, the shape a protocol lane merge or a
+		// still-live engine batch, the shape a protocol lane merge or a
 		// runInBatch-delivered write produces.
 		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
-		let actionToken: number | undefined;
+		let actionBatch: number | undefined;
 		await act(async () => {
 			startSignalTransition(async () => {
 				b.set(1); // sync part classifies into the action's batch: the transition renders + commits (locks in) while parked
 				await gate.promise;
-				h.bridge.write(actionToken!, aNode, 0, 1); // member writes: committed truth moves at each…
-				h.bridge.write(actionToken!, aNode, 0, 2);
-				h.bridge.write(actionToken!, aNode, 0, 3);
+				h.bridge.write(actionBatch!, aNode, 0, 1); // member writes: committed truth moves at each…
+				h.bridge.write(actionBatch!, aNode, 0, 2);
+				h.bridge.write(actionBatch!, aNode, 0, 3);
 				wrote.resolve();
 				await hold.promise; // …but the action stays parked past the assertion
 			});
-			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
+			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
 		});
 		expect(runs).toEqual([0]); // b's lock-in commit: value gate holds (a unchanged)
 		await act(async () => {
@@ -792,19 +792,19 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 		const gate = deferred<void>();
 		const wrote = deferred<void>();
 		const hold = deferred<void>();
-		// Engine-level member write into the action's still-live token (see the
+		// Engine-level member write into the action's still-live batch (see the
 		// coalescing test above for why the React surface no longer spells this).
 		const aNode = h.handle.shim.nodeForAtom(a as Atom<unknown>);
-		let actionToken: number | undefined;
+		let actionBatch: number | undefined;
 		await act(async () => {
 			startSignalTransition(async () => {
 				b.set(1);
 				await gate.promise;
-				h.bridge.write(actionToken!, aNode, 0, 7); // the member write lands while the effect is live…
+				h.bridge.write(actionBatch!, aNode, 0, 7); // the member write lands while the effect is live…
 				wrote.resolve();
 				await hold.promise; // …but its durable flip is the settlement, later
 			});
-			actionToken = h.bridge.liveTokens().find((t) => t.parked)?.id;
+			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
 		});
 		await act(async () => {
 			gate.resolve();

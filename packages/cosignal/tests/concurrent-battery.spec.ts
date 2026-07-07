@@ -32,12 +32,12 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		const { m, flag, a, c, w } = setup();
 		const k = m.openBatch('deferred');
 		m.write(k.id, flag, set(1)); // step 1
-		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(1);
+		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === k.id)).toHaveLength(1);
 		const pk = pass(m, 'A', [k]); // step 2: k-world read caches nothing in the model, but records the real dep a→c
 		expect(m.passValue(c, pk)).toBe(0); // flag=1 → a-path, a in-world 0
 		m.write(k.id, a, set(1)); // step 3: post-pin write
 		// pass-aware suppression: bit set, but pk is open with pin < seq → deliver anyway
-		const deliveries = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.token === k.id);
+		const deliveries = m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === k.id);
 		expect(deliveries).toHaveLength(2);
 		expect(deliveries[1]!.mode).toBe('interleaved');
 		expect(m.passValue(c, pk)).toBe(0); // pinned world never drifts (s2 > pin)
@@ -61,7 +61,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		// (W, k) is already armed and no pass has started: the scheduled render will
 		// fold a=1 and b=9, so dedup suppresses both follow-ups — a scheduling
 		// decision, never an equality test on values.
-		expect(m.eventsOfType('suppressed').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(2);
+		expect(m.eventsOfType('suppressed').filter((e) => e.watcher === 'W' && e.batch === k.id)).toHaveLength(2);
 		const pk = pass(m, 'A', [k]);
 		expect(m.passValue(c, pk)).toBe(1); // value unchanged by b in k's world
 		m.passEnd(pk.id, 'discard');
@@ -91,14 +91,14 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		const { m, a, c } = setup();
 		const k = m.openBatch('deferred');
 		m.write(k.id, a, set(1));
-		const kSlot = m.tokens.get(k.id)!.slot!;
+		const kSlot = m.idToBatch.get(k.id)!.slot!;
 		const held = pass(m, 'B', []); // a pass that excludes k, pinned before k retires
 		m.passYield(held.id);
 		m.retire(k.id); // slot releases immediately (no mask names it)
-		expect(m.eventsOfType('slot-released').some((e) => e.token === k.id)).toBe(true);
+		expect(m.eventsOfType('slot-released').some((e) => e.batch === k.id)).toBe(true);
 		const v = m.openBatch('deferred');
 		m.write(v.id, a, set(2));
-		expect(m.tokens.get(v.id)!.slot).toBe(kSlot); // recycled
+		expect(m.idToBatch.get(v.id)!.slot).toBe(kSlot); // recycled
 		expect(m.slots[kSlot]!.writeClock).toBeGreaterThan(0); // fresh clock started from zero at claim
 		// held pass (pinned before k's retirement): excludes BOTH tenants
 		expect(m.passValue(a, held)).toBe(0);
@@ -152,7 +152,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		m.write(u.id, a, set(1));
 		expect(ce.lastValue).toBe(11); // core effects always observe the newest values — the core contract
 		m.retire(u.id); // entries stamped; pin blocks compaction; slot releases immediately
-		expect(m.eventsOfType('slot-released').some((e) => e.token === u.id)).toBe(true);
+		expect(m.eventsOfType('slot-released').some((e) => e.batch === u.id)).toBe(true);
 		m.passResume(p.id);
 		expect(m.passValue(n, p)).toBe(15); // clause 1 fails (rs > pin), clause 2 has only T: a=5 → 15; U invisible
 		const uTape = m.nodes.get(a.id);
@@ -250,7 +250,7 @@ describe('case 2 — flushSync excludes a pending default batch (why always-log)
 		// mount variant: a component mounting inside the flushSync render joins D's own lane
 		const w2 = m.mountWatcher(sync.id, c, 'W2');
 		m.passEnd(sync.id, 'commit');
-		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W2' && e.token === d.id)).toHaveLength(1);
+		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W2' && e.batch === d.id)).toHaveLength(1);
 		commitAndRetire(m, 'A', d, [w2]);
 		expect(m.committedValue(c, 'A')).toBe(11);
 		expect(w.lastRenderedValue).toBe(11); // committed observers drained via D's touched list
@@ -312,8 +312,8 @@ describe('case 4 — two-batch write into an already-stale region (re-notify)', 
 		m.write(t2.id, a, set(2)); // before any re-render
 		const deliveries = m.eventsOfType('delivery').filter((e) => e.watcher === 'W');
 		expect(deliveries).toHaveLength(2);
-		expect(deliveries[0]!.token).toBe(t1.id);
-		expect(deliveries[1]!.token).toBe(t2.id); // in T2's lane — marks gate routing, never delivery
+		expect(deliveries[0]!.batch).toBe(t1.id);
+		expect(deliveries[1]!.batch).toBe(t2.id); // in T2's lane — marks gate routing, never delivery
 		expect(w.dedup.size).toBe(2);
 		m.retire(t1.id);
 		m.retire(t2.id);
@@ -360,8 +360,8 @@ describe('case 6 — lane attribution under grouped notification', () => {
 		m.write(transition.id, b, set(2)); // delivery NOW, transition context
 		const dA = m.eventsOfType('delivery').find((e) => e.watcher === 'Wa')!;
 		const dB = m.eventsOfType('delivery').find((e) => e.watcher === 'Wb')!;
-		expect(dA.token).toBe(urgent.id); // watcher setStates inherit the writer's lanes
-		expect(dB.token).toBe(transition.id);
+		expect(dA.batch).toBe(urgent.id); // watcher setStates inherit the writer's lanes
+		expect(dB.batch).toBe(transition.id);
 		m.retire(urgent.id);
 		m.retire(transition.id);
 		selfCheck(m);
@@ -396,13 +396,13 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 		m.passYield(p.id);
 		m.write(t.id, b, set(9)); // post-pin T-attributed write: stays excluded
 		m.retire(t.id); // T's remaining React work lived on other roots
-		const slot = m.tokens.get(t.id)!.slot;
+		const slot = m.idToBatch.get(t.id)!.slot;
 		expect(slot).toBeDefined(); // release BLOCKED: P's mask names it
 		expect(m.slots[slot!]!.releasePending).toBe(true);
 		expect(m.passValue(b, p)).toBe(7); // clause 1 fails (rs > pin); clause 2: mask ∋ T ∧ 95 ≤ pin
 		m.passResume(p.id);
 		m.passEnd(p.id, 'discard'); // commit and discard alike re-evaluate the deferred release
-		expect(m.eventsOfType('slot-released').some((e) => e.token === t.id)).toBe(true);
+		expect(m.eventsOfType('slot-released').some((e) => e.batch === t.id)).toBe(true);
 		expect(m.committedValue(b, 'A')).toBe(9);
 		selfCheck(m);
 	});
@@ -520,12 +520,12 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		m.write(k.id, a, set(2));
 		m.passResume(pk.id);
 		m.passEnd(pk.id, 'commit'); // k live: lock-in, no retirement
-		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(1);
+		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W' && e.batch === k.id)).toHaveLength(1);
 		// A deliberate, documented subtlety (the "flag 5" family — see
 		// concurrent-flags.spec.ts): one might expect the mount compare to come out
 		// equal here — no false urgent — when k stays live. But the commit updates
-		// the root's committed-token table before layout effects run, and a root's
-		// committed world closes over EVERY write of a token it has committed, so
+		// the root's committed-batch table before layout effects run, and a root's
+		// committed world closes over EVERY write of a batch it has committed, so
 		// committed-for-A already includes k's post-pin write and the fixup's
 		// committed clause folds s2: the compare fires — a value-TRUE urgent
 		// correction. Over-firing here cannot be unsound: the correction writes
@@ -574,7 +574,7 @@ describe('case 10 — late subscription joins the pending batch (entanglement)',
 		expect(w.lastRenderedValue).toBe(0); // committed value rendered
 		m.passEnd(urgent.id, 'commit');
 		// layout: subscribe, then fixup: k live, slot(k) ∉ includedSet ⇒ runInBatch(k, setStateW)
-		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W' && e.token === k.id)).toHaveLength(1);
+		expect(m.eventsOfType('mount-corrective').filter((e) => e.watcher === 'W' && e.batch === k.id)).toHaveLength(1);
 		expect(m.eventsOfType('mount-urgent-correction')).toHaveLength(0); // no urgent tear
 		const pk = pass(m, 'A', [k]); // k's render includes W
 		m.renderWatcher(pk.id, w.id);
@@ -618,8 +618,8 @@ describe('case 11 — multiple roots (declared scope: degraded multi-root)', () 
 		const pA = pass(m, 'A', [k]);
 		m.renderWatcher(pA.id, wA.id);
 		m.passEnd(pA.id, 'commit');
-		expect(m.eventsOfType('per-root-commit').filter((e) => e.root === 'A' && e.token === k.id)).toHaveLength(1);
-		expect(m.tokens.get(k.id)!.state).toBe('live');
+		expect(m.eventsOfType('per-root-commit').filter((e) => e.root === 'A' && e.batch === k.id)).toHaveLength(1);
+		expect(m.idToBatch.get(k.id)!.state).toBe('live');
 		// later urgent render on A: its world includes A's captured committed set ∋ k
 		const uA = pass(m, 'A', []);
 		expect(m.passValue(c, uA)).toBe(1); // A never contradicts its own DOM
@@ -634,9 +634,9 @@ describe('case 11 — multiple roots (declared scope: degraded multi-root)', () 
 		const pB = pass(m, 'B', [k]);
 		m.renderWatcher(pB.id, wB.id);
 		m.passEnd(pB.id, 'commit', { retireAtCommit: [k.id] });
-		expect(m.eventsOfType('retired').filter((e) => e.token === k.id)).toHaveLength(1);
-		expect(m.roots.get('A')!.committedTokens.has(k.id)).toBe(false); // rows cleared at retirement
-		expect(m.eventsOfType('slot-released').some((e) => e.token === k.id)).toBe(true);
+		expect(m.eventsOfType('retired').filter((e) => e.batch === k.id)).toHaveLength(1);
+		expect(m.roots.get('A')!.committedBatches.has(k.id)).toBe(false); // rows cleared at retirement
+		expect(m.eventsOfType('slot-released').some((e) => e.batch === k.id)).toBe(true);
 		expect(wA.lastRenderedValue).toBe(1);
 		expect(wB.lastRenderedValue).toBe(1);
 		selfCheck(m);
@@ -660,9 +660,9 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true }); // action T
 		m.write(t.id, a, set(1)); // synchronous prefix: classifies into T; T parks
-		expect(() => m.retire(t.id)).toThrow(); // parked tokens retire only at settlement
+		expect(() => m.retire(t.id)).toThrow(); // parked batches retire only at settlement
 		m.bareWrite(a, set(2)); // continuation runs bare ⇒ ambient default D (the post-await lint is adapter-only)
-		const d = m.tokens.get(m.ambientToken!)!;
+		const d = m.idToBatch.get(m.ambientBatch!)!;
 		m.retire(d.id); // D retires on its own schedule
 		expect(m.committedValue(a, 'A')).toBe(2); // BEFORE the action settles — React parity
 		m.settleAction(t.id); // T settles ⇒ retires; replay base→set(1)→set(2) by seq
@@ -677,11 +677,11 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		const a = m.atom('a', 0);
 		const t = m.openBatch('deferred', { action: true });
 		m.write(t.id, a, set(1));
-		m.write(t.id, a, set(2)); // post-await member write, attributed to the action's still-live token
+		m.write(t.id, a, set(2)); // post-await member write, attributed to the action's still-live batch
 		expect(m.committedValue(a, 'A')).toBe(0); // not before settlement
 		m.settleAction(t.id);
 		expect(m.committedValue(a, 'A')).toBe(2);
-		expect(() => m.write(t.id, a, set(3))).toThrow(/retired token/); // a settled action's batch fails loudly — never silently urgent
+		expect(() => m.write(t.id, a, set(3))).toThrow(/retired batch/); // a settled action's batch fails loudly — never silently urgent
 		selfCheck(m);
 	});
 });
@@ -694,7 +694,7 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 		m.write(t.id, a, update((x) => (x as number) + 41));
 		m.write(t.id, a, update((x) => (x as number) + 1));
 		commitAndRetire(m, 'A', t);
-		const lastToken = t.id;
+		const lastBatchId = t.id;
 		expect(m.committedValue(a, 'A')).toBe(42);
 		const seqBefore = m.seq;
 		m.quiesce();
@@ -702,9 +702,9 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 		expect(m.seq).toBeGreaterThanOrEqual(seqBefore); // counters are NEVER rewritten (exact to 2^53; renumbering deleted)
 		expect(m.committedValue(a, 'A')).toBe(42); // folds unchanged across the episode reset
 		expect(m.newestValue(a)).toBe(42);
-		// new episode: everything still works, token serials keep climbing
+		// new episode: everything still works, batch serials keep climbing
 		const t2 = m.openBatch('urgent');
-		expect(t2.id).toBeGreaterThan(lastToken);
+		expect(t2.id).toBeGreaterThan(lastBatchId);
 		m.write(t2.id, a, set(1));
 		commitAndRetire(m, 'A', t2);
 		expect(m.committedValue(a, 'A')).toBe(1);
@@ -720,14 +720,14 @@ describe('case 13 — counter/world-id lifecycle soundness (model rows)', () => 
 		const w = mountCommitted(m, 'A', c, 'W');
 		const k = m.openBatch('deferred');
 		m.write(k.id, a, set(1));
-		const slot = m.tokens.get(k.id)!.slot!;
+		const slot = m.idToBatch.get(k.id)!.slot!;
 		expect(w.dedup.has(slot)).toBe(true); // armed by k's delivery
 		m.retire(k.id);
 		const v = m.openBatch('deferred');
 		m.write(v.id, a, set(2)); // claims the same slot
-		expect(m.tokens.get(v.id)!.slot).toBe(slot);
+		expect(m.idToBatch.get(v.id)!.slot).toBe(slot);
 		// dedup bits cleared at claim: V's first delivery is FRESH, not suppressed by k's stale bit
-		const vDeliveries = m.eventsOfType('delivery').filter((e) => e.token === v.id && e.watcher === 'W');
+		const vDeliveries = m.eventsOfType('delivery').filter((e) => e.batch === v.id && e.watcher === 'W');
 		expect(vDeliveries).toHaveLength(1);
 		expect(vDeliveries[0]!.mode).toBe('fresh');
 		m.retire(v.id);
@@ -838,7 +838,7 @@ describe('case 16 — effects observe committed state only', () => {
 	it('16b — a committed-member write NEVER re-fires under an open same-root frame; the flip flushes at the frame close (kills immediate revalidation — codex finding 2)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
-		const t = m.openBatch('deferred', { action: true }); // parked action: its token stays live for member writes
+		const t = m.openBatch('deferred', { action: true }); // parked action: its batch stays live for member writes
 		m.write(t.id, a, set(1));
 		const p0 = pass(m, 'A', [t]);
 		m.passEnd(p0.id, 'commit'); // t locks into A (still live, parked)
@@ -967,7 +967,7 @@ describe('case 16 — effects observe committed state only', () => {
 		selfCheck(m);
 	});
 
-	it('16h — one pass locking in TWO tokens re-checks once, at the boundary value (one re-check per boundary, not per token)', () => {
+	it('16h — one pass locking in TWO batches re-checks once, at the boundary value (one re-check per boundary, not per batch)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const e = m.mountReactEffect('A', a, 'E');

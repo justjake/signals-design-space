@@ -1,9 +1,9 @@
 /**
  * Quiet-mode writes (Phase 1b) — the owner-ratified short-circuit: while
- * NOTHING is pending (no live batch token, no open render pass, every tape
+ * NOTHING is pending (no live batch, no open render pass, every tape
  * compacted), an unclassified write to a REGISTERED atom folds directly —
  * committed base and the kernel advance together; no receipt, no tape
- * append, no batch token (the ambient batch is NOT minted), no delivery
+ * append, no batch (the ambient batch is NOT minted), no delivery
  * walk. The pipeline arms while anything is pending and re-arms at the last
  * retirement / pass close. Observation never perturbs the derivation: an
  * attached tracer gets ONE quiet-write record per accepted fold and the
@@ -37,11 +37,11 @@ function quietBridge(): CosignalBridge {
 
 const probes = () => {
 	const p = __coreProbes();
-	return { receipts: p.receipts, tokens: p.tokens };
+	return { receipts: p.receipts, batches: p.batches };
 };
 
 describe('quiet-mode writes', () => {
-	it('arms at registration; quiet folds leave zero receipts/tokens/events and no ambient batch', () => {
+	it('arms at registration; quiet folds leave zero receipts/batches/events and no ambient batch', () => {
 		const b = quietBridge();
 		expect(b.quiet).toBe(true);
 		const a = b.atom('a', 0);
@@ -50,7 +50,7 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).update((v) => v + 1);
 		expect(probes()).toEqual(before); // ZERO pipeline activity
 		expect(a.tp.materialize()).toHaveLength(0);
-		expect(b.ambientToken).toBeUndefined();
+		expect(b.ambientBatch).toBeUndefined();
 		expect(b.newestValue(a)).toBe(2);
 		expect(b.committedValue(a, 'A')).toBe(2); // base advanced WITH the kernel
 		expect(b.quiescent()).toBe(true); // folds never leave pending state behind
@@ -63,7 +63,7 @@ describe('quiet-mode writes', () => {
 		const t = b.openBatch();
 		expect(b.quiet).toBe(false); // a live batch arms the pipeline
 		(a.handle as Atom<number>).set(6); // armed: classifies into the AMBIENT batch
-		expect(b.ambientToken).toBeDefined();
+		expect(b.ambientBatch).toBeDefined();
 		expect(a.tp.materialize()).toHaveLength(1);
 		b.write(t.id, a, 1, (v: unknown) => (v as number) * 10);
 		expect(b.newestValue(a)).toBe(60);
@@ -72,7 +72,7 @@ describe('quiet-mode writes', () => {
 		const p = b.passStart('A', []);
 		expect(b.passValue(a, p)).toBe(5);
 		b.passEnd(p.id, 'discard');
-		b.retire(b.ambientToken!);
+		b.retire(b.ambientBatch!);
 		expect(b.quiet).toBe(false); // t is still live
 		b.retire(t.id);
 		expect(b.quiet).toBe(true); // LAST retirement: tapes compacted, quiet re-armed
@@ -94,11 +94,11 @@ describe('quiet-mode writes', () => {
 		expect(b.passValue(a, p)).toBe(6); // the transition world = quiet base + its own receipt
 		b.passEnd(p.id, 'commit');
 		const root = b.root('A');
-		expect(root.committedTokens.has(t.id)).toBe(true); // locked in at commit
+		expect(root.committedBatches.has(t.id)).toBe(true); // locked in at commit
 		expect(b.committedValue(a, 'A')).toBe(6); // membership clause
 		const genAtCommit = root.commitGen;
 		b.retire(t.id);
-		expect(root.committedTokens.size).toBe(0); // retired clause subsumes membership
+		expect(root.committedBatches.size).toBe(0); // retired clause subsumes membership
 		expect(root.committedDirtySlots).toBe(0);
 		expect(b.quiet).toBe(true);
 		(a.handle as Atom<number>).set(7); // quiet again
@@ -122,7 +122,7 @@ describe('quiet-mode writes', () => {
 		b.onDelivery = () => deliveries++;
 		const before = probes();
 		(a.handle as Atom<number>).set(10); // quiet fold moves committed truth
-		expect(probes()).toEqual(before); // still zero receipts/tokens/events
+		expect(probes()).toEqual(before); // still zero receipts/batches/events
 		expect(corrections).toBe(1); // urgent value-gated correction reached the watcher
 		expect(deliveries).toBe(0); // NO value-blind delivery walk ran
 		expect(w.lastRenderedValue).toBe(11); // reconciled to committed-now
@@ -190,9 +190,9 @@ describe('quiet-mode writes', () => {
 		expect(a.tp.materialize()).toHaveLength(1);
 		expect(b.quiet).toBe(false);
 		(a.handle as Atom<number>).set(2); // armed semantics: ambient receipt
-		expect(b.ambientToken).toBeDefined();
+		expect(b.ambientBatch).toBeDefined();
 		expect(a.tp.materialize()).toHaveLength(2);
-		b.retire(b.ambientToken!);
+		b.retire(b.ambientBatch!);
 		expect(b.quiet).toBe(false); // pass still open
 		b.passEnd(p.id, 'discard'); // pin lapses: compaction drains, quiet re-arms
 		expect(a.tp.materialize()).toHaveLength(0);
@@ -210,13 +210,13 @@ describe('quiet-mode writes', () => {
 		expect(b.quiet).toBe(true); // observation never changes which write path executes
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(1);
-		expect(b.ambientToken).toBeUndefined(); // NO ambient batch: the quiet fold ran
+		expect(b.ambientBatch).toBeUndefined(); // NO ambient batch: the quiet fold ran
 		expect(a.tp.materialize()).toHaveLength(0); // no receipt
 		expect(stream.eventsOfType('write').length).toBe(0);
 		expect(stream.eventsOfType('quiet-write')).toEqual([{ type: 'quiet-write', node: 'a', seq: a.baseSeq }]);
 		expect(b.newestValue(a)).toBe(1);
 		expect(b.committedValue(a, 'A')).toBe(1); // base advanced WITH the kernel
-		// The equality drop stays silent — no token exists to attribute a drop to.
+		// The equality drop stays silent — no batch exists to attribute a drop to.
 		(a.handle as Atom<number>).set(1);
 		expect(stream.eventsOfType('quiet-write')).toHaveLength(1);
 		expect(stream.eventsOfType('write-dropped')).toHaveLength(0);
@@ -225,7 +225,7 @@ describe('quiet-mode writes', () => {
 		expect(b.quiet).toBe(false);
 		(a.handle as Atom<number>).set(2);
 		expect(stream.eventsOfType('write').length).toBe(1);
-		b.retire(b.ambientToken!);
+		b.retire(b.ambientBatch!);
 		b.retire(t.id);
 		expect(b.quiet).toBe(true); // and quiet re-arms with the consumer still attached
 	});

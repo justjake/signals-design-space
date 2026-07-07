@@ -37,10 +37,10 @@ export type WriteKind = 'set' | 'inc' | 'double' | 'equalNewest';
 
 export type ScheduleOp =
 	| { t: 'open'; action: boolean }
-	| { t: 'write'; token: number; atom: number; kind: WriteKind; value: number }
+	| { t: 'write'; batch: number; atom: number; kind: WriteKind; value: number }
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
-	| { t: 'settle'; token: number }
-	| { t: 'retire'; token: number }
+	| { t: 'settle'; batch: number }
+	| { t: 'retire'; batch: number }
 	| { t: 'passStart'; root: string; include: number[] }
 	| { t: 'yield'; pass: number }
 	| { t: 'resume'; pass: number }
@@ -110,7 +110,7 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'open': m.openBatch({ action: op.action }); break;
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
-				m.write(tokenAt(m, op.token), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
+				m.write(batchAt(m, op.batch), atom, writeOp(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
 			case 'bareWrite': {
@@ -118,12 +118,12 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 				m.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length));
 				break;
 			}
-			case 'settle': m.settleAction(tokenAt(m, op.token)); break;
-			case 'retire': m.retire(tokenAt(m, op.token)); break;
-			case 'passStart': m.passStart(op.root, op.include.map((i) => tokenAt(m, i))); break;
+			case 'settle': m.settleAction(batchAt(m, op.batch)); break;
+			case 'retire': m.retire(batchAt(m, op.batch)); break;
+			case 'passStart': m.passStart(op.root, op.include.map((i) => batchAt(m, i))); break;
 			case 'yield': m.passYield(passAt(m, op.pass)); break;
 			case 'resume': m.passResume(passAt(m, op.pass)); break;
-			case 'end': m.passEnd(passAt(m, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => tokenAt(m, i)) }); break;
+			case 'end': m.passEnd(passAt(m, op.pass), op.kind, { retireAtCommit: op.retireAtCommit.map((i) => batchAt(m, i)) }); break;
 			case 'mount': m.mountWatcher(passAt(m, op.pass), nodes[op.node % nodes.length]!, `W${uniq}`); break;
 			case 'render': m.renderWatcher(passAt(m, op.pass), watcherAt(m, op.watcher)); break;
 			case 'reactEffect': m.mountReactEffect(op.root, nodes[op.node % nodes.length]!, `E${uniq}`); break;
@@ -175,7 +175,7 @@ function pickId<K>(map: Map<K, unknown>, index: number, what: string): K {
 	return ids[index % ids.length]!;
 }
 
-const tokenAt = (m: CosignalModel, index: number): number => pickId(m.tokens, index, 'tokens');
+const batchAt = (m: CosignalModel, index: number): number => pickId(m.idToBatch, index, 'batches');
 const passAt = (m: CosignalModel, index: number): number => pickId(m.passes, index, 'passes');
 const watcherAt = (m: CosignalModel, index: number): number => pickId(m.watchers, index, 'watchers');
 const effectAt = (m: CosignalModel, index: number): number => pickId(m.reactEffects, index, 'react effects');
@@ -194,11 +194,11 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			ops.push({ t: 'open', action: bool(0.25) });
 		}
 		else if (roll < 0.34) {
-			const token = pick(34);
-			ops.push({ t: 'write', token, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
-			// same-token bursts exercise the per-(watcher, slot) dedup and the
+			const batch = pick(34);
+			ops.push({ t: 'write', batch, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
+			// same-batch bursts exercise the per-(watcher, slot) dedup and the
 			// pass-aware suppression rule far more often than uniform picks
-			while (bool(0.4)) ops.push({ t: 'write', token, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
+			while (bool(0.4)) ops.push({ t: 'write', batch, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		}
 		else if (roll < 0.38) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		// This band emitted the deleted scope-write op (the action-scope write
@@ -207,18 +207,18 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		// the old op's fixed payload shape (kind pinned to 'set') — the seed
 		// stream stays byte-for-byte identical, so every other op in every
 		// historical schedule is unchanged. Replay legality widens by design:
-		// the old op skipped on non-action tokens; a write applies to any live
-		// token — both sides of the lockstep harness widen together.
-		else if (roll < 0.41) ops.push({ t: 'write', token: pick(34), atom: pick(4), kind: 'set', value: pick(10) });
+		// the old op skipped on non-action batches; a write applies to any live
+		// batch — both sides of the lockstep harness widen together.
+		else if (roll < 0.41) ops.push({ t: 'write', batch: pick(34), atom: pick(4), kind: 'set', value: pick(10) });
 		else if (roll < 0.45) {
-			const token = pick(34);
+			const batch = pick(34);
 			bool(0.7); // discarded draw — preserves the historical seed stream byte-for-byte (it fed the deleted settle committed flag; the model never branched on it)
-			ops.push({ t: 'settle', token });
+			ops.push({ t: 'settle', batch });
 		}
 		else if (roll < 0.55) {
-			const token = pick(34);
+			const batch = pick(34);
 			bool(0.7); // discarded draw — same seed-stream preservation for the deleted retire committed flag
-			ops.push({ t: 'retire', token });
+			ops.push({ t: 'retire', batch });
 		}
 		else if (roll < 0.64) {
 			const include: number[] = [];
@@ -228,9 +228,9 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			// pre-pin, open a pass including that slot, then write post-pin —
 			// the started render cannot fold the write, so it must re-deliver
 			if (include.length > 0 && bool(0.5)) {
-				ops.push({ t: 'write', token: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
+				ops.push({ t: 'write', batch: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
 				ops.push({ t: 'passStart', root: ROOTS[pick(2)]!, include });
-				ops.push({ t: 'write', token: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
+				ops.push({ t: 'write', batch: include[0]!, atom: pick(4), kind: 'set', value: pick(10) });
 			} else {
 				ops.push({ t: 'passStart', root: ROOTS[pick(2)]!, include });
 			}
@@ -259,11 +259,11 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		else ops.push({ t: 'quiesce' });
 	}
 	// Close out: retire everything then quiesce, so residue/epoch-reset rules run on most seeds.
-	for (let tokenIdx = 0; tokenIdx < 34; tokenIdx++) {
+	for (let batchIdx = 0; batchIdx < 34; batchIdx++) {
 		ops.push({ t: 'discardAllWip' });
-		ops.push({ t: 'settle', token: tokenIdx });
+		ops.push({ t: 'settle', batch: batchIdx });
 		bool(0.5); // discarded draw — the deleted retire committed flag (seed-stream preservation; the settle above drew nothing, matching its old constant)
-		ops.push({ t: 'retire', token: tokenIdx });
+		ops.push({ t: 'retire', batch: batchIdx });
 	}
 	ops.push({ t: 'quiesce' });
 	return ops;
