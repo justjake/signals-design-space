@@ -186,10 +186,14 @@ changes:
   `runInBatch`, retirement + commit reports) speaks it.
   `getOrMintBatchToken` → `getOrCreateBatchId`; the registry's own
   vocabulary renames with it (S3 rewrites these lines anyway).
-- Test seam: the fork gains a protocol reset hook that clears every lane's
-  batch field (used by `__resetEngineForTest`'s precondition, never
-  production); with monotonic BatchIds this is belt-and-suspenders against
-  stale lane entries crossing a reset.
+- Test seam (round-3 hardened): the fork's protocol reset hook clears the
+  FULL slot tenancy — batch field, root sets, committed-root sets, parked
+  state — not just the batch field, and parked settlement callbacks
+  SELF-INVALIDATE (each captures its BatchId and no-ops if the slot's
+  current id differs when it fires). Reset ownership and order are
+  explicit: `__resetEngineForTest` invokes the driver's protocol reset
+  FIRST, then scrubs the engine. Never production; with monotonic BatchIds
+  this is belt-and-suspenders against stale lane entries crossing a reset.
 - The deferred flag becomes a STORED FIELD on the Slot. The three load-
   bearing low-bit reads convert (enumerated; review finding): the fork's
   run-in-batch scheduling branch, the fork's async-action park decision at
@@ -404,27 +408,37 @@ The audit's full fix list, mapped:
   assembly. Each E gate-green.
 - **S5 the merge** — hooks die, §4 shapes land, attachDriver (with the
   §3.3 contract), adoption family deleted, the class dissolves.
-  R-2 EQUALITY, full inventory (round-2: the flip is not quiet-only):
-  engine sites — quiet fold, writeInner's drop check AND eager apply,
-  compactAtom — align to kernel order; model sites — write path AND
-  foldAtom, shadowFoldAtom, compactAtom — align in the same commit (a
-  shadow-fold lag breaks the retention invariant for asymmetric
-  comparators). The "once" contract is scoped to THE ACCEPTANCE DECISION
+  R-2 EQUALITY, full inventory (round-3 complete): engine sites — quiet
+  fold, writeInner's drop check AND eager apply, compactAtom, AND the
+  ordinary world-replay fold (foldAtom's per-entry comparator — round-3:
+  leaving it flipped makes an asymmetric comparator fold worlds wrongly) —
+  align to kernel order; model sites, individually named — quietWrite,
+  the write drop, the eager-advance decision, foldAtom, shadowFoldAtom,
+  compactAtom — align in the same commit (a shadow-fold lag breaks the
+  retention invariant for asymmetric comparators). The "once" contract is scoped to THE ACCEPTANCE DECISION
   (folds and compaction re-invoke per entry by design — documented).
   Pinned matrix: {standalone, quiet, recorded} × {set, update, dispatch} ×
   {empty, nonempty log}, order pinned by an asymmetric comparator, count
   by a counting comparator. The corpus gains a CUSTOM-EQUALS topology
   member (asymmetric + counting) — without it R-2 is lockstep-invisible
   (today zero oracle atoms carry custom equality).
-  R-3 EFFECT WRITES, three obligations beyond vocabulary (round-2): the
-  new schedule band preserves historical seed streams (reuse a band /
-  discarded draws, the retire-flag precedent); writing core effects are
-  convergent by construction (the model's flush re-enters write — no
-  guard exists, so op generation must not create infinite cascades);
-  classification is refereed directly (snapshot + event placement).
+  R-3 EFFECT WRITES, executable spec (round-3): FIRST freeze the named
+  finding seeds (29/97/173 and the long-seed set) as stored literal
+  schedules in their spec files — their pinned regressions survive any
+  generator change; THEN the generator adds a writing-core-effect band
+  freely (seed streams for archival seeds no longer constrain it).
+  Convergence by construction: writing effects write ONLY into a disjoint
+  "effect-output" atom subset that no core effect reads (acyclic by
+  generation rule), with payloads derived from the effect's own run count
+  under equality cutoff — a bounded number of effective writes per
+  trigger, then drops. Classification is refereed directly (snapshot +
+  event placement, engine vs model).
   `__resetEngineForTest` (R-6): watermark scrub + engine epoch + PRE-
-  CONDITION ASSERTS (quiescent; batchDepth/opDepth/enterDepth === 0 — a
-  test that threw mid-batch must fail loudly here, not corrupt the next),
+  CONDITION ASSERTS via one exhaustive assertIdle (round-3): quiescent;
+  batchDepth/opDepth/enterDepth === 0; evalDepth === 0; no capture frame;
+  no arena evaluation frame; no settle or notify drain in progress — a
+  test that threw mid-batch or resets from inside a subscription body
+  must fail loudly here, not corrupt the next test),
   and the scrub checklist (round-2 additions in CAPS): kernel allocator
   heads and counters, queued/pendingFree, VALUES/FNS SIDE COLUMNS (stale
   ctx.previous and wrapper closures otherwise survive id reuse), walk

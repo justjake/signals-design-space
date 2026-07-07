@@ -21,23 +21,25 @@ refactor's S5 design.
 - The aux slot stops storing the handle: ctx.use owner resolution becomes
   id-keyed; the use-cache moves into a nodeIndex-keyed engine column
   (scrubbed at record free — the refactor's column-scrub hook).
-- LIFECYCLE, handle-free (round-2 design debt, now specified): the
-  lifecycle record lives ON the handle (handle-owned state — an object the
-  `Atom` instance references, so it dies with the handle); the engine's
-  per-id index holds a **WeakRef** to the handle for the cold shift path
-  (watched/unwatched transitions deref it; a dead deref means the handle is
-  gone and the lifecycle is over — correct, nothing can observe it).
-  Justification vs the rejects list: the +93 ns WeakRef rejection was for
-  hot per-registration schemes; lifecycle shift edges are cold
-  mount/unmount boundaries. The shift path keeps routing set/update through
-  the handle's own methods (the full policy path — equality,
-  classification), which the deref supplies.
-  KNOWN RESIDUAL, documented: a user lifecycle callback that closes over
-  its own atom pins itself only through USER-held structure once the
-  engine holds no strong path; if the user's closure is itself only
-  reachable from the handle-owned record, handle + record + closure form
-  one garbage cycle and collect together. The engine never holds the
-  closure strongly.
+- LIFECYCLE (round-3 correction — the handle-owned/WeakRef design could not
+  run a collected handle's cleanup, and shift edges are NOT all cold: they
+  fire on dependency link insert/remove during retracking): the engine
+  holds the lifecycle record STRONGLY WHILE THE LIFECYCLE IS ACTIVE —
+  watched, or with a pending flap-damped shift — keyed by id, exactly like
+  today's map. That is correct liveness, not a pin bug: an atom with an
+  active lifecycle effect is observable machinery whose cleanup MUST run
+  at unmount regardless of handle reachability (current semantics, kept).
+  At the dormancy transition (cleanup ran, no pending shift) the engine
+  DELETES the entry — releasing the record, the user callback, and any
+  handle the user's closure captured — and that deletion site is the
+  reclamation retry trigger for lifecycle atoms. What actually fixes the
+  original pin (L3): the STORED CONTEXT routes set/update BY ID through
+  the engine write path (post-merge these are direct calls) — the engine
+  never stores a handle reference of its own; only the user's callback
+  may capture one, and only for the active window. No WeakRef anywhere;
+  the rejects list stands untouched.
+  RECLAMATION INTERPLAY: lifecycle-ACTIVE is a GUARD (the map entry's
+  existence); its clearing site (the dormancy deletion) is its TRIGGER.
 - `__resetEngineForTest` provides the ENGINE EPOCH (refactor R-6), and the
   reclamation state below is part of R-6's scrub checklist (registry swap,
   retry queues, deferred-cleanup queue).
@@ -90,7 +92,8 @@ other operations):
 |---|---|
 | kernel SUBS non-empty (something reads this record) | `unwatched()` — the last-subscriber unlink |
 | the node has ANY entry in the watcher index (covers live, mounted-in-an-open-render, and reveal-deferred watchers uniformly — round-2: deferMount leaves a watcher in the indexes while neither live nor mounted) | watcher index removal (`removeWatcher`, unmount teardown) |
-| membership in any open render's arena or any arena's suspended list | render end; settlement drain; arena release/quiesce |
+| membership in any open render's arena or any arena's suspended list | THE SHARED SUSPENDED-LIST REMOVAL OPERATION ITSELF (round-3: unsuspension also happens during ordinary refolds and dirty-list decay — the removal function carries the retry check, covering every exit path), plus render end / settlement drain / arena release/quiesce for whole-arena teardown |
+| lifecycle ACTIVE (the id-keyed lifecycle map entry exists — see §2) | the dormancy deletion site (cleanup ran, entry removed) |
 | observation-index retains (`obsRefs > 0`) | the obs RELEASE-TO-ZERO site itself — wherever it happens: dependency recapture, subscription teardown, watcher release (round-2: these clear without any listed boundary firing) |
 | a non-empty WriteLog | WriteLog compaction (edge-triggered: the tape-empty transition files the check, so the warm compaction path pays a size-0 bail otherwise) |
 
@@ -104,12 +107,18 @@ cannot carry this): reclamation never runs user code in the GC job. Phase 1
 dispose owned deps; any owned effect's user cleanup is NOT run — it is
 filed as a DEFERRED-CLEANUP entry `{id, gen, cleanups[]}` in a dedicated
 queue, and the record's free is queued BEHIND that entry. Phase 2 (the next
-boundary sweep): run the cleanups with `reportError` isolation (a throw
-never aborts the sweep or skips the free), then free the record. The record
-cannot be reused before phase 2 completes because the free — hence the
-free-list insertion — IS phase 2's last step. Pinned by a throwing-cleanup
-probe. Deterministic dispose paths do NOT unregister; they rely on
-epoch+gen defusing.
+boundary sweep): TAKE-BEFORE-CALL (round-3 reentrancy rule) — the drain
+swaps the queue for an empty one, sets a drain guard, and runs the taken
+entries with `reportError` isolation; a cleanup that synchronously
+re-enters signal APIs (and thus boundary work) finds the guard set and the
+queue empty — the nested sweep does no cleanup work, cannot double-run an
+entry, and cannot observe the taken entries' queued frees; entries filed
+DURING cleanup land in the fresh queue for the next boundary. Each record
+frees only after its own cleanups completed within the taken batch — the
+free-list insertion is the last step per entry. Pinned by BOTH a
+throwing-cleanup probe and a reentrant-cleanup probe (a cleanup that
+writes an atom). Deterministic dispose paths do NOT unregister; they rely
+on epoch+gen defusing.
 
 Trigger-queue discipline: every warm trigger site opens with a size-0 bail;
 filing is edge-triggered (on the guard's clearing transition, not per
