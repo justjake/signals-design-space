@@ -255,10 +255,10 @@ describe('ctx.use', () => {
 		});
 		for (let i = 0; i < keys.length; i++) {
 			which.set(i);
-			catchOf(() => c.state); // mint (suspends; Promise.resolve settles next tick)
+			catchOf(() => c.state); // create (suspends; Promise.resolve settles next tick)
 		}
 		await tick();
-		expect(fetches).toBe(keys.length); // every key minted its own entry
+		expect(fetches).toBe(keys.length); // every key created its own entry
 	});
 
 	test('ctx.use outside a computed evaluation throws', () => {

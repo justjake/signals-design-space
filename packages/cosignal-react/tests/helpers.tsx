@@ -9,7 +9,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __newBridgeForTest, type AtomNode, type CosignalBridge, type Receipt } from 'cosignal';
+import { __newBridgeForTest, type AtomNode, type CosignalBridge, type WriteLogEntry } from 'cosignal';
 import { attachRefereeStream, type RefereeStream } from '../../cosignal/tests/trace-events.js';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
@@ -19,9 +19,9 @@ export type Harness = {
 	/** The decoded event stream (lossless session tracer attached at bridge
 	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads). */
 	events: RefereeStream;
-	/** Receipts as compaction folded them out of the tapes (op-replay-fidelity
+	/** Log entries as compaction folded them out of the write logs (op-replay-fidelity
 	 * assertions; fed by the engine's onCompact referee seam). */
-	compacted: Array<{ atom: AtomNode; entry: Receipt }>;
+	compacted: Array<{ atom: AtomNode; entry: WriteLogEntry }>;
 	roots: Root[];
 	containers: HTMLElement[];
 	/** createRoot over a fresh container div. */
@@ -36,7 +36,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// production posture (defined fall-throughs, no warning allocation).
 	const bridge = __newBridgeForTest({ devChecks: opts?.devChecks ?? true });
 	const events = attachRefereeStream(bridge);
-	const compacted: Array<{ atom: AtomNode; entry: Receipt }> = [];
+	const compacted: Array<{ atom: AtomNode; entry: WriteLogEntry }> = [];
 	bridge.onCompact = (atom, entry) => compacted.push({ atom, entry });
 	const handle = registerCosignalReact({ bridge });
 	const roots: Root[] = [];

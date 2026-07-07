@@ -41,10 +41,10 @@ describe('useSignal', () => {
 			a.update((n) => n + 5);
 		});
 		expect(text(container)).toBe('15');
-		// The receipt holds the updater function itself, not a pre-folded value,
+		// The log entry holds the updater function itself, not a pre-folded value,
 		// so each world can replay it against its own view.
-		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
-		const ops = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
+		const node = h.bridge.kernelIdToNode.get(a._id) as AtomNode;
+		const ops = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
 		expect(ops).toContain('update');
 	});
 
@@ -131,7 +131,7 @@ describe('useSignal', () => {
 });
 
 describe('useComputed (§3.3 cut C3)', () => {
-	test('deps-keyed recreation: equal deps reuse the node, changed deps mint fresh', async () => {
+	test('deps-keyed recreation: equal deps reuse the node, changed deps create fresh', async () => {
 		h = makeHarness();
 		const a = new Atom(2);
 		const seen: number[] = [];
@@ -227,8 +227,8 @@ describe('useReducerAtom (§3.2)', () => {
 			r.dispatch(7);
 		});
 		expect(text(container)).toBe('107');
-		const node = h.bridge.byKernelId.get(r._id) as AtomNode;
-		const kinds = [...node.tp.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
+		const node = h.bridge.kernelIdToNode.get(r._id) as AtomNode;
+		const kinds = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
 		expect(kinds).toContain('update'); // re-pinned: dispatch → update(s => reduce(s, action))
 	});
 });
@@ -282,7 +282,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 	// MECHANISM. Observation is ONE core concept counted over the UNION of
 	// consumer kinds: kernel subscribers (a live computed chain, a core
 	// effect()) flip the kernel liveness bit (D1), and React subscribers —
-	// bridge watchers minted by useSignal — retain/release the SAME refcount
+	// bridge watchers created by useSignal — retain/release the SAME refcount
 	// when their engine-side liveness flips (commit layout loop, reveal
 	// resubscribe, orphan sweep, debounce-finalized unsubscribe). The callback
 	// fires on the union's 0→1 transition, the cleanup on its 1→0, both
@@ -530,7 +530,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		expect(log).toEqual(['observe']); // watcher attach worked while quiet
 		expect(h.bridge.quiet).toBe(true); // and armed no pipeline
 		await act(async () => {
-			a.set(5); // quiet fold: no receipts — deliveries still flow
+			a.set(5); // quiet fold: no log entries — deliveries still flow
 		});
 		expect(text(container)).toBe('v:5;');
 		expect(h.bridge.quiet).toBe(true);

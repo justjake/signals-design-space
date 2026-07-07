@@ -54,7 +54,7 @@
  *    a whole boot losslessly, attach before the engine's first operation.
  *
  * ## Event vocabulary (kind → decoded `data` fields, in format order)
- * Terms as in the package README: a *receipt* records one write on the
+ * Terms as in the package README: a *log entry* records one write on the
  * written atom's history; a *batch* (identified by a BatchId) groups the
  * writes of one UI update; a *slot* is one of 31 tracking entries a written
  * batch occupies while its writes can still matter (31 because React
@@ -64,15 +64,15 @@
  * one mounted UI subscription; *retirement* makes a batch's writes
  * permanent history; a *world* is one self-consistent view of all values.
  *
- *  write                {node, op, batch, slot, seq}         a write was recorded: a receipt joined the atom's history
- *  quiet-write          {node, seq}                          a quiet-mode fold: nothing was pending, so the write folded straight into committed state (no batch, no receipt)
- *  write-dropped        {node, batch}                        dropped without a receipt: the atom had no pending receipts and the op produced a value equal to the current one
+ *  write                {node, op, batch, slot, seq}         a write was recorded: a log entry joined the atom's history
+ *  quiet-write          {node, seq}                          a quiet-mode fold: nothing was pending, so the write folded straight into committed state (no batch, no log entry)
+ *  write-dropped        {node, batch}                        dropped without a log entry: the atom had no pending log entries and the op produced a value equal to the current one
  *  batch-open           {batch, action, ambient}             a batch opened (action = async action; ambient = engine-opened batch adopting writes made outside any explicit batch)
  *  batch-settle         {batch}                              an async action's promise settled; its retirement follows
  *  batch-retire         {batch, retiredSeq}                  the batch retired: its writes became permanent history visible to every world
  *  batch-disposition    {batch, committed}                   the React bindings' report, recorded at its source (the protocol handler):
  *                       React committed (true) or abandoned (false) the batch. Diagnostic only — retirement behavior is identical
- *                       either way. The engine never mints this kind. (Recordings from older engines carried the flag as a bit on
+ *                       either way. The engine never creates this kind. (Recordings from older engines carried the flag as a bit on
  *                       batch-settle / batch-retire records instead; that bit is ignored at decode.)
  *  slot-claim           {slot, batch}                        a batch's first write claimed a slot
  *  slot-release         {slot, batch}
@@ -126,7 +126,7 @@
  * ## Reading a trace
  * `tracer.events()` returns decoded `{id, kind, dt, cause, data}` objects
  * (the structured form for tools — a lazy view over the packed records,
- * never a second recorder); `decode(id)` one event; `formatTraceEvent(e)` /
+ * never a second recorder); `decode(id)` one event; `formatTraceRecord(e)` /
  * `formatTrace(events)` the stable human form
  * `#id +Δµs kind(subject) k=v … [<- #cause]`. Queries: `causeChain(id)`,
  * `whyDelivered(watcher)`, `whyEffectRan(effect)`, `effectRunCount(effect)`.
@@ -135,7 +135,7 @@
  * Note: engine sequence numbers are never rewritten (they climb for the
  * process's life, exact to 2^53), but trace records pack them into Int32
  * fields — so seq fields in records decode faithfully only below 2^31-1
- * minted sequences. A diagnostics-fidelity bound, not an engine one.
+ * created sequences. A diagnostics-fidelity bound, not an engine one.
  */
 
 import type {
@@ -145,7 +145,7 @@ import type {
 	CosignalBridge,
 	Epoch,
 	RenderPass,
-	Receipt,
+	WriteLogEntry,
 	RootId,
 	Seq,
 	BatchSlot,
@@ -221,7 +221,7 @@ const MAX_I32 = 0x7fffffff;
 /** Kind codes (record form). Public decoded events carry the NAME, not the
  * code. Codes are append-only (existing recordings decode forever): 28-30
  * joined when the packed stream became the engine's ONLY event output — the
- * referee kinds the deleted BridgeEvent object channel used to carry alone;
+ * referee kinds the deleted TraceEvent object channel used to carry alone;
  * 31 joined when the committed/abandoned report moved to its source (the
  * React bindings' protocol handler) and left the retirement chain. */
 const K = {
@@ -283,7 +283,7 @@ export type TracerOptions = {
 };
 
 /** The structured (tool-facing) event: a lazy decode of one packed record. */
-export type TraceEvent = {
+export type TraceRecord = {
 	id: TraceEventId;
 	kind: TraceKind;
 	/** µs since the previous recorded event (0 for the first). */
@@ -424,7 +424,7 @@ export class Tracer implements TraceHooks {
 		return this.chunks[this.chunks.length - 1]!;
 	}
 
-	/** The one write path: id mint, time delta, cause register, 8 integer stores. */
+	/** The one write path: id creation, time delta, cause register, 8 integer stores. */
 	private rec(kindFlags: KindWord, subject: number, world: number, a0: number, a1: number, a2: number): TraceEventId {
 		const t = this.now();
 		let dt = Math.round(t - this.lastUs);
@@ -580,9 +580,9 @@ export class Tracer implements TraceHooks {
 		this.rec(K.epochReset, epoch, 0, 0, 0, 0);
 	}
 
-	receipt(node: AtomNode, r: Receipt): void {
-		const op = OP_NAMES.indexOf(r.op.kind); // encoder and decoder share OP_NAMES (cold path)
-		this.rec(K.write, this.label(node.name), r.batch, r.slot, r.seq, op);
+	logEntry(node: AtomNode, entry: WriteLogEntry): void {
+		const op = OP_NAMES.indexOf(entry.op.kind); // encoder and decoder share OP_NAMES (cold path)
+		this.rec(K.write, this.label(node.name), entry.batch, entry.slot, entry.seq, op);
 	}
 
 	batchOpen(t: Batch): void {
@@ -593,7 +593,7 @@ export class Tracer implements TraceHooks {
 		this.rec(K.batchSettle, t.id, 0, 0, 0, 0);
 	}
 
-	/** The bindings' committed/abandoned report, minted at its source (the
+	/** The bindings' committed/abandoned report, created at its source (the
 	 * protocol handler that received it) — the engine never calls this hook.
 	 * Not a cause-claiming kind: the retirement operation it precedes roots
 	 * its own chain, exactly as it did when the flag rode the engine call. */
@@ -696,7 +696,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** Decode one event; undefined once overwritten (RING) or never recorded. */
-	decode(id: TraceEventId): TraceEvent | undefined {
+	decode(id: TraceEventId): TraceRecord | undefined {
 		if (!this.isRetained(id)) return undefined;
 		const kf = this.peek(id, TraceField.KIND);
 		const kind: TraceKindCode = kf & KindBits.KIND_MASK;
@@ -813,8 +813,8 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** All retained events, oldest first (optionally one kind). The tool-facing view. */
-	events(kind?: TraceKind): TraceEvent[] {
-		const out: TraceEvent[] = [];
+	events(kind?: TraceKind): TraceRecord[] {
+		const out: TraceRecord[] = [];
 		for (let id = this.firstRetained(); id < this.head; id++) {
 			if (!this.isRetained(id)) continue;
 			if (kind !== undefined && KIND_NAMES[this.peek(id, TraceField.KIND) & KindBits.KIND_MASK] !== kind) continue;
@@ -827,8 +827,8 @@ export class Tracer implements TraceHooks {
 	// ------------------------------------------------------ causality queries
 
 	/** The event and its provokers, event first, walking CAUSE to the operation root. */
-	causeChain(id: TraceEventId): TraceEvent[] {
-		const out: TraceEvent[] = [];
+	causeChain(id: TraceEventId): TraceRecord[] {
+		const out: TraceRecord[] = [];
 		let cur: number | undefined = id;
 		while (cur !== undefined) {
 			const e = this.decode(cur);
@@ -851,7 +851,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** Why did this watcher last re-render (or get suppressed/corrected)? The cause chain. */
-	whyDelivered(watcher: string): TraceEvent[] {
+	whyDelivered(watcher: string): TraceRecord[] {
 		const id = this.lastBySubject(
 			[K.delivery, K.suppressed, K.mountCorrective, K.mountCorrection, K.reconcileCorrection],
 			watcher,
@@ -860,7 +860,7 @@ export class Tracer implements TraceHooks {
 	}
 
 	/** Why did this effect last run? The cause chain. */
-	whyEffectRan(effect: string): TraceEvent[] {
+	whyEffectRan(effect: string): TraceRecord[] {
 		const id = this.lastBySubject([K.coreEffectRun, K.reactEffectRun], effect);
 		return id === undefined ? [] : this.causeChain(id);
 	}
@@ -937,7 +937,7 @@ function fmtValue(v: unknown): string {
  * The grammar and per-kind field order are fixed (asserted by tests); only
  * Δt varies run to run under the real clock.
  */
-export function formatTraceEvent(e: TraceEvent): string {
+export function formatTraceRecord(e: TraceRecord): string {
 	const entries = Object.entries(e.data);
 	// the first field is the subject, rendered inside the parens
 	const head = entries.length > 0 ? fmtSubject(entries[0]![1]) : '';
@@ -951,7 +951,7 @@ function fmtSubject(v: unknown): string {
 }
 
 /** The whole capture (or any decoded slice), one line per event. */
-export function formatTrace(events: TraceEvent[]): string {
-	return events.map(formatTraceEvent).join('\n');
+export function formatTrace(events: TraceRecord[]): string {
+	return events.map(formatTraceRecord).join('\n');
 }
 

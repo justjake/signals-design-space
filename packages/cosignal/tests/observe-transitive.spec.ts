@@ -40,7 +40,7 @@ function bridge(): CosignalBridge {
 }
 
 describe('transitive observation through derived nodes', () => {
-	it('two watchers sharing one derived node: minted ≠ observed, ONE observe at first liveness, release after the LAST leaves', async () => {
+	it('two watchers sharing one derived node: created ≠ observed, ONE observe at first liveness, release after the LAST leaves', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
@@ -48,7 +48,7 @@ describe('transitive observation through derived nodes', () => {
 		const p1 = b.renderStart('A', []);
 		const w1 = b.mountWatcher(p1.id, oc, 'W1');
 		await tick();
-		expect(log).toEqual([]); // minted, not live: a render alone observes nothing
+		expect(log).toEqual([]); // created, not live: a render alone observes nothing
 		b.renderEnd(p1.id, 'commit');
 		await tick();
 		expect(log).toEqual(['observe']); // the closure atom observes through the derived node

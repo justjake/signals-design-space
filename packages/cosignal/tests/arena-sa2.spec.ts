@@ -84,7 +84,7 @@ describe('S-A fp-100/seq-50 lock-in walk (§4.2 no-fp rule)', () => {
 		b.write(tHigh.id, a, 1, (p: unknown) => (p as number) + 100);
 		b.retire(tHigh.id);
 		expect(w.lastRenderedValue).toBe(100); // committed sees only the retired +100
-		// Lock T in via a per-root commit: membership exposes T's receipt
+		// Lock T in via a per-root commit: membership exposes T's log entry
 		// BELOW the visible maximum — an fp gate could never see this flip;
 		// the site-(b) mark + unconditional refold does (and the armed
 		// divergence check proves arena ≡ memo at the epilogue).

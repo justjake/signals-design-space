@@ -151,7 +151,7 @@ describe('S-C — N-1 REAL-REUSE leg (§4.5.3): a disposed computed\'s kernel id
 		});
 		const w1 = mount(b, 'R', cOld, 'W1');
 		expect(b.committedValue(cOld, 'R')).toBe(10);
-		const oldKid = cOld.handle._id;
+		const oldKernelId = cOld.handle._id;
 		const oldEvalsAtDispose = oldEvals;
 		const oldComparesAtDispose = oldCompares;
 
@@ -167,7 +167,7 @@ describe('S-C — N-1 REAL-REUSE leg (§4.5.3): a disposed computed\'s kernel id
 			newEvals++;
 			return (read(a) as number) + 1000;
 		});
-		expect(cNew.handle._id).toBe(oldKid); // the free-list handed the id to the new tenant
+		expect(cNew.handle._id).toBe(oldKernelId); // the free-list handed the id to the new tenant
 
 		// Reads under a live committed arena: the NEW tenant folds cold —
 		// never the dead node's cached 10, fn, or comparator.

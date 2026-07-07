@@ -87,7 +87,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		selfCheck(m);
 	});
 
-	it('each dropped conjunct admits a counterexample: foreign cas motion falls through and fires', () => {
+	it('each dropped conjunct admits a counterexample: foreign committedAdvance motion falls through and fires', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const k = m.openBatch();
@@ -108,7 +108,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 });
 
 describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)', () => {
-	it('after a forced release, the retained render still folds its world exactly (receipts carry slots)', () => {
+	it('after a forced release, the retained render still folds its world exactly (log entries carry slots)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const retained = Array.from({ length: 5 }, () => m.openBatch());
@@ -124,7 +124,7 @@ describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)',
 			m.write(u.id, a, set(100 + i)); // 27th claim forces the backstop
 		}
 		expect(m.eventsOfType('slot-backstop-released')).toHaveLength(1);
-		// the safety argument: the victim's receipts keep their slot field and stay
+		// the safety argument: the victim's log entries keep their slot field and stay
 		// visible by inclusion below the held pin; the new tenant's sequences postdate it
 		expect(m.renderValue(a, held)).toBe(5);
 		// and the new tenant's own world folds the recycled slot's history in seq order

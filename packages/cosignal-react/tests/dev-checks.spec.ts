@@ -43,7 +43,7 @@ describe('write classifier: no batch context (React batch id 0)', () => {
 		const a = new Atom(0);
 		expect(() => a.set(5)).toThrow(/protocol violation — signal write with no batch context/);
 		expect(a.state).toBe(0); // the classifier threw before any write landed
-		expect(h.bridge.liveBatches()).toHaveLength(0); // no batch minted
+		expect(h.bridge.liveBatches()).toHaveLength(0); // no batch created
 		expect(h.bridge.ambientBatch).toBeUndefined(); // and never an ambient batch
 	});
 
@@ -87,7 +87,7 @@ describe('startSignalTransition: no batch context (React batch id 0)', () => {
 			a.set(3);
 		});
 		expect(a.state).toBe(3);
-		// No parked action batch was minted for React batch id 0 — nothing could ever
+		// No parked action batch was created for React batch id 0 — nothing could ever
 		// settle it; the write rode the ordinary id-0 batch instead.
 		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(false);
 		expect(h.bridge.liveBatches()).toHaveLength(1);

@@ -1,9 +1,9 @@
 /**
  * Quiet-mode writes (Phase 1b) — the owner-ratified short-circuit: while
- * NOTHING is pending (no live batch, no open render pass, every tape
+ * NOTHING is pending (no live batch, no open render pass, every write log
  * compacted), an unclassified write to a REGISTERED atom folds directly —
- * committed base and the kernel advance together; no receipt, no tape
- * append, no batch (the ambient batch is NOT minted), no delivery
+ * committed base and the kernel advance together; no log entry, no write log
+ * append, no batch (the ambient batch is NOT created), no delivery
  * walk. The pipeline arms while anything is pending and re-arms at the last
  * retirement / render close. Observation never perturbs the derivation: an
  * attached tracer gets ONE quiet-write record per accepted fold and the
@@ -37,11 +37,11 @@ function quietBridge(): CosignalBridge {
 
 const probes = () => {
 	const p = __coreProbes();
-	return { receipts: p.receipts, batches: p.batches };
+	return { logEntries: p.logEntries, batches: p.batches };
 };
 
 describe('quiet-mode writes', () => {
-	it('arms at registration; quiet folds leave zero receipts/batches/events and no ambient batch', () => {
+	it('arms at registration; quiet folds leave zero log entries/batches/events and no ambient batch', () => {
 		const b = quietBridge();
 		expect(b.quiet).toBe(true);
 		const a = b.atom('a', 0);
@@ -49,7 +49,7 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(1);
 		(a.handle as Atom<number>).update((v) => v + 1);
 		expect(probes()).toEqual(before); // ZERO pipeline activity
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(a.log.materialize()).toHaveLength(0);
 		expect(b.ambientBatch).toBeUndefined();
 		expect(b.newestValue(a)).toBe(2);
 		expect(b.committedValue(a, 'A')).toBe(2); // base advanced WITH the kernel
@@ -64,22 +64,22 @@ describe('quiet-mode writes', () => {
 		expect(b.quiet).toBe(false); // a live batch arms the pipeline
 		(a.handle as Atom<number>).set(6); // armed: classifies into the AMBIENT batch
 		expect(b.ambientBatch).toBeDefined();
-		expect(a.tp.materialize()).toHaveLength(1);
+		expect(a.log.materialize()).toHaveLength(1);
 		b.write(t.id, a, 1, (v: unknown) => (v as number) * 10);
 		expect(b.newestValue(a)).toBe(60);
 		// A render excluding both live batches folds committed base — which
-		// already contains the QUIET fold (5), not the live receipts.
+		// already contains the QUIET fold (5), not the live log entries.
 		const p = b.renderStart('A', []);
 		expect(b.renderValue(a, p)).toBe(5);
 		b.renderEnd(p.id, 'discard');
 		b.retire(b.ambientBatch!);
 		expect(b.quiet).toBe(false); // t is still live
 		b.retire(t.id);
-		expect(b.quiet).toBe(true); // LAST retirement: tapes compacted, quiet re-armed
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(b.quiet).toBe(true); // LAST retirement: write logs compacted, quiet re-armed
+		expect(a.log.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'A')).toBe(60);
 		(a.handle as Atom<number>).set(61); // and folds resume
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(a.log.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'A')).toBe(61);
 		expect(b.newestValue(a)).toBe(61);
 	});
@@ -91,7 +91,7 @@ describe('quiet-mode writes', () => {
 		const t = b.openBatch();
 		b.write(t.id, a, 1, (v: unknown) => (v as number) + 1); // folds over base 5
 		const p = b.renderStart('A', [t.id]);
-		expect(b.renderValue(a, p)).toBe(6); // the transition world = quiet base + its own receipt
+		expect(b.renderValue(a, p)).toBe(6); // the transition world = quiet base + its own log entry
 		b.renderEnd(p.id, 'commit');
 		const root = b.root('A');
 		expect(root.committedBatches.has(t.id)).toBe(true); // locked in at commit
@@ -122,7 +122,7 @@ describe('quiet-mode writes', () => {
 		b.onDelivery = () => deliveries++;
 		const before = probes();
 		(a.handle as Atom<number>).set(10); // quiet fold moves committed truth
-		expect(probes()).toEqual(before); // still zero receipts/batches/events
+		expect(probes()).toEqual(before); // still zero log entries/batches/events
 		expect(corrections).toBe(1); // urgent value-gated correction reached the watcher
 		expect(deliveries).toBe(0); // NO value-blind delivery walk ran
 		expect(w.lastRenderedValue).toBe(11); // reconciled to committed-now
@@ -165,7 +165,7 @@ describe('quiet-mode writes', () => {
 		expect(() => handle.update((n) => n + handle.state)).toThrow(/not allowed inside an update|updaters and reducers must be pure/);
 		expect(b.newestValue(a)).toBe(1);
 		expect(b.committedValue(a, 'A')).toBe(1);
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(a.log.materialize()).toHaveLength(0);
 		expect(b.quiet).toBe(true); // the rejected write disturbed nothing
 		// Reducers: registered dispatch folds once over base (the recorded op
 		// is an update whose closure carries the reducer and the action).
@@ -174,7 +174,7 @@ describe('quiet-mode writes', () => {
 		rHandle.dispatch('inc');
 		expect(b.newestValue(r)).toBe(11);
 		expect(b.committedValue(r, 'A')).toBe(11);
-		expect(r.tp.materialize()).toHaveLength(0);
+		expect(r.log.materialize()).toHaveLength(0);
 	});
 
 	it('pin-blocked arming: an open render holds the pipeline armed past the last retirement; render close compacts and re-arms', () => {
@@ -184,21 +184,21 @@ describe('quiet-mode writes', () => {
 		b.write(t.id, a, 0, 1);
 		const p = b.renderStart('B', [t.id]); // pin freezes before the retirement below
 		b.retire(t.id);
-		// The render's pin blocks compaction: the retired receipt is still on
-		// the tape, so quiet must NOT re-arm (a fold would slide base under
-		// a receipt that replays over it).
-		expect(a.tp.materialize()).toHaveLength(1);
+		// The render's pin blocks compaction: the retired log entry is still on
+		// the write log, so quiet must NOT re-arm (a fold would slide base under
+		// a log entry that replays over it).
+		expect(a.log.materialize()).toHaveLength(1);
 		expect(b.quiet).toBe(false);
-		(a.handle as Atom<number>).set(2); // armed semantics: ambient receipt
+		(a.handle as Atom<number>).set(2); // armed semantics: ambient log entry
 		expect(b.ambientBatch).toBeDefined();
-		expect(a.tp.materialize()).toHaveLength(2);
+		expect(a.log.materialize()).toHaveLength(2);
 		b.retire(b.ambientBatch!);
 		expect(b.quiet).toBe(false); // render still open
 		b.renderEnd(p.id, 'discard'); // pin lapses: compaction drains, quiet re-arms
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(a.log.materialize()).toHaveLength(0);
 		expect(b.quiet).toBe(true);
 		(a.handle as Atom<number>).set(3);
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(a.log.materialize()).toHaveLength(0);
 		expect(b.committedValue(a, 'B')).toBe(3);
 		expect(b.newestValue(a)).toBe(3);
 	});
@@ -211,7 +211,7 @@ describe('quiet-mode writes', () => {
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(1);
 		expect(b.ambientBatch).toBeUndefined(); // NO ambient batch: the quiet fold ran
-		expect(a.tp.materialize()).toHaveLength(0); // no receipt
+		expect(a.log.materialize()).toHaveLength(0); // no log entry
 		expect(stream.eventsOfType('write').length).toBe(0);
 		expect(stream.eventsOfType('quiet-write')).toEqual([{ type: 'quiet-write', node: 'a', seq: a.baseSeq }]);
 		expect(b.newestValue(a)).toBe(1);
@@ -220,7 +220,7 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(1);
 		expect(stream.eventsOfType('quiet-write')).toHaveLength(1);
 		expect(stream.eventsOfType('write-dropped')).toHaveLength(0);
-		// Armed semantics still mint receipts + write records past the same consumer.
+		// Armed semantics still create log entries + write records past the same consumer.
 		const t = b.openBatch();
 		expect(b.quiet).toBe(false);
 		(a.handle as Atom<number>).set(2);
@@ -240,6 +240,6 @@ describe('quiet-mode writes', () => {
 		(a.handle as Atom<number>).set(42); // folds fine in the new episode
 		expect(b.newestValue(a)).toBe(42);
 		expect(b.committedValue(a, 'A')).toBe(42);
-		expect(a.tp.materialize()).toHaveLength(0);
+		expect(a.log.materialize()).toHaveLength(0);
 	});
 });

@@ -4,7 +4,7 @@
  *    engine's surface (registerReactBridge / CosignalBridge / bridge types);
  *    no `./concurrent` entry exists.
  *  - ZERO COST WHEN UNUSED, asserted behaviorally: with no host attached,
- *    heavy create/write/read/effect traffic mints zero receipts, zero batch
+ *    heavy create/write/read/effect traffic creates zero log entries, zero batch
  *    batches, zero world evaluations, zero bridges (the engine's
  *    referee-surface probes, `__coreProbes`; events are packed trace records
  *    behind per-site tracer guards — no tracer, no event machinery at all).
@@ -50,12 +50,12 @@ describe('one entry', () => {
 });
 
 describe('zero cost with no host attached (behavioral)', () => {
-	it('heavy sync-only traffic mints zero receipts/batches/worlds/bridges', () => {
+	it('heavy sync-only traffic creates zero log entries/batches/worlds/bridges', () => {
 		const before = __coreProbes();
-		// (No event probe anymore: events are packed trace records, minted only
+		// (No event probe anymore: events are packed trace records, created only
 		// behind each site's tracer guard — the object channel is gone, so with
 		// no tracer there is no event machinery left to count.)
-		expect(before).toEqual({ receipts: 0, batches: 0, worldEvals: 0, bridges: 0 });
+		expect(before).toEqual({ logEntries: 0, batches: 0, worldEvals: 0, bridges: 0 });
 
 		// Heavy create/write/read/derive/effect traffic through the public API.
 		const atoms = Array.from({ length: 50 }, (_, i) => new Atom(i));
@@ -115,18 +115,18 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const dispose = effect(() => {
 			seen.push(sum.state);
 		});
-		const receiptsBefore = __coreProbes().receipts;
+		const entriesBefore = __coreProbes().logEntries;
 		batch(() => {
 			a.set(10);
 			b.set(20);
 		});
 		expect(seen).toEqual([3, 30]); // one flush at batch close, exactly as sync
 		expect(untracked(() => sum.state)).toBe(30);
-		expect(__coreProbes().receipts).toBe(receiptsBefore); // unregistered: no receipts
+		expect(__coreProbes().logEntries).toBe(entriesBefore); // unregistered: no log entries
 		dispose();
 	});
 
-	it('host attached, zero batches: unregistered traffic still does zero receipt/world work', () => {
+	it('host attached, zero batches: unregistered traffic still does zero log entry/world work', () => {
 		// The harness cosignal-concurrent adapter's gate, in-package: attached-idle
 		// semantics ≡ sync semantics, and the probes prove no concurrent
 		// machinery ran for plain traffic.
@@ -145,7 +145,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		dispose();
 		expect(sink).toBeGreaterThan(0);
 		const after = __coreProbes();
-		expect(after.receipts).toBe(before.receipts);
+		expect(after.logEntries).toBe(before.logEntries);
 		expect(after.batches).toBe(before.batches);
 		expect(after.worldEvals).toBe(before.worldEvals);
 	});
@@ -160,48 +160,48 @@ describe('host attached but quiet: sync semantics preserved', () => {
 
 	it('public writes to a REGISTERED atom: QUIET folds directly; ARMED classifies into the ambient default batch with WHOLE ops', () => {
 		// RE-PINNED for Phase 1b (quiet-mode writes). The old contract —
-		// attached-but-quiet registered writes always mint ambient receipts —
+		// attached-but-quiet registered writes always create ambient log entries —
 		// is gone: while nothing is pending the pipeline stays disarmed and
 		// the write folds to committed base + kernel in one step.
 		const la = bridge.atom('pub', 0);
 		const before = __coreProbes();
 		la.handle.set(7); // application code writing through the public API, while QUIET
 		(la.handle as Atom<number>).update((n) => n + 1);
-		expect(la.tp.materialize()).toHaveLength(0); // no receipt
-		expect(bridge.ambientBatch).toBeUndefined(); // ambient batch NOT minted while quiet
+		expect(la.log.materialize()).toHaveLength(0); // no log entry
+		expect(bridge.ambientBatch).toBeUndefined(); // ambient batch NOT created while quiet
 		expect(bridge.newestValue(la)).toBe(8); // kernel advanced
 		expect(bridge.committedValue(la, 'A')).toBe(8); // committed truth advanced WITH it
 		const afterQuiet = __coreProbes();
-		expect(afterQuiet.receipts).toBe(before.receipts);
+		expect(afterQuiet.logEntries).toBe(before.logEntries);
 		expect(afterQuiet.batches).toBe(before.batches);
 		// ARM the pipeline (a live batch exists): the same public writes now
 		// classify into the ambient default batch as WHOLE ops.
 		const t = bridge.openBatch();
 		la.handle.set(100);
 		(la.handle as Atom<number>).update((n) => n + 1); // op captured UNFOLDED
-		expect(la.tp.materialize()).toHaveLength(2);
-		expect(la.tp.materialize()[0]!.op).toEqual({ kind: 'set', value: 100 });
-		expect(la.tp.materialize()[1]!.op.kind).toBe('update'); // replay fidelity: the updater itself
+		expect(la.log.materialize()).toHaveLength(2);
+		expect(la.log.materialize()[0]!.op).toEqual({ kind: 'set', value: 100 });
+		expect(la.log.materialize()[1]!.op.kind).toBe('update'); // replay fidelity: the updater itself
 		const ambient = bridge.ambientBatch;
 		expect(ambient).toBeDefined();
-		expect(la.tp.materialize()[0]!.batch).toBe(ambient);
+		expect(la.log.materialize()[0]!.batch).toBe(ambient);
 		expect(bridge.newestValue(la)).toBe(101); // writes apply to the kernel immediately
 		expect(bridge.committedValue(la, 'A')).toBe(8); // not committed yet: base still holds the quiet fold
 		bridge.retire(ambient!);
 		expect(bridge.committedValue(la, 'A')).toBe(101); // persistence never depends on subscription
 		bridge.retire(t.id); // last retirement: quiet re-arms
-		expect(la.tp.materialize()).toHaveLength(0); // pin-free retirement compacts the prefix
+		expect(la.log.materialize()).toHaveLength(0); // pin-free retirement compacts the prefix
 		la.handle.set(500); // and the next write folds again
-		expect(la.tp.materialize()).toHaveLength(0);
+		expect(la.log.materialize()).toHaveLength(0);
 		expect(bridge.committedValue(la, 'A')).toBe(500);
 	});
 
-	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero receipts/batches', () => {
+	it('zero-cost probes: heavy REGISTERED-atom writes, host attached, no transitions — zero log entries/batches', () => {
 		// The Phase 1b population (the reviews' "wrong population" fix): atoms
 		// REGISTERED with the bridge, host attached, kernel derivations and
 		// effects subscribed — and NO transition, batch, or render pass ever
 		// open. Heavy public write/read traffic must leave the concurrency
-		// pipeline fully disarmed: zero receipts, zero batches (and with
+		// pipeline fully disarmed: zero log entries, zero batches (and with
 		// no tracer attached, every record site is one dead branch).
 		const atoms = Array.from({ length: 20 }, (_, i) => bridge.atom(`reg${i}`, i));
 		const handles = atoms.map((n) => n.handle as Atom<number>);
@@ -228,8 +228,8 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		expect(sink).not.toBe(0);
 		expect(effectRuns).toBeGreaterThan(1); // kernel effects observed the quiet folds
 		const after = __coreProbes();
-		expect(after.receipts).toBe(before.receipts); // ZERO receipts
-		expect(after.batches).toBe(before.batches); // ZERO batches (no ambient mint)
+		expect(after.logEntries).toBe(before.logEntries); // ZERO log entries
+		expect(after.batches).toBe(before.batches); // ZERO batches (no ambient create)
 		expect(bridge.ambientBatch).toBeUndefined();
 		// And the folds are real: base == kernel == committed for every atom.
 		expect(bridge.newestValue(atoms[3]!)).toBe(49 * 1000 + 3 + 1);
@@ -242,7 +242,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		handle.set(42); // pre-registration history
 		const la = bridge.adoptAtom('adopted', handle);
 		expect(la.base).toBe(42);
-		expect(la.tp.materialize()).toHaveLength(0);
+		expect(la.log.materialize()).toHaveLength(0);
 		expect(bridge.committedValue(la, 'A')).toBe(42);
 	});
 
@@ -250,11 +250,11 @@ describe('host attached but quiet: sync semantics preserved', () => {
 		const la = bridge.atom('pure', 1);
 		const handle = la.handle as Atom<number>;
 		expect(() => handle.update((n) => n + (handle.state as number))).toThrow(/not allowed inside an update/);
-		expect(la.tp.materialize()).toHaveLength(0); // the rejected write left no receipt
+		expect(la.log.materialize()).toHaveLength(0); // the rejected write left no log entry
 		expect(bridge.newestValue(la)).toBe(1); // and no kernel mutation
 	});
 
-	it('forbidWritesInComputeds rejects hosted writes BEFORE any receipt lands', () => {
+	it('forbidWritesInComputeds rejects hosted writes BEFORE any log entry lands', () => {
 		configure({ forbidWritesInComputeds: true });
 		try {
 			const la = bridge.atom('guarded', 0);
@@ -263,7 +263,7 @@ describe('host attached but quiet: sync semantics preserved', () => {
 				return 1;
 			});
 			expect(() => probe.state).toThrow(/writes inside computeds are forbidden/);
-			expect(la.tp.materialize()).toHaveLength(0); // policy first, capture second: no receipt behind the throw
+			expect(la.log.materialize()).toHaveLength(0); // policy first, capture second: no log entry behind the throw
 			expect(bridge.newestValue(la)).toBe(0);
 		} finally {
 			configure({ forbidWritesInComputeds: false });

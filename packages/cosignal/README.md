@@ -157,17 +157,17 @@ state.
 
 The engine removes the single-current-value limitation:
 
-- **Receipts.** Every write is recorded as a compact receipt — which
+- **Log entries.** Every write is recorded as a compact log entry — which
   operation (set / functional update / reducer action), which batch it
   belongs to, and its position on one global timeline — appended to the
-  written atom's history. Writes still apply to the core immediately, so
+  written atom's write log. Writes still apply to the core immediately, so
   plain reads stay fast.
 - **Batches.** A batch is the group of writes belonging to one UI update
   (one event handler, one transition, one async action). React schedules
   each batch at a single priority; the engine keeps each batch's writes
   visible together or not at all.
 - **Worlds.** A world is one self-consistent assignment of values to
-  every signal, computed by replaying exactly the receipts that world is
+  every signal, computed by replaying exactly the log entries that world is
   allowed to see, in timeline order, over the atom's folded base value.
   Three kinds exist: the *newest* world (every write applied), the
   *committed* world of a root (exactly what that root's on-screen UI
@@ -175,15 +175,15 @@ The engine removes the single-current-value limitation:
   committed state plus its own batches, frozen at the moment the render
   started so a paused-and-resumed render never drifts).
 
-Because every world is a pure replay of the same receipts, a pending UI
+Because every world is a pure replay of the same log entries, a pending UI
 update and the committed UI can never disagree about history — they only
 differ in how much of it they are allowed to see. When a batch is done
 (committed everywhere or abandoned), it *retires*: its writes become
 permanent history visible to every world, and once no world can tell the
-difference, its receipts fold into the atom's base value and are
+difference, its log entries fold into the atom's base value and are
 reclaimed.
 
-The receipts themselves live in packed parallel number arrays per atom,
+The log entries themselves live in packed parallel number arrays per atom,
 matching the core's no-allocation discipline: recording a write is a few
 integer stores, not an object allocation.
 
@@ -192,7 +192,7 @@ integer stores, not an object allocation.
 Registering the bridge does not, by itself, make writes expensive. While
 nothing is pending — no live batch, no in-progress render pass — the
 bridge is **quiet**: a write to a registered atom folds directly into
-permanent history and the current value together, minting no receipt, no
+permanent history and the current value together, creating no log entry, no
 batch, and no event. The recording pipeline arms only while an update is
 actually in flight (a batch open, a render pass in progress) and disarms
 again once the last one retires. A transition that starts after a run of

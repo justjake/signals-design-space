@@ -54,7 +54,7 @@ for (let r = 0; r < WARMUP; r++) await round();
 const times = [];
 for (let r = 0; r < ROUNDS; r++) times.push(await round());
 times.sort((x, y) => x - y);
-const node = bridge.byKernelId.get(a._id);
+const node = bridge.kernelIdToNode.get(a._id);
 const checksum = container.textContent.length + Number(bridge.newestValue(node));
 row({
 	gate: 'SPK-R', config: 'react-cosignal', shape: `N${N}`,
@@ -62,6 +62,6 @@ row({
 });
 row({
 	gate: 'SPK-R', config: 'react-cosignal', shape: `N${N}`,
-	metric: `steadyTape:N${N}`, value: node.tp.length + bridge.liveBatches().length, checksum,
+	metric: `steadyLog:N${N}`, value: node.log.length + bridge.liveBatches().length, checksum,
 });
 handle.dispose();

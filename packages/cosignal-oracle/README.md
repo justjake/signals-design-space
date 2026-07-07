@@ -51,14 +51,14 @@ must reproduce. Terms are defined as they appear.
   mirroring React's 31 priority lanes; each live batch that has written
   occupies a **slot** in a 31-entry recycling table, and visibility
   bookkeeping is per-slot.
-- A **receipt** records one write: the operation (set / functional
+- A **log entry** records one write: the operation (set / functional
   update — a reducer-style write records as an update whose closure
   captures the action), the writing batch's id and slot, and a
-  position (**seq**) on one global timeline. Receipts append to the
-  written atom's **tape**; older receipts eventually fold into the
+  position (**seq**) on one global timeline. Log entries append to the
+  written atom's **write log**; older log entries eventually fold into the
   atom's **base** value (compaction).
 - A **world** is one self-consistent assignment of values to every atom,
-  computed by replaying the receipts that world may see, in timeline
+  computed by replaying the log entries that world may see, in timeline
   order, over the base — with the atom's equality function applied
   stepwise (an equal step keeps the previous reference).
 - A **render pass** is one attempt by React to render a root. It may
@@ -67,27 +67,27 @@ must reproduce. Terms are defined as they appear.
   (the current timeline position) and captures its **mask** (the live
   batches it is rendering) plus a snapshot of the root's
   already-committed batches.
-- **Retirement** ends a batch's life, exactly once: its receipts become
+- **Retirement** ends a batch's life, exactly once: its log entries become
   permanent history visible to every world. A **parked** async-action
   batch retires only when the action settles.
 - A **watcher** is one subscribed component instance. A **delivery** is
   the notification that schedules a watcher to re-render after a write.
 
-### Visibility (which receipts a world replays)
+### Visibility (which log entries a world replays)
 
-- **A render world** sees a receipt if (1) the receipt's batch retired at
+- **A render world** sees a log entry if (1) the log entry's batch retired at
   or before the render's pin — it was already permanent history when the
-  render started — or (2) the receipt belongs to an *included* batch (in
+  render started — or (2) the log entry belongs to an *included* batch (in
   the render's mask, or committed into the root when the render started)
-  *and* the receipt's seq is at or before the pin. The pin cap exists
+  *and* the log entry's seq is at or before the pin. The pin cap exists
   because a render can pause and resume: without it, a write landing
   mid-pause would change answers between two slices of the same render,
   which is exactly the tearing this design exists to prevent. The pin
   cap applies to committed members too: a still-live batch that is
   already committed into the root can keep writing, and those late
   writes must not drift a paused render.
-- **The committed world of a root** sees every retired receipt, plus
-  receipts of batches currently committed into that root (membership).
+- **The committed world of a root** sees every retired log entry, plus
+  log entries of batches currently committed into that root (membership).
   Membership exists because commits are per root: once a root has
   committed UI rendered from a batch, that root must keep agreeing with
   its own screen even though the batch is still live elsewhere.
@@ -106,37 +106,37 @@ must reproduce. Terms are defined as they appear.
   untracked deps stay fresh in every world-side revalidation.
 - **The mount-reconciliation world** (used at most once per mount, at
   its commit, when the four-condition test below falls through) sees
-  the mounting render's own included receipts up to its pin, plus
+  the mounting render's own included log entries up to its pin, plus
   committed truth *as of now* — i.e., the mounted component's view
   fast-forwarded to what actually committed during its mount window.
 
 ### Batch and slot lifecycle
 
 A batch's first write interns its slot (claiming a free one), appends a
-receipt, and bumps the slot's write clock. On retirement the model runs
-a fixed order: stamp every receipt of the batch with the retirement seq;
+log entry, and bumps the slot's write clock. On retirement the model runs
+a fixed order: stamp every log entry of the batch with the retirement seq;
 fold/compact what can be folded; notify committed-state observers; clear
 the batch's per-root membership rows; release the slot — deferred while
 any open render's mask names it (deferred releases re-evaluate at every
 render end). The order is load-bearing: rows clear before release so a
 recycled slot can never be mistaken for a committed member, and
 notification happens after stamping so observers see the post-retirement
-truth. Slot recycling is safe because receipts carry their slot
+truth. Slot recycling is safe because log entries carry their slot
 permanently and every claim is sequenced after the previous tenant's
 retirement, so a fold can always tell tenants apart by seq. Write clocks
 and delivery-dedup bits reset at claim. If every slot is somehow held, a
 retired-but-mask-retained slot is released anyway, loudly — retained
-renders stay correct because their receipts kept their slot fields.
+renders stay correct because their log entries kept their slot fields.
 
-Compaction folds a prefix of a tape into the base only when every
-receipt in the prefix is retired *and* every live render's pin already
+Compaction folds a prefix of a write log into the base only when every
+log entry in the prefix is retired *and* every live render's pin already
 sees them via the retired-history rule — so compaction can never change
 any live world's answer. An abandoned batch (no React work ever
 committed) retires through the same path: writes never silently revert,
 and persistence never depends on having subscribers.
 
 Equality dropping is allowed only for a write that lands on an *empty*
-tape and evaluates equal to the base: with pending history present, a
+write log and evaluates equal to the base: with pending history present, a
 "no-op" write can still change some world's fold, so it must append.
 
 ### Delivery (how watchers learn about writes)
@@ -207,7 +207,7 @@ explicit op (cleanup + unconditional re-run + recapture).
 ### Quiescence
 
 When nothing is live (no batches, no renders, no parked actions), every
-tape has fully compacted. The model then resets per-episode dependency
+write log has fully compacted. The model then resets per-episode dependency
 bookkeeping (epoch bump, dead-record drop, slot bookkeeping zeroes).
 Timeline values are never rewritten: sequence counters are plain JS
 numbers, exact to 2^53, only ever compared, so they simply keep

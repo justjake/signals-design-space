@@ -19,7 +19,7 @@
  *  7  invalidateComputed (suspense settle)             | K0                       | K0-ONLY: boxes live on kernel computeds; overlay folds SuspendedRead as a value | suspense.spec
  *  8  Atom.state host seam (index.ts)                  | K0 or world              | ROUTE-BY-FRAME: world routing only with NO kernel frame open; a kernel-frame read makes a K0 link + fills a K0 cache, so it must serve K0 (newest) — FIXED (was: world-routed → kernel cache poisoned = torn newest arena) | T6 (new), one-core 'overlay world evaluation' pins the routed side
  *  9  Computed.state (no host seam)                    | K0                       | K0-ONLY: standalone computeds are not world-routable (bindings reject via resolveNode) | T6, hooks.ts resolveNode error
- * 10  deliveryWalk (arena STRONG lists+watchersByNode) | arenas (strong)          | ARENA-ONLY: K0 consumers already served by eager kernel apply; weak lists never traversed (§4.4.1); may deliver FEWER than the union-conservative model (⊆ bound; S-NF2-D1 pins the retreat) | battery case 1, scars S2/S3, T5, arena-sb.spec
+ * 10  deliveryWalk (arena STRONG lists+nodeToWatchers) | arenas (strong)          | ARENA-ONLY: K0 consumers already served by eager kernel apply; weak lists never traversed (§4.4.1); may deliver FEWER than the union-conservative model (⊆ bound; S-NF2-D1 pins the retreat) | battery case 1, scars S2/S3, T5, arena-sb.spec
  * 11  core effect() reach (kernel flush; W9)           | K0                       | K0-ONLY: core effects are REAL kernel effects, flushed by the eager kernel apply over tracked links only (untracked deps invalidate values, never notify); sibling firing order under one op is implementation-defined [owner ruling 2026-07-06] — the lockstep differ compares same-step runs as a multiset | fuzz (multiset differ), trace.spec core-effect stage
  * 12  weak (untracked) links — segregated subs lists   | arena weak lists         | WEAK-ONLY: mark propagation + drain candidates, never deliveries | battery 'taint member', arena-sa2 mixed-mode, arena-sb untracked-fan, fuzz
  * 13  arena reclamation (consumerCount sweep)          | watchers + committed subs | ZERO-CONSUMER quiescence sweep (§4.5.8); no reachability walk needed — coverage is the arena itself | arena-sa2 root-churn, long-seed fuzz (episode churn), T7
@@ -28,23 +28,23 @@
  * 16  quiesce                                          | arenas persist           | NO refresh: routing coverage survives by arena persistence (§4.1); duties = zero-consumer sweep + read-clock renumber | quiet-mode 'quiesce() interoperates', T7
  * 17  Watcher.live setter → obsShift → retain/release  | edge → union refcount    | UNION (watcher half, via the observation index) | observe-union.spec (all), T1
  * 18  observation index (obsRefs/obsDeps/capture) | eval-time strong deps → K0 lifecycle | UNION-TRANSITIVE: a live watcher observes every atom its node's CURRENT evaluation (transitively) reads — retains follow fn re-runs in EVERY world (arena refolds carry the capture, §4.7/M6), survive quiescence, release with the last watcher | T2 (flipped pin), observe-transitive.spec
- * 19  watchers map + watchersByNode index mutation     | dual store               | MUST MOVE TOGETHER via removeWatcher — FIXED (shim's map-only deletes stranded index entries) | T7 (new), cosignal-react graph-consumers.spec.tsx
+ * 19  watchers map + nodeToWatchers index mutation     | dual store               | MUST MOVE TOGETHER via removeWatcher — FIXED (shim's map-only deletes stranded index entries) | T7 (new), cosignal-react graph-consumers.spec.tsx
  * 20  dependencyEdges/graphviz snapshot                | arenas (both lists)      | ARENA-ONLY diagnostics (current structure; persists with the arenas) | graphviz docstring; not behavior-bearing
  * 21  shim liveness flips (claim/orphan/finalize)      | via one setter           | UNION + both stores (delegates to Watcher.live + removeWatcher) | cosignal-react hooks.spec StrictMode netting + graph-consumers.spec.tsx
  * 22  useSignal render branches (watchers.get/w.live)  | bridge watchers          | bridge watcher records are the one source | cosignal-react battery/hooks.spec
  * 23  committed-subscription dep snapshots (captureRun) | committed VALUES + obs union | value-gated per EF2 boundary, no edge store; the capture's committed evaluations POPULATE the root's arena, whose marks the re-checks validate through (subDepRefs dissolved at S-B, §4.0) | concurrent-battery case 16, observe-union.spec, cosignal-react hooks.spec useSignalEffect
  *
  * §2 DUAL-REPRESENTATION AGREEMENTS ─ pair | enforcement
- *  A1 kernel value ≡ fold(base, receipts)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
- *  A2 newest memo fingerprints ≡ tapes (+retirement stamps) | lockstep values; scars S5 pins receipt-after-read invalidation
- *  A3 quiet flag ≡ pending state (batches/renders/tapes) | quiet-mode.spec arming/disarming battery
- *  A4 adoption stamp ≡ byKernelId registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
+ *  A1 kernel value ≡ fold(base, log entries)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
+ *  A2 newest memo fingerprints ≡ write logs (+retirement stamps) | lockstep values; scars S5 pins log-entry-after-read invalidation
+ *  A3 quiet flag ≡ pending state (batches/renders/write logs) | quiet-mode.spec arming/disarming battery
+ *  A4 adoption stamp ≡ kernelIdToNode registry             | T8 (new pin): stale foreign stamps re-resolve via the registry probe, writes land on the ACTIVE bridge's node
  *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (tests/arena-checker.ts): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
  *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
  *  A8 render-pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's ONLY slot-set form (W1); model-view derives the oracle's Sets from the bits; lockstep render worlds
- *  A9 batch.atomsTouched ⊇ tape batch columns          | retirement stamping via touch lists; quiesce residue BridgeInvariantViolation + lockstep retirement visibility
- * A10 batch.liveReceipts ≡ un-compacted receipts       | T10 (new pin: batch outlives pinned receipts, reclaims after compaction)
+ *  A9 batch.atomsTouched ⊇ write log batch columns          | retirement stamping via touch lists; quiesce residue BridgeInvariantViolation + lockstep retirement visibility
+ * A10 batch.liveLogEntries ≡ un-compacted log entries       | T10 (new pin: batch outlives pinned log entries, reclaims after compaction)
  * A11 DIRTY flag ⇒ dirty-list membership (decay + drain seeding stand on it) | the structural validator at every armed epilogue; arena-sa2 decay pins
  * A12 shim previousCells ≡ last committed value        | cosignal-react hooks.spec 'ctx.previous returns the last committed value'
  */
@@ -263,11 +263,11 @@ describe('§2 A4 — adoption stamp vs registry', () => {
 		expect(b2.nodeFor(handle as Atom<unknown>)).toBe(n2); // (and re-stamps per bridge)
 		handle.set(1); // public write → the ACTIVE bridge's node, whatever the stamp said last
 		// b2 is at rest, so the write is a quiet fold: base advances on the
-		// ACTIVE bridge's node (no receipt is minted while nothing is pending).
+		// ACTIVE bridge's node (no log entry is created while nothing is pending).
 		expect(n2.base).toBe(1);
-		expect(n2.tp.length).toBe(0);
+		expect(n2.log.length).toBe(0);
 		expect(n1.base).toBe(0); // the foreign bridge's node saw nothing
-		expect(n1.tp.length).toBe(0);
+		expect(n1.log.length).toBe(0);
 	});
 });
 
@@ -289,16 +289,16 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 	});
 });
 
-describe('§2 A10 — batch.liveReceipts gates reclamation against un-compacted receipts', () => {
-	it('T10: a retired batch outlives its pin-blocked receipts and reclaims exactly when they compact', () => {
+describe('§2 A10 — batch.liveLogEntries gates reclamation against un-compacted log entries', () => {
+	it('T10: a retired batch outlives its pin-blocked log entries and reclaims exactly when they compact', () => {
 		const b = bridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
 		const p = b.renderStart('A', []); // live pin below the coming retirement blocks compaction
 		b.retire(t.id);
-		expect(b.idToBatch.has(t.id)).toBe(true); // receipts still on the tape reference the batch by id
-		b.renderEnd(p.id, 'discard'); // pin released → compaction folds the receipt → gate opens
+		expect(b.idToBatch.has(t.id)).toBe(true); // log entries still on the write log reference the batch by id
+		b.renderEnd(p.id, 'discard'); // pin released → compaction folds the log entry → gate opens
 		expect(b.idToBatch.has(t.id)).toBe(false);
 	});
 });

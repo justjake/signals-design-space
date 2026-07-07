@@ -84,7 +84,7 @@ describe('kernel link free list threads through a spare field (row 2)', () => {
 		// left it unwatched-DIRTY mid-walk). `a2` evaluates ONCE: it was
 		// MID-EVALUATION when the cascade reached it (its own getter ran the
 		// dispose), and unwatched() skips mid-evaluation records since S-C
-		// (stripping the live re-track cursor minted cyclic dep lists — the
+		// (stripping the live re-track cursor created cyclic dep lists — the
 		// union-cycle hang), so its just-computed cache serves b's rebuild.
 		expect([aEvals, a2Evals, bEvals]).toEqual([3, 2, 2]);
 	});

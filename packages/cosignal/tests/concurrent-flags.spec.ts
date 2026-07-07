@@ -86,7 +86,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		selfCheck(m);
 	});
 
-	it('each dropped conjunct admits a counterexample: foreign cas motion falls through and fires', () => {
+	it('each dropped conjunct admits a counterexample: foreign committedAdvance motion falls through and fires', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const k = m.openBatch('deferred');
@@ -98,7 +98,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 		m.retire(d.id);
 		m.renderResume(pk.id);
 		m.renderEnd(pk.id, 'commit');
-		// conjunct 1 (baseline.cas ≤ pin) fails ⇒ compare ⇒ value-true correction
+		// conjunct 1 (baseline.committedAdvance ≤ pin) fails ⇒ compare ⇒ value-true correction
 		expect(m.eventsOfType('mount-urgent-correction').filter((e) => e.watcher === 'W')).toHaveLength(1);
 		expect(w.lastRenderedValue).toBe(3);
 		m.retire(k.id);
@@ -107,7 +107,7 @@ describe('flag 5 — fixup fast-out conjunct set (four conjuncts, population gat
 });
 
 describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)', () => {
-	it('after a forced release, the retained render still folds its world exactly (receipts carry slots)', () => {
+	it('after a forced release, the retained render still folds its world exactly (log entries carry slots)', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const retained = Array.from({ length: 5 }, () => m.openBatch('deferred'));
@@ -123,7 +123,7 @@ describe('flag 7 — backstop without the render flag (keep-the-dirt disposal)',
 			m.write(u.id, a, set(100 + i)); // 27th claim forces the backstop
 		}
 		expect(m.eventsOfType('slot-backstop-released')).toHaveLength(1);
-		// flag-free safety: the victim's receipts keep their slot field and stay
+		// flag-free safety: the victim's log entries keep their slot field and stay
 		// clause-2 visible below the held pin; the new tenant's sequences postdate it
 		expect(m.renderValue(a, held)).toBe(5);
 		// and the new tenant's own world folds the recycled slot's history in seq order

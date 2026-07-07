@@ -116,7 +116,7 @@
  * read/write methods (see "the host seams" section below). Sync-only apps
  * that never register a bridge keep both hooks undefined forever: the whole
  * concurrency feature costs one predictable `!== undefined` branch per
- * public read/write, and zero receipts, batches, worlds, or bridge events are
+ * public read/write, and zero log entries, batches, worlds, or bridge events are
  * ever created (tests/one-core.spec.ts asserts this behaviorally with engine
  * probes). The only other swapped table is POISON (fold purity, below) —
  * reachable exclusively by erroring code.
@@ -1423,7 +1423,7 @@ function createEngine(records: RecordCount, carry?: Int32Array): Engine {
 	}
 
 	// S-C: flag a computed HOST_OWNED (see NodeFlag.HOST_OWNED) and settle the
-	// books for links minted BEFORE adoption: each existing link to a
+	// books for links created BEFORE adoption: each existing link to a
 	// lifecycle dep fired +1 at insert, and its eventual unlink will skip the
 	// -1 (the flag reads at unlink time) — so release those refs here, once.
 	function markHostOwnedOp(c: NodeId): void {
@@ -1533,7 +1533,7 @@ let E: Engine = createEngine(initialRecords * RecordGeom.RECORDS_PER_UNIT);
 // bridge registers (and, for reads, only while a routing context is live), so
 // an app that never attaches a host pays exactly one `!== undefined` test per
 // public read/write — the empty-state short-circuit is the FIRST test on each
-// path — and zero receipt/world work ever runs (asserted behaviorally by
+// path — and zero log entry/world work ever runs (asserted behaviorally by
 // tests/one-core.spec.ts).
 
 /** Declined-read sentinel: the host read hook returns it to mean "not mine —
@@ -1541,14 +1541,14 @@ let E: Engine = createEngine(initialRecords * RecordGeom.RECORDS_PER_UNIT);
 export const __HOST_MISS: { readonly hostMiss: true } = { hostMiss: true };
 
 /** Whole-op codes for the host write hook (0 = set, 1 = update). @internal */
-export type HostOpKind = 0 | 1;
+export type WriteKind = 0 | 1;
 
 /**
  * Host write interceptor. Returns true iff the host consumed the write (the
  * kernel apply then happens through the host's own machinery, re-entering the
  * public method with the hook's recursion guard down). @internal
  */
-let hostWrite: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => boolean) | undefined;
+let hostWrite: ((atom: Atom<unknown>, kind: WriteKind, payload: unknown) => boolean) | undefined;
 
 /**
  * Host read router. Armed (non-undefined) only while the host has a live
@@ -1566,7 +1566,7 @@ let hostRead: ((atom: Atom<unknown>) => unknown) | undefined;
 let hostComputedRead: ((c: Computed<unknown>) => unknown) | undefined;
 
 /** @internal */
-export function __setHostWrite(fn: ((atom: Atom<unknown>, kind: HostOpKind, payload: unknown) => boolean) | undefined): void {
+export function __setHostWrite(fn: ((atom: Atom<unknown>, kind: WriteKind, payload: unknown) => boolean) | undefined): void {
 	hostWrite = fn;
 }
 
@@ -1590,7 +1590,7 @@ export function __hostRunFold<T>(fn: () => T): T {
 }
 
 /**
- * Policy checks a host must run BEFORE recording a write (a receipt must
+ * Policy checks a host must run BEFORE recording a write (a log entry must
  * never land for a write the policy layer would have rejected). @internal
  */
 export function __assertHostWritable(): void {
@@ -1865,7 +1865,7 @@ function lifecycleUnwatched(id: NodeId): void {
  * engine's observation index (./concurrent.ts) when a watcher over a registered
  * atom's node flips live; a no-op for atoms carrying no observed-lifecycle
  * effect. Direct callbacks only — observation transitions are NOT
- * BridgeEvents and never enter the engine's event/lockstep stream. @internal
+ * TraceEvents and never enter the engine's event/lockstep stream. @internal
  */
 export function __lifecycleRetain(id: NodeId): void {
 	lifecycleShift(id, 1);
@@ -1894,7 +1894,7 @@ function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | 
 	// always empty, so a write equal to the current pending value is simply
 	// dropped — this short-circuit is the whole rule. (Under a registered
 	// bridge the same drop applies only while the atom has no un-retired
-	// receipts: once history exists, different worlds may fold different
+	// log entries: once history exists, different worlds may fold different
 	// values.) Policy equality
 	// against the newest (pending) value here; the kernel's own identity
 	// compare covers the default.
@@ -1934,10 +1934,10 @@ type InstrumentedThenable = PromiseLike<unknown> & {
 	status?: 'pending' | 'fulfilled' | 'rejected';
 	value?: unknown;
 	reason?: unknown;
-	/** The thenable's stable SuspendedRead, minted lazily at the first read
+	/** The thenable's stable SuspendedRead, created lazily at the first read
 	 * that observes it pending — every read site throws THIS instance while
 	 * the thenable is pending, so observers can dedupe by identity. */
-	sr?: SuspendedRead;
+	suspendSentinel?: SuspendedRead;
 };
 
 /**
@@ -1975,7 +1975,7 @@ function unwrapThenable(t: InstrumentedThenable): unknown {
 		case 'rejected':
 			throw t.reason;
 		case 'pending':
-			throw (t.sr ??= new SuspendedRead(t));
+			throw (t.suspendSentinel ??= new SuspendedRead(t));
 		default: {
 			t.status = 'pending';
 			t.then(
@@ -1998,7 +1998,7 @@ function unwrapThenable(t: InstrumentedThenable): unknown {
 					}
 				},
 			);
-			throw (t.sr ??= new SuspendedRead(t));
+			throw (t.suspendSentinel ??= new SuspendedRead(t));
 		}
 	}
 }
@@ -2171,10 +2171,10 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
  * Errors rethrow the payload directly. Suspensions whose thenable already
  * settled self-heal (invalidate + recompute) so a read after `await` is
  * deterministic even before the settle listener's microtask runs; pending
- * suspensions throw the thenable's stable SuspendedRead (minted lazily on
+ * suspensions throw the thenable's stable SuspendedRead (created lazily on
  * it). The self-heal re-read recurses through the kernel tail at most once
  * more: a payload stored during the recursion necessarily carries a thenable
- * that was pending at mint, which throws — settlement cannot occur inside
+ * that was pending at creation, which throws — settlement cannot occur inside
  * this synchronous frame.
  */
 function boxedRead(c: NodeId, flags: NodeFlags): unknown {
@@ -2184,7 +2184,7 @@ function boxedRead(c: NodeId, flags: NodeFlags): unknown {
 	}
 	const t = values[v] as InstrumentedThenable;
 	if (t.status === undefined || t.status === 'pending') {
-		throw (t.sr ??= new SuspendedRead(t));
+		throw (t.suspendSentinel ??= new SuspendedRead(t));
 	}
 	E.invalidateComputed(c);
 	const next = E.computedRead(c);
@@ -2220,7 +2220,7 @@ export type AtomOptions<T> = {
 	/**
 	 * Policy equality for writes: an incoming value equal to the newest value
 	 * is dropped (unconditionally with no bridge registered; under a bridge,
-	 * only while the atom's write history holds no un-retired receipts). The
+	 * only while the atom's write history holds no un-retired log entries). The
 	 * kernel itself compares reference identity only; keep values
 	 * reference-stable rather than relying on deep equality.
 	 */
@@ -2558,10 +2558,10 @@ export function configure(options: ConfigureOptions): void {
 // ---- the concurrent-worlds engine (the host) --------------------------------------
 // ONE public entry: the batch/world machinery lives in ./concurrent.ts and is
 // re-exported here — `registerReactBridge()`, `CosignalBridge`, the bridge
-// surface types (Seq, BatchSlotSet, Receipt, BridgeEvent, …). Until
+// surface types (Seq, BatchSlotSet, WriteLogEntry, TraceEvent, …). Until
 // registerReactBridge() runs, none of it executes: the host seams above stay
 // undefined and every read/write short-circuits into the plain kernel path.
-// CURATED (no `export *`): the engine's internals — the packed Tape class,
+// CURATED (no `export *`): the engine's internals — the packed WriteLog class,
 // node/watcher class VALUES, module seams — stay importable only from
 // './concurrent.js' inside this package; consumers get the activation function,
 // the bridge, its error classes, the two @internal test seams the sibling
@@ -2591,12 +2591,12 @@ export type {
 	Subscription,
 	// operations and worlds (the tracing hook types stay on the
 	// `cosignal/trace` side of the seam; this entry never names them.
-	// Write ops travel as (kind, payload) scalars — HostOpKind above is the
-	// kind's name; the object shape survives only inside Receipt, the
+	// Write ops travel as (kind, payload) scalars — WriteKind above is the
+	// kind's name; the object shape survives only inside WriteLogEntry, the
 	// materialized test/trace surface)
-	Receipt,
+	WriteLogEntry,
 	World,
-	BridgeEvent,
+	TraceEvent,
 	Reader,
 	ComputedFn,
 	Equals,

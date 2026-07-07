@@ -30,11 +30,11 @@ which breaks in two ways:
   screen in the background while the current one stays interactive"
   behavior is lost.
 
-cosignal's engine solves this by recording every write as a **receipt** —
+cosignal's engine solves this by recording every write as a **log entry** —
 a compact record of the operation, the **batch** it belongs to (the group
 of writes making up one UI update), and its position on one global
 timeline. Each view of the state (a **world**) is computed by replaying
-exactly the receipts that view is allowed to see: a pending render's
+exactly the log entries that view is allowed to see: a pending render's
 world (its batches plus committed state, frozen when the render started),
 the committed world of a root (what is on screen), and the newest world
 (everything). This package wires those worlds to React: every component
@@ -97,7 +97,7 @@ This package re-exports the app-facing part of the engine surface —
 `Atom`, `ReducerAtom`, `effect`, `effectScope`, `batch`, `untracked`,
 `SuspendedRead` and their option types — so applications can import them
 from `cosignal-react` directly. Bridge internals (the `CosignalBridge`
-class, `Tape`, event/receipt types, …) are deliberately not re-exported;
+class, `WriteLog`, event/log entry types, …) are deliberately not re-exported;
 import those from `cosignal` if you are writing engine-level tooling.
 
 ## Hooks

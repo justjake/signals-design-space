@@ -19,7 +19,7 @@ for (const N of [8, 64]) {
 		useStateMs: stat(uM, 3),
 		cosignalMs: stat(cM, 3),
 		ratio: (median(cM) / median(uM)).toFixed(2),
-		steady: stat(c.byMetric.get(`steadyTape:N${N}`), 0),
+		steady: stat(c.byMetric.get(`steadyLog:N${N}`), 0),
 	});
 }
 console.log('\nSPK-R react results (wall ms per update round; COARSE; median [min..max] across processes)');

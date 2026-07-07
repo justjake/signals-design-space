@@ -6,8 +6,8 @@
 // reports per-write ns and evals per write as G grows. MODE=typeahead:
 // each keystroke writes into a parked action batch, discards the open
 // render pass, and starts+yields a fresh one; the batch retires only at the
-// end, so its receipts accumulate — reports per-keystroke ns, evals per
-// keystroke, and the receipt-history length every replay must walk.
+// end, so its log entries accumulate — reports per-keystroke ns, evals per
+// keystroke, and the log-history length every replay must walk.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 
@@ -62,13 +62,13 @@ function repBurst() {
 		b.retire(tok.id);
 	}
 	const evalsPerWrite = evals / (FRAMES * W);
-	const tapeLen = query.tp.length;
+	const logLen = query.log.length;
 	if (heldRender !== undefined) {
 		b.renderResume(heldRender.id);
 		b.renderEnd(heldRender.id, 'commit');
 	}
 	if (held !== undefined) b.settleAction(held.id);
-	return { writeNs: writeNs / (FRAMES * W), evalsPerWrite, tapeLen };
+	return { writeNs: writeNs / (FRAMES * W), evalsPerWrite, logLen };
 }
 
 function repTypeahead() {
@@ -87,14 +87,14 @@ function repTypeahead() {
 		const t1 = process.hrtime.bigint();
 		keyNs += Number(t1 - t0);
 	}
-	const tapeLen = query.tp.length; // retention/prefix length before settle
+	const logLen = query.log.length; // retention/prefix length before settle
 	const evalsPerKey = evals / KEYS;
 	b.renderResume(open.id);
 	b.renderEnd(open.id, 'commit');
 	b.settleAction(T.id);
 	const t1all = process.hrtime.bigint();
 	b.events.length = 0;
-	return { keyNs: keyNs / KEYS, evalsPerKey, tapeLen, runNs: Number(t1all - t0all) / KEYS };
+	return { keyNs: keyNs / KEYS, evalsPerKey, logLen, runNs: Number(t1all - t0all) / KEYS };
 }
 
 const rep = MODE === 'burst' ? repBurst : repTypeahead;
@@ -108,10 +108,10 @@ const base = { gate: 'SPK-G8', config: 'logged', shape, checksum };
 if (MODE === 'burst') {
 	row({ ...base, metric: `writeNs:${shape}`, value: med('writeNs') });
 	row({ ...base, metric: `evalsPerWrite:${shape}`, value: med('evalsPerWrite') });
-	row({ ...base, metric: `tapeLen:${shape}`, value: med('tapeLen') });
+	row({ ...base, metric: `logLen:${shape}`, value: med('logLen') });
 } else {
 	row({ ...base, metric: `keyNs:${shape}`, value: med('keyNs') });
 	row({ ...base, metric: `evalsPerKey:${shape}`, value: med('evalsPerKey') });
-	row({ ...base, metric: `tapeLen:${shape}`, value: med('tapeLen') });
+	row({ ...base, metric: `logLen:${shape}`, value: med('logLen') });
 	row({ ...base, metric: `runNsPerKey:${shape}`, value: med('runNs') });
 }

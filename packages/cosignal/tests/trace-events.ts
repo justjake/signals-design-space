@@ -1,11 +1,11 @@
 /**
  * The referee's packed-trace decoder. Since W5 ("tracer packed data is the
- * only form of events") the engine mints NO event objects: every
+ * only form of events") the engine creates NO event objects: every
  * instrumentation site writes a fixed-size record into the attached tracer,
- * and everything that used to read the retained BridgeEvent log — the twin
+ * and everything that used to read the retained TraceEvent log — the twin
  * driver's lockstep comparison, the oracle adapter, specs — attaches a
  * LOSSLESS SESSION tracer at bridge birth and decodes records back into
- * `BridgeEvent` objects (the decoded shape, still declared in
+ * `TraceEvent` objects (the decoded shape, still declared in
  * src/concurrent.ts because the package entry re-exports it) on demand here.
  *
  * The mapping is the exact inverse of the engine sites' packing, minus
@@ -13,7 +13,7 @@
  * root-commit's generation) and minus trace-only kinds (batch open/settle,
  * render start/yield/resume/end, evals, mount-fixup dispositions, deferred
  * releases, clock-sync, truncation): the decoded stream contains exactly the
- * BridgeEvent vocabulary, in mint order, with the FIELD ORDER the reference
+ * TraceEvent vocabulary, in create order, with the FIELD ORDER the reference
  * model's own event literals use — the twin and the oracle differ compare
  * streams by JSON, so key order is load-bearing.
  *
@@ -24,11 +24,11 @@
  * loudly. `attachRefereeStream` therefore attaches with a large ref
  * capacity (2^16) instead of the diagnostic default (256).
  */
-import type { BridgeEvent, CosignalBridge, Value } from '../src/concurrent.js';
-import { attachTracer, Tracer, type TraceEvent, type TracerOptions } from '../src/trace.js';
+import type { TraceEvent, CosignalBridge, Value } from '../src/concurrent.js';
+import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/trace.js';
 import type { ModelEvent } from '../../cosignal-oracle/src/model.js';
 
-// ---- BridgeEvent ≡ ModelEvent pin -------------------------------------------
+// ---- TraceEvent ≡ ModelEvent pin -------------------------------------------
 // The decoded-engine-event union and the reference model's event union are
 // maintained BY HAND in two deliberately-independent packages (importing
 // would weaken the oracle as a referee) and the lockstep differ compares
@@ -37,20 +37,20 @@ import type { ModelEvent } from '../../cosignal-oracle/src/model.js';
 // decoder is now the ONLY producer of the engine-side shape. Non-distributive
 // form on purpose: the WHOLE union must assign in both directions.
 type _EventStreamPin = [
-	[BridgeEvent] extends [ModelEvent] ? true : never,
-	[ModelEvent] extends [BridgeEvent] ? true : never,
+	[TraceEvent] extends [ModelEvent] ? true : never,
+	[ModelEvent] extends [TraceEvent] ? true : never,
 ];
 const _eventStreamPin: _EventStreamPin = [true, true];
 void _eventStreamPin;
 
 /**
- * One decoded trace event → the BridgeEvent it stands for, or undefined for
+ * One decoded trace event → the TraceEvent it stands for, or undefined for
  * trace-only kinds. Field order matches the reference model's literals.
  */
-export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
+export function decodeTraceEvent(e: TraceRecord): TraceEvent | undefined {
 	const d = e.data;
 	switch (e.kind) {
-		case 'write': // the receipt-borne record; `op` is a trace-only enrichment
+		case 'write': // the log-entry-borne record; `op` is a trace-only enrichment
 			return { type: 'write', node: d['node'] as string, batch: d['batch'] as number, slot: d['slot'] as number, seq: d['seq'] as number };
 		case 'write-dropped':
 			return { type: 'write-dropped', node: d['node'] as string, batch: d['batch'] as number };
@@ -91,8 +91,8 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 			return { type: 'render-discarded', renderPass: d['renderPass'] as number, root: d['root'] as string };
 		case 'epoch-reset':
 			return { type: 'epoch-reset', epoch: d['epoch'] as number };
-		// trace-only kinds: no BridgeEvent counterpart ('batch-disposition' is
-		// the bindings-minted committed/abandoned report — the model has no
+		// trace-only kinds: no TraceEvent counterpart ('batch-disposition' is
+		// the bindings-created committed/abandoned report — the model has no
 		// twin because neither side's retirement consumes the flag)
 		case 'batch-open':
 		case 'batch-settle':
@@ -110,12 +110,12 @@ export function decodeBridgeEvent(e: TraceEvent): BridgeEvent | undefined {
 	}
 }
 
-/** Every BridgeEvent decodable from `tr`, oldest first (a one-shot decode;
+/** Every TraceEvent decodable from `tr`, oldest first (a one-shot decode;
  * specs driving their own tracer use this — referees use RefereeStream). */
-export function decodedBridgeEvents(tr: Tracer): BridgeEvent[] {
-	const out: BridgeEvent[] = [];
+export function decodedTraceEvents(tr: Tracer): TraceEvent[] {
+	const out: TraceEvent[] = [];
 	for (const te of tr.events()) {
-		const be = decodeBridgeEvent(te);
+		const be = decodeTraceEvent(te);
 		if (be !== undefined) out.push(be);
 	}
 	return out;
@@ -123,7 +123,7 @@ export function decodedBridgeEvents(tr: Tracer): BridgeEvent[] {
 
 /**
  * The referee's view of one bridge's event stream: a lossless session tracer
- * plus an incrementally-maintained decode of its BridgeEvent-mapped records
+ * plus an incrementally-maintained decode of its TraceEvent-mapped records
  * (session records are immutable and ids are dense, so decoding forward from
  * a cursor is sound and each record decodes exactly once). Presents the
  * surface the retained log used to: `events`, `eventsOfType`, `eventsSince`,
@@ -131,7 +131,7 @@ export function decodedBridgeEvents(tr: Tracer): BridgeEvent[] {
  */
 export class RefereeStream {
 	readonly tracer: Tracer;
-	private decoded: BridgeEvent[] = [];
+	private decoded: TraceEvent[] = [];
 	private nextId = 0;
 
 	constructor(tracer: Tracer) {
@@ -139,20 +139,20 @@ export class RefereeStream {
 	}
 
 	/** All decoded events so far, oldest first (syncs, then returns the cache). */
-	get events(): BridgeEvent[] {
+	get events(): TraceEvent[] {
 		const head = this.tracer.stats().recorded;
 		for (let id = this.nextId; id < head; id++) {
 			const te = this.tracer.decode(id);
 			if (te === undefined) continue; // unreachable while the session stays lossless
-			const be = decodeBridgeEvent(te);
+			const be = decodeTraceEvent(te);
 			if (be !== undefined) this.decoded.push(be);
 		}
 		this.nextId = head;
 		return this.decoded;
 	}
 
-	eventsOfType<T extends BridgeEvent['type']>(type: T): Extract<BridgeEvent, { type: T }>[] {
-		return this.events.filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
+	eventsOfType<T extends TraceEvent['type']>(type: T): Extract<TraceEvent, { type: T }>[] {
+		return this.events.filter((e): e is Extract<TraceEvent, { type: T }> => e.type === type);
 	}
 
 	/** Cursor into the decoded stream (a mark for eventsSince). */
@@ -161,7 +161,7 @@ export class RefereeStream {
 	}
 
 	/** Events decoded after a caller-captured mark. */
-	eventsSince(mark: number): BridgeEvent[] {
+	eventsSince(mark: number): TraceEvent[] {
 		return this.events.slice(mark);
 	}
 }

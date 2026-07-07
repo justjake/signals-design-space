@@ -1,4 +1,4 @@
-// Measures per-write ns of the logged build (receipt append + eager core
+// Measures per-write ns of the logged build (log entry append + eager core
 // apply + marking/delivery walks + effect flush) on the same shapes as the
 // base-build child; writes run in windows of WINDOW per batch, retired
 // between windows — retirement excluded from writeNs, included in amortNs.

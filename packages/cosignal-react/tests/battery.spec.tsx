@@ -64,7 +64,7 @@ describe('battery (spec §6) at React level', () => {
 		// Divergence window: committed world (and the DOM) hold the old value
 		// while the newest world already folded the pending write.
 		expect(text(container)).toBe('c:10;s:1;');
-		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
+		const node = h.bridge.kernelIdToNode.get(a._id) as AtomNode;
 		expect(h.bridge.newestValue(node)).toBe(2);
 		gate.settled = true;
 		await act(async () => {
@@ -80,7 +80,7 @@ describe('battery (spec §6) at React level', () => {
 		// React level — verified empirically; the default-priority exclusion
 		// schedule is pinned engine-side (cosignal concurrent-battery). The
 		// React-reachable exclusion window is a DEFERRED batch, exercised here
-		// with case 2's real payload: the excluded write is logged (a receipt
+		// with case 2's real payload: the excluded write is logged (a log entry
 		// exists despite producing no React work yet) and folds later.
 		h = makeHarness();
 		const a = new Atom(0);
@@ -96,9 +96,9 @@ describe('battery (spec §6) at React level', () => {
 			React.startTransition(() => a.set(1)); // pending deferred batch
 			flushSync(() => b.set(2)); // urgent synchronous commit excludes it
 			mid = text(container);
-			// Always-log: the excluded write already holds a receipt.
-			const node = h.bridge.byKernelId.get(a._id) as AtomNode;
-			expect(node.tp.length).toBe(1);
+			// Always-log: the excluded write already holds a log entry.
+			const node = h.bridge.kernelIdToNode.get(a._id) as AtomNode;
+			expect(node.log.length).toBe(1);
 		});
 		expect(mid).toBe('a:0;b:2;');
 		await act(async () => {});
@@ -145,7 +145,7 @@ describe('battery (spec §6) at React level', () => {
 		// engine's retirement is disposition-blind. Both transitions here
 		// reached the screen, so every report says committed, and every report
 		// names a batch that then retired. (The ambient batch, which no
-		// protocol report ever names, correctly mints none.)
+		// protocol report ever names, correctly creates none.)
 		const dispositions = h.events.tracer.events('batch-disposition');
 		expect(dispositions.length).toBeGreaterThan(0);
 		for (const d of dispositions) {
@@ -167,7 +167,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(h.events.eventsOfType('write').length).toBeGreaterThanOrEqual(1);
 	});
 
-	test('case 6 — grouped writes in one handler: per-write receipts, one commit, consistent lane', async () => {
+	test('case 6 — grouped writes in one handler: per-write log entries, one commit, consistent lane', async () => {
 		h = makeHarness();
 		const a = new Atom(0);
 		const b = new Atom(0);
@@ -196,31 +196,31 @@ describe('battery (spec §6) at React level', () => {
 		});
 		expect(text(container)).toBe('1,2');
 		expect(renders).toBe(before + 1); // one commit for the event's writes
-		// Both writes carry batch attribution (receipts with batches), no grouping
+		// Both writes carry batch attribution (log entries with batches), no grouping
 		// machinery anywhere: two write events, each with a batch.
 		const writes = h.events.eventsOfType('write');
 		expect(writes.length).toBe(2);
 		for (const w of writes) expect(w.batch).toBeGreaterThan(0);
 	});
 
-	test('case 8 — equality drops never lose receipts once history exists', async () => {
+	test('case 8 — equality drops never lose log entries once history exists', async () => {
 		h = makeHarness();
 		const a = new Atom(0, { isEqual: (x, y) => x === y });
 		const { container } = await h.mount(<Reader id="a" atom={a} />);
 		await act(async () => {
-			React.startTransition(() => a.set(5)); // pending deferred receipt
+			React.startTransition(() => a.set(5)); // pending deferred log entry
 			// Equal to the PENDING newest value — but history is non-empty, so
-			// the receipt must be kept (the equality drop applies only to an
-			// atom with an empty tape): without it the urgent world (which
+			// the log entry must be kept (the equality drop applies only to an
+			// atom with an empty write log): without it the urgent world (which
 			// excludes the transition) would still show 0.
 			flushSync(() => a.set(5));
-			expect(text(container)).toBe('a:5;'); // the urgent receipt rendered
+			expect(text(container)).toBe('a:5;'); // the urgent log entry rendered
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:5;');
-		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
-		// Both writes held receipts (the retained referee event log counts
-		// them; the receipts themselves compacted into base at retirement).
+		const node = h.bridge.kernelIdToNode.get(a._id) as AtomNode;
+		// Both writes held log entries (the retained referee event log counts
+		// them; the log entries themselves compacted into base at retirement).
 		expect(h.events.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
 	});
 
@@ -349,8 +349,8 @@ describe('battery (spec §6) at React level', () => {
 		await act(async () => {});
 		// The batch retired through the same disposition-blind path: fold
 		// happened. React's "abandoned" report survives only as the shim's
-		// source-minted batch-disposition record — pin it with the right value.
-		const orphanNode = h.bridge.byKernelId.get(orphan._id)!;
+		// source-created batch-disposition record — pin it with the right value.
+		const orphanNode = h.bridge.kernelIdToNode.get(orphan._id)!;
 		expect(h.events.eventsOfType('retired').length).toBeGreaterThan(0);
 		const dispositions = h.events.tracer.events('batch-disposition');
 		expect(dispositions.some((d) => d.data['committed'] === false)).toBe(true);
@@ -514,7 +514,7 @@ describe('battery (spec §6) at React level', () => {
 		expect(text(container)).toBe('fb;');
 		// How many attempts React makes before/after the fallback is the
 		// scheduler's business (observed: the initial mount already renders
-		// the child twice, minting two nodes) — the CONTRACT pinned here is
+		// the child twice, creating two nodes) — the CONTRACT pinned here is
 		// only that discarded attempts do NOT share one cache: every attempt
 		// re-ran the factory, and the retry after settlement re-ran it again
 		// on a fresh node instead of replaying a dead node's entry.
@@ -652,11 +652,11 @@ describe('context-free writes (React batch id 0 is unreachable once a renderer p
 	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the id-0 state is unreachable', async () => {
 		// Unreachability, proven on the happy path: once a renderer provider
 		// exists (the shim's handshake asserts one),
-		// unstable_getCurrentWriteBatch() mints a nonzero React batch id for EVERY
+		// unstable_getCurrentWriteBatch() creates a nonzero React batch id for EVERY
 		// write — even from a bare timer-style call stack — with a guaranteed
 		// close edge. So the classifier's id-0 protocol-violation check
 		// (devChecks, armed by this harness) never fires in the React path,
-		// and no ambient batch is ever minted. dev-checks.spec.ts drives the
+		// and no ambient batch is ever created. dev-checks.spec.ts drives the
 		// id-0 state itself in a renderer-less environment.
 		h = makeHarness();
 		const a = new Atom(0);
@@ -678,7 +678,7 @@ describe('context-free writes (React batch id 0 is unreachable once a renderer p
 		// The out-of-context write while the window is open: NOT ambient — the
 		// protocol supplies a real write batch (urgent), with a close edge.
 		flag.set(7);
-		expect(h.bridge.ambientBatch).toBeUndefined(); // no ambient mint, ever
+		expect(h.bridge.ambientBatch).toBeUndefined(); // no ambient create, ever
 		expect(h.bridge.liveBatches().some((t) => !t.parked && !t.ambient)).toBe(true); // it rode a protocol batch
 		// The window closes: the action settles; the write's own batch closes
 		// via the protocol's guaranteed close edge. Nothing lives on.
@@ -688,9 +688,9 @@ describe('context-free writes (React batch id 0 is unreachable once a renderer p
 		});
 		await act(async () => {});
 		expect(h.bridge.liveBatches()).toHaveLength(0);
-		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (tapes compacted)
+		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (write logs compacted)
 		expect(h.bridge.quiet).toBe(true); // quiet mode re-armed for the next episode
-		const flagNode = h.bridge.byKernelId.get(flag._id)!;
+		const flagNode = h.bridge.kernelIdToNode.get(flag._id)!;
 		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // the write persisted (committed truth)
 		expect(text(container)).toBe('a:1;');
 	});
@@ -698,7 +698,7 @@ describe('context-free writes (React batch id 0 is unreachable once a renderer p
 	// (The shim's ambient-batch retirement policy — and its pin here — died
 	// with the classifier's bareWrite fallback: the classifier never routes
 	// to the engine's ambient batch anymore, so the shim owns no ambient
-	// retirement. The engine KEEPS bareWrite/ambient minting for
+	// retirement. The engine KEEPS bareWrite/ambient creation for
 	// classifier-less hosts (host-agnostic embedding); the engine suites and
 	// the oracle corpus pin that capability.)
 });

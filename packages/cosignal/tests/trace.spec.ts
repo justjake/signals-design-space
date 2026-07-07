@@ -10,10 +10,10 @@
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
-import { __newBridgeForTest, type BridgeEvent, type CosignalBridge } from '../src/concurrent.js';
-import { attachTracer, formatTrace, formatTraceEvent, Tracer, type TraceEvent, type TraceKind } from '../src/trace.js';
+import { __newBridgeForTest, type TraceEvent, type CosignalBridge } from '../src/concurrent.js';
+import { attachTracer, formatTrace, formatTraceRecord, Tracer, type TraceRecord, type TraceKind } from '../src/trace.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
-import { attachRefereeStream, decodeBridgeEvent, decodedBridgeEvents } from './trace-events.js';
+import { attachRefereeStream, decodeTraceEvent, decodedTraceEvents } from './trace-events.js';
 
 function tick(): () => number {
 	let t = 0;
@@ -21,19 +21,19 @@ function tick(): () => number {
 }
 
 /** All decoded events of a kind. */
-function all(tr: Tracer, kind: TraceKind): TraceEvent[] {
+function all(tr: Tracer, kind: TraceKind): TraceRecord[] {
 	return tr.events(kind);
 }
 
-function last(tr: Tracer, kind: TraceKind): TraceEvent {
+function last(tr: Tracer, kind: TraceKind): TraceRecord {
 	const found = all(tr, kind);
 	expect(found.length, `expected at least one ${kind} event`).toBeGreaterThan(0);
 	return found[found.length - 1]!;
 }
 
 /** The referee's view of the same records (the deleted object log's shape). */
-function bevents<T extends BridgeEvent['type']>(tr: Tracer, type: T): Extract<BridgeEvent, { type: T }>[] {
-	return decodedBridgeEvents(tr).filter((e): e is Extract<BridgeEvent, { type: T }> => e.type === type);
+function tevents<T extends TraceEvent['type']>(tr: Tracer, type: T): Extract<TraceEvent, { type: T }>[] {
+	return decodedTraceEvents(tr).filter((e): e is Extract<TraceEvent, { type: T }> => e.type === type);
 }
 
 describe('R11 event-class coverage (staged narrative, one traced bridge)', () => {
@@ -67,13 +67,13 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(tr.causeChain(fx.id).map((e) => e.kind)).toContain('render-end');
 	});
 
-	it('writes: batch-open, slot-claim, receipt payload with op, fresh delivery caused by the write', () => {
+	it('writes: batch-open, slot-claim, log entry payload with op, fresh delivery caused by the write', () => {
 		const k = b.openBatch();
 		b.write(k.id, flag, 0, 1);
 
 		expect(all(tr, 'batch-open')[0]!.data).toEqual({ batch: k.id, action: false, ambient: false });
 		expect(all(tr, 'slot-claim')[0]!.data).toEqual({ slot: 0, batch: k.id });
-		const seq = bevents(tr, 'write')[0]!.seq; // the slot claim minted its own seq before the write's
+		const seq = tevents(tr, 'write')[0]!.seq; // the slot claim created its own seq before the write's
 		const w1 = all(tr, 'write')[0]!;
 		expect(w1.data).toEqual({ node: 'flag', op: 'set', batch: k.id, slot: 0, seq });
 		expect(w1.cause).toBeUndefined(); // operation root
@@ -96,7 +96,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		const w2 = all(tr, 'write')[1]!;
 		expect(w2.cause).toBeUndefined(); // opEnd isolated the previous write's chain
 		const s = all(tr, 'suppressed')[0]!;
-		expect(s.data).toEqual({ watcher: 'W', batch: k, slot: 0, seq: bevents(tr, 'suppressed')[0]!.seq, reason: 'dedup-pending-fold' });
+		expect(s.data).toEqual({ watcher: 'W', batch: k, slot: 0, seq: tevents(tr, 'suppressed')[0]!.seq, reason: 'dedup-pending-fold' });
 		expect(s.cause).toBe(w2.id);
 	});
 
@@ -112,7 +112,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 		b.write(1, a, 0, 5);
 		const d = last(tr, 'delivery');
-		const seq = bevents(tr, 'write')[2]!.seq;
+		const seq = tevents(tr, 'write')[2]!.seq;
 		expect(d.data).toEqual({ watcher: 'W', batch: 1, slot: 0, seq, mode: 'interleaved' });
 
 		b.renderWatcher(p2.id, w.id);
@@ -123,7 +123,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		const end = all(tr, 'render-end')[1]!;
 		expect(end.data['disposition']).toBe('commit');
 		const ret = all(tr, 'batch-retire')[0]!;
-		expect(ret.data).toEqual({ batch: 1, retiredSeq: bevents(tr, 'retired')[0]!.retiredSeq });
+		expect(ret.data).toEqual({ batch: 1, retiredSeq: tevents(tr, 'retired')[0]!.retiredSeq });
 		expect(ret.cause).toBe(end.id); // retirement folded inside the commit
 		const rel = all(tr, 'slot-release')[0]!;
 		expect(rel.data).toEqual({ slot: 0, batch: 1 });
@@ -167,7 +167,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 	it('write-dropped (§5.3 step 2) records the dropped batch', () => {
 		const t4 = b.openBatch();
-		b.write(t4.id, bb, 0, 0); // empty tape, equal against base
+		b.write(t4.id, bb, 0, 0); // empty write log, equal against base
 		expect(last(tr, 'write-dropped').data).toEqual({ node: 'b', batch: t4.id });
 		b.retire(t4.id);
 	});
@@ -185,9 +185,9 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(ret.cause).toBe(settle.id);
 	});
 
-	it('batch-disposition: the bindings-minted report decodes {batch, committed} and claims no cause', () => {
-		// The engine never mints this kind — the React bindings' protocol
-		// handler does, through the same TraceHooks surface. Mint directly.
+	it('batch-disposition: the bindings-created report decodes {batch, committed} and claims no cause', () => {
+		// The engine never creates this kind — the React bindings' protocol
+		// handler does, through the same TraceHooks surface. Create directly.
 		tr.batchDisposition(41, true);
 		const yes = last(tr, 'batch-disposition');
 		expect(yes.data).toEqual({ batch: 41, committed: true });
@@ -197,7 +197,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		expect(no.cause).toBe(yes.cause); // not a cause-claiming kind: the register is untouched
 	});
 
-	it('ambient classification and op kinds: update receipts (reducer-style closures included); bare writes stay lint-free', () => {
+	it('ambient classification and op kinds: update log entries (reducer-style closures included); bare writes stay lint-free', () => {
 		const r = b.atom('r', 0);
 		b.bareWrite(r, 1, (s: unknown) => (s as number) + 1); // the closure form a ReducerAtom dispatch records
 		expect(last(tr, 'batch-open').data).toMatchObject({ ambient: true });
@@ -239,7 +239,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		b.mountWatcher(p5.id, c, 'W2'); // renders committed-at-pin: c = 42
 		const t6 = b.openBatch();
 		b.write(t6.id, a, 0, 50);
-		b.retire(t6.id); // cas moves past p5's pin
+		b.retire(t6.id); // committedAdvance moves past p5's pin
 		b.renderEnd(p5.id, 'commit');
 
 		const fx = last(tr, 'mount-fixup');
@@ -275,7 +275,7 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 		b.mountWatcher(p8.id, c, 'W4'); // c = 80
 		const t8 = b.openBatch();
 		b.write(t8.id, bb, 0, 123); // c is on the a-path: value unaffected
-		b.retire(t8.id); // cas moves → fast-out fails
+		b.retire(t8.id); // committedAdvance moves → fast-out fails
 		b.renderEnd(p8.id, 'commit');
 		expect(last(tr, 'mount-fixup').data).toEqual({ watcher: 'W4', root: 'A', disposition: 'compare-clean', correctives: 0 });
 	});
@@ -307,17 +307,17 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 
 	it('stable human format: fixed grammar #id +Δµs kind(subject) k=v … [<- #cause]', () => {
 		const w1 = all(tr, 'write')[0]!;
-		expect(formatTraceEvent(w1)).toMatch(/^#\d+ \+\d+µs write\(flag\) op=set batch=1 slot=0 seq=\d+$/);
+		expect(formatTraceRecord(w1)).toMatch(/^#\d+ \+\d+µs write\(flag\) op=set batch=1 slot=0 seq=\d+$/);
 		const d1 = all(tr, 'delivery')[0]!;
-		expect(formatTraceEvent(d1)).toMatch(/^#\d+ \+\d+µs delivery\(W\) batch=1 slot=0 seq=\d+ mode=fresh <- #\d+$/);
+		expect(formatTraceRecord(d1)).toMatch(/^#\d+ \+\d+µs delivery\(W\) batch=1 slot=0 seq=\d+ mode=fresh <- #\d+$/);
 		const fx = all(tr, 'mount-fixup')[0]!;
-		expect(formatTraceEvent(fx)).toMatch(/^#\d+ \+\d+µs mount-fixup\(W\) root=A disposition=fast-out correctives=0 <- #\d+$/);
+		expect(formatTraceRecord(fx)).toMatch(/^#\d+ \+\d+µs mount-fixup\(W\) root=A disposition=fast-out correctives=0 <- #\d+$/);
 		const rc = all(tr, 'root-commit')[0]!;
-		expect(formatTraceEvent(rc)).toMatch(/^#\d+ \+\d+µs root-commit\(A\) batch=2 commitGen=1 <- #\d+$/);
+		expect(formatTraceRecord(rc)).toMatch(/^#\d+ \+\d+µs root-commit\(A\) batch=2 commitGen=1 <- #\d+$/);
 	});
 
 	it('effectRunCount agrees with the referee-decoded stream', () => {
-		const expected = bevents(tr, 'react-effect-run').filter((e) => e.effect === 'RE').length;
+		const expected = tevents(tr, 'react-effect-run').filter((e) => e.effect === 'RE').length;
 		expect(tr.effectRunCount('RE')).toBe(expected);
 		expect(tr.effectRunCount('nope')).toBe(0);
 	});
@@ -345,10 +345,10 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 			const decoded = tr.events();
 			expect(decoded.length).toBe(tr.stats().recorded);
 
-			// the referee decoder maps every BridgeEvent-vocabulary record and
+			// the referee decoder maps every TraceEvent-vocabulary record and
 			// nothing else (kind-for-kind agreement with a manual partition)
-			const bridgeEvents = decodedBridgeEvents(tr);
-			const mapped = decoded.filter((e) => decodeBridgeEvent(e) !== undefined);
+			const bridgeEvents = decodedTraceEvents(tr);
+			const mapped = decoded.filter((e) => decodeTraceEvent(e) !== undefined);
 			expect(bridgeEvents.length, `seed ${seed}: referee coverage`).toBe(mapped.length);
 			// every render end has exactly one disposition record BEFORE its
 			// consequences and exactly one referee marker after them
@@ -410,7 +410,7 @@ describe('fixed memory under a tracer: the engine retains nothing on the tracer�
 			b.write(t.id, a, 0, i + 1);
 			b.retire(t.id);
 		}
-		expect(tr.stats().recorded).toBeGreaterThanOrEqual(N * 3); // every site minted, live (open+claim+write+retire+release per loop)
+		expect(tr.stats().recorded).toBeGreaterThanOrEqual(N * 3); // every site created, live (open+claim+write+retire+release per loop)
 		expect(tr.stats().retained).toBe(256); // into the fixed ring — nothing engine-side grew
 		expect(tr.stats().bytes).toBe(256 * 8 * 4); // record storage stayed exactly one ring
 		tr.stop();

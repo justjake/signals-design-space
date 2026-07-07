@@ -121,7 +121,7 @@ bridge.mountWatcher(render.id, cc2 as AnyNode, 'W');
 bridge.renderEnd(render.id, 'commit');
 for (let i = 0; i < 50; i++) {
 	const t = bridge.openBatch();
-	// update-op receipts make committed folds run the updater: foldAtom.
+	// update-op log entries make committed folds run the updater: foldAtom.
 	bridge.write(t.id, at as never, 1, (prev: unknown) => (prev as number) + 1);
 	bridge.retire(t.id);
 }

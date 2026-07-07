@@ -40,7 +40,7 @@ suites.
   immutable, so the schedule cannot exist.
 - **S34** — gating evaluator stages only at hook execution time leaves
   gaps. Same removal; unrepresentable.
-- **S37** — a coarse receipt-count gate on reads. The approach died on
+- **S37** — a coarse log-entry-count gate on reads. The approach died on
   its own declared cost terms; there is no correctness observable to
   pin.
 - **S39** — guarding Suspense settlement with generation counters alone

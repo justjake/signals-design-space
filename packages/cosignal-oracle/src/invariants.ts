@@ -3,24 +3,24 @@
  * one clause of the behavioral contract (stated in README.md):
  *
  * 1. fold determinism — evaluating any node twice in the same world agrees:
- *    folds (replays of a world's visible receipts over the atom's base —
+ *    folds (replays of a world's visible log entries over the atom's base —
  *    README vocabulary) and evaluations are pure, so a world's answer is a
  *    function of the schedule prefix, never of when you ask.
  * 2. tenancy orderings — the three sequence orderings that make slot
- *    recycling safe: an un-retired receipt bearing a slot belongs to the
+ *    recycling safe: an un-retired log entry bearing a slot belongs to the
  *    slot's current tenant (stamp-before-release), every previous tenant's
  *    retirement precedes the current claim (claim-after-release), and the
- *    current tenant's receipts and pins postdate the claim
+ *    current tenant's log entries and pins postdate the claim
  *    (pin/seq-after-claim). Together they let folds tell tenants apart by
  *    sequence alone.
- * 3. monotone sequence relations — tapes strictly increase, nothing exceeds
+ * 3. monotone sequence relations — write logs strictly increase, nothing exceeds
  *    the global counter, retirement stamps follow the writes they stamp.
- * 4. receipt-retention soundness — a pinned render can always reconstruct its
- *    world: the base+tape fold equals the full-history
- *    (origin+archive+tape) fold for every live world, i.e. compaction never
+ * 4. log-entry retention soundness — a pinned render can always reconstruct its
+ *    world: the base+log fold equals the full-history
+ *    (origin+archive+log) fold for every live world, i.e. compaction never
  *    changed any live world's answer.
  * 5. quiescence residue is zero — whenever no live pins/batches exist, every
- *    tape has fully compacted into its base.
+ *    write log has fully compacted into its base.
  * 6. structural coherence — at most 31 live batches, slot↔batch bindings
  *    agree both ways, per-root commit rows never name retired batches (rows
  *    clear at retirement, before slot release), one open render per root.
@@ -66,13 +66,13 @@ export function checkInvariants(m: CosignalModel): void {
 }
 
 function atoms(m: CosignalModel): AtomNode[] {
-	return [...m.nodes.values()].filter((n): n is AtomNode => n.kind === 'atom');
+	return [...m.idToNode.values()].filter((n): n is AtomNode => n.kind === 'atom');
 }
 
 /** Invariant 1 — evaluating any node twice in the same world agrees (purity). */
 function checkFoldDeterminism(m: CosignalModel): void {
 	for (const w of relevantWorlds(m)) {
-		for (const n of m.nodes.values()) {
+		for (const n of m.idToNode.values()) {
 			const a = m.evaluate(n, w);
 			const b = m.evaluate(n, w);
 			if (!Object.is(a, b)) {
@@ -87,12 +87,12 @@ function checkTenancy(m: CosignalModel): void {
 	for (const slot of m.slots) {
 		const tenant = slot.tenant;
 		for (const atom of atoms(m)) {
-			for (const e of atom.tape) {
+			for (const e of atom.log) {
 				if (e.slot !== slot.id) continue;
 				if (e.retiredSeq === undefined) {
 					// Stamp-before-release: un-retired entries bearing slot s belong to exactly its current tenant.
 					if (tenant !== e.batch) {
-						fail(`tenancy: un-retired receipt (seq ${e.seq}, batch ${e.batch}) bears slot ${slot.id} owned by ${String(tenant)}`);
+						fail(`tenancy: un-retired log entry (seq ${e.seq}, batch ${e.batch}) bears slot ${slot.id} owned by ${String(tenant)}`);
 					}
 				} else if (tenant !== undefined && tenant !== e.batch) {
 					// Claim-after-release: every retirement sequence of a previous tenant precedes the current claim.
@@ -101,8 +101,8 @@ function checkTenancy(m: CosignalModel): void {
 					}
 				}
 				if (tenant === e.batch && e.seq <= slot.claimSeq) {
-					// Pin/seq-after-claim: any receipt of the current tenant has a sequence above the claim.
-					fail(`tenancy: tenant ${e.batch} receipt seq ${e.seq} ≤ claim ${slot.claimSeq} of slot ${slot.id}`);
+					// Pin/seq-after-claim: any log entry of the current tenant has a sequence above the claim.
+					fail(`tenancy: tenant ${e.batch} log entry seq ${e.seq} ≤ claim ${slot.claimSeq} of slot ${slot.id}`);
 				}
 			}
 		}
@@ -122,21 +122,21 @@ function checkTenancy(m: CosignalModel): void {
 function checkMonotone(m: CosignalModel): void {
 	for (const atom of atoms(m)) {
 		let prev = atom.baseSeq;
-		for (const e of atom.tape) {
-			if (e.seq <= prev) fail(`monotone: tape of ${atom.name} not strictly increasing at seq ${e.seq}`);
+		for (const e of atom.log) {
+			if (e.seq <= prev) fail(`monotone: write log of ${atom.name} not strictly increasing at seq ${e.seq}`);
 			prev = e.seq;
-			if (e.seq > m.seq) fail(`monotone: receipt seq ${e.seq} above the global counter ${m.seq}`);
+			if (e.seq > m.seq) fail(`monotone: log entry seq ${e.seq} above the global counter ${m.seq}`);
 			if (e.retiredSeq !== undefined && e.retiredSeq <= e.seq) {
 				fail(`monotone: retiredSeq ${e.retiredSeq} ≤ write seq ${e.seq} on ${atom.name}`);
 			}
 			const batch = m.idToBatch.get(e.batch);
-			if (batch === undefined) fail(`receipt names unknown batch ${e.batch}`);
+			if (batch === undefined) fail(`log entry names unknown batch ${e.batch}`);
 			if (batch.state === 'retired') {
 				if (e.retiredSeq !== batch.retiredSeq) {
-					fail(`retired batch ${batch.id} has receipt with retiredSeq ${String(e.retiredSeq)} ≠ batch stamp ${String(batch.retiredSeq)}`);
+					fail(`retired batch ${batch.id} has log entry with retiredSeq ${String(e.retiredSeq)} ≠ batch stamp ${String(batch.retiredSeq)}`);
 				}
 			} else if (e.retiredSeq !== undefined) {
-				fail(`live batch ${batch.id} has a retirement-stamped receipt`);
+				fail(`live batch ${batch.id} has a retirement-stamped log entry`);
 			}
 		}
 	}
@@ -148,7 +148,7 @@ function checkMonotone(m: CosignalModel): void {
 	}
 }
 
-/** Invariant 4 — receipt-retention soundness: compaction never changed any live world's fold. */
+/** Invariant 4 — log-entry retention soundness: compaction never changed any live world's fold. */
 function checkRetention(m: CosignalModel): void {
 	for (const w of relevantWorlds(m)) {
 		for (const atom of atoms(m)) {
@@ -161,12 +161,12 @@ function checkRetention(m: CosignalModel): void {
 	}
 }
 
-/** Invariant 5 — with no live pins and no live batches, every tape has compacted to base. */
+/** Invariant 5 — with no live pins and no live batches, every write log has compacted to base. */
 function checkResidue(m: CosignalModel): void {
 	if (!m.quiescent()) return;
 	for (const atom of atoms(m)) {
-		if (atom.tape.length > 0) {
-			fail(`residue: quiescent but ${atom.name} retains ${atom.tape.length} receipts`);
+		if (atom.log.length > 0) {
+			fail(`residue: quiescent but ${atom.name} retains ${atom.log.length} log entries`);
 		}
 	}
 }

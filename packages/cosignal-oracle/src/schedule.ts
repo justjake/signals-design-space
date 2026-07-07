@@ -93,7 +93,7 @@ export type RunResult = {
  * Exported for the engine-adapter harness (src/adapter.ts).
  */
 export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
-	const allNodes = [...m.nodes.values()];
+	const allNodes = [...m.idToNode.values()];
 	const atoms = allNodes.filter((n): n is AtomNode => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
 	const writeOp = (kind: WriteKind, value: number, atomIdx: number): Op => {
@@ -273,7 +273,7 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 export function fingerprint(result: RunResult): string {
 	const m = result.model;
 	const values: Record<string, Value> = {};
-	for (const n of m.nodes.values()) {
+	for (const n of m.idToNode.values()) {
 		values[`newest:${n.name}`] = m.newestValue(n);
 		for (const root of m.roots.keys()) values[`committed:${root}:${n.name}`] = m.committedValue(n, root);
 	}

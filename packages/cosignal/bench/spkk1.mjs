@@ -32,7 +32,7 @@ const out = {
 	'write ns first window': stat(g('writeNsFirstWin'), 0),
 	'write ns last window': stat(g('writeNsLastWin'), 0),
 	'K1 edges/h': stat(g('k1EdgesPerHour'), 0),
-	'tape at end (receipts)': stat(g('tapeEnd'), 0),
+	'log at end (entries)': stat(g('logEnd'), 0),
 	'batch records/h': stat(g('batchesPerHour'), 0),
 	'render passes/h': stat(g('renderPassesPerHour'), 0),
 	'events/h (allocated either way)': stat(g('eventsPerHour'), 0),

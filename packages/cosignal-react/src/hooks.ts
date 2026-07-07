@@ -5,7 +5,7 @@
  * recording) and couples it to a protocol-v1 React build via the Shim.
  *
  * Watcher lifecycle, shared by the subscription hooks (a watcher is the
- * engine's record of one subscribed component instance): render mints (or
+ * engine's record of one subscribed component instance): render creates (or
  * re-tracks) a watcher in the current render's world, so the component reads
  * the view of the render it is part of; the layout effect claims the
  * subscription after commit (StrictMode's double-mount nets to one live
@@ -133,7 +133,7 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 	const state = ref.current;
 
 	// Signal identity changed across renders: queue the old subscription for
-	// teardown (finalized at the next layout effect) and mint a fresh one.
+	// teardown (finalized at the next layout effect) and create a fresh one.
 	if (state.current !== null && state.current.node !== node) {
 		state.retired.push(state.current);
 		state.current = null;
@@ -149,15 +149,15 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 		rec.root = rendering.id;
 		const w = rec.watcherId === undefined ? undefined : bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
-			// Mount: mint the watcher in this render's world; the value it renders
+			// Mount: create the watcher in this render's world; the value it renders
 			// is captured so the commit-edge fixup can compare against it.
 			value = shim.hookRead(() => {
-				const minted = bridge.mountWatcher(render.id, node, 'w?');
-				minted.name = `w${minted.id}`;
-				rec.watcherId = minted.id;
-				shim.targets.set(minted.id, rec.target);
-				shim.noteMinted(rendering, minted.id);
-				return minted.lastRenderedValue;
+				const created = bridge.mountWatcher(render.id, node, 'w?');
+				created.name = `w${created.id}`;
+				rec.watcherId = created.id;
+				shim.targets.set(created.id, rec.target);
+				shim.noteCreated(rendering, created.id);
+				return created.lastRenderedValue;
 			});
 		} else if (w.live) {
 			// Re-render: re-arm the watcher's delivery dedup and read this render's world.
@@ -169,8 +169,8 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 			// so the commit-edge mount fixup reconciles it — against batches this
 			// render did not include, and against committed state — as if it were
 			// a fresh mount.
-			bridge.adoptMount(render.id, w.id);
-			shim.noteMinted(rendering, w.id);
+			bridge.adoptRevealedMount(render.id, w.id);
+			shim.noteCreated(rendering, w.id);
 			value = shim.hookRead(() => bridge.renderValue(node, render));
 		}
 	} else {
@@ -206,7 +206,7 @@ let nextComputedSerial = 1;
 /**
  * A derived value scoped to the component, with useMemo semantics applied to
  * node identity: while `deps` are equal you keep the same node (nothing is
- * minted); when `deps` change, a fresh node capturing the new closure is
+ * created); when `deps` change, a fresh node capturing the new closure is
  * created in work-in-progress hook state — adopted if the render commits,
  * dropped if the render is discarded. Returns a real kernel `Computed`
  * handle (S-C: one computed) whose `.state` reads in the current render's
@@ -231,7 +231,7 @@ let nextComputedSerial = 1;
  * handle — by then every subscription hook re-keyed to the replacement), so
  * kernel ids recycle instead of leaking per deps change; the §4.5.3 GEN
  * discipline makes the reuse sound. Discarded render attempts leak their
- * minted node exactly as the overlay representation did (never current, so
+ * created node exactly as the overlay representation did (never current, so
  * never disposed) — bounded by React's own discard rate.
  */
 export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unknown[]): Computed<T> {
@@ -364,7 +364,7 @@ export function startSignalTransition(fn: () => unknown): void {
 		// batch context (React batch id 0, dev checks off) there is no batch to park:
 		// the action runs and its writes classify as they land — ordinary
 		// urgent writes, the same fall-through as the write classifier —
-		// rather than minting a parked batch nothing could ever settle.
+		// rather than creating a parked batch nothing could ever settle.
 		if (reactBatchId !== 0) shim.batchForReactBatch(reactBatchId, { action: true });
 		// Returning fn's thenable keeps the transition pending until it settles
 		// (React async-action semantics); the protocol host retires the batch

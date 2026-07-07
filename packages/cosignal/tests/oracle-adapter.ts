@@ -34,7 +34,7 @@ import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../.
 import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
 
-// (The BridgeEvent ≡ ModelEvent type-parity pin moved to trace-events.ts,
+// (The TraceEvent ≡ ModelEvent type-parity pin moved to trace-events.ts,
 // beside the decoder — the only producer of the engine-side shape now.)
 
 /** The reference model's fixed fuzz topology (buildTopology in its schedule.ts), rebuilt on the engine. */
@@ -96,7 +96,7 @@ function watcherAt(b: CosignalBridge, index: number): number {
  * diverge once a core effect mounts, which is why resolution is positional). */
 function effectAt(b: CosignalBridge, index: number): number {
 	const ids: number[] = [];
-	for (const s of b.subs.values()) ids.push(s.id);
+	for (const s of b.idToSubscription.values()) ids.push(s.id);
 	if (ids.length === 0) throw new BridgeScheduleError('no react effects yet');
 	return ids[index % ids.length]!;
 }
@@ -110,12 +110,12 @@ const appliedOps = new WeakMap<CosignalBridge, number>();
 
 /** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin).
  * `namingEvents` (when given) replaces the engine's own op count in the
- * `${events}.${seq}.${epoch}` uniq: the model mints names off ITS stream
+ * `${events}.${seq}.${epoch}` uniq: the model creates names off ITS stream
  * length, and since S-B the engine legitimately delivers FEWER deliveryish
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
  * so name parity requires the MODEL's count — the differ supplies it. */
 export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: number): boolean {
-	const allNodes = [...b.nodes.values()];
+	const allNodes = [...b.idToNode.values()];
 	const atoms = allNodes.filter((n): n is AtomNode => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
 	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
@@ -133,7 +133,7 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 	appliedOps.set(b, opIndex);
 	const uniq = `${namingEvents ?? opIndex}.${b.seq}.${b.epoch}`;
 	const reg = registryOf(b);
-	/** bareWrite may mint the ambient batch — mirror the model's map growth. */
+	/** bareWrite may create the ambient batch — mirror the model's map growth. */
 	const syncAmbient = (): void => {
 		const amb = b.ambientBatch;
 		if (amb !== undefined && reg.batches[reg.batches.length - 1] !== amb && !reg.batches.includes(amb)) {
@@ -378,7 +378,7 @@ export function diffAgainstModelTolerant(
 // notification (delivery / suppression / mount-corrective) since that
 // render — otherwise S-B's routing silently stopped notifying. Scoped per
 // m3 to the class it can police, excluding its counterexamples:
-//   - quiet-mode corrections (a quiet fold's corrections mint no
+//   - quiet-mode corrections (a quiet fold's corrections create no
 //     'reconcile-correction' event — the fold's own 'quiet-write' event is
 //     its whole stream — so DPC never sees them; and quiet requires zero
 //     live batches, so no retire/settle boundary observes a quiet window);
@@ -445,7 +445,7 @@ class DeliveryPrecedesCorrection {
 					continue;
 				}
 				const w = [...b.watchers.values()].find((x) => x.name === name);
-				const node = w !== undefined ? b.nodes.get(w.node) : undefined;
+				const node = w !== undefined ? b.idToNode.get(w.node) : undefined;
 				const untrackedConsumer = node !== undefined && node.name === 'cMix';
 				if (
 					singleBoundary &&

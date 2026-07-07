@@ -22,9 +22,9 @@ import { CosignalModel, type ModelEvent, type Value } from './model.js';
 import { applyOneOp, buildTopology, type ScheduleOp } from './schedule.js';
 
 /** Event kinds an engine must reproduce 1:1, in order. Others are model-internal.
- * 'quiet-write' is compared so the harness referees the quiet-vs-receipt
+ * 'quiet-write' is compared so the harness referees the quiet-vs-log entry
  * write-path decision itself: an engine that folds where the model appends a
- * receipt (or vice versa) diverges at the exact step, not just downstream. */
+ * log entry (or vice versa) diverges at the exact step, not just downstream. */
 const COMPARED_EVENTS: ModelEvent['type'][] = [
 	'quiet-write',
 	'delivery',
@@ -60,15 +60,15 @@ export function snapshotModel(m: CosignalModel): ObservableSnapshot {
 	const newest: Record<string, Value> = {};
 	const committed: Record<string, Record<string, Value>> = {};
 	const renderPasses: Record<string, Record<string, Value>> = {};
-	for (const n of m.nodes.values()) newest[n.name] = m.newestValue(n);
+	for (const n of m.idToNode.values()) newest[n.name] = m.newestValue(n);
 	for (const root of m.roots.keys()) {
 		committed[root] = {};
-		for (const n of m.nodes.values()) committed[root]![n.name] = m.committedValue(n, root);
+		for (const n of m.idToNode.values()) committed[root]![n.name] = m.committedValue(n, root);
 	}
 	for (const p of m.idToRenderPass.values()) {
 		if (p.state === 'ended') continue;
 		renderPasses[String(p.id)] = {};
-		for (const n of m.nodes.values()) renderPasses[String(p.id)]![n.name] = m.renderValue(n, p);
+		for (const n of m.idToNode.values()) renderPasses[String(p.id)]![n.name] = m.renderValue(n, p);
 	}
 	return { newest, committed, renderPasses };
 }

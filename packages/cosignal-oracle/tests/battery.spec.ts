@@ -9,7 +9,7 @@
  *   1  a computed whose dependencies differ between worlds (flag-flip) —
  *      the shape naive stores tear on; plus its family members: untracked
  *      reads (whose conservative marking the engine calls "taint"),
- *      receipt retention, write storms, cycles, and node recreation
+ *      log entry retention, write storms, cycles, and node recreation
  *   2  a synchronous render excluding a pending default batch sees only
  *      old values — never a half-applied frame
  *   3  functional updates replay in write order over the pre-batch base
@@ -20,7 +20,7 @@
  *   6  no implicit grouping: each write delivers in its own batch context
  *   7  writes and reads during a paused render (the pinned world never
  *      drifts; gap code reads newest)
- *   8  equality drops never lose receipts (only an empty-tape no-op drops)
+ *   8  equality drops never lose log entries (only an empty-log no-op drops)
  *   9  mounting mid-transition (own render, foreign retirement, own-commit
  *      late write, stayed-live variant, hidden-then-revealed subtree)
  *  10  a late subscriber joins the pending batch it missed
@@ -173,9 +173,9 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		expect(m.eventsOfType('slot-released').some((e) => e.batch === u.id)).toBe(true);
 		m.renderResume(p.id);
 		expect(m.renderValue(n, p)).toBe(15); // U retired after the pin (not history yet) and only T is included: a=5 → 15; U invisible
-		const uTape = m.nodes.get(a.id);
-		expect(uTape).toBeDefined();
-		expect(a.tape.length).toBeGreaterThan(0); // pin-blocked from compaction
+		const uLog = m.idToNode.get(a.id);
+		expect(uLog).toBeDefined();
+		expect(a.log.length).toBeGreaterThan(0); // pin-blocked from compaction
 		// later tenant V claims the freed slot and writes a=2: P still excludes it
 		const v = m.openBatch();
 		m.write(v.id, a, set(2));
@@ -188,7 +188,7 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		selfCheck(m);
 	});
 
-	it('storm member: slot demand collapses to live + mask-retained; receipts all survive', () => {
+	it('storm member: slot demand collapses to live + mask-retained; log entries all survive', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch();
@@ -202,14 +202,14 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		}
 		const inUse = m.slots.filter((s) => s.tenant !== undefined).length;
 		expect(inUse).toBeLessThanOrEqual(3); // T plus the recycling urgent slot(s); never approaching 31
-		expect(a.tape.length).toBe(41); // pin 100-style retention: all receipts stay (held pin blocks compaction)
+		expect(a.log.length).toBe(41); // pin 100-style retention: all log entries stay (held pin blocks compaction)
 		expect(m.renderValue(a, held)).toBe(100); // held world: only T visible
 		expect(m.committedValue(a, 'A')).toBe(40);
 		m.renderResume(held.id);
 		m.renderEnd(held.id, 'discard');
 		m.retire(t.id);
 		expect(m.committedValue(a, 'A')).toBe(40); // replay by sequence: +100 first, then the sets
-		expect(a.tape.length).toBe(0); // everything compacted once pins released
+		expect(a.log.length).toBe(0); // everything compacted once pins released
 		selfCheck(m);
 	});
 
@@ -285,14 +285,14 @@ describe('case 3 — rebase parity (React updater-queue arithmetic)', () => {
 		m.write(t.id, a, update((x) => (x as number) + 1)); // append (2 ≠ 1)
 		expect(m.newestValue(a)).toBe(2);
 		const u = m.openBatch();
-		m.write(u.id, a, update((x) => (x as number) * 2)); // tape non-empty ⇒ always append
+		m.write(u.id, a, update((x) => (x as number) * 2)); // write log non-empty ⇒ always append
 		expect(m.newestValue(a)).toBe(4);
 		const pu = openRender(m, 'A', [u]);
 		expect(m.renderValue(a, pu)).toBe(2); // base 1; T excluded; ×2 → 2
 		m.renderEnd(pu.id, 'commit', { retireAtCommit: [u.id] });
 		expect(m.committedValue(a, 'A')).toBe(2);
 		expect(a.base).toBe(1); // compaction blocked: s1 (unretired) is a prefix hole — folding ×2 would commit 3
-		expect(a.tape).toHaveLength(2);
+		expect(a.log).toHaveLength(2);
 		const pt = openRender(m, 'A', [t]);
 		expect(m.renderValue(a, pt)).toBe(4); // (1+1)×2 — mask{T} ∪ retired U, replayed by sequence
 		m.renderEnd(pt.id, 'commit', { retireAtCommit: [t.id] });
@@ -426,26 +426,26 @@ describe('case 7 — writes and reads during a yielded render pass', () => {
 	});
 });
 
-describe('case 8 — equality drops must not lose receipts', () => {
-	it('equal-to-newest writes append; abandonment folds; only the empty-tape equal drop is legal', () => {
+describe('case 8 — equality drops must not lose log entries', () => {
+	it('equal-to-newest writes append; abandonment folds; only the empty-log equal drop is legal', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0);
 		const t = m.openBatch();
-		m.write(t.id, a, set(1)); // tape empty, 1 ≠ 0 ⇒ append
+		m.write(t.id, a, set(1)); // write log empty, 1 ≠ 0 ⇒ append
 		const u = m.openBatch();
-		m.write(u.id, a, set(1)); // equal to the NEWEST value: tape non-empty ⇒ ALWAYS append
-		expect(a.tape).toHaveLength(2);
+		m.write(u.id, a, set(1)); // equal to the NEWEST value: write log non-empty ⇒ ALWAYS append
+		expect(a.log).toHaveLength(2);
 		const pu = openRender(m, 'A', [u]);
 		expect(m.renderValue(a, pu)).toBe(1); // U's render (excluding T): base 0 + U's set → 1
 		m.renderEnd(pu.id, 'commit', { retireAtCommit: [u.id] });
 		m.retire(t.id); // T abandoned: retirement is disposition-blind — identical fold path
-		expect(m.committedValue(a, 'A')).toBe(1); // U's receipt independently commits 1
-		// the legal drop: quiescent tape-free equal write
+		expect(m.committedValue(a, 'A')).toBe(1); // U's log entry independently commits 1
+		// the legal drop: quiescent log-free equal write
 		const q = m.atom('q', 3);
 		const d = m.openBatch();
 		m.write(d.id, q, set(3));
 		expect(m.eventsOfType('write-dropped').filter((e) => e.node === 'q')).toHaveLength(1);
-		expect(q.tape).toHaveLength(0);
+		expect(q.log).toHaveLength(0);
 		m.retire(d.id);
 		selfCheck(m);
 	});
@@ -457,7 +457,7 @@ describe('case 8 — equality drops must not lose receipts', () => {
 		const t2 = m.openBatch();
 		m.write(t1.id, a, set(1));
 		m.write(t2.id, a, set(1));
-		expect(a.tape).toHaveLength(2);
+		expect(a.log).toHaveLength(2);
 		const p1 = openRender(m, 'A', [t1]);
 		expect(m.renderValue(a, p1)).toBe(1);
 		m.renderEnd(p1.id, 'commit', { retireAtCommit: [t1.id] });
@@ -564,13 +564,13 @@ describe('case 9 — mount mid-transition (existing and fresh nodes)', () => {
 		const hidden = openRender(m, 'A', []); // Activity pre-renders W hidden (pin p1, mask ∅)
 		const w = m.mountWatcher(hidden.id, c, 'W');
 		expect(w.lastRenderedValue).toBe(1);
-		m.deferMount(w.id); // effects deferred: the hidden commit runs no fixup for W
+		m.deferMountEffects(w.id); // effects deferred: the hidden commit runs no fixup for W
 		m.renderEnd(hidden.id, 'commit');
 		expect(w.live).toBe(false);
 		const u = m.openBatch(); // one event writes a@s2 > p1 and reveals
 		m.write(u.id, a, set(6));
 		const pu = openRender(m, 'A', [u]);
-		m.adoptMount(pu.id, w.id); // W's layout effects fire inside u's commit
+		m.adoptRevealedMount(pu.id, w.id); // W's layout effects fire inside u's commit
 		m.renderEnd(pu.id, 'commit', { retireAtCommit: [u.id] });
 		// the same-render condition FAILS (mounted by an older render) ⇒ conservative
 		// fall-through ⇒ the fast-forwarded compare corrects pre-paint
@@ -689,7 +689,7 @@ describe('case 12 — store-only transitions persist; async is React parity', ()
 		expect(m.committedValue(a, 'A')).toBe(2); // BEFORE the action settles — React parity
 		m.settleAction(t.id); // T settles ⇒ retires; replay base→set(1)→set(2) by seq
 		expect(m.committedValue(a, 'A')).toBe(2); // committed stays 2 (write order wins)
-		expect(a.tape).toHaveLength(0); // full prefix retired ⇒ compaction
+		expect(a.log).toHaveLength(0); // full prefix retired ⇒ compaction
 		expect(a.base).toBe(2);
 		selfCheck(m);
 	});
@@ -786,7 +786,7 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 			return 0;
 		});
 		expect(() => m.newestValue(evil)).toThrow(/write during a world evaluation/);
-		expect(a.tape).toHaveLength(0); // nothing landed
+		expect(a.log).toHaveLength(0); // nothing landed
 		misbehave = false; // the node behaves from here so the invariant sweep can evaluate it
 		m.retire(t.id);
 		selfCheck(m);
@@ -1016,7 +1016,7 @@ describe('case 17 — optimistic rollback: the feature is deleted', () => {
 		for (const forbidden of ['truncate', 'rollback', 'revert', 'undo']) {
 			expect(surface.filter((s) => s.includes(forbidden))).toHaveLength(0);
 		}
-		// receipts cannot be un-appended: the op vocabulary is set/update only
+		// log entries cannot be un-appended: the op vocabulary is set/update only
 		const a = m.atom('a', 0);
 		const t = m.openBatch();
 		m.write(t.id, a, set(1));

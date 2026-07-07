@@ -7,7 +7,7 @@
  * the other.
  *
  *  - `dependencyGraphToDot(bridge)` — a snapshot of the live dependency
- *    graph: atoms (annotated with how many receipts their history currently
+ *    graph: atoms (annotated with how many log entries their history currently
  *    holds), computeds, the dependency edges the live per-world arenas
  *    currently hold (the structure the routing walks consult — links follow
  *    each world's latest evaluations and persist with their arenas), and
@@ -19,7 +19,7 @@
  */
 
 import type { CosignalBridge } from './concurrent.js';
-import type { TraceEvent, TraceKind } from './trace.js';
+import type { TraceRecord, TraceKind } from './trace.js';
 
 function q(s: string): string {
 	return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -28,10 +28,10 @@ function q(s: string): string {
 /** Snapshot of the live dependency graph: nodes, recorded dependency edges, observers. */
 export function dependencyGraphToDot(bridge: CosignalBridge): string {
 	const lines: string[] = ['digraph cosignal {', '\trankdir=LR;', '\tnode [fontname="monospace"];'];
-	for (const n of bridge.nodes.values()) {
+	for (const n of bridge.idToNode.values()) {
 		if (n.kind === 'atom') {
-			const tape = n.tp.length > 0 ? `|tape:${n.tp.length}` : '';
-			lines.push(`\tn${n.id} [shape=box, label=${q(`${n.name}#${n.id}${tape}`)}];`);
+			const log = n.log.length > 0 ? `|log:${n.log.length}` : '';
+			lines.push(`\tn${n.id} [shape=box, label=${q(`${n.name}#${n.id}${log}`)}];`);
 		} else {
 			lines.push(`\tn${n.id} [shape=ellipse, label=${q(`${n.name}#${n.id}`)}];`);
 		}
@@ -44,16 +44,16 @@ export function dependencyGraphToDot(bridge: CosignalBridge): string {
 		lines.push(`\tw${w.id} [shape=house, label=${q(`${w.name}@${w.root}`)}];`);
 		lines.push(`\tn${w.node} -> w${w.id} [style=dashed];`);
 	}
-	for (const e of bridge.subs.values()) {
-		lines.push(`\te${e.id} [shape=cds, label=${q(`${e.name}@${e.root} runs:${e.runs}`)}];`);
-		for (const d of e.deps) lines.push(`\tn${d.node.id} -> e${e.id} [style=dotted];`);
+	for (const sub of bridge.idToSubscription.values()) {
+		lines.push(`\te${sub.id} [shape=cds, label=${q(`${sub.name}@${sub.root} runs:${sub.runs}`)}];`);
+		for (const d of sub.deps) lines.push(`\tn${d.node.id} -> e${sub.id} [style=dotted];`);
 	}
 	lines.push('}');
 	return lines.join('\n');
 }
 
 /** The causal graph of a decoded trace slice; `filter` keeps matching events only. */
-export function traceToDot(events: TraceEvent[], filter?: (e: TraceEvent) => boolean): string {
+export function traceToDot(events: TraceRecord[], filter?: (e: TraceRecord) => boolean): string {
 	const kept = filter === undefined ? events : events.filter(filter);
 	const ids = new Set(kept.map((e) => e.id));
 	const lines: string[] = ['digraph trace {', '\tnode [fontname="monospace", shape=box];'];

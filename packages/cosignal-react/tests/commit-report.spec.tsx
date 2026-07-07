@@ -24,7 +24,7 @@ import { useSignal } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
 /** The shim internals this suite drives directly (private in production). */
-type ShimInternals = {
+type ShimPrivate = {
 	rootsByContainer: Map<unknown, { id: string }>;
 	handleRootCommitted(container: unknown, committedBatches: readonly number[], generation: number): void;
 };
@@ -44,10 +44,10 @@ describe('root-commit report reconciliation (W11)', () => {
 		const { container } = await h.mount(<Reader />);
 		expect(text(container)).toBe('v:0;');
 
-		const shim = h.handle.shim as unknown as ShimInternals;
+		const shim = h.handle.shim as unknown as ShimPrivate;
 		expect(shim.rootsByContainer.size).toBe(1);
 		const [rootContainer, rec] = [...shim.rootsByContainer.entries()][0]!;
-		const node = h.bridge.byKernelId.get(a._id) as AtomNode;
+		const node = h.bridge.kernelIdToNode.get(a._id) as AtomNode;
 
 		await act(async () => {
 			// A REAL protocol batch: the transition write classifies into it and

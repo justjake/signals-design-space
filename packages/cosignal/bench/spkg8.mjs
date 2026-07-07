@@ -1,7 +1,7 @@
 // Measures world-evaluation cost of the logged build: per-write ns of burst
 // writes as the computed population grows (with and without a held-open
 // transition batch), and per-keystroke ns of a restart-heavy typeahead
-// schedule, with eval counts and receipt-history length reported.
+// schedule, with eval counts and log-history length reported.
 import { median, medianOfProcesses, stat } from './util.mjs';
 
 const DIR = '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench';
@@ -23,7 +23,7 @@ for (const G of [4, 16, 64]) {
 			writeNs: stat(w, 0),
 			heldTax: HELD ? (median(w) / burstBase.get(G)).toFixed(2) : '1 (base)',
 			evalsPerWrite: stat(r.byMetric.get(`evalsPerWrite:${shape}`), 1),
-			tapeLenHeld: stat(r.byMetric.get(`tapeLen:${shape}`), 0),
+			logLenHeld: stat(r.byMetric.get(`logLen:${shape}`), 0),
 		});
 	}
 }
@@ -38,7 +38,7 @@ for (const G of [16]) {
 		writeNs: stat(r.byMetric.get(`keyNs:${shape}`), 0),
 		heldTax: '-',
 		evalsPerWrite: stat(r.byMetric.get(`evalsPerKey:${shape}`), 1),
-		tapeLenHeld: stat(r.byMetric.get(`tapeLen:${shape}`), 0),
+		logLenHeld: stat(r.byMetric.get(`logLen:${shape}`), 0),
 	});
 }
 console.log('\nSPK-G8 results (ns; median [min..max] across processes)');

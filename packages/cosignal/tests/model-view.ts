@@ -3,15 +3,15 @@
  * `CosignalBridge` in the reference model's shape, so the oracle's
  * `checkInvariants` / `snapshotModel` run against the engine without the
  * production class carrying mirror members. Everything the checkers read is
- * materialized on demand from load-bearing packed state (`tp`,
+ * materialized on demand from load-bearing packed state (`log`,
  * `rootToOpenRender`-backed maps, slot/batch/root registries) plus the one
  * thing packed state cannot answer — the FULL history behind compaction —
  * which a driver-side mirror retains: per-atom archives fed by the engine's
  * `onCompact` hook and per-atom origins maintained at the ops that move them
  * (creation, adoption, quiesce). The shadow fold reimplements the
- * model's Receipt-shaped fold over that full history, replaying the oracle's
- * exported `visible` rule (imported — the one Receipt-shaped statement of
- * receipt visibility, not a copy); the engine keeps only the packed forms
+ * model's WriteLogEntry-shaped fold over that full history, replaying the oracle's
+ * exported `visible` rule (imported — the one WriteLogEntry-shaped statement of
+ * log-entry visibility, not a copy); the engine keeps only the packed forms
  * (`visibleAt`, `foldAtom`).
  *
  * Slot sets: the engine's ONLY slot-set representation is the 31-bit integer
@@ -27,7 +27,7 @@ import type {
 	CosignalBridge,
 	RenderPass,
 	RenderPassId,
-	Receipt,
+	WriteLogEntry,
 	RootId,
 	Seq,
 	BatchSlot,
@@ -39,7 +39,7 @@ import type {
 /** The full-history mirror a twin driver owns and feeds. */
 export class RefereeMirror {
 	private origins = new Map<AtomNode, Value>();
-	private archives = new Map<AtomNode, Receipt[]>();
+	private archives = new Map<AtomNode, WriteLogEntry[]>();
 
 	/** Install the compaction feed on a bridge (call once, at driver setup). */
 	attach(engine: CosignalBridge): void {
@@ -53,7 +53,7 @@ export class RefereeMirror {
 
 	/** The quiescence episode reset sets origin to base (the model's episode reset twin). */
 	originsFromBase(engine: CosignalBridge): void {
-		for (const n of engine.nodes.values()) {
+		for (const n of engine.idToNode.values()) {
 			if (n.kind === 'atom') this.origins.set(n, n.base);
 		}
 	}
@@ -67,7 +67,7 @@ export class RefereeMirror {
 		return this.origins.get(atom);
 	}
 
-	archiveOf(atom: AtomNode): Receipt[] {
+	archiveOf(atom: AtomNode): WriteLogEntry[] {
 		let a = this.archives.get(atom);
 		if (a === undefined) {
 			a = [];
@@ -81,9 +81,9 @@ export class RefereeMirror {
 type ViewAtom = {
 	kind: 'atom';
 	name: string;
-	readonly tape: Receipt[];
+	readonly log: WriteLogEntry[];
 	readonly baseSeq: number;
-	readonly archive: Receipt[];
+	readonly archive: WriteLogEntry[];
 	readonly origin: Value;
 	__engine: AtomNode;
 };
@@ -124,9 +124,9 @@ function engineWorld(w: World): World {
 
 /** Pure op application for the shadow fold (test-side: the corpus's updaters/
  * reducers are pure by the fold-purity contract the engine enforces; the
- * object-shaped op is the materialized Receipt surface — engine truth is the
+ * object-shaped op is the materialized WriteLogEntry surface — engine truth is the
  * packed scalar pair). */
-function applyOp(atom: AtomNode, op: Receipt['op'], prev: Value): Value {
+function applyOp(atom: AtomNode, op: WriteLogEntry['op'], prev: Value): Value {
 	switch (op.kind) {
 		case 'set':
 			return op.value;
@@ -146,13 +146,13 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 		return {
 			kind: 'atom',
 			name: n.name,
-			get tape(): Receipt[] {
-				return n.tp.materialize();
+			get log(): WriteLogEntry[] {
+				return n.log.materialize();
 			},
 			get baseSeq(): number {
 				return n.baseSeq;
 			},
-			get archive(): Receipt[] {
+			get archive(): WriteLogEntry[] {
 				return mirror.archiveOf(n);
 			},
 			get origin(): Value {
@@ -173,9 +173,9 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 		committedSlotsNow: (root) => slotsOf(engine.root(root).committedBits),
 	};
 	return {
-		get nodes(): Map<number, ViewNode> {
+		get idToNode(): Map<number, ViewNode> {
 			const out = new Map<number, ViewNode>();
-			for (const [id, n] of engine.nodes) out.set(id, viewNode(n));
+			for (const [id, n] of engine.idToNode) out.set(id, viewNode(n));
 			return out;
 		},
 		get idToRenderPass(): Map<RenderPassId, ViewRenderPass> {
@@ -201,17 +201,17 @@ export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record
 		newestValue: (n: unknown) => engine.newestValue(unwrap<ENode>(n)),
 		committedValue: (n: unknown, root: string) => engine.committedValue(unwrap<ENode>(n), root),
 		renderValue: (n: unknown, p: unknown) => engine.renderValue(unwrap<ENode>(n), unwrap<RenderPass>(p)),
-		/** The retention invariant's full-history fold: origin + archive + tape. */
+		/** The retention invariant's full-history fold: origin + archive + write log. */
 		shadowFoldAtom(n: unknown, world: World): Value {
 			const atom = unwrap<ENode>(n) as AtomNode;
-			// The rule is Receipt/Set-shaped; worlds arrive bit-shaped (mountFix)
+			// The rule is WriteLogEntry/Set-shaped; worlds arrive bit-shaped (mountFix)
 			// or carrying view render passes (whose host lookups unwrap) — translate here.
 			const w: ModelWorld =
 				world.kind === 'mountFix'
 					? { kind: 'mountFix', maskSlots: slotsOf(world.maskBits), pin: world.pin, root: world.root }
 					: (world as unknown as ModelWorld);
 			let value = mirror.originOf(atom);
-			for (const e of [...mirror.archiveOf(atom), ...atom.tp.materialize()]) {
+			for (const e of [...mirror.archiveOf(atom), ...atom.log.materialize()]) {
 				if (!visible(host, e, w)) continue;
 				const next = applyOp(atom, e.op, value);
 				if (!atom.equals(next, value)) value = next;

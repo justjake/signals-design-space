@@ -3,7 +3,7 @@
 // full history compaction), the dependency topology rotates periodically so
 // stale recorded edges accumulate, and a frame loop of writes + periodic
 // committed render passes runs for DURATION_MS. Samples heap after gc(),
-// recorded-edge counts, receipt-history totals, batch/render map sizes, event
+// recorded-edge counts, log-history totals, batch/render map sizes, event
 // counts, and write-latency window medians (degradation = last/first).
 // EVENTS=truncate zeroes the diagnostic event stream at each sample to
 // isolate the engine's retained state; EVENTS=retain leaves it in place to
@@ -49,7 +49,7 @@ b.write(holderA.id, atoms[0], 0, 1);
 let holderB;
 
 const k1EdgeCount = () => { let n = 0; for (const s of b.dependencyEdges.values()) n += s.size; return n; };
-const tapeTotal = () => { let n = 0; for (const nd of b.nodes.values()) if (nd.kind === 'atom') n += nd.tp.length; return n; };
+const logTotal = () => { let n = 0; for (const nd of b.idToNode.values()) if (nd.kind === 'atom') n += nd.log.length; return n; };
 
 const samples = [];
 const t0 = Date.now();
@@ -71,7 +71,7 @@ function takeSample(now) {
 	samples.push({
 		t: (now - t0) / 1000, heap,
 		k1: k1EdgeCount(), k1Keys: b.dependencyEdges.size,
-		tape: tapeTotal(),
+		log: logTotal(),
 		batches: b.idToBatch.size, renderPasses: b.idToRenderPass.size,
 		events: b.events.length, eventsRate: eventsSinceSample,
 		writeNsMed: wMed,
@@ -134,9 +134,9 @@ row({ ...base, metric: 'walkDegradePct', value: degradePct, checksum: end.writeN
 row({ ...base, metric: 'writeNsFirstWin', value: first, checksum: 0 });
 row({ ...base, metric: 'writeNsLastWin', value: last, checksum: 0 });
 row({ ...base, metric: 'k1EdgesPerHour', value: perHour('k1'), checksum: end.k1 });
-row({ ...base, metric: 'tapeEnd', value: end.tape, checksum: 0 });
+row({ ...base, metric: 'logEnd', value: end.log, checksum: 0 });
 row({ ...base, metric: 'batchesPerHour', value: perHour('batches'), checksum: end.batches });
 row({ ...base, metric: 'renderPassesPerHour', value: perHour('renderPasses'), checksum: end.renderPasses });
 row({ ...base, metric: 'eventsPerHour', value: (samples.slice(2).reduce((s, p) => s + p.eventsRate, 0) / (end.t - start.t)) * 3600, checksum: 0 });
 row({ ...base, metric: 'framesPerSec', value: frame / end.t, checksum: frame });
-console.log(`samples: ${JSON.stringify(samples.map((s) => ({ t: s.t, heapMB: +(s.heap / 1048576).toFixed(2), k1: s.k1, tape: s.tape, batches: s.batches, renderPasses: s.renderPasses, wNs: s.writeNsMed })))}`);
+console.log(`samples: ${JSON.stringify(samples.map((s) => ({ t: s.t, heapMB: +(s.heap / 1048576).toFixed(2), k1: s.k1, log: s.log, batches: s.batches, renderPasses: s.renderPasses, wNs: s.writeNsMed })))}`);

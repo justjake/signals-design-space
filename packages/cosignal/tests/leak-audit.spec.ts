@@ -15,7 +15,7 @@
  *  - watcher dual-store rule (T7):               tests/graph-consumers.spec.ts
  *    + cosignal-react/tests/graph-consumers.spec.tsx (the shim-side fix)
  *  - never-quiescent soak that motivated mid-episode batch/render reclamation
- *    and the event-minting gate: research/experiments/cosignal-gates.md SPK-K1
+ *    and the event-creating gate: research/experiments/cosignal-gates.md SPK-K1
  *  - KNOWN-HOLE-BY-RULING (not probed, not fixed): root records are immortal
  *    (RUL-6 — no root-teardown event exists; concurrent.ts arenaQuiesceSweep).
  */
@@ -66,7 +66,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 /** Read a TS-private field (probes only observe; they never mutate). */
 const priv = <T,>(o: object, k: string): T => (o as unknown as Record<string, T>)[k];
 
-/** Sample the kernel node free-list head: mint a throwaway Computed (alloc
+/** Sample the kernel node free-list head: create a throwaway Computed (alloc
  * pops the free list first) and dispose it right back. */
 function sampleFreeNodeId(): number {
 	const c = new Computed(() => 0);
@@ -126,15 +126,15 @@ describe('1. KERNEL (index.ts arena)', () => {
 	});
 });
 
-describe('2. ENGINE REGISTRY (byKernelId + dense per-node columns)', () => {
-	it('adopt/dispose churn returns byKernelId + nodes to baseline, recycles kernel ids, and leaves only cleared dense rows (RECLAIMED; monotone overlay-id slots quantified as accepted residue)', () => {
+describe('2. ENGINE REGISTRY (kernelIdToNode + dense per-node columns)', () => {
+	it('adopt/dispose churn returns kernelIdToNode + idToNode to baseline, recycles kernel ids, and leaves only cleared dense rows (RECLAIMED; monotone engine-node-id slots quantified as accepted residue)', () => {
 		const b = bridge();
 		const at = new Atom(1);
 		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', (read) => read(an));
 		mount(b, 'R', keep, 'W');
-		const nodesBase = b.nodes.size;
-		const kidBase = b.byKernelId.size;
+		const nodesBase = b.idToNode.size;
+		const kernelIdBase = b.kernelIdToNode.size;
 		const arrBase = priv<unknown[]>(b, 'nodesArr').length;
 		const kids = new Set<number>();
 		const N = 200;
@@ -145,11 +145,11 @@ describe('2. ENGINE REGISTRY (byKernelId + dense per-node columns)', () => {
 			kids.add((c as unknown as { _id: number })._id);
 			b.disposeComputed(c as unknown as Computed<unknown>);
 		}
-		expect(b.nodes.size).toBe(nodesBase); // registry entries removed at dispose
-		expect(b.byKernelId.size).toBe(kidBase); // kernel-id rows removed at dispose
+		expect(b.idToNode.size).toBe(nodesBase); // registry entries removed at dispose
+		expect(b.kernelIdToNode.size).toBe(kernelIdBase); // kernel-id rows removed at dispose
 		expect(kids.size).toBeLessThanOrEqual(2); // kernel records recycled (§4.5.3; arena-sc pins tenancy)
 		const arr = priv<unknown[]>(b, 'nodesArr');
-		expect(arr.length).toBe(arrBase + N); // overlay ids are monotone: one dense slot per creation — a small scalar per column, no object retained…
+		expect(arr.length).toBe(arrBase + N); // engine node ids are monotone: one dense slot per creation — a small scalar per column, no object retained…
 		for (let i = arrBase; i < arr.length; i++) expect(arr[i]).toBeUndefined(); // …and the row is cleared
 		expect(priv<number[]>(b, 'obsRefs')[arrBase + N - 1]).toBe(0);
 	});
@@ -189,14 +189,14 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		expect(shell.links).toBe(links0); // dep links recycled through the arena link free list
 		expect(shell.suspended.length).toBe(0);
 		expect(shell.dirty.length).toBeLessThanOrEqual(4);
-		// Accepted residue, quantified: byNode is overlay-nid-indexed and overlay
+		// Accepted residue, quantified: nodeToShadow is engine-node-id-indexed and engine node
 		// ids never recycle — one Int32-sized slot per creation per live arena.
-		expect(shell.byNode.length).toBeGreaterThanOrEqual(N);
+		expect(shell.nodeToShadow.length).toBeGreaterThanOrEqual(N);
 		expect(w.live).toBe(true);
 		expect(b.__arenaStats().committed).toBe(1);
 	});
 
-	it('dispose-while-suspended purges the suspended-list entry and its byNode row from the live arena; a post-dispose settlement is inert (RECLAIMED)', async () => {
+	it('dispose-while-suspended purges the suspended-list entry and its nodeToShadow row from the live arena; a post-dispose settlement is inert (RECLAIMED)', async () => {
 		const b = bridge();
 		armArenaCheck(b);
 		const gate = deferred<string>();
@@ -276,7 +276,7 @@ describe('4. ARENA POOL', () => {
 	});
 });
 
-describe('5. TAPES / BATCHES / RENDER PASSES', () => {
+describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE (SPK-K1 regression: mid-episode reclamation; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
 		const b = __newBridgeForTest(); // production posture: no referee, no tracer
 		b.registerBridge();
@@ -301,9 +301,9 @@ describe('5. TAPES / BATCHES / RENDER PASSES', () => {
 		}
 		expect(b.idToBatch.size).toBe(0); // retired batches reclaimed mid-episode — NO quiesce ran
 		expect(b.idToRenderPass.size).toBe(0); // ended renders reclaimed at render end
-		expect(an.tp.n - an.tp.start).toBe(0); // tapes fully compacted
-		expect(an.tp.kinds.length).toBe(0); // packed columns reset with the empty window
-		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing minted anywhere)
+		expect(an.log.n - an.log.start).toBe(0); // write logs fully compacted
+		expect(an.log.kinds.length).toBe(0); // packed columns reset with the empty window
+		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing created anywhere)
 		expect(b.__arenaStats().dirty).toBeLessThanOrEqual(4); // boundary decay keeps the dirty lists to live cones
 		expect(b.committedValue(c, 'R')).toBe(1400);
 	});
@@ -327,7 +327,7 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 		}
 		expect(b.watchers.size).toBe(0);
 		expect(priv<number[]>(b, 'obsRefs').every((r) => r === 0)).toBe(true);
-		expect(priv<(unknown[] | undefined)[]>(b, 'watchersByNode').every((l) => l === undefined || l.length === 0)).toBe(true);
+		expect(priv<(unknown[] | undefined)[]>(b, 'nodeToWatchers').every((l) => l === undefined || l.length === 0)).toBe(true);
 		b.quiesce();
 		expect(b.__arenaStats().committed).toBe(0); // zero consumers: the arena released to the pool
 	});

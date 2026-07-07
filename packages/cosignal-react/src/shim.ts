@@ -38,12 +38,12 @@
  *    unstable_runInBatch's discrete-urgent fallback. The protocol permits
  *    scheduling updates from its yield and commit callbacks, so listening
  *    at those points is legal (writes during render are not, and throw).
- *    The bridge's BridgeEvent LOG is a referee/tracing surface only: it does
- *    not mint unless a referee retains it or a tracer attaches.
+ *    The bridge's TraceEvent LOG is a referee/tracing surface only: it does
+ *    not create unless a referee retains it or a tracer attaches.
  *  - write classification — the rule: a write belongs to the batch context
  *    in which it executes. The CORE's public Atom.set/update (dispatch is a
  *    thin layer over update) capture host-attributable writes as WHOLE
- *    operations (worlds replay receipts, so a functional update must reach
+ *    operations (worlds replay log entries, so a functional update must reach
  *    the engine unfolded) and
  *    hand them to the classifier this shim installs on the bridge
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
@@ -73,7 +73,7 @@ import type {
 	AnyNode,
 	AtomNode,
 	CosignalBridge,
-	HostOpKind,
+	WriteKind,
 	RenderPass,
 	RootId,
 	BatchId,
@@ -114,11 +114,11 @@ type RootRec = {
 	id: RootId;
 	/** The open bridge render pass mirroring the protocol host's in-progress render, if any. */
 	renderPass: RenderPass | undefined;
-	/** Watcher ids minted during the current/most recent render, for the orphan sweep. */
-	minted: Set<number>;
+	/** Watcher ids created during the current/most recent render, for the orphan sweep. */
+	created: Set<number>;
 };
 
-/** Fallback root id for effects/watchers minted outside any tracked render
+/** Fallback root id for effects/watchers created outside any tracked render
  * pass (defensive paths; both packages name it through this one constant). */
 export const ROOT_UNKNOWN: RootId = 'root-unknown';
 
@@ -213,7 +213,7 @@ export class Shim {
 			return undefined;
 		});
 		// Direct listeners — the load-bearing consumption surface. The bridge's
-		// event LOG stays a referee/tracing artifact (it does not mint unless a
+		// event LOG stays a referee/tracing artifact (it does not create unless a
 		// referee retains it or a tracer attaches); scheduling decisions arrive
 		// here as live objects, allocation-free. Listener bodies must never
 		// throw into the engine mid-operation: failures are recorded.
@@ -283,7 +283,7 @@ export class Shim {
 			rec = {
 				id: `root-${nextRootSerial++}`,
 				renderPass: undefined,
-				minted: new Set(),
+				created: new Set(),
 			};
 			this.rootsByContainer.set(container, rec);
 			this.bridge.root(rec.id); // materialize the per-root committed table
@@ -291,7 +291,7 @@ export class Shim {
 		return rec;
 	}
 
-	/** The engine batch mirroring a React batch (minted on first sight). */
+	/** The engine batch mirroring a React batch (created on first sight). */
 	batchForReactBatch(reactBatchId: number, opts?: { action?: boolean }): BatchId {
 		const existing = this.reactBatchToBatch.get(reactBatchId);
 		if (existing !== undefined) {
@@ -350,14 +350,14 @@ export class Shim {
 		const known: BatchId[] = [];
 		for (const reactBatchId of includedBatches) {
 			// Only React batches carrying cosignal writes have engine batches.
-			// A pure-React batch contributed no receipts, and a world is computed
-			// purely by replaying receipts, so leaving that batch out of the
+			// A pure-React batch contributed no log entries, and a world is computed
+			// purely by replaying log entries, so leaving that batch out of the
 			// render's batch set cannot change any value the render observes.
 			const mapped = this.reactBatchToBatch.get(reactBatchId);
 			if (mapped !== undefined && this.bridge.idToBatch.get(mapped)?.state === 'live') known.push(mapped);
 		}
 		rec.renderPass = this.bridge.renderStart(rec.id, known);
-		rec.minted = new Set();
+		rec.created = new Set();
 	}
 
 	private handleYield(container: unknown): void {
@@ -379,10 +379,10 @@ export class Shim {
 		if (!committed) {
 			// Discard: render-owned mounts die in the bridge; drop their targets too.
 			this.bridge.renderEnd(render.id, 'discard');
-			for (const wid of rec.minted) {
+			for (const wid of rec.created) {
 				if (!this.claimed.has(wid)) this.targets.delete(wid);
 			}
-			rec.minted = new Set();
+			rec.created = new Set();
 			rec.renderPass = undefined;
 			return;
 		}
@@ -391,7 +391,7 @@ export class Shim {
 		// generation on entry — before it locks this render's batches into the
 		// root's committed table, and before the protocol's onRootCommitted /
 		// onBatchRetired events for the same commit arrive. The mount fixup
-		// for watchers minted this render runs inside renderEnd; the corrective
+		// for watchers created this render runs inside renderEnd; the corrective
 		// re-renders it emits reach React through the direct listeners
 		// (delivered at the operation boundary, inside this call). Effect
 		// REFIRES the commit's boundary scan queues are HELD here and flushed
@@ -407,16 +407,16 @@ export class Shim {
 		// (ctx.previous cells update inside bridge.renderEnd since S-C — the
 		// cells live on the bridge's computed nodes with the ctx adapter.)
 		// Orphan sweep. In development StrictMode React invokes render twice to
-		// surface impure renders, so even a committed render can mint watchers
+		// surface impure renders, so even a committed render can create watchers
 		// whose hook instance was thrown away and will never be claimed. Layout
 		// effects run synchronously inside the commit, so by the time this
-		// microtask runs every claim has happened — any watcher minted by this
+		// microtask runs every claim has happened — any watcher created by this
 		// render and still unclaimed is dead.
-		const minted = rec.minted;
-		rec.minted = new Set();
+		const created = rec.created;
+		rec.created = new Set();
 		queueMicrotask(() => {
 			if (this.disposed) return;
-			for (const wid of minted) {
+			for (const wid of created) {
 				if (this.claimed.has(wid)) continue;
 				// removeWatcher, never a bare watchers.delete: the engine keeps a
 				// per-node watcher index next to the id map, and a map-only delete
@@ -437,9 +437,9 @@ export class Shim {
 		// The committed/abandoned fact is BORN here — React's own report about
 		// its batch. Retirement is disposition-blind (recorded writes never
 		// revert either way), so the flag goes no further than this diagnostic
-		// record, minted straight into the bridge's tracer when one is
+		// record, created straight into the bridge's tracer when one is
 		// attached. Batches with no protocol report (the ambient batch below)
-		// mint none.
+		// create none.
 		const tr = this.bridge.trace;
 		if (tr !== undefined) tr.batchDisposition(mapped, committed);
 		// Retirement/settlement ARE effect boundaries now (RCC-EF2 amended):
@@ -506,7 +506,7 @@ export class Shim {
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
 	 * unstable_runInBatch, so the re-render renders and commits together with
 	 * the batch that caused it. Engine batches without a live protocol
-	 * counterpart (an already-retired batch, or an engine-minted batch no
+	 * counterpart (an already-retired batch, or an engine-created batch no
 	 * React batch mirrors) pass React batch id 0, which unstable_runInBatch
 	 * defines as a discrete-urgent fallback.
 	 */
@@ -523,7 +523,7 @@ export class Shim {
 	 * — carried as the host seam's scalar (kind, payload) pair (0 = set with
 	 * the value, 1 = update with the updater fn) — classified into the batch
 	 * context the write executes in. */
-	classifyWrite(node: AtomNode, kind: HostOpKind, payload: unknown): void {
+	classifyWrite(node: AtomNode, kind: WriteKind, payload: unknown): void {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
@@ -531,7 +531,7 @@ export class Shim {
 		// React batch id 0 is UNREACHABLE in practice: it means "no renderer
 		// provider registered" (ReactExternalRuntime returns 0 only then),
 		// and a renderer registers its provider at module load — after that,
-		// getCurrentWriteBatch() mints a React batch id for EVERY write (any
+		// getCurrentWriteBatch() creates a React batch id for EVERY write (any
 		// call context) with a guaranteed close edge, so no write in the React
 		// path is ever context-free. Dev checks make reaching it explode;
 		// without them it classifies below as an ordinary urgent write
@@ -594,13 +594,13 @@ export class Shim {
 	}
 
 	unregisterEffect(id: number): void {
-		if (this.bridge.subs.has(id)) this.bridge.removeSubscription(id);
+		if (this.bridge.idToSubscription.has(id)) this.bridge.removeSubscription(id);
 	}
 
 	/** Runs an effect body under the ENGINE's committed-for-root capture
 	 * frame (the promoted mechanism); the engine stores the dep snapshot. */
 	captureEffectRun(id: number, body: () => void): void {
-		if (!this.bridge.subs.has(id)) return; // torn down between queue and run
+		if (!this.bridge.idToSubscription.has(id)) return; // torn down between queue and run
 		this.bridge.captureRun(id, body);
 	}
 
@@ -648,9 +648,9 @@ export class Shim {
 		}
 	}
 
-	/** Register a watcher minted during the current render (orphan-sweep set). */
-	noteMinted(rootRec: RootRec, watcherId: number): void {
-		rootRec.minted.add(watcherId);
+	/** Register a watcher created during the current render (orphan-sweep set). */
+	noteCreated(rootRec: RootRec, watcherId: number): void {
+		rootRec.created.add(watcherId);
 	}
 
 	// ---- watcher claim / unsubscribe ------------------------------------------------
@@ -661,7 +661,7 @@ export class Shim {
 		const w = rec.watcherId === undefined ? undefined : this.bridge.watchers.get(rec.watcherId);
 		if (w === undefined) {
 			// Reveal without a re-render (React bailed out) or a swept
-			// subscription: mint a fresh watcher outside any React render and take
+			// subscription: create a fresh watcher outside any React render and take
 			// the conservative reveal path — compare what the committed DOM shows
 			// against committed truth, and fix urgently, before paint.
 			this.resubscribeAtLayout(rec);
@@ -675,24 +675,24 @@ export class Shim {
 	private resubscribeAtLayout(rec: { node: AnyNode; watcherId: number | undefined; target: WatcherTarget; root: RootId | undefined; lastValue: unknown }): void {
 		const root = rec.root ?? ROOT_UNKNOWN;
 		const render = this.bridge.renderStart(root, []);
-		let minted: Watcher | undefined;
+		let created: Watcher | undefined;
 		try {
-			minted = this.bridge.mountWatcher(render.id, rec.node, 'w?');
-			minted.name = `w${minted.id}`;
-			this.bridge.deferMount(minted.id); // keep it out of the degenerate render
+			created = this.bridge.mountWatcher(render.id, rec.node, 'w?');
+			created.name = `w${created.id}`;
+			this.bridge.deferMountEffects(created.id); // keep it out of the degenerate render
 		} finally {
 			this.bridge.renderEnd(render.id, 'discard');
 		}
-		if (minted === undefined) return;
-		minted.live = true;
-		minted.lastRenderedValue = rec.lastValue; // what the committed DOM shows
-		rec.watcherId = minted.id;
-		this.claimed.add(minted.id);
+		if (created === undefined) return;
+		created.live = true;
+		created.lastRenderedValue = rec.lastValue; // what the committed DOM shows
+		rec.watcherId = created.id;
+		this.claimed.add(created.id);
 		rec.target.live = true;
-		this.targets.set(minted.id, rec.target);
+		this.targets.set(created.id, rec.target);
 		// Conservative reveal compare: fix any drift urgently, pre-paint.
 		const now = this.bridge.committedValue(rec.node, root);
-		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(minted.id, undefined);
+		if (!Object.is(now, rec.lastValue)) this.bumpInBatch(created.id, undefined);
 	}
 
 	/** Debounce-finalized unsubscription (or immediate teardown for retired recs). */

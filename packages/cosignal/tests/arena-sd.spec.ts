@@ -79,7 +79,7 @@ function suspendingUse(b: CosignalBridge, name: string, holder: { _useCache: unk
 
 /** Length of a sub's deps chain counted from its FIRST dep's link (the fn
  * must read that dep first, making its link the chain head). A same-eval
- * dedup miss would mint a duplicate link and lengthen the chain. */
+ * dedup miss would create a duplicate link and lengthen the chain. */
 function depsChainLen(b: CosignalBridge, root: string, firstDep: AnyNode, sub: AnyNode): number {
 	let cur = b.__arenaLinkIdForTest(root, firstDep, sub);
 	let n = 0;
@@ -114,7 +114,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		// The scrub is TOTAL — dead-tenancy residue cannot validate…
 		expect(shell.memory.every((x) => x === 0)).toBe(true); // written prefix zeroed; past it was fresh-zero
 		expect(shell.vals.every((v) => v === undefined)).toBe(true); // value refs released (no pooled leak)
-		expect(shell.byNode.every((x) => x === 0)).toBe(true);
+		expect(shell.nodeToShadow.every((x) => x === 0)).toBe(true);
 		expect(shell.suspIdx.every((x) => x === 0)).toBe(true);
 		expect(shell.walk.every((x) => x === 0)).toBe(true);
 		expect(shell.weakSubs.every((x) => x === 0)).toBe(true);
@@ -200,8 +200,8 @@ describe('S-D pool shell reuse (§4.8)', () => {
 
 describe('S-D stale-loading wart verification (the pre-S-B note)', () => {
 	// The wart, as noted pre-S-B: "a ctx.use sentinel cached in a committed
-	// MEMO is refreshed only by committed-truth motion" — settlement mints no
-	// receipt, so an unwatched suspension could serve stale loading to a
+	// MEMO is refreshed only by committed-truth motion" — settlement creates no
+	// log entry, so an unwatched suspension could serve stale loading to a
 	// re-watcher until some unrelated write moved committed truth. The memo
 	// arms are DELETED (S-C) and the settlement tap re-marks arenas directly
 	// (S-A §4.5.4), so the wart should have died with the memos. These pins
@@ -262,8 +262,8 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		expect(shell.readClock).toBeGreaterThan(0);
 		expect(shell.readClock).toBeLessThan(1000); // the renumber restarted the clock
 		// Every live MARK stamp is again a small post-renumber value (Int32-exact).
-		for (let nid = 0; nid < shell.byNode.length; nid++) {
-			const sh = shell.byNode[nid]!;
+		for (let nid = 0; nid < shell.nodeToShadow.length; nid++) {
+			const sh = shell.nodeToShadow[nid]!;
 			if (sh !== 0) expect(shell.memory[sh + layout.ArenaField.MARK]).toBeLessThanOrEqual(shell.readClock);
 		}
 	});
@@ -284,7 +284,7 @@ describe('S-D Int32 clock-wrap renumbers (§4.8 hardening)', () => {
 		});
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBe(112);
-		expect(depsChainLen(b, 'R', x, c)).toBe(3); // x, y, z — the duplicate read reused, not re-minted
+		expect(depsChainLen(b, 'R', x, c)).toBe(3); // x, y, z — the duplicate read reused, not re-created
 		const shell = b.__arenaForTest('R')!;
 		shell.cycle = b.__checkerInternals().layout.ArenaGeom.CLOCK_LIMIT - 2;
 		for (let i = 2; i <= 6; i++) {

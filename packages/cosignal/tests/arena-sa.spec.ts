@@ -224,7 +224,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		expect(b.__arenaStats().suspended).toBe(K);
 		let chain = 0;
 		b.onCorrection = () => {
-			if (++chain < K) gates[chain]!.settle(`v${chain}`); // each iteration mints the next settlement
+			if (++chain < K) gates[chain]!.settle(`v${chain}`); // each iteration creates the next settlement
 		};
 		expect(() => gates[0]!.settle('v0')).toThrow(BridgeInvariantViolation);
 		expect(chain).toBeGreaterThanOrEqual(8); // the loop made real progress up to the cap

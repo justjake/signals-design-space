@@ -60,16 +60,16 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S5 — eval-time-only validity: an atom acquiring its first receipt AFTER a world read still invalidates', () => {
+	it('S5 — eval-time-only validity: an atom acquiring its first log entry AFTER a world read still invalidates', () => {
 		const m = concurrent();
 		const a = m.atom('a', 0); // unlogged when world-k first reads it
 		const c = m.computed('c', (read) => (read(a) as number) + 1);
 		const k = m.openBatch();
 		m.write(k.id, m.atom('warm', 0), set(1)); // k exists with unrelated state
 		const pk = openRender(m, 'A', [k]);
-		expect(m.renderValue(c, pk)).toBe(1); // first read: a has no tape
+		expect(m.renderValue(c, pk)).toBe(1); // first read: a has no write log
 		m.renderEnd(pk.id, 'discard');
-		m.write(k.id, a, set(9)); // a acquires a tape only now
+		m.write(k.id, a, set(9)); // a acquires a write log only now
 		const pk2 = openRender(m, 'A', [k]);
 		expect(m.renderValue(c, pk2)).toBe(10); // a fresh k render must see it (no stale certificate)
 		m.renderEnd(pk2.id, 'discard');
@@ -92,13 +92,13 @@ describe('pinned scars (model-expressible)', () => {
 		const m2 = new (Object.getPrototypeOf(m).constructor)() as typeof m;
 		const early = m2.atom('early', 0);
 		expect(() => m2.write(undefined, early, set(1))).toThrow(/registered bridge/); // pre-registration writes cannot be expressed
-		expect(early.tape).toHaveLength(0);
+		expect(early.log).toHaveLength(0);
 		expect(early.base).toBe(0); // the rejected write left nothing behind
 		m2.registerBridge(); // activation is monotonic on registration, not on first watcher
 		const a = m2.atom('a', 1); // adoption's model mirror: seeded with the kernel-current value
-		expect(a.tape).toHaveLength(0); // pre-bridge history carries no receipts
+		expect(a.log).toHaveLength(0); // pre-bridge history carries no log entries
 		expect(a.base).toBe(1); // ...it is committed-only base state
-		expect(m2.events).toHaveLength(0); // ...and minted no events
+		expect(m2.events).toHaveLength(0); // ...and created no events
 		expect(m2.idToBatch.size).toBe(0); // ...and no batches
 		const c = m2.computed('c', (read) => read(a));
 		const w = mountCommitted(m2, 'A', c, 'W');
@@ -137,7 +137,7 @@ describe('pinned scars (model-expressible)', () => {
 		const pu = openRender(m, 'A', [u]);
 		expect(m.renderValue(a, pu)).toBe(1); // U's render excludes T and must still show 1, not 0
 		m.renderEnd(pu.id, 'commit', { retireAtCommit: [u.id] });
-		m.retire(t.id); // even if T dies, U's receipt independently commits 1
+		m.retire(t.id); // even if T dies, U's log entry independently commits 1
 		expect(m.committedValue(a, 'A')).toBe(1);
 		selfCheck(m);
 	});
@@ -320,7 +320,7 @@ describe('pinned scars (model-expressible)', () => {
 		m.write(t.id, a, set(1)); // sync prefix
 		m.bareWrite(a, set(2)); // timer/continuation on a bare stack (the post-await lint is adapter-only)
 		const ambient = m.idToBatch.get(m.ambientBatch!)!;
-		expect(ambient.ambient).toBe(true); // the auto-minted ambient default batch
+		expect(ambient.ambient).toBe(true); // the auto-created ambient default batch
 		m.retire(ambient.id);
 		expect(m.committedValue(a, 'A')).toBe(2); // commits before the action settles — exactly React's own transition rule
 		m.settleAction(t.id);
@@ -363,7 +363,7 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S27 — empty-tape drops with immutable evaluators: identity update drops; real update appends', () => {
+	it('S27 — empty-log drops with immutable evaluators: identity update drops; real update appends', () => {
 		// Re-pinned for the shrunk op vocabulary: a reducer-style write records
 		// as an update whose closure captures the action, so the drop/append
 		// rules are exercised through the closure form.
@@ -373,11 +373,11 @@ describe('pinned scars (model-expressible)', () => {
 		const t = m.openBatch();
 		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // evaluates equal against base → legal drop
 		expect(m.eventsOfType('write-dropped')).toHaveLength(1);
-		expect(r.tape).toHaveLength(0);
+		expect(r.log).toHaveLength(0);
 		m.write(t.id, r, update((s) => reduce(s, 'inc'))); // 1 ≠ 0 → append
-		expect(r.tape).toHaveLength(1);
-		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // tape non-empty → ALWAYS append (equality lives at fold time)
-		expect(r.tape).toHaveLength(2);
+		expect(r.log).toHaveLength(1);
+		m.write(t.id, r, update((s) => reduce(s, 'noop'))); // write log non-empty → ALWAYS append (equality lives at fold time)
+		expect(r.log).toHaveLength(2);
 		commitAndRetire(m, 'A', t);
 		expect(m.committedValue(r, 'A')).toBe(1);
 		selfCheck(m);
@@ -421,7 +421,7 @@ describe('pinned scars (model-expressible)', () => {
 			m.write(u.id, a, set(i));
 		}
 		expect(m.eventsOfType('slot-backstop-released')).toHaveLength(1); // loud
-		// safe: the retained render's receipts keep their slot fields and stay visible by inclusion below its pin
+		// safe: the retained render's log entries keep their slot fields and stay visible by inclusion below its pin
 		expect(m.renderValue(a, held)).toBe(heldBefore);
 		m.renderResume(held.id);
 		m.renderEnd(held.id, 'discard');
@@ -523,12 +523,12 @@ describe('pinned scars (model-expressible)', () => {
 		const f = m.computed('f', (read) => read(a));
 		const hidden = openRender(m, 'A', []); // Activity pre-renders hidden W (pin p1, mask ∅)
 		const w = m.mountWatcher(hidden.id, f, 'W');
-		m.deferMount(w.id); // effects deferred
+		m.deferMountEffects(w.id); // effects deferred
 		m.renderEnd(hidden.id, 'commit');
 		const u = m.openBatch();
 		m.write(u.id, a, set(1)); // one event writes a@s2 > p1 and reveals
 		const pu = openRender(m, 'A', [u]); // u's render bails on the pre-rendered W (not re-rendered)
-		m.adoptMount(pu.id, w.id);
+		m.adoptRevealedMount(pu.id, w.id);
 		m.renderEnd(pu.id, 'commit', { retireAtCommit: [u.id] }); // u's commit folds u post-baseline
 		// without the same-render condition the fast path would return and this commit
 		// would paint f(1) beside W's stale f(0); the condition forces the compare,

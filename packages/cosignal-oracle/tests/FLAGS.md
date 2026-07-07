@@ -13,7 +13,7 @@ Background, briefly (defined fully in the package README): a **batch**
 groups the writes of one UI update and is visible per **slot** (a
 31-entry recycling identity table); a **render pass** freezes a **pin**
 (a global timeline position) at start and captures a **mask** (the live
-batches it renders); a **world** is a replay of the write **receipts**
+batches it renders); a **world** is a replay of the write **log entries**
 that view may see; committing a render **locks in** its still-live batches
 to the root (membership in the root's committed view); **retirement**
 makes a batch's writes permanent history.
@@ -41,7 +41,7 @@ condition the mount fast path checks.
 
 ## flag 4 — the pin cap on included-batch visibility
 
-A render world admits an included batch's receipt only up to the render's
+A render world admits an included batch's log entry only up to the render's
 pin (`slot included ∧ seq ≤ pin`). The cap is what keeps a paused
 render's world from drifting: a *committed-member* batch that is still
 live (the parked-action shape above) can write after the render pinned,
@@ -127,8 +127,8 @@ enforces it as a schedule-legality rule in `renderEnd`.
 A retired batch's slot normally stays held while any open render's mask
 names it. If every slot is held and a new batch needs one, the model
 releases the oldest retired-but-retained slot anyway, loudly. This is
-safe with no extra bookkeeping because receipts record their slot
-permanently at mint: the retained render's world replays byte-identically
+safe with no extra bookkeeping because log entries record their slot
+permanently at creation: the retained render's world replays byte-identically
 before and after the forced release, and the new tenant's world folds
 both tenants' history in global timeline order with nothing
 double-applied (every claim is sequenced after the previous tenant's

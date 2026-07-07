@@ -45,7 +45,7 @@ for (const cell of GRID) {
 		frameNsLogged: stat(l.byMetric.get(`frameNs:${lshape}`), 0),
 		maxDelivPerWB: stat(l.byMetric.get(`maxDeliv:${lshape}`), 0),
 		maxSpuriousPerWB: stat(l.byMetric.get(`maxSpurious:${lshape}`), 0),
-		tapeLenEnd: stat(l.byMetric.get(`tapeLen:${lshape}`), 0),
+		logLenEnd: stat(l.byMetric.get(`logLen:${lshape}`), 0),
 		heldDegrade: stat(l.byMetric.get(`degrade:${lshape}`), 2),
 	});
 }

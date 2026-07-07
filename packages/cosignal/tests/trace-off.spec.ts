@@ -43,7 +43,7 @@ function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
 }
 
 /** One record per call, with a recognizable payload (the typed epoch-reset
- * mint — the direct emit surface the engine's sites call). */
+ * create — the direct emit surface the engine's sites call). */
 function emitN(tr: Tracer, n: number, from = 0): void {
 	for (let i = from; i < from + n; i++) tr.epochReset(i);
 }
@@ -121,7 +121,7 @@ describe('R11 runtime enable/disable', () => {
 		b.bareWrite(a, 0, 3);
 		expect(tr.stats().recorded).toBe(recorded); // capture frozen, still decodable
 		// The bridge was at rest for every write above, so the captured records
-		// are quiet folds (the production default write path), not receipts.
+		// are quiet folds (the production default write path), not log entries.
 		expect(tr.events('quiet-write').length).toBeGreaterThan(0);
 
 		const tr2 = attachTracer(b); // a later session starts fresh
@@ -145,9 +145,9 @@ describe('R11 runtime enable/disable', () => {
 		// untraced run has no stream to diff — the perturbation check compares
 		// what exists on both sides: every clock and every observable value.
 		expect(traced.seq).toBe(plain.seq);
-		expect(traced.cas).toBe(plain.cas);
+		expect(traced.committedAdvance).toBe(plain.committedAdvance);
 		expect(traced.epoch).toBe(plain.epoch);
-		for (const [id, n] of plain.nodes) {
+		for (const [id, n] of plain.idToNode) {
 			expect(
 				Object.is(traced.newestValue(traced.nodeById(id)), plain.newestValue(n)),
 				`newest(${n.name}) diverged under tracing`,

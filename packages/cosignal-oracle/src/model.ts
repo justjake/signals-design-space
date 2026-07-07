@@ -10,7 +10,7 @@
  * (`ComputedNode.newestSample` — a point-in-time sample taken in the past
  * cannot be recomputed from present state, so it must be remembered).
  * Worlds (self-consistent views of all atom values) are pure folds — a fold
- * replays the receipts a world may see, in timeline order, over the atom's
+ * replays the log entries a world may see, in timeline order, over the atom's
  * base value (README vocabulary); computeds are memo-free recursive
  * evaluation in a given world; the React host is simulated as explicit
  * batch/render/retirement bookkeeping. Where the engine has optimizations
@@ -36,15 +36,15 @@ export type Op =
 	| { kind: 'update'; fn: (prev: Value) => Value };
 
 /**
- * A receipt records one write: {op, slot, seq} appended to the written
- * atom's tape. retiredSeq is stamped when the writing batch retires. The
+ * A log entry records one write: {op, slot, seq} appended to the written
+ * atom's write log. retiredSeq is stamped when the writing batch retires. The
  * batch is carried for invariant checking and event logs only: folds
  * resolve visibility through slot+seq alone, exactly as the contract's
  * visibility rules do — so the aliasing hazards of slot recycling (two
  * batches sharing a slot number across time) are exercised honestly
  * rather than papered over by batch identity.
  */
-export type Receipt = {
+export type WriteLogEntry = {
 	op: Op;
 	batch: BatchId;
 	slot: BatchSlot;
@@ -58,20 +58,20 @@ export type AtomNode = {
 	kind: 'atom';
 	id: NodeId;
 	name: string;
-	/** The folded floor of the tape: committed history already compacted in. */
+	/** The folded floor of the write log: committed history already compacted in. */
 	base: Value;
 	baseSeq: number;
-	tape: Receipt[];
-	/** Full history for invariant 4 (receipt-retention soundness): compacted
-	 * receipts move here, and quiet folds append their receipt-shaped ledger
+	log: WriteLogEntry[];
+	/** Full history for invariant 4 (log-entry retention soundness): compacted
+	 * log entries move here, and quiet folds append their log-entry-shaped ledger
 	 * entries here directly (see quietWrite — the fold IS already-retired
-	 * history the moment it lands, and every tape is empty at that moment,
+	 * history the moment it lands, and every write log is empty at that moment,
 	 * so appending keeps the archive in sequence order). */
-	archive: Receipt[];
+	archive: WriteLogEntry[];
 	/** The value the atom was created with (shadow-fold origin). */
 	origin: Value;
 	equals: Equals;
-	/** Per-atom retirement stamp, minted at every retirement that touched this atom. */
+	/** Per-atom retirement stamp, created at every retirement that touched this atom. */
 	retirementStamp: number;
 };
 
@@ -129,10 +129,10 @@ export type Batch = {
 	state: 'live' | 'retired';
 	slot: BatchSlot | undefined;
 	retiredSeq: number | undefined;
-	/** Sequence of this batch's last receipt (0 = none) — the mount fixup's
+	/** Sequence of this batch's last log entry (0 = none) — the mount fixup's
 	 * fast-path clock check reads it (the engine twin is the same scalar). */
 	lastWriteSeq: number;
-	/** True for the model's auto-minted ambient default batch (home of context-free writes). */
+	/** True for the model's auto-created ambient default batch (home of context-free writes). */
 	ambient: boolean;
 };
 
@@ -144,7 +144,7 @@ export type Batch = {
 export type BatchSlotMeta = {
 	id: BatchSlot;
 	tenant: BatchId | undefined;
-	/** seq minted at claim — the anchor of the tenant-ordering argument above. */
+	/** seq created at claim — the anchor of the tenant-ordering argument above. */
 	claimSeq: number;
 	/** Write clock: seq of the slot's last write. Zeroed when a new tenant claims the slot. */
 	writeClock: number;
@@ -263,8 +263,8 @@ export type ModelEvent =
 	| { type: 'write'; node: string; batch: BatchId; slot: BatchSlot; seq: number }
 	| { type: 'write-dropped'; node: string; batch: BatchId }
 	/** A quiet-mode fold: a bare write while nothing was pending folded
-	 * straight into base — no batch, no receipt, no slot; `seq` is the
-	 * fold's minted sequence (the atom's new baseSeq and the cas clock). */
+	 * straight into base — no batch, no log entry, no slot; `seq` is the
+	 * fold's created sequence (the atom's new baseSeq and the committedAdvance clock). */
 	| { type: 'quiet-write'; node: string; seq: number }
 	| { type: 'delivery'; watcher: string; batch: BatchId; slot: BatchSlot; seq: number; mode: 'fresh' | 'interleaved' }
 	| { type: 'suppressed'; watcher: string; batch: BatchId; slot: BatchSlot; seq: number }
@@ -304,14 +304,14 @@ export type VisibilityHost = {
 };
 
 /**
- * THE visibility rule: which receipts each kind of world replays.
+ * THE visibility rule: which log entries each kind of world replays.
  *
- * - RenderPass world, two clauses: (1) receipts whose batch retired at or
+ * - RenderPass world, two clauses: (1) log entries whose batch retired at or
  *   before the render's pin — already permanent history when the render
- *   started; (2) receipts of included batches (rendered or already
+ *   started; (2) log entries of included batches (rendered or already
  *   committed into the root at render start), up to the pin. The pin cap
  *   is what keeps a paused-and-resumed render from drifting.
- * - Committed-for-root: every retired receipt, plus receipts of batches
+ * - Committed-for-root: every retired log entry, plus log entries of batches
  *   currently committed into the root (membership) — a root must keep
  *   agreeing with UI it already committed, even before those batches
  *   retire globally.
@@ -320,11 +320,11 @@ export type VisibilityHost = {
  *   pin, plus committed truth as of NOW — the mount's view
  *   fast-forwarded to what actually committed during its mount window.
  *
- * Exported standalone so the rule has exactly one Receipt-shaped statement:
+ * Exported standalone so the rule has exactly one WriteLogEntry-shaped statement:
  * the model folds through it, and an engine's test-side model view may call
  * it directly rather than keeping a copy.
  */
-export function visible(host: VisibilityHost, e: Receipt, world: World): boolean {
+export function visible(host: VisibilityHost, e: WriteLogEntry, world: World): boolean {
 	switch (world.kind) {
 		case 'newest':
 			return true;
@@ -346,7 +346,7 @@ export function visible(host: VisibilityHost, e: Receipt, world: World): boolean
 }
 
 export class CosignalModel {
-	nodes = new Map<NodeId, AnyNode>();
+	idToNode = new Map<NodeId, AnyNode>();
 	idToBatch = new Map<BatchId, Batch>();
 	slots: BatchSlotMeta[] = [];
 	idToRenderPass = new Map<RenderPassId, RenderPass>();
@@ -362,10 +362,10 @@ export class CosignalModel {
 	 * kernel state that never involves a bridge, so the model cannot express
 	 * them (they throw, mirroring the engine). */
 	private registered = false;
-	/** The one global sequence line every receipt, pin, and stamp lives on. */
+	/** The one global sequence line every log entry, pin, and stamp lives on. */
 	seq = 0;
 	/** Committed-advance counter, in sequence units: seq of the last change to any committed view. */
-	cas = 0;
+	committedAdvance = 0;
 	/** Episode counter — bumped at quiescence, when all per-episode bookkeeping resets. */
 	epoch = 0;
 	/**
@@ -384,13 +384,13 @@ export class CosignalModel {
 	private nextRenderPassId = 1;
 	private nextWatcher = 1;
 	private nextEffect = 1;
-	/** Core-effect mount ordinal, appended to minted names (`#k`) so every
+	/** Core-effect mount ordinal, appended to created names (`#k`) so every
 	 * core effect's name is unique: sibling firing order under one operation
 	 * is implementation-defined [owner ruling 2026-07-06], the lockstep
 	 * differ compares same-step runs as a multiset sorted on (effect, value),
 	 * and duplicate names would make that comparison ambiguous. Never reset
 	 * (core effects survive quiescence); the engine twin's mount helper keeps
-	 * the same counter, so lockstep-minted names agree. */
+	 * the same counter, so lockstep-created names agree. */
 	private coreEffectMounts = 0;
 
 	/** Purity frames: >0 while a world evaluation or fold is on stack (writes then throw). */
@@ -414,7 +414,7 @@ export class CosignalModel {
 		this.events.push(e);
 	}
 
-	private mintSeq(): number {
+	private nextSeq(): number {
 		return ++this.seq;
 	}
 
@@ -432,16 +432,16 @@ export class CosignalModel {
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const node: AtomNode = {
 			kind: 'atom', id: this.nextNode++, name,
-			base: initial, baseSeq: 0, tape: [], archive: [], origin: initial,
+			base: initial, baseSeq: 0, log: [], archive: [], origin: initial,
 			equals: equals ?? Object.is, retirementStamp: 0,
 		};
-		this.nodes.set(node.id, node);
+		this.idToNode.set(node.id, node);
 		return node;
 	}
 
 	computed(name: string, fn: ComputedFn): ComputedNode {
 		const node: ComputedNode = { kind: 'computed', id: this.nextNode++, name, fn };
-		this.nodes.set(node.id, node);
+		this.idToNode.set(node.id, node);
 		return node;
 	}
 
@@ -472,7 +472,7 @@ export class CosignalModel {
 	}
 
 	/** THE visibility rule (the exported `visible`, above), with this model as its host. */
-	visible(e: Receipt, world: World): boolean {
+	visible(e: WriteLogEntry, world: World): boolean {
 		return visible(this, e, world);
 	}
 
@@ -503,13 +503,13 @@ export class CosignalModel {
 	}
 
 	/**
-	 * The fold: replay the world-visible receipts over the base in sequence
+	 * The fold: replay the world-visible log entries over the base in sequence
 	 * order, applying the atom's equality stepwise (an equal step keeps the
 	 * old reference, so equality cutoffs behave identically in every world).
 	 */
 	foldAtom(atom: AtomNode, world: World): Value {
 		let value = atom.base;
-		for (const e of atom.tape) { // tape is in seq order by construction
+		for (const e of atom.log) { // write log is in seq order by construction
 			if (!this.visible(e, world)) continue;
 			const next = this.applyOp(atom, e.op, value);
 			if (!this.inCallback(() => atom.equals(next, value))) value = next;
@@ -517,10 +517,10 @@ export class CosignalModel {
 		return value;
 	}
 
-	/** Retention-invariant helper: the same fold over the FULL history (archive + tape) from the origin value. */
+	/** Retention-invariant helper: the same fold over the FULL history (archive + write log) from the origin value. */
 	shadowFoldAtom(atom: AtomNode, world: World): Value {
 		let value = atom.origin;
-		for (const e of [...atom.archive, ...atom.tape]) {
+		for (const e of [...atom.archive, ...atom.log]) {
 			if (e.retiredSeq === undefined && !this.visible(e, world)) continue;
 			// Archived (compacted) entries are visible to every live world by the
 			// compaction rule (they retired at or below every live pin) — assert via visible() too.
@@ -586,7 +586,7 @@ export class CosignalModel {
 			if (p.state !== 'ended') worlds.push({ kind: 'render', render: p });
 		}
 		for (const r of this.roots.keys()) worlds.push({ kind: 'committed', root: r });
-		for (const n of this.nodes.values()) {
+		for (const n of this.idToNode.values()) {
 			if (n.kind !== 'computed') continue;
 			for (const w of worlds) this.evaluate(n, w);
 		}
@@ -625,7 +625,7 @@ export class CosignalModel {
 		return pins.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...pins);
 	}
 
-	/** Mint a batch. At most 31 live at once — one per React priority
+	/** Create a batch. At most 31 live at once — one per React priority
 	 * lane. (Lane priority itself stays React's: neither the model nor the
 	 * engine ever consults it — the Priority dimension was deleted.) */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Batch {
@@ -658,7 +658,7 @@ export class CosignalModel {
 	}
 
 	nodeById(id: NodeId): AnyNode {
-		return this.mustGet(this.nodes, id, 'node');
+		return this.mustGet(this.idToNode, id, 'node');
 	}
 
 	/**
@@ -675,7 +675,7 @@ export class CosignalModel {
 		let free = this.slots.find((s) => s.tenant === undefined);
 		if (free === undefined) {
 			// Backstop: all 31 slots held ⇒ release the oldest retired-but-mask-retained slot anyway, loudly.
-			// Safe because receipts keep their slot fields (see tests/FLAGS.md, flag 7).
+			// Safe because log entries keep their slot fields (see tests/FLAGS.md, flag 7).
 			const candidates = this.slots.filter((s) => s.releasePending);
 			if (candidates.length === 0) {
 				throw new ScheduleError('slot table full of live tenants — unreachable under the 31-live-batch guard');
@@ -691,7 +691,7 @@ export class CosignalModel {
 			free = victim;
 		}
 		free.tenant = batch.id;
-		free.claimSeq = this.mintSeq(); // tenancy ordering: every claim gets its own point on the line, after the previous tenant's retirement
+		free.claimSeq = this.nextSeq(); // tenancy ordering: every claim gets its own point on the line, after the previous tenant's retirement
 		free.writeClock = 0;
 		free.releasePending = false;
 		batch.slot = free.id;
@@ -703,7 +703,7 @@ export class CosignalModel {
 	private releaseSlot(slot: BatchSlotMeta): void {
 		const tenant = slot.tenant === undefined ? undefined : this.batchById(slot.tenant);
 		if (tenant !== undefined) {
-			tenant.slot = undefined; // identity release only; receipts keep their denormalized slot field forever
+			tenant.slot = undefined; // identity release only; log entries keep their denormalized slot field forever
 			this.log({ type: 'slot-released', slot: slot.id, batch: tenant.id });
 		}
 		slot.tenant = undefined;
@@ -716,15 +716,15 @@ export class CosignalModel {
 	 * The quiet state, derived on demand (the model recomputes everything;
 	 * the engine keeps the same four-condition derivation as a recomputed
 	 * boolean): registered AND zero live batches AND zero open renders AND
-	 * every tape compacted. While quiet, a bare write is one direct fold —
+	 * every write log compacted. While quiet, a bare write is one direct fold —
 	 * see quietWrite.
 	 */
 	private quietNow(): boolean {
 		if (!this.registered) return false;
 		if (this.liveBatches().length > 0) return false;
 		if (this.livePins().length > 0) return false;
-		for (const n of this.nodes.values()) {
-			if (n.kind === 'atom' && n.tape.length > 0) return false;
+		for (const n of this.idToNode.values()) {
+			if (n.kind === 'atom' && n.log.length > 0) return false;
 		}
 		return true;
 	}
@@ -732,16 +732,16 @@ export class CosignalModel {
 	/**
 	 * The quiet-mode fold (mirrors the engine's __quietWrite): while NOTHING
 	 * is pending, a bare write folds directly into base — no batch, no
-	 * receipt, no delivery walk. The op folds over base under the fold-purity
-	 * guards, the same equality drop as the write path's empty-tape drop
+	 * log entry, no delivery walk. The op folds over base under the fold-purity
+	 * guards, the same equality drop as the write path's empty-log drop
 	 * applies (silently — there is no batch to attribute a drop to), and an
 	 * accepted fold advances base, baseSeq, and the committed-advance clock
-	 * together on one minted sequence, then emits ONE 'quiet-write' event.
+	 * together on one created sequence, then emits ONE 'quiet-write' event.
 	 * Observers reconcile value-gated at the fold (it is a committed-truth
 	 * boundary for every root): core effects flush over the refreshed union
 	 * reachability, live watchers correct SILENTLY (the engine's quiet
-	 * corrections mint no event either), and committed effects re-check once,
-	 * as at any boundary operation. The fold also appends a receipt-shaped
+	 * corrections create no event either), and committed effects re-check once,
+	 * as at any boundary operation. The fold also appends a log-entry-shaped
 	 * entry to the atom's ARCHIVE (retiredSeq = seq: the fold is permanent
 	 * history the moment it lands) so invariant 4's full-history shadow fold
 	 * keeps reconstructing every world; batch/slot carry the reserved 0/-1 —
@@ -753,10 +753,10 @@ export class CosignalModel {
 		const prev = node.base;
 		const next = this.applyOp(node, op, prev);
 		if (this.inCallback(() => node.equals(next, prev))) {
-			return; // equality drop against base — the tape is empty by the quiet invariant
+			return; // equality drop against base — the write log is empty by the quiet invariant
 		}
 		node.base = next;
-		node.baseSeq = this.cas = this.mintSeq();
+		node.baseSeq = this.committedAdvance = this.nextSeq();
 		node.archive.push({ op, batch: 0, slot: -1, seq: node.baseSeq, retiredSeq: node.baseSeq });
 		this.log({ type: 'quiet-write', node: node.name, seq: node.baseSeq });
 		// Core effects observe the newest world, which the fold just advanced;
@@ -765,7 +765,7 @@ export class CosignalModel {
 		this.flushCoreEffects(this.reachableFrom(node.id));
 		// Value-gated watcher reconciliation against committed truth (which
 		// the fold moved for every root). Silent by exact mirroring: the
-		// engine's quiet corrections mint no event.
+		// engine's quiet corrections create no event.
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
 			const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: w.root });
@@ -783,7 +783,7 @@ export class CosignalModel {
 	 * A write belongs to the batch context in which it executes; a bare
 	 * (context-free) write goes to the ambient default batch — unless the
 	 * model is QUIET, in which case the write folds directly (no ambient
-	 * batch is minted while nothing is pending). This is the same rule
+	 * batch is created while nothing is pending). This is the same rule
 	 * React's own transitions have — an async continuation runs on
 	 * a fresh stack with no ambient transition context.
 	 */
@@ -819,10 +819,10 @@ export class CosignalModel {
 		const batch = this.batchById(batchId);
 		if (batch.state !== 'live') throw new ScheduleError(`write into retired batch ${batchId} — a retired batch accepts no new writes`);
 
-		// Drop check — the ONLY legal equality drop: empty tape AND the op
+		// Drop check — the ONLY legal equality drop: empty write log AND the op
 		// evaluates equal against the base. With pending history present, a
 		// "no-op" write could still change some world's fold, so it must append.
-		if (node.tape.length === 0) {
+		if (node.log.length === 0) {
 			const evaluated = this.applyOp(node, op, node.base);
 			if (this.inCallback(() => node.equals(evaluated, node.base))) {
 				this.log({ type: 'write-dropped', node: node.name, batch: batchId });
@@ -838,10 +838,10 @@ export class CosignalModel {
 		const nextNewest = this.applyOp(node, op, prevNewest);
 		const advancesNewest = !this.inCallback(() => node.equals(nextNewest, prevNewest));
 
-		// Record the write: intern the slot, append the receipt, bump the slot's write clock.
+		// Record the write: intern the slot, append the log entry, bump the slot's write clock.
 		const slot = this.internSlot(batch);
-		const seq = this.mintSeq();
-		node.tape.push({ op, batch: batch.id, slot: slot.id, seq, retiredSeq: undefined });
+		const seq = this.nextSeq();
+		node.log.push({ op, batch: batch.id, slot: slot.id, seq, retiredSeq: undefined });
 		batch.lastWriteSeq = seq;
 		slot.writeClock = seq;
 		this.log({ type: 'write', node: node.name, batch: batch.id, slot: slot.id, seq });
@@ -936,7 +936,7 @@ export class CosignalModel {
 			const t = this.batchById(id);
 			if (t.state !== 'live') throw new ScheduleError('mask captures live batches only — a retired batch is already permanent history');
 			maskBatches.add(id);
-			// A live batch with no slot never wrote; its later receipts postdate the
+			// A live batch with no slot never wrote; its later log entries postdate the
 			// pin and are excluded by the pin cap anyway (claims are sequenced, so
 			// any future slot's writes sit above this render's pin).
 			if (t.slot !== undefined) maskSlots.add(t.slot);
@@ -1006,14 +1006,14 @@ export class CosignalModel {
 	 */
 	/** The hidden half of a reveal: the mounting render commits but the watcher's
 	 * layout effects (subscribe + reconcile) defer — an Offscreen/Activity subtree. */
-	deferMount(watcherId: WatcherId): void {
+	deferMountEffects(watcherId: WatcherId): void {
 		for (const p of this.idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId);
 			if (i >= 0) p.mounted.splice(i, 1);
 		}
 	}
 
-	adoptMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
+	adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
 		const adopter = this.renderPassById(renderPassId);
 		if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open');
 		const w = this.mustGet(this.watchers, watcherId, 'watcher');
@@ -1200,7 +1200,7 @@ export class CosignalModel {
 		// (1) Baseline capture at the commit's committed-side entry: the mount
 		// fast path later asks "did committed truth move after my pin?" against
 		// exactly these values.
-		const baseline = { cas: this.cas, rootCommitGen: this.root(render.root).commitGen };
+		const baseline = { committedAdvance: this.committedAdvance, rootCommitGen: this.root(render.root).commitGen };
 		// The committing tree's content: re-rendered watchers take this render's
 		// world values NOW — a watcher's "last rendered value" updates only at
 		// committed renders, and it is the comparand every later
@@ -1229,7 +1229,7 @@ export class CosignalModel {
 			if (!root.committedBatches.has(tid)) {
 				root.committedBatches.add(tid);
 				root.commitGen++;
-				this.cas = this.mintSeq(); // committed-advance: every per-root commit moves committed truth
+				this.committedAdvance = this.nextSeq(); // committed-advance: every per-root commit moves committed truth
 				this.log({ type: 'per-root-commit', root: render.root, batch: tid });
 				// (3) Committed truth moved: reconcile this root's committed observers now.
 				this.drainCommittedObservers(render.root, 'per-root-commit');
@@ -1293,8 +1293,8 @@ export class CosignalModel {
 	}
 
 	/**
-	 * Retirement — the internal order is normative: stamp the receipts, fold
-	 * (compaction), mint per-atom retirement stamps + advance the committed
+	 * Retirement — the internal order is normative: stamp the log entries, fold
+	 * (compaction), create per-atom retirement stamps + advance the committed
 	 * counter, reconcile committed observers, clear per-root membership
 	 * rows, and only then release the slot (deferred if an open render's
 	 * render mask names it). The row-clear-before-release order guarantees a
@@ -1308,13 +1308,13 @@ export class CosignalModel {
 	private retireInternal(batch: Batch): void {
 		batch.state = 'retired';
 		batch.parked = false;
-		const retiredSeq = this.mintSeq(); // one retirement sequence per retirement event
+		const retiredSeq = this.nextSeq(); // one retirement sequence per retirement event
 		batch.retiredSeq = retiredSeq;
 		const touched: AtomNode[] = [];
-		for (const n of this.nodes.values()) {
+		for (const n of this.idToNode.values()) {
 			if (n.kind !== 'atom') continue;
 			let hit = false;
-			for (const e of n.tape) {
+			for (const e of n.log) {
 				if (e.batch === batch.id) {
 					e.retiredSeq = retiredSeq;
 					hit = true;
@@ -1322,9 +1322,9 @@ export class CosignalModel {
 			}
 			if (hit) touched.push(n);
 		}
-		// Mint the retirement stamp per touched atom; advance the committed counter.
+		// Create the retirement stamp per touched atom; advance the committed counter.
 		for (const n of touched) n.retirementStamp = retiredSeq;
-		if (touched.length > 0) this.cas = this.mintSeq();
+		if (touched.length > 0) this.committedAdvance = this.nextSeq();
 		// Fold/compaction. Naive form: try every atom — a retirement can
 		// unblock compactable prefixes anywhere.
 		this.compactAll();
@@ -1350,7 +1350,7 @@ export class CosignalModel {
 	}
 
 	/**
-	 * Compaction consumes a sequence-order prefix of the tape: entry e
+	 * Compaction consumes a sequence-order prefix of the write log: entry e
 	 * compacts iff every entry with seq ≤ e.seq is retired AND
 	 * e.retiredSeq ≤ min(live pins) — i.e. every live world already sees the
 	 * prefix via the retired-history rule, so folding it into the base can
@@ -1358,7 +1358,7 @@ export class CosignalModel {
 	 * so the retention invariant can re-derive every fold from full history.
 	 */
 	private compactAll(): void {
-		for (const n of this.nodes.values()) {
+		for (const n of this.idToNode.values()) {
 			if (n.kind === 'atom') this.compactAtom(n);
 		}
 	}
@@ -1366,20 +1366,20 @@ export class CosignalModel {
 	private compactAtom(atom: AtomNode): void {
 		const minPin = this.minLivePin();
 		let cut = 0;
-		for (const e of atom.tape) {
+		for (const e of atom.log) {
 			if (e.retiredSeq === undefined) break; // prefix clause: an unretired earlier entry blocks everything after it
 			if (e.retiredSeq > minPin) break; // pin clause: every live pin must already see e via the retired clause
 			cut++;
 		}
 		if (cut === 0) return;
-		const folded = atom.tape.slice(0, cut);
+		const folded = atom.log.slice(0, cut);
 		for (const e of folded) {
 			const next = this.applyOp(atom, e.op, atom.base);
 			if (!this.inCallback(() => atom.equals(next, atom.base))) atom.base = next;
 			atom.baseSeq = e.seq;
 			atom.archive.push(e);
 		}
-		atom.tape = atom.tape.slice(cut);
+		atom.log = atom.log.slice(cut);
 	}
 
 	/**
@@ -1421,7 +1421,7 @@ export class CosignalModel {
 	 * only a failing condition triggers the fast-forwarded re-evaluation and
 	 * the urgent pre-paint correction.
 	 */
-	private mountFixup(w: Watcher, committingRender: RenderPass, baseline: { cas: number; rootCommitGen: number }): void {
+	private mountFixup(w: Watcher, committingRender: RenderPass, baseline: { committedAdvance: number; rootCommitGen: number }): void {
 		const node = this.nodeById(w.node);
 		this.refreshEdgesAllWorlds();
 		const closure = this.dependencyClosureOf(w.node);
@@ -1469,7 +1469,7 @@ export class CosignalModel {
 			});
 		const fastOut =
 			w.snapshot.renderPassId === committingRender.id &&
-			baseline.cas <= w.snapshot.pin &&
+			baseline.committedAdvance <= w.snapshot.pin &&
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
 		if (fastOut) return; // the window was quiet: no evaluation, no comparison
@@ -1504,9 +1504,9 @@ export class CosignalModel {
 	}
 
 	private batchTouches(t: Batch, closure: Set<NodeId>): boolean {
-		for (const n of this.nodes.values()) {
+		for (const n of this.idToNode.values()) {
 			if (n.kind !== 'atom' || !closure.has(n.id)) continue;
-			for (const e of n.tape) if (e.batch === t.id) return true;
+			for (const e of n.log) if (e.batch === t.id) return true;
 		}
 		return false;
 	}
@@ -1530,17 +1530,17 @@ export class CosignalModel {
 	 * sequence values are NOT rewritten — sequences are plain JS numbers,
 	 * exact to 2^53, and only ever compared, so the counter simply keeps
 	 * climbing across episodes (renumbering was measured within noise on
-	 * tape-heavy shapes and deleted; grind batch 4, item C). Batch serials
+	 * log-heavy shapes and deleted; grind batch 4, item C). Batch serials
 	 * were always a separate, never-renumbered domain. The model has no
 	 * caches to refresh afterward — delivery reachability is recomputed from
 	 * scratch at every write, which is the refreshed state by construction.
 	 */
 	quiesce(): void {
 		if (!this.quiescent()) throw new ScheduleError('quiescence requires no live batches, pins, or parked actions');
-		// Residue check: with no live pins, the last retirement compacted every tape.
-		for (const n of this.nodes.values()) {
-			if (n.kind === 'atom' && n.tape.length > 0) {
-				throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.tape.length} receipts`);
+		// Residue check: with no live pins, the last retirement compacted every write log.
+		for (const n of this.idToNode.values()) {
+			if (n.kind === 'atom' && n.log.length > 0) {
+				throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.log.length} log entries`);
 			}
 		}
 		this.episodeEdges.clear();
@@ -1555,7 +1555,7 @@ export class CosignalModel {
 		for (const [id, t] of this.idToBatch) {
 			if (t.state === 'retired') this.idToBatch.delete(id);
 		}
-		for (const n of this.nodes.values()) {
+		for (const n of this.idToNode.values()) {
 			if (n.kind !== 'atom') continue;
 			// The archive belongs to the dead episode; it exists only for the
 			// retention invariant, whose comparisons are per-episode. Clear it.

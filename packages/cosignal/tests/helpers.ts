@@ -9,7 +9,7 @@
  * `selfCheck` additionally runs the reference model's invariant battery on
  * BOTH sides (the engine through its model view — tests/model-view.ts) plus
  * one engine-only check ("K0 parity"): the kernel's newest value must equal
- * folding the atom's base value through its receipts.
+ * folding the atom's base value through its log entries.
  */
 import { expect } from 'vitest';
 import { snapshotModel } from '../../cosignal-oracle/src/adapter.js';
@@ -94,7 +94,7 @@ function capture(fn: () => unknown): Thrown {
 
 // ---- referee effect constructors (test-side compositions over the REAL
 // mechanism: mountCommittedObserver + a `body` + captureRun; the body path is
-// the engine's inline-run + event-mint machinery lockstep compares) ----------
+// the engine's inline-run + event-creation machinery lockstep compares) ----------
 
 /** Referee configuration — a single-node body (the engine twin of the
  * model's mountReactEffect). */
@@ -124,7 +124,7 @@ export type EngineCoreEffect = {
 };
 
 /** Per-bridge core-effect mount ordinal (never reset — mirrors the model's
- * `coreEffectMounts`; both sides tick once per mount in lockstep, so minted
+ * `coreEffectMounts`; both sides tick once per mount in lockstep, so created
  * names agree). */
 const coreEffectMounts = new WeakMap<CosignalBridge, number>();
 
@@ -141,7 +141,7 @@ const coreEffectMounts = new WeakMap<CosignalBridge, number>();
  * order under one operation is implementation-defined (owner ruling
  * 2026-07-06), so the lockstep differ compares same-step runs as a multiset
  * sorted on (effect, value) — duplicate names (two mounts with no
- * intervening event/seq used to mint the same `CE${events}.${seq}.${epoch}`
+ * intervening event/seq used to create the same `CE${events}.${seq}.${epoch}`
  * uniq) would make that comparison ambiguous.
  */
 export function mountEngineCoreEffect(b: CosignalBridge, node: ENode, name: string): EngineCoreEffect {
@@ -170,7 +170,7 @@ export class TwinDriver {
 	 * suite running with it on proves the flag itself perturbs nothing. */
 	readonly engine: CosignalBridge = __newBridgeForTest({ devChecks: true });
 	/** The engine's event stream: a lossless session tracer attached at
-	 * bridge birth, decoded to BridgeEvents on demand (the engine mints no
+	 * bridge birth, decoded to TraceEvents on demand (the engine creates no
 	 * event objects — tests/trace-events.ts). */
 	readonly engineEvents = attachRefereeStream(this.engine);
 	/** Full-history mirror (archives via onCompact + origins) — the referee
@@ -189,7 +189,7 @@ export class TwinDriver {
 	constructor() {
 		// The reference model's retention invariant (checkRetention in
 		// invariants.ts) shadow-folds over the full history; the engine
-		// retains none of it — the mirror archives each receipt as compaction
+		// retains none of it — the mirror archives each log entry as compaction
 		// folds it out (retaining in-engine would grow without bound under a
 		// workload that never quiesces).
 		this.mirror.attach(this.engine);
@@ -206,7 +206,7 @@ export class TwinDriver {
 	get slots(): CosignalModel['slots'] { return this.model.slots; }
 	get idToRenderPass(): CosignalModel['idToRenderPass'] { return this.model.idToRenderPass; }
 	get roots(): CosignalModel['roots'] { return this.model.roots; }
-	get nodes(): CosignalModel['nodes'] { return this.model.nodes; }
+	get idToNode(): CosignalModel['idToNode'] { return this.model.idToNode; }
 	get watchers(): CosignalModel['watchers'] { return this.model.watchers; }
 	get seq(): number { return this.model.seq; }
 	get epoch(): number { return this.model.epoch; }
@@ -251,7 +251,7 @@ export class TwinDriver {
 	}
 
 	/**
-	 * Event stream, sequence counters, and cas must agree after every op.
+	 * Event stream, sequence counters, and committedAdvance must agree after every op.
 	 *
 	 * Delivery tolerance (the relaxation documented in the reference
 	 * model's README, `cosignal-oracle`): the model's delivery reachability
@@ -270,7 +270,7 @@ export class TwinDriver {
 	private compareStreams(label: string): void {
 		checkArenas(this.engine); // NF2 S-A divergence check (throws on ANY arena↔memo mismatch)
 		expect(this.engine.seq, `twin ${label}: seq diverged`).toBe(this.model.seq);
-		expect(this.engine.cas, `twin ${label}: cas diverged`).toBe(this.model.cas);
+		expect(this.engine.committedAdvance, `twin ${label}: committedAdvance diverged`).toBe(this.model.committedAdvance);
 		expect(this.engine.epoch, `twin ${label}: epoch diverged`).toBe(this.model.epoch);
 		// The engine's stream is decoded from its packed trace records (the
 		// only event channel); the decode is incremental, so re-reading the
@@ -313,7 +313,7 @@ export class TwinDriver {
 	 * the kernel-current value (adoptAtom — pre-registration history is
 	 * committed-only base state by construction); the model, which has no
 	 * kernel, mirrors adoption as construction-time seeding with that same
-	 * value. Neither side mints a receipt, batch, or event.
+	 * value. Neither side creates a log entry, batch, or event.
 	 */
 	adoptAtom(name: string, handle: Atom<unknown>): AtomNode {
 		const eNode = this.engine.adoptAtom(name, handle);
@@ -338,7 +338,7 @@ export class TwinDriver {
 	openBatch(_priority: Priority, opts?: { action?: boolean; ambient?: boolean }): Batch {
 		let eId: number | undefined;
 		const t = this.both('openBatch', () => this.model.openBatch(opts), () => {
-			eId = this.engine.openBatch(opts).id; // neither side mints a priority — scheduling stays React's (see the Priority annotation type)
+			eId = this.engine.openBatch(opts).id; // neither side creates a priority — scheduling stays React's (see the Priority annotation type)
 		});
 		expect(eId, 'twin openBatch: batch ids diverged').toBe(t.id);
 		return t;
@@ -358,13 +358,13 @@ export class TwinDriver {
 		this.mirrorQuietFold(node, op, mark);
 	}
 
-	/** A quiet fold advances the engine's base with no receipt and no
+	/** A quiet fold advances the engine's base with no log entry and no
 	 * compaction, so the mirror's `onCompact` feed never sees it. The driver
 	 * appends the fold's ledger entry to the mirror archive itself — exactly
 	 * what the model's quietWrite does to ITS archive — so the view's
 	 * full-history shadow fold (retention invariant) keeps reconstructing
 	 * every world. Detection is by the model's own 'quiet-write' event
-	 * (compareStreams already proved the engine minted the same one). */
+	 * (compareStreams already proved the engine created the same one). */
 	private mirrorQuietFold(node: AtomNode, op: Op, mark: number): void {
 		for (const e of this.model.events.slice(mark)) {
 			if (e.type !== 'quiet-write') continue;
@@ -421,13 +421,13 @@ export class TwinDriver {
 			this.engine.renderWatcher(renderPassId, watcherId));
 	}
 
-	deferMount(watcherId: number): void {
-		this.both('deferMount', () => this.model.deferMount(watcherId), () => this.engine.deferMount(watcherId));
+	deferMountEffects(watcherId: number): void {
+		this.both('deferMountEffects', () => this.model.deferMountEffects(watcherId), () => this.engine.deferMountEffects(watcherId));
 	}
 
-	adoptMount(renderPassId: number, watcherId: number): void {
-		this.both('adoptMount', () => this.model.adoptMount(renderPassId, watcherId), () =>
-			this.engine.adoptMount(renderPassId, watcherId));
+	adoptRevealedMount(renderPassId: number, watcherId: number): void {
+		this.both('adoptRevealedMount', () => this.model.adoptRevealedMount(renderPassId, watcherId), () =>
+			this.engine.adoptRevealedMount(renderPassId, watcherId));
 	}
 
 	mountReactEffect(root: string, node: AnyNode, name: string): ReactEffect {
@@ -537,8 +537,8 @@ export class TwinDriver {
 		checkInvariants(this.model);
 		checkInvariants(this.view);
 		// Eager-apply invariant: writes land in the kernel immediately, so the
-		// kernel's newest value must equal replaying the receipts over the base.
-		for (const n of this.engine.nodes.values()) {
+		// kernel's newest value must equal replaying the log entries over the base.
+		for (const n of this.engine.idToNode.values()) {
 			if (n.kind !== 'atom') continue;
 			const folded = this.engine.foldAtom(n, { kind: 'newest' } as EWorld);
 			const kernel = this.engine.newestValue(n);

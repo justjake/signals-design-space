@@ -118,7 +118,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		// evicts leaf's memo — no live watcher consumes anything.
 		gate.resolve('D');
 		await tick();
-		// The retire advances committed truth (cas + k's fingerprint move, so
+		// The retire advances committed truth (committedAdvance + k's fingerprint move, so
 		// the memo side re-derives 'D:1'), fans k DIRTY, and §4.3 decay drops
 		// BOTH unconsumed marks — the leaf COMPUTED and the k atom — to cold.
 		// The epilogue then serves TOP first: its walk descends mid (PENDING),

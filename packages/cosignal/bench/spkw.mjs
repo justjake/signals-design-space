@@ -1,5 +1,5 @@
 // Measures the price of a logged-build write: per-write ns of the logged
-// build (receipt append + delivery walk) against the base build on the same
+// build (log entry append + delivery walk) against the base build on the same
 // graph shapes, plus evals/events/deliveries per write.
 import { median, medianOfProcesses, stat } from './util.mjs';
 

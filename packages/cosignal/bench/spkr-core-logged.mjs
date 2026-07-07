@@ -4,7 +4,7 @@
 // retirement must also reconcile (logged-only surface). Burst = open K
 // batches, M writes each (round-robin atoms, always-changing values), then
 // retire all K as committed. retireNs isolates retirement itself: stamping
-// receipts, folding them into base values, reconciling committed watchers
+// log entries, folding them into base values, reconciling committed watchers
 // and effects, clearing per-root bookkeeping, releasing slots.
 import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';

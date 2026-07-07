@@ -11,9 +11,9 @@
  * shadow FROM THE ARENA (its own walks — the arena side runs FIRST, pinning
  * the discipline that a stale shadow must not be refreshed by the reference
  * side) and compare against FOLD-TRUTH — a naive, cache-free re-derivation
- * of the same node in the same world (atoms fold their tapes; computed fns
+ * of the same node in the same world (atoms fold their write logs; computed fns
  * re-run over naive readers; memoized per check pass, since fold-truth
- * depends only on tape/membership state the serves never mutate). ANY
+ * depends only on write log/membership state the serves never mutate). ANY
  * divergence throws — a lockstep test failure, the stage's STOP condition.
  * The newest world is pinned separately (K0 parity in the twin's verify).
  */
@@ -82,8 +82,8 @@ function runCheck(st: CheckerState): void {
 			v.eachArena((a) => {
 				validateArena(v, a);
 				const naiveMemo = new Map<NodeId, NaiveOutcome>();
-				for (let nid = 0; nid < a.byNode.length; nid++) {
-					const sh = a.byNode[nid] ?? 0;
+				for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
+					const sh = a.nodeToShadow[nid] ?? 0;
 					if (sh === 0) continue;
 					const node = v.nodeAt(nid);
 					if (node === undefined) continue;
@@ -148,7 +148,7 @@ function runCheck(st: CheckerState): void {
 
 /**
  * Fold-truth (the check's reference side): a naive, cache-free evaluation —
- * atoms replay their tapes (the bridge's public `foldAtom`, the same fold
+ * atoms replay their write logs (the bridge's public `foldAtom`, the same fold
  * every world serve is defined against); computed fns re-run with naive
  * readers (tracked ≡ untracked: structure is not being recorded) inside the
  * engine's fold-truth frame, so raw-handle reads inside fns fold plain too
@@ -191,8 +191,8 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 	const memory = a.memory;
 	const CAP = 100_000;
 	let suspSeen = 0;
-	for (let nid = 0; nid < a.byNode.length; nid++) {
-		const sh = a.byNode[nid] ?? 0;
+	for (let nid = 0; nid < a.nodeToShadow.length; nid++) {
+		const sh = a.nodeToShadow[nid] ?? 0;
 		if (sh === 0) continue;
 		if (memory[sh + ArenaField.NODE] !== nid) throw new BridgeInvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
 		// A dead-GEN shadow is legal COLD residue (§4.5.3): the invariant is

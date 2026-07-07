@@ -8,7 +8,7 @@
  *
  * ENGINE-DIRECT (no twin driver): the reference model deliberately models no
  * observe lifecycle, and these transitions are direct callbacks — never
- * BridgeEvents — so the lockstep comparison surfaces cannot see them (the
+ * TraceEvents — so the lockstep comparison surfaces cannot see them (the
  * last test pins that). Watcher liveness is driven the way the shim drives
  * it: the commit layout loop flips it on; `w.live = false` is the shim's
  * debounce-finalized unsubscribe / orphan sweep shape.
@@ -47,7 +47,7 @@ describe('observation union at the bridge', () => {
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		await tick();
-		expect(log).toEqual([]); // minted ≠ subscribed: a render alone does not observe
+		expect(log).toEqual([]); // created ≠ subscribed: a render alone does not observe
 		b.renderEnd(p.id, 'commit'); // layout: the watcher goes live
 		expect(log).toEqual([]); // delivery is a microtask, never synchronous
 		await tick();
@@ -79,19 +79,19 @@ describe('observation union at the bridge', () => {
 		expect(log).toEqual(['observe', 'unobserve']);
 	});
 
-	it('deferMount hidden prepare never observes; the adoptMount reveal observes exactly once', async () => {
+	it('deferMountEffects hidden prepare never observes; the adoptRevealedMount reveal observes exactly once', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const node = b.adoptAtom('a', atom as Atom<unknown>);
 		const hidden = b.renderStart('A', []);
 		const w = b.mountWatcher(hidden.id, node, 'W');
-		b.deferMount(w.id); // Activity pre-render: layout effects deferred
+		b.deferMountEffects(w.id); // Activity pre-render: layout effects deferred
 		b.renderEnd(hidden.id, 'commit');
 		await tick();
 		expect(w.live).toBe(false);
 		expect(log).toEqual([]); // the hidden commit subscribed nothing
 		const reveal = b.renderStart('A', []);
-		b.adoptMount(reveal.id, w.id);
+		b.adoptRevealedMount(reveal.id, w.id);
 		b.renderEnd(reveal.id, 'commit'); // adopting commit: subscribe fires HERE
 		await tick();
 		expect(log).toEqual(['observe']); // one clean 0→1 — the reveal never flapped
@@ -168,7 +168,7 @@ describe('observation union at the bridge', () => {
 		expect(b.quiet).toBe(true);
 		await tick();
 		expect(log).toEqual(['observe']); // fired with the pipeline fully quiet
-		atom.set(7); // quiet fold — still no receipts/batches
+		atom.set(7); // quiet fold — still no log entries/batches
 		expect(b.newestValue(node)).toBe(7);
 		expect(b.quiet).toBe(true);
 		w.live = false;
@@ -190,9 +190,9 @@ describe('observation union at the bridge', () => {
 		w.live = false;
 		await tick();
 		expect(log).toEqual(['observe', 'unobserve']);
-		const minted = stream.eventsSince(before).map((e) => e.type);
-		expect(minted.filter((t) => /observe|lifecycle/i.test(t))).toEqual([]);
-		expect(minted).toEqual(['render-committed']); // render-pass bookkeeping only
+		const created = stream.eventsSince(before).map((e) => e.type);
+		expect(created.filter((t) => /observe|lifecycle/i.test(t))).toEqual([]);
+		expect(created).toEqual(['render-committed']); // render-pass bookkeeping only
 	});
 
 	// RCC-OL1 re-pin (effects unification, 2026-07-06): committed

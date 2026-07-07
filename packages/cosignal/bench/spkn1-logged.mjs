@@ -4,7 +4,7 @@
 // the logged build records and delivers them; the base build drops them).
 // Frame = writes -> render pass (renders all watchers, commits) -> retire
 // the frame's batches. HELD=1 adds a batch held open for the whole rep,
-// whose unretired receipt blocks history compaction behind it. Metrics:
+// whose unretired log entry blocks history compaction behind it. Metrics:
 // propagate ns/write (write-call time only), frame ns, deliveries and
 // spurious renders per (watcher, batch, cycle), held-row history growth +
 // first/last frame write-time degradation.
@@ -100,7 +100,7 @@ function repOnce() {
 			if (rec.s > maxSpurious) maxSpurious = rec.s;
 		}
 	}
-	const tapeLen = a.tp.length;
+	const logLen = a.log.length;
 	if (held !== undefined) b.retire(held.id);
 	const n = firstLast.length;
 	const head = firstLast.slice(0, 5).reduce((x, y) => x + y, 0) / Math.min(5, n);
@@ -108,7 +108,7 @@ function repOnce() {
 	return {
 		writeNsPerWrite: writeNs / (FRAMES * W),
 		frameNs: frameNsTot / FRAMES,
-		maxDeliv, maxSpurious, tapeLen,
+		maxDeliv, maxSpurious, logLen,
 		degradation: tail / head,
 	};
 }
@@ -123,5 +123,5 @@ row({ ...base, metric: `propNs:${base.shape}`, value: med('writeNsPerWrite') });
 row({ ...base, metric: `frameNs:${base.shape}`, value: med('frameNs') });
 row({ ...base, metric: `maxDeliv:${base.shape}`, value: med('maxDeliv') });
 row({ ...base, metric: `maxSpurious:${base.shape}`, value: med('maxSpurious') });
-row({ ...base, metric: `tapeLen:${base.shape}`, value: med('tapeLen') });
+row({ ...base, metric: `logLen:${base.shape}`, value: med('logLen') });
 row({ ...base, metric: `degrade:${base.shape}`, value: med('degradation') });
