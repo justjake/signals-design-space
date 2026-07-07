@@ -40,6 +40,17 @@
  *    at those points is legal (writes during render are not, and throw).
  *    The bridge's TraceEvent LOG is a referee/tracing surface only: it does
  *    not create unless a referee retains it or a tracer attaches.
+ *  - batch identity (protocol v2) — ONE id space, no translation: the shim
+ *    registers a BATCH-ID ALLOCATOR on the protocol
+ *    (unstable_registerBatchIdAllocator). At every React batch's creation
+ *    the fork calls it with the batch's deferred classification; the
+ *    allocator opens an engine batch (recording `deferred` on it) and
+ *    returns the engine BatchId, which React stores as THE batch's identity
+ *    for its whole life. Every protocol surface — getCurrentWriteBatch,
+ *    runInBatch, the retirement and per-root commit reports, render-pass
+ *    included-batch lists — speaks engine BatchIds directly; the old
+ *    reactBatch<->engineBatch mapping tables are gone. BATCH_NONE (0),
+ *    named on both sides, is the "no batch context" sentinel.
  *  - write classification — the rule: a write belongs to the batch context
  *    in which it executes. The CORE's public Atom.set/update (dispatch is a
  *    thin layer over update) capture host-attributable writes as WHOLE
@@ -47,11 +58,13 @@
  *    the engine unfolded) and
  *    hand them to the classifier this shim installs on the bridge
  *    (`bridge.writeClassifier`). The batch is read from the protocol's
- *    write-context API (unstable_getCurrentWriteBatch, whose low bit is
- *    the deferred flag); React batch id 0 (no provider registered) is unreachable
+ *    write-context API (unstable_getCurrentWriteBatch — the engine BatchId
+ *    itself, allocator-opened at the batch's creation); BATCH_NONE (no
+ *    provider registered) is unreachable
  *    once a renderer has loaded — with dev checks armed
  *    (BridgeOptions.devChecks) it throws as a protocol violation, and
- *    without them it classifies as an ordinary urgent write. Raw `.state` reads
+ *    without them it falls through to the engine's ordinary no-context
+ *    write (quiet fold, else the ambient batch). Raw `.state` reads
  *    route through the core's host read hook into the bridge's effective
  *    world (evaluation world, else the ambient world this shim maintains
  *    around render passes and effect fires) — no prototype patching
@@ -68,7 +81,7 @@
  */
 
 import * as React from 'react';
-import { Atom, SuspendedRead, type ComputedCtx } from 'cosignal';
+import { Atom, BATCH_NONE, SuspendedRead, type ComputedCtx } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
@@ -162,9 +175,8 @@ export class Shim {
 	private warned = new Set<string>();
 
 	private unsubscribe: () => void;
+	private unregisterAllocator: () => void;
 	private rootsByContainer = new Map<unknown, RootRec>();
-	private reactBatchToBatch = new Map<number, BatchId>();
-	private batchToReactBatch = new Map<BatchId, number>();
 	/** watcher id -> delivery target (registered at render, claimed at layout). */
 	targets = new Map<number, WatcherTarget>();
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
@@ -224,6 +236,15 @@ export class Shim {
 		bridge.onDelivery = (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)); // re-render in the write's own batch
 		bridge.onMountCorrective = (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)); // join a still-live batch this mount's render missed
 		bridge.onCorrection = (w) => this.guard(() => this.bumpInBatch(w.id, undefined)); // urgent pre-paint fix: discrete-urgent fallback lane
+		// Protocol v2: the shim IS the batch-id allocator. React calls this at
+		// every batch's creation (which can sit mid-render, mid-commit, or
+		// inside protocol listeners — the engine's openBatch is allocation-only
+		// bookkeeping and legal at all three); the engine batch opens with the
+		// fork's deferred classification recorded, and the returned engine
+		// BatchId is the identity BOTH sides speak from then on.
+		this.unregisterAllocator = React.unstable_registerBatchIdAllocator(
+			(deferred: boolean) => this.bridge.openBatch({ deferred }).id,
+		);
 		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches) =>
 				this.guard(() => this.handleRenderStart(container, includedBatches)),
@@ -239,6 +260,7 @@ export class Shim {
 	dispose(): void {
 		this.disposed = true;
 		this.unsubscribe();
+		this.unregisterAllocator();
 		this.bridge.writeClassifier = undefined;
 		this.bridge.readAdopter = undefined;
 		this.bridge.onDelivery = undefined;
@@ -291,33 +313,20 @@ export class Shim {
 		return rec;
 	}
 
-	/** The engine batch mirroring a React batch (created on first sight). */
-	batchForReactBatch(reactBatchId: number, opts?: { action?: boolean }): BatchId {
-		const existing = this.reactBatchToBatch.get(reactBatchId);
-		if (existing !== undefined) {
-			if (opts?.action === true) {
-				// Every transition started inside one event shares one React
-				// batch, so the engine batch may already exist when an action
-				// starts: upgrade it in place to action semantics (parked — kept
-				// pending — until the action settles).
-				const t = this.bridge.idToBatch.get(existing);
-				if (t !== undefined && t.state === 'live') {
-					t.action = true;
-					t.parked = true;
-				}
-			}
-			return existing;
+	/**
+	 * Upgrades a live batch to async-action semantics in place (parked — kept
+	 * pending — until the action settles). The batch already exists: with
+	 * protocol v2 every React batch is engine-opened at creation by this
+	 * shim's allocator, and every transition started inside one event shares
+	 * one batch, so an action start never creates — it only marks. Ids with
+	 * no live engine batch (already retired; foreign) are ignored.
+	 */
+	upgradeToAction(batchId: BatchId): void {
+		const t = this.bridge.idToBatch.get(batchId);
+		if (t !== undefined && t.state === 'live') {
+			t.action = true;
+			t.parked = true;
 		}
-		const batch = this.bridge.openBatch({
-			action: opts?.action ?? false,
-		});
-		this.reactBatchToBatch.set(reactBatchId, batch.id);
-		this.batchToReactBatch.set(batch.id, reactBatchId);
-		return batch.id;
-	}
-
-	reactBatchForBatch(batchId: BatchId): number | undefined {
-		return this.batchToReactBatch.get(batchId);
 	}
 
 	/** The root whose render is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
@@ -348,13 +357,14 @@ export class Shim {
 			this.bridge.renderEnd(rec.renderPass.id, 'discard');
 		}
 		const known: BatchId[] = [];
-		for (const reactBatchId of includedBatches) {
-			// Only React batches carrying cosignal writes have engine batches.
-			// A pure-React batch contributed no log entries, and a world is computed
-			// purely by replaying log entries, so leaving that batch out of the
-			// render's batch set cannot change any value the render observes.
-			const mapped = this.reactBatchToBatch.get(reactBatchId);
-			if (mapped !== undefined && this.bridge.idToBatch.get(mapped)?.state === 'live') known.push(mapped);
+		for (const batchId of includedBatches) {
+			// The protocol speaks engine BatchIds directly (this shim's allocator
+			// opened every one at its React batch's creation). The liveness
+			// filter is defensive: a batch can retire between React capturing
+			// the included list and this listener running only in exotic
+			// schedules, and stale ids (a test registry that missed its reset)
+			// must never enter a render's batch set.
+			if (this.bridge.idToBatch.get(batchId)?.state === 'live') known.push(batchId);
 		}
 		rec.renderPass = this.bridge.renderStart(rec.id, known);
 		rec.created = new Set();
@@ -428,28 +438,24 @@ export class Shim {
 		});
 	}
 
-	private handleBatchRetired(reactBatchId: number, committed: boolean): void {
+	private handleBatchRetired(batchId: BatchId, committed: boolean): void {
 		this.flushHeldRefires(); // defensive: nothing stays parked past its commit's own events
-		const mapped = this.reactBatchToBatch.get(reactBatchId);
-		if (mapped === undefined) return; // no cosignal writes rode this batch
-		const t = this.bridge.idToBatch.get(mapped);
-		if (t === undefined || t.state !== 'live') return;
+		const t = this.bridge.idToBatch.get(batchId);
+		if (t === undefined || t.state !== 'live') return; // already retired, or a stale/foreign id — nothing to do
 		// The committed/abandoned fact is BORN here — React's own report about
 		// its batch. Retirement is disposition-blind (recorded writes never
 		// revert either way), so the flag goes no further than this diagnostic
 		// record, created straight into the bridge's tracer when one is
-		// attached. Batches with no protocol report (the ambient batch below)
-		// create none.
+		// attached. Batches with no protocol report (the engine-side ambient
+		// batch) create none.
 		const tr = this.bridge.trace;
-		if (tr !== undefined) tr.batchDisposition(mapped, committed);
+		if (tr !== undefined) tr.batchDisposition(batchId, committed);
 		// Retirement/settlement ARE effect boundaries now (RCC-EF2 amended):
 		// the engine's boundary scan runs inside retire/settleAction and
 		// queued refires fire at the operation boundary, inside this call —
 		// the same observable point as the old post-retire revalidation.
-		if (t.parked) this.bridge.settleAction(mapped); // async action reached settlement
-		else this.bridge.retire(mapped); // batch done everywhere: its writes become permanent history
-		this.reactBatchToBatch.delete(reactBatchId);
-		this.batchToReactBatch.delete(mapped);
+		if (t.parked) this.bridge.settleAction(batchId); // async action reached settlement
+		else this.bridge.retire(batchId); // batch done everywhere: its writes become permanent history
 	}
 
 	private handleRootCommitted(container: unknown, committedBatches: readonly number[], _generation: number): void {
@@ -466,9 +472,11 @@ export class Shim {
 		// partial table write from here). Defensive: for React batches with
 		// engine batches the render's set already covers the delta by construction.
 		const reported: BatchId[] = [];
-		for (const reactBatchId of committedBatches) {
-			const mapped = this.reactBatchToBatch.get(reactBatchId);
-			if (mapped !== undefined) reported.push(mapped);
+		for (const batchId of committedBatches) {
+			// Engine BatchIds directly; the liveness filter mirrors v1's
+			// mapping check (the mapping was deleted at retirement, so a
+			// retired batch never re-entered commitBatches from here).
+			if (this.bridge.idToBatch.get(batchId)?.state === 'live') reported.push(batchId);
 		}
 		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported);
 		// The root-commit REPORT is where the commit's effect refires run
@@ -504,17 +512,16 @@ export class Shim {
 
 	/**
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
-	 * unstable_runInBatch, so the re-render renders and commits together with
-	 * the batch that caused it. Engine batches without a live protocol
-	 * counterpart (an already-retired batch, or an engine-created batch no
-	 * React batch mirrors) pass React batch id 0, which unstable_runInBatch
-	 * defines as a discrete-urgent fallback.
+	 * unstable_runInBatch — the engine BatchId IS the protocol id, so it
+	 * passes straight through. Batches React no longer (or never) holds —
+	 * an already-retired batch, an engine-created batch such as the ambient
+	 * one, or BATCH_NONE for no batch at all — take unstable_runInBatch's
+	 * documented discrete-urgent fallback.
 	 */
 	private bumpInBatch(watcherId: number, batchId: BatchId | undefined): void {
 		const target = this.targets.get(watcherId);
 		if (target === undefined || !target.live) return;
-		const reactBatchId = batchId === undefined ? 0 : (this.batchToReactBatch.get(batchId) ?? 0);
-		React.unstable_runInBatch(reactBatchId, () => target.bump());
+		React.unstable_runInBatch(batchId ?? BATCH_NONE, () => target.bump());
 	}
 
 	// ---- write classification -----------------------------------------------------
@@ -527,43 +534,47 @@ export class Shim {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
-		const reactBatchId = React.unstable_getCurrentWriteBatch();
-		// React batch id 0 is UNREACHABLE in practice: it means "no renderer
-		// provider registered" (ReactExternalRuntime returns 0 only then),
+		// The protocol id IS the engine BatchId: the fork created the batch
+		// through this shim's allocator (which opened the engine batch) the
+		// first time any write asked for this batch, this call included.
+		const batchId = React.unstable_getCurrentWriteBatch();
+		// BATCH_NONE is UNREACHABLE in practice: it means "no renderer
+		// provider registered" (ReactExternalRuntime returns it only then),
 		// and a renderer registers its provider at module load — after that,
-		// getCurrentWriteBatch() creates a React batch id for EVERY write (any
+		// getCurrentWriteBatch() creates a batch id for EVERY write (any
 		// call context) with a guaranteed close edge, so no write in the React
 		// path is ever context-free. Dev checks make reaching it explode;
-		// without them it classifies below as an ordinary urgent write
-		// (React batch id 0's low bit is clear = non-deferred).
-		if (this.devChecks && reactBatchId === 0) {
+		// without them it falls through to the engine's ordinary no-context
+		// write below (quiet fold when nothing is pending, else the ambient
+		// batch) — the same defined fall-through a bare non-React write takes.
+		if (this.devChecks && batchId === BATCH_NONE) {
 			throw new Error(
 				'cosignal: protocol violation — signal write with no batch context after registration (the renderer provided no external-runtime write batch)',
 			);
 		}
-		const batchId = this.batchForReactBatch(reactBatchId);
 		if (this.devChecks) {
 			// Dev-warning heuristic. After an await, code runs on a fresh call
 			// stack with no ambient transition context, so a bare write lands
 			// urgent — while an async action is pending that is usually a bug
 			// (the author meant the write to join the action; the fix is a
 			// fresh startTransition). Warn on a non-deferred write while any
-			// action is parked. The protocol exposes only one bit (deferred or
-			// not), which cannot distinguish a discrete handler's React batch
-			// from a timer's ambient one, so this lint can over-trigger on genuine
-			// handler writes during someone else's action — accepted
-			// imprecision for a dev-only warning.
+			// action is parked. Deferredness is the classification the fork
+			// told the allocator at the batch's creation, stored on the engine
+			// batch record; one bit cannot distinguish a discrete handler's
+			// batch from a timer's ambient one, so this lint can over-trigger
+			// on genuine handler writes during someone else's action —
+			// accepted imprecision for a dev-only warning.
 			const t = this.bridge.idToBatch.get(batchId);
 			if (
 				t !== undefined &&
 				!t.action &&
-				(reactBatchId & 1) === 0 &&
+				!t.deferred &&
 				this.bridge.liveBatches().some((lt) => lt.parked)
 			) {
 				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
 			}
 		}
-		this.bridge.write(batchId, node, kind, payload);
+		this.bridge.write(batchId === BATCH_NONE ? undefined : batchId, node, kind, payload);
 		// A write into a batch already locked into some root's committed table
 		// moves that root's committed world immediately — but effects are
 		// BOUNDARY consumers (RCC-EF2 amended, 2026-07-06): they never re-run

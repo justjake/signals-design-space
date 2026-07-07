@@ -2600,6 +2600,10 @@ export {
 	CosignalBridge,
 	BridgeScheduleError,
 	BridgeInvariantViolation,
+	// The reserved "no batch context" BatchId (0). The React bindings and the
+	// patched React build name the same sentinel — protocol v2 shares ONE
+	// batch-id space, so the sentinel is shared too.
+	BATCH_NONE,
 	// @internal test seams (cosignal-react's suite constructs per-test bridges
 	// and one-core.spec proves the zero-cost promise through these):
 	__newBridgeForTest,

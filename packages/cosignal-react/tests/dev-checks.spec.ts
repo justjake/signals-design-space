@@ -3,10 +3,10 @@
  *
  * This file NEVER imports react-dom, on purpose: the external-runtime
  * provider registers when a renderer module loads, so here
- * unstable_getCurrentWriteBatch() returns the real React batch id 0 ("no renderer
- * provider registered") — the exact state the integration contract makes
- * unreachable in an app. That lets these tests drive every guarded site
- * genuinely, with no mocking:
+ * unstable_getCurrentWriteBatch() returns the real BATCH_NONE (0, "no
+ * renderer provider registered") — the exact state the integration contract
+ * makes unreachable in an app. That lets these tests drive every guarded
+ * site genuinely, with no mocking:
  *
  *  - armed (devChecks: true — every other suite file, via makeHarness):
  *    protocol violations THROW at the violating call.
@@ -37,7 +37,7 @@ afterEach(() => {
 	handle = undefined;
 });
 
-describe('write classifier: no batch context (React batch id 0)', () => {
+describe('write classifier: no batch context (BATCH_NONE)', () => {
 	test('armed: a context-free write throws a protocol violation, and no state moves', () => {
 		const h = register(true);
 		const a = new Atom(0);
@@ -47,28 +47,28 @@ describe('write classifier: no batch context (React batch id 0)', () => {
 		expect(h.bridge.ambientBatch).toBeUndefined(); // and never an ambient batch
 	});
 
-	test('off: a context-free write classifies as an ordinary urgent write (no ambient batch, no fallback arm)', () => {
+	test('off: a context-free write takes the engine no-context fall-through (quiet fold, no batch)', () => {
 		const h = register(false);
 		const a = new Atom(0);
 		const b = new Atom(0);
 		a.set(5);
 		expect(a.state).toBe(5); // newest world: the write landed
-		// One ordinary batch — NOT the engine's ambient default batch,
-		// not parked: React batch id 0's low bit is clear, so the write is urgent.
+		// Protocol v2 deleted the id-translation layer, and with it the v1
+		// materialization of "React batch id 0" as its own mapped engine
+		// batch. BATCH_NONE now means what it says — no batch context — so
+		// the write takes the ENGINE's own no-context path: with nothing
+		// pending the bridge is QUIET and the write folds directly; no batch
+		// of any kind materializes (ambient included).
 		expect(h.bridge.ambientBatch).toBeUndefined();
-		const live = h.bridge.liveBatches();
-		expect(live).toHaveLength(1);
-		expect(live[0]!.ambient).toBe(false);
-		expect(live[0]!.parked).toBe(false);
-		// Later context-free writes reuse the same engine batch (one React
-		// batch id, one engine batch — the ordinary classifier rule).
+		expect(h.bridge.liveBatches()).toHaveLength(0);
+		// Later context-free writes fold the same way — still no batch.
 		b.set(7);
 		expect(b.state).toBe(7);
-		expect(h.bridge.liveBatches()).toHaveLength(1);
+		expect(h.bridge.liveBatches()).toHaveLength(0);
 	});
 });
 
-describe('startSignalTransition: no batch context (React batch id 0)', () => {
+describe('startSignalTransition: no batch context (BATCH_NONE)', () => {
 	test('armed: throws to the caller, before React.startTransition swallows scope errors', () => {
 		register(true);
 		let ran = false;
@@ -80,17 +80,18 @@ describe('startSignalTransition: no batch context (React batch id 0)', () => {
 		expect(ran).toBe(false); // the action body never started
 	});
 
-	test('off: the action runs; with no batch to park, its writes classify as ordinary urgent writes', () => {
+	test('off: the action runs; with no batch to park, its writes take the no-context fall-through', () => {
 		const h = register(false);
 		const a = new Atom(0);
 		startSignalTransition(() => {
 			a.set(3);
 		});
 		expect(a.state).toBe(3);
-		// No parked action batch was created for React batch id 0 — nothing could ever
-		// settle it; the write rode the ordinary id-0 batch instead.
+		// No parked action batch was created for BATCH_NONE — nothing could
+		// ever settle it; the write folded quietly (the engine's no-context
+		// path), creating no batch at all.
 		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(false);
-		expect(h.bridge.liveBatches()).toHaveLength(1);
+		expect(h.bridge.liveBatches()).toHaveLength(0);
 	});
 });
 

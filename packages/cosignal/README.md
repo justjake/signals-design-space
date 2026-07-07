@@ -213,7 +213,7 @@ could implement the same contract. A host driver's responsibilities:
 
 - **Batch lifecycle.** Open a batch (`openBatch`) for each group of
   writes that must land together — one event handler, one transition —
-  and retire it (`retire(token)`) once it is finished everywhere.
+  and retire it (`retire(batchId)`) once it is finished everywhere.
   Retirement makes the batch's recorded writes permanent history that
   every world sees; this holds whether the host committed the batch or
   abandoned it (state changes are never silently discarded — a host
@@ -249,7 +249,7 @@ could implement the same contract. A host driver's responsibilities:
   together with its cause. Deliveries are value-blind: the engine
   decides who must re-render; the host only schedules.
 
-The remaining engine exports (`CosignalBridge`, the node/render-pass/token
+The remaining engine exports (`CosignalBridge`, the node/render-pass/batch
 types, `BridgeScheduleError`, `BridgeInvariantViolation`) are that seam;
 applications normally touch only `registerReactBridge()`, indirectly,
 via `cosignal-react`.

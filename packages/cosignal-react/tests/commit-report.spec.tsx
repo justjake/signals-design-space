@@ -56,16 +56,16 @@ describe('root-commit report reconciliation (W11)', () => {
 			React.startTransition(() => a.set(7));
 			const batch = h.bridge.liveBatches().find((t) => !t.ambient);
 			expect(batch).toBeDefined();
+			// Protocol v2: the engine BatchId IS the id React's reports carry
+			// (the shim's allocator handed it out at the batch's creation).
 			const tid = batch!.id;
-			const reactBatchId = h.handle.shim.reactBatchForBatch(tid);
-			expect(reactBatchId).toBeDefined();
 			const root = h.bridge.root(rec.id);
 			expect(root.committedBatches.has(tid)).toBe(false); // render-end never saw it
 			const genBefore = root.commitGen;
 			expect(h.bridge.committedValue(node, rec.id)).toBe(0); // still pending for this root
 
 			// React's report names the live batch render-end didn't lock in.
-			shim.handleRootCommitted(rootContainer, [reactBatchId!], 1);
+			shim.handleRootCommitted(rootContainer, [tid], 1);
 
 			// The COMPLETE lock-in, not the half-job: committed-world reads for
 			// this root now include the batch's writes...
@@ -79,7 +79,7 @@ describe('root-commit report reconciliation (W11)', () => {
 			expect(root.commitGen).toBe(genBefore + 1);
 
 			// Re-reporting the same batch is an idempotent set-add: no-op.
-			shim.handleRootCommitted(rootContainer, [reactBatchId!], 2);
+			shim.handleRootCommitted(rootContainer, [tid], 2);
 			expect(root.commitGen).toBe(genBefore + 1);
 			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
 		});

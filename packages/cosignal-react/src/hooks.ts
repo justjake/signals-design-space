@@ -2,7 +2,7 @@
  * cosignal-react — the hook surface: useSignal, useComputed, useReducerAtom,
  * useSignalEffect, startSignalTransition, plus registerCosignalReact — the
  * activation call that registers `cosignal`'s bridge (arming its write
- * recording) and couples it to a protocol-v1 React build via the Shim.
+ * recording) and couples it to a protocol React build via the Shim.
  *
  * Watcher lifecycle, shared by the subscription hooks (a watcher is the
  * engine's record of one subscribed component instance): render creates (or
@@ -17,7 +17,7 @@
  */
 
 import * as React from 'react';
-import { Atom, Computed, ReducerAtom, registerReactBridge } from 'cosignal';
+import { Atom, BATCH_NONE, Computed, ReducerAtom, registerReactBridge } from 'cosignal';
 import type { AnyNode, CosignalBridge, RootId } from 'cosignal';
 import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
@@ -343,29 +343,30 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
  */
 export function startSignalTransition(fn: () => unknown): void {
 	const shim = requireShim();
-	// React batch id 0 ("no renderer provider registered") is unreachable once a
-	// renderer has loaded, and it is a global condition — zero out here means
-	// zero inside the transition scope too. The dev check throws HERE, before
+	// BATCH_NONE ("no renderer provider registered") is unreachable once a
+	// renderer has loaded, and it is a global condition — none here means
+	// none inside the transition scope too. The dev check throws HERE, before
 	// React.startTransition, because startTransition reports a sync throw
 	// from its scope as an uncaught error instead of propagating it.
-	if (shim.devChecks && React.unstable_getCurrentWriteBatch() === 0) {
+	if (shim.devChecks && React.unstable_getCurrentWriteBatch() === BATCH_NONE) {
 		throw new Error('cosignal: no transition batch context — the renderer did not provide an external-runtime write batch.');
 	}
 	React.startTransition((): void => {
 		// The action's batch context is React's own transition scope: inside
 		// this callback unstable_getCurrentWriteBatch() returns the
-		// transition's React batch id, and the shim's classifier routes every
-		// write executed here into that batch.
-		const reactBatchId = React.unstable_getCurrentWriteBatch();
+		// transition batch's id — the engine BatchId the shim's allocator
+		// handed out at the batch's creation — and the shim's classifier
+		// routes every write executed here into that batch.
+		const batchId = React.unstable_getCurrentWriteBatch();
 		// Upgrade the batch to action semantics NOW (parked — kept pending —
 		// until the action settles), before fn writes anything: the parked
 		// batch holds the pending window open for the action's whole life,
 		// even for an action that only writes after its first await. With no
-		// batch context (React batch id 0, dev checks off) there is no batch to park:
+		// batch context (BATCH_NONE, dev checks off) there is no batch to park:
 		// the action runs and its writes classify as they land — ordinary
-		// urgent writes, the same fall-through as the write classifier —
+		// no-context writes, the same fall-through as the write classifier —
 		// rather than creating a parked batch nothing could ever settle.
-		if (reactBatchId !== 0) shim.batchForReactBatch(reactBatchId, { action: true });
+		if (batchId !== BATCH_NONE) shim.upgradeToAction(batchId);
 		// Returning fn's thenable keeps the transition pending until it settles
 		// (React async-action semantics); the protocol host retires the batch
 		// at settlement, which is when its writes become permanent history.

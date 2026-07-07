@@ -31,6 +31,12 @@ export type Harness = {
 };
 
 export function makeHarness(opts?: { devChecks?: boolean }): Harness {
+	// Protocol v2 test seam: scrub React's batch registry before wiring a
+	// fresh bridge. Each test's bridge restarts its BatchId space at 1, so a
+	// stale slot left by a previous test (an unsettled action, an unflushed
+	// close edge) could otherwise collide with — and merge into — this
+	// test's ids. The scrub emits no retirement events.
+	React.unstable_resetBatchRegistryForTest();
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
 	// production posture (defined fall-throughs, no warning allocation).
@@ -72,6 +78,11 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 			await act(async () => {}); // drain debounced unsubscribes
 			for (const c of containers) c.remove();
 			handle.dispose();
+			// Leave the registry clean for whatever runs next (makeHarness
+			// scrubs again defensively): after dispose the slots' ids name a
+			// dead bridge. Parked settlements that fire later no-op — the
+			// scrub cleared their slots and their callbacks self-invalidate.
+			React.unstable_resetBatchRegistryForTest();
 			if (errors.length > 0) {
 				throw new Error(`shim recorded errors: ${errors.map((e) => String(e)).join(' | ')}`);
 			}

@@ -648,16 +648,17 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 	});
 });
 
-describe('context-free writes (React batch id 0 is unreachable once a renderer provider exists)', () => {
-	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the id-0 state is unreachable', async () => {
+describe('context-free writes (BATCH_NONE is unreachable once a renderer provider exists)', () => {
+	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the BATCH_NONE state is unreachable', async () => {
 		// Unreachability, proven on the happy path: once a renderer provider
 		// exists (the shim's handshake asserts one),
-		// unstable_getCurrentWriteBatch() creates a nonzero React batch id for EVERY
+		// unstable_getCurrentWriteBatch() creates a real batch id for EVERY
 		// write — even from a bare timer-style call stack — with a guaranteed
-		// close edge. So the classifier's id-0 protocol-violation check
-		// (devChecks, armed by this harness) never fires in the React path,
-		// and no ambient batch is ever created. dev-checks.spec.ts drives the
-		// id-0 state itself in a renderer-less environment.
+		// close edge (the id is the engine BatchId the shim's allocator handed
+		// out at creation). So the classifier's BATCH_NONE protocol-violation
+		// check (devChecks, armed by this harness) never fires in the React
+		// path, and no ambient batch is ever created. dev-checks.spec.ts
+		// drives the BATCH_NONE state itself in a renderer-less environment.
 		h = makeHarness();
 		const a = new Atom(0);
 		const flag = new Atom(0); // written outside any React context; observed by no component

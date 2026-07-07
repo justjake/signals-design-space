@@ -196,6 +196,12 @@ type NodeIndex = number;
 /** A kernel record's GEN field value: the id-tenancy stamp, bumped at free. */
 type Generation = number;
 export type BatchId = number;
+/** The reserved "no batch context" BatchId. Never allocated (batch ids start
+ * at 1): `getCurrentWriteBatch() === BATCH_NONE` means no renderer provider
+ * has registered, and a classified write carrying it has no batch to join.
+ * The React fork names the same sentinel on its side (protocol v2 shares ONE
+ * id space between the engine and React, so the sentinel must too). */
+export const BATCH_NONE: BatchId = 0;
 export type BatchSlot = number;
 export type RootId = string;
 export type RenderPassId = number;
@@ -424,6 +430,13 @@ export type Batch = {
 	id: BatchId;
 	action: boolean;
 	parked: boolean;
+	/** The React-side classification told to the driver's batch-id allocator
+	 * at creation (true = transition-like: renders don't block paint and the
+	 * batch commits later). A DRIVER-owned annotation stored on the shared
+	 * record so the driver needs no side table — the engine itself never
+	 * branches on it (scheduling stays React's). False for engine-created
+	 * batches (ambient, tests) that no allocator classified. */
+	deferred: boolean;
 	state: 'live' | 'retired';
 	slot: BatchSlot | undefined;
 	retiredSeq: Seq | undefined;
@@ -1954,6 +1967,14 @@ export class CosignalBridge {
 	 * on it. */
 	readonly devChecks: boolean;
 
+	/** BatchId source — MONOTONIC for this engine's whole life, never reused
+	 * and never rewound (ids start at 1; BATCH_NONE = 0 is never allocated).
+	 * With protocol v2 these ids are stored verbatim in React's batch
+	 * registry, so monotonicity is what keeps a stale fork-side id from ever
+	 * colliding with a later batch. (Surviving `__resetEngineForTest` — ids
+	 * monotonic ACROSS engine resets — is the great-refactor S5 rule, noted
+	 * here so the reset work keeps it; per-test bridges today get fresh
+	 * counters and rely on the fork's test-only registry reset instead.) */
 	private nextBatchId = 1;
 	private nextRenderPassId = 1;
 	private nextWatcher = 1;
@@ -3943,8 +3964,15 @@ export class CosignalBridge {
 	/** Create a batch. At most 31 live at once — React schedules each
 	 * batch on one of its 31 lanes, so more can never be in flight. (The
 	 * lane/priority itself stays React's: the engine never consults it —
-	 * scheduling decisions ride the React bindings' reactBatchToBatch map.) */
-	openBatch(opts?: { action?: boolean; ambient?: boolean }): Batch {
+	 * with protocol v2 the driver's batch-id allocator opens the batch and
+	 * hands its id straight to React, one shared number space, no map.)
+	 *
+	 * ALLOCATION-ONLY envelope (the driver's allocator calls this from
+	 * React's batch-creation site, which can sit mid-render, mid-commit, or
+	 * inside protocol listeners — i.e. at opDepth > 0): bookkeeping only —
+	 * counter, registry map, quiet recompute, probes/trace records. No
+	 * operation epilogue, no drains, no kernel mutation, no user code. */
+	openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
 		if (!this._registered) throw new BridgeScheduleError('batches require a registered bridge — register the React bridge first');
 		if (this.liveBatchCount >= SLOT_COUNT) {
 			throw new BridgeScheduleError('at most 31 batches may be live at once (one per React lane)');
@@ -3955,6 +3983,7 @@ export class CosignalBridge {
 			id: this.nextBatchId++,
 			action: opts?.action ?? false,
 			parked, // async-action batches park (cannot retire) until their promise settles
+			deferred: opts?.deferred ?? false, // driver-owned annotation (see Batch.deferred)
 			state: 'live', slot: undefined,
 			retiredSeq: undefined, lastWriteSeq: 0, atomsTouched: [], liveLogEntries: 0,
 			ambient: opts?.ambient ?? false,
