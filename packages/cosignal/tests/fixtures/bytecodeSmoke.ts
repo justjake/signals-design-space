@@ -10,7 +10,7 @@
  * everything exercised below dumps after the marker.
  */
 import {
-	__newBridgeForTest,
+	engine,
 	Atom,
 	batch,
 	Computed,
@@ -18,6 +18,7 @@ import {
 	effectScope,
 	untracked,
 	type AnyNode,
+	type WorldArena,
 } from '../../src/index';
 import { armArenaCheck } from '../arena-checker';
 
@@ -107,10 +108,10 @@ base.set(1);
 base.set(2);
 
 // ---- concurrent engine: arenaLink, arenaCheckDirty, shadowFor, arenaPropagateBoth, foldAtom.
-// A bridge with the S-A divergence check armed: every op epilogue serves
-// every arena shadow through the arena's own walks (arenaServe → arenaCheckDirty).
-const bridge = __newBridgeForTest();
-bridge.registerBridge();
+// THE one engine with the S-A divergence check armed: every op epilogue
+// serves every arena shadow through the arena's own walks
+// (arenaServe → arenaCheckDirty). Always-concurrent: no registration step.
+const bridge = engine;
 armArenaCheck(bridge);
 const at = bridge.atom('at', 1);
 const at2 = bridge.atom('at2', 2);
@@ -186,15 +187,10 @@ commitWrite(atK as AnyNode, 2);
 // refolds the dirty base (descend arm; committed fold, value unchanged)
 // and sees the unchanged constant above it (unwind arm), leaving flags
 // clean and every value as it was.
-const B = bridge as unknown as {
-	eachArena(cb: (a: unknown) => void): void;
-	fanAtomsToArena(a: unknown, atoms: unknown[], fromSettlement: boolean): void;
-	arenaServe(a: unknown, node: AnyNode): unknown;
-};
-B.eachArena((a) => {
-	if ((a as { root: string; kind: string }).root !== 'R5' || (a as { kind: string }).kind !== 'committed') return;
-	B.fanAtomsToArena(a, [atK], false);
-	B.arenaServe(a, topK as AnyNode);
+bridge.__eachArenaForTest((a: WorldArena) => {
+	if (a.root !== 'R5' || a.kind !== 'committed') return;
+	bridge.__fanAtomsToArenaForTest(a, [atK], false);
+	bridge.__arenaServeForTest(a, topK as AnyNode);
 });
 
 // In-arena dynamic dep drop + re-link: arenaUnlink, arenaFreeLink, then arenaAllocLink

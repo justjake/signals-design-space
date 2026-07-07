@@ -1,21 +1,23 @@
 /**
- * Shared harness: per-test bridge + shim registration (fresh
- * `__newBridgeForTest()` instances so cosignal's public once-rule stays
- * intact for real apps), react-dom/client roots, and act plumbing. The
- * engine's event stream is its packed trace records — the harness attaches
- * the referee's lossless session tracer at bridge birth and exposes the
- * decoded stream as `events` (the deleted object log's shape).
+ * Shared harness: per-test ENGINE RESET + shim registration (`cosignal` has
+ * ONE module-level engine — `__resetEngineForTest` is the fresh-engine
+ * analog of the old per-test bridge construction), react-dom/client roots,
+ * and act plumbing. The engine's event stream is its packed trace records —
+ * the harness attaches the referee's lossless session tracer right after
+ * the reset and exposes the decoded stream as `events` (the deleted object
+ * log's shape).
  */
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __newBridgeForTest, type AtomNode, type CosignalBridge, type WriteLogEntry } from 'cosignal';
+import { __resetEngineForTest, engine, type AtomNode, type CosignalEngine, type WriteLogEntry } from 'cosignal';
 import { attachRefereeStream, type RefereeStream } from '../../cosignal/tests/trace-events.js';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 export type Harness = {
 	handle: CosignalReactHandle;
-	bridge: CosignalBridge;
+	/** THE engine surface (the module-level engine; the name is historical). */
+	bridge: CosignalEngine;
 	/** The decoded event stream (lossless session tracer attached at bridge
 	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads). */
 	events: RefereeStream;
@@ -31,25 +33,39 @@ export type Harness = {
 };
 
 export function makeHarness(opts?: { devChecks?: boolean }): Harness {
-	// Protocol v2 test seam: scrub React's batch registry before wiring a
-	// fresh bridge. Each test's bridge restarts its BatchId space at 1, so a
-	// stale slot left by a previous test (an unsettled action, an unflushed
-	// close edge) could otherwise collide with — and merge into — this
-	// test's ids. The scrub emits no retirement events.
+	// Close out whatever episode the previous test left open (a test may
+	// legitimately end mid-render or with an unsettled parked action; the old
+	// per-test bridges were simply abandoned — the ONE engine closes the
+	// episode out instead, so the reset's idle preconditions hold).
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	// Protocol v2 test seam: scrub React's batch registry before the engine
+	// reset. BatchIds stay monotonic across resets, so a stale slot left by a
+	// previous test (an unsettled action, an unflushed close edge) can never
+	// collide with this test's ids — but it could still deliver late protocol
+	// events for a dead composition. The scrub emits no retirement events.
+	// (The reset repeats it through the previous driver's protocolReset;
+	// the explicit call also covers a first run with no driver attached.)
 	React.unstable_resetBatchRegistryForTest();
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
 	// production posture (defined fall-throughs, no warning allocation).
-	const bridge = __newBridgeForTest({ devChecks: opts?.devChecks ?? true });
-	const events = attachRefereeStream(bridge);
+	__resetEngineForTest({ devChecks: opts?.devChecks ?? true });
+	// The referee stream attaches AFTER the reset (the fresh composition's
+	// trace slot starts empty) and before the first engine operation, so the
+	// session is complete from event 0.
+	const events = attachRefereeStream(engine);
 	const compacted: Array<{ atom: AtomNode; entry: WriteLogEntry }> = [];
-	bridge.onCompact = (atom, entry) => compacted.push({ atom, entry });
-	const handle = registerCosignalReact({ bridge });
+	engine.onCompact = (atom, entry) => compacted.push({ atom, entry });
+	const handle = registerCosignalReact();
 	const roots: Root[] = [];
 	const containers: HTMLElement[] = [];
 	const h: Harness = {
 		handle,
-		bridge,
+		bridge: engine,
 		events,
 		compacted,
 		roots,
@@ -80,8 +96,11 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 			handle.dispose();
 			// Leave the registry clean for whatever runs next (makeHarness
 			// scrubs again defensively): after dispose the slots' ids name a
-			// dead bridge. Parked settlements that fire later no-op — the
-			// scrub cleared their slots and their callbacks self-invalidate.
+			// composition this shim no longer listens to. Parked settlements
+			// that fire later no-op — the scrub cleared their slots and their
+			// callbacks self-invalidate. (The engine driver slot stays
+			// attached until the next test's reset clears it; the disposed
+			// shim's driver is inert.)
 			React.unstable_resetBatchRegistryForTest();
 			if (errors.length > 0) {
 				throw new Error(`shim recorded errors: ${errors.map((e) => String(e)).join(' | ')}`);

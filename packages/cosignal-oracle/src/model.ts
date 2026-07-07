@@ -237,13 +237,21 @@ export type ReactEffect = {
 	cleanups: number;
 };
 
-/** A core effect() observer: it sees the newest world (every write applied). */
+/** A core effect() observer: it sees the newest world (every write applied).
+ * A WRITING core effect (R-3 vocabulary) additionally writes its dedicated
+ * effect-output atom on every value-gated run — the payload derives from
+ * its own run count under an equality cutoff (min(runs, 3)), so each
+ * trigger produces a bounded number of effective writes, then drops. The
+ * output subset is DISJOINT: no core effect (and no corpus computed) reads
+ * an effect-output atom, so the write fan is acyclic by construction. */
 export type CoreEffect = {
 	id: EffectId;
 	name: string;
 	node: NodeId;
 	lastValue: Value;
 	runs: number;
+	/** The effect-output atom this effect writes per run (writing effects only). */
+	writeTo?: AtomNode;
 };
 
 /** A world: one self-consistent assignment of values to all atoms. */
@@ -356,12 +364,6 @@ export class CosignalModel {
 	coreEffects = new Map<EffectId, CoreEffect>();
 	events: ModelEvent[] = [];
 
-	/** Flipped once by registerBridge(). There is no pre-registration write
-	 * mode: in the real system, writes reach a bridge only through the kernel
-	 * write hook, which arms at registration — earlier writes are plain
-	 * kernel state that never involves a bridge, so the model cannot express
-	 * them (they throw, mirroring the engine). */
-	private registered = false;
 	/** The one global sequence line every log entry, pin, and stamp lives on. */
 	seq = 0;
 	/** Committed-advance counter, in sequence units: seq of the last change to any committed view. */
@@ -418,16 +420,10 @@ export class CosignalModel {
 		return ++this.seq;
 	}
 
-	// ---------------------------------------------------------------- setup
-
-	/** Activates the bridge: once, monotonically; illegal inside open evaluation frames. */
-	registerBridge(): void {
-		if (this.evalDepth > 0 || this.inFoldCallback) {
-			throw new ScheduleError('registerReactBridge called inside an open evaluation/fold frame; it may only run at an operation boundary');
-		}
-		if (this.registered) throw new ScheduleError('bridge already registered — registration happens exactly once');
-		this.registered = true;
-	}
+	// (There is no registration step: the model — like the engine — is live
+	// from construction. ALWAYS-CONCURRENT: the old registered dimension,
+	// its guards, and its quiet clause were deleted under the S5 oracle-edit
+	// license.)
 
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const node: AtomNode = {
@@ -512,7 +508,9 @@ export class CosignalModel {
 		for (const e of atom.log) { // write log is in seq order by construction
 			if (!this.visible(e, world)) continue;
 			const next = this.applyOp(atom, e.op, value);
-			if (!this.inCallback(() => atom.equals(next, value))) value = next;
+			// R-2 order: isEqual(current, incoming) — per replayed entry (folds
+			// re-invoke per entry BY DESIGN; "once" is the acceptance decision).
+			if (!this.inCallback(() => atom.equals(value, next))) value = next;
 		}
 		return value;
 	}
@@ -526,7 +524,9 @@ export class CosignalModel {
 			// compaction rule (they retired at or below every live pin) — assert via visible() too.
 			if (!this.visible(e, world)) continue;
 			const next = this.applyOp(atom, e.op, value);
-			if (!this.inCallback(() => atom.equals(next, value))) value = next;
+			// R-2 order: (current, incoming) — the shadow fold aligns in the same
+			// commit as foldAtom (a lag breaks retention for asymmetric comparators).
+			if (!this.inCallback(() => atom.equals(value, next))) value = next;
 		}
 		return value;
 	}
@@ -629,7 +629,6 @@ export class CosignalModel {
 	 * lane. (Lane priority itself stays React's: neither the model nor the
 	 * engine ever consults it — the Priority dimension was deleted.) */
 	openBatch(opts?: { action?: boolean; ambient?: boolean }): Batch {
-		if (!this.registered) throw new ScheduleError('batches require a registered bridge — register the React bridge first');
 		if (this.liveBatches().length >= SLOT_COUNT) {
 			throw new ScheduleError('at most 31 batches may be live at once (one per React lane)');
 		}
@@ -714,13 +713,11 @@ export class CosignalModel {
 
 	/**
 	 * The quiet state, derived on demand (the model recomputes everything;
-	 * the engine keeps the same four-condition derivation as a recomputed
-	 * boolean): registered AND zero live batches AND zero open renders AND
-	 * every write log compacted. While quiet, a bare write is one direct fold —
-	 * see quietWrite.
+	 * the engine keeps the same derivation as a recomputed boolean): zero
+	 * live batches AND zero open renders AND every write log compacted.
+	 * While quiet, a bare write is one direct fold — see quietWrite.
 	 */
 	private quietNow(): boolean {
-		if (!this.registered) return false;
 		if (this.liveBatches().length > 0) return false;
 		if (this.livePins().length > 0) return false;
 		for (const n of this.idToNode.values()) {
@@ -752,8 +749,8 @@ export class CosignalModel {
 		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		const prev = node.base;
 		const next = this.applyOp(node, op, prev);
-		if (this.inCallback(() => node.equals(next, prev))) {
-			return; // equality drop against base — the write log is empty by the quiet invariant
+		if (this.inCallback(() => node.equals(prev, next))) {
+			return; // R-2 equality drop — once, kernel order (current, incoming); the write log is empty by the quiet invariant
 		}
 		node.base = next;
 		node.baseSeq = this.committedAdvance = this.nextSeq();
@@ -803,15 +800,13 @@ export class CosignalModel {
 	}
 
 	/**
-	 * The write path (registered bridges only — an unregistered model
-	 * throws, mirroring the engine: pre-registration writes are plain kernel
-	 * state that never reaches a bridge, so they cannot be expressed here).
+	 * The write path (an explicit batch id, or undefined for the
+	 * context-free arm — quiet fold, else the ambient batch).
 	 */
 	write(batchId: BatchId | undefined, node: AtomNode, op: Op): void {
 		if (this.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 		if (this.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 		if (node.kind !== 'atom') throw new ScheduleError('writes target atoms');
-		if (!this.registered) throw new ScheduleError('writes require a registered bridge — before registration, writes are plain kernel state and never reach a bridge');
 		if (batchId === undefined) {
 			this.bareWrite(node, op);
 			return;
@@ -824,7 +819,7 @@ export class CosignalModel {
 		// "no-op" write could still change some world's fold, so it must append.
 		if (node.log.length === 0) {
 			const evaluated = this.applyOp(node, op, node.base);
-			if (this.inCallback(() => node.equals(evaluated, node.base))) {
+			if (this.inCallback(() => node.equals(node.base, evaluated))) {
 				this.log({ type: 'write-dropped', node: node.name, batch: batchId });
 				return;
 			}
@@ -836,7 +831,7 @@ export class CosignalModel {
 		// flush at exactly the newest-advancing writes (below), value-gated.
 		const prevNewest = this.newestValue(node);
 		const nextNewest = this.applyOp(node, op, prevNewest);
-		const advancesNewest = !this.inCallback(() => node.equals(nextNewest, prevNewest));
+		const advancesNewest = !this.inCallback(() => node.equals(prevNewest, nextNewest)); // R-2 order: (current, incoming)
 
 		// Record the write: intern the slot, append the log entry, bump the slot's write clock.
 		const slot = this.internSlot(batch);
@@ -911,6 +906,16 @@ export class CosignalModel {
 				e.lastValue = value;
 				e.runs++;
 				this.log({ type: 'core-effect-run', effect: e.name, value });
+				// R-3: a writing core effect's write CLASSIFIES NORMALLY — it
+				// takes the ordinary context-free arm (the ambient batch while
+				// anything is pending, the quiet fold otherwise), exactly like
+				// the engine's effect writes during the eager kernel apply.
+				// Payload = min(runs, 3): the equality cutoff bounds effective
+				// writes per trigger. Acyclic by construction: no core effect
+				// reads an effect-output atom, so the nested flush reaches none.
+				if (e.writeTo !== undefined) {
+					this.bareWrite(e.writeTo, { kind: 'set', value: Math.min(e.runs, 3) });
+				}
 			}
 		}
 	}
@@ -1150,12 +1155,13 @@ export class CosignalModel {
 	 * the same value face `newestValue` serves). The mount evaluation is the
 	 * silent baseline; names take the per-mount ordinal suffix (see
 	 * `coreEffectMounts`). */
-	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
+	mountCoreEffect(node: AnyNode, name: string, writeTo?: AtomNode): CoreEffect {
 		const e: CoreEffect = {
 			id: this.nextEffect++, name: `${name}#${this.coreEffectMounts++}`, node: node.id,
 			lastValue: this.newestValue(node),
 			runs: 0,
 		};
+		if (writeTo !== undefined) e.writeTo = writeTo;
 		this.coreEffects.set(e.id, e);
 		return e;
 	}
@@ -1375,7 +1381,8 @@ export class CosignalModel {
 		const folded = atom.log.slice(0, cut);
 		for (const e of folded) {
 			const next = this.applyOp(atom, e.op, atom.base);
-			if (!this.inCallback(() => atom.equals(next, atom.base))) atom.base = next;
+			// R-2 order: (current, incoming) — per compacted entry BY DESIGN.
+			if (!this.inCallback(() => atom.equals(atom.base, next))) atom.base = next;
 			atom.baseSeq = e.seq;
 			atom.archive.push(e);
 		}

@@ -6,7 +6,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom, __newBridgeForTest, type AtomNode } from 'cosignal';
+import { Atom, ReducerAtom, BATCH_NONE, __resetEngineForTest, attachDriver, type AtomNode } from 'cosignal';
 import { registerCosignalReact, requireShim, useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
@@ -549,20 +549,32 @@ describe('registration lifecycle (module active-shim slot)', () => {
 		const handleA = h.handle;
 		// A's shim goes dead without its handle's dispose having run, so the
 		// slot still points at the disposed shim; registration B must get past
-		// the liveness-filtered guard.
+		// the liveness-filtered guard. A's DRIVER record is still attached
+		// (dispose never detaches), so the engine resets first — the one way
+		// the driver slot clears — before B can attach its own.
 		handleA.shim.dispose();
-		const handleB = registerCosignalReact({ bridge: __newBridgeForTest() });
+		__resetEngineForTest({ devChecks: true });
+		const handleB = registerCosignalReact();
 		try {
 			expect(requireShim()).toBe(handleB.shim);
 			// The old handle's dispose arrives AFTER the successor registered:
 			// it may clear only its own registration, never B's.
 			handleA.dispose();
 			expect(requireShim()).toBe(handleB.shim);
-			expect(() => registerCosignalReact({ bridge: __newBridgeForTest() })).toThrow(/already registered/);
+			// The double-register throw is the SHIM slot's guard — it fires
+			// before any driver attach could be attempted.
+			expect(() => registerCosignalReact()).toThrow(/already registered/);
 		} finally {
 			handleB.dispose();
 		}
 		// B's own dispose (the slot points at B) does clear the slot.
 		expect(() => requireShim()).toThrow(/registerCosignalReact/);
+	});
+
+	test('one driver per composition: a second attachDriver throws until the engine resets', () => {
+		h = makeHarness(); // the shim's constructor attached THE driver for this composition
+		expect(() => attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined })).toThrow(
+			/driver is already attached/,
+		);
 	});
 });

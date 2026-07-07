@@ -16,6 +16,15 @@
 import { describe, expect, it } from 'vitest';
 import { generateSchedule, shrink, type ScheduleOp } from '../../cosignal-oracle/src/schedule.js';
 import { diffAgainstModelTolerant, engineAsAdapter } from './oracle-adapter.js';
+import frozen from '../../cosignal-oracle/tests/frozen-schedules.json';
+
+/** THE FROZEN FINDING SEEDS (R-3's executable-spec order): the named seeds'
+ * schedules were captured as literal op lists BEFORE the generator gained
+ * the writing-core-effect and custom-equals bands — their pinned
+ * regressions survive any generator change (generator output for the same
+ * seed numbers is now different, and that is fine: fresh sweeps regenerate,
+ * archives replay literals). */
+const FROZEN = frozen as Record<string, ScheduleOp[]>;
 
 const CI_SEEDS = 300;
 const CI_STEPS = 80;
@@ -32,7 +41,11 @@ const LONG_STEPS = 400;
  * exact per step.
  */
 function expectSeedDiffClean(seed: number, steps: number): void {
-	const ops = generateSchedule(seed, steps);
+	expectOpsDiffClean(generateSchedule(seed, steps), seed);
+}
+
+/** Diff a concrete (frozen or generated) op list; shrink on failure. */
+function expectOpsDiffClean(ops: ScheduleOp[], seed?: number): void {
 	const diff = diffAgainstModelTolerant(engineAsAdapter(), ops, seed);
 	if (diff === undefined) return;
 	const failing = (candidate: ScheduleOp[]): boolean => diffAgainstModelTolerant(engineAsAdapter(), candidate) !== undefined;
@@ -54,14 +67,15 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 		for (let seed = 1; seed <= CI_SEEDS; seed++) expectSeedDiffClean(seed, CI_STEPS);
 	});
 
-	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop)`, () => {
-		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) expectSeedDiffClean(seed, LONG_STEPS);
+	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop) — FROZEN literals`, () => {
+		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) expectOpsDiffClean(FROZEN[`s${seed}x400`]!, seed);
 	});
 
-	it('the flag-5 finding seeds (29, 97, 173) diff clean', () => {
+	it('the flag-5 finding seeds (29, 97, 173) diff clean — FROZEN literals', () => {
 		// The schedules that first exposed the mount-fixup fast-out corner covered
-		// by the "flag 5" tests (concurrent-flags.spec.ts) — pinned so it can never
-		// silently regress.
-		for (const seed of [29, 97, 173]) expectSeedDiffClean(seed, CI_STEPS);
+		// by the "flag 5" tests (concurrent-flags.spec.ts) — stored as literal op
+		// lists (tests/frozen-schedules.json) so no generator change can ever
+		// silently rewrite them.
+		for (const seed of [29, 97, 173]) expectOpsDiffClean(FROZEN[`s${seed}x80`]!, seed);
 	});
 });

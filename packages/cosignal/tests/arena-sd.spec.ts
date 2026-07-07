@@ -30,19 +30,25 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { __newBridgeForTest, type AnyNode, type BridgeOptions, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(options?: BridgeOptions): CosignalBridge {
-	const b = __newBridgeForTest(options);
-	b.registerBridge();
+function bridge(options?: EngineResetOptions): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest(options);
+	const b = engine;
 	armArenaCheck(b);
 	return b;
 }
 
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
@@ -50,7 +56,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
-function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
@@ -66,21 +72,22 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 
 /** The shim-wrapper analog: a background suspension folds to the thenable's
  * stable sentinel VALUE instead of unwinding (battery 16d's rule). */
-function suspendingUse(b: CosignalBridge, name: string, holder: { _useCache: unknown }, thenable: () => PromiseLike<unknown>): AnyNode {
-	return b.computed(name, () => {
+function suspendingUse(b: CosignalEngine, name: string, thenable: () => PromiseLike<unknown>): AnyNode {
+	const node: AnyNode = b.computed(name, () => {
 		try {
-			return __ctxUse(holder as never, 'k', thenable);
+			return __ctxUse(node.ix, 'k', thenable); // the id-keyed ctx.use request cache (per node)
 		} catch (err) {
 			if (err instanceof SuspendedRead) return err;
 			throw err;
 		}
 	});
+	return node;
 }
 
 /** Length of a sub's deps chain counted from its FIRST dep's link (the fn
  * must read that dep first, making its link the chain head). A same-eval
  * dedup miss would create a duplicate link and lengthen the chain. */
-function depsChainLen(b: CosignalBridge, root: string, firstDep: AnyNode, sub: AnyNode): number {
+function depsChainLen(b: CosignalEngine, root: string, firstDep: AnyNode, sub: AnyNode): number {
 	let cur = b.__arenaLinkIdForTest(root, firstDep, sub);
 	let n = 0;
 	while (cur !== 0) {
@@ -182,8 +189,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 	it('suspended bookkeeping: release returns the global count to zero; a post-release settlement is a no-op', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = suspendingUse(b, 'c', holder, () => gate.promise);
+		const c = suspendingUse(b, 'c', () => gate.promise);
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
 		expect(b.__arenaStats().suspended).toBe(1);
@@ -209,8 +215,7 @@ describe('S-D stale-loading wart verification (the pre-S-B note)', () => {
 	it('unwatched suspending derived + settle + re-watch before any state motion → data, never stale loading', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = suspendingUse(b, 'c', holder, () => gate.promise);
+		const c = suspendingUse(b, 'c', () => gate.promise);
 		const w1 = mount(b, 'R', c, 'W1');
 		expect(w1.lastRenderedValue).toBeInstanceOf(SuspendedRead); // sentinel cached while watched
 		expect(b.__arenaStats().suspended).toBe(1);
@@ -233,8 +238,7 @@ describe('S-D stale-loading wart verification (the pre-S-B note)', () => {
 	it('never-watched variant: a committedValue-cached sentinel + settle + first watch → data', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = suspendingUse(b, 'c', holder, () => gate.promise);
+		const c = suspendingUse(b, 'c', () => gate.promise);
 		// Cache the sentinel in the committed world WITHOUT ever mounting.
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
 		gate.resolve('DATA');

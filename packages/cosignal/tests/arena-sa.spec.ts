@@ -11,23 +11,29 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { __newBridgeForTest, InvariantViolation, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, InvariantViolation, type AnyNode, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
+function bridge(): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	const b = engine;
 	attachRefereeStream(b); // the decoded packed stream is the event surface
-	b.registerBridge();
 	armArenaCheck(b);
 	return b;
 }
 
 /** The shim-wrapper analog (`makeComputedNode`): a background suspension
  * folds to the thenable's stable sentinel VALUE instead of unwinding. */
-function suspending(b: CosignalBridge, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
+function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
 	return b.computed(name, (read, untracked) => {
 		try {
 			return fn(read, untracked);
@@ -60,14 +66,14 @@ function manual<T>(): { t: PromiseLike<T>; settle: (v: T) => void } {
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function corrections(b: CosignalBridge, watcher: string): number {
+function corrections(b: CosignalEngine, watcher: string): number {
 	return refereeStreamOf(b).eventsOfType('reconcile-correction').filter((e) => e.watcher === watcher).length;
 }
 
@@ -75,8 +81,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('at-rest background settlement: the drain itself delivers the correction — NO subsequent operation', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = suspending(b, 'c', () => __ctxUse(holder, 'k', () => gate.promise));
+		const c: AnyNode = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => gate.promise));
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead); // sentinel cached (arena box-suspended)
 		expect(b.__arenaStats().suspended).toBe(1);
@@ -94,11 +99,10 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('mid-operation settlement: the enclosing operation\'s epilogue fixed point consumes it', async () => {
 		const b = bridge();
 		const m1 = manual<string>();
-		const holder = { _useCache: undefined };
 		const key = b.atom('key', 0);
-		const c = suspending(b, 'c', (read) => {
+		const c: AnyNode = suspending(b, 'c', (read) => {
 			read(key);
-			return __ctxUse(holder, 'k', () => m1.t);
+			return __ctxUse(c.ix, 'k', () => m1.t);
 		});
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
@@ -130,10 +134,8 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const b = bridge();
 		const g1 = deferred<string>();
 		const m2 = manual<string>();
-		const h1 = { _useCache: undefined };
-		const h2 = { _useCache: undefined };
-		const c1 = suspending(b, 'c1', () => __ctxUse(h1, 'k1', () => g1.promise));
-		const c2 = suspending(b, 'c2', () => __ctxUse(h2, 'k2', () => m2.t));
+		const c1: AnyNode = suspending(b, 'c1', () => __ctxUse(c1.ix, 'k1', () => g1.promise));
+		const c2: AnyNode = suspending(b, 'c2', () => __ctxUse(c2.ix, 'k2', () => m2.t));
 		const w1 = mount(b, 'R', c1, 'W1');
 		const w2 = mount(b, 'R', c2, 'W2');
 		expect(b.__arenaStats().suspended).toBe(2);
@@ -159,8 +161,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('read-context microtask drain (step 0): a sync thenable settling during standalone committedValue strands nothing — the coalesced queueMicrotask drain consumes it', async () => {
 		const b = bridge();
 		const m1 = manual<string>();
-		const holder = { _useCache: undefined };
-		const c = suspending(b, 'c', () => __ctxUse(holder, 'k', () => m1.t));
+		const c: AnyNode = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => m1.t));
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
 		// Settle synchronously while ONLY a read frame is open: no public
@@ -181,8 +182,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('read-after-await self-heal (pull half): committedValue observes the settled outcome deterministically, before any drain', async () => {
 		const b = bridge();
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = suspending(b, 'c', () => __ctxUse(holder, 'k', () => gate.promise));
+		const c: AnyNode = suspending(b, 'c', () => __ctxUse(c.ix, 'k', () => gate.promise));
 		mount(b, 'R', c, 'W');
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
 		gate.resolve('HEALED');
@@ -194,11 +194,10 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 	it('key-A/key-B world-only settlement: the kernel never cached A; the tap + suspended-list scan still heal the committed world', async () => {
 		const b = bridge();
 		const gateA = deferred<string>();
-		const holder = { _useCache: undefined };
 		const kick = b.atom('kick', 0);
-		const c = suspending(b, 'c', (read) => {
+		const c: AnyNode = suspending(b, 'c', (read) => {
 			const key = (read(kick) as number) === 0 ? 'A' : 'B';
-			return __ctxUse(holder, key, () => (key === 'A' ? gateA.promise : ({ then: () => undefined as never, status: 'fulfilled', value: 'B!' } as PromiseLike<string>)));
+			return __ctxUse(c.ix, key, () => (key === 'A' ? gateA.promise : ({ then: () => undefined as never, status: 'fulfilled', value: 'B!' } as PromiseLike<string>)));
 		});
 		const w = mount(b, 'R', c, 'W'); // committed world: key A → suspends, sentinel cached
 		expect(w.lastRenderedValue).toBeInstanceOf(SuspendedRead);
@@ -217,8 +216,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const K = 12; // chain length > cap
 		const gates = Array.from({ length: K }, () => manual<string>());
 		const watchers = gates.map((g, i) => {
-			const h = { _useCache: undefined };
-			const c = suspending(b, `c${i}`, () => __ctxUse(h, `k${i}`, () => g.t));
+			const c: AnyNode = suspending(b, `c${i}`, () => __ctxUse(c.ix, `k${i}`, () => g.t));
 			return mount(b, 'R', c, `W${i}`);
 		});
 		expect(b.__arenaStats().suspended).toBe(K);
@@ -235,11 +233,10 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		const b = bridge();
 		const gs = [deferred<string>(), deferred<string>(), deferred<string>()];
 		const keyAtom = b.atom('key', 0);
-		const holders = gs.map(() => ({ _useCache: undefined }));
-		const cs = gs.map((g, i) =>
+		const cs: AnyNode[] = gs.map((g, i) =>
 			suspending(b, `c${i}`, (read) => {
 				const gen = read(keyAtom) as number;
-				return __ctxUse(holders[i]!, `k${i}-${gen}`, () => (gen === 0 ? g.promise : deferred<string>().promise));
+				return __ctxUse(cs[i]!.ix, `k${i}-${gen}`, () => (gen === 0 ? g.promise : deferred<string>().promise));
 			}));
 		for (let i = 0; i < 3; i++) mount(b, 'R', cs[i]!, `W${i}`);
 		expect(b.__arenaStats().suspended).toBe(3);

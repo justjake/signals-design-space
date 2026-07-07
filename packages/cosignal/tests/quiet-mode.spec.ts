@@ -18,21 +18,26 @@ import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
 import {
 	__coreProbes,
-	__newBridgeForTest,
+	__resetEngineForTest,
 	Atom,
 	Computed,
 	effect,
+	engine,
 	ReducerAtom,
-	type CosignalBridge,
+	type CosignalEngine,
 } from '../src/index.js';
 
-/** A fresh bridge in PRODUCTION posture — which is the only posture now: no
- * event objects exist, and no tracer is attached (quiet arms by derivation
- * alone — there is no semantic switch to flip). */
-function quietBridge(): CosignalBridge {
-	const b = __newBridgeForTest();
-	b.registerBridge();
-	return b;
+/** A fresh engine in PRODUCTION posture — which is the only posture now: no
+ * driver, no tracer (quiet arms by derivation alone — there is no semantic
+ * switch to flip; always-concurrent means composition IS activation). */
+function quietBridge(): CosignalEngine {
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	return engine;
 }
 
 const probes = () => {
@@ -41,7 +46,7 @@ const probes = () => {
 };
 
 describe('quiet-mode writes', () => {
-	it('arms at registration; quiet folds leave zero log entries/batches/events and no ambient batch', () => {
+	it('arms at composition; quiet folds leave zero log entries/batches/events and no ambient batch', () => {
 		const b = quietBridge();
 		expect(b.quiet).toBe(true);
 		const a = b.atom('a', 0);
@@ -170,7 +175,8 @@ describe('quiet-mode writes', () => {
 		// Reducers: registered dispatch folds once over base (the recorded op
 		// is an update whose closure carries the reducer and the action).
 		const rHandle = new ReducerAtom<number, string>((s, act) => (act === 'inc' ? s + 1 : s), 10);
-		const r = b.adoptAtom('r', rHandle as unknown as Atom<number>);
+		const r = b.nodeForAtom(rHandle as unknown as Atom<number>);
+		r.name = 'r';
 		rHandle.dispatch('inc');
 		expect(b.newestValue(r)).toBe(11);
 		expect(b.committedValue(r, 'A')).toBe(11);
@@ -204,9 +210,8 @@ describe('quiet-mode writes', () => {
 	});
 
 	it('an attached tracer does not disarm quiet: writes still fold quietly AND their records appear', () => {
-		const b = __newBridgeForTest();
+		const b = quietBridge();
 		const stream = attachRefereeStream(b); // referee posture: the packed stream is the event channel
-		b.registerBridge();
 		expect(b.quiet).toBe(true); // observation never changes which write path executes
 		const a = b.atom('a', 0);
 		(a.handle as Atom<number>).set(1);

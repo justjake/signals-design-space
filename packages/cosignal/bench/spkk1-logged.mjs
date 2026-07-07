@@ -8,8 +8,10 @@
 // EVENTS=truncate zeroes the diagnostic event stream at each sample to
 // isolate the engine's retained state; EVENTS=retain leaves it in place to
 // measure the unbounded stream itself.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
 
 const DURATION_MS = envInt('DURATION_MS', 60_000);
 const SAMPLE_MS = envInt('SAMPLE_MS', 5_000);
@@ -19,14 +21,23 @@ const NA = envInt('NA', 64);
 const NC = envInt('NC', 64);
 const EVENTS = env('EVENTS', 'truncate');
 
-const b = registerReactBridge();
-// Measurement isolation: the truncate config's intent is "truncate
-// bridge.events at each sample so the heap slope isolates the engine's
-// retained state" — but at this frame rate a 5s inter-sample event backlog
-// is hundreds of MB and drowns that signal. Bound the diagnostic stream in
-// the truncate config only; the retain config still measures the
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine.
+const b = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
+// Event retention exists only on the anchor tree (this tree deleted the
+// retained event log — nothing accumulates, and the EVENTS knob's
+// truncate/retain split measures nothing here; its rows report 0).
+const hasEvents = b.events !== undefined;
+const eventsLen = hasEvents ? () => b.events.length : () => 0;
+// Measurement isolation (anchor arm): the truncate config's intent is
+// "truncate bridge.events at each sample so the heap slope isolates the
+// engine's retained state" — but at this frame rate a 5s inter-sample event
+// backlog is hundreds of MB and drowns that signal. Bound the diagnostic
+// stream in the truncate config only; the retain config still measures the
 // unbounded-stream liability.
-if (EVENTS === 'truncate') b.setEventCapacity(65536);
+if (hasEvents && EVENTS === 'truncate') b.setEventCapacity(65536);
 const atoms = [];
 for (let i = 0; i < NA; i++) atoms.push(b.atom(`a${i}`, 0));
 let phase = 0;
@@ -73,12 +84,12 @@ function takeSample(now) {
 		k1: k1EdgeCount(), k1Keys: b.dependencyEdges.size,
 		log: logTotal(),
 		batches: b.idToBatch.size, renderPasses: b.idToRenderPass.size,
-		events: b.events.length, eventsRate: eventsSinceSample,
+		events: eventsLen(), eventsRate: eventsSinceSample,
 		writeNsMed: wMed,
 	});
 	eventsSinceSample = 0;
 	writeNsWindow = [];
-	if (EVENTS === 'truncate') b.events.length = 0;
+	if (hasEvents && EVENTS === 'truncate') b.events.length = 0;
 }
 
 while (Date.now() - t0 < DURATION_MS) {
@@ -93,7 +104,7 @@ while (Date.now() - t0 < DURATION_MS) {
 		lastHold = now;
 	}
 	const batch = b.openBatch();
-	const preEvents = b.events.length;
+	const preEvents = eventsLen();
 	for (let m = 0; m < 4; m++) {
 		const a = atoms[(frame + m * 13) % NA];
 		const s0 = process.hrtime.bigint();
@@ -101,7 +112,7 @@ while (Date.now() - t0 < DURATION_MS) {
 		const s1 = process.hrtime.bigint();
 		writeNsWindow.push(Number(s1 - s0));
 	}
-	eventsSinceSample += b.events.length - preEvents;
+	eventsSinceSample += eventsLen() - preEvents;
 	if (frame % 16 === 0) {
 		const p = b.renderStart('R', b.liveBatches().map((t) => t.id));
 		for (const w of watchers) b.renderWatcher(p.id, w.id);

@@ -27,7 +27,8 @@
  *    settlement recursion at call time.
  */
 
-import { NodeField, SuspendedRead, __kernelBuffer } from './index.js';
+import { NodeField, SuspendedRead } from './index.js';
+import { E } from './graph.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore, World } from './World.js';
 import type { AnyNode, AtomNode, ComputedNode, ArenaInitInts, Equals, NodeId, Reader, RootId, Value, Watcher } from './concurrent.js';
@@ -43,12 +44,12 @@ type WalkGen = number;
  * buffer is re-fetched per read: kernel growth rebuilds swap it, and bridge
  * operations span growth boundaries. */
 export function kernelGenOf(id: NodeId): Generation {
-	return __kernelBuffer()[id + NodeField.GEN]!;
+	return E.buffer()[id + NodeField.GEN]!;
 }
 
 /** A node record's NODE_INDEX, read live from kernel memory. */
 export function kernelNodeIndexOf(id: NodeId): NodeIndex {
-	return __kernelBuffer()[id + NodeField.NODE_INDEX]!;
+	return E.buffer()[id + NodeField.NODE_INDEX]!;
 }
 
 // ---- the arena layer (NF2, plans/2026-07-06 §4) -----------------------------------

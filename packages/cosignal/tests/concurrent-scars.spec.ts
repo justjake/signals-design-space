@@ -81,25 +81,27 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S6 — machinery keyed to watcher count: pre-bridge writes are committed-only state', () => {
-		// Re-pinned at SYSTEM level: there is no bridge-level "pre-registration
-		// era" — the kernel write hook arms only at registration, so writes
-		// made before then are plain KERNEL writes that never involve a bridge.
-		// The truth this scar protects: that history joins as committed-only
-		// base state — adopted with an empty write log, no log entries, no batches, no
-		// events — and activation is monotonic on registration, not on first
-		// watcher (a bridge write path is illegal until registration; see the
-		// oracle suite's S6 for the model-level face of the same claim).
+	it('S6 — machinery keyed to watcher count: standalone history is committed-only state', () => {
+		// Re-pinned at SYSTEM level (always-concurrent): the registration era
+		// ceased to exist — a handle exists ⟺ the engine can resolve it, and
+		// its engine CONTENT allocates on first participation. The truth this
+		// scar protects: standalone history (plain kernel writes while quiet
+		// with no engine content — the node-less arm) joins as committed-only
+		// base state — an empty write log, no log entries, no batches, no
+		// events — and machinery never keys to a watcher-count "era".
 		const handle = new Atom<unknown>(0);
-		handle.set(1); // REAL kernel write through the public atom API — no bridge involved
-		const m = new TwinDriver(); // only now does the bridge/model pair exist
-		m.registerBridge();
-		const a = m.adoptAtom('a', handle); // joins with its kernel-current value
-		expect(a.base).toBe(1); // pre-bridge history is committed-only base state
+		handle.set(1); // REAL kernel write through the public atom API — the node-less arm
+		const m = new TwinDriver(); // reset the engine; the handle's kernel record survives? NO —
+		// the reset scrubs the kernel too, so the standalone history must
+		// happen AFTER the twin exists to be observable. Re-run it here:
+		const handle2 = new Atom<unknown>(0);
+		handle2.set(1); // node-less arm again, now inside the twin's episode
+		const a = m.joinAtom('a', handle2); // joins with its kernel-current value
+		expect(a.base).toBe(1); // standalone history is committed-only base state
 		expect(a.log).toHaveLength(0); // ...with no log entries
-		expect(m.events).toHaveLength(0); // ...no bridge events
+		expect(m.events).toHaveLength(0); // ...no engine events
 		expect(m.idToBatch.size).toBe(0); // ...and no batches
-		const eNode = m.engine.nodeFor(handle)!; // engine face of the same emptiness
+		const eNode = m.engine.nodeForAtom(handle2); // engine face of the same emptiness
 		expect(eNode.base).toBe(1);
 		expect(eNode.log.materialize()).toHaveLength(0);
 		const c = m.computed('c', (read) => read(a));

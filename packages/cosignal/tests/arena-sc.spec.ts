@@ -26,15 +26,21 @@
  *    CACHED VALUE never serves and the refold runs the CURRENT fn cold.
  */
 import { describe, expect, it } from 'vitest';
-import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { Atom, Computed, effect } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
-	b.registerBridge();
+function bridge(): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	const b = engine;
 	armArenaCheck(b); // armed: arena serves ≡ fold truth at every epilogue
 	return b;
 }
@@ -50,14 +56,14 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log };
 }
 
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
@@ -68,8 +74,10 @@ describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)
 		const b = bridge();
 		const { atom: atomA, log: logA } = observedAtom(10);
 		const { atom: atomB, log: logB } = observedAtom(20);
-		const nA = b.adoptAtom('A', atomA as Atom<unknown>);
-		const nB = b.adoptAtom('B', atomB as Atom<unknown>);
+		const nA = b.nodeForAtom(atomA as Atom<unknown>);
+		nA.name = 'A';
+		const nB = b.nodeForAtom(atomB as Atom<unknown>);
+		nB.name = 'B';
 		const flag = b.atom('flag', 0);
 		// World-divergent deps: flag=0 → {flag, A}; flag=1 → {flag, B}.
 		const oc = b.computed('oc', (read) => ((read(flag) as number) ? read(nB) : read(nA)));
@@ -282,10 +290,12 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 			seen.push(c.state);
 		});
 		expect(seen).toEqual([11]); // newest: flag=true → a=10 → 11
-		const nFlag = b.adoptAtom('flag', flag);
-		b.adoptAtom('a', a);
-		b.adoptAtom('bb', bb);
-		const nC = b.adoptComputed('c', c as Computed<unknown>);
+		const nFlag = b.nodeForAtom(flag);
+		nFlag.name = 'flag';
+		b.nodeForAtom(a).name = 'a';
+		b.nodeForAtom(bb).name = 'bb';
+		const nC = b.nodeForComputed(c as Computed<unknown>);
+		nC.name = 'c';
 
 		// Two worlds with DIFFERENT flag values (the dep flip): w1 = the render
 		// world of a live batch writing flag=false; w2 = the committed world
@@ -302,31 +312,42 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		// arena links. w2 folds it; newest is on the bb branch (kernel links
 		// exclude a — the write is delivery-silent there); w1's pin excludes it.
 		const t2 = b.openBatch();
-		b.write(t2.id, b.nodeFor(a)!, 0, 100);
+		b.write(t2.id, b.nodeForAtom(a), 0, 100);
 		b.retire(t2.id);
 		expect(seen).toEqual([11, 21]); // no newest re-run: a is off m's newest dep set (the ruling's tracked-only rule)
 		expect(b.committedValue(nC, 'R2')).toBe(101); // w2: flag=true (no t1) → a=100 → 101
 		expect(b.renderValue(nC, p1)).toBe(21); // pin: the paused render never drifts
 
-		// Kernel propagation INSIDE a world evaluation (the spike's mid-walk
-		// interleave): a computed whose getter writes an UNREGISTERED kernel
-		// signal — tolerated writes-in-computeds take the plain kernel path
-		// and propagate while the ARENA evaluation frame is open.
+		// Writes INSIDE a world evaluation (the spike's mid-walk interleave,
+		// RE-PINNED for always-concurrent): the old tolerance — "a write to
+		// an atom the engine doesn't know takes the plain kernel path even
+		// mid-world-eval" — died with the registration era (a handle exists
+		// ⟺ the engine can resolve it, so with the pipeline armed the write
+		// classifies and hits the render-purity guard). The pinned truth now:
+		// the write THROWS and leaves nothing behind. The throwing node is
+		// DISPOSED after the pin (its boxed throw would otherwise sit in the
+		// render arena as a stale outcome no world can invalidate — the
+		// armed checker rightly refuses impure fns), and the dep-flip
+		// evaluation continues on a well-behaved twin.
 		const poker = new Atom(0);
 		const pokerSeen: number[] = [];
 		const disposePoker = effect(() => {
 			pokerSeen.push(poker.state as number);
 		});
-		const noisy = new Computed<number>(() => {
-			const v = (flag.state ? a.state : bb.state) as number;
-			poker.set(v); // kernel propagate during the world evaluation
-			return v;
+		const pokerWriter = new Computed<number>(() => {
+			poker.set((flag.state ? a.state : bb.state) as number); // a write during the world evaluation
+			return 0;
 		});
-		const nNoisy = b.adoptComputed('noisy', noisy as Computed<unknown>);
+		const nPokerWriter = b.nodeForComputed(pokerWriter as Computed<unknown>);
+		nPokerWriter.name = 'pokerWriter';
+		expect(() => b.renderValue(nPokerWriter, p1)).toThrow(/write during a world evaluation/); // render purity, era-free
+		expect(pokerSeen).toEqual([0]); // the rejected write left nothing behind
+		b.disposeComputed(pokerWriter as Computed<unknown>); // purge the boxed throw from every arena
+		const noisy = new Computed<number>(() => (flag.state ? a.state : bb.state) as number);
+		const nNoisy = b.nodeForComputed(noisy as Computed<unknown>);
+		nNoisy.name = 'noisy';
 		expect(b.renderValue(nNoisy, p1)).toBe(20); // w1: flag=false → bb
-		expect(pokerSeen[pokerSeen.length - 1]).toBe(20); // the mid-eval write flushed
 		expect(b.committedValue(nNoisy, 'R2')).toBe(100); // w2: flag=true → a=100
-		expect(pokerSeen[pokerSeen.length - 1]).toBe(100); // …and its mid-eval write flushed too
 		expect(noisy.state).toBe(20); // newest evaluation, kernel path (newest flag=false → bb)
 
 		// Kernel dep flip UNDER live worlds: newest re-track while world links live.
@@ -345,7 +366,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		disposeEff();
 		disposePoker();
 		const t4 = b.openBatch();
-		b.write(t4.id, b.nodeFor(a)!, 0, 7);
+		b.write(t4.id, b.nodeForAtom(a), 0, 7);
 		b.write(t4.id, nFlag, 0, true);
 		b.retire(t4.id);
 		expect(c.state).toBe(8); // kernel fully functional after dispose (lazy re-eval)
@@ -355,7 +376,7 @@ describe('§4.9.1 hang schedule — kernel computeds under worlds via arena fram
 		b.retire(t1.id);
 		// Zero-world sync semantics intact after everything.
 		const t5 = b.openBatch();
-		b.write(t5.id, b.nodeFor(bb)!, 0, 99);
+		b.write(t5.id, b.nodeForAtom(bb), 0, 99);
 		b.write(t5.id, nFlag, 0, false);
 		b.retire(t5.id);
 		expect(c.state).toBe(100);

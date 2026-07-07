@@ -19,6 +19,7 @@
  */
 
 import { SuspendedRead } from './index.js';
+import { engineEpoch } from './graph.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore } from './World.js';
 import type { RootId } from './concurrent.js';
@@ -70,8 +71,13 @@ export function createSettlement(core: EngineCore): void {
 			// (queueMicrotask); it no-ops when an epilogue got there first.
 			if (!settleDrainScheduled) {
 				settleDrainScheduled = true;
+				// ENGINE-EPOCH GUARD (cross-reset microtask discipline): a
+				// drain scheduled by a dead test must not run this (dead)
+				// composition's queue into the next test's time.
+				const epoch = engineEpoch;
 				queueMicrotask(() => {
 					settleDrainScheduled = false;
+					if (epoch !== engineEpoch) return;
 					if (pendingSettle.length !== 0 && core.opDepth === 0 && core.evalDepth === 0 && !settleDraining && !notifyState.flushing) {
 						settlementDrain();
 					}
@@ -154,10 +160,15 @@ export function createSettlement(core: EngineCore): void {
 	}
 
 	/** Public-operation epilogue (S-A): drain queued settlements to empty
-	 * (the fixed point), then the divergence check when armed. */
+	 * (the fixed point), then the divergence check when armed. BOTH halves
+	 * are top-level-boundary work: a NESTED operation (R-3's effect writes
+	 * during a fused apply run whole write/fold operations inside the outer
+	 * one) must not drain or check mid-outer — the outer epilogue owes both
+	 * once its own mutations complete. */
 	function arenaOpEpilogue(): void {
 		const c = core; // one context load; the depth/hook reads stay one-load
-		if (pendingSettle.length !== 0 && !settleDraining && c.opDepth === 0) settlementDrain();
+		if (c.opDepth !== 0) return; // nested operation: the outer epilogue owns the boundary
+		if (pendingSettle.length !== 0 && !settleDraining) settlementDrain();
 		if (c.epilogueCheck !== undefined) c.epilogueCheck();
 	}
 

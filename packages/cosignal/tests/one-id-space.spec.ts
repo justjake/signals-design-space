@@ -24,36 +24,44 @@
  * tests/elements-kind.spec.ts: they need --allow-natives-syntax.)
  */
 import { describe, expect, it } from 'vitest';
-import { Atom, Computed, NodeField, __kernelBuffer } from '../src/index.js';
-import { __newBridgeForTest, type AnyNode, type AtomNode, type CosignalBridge, type Watcher } from '../src/concurrent.js';
+import { Atom, Computed } from '../src/index.js';
+import { attachDriver, BATCH_NONE, engine, __resetEngineForTest, type AnyNode, type AtomNode, type CosignalEngine, type Watcher } from '../src/concurrent.js';
+import { kernelGenOf, kernelNodeIndexOf } from '../src/WorldArena.js';
 import { armArenaCheck } from './arena-checker.js';
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest({ devChecks: true });
-	b.registerBridge();
-	return b;
+function bridge(): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest({ devChecks: true });
+	// R-5: a devChecks harness that opens batches must attach a driver first.
+	attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
+	return engine;
 }
 
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string): Watcher {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string): Watcher {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function commitWrite(b: CosignalBridge, node: AtomNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AtomNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, 0, value);
 	b.retire(t.id);
 }
 
-/** Read a TS-private field (probes only observe; they never mutate). */
-const priv = <T,>(o: object, k: string): T => (o as unknown as Record<string, T>)[k];
+/** The engine's dense nodeIndex-keyed columns (probes only observe; they never mutate). */
+const cols = (b: CosignalEngine) => b.__columnsForTest();
 
-/** A node record's nodeIndex, read from kernel memory (field 7). */
-const ixOf = (kernelId: number): number => __kernelBuffer()[kernelId + NodeField.NODE_INDEX]!;
-/** A node record's tenancy generation, read from kernel memory. */
-const genOf = (kernelId: number): number => __kernelBuffer()[kernelId + NodeField.GEN]!;
+/** A node record's nodeIndex, read live from kernel memory (field 7). */
+const ixOf = kernelNodeIndexOf;
+/** A node record's tenancy generation, read live from kernel memory. */
+const genOf = kernelGenOf;
 
 describe('P1 — dormant-watcher aliasing across record reuse', () => {
 	it('a watcher mounted in an uncommitted render on a later-disposed computed skips loudly at its commit instead of binding the record\'s new tenant', () => {
@@ -102,7 +110,7 @@ describe('P1 — dormant-watcher aliasing across record reuse', () => {
 
 		// The new tenant is untouched by the stale commit: no watcher-index row
 		// names the dormant watcher, and deliveries reach only the real watcher.
-		const rows = priv<(Watcher[] | undefined)[]>(b, 'nodeToWatchers');
+		const rows = cols(b).nodeToWatchers;
 		const row = rows[ixOf(oldId)];
 		expect(row === undefined || !row.includes(w)).toBe(true);
 		expect(row !== undefined && row.includes(w2)).toBe(true);
@@ -119,7 +127,7 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		const b = bridge();
 		armArenaCheck(b);
 		const at = new Atom(1);
-		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
+		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', (read) => read(an));
 		mount(b, 'R', keep, 'W');
 		// Warm one full dispose→create cycle so the steady state is the baseline.
@@ -127,7 +135,7 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		b.committedValue(b.nodeForComputed(warm as unknown as Computed<unknown>), 'R');
 		b.disposeComputed(warm as unknown as Computed<unknown>);
 
-		const arrBase = priv<unknown[]>(b, 'nodesArr').length;
+		const arrBase = cols(b).nodesArr.length;
 		const shell = b.__arenaForTest('R')!;
 		const shadowBase = shell.nodeToShadow.length;
 		const indexes = new Set<number>();
@@ -140,9 +148,9 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 			b.disposeComputed(c as unknown as Computed<unknown>);
 		}
 		expect(indexes.size).toBeLessThanOrEqual(2); // the slot's index recycles with the record
-		expect(priv<unknown[]>(b, 'nodesArr').length).toBe(arrBase); // columns bounded by node count — not creation count
-		expect(priv<number[]>(b, 'lastWalk').length).toBe(arrBase);
-		expect(priv<number[]>(b, 'obsRefs').length).toBe(arrBase);
+		expect(cols(b).nodesArr.length).toBe(arrBase); // columns bounded by node count — not creation count
+		expect(cols(b).lastWalk.length).toBe(arrBase);
+		expect(cols(b).obsRefs.length).toBe(arrBase);
 		expect(shell.nodeToShadow.length).toBe(shadowBase); // per-arena lookup bounded too
 	});
 
@@ -178,11 +186,11 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 
 		const oldId = cOld.handle._id;
 		const ix = ixOf(oldId);
-		expect(priv<number[]>(b, 'obsRefs')[ix]!).toBeGreaterThan(0); // retained via the observer's dep snapshot
+		expect(cols(b).obsRefs[ix]!).toBeGreaterThan(0); // retained via the observer's dep snapshot
 		// Leave a DORMANT watcher row on cOld (mounted, never committed).
 		const p = b.renderStart('R2', []);
 		b.mountWatcher(p.id, cOld, 'Wstale');
-		expect(priv<(Watcher[] | undefined)[]>(b, 'nodeToWatchers')[ix]!.length).toBe(1);
+		expect(cols(b).nodeToWatchers[ix]!.length).toBe(1);
 
 		// Supersede + dispose (the watcher is dormant, the retain is transitive
 		// — both legal), then the boundary sweep frees the record.
@@ -191,12 +199,12 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 		b.disposeComputed(cOld.handle);
 
 		// The scrub: every nodeIndex-keyed row for the freed record is cleared.
-		expect(priv<(AnyNode | undefined)[]>(b, 'nodesArr')[ix]).toBeUndefined();
-		expect(priv<(Watcher[] | undefined)[]>(b, 'nodeToWatchers')[ix]).toBeUndefined();
-		expect(priv<number[]>(b, 'obsRefs')[ix]).toBe(0);
-		expect(priv<unknown[]>(b, 'obsDeps')[ix]).toBeUndefined();
-		expect(priv<number[]>(b, 'lastWalk')[ix]).toBe(0);
-		expect(priv<number[]>(b, 'evalMark')[ix]).toBe(0);
+		expect(cols(b).nodesArr[ix]).toBeUndefined();
+		expect(cols(b).nodeToWatchers[ix]).toBeUndefined();
+		expect(cols(b).obsRefs[ix]).toBe(0);
+		expect(cols(b).obsDeps[ix]).toBeUndefined();
+		expect(cols(b).lastWalk[ix]).toBe(0);
+		expect(cols(b).evalMark[ix]).toBe(0);
 		expect(b.__arenaForTest('R')!.nodeToShadow[ix] ?? 0).toBe(0);
 		expect(b.idToNode.has(oldId)).toBe(false);
 
@@ -206,7 +214,7 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 		expect(ixOf(cNew.handle._id)).toBe(ix);
 		const wNew = mount(b, 'R', cNew, 'Wnew');
 		expect(b.committedValue(cNew, 'R')).toBe(106); // cold fold under the new tenant
-		const row = priv<(Watcher[] | undefined)[]>(b, 'nodeToWatchers')[ix]!;
+		const row = cols(b).nodeToWatchers[ix]!;
 		expect(row.length).toBe(1);
 		expect(row[0]).toBe(wNew);
 	});
@@ -222,7 +230,7 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 		mount(b, 'R', obs, 'Wobs');
 		const oldId = cOld.handle._id;
 		const ix = ixOf(oldId);
-		expect(priv<number[]>(b, 'obsRefs')[ix]!).toBeGreaterThan(0);
+		expect(cols(b).obsRefs[ix]!).toBeGreaterThan(0);
 
 		// Dispose cOld while the observer's snapshot still names it (the
 		// discipline breach the identity guard defuses), then reuse the record.
@@ -230,14 +238,14 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 		const cNew = b.computed('cNew', (read) => (read(a) as number) + 100);
 		expect(cNew.handle._id).toBe(oldId);
 		const wNew = mount(b, 'R', cNew, 'Wnew'); // the new tenant is observed: obsRefs[ix] = its own count
-		const newRefs = priv<number[]>(b, 'obsRefs')[ix]!;
+		const newRefs = cols(b).obsRefs[ix]!;
 		expect(newRefs).toBeGreaterThan(0);
 
 		// Flip the observer's deps: its re-point releases the STALE cOld
 		// reference — the release must not decrement the new tenant's count.
 		commitWrite(b, gate, 0);
 		expect(b.committedValue(obs, 'R')).toBe(5);
-		expect(priv<number[]>(b, 'obsRefs')[ix]!).toBe(newRefs);
+		expect(cols(b).obsRefs[ix]!).toBe(newRefs);
 		expect(wNew.live).toBe(true);
 	});
 });

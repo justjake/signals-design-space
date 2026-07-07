@@ -13,7 +13,27 @@
 import process from 'node:process';
 
 const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
-const { __newBridgeForTest } = await import(`${ROOT}/packages/cosignal/src/concurrent.ts`);
+const mod = await import(`${ROOT}/packages/cosignal/src/concurrent.ts`);
+
+/**
+ * A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree constructs one
+ * bridge per shape; this tree has ONE module engine, so each shape gets one
+ * `__resetEngineForTest()` instead. The reset asserts quiescence — both
+ * shapes below already end quiescent (every render ends, every batch
+ * retires at commit) — and the drain below is insurance for leftovers.
+ */
+function acquireEngine() {
+	if (typeof mod.__newBridgeForTest === 'function') {
+		const b = mod.__newBridgeForTest();
+		b.registerBridge();
+		return b;
+	}
+	const e = mod.engine;
+	e.discardAllWip();
+	for (const t of e.liveBatches()) (t.parked ? e.settleAction(t.id) : e.retire(t.id));
+	mod.__resetEngineForTest();
+	return e;
+}
 
 const REPS = Number(process.env.REPS ?? 15);
 const N = 200;
@@ -25,8 +45,7 @@ function median(xs) {
 }
 
 function coldRender() {
-	const b = __newBridgeForTest();
-	b.registerBridge();
+	const b = acquireEngine();
 	const atoms = Array.from({ length: N }, (_, i) => b.atom(`a${i}`, i));
 	const comps = Array.from({ length: N }, (_, i) =>
 		b.computed(`c${i}`, (read) => Number(read(atoms[i])) + Number(read(atoms[(i + 1) % N]))));
@@ -51,8 +70,7 @@ function coldRender() {
 }
 
 function wideMask() {
-	const b = __newBridgeForTest();
-	b.registerBridge();
+	const b = acquireEngine();
 	const atoms = Array.from({ length: N }, (_, i) => b.atom(`a${i}`, i));
 	const c = b.computed('wide', (read) => {
 		let s = 0;

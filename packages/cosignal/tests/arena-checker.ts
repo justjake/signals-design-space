@@ -21,22 +21,27 @@ import {
 	InvariantViolation,
 	type AnyNode,
 	type ArenaCheckerInternals,
-	type CosignalBridge,
+	type CosignalEngine,
 	type Reader,
 	type WorldArena,
 	type Value,
 	type World,
 } from '../src/concurrent.js';
 import { SuspendedRead } from '../src/index.js';
+import { engineEpoch } from '../src/graph.js';
 
 /** One memoized naive outcome (thrown outcomes memoize and rethrow,
  * identity-stable — same payload object every consult within a check). */
 type NaiveOutcome = { threw: boolean; v: Value };
 
-/** Per-bridge checker state, held OUTSIDE the engine. */
+/** Per-composition checker state, held OUTSIDE the engine. */
 type CheckerState = {
-	readonly bridge: CosignalBridge;
+	readonly bridge: CosignalEngine;
 	readonly views: ArenaCheckerInternals;
+	/** The engine epoch this state was built against — `__resetEngineForTest`
+	 * re-composes the engine, so cached internals (the old core's brackets)
+	 * must rebuild when the epoch moves. */
+	readonly epoch: number;
 	/** Re-entry latch (one check at a time; a serve inside the check can
 	 * run user fns, and nothing they reach may start a nested check). */
 	checking: boolean;
@@ -47,12 +52,12 @@ type CheckerState = {
 	readonly naiveStack: Set<AnyNode>;
 };
 
-const states = new WeakMap<CosignalBridge, CheckerState>();
+const states = new WeakMap<CosignalEngine, CheckerState>();
 
-function stateFor(b: CosignalBridge): CheckerState {
+function stateFor(b: CosignalEngine): CheckerState {
 	let st = states.get(b);
-	if (st === undefined) {
-		st = { bridge: b, views: b.__checkerInternals(), checking: false, naiveStack: new Set() };
+	if (st === undefined || st.epoch !== engineEpoch) {
+		st = { bridge: b, views: b.__checkerInternals(), epoch: engineEpoch, checking: false, naiveStack: new Set() };
 		states.set(b, st);
 	}
 	return st;
@@ -63,7 +68,7 @@ function stateFor(b: CosignalBridge): CheckerState {
  * operation's epilogue (after its settlement fixed point) runs one full
  * check pass. Idempotent; stays armed for the bridge's life.
  */
-export function armArenaCheck(b: CosignalBridge): void {
+export function armArenaCheck(b: CosignalEngine): void {
 	const st = stateFor(b);
 	st.views.armEpilogueCheck(() => runCheck(st));
 }
@@ -71,7 +76,7 @@ export function armArenaCheck(b: CosignalBridge): void {
 /** One immediate check pass (the twin driver's per-op referee call site).
  * A no-op inside an open evaluation frame or fold callback, exactly like
  * the armed epilogue form. */
-export function checkArenas(b: CosignalBridge): void {
+export function checkArenas(b: CosignalEngine): void {
 	runCheck(stateFor(b));
 }
 

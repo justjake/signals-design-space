@@ -19,20 +19,26 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { __newBridgeForTest, type AnyNode, type CosignalBridge, type Reader, type Value } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
-	b.registerBridge();
+function bridge(): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	const b = engine;
 	armArenaCheck(b);
 	return b;
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
@@ -40,7 +46,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
-function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);
@@ -48,7 +54,7 @@ function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
 
 /** The shim-wrapper analog (`makeComputedNode`): a background suspension
  * folds to the thenable's stable sentinel VALUE instead of unwinding. */
-function suspending(b: CosignalBridge, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
+function suspending(b: CosignalEngine, name: string, fn: (read: Reader, untracked: Reader) => Value): AnyNode {
 	return b.computed(name, (read, untracked) => {
 		try {
 			return fn(read, untracked);
@@ -103,8 +109,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 			return v instanceof SuspendedRead ? 'p' : v; // DERIVED from the sentinel (mid itself never box-suspends)
 		});
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		leaf = suspending(b, 'leaf', () => __ctxUse(holder, 'x', () => gate.promise));
+		leaf = suspending(b, 'leaf', () => __ctxUse(leaf.ix, 'x', () => gate.promise));
 		k = b.atom('k', 0);
 		const w = mount(b, 'R', top, 'W');
 		expect(w.lastRenderedValue).toBe('p:0'); // leaf suspended; mid derives; cone cached

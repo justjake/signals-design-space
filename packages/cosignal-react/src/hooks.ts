@@ -1,8 +1,9 @@
 /**
  * cosignal-react — the hook surface: useSignal, useComputed, useReducerAtom,
  * useSignalEffect, startSignalTransition, plus registerCosignalReact — the
- * activation call that registers `cosignal`'s bridge (arming its write
- * recording) and couples it to a protocol React build via the Shim.
+ * activation call that couples `cosignal`'s one module-level engine to a
+ * protocol React build via the Shim (whose constructor attaches the engine
+ * driver — the seam that arms write classification and world routing).
  *
  * Watcher lifecycle, shared by the subscription hooks (a watcher is the
  * engine's record of one subscribed component instance): render creates (or
@@ -17,37 +18,40 @@
  */
 
 import * as React from 'react';
-import { Atom, BATCH_NONE, Computed, ReducerAtom, registerReactBridge } from 'cosignal';
-import type { AnyNode, CosignalBridge, RootId } from 'cosignal';
+import { Atom, BATCH_NONE, Computed, ReducerAtom, engine } from 'cosignal';
+import type { AnyNode, CosignalEngine, RootId } from 'cosignal';
 import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------
 
 export type CosignalReactHandle = {
-	bridge: CosignalBridge;
+	/** THE engine surface (the same module-level object `cosignal` exports as
+	 * `engine`; the field keeps the bindings' historical name). */
+	bridge: CosignalEngine;
 	shim: Shim;
 	dispose: () => void;
 };
 
 /**
- * Activates the bindings: registers the engine's bridge — arming write
- * recording, once per process — and subscribes the shim to the
- * external-runtime protocol events. Call during app setup, after importing react-dom/client (the
- * renderer must have registered its protocol provider first), before
- * rendering any root; throws on stock React — see assertForkPresent.
- * `opts.bridge` injects a pre-built bridge (tests use
- * `__newBridgeForTest()` instances).
+ * Activates the bindings: attaches the engine driver (write classification,
+ * world routing, delivery listeners — the Shim constructor's job) and
+ * subscribes the shim to the external-runtime protocol events. Call during
+ * app setup, after importing react-dom/client (the renderer must have
+ * registered its protocol provider first), before rendering any root;
+ * throws on stock React — see assertForkPresent. One registration at a
+ * time: dispose the handle before registering again. Dispose releases the
+ * React-side registrations only — the engine's driver slot is cleared only
+ * by the test-only engine reset (`__resetEngineForTest`), so tests reset
+ * the engine between registrations.
  */
-export function registerCosignalReact(opts?: { bridge?: CosignalBridge }): CosignalReactHandle {
+export function registerCosignalReact(): CosignalReactHandle {
 	if (getActiveShim() !== undefined) {
 		throw new Error('cosignal-react: already registered (dispose the previous registration first).');
 	}
-	const bridge = opts?.bridge ?? registerReactBridge();
-	if (!bridge.registered) bridge.registerBridge();
-	const shim = new Shim(bridge);
+	const shim = new Shim();
 	setActiveShim(shim);
 	return {
-		bridge,
+		bridge: engine,
 		shim,
 		dispose: () => {
 			shim.dispose();
@@ -191,7 +195,12 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 			// plus a fresh subscribe. Activity hide/reveal cancels the same way.
 			rec.pendingUnsub = true;
 			queueMicrotask(() => {
-				if (rec.pendingUnsub) shim.finalizeUnsub(rec);
+				// The disposed guard is the cross-reset guard: tests dispose the
+				// shim before resetting the ONE engine, and a microtask crossing
+				// that boundary would tear down a watcher id inside a fresh
+				// composition it never belonged to. A disposed shim's pending
+				// unsubscribes died with its targets.
+				if (!shim.disposed && rec.pendingUnsub) shim.finalizeUnsub(rec);
 			});
 		};
 	}, [shim, rec]);

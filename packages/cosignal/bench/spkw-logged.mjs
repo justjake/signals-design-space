@@ -3,8 +3,11 @@
 // base-build child; writes run in windows of WINDOW per batch, retired
 // between windows — retirement excluded from writeNs, included in amortNs.
 // Observers are real kernel effect()s (the only core-effect form since W9).
-import { effect, registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
+const { effect } = mod;
 
 const SHAPE = env('SHAPE', 'bare');
 const WRITES = envInt('WRITES', 6400); // per rep
@@ -12,7 +15,11 @@ const WINDOW = envInt('WINDOW', 64); // writes per batch window
 const REPS = envInt('REPS', 7);
 const WARMUP = envInt('WARMUP', 2);
 
-const b = registerReactBridge();
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine.
+const b = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
 const a = b.atom('a', 0);
 let evals = 0;
 let top;

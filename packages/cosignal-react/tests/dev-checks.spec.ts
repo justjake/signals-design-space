@@ -1,5 +1,6 @@
 /**
- * devChecks — the protocol-edge fail-fast switch (BridgeOptions.devChecks).
+ * devChecks — the protocol-edge fail-fast switch (EngineResetOptions.devChecks:
+ * a reset parameter of the ONE module-level engine).
  *
  * This file NEVER imports react-dom, on purpose: the external-runtime
  * provider registers when a renderer module loads, so here
@@ -15,7 +16,7 @@
  *    heuristic never runs (see scenarios R12/R12b for the warning pins).
  */
 import { afterEach, describe, expect, test } from 'vitest';
-import { Atom, __newBridgeForTest } from 'cosignal';
+import { Atom, __resetEngineForTest } from 'cosignal';
 import { registerCosignalReact, startSignalTransition, type CosignalReactHandle } from '../src/index.js';
 
 /** The shim's protocol listeners, driven directly (TypeScript-private only;
@@ -28,7 +29,11 @@ type ShimListeners = {
 let handle: CosignalReactHandle | undefined;
 
 function register(devChecks: boolean): CosignalReactHandle {
-	handle = registerCosignalReact({ bridge: __newBridgeForTest({ devChecks }) });
+	// The reset clears the previous test's driver slot (dispose never
+	// detaches) and lands devChecks as a reset parameter; the fresh
+	// registration then attaches this test's driver.
+	__resetEngineForTest({ devChecks });
+	handle = registerCosignalReact();
 	return handle;
 }
 

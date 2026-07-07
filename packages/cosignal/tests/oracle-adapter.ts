@@ -17,11 +17,16 @@
  */
 
 import {
-	__newBridgeForTest,
+	attachDriver,
+	engine,
+	BATCH_NONE,
 	ScheduleError,
+	__resetEngineForTest,
 	type AtomNode,
-	type CosignalBridge,
+	type CosignalEngine,
 } from '../src/concurrent.js';
+import { __peekNextBatchIdForTest } from '../src/Batch.js';
+import { engineEpoch } from '../src/graph.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
 	comparableEvents,
@@ -30,7 +35,7 @@ import {
 	type EngineAdapter,
 } from '../../cosignal-oracle/src/adapter.js';
 import { CosignalModel, type ModelEvent } from '../../cosignal-oracle/src/model.js';
-import { applyOneOp, buildTopology, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
+import { applyOneOp, buildTopology, Q_EQUALS, type ScheduleOp, type WriteKind } from '../../cosignal-oracle/src/schedule.js';
 import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
 
@@ -38,7 +43,7 @@ import { attachRefereeStream } from './trace-events.js';
 // beside the decoder — the only producer of the engine-side shape now.)
 
 /** The reference model's fixed fuzz topology (buildTopology in its schedule.ts), rebuilt on the engine. */
-export function buildEngineTopology(b: CosignalBridge) {
+export function buildEngineTopology(b: CosignalEngine) {
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 0);
 	const bb = b.atom('b', 0);
@@ -47,7 +52,13 @@ export function buildEngineTopology(b: CosignalBridge) {
 	const cSum = b.computed('cSum', (read) => (read(a) as number) + (read(bb) as number) + (read(r) as number));
 	const cChain = b.computed('cChain', (read) => (read(cFlip) as number) + 10);
 	const cMix = b.computed('cMix', (read, untracked) => (read(bb) as number) + (untracked(a) as number));
-	return { atoms: [flag, a, bb, r], computeds: [cFlip, cSum, cChain, cMix] };
+	// Appended AFTER the core eight (the op-index slices stay stable):
+	// q = the custom-equals member (R-2), out1/out2 = the disjoint
+	// effect-output subset writing core effects target (R-3).
+	const q = b.atom('q', 0, Q_EQUALS);
+	const out1 = b.atom('out1', 0);
+	const out2 = b.atom('out2', 0);
+	return { atoms: [flag, a, bb, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2] };
 }
 
 /**
@@ -58,32 +69,35 @@ export function buildEngineTopology(b: CosignalBridge) {
  * population itself to keep op resolution identical on both sides. Purely
  * an indexing-fidelity shim — no tolerance.
  */
-type EntityRegistry = { batches: number[]; renderPasses: number[] };
+type EntityRegistry = { batches: number[]; renderPasses: number[]; outWriters: Set<string> };
 
-const registries = new WeakMap<CosignalBridge, EntityRegistry>();
+/** Keyed by ENGINE EPOCH (one schedule = one reset = one epoch): the engine
+ * surface is a singleton, so object keying would leak the previous
+ * schedule's registry into the next. */
+const registries = new Map<number, EntityRegistry>();
 
-function registryOf(b: CosignalBridge): EntityRegistry {
-	let r = registries.get(b);
+function registryOf(_b: CosignalEngine): EntityRegistry {
+	let r = registries.get(engineEpoch);
 	if (r === undefined) {
-		r = { batches: [], renderPasses: [] };
-		registries.set(b, r);
+		r = { batches: [], renderPasses: [], outWriters: new Set() };
+		registries.set(engineEpoch, r);
 	}
 	return r;
 }
 
-function batchAt(b: CosignalBridge, index: number): number | undefined {
+function batchAt(b: CosignalEngine, index: number): number | undefined {
 	const ids = registryOf(b).batches;
 	if (ids.length === 0) throw new ScheduleError('no batches yet');
 	return ids[index % ids.length];
 }
 
-function renderPassAt(b: CosignalBridge, index: number): number {
+function renderPassAt(b: CosignalEngine, index: number): number {
 	const ids = registryOf(b).renderPasses;
 	if (ids.length === 0) throw new ScheduleError('no render passes yet');
 	return ids[index % ids.length]!;
 }
 
-function watcherAt(b: CosignalBridge, index: number): number {
+function watcherAt(b: CosignalEngine, index: number): number {
 	const ids = [...b.watchers.keys()];
 	if (ids.length === 0) throw new ScheduleError('no watchers yet');
 	return ids[index % ids.length]!;
@@ -94,7 +108,7 @@ function watcherAt(b: CosignalBridge, index: number): number {
  * effects are kernel `effect()`s, not bridge records — so its key sequence
  * is exactly the model's reactEffects key sequence, by INDEX; the id VALUES
  * diverge once a core effect mounts, which is why resolution is positional). */
-function effectAt(b: CosignalBridge, index: number): number {
+function effectAt(b: CosignalEngine, index: number): number {
 	const ids: number[] = [];
 	for (const s of b.idToSubscription.values()) ids.push(s.id);
 	if (ids.length === 0) throw new ScheduleError('no react effects yet');
@@ -106,7 +120,7 @@ function effectAt(b: CosignalBridge, index: number): number {
  * object channel died. Only per-bridge uniqueness and run-to-run determinism
  * matter here — when NAME PARITY with the model matters (lockstep), the
  * differ supplies the model's own event count as `namingEvents`. */
-const appliedOps = new WeakMap<CosignalBridge, number>();
+const appliedOps = new Map<number, number>();
 
 /** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin).
  * `namingEvents` (when given) replaces the engine's own op count in the
@@ -114,13 +128,21 @@ const appliedOps = new WeakMap<CosignalBridge, number>();
  * length, and since S-B the engine legitimately delivers FEWER deliveryish
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
  * so name parity requires the MODEL's count — the differ supplies it. */
-export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: number): boolean {
+export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: number): boolean {
 	const allNodes = [...b.idToNode.values()];
 	const atoms = allNodes.filter((n): n is AtomNode => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
 	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
 	 * pair (0 = set, 1 = update) — the adapter's op-literal twin of the
 	 * model-side writeOp in the oracle's schedule.ts. */
+	const writeScalarsFor = (kind: WriteKind, value: number): [0 | 1, unknown] => {
+		switch (kind) {
+			case 'set': return [0, value];
+			case 'inc': return [1, (p: unknown) => (p as number) + 1];
+			case 'double': return [1, (p: unknown) => (p as number) * 2];
+			case 'equalNewest': return [0, value]; // resolved by the caller against the target atom
+		}
+	};
 	const writeScalars = (kind: WriteKind, value: number, atomIdx: number): [0 | 1, unknown] => {
 		switch (kind) {
 			case 'set': return [0, value];
@@ -129,8 +151,8 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'equalNewest': return [0, b.newestValue(atoms[atomIdx]!)];
 		}
 	};
-	const opIndex = (appliedOps.get(b) ?? 0) + 1;
-	appliedOps.set(b, opIndex);
+	const opIndex = (appliedOps.get(engineEpoch) ?? 0) + 1;
+	appliedOps.set(engineEpoch, opIndex);
 	const uniq = `${namingEvents ?? opIndex}.${b.seq}.${b.epoch}`;
 	const reg = registryOf(b);
 	/** bareWrite may create the ambient batch — mirror the model's map growth. */
@@ -146,11 +168,24 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'write': {
 				const atom = atoms[op.atom % atoms.length]!;
 				b.write(batchAt(b, op.batch), atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
+				syncAmbient(); // a writing core effect's nested bare write can create the ambient batch
 				break;
 			}
 			case 'bareWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
 				b.bareWrite(atom, ...writeScalars(op.kind, op.value, op.atom % atoms.length));
+				syncAmbient();
+				break;
+			}
+			case 'writeQ': {
+				const q = allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === 'q')!;
+				b.write(batchAt(b, op.batch), q, ...(op.kind === 'equalNewest' ? ([0, b.newestValue(q)] as [0, unknown]) : writeScalarsFor(op.kind, op.value)));
+				syncAmbient(); // a writing core effect's nested bare write can create the ambient batch
+				break;
+			}
+			case 'bareWriteQ': {
+				const q = allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === 'q')!;
+				b.bareWrite(q, ...(op.kind === 'equalNewest' ? [0, b.newestValue(q)] as [0, unknown] : writeScalarsFor(op.kind, op.value)));
 				syncAmbient();
 				break;
 			}
@@ -173,6 +208,17 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
 			case 'removeReactEffect': b.removeSubscription(effectAt(b, op.effect)); break;
 			case 'replayReactEffect': b.replayReactEffect(effectAt(b, op.effect)); break;
 			case 'coreEffect': mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`); break;
+			case 'coreEffectWrite': {
+				const outName = op.out % 2 === 0 ? 'out1' : 'out2';
+				// One writer per output atom (mirrors the model's legality —
+				// sibling firing order is implementation-defined, so a shared
+				// output's final value would be order-dependent).
+				if (reg.outWriters.has(outName)) throw new ScheduleError(`output atom ${outName} already has a writing effect`);
+				const out = allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === outName)!;
+				mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`, out);
+				reg.outWriters.add(outName);
+				break;
+			}
 			case 'discardAllWip': b.discardAllWip(); break;
 			case 'quiesce':
 				b.quiesce();
@@ -197,14 +243,29 @@ export function applyEngineOp(b: CosignalBridge, op: ScheduleOp, namingEvents?: 
  * `snapshotModel` reads the engine's observables — engine internals
  * (kernel arena, union edges, memos) are never compared.
  */
-export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __syncNamingEvents(n: number): void } {
+export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __syncNamingEvents(n: number): void } {
+	// THE ONE ENGINE, reset per schedule (the fresh-model analog). A test
+	// may legitimately end mid-episode; close it out before the reset's
+	// idle preconditions run (the helpers.ts drain, inlined).
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
 	// devChecks armed (an engine-inert switch): the corpus referees the
 	// engine with it on, proving the flag perturbs no engine semantics.
-	const b = __newBridgeForTest({ devChecks: true });
+	// R-5: devChecks harnesses that open batches attach a driver first —
+	// the minimal context-free driver (explicit ids drive the writes).
+	__resetEngineForTest({ devChecks: true });
+	attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
+	const b = engine;
+	// BatchIds are monotonic across resets; the model restarts at 1 — the
+	// adapter rebases engine event batch ids into the model's space.
+	const batchIdBase = __peekNextBatchIdForTest() - 1;
 	// The engine's event stream: a lossless session tracer decoded on demand
 	// (the packed records are the only event channel; tests/trace-events.ts).
 	const stream = attachRefereeStream(b);
-	// PRODUCTION write semantics: the bridge quiet-folds bare writes at rest
+	// PRODUCTION write semantics: the engine quiet-folds bare writes at rest
 	// and the model mirrors the same derivation and fold, so the corpus
 	// referees the real default write path ('quiet-write' is a compared
 	// event; tests/quiet-mode.spec.ts pins the arming schedules by hand).
@@ -214,7 +275,6 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 	// with the referee that owns the stage's STOP condition.
 	armArenaCheck(b);
 	buildEngineTopology(b);
-	b.registerBridge();
 	let drained = 0;
 	let namingEvents: number | undefined;
 	return {
@@ -228,7 +288,10 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalBridge; __s
 		snapshot: () => snapshotModel(b as unknown as CosignalModel),
 		drainEvents() {
 			const events = stream.events;
-			const out = comparableEvents(events.slice(drained) as ModelEvent[]);
+			const out = comparableEvents(events.slice(drained) as ModelEvent[]).map((e) => {
+				const batch = (e as { batch?: number }).batch;
+				return typeof batch === 'number' && batch > 0 ? ({ ...e, batch: batch - batchIdBase } as ModelEvent) : e;
+			});
 			drained = events.length;
 			return out;
 		},
@@ -277,6 +340,17 @@ const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'moun
  * (any non-core-effect event) still pin placement, and values never relax.
  */
 function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
+	// R-3 extension: a WRITING core effect's write lands in the sibling
+	// block too — as a 'quiet-write' on an effect-output atom when the
+	// engine/model are at rest (the ambient-batch case's 'write' events are
+	// not compared events). The write travels WITH its effect's run (the
+	// unit), units sort by (effect, value) — the ruling's mechanical form —
+	// and the quiet-write SEQS renumber positionally within the block:
+	// sibling order is implementation-defined, so seq assignment within the
+	// sibling block is a quotient of the same ruling.
+	const isOutWrite = (e: ModelEvent): boolean =>
+		e.type === 'quiet-write' && ((e as { node?: string }).node === 'out1' || (e as { node?: string }).node === 'out2');
+	const inBlock = (e: ModelEvent): boolean => e.type === 'core-effect-run' || isOutWrite(e);
 	const out = events.slice();
 	let i = 0;
 	while (i < out.length) {
@@ -285,13 +359,40 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 			continue;
 		}
 		let j = i + 1;
-		while (j < out.length && out[j]!.type === 'core-effect-run') j++;
-		if (j - i > 1) {
-			const block = out.slice(i, j) as Extract<ModelEvent, { type: 'core-effect-run' }>[];
-			block.sort((a, b) =>
-				a.effect < b.effect ? -1 : a.effect > b.effect ? 1 :
-				String(a.value) < String(b.value) ? -1 : String(a.value) > String(b.value) ? 1 : 0);
-			for (let k = i; k < j; k++) out[k] = block[k - i]!;
+		while (j < out.length && inBlock(out[j]!)) j++;
+		// Trim trailing non-run events only if the block contains ≥2 runs or
+		// any out-write (a lone run needs no canonicalization).
+		const block = out.slice(i, j);
+		const runCount = block.filter((e) => e.type === 'core-effect-run').length;
+		if (runCount > 1 || (runCount === 1 && block.length > 1)) {
+			// Group into units: one run + its following out-writes.
+			type Unit = { key: [string, string]; events: ModelEvent[] };
+			const units: Unit[] = [];
+			for (const e of block) {
+				if (e.type === 'core-effect-run') {
+					const r = e as Extract<ModelEvent, { type: 'core-effect-run' }>;
+					units.push({ key: [r.effect, String(r.value)], events: [e] });
+				} else {
+					units[units.length - 1]!.events.push(e); // an out-write always follows its run
+				}
+			}
+			units.sort((a, b) =>
+				a.key[0] < b.key[0] ? -1 : a.key[0] > b.key[0] ? 1 :
+				a.key[1] < b.key[1] ? -1 : a.key[1] > b.key[1] ? 1 : 0);
+			// Renumber the block's quiet-write seqs positionally (ascending
+			// pool, canonical order) — clone events, never mutate the stream.
+			const seqPool = block
+				.filter(isOutWrite)
+				.map((e) => (e as { seq: number }).seq)
+				.sort((a, b) => a - b);
+			let seqIx = 0;
+			const flat: ModelEvent[] = [];
+			for (const u of units) {
+				for (const e of u.events) {
+					flat.push(isOutWrite(e) ? ({ ...e, seq: seqPool[seqIx++]! } as ModelEvent) : e);
+				}
+			}
+			for (let k = i; k < j; k++) out[k] = flat[k - i]!;
 		}
 		i = j;
 	}
@@ -324,11 +425,10 @@ export function diffAgainstModelTolerant(
 ): DiffResult {
 	const m = new CosignalModel();
 	buildTopology(m);
-	m.registerBridge();
 	let drained = 0;
 	const modelPool = new Map<string, number>();
 	const engineUsed = new Map<string, number>();
-	const namedEngine = engine as EngineAdapter & { __syncNamingEvents?(n: number): void; bridge?: CosignalBridge };
+	const namedEngine = engine as EngineAdapter & { __syncNamingEvents?(n: number): void; bridge?: CosignalEngine };
 	const dpc = namedEngine.bridge !== undefined ? new DeliveryPrecedesCorrection(namedEngine.bridge) : undefined;
 	for (let step = 0; step < ops.length; step++) {
 		const namingEvents = m.events.length; // the model's pre-op count — its uniq naming input
@@ -401,7 +501,7 @@ class DeliveryPrecedesCorrection {
 	private marks = new Map<string, DpcMark>();
 	private preOpBatchWriteSeq = 0;
 
-	constructor(private bridge: CosignalBridge) {}
+	constructor(private bridge: CosignalEngine) {}
 
 	private resetAll(): void {
 		this.marks.clear();

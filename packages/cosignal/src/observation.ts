@@ -26,7 +26,8 @@
  * consumed here, beside their one consumer.
  */
 
-import { untracked, __kernelComputedRead, __lifecycleRelease, __lifecycleRetain } from './index.js';
+import { untracked, __lifecycleRelease, __lifecycleRetain } from './index.js';
+import { E } from './graph.js';
 import type { AnyNode, ComputedNode, Subscription } from './concurrent.js';
 
 /** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
@@ -100,7 +101,7 @@ export function createObservation(deps: ObservationDeps): ObservationTable {
 			return;
 		}
 		try {
-			untracked(() => __kernelComputedRead(node.handle));
+			untracked(() => E.computedRead(node.handle._id));
 		} catch {
 			// partial dep prefix retained below
 		}

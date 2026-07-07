@@ -8,8 +8,10 @@
 // render pass, and starts+yields a fresh one; the batch retires only at the
 // end, so its log entries accumulate — reports per-keystroke ns, evals per
 // keystroke, and the log-history length every replay must walk.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
 
 const MODE = env('MODE', 'burst');
 const G = envInt('G', 16); // total computeds (flagged region stays 1 chain)
@@ -20,7 +22,13 @@ const KEYS = envInt('KEYS', 50);
 const REPS = envInt('REPS', 5);
 const WARMUP = envInt('WARMUP', 1);
 
-const b = registerReactBridge();
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine.
+const b = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
+// Anchor-tree retained event log (this tree retains no events; nothing to bound).
+const clearEvents = b.events !== undefined ? () => { b.events.length = 0; } : () => {};
 let evals = 0;
 const query = b.atom('query', 0);
 const unrelated = [];
@@ -53,7 +61,7 @@ function repBurst() {
 	evals = 0;
 	let writeNs = 0;
 	for (let f = 0; f < FRAMES; f++) {
-		b.events.length = 0;
+		clearEvents();
 		const tok = b.openBatch();
 		const t0 = process.hrtime.bigint();
 		for (let k = 0; k < W; k++) b.write(tok.id, query, 0, ++v);
@@ -93,7 +101,7 @@ function repTypeahead() {
 	b.renderEnd(open.id, 'commit');
 	b.settleAction(T.id);
 	const t1all = process.hrtime.bigint();
-	b.events.length = 0;
+	clearEvents();
 	return { keyNs: keyNs / KEYS, evalsPerKey, logLen, runNs: Number(t1all - t0all) / KEYS };
 }
 

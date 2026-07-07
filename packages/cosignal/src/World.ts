@@ -12,10 +12,12 @@
  *    kernel-served newest, memo-free fold-throughs for mountFix worlds) with
  *    per-world cycle detection;
  *  - read routing: the resolution order (fold-purity throw → evaluation
- *    world on stack → open capture frame → the host's ambient provider),
- *    the host read hook bodies, and the hook ARMING (`syncReadRouting` over
- *    the kernel's `__setHostRead` seams — the function-based arming persists
- *    until the driver seam replaces it at S5).
+ *    world on stack → open capture frame → the driver's ambient provider),
+ *    the routed read bodies (`routedAtomRead` / `routedComputedRead` — the
+ *    public `.state` getters call them directly when `routingActive` is
+ *    set), and the one-flag arming (`syncReadRouting` maintains graph.ts's
+ *    `routingActive` boolean at every world/capture/provider transition —
+ *    the merged replacement for the old nullable host hooks).
  *
  * THE SHARED ENGINE CORE RECORD (`EngineCore`) is declared here: the one
  * deps/table record the strongly-connected mechanisms — World, WorldArena,
@@ -31,7 +33,8 @@
  * and keep the one-property-load access shape the class fields had.
  */
 
-import { CycleError, SuspendedRead, __hostReadNewest, __hostRunFold, __kernelComputedRead, __setHostComputedRead, __setHostRead, __HOST_MISS, type Atom, type Computed } from './index.js';
+import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js';
+import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './graph.js';
 import { ScheduleError } from './errors.js';
 import { probes } from './engine.js';
 import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
@@ -55,6 +58,11 @@ export type World =
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
 export const NEWEST: World = { kind: 'newest' };
+
+/** Declined-read sentinel: a routed read returns it to mean "no routing
+ * context answered — take the plain kernel path". Package-internal (the
+ * public `.state` getters compare against it); never observable. */
+export const NOT_ROUTED: { readonly notRouted: true } = { notRouted: true };
 
 /**
  * THE SHARED ENGINE CORE RECORD — deps and table in one (see the module
@@ -97,13 +105,11 @@ export type EngineCore = {
 	/** Root record lookup-or-create (resident: the committed/mountFix
 	 * membership consults materialize the root record — reference-model parity). */
 	root(id: RootId): RootState;
-	/** The module-level host read hook targets (concurrent.ts's one-per-process
-	 * routers), passed as values for `syncReadRouting`'s arming. */
-	hostReadImpl(atom: Atom<unknown>): unknown;
-	hostComputedReadImpl(c: Computed<unknown>): unknown;
-	/** The bindings' adopt-on-demand slot (resident public field, read live). */
-	readAdopter(): ((atom: Atom<unknown>) => AtomNode) | undefined;
-	/** Public-Computed-handle resolution (resident registry/adoption cluster). */
+	/** Public-handle resolution (engine.ts content allocation — a handle with
+	 * no engine content gets its node record on first participation; base
+	 * seeds from kernel-current, which IS its full committed history by the
+	 * quiet invariant). */
+	nodeForAtom(atom: Atom<unknown>): AtomNode;
 	nodeForComputed(c: Computed<unknown>): ComputedNode;
 	/** Quiet-state recompute at pipeline transitions (resident derivation until
 	 * the engine composition owns it — batch open/retire, render start/end). */
@@ -130,15 +136,6 @@ export type EngineCore = {
 	compactAll(): void;
 
 	// ---- shared mutable state ----
-	/** True while this bridge is the module-level active bridge — the
-	 * read-hook arming guard, mirrored as a FIELD so `syncReadRouting` pays
-	 * one property read per sync (the arrow call it replaced was convicted
-	 * by the eval-frame benches). The resident registration cluster is the
-	 * ONE writer of the module-level active-bridge slot, and it maintains
-	 * this mirror at exactly the activeness transitions: registerBridge
-	 * demotes the previously active bridge's flag before promoting its own
-	 * (the cluster stays resident until S5's driver seam). */
-	isActive: boolean;
 	/** The trace recorder slot — the engine's ONLY instrumentation output
 	 * (one nullable slot; the class exposes accessor delegates for the
 	 * public `bridge.trace` surface). */
@@ -230,8 +227,11 @@ export type EngineCore = {
 	 * two-step every captureRun edge performs — Subscription's one writer). */
 	setCaptureFrame(f: CaptureFrame | undefined): void;
 	routedRead(atom: AtomNode, world: World): Value;
-	hostRead(atom: Atom<unknown>): unknown;
-	hostComputedRead(c: Computed<unknown>): unknown;
+	/** The public `.state` routed-read bodies (index.ts calls the module
+	 * trampolines in engine.ts, which read these slots): NOT_ROUTED declines
+	 * to the plain kernel path. */
+	routedAtomRead(atom: Atom<unknown>): unknown;
+	routedComputedRead(c: Computed<unknown>): unknown;
 
 	// ---- late-bound: WorldArena ----
 	claimArena(kind: 'render' | 'committed', world: World, root: RootId): WorldArena;
@@ -297,9 +297,7 @@ export type EngineCoreDeps = Pick<
 	| 'notify'
 	| 'notifyState'
 	| 'root'
-	| 'hostReadImpl'
-	| 'hostComputedReadImpl'
-	| 'readAdopter'
+	| 'nodeForAtom'
 	| 'nodeForComputed'
 	| 'recomputeQuiet'
 	| 'nextSeq'
@@ -323,7 +321,6 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		batch: LATE,
 		compactAll: LATE,
 		// shared mutable state
-		isActive: false,
 		trace: undefined,
 		activeWorld: undefined,
 		currentSink: 0,
@@ -359,8 +356,8 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		setWorldProvider: LATE,
 		setCaptureFrame: LATE,
 		routedRead: LATE,
-		hostRead: LATE,
-		hostComputedRead: LATE,
+		routedAtomRead: LATE,
+		routedComputedRead: LATE,
 		// late-bound: WorldArena
 		claimArena: LATE,
 		releaseArena: LATE,
@@ -447,16 +444,14 @@ export function createWorld(core: EngineCore): void {
 		syncReadRouting();
 	}
 
-	/** Arms/disarms the core's host read hooks (atom + computed — the S-C
-	 * computed-read seam arms in lockstep): armed while an evaluation world
-	 * is on stack OR a provider could answer — so a provider-less quiet host
-	 * costs reads exactly one undefined-check. */
+	/** Arms/disarms READ ROUTING (graph.ts's one `routingActive` boolean —
+	 * the public `.state` getters' inline check): armed while an evaluation
+	 * world is on stack OR an open capture frame OR a driver's ambient
+	 * provider could answer — so a driver-less quiet engine costs reads
+	 * exactly one boolean check. */
 	function syncReadRouting(): void {
 		const c = core; // one context load; field accesses below keep the one-load shape
-		if (!c.isActive) return;
-		const armed = c.activeWorld !== undefined || worldProvider !== undefined || c.captureFrame !== undefined;
-		__setHostRead(armed ? c.hostReadImpl : undefined);
-		__setHostComputedRead(armed ? c.hostComputedReadImpl : undefined);
+		__setRoutingActive(c.activeWorld !== undefined || worldProvider !== undefined || c.captureFrame !== undefined);
 	}
 
 	/** Assigns the capture frame and re-syncs the arming (Subscription's
@@ -495,44 +490,37 @@ export function createWorld(core: EngineCore): void {
 	}
 
 	/**
-	 * The host read hook's target: route a public read to the effective
-	 * world, adopting unregistered atoms on demand when the bindings provided
-	 * an adopter. Returns __HOST_MISS to take the plain kernel path.
+	 * THE routed public atom read: route a `.state` read to the effective
+	 * world; a handle with no engine content gets its node allocated here
+	 * (world participation IS content — the read is about to give it arena
+	 * presence). Returns NOT_ROUTED to take the plain kernel path.
 	 * @internal (reached only through index.ts's `Atom.state`)
 	 */
-	function hostRead(atom: Atom<unknown>): unknown {
+	function routedAtomRead(atom: Atom<unknown>): unknown {
 		const world = resolveRoutedWorld();
 		if (world === undefined) {
-			return __HOST_MISS;
+			return NOT_ROUTED;
 		}
 		const cap = routedCap;
-		let node = idToNode.get(atom._id);
-		if (node === undefined) {
-			const adopt = core.readAdopter();
-			if (adopt === undefined) {
-				return __HOST_MISS;
-			}
-			node = adopt(atom);
-		}
-		const v = routedRead(node as AtomNode, world);
+		const node = core.nodeForAtom(atom);
+		const v = routedRead(node, world);
 		if (cap !== undefined) cap.deps.push({ node, value: v });
 		return v;
 	}
 
 	/**
-	 * The computed host read hook's target (S-C computed-read seam): route a
-	 * public `Computed.state` read to the effective world, adopting
-	 * unregistered handles on demand (adoption is bridge-owned — unlike
-	 * atoms, no bindings policy participates). Newest resolution declines
-	 * (__HOST_MISS): the plain kernel path IS newest serving, seam-free.
-	 * Reads inside an open capture frame resolve committed-for-root and
-	 * append to the dep snapshot, exactly like routed atom reads.
+	 * The routed public computed read (S-C twin of routedAtomRead): route a
+	 * `Computed.state` read to the effective world, allocating engine
+	 * content on first sight. Newest resolution declines (NOT_ROUTED): the
+	 * plain kernel path IS newest serving, seam-free. Reads inside an open
+	 * capture frame resolve committed-for-root and append to the dep
+	 * snapshot, exactly like routed atom reads.
 	 * @internal (reached only through index.ts's `Computed.state`)
 	 */
-	function hostComputedRead(c: Computed<unknown>): unknown {
+	function routedComputedRead(c: Computed<unknown>): unknown {
 		const world = resolveRoutedWorld();
 		if (world === undefined || world.kind === 'newest') {
-			return __HOST_MISS; // the plain kernel path is newest serving
+			return NOT_ROUTED; // the plain kernel path is newest serving
 		}
 		const cap = routedCap;
 		const node = core.nodeForComputed(c);
@@ -577,7 +565,10 @@ export function createWorld(core: EngineCore): void {
 		for (let i = log.start; i < n; i++) {
 			if (!visibleAt(i, world, seqs, retired, slots)) continue;
 			const next = applyOp(atom, log.kinds[i]!, log.payloads[i], value);
-			if (!eqAtom(atom, next, value)) value = next;
+			// R-2 order: isEqual(current, incoming) — per replayed entry (the
+			// fold re-invokes per entry BY DESIGN; "once" is scoped to the
+			// write path's acceptance decision).
+			if (!eqAtom(atom, value, next)) value = next;
 		}
 		return value;
 	}
@@ -642,7 +633,17 @@ export function createWorld(core: EngineCore): void {
 	 * the WriteLog.ts pattern.) */
 	function applyOp(atom: AtomNode, kind: WriteKind, payload: unknown, prev: Value): Value {
 		if (kind === 0 /* WriteKind.SET */) return payload;
-		return inCallback(() => __hostRunFold(() => (payload as (p: Value) => Value)(prev)));
+		return inCallback(() => {
+			// The kernel's fold-purity POISON table guards the replay exactly
+			// like the plain-path update() (graph.ts's fold-guard pair — the
+			// old __hostRunFold seam, inlined at the merge).
+			const saved = foldGuardSwap();
+			try {
+				return (payload as (p: Value) => Value)(prev);
+			} finally {
+				foldGuardRestore(saved);
+			}
+		});
 	}
 
 	/** How this atom compares two values — THE equality rule, one copy for
@@ -711,7 +712,7 @@ export function createWorld(core: EngineCore): void {
 		}
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
-			return __hostReadNewest(atom.handle);
+			return E.read(atom.handle._id);
 		}
 		if (world.kind === 'render' || world.kind === 'committed') {
 			const a = c.arenaOf(world);
@@ -805,7 +806,7 @@ export function createWorld(core: EngineCore): void {
 	 */
 	function kernelComputed(node: ComputedNode): Value {
 		try {
-			return __kernelComputedRead(node.handle);
+			return E.computedRead(node.handle._id);
 		} catch (err) {
 			if (err instanceof CycleError) {
 				throw cycleError(node.name);
@@ -859,6 +860,6 @@ export function createWorld(core: EngineCore): void {
 	core.setWorldProvider = setWorldProvider;
 	core.setCaptureFrame = setCaptureFrame;
 	core.routedRead = routedRead;
-	core.hostRead = hostRead;
-	core.hostComputedRead = hostComputedRead;
+	core.routedAtomRead = routedAtomRead;
+	core.routedComputedRead = routedComputedRead;
 }

@@ -6,8 +6,10 @@
 // retire all K as committed. retireNs isolates retirement itself: stamping
 // log entries, folding them into base values, reconciling committed watchers
 // and effects, clearing per-root bookkeeping, releasing slots.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
 
 const K = envInt('K', 8);
 const M = envInt('M', 8);
@@ -15,7 +17,11 @@ const WATCHERS = envInt('WATCHERS', 0);
 const REPS = envInt('REPS', 7);
 const WARMUP = envInt('WARMUP', 2);
 
-const b = registerReactBridge();
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine.
+const b = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
 const atoms = [];
 for (let i = 0; i < 4; i++) atoms.push(b.atom(`a${i}`, 0));
 const computeds = [];
@@ -24,7 +30,22 @@ for (let j = 0; j < 4; j++) {
 	const y = atoms[(j + 1) % 4];
 	computeds.push(b.computed(`c${j}`, (read) => Number(read(x)) + Number(read(y))));
 }
-for (const c of computeds) b.mountCoreEffect(c, `e-${c.name}`);
+// Core effects, per arm: the anchor tree mounts newest-policy bridge
+// subscriptions; on this tree kernel `effect()` on the node's public handle
+// IS the core-effect form (value-gated like the anchor's subscription, so
+// per-write observer work matches).
+if (typeof b.mountCoreEffect === 'function') {
+	for (const c of computeds) b.mountCoreEffect(c, `e-${c.name}`);
+} else {
+	for (const c of computeds) {
+		let last;
+		mod.effect(() => {
+			const value = c.handle.state; // tracked kernel read (newest world)
+			if (Object.is(value, last)) return; // value gate
+			last = value;
+		});
+	}
+}
 if (WATCHERS > 0) {
 	const p = b.renderStart('R', []);
 	for (let i = 0; i < WATCHERS; i++) b.mountWatcher(p.id, computeds[i % 4], `w${i}`);
@@ -33,7 +54,7 @@ if (WATCHERS > 0) {
 
 let v = 0;
 function repOnce() {
-	b.events.length = 0;
+	if (b.events !== undefined) b.events.length = 0; // anchor-tree retained log; this tree retains no events
 	const t0 = process.hrtime.bigint();
 	const batches = [];
 	for (let k = 0; k < K; k++) batches.push(b.openBatch());

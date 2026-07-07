@@ -1,7 +1,8 @@
 /**
- * cosignal-react — the protocol shim. One Shim instance couples one
- * CosignalBridge (the concurrent engine of `cosignal`) to a React
- * build implementing the cosignal external-runtime protocol.
+ * cosignal-react — the protocol shim. One Shim instance couples THE cosignal
+ * engine (the module-level concurrent engine `cosignal` exports as `engine`;
+ * nothing constructs engines) to a React build implementing the cosignal
+ * external-runtime protocol.
  * Stock React never reveals when it starts, pauses, commits, or discards a
  * render pass — which is exactly what an external store must know to stay
  * tear-free — so a patched React build provides those events, and this shim
@@ -11,11 +12,11 @@
  *    entry points simply don't exist there). Degrading silently would
  *    reintroduce tearing (a single rendered frame mixing old and new
  *    state) later, with no error pointing at the cause.
- *  - protocol events -> bridge: onRenderPassStart(includedBatches) ->
+ *  - protocol events -> engine: onRenderPassStart(includedBatches) ->
  *    renderStart; yield/resume -> renderYield/renderResume;
  *    onRenderPassEnd(committed) -> renderEnd('commit') at the moment the
  *    render commits — before that commit's per-root report and before any
- *    retirement, which is what lets the bridge snapshot committed state as
+ *    retirement, which is what lets the engine snapshot committed state as
  *    the baseline for mount fixups (the engine's commit-time reconciliation
  *    of freshly mounted components against updates that were in flight
  *    while they mounted); onRenderPassEnd(discarded) -> renderEnd('discard');
@@ -27,19 +28,39 @@
  *    record when a tracer is attached; onRootCommitted ->
  *    idempotent reconciliation of the root's committed-batch table +
  *    effect re-checks.
- *  - bridge listeners -> React: the shim registers direct listeners on the
- *    bridge (onDelivery / onMountCorrective / onCorrection);
- *    the bridge invokes them at each operation's end, and the shim turns
- *    deliveries and mount correctives into setStates via unstable_runInBatch,
- *    so each corrective re-render is scheduled in the lane of the batch that
- *    caused it and the whole update renders and commits together. Deliveries
- *    are value-blind: the bridge decides who must re-render, the shim only
- *    schedules. Batches with no live protocol counterpart take
- *    unstable_runInBatch's discrete-urgent fallback. The protocol permits
- *    scheduling updates from its yield and commit callbacks, so listening
- *    at those points is legal (writes during render are not, and throw).
- *    The bridge's TraceEvent LOG is a referee/tracing surface only: it does
- *    not create unless a referee retains it or a tracer attaches.
+ *  - THE DRIVER: the constructor builds one EngineDriver record and installs
+ *    it with `attachDriver` — the engine's single attachment surface (one
+ *    driver per engine composition; a second attach throws; only the
+ *    test-only engine reset clears the slot). The record carries:
+ *      - currentBatch() — the write context, consulted by the engine once
+ *        per classified public write (the core's Atom.set/update — dispatch
+ *        is a thin layer over update — capture host-attributable writes as
+ *        WHOLE operations, because worlds replay log entries, and the engine
+ *        dispatches them internally after this one foreign call). The shim
+ *        answers from the protocol's write-context API
+ *        (unstable_getCurrentWriteBatch — the engine BatchId itself,
+ *        allocator-opened at the batch's creation); a write during render
+ *        throws here; see `currentBatch` for the BATCH_NONE edge.
+ *      - worldFor() — the ambient world for routed reads. Raw `.state` reads
+ *        route through the core's read seams into the engine's effective
+ *        world (evaluation world, else this provider's answer, resolved from
+ *        the live render context) — no prototype patching anywhere.
+ *      - onDelivery / onMountCorrective / onCorrection — the consumption
+ *        listeners: the engine invokes them at each operation's end, and the
+ *        shim turns deliveries and mount correctives into setStates via
+ *        unstable_runInBatch, so each corrective re-render is scheduled in
+ *        the lane of the batch that caused it and the whole update renders
+ *        and commits together. Deliveries are value-blind: the engine
+ *        decides who must re-render, the shim only schedules. Batches with
+ *        no live protocol counterpart take unstable_runInBatch's
+ *        discrete-urgent fallback. The protocol permits scheduling updates
+ *        from its yield and commit callbacks, so listening at those points
+ *        is legal (writes during render are not, and throw).
+ *      - protocolReset() — test-only: scrubs React's batch registry; the
+ *        engine reset invokes it FIRST, before scrubbing engine state, so
+ *        no stale protocol slot survives into the next composition.
+ *    The engine's TraceEvent stream is a referee/tracing surface only: it
+ *    does not create unless a referee retains it or a tracer attaches.
  *  - batch identity (protocol v2) — ONE id space, no translation: the shim
  *    registers a BATCH-ID ALLOCATOR on the protocol
  *    (unstable_registerBatchIdAllocator). At every React batch's creation
@@ -51,24 +72,6 @@
  *    included-batch lists — speaks engine BatchIds directly; the old
  *    reactBatch<->engineBatch mapping tables are gone. BATCH_NONE (0),
  *    named on both sides, is the "no batch context" sentinel.
- *  - write classification — the rule: a write belongs to the batch context
- *    in which it executes. The CORE's public Atom.set/update (dispatch is a
- *    thin layer over update) capture host-attributable writes as WHOLE
- *    operations (worlds replay log entries, so a functional update must reach
- *    the engine unfolded) and
- *    hand them to the classifier this shim installs on the bridge
- *    (`bridge.writeClassifier`). The batch is read from the protocol's
- *    write-context API (unstable_getCurrentWriteBatch — the engine BatchId
- *    itself, allocator-opened at the batch's creation); BATCH_NONE (no
- *    provider registered) is unreachable
- *    once a renderer has loaded — with dev checks armed
- *    (BridgeOptions.devChecks) it throws as a protocol violation, and
- *    without them it falls through to the engine's ordinary no-context
- *    write (quiet fold, else the ambient batch). Raw `.state` reads
- *    route through the core's host read hook into the bridge's effective
- *    world (evaluation world, else the ambient world this shim maintains
- *    around render passes and effect fires) — no prototype patching
- *    anywhere.
  *  - Suspense: the core's `ctx.use` is the ONE implementation (two forms:
  *    caller-cached thenable, and a per-key cache scoped to the living node —
  *    see ComputedCtx.use in cosignal). Bound computeds delegate to it with a
@@ -81,12 +84,12 @@
  */
 
 import * as React from 'react';
-import { Atom, BATCH_NONE, SuspendedRead, type ComputedCtx } from 'cosignal';
+import { Atom, BATCH_NONE, SuspendedRead, attachDriver, engine, type ComputedCtx } from 'cosignal';
 import type {
 	AnyNode,
 	AtomNode,
-	CosignalBridge,
-	WriteKind,
+	CosignalEngine,
+	EngineDriver,
 	RenderPass,
 	RootId,
 	BatchId,
@@ -161,11 +164,14 @@ export function getActiveShim(): Shim | undefined {
 // ---- the shim --------------------------------------------------------------------
 
 export class Shim {
-	readonly bridge: CosignalBridge;
-	/** Development-time checks (the bridge's BridgeOptions.devChecks): armed,
-	 * protocol-edge states the integration contract makes unreachable throw,
-	 * and the post-await orphan-write warning runs; off, each guarded site is
-	 * one boolean branch and the defined fall-through. */
+	/** THE engine surface (`cosignal`'s one module-level engine; the field
+	 * keeps the bindings' historical name to spare every call site). */
+	readonly bridge: CosignalEngine;
+	/** Development-time checks (the engine's EngineResetOptions.devChecks,
+	 * snapshotted at registration): armed, protocol-edge states the
+	 * integration contract makes unreachable throw, and the post-await
+	 * orphan-write warning runs; off, each guarded site is one boolean branch
+	 * and the defined fall-through. */
 	readonly devChecks: boolean;
 	disposed = false;
 	/** Listener/translation errors (recorded, not thrown across React's commit). */
@@ -197,45 +203,52 @@ export class Shim {
 	private holdingRefires = false;
 	private heldRefires: (() => void)[] = [];
 
-	constructor(bridge: CosignalBridge) {
-		this.bridge = bridge;
-		this.devChecks = bridge.devChecks;
+	constructor() {
+		this.bridge = engine;
+		this.devChecks = engine.devChecks;
 		assertForkPresent();
-		// The engine's host seams: the core's public Atom methods route
-		// host-attributable writes (whole ops) to the classifier, and routed
-		// reads to the effective world; the observer feeds effect dependency
-		// snapshots.
-		bridge.writeClassifier = (atom, kind, payload) => {
-			this.classifyWrite(this.nodeForAtom(atom), kind, payload); // the seam's scalar (kind, payload) pair, untouched
+		// THE DRIVER RECORD — the engine's one attachment surface (see the
+		// module header). Installed before any React-side registration, so a
+		// second registration fails cleanly here (attachDriver throws: one
+		// driver per composition) with no protocol listeners left behind.
+		const driver: EngineDriver = {
+			// The write context — the one foreign call the engine makes per
+			// classified public write (dispatch is engine-internal after it).
+			currentBatch: () => this.currentBatch(),
+			// The ambient-world provider answers from the LIVE call context, per
+			// read: a render resolves its own render's world via the protocol's
+			// render context (stack-accurate — a COMPLETED-but-uncommitted render
+			// is not "in render", and interleaved roots each see their own
+			// render); anything else resolves newest (undefined). Effect fires
+			// need no arm here: the ENGINE's captureRun frame owns
+			// committed-for-root routing and dependency capture (the promoted
+			// mechanism), and the engine consults its own frame before this
+			// provider.
+			worldFor: () => {
+				const rendering = this.renderingRoot();
+				if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
+					return { kind: 'render', render: rendering.renderPass };
+				}
+				return undefined;
+			},
+			// Direct listeners — the load-bearing consumption surface. The
+			// engine's trace stream stays a referee/tracing artifact (it does not
+			// create unless a referee retains it or a tracer attaches);
+			// scheduling decisions arrive here as live objects, allocation-free.
+			// Listener bodies must never throw into the engine mid-operation:
+			// failures are recorded. One listener error policy: guard() — which
+			// also closes the disposed window (the driver record outlives the
+			// shim, so post-dispose engine callbacks must be no-ops rather than
+			// relying on the cleared `targets` map to degrade safely).
+			onDelivery: (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)), // re-render in the write's own batch
+			onMountCorrective: (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)), // join a still-live batch this mount's render missed
+			onCorrection: (w) => this.guard(() => this.bumpInBatch(w.id, undefined)), // urgent pre-paint fix: discrete-urgent fallback lane
+			// Test-only: the engine reset invokes this FIRST, before scrubbing
+			// engine state, so React's batch registry drops its slot tenancy
+			// while the engine composition those ids point into still exists.
+			protocolReset: () => React.unstable_resetBatchRegistryForTest(),
 		};
-		bridge.readAdopter = (atom) => this.nodeForAtom(atom);
-		// The ambient-world provider answers from the LIVE call context, per
-		// read: a render resolves its own render's world via the protocol's
-		// render context (stack-accurate — a COMPLETED-but-uncommitted render is
-		// not "in render", and interleaved roots each see their own render);
-		// anything else resolves newest (undefined). Effect fires need no arm
-		// here: the ENGINE's captureRun frame owns committed-for-root routing
-		// and dependency capture (the promoted mechanism), and the engine
-		// consults its own frame before this provider.
-		bridge.setWorldProvider(() => {
-			const rendering = this.renderingRoot();
-			if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
-				return { kind: 'render', render: rendering.renderPass };
-			}
-			return undefined;
-		});
-		// Direct listeners — the load-bearing consumption surface. The bridge's
-		// event LOG stays a referee/tracing artifact (it does not create unless a
-		// referee retains it or a tracer attaches); scheduling decisions arrive
-		// here as live objects, allocation-free. Listener bodies must never
-		// throw into the engine mid-operation: failures are recorded.
-		// One listener error policy: guard() — which also closes the disposed
-		// window the hand-rolled try/catch these replaced lacked (post-dispose
-		// bridge callbacks are now no-ops instead of relying on the cleared
-		// `targets` map to degrade safely).
-		bridge.onDelivery = (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)); // re-render in the write's own batch
-		bridge.onMountCorrective = (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)); // join a still-live batch this mount's render missed
-		bridge.onCorrection = (w) => this.guard(() => this.bumpInBatch(w.id, undefined)); // urgent pre-paint fix: discrete-urgent fallback lane
+		attachDriver(driver);
 		// Protocol v2: the shim IS the batch-id allocator. React calls this at
 		// every batch's creation (which can sit mid-render, mid-commit, or
 		// inside protocol listeners — the engine's openBatch is allocation-only
@@ -257,16 +270,18 @@ export class Shim {
 		});
 	}
 
+	/**
+	 * Releases every React-side registration (the protocol listeners, the
+	 * batch-id allocator) and drops the shim's delivery targets. The DRIVER
+	 * RECORD stays attached: the engine owns that slot and only the test-only
+	 * engine reset clears it (there is deliberately no detach — one driver
+	 * per composition). A disposed shim's driver is harmless: its listeners
+	 * no-op through guard(), and its write context only reads protocol state.
+	 */
 	dispose(): void {
 		this.disposed = true;
 		this.unsubscribe();
 		this.unregisterAllocator();
-		this.bridge.writeClassifier = undefined;
-		this.bridge.readAdopter = undefined;
-		this.bridge.onDelivery = undefined;
-		this.bridge.onMountCorrective = undefined;
-		this.bridge.onCorrection = undefined;
-		this.bridge.setWorldProvider(undefined);
 		this.targets.clear();
 		this.heldRefires.length = 0;
 	}
@@ -502,12 +517,12 @@ export class Shim {
 	}
 
 	// ---- direct listeners -> React ---------------------------------------------
-	// (Registered in the constructor: deliveries and mount correctives bump in
-	// the causing batch's lane; urgent/reconcile corrections take the
-	// discrete-urgent fallback. The bridge delivers them at the end of each
-	// engine operation — the same timing the old post-op event drain had.
+	// (Installed through the constructor's driver record: deliveries and mount
+	// correctives bump in the causing batch's lane; urgent/reconcile
+	// corrections take the discrete-urgent fallback. The engine delivers them
+	// at the end of each engine operation.
 	// Dev warnings are shim-local AND devChecks-gated: the post-await lint
-	// lives HERE only, in classifyWrite — the engine and the reference model
+	// lives HERE only, in currentBatch — the engine and the reference model
 	// emit no dev events.)
 
 	/**
@@ -524,13 +539,19 @@ export class Shim {
 		React.unstable_runInBatch(batchId ?? BATCH_NONE, () => target.bump());
 	}
 
-	// ---- write classification -----------------------------------------------------
+	// ---- the write context ----------------------------------------------------
 
-	/** The single write entry for adopted atoms: records the WHOLE operation
-	 * — carried as the host seam's scalar (kind, payload) pair (0 = set with
-	 * the value, 1 = update with the updater fn) — classified into the batch
-	 * context the write executes in. */
-	classifyWrite(node: AtomNode, kind: WriteKind, payload: unknown): void {
+	/** The batch context for the public write executing NOW — the driver's
+	 * `currentBatch`, consulted by the engine once per classified write (the
+	 * write itself — whole (kind, payload) operations for worlds to replay —
+	 * is dispatched engine-internally after this answer). Returns the engine
+	 * BatchId, BATCH_NONE included: the engine converges BATCH_NONE to its
+	 * ordinary no-context write (quiet fold when nothing is pending, else the
+	 * ambient batch) — the same defined fall-through a bare non-React write
+	 * takes. Effects stay BOUNDARY consumers of such writes: the engine
+	 * re-checks their snapshots at the next boundary (retirement, settlement,
+	 * per-root commit), never mid-write. */
+	currentBatch(): BatchId {
 		if (React.unstable_getRenderContext() !== null) {
 			throw new Error('cosignal: signal write during render — write from an event handler or effect instead');
 		}
@@ -544,9 +565,7 @@ export class Shim {
 		// getCurrentWriteBatch() creates a batch id for EVERY write (any
 		// call context) with a guaranteed close edge, so no write in the React
 		// path is ever context-free. Dev checks make reaching it explode;
-		// without them it falls through to the engine's ordinary no-context
-		// write below (quiet fold when nothing is pending, else the ambient
-		// batch) — the same defined fall-through a bare non-React write takes.
+		// without them it returns to the engine's no-context arm.
 		if (this.devChecks && batchId === BATCH_NONE) {
 			throw new Error(
 				'cosignal: protocol violation — signal write with no batch context after registration (the renderer provided no external-runtime write batch)',
@@ -574,14 +593,7 @@ export class Shim {
 				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
 			}
 		}
-		this.bridge.write(batchId === BATCH_NONE ? undefined : batchId, node, kind, payload);
-		// A write into a batch already locked into some root's committed table
-		// moves that root's committed world immediately — but effects are
-		// BOUNDARY consumers (RCC-EF2 amended, 2026-07-06): they never re-run
-		// mid-write. The engine re-checks their snapshots at the next boundary
-		// (retirement, settlement, per-root commit — or this root's frame
-		// close if one is open), coalescing every member write before it to
-		// one run at the boundary value. Nothing to do here.
+		return batchId;
 	}
 
 	// ---- useSignalEffect timing shell -------------------------------------------------
@@ -615,23 +627,17 @@ export class Shim {
 		this.bridge.captureRun(id, body);
 	}
 
-	// ---- adoption -------------------------------------------------------------------
+	// ---- node resolution --------------------------------------------------------
 
 	/**
-	 * The bridge node for a public Atom/ReducerAtom, adopting on first use.
-	 * Resolution IS the engine's `bridge.nodeFor` (the one stamp-validate +
-	 * registry-probe rule, shared with the host write seam) — this method
-	 * only adds adopt-on-miss. The original handle IS the bridge's kernel
-	 * handle: the engine's own kernel applies/reads re-enter the public
-	 * methods with the host hooks' recursion guard down, so no shadow handle
-	 * is needed. Adoption itself is entirely the engine's job (a ReducerAtom
-	 * needs no wiring: its dispatch records as an update closure).
+	 * The engine node for a public Atom/ReducerAtom — a delegate to the
+	 * engine's own resolution, which allocates content on the atom's first
+	 * engine participation (seeding base from kernel-current — the atom's
+	 * full committed history — and carrying the handle's own equality).
+	 * Kept as a method so the hooks and the suites name ONE resolution point.
 	 */
 	nodeForAtom(atom: Atom<unknown>): AtomNode {
-		return (
-			this.bridge.nodeFor(atom) // the engine's one stamp-validate + registry-probe rule
-			?? this.bridge.adoptAtom(atom.label ?? `atom#${atom._id}`, atom as Atom<Value>, atom._isEqual)
-		);
+		return this.bridge.nodeForAtom(atom);
 	}
 
 	// ---- suspense translation ----------------------------------------------------------
@@ -717,7 +723,7 @@ export class Shim {
 		this.targets.delete(wid);
 		// One engine call retires the watcher from EVERY store it lives in
 		// (liveness/observation retain, id map, per-node walk index, open
-		// mounted lists) — see CosignalBridge.removeWatcher.
+		// mounted lists) — see the engine's removeWatcher.
 		this.bridge.removeWatcher(wid);
 	}
 }

@@ -114,17 +114,20 @@
  * a rebuilt table needs (scalar heads, side columns, queue, scratch stacks)
  * lives at module level for exactly this reason.
  *
- * There is exactly ONE build of this library. The concurrent-worlds engine
- * (`./concurrent.ts`, re-exported at the bottom of this file: `registerReactBridge`,
- * `CosignalBridge`, the bridge types) attaches to this kernel through the
- * HOST SEAMS — two nullable module hooks consulted FIRST in the public
- * read/write methods (see "the host seams" section below). Sync-only apps
- * that never register a bridge keep both hooks undefined forever: the whole
- * concurrency feature costs one predictable `!== undefined` branch per
- * public read/write, and zero log entries, batches, worlds, or bridge events are
- * ever created (tests/one-core.spec.ts asserts this behaviorally with engine
- * probes). The only other swapped table is POISON (fold purity — graph.ts,
- * swapped through runFold below) — reachable exclusively by erroring code.
+ * There is exactly ONE build of this library, and ONE ENGINE — the
+ * concurrent-worlds machinery (`./concurrent.ts`, re-exported at the bottom
+ * of this file: `attachDriver`, the `engine` surface, the engine types)
+ * composes at module initialization (always-concurrent: no installation
+ * step exists). The public read/write methods dispatch into its paths
+ * DIRECTLY: writes test ONE module boolean (`standaloneQuiet` — quiet and
+ * driver-less) and take the plain kernel path on the fast arm; reads test
+ * ONE module boolean (`routingActive`) beside `activeSub` and take the
+ * plain kernel read unless a routing context could answer. Sync-only apps
+ * that never attach a driver and never open a batch keep both fast arms
+ * forever: zero log entries, batches, or worlds are ever created
+ * (tests/one-core.spec.ts asserts this behaviorally with engine probes).
+ * The only other swapped table is POISON (fold purity — graph.ts, swapped
+ * through runFold below) — reachable exclusively by erroring code.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Kernel deviations from a plain transliteration of upstream alien-signals
@@ -183,8 +186,11 @@
  * not, documented at its implementation sites in graph.ts.
  */
 
-import { E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, RecordGeom, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, untracked, values } from './graph.js';
-import { lifecycleStates } from './lifecycle.js';
+import { E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, RecordGeom, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom } from './graph.js';
+import { __resetLifecycleForTest } from './lifecycle.js';
+import { NOT_ROUTED } from './World.js';
+import { engineWrite, __engineAtomNodeById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
+import type { AtomNode, ComputedNode } from './concurrent.js';
 import type { NodeId, ValueIndex } from './graph.js';
 
 // ---- sentinels ----------------------------------------------------------------
@@ -277,121 +283,23 @@ export { NodeField, LinkField, NodeFlag } from './graph.js';
 
 
 
-// ---- the host seams -------------------------------------------------------------
-// ONE CORE: there is exactly one engine and one write/read path. The
-// concurrent-worlds machinery (`./concurrent.ts`, re-exported at the bottom of
-// this file) is the HOST: it needs whole operations — set(value) vs
-// update(fn) — because worlds replay recorded writes, and
-// it needs world-routed reads while a world evaluation (or a host-declared
-// ambient world, e.g. a render pass) is on stack. Both needs attach HERE, in
-// the public methods, through two nullable module hooks: undefined until a
-// bridge registers (and, for reads, only while a routing context is live), so
-// an app that never attaches a host pays exactly one `!== undefined` test per
-// public read/write — the empty-state short-circuit is the FIRST test on each
-// path — and zero log entry/world work ever runs (asserted behaviorally by
-// tests/one-core.spec.ts).
+// ---- the engine dispatch ----------------------------------------------------------
+// ONE ENGINE, ALWAYS-CONCURRENT: the concurrent-worlds machinery
+// (`./concurrent.ts`, re-exported at the bottom of this file) composes at
+// module initialization, and the public methods below call its paths
+// DIRECTLY — no nullable hooks, no arming, no registration step. The costs
+// on the plain paths are exactly two module-boolean checks: writes test
+// `standaloneQuiet` (quiet AND no driver — the fast arm), reads test
+// `routingActive` (a routing context could answer) beside `activeSub`.
+// A process that never attaches a driver and never opens a batch keeps both
+// flags in their fast states forever, and zero log-entry/world work ever
+// runs (asserted behaviorally by tests/one-core.spec.ts).
 
-/** Declined-read sentinel: the host read hook returns it to mean "not mine —
- * take the plain kernel path". @internal */
-export const __HOST_MISS: { readonly hostMiss: true } = { hostMiss: true };
-
-/** Whole-op codes for the host write hook (0 = set, 1 = update). @internal */
+/** Whole-op codes for the engine write dispatch (0 = set, 1 = update).
+ * Shares the 0/1 encoding with engine.ts's `const enum WriteKind` by
+ * construction (the two collapse conceptually; this alias is the public
+ * type name). @internal */
 export type WriteKind = 0 | 1;
-
-/**
- * Host write interceptor. Returns true iff the host consumed the write (the
- * kernel apply then happens through the host's own machinery, re-entering the
- * public method with the hook's recursion guard down). @internal
- */
-let hostWrite: ((atom: Atom<unknown>, kind: WriteKind, payload: unknown) => boolean) | undefined;
-
-/**
- * Host read router. Armed (non-undefined) only while the host has a live
- * routing context — a world evaluation or an ambient world; returns
- * __HOST_MISS to decline. @internal
- */
-let hostRead: ((atom: Atom<unknown>) => unknown) | undefined;
-
-/**
- * Host COMPUTED read router (S-C: one computed — kernel `Computed` records
- * evaluate under worlds). Armed/disarmed in lockstep with `hostRead`; the
- * same `activeSub === 0` gate applies (kernel-frame reads are never
- * world-routed). Returns __HOST_MISS to decline. @internal
- */
-let hostComputedRead: ((c: Computed<unknown>) => unknown) | undefined;
-
-/** @internal */
-export function __setHostWrite(fn: ((atom: Atom<unknown>, kind: WriteKind, payload: unknown) => boolean) | undefined): void {
-	hostWrite = fn;
-}
-
-/** @internal */
-export function __setHostRead(fn: ((atom: Atom<unknown>) => unknown) | undefined): void {
-	hostRead = fn;
-}
-
-/** @internal */
-export function __setHostComputedRead(fn: ((c: Computed<unknown>) => unknown) | undefined): void {
-	hostComputedRead = fn;
-}
-
-// The record-free hook — invoked at the boundary sweep for every freed NODE
-// record, so hosts keying dense side tables by NodeField.NODE_INDEX can
-// scrub the freed record's rows — lives in graph.ts with freeNode, its one
-// caller; the registration seam is re-exported here (host seam surface).
-export { __setRecordFreeHook } from './graph.js';
-
-/**
- * The host's fold guard: runs a host-side updater/reducer replay under the
- * same POISON table the base `update()`/`dispatch()` use, so raw kernel
- * reads/writes inside a replayed op throw identically in every mode. @internal
- */
-export function __hostRunFold<T>(fn: () => T): T {
-	return runFold(fn);
-}
-
-/**
- * Policy checks a host must run BEFORE recording a write (a log entry must
- * never land for a write the policy layer would have rejected). @internal
- */
-export function __assertHostWritable(): void {
-	if (forbidWritesInComputeds && E.activeIsComputed()) {
-		throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
-	}
-}
-
-/**
- * Direct kernel apply for the host's quiet-mode fold: the plain-path write
- * tail (`writeAtom` — equality drop, propagation, flush), skipping the
- * public method and its host-seam re-entry. The caller has already run the
- * host-writable policy check and folded the operation to a plain value.
- * @internal
- */
-export function __hostApplySet(atom: Atom<unknown>, value: unknown): void {
-	writeAtom(atom._id, atom._isEqual, value);
-}
-
-/**
- * Newest-value read for the host's own folds and eager applies: the plain
- * kernel read path (`E.read` — dependency tracking included, exactly the
- * public getter minus the host-seam interception), so the host can read the
- * kernel arena regardless of any live routing context without toggling its
- * seams around the call. @internal
- */
-export function __hostReadNewest(atom: Atom<unknown>): unknown {
-	return E.read(atom._id);
-}
-
-/**
- * Raw kernel computed read for the host's own newest serving (S-C): the
- * plain kernel path — recompute-if-stale, kernel links to any open kernel
- * frame, boxed-read unwrap — minus the host-seam interception, so the host
- * serves the newest world off the kernel regardless of any live routing
- * context. @internal
- */
-export function __kernelComputedRead(c: Computed<unknown>): unknown {
-	return E.computedRead(c._id);
-}
 
 /** @internal Test seam (leak audit): a record's side-column slots. freeNode
  * must clear all three, or freed records pin dead values/closures for the
@@ -402,49 +310,51 @@ export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: u
 }
 
 /**
- * Raw arena view for the host's kernel-link strong walks (S-C: newest
- * subscription reach + the mount-fixup closure's kernel leg ride the
- * kernel's own dep links). The buffer is valid only until the next growth
- * boundary — hosts must re-fetch per walk and never retain it across public
- * operations. Field offsets are the host's mirrored constants (asserted
- * stable by the suite). @internal
+ * The plain-path write tail shared by the standalone fast arm and the
+ * engine's node-less arm: fold the op (updaters under the fold-purity
+ * guard), then `writeAtom` — which applies the R-2 policy equality ONCE
+ * (kernel order: `isEqual(current, incoming)`) at the acceptance decision
+ * and takes the kernel write + flush. @internal
  */
-export function __kernelBuffer(): Int32Array {
-	return E.buffer();
+export function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: unknown): void {
+	const id = atom._id;
+	const next = kind === 0
+		? payload
+		: runFold(() => (payload as (p: unknown) => unknown)(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET]));
+	writeAtom(id, atom._isEqual, next);
 }
 
 /**
- * Dispose a computed record (S-C — the useComputed deps-change reclamation
- * path): unlink its deps in reverse, detach every remaining subscriber
- * link, and defer the free to the next operation boundary (GEN bumps at the
- * sweep; the freed id is then reusable). The caller owns the discipline
- * that no live consumer still reads the handle — a disposed handle's reads
- * serve garbage, exactly like a use-after-dispose anywhere else. @internal
+ * Handle-free write path for lifecycle contexts (id-keyed — the lifecycle
+ * record deliberately holds no handle reference; see lifecycle.ts). Runs
+ * the same policy assert as the public methods, then the engine dispatch
+ * over the id-resolved node; an atom with no engine content takes the
+ * plain kernel path (its comparator lives on the unreachable handle, so
+ * the kernel's identity compare is the only equality — the engine node,
+ * once content exists, carries the comparator). @internal
  */
-export function __hostDisposeComputed(c: Computed<unknown>): void {
-	maybeBoundary();
-	E.disposeComputed(c._id);
-	maybeBoundary(); // sweep now when possible, so the id-tenancy GEN moves at this boundary
+export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown): void {
+	if (forbidWritesInComputeds === true && E.activeIsComputed()) {
+		throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
+	}
+	const node = __engineAtomNodeById(id);
+	if (node !== undefined) {
+		__engineWriteNode(node, kind, payload);
+		return;
+	}
+	const next = kind === 0
+		? payload
+		: runFold(() => (payload as (p: unknown) => unknown)(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET]));
+	writeAtom(id, undefined, next);
 }
 
-/**
- * Flag a computed record HOST-owned (S-C): its kernel dep links stop
- * feeding the D1 observed-lifecycle union — the host's observation index
- * is its arm. See NodeFlag.HOST_OWNED and the engine op. @internal
- */
-export function __hostMarkComputedOwned(c: Computed<unknown>): void {
-	E.markHostOwned(c._id);
-}
-
-/**
- * Wrap a computed's kernel getter with a host epilogue (S-C: the bridge's
- * observation re-pointing rides every kernel re-run of an adopted computed,
- * and bridge-created computeds get their world-fn adapters this way).
- * Policy wrappers (custom equality) stay INSIDE the wrap — the host sees the
- * same fn the kernel would have run. @internal
- */
-export function __hostWrapComputedFn(id: NodeId, wrap: (inner: (ctx: unknown) => unknown) => (ctx: unknown) => unknown): void {
-	fns[id >> RecordGeom.ID_TO_FN_SHIFT] = wrap(fns[id >> RecordGeom.ID_TO_FN_SHIFT] as (ctx: unknown) => unknown);
+/** Test-only policy scrub (`__resetEngineForTest`'s index.ts half):
+ * configure() state returns to defaults; the lifecycle map, queue, and its
+ * scheduled flush drop (the flush microtask is engine-epoch guarded).
+ * @internal */
+export function __resetPolicyForTest(): void {
+	forbidWritesInComputeds = false;
+	__resetLifecycleForTest();
 }
 
 // (maybeBoundary / boundaryWork / flush — the operation-boundary machinery
@@ -457,7 +367,47 @@ export function __hostWrapComputedFn(id: NodeId, wrap: (inner: (ctx: unknown) =>
 
 // ---- policy state -------------------------------------------------------------
 
-let forbidWritesInComputeds = false;
+// Hot-guard shape, both policy flags: `var` (a `let` module slot keeps a
+// per-access initialization hole-check in optimized code; var never does),
+// and guards compare `=== true` (a boolean-singleton pointer compare; a
+// truthiness test on module state compiles to the generic ToBoolean ladder
+// — smi test, four oddball compares, two map checks — per access).
+// eslint-disable-next-line no-var
+var forbidWritesInComputeds = false;
+
+/**
+ * quiet AND no driver attached — the public write path's ONE fast-arm check
+ * (Atom.set/update): with a driver attached every write must make the one
+ * foreign call (the driver's batch context can create batch identity on the
+ * write itself), so the fast arm requires both. The flag LIVES HERE, in the
+ * module that reads it on every write: index and concurrent import each
+ * other circularly, and a read through the imported binding of a cyclic
+ * module keeps a per-access initialization check that a same-module read
+ * doesn't pay. The engine flips it through the setter below on the cold
+ * quiet-derivation path (driver attach, batch open/close, log drain).
+ *
+ * `var`, deliberately: the engine composes during concurrent.ts's MODULE
+ * BODY, and when a consumer enters the cycle through this module that body
+ * runs before ours — the initial derivation arrives via the setter while a
+ * `let` here would still be uninitialized. var's hoisted slot accepts the
+ * early write, both evaluation orders converge on `true` (no driver can
+ * attach before module evaluation completes), and the per-write read never
+ * carries an initialization check.
+ */
+// eslint-disable-next-line no-var
+var standaloneQuiet = true;
+
+/** @internal Engine seam: the quiet derivation (concurrent.ts) lands its
+ * `quiet && no driver` result here. Cold — never on a per-write path.
+ * Store ONLY on change: a slot that is never re-stored stays constant-
+ * trackable, so a process that never attaches a driver keeps a foldable
+ * fast-arm guard (the store would de-constify it even with the same
+ * value); the first real transition is the usual one-shot respecialization. */
+export function __setStandaloneQuiet(v: boolean): void {
+	if (v !== standaloneQuiet) {
+		standaloneQuiet = v;
+	}
+}
 
 // (throwFold / the POISON table's operations live in graph.ts with the
 // table; runFold below swaps through graph.ts's fold-guard pair.)
@@ -473,35 +423,10 @@ let forbidWritesInComputeds = false;
 export { __lifecycleRetain, __lifecycleRelease } from './lifecycle.js';
 
 // ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
-
-function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | undefined, value: unknown): void {
-	// Writes-in-computeds: tolerated by default (upstream alien-signals
-	// semantics, conformance-pinned — a write that feeds the evaluating
-	// computed simply marks it pending again through the kernel's RECURSED
-	// flag transitions in propagate() and settles by lazy revalidation).
-	// Evaluation *cycles* —
-	// re-entrant reads — throw in computedRead (D2). The configure flag
-	// rejects every in-evaluation write. (Known pinhole: a write wrapped in
-	// untracked() clears the kernel's activeSub, so the flag cannot see it.)
-	if (forbidWritesInComputeds && E.activeIsComputed()) {
-		throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
-	}
-	// Equality drop: with no bridge registered an atom's write history is
-	// always empty, so a write equal to the current pending value is simply
-	// dropped — this short-circuit is the whole rule. (Under a registered
-	// bridge the same drop applies only while the atom has no un-retired
-	// log entries: once history exists, different worlds may fold different
-	// values.) Policy equality
-	// against the newest (pending) value here; the kernel's own identity
-	// compare covers the default.
-	if (isEqual !== undefined && isEqual(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET], value)) {
-		return;
-	}
-	maybeBoundary();
-	if (E.write(id, value) && batchDepth === 0) {
-		flush();
-	}
-}
+// (writeAtom lives in graph.ts: every binding it touches per call — values,
+// maybeBoundary, E, batchDepth, flush — is graph state, and a hot read of a
+// CYCLIC module's imported binding pays a per-access cell + initialization
+// check that a same-module read doesn't. Imported above with the rest.)
 
 /**
  * Runs a reducer/updater under the fold-purity guard. The rule: updaters and
@@ -591,6 +516,13 @@ export class Atom<T> {
 	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
+	/** The engine node, once this handle has ENGINE CONTENT (a log entry, a
+	 * watcher, arena presence, a routed read) — undefined until then. The
+	 * handle-node link is 1:1 for the handle's life; the record-free scrub
+	 * clears it. Creation is ONE STEP: the constructor makes the kernel
+	 * record, and the engine resolves the handle by its id — content
+	 * allocates lazily, never through a user-facing adoption step. @internal */
+	_node: AtomNode | undefined = undefined;
 	readonly label: string | undefined;
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
@@ -602,85 +534,83 @@ export class Atom<T> {
 		const effect = options?.effect;
 		if (effect !== undefined) {
 			E.markLifecycle(id);
-			const self = this as Atom<unknown>;
-			lifecycleStates.set(id, {
-				effect: effect as (ctx: AtomCtx<unknown>) => void | (() => void),
-				// ctx.set/update delegate to the public methods — they ARE the
-				// one write path (host-seam interception, fold-purity guard and
-				// equality policy live there, never re-implemented here).
-				ctx: {
-					get state(): unknown {
-						return untracked(() => E.read(id));
-					},
-					set(value: unknown): void {
-						self.set(value);
-					},
-					update(fn: (current: unknown) => unknown): void {
-						self.update(fn);
-					},
-				},
-				cleanup: undefined,
-				refs: 0,
-				wantMounted: false,
-				isMounted: false,
-				scheduled: false,
-			});
+			// THE DORMANT OWNER (reclamation plan §2): the user's callback
+			// lives in the atom's own record `fns` slot — atoms never use
+			// that column, it is engine memory addressed by id, and the
+			// record-free path clears it like every column. The ACTIVE
+			// lifecycle record (ctx, cleanup, refcount) is created id-keyed
+			// at the first watched transition (lifecycle.ts REHYDRATION) and
+			// deleted at dormancy — the engine never stores a handle
+			// reference of its own (the ctx routes set/update BY ID through
+			// the engine write path).
+			fns[id >> RecordGeom.ID_TO_FN_SHIFT] = effect as (ctx: AtomCtx<unknown>) => void | (() => void);
 		}
 	}
 
 	/**
 	 * The atom's current value (registers a dependency inside evaluations).
-	 * With a host routing context live (world evaluation / ambient world),
-	 * the host serves the value of the world doing the asking. Inside a fold
+	 * With a routing context live (world evaluation / ambient world), the
+	 * engine serves the value of the world doing the asking. Inside a fold
 	 * frame the dispatch itself throws (POISON table).
 	 *
 	 * KERNEL-FRAME READS ARE NEVER WORLD-ROUTED (`activeSub === 0` guards the
-	 * seam): a read inside an open kernel evaluation (a `Computed` getter, an
-	 * `effect()` body) creates a K0 dependency link and its result lands in a
-	 * K0 cache slot, and K0 state is newest-world state by the eager-apply
-	 * invariant — serving a world-folded value there would poison the kernel
-	 * cache (a later newest read of the computed would serve another world's
-	 * value with no invalidation: tearing). World routing belongs to overlay
-	 * evaluations and render/effect call contexts, all of which run with no
-	 * kernel frame open. (Known pinhole, same shape as the documented
-	 * forbidWritesInComputeds one: `untracked()` inside a kernel getter
-	 * clears activeSub, so a routed read there can still reach the getter's
-	 * return value; untracked reads leave no K0 link, but the cache slot
-	 * still absorbs the result.) Pinned by tests/graph-consumers.spec.ts.
+	 * routed arm): a read inside an open kernel evaluation (a `Computed`
+	 * getter, an `effect()` body) creates a K0 dependency link and its
+	 * result lands in a K0 cache slot, and K0 state is newest-world state by
+	 * the eager-apply invariant — serving a world-folded value there would
+	 * poison the kernel cache (a later newest read of the computed would
+	 * serve another world's value with no invalidation: tearing). World
+	 * routing belongs to overlay evaluations and render/effect call
+	 * contexts, all of which run with no kernel frame open. (Known pinhole,
+	 * same shape as the documented forbidWritesInComputeds one:
+	 * `untracked()` inside a kernel getter clears activeSub, so a routed
+	 * read there can still reach the getter's return value; untracked reads
+	 * leave no K0 link, but the cache slot still absorbs the result.)
+	 * Pinned by tests/graph-consumers.spec.ts.
 	 */
 	get state(): T {
-		const hr = hostRead;
-		if (hr !== undefined && activeSub === 0) {
-			const v = hr(this as Atom<unknown>);
-			if (v !== __HOST_MISS) {
+		if (routingActive && activeSub === 0) {
+			const v = __routedAtomRead(this as Atom<unknown>);
+			if (v !== NOT_ROUTED) {
 				return v as T;
 			}
 		}
 		return E.read(this._id) as T;
 	}
 
-	/** Replaces the atom's value. A host-attributable write is recorded whole. */
+	/** Replaces the atom's value. Policy asserts first; then the standalone
+	 * fast arm (no engine content, quiet, no driver — the plain kernel
+	 * write, R-2 equality once) or the engine dispatch (driver batch
+	 * context / quiet fold / ambient batch). */
 	set(value: T): void {
-		if (hostWrite !== undefined && hostWrite(this as Atom<unknown>, 0, value)) {
+		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
+			throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
+		}
+		if (this._node === undefined && standaloneQuiet === true) {
+			writeAtom(this._id, this._isEqual, value);
 			return;
 		}
-		writeAtom(this._id, this._isEqual, value);
+		engineWrite(this as Atom<unknown>, 0, value);
 	}
 
 	/**
 	 * Functional update. `fn` must be pure: it runs under the fold-purity
 	 * guard, so signal reads and writes inside it throw — read what you need
-	 * first, then update. A host-attributable update records the WHOLE op
-	 * (the updater itself, replayed per world); otherwise it applies
-	 * immediately.
+	 * first, then update. An engine-dispatched update records the WHOLE op
+	 * (the updater itself, replayed per world); the standalone fast arm
+	 * folds and applies immediately.
 	 */
 	update(fn: (current: T) => T): void {
-		if (hostWrite !== undefined && hostWrite(this as Atom<unknown>, 1, fn)) {
+		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
+			throw new Error('cosignal: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
+		}
+		if (this._node === undefined && standaloneQuiet === true) {
+			const id = this._id;
+			const next = runFold(() => fn(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] as T));
+			writeAtom(id, this._isEqual, next);
 			return;
 		}
-		const id = this._id;
-		const next = runFold(() => fn(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] as T));
-		writeAtom(id, this._isEqual, next);
+		engineWrite(this as Atom<unknown>, 1, fn);
 	}
 }
 
@@ -712,15 +642,14 @@ export class ReducerAtom<S, A> extends Atom<S> {
 export class Computed<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignal-react`). @internal */
 	readonly _id: NodeId;
-	/** ctx.use(key, factory) cache, scoped to this living node (lazily
-	 * created; dies with the node). Same key ⇒ same thenable for the node's
-	 * lifetime. @internal */
-	_useCache: Map<string, PromiseLike<unknown>> | undefined;
-	/** §4.5.3 retention columns (S-C): the RAW authored fn and the policy
+	/** The engine node, once this handle has ENGINE CONTENT (see Atom._node —
+	 * same one-step-creation, content-lazy rule). @internal */
+	_node: ComputedNode | undefined = undefined;
+	/** Retention columns (S-C): the RAW authored fn and the policy
 	 * comparator, kept on the owning instance (GC-owned, so a reused kernel
-	 * id can never serve another tenant's fn/comparator) — the host's world
-	 * evaluations run the raw fn against WORLD-local previous values; the
-	 * kernel's own equality wrapper stays kernel-slot-scoped. @internal */
+	 * id can never serve another tenant's fn/comparator) — the engine's
+	 * world evaluations run the raw fn against WORLD-local previous values;
+	 * the kernel's own equality wrapper stays kernel-slot-scoped. @internal */
 	readonly _fn: (ctx: ComputedCtx<T>) => T;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
@@ -728,15 +657,18 @@ export class Computed<T> {
 
 	constructor(fn: (ctx: ComputedCtx<T>) => T, options?: ComputedOptions<T>) {
 		maybeBoundary();
-		this._useCache = undefined;
 		this._fn = fn;
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		this._isEqual = isEqual;
 		const id = E.newComputed(fn as (ctx: unknown) => unknown);
 		this._id = id;
-		// D4: the aux value slot carries the owning instance (policy state).
-		values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] = this;
+		// (The old D4 aux-slot instance backref died at the merge: ctx.use
+		// owner resolution is ID-KEYED now — suspense.ts resolves the
+		// evaluating record straight from `activeSub`, and the per-key
+		// request cache is a nodeIndex-keyed engine column scrubbed at
+		// record free. The aux slot stays empty for computeds; nothing pins
+		// the handle — the reclamation plan's L3 prerequisite.)
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
@@ -768,10 +700,9 @@ export class Computed<T> {
 	 * ARE NEVER WORLD-ROUTED — see Atom.state for the poisoning argument).
 	 */
 	get state(): T {
-		const hr = hostComputedRead;
-		if (hr !== undefined && activeSub === 0) {
-			const v = hr(this as Computed<unknown>);
-			if (v !== __HOST_MISS) {
+		if (routingActive && activeSub === 0) {
+			const v = __routedComputedRead(this as Computed<unknown>);
+			if (v !== NOT_ROUTED) {
 				return v as T;
 			}
 		}
@@ -854,35 +785,40 @@ export function configure(options: ConfigureOptions): void {
 	}
 }
 
-// ---- the concurrent-worlds engine (the host) --------------------------------------
+// ---- the concurrent-worlds engine ---------------------------------------------------
 // ONE public entry: the batch/world machinery lives in ./concurrent.ts and is
-// re-exported here — `registerReactBridge()`, `CosignalBridge`, the bridge
-// surface types (Seq, BatchSlotSet, WriteLogEntry, TraceEvent, …). Until
-// registerReactBridge() runs, none of it executes: the host seams above stay
-// undefined and every read/write short-circuits into the plain kernel path.
-// CURATED (no `export *`): the engine's internals — the packed WriteLog class,
-// node/watcher class VALUES, module seams — stay importable only from
-// './concurrent.js' inside this package; consumers get the activation function,
-// the bridge, its error classes, the two @internal test seams the sibling
-// packages' suites drive, and the bridge-surface TYPES.
+// re-exported here — `attachDriver()`, the `engine` surface, the engine
+// surface types (Seq, BatchSlotSet, WriteLogEntry, TraceEvent, …). The engine
+// composes at module initialization (always-concurrent); a process that never
+// attaches a driver and never opens a batch keeps the plain read/write fast
+// paths forever. CURATED (no `export *`): the engine's internals — the packed
+// WriteLog class, node/watcher class VALUES, module seams — stay importable
+// only from './concurrent.js' inside this package; consumers get the driver
+// seam, the engine surface, its error classes, the test seams the sibling
+// packages' suites drive, and the engine-surface TYPES.
 export {
-	registerReactBridge,
-	CosignalBridge,
+	attachDriver,
+	engine,
 	ScheduleError,
 	InvariantViolation,
 	// The reserved "no batch context" BatchId (0). The React bindings and the
 	// patched React build name the same sentinel — protocol v2 shares ONE
 	// batch-id space, so the sentinel is shared too.
 	BATCH_NONE,
-	// @internal test seams (cosignal-react's suite constructs per-test bridges
-	// and one-core.spec proves the zero-cost promise through these):
-	__newBridgeForTest,
+	// @internal test seams (the suites reset the one engine per test and
+	// one-core.spec proves the zero-cost promise through the probes):
+	__resetEngineForTest,
 	__coreProbes,
 } from './concurrent.js';
 export type {
+	// the driver seam + the engine surface's type + reset options
+	EngineDriver,
+	CosignalEngine,
+	EngineResetOptions,
 	// entities (type-only: the classes construct nowhere outside the engine)
 	AtomNode,
 	Watcher,
+	WorldArena,
 	ComputedNode,
 	AnyNode,
 	Batch,

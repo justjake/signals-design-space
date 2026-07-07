@@ -10,7 +10,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { diffAgainstModel, modelAsEngine } from '../src/adapter.js';
-import { expectSeedClean, fingerprint, generateSchedule, runSchedule } from '../src/schedule.js';
+import { expectSeedClean, fingerprint, generateSchedule, runSchedule, type ScheduleOp } from '../src/schedule.js';
+import frozen from './frozen-schedules.json';
+
+/** Frozen finding-seed schedules (captured before the writing-core-effect /
+ * custom-equals generator bands landed — see the engine-side fuzz spec). */
+const FROZEN = frozen as Record<string, ScheduleOp[]>;
 
 const CI_SEEDS = 300;
 const CI_STEPS = 80;
@@ -25,9 +30,14 @@ describe('randomized schedules against the naive model', () => {
 		}
 	});
 
-	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop)`, () => {
+	it(`${LONG_SEEDS} long seeds × ${LONG_STEPS} steps (episode churn: recycle, epoch reset, backstop) — FROZEN literals + fresh regenerations`, () => {
 		for (let seed = 9001; seed < 9001 + LONG_SEEDS; seed++) {
-			expectSeedClean(seed, LONG_STEPS);
+			const ops = FROZEN[`s${seed}x400`]!;
+			const r = runSchedule(ops, true);
+			if (r.failure !== undefined) {
+				throw new Error(`frozen seed ${seed} failed at step ${r.failure.step}: ${r.failure.error.message}`);
+			}
+			expectSeedClean(seed, LONG_STEPS); // and the regenerated schedule (new bands included)
 		}
 	});
 
@@ -73,5 +83,26 @@ describe('randomized schedules against the naive model', () => {
 		for (const [key, count] of Object.entries(totals)) {
 			expect(count, `corpus never hit: ${key}`).toBeGreaterThan(0);
 		}
+	});
+
+	it('coverage: the R-2/R-3 bands actually run (custom-equals writes; writing core effects)', () => {
+		let qWrites = 0;
+		let qDrops = 0;
+		let effectWrites = 0;
+		for (let seed = 1; seed <= 60; seed++) {
+			const ops = generateSchedule(seed, CI_STEPS);
+			qWrites += ops.filter((o) => o.t === 'writeQ' || o.t === 'bareWriteQ').length;
+			const r = runSchedule(ops, true);
+			expect(r.failure, `seed ${seed}: ${r.failure?.error.message ?? ''}`).toBeUndefined();
+			const m = r.model;
+			qDrops += m.eventsOfType('write-dropped').filter((e) => e.node === 'q').length;
+			// A writing core effect leaves observable history on its output atom.
+			for (const n of m.idToNode.values()) {
+				if ((n.name === 'out1' || n.name === 'out2') && n.kind === 'atom' && m.newestValue(n) !== 0) effectWrites++;
+			}
+		}
+		expect(qWrites, 'the custom-equals band never emitted').toBeGreaterThan(0);
+		expect(qDrops, 'the asymmetric comparator never dropped a write').toBeGreaterThan(0);
+		expect(effectWrites, 'no writing core effect ever produced an effective write').toBeGreaterThan(0);
 	});
 });

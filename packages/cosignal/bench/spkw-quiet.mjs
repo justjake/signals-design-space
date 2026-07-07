@@ -3,19 +3,31 @@
 // no renders — so every public `a.set(i)` takes the quiet fold (committed
 // base + kernel advance together; no log entry/batch/walk/event). Same graph
 // shapes and protocol as spkw-direct.mjs; compare per-write ns against it.
-import { Atom, Computed, effect, registerReactBridge, __coreProbes } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
+const { Atom, Computed, effect } = mod;
 
 const SHAPE = env('SHAPE', 'bare');
 const WRITES = envInt('WRITES', 100_000);
 const REPS = envInt('REPS', 7);
 const WARMUP = envInt('WARMUP', 2);
 
-const bridge = registerReactBridge(); // production posture: quiet ON, no event retention
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine (production posture either way:
+// quiet ON, no event retention).
+const bridge = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
 
 let sink = 0;
 const a = new Atom(0);
-const node = bridge.adoptAtom('a', a); // REGISTERED: the host write seam engages
+// REGISTERED: the host write seam engages (the anchor adopts; this tree
+// resolves the node, which allocates content seeded from kernel-current).
+const node = bridge.adoptAtom
+	? bridge.adoptAtom('a', a)
+	: (() => { const n = bridge.nodeForAtom(a); n.name = 'a'; return n; })();
 let top; // deepest/last computed, read for checksum
 
 if (SHAPE === 'chain3') {
@@ -56,7 +68,7 @@ perWrite.sort((x, y) => x - y);
 const med = perWrite[perWrite.length >> 1];
 // Quiet-mode invariants, asserted in the bench itself: zero pipeline
 // activity, committed == kernel == last write.
-const probes = __coreProbes();
+const probes = mod.__coreProbes();
 if (probes.logEntries !== 0 || probes.batches !== 0) {
 	throw new Error(`SPK-W quiet invariant: pipeline activity while quiet (${JSON.stringify(probes)})`);
 }

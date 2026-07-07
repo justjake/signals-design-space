@@ -22,41 +22,47 @@
  * clean under the S-B checker while exhibiting the pinned lane outcomes.
  */
 import { describe, expect, it } from 'vitest';
-import { __newBridgeForTest, type AnyNode, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
+function bridge(): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	const b = engine;
 	attachRefereeStream(b); // the decoded packed stream is the event surface
-	b.registerBridge();
 	armArenaCheck(b);
 	return b;
 }
 
 /** Mount a live committed watcher on `node` via a clean commit. */
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function deliveriesTo(b: CosignalBridge, watcher: string, batch?: number) {
+function deliveriesTo(b: CosignalEngine, watcher: string, batch?: number) {
 	return refereeStreamOf(b).eventsOfType('delivery').filter((e) => e.watcher === watcher && (batch === undefined || e.batch === batch));
 }
 
-function suppressionsTo(b: CosignalBridge, watcher: string, batch?: number) {
+function suppressionsTo(b: CosignalEngine, watcher: string, batch?: number) {
 	return refereeStreamOf(b).eventsOfType('suppressed').filter((e) => e.watcher === watcher && (batch === undefined || e.batch === batch));
 }
 
-function correctionsTo(b: CosignalBridge, watcher: string) {
+function correctionsTo(b: CosignalEngine, watcher: string) {
 	return refereeStreamOf(b).eventsOfType('reconcile-correction').filter((e) => e.watcher === watcher);
 }
 
 /** The D1 topology: committed truth shows the b-branch; a parked action
  * flips the discriminant only in its own (soon-discarded) render world. */
-function d1Topology(b: CosignalBridge) {
+function d1Topology(b: CosignalEngine) {
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 1);
 	const bb = b.atom('b', 2);

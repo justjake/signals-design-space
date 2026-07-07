@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
-import { __newBridgeForTest, type TraceEvent, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type TraceEvent, type CosignalEngine } from '../src/concurrent.js';
 import { attachTracer, formatTrace, formatTraceRecord, Tracer, type TraceRecord, type TraceKind } from '../src/trace.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 import { attachRefereeStream, decodeTraceEvent, decodedTraceEvents } from './trace-events.js';
@@ -18,6 +18,18 @@ import { attachRefereeStream, decodeTraceEvent, decodedTraceEvents } from './tra
 function tick(): () => number {
 	let t = 0;
 	return () => (t += 10);
+}
+
+/** Fresh engine (the per-test bridge analog): finish any leftover episode
+ * so the reset's idle preconditions hold, then reset. */
+function bridge(): CosignalEngine {
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	return engine;
 }
 
 /** All decoded events of a kind. */
@@ -36,15 +48,16 @@ function tevents<T extends TraceEvent['type']>(tr: Tracer, type: T): Extract<Tra
 	return decodedTraceEvents(tr).filter((e): e is Extract<TraceEvent, { type: T }> => e.type === type);
 }
 
-describe('R11 event-class coverage (staged narrative, one traced bridge)', () => {
-	const b = __newBridgeForTest();
+describe('R11 event-class coverage (staged narrative, one traced engine)', () => {
+	// ONE module-scope engine init for the whole staged narrative (the its
+	// share state deliberately; no per-test reset in this block).
+	const b = bridge();
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 0);
 	const bb = b.atom('b', 0);
 	const c = b.computed('c', (read) => (read(flag) ? read(a) : read(bb)));
-	b.registerBridge();
 	const tr = attachTracer(b, { mode: 'session', now: tick() });
-	let w!: ReturnType<CosignalBridge['mountWatcher']>;
+	let w!: ReturnType<CosignalEngine['mountWatcher']>;
 
 	it('render lifecycle + mount fixup fast-out: render-start/render-end payloads, eval records, disposition', () => {
 		const p1 = b.renderStart('A', []);
@@ -335,9 +348,8 @@ describe('R11 event-class coverage (staged narrative, one traced bridge)', () =>
 describe('R11 fuzz sweep: lossless capture, total decode, terminating causality (oracle schedules)', () => {
 	it('20 seeds × 60 steps: session lossless; decode/format total; referee decode covers the stream; causality terminates', () => {
 		for (let seed = 1; seed <= 20; seed++) {
-			const b = __newBridgeForTest();
+			const b = bridge(); // drains the previous seed's leftovers, then resets
 			buildEngineTopology(b);
-			b.registerBridge();
 			const tr = attachTracer(b, { mode: 'session', refCapacity: 0 });
 			for (const op of generateSchedule(seed, 60)) applyEngineOp(b, op);
 
@@ -372,11 +384,10 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 	});
 });
 
-describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)', () => {
+describe('R11 slot backstop (fresh engine: 31 live tenants, keep-the-dirt table)', () => {
 	it('backstop release records loudly, then the claim proceeds', () => {
-		const b = __newBridgeForTest();
+		const b = bridge();
 		const a = b.atom('a', 0);
-		b.registerBridge();
 		const tr = attachTracer(b, { mode: 'session' });
 		const batches = [];
 		for (let i = 0; i < 31; i++) {
@@ -400,8 +411,7 @@ describe('R11 slot backstop (fresh bridge: 31 live tenants, keep-the-dirt table)
 
 describe('fixed memory under a tracer: the engine retains nothing on the tracer’s behalf', () => {
 	it('production posture: hammering writes stores records ONLY in the tracer’s own fixed ring', () => {
-		const b = __newBridgeForTest(); // production posture — no event objects exist anywhere
-		b.registerBridge();
+		const b = bridge(); // production posture — no event objects exist anywhere
 		const a = b.atom('a', 0);
 		const tr = attachTracer(b, { mode: 'ring', capacity: 256, now: tick() });
 		const N = 5000;
@@ -417,9 +427,8 @@ describe('fixed memory under a tracer: the engine retains nothing on the tracer�
 	});
 
 	it('referee posture: a lossless session decodes the complete stream (lockstep needs it)', () => {
-		const b = __newBridgeForTest();
+		const b = bridge();
 		const stream = attachRefereeStream(b, { now: tick() }); // the referee’s session tracer
-		b.registerBridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);

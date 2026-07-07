@@ -142,7 +142,7 @@ import type {
 	AtomNode,
 	CommitGen,
 	ComputedNode,
-	CosignalBridge,
+	CosignalEngine,
 	Epoch,
 	RenderPass,
 	WriteLogEntry,
@@ -333,7 +333,7 @@ const EVAL_STACK_DEPTH = 1024;
 // ---- the tracer ------------------------------------------------------------------
 
 export class Tracer implements TraceHooks {
-	private readonly bridge: CosignalBridge;
+	private readonly bridge: CosignalEngine;
 	private readonly mode: 'ring' | 'session';
 	private readonly cap: number; // ring capacity or session chunk size (records)
 	private readonly capMask: number;
@@ -359,7 +359,7 @@ export class Tracer implements TraceHooks {
 	private evalSp = 0;
 	private evalOverflow = 0;
 
-	constructor(bridge: CosignalBridge, opts?: TracerOptions) {
+	constructor(bridge: CosignalEngine, opts?: TracerOptions) {
 		this.bridge = bridge;
 		this.mode = opts?.mode ?? 'ring';
 		this.cap = this.mode === 'ring'
@@ -915,7 +915,7 @@ export class Tracer implements TraceHooks {
  * decoding. To capture a provably complete SESSION, attach before the
  * engine's first operation.
  */
-export function attachTracer(bridge: CosignalBridge, opts?: TracerOptions): Tracer {
+export function attachTracer(bridge: CosignalEngine, opts?: TracerOptions): Tracer {
 	if (bridge.trace !== undefined) {
 		throw new Error('cosignal/trace: a tracer is already attached to this bridge (stop() it first)');
 	}

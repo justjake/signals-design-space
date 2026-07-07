@@ -18,7 +18,7 @@
  *    event, clustered by nothing (time flows top to bottom).
  */
 
-import type { CosignalBridge } from './concurrent.js';
+import type { CosignalEngine } from './concurrent.js';
 import type { TraceRecord, TraceKind } from './trace.js';
 
 function q(s: string): string {
@@ -26,7 +26,7 @@ function q(s: string): string {
 }
 
 /** Snapshot of the live dependency graph: nodes, recorded dependency edges, observers. */
-export function dependencyGraphToDot(bridge: CosignalBridge): string {
+export function dependencyGraphToDot(bridge: CosignalEngine): string {
 	const lines: string[] = ['digraph cosignal {', '\trankdir=LR;', '\tnode [fontname="monospace"];'];
 	for (const n of bridge.idToNode.values()) {
 		if (n.kind === 'atom') {

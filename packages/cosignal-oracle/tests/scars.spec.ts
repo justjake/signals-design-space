@@ -77,36 +77,31 @@ describe('pinned scars (model-expressible)', () => {
 		selfCheck(m);
 	});
 
-	it('S6 — machinery keyed to watcher count: pre-bridge writes are committed-only state', () => {
-		// Re-pinned: there is no model-level pre-registration write mode. In
-		// the real system the kernel write hook arms only at registration, so
-		// pre-bridge writes are plain kernel state that never reaches a
-		// bridge; the engine ADOPTS such an atom with its current value as
-		// committed-only base state, which this model mirrors as
-		// construction-time seeding. Writes before registerBridge are
-		// inexpressible (they throw), so no machinery can key to a "pre-bridge
-		// era" — and activation stays monotonic on registration, not on first
-		// watcher.
-		const m = concurrent(); // fresh model, then examine the pre-bridge era on a second model
-		void m;
-		const m2 = new (Object.getPrototypeOf(m).constructor)() as typeof m;
-		const early = m2.atom('early', 0);
-		expect(() => m2.write(undefined, early, set(1))).toThrow(/registered bridge/); // pre-registration writes cannot be expressed
-		expect(early.log).toHaveLength(0);
-		expect(early.base).toBe(0); // the rejected write left nothing behind
-		m2.registerBridge(); // activation is monotonic on registration, not on first watcher
-		const a = m2.atom('a', 1); // adoption's model mirror: seeded with the kernel-current value
-		expect(a.log).toHaveLength(0); // pre-bridge history carries no log entries
-		expect(a.base).toBe(1); // ...it is committed-only base state
-		expect(m2.events).toHaveLength(0); // ...and created no events
-		expect(m2.idToBatch.size).toBe(0); // ...and no batches
-		const c = m2.computed('c', (read) => read(a));
-		const w = mountCommitted(m2, 'A', c, 'W');
-		expect(w.lastRenderedValue).toBe(1); // committed-only value; urgent renders cannot leak a "transition"
-		const sync = openRender(m2, 'A', []);
-		expect(m2.renderValue(c, sync)).toBe(1);
-		m2.renderEnd(sync.id, 'commit');
-		selfCheck(m2);
+	it('S6 — machinery keyed to watcher count: creation is one step and standalone history is committed-only state', () => {
+		// ALWAYS-CONCURRENT re-pin: the registration era ceased to exist —
+		// the model (like the engine) is live from construction, and a node
+		// exists the moment it is created. What survives of the old scar is
+		// its payload: creation itself makes no events and no batches; an
+		// atom whose whole history predates any pipeline activity carries an
+		// empty log (its history is committed-only base state, visible to
+		// every world); and machinery never keys to a watcher-count "era" —
+		// a quiet write before the first watcher folds exactly like one
+		// after the last watcher left.
+		const m = concurrent();
+		const a = m.atom('a', 1); // creation is one step: no events, no batches, no log
+		expect(a.log).toHaveLength(0);
+		expect(a.base).toBe(1); // committed-only base state
+		m.bareWrite(a, set(2)); // standalone quiet history: one fold, still no log entry
+		expect(a.log).toHaveLength(0);
+		expect(a.base).toBe(2);
+		expect(m.idToBatch.size).toBe(0); // no batch materialized for quiet history
+		const c = m.computed('c', (read) => read(a));
+		const w = mountCommitted(m, 'A', c, 'W');
+		expect(w.lastRenderedValue).toBe(2); // committed-only value; urgent renders cannot leak a "transition"
+		const sync = openRender(m, 'A', []);
+		expect(m.renderValue(c, sync)).toBe(2);
+		m.renderEnd(sync.id, 'commit');
+		selfCheck(m);
 	});
 
 	it('S7 — wall-clock render scopes: a yield-gap write neither throws nor lands in the render', () => {

@@ -86,11 +86,31 @@ export type BatchSlotMeta = {
 
 const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and slot sets fit one int bit mask.
 
+/** BatchId source — MONOTONIC for the PROCESS's whole life, never reused
+ * and never rewound (ids start at 1; BATCH_NONE = 0 is never allocated).
+ * With protocol v2 these ids are stored verbatim in React's batch registry,
+ * so monotonicity is what keeps a stale fork-side id from ever colliding
+ * with a later batch. MODULE-LEVEL deliberately: the counter SURVIVES
+ * `__resetEngineForTest` (which re-runs the factory below) — a host lane
+ * table can legally hold an id across an engine reset, and monotonicity
+ * guarantees a stale id can never collide with a post-reset batch. */
+let nextBatchId = 1;
+
+/** The next id the allocator would hand out (test harnesses rebase their
+ * model↔engine batch-id comparison on it across resets). @internal */
+export function __peekNextBatchIdForTest(): BatchId {
+	return nextBatchId;
+}
+
 /** The resident-state edges the mechanism consumes (provided by the engine's
  * composition site; each is a thin arrow over engine state or orchestration). */
 export type BatchDeps = {
-	/** The engine's registered latch (openBatch's guard). */
-	isRegistered(): boolean;
+	/** The driver slot's presence + the devChecks switch — R-5's openBatch
+	 * guard: with devChecks armed, opening a batch with no driver attached
+	 * throws (the documented host contract is "hosts that open batches must
+	 * retire them"; the guard catches harnesses that forgot to attach). */
+	hasDriver(): boolean;
+	devChecksOn(): boolean;
 	/** Reclamation's edge into the write path's last-batch cache: clear the
 	 * cache iff it names the reclaimed id (the cache stays resident beside
 	 * the write path that reads it per write). */
@@ -149,15 +169,6 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 	let liveBatchCount = 0;
 	/** Ambient default batch for bare (context-free) writes. */
 	let ambientBatch: BatchId | undefined;
-	/** BatchId source — MONOTONIC for this engine's whole life, never reused
-	 * and never rewound (ids start at 1; BATCH_NONE = 0 is never allocated).
-	 * With protocol v2 these ids are stored verbatim in React's batch
-	 * registry, so monotonicity is what keeps a stale fork-side id from ever
-	 * colliding with a later batch. (Surviving `__resetEngineForTest` — ids
-	 * monotonic ACROSS engine resets — is the great-refactor S5 rule, noted
-	 * here so the reset work keeps it; per-test bridges today get fresh
-	 * counters and rely on the fork's test-only registry reset instead.) */
-	let nextBatchId = 1;
 
 	/** Create a batch. At most 31 live at once — React schedules each
 	 * batch on one of its 31 lanes, so more can never be in flight. (The
@@ -169,9 +180,16 @@ export function createBatch(core: EngineCore, deps: BatchDeps): BatchTable {
 	 * React's batch-creation site, which can sit mid-render, mid-commit, or
 	 * inside protocol listeners — i.e. at opDepth > 0): bookkeeping only —
 	 * counter, registry map, quiet recompute, probes/trace records. No
-	 * operation epilogue, no drains, no kernel mutation, no user code. */
+	 * operation epilogue, no drains, no kernel mutation, no user code.
+	 *
+	 * R-5: with devChecks armed, opening a batch with NO driver attached
+	 * throws — the documented host contract is "hosts that open batches
+	 * must retire them", and a devChecks harness must attach its driver
+	 * before opening engine batches. */
 	function openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch {
-		if (!deps.isRegistered()) throw new ScheduleError('batches require a registered bridge — register the React bridge first');
+		if (deps.devChecksOn() && !deps.hasDriver()) {
+			throw new ScheduleError('openBatch with no driver attached — hosts that open batches must retire them; attach a driver first (devChecks)');
+		}
 		if (liveBatchCount >= SLOT_COUNT) {
 			throw new ScheduleError('at most 31 batches may be live at once (one per React lane)');
 		}

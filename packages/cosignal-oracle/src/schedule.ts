@@ -39,6 +39,11 @@ export type ScheduleOp =
 	| { t: 'open'; action: boolean }
 	| { t: 'write'; batch: number; atom: number; kind: WriteKind; value: number }
 	| { t: 'bareWrite'; atom: number; kind: WriteKind; value: number }
+	/** R-2 corpus coverage: writes targeting the CUSTOM-EQUALS topology
+	 * member `q` (asymmetric comparator) — without them, equality order is
+	 * lockstep-invisible (no other corpus atom carries custom equality). */
+	| { t: 'writeQ'; batch: number; kind: WriteKind; value: number }
+	| { t: 'bareWriteQ'; kind: WriteKind; value: number }
 	| { t: 'settle'; batch: number }
 	| { t: 'retire'; batch: number }
 	| { t: 'renderStart'; root: string; include: number[] }
@@ -55,6 +60,11 @@ export type ScheduleOp =
 	/** StrictMode-style replay: cleanup + unconditional re-run + recapture. */
 	| { t: 'replayReactEffect'; effect: number }
 	| { t: 'coreEffect'; node: number }
+	/** R-3 corpus coverage: a WRITING core effect — mounts on a core node and
+	 * writes the `out`-indexed effect-output atom per value-gated run (the
+	 * write classifies normally: ambient batch while pending, quiet fold at
+	 * rest — refereed against the engine's fused-apply effect writes). */
+	| { t: 'coreEffectWrite'; node: number; out: number }
 	| { t: 'discardAllWip' }
 	| { t: 'quiesce' };
 
@@ -66,6 +76,20 @@ const ROOTS = ['A', 'B'];
  * cross-world bugs — acceptance scenario case 1), a diamond, a chain, and
  * an untracked-read mix.
  */
+/**
+ * The custom-equals topology member's comparator (R-2 corpus coverage):
+ * ASYMMETRIC on purpose — values are also "equal" when the INCOMING value
+ * is exactly current + 10 — so any site invoking it with flipped arguments
+ * makes observably different drop/accept decisions, which lockstep then
+ * catches. Pure and deterministic (both sides construct their own copy; a
+ * STATEFUL counting comparator would be lockstep-illegal — the model
+ * re-folds eagerly everywhere while the engine memoizes, so invocation
+ * counts legitimately differ across the fold sites; count is pinned by the
+ * engine's hand matrix instead — tests/equality-semantics.spec.ts).
+ */
+export const Q_EQUALS = (a: Value, b: Value): boolean =>
+	Object.is(a, b) || (typeof a === 'number' && typeof b === 'number' && b === a + 10);
+
 export function buildTopology(m: CosignalModel) {
 	const flag = m.atom('flag', 0);
 	const a = m.atom('a', 0);
@@ -75,7 +99,15 @@ export function buildTopology(m: CosignalModel) {
 	const cSum = m.computed('cSum', (read) => (read(a) as number) + (read(b) as number) + (read(r) as number));
 	const cChain = m.computed('cChain', (read) => (read(cFlip) as number) + 10);
 	const cMix = m.computed('cMix', (read, untracked) => (read(b) as number) + (untracked(a) as number));
-	return { atoms: [flag, a, b, r], computeds: [cFlip, cSum, cChain, cMix] };
+	// Appended AFTER the core eight so the historical op-index slices
+	// (atoms 0..4, nodes 0..8) keep resolving exactly as before:
+	//  - q: THE custom-equals member (targeted only by writeQ/bareWriteQ);
+	//  - out1/out2: the DISJOINT effect-output subset (written only by
+	//    writing core effects; read by nothing in the corpus).
+	const q = m.atom('q', 0, Q_EQUALS);
+	const out1 = m.atom('out1', 0);
+	const out2 = m.atom('out2', 0);
+	return { atoms: [flag, a, b, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2] };
 }
 
 export type RunResult = {
@@ -106,6 +138,15 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 	};
 	const uniq = `${m.events.length}.${m.seq}.${m.epoch}`;
 	try {
+		const atomNamed = (name: string): AtomNode => allNodes.find((n): n is AtomNode => n.kind === 'atom' && n.name === name)!;
+		const writeOpFor = (kind: WriteKind, value: number, atom: AtomNode): Op => {
+			switch (kind) {
+				case 'set': return { kind: 'set', value };
+				case 'inc': return { kind: 'update', fn: (p) => (p as number) + 1 };
+				case 'double': return { kind: 'update', fn: (p) => (p as number) * 2 };
+				case 'equalNewest': return { kind: 'set', value: m.newestValue(atom) };
+			}
+		};
 		switch (op.t) {
 			case 'open': m.openBatch({ action: op.action }); break;
 			case 'write': {
@@ -116,6 +157,16 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'bareWrite': {
 				const atom = atoms[op.atom % atoms.length]!;
 				m.bareWrite(atom, writeOp(op.kind, op.value, op.atom % atoms.length));
+				break;
+			}
+			case 'writeQ': {
+				const q = atomNamed('q');
+				m.write(batchAt(m, op.batch), q, writeOpFor(op.kind, op.value, q));
+				break;
+			}
+			case 'bareWriteQ': {
+				const q = atomNamed('q');
+				m.bareWrite(q, writeOpFor(op.kind, op.value, q));
 				break;
 			}
 			case 'settle': m.settleAction(batchAt(m, op.batch)); break;
@@ -137,6 +188,20 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 			case 'removeReactEffect': m.removeReactEffect(effectAt(m, op.effect)); break;
 			case 'replayReactEffect': m.replayReactEffect(effectAt(m, op.effect)); break;
 			case 'coreEffect': m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`); break;
+			case 'coreEffectWrite': {
+				const out = atomNamed(op.out % 2 === 0 ? 'out1' : 'out2');
+				// ONE WRITER PER OUTPUT ATOM (acyclic AND order-free by
+				// construction): sibling core-effect firing order is
+				// implementation-defined, so two writers sharing an output
+				// would make its final value order-dependent — the op is
+				// illegal (a skip) once the output has a writer, identically
+				// on both sides.
+				for (const e of m.coreEffects.values()) {
+					if (e.writeTo === out) throw new ScheduleError(`output atom ${out.name} already has a writing effect`);
+				}
+				m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`, out);
+				break;
+			}
 			case 'discardAllWip': m.discardAllWip(); break;
 			case 'quiesce': m.quiesce(); break;
 		}
@@ -151,7 +216,6 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 export function runSchedule(ops: ScheduleOp[], check: boolean): RunResult {
 	const m = new CosignalModel();
 	buildTopology(m);
-	m.registerBridge();
 	const applied: ScheduleOp[] = [];
 	for (let step = 0; step < ops.length; step++) {
 		const op = ops[step]!;
@@ -200,7 +264,16 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			// render-aware suppression rule far more often than uniform picks
 			while (bool(0.4)) ops.push({ t: 'write', batch, atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
 		}
-		else if (roll < 0.38) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
+		else if (roll < 0.375) ops.push({ t: 'bareWrite', atom: pick(4), kind: kinds[pick(kinds.length)]!, value: pick(10) });
+		// R-2 corpus band: writes targeting the custom-equals member q — the
+		// asymmetric comparator's drop/accept decisions referee equality ORDER
+		// at every aligned site (added freely post-freeze: the named finding
+		// seeds are stored literal schedules now; generator changes cannot
+		// touch them).
+		else if (roll < 0.38) {
+			if (bool(0.6)) ops.push({ t: 'writeQ', batch: pick(34), kind: kinds[pick(kinds.length)]!, value: pick(10) });
+			else ops.push({ t: 'bareWriteQ', kind: kinds[pick(kinds.length)]!, value: pick(10) });
+		}
 		// This band emitted the deleted scope-write op (the action-scope write
 		// channel is gone: writes attributed to an action's batch are ordinary
 		// writes now). Same three draws, now feeding an ordinary write with
@@ -254,7 +327,10 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 			else ops.push({ t: 'reactEffectPick', root: ROOTS[pick(2)]!, sel: pick(8), a: pick(8), b: pick(8) });
 			if (bool(0.25)) ops.push({ t: bool(0.5) ? 'removeReactEffect' : 'replayReactEffect', effect: pick(10) });
 		}
-		else if (roll < 0.96) ops.push({ t: 'coreEffect', node: pick(8) });
+		else if (roll < 0.95) ops.push({ t: 'coreEffect', node: pick(8) });
+		// R-3 corpus band: writing core effects (effect writes classify
+		// normally — the fused-apply fix's referee vocabulary).
+		else if (roll < 0.96) ops.push({ t: 'coreEffectWrite', node: pick(8), out: pick(2) });
 		else if (roll < 0.98) ops.push({ t: 'discardAllWip' });
 		else ops.push({ t: 'quiesce' });
 	}

@@ -247,7 +247,34 @@ export let batchDepth = 0; // (read cross-module by the policy write path; assig
 let notifyIndex = 0;
 let queuedLength = 0;
 export let activeSub: NodeId = 0; // (readers outside this module never assign — ESM enforces it)
-let enterDepth = 0; // live engine frames that captured memory; 0 = op boundary
+export let enterDepth = 0; // live engine frames that captured memory; 0 = op boundary (exported read-only: the engine reset's idle precondition)
+
+/**
+ * READ ROUTING, armed: true while the concurrent engine has a routing
+ * context that could answer a public read — an evaluation world on stack, an
+ * open capture frame, or an attached driver's ambient-world provider. The
+ * public `.state` getters (index.ts) test this ONE module boolean (beside
+ * `activeSub`, their other guard) and take the routed read path only when it
+ * is set; everything else is the plain kernel read. World.ts's routing layer
+ * is the only writer (through the setter — ESM import bindings are read-only).
+ */
+export let routingActive = false;
+
+/** World.ts's arming edge (setWorld / capture-frame / driver transitions). @internal */
+export function __setRoutingActive(v: boolean): void {
+	routingActive = v;
+}
+
+/**
+ * THE ENGINE EPOCH (great-refactor R-6): bumped once per
+ * `__resetEngineForTest`, never in production. Every cross-reset microtask
+ * (settle drain, lifecycle flush, thenable settle-invalidate, unhandled
+ * rethrow) captures the epoch at schedule time and no-ops if it moved — a
+ * microtask scheduled by a dead test must never touch the next test's
+ * engine. Reclamation (plans/2026-07-07-signal-reclamation.md) consumes the
+ * same counter for its per-epoch registry.
+ */
+export let engineEpoch = 0;
 
 const queued: NodeId[] = [];
 const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the sweep (batch-freed at the next operation boundary)
@@ -1374,6 +1401,36 @@ export function maybeBoundary(): void {
 	}
 }
 
+/**
+ * The plain kernel write (no engine content): the tail of Atom.set/update's
+ * standalone fast arm, the engine's node-less arm, and the lifecycle
+ * context's handle-free path. Lives HERE, not in the policy layer: every
+ * binding it touches per call — values, maybeBoundary, E, batchDepth,
+ * flush — is this module's state, and a hot read of a cyclic module's
+ * imported binding pays a per-access cell + initialization check that a
+ * same-module read doesn't.
+ *
+ * R-2 equality drop — `isEqual(current, incoming)`, kernel order, ONCE, at
+ * the acceptance decision: an atom on this path has no engine content, so
+ * its write history is empty by construction and a write equal to the
+ * current pending value simply drops. (An atom WITH engine content
+ * dispatches through the engine, where the same rule applies only while its
+ * write log is empty — once history exists, different worlds may fold
+ * different values.) Policy equality against the newest (pending) value;
+ * the kernel's own identity compare covers the default. The
+ * writes-in-computeds policy is asserted by the CALLERS before dispatching
+ * here. @internal
+ */
+export function writeAtom(id: NodeId, isEqual: ((a: unknown, b: unknown) => boolean) | undefined, value: unknown): void {
+	if (isEqual !== undefined && isEqual(values[(id >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET], value)) {
+		return;
+	}
+	maybeBoundary();
+	if (E.write(id, value) && batchDepth === 0) {
+		flush();
+	}
+}
+
 function boundaryWork(): void {
 	// Sweep only while the effect queue is empty: an un-flushed queue (e.g. a
 	// read's shallowPropagate notified an effect after the last flush) may
@@ -1504,4 +1561,80 @@ export function requestCapacity(units: RecordCount): void {
 		growPending = true;
 		maybeBoundary();
 	}
+}
+
+/**
+ * Direct newest apply — the plain write tail (equality-drop-free: the caller
+ * has already made the acceptance decision and folded the operation to a
+ * plain value), used by the concurrent engine's quiet fold and eager apply.
+ * The policy comparator does NOT run here (R-2: `isEqual(current, incoming)`
+ * is invoked exactly once, at the acceptance decision — re-running it inside
+ * the apply was the old double invocation); the kernel's own identity
+ * store-compare still gates propagation. Effects flushed here re-enter the
+ * public write path and CLASSIFY NORMALLY (R-3) — there is no recursion
+ * guard because this tail never re-enters the public methods itself.
+ */
+export function writeNewest(id: NodeId, value: unknown): void {
+	maybeBoundary();
+	if (E.write(id, value) && batchDepth === 0) {
+		flush();
+	}
+}
+
+// ---- the engine reset's kernel half (test-only; great-refactor R-6) --------------
+
+/**
+ * Kernel idle preconditions for `__resetEngineForTest` — a reset from inside
+ * any live kernel frame would corrupt the next test instead of failing this
+ * one. @internal
+ */
+export function __assertKernelIdleForReset(): void {
+	if (enterDepth !== 0) throw new Error('cosignal: __resetEngineForTest inside an open kernel frame (enterDepth !== 0)');
+	if (batchDepth !== 0) throw new Error('cosignal: __resetEngineForTest inside batch() (batchDepth !== 0)');
+	if (runDepth !== 0) throw new Error('cosignal: __resetEngineForTest inside an effect run');
+	if (queuedLength !== notifyIndex) throw new Error('cosignal: __resetEngineForTest with queued effects unflushed');
+	if (E === POISON) throw new Error('cosignal: __resetEngineForTest inside a fold-purity frame');
+}
+
+/**
+ * THE KERNEL SCRUB (test-only; great-refactor R-6): a watermark-bounded
+ * scrub — zero the used arena range and every allocator head/counter, drop
+ * the side columns to their burned seeds — never a reallocation (the arena
+ * keeps any grown capacity; the live operation table stays valid because it
+ * closes over the same buffer). Bumps THE ENGINE EPOCH, which every
+ * cross-reset microtask consults. The caller (`__resetEngineForTest`) owns
+ * ordering: driver protocol reset first, then this, then the engine
+ * recomposition. @internal
+ */
+export function __resetKernelForTest(): void {
+	__assertKernelIdleForReset();
+	engineEpoch++;
+	E.buffer().fill(0, 0, recNext); // watermark-bounded: only the used range holds records
+	recNext = RecordGeom.STRIDE; // record 0 stays burned
+	nextNodeIndex = 1; // index 0 stays burned
+	nodeFreeHead = 0;
+	linkFreeHead = 0;
+	growPending = false;
+	cycle = 0;
+	notifyIndex = 0;
+	queuedLength = 0;
+	activeSub = 0;
+	queued.length = 0;
+	pendingFree.length = 0;
+	// Side columns: stale values and wrapper/effect closures must not survive
+	// id reuse (the reset checklist's VALUES/FNS clause).
+	values.length = 2;
+	values[0] = undefined;
+	values[1] = undefined;
+	fns.length = 1;
+	fns[0] = undefined;
+	// Walk scratch: stack contents are per-walk, but a reset mid-diagnosis
+	// must not leave stale cursors.
+	propSp = 0;
+	checkSp = 0;
+	// configure({initialRecords}) is per-instance tuning → a reset parameter
+	// now: the floor returns to the process default (the checklist's
+	// DESIREDRECORDS clause).
+	desiredRecords = initialRecords * RecordGeom.RECORDS_PER_UNIT;
+	routingActive = false;
 }

@@ -1,6 +1,6 @@
 /**
  * The referee's MODEL VIEW of the engine: a test-side adapter that presents a
- * `CosignalBridge` in the reference model's shape, so the oracle's
+ * `CosignalEngine` in the reference model's shape, so the oracle's
  * `checkInvariants` / `snapshotModel` run against the engine without the
  * production class carrying mirror members. Everything the checkers read is
  * materialized on demand from load-bearing packed state (`log`,
@@ -24,7 +24,7 @@ import { visible, type VisibilityHost, type World as ModelWorld } from '../../co
 import type {
 	AnyNode as ENode,
 	AtomNode,
-	CosignalBridge,
+	CosignalEngine,
 	RenderPass,
 	RenderPassId,
 	WriteLogEntry,
@@ -42,7 +42,7 @@ export class RefereeMirror {
 	private archives = new Map<AtomNode, WriteLogEntry[]>();
 
 	/** Install the compaction feed on a bridge (call once, at driver setup). */
-	attach(engine: CosignalBridge): void {
+	attach(engine: CosignalEngine): void {
 		engine.onCompact = (atom, entry) => this.archiveOf(atom).push(entry);
 	}
 
@@ -52,7 +52,7 @@ export class RefereeMirror {
 	}
 
 	/** The quiescence episode reset sets origin to base (the model's episode reset twin). */
-	originsFromBase(engine: CosignalBridge): void {
+	originsFromBase(engine: CosignalEngine): void {
 		for (const n of engine.idToNode.values()) {
 			if (n.kind === 'atom') this.origins.set(n, n.base);
 		}
@@ -140,7 +140,7 @@ function applyOp(atom: AtomNode, op: WriteLogEntry['op'], prev: Value): Value {
  * `checkInvariants(view as unknown as CosignalModel)` / `snapshotModel(...)`
  * — it presents exactly the members those checkers read at runtime.
  */
-export function modelView(engine: CosignalBridge, mirror: RefereeMirror): Record<string, unknown> {
+export function modelView(engine: CosignalEngine, mirror: RefereeMirror): Record<string, unknown> {
 	const viewNode = (n: ENode): ViewNode => {
 		if (n.kind !== 'atom') return { kind: 'computed', name: n.name, __engine: n };
 		return {

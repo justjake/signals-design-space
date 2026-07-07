@@ -25,7 +25,7 @@ import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignal-oracle/src/schedule.js';
 import { mountEngineReactEffect } from './helpers.js';
 import { dependencyGraphToDot, traceToDot } from '../src/graphviz.js';
-import { __newBridgeForTest, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type CosignalEngine } from '../src/concurrent.js';
 import { attachTracer, REF_DROPPED, Tracer } from '../src/trace.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 
@@ -58,9 +58,21 @@ function src(rel: string): string {
 		.replace(/\/\/[^\n]*/g, '');
 }
 
-/** A tracer over a throwaway bridge, for driving the recorder synthetically. */
+/** Fresh engine (the per-test bridge analog): finish any leftover episode
+ * so the reset's idle preconditions hold, then reset. */
+function bridge(): CosignalEngine {
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	return engine;
+}
+
+/** A tracer over a fresh engine reset, for driving the recorder synthetically. */
 function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
-	return attachTracer(__newBridgeForTest(), opts);
+	return attachTracer(bridge(), opts);
 }
 
 /** One record per call, with a recognizable payload (the typed epoch-reset
@@ -84,23 +96,22 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 
 	it("the engine's only tracing state is the one nullable slot, captured locally", () => {
 		// The slot's STORAGE is the shared engine-core record's `trace` field
-		// (World.ts declares it; the class exposes the `bridge.trace` accessor
-		// pair over it). Mechanism modules capture it locally per site —
-		// `const tr = core.trace;` for the core-wired factories, or through a
-		// deps arrow (`const tr = deps.trace();`) for the arrow-wired ones —
-		// and the engine-side arrow that feeds the latter is the composition
-		// site's one additional read form.
+		// (World.ts declares it; the engine surface exposes the `engine.trace`
+		// accessor pair over it). Mechanism modules capture it locally per
+		// site — `const tr = core.trace;` (or `const tr = c.trace;` over a
+		// one-load core alias) for the core-wired factories, or through a
+		// deps arrow (`trace: () => core.trace`) for the arrow-wired ones.
 		const lines = src('src/concurrent.ts').split('\n');
 		for (const line of lines) {
-			if (!line.includes('this.trace')) continue;
+			if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;
 			const t = line.trim();
 			expect(
-				t.startsWith('const tr = this.trace;') || t === 'trace: () => this.trace,',
+				t.startsWith('const tr = core.trace;') || t.startsWith('const tr = c.trace;') || t === 'return core.trace;' || t === 'core.trace = hooks;',
 				`unexpected use of the trace slot: ${t}`,
 			).toBe(true);
 		}
-		// The class accessor pair is the only surface over the core field.
-		expect(src('src/concurrent.ts')).toMatch(/return this\.core\.trace;/);
+		// The engine-surface accessor pair is the only surface over the core field.
+		expect(src('src/concurrent.ts')).toMatch(/return core\.trace;/);
 		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/deliver.ts', 'src/RenderPass.ts', 'src/engine.ts']) {
 			const lines2 = src(rel).split('\n');
 			for (const line of lines2) {
@@ -145,9 +156,8 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 
 describe('R11 runtime enable/disable', () => {
 	it('the slot stays undefined without attach; attach/stop/re-attach at runtime', () => {
-		const b = __newBridgeForTest();
+		const b = bridge();
 		const a = b.atom('a', 0);
-		b.registerBridge();
 		expect(b.trace).toBeUndefined();
 		b.bareWrite(a, 0, 1);
 		expect(b.trace).toBeUndefined(); // nothing armed it
@@ -176,34 +186,40 @@ describe('R11 runtime enable/disable', () => {
 	});
 
 	it('tracing never perturbs semantics: identical schedules, identical counters and observable values', () => {
-		const run = (traced: boolean): CosignalBridge => {
-			const b = __newBridgeForTest();
+		// ONE engine now, so the runs are sequential RESETS: run traced,
+		// snapshot every observable, reset, run untraced, compare snapshots.
+		const run = (traced: boolean) => {
+			const b = bridge();
 			buildEngineTopology(b);
-			b.registerBridge();
-			if (traced) attachTracer(b, { mode: 'ring', capacity: 16 }); // tiny ring: wrap under load
+			const tr = traced ? attachTracer(b, { mode: 'ring', capacity: 16 }) : undefined; // tiny ring: wrap under load
 			for (const op of generateSchedule(7, 80)) applyEngineOp(b, op);
-			return b;
+			const snapshot = {
+				seq: b.seq,
+				committedAdvance: b.committedAdvance,
+				epoch: b.epoch,
+				// NodeIds line up exactly across resets (the kernel scrubs at
+				// reset, so identical schedules allocate identical record ids).
+				nodes: [...b.idToNode.values()].map((n) => ({ id: n.id, name: n.name, newest: b.newestValue(n) })),
+			};
+			tr?.stop();
+			return snapshot;
 		};
-		const plain = run(false);
 		const traced = run(true);
+		const plain = run(false);
 		// The engine's only event output is the tracer itself now, so the
 		// untraced run has no stream to diff — the perturbation check compares
 		// what exists on both sides: every clock and every observable value.
 		expect(traced.seq).toBe(plain.seq);
 		expect(traced.committedAdvance).toBe(plain.committedAdvance);
 		expect(traced.epoch).toBe(plain.epoch);
-		// NodeIds are kernel record ids, and the two bridges share one kernel
-		// — same-position nodes carry DIFFERENT ids across the two runs, so
-		// the pairing is creation order (identical schedules), verified by name.
-		const tracedNodes = [...traced.idToNode.values()];
-		const plainNodes = [...plain.idToNode.values()];
-		expect(tracedNodes.length).toBe(plainNodes.length);
-		for (let i = 0; i < plainNodes.length; i++) {
-			const n = plainNodes[i]!;
-			const tn = tracedNodes[i]!;
+		expect(traced.nodes.length).toBe(plain.nodes.length);
+		for (let i = 0; i < plain.nodes.length; i++) {
+			const n = plain.nodes[i]!;
+			const tn = traced.nodes[i]!;
+			expect(tn.id, 'node ids diverged under tracing').toBe(n.id);
 			expect(tn.name, 'node population diverged under tracing').toBe(n.name);
 			expect(
-				Object.is(traced.newestValue(tn), plain.newestValue(n)),
+				Object.is(tn.newest, n.newest),
 				`newest(${n.name}) diverged under tracing`,
 			).toBe(true);
 		}
@@ -289,11 +305,10 @@ describe('R11 recorder details', () => {
 
 describe('R11 Graphviz renderers', () => {
 	it('dependencyGraphToDot: nodes, K1 union edges, watchers, effects', () => {
-		const b = __newBridgeForTest();
+		const b = bridge();
 		const flag = b.atom('flag', 0);
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(flag) ? read(a) : 0));
-		b.registerBridge();
 		const p = b.renderStart('A', []);
 		b.mountWatcher(p.id, c, 'W');
 		b.renderEnd(p.id, 'commit');
@@ -310,10 +325,9 @@ describe('R11 Graphviz renderers', () => {
 	});
 
 	it('traceToDot: cause edges drawn within the kept set; filter respected', () => {
-		const b = __newBridgeForTest();
+		const b = bridge();
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(a));
-		b.registerBridge();
 		const tr = attachTracer(b);
 		const p = b.renderStart('A', []);
 		b.mountWatcher(p.id, c, 'W');

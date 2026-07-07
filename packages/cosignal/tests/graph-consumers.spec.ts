@@ -38,7 +38,7 @@
  *  A1 kernel value ≡ fold(base, log entries)              | lockstep EVERY step: oracle-adapter snapshot `newest` reads the kernel arena, the model folds; concurrent-fuzz.spec 'diff clean' + concurrent-battery
  *  A2 newest memo fingerprints ≡ write logs (+retirement stamps) | lockstep values; scars S5 pins log-entry-after-read invalidation
  *  A3 quiet flag ≡ pending state (batches/renders/write logs) | quiet-mode.spec arming/disarming battery
- *  A4 handle resolution = per-bridge idToNode registry     | T8: resolution is each bridge's own registry probe by kernel record id; writes land on the ACTIVE bridge's node
+ *  A4 handle resolution = the one engine's idToNode registry | T8: resolution is the handle-node link + the registry probe by kernel record id; content allocates once and writes land on it
  *  A5 arena-served value ≡ fold-truth (naive cache-free re-fold) | THE ARMED CHECKER (tests/arena-checker.ts): every op epilogue in the twin suites AND the fuzz corpus serves every shadow and compares
  *  A6 observation refcount ≡ live consumers            | observe-union.spec + T1/T2
  *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
@@ -49,18 +49,23 @@
  * A12 shim previousCells ≡ last committed value        | cosignal-react hooks.spec 'ctx.previous returns the last committed value'
  */
 import { describe, expect, it } from 'vitest';
-import { Atom, Computed, effect, effectScope, __newBridgeForTest, type CosignalBridge } from '../src/index.js';
+import { Atom, Computed, effect, effectScope, engine, __resetEngineForTest, type CosignalEngine } from '../src/index.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
-/** Fresh registered bridge in referee posture (a lossless session tracer is
- * the event surface; quiet arms by the production derivation). */
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
-	attachRefereeStream(b);
-	b.registerBridge();
-	return b;
+/** Fresh engine in referee posture (a lossless session tracer is the event
+ * surface; quiet arms by the production derivation; no driver — the tests
+ * pass explicit batch ids). */
+function bridge(): CosignalEngine {
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	attachRefereeStream(engine);
+	return engine;
 }
 
 function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
@@ -78,7 +83,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 	it('T1: fires with K1 empty (kernel-only), holds across a store handoff, releases only when both empty', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = (() => { const n0 = b.nodeForAtom(atom as Atom<unknown>); n0.name = 'a'; return n0; })();
 		const dispose = effect(() => {
 			void atom.state; // K0 subscriber; K1 observation index holds nothing
 		});
@@ -99,7 +104,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 	it('T2: UNION-TRANSITIVE (row 18) — a watcher over an overlay COMPUTED retains the atoms its evaluation reads; a direct atom watcher joining is an interior transition', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = (() => { const n0 = b.nodeForAtom(atom as Atom<unknown>); n0.name = 'a'; return n0; })();
 		const oc = b.computed('oc', (read) => read(node));
 		const p = b.renderStart('A', []);
 		const wc = b.mountWatcher(p.id, oc, 'WC'); // no direct atom watcher anywhere
@@ -124,7 +129,8 @@ describe('§1 rows 3/4 — kernel liveness transitions consult K0 only', () => {
 	it('T3: an unwatched kernel computed goes lazy-dirty regardless of live K1 watchers over the same atom', () => {
 		const b = bridge();
 		const handle = new Atom(1);
-		const node = b.adoptAtom('a', handle as Atom<unknown>);
+		const node = b.nodeForAtom(handle as Atom<unknown>);
+		node.name = 'a';
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, b.computed('oc', (read) => read(node)), 'W');
 		b.renderEnd(p.id, 'commit'); // K1 holds a live watcher over the atom
@@ -163,7 +169,8 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 	it('T5: a kernel effect (no K1 record) and a bridge watcher (no K0 link) both hear one write', () => {
 		const b = bridge();
 		const handle = new Atom(0);
-		const node = b.adoptAtom('a', handle as Atom<unknown>);
+		const node = b.nodeForAtom(handle as Atom<unknown>);
+		node.name = 'a';
 		let kernelSeen = -1;
 		const dispose = effect(() => {
 			kernelSeen = handle.state as number; // K0 subscriber
@@ -187,7 +194,8 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 	it('T6 (re-pinned at S-C): a kernel computed read inside a world evaluation ADOPTS and evaluates under that world (arena links recorded); the kernel cache stays newest-coherent because worlds never touch it; kernel-frame reads still serve newest', () => {
 		const b = bridge();
 		const handle = new Atom(0);
-		const node = b.adoptAtom('a', handle as Atom<unknown>);
+		const node = b.nodeForAtom(handle as Atom<unknown>);
+		node.name = 'a';
 		let kcEvals = 0;
 		const kc = new Computed(() => {
 			kcEvals++;
@@ -252,22 +260,21 @@ describe('§1 rows 13/16/19 — the two watcher stores move together (removeWatc
 	});
 });
 
-describe('§2 A4 — handle resolution vs per-bridge registry', () => {
-	it('T8: registration on one bridge never leaks to another — nodeFor probes THIS bridge\'s registry and writes land on the ACTIVE one', () => {
-		const b1 = bridge();
+describe('§2 A4 — handle resolution vs the one engine registry', () => {
+	it('T8: resolution is idempotent content allocation — one node per handle, registry-probed by kernel record id, and writes land on it', () => {
+		const b = bridge();
 		const handle = new Atom(0);
-		const n1 = b1.adoptAtom('a', handle as Atom<unknown>);
-		const b2 = bridge(); // replaces the active routing
-		const n2 = b2.adoptAtom('a', handle as Atom<unknown>);
-		expect(b1.nodeFor(handle as Atom<unknown>)).toBe(n1); // each bridge resolves by ITS OWN idToNode row for the kernel id
-		expect(b2.nodeFor(handle as Atom<unknown>)).toBe(n2);
-		handle.set(1); // public write → the ACTIVE bridge's node
-		// b2 is at rest, so the write is a quiet fold: base advances on the
-		// ACTIVE bridge's node (no log entry is created while nothing is pending).
-		expect(n2.base).toBe(1);
-		expect(n2.log.length).toBe(0);
-		expect(n1.base).toBe(0); // the foreign bridge's node saw nothing
-		expect(n1.log.length).toBe(0);
+		handle.set(1); // standalone history first (the node-less arm: kernel only)
+		const n = b.nodeForAtom(handle as Atom<unknown>); // content allocates ONCE; base seeds from kernel-current
+		n.name = 'a';
+		expect(n.base).toBe(1); // the standalone history is committed-only base state
+		expect(b.nodeForAtom(handle as Atom<unknown>)).toBe(n); // idempotent: the handle-node link resolves, never re-allocates
+		expect(b.idToNode.get(handle._id)).toBe(n); // and the registry row is the same node
+		const other = new Atom(0);
+		expect(b.nodeForAtom(other as Atom<unknown>)).not.toBe(n); // a different handle gets its own node
+		handle.set(2); // public write → THE node (quiet fold: base advances, no log entry)
+		expect(n.base).toBe(2);
+		expect(n.log.length).toBe(0);
 	});
 });
 

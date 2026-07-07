@@ -27,31 +27,36 @@ import {
 	NodeField,
 	SuspendedRead,
 	__ctxUse,
-	__hostDisposeComputed,
-	__kernelBuffer,
 	__kernelSideColumnsForTest,
 	effect,
 	effectScope,
 } from '../src/index.js';
-import { __newBridgeForTest, type AnyNode, type AtomNode, type BridgeOptions, type ComputedNode, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyNode, type AtomNode, type ComputedNode, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { E } from '../src/graph.js';
+import { __useCacheForTest } from '../src/suspense.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(options?: BridgeOptions): CosignalBridge {
-	const b = __newBridgeForTest(options);
-	b.registerBridge();
-	return b;
+function bridge(options?: EngineResetOptions): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest(options);
+	return engine;
 }
 
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function commitWrite(b: CosignalBridge, node: AtomNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AtomNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, 0, value);
 	b.retire(t.id);
@@ -63,22 +68,22 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 	return { promise, resolve };
 }
 
-/** Read a TS-private field (probes only observe; they never mutate). */
-const priv = <T,>(o: object, k: string): T => (o as unknown as Record<string, T>)[k];
+/** The engine's dense nodeIndex-keyed columns (probes only observe; they never mutate). */
+const engineCols = (b: CosignalEngine) => b.__columnsForTest();
 
 /** Sample the kernel node free-list head: create a throwaway Computed (alloc
  * pops the free list first) and dispose it right back. */
 function sampleFreeNodeId(): number {
 	const c = new Computed(() => 0);
 	const id = (c as unknown as { _id: number })._id;
-	__hostDisposeComputed(c as unknown as Computed<unknown>);
+	engine.disposeComputed(c as unknown as Computed<unknown>);
 	return id;
 }
 
 describe('1. KERNEL (index.ts arena)', () => {
 	it('node records — effect/scope create+dispose churn reuses freed records via the freelist; the arena never grows (RECLAIMED)', () => {
 		const src = new Atom(0);
-		const buf = __kernelBuffer();
+		const buf = E.buffer();
 		const ids = new Set<number>();
 		for (let i = 0; i < 500; i++) {
 			const stop = effect(() => { void src.state; });
@@ -88,10 +93,10 @@ describe('1. KERNEL (index.ts arena)', () => {
 			ids.add(sampleFreeNodeId());
 		}
 		expect(ids.size).toBeLessThanOrEqual(4); // bump pointer untouched: churn cycles a handful of freed records
-		expect(__kernelBuffer()).toBe(buf); // no growth rebuild — freelist balance held
+		expect(E.buffer()).toBe(buf); // no growth rebuild — freelist balance held
 	});
 
-	it('computed records — __hostDisposeComputed churn recycles ids and freeNode clears the values/fns side columns (RECLAIMED)', () => {
+	it('computed records — disposeComputed churn recycles ids and freeNode clears the values/fns side columns (RECLAIMED)', () => {
 		const src = new Atom(1);
 		const ids = new Set<number>();
 		let lastId = 0;
@@ -100,12 +105,12 @@ describe('1. KERNEL (index.ts arena)', () => {
 			void c.state; // evaluate: value cache + one dep link
 			lastId = (c as unknown as { _id: number })._id;
 			ids.add(lastId);
-			__hostDisposeComputed(c as unknown as Computed<unknown>);
+			engine.disposeComputed(c as unknown as Computed<unknown>);
 		}
 		expect(ids.size).toBeLessThanOrEqual(2); // LIFO freelist steady state
 		const cols = __kernelSideColumnsForTest(lastId);
 		expect(cols.value).toBeUndefined(); // cached value released
-		expect(cols.aux).toBeUndefined(); // D4 owning-instance backref released (the handle is GC-able)
+		expect(cols.aux).toBeUndefined(); // the aux slot stays empty for computeds by construction now (ctx.use is id-keyed; the engine never pins handles)
 		expect(cols.fn).toBeUndefined(); // getter closure released
 	});
 
@@ -119,7 +124,7 @@ describe('1. KERNEL (index.ts arena)', () => {
 		for (let i = 0; i < 400; i++) {
 			gate.set(i % 2 === 0);
 			void c.state; // re-track: one link unlinks (freed), its replacement allocates
-			const memory = __kernelBuffer();
+			const memory = E.buffer();
 			for (let l = memory[cid + NodeField.DEPS]!; l !== 0; l = memory[l + LinkField.NEXT_DEP]!) linkIds.add(l);
 		}
 		expect(linkIds.size).toBeLessThanOrEqual(6); // the flip cycles the same few records, not 400 fresh ones
@@ -130,7 +135,7 @@ describe('2. ENGINE REGISTRY (idToNode + dense per-node columns)', () => {
 	it('adopt/dispose churn returns idToNode to baseline, recycles kernel ids AND their nodeIndexes, and the record-free scrub leaves only cleared dense rows (RECLAIMED; columns bounded by node count)', () => {
 		const b = bridge();
 		const at = new Atom(1);
-		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
+		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', (read) => read(an));
 		mount(b, 'R', keep, 'W');
 		// Warm one dispose→create cycle so the free list (and its recycled
@@ -139,7 +144,7 @@ describe('2. ENGINE REGISTRY (idToNode + dense per-node columns)', () => {
 		b.committedValue(b.nodeForComputed(warm as unknown as Computed<unknown>), 'R');
 		b.disposeComputed(warm as unknown as Computed<unknown>);
 		const nodesBase = b.idToNode.size;
-		const arrBase = priv<unknown[]>(b, 'nodesArr').length;
+		const arrBase = engineCols(b).nodesArr.length;
 		const kids = new Set<number>();
 		const indexes = new Set<number>();
 		let lastIx = 0;
@@ -156,12 +161,12 @@ describe('2. ENGINE REGISTRY (idToNode + dense per-node columns)', () => {
 		expect(b.idToNode.size).toBe(nodesBase); // registry entries removed at dispose (kernel-id keyed since the id merge)
 		expect(kids.size).toBeLessThanOrEqual(2); // kernel records recycled (arena-sc pins tenancy)
 		expect(indexes.size).toBeLessThanOrEqual(2); // a reused record inherits its slot's nodeIndex
-		const arr = priv<unknown[]>(b, 'nodesArr');
+		const arr = engineCols(b).nodesArr;
 		expect(arr.length).toBe(arrBase); // nodeIndex recycling: the dense columns do NOT grow with creation count
 		expect(arr[lastIx]).toBeUndefined(); // the record-free scrub cleared the row
-		expect(priv<number[]>(b, 'obsRefs')[lastIx]).toBe(0);
-		expect(priv<number[]>(b, 'lastWalk')[lastIx]).toBe(0);
-		expect(priv<(unknown[] | undefined)[]>(b, 'nodeToWatchers')[lastIx]).toBeUndefined();
+		expect(engineCols(b).obsRefs[lastIx]).toBe(0);
+		expect(engineCols(b).lastWalk[lastIx]).toBe(0);
+		expect(engineCols(b).nodeToWatchers[lastIx]).toBeUndefined();
 	});
 });
 
@@ -170,7 +175,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const b = bridge();
 		armArenaCheck(b); // fold-truth divergence check armed across record reuse
 		const at = new Atom(1);
-		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
+		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
 		const other = b.atom('other', 0);
 		const keep = b.computed('keep', (read) => read(an));
 		const w = mount(b, 'R', keep, 'W'); // consumers never hit zero: the arena LIVES for the whole probe
@@ -211,10 +216,9 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const b = bridge();
 		armArenaCheck(b);
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = b.computed('c', () => {
+		const c: ComputedNode = b.computed('c', () => {
 			try {
-				return __ctxUse(holder as never, 'k', () => gate.promise);
+				return __ctxUse(c.ix, 'k', () => gate.promise);
 			} catch (err) {
 				if (err instanceof SuspendedRead) return err; // background fold (battery 16d)
 				throw err;
@@ -235,11 +239,10 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const b = bridge();
 		armArenaCheck(b);
 		const at = new Atom(1);
-		const an = b.adoptAtom('a', at as unknown as Atom<unknown>);
+		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
 		const gate = deferred<string>();
-		const holder = { _useCache: undefined };
-		const c = b.computed('c', () => {
-			try { return __ctxUse(holder as never, 'k', () => gate.promise); } catch (err) {
+		const c: ComputedNode = b.computed('c', () => {
+			try { return __ctxUse(c.ix, 'k', () => gate.promise); } catch (err) {
 				if (err instanceof SuspendedRead) return err;
 				throw err;
 			}
@@ -289,8 +292,7 @@ describe('4. ARENA POOL', () => {
 
 describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE (SPK-K1 regression: mid-episode reclamation; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
-		const b = __newBridgeForTest(); // production posture: no referee, no tracer
-		b.registerBridge();
+		const b = bridge(); // production posture: no referee, no tracer, no armed checker
 		const an = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(an));
 		const w = mount(b, 'R', c, 'W');
@@ -322,11 +324,12 @@ describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 
 describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 	it('watcher mount/remove churn empties both watcher stores, releases every observation retain, and balances the observed-lifecycle union (RECLAIMED; dual-store rule pinned by graph-consumers T7 + the react shim suite)', async () => {
+		const b = bridge(); // reset FIRST: the kernel scrub would orphan handles created before it
 		let effects = 0;
 		let cleanups = 0;
 		const at = new Atom(1, { effect: () => { effects++; return () => { cleanups++; }; } });
-		const b = bridge();
-		const an = b.adoptAtom('life', at as unknown as Atom<unknown>);
+		const an = b.nodeForAtom(at as unknown as Atom<unknown>);
+		an.name = 'life';
 		const c = b.computed('c', (read) => read(an));
 		for (let i = 1; i <= 25; i++) {
 			const w = mount(b, 'R', c, `W${i}`);
@@ -337,8 +340,8 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 			expect(cleanups).toBe(i); // 1→0: cleanup ran — no stuck retain anywhere in the closure
 		}
 		expect(b.watchers.size).toBe(0);
-		expect(priv<number[]>(b, 'obsRefs').every((r) => r === 0)).toBe(true);
-		expect(priv<(unknown[] | undefined)[]>(b, 'nodeToWatchers').every((l) => l === undefined || l.length === 0)).toBe(true);
+		expect(engineCols(b).obsRefs.every((r) => r === 0)).toBe(true);
+		expect(engineCols(b).nodeToWatchers.every((l) => l === undefined || l.length === 0)).toBe(true);
 		b.quiesce();
 		expect(b.__arenaStats().committed).toBe(0); // zero consumers: the arena released to the pool
 	});
@@ -348,11 +351,10 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 		armArenaCheck(b);
 		const version = b.atom('v', 0);
 		const gates = Array.from({ length: 20 }, () => deferred<string>());
-		const holder = { _useCache: undefined as Map<string, unknown> | undefined };
-		const c = b.computed('c', (read) => {
+		const c: ComputedNode = b.computed('c', (read) => {
 			const v = read(version) as number;
 			try {
-				return __ctxUse(holder as never, `k${v}`, () => gates[v]!.promise);
+				return __ctxUse(c.ix, `k${v}`, () => gates[v]!.promise);
 			} catch (err) {
 				if (err instanceof SuspendedRead) return err;
 				throw err;
@@ -368,6 +370,6 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 			expect(b.__arenaStats().pendingSettlements).toBe(0); // queue drained to its fixed point
 			expect(b.committedValue(c, 'R')).toBe(`d${v}`);
 		}
-		expect(holder._useCache!.size).toBe(20); // per-key cache is monotone PER NODE and dies with it — the documented ctx.use contract
+		expect(__useCacheForTest(c.ix)!.size).toBe(20); // per-key cache is monotone PER NODE and dies with it — the documented ctx.use contract
 	});
 });

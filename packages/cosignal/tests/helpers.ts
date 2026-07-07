@@ -30,15 +30,20 @@ import {
 	type Watcher,
 } from '../../cosignal-oracle/src/model.js';
 import {
-	__newBridgeForTest,
+	attachDriver,
+	engine,
+	BATCH_NONE,
+	__resetEngineForTest,
 	ScheduleError as EScheduleError,
 	type AnyNode as ENode,
 	type AtomNode as EAtomNode,
-	type CosignalBridge,
+	type CosignalEngine,
 	type RenderPass as ERenderPass,
 	type Subscription as ESubscription,
 	type World as EWorld,
 } from '../src/concurrent.js';
+import { __peekNextBatchIdForTest } from '../src/Batch.js';
+import { engineEpoch } from '../src/graph.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';
@@ -98,7 +103,7 @@ function capture(fn: () => unknown): Thrown {
 
 /** Referee configuration — a single-node body (the engine twin of the
  * model's mountReactEffect). */
-export function mountEngineReactEffect(b: CosignalBridge, rootId: string, node: ENode, name: string): ESubscription {
+export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: ENode, name: string): ESubscription {
 	const e = b.mountCommittedObserver(rootId, name);
 	e.body = () => void b.captureRead(node);
 	b.captureRun(e.id, e.body);
@@ -107,7 +112,7 @@ export function mountEngineReactEffect(b: CosignalBridge, rootId: string, node: 
 
 /** Referee configuration — a body that re-chooses deps CAUSALLY:
  * captureRead(sel) ? captureRead(a) : captureRead(b). */
-export function mountEngineReactEffectPick(b: CosignalBridge, rootId: string, sel: ENode, a: ENode, bb: ENode, name: string): ESubscription {
+export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, sel: ENode, a: ENode, bb: ENode, name: string): ESubscription {
 	const e = b.mountCommittedObserver(rootId, name);
 	e.body = () => void (b.captureRead(sel) ? b.captureRead(a) : b.captureRead(bb));
 	b.captureRun(e.id, e.body);
@@ -123,10 +128,10 @@ export type EngineCoreEffect = {
 	dispose: () => void;
 };
 
-/** Per-bridge core-effect mount ordinal (never reset — mirrors the model's
- * `coreEffectMounts`; both sides tick once per mount in lockstep, so created
- * names agree). */
-const coreEffectMounts = new WeakMap<CosignalBridge, number>();
+/** Per-composition core-effect mount ordinal (keyed by the ENGINE EPOCH —
+ * one test = one epoch; mirrors the model's `coreEffectMounts`: both sides
+ * tick once per mount in lockstep, so created names agree). */
+const coreEffectMounts = new Map<number, number>();
 
 /**
  * Mount a core effect: a REAL kernel `effect()` whose body does a plain
@@ -144,9 +149,9 @@ const coreEffectMounts = new WeakMap<CosignalBridge, number>();
  * intervening event/seq used to create the same `CE${events}.${seq}.${epoch}`
  * uniq) would make that comparison ambiguous.
  */
-export function mountEngineCoreEffect(b: CosignalBridge, node: ENode, name: string): EngineCoreEffect {
-	const ordinal = coreEffectMounts.get(b) ?? 0;
-	coreEffectMounts.set(b, ordinal + 1);
+export function mountEngineCoreEffect(b: CosignalEngine, node: ENode, name: string, writeTo?: EAtomNode): EngineCoreEffect {
+	const ordinal = coreEffectMounts.get(engineEpoch) ?? 0;
+	coreEffectMounts.set(engineEpoch, ordinal + 1);
 	const rec: EngineCoreEffect = { name: `${name}#${ordinal}`, runs: 0, lastValue: undefined, dispose: () => {} };
 	let mounted = false;
 	rec.dispose = effect(() => {
@@ -160,17 +165,39 @@ export function mountEngineCoreEffect(b: CosignalBridge, node: ENode, name: stri
 		rec.lastValue = value;
 		rec.runs++;
 		b.logCoreEffectRun(rec.name, value);
+		// R-3: a WRITING core effect — the write goes through the PUBLIC atom
+		// path from inside the kernel flush (i.e. during the triggering
+		// write's fused eager apply) and must CLASSIFY NORMALLY (ambient
+		// batch while pending, quiet fold at rest). Payload = min(runs, 3):
+		// the equality cutoff bounds effective writes per trigger.
+		if (writeTo !== undefined) {
+			(writeTo.handle as Atom<number>).set(Math.min(rec.runs, 3));
+		}
 	});
 	return rec;
 }
 
 export class TwinDriver {
 	readonly model = new CosignalModel();
-	/** devChecks armed: the switch must be engine-inert — the whole lockstep
-	 * suite running with it on proves the flag itself perturbs nothing. */
-	readonly engine: CosignalBridge = __newBridgeForTest({ devChecks: true });
+	/** THE ONE ENGINE, reset per driver (the fresh-model analog): devChecks
+	 * armed — the switch must be engine-inert, and the whole lockstep suite
+	 * running with it on proves the flag itself perturbs nothing. A minimal
+	 * driver attaches (R-5: devChecks harnesses that open batches must
+	 * attach first); its batch context is always BATCH_NONE — the twin
+	 * passes explicit batch ids through the referee write surface. */
+	readonly engine: CosignalEngine = (() => {
+		drainLeftoverEpisode();
+		__resetEngineForTest({ devChecks: true });
+		attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
+		return engine;
+	})();
+	/** BatchIds are MONOTONIC ACROSS RESETS (the engine counter survives
+	 * `__resetEngineForTest`); the model's restart at 1 — so the twin
+	 * rebases: engine id = model id + base, and engine events normalize by
+	 * subtracting it before comparison. */
+	private readonly batchIdBase = __peekNextBatchIdForTest() - 1;
 	/** The engine's event stream: a lossless session tracer attached at
-	 * bridge birth, decoded to TraceEvents on demand (the engine creates no
+	 * engine reset, decoded to TraceEvents on demand (the engine creates no
 	 * event objects — tests/trace-events.ts). */
 	readonly engineEvents = attachRefereeStream(this.engine);
 	/** Full-history mirror (archives via onCompact + origins) — the referee
@@ -272,6 +299,18 @@ export class TwinDriver {
 	 * snapshots, reconcile corrections, effect runs, and counters stay
 	 * exact.
 	 */
+	/** Engine-decoded events with batch ids rebased into the model's space
+	 * (BatchIds are monotonic across resets engine-side; see batchIdBase). */
+	private normalizedEngineEvents(): ModelEvent[] {
+		const base = this.batchIdBase;
+		const events = this.engineEvents.events as ModelEvent[];
+		if (base === 0) return events;
+		return events.map((e) => {
+			const batch = (e as { batch?: number }).batch;
+			return typeof batch === 'number' && batch > 0 ? ({ ...e, batch: batch - base } as ModelEvent) : e;
+		});
+	}
+
 	private compareStreams(label: string): void {
 		checkArenas(this.engine); // NF2 S-A divergence check (throws on ANY arena↔memo mismatch)
 		expect(this.engine.seq, `twin ${label}: seq diverged`).toBe(this.model.seq);
@@ -280,7 +319,7 @@ export class TwinDriver {
 		// The engine's stream is decoded from its packed trace records (the
 		// only event channel); the decode is incremental, so re-reading the
 		// cumulative stream after every op stays cheap.
-		const engineEvents = this.engineEvents.events as ModelEvent[];
+		const engineEvents = this.normalizedEngineEvents();
 		const mRest = this.model.events.filter((e) => !isDeliveryish(e));
 		const eRest = engineEvents.filter((e) => !isDeliveryish(e));
 		const me = JSON.stringify(mRest);
@@ -290,6 +329,7 @@ export class TwinDriver {
 		}
 		const pool = deliveryCounts(this.model.events);
 		const engineCounts = deliveryCounts(engineEvents);
+		void 0;
 		for (const [key, n] of engineCounts) {
 			const avail = pool.get(key) ?? 0;
 			if (n > avail) {
@@ -300,10 +340,6 @@ export class TwinDriver {
 
 	// ------------------------------------------------------------- surface
 
-	registerBridge(): void {
-		this.both('registerBridge', () => this.model.registerBridge(), () => this.engine.registerBridge());
-	}
-
 	atom(name: string, initial: Value, equals?: Equals): AtomNode {
 		const mNode = this.model.atom(name, initial, equals);
 		const eNode = this.engine.atom(name, initial, equals);
@@ -313,16 +349,18 @@ export class TwinDriver {
 	}
 
 	/**
-	 * Adopt a pre-existing PUBLIC kernel atom on both sides. The engine reads
-	 * the kernel-current value (adoptAtom — pre-registration history is
-	 * committed-only base state by construction); the model, which has no
-	 * kernel, mirrors adoption as construction-time seeding with that same
-	 * value. Neither side creates a log entry, batch, or event.
+	 * Join a pre-existing PUBLIC kernel atom on both sides (always-concurrent:
+	 * the engine resolves any handle by its id — content allocates on first
+	 * participation and seeds base from kernel-current, which IS the atom's
+	 * full committed history; the model, which has no kernel, mirrors it as
+	 * construction-time seeding with that same value). Neither side creates
+	 * a log entry, batch, or event.
 	 */
-	adoptAtom(name: string, handle: Atom<unknown>): AtomNode {
-		const eNode = this.engine.adoptAtom(name, handle);
+	joinAtom(name: string, handle: Atom<unknown>): AtomNode {
+		const eNode = this.engine.nodeForAtom(handle);
+		eNode.name = name; // referee naming: streams compare by name
 		const mNode = this.model.atom(name, eNode.base);
-		expect(Object.is(mNode.base, eNode.base), 'twin adoptAtom: seeded base diverged').toBe(true);
+		expect(Object.is(mNode.base, eNode.base), 'twin joinAtom: seeded base diverged').toBe(true);
 		this.nodeMap.set(mNode, eNode); // ids live in different spaces — the mapping is the resolution
 		this.mirror.setOrigin(eNode, eNode.base);
 		return mNode;
@@ -342,14 +380,14 @@ export class TwinDriver {
 		const t = this.both('openBatch', () => this.model.openBatch(opts), () => {
 			eId = this.engine.openBatch(opts).id; // neither side creates a priority — scheduling stays React's (see the Priority annotation type)
 		});
-		expect(eId, 'twin openBatch: batch ids diverged').toBe(t.id);
+		expect(eId! - this.batchIdBase, 'twin openBatch: batch ids diverged').toBe(t.id);
 		return t;
 	}
 
 	write(batchId: number | undefined, node: AtomNode, op: Op): void {
 		const mark = this.model.events.length;
 		this.both('write', () => this.model.write(batchId, node, op), () =>
-			this.engine.write(batchId, this.toEngine(node) as never, ...opScalars(op)));
+			this.engine.write(batchId === undefined ? undefined : batchId + this.batchIdBase, this.toEngine(node) as never, ...opScalars(op)));
 		if (batchId === undefined) this.mirrorQuietFold(node, op, mark);
 	}
 
@@ -377,18 +415,18 @@ export class TwinDriver {
 
 	settleAction(batchId: number): void {
 		this.both('settleAction', () => this.model.settleAction(batchId), () =>
-			this.engine.settleAction(batchId));
+			this.engine.settleAction(batchId + this.batchIdBase));
 	}
 
 	retire(batchId: number): void {
 		this.both('retire', () => this.model.retire(batchId), () =>
-			this.engine.retire(batchId));
+			this.engine.retire(batchId + this.batchIdBase));
 	}
 
 	renderStart(root: string, includeBatches: number[]): RenderPass {
 		let eRenderPass: ERenderPass | undefined;
 		const mRenderPass = this.both('renderStart', () => this.model.renderStart(root, includeBatches), () => {
-			eRenderPass = this.engine.renderStart(root, includeBatches);
+			eRenderPass = this.engine.renderStart(root, includeBatches.map((id) => id + this.batchIdBase));
 			return eRenderPass;
 		});
 		expect(eRenderPass!.id, 'twin renderStart: render pass ids diverged').toBe(mRenderPass.id);
@@ -406,7 +444,8 @@ export class TwinDriver {
 	}
 
 	renderEnd(id: number, kind: 'commit' | 'discard', opts?: { retireAtCommit?: number[] }): void {
-		this.both('renderEnd', () => this.model.renderEnd(id, kind, opts), () => this.engine.renderEnd(id, kind, opts));
+		const eOpts = opts?.retireAtCommit === undefined ? opts : { ...opts, retireAtCommit: opts.retireAtCommit.map((b) => b + this.batchIdBase) };
+		this.both('renderEnd', () => this.model.renderEnd(id, kind, opts), () => this.engine.renderEnd(id, kind, eOpts));
 	}
 
 	mountWatcher(renderPassId: number, node: AnyNode, name: string): Watcher {
@@ -462,9 +501,9 @@ export class TwinDriver {
 			this.engine.replayReactEffect(this.toEngineEffect(id)));
 	}
 
-	mountCoreEffect(node: AnyNode, name: string): CoreEffect {
-		return this.both('mountCoreEffect', () => this.model.mountCoreEffect(node, name), () =>
-			mountEngineCoreEffect(this.engine, this.toEngine(node), name));
+	mountCoreEffect(node: AnyNode, name: string, writeTo?: AtomNode): CoreEffect {
+		return this.both('mountCoreEffect', () => this.model.mountCoreEffect(node, name, writeTo), () =>
+			mountEngineCoreEffect(this.engine, this.toEngine(node), name, writeTo === undefined ? undefined : this.toEngine(writeTo) as EAtomNode));
 	}
 
 	discardAllWip(): void {
@@ -513,7 +552,7 @@ export class TwinDriver {
 	eventsOfType<T extends ModelEvent['type']>(type: T): Extract<ModelEvent, { type: T }>[] {
 		const m = this.model.eventsOfType(type);
 		if (type !== 'delivery' && type !== 'suppressed' && type !== 'mount-corrective') {
-			const e = this.engineEvents.eventsOfType(type as never);
+			const e = this.normalizedEngineEvents().filter((ev) => ev.type === type);
 			expect(JSON.stringify(e), `twin eventsOfType(${type}) diverged`).toBe(JSON.stringify(m));
 		}
 		// deliveryish types: covered cumulatively by compareStreams' ⊆ bound;
@@ -549,11 +588,27 @@ export class TwinDriver {
 	}
 }
 
-/** A twin with the bridge registered on both sides during setup. */
+/**
+ * Finish the PREVIOUS test's leftover episode so the reset's idle
+ * preconditions hold (the fresh-model analog: a test may legitimately end
+ * mid-episode — the old per-test bridges were simply abandoned; the one
+ * engine instead closes the episode out, exactly as the schedule
+ * generator's close-out does). The reset preconditions still fail loudly
+ * for a reset attempted INSIDE any frame — that stays a bug to fix.
+ */
+function drainLeftoverEpisode(): void {
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+}
+
+/** A fresh twin (always-concurrent: construction IS activation — the
+ * engine resets and re-attaches its minimal driver; the model is live from
+ * construction). */
 export function concurrent(): TwinDriver {
-	const t = new TwinDriver();
-	t.registerBridge();
-	return t;
+	return new TwinDriver();
 }
 
 /** Mount a watcher on `node` via a clean committed render on `root`. */

@@ -8,8 +8,10 @@
 // propagate ns/write (write-call time only), frame ns, deliveries and
 // spurious renders per (watcher, batch, cycle), held-row history growth +
 // first/last frame write-time degradation.
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
 
 const F = envInt('F', 8); // watchers
 const B = envInt('B', 1); // batches (fresh batches) per frame
@@ -27,7 +29,45 @@ const INTERLEAVE = envInt('INTERLEAVE', 0) === 1;
 const REPS = envInt('REPS', 5);
 const WARMUP = envInt('WARMUP', 1);
 
-const b = registerReactBridge();
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine.
+const b = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
+
+// Delivery accounting, per arm. Anchor tree: the bridge retains decoded
+// event objects on `b.events` (minted inside the write call — part of that
+// tree's logged posture; the mark/scan sites sit OUTSIDE the timed write).
+// This tree deleted event retention: attach the packed session tracer
+// (cosignal/trace) — records append inside the write as fixed-size ints
+// (the in-write analog of the anchor's event minting) and decode here at
+// the same out-of-window scan sites. The timed statement stays exactly
+// `b.write(...)` in both arms.
+const tracer = b.events !== undefined
+	? undefined
+	: (await import(`${ROOT}/packages/cosignal/src/trace.ts`)).attachTracer(b, { mode: 'session' });
+const deliveryMark = tracer === undefined
+	? () => b.events.length
+	: () => tracer.stats().recorded;
+/** Invoke fn(watcherName, slotId) per delivery event recorded since `mark`. */
+const eachDeliverySince = tracer === undefined
+	? (mark, fn) => {
+		for (let e = mark; e < b.events.length; e++) {
+			const ev = b.events[e];
+			if (ev.type === 'delivery') fn(ev.watcher, ev.slot);
+		}
+	}
+	: (mark, fn) => {
+		const head = tracer.stats().recorded;
+		for (let id = mark; id < head; id++) {
+			const ev = tracer.decode(id);
+			if (ev !== undefined && ev.kind === 'delivery') fn(ev.data.watcher, ev.data.slot);
+		}
+	};
+// Session records are immutable (marks scope every scan); only the anchor's
+// retained array needs per-frame truncation.
+const frameEventsReset = tracer === undefined ? () => { b.events.length = 0; } : () => {};
+
 const a = b.atom('a', 0);
 const c = b.computed('c', (read) => read(a) + 1);
 const setup = b.renderStart('R', []);
@@ -44,7 +84,7 @@ function repOnce() {
 	let maxSpurious = 0; // value-unchanged delivered renders per (watcher,batch,cycle), max
 	const firstLast = [];
 	for (let f = 0; f < FRAMES; f++) {
-		b.events.length = 0;
+		frameEventsReset();
 		const f0 = process.hrtime.bigint();
 		const batches = [];
 		for (let i = 0; i < B; i++) batches.push(b.openBatch());
@@ -65,20 +105,18 @@ function repOnce() {
 			const batch = batches[k % B];
 			const changed = k % 2 === 0;
 			const value = changed ? ++v : v;
-			const mark = b.events.length;
+			const mark = deliveryMark();
 			const t0 = process.hrtime.bigint();
 			b.write(batch.id, a, 0, value);
 			const t1 = process.hrtime.bigint();
 			frameWriteNs += Number(t1 - t0);
-			for (let e = mark; e < b.events.length; e++) {
-				const ev = b.events[e];
-				if (ev.type !== 'delivery') continue;
-				const key = `${ev.watcher}:${ev.slot}`;
+			eachDeliverySince(mark, (watcher, slot) => {
+				const key = `${watcher}:${slot}`;
 				let rec = perWB.get(key);
 				if (rec === undefined) { rec = { d: 0, s: 0 }; perWB.set(key, rec); }
 				rec.d++;
 				if (!changed) rec.s++;
-			}
+			});
 		}
 		writeNs += frameWriteNs;
 		firstLast.push(frameWriteNs / W);

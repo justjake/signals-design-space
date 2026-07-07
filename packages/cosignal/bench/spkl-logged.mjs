@@ -4,10 +4,12 @@
 // measurement. The hot loops run on UNREGISTERED plain signals through the
 // armed wrappers — the cost an app pays for merely loading the concurrent
 // engine. Same injected shape code as the base-build child.
-import { Atom, Computed, effect } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
-import { registerReactBridge } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts';
 import { env, envInt, row } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs';
 import { makeShape, SHAPE_OPS } from '/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/spkl-shapes.mjs';
+
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
+const { Atom, Computed, effect } = mod;
 
 const SHAPE = env('SHAPE', 'readPoll');
 const REPS = envInt('REPS', 9);
@@ -15,7 +17,11 @@ const WARMUP = envInt('WARMUP', 3);
 const OPS = envInt('OPS', SHAPE_OPS[SHAPE]);
 
 // Arm the seam BEFORE building the workload (mounted-quiet app state).
-const bridge = registerReactBridge();
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
+// instance; this tree has ONE module engine.
+const bridge = typeof mod.registerReactBridge === 'function'
+	? mod.registerReactBridge()
+	: (mod.__resetEngineForTest?.(), mod.engine);
 const decoy = bridge.atom('decoy', 0);
 bridge.computed('decoyC', (read) => Number(read(decoy)) + 1);
 
@@ -30,8 +36,19 @@ for (let r = 0; r < REPS; r++) {
 	times.push(Number(t1 - t0) / OPS);
 }
 times.sort((a, b) => a - b);
-if (bridge.liveBatches().length !== 0 || bridge.events.length !== 0) {
-	throw new Error('SPK-L invariant: the quiet workload must not touch the bridge');
+// Quiet invariant, per arm: the anchor tree retains an event log (must stay
+// empty); this tree deleted event retention — the engine-activity probes
+// (log entries created, batches opened) carry the same "nothing touched the
+// engine" fact.
+if (bridge.events !== undefined) {
+	if (bridge.liveBatches().length !== 0 || bridge.events.length !== 0) {
+		throw new Error('SPK-L invariant: the quiet workload must not touch the bridge');
+	}
+} else {
+	const probes = mod.__coreProbes();
+	if (bridge.liveBatches().length !== 0 || probes.logEntries !== 0 || probes.batches !== 0) {
+		throw new Error(`SPK-L invariant: the quiet workload must not touch the engine (${JSON.stringify(probes)})`);
+	}
 }
 row({
 	gate: 'SPK-L', config: 'logged-quiet', shape: SHAPE,

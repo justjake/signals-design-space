@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { mountEngineReactEffectPick } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
-import { __newBridgeForTest, Atom, effect, type CosignalBridge } from '../src/index.js';
+import { engine, __resetEngineForTest, Atom, effect, type CosignalEngine } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
@@ -31,19 +31,24 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 	return { atom, log };
 }
 
-/** A fresh registered bridge (production posture — the only posture: no
+/** A fresh engine reset (production posture — the only posture: no
  * event objects exist; quiet arming follows the production derivation). */
-function bridge(): CosignalBridge {
-	const b = __newBridgeForTest();
-	b.registerBridge();
-	return b;
+function bridge(): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest();
+	return engine;
 }
 
 describe('observation union at the bridge', () => {
 	it('a live watcher alone observes; dropping it unobserves', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		await tick();
@@ -60,7 +65,7 @@ describe('observation union at the bridge', () => {
 	it('kernel subscriber + watcher = ONE observation; unobserve only after BOTH detach', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const dispose = effect(() => {
 			void atom.state; // kernel consumer: links on the atom's record
 		});
@@ -82,7 +87,7 @@ describe('observation union at the bridge', () => {
 	it('deferMountEffects hidden prepare never observes; the adoptRevealedMount reveal observes exactly once', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const hidden = b.renderStart('A', []);
 		const w = b.mountWatcher(hidden.id, node, 'W');
 		b.deferMountEffects(w.id); // Activity pre-render: layout effects deferred
@@ -103,7 +108,7 @@ describe('observation union at the bridge', () => {
 	it('same-tick handoff between consumer kinds coalesces (no flap either direction)', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		b.renderEnd(p.id, 'commit');
@@ -132,7 +137,7 @@ describe('observation union at the bridge', () => {
 	it('cold flap: commit-subscribe and unsubscribe within one tick net to nothing', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		b.renderEnd(p.id, 'commit');
@@ -144,7 +149,7 @@ describe('observation union at the bridge', () => {
 	it('re-asserting watcher liveness is edge-filtered (idempotent, no double retain)', async () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
 		b.renderEnd(p.id, 'commit');
@@ -157,10 +162,9 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('quiet mode: observation transitions need no armed pipeline (production posture)', async () => {
-		const b = __newBridgeForTest(); // production posture (quiet arms by derivation alone)
-		b.registerBridge();
+		const b = bridge(); // production posture (quiet arms by derivation alone)
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		expect(b.quiet).toBe(true);
 		const p = b.renderStart('A', []); // the render disarms quiet while open…
 		const w = b.mountWatcher(p.id, node, 'W');
@@ -181,7 +185,7 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const stream = attachRefereeStream(b); // referee posture: decode the packed stream
 		const { atom, log } = observedAtom(0);
-		const node = b.adoptAtom('a', atom as Atom<unknown>);
+		const node = b.nodeForAtom(atom as Atom<unknown>);
 		const before = stream.cursor();
 		const p = b.renderStart('A', []);
 		const w = b.mountWatcher(p.id, node, 'W');
@@ -205,8 +209,8 @@ describe('observation union at the bridge', () => {
 		const b = bridge();
 		const { atom, log } = observedAtom(0);
 		const { atom: atomB, log: logB } = observedAtom(0);
-		const nodeA = b.adoptAtom('a', atom as Atom<unknown>);
-		const nodeB = b.adoptAtom('b', atomB as Atom<unknown>);
+		const nodeA = b.nodeForAtom(atom as Atom<unknown>);
+		const nodeB = b.nodeForAtom(atomB as Atom<unknown>);
 		const flag = b.atom('flag', 0);
 		const e = mountEngineReactEffectPick(b, 'A', flag, nodeA, nodeB, 'E'); // flag=0 → snapshot {flag, b}
 		await tick();

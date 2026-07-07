@@ -198,7 +198,9 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 		for (let k = 0; k < cut; k++) {
 			const i = from + k;
 			const next = deps.applyOp(atom, log.kinds[i]!, log.payloads[i], atom.base);
-			if (!deps.eqAtom(atom, next, atom.base)) atom.base = next;
+			// R-2 order: isEqual(current, incoming) — per compacted entry
+			// (compaction re-invokes per entry BY DESIGN).
+			if (!deps.eqAtom(atom, atom.base, next)) atom.base = next;
 			atom.baseSeq = log.seqs[i]!;
 			if (onCompact !== undefined) onCompact(atom, log.entryAt(i));
 			// A compacted log entry stops pinning its batch record.

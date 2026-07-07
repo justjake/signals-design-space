@@ -5,7 +5,6 @@ import { checkInvariants } from '../src/invariants.js';
 /** A model with the bridge registered during setup. */
 export function concurrent(): CosignalModel {
 	const m = new CosignalModel();
-	m.registerBridge();
 	return m;
 }
 

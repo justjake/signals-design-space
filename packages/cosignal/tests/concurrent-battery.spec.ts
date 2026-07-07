@@ -7,7 +7,7 @@
 // ENGINE directly — a fan-out write inside one side's evaluation would corrupt
 // the other side by construction (the model half of that case runs in the
 // reference model's own suite).
-import { __newBridgeForTest } from '../src/concurrent.js';
+import { engine, __resetEngineForTest } from '../src/concurrent.js';
 /**
  * The 17-case acceptance battery of the behavioral contract, as
  * deterministic named tests asserting the required outcomes at model level.
@@ -755,9 +755,10 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 	});
 
 	it('render-phase writes throw in all builds', () => {
-		// Engine leg (see the header note): same schedule, driven on the bridge.
-		const m = __newBridgeForTest();
-		m.registerBridge();
+		// Engine leg (see the header note): same schedule, driven on the engine
+		// surface directly (production posture: fresh reset, no driver).
+		__resetEngineForTest();
+		const m = engine;
 		const a = m.atom('a', 0);
 		const t = m.openBatch();
 		let misbehave = true;

@@ -5,7 +5,8 @@
 // history compacted after each act). Metric: wall ms per round (render/commit
 // for N reached watchers), median across rounds, plus bridge-state steadiness.
 import { createRequire } from 'node:module';
-const req = createRequire('/Users/jitl/src/alien-signals-opt/packages/cosignal-react/tests/helpers.tsx');
+const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
+const req = createRequire(`${ROOT}/packages/cosignal-react/tests/helpers.tsx`);
 const { JSDOM } = req('jsdom');
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 globalThis.window = dom.window;
@@ -16,16 +17,21 @@ const React = req('react');
 const { createRoot } = req('react-dom/client');
 const { act } = React;
 
-const { __newBridgeForTest, Atom } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal/src/index.ts');
-const { registerCosignalReact, useSignal } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal-react/src/index.ts');
+const mod = await import(`${ROOT}/packages/cosignal/src/index.ts`);
+const { Atom } = mod;
+const { registerCosignalReact, useSignal } = await import(`${ROOT}/packages/cosignal-react/src/index.ts`);
 const { envInt, row } = await import('/Users/jitl/src/alien-signals-opt/packages/cosignal/bench/util.mjs');
 
 const N = envInt('N', 64); // components (reached watchers)
 const ROUNDS = envInt('ROUNDS', 30);
 const WARMUP = envInt('WARMUP', 5);
 
-const bridge = __newBridgeForTest();
-const handle = registerCosignalReact({ bridge });
+// A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree injects a per-test
+// bridge into the bindings; this tree has ONE module engine and the
+// bindings attach to it — registerCosignalReact() takes nothing.
+const oldTree = typeof mod.__newBridgeForTest === 'function';
+const bridge = oldTree ? mod.__newBridgeForTest() : mod.engine;
+const handle = oldTree ? registerCosignalReact({ bridge }) : registerCosignalReact();
 const a = new Atom(0);
 
 function Cell() {
@@ -54,7 +60,7 @@ for (let r = 0; r < WARMUP; r++) await round();
 const times = [];
 for (let r = 0; r < ROUNDS; r++) times.push(await round());
 times.sort((x, y) => x - y);
-const node = bridge.kernelIdToNode.get(a._id);
+const node = oldTree ? bridge.kernelIdToNode.get(a._id) : bridge.idToNode.get(a._id);
 const checksum = container.textContent.length + Number(bridge.newestValue(node));
 row({
 	gate: 'SPK-R', config: 'react-cosignal', shape: `N${N}`,
@@ -64,4 +70,4 @@ row({
 	gate: 'SPK-R', config: 'react-cosignal', shape: `N${N}`,
 	metric: `steadyLog:N${N}`, value: node.log.length + bridge.liveBatches().length, checksum,
 });
-handle.dispose();
+handle.dispose?.();

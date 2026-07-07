@@ -24,8 +24,9 @@
  * loudly. `attachRefereeStream` therefore attaches with a large ref
  * capacity (2^16) instead of the diagnostic default (256).
  */
-import type { TraceEvent, CosignalBridge, Value } from '../src/concurrent.js';
+import type { TraceEvent, CosignalEngine, Value } from '../src/concurrent.js';
 import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/trace.js';
+import { engineEpoch } from '../src/graph.js';
 import type { ModelEvent } from '../../cosignal-oracle/src/model.js';
 
 // ---- TraceEvent ≡ ModelEvent pin -------------------------------------------
@@ -166,7 +167,7 @@ export class RefereeStream {
 	}
 }
 
-const streams = new WeakMap<CosignalBridge, RefereeStream>();
+const streams = new WeakMap<CosignalEngine, { epoch: number; stream: RefereeStream }>();
 
 /**
  * Attach the referee's lossless session tracer to a fresh bridge and return
@@ -174,15 +175,16 @@ const streams = new WeakMap<CosignalBridge, RefereeStream>();
  * `refereeStreamOf`). Attach before the bridge's first operation: session
  * completeness is what makes the decoded stream comparable from event 0.
  */
-export function attachRefereeStream(b: CosignalBridge, opts?: TracerOptions): RefereeStream {
+export function attachRefereeStream(b: CosignalEngine, opts?: TracerOptions): RefereeStream {
 	const s = new RefereeStream(attachTracer(b, { mode: 'session', refCapacity: 1 << 16, ...opts }));
-	streams.set(b, s);
+	streams.set(b, { epoch: engineEpoch, stream: s });
 	return s;
 }
 
-/** The stream attached to `b`, or throw (attachRefereeStream first). */
-export function refereeStreamOf(b: CosignalBridge): RefereeStream {
+/** The stream attached to `b` THIS EPOCH, or throw (attachRefereeStream
+ * after every `__resetEngineForTest`). */
+export function refereeStreamOf(b: CosignalEngine): RefereeStream {
 	const s = streams.get(b);
-	if (s === undefined) throw new Error('no referee stream attached to this bridge (call attachRefereeStream at bridge birth)');
-	return s;
+	if (s === undefined || s.epoch !== engineEpoch) throw new Error('no referee stream attached to this engine composition (call attachRefereeStream after the reset)');
+	return s.stream;
 }

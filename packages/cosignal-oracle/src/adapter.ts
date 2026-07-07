@@ -96,7 +96,6 @@ export type DiffResult = { seed: number | undefined; step: number; message: stri
 export function diffAgainstModel(engine: EngineAdapter, ops: ScheduleOp[], seed?: number): DiffResult {
 	const m = new CosignalModel();
 	buildTopology(m);
-	m.registerBridge();
 	let drained = 0;
 	for (let step = 0; step < ops.length; step++) {
 		// The model's step: capture legality, then the step's comparable
@@ -132,7 +131,6 @@ export function diffAgainstModel(engine: EngineAdapter, ops: ScheduleOp[], seed?
 export function modelAsEngine(): EngineAdapter {
 	const m = new CosignalModel();
 	buildTopology(m);
-	m.registerBridge();
 	let drained = 0;
 	return {
 		apply: (op) => (applyOneOp(m, op) ? 'applied' : 'skipped'),

@@ -32,8 +32,7 @@
  * or suspends never calls into this module.
  */
 
-import { E, NodeField, NodeFlag, RecordGeom, batchDepth, activeSub, flush, maybeBoundary, values } from './graph.js';
-import { Computed } from './index.js';
+import { E, NodeField, NodeFlag, RecordGeom, batchDepth, activeSub, engineEpoch, flush, maybeBoundary, values } from './graph.js';
 import type { NodeFlags, NodeId, ValueIndex } from './graph.js';
 
 /**
@@ -179,18 +178,47 @@ function serializeUseKey(key: unknown): string {
 }
 
 /**
- * The two-form ctx.use dispatch over a node-scoped key cache — the ONE
- * suspense implementation, shared with the React bindings' bound computeds
- * (which pass their own per-node holder). See ComputedCtx.use for the
+ * THE ctx.use REQUEST-CACHE COLUMN — id-keyed engine state (reclamation
+ * plan §2's prerequisite: the owning `Computed` INSTANCE is no longer
+ * stored anywhere kernel-side, so nothing pins the handle). Keyed by
+ * NODE INDEX (the recycled dense key): the record-free scrub clears the
+ * freed record's entry (`__clearUseCacheForIndex`), so a slot's next
+ * tenant can never be served the previous tenant's requests. A Map (not a
+ * dense array) deliberately — ctx.use is a cold path and the map's delete
+ * IS the scrub.
+ */
+const useCaches = new Map<number, Map<string, PromiseLike<unknown>>>();
+
+/** The record-free scrub's suspense half (called by the engine's record-free
+ * hook): drop the freed record's request cache. @internal */
+export function __clearUseCacheForIndex(nodeIndex: number): void {
+	useCaches.delete(nodeIndex);
+}
+
+/** Test-only (`__resetEngineForTest`): every request cache drops. @internal */
+export function __resetSuspenseForTest(): void {
+	useCaches.clear();
+}
+
+/** Test seam: a record's ctx.use request cache, by node index (the leak
+ * audit probes clearing at record free). @internal */
+export function __useCacheForTest(nodeIndex: number): Map<string, PromiseLike<unknown>> | undefined {
+	return useCaches.get(nodeIndex);
+}
+
+/**
+ * The two-form ctx.use dispatch over a node-index-keyed request cache — the
+ * ONE suspense implementation, shared with the engine's ctx-shaped world
+ * fns (which pass their node's index). See ComputedCtx.use for the
  * contract. The keyed cache is monotone per node: same key ⇒ same thenable
- * for the holder's lifetime — including across worlds, which is safe exactly
+ * for the node's lifetime — including across worlds, which is safe exactly
  * because the key carries the world-varying inputs (a request cache never
  * un-learns an answer; a world that asks a different question uses a
- * different key). Entries evaporate with the holder (node disposal).
- * @internal — bindings seam, not public API.
+ * different key). Entries evaporate at the record's free (the scrub above).
+ * @internal — engine seam, not public API.
  */
 export function __ctxUse(
-	holder: { _useCache: Map<string, PromiseLike<unknown>> | undefined },
+	nodeIndex: number,
 	sourceOrKey: unknown,
 	factory: (() => PromiseLike<unknown>) | undefined,
 ): unknown {
@@ -209,7 +237,11 @@ export function __ctxUse(
 		throw new Error('cosignal: ctx.use(key, factory) requires a factory function.');
 	}
 	const k = serializeUseKey(sourceOrKey);
-	const cache = (holder._useCache ??= new Map());
+	let cache = useCaches.get(nodeIndex);
+	if (cache === undefined) {
+		cache = new Map();
+		useCaches.set(nodeIndex, cache);
+	}
 	let t = cache.get(k) as InstrumentedThenable | undefined;
 	if (t === undefined) {
 		t = factory() as InstrumentedThenable;
@@ -222,19 +254,20 @@ export function __ctxUse(
 }
 
 /**
- * ctx.use (hoisted; called from POLICY_CTX): resolve the evaluating node's
- * owning Computed (the per-key cache holder) and dispatch. The per-key cache
- * lives on the living node and dies with it — a recreated node refetches,
- * which is React's own uncached-promise story; callers needing cross-death
- * dedup cache the promise in their data layer and use the one-arg form.
+ * ctx.use (hoisted; called from POLICY_CTX): resolve the evaluating
+ * COMPUTED RECORD from the kernel's `activeSub` — id-keyed, no instance
+ * lookup (the old aux-slot owner backref died at the merge; nothing pins
+ * the handle) — and dispatch on its node index. The per-key cache lives
+ * with the record and dies at its free — a recreated node refetches, which
+ * is React's own uncached-promise story; callers needing cross-death dedup
+ * cache the promise in their data layer and use the one-arg form.
  */
 export function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | undefined): unknown {
 	const c = activeSub;
-	const owner = c !== 0 ? values[(c >> RecordGeom.ID_TO_VALUE_SHIFT) + RecordGeom.AUX_VALUE_OFFSET] : undefined;
-	if (!(owner instanceof Computed)) {
+	if (c === 0 || (E.buffer()[c + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) === 0) {
 		throw new Error('cosignal: ctx.use may only be called during a computed evaluation.');
 	}
-	return __ctxUse(owner, sourceOrKey, factory);
+	return __ctxUse(E.buffer()[c + NodeField.NODE_INDEX]!, sourceOrKey, factory);
 }
 
 /**
@@ -270,7 +303,17 @@ export function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: No
  * out-of-order settlement of superseded work is inert.
  */
 function attachSettle(c: NodeId, t: InstrumentedThenable): void {
+	// ENGINE-EPOCH GUARD (cross-reset microtask discipline): the listener
+	// captures the epoch at attach; a settlement delivered after
+	// `__resetEngineForTest` must not touch the scrubbed arena (the record
+	// id may already belong to a new tenant). Belt and suspenders: the
+	// stale-guard below is ALSO inert post-reset — the scrubbed record's
+	// flags read 0 and the values column no longer holds the thenable.
+	const epoch = engineEpoch;
 	const onSettle = (): void => {
+		if (epoch !== engineEpoch) {
+			return; // a dead test's settlement — the engine it targeted is gone
+		}
 		if (
 			(E.buffer()[c + NodeField.FLAGS]! & NodeFlag.BOX_SUSPENDED) === 0
 			|| values[c >> RecordGeom.ID_TO_VALUE_SHIFT] !== t
@@ -286,7 +329,11 @@ function attachSettle(c: NodeId, t: InstrumentedThenable): void {
 		} catch (err) {
 			// Effects that throw during the settle flush surface like any other
 			// unhandled error rather than rejecting the settled promise chain.
+			// Epoch-guarded like every cross-reset microtask: a reset between
+			// the throw and the rethrow swallows it (the erroring test is
+			// already over; rethrowing into the next test would misattribute).
 			queueMicrotask(() => {
+				if (epoch !== engineEpoch) return;
 				throw err;
 			});
 		}

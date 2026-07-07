@@ -35,7 +35,8 @@
  */
 
 import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
-import { SuspendedRead, __kernelBuffer, LinkField, NodeField, NodeFlag } from './index.js';
+import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
+import { E } from './graph.js';
 import { kernelGenOf, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
 import type { EngineCore } from './World.js';
@@ -835,7 +836,7 @@ export function createRenderPass(core: EngineCore, deps: RenderPassDeps): Render
 	function closureOverKernel(kernelId: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
 		if (seen.has(kernelId)) return;
 		seen.add(kernelId);
-		const memory = __kernelBuffer();
+		const memory = E.buffer();
 		let l = memory[kernelId + NodeField.DEPS]!;
 		while (l !== 0) {
 			const depKernelId = memory[l + LinkField.DEP]!;

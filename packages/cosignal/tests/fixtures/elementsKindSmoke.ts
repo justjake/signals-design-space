@@ -10,7 +10,7 @@
  * in this bundled module otherwise).
  */
 import { Atom, Computed, effect } from '../../src/index';
-import { __newBridgeForTest, type AtomNode, type CosignalBridge, type Watcher } from '../../src/concurrent';
+import { engine, __columnsForTest, type AtomNode, type CosignalEngine, type Watcher } from '../../src/concurrent';
 
 const hasHoley = new Function('a', 'return %HasHoleyElements(a);') as (a: unknown) => boolean;
 const isSmi = new Function('a', 'return %HasSmiElements(a);') as (a: unknown) => boolean;
@@ -25,23 +25,21 @@ const isSmi = new Function('a', 'return %HasSmiElements(a);') as (a: unknown) =>
 	}
 }
 
-const priv = <T,>(o: object, k: string): T => (o as unknown as Record<string, T>)[k];
-
-function mount(b: CosignalBridge, root: string, node: unknown, name: string): Watcher {
+function mount(b: CosignalEngine, root: string, node: unknown, name: string): Watcher {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node as never, name);
 	b.renderEnd(p.id, 'commit');
 	return w;
 }
 
-function commitWrite(b: CosignalBridge, node: AtomNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AtomNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node, 0, value);
 	b.retire(t.id);
 }
 
-const b = __newBridgeForTest();
-b.registerBridge();
+// THE one engine (always-concurrent; a fresh process needs no reset).
+const b = engine;
 
 // Link-heavy topology: each computed's evaluation allocates one node record
 // and MANY link records (kernel + arena), so node records land on widely
@@ -77,13 +75,14 @@ for (const w of watchers) b.removeWatcher(w.id);
 
 // ---- the probes ------------------------------------------------------------
 type Probe = { name: string; arr: unknown; smi: boolean };
+const columns = __columnsForTest();
 const probes: Probe[] = [
-	{ name: 'nodesArr', arr: priv(b, 'nodesArr'), smi: false },
-	{ name: 'lastWalk', arr: priv(b, 'lastWalk'), smi: true },
-	{ name: 'evalMark', arr: priv(b, 'evalMark'), smi: true },
-	{ name: 'obsRefs', arr: priv(b, 'obsRefs'), smi: true },
-	{ name: 'obsDeps', arr: priv(b, 'obsDeps'), smi: false },
-	{ name: 'nodeToWatchers', arr: priv(b, 'nodeToWatchers'), smi: false },
+	{ name: 'nodesArr', arr: columns.nodesArr, smi: false },
+	{ name: 'lastWalk', arr: columns.lastWalk, smi: true },
+	{ name: 'evalMark', arr: columns.evalMark, smi: true },
+	{ name: 'obsRefs', arr: columns.obsRefs, smi: true },
+	{ name: 'obsDeps', arr: columns.obsDeps, smi: false },
+	{ name: 'nodeToWatchers', arr: columns.nodeToWatchers, smi: false },
 	{ name: 'committed-arena nodeToShadow', arr: b.__arenaForTest('R')!.nodeToShadow, smi: true },
 ];
 let failed = false;

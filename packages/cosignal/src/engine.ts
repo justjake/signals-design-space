@@ -22,18 +22,17 @@
  *      late-bound slots);
  *   7. Subscription (its boundary revalidation joins the core table).
  *
- * The QUIET derivation lives here: quiet ⇔ registered AND zero live batches
- * AND zero open renders AND every write log compacted — recomputed only at
- * pipeline transitions (batch open/retire, render start/end, registration).
- * The flag itself stays a field on the class shell (the host write hook's
- * one hot read); this module owns the rule.
+ * The QUIET derivation lives here: quiet ⇔ zero live batches AND zero open
+ * renders AND every write log compacted — recomputed only at pipeline
+ * transitions (batch open/retire, render start/end, driver attach). The
+ * flags themselves stay module lets in concurrent.ts (the write path's hot
+ * reads); this module owns the rule.
  *
- * `CosignalBridge` (concurrent.ts) is the class SHELL over the record this
- * factory returns: its constructor calls `createConcurrentEngine` and
- * aliases the hot table entries as own fields (resident callers keep their
- * one-load call shapes). The shell also still houses the registry/adoption
- * cluster and the write path; both are scheduled to dissolve into this
- * composition when the host seams die.
+ * concurrent.ts calls this factory ONCE at module initialization (THE one
+ * composition call — always-concurrent) and aliases the hot table entries
+ * as module bindings (callers keep one-load call shapes);
+ * `__resetEngineForTest` re-runs it — every mechanism factory re-runs at a
+ * reset, while GROWTH re-runs only the kernel's graph factory.
  */
 
 import { createDeliver, createDeliverWalks, type DeliverTable } from './deliver.js';
@@ -46,7 +45,7 @@ import { createSettlement } from './settlement.js';
 import { createSubscription, type SubscriptionTable } from './Subscription.js';
 import { createRenderPass, type RenderPass, type RenderPassTable, type Watcher } from './RenderPass.js';
 import type { Atom, Computed } from './index.js';
-import type { AnyNode, AtomNode, BridgeOptions, ComputedNode, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
+import type { AnyNode, AtomNode, ComputedNode, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
 
 /** Write-kind tags: the packed log entry column AND the write surface's kind
  * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the
@@ -75,11 +74,11 @@ export const enum WriteKind {
  */
 export const probes = { logEntries: 0, batches: 0, worldEvals: 0, bridges: 0 };
 
-/** The resident-state edges the composition consumes: the class shell's
+/** The module-state edges the composition consumes: concurrent.ts's
  * containers (aliased by identity into the core record) and thin arrows
- * over the state that stays resident until the shell dissolves — the
- * registry/adoption cluster, the sequence clocks, the quiet flag, the
- * write path's last-batch cache, and the module-level host read routers. */
+ * over the module state the operation functions own — handle resolution,
+ * the sequence clocks, the quiet flag, the write path's last-batch cache,
+ * and the driver/devChecks slots. */
 export type ConcurrentEngineHost = {
 	idToNode: Map<number, AnyNode>;
 	nodesArr: (AnyNode | undefined)[];
@@ -90,29 +89,27 @@ export type ConcurrentEngineHost = {
 	rootToOpenRender: Map<RootId, RenderPass>;
 	roots: Map<RootId, RootState>;
 	root(id: RootId): RootState;
-	/** Registry/adoption edges (resident cluster; adoption dies with the seams). */
-	adoptComputed(name: string, handle: Computed<unknown>): ComputedNode;
+	/** Handle resolution (content allocation on first participation). */
+	nodeForAtom(atom: Atom<unknown>): AtomNode;
+	nodeForComputed(c: Computed<unknown>): ComputedNode;
 	kernelStrongDepsOf(node: ComputedNode): AnyNode[];
 	kernelReadOf(dep: AnyNode): Value;
-	readAdopter(): ((atom: Atom<unknown>) => AtomNode) | undefined;
 	/** The optional compaction observer slot (the engine's public `onCompact`). */
 	onCompact(): ((atom: AtomNode, entry: WriteLogEntry) => void) | undefined;
-	/** The registered latch + the quiet flag's one writer (the flag stays a
-	 * shell field — the host write hook's hot read; this module owns the rule). */
-	isRegistered(): boolean;
+	/** The driver slot's presence + the devChecks switch (R-5's openBatch
+	 * guard reads both). */
+	hasDriver(): boolean;
+	devChecksOn(): boolean;
+	/** The quiet flag's one writer (the flags stay module lets — the write
+	 * path's hot reads; this module owns the rule). */
 	setQuiet(quiet: boolean): void;
-	/** The sequence clocks (resident shell fields — the quiet fold advances
-	 * them fused; see the E9 note at the shell's declarations). */
+	/** The sequence clocks (module lets — the quiet fold advances them fused). */
 	nextSeq(): Seq;
 	getSeq(): Seq;
 	getCommittedAdvance(): Seq;
 	advanceCommitted(): void;
 	/** The write path's last-batch cache clear (reclamation edge). */
 	invalidateBatchCache(id: BatchId): void;
-	/** The module-level host read hook targets (concurrent.ts's
-	 * one-per-process routers), passed as values for read-routing's arming. */
-	hostReadImpl(atom: Atom<unknown>): unknown;
-	hostComputedReadImpl(c: Computed<unknown>): unknown;
 };
 
 /** Everything the composition assembles: the shared core record, each
@@ -133,13 +130,10 @@ export type ConcurrentEngine = {
 	 * here so the closure captures the core record directly (the
 	 * capture-list read stays one load). */
 	kernelTrackedReader: Reader;
-	/** Development-time checks switch (BridgeOptions.devChecks). */
-	devChecks: boolean;
 };
 
-export function createConcurrentEngine(host: ConcurrentEngineHost, options?: BridgeOptions): ConcurrentEngine {
-	const devChecks = options?.devChecks ?? false;
-	probes.bridges++; // One Core probe (referee surface)
+export function createConcurrentEngine(host: ConcurrentEngineHost, options?: EngineResetOptions): ConcurrentEngine {
+	probes.bridges++; // One Core probe (referee surface): counts COMPOSITIONS (module init + resets)
 	// Stable resident containers, aliased once (identity-shared).
 	const idToNode = host.idToNode;
 	const nodesArr = host.nodesArr;
@@ -162,18 +156,17 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Bri
 		kernelStrongDepsOf: (node) => host.kernelStrongDepsOf(node),
 	});
 	/**
-	 * The ARMED quiet state derivation — quiet ⇔ bridge registered AND zero
-	 * live batches AND zero open renders AND every write log compacted —
-	 * recomputed only at state transitions (batch open/retire, render
-	 * start/end, registration); the one boolean the write path branches on
-	 * stays a shell field (host.setQuiet). The registered clause is
-	 * load-bearing: quiet must never arm on an unregistered test bridge
-	 * (its write path throws).
+	 * The ARMED quiet state derivation — quiet ⇔ zero live batches AND zero
+	 * open renders AND every write log compacted — recomputed only at state
+	 * transitions (batch open/retire, render start/end, driver attach); the
+	 * booleans the write path branches on stay module lets (host.setQuiet
+	 * maintains both `quiet` and `standaloneQuiet`). There is no registered
+	 * clause: the engine is always live (a batch cannot exist before
+	 * something opens it, and openBatch precedes any classified write).
 	 */
 	function recomputeQuiet(): void {
 		host.setQuiet(
-			host.isRegistered()
-			&& batchOps.liveBatchCount() === 0
+			batchOps.liveBatchCount() === 0
 			&& rootToOpenRender.size === 0
 			&& compaction.uncompactedAtoms.size === 0,
 		);
@@ -197,27 +190,15 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Bri
 		notify,
 		notifyState: notify.state,
 		root: (id) => host.root(id),
-		// (The read-hook arming guard is the core's `isActive` mirror
-		// field — registerBridge, the registration cluster's one
-		// activeness writer, maintains it.)
-		hostReadImpl: host.hostReadImpl,
-		hostComputedReadImpl: host.hostComputedReadImpl,
-		readAdopter: () => host.readAdopter(),
-		// THE resolution body lives in this arrow (one call frame from the
-		// routed computed read path — the class method delegates here): one
-		// `idToNode` probe by the handle's own kernel record id, adopting on
-		// first sight. Record reuse can never serve a dead tenant: disposal
-		// (and the record-free scrub) clears the row, so a reused id
-		// resolves fresh.
-		nodeForComputed: (c) => {
-			const hit = idToNode.get(c._id);
-			if (hit !== undefined && hit.kind === 'computed') return hit;
-			return host.adoptComputed(c.label ?? `computed#${c._id}`, c);
-		},
+		// Handle resolution (content allocation on first participation —
+		// record reuse can never serve a dead tenant: disposal and the
+		// record-free scrub clear the handle link and the rows, so a reused
+		// id resolves fresh).
+		nodeForAtom: host.nodeForAtom,
+		nodeForComputed: host.nodeForComputed,
 		// The quiet derivation is composition-owned (above); the sequence
-		// clocks are resident shell fields until the shell dissolves (thin
-		// arrows — every one is a transition/boundary call, never a per-read
-		// hot path).
+		// clocks are module lets in concurrent.ts (thin arrows — every one
+		// is a transition/boundary call, never a per-read hot path).
 		recomputeQuiet,
 		nextSeq: host.nextSeq,
 		getSeq: host.getSeq,
@@ -231,7 +212,8 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Bri
 	// ---- the batch mechanism + retirement (the batch lifecycle owns its
 	// terminal transition; the fan reads the core's late-bound slots).
 	const batchOps = createBatch(core, {
-		isRegistered: host.isRegistered,
+		hasDriver: host.hasDriver,
+		devChecksOn: host.devChecksOn,
 		// The write path's last-batch cache must not outlive a reclaimed
 		// record (the cache stays resident beside the write path).
 		invalidateBatchCache: host.invalidateBatchCache,
@@ -280,5 +262,5 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Bri
 		committedSubCount: () => core.committedSubCount,
 	});
 	core.revalidateCommittedSubs = subs.revalidateCommittedSubs;
-	return { core, notify, obs, compaction, batch: batchOps, render, subs, recomputeQuiet, kernelTrackedReader, devChecks };
+	return { core, notify, obs, compaction, batch: batchOps, render, subs, recomputeQuiet, kernelTrackedReader };
 }

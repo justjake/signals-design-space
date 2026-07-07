@@ -7,17 +7,23 @@
  * check armed (arena-served ≡ memo-served after every public operation).
  */
 import { describe, expect, it } from 'vitest';
-import { __newBridgeForTest, type AnyNode, type BridgeOptions, type CosignalBridge } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyNode, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
 import { armArenaCheck } from './arena-checker.js';
 
-function bridge(options?: BridgeOptions): CosignalBridge {
-	const b = __newBridgeForTest(options);
-	b.registerBridge();
+function bridge(options?: EngineResetOptions): CosignalEngine {
+	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
+	engine.discardAllWip();
+	for (const t of engine.liveBatches()) {
+		if (t.parked) engine.settleAction(t.id);
+		else engine.retire(t.id);
+	}
+	__resetEngineForTest(options);
+	const b = engine;
 	armArenaCheck(b);
 	return b;
 }
 
-function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
+function mount(b: CosignalEngine, root: string, node: AnyNode, name: string) {
 	const p = b.renderStart(root, []);
 	const w = b.mountWatcher(p.id, node, name);
 	b.renderEnd(p.id, 'commit');
@@ -25,7 +31,7 @@ function mount(b: CosignalBridge, root: string, node: AnyNode, name: string) {
 }
 
 /** Write + retire in one committed batch (a committed-truth advance). */
-function commitWrite(b: CosignalBridge, node: AnyNode, value: unknown): void {
+function commitWrite(b: CosignalEngine, node: AnyNode, value: unknown): void {
 	const t = b.openBatch();
 	b.write(t.id, node as never, 0, value);
 	b.retire(t.id);

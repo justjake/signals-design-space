@@ -24,9 +24,10 @@ export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './sh
 // standalone instances world-route through the core's computed-read seam),
 // the write/read utilities that are world-safe under React, and the types
 // those signatures mention (`CosignalReactHandle.bridge` is a
-// `CosignalBridge`). Bridge internals (`CosignalBridge` the value, `WriteLog`,
-// `Watcher`, `TraceEvent`, node/log entry types, …) stay available on the
-// power-user path: import them from 'cosignal'.
+// `CosignalEngine` — the module-level engine surface). Engine internals
+// (`engine` the value, `attachDriver`, `Watcher`, `TraceEvent`, node/log
+// entry types, …) stay available on the power-user path: import them from
+// 'cosignal'.
 export {
 	Atom,
 	Computed,
@@ -40,5 +41,5 @@ export {
 	type AtomCtx,
 	type ComputedOptions,
 	type ReducerAtomOptions,
-	type CosignalBridge,
+	type CosignalEngine,
 } from 'cosignal';
