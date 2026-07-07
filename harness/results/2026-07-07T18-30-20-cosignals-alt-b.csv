@@ -1,0 +1,10 @@
+framework,suite,test,time
+cosignals-alt-b,kairo,avoidablePropagation,130.18947899999998
+cosignals-alt-b,kairo,broadPropagation,112.34108300000003
+cosignals-alt-b,kairo,deepPropagation,43.10672900000009
+cosignals-alt-b,kairo,diamond,97.21575000000007
+cosignals-alt-b,kairo,mux,89.6589170000002
+cosignals-alt-b,kairo,repeatedObservers,16.874311999999918
+cosignals-alt-b,kairo,triangle,29.708770999999615
+cosignals-alt-b,kairo,unstable,23.808708000000024
+cosignals-alt-b,kairo,molBench,13.779916499999672

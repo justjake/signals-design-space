@@ -16,12 +16,13 @@
  * the suites' between-run gc() calls work in both runtimes.
  */
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { adapterNames } from '../adapters/index';
 import {
-	bundleChild,
 	type ChildResult,
 	parseFlags,
 	parseList,
@@ -36,6 +37,61 @@ const resultsDir = path.join(harnessDir, 'results');
 const childScript = path.join(harnessDir, 'bench', 'child.ts');
 
 const ALL_SUITES = ['kairo', 'sbench', 'cellx', 'dynamic'] as const;
+
+/**
+ * Local replacement for util/cli.ts bundleChild (same esbuild options —
+ * keepNames OFF, see util/cli.ts for why) that additionally stubs out every
+ * adapter module NOT in the requested framework set. adapters/index.ts loads
+ * adapters lazily precisely so one broken library cannot break the others,
+ * but a single-file esbuild bundle re-eagerizes those dynamic imports at
+ * BUILD time: one adapter package with a broken import graph (e.g. mid-edit
+ * by a concurrent workstream) would fail the whole bundle even when nobody
+ * asked to bench it. Stubbed adapters throw if their loader ever runs, which
+ * cannot happen for children spawned by this parent (FRAMEWORK is always one
+ * of the requested names).
+ */
+async function bundleChildForFrameworks(
+	entry: string,
+	requested: readonly string[],
+): Promise<{ script: string; cleanup: () => void }> {
+	const adaptersIndex = path.join(harnessDir, 'adapters', 'index.ts');
+	const keep = new Set(requested);
+	const dir = mkdtempSync(path.join(os.tmpdir(), 'signals-harness-'));
+	const script = path.join(dir, `${path.basename(entry, '.ts')}.mjs`);
+	await build({
+		entryPoints: [entry],
+		outfile: script,
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		target: 'es2022',
+		keepNames: false,
+		sourcemap: false,
+		plugins: [
+			{
+				name: 'stub-unrequested-adapters',
+				setup(b) {
+					b.onResolve({ filter: /^\.\/[^/]+$/ }, (args) => {
+						if (args.importer !== adaptersIndex) return null;
+						const name = args.path.slice('./'.length);
+						if (name === 'types' || keep.has(name)) return null;
+						return { path: name, namespace: 'adapter-stub' };
+					});
+					b.onLoad({ filter: /.*/, namespace: 'adapter-stub' }, (args) => ({
+						loader: 'js',
+						contents: `throw new Error(${JSON.stringify(
+							`adapter "${args.path}" was not bundled (not in --frameworks for this run)`,
+						)});`,
+					}));
+				},
+			},
+		],
+	});
+	return {
+		script,
+		cleanup: () => rmSync(dir, { recursive: true, force: true }),
+	};
+}
 
 /**
  * Local bun equivalent of util/cli.ts runChild (which hardcodes
@@ -114,8 +170,9 @@ async function main(): Promise<void> {
 	const allRows: Record<string, unknown>[] = [];
 	const failures: { framework: string; detail: string }[] = [];
 
-	// Bundle once (shared by all frameworks; env selects the adapter).
-	const bundle = await bundleChild(childScript);
+	// Bundle once (shared by all requested frameworks; env selects the
+	// adapter, unrequested adapters are stubbed out of the bundle).
+	const bundle = await bundleChildForFrameworks(childScript, frameworks);
 	process.on('exit', bundle.cleanup);
 
 	for (const framework of frameworks) {

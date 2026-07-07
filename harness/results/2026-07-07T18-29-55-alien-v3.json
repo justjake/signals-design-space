@@ -1,0 +1,73 @@
+{
+  "kind": "bench",
+  "framework": "alien-v3",
+  "suites": [
+    "kairo"
+  ],
+  "timestamp": "2026-07-07T18-29-55",
+  "node": "v24.16.0",
+  "runtime": "node",
+  "loadavg": [
+    3.5478515625,
+    4.001953125,
+    4.044921875
+  ],
+  "ok": true,
+  "error": null,
+  "rows": [
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "avoidablePropagation",
+      "time": 103.1298755
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "broadPropagation",
+      "time": 86.77610449999997
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "deepPropagation",
+      "time": 34.48256249999986
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "diamond",
+      "time": 95.44637499999976
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "mux",
+      "time": 85.05258349999986
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "repeatedObservers",
+      "time": 20.511458499999662
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "triangle",
+      "time": 26.93402049999986
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "unstable",
+      "time": 22.764854000000014
+    },
+    {
+      "suite": "kairo",
+      "framework": "alien-v3",
+      "test": "molBench",
+      "time": 15.021479500000169
+    }
+  ]
+}

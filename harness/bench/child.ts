@@ -14,7 +14,7 @@
  * do not import any framework packages (verified 2026-07-03).
  */
 import { loadAdapter } from '../adapters/index';
-import type { FrameworkAdapter } from '../adapters/types';
+import type { AdapterComputed, AdapterSignal, FrameworkAdapter } from '../adapters/types';
 import type { ReactiveFramework } from '../../milomg-reactivity-benchmark/packages/core/src/util/reactiveFramework';
 import type { PerfResult } from '../../milomg-reactivity-benchmark/packages/core/src/util/perfLogging';
 import { kairoBench } from '../../milomg-reactivity-benchmark/packages/core/src/benches/kairoBench';
@@ -23,25 +23,40 @@ import { cellxbench } from '../../milomg-reactivity-benchmark/packages/core/src/
 import { dynamicBench } from '../../milomg-reactivity-benchmark/packages/core/src/benches/reactively/dynamicBench';
 
 /**
- * Wrap our shared adapter in milomg's ReactiveFramework interface.
+ * The opaque cell type our adapter exposes to the benches: signals are
+ * AdapterSignal handles (structurally an AdapterComputed plus write) and
+ * computeds are AdapterComputed handles, so every cell can `.read()`.
+ * readComputed must accept signal cells too (see reactiveFramework.ts) —
+ * AdapterSignal is assignable to AdapterComputed, so that holds by typing.
+ */
+type Cell = AdapterComputed<unknown>;
+
+/**
+ * Wrap our shared adapter in milomg's ReactiveFramework interface (the
+ * static-method form: createX/readX/writeX over opaque cells).
  * Mirrors the submodule's own alienSignals.ts adapter: one scope disposer
  * held between withBuild and cleanup.
  */
-function toReactiveFramework(adapter: FrameworkAdapter): ReactiveFramework {
+function toReactiveFramework(adapter: FrameworkAdapter): ReactiveFramework<Cell> {
 	let scope: (() => void) | null = null;
 	return {
 		name: adapter.name,
-		signal: (initialValue) => adapter.signal(initialValue),
-		computed: (fn) => adapter.computed(fn),
+		createSignal: (initialValue) => adapter.signal(initialValue),
+		readSignal: (signal) => signal.read(),
+		writeSignal: (signal, value) => {
+			// createSignal only ever hands out AdapterSignal cells, and benches
+			// only writeSignal cells they created via createSignal.
+			(signal as AdapterSignal<unknown>).write(value);
+		},
+		createComputed: (fn) => adapter.computed(fn),
+		readComputed: (cell) => cell.read(),
 		effect: (fn) => {
-			// milomg's interface types effect callbacks as `() => void`, but its
-			// bench bodies are arrows that RETURN numbers (e.g. `() => x.read()`),
-			// which alien v3.2+ would treat as cleanup functions and crash on.
-			// Swallow the return value — uniformly for every framework.
+			// The interface contract now guarantees fn returns undefined (bench
+			// bodies are block-bodied), so fn passes through without the old
+			// protective wrapper — a returned value would be treated as a cleanup
+			// handle by alien v3.2+.
 			// The disposer is intentionally dropped: effects die with the scope.
-			adapter.effect(() => {
-				fn();
-			});
+			adapter.effect(fn);
 		},
 		withBatch: (fn) => {
 			adapter.startBatch();
@@ -68,7 +83,7 @@ function toReactiveFramework(adapter: FrameworkAdapter): ReactiveFramework {
 }
 
 type SuiteRunner = (
-	framework: ReactiveFramework,
+	framework: ReactiveFramework<Cell>,
 	log: (result: PerfResult) => void,
 ) => Promise<void>;
 
