@@ -159,11 +159,14 @@ describe('S-A mark decay (§4.3) + growth (§4.5.9) + GEN tenancy (§4.5.3)', ()
 	});
 
 	it('stride-sized initial arena: every growth path exercises mid-walk (structural validator green throughout)', () => {
-		const b = bridge({ arenaInitInts: 16 }); // two records: every later alloc grows mid-operation
+		const b = bridge({ arenaInitInts: 16 }); // 2 records: every shadow/link allocation past the first outruns the reservation — real mid-operation doubling on every path
 		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
 		const c = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w = mount(b, 'R', c, 'W');
 		expect(w.lastRenderedValue).toBe(66);
+		const shell = b.__arenaForTest('R')!;
+		expect(shell.memory.length).toBeGreaterThan(16); // the buffers really doubled (grow-by-copy; ids stable, the armed check revalidates values)
+		expect(shell.clocks.length).toBe(shell.memory.length >> 3); // the clock column grew WITH the record store (one slot per record)
 		commitWrite(b, atoms[3]!, 100); // fanout + refold across the grown arena
 		expect(b.committedValue(c, 'R')).toBe(163);
 	});

@@ -110,11 +110,13 @@ rendered frame can mix old and new state. That bug is called **tearing**.
 cosignals removes the single-current-value limitation with three ideas:
 
 - **Write log.** Every write that lands while something is pending is
-  recorded as a compact log entry — which operation (set / functional
-  update / reducer action), which batch it belongs to, and its position on
-  one global timeline — appended to the written atom's write log. Entries
-  are packed into parallel number arrays: recording a write is a few
-  integer stores, not an object allocation.
+  recorded — which operation (set / functional update / reducer action),
+  which batch it belongs to, and its position on one global timeline — as
+  one small entry object appended to the written atom's write log. Logs
+  only ever append while pending work lives; removal is always wholesale
+  (an episode closing drops a whole log, the bounding valve drops a whole
+  prefix — both below), so dropped history is reclaimed by the garbage
+  collector in bulk and no per-entry bookkeeping exists anywhere.
 - **Batches.** A batch groups the writes belonging to one UI update — one
   event handler, one transition, one async action. React schedules each
   batch at a single priority, and the engine keeps a batch's writes visible
@@ -155,7 +157,7 @@ sequenceDiagram
     E-->>R: the frozen render world - tab "settings", count 4
     Note over R: every slice of the transition render agrees - no torn frame
     R->>E: transition commits - batch T retires
-    E->>E: T's entries become permanent history, then fold away
+    E->>E: T's writes become permanent history - the episode closes, logs drop
 ```
 
 The resumed transition render still sees exactly the state it started from
@@ -165,12 +167,43 @@ committed urgent update, the new render starts from a fresh frozen view
 that includes both batches.
 
 When a batch is finished everywhere (committed or abandoned), it
-**retires**: its writes become permanent history visible to every world,
-and once no world can tell the difference, its log entries fold into each
-atom's base value and are reclaimed. When nothing is pending at all, the
-engine is **quiet**: a write folds directly into permanent history — no log
-entry, no batch, no world is created — so an app that never starts a
-transition pays almost nothing for any of this.
+**retires**: its writes become permanent history visible to every world.
+All of the pending-state bookkeeping lives and dies as one **episode** —
+the span from the first pending durable work (a batch opens, an async
+action parks, a render starts) to full quiescence (every batch retired,
+every render closed). While an episode runs, logs and batch records only
+grow — nothing is edited in place. At the close, every touched atom's base
+value adopts the newest result directly (every world provably folds to the
+same value by then, so nothing is replayed or compared), the logs and
+retired batch records drop wholesale, and the garbage collector reclaims
+the history in bulk. One valve bounds the exception: a parked action can
+hold an episode open indefinitely while writes keep landing, so when a
+log's fully-retired prefix — already below every live render's frozen
+view — grows past a threshold, that prefix folds into the base value and
+drops early, keeping held-open episodes at bounded memory.
+
+When nothing is pending at all, the engine is **quiet**: a write folds
+directly into permanent history — no log entry, no batch, no world is
+created — so an app that never starts a transition pays almost nothing for
+any of this.
+
+### What subscribers may see: at-least-once
+
+Subscribed observers — components subscribed through the React driver, and
+effect-style subscriptions such as `useSignalEffect`'s — follow an
+**at-least-once** contract: an observer re-fires when a durable accepted
+change touched a value it read, and it may re-fire even though the value it
+then reads compares equal to what it last saw. The engine stamps every
+change with a per-root clock and revalidates observers against those
+clocks — a producer whose clock is unmoved is skipped without any work, and
+a producer whose clock moved re-fires the observer without a value
+comparison. A round trip through several boundaries (write A→B, then B→A)
+is two accepted changes, so an observer that saw neither intermediate state
+may still re-fire once at the end. What does NOT change: many writes inside
+one boundary still coalesce into one re-fire, and write acceptance still
+honors custom equality — writing an equal value is not an accepted change
+and moves no clock. Observer callbacks should be idempotent (the same
+discipline React's Strict Mode teaches for effects).
 
 ## API
 
@@ -325,7 +358,11 @@ fixed-size record in one shared `Int32Array` — a contiguous arena, like an
 array of structs in C. Reads, writes, and invalidation walks are index
 arithmetic over those records: no per-operation allocation on hot paths,
 nothing for the garbage collector to trace. A record id is the record's
-starting offset in the array; id `0` means "none".
+starting offset in the array; id `0` means "none". Observers live in the
+same arena: a **watcher** record is one component subscribed through the
+driver, and a **subscription** record is one effect-style subscription —
+both served by the node allocator, so they share its free list, generation
+stamps, and side-column scrubbing.
 
 ```mermaid
 classDiagram
@@ -350,21 +387,58 @@ classDiagram
         6 NEXT_DEP : next input edge
         7 FREE_NEXT : next recycled link
     }
-    class SideColumns["JavaScript side arrays"] {
-        values : current value, pending value or cleanup
-        fns : computed getters, effect callbacks
+    class Watcher["watcher record - 8 int32 slots"] {
+        0 FLAGS : kind and live bits
+        1 FREE_NEXT : free-list thread while recycled
+        2 NODE : the watched node
+        3 NODE_GEN : watched node generation at mount
+        4 DEDUP_BITS : per-batch-slot delivery dedup
+        5 GEN : generation
+        6 NODE_IX : watched node dense ordinal
+        7 NODE_INDEX : dense ordinal for side tables
+    }
+    class Subscription["subscription record - 8 int32 slots"] {
+        0 FLAGS : kind and live bits
+        1 FREE_NEXT : free-list thread while recycled
+        2 DEP_HEAD : first per-world dependency link
+        3 DEP_TAIL : last per-world dependency link
+        5 GEN : generation
+        7 NODE_INDEX : dense ordinal for side tables
+    }
+    class SideColumns["side columns - indexed by the same id"] {
+        values : current + pending value or cleanup; a watcher's rendered value
+        fns : computed getters, effect bodies, subscription re-fire callbacks
+        extras : one object of cold oddments per observer record
+        clocks : float64 stamps - a node's updated-at, an observer's last-validated-at
     }
     Node --> Link : DEPS / SUBS
     Link --> Node : DEP / SUB
-    Node ..> SideColumns : indexed by the same id
+    Watcher --> Node : NODE
+    Subscription --> Node : dependency links
+    Node ..> SideColumns : id >> shift
 ```
 
-Node and link records share the arena, the 8-slot stride, and one
-allocator. JavaScript values and functions cannot live in an `Int32Array`,
+All four record families share the arena, the 8-slot stride, and the
+allocators (nodes, watchers, and subscriptions draw from one; links from
+the other). JavaScript values and functions cannot live in an `Int32Array`,
 so they sit in ordinary arrays running parallel to the arena (the side
-columns), indexed by shifting the same record id. Capacity grows by
-rebuilding over doubled buffers at safe operation boundaries; freed records
-are recycled through free lists.
+columns), indexed by shifting the same record id; clock stamps live in a
+parallel `Float64Array` the same way. Kernel capacity grows by rebuilding
+over doubled buffers at safe operation boundaries; freed records are
+recycled through free lists.
+
+Each open world (a committed root, or one in-progress render) additionally
+owns a **world arena** from a small pool: the same record shape carrying
+that world's per-node value state (shadow records) and its per-world
+dependency edges (arena links), plus its own value, clock, and
+suspended-list columns. World arenas grow by copying into doubled buffers —
+mid-operation if an allocation demands it — and release back to the pool
+scrubbed when their world closes, so open/close churn allocates nothing in
+steady state. Per-root **clocks** live here: an observer's re-validation
+compares the watched node's per-root updated-at stamp against the
+observer's last-validated stamp, which is what lets boundary re-checks skip
+untouched dependencies without evaluating anything (the at-least-once
+contract above).
 
 The `FLAGS` slot carries the node's kind and its update state. A computed
 moves through three states:
@@ -388,7 +462,30 @@ The reactive semantics are compatible with
 [alien-signals](https://github.com/stackblitz/alien-signals) (the same
 push-pull algorithm, re-expressed over arena records), validated against a
 179-case conformance suite. The layout enums (`NodeField`, `LinkField`,
-`NodeFlag`) are exported for tools that want to walk the graph themselves.
+`NodeFlag`, `ArenaShape`) are exported for tools that want to walk the
+graph themselves.
+
+### Package layout
+
+One module is the engine; everything else orbits it:
+
+- **`CosignalEngine.ts`** — the engine. Reads top to bottom: storage layout
+  (the record families and column-coherence functions above), the kernel
+  algorithm, updated-at clocks, the live operation table and growth, the
+  computed evaluation policy (exceptions and suspense), the observed
+  lifecycle, world arenas, observer records, committed observers, render
+  integration, and reclamation last.
+- **`index.ts`** — the package entry: the `Atom`/`ReducerAtom`/`Computed`
+  classes, `effect`, `batch`, `configure` — the policy layer over the
+  kernel, and the whole-package vocabulary in its header.
+- Satellites, composed at module initialization: `concurrent.ts` (the
+  engine surface and orchestration), `World.ts` (world folds and
+  evaluation), `WriteLog.ts` (the write log and the episode lifecycle),
+  `Batch.ts` (batch records and retirement), `NotificationQueue.ts`
+  (delivery walks and corrections), `ObservationIndex.ts` (observed-
+  lifecycle refcounts), `settlement.ts` (async settlement),
+  `ConcurrentEngine.ts` (the composition root), with `errors.ts`,
+  `Tracer.ts`, and `graphviz.ts` self-contained.
 
 ## The React driver
 

@@ -298,10 +298,17 @@ export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initia
  * (network, imperative DOM, logging), and side effects must track what the
  * user actually sees: a pending transition may still be discarded, and a
  * side effect cannot be un-run. The effect re-fires (cleanup, then run)
- * when a durable change moves any value it read during its last run — the
- * root committing UI that includes a batch, a batch retiring, an async
- * action settling. `deps` changes re-run it through React's own useEffect
- * machinery, exactly like useEffect.
+ * when a durable accepted change touched a value it read during its last
+ * run — the root committing UI that includes a batch, a batch retiring, an
+ * async action settling. Re-fires are AT-LEAST-ONCE: writes that put a
+ * value back where the effect last saw it usually coalesce away at the
+ * next boundary, but an equal-value round trip whose intermediate state
+ * the engine observed elsewhere may re-fire the effect with unchanged
+ * inputs — write idempotent effect bodies, exactly as you would for
+ * React's own Strict Mode re-runs. Equality-gated write ACCEPTANCE is
+ * unaffected: a write that changes nothing is still not a change. `deps`
+ * changes re-run it through React's own useEffect machinery, exactly like
+ * useEffect.
  */
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
 	const shim = requireShim();

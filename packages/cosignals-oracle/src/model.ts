@@ -203,6 +203,16 @@ export type Watcher = {
 	/** Subscribed at its mounting render's commit (React: in the layout phase, before paint). */
 	live: boolean;
 	lastRenderedValue: Value;
+	/** lastValidatedAt — the watched node's per-(root, node) accepted-change
+	 * counter at the last moment the screen was known to agree with
+	 * committed truth [SANCTIONED MODEL CO-EVOLUTION, owner ruling: observer
+	 * re-fires are at-least-once]. Advances at a committed render whose
+	 * rendered value matched committed-now, and at an urgent correction;
+	 * 0 = never (a re-staled commit resets it, forcing the next drain's
+	 * correction). Drains outside the committing render's own window gate on
+	 * this stamp alone — counter movement means correct, no value
+	 * comparison. */
+	lastSeen: number;
 	snapshot: WatcherSnapshot;
 	/** Per-(watcher, slot) delivery dedup bits — see deliver() for the suppression rule. */
 	dedup: Set<BatchSlot>;
@@ -229,8 +239,12 @@ export type ReactEffect = {
 	root: RootId;
 	/** The effect body: run under committed-for-root read capture. */
 	body: (read: Reader) => void;
-	/** Dep snapshot: (node, value) pairs the last run captured, in read order. */
-	deps: { node: AnyNode; value: Value }[];
+	/** Dep snapshot: the last run's reads, in read order. `value` is a
+	 * capture artifact (the run event's values array); `lastSeen` is the
+	 * dep's lastValidatedAt — the per-(root, node) accepted-change counter
+	 * at the read [sanctioned co-evolution: re-checks gate on counter
+	 * movement since the read, never on values]. */
+	deps: { node: AnyNode; value: Value; lastSeen: number }[];
 	/** Convenience comparand (tests): the last captured value of the last run. */
 	lastValue: Value;
 	runs: number;
@@ -377,6 +391,63 @@ export class CosignalModel {
 	 * notify, and over-notification costs a render, never correctness.
 	 */
 	episodeEdges = new Map<NodeId, Set<NodeId>>(); // dep -> dependents
+
+	/**
+	 * Per-(root, node) committed fold cache with accepted-change counters
+	 * [SANCTIONED MODEL CO-EVOLUTION, owner ruling: observer re-fires are
+	 * at-least-once]. This is the model's twin of the engine's per-root
+	 * committed clocks: a record holds the node's last committed-for-root
+	 * fold outcome and a counter that moves exactly when a refresh derives a
+	 * CHANGED outcome (identity over values and thrown payloads — the
+	 * engine's refold gates; a first fold counts as changed). Refreshes run
+	 * ONLY inside observer-machinery committed evaluations — the watcher
+	 * drains and quiet scans, the effect boundary re-check, the effect
+	 * capture, and the commit populator — which mirror the engine's lazy
+	 * arena refold consults one-to-one at value-changing events: between
+	 * boundaries committed folds are fixed, so plain reads move nothing on
+	 * either side, and a refresh at an unchanged value is invisible.
+	 * Deliberately NOT reset at quiescence (the engine's committed arenas
+	 * and their clocks persist the same way).
+	 */
+	private committedFold = new Map<RootId, Map<NodeId, { threw: boolean; v: Value; counter: number }>>();
+
+	/** Refresh one (root, node) committed fold cache row: evaluate
+	 * committed-for-root, bump the counter iff the outcome changed. Returns
+	 * the row (callers gate on `counter`; a thrown outcome is conveyed, not
+	 * re-thrown — the model's committed evaluations do not throw today, and
+	 * the engine mirror skips a throwing dep without gating). */
+	private refreshCommitted(rootId: RootId, node: AnyNode): { threw: boolean; v: Value; counter: number } {
+		let byNode = this.committedFold.get(rootId);
+		if (byNode === undefined) {
+			byNode = new Map();
+			this.committedFold.set(rootId, byNode);
+		}
+		let v: Value;
+		try {
+			v = this.evaluate(node, { kind: 'committed', root: rootId });
+		} catch (err) {
+			// A THROWING evaluation never settles the chain (the engine's
+			// consult sites skip a throwing dep without touching its stamp or
+			// register): convey the outcome, leave the cache untouched — the
+			// settle transition back to a value decides against the
+			// pre-throw register, so an unchanged round trip stays quiet.
+			return { threw: true, v: err, counter: byNode.get(node.id)?.counter ?? 0 };
+		}
+		let rec = byNode.get(node.id);
+		if (rec === undefined) {
+			rec = { threw: false, v, counter: 1 }; // a first fold counts as changed (the engine's never-consulted marker)
+			byNode.set(node.id, rec);
+		} else if (!Object.is(rec.v, v)) {
+			rec.v = v;
+			rec.counter++;
+		}
+		return rec;
+	}
+
+	/** The render currently COMMITTING (the span of renderEnd's commit half):
+	 * the watcher correction gate's cross-world discriminant — see
+	 * drainCommittedObservers [sanctioned co-evolution]. */
+	private committingRender: RenderPass | undefined;
 
 	/** Ambient default batch: the home of bare (context-free) writes. */
 	ambientBatch: BatchId | undefined;
@@ -760,14 +831,17 @@ export class CosignalModel {
 		// same union-reachability flush as the write path's.
 		this.refreshEdgesAllWorlds();
 		this.flushCoreEffects(this.reachableFrom(node.id));
-		// Value-gated watcher reconciliation against committed truth (which
-		// the fold moved for every root). Silent by exact mirroring: the
+		// Counter-gated watcher reconciliation against committed truth (which
+		// the fold moved for every root) [sanctioned co-evolution: correct on
+		// accepted-change-counter movement since the watcher's last
+		// validation, never on values]. Silent by exact mirroring: the
 		// engine's quiet corrections create no event.
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
-			const now = this.evaluate(this.nodeById(w.node), { kind: 'committed', root: w.root });
-			if (!Object.is(now, w.lastRenderedValue)) {
-				w.lastRenderedValue = now; // the urgent pre-paint re-render
+			const rec = this.refreshCommitted(w.root, this.nodeById(w.node));
+			if (rec.counter !== w.lastSeen) {
+				w.lastSeen = rec.counter; // the urgent correction validates
+				w.lastRenderedValue = rec.v; // the urgent pre-paint re-render
 				w.dedup.clear(); // dedup bits re-arm at the watcher's render
 			}
 		}
@@ -987,6 +1061,7 @@ export class CosignalModel {
 			id: this.nextWatcher++, name, root: p.root, node: node.id,
 			live: false, // subscribes at layout, i.e. at this render's commit
 			lastRenderedValue: value,
+			lastSeen: 0, // validated for the first time at its commit's populator
 			snapshot: {
 				renderPassId: p.id, pin: p.pin,
 				maskSlots: new Set(p.maskSlots),
@@ -1096,11 +1171,15 @@ export class CosignalModel {
 	 * computed, not the effect (suppression is by construction: only the
 	 * body's TOP-LEVEL reads reach this reader). */
 	private captureReactEffectRun(e: ReactEffect): void {
-		const deps: { node: AnyNode; value: Value }[] = [];
+		const deps: { node: AnyNode; value: Value; lastSeen: number }[] = [];
 		const read: Reader = (n) => {
-			const v = this.evaluate(n, { kind: 'committed', root: e.root });
-			deps.push({ node: n, value: v });
-			return v;
+			// The refresh IS the committed evaluation (one derivation per
+			// read, exactly as before); the dep entry stamps the counter AT
+			// THE READ — an effect body may write mid-run, and the boundary
+			// re-check must still see that write as newer than the snapshot.
+			const rec = this.refreshCommitted(e.root, n);
+			deps.push({ node: n, value: rec.v, lastSeen: rec.counter });
+			return rec.v;
 		};
 		try {
 			e.body(read);
@@ -1142,7 +1221,14 @@ export class CosignalModel {
 			if (open) continue; // deferred to the frame's close
 			let changed = false;
 			for (const d of e.deps) {
-				if (!Object.is(this.evaluate(d.node, { kind: 'committed', root: e.root }), d.value)) {
+				// At-least-once [sanctioned co-evolution]: re-fire iff the
+				// dep's accepted-change counter moved since the read that
+				// captured it — no value comparison. A thrown outcome is
+				// conveyed, never gated (the engine mirror skips a
+				// still-pending suspension without touching its stamp).
+				const rec = this.refreshCommitted(e.root, d.node);
+				if (rec.threw) continue;
+				if (rec.counter !== d.lastSeen) {
 					changed = true;
 					break;
 				}
@@ -1203,6 +1289,9 @@ export class CosignalModel {
 			this.revalidateReactEffects(render.root);
 			return;
 		}
+		// The cross-world correction window opens (see drainCommittedObservers)
+		// [sanctioned co-evolution]; closed after the populator below.
+		this.committingRender = render;
 		// (1) Baseline capture at the commit's committed-side entry: the mount
 		// fast path later asks "did committed truth move after my pin?" against
 		// exactly these values.
@@ -1248,6 +1337,25 @@ export class CosignalModel {
 			w.live = true;
 			this.mountFixup(w, render, baseline);
 		}
+		// The committed-render stamp rule [sanctioned co-evolution — the
+		// at-least-once ruling's baseline-advance site; the engine's commit
+		// populator twin]: for every watcher this commit re-rendered or
+		// mounted (adopted reveals excluded — their snapshot rides the
+		// original hidden render), derive committed-now; a rendered register
+		// that agrees is VALIDATED (stamp := the counter now), one that
+		// differs is re-staled (stamp := 0 — never-validated, so the next
+		// drain corrects it even if committed truth flips back meanwhile;
+		// the engine's full-scan drains catch its restaled set the same
+		// way). The value compare is the cross-world render ↔ committed
+		// commit-integrity check the ruling's survivor clause keeps.
+		for (const wid of [...render.rendered, ...render.mounted]) {
+			const w = this.watchers.get(wid);
+			if (w === undefined || !w.live) continue;
+			if (w.snapshot.renderPassId !== render.id) continue; // adopted reveal: population keeps its own timing
+			const rec = this.refreshCommitted(render.root, this.nodeById(w.node));
+			w.lastSeen = Object.is(rec.v, w.lastRenderedValue) ? rec.counter : 0;
+		}
+		this.committingRender = undefined; // the cross-world window closes with the commit fan
 		this.log({ type: 'render-committed', renderPass: render.id, root: render.root });
 		this.reevaluateDeferredReleases();
 		// EF2 boundary: ONE effect re-check per commit operation, at the
@@ -1401,13 +1509,33 @@ export class CosignalModel {
 	 * semantics.
 	 */
 	private drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void {
-		const world: World = { kind: 'committed', root: rootId };
 		for (const w of this.watchers.values()) {
 			if (!w.live || w.root !== rootId) continue;
-			const now = this.evaluate(this.nodeById(w.node), world);
-			if (!Object.is(now, w.lastRenderedValue)) {
-				this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: now, cause });
-				w.lastRenderedValue = now; // the urgent pre-paint re-render
+			const rec = this.refreshCommitted(rootId, this.nodeById(w.node));
+			// The correction gate [sanctioned co-evolution — at-least-once]:
+			// counter movement since the watcher's last validation corrects,
+			// no value comparison — EXCEPT watchers re-rendered/mounted by
+			// the render currently committing, whose rendered register was
+			// just reset from the RENDER world: the commit's own lock-in
+			// moves committed truth by exactly the content their screen
+			// already shows, so a counter gate would correct every watcher
+			// at every commit. Their reconciliation stays the cross-world
+			// value compare (the ruling's survivor clause — per-root
+			// counters cannot express render ↔ committed equivalence).
+			const committing = this.committingRender;
+			if (committing !== undefined && w.snapshot.renderPassId === committing.id) {
+				if (!Object.is(rec.v, w.lastRenderedValue)) {
+					this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: rec.v, cause });
+					w.lastSeen = rec.counter; // the urgent correction validates
+					w.lastRenderedValue = rec.v; // the urgent pre-paint re-render
+					w.dedup.clear(); // dedup bits re-arm at the watcher's render
+				}
+				continue;
+			}
+			if (rec.counter !== w.lastSeen) {
+				this.log({ type: 'reconcile-correction', watcher: w.name, root: rootId, from: w.lastRenderedValue, to: rec.v, cause });
+				w.lastSeen = rec.counter;
+				w.lastRenderedValue = rec.v; // the urgent pre-paint re-render
 				w.dedup.clear(); // dedup bits re-arm at the watcher's render
 			}
 		}

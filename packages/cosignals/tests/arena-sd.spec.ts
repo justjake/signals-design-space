@@ -8,7 +8,9 @@
  *     current truth, never dead-tenancy residue.
  *  2. The pool cap (8): releases beyond the cap drop the shell.
  *  3. Growth across pooled tenancies: a buffer grown in tenancy 1 re-claims
- *     at its grown capacity and keeps growing mid-op in tenancy 2.
+ *     at its grown capacity and keeps growing mid-op in tenancy 2; and the
+ *     observer dep-chain capture keeps its links valid across a mid-loop
+ *     doubling (the reload-after-allocation discipline's chain-build row).
  *  4. Suspended bookkeeping at release: the global suspended count returns
  *     to zero with the arena, and a settlement arriving AFTER the release
  *     is a no-op, not a crash.
@@ -163,7 +165,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 	});
 
 	it('growth across pooled tenancies: a grown buffer re-claims at capacity and keeps growing mid-op', () => {
-		const b = bridge({ arenaInitInts: 16 }); // two records: every alloc beyond the burn grows mid-operation
+		const b = bridge({ arenaInitInts: 16 }); // 2 records: forces real mid-operation doubling in both tenancies
 		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
 		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w1 = mount(b, 'R', sum, 'W1');
@@ -183,6 +185,37 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		expect(w2.lastRenderedValue).toBe(276);
 		commitWrite(b, more[7]!, 1007); // fanout + refold across the re-grown arena
 		expect(b.committedValue(sum2, 'S')).toBe(276 - 7 + 1007);
+	});
+
+	it('observer dep-chain capture across mid-loop doubling: links allocated while the chain builds stay valid (ids stable; stale cached views would corrupt silently)', () => {
+		const b = bridge({ arenaInitInts: 16 });
+		const atoms = Array.from({ length: 24 }, (_, i) => b.atom(`a${i}`, i));
+		// A committed consumer materializes the root's arena and shadows every
+		// atom, leaving the buffer close to its grown capacity...
+		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
+		mount(b, 'R', sum, 'W');
+		const shell = b.__arenaForTest('R')!;
+		const beforeCapture = shell.memory.length;
+		// ...so the capture close's per-dep link loop (one arena link per dep,
+		// threaded through the subscription record) must double the buffers
+		// MID-LOOP — the exact shape where a stale cached view would write
+		// into the orphaned buffer.
+		const e = b.mountCommittedObserver('R', 'E');
+		e.body = () => {
+			for (const at of atoms) void b.captureRead(at);
+		};
+		b.captureRun(e.id, e.body);
+		expect(shell.memory.length).toBeGreaterThan(beforeCapture); // the chain build itself grew the arena
+		expect(e.deps.length).toBe(24);
+		expect(e.runs).toBe(0); // runs counts RE-fires (the mount capture is run zero)
+		// The boundary re-check walks the grown chain: a write to a LATE dep —
+		// its link was allocated after the doubling — re-fires exactly once...
+		commitWrite(b, atoms[20]!, 999);
+		expect(e.runs).toBe(1);
+		// ...and an identity-equal write (rejected at acceptance) leaves every
+		// dep clean: the fast negative guard skips over the re-built chain.
+		commitWrite(b, atoms[20]!, 999);
+		expect(e.runs).toBe(1);
 	});
 
 	it('suspended bookkeeping: release returns the global count to zero; a post-release settlement is a no-op', async () => {

@@ -43,7 +43,7 @@ import {
 	type World as EWorld,
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';
@@ -143,8 +143,8 @@ const coreEffectMounts = new Map<number, number>();
  * through the bridge's `logCoreEffectRun` trace seam.
  *
  * Names take a per-mount ordinal suffix (`#k`): sibling core-effect firing
- * order under one operation is implementation-defined (owner ruling
- * 2026-07-06), so the lockstep differ compares same-step runs as a multiset
+ * order under one operation is implementation-defined by contract, so the
+ * lockstep differ compares same-step runs as a multiset
  * sorted on (effect, value) — duplicate names (two mounts with no
  * intervening event/seq used to create the same `CE${events}.${seq}.${epoch}`
  * uniq) would make that comparison ambiguous.
@@ -200,7 +200,7 @@ export class TwinDriver {
 	 * engine reset, decoded to TraceEvents on demand (the engine creates no
 	 * event objects — tests/trace-events.ts). */
 	readonly engineEvents = attachRefereeStream(this.engine);
-	/** Full-history mirror (archives via onCompact + origins) — the model comparison
+	/** Full-history mirror (archives via onLogEntryDrop + origins) — the model comparison
 	 * retains it OUTSIDE the engine; see tests/model-view.ts. */
 	readonly mirror = new RefereeMirror();
 	/** The engine presented in the model's shape for the oracle's checkers. */
@@ -221,9 +221,10 @@ export class TwinDriver {
 	constructor() {
 		// The reference model's retention invariant (checkRetention in
 		// invariants.ts) shadow-folds over the full history; the engine
-		// retains none of it — the mirror archives each log entry as compaction
-		// folds it out (retaining in-engine would grow without bound under a
-		// workload that never quiesces).
+		// retains none of it — the mirror archives each log entry as it drops
+		// from the write log (fold-valve folds, the episode close's drop;
+		// retaining in-engine would grow without bound under a workload that
+		// never quiesces).
 		this.mirror.attach(this.engine);
 		// Dual bookkeeping: after every lockstep op, the engine serves
 		// every live arena's shadows FROM THE ARENA and compares against the
@@ -398,8 +399,8 @@ export class TwinDriver {
 		this.mirrorQuietFold(node, op, mark);
 	}
 
-	/** A quiet fold advances the engine's base with no log entry and no
-	 * compaction, so the mirror's `onCompact` feed never sees it. The driver
+	/** A quiet fold advances the engine's base with no log entry, so the
+	 * mirror's `onLogEntryDrop` feed never sees it. The driver
 	 * appends the fold's ledger entry to the mirror archive itself — exactly
 	 * what the model's quietWrite does to ITS archive — so the view's
 	 * full-history shadow fold (retention invariant) keeps reconstructing

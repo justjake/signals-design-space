@@ -28,7 +28,7 @@
  * instead of calls.
  */
 
-import { getKernelGeneration } from './WorldArena.js';
+import { committedNodeClock, getKernelGeneration } from './CosignalEngine.js';
 import type { Batch, BatchSlot, BatchSlotMeta } from './Batch.js';
 import type { AnyInternals, AtomInternals, RootId, Seq, Subscription, Value, Watcher } from './concurrent.js';
 import type { EngineCore, World } from './World.js';
@@ -135,9 +135,9 @@ export function createNotificationQueue(deps: NotificationQueueDeps): Notificati
  * drain, the quiet-fold drain, and the one urgent correction — assigned onto
  * the shared engine core record's late-bound slots (the arena walk halves it
  * calls — `walkArenaStrong`, `collectWatchersAt`,
- * `arenaCollectDrainCandidates` — live in WorldArena.ts, same-file with the
- * layout enums; the watcher resolution lives in RenderPass.ts; all are read
- * off the core record at call time).
+ * `arenaCollectDrainCandidates` — live in the engine module, same-file with
+ * the layout enums; the watcher resolution lives in its render-integration
+ * section; all are read off the core record at call time).
  */
 export function createDeliveryWalks(core: EngineCore): void {
 	// Stable resident containers, aliased once (identity-shared).
@@ -214,18 +214,53 @@ export function createDeliveryWalks(core: EngineCore): void {
 		}
 	}
 
-	/** The one urgent pre-paint watcher correction (compare → record → resets →
-	 * notify). A correction must move `lastRenderedValue`, re-arm the dedup
-	 * bits, and queue the kind-2 notify together — all four correction sites
-	 * (settlement drain, quiet drain, durable drain, mount fixup) share this
-	 * body so the triple can never drift. Records by cause: drains record
-	 * reconcile-correction; mounts record mount-correction (decoded as
-	 * 'mount-urgent-correction'); quiet folds record nothing here — the fold's
-	 * own quiet-write record is the whole quiet stream, and the reference
-	 * model's mirrored quiet corrections are silent too, so the streams stay
-	 * comparable. Returns true iff a correction fired. */
+	/** The one urgent pre-paint watcher correction (gate → record → resets →
+	 * notify). A correction must move the rendered register, advance the
+	 * lastValidatedAt stamp, re-arm the dedup bits, and queue the kind-2
+	 * notify together — all four correction sites (settlement drain, quiet
+	 * drain, durable drain, mount fixup) share this body so the tuple can
+	 * never drift. The gate is split by the at-least-once contract:
+	 *
+	 *  - Drain causes (retirement / per-root-commit / quiet) gate on CLOCKS:
+	 *    the candidate's evaluation just settled the watched node's per-root
+	 *    committed clock, and a correction fires iff that clock differs from
+	 *    the watcher's lastValidatedAt — no value comparison. Flip-flops
+	 *    whose intermediate states were refolded re-fire spuriously by
+	 *    accepted design; the stamp advances here (the urgent correction is
+	 *    a validation).
+	 *  - TWO cross-world cases keep the value compare, because per-root
+	 *    committed clocks cannot express equivalence between two different
+	 *    worlds: the mount fixup (cause 'mount' — a mountFix-world value
+	 *    against the rendered register; it does not stamp — the commit
+	 *    populator right after it owns the watcher's validation) and
+	 *    candidates re-rendered or mounted by the CURRENTLY COMMITTING
+	 *    render (core.committingRender — their register was just reset from
+	 *    the render world, and the commit's own lock-in bumps the committed
+	 *    clock for exactly the content the screen already shows, so a clock
+	 *    gate would correct every watcher at every commit; a firing
+	 *    correction here reconciles against committed-now, so it stamps).
+	 *
+	 * Records by cause: drains record reconcile-correction; mounts record
+	 * mount-correction (decoded as 'mount-urgent-correction'); quiet folds
+	 * record nothing here — the fold's own quiet-write record is the whole
+	 * quiet stream, and the reference model's mirrored quiet corrections are
+	 * silent too, so the streams stay comparable. Returns true iff a
+	 * correction fired. */
 	function correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
-		if (!core.isValueChanged(wInternals, w.lastRenderedValue, now)) return false;
+		const committing = core.committingRender;
+		if (cause === 'mount' || (committing !== undefined && w.snapshot.renderPassId === committing.id)) {
+			// Cross-world gate (the value compare per-root clocks cannot replace).
+			if (!core.isValueChanged(wInternals, w.lastRenderedValue, now)) return false;
+			if (cause !== 'mount') {
+				const a = core.rootToArena.get(w.root);
+				if (a !== undefined) w.lastValidatedAt = committedNodeClock(a, w.nodeIx);
+			}
+		} else {
+			const a = core.rootToArena.get(w.root);
+			const clockNow = a === undefined ? 0 : committedNodeClock(a, w.nodeIx);
+			if (clockNow === w.lastValidatedAt) return false;
+			w.lastValidatedAt = clockNow;
+		}
 		if (cause !== 'quiet') {
 			const tr = core.trace;
 			if (tr !== undefined) {
@@ -250,7 +285,12 @@ export function createDeliveryWalks(core: EngineCore): void {
 			if (!w.live) continue;
 			const wInternals = c.resolveWatcherInternals(w);
 			if (wInternals === undefined) continue; // loud skip: record tenancy moved
-			correctWatcher(w, wInternals, c.evaluate(wInternals, { kind: 'committed', root: w.root }), 'quiet');
+			const now = c.evaluate(wInternals, { kind: 'committed', root: w.root });
+			// The drain is an observer consult: settle the watched node's
+			// committed clock before the correction gate reads it.
+			const a = c.rootToArena.get(w.root);
+			if (a !== undefined) c.settleObserverClock(a, wInternals);
+			correctWatcher(w, wInternals, now, 'quiet');
 		}
 	}
 
@@ -282,7 +322,7 @@ export function createDeliveryWalks(core: EngineCore): void {
 		ws.length = 0;
 		// Candidate collection: the root arena's dirty list seeds a
 		// walk over all arena links — weak included (the walk itself lives in
-		// WorldArena.ts, same-file with the layout enums).
+		// CosignalEngine.ts's world-arena sections, same-file with the enums).
 		const a = c.rootToArena.get(rootId);
 		if (a !== undefined && a.dirty.length !== 0) {
 			c.arenaCollectDrainCandidates(a, gen, rootId, ws);
@@ -303,7 +343,11 @@ export function createDeliveryWalks(core: EngineCore): void {
 			const w = ws[i]!;
 			const wInternals = c.resolveWatcherInternals(w);
 			if (wInternals === undefined) continue; // loud skip: record tenancy moved
-			correctWatcher(w, wInternals, c.evaluate(wInternals, world), cause);
+			const now = c.evaluate(wInternals, world);
+			// The drain is an observer consult: settle the watched node's
+			// committed clock before the correction gate reads it.
+			if (a !== undefined) c.settleObserverClock(a, wInternals);
+			correctWatcher(w, wInternals, now, cause);
 		}
 		ws.length = 0;
 	}

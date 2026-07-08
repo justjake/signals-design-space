@@ -19,7 +19,7 @@
  */
 
 import { SuspendedRead } from './index.js';
-import { engineEpoch, reclaimRetryAllSkipped } from './Kernel.js';
+import { engineEpoch, reclaimRetryAllSkipped } from './CosignalEngine.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore } from './World.js';
 import type { RootId } from './concurrent.js';
@@ -123,7 +123,7 @@ export function createSettlement(core: EngineCore): void {
 						// Scan the suspended list (dense — O(current suspensions))
 						// for shadows whose box payload is this sentinel —
 						// the arena half (marks + propagation + the read-clock
-						// bump) lives with the layout enums: WorldArena.ts
+						// bump) lives with the layout enums: CosignalEngine.ts
 						// arenaInvalidateSettled. The marks are the invalidation
 						// (arenas serve world reads); committed roots
 						// also join the cone drain below. Open-render arenas keep
@@ -140,11 +140,17 @@ export function createSettlement(core: EngineCore): void {
 				// with an open render frame (their close flushes).
 				for (const rootId of touchedRoots) {
 					if (rootToOpenRender.has(rootId)) continue;
+					const ra = c.rootToArena.get(rootId);
 					for (const w of watchers.values()) {
 						if (!w.live || w.root !== rootId) continue;
 						const wInternals = c.resolveWatcherInternals(w);
 						if (wInternals === undefined) continue; // loud skip: record tenancy moved
-						c.correctWatcher(w, wInternals, c.evaluate(wInternals, { kind: 'committed', root: rootId }), 'retirement');
+						const now = c.evaluate(wInternals, { kind: 'committed', root: rootId });
+						// The settlement drain is an observer consult: settle the
+						// watched node's committed clock before the correction
+						// gate reads it.
+						if (ra !== undefined) c.settleObserverClock(ra, wInternals);
+						c.correctWatcher(w, wInternals, now, 'retirement');
 					}
 				}
 				// Boundary subscription scan + the flush the loop owns.

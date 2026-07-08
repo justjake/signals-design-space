@@ -15,7 +15,7 @@ import { engine, __resetEngineForTest } from '../src/concurrent.js';
  * SKIPPED-FOR-FORK-SUITE.md alongside the reference model's own suite.
  */
 import { describe, expect, it } from 'vitest';
-import { commitAndRetire, concurrent, mountCommitted, openRender, selfCheck, set, update } from './helpers.js';
+import { commitAndRetire, concurrent, mountCommitted, mountEngineReactEffect, openRender, selfCheck, set, update } from './helpers.js';
 
 describe('case 1 — world-divergent dependency (the killer; family)', () => {
 	function setup() {
@@ -1032,5 +1032,83 @@ describe('case 17 — optimistic rollback: the feature is deleted', () => {
 		m.retire(t.id); // abandoned still folds (the only "cancellation" is... nothing)
 		expect(m.committedValue(a, 'A')).toBe(1);
 		selfCheck(m);
+	});
+});
+
+describe('at-least-once observers (re-fires are clock-gated; no per-dep value baselines)', () => {
+	// The rewritten value-gate pins. The old contract compared each dep's
+	// committed value against a per-observer baseline; the ruling replaces
+	// the re-fire decision with the per-(root, node) committed clock —
+	// producer clean + clock match skips, clock mismatch RE-FIRES, no value
+	// comparison. The clock is consult-driven (settleObserverClock): it moves
+	// only when an OBSERVER CONSULT derives a changed value, so the three
+	// cells below pin the exact spurious/coalescing boundary on both twins.
+
+	it('equal-value round trip whose intermediate state another observer consulted RE-FIRES spuriously by accepted design', () => {
+		const m = concurrent();
+		const x = m.atom('x', 0);
+		const w = mountCommitted(m, 'A', x, 'W'); // co-consultant ON x: its per-boundary drains settle x's chain
+		const e = m.mountReactEffect('A', x, 'E');
+		expect(e.runs).toBe(0);
+		const held = openRender(m, 'A', []); // defer E: its root holds an open frame
+		const t1 = m.openBatch('urgent');
+		m.write(t1.id, x, set(1));
+		m.retire(t1.id); // boundary 1: W's drain consults x at 1 (chain hop; W corrects)
+		const t2 = m.openBatch('urgent');
+		m.write(t2.id, x, set(0));
+		m.retire(t2.id); // boundary 2: W's drain consults x back at 0 (second hop)
+		expect(w.lastRenderedValue).toBe(0);
+		expect(e.runs).toBe(0); // still deferred
+		m.renderEnd(held.id, 'discard'); // the frame closes: E's deferred re-check flushes
+		expect(e.runs).toBe(1); // AT-LEAST-ONCE: the chain moved twice since E's stamp — re-fire, same value
+		expect(e.lastValue).toBe(0); // the round trip netted to the captured value
+		selfCheck(m);
+	});
+
+	it('equal-value round trip WITHIN one consult window coalesces: the boundary re-check folds the net result and skips', () => {
+		const m = concurrent();
+		const x = m.atom('x', 0);
+		const e = m.mountReactEffect('A', x, 'E');
+		const t = m.openBatch('deferred');
+		m.write(t.id, x, set(5));
+		m.write(t.id, x, set(0)); // net-no-change inside one batch: no consult sees the 5
+		m.retire(t.id);
+		expect(e.runs).toBe(0); // coalesced — boundary-driven coalescing is unchanged
+		selfCheck(m);
+	});
+
+	it('the fast negative guard: an untouched clean dep skips the boundary re-check without re-evaluating (engine leg)', () => {
+		// Engine leg (see the header note): the pin counts ENGINE evaluations,
+		// which the lockstep fan-out cannot express (the model re-derives per
+		// re-check by design — its naive evaluation is the reference, not a
+		// cost model).
+		__resetEngineForTest();
+		const m = engine;
+		const x = m.atom('x', 0);
+		const y = m.atom('y', 0);
+		let evals = 0;
+		const c = m.computed('c', (read) => {
+			evals++;
+			return (read(x) as number) + 1;
+		});
+		const e = mountEngineReactEffect(m, 'A', c, 'E');
+		const evalsAfterCapture = evals; // the capture's own evaluation(s)
+		// An unrelated boundary: y's batch retires; the re-check runs for
+		// every root, but c is CLEAN (no mark reached it), its clock matches
+		// E's stamp, and the cutoff register agrees — the guard skips with no
+		// evaluation and no comparison.
+		const tU = m.openBatch();
+		m.write(tU.id, y, 0, 1);
+		m.retire(tU.id);
+		expect(e.runs).toBe(0);
+		expect(evals).toBe(evalsAfterCapture); // the guard's whole point: zero re-derivation
+		// A touching boundary: x's batch retires; the mark fails the guard,
+		// the consult re-derives and settles a moved clock, and E re-fires.
+		const tX = m.openBatch();
+		m.write(tX.id, x, 0, 41);
+		m.retire(tX.id);
+		expect(e.runs).toBe(1);
+		expect(e.lastValue).toBe(42);
+		expect(evals).toBeGreaterThan(evalsAfterCapture);
 	});
 });

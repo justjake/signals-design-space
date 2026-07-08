@@ -1,8 +1,7 @@
 /**
- * THE ARMED DIVERGENCE CHECKER + STRUCTURAL VALIDATOR (W3: referee
- * machinery, moved out of the shipped bridge class — the engine keeps only
- * the narrow `__checkerInternals` window and the fold-truth frame
- * discipline). Armed by the test harness — the lockstep driver, the fuzz-corpus
+ * THE ARMED DIVERGENCE CHECKER + STRUCTURAL VALIDATOR (test-side
+ * machinery — the engine keeps only the narrow `__checkerInternals`
+ * window and the fold-truth frame discipline). Armed by the test harness — the lockstep driver, the fuzz-corpus
  * adapter, and the arena suites — via `armArenaCheck`; production installs
  * nothing and pays one undefined test per operation epilogue.
  *
@@ -27,7 +26,7 @@ import {
 	type World,
 } from '../src/concurrent.js';
 import { SuspendedRead } from '../src/index.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 
 /** One memoized naive outcome (thrown outcomes memoize and rethrow,
  * identity-stable — same payload object every consult within a check). */

@@ -1,6 +1,6 @@
 /**
  * cosignals — the concurrent-worlds engine riding the kernel. The kernel is
- * the dependency tracker (Kernel.ts; index.ts's header defines its terms):
+ * the dependency tracker (CosignalEngine.ts; index.ts's header defines its terms):
  * it stores every signal, computed, effect, and dependency edge as
  * fixed-size integer records in shared arrays — and it holds exactly one
  * current value per atom. React's concurrent rendering needs several views
@@ -56,8 +56,10 @@
  *   Its **mask** is the set of live batches (and their slots) the render
  *   is rendering.
  * - **Retirement** ends a batch: its log entries become permanent history
- *   visible to every world, and once no world can tell the difference they
- *   **compact** — fold into the atom's base and are reclaimed.
+ *   visible to every world. Write records are episode-lifetime — they stay
+ *   on the log until the episode closes (below), where the durable handoff
+ *   drops them wholesale; only the bounded-memory valve (WriteLog.ts's
+ *   retired-prefix fold) ever folds entries into base mid-episode.
  *   `committedAdvance` is the committed-advance counter, bumped whenever
  *   committed truth moves (a per-root commit, or a retirement that changed
  *   history).
@@ -70,7 +72,7 @@
  *   re-check every observer the change could reach against committed state
  *   and correct the stale ones.
  * - The engine keeps two dependency graphs. One is the kernel's own graph
- *   (the packed records in Kernel.ts), which only knows newest values. The
+ *   (the packed records in CosignalEngine.ts), which only knows newest values. The
  *   other is the per-world **world arenas**: one packed record arena per
  *   render world and per committed-for-root world, holding a **shadow**
  *   (value + flags) per consumed node and the strong and weak-flagged
@@ -88,12 +90,19 @@
  *   samples taken at those re-derivations (the untracked-sampling rule).
  *   Kernel atoms serve newest directly (the eager-apply invariant);
  *   everything else folds.
- * - An **episode** is the stretch between **quiescence** points — moments
- *   when nothing is in flight (no live batches, no open renders, no
- *   **parked** actions — async actions kept pending until their promise
- *   settles). At quiescence zero-consumer committed arenas reclaim;
- *   populated arenas persist — their links are current structure, not an
- *   episode log — and the kernel's newest caches persist the same way
+ * - An **episode** runs from the first pending durable work (a batch opens,
+ *   an action parks, a render starts — never inferred from writes or call
+ *   depth) to full **quiescence** (every batch retired — **parked** async
+ *   actions included, kept pending until their promise settles — and every
+ *   render closed). Episode-lifetime state — write records, batch
+ *   bookkeeping — drops WHOLESALE at that boundary after the durable
+ *   handoff (WriteLog.ts's episode lifecycle: canonical newest becomes each
+ *   touched atom's base by identity and the logs vanish). NOT
+ *   episode-lifetime: committed-root routing structure (a mounted watcher's
+ *   dependency cone is current routing state and persists across
+ *   quiescence, exactly as committed arenas do), observer records and their
+ *   baselines, and dependency edges anywhere (edges purge and re-link per
+ *   evaluating world). The kernel's newest caches persist the same way
  *   (nothing newest-visible changes at quiescence). Sequence values are
  *   never rewritten: the global counter climbs monotonically for the
  *   process's life (exact to 2^53 — see the bound note at `quiesce`).
@@ -116,7 +125,7 @@
  *   reachable only through structure no live arena holds degrades to a
  *   drain correction instead of a live delivery.
  * - worlds as pure folds with the two-clause visibility rule (see
- *   {@link isVisibleAt}), the committed-for-root world, and the fast-forwarded
+ *   {@link isVisible}), the committed-for-root world, and the fast-forwarded
  *   mount-fixup world (see {@link runMountFixup}).
  * - per-write value-blind synchronous delivery in the writer's stack with
  *   render-aware suppression, per-(watcher, slot) dedup, and dedup clear
@@ -128,8 +137,9 @@
  *   every render end; disposal keeps conservative touched bits until no
  *   live pin can still need them; a loud release-anyway backstop prevents
  *   deadlock.
- * - retirement ordering stamp → fold → drain → clear-rows → release, with
- *   pin-gated prefix compaction of write logs, and per-root commit lock-in
+ * - retirement ordering stamp → fold valve → drain → clear-rows → release →
+ *   episode close (the fold valve and the quiescence handoff live in
+ *   WriteLog.ts), and per-root commit lock-in
  *   (a root that committed UI from a still-live batch must keep agreeing
  *   with its own screen).
  * - **mount fixup** (see {@link runMountFixup}): the commit-edge
@@ -177,19 +187,19 @@
  */
 
 import { Atom, Computed, CycleError, SuspendedRead, untracked, __plainAtomWrite, __resetPolicyForTest, __setStandaloneQuiet, type ComputedCtx } from './index.js';
-import { ArenaShape, E, LinkField, NodeField, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch, type IdBrand, type NodeId, type NodeIndex } from './Kernel.js';
-import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleTap } from './suspense.js';
-import { __setReclaimGuardHook, __setRecordFreeHook } from './Kernel.js';
+import { ArenaShape, E, LinkField, NodeField, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch, type IdBrand, type NodeId, type NodeIndex } from './CosignalEngine.js';
+import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleTap } from './CosignalEngine.js';
+import { __setReclaimGuardHook, __setRecordFreeHook } from './CosignalEngine.js';
 import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { createConcurrentEngine, probes, type ConcurrentEngine, type WriteKind } from './ConcurrentEngine.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 import type { ObservationIndex } from './ObservationIndex.js';
-import { WriteLog, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
+import { FOLD_VALVE_THRESHOLD, WriteLog, type WriteLogEntry } from './WriteLog.js';
 import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchManager } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
-import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './WorldArena.js';
-import type { Subscription } from './SubscriptionManager.js';
-import { Watcher, type RenderPass, type RenderPassManager } from './RenderPass.js';
+import { WorldArena, arenaCheckerLayout, arenaHasShadow, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
+import type { Subscription } from './CosignalEngine.js';
+import { Watcher, type RenderPass, type RenderPassManager } from './CosignalEngine.js';
 
 // ---- error carriers (errors.ts; re-exported — they are public surface) -----------
 
@@ -204,14 +214,14 @@ export type Value = unknown;
  * its own — so this is the kernel's (leniently branded) NodeId, re-exported.
  * Never dense over nodes — node and link records share the kernel's one
  * allocator — so dense per-node columns key by NodeIndex instead. */
-export type { NodeId } from './Kernel.js';
+export type { NodeId } from './CosignalEngine.js';
 /** Dense per-node column key: the record's NodeField.NODE_INDEX, assigned by
  * the kernel allocator and recycled with the record slot (a reused record
  * inherits its slot's index — the record-free scrub is what makes that
  * sound). A packing detail, never an identity — the kernel's (leniently
  * branded) NodeIndex, re-exported: a NodeIndex is not a NodeId, and the
  * brands make mixing them a compile error. */
-export type { NodeIndex } from './Kernel.js';
+export type { NodeIndex } from './CosignalEngine.js';
 // Batch identity, slots, and slot sets live in Batch.ts (the batch
 // mechanism module); re-exported here — they are engine surface.
 export { BATCH_NONE } from './Batch.js';
@@ -219,10 +229,11 @@ export type { Batch, BatchId, BatchSlot, BatchSlotMeta, BatchSlotSet } from './B
 export type RootId = string;
 export type RenderPassId = number;
 export type WatcherId = number;
-/** A committed `run`-action subscription's id: the SubscriptionManager's own
- * mount counter — not a kernel record id of any kind (kernel effect records
- * travel as NodeId). Leniently branded (Kernel.ts IdBrand) so the spaces
- * cannot cross. */
+/** A committed `run`-action subscription's id: the committed-observers
+ * section's monotone mount counter (registration order — the boundary
+ * scan's iteration order, the reference model's map order) — never a kernel
+ * record id (subscription RECORDS recycle; this id never does). Leniently
+ * branded (CosignalEngine.ts IdBrand) so the spaces cannot cross. */
 export type SubscriptionId = number & IdBrand<'subscription'>;
 /** A point on the one global sequence line (log-entry seqs, pins, retirement
  * stamps, write clocks, the committed-advance counter). */
@@ -236,7 +247,7 @@ type WalkGen = number;
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
 
-// The per-atom write log and its compaction mechanism live in WriteLog.ts;
+// The per-atom write log and the episode lifecycle live in WriteLog.ts;
 // re-exported here — the class and the entry shape are engine surface.
 export { WriteLog } from './WriteLog.js';
 export type { WriteLogEntry } from './WriteLog.js';
@@ -261,7 +272,9 @@ export class AtomInternals {
 	 * which this node does not survive). @internal */
 	readonly ix: NodeIndex;
 	name: string;
-	/** The folded floor of the write log: retired, compacted history every world sees. */
+	/** The floor every world folds from: the atom's episode-start value
+	 * (advanced only by quiet folds, fold-valve folds, and the episode
+	 * close's durable handoff). */
 	base: Value;
 	baseSeq: Seq = 0;
 	/** Packed log entry columns (the engine truth; tests/diagnostics materialize
@@ -370,12 +383,12 @@ export type AnyInternals = AtomInternals | ComputedInternals;
 
 // (The `Batch` record and `BatchSlotMeta` slot-table entry types live in
 // Batch.ts with the batch mechanism; re-exported above. The `RenderPass`
-// record, the `Watcher` class, and the watcher snapshot live in
-// RenderPass.ts with the render lifecycle; re-exported here — they are
-// engine surface.)
+// record, the `Watcher` class, and the watcher snapshot live in the engine
+// module's observer-records + render-integration sections; re-exported
+// here — they are engine surface.)
 
-export { Watcher } from './RenderPass.js';
-export type { RenderPass, RenderPassState, WatcherSnapshot } from './RenderPass.js';
+export { Watcher } from './CosignalEngine.js';
+export type { RenderPass, RenderPassState, WatcherSnapshot } from './CosignalEngine.js';
 
 export type RootState = {
 	id: RootId;
@@ -397,13 +410,13 @@ export type RootState = {
 
 // The committed `run`-action Subscription record and its whole lifecycle
 // (registration, capture frame, removal, replay, boundary revalidation)
-// live in SubscriptionManager.ts; the type is re-exported here — it is
-// engine
+// live in the engine module's committed-observers section
+// (CosignalEngine.ts); the class is re-exported here — it is engine
 // surface. The `World` type — one self-consistent assignment of values to
 // all atoms — and the fold/evaluation/read-routing machinery live in
 // World.ts, beside the one shared engine-core record the strongly-connected
 // mechanism factories are wired through.
-export type { Subscription } from './SubscriptionManager.js';
+export type { Subscription } from './CosignalEngine.js';
 export type { World } from './World.js';
 
 /** The decoded shape of the engine's observable events (same shapes as the
@@ -552,7 +565,7 @@ let driver: EngineDriver | undefined;
  * The armed quiet state — the one boolean the write path branches on,
  * recomputed only at pipeline transitions (batch open/retire, render
  * start/end, driver attach): quiet ⇔ zero live batches and zero open renders
- * and every write log compacted. While quiet, a context-free write to a
+ * and no episode write records held. While quiet, a context-free write to a
  * node with engine content folds directly (see {@link quietWrite}); a handle with
  * no engine content takes the plain graph write (the internals-less arm — its
  * whole history is quiet folds, so kernel-current is its committed base).
@@ -695,21 +708,25 @@ function recordFreeImpl(recordId: NodeId, nodeIndex: number): void {
 }
 
 // (getKernelGeneration / getKernelNodeIndex — the live kernel-memory tenancy/index
-// reads — live in WorldArena.ts beside their hottest consumers, imported
-// above for the registry and the resident walks.)
+// reads — live in the engine module's world-arena section beside their
+// hottest consumers, imported above for the registry and the resident walks.)
 
 /** An arena buffer capacity, counted in Int32 slots (stride-8 records: one
- * node shadow or one dependency link per record). */
+ * node shadow or one dependency link per record; positive — the growth
+ * doubling starts from it). */
 export type ArenaInitInts = number;
 
 /** Engine tuning — accepted by `__resetEngineForTest`; a never-reset
  * production process runs the defaults. */
 export type EngineResetOptions = {
 	/**
-	 * Every claimed world arena's buffer starts at this capacity and grows
-	 * in place when its records outgrow it (default 8192 ints). Shrinking it
-	 * makes even small graphs exercise mid-operation growth, which is how the
-	 * arena suites pin every growth path.
+	 * The world arenas' initial buffer reservation. Defaults to the
+	 * generous engine reservation (64MiB of records — zero-fill
+	 * demand-paged, so untouched records cost no resident memory and
+	 * growth stays rare); an arena that outgrows its reservation doubles
+	 * its buffers by copy, mid-operation — exhaustion is never fatal. The
+	 * arena suites shrink this to force that growth path on every
+	 * allocation (tests/arena-sa2.spec.ts, tests/arena-sd.spec.ts).
 	 */
 	arenaInitInts?: ArenaInitInts;
 	/**
@@ -790,7 +807,7 @@ export function attachDriver(d: EngineDriver): void {
 // The WorldArena record class, its same-file layout const enums, the
 // transliterated walk family, and the whole serving/lifecycle layer
 // (serve/refold, claim/release/pool, fanout, decay, the routing walks) live
-// in WorldArena.ts; the FOLD_TRUTH serve-override marker and the world
+// in CosignalEngine.ts's world-arena sections; the FOLD_TRUTH serve-override marker and the world
 // fold/evaluation/read-routing layer live in World.ts. Both are composed by
 // ConcurrentEngine.ts (createConcurrentEngine, called at module initialization below)
 // through one shared engine-core record (World.ts
@@ -800,7 +817,7 @@ export function attachDriver(d: EngineDriver): void {
 // module re-exports the arena class (engine surface) and keeps module-level
 // aliases of the hot table entries so resident callers keep their one-load
 // call shapes.
-export { WorldArena } from './WorldArena.js';
+export { WorldArena } from './CosignalEngine.js';
 
 /**
  * The armed checker's window into the engine — returned by
@@ -900,7 +917,7 @@ export type ArenaCheckerInternals = {
  * `snapshotModel` against a model-shaped view of this engine (tests/model-view.ts)
  * that materializes the model's shape — write logs, archives, origins, dedup
  * sets — from packed engine state plus a driver-side mirror fed by the
- * `onCompact` hook, so the production engine carries no mirror members.
+ * `onLogEntryDrop` hook, so the production engine carries no mirror members.
  *
  * State threading: every binding below is
  * module state re-pointed by {@link composeEngine} — the one composition call,
@@ -915,8 +932,8 @@ let slots: BatchSlotMeta[];
 let idToRenderPass: Map<RenderPassId, RenderPass>;
 let roots: Map<RootId, RootState>;
 let watchers: Map<WatcherId, Watcher>;
-/** The committed `run`-action subscription store (alias of
- * SubscriptionManager.ts's, by identity). */
+/** The committed `run`-action subscription store (alias of the engine's
+ * committed-observers table, by identity). */
 let idToSubscription: Map<SubscriptionId, Subscription>;
 // (The trace recorder slot and the direct listeners live on the shared
 // engine core record; the `engine` surface object at the bottom of this
@@ -975,12 +992,15 @@ let obsDeps: (Set<AnyInternals> | undefined)[];
 let syncObservedDeps: ObservationIndex['syncObservedDeps'];
 /** Watchers by nodeIndex (the routing walks' collection rows). */
 let nodeToWatchers: (Watcher[] | undefined)[];
-// The write-log compaction mechanism (WriteLog.ts); the batch-state edge of
-// a compaction is Batch.ts's own releaseLogEntry.
-let compaction: CompactionTable;
-/** Atoms with a non-empty write log (compaction candidates; identity alias
- * of WriteLog.ts's set). */
-let uncompactedAtoms: Set<AtomInternals>;
+// The episode lifecycle (WriteLog.ts): touched-atom membership, the
+// bounded-memory fold valve, and the quiescence close.
+/** Atoms whose write log holds entries — the episode's touched-atom
+ * membership and the reclamation guard row (identity alias of
+ * WriteLog.ts's set). */
+let episodeHolds: Set<AtomInternals>;
+/** The fold valve's candidates — atoms whose log reached the valve
+ * threshold (identity alias; the write path adds at the crossing). */
+let foldCandidates: Set<AtomInternals>;
 /** The one open (non-ended) render per root — React renders one tree per
  * root at a time; a same-root restart is a new render. */
 let rootToOpenRender: Map<RootId, RenderPass>;
@@ -990,14 +1010,14 @@ let batchOps: BatchManager;
  * write path's cache over the mechanism's registry. */
 let lastBatchId = 0;
 let lastBatchRef: Batch | undefined = undefined;
-/** Optional compaction observer (test/diagnostics seam): called once
- * per log entry as it folds into base and leaves the write log. The
- * reference model's
+/** Optional log-entry drop observer (test/diagnostics seam): called once
+ * per log entry as it leaves the write log — at a fold-valve fold or the
+ * episode drop. The reference model's
  * retention invariant needs the full history; its archive mirror lives
  * outside the engine (tests/model-view.ts), fed by this hook — keeping
- * every compacted log entry in-engine would grow without bound. Production
+ * every dropped log entry in-engine would grow without bound. Production
  * leaves it undefined and retains nothing. */
-let onCompact: ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined = undefined;
+let onLogEntryDrop: ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined = undefined;
 
 /** The shared engine-core record (World.ts `EngineCore`) of the current
  * composition. */
@@ -1051,7 +1071,7 @@ function composeEngine(options?: EngineResetOptions): void {
 	epoch = 0;
 	lastBatchId = 0;
 	lastBatchRef = undefined;
-	onCompact = undefined;
+	onLogEntryDrop = undefined;
 	driver = undefined;
 	devChecks = options?.devChecks ?? false;
 	eng = createConcurrentEngine({
@@ -1067,7 +1087,8 @@ function composeEngine(options?: EngineResetOptions): void {
 		internalsForComputed,
 		getKernelStrongDeps,
 		readKernelValue,
-		getOnCompact: () => onCompact,
+		getOnLogEntryDrop: () => onLogEntryDrop,
+		readNewestUntracked: (node) => untracked(() => E.readAtom(node.id)),
 		isDriverAttached: () => driver !== undefined,
 		isDevChecksEnabled: () => devChecks,
 		setQuiet: (q) => {
@@ -1094,19 +1115,19 @@ function composeEngine(options?: EngineResetOptions): void {
 	obsRefs = eng.obs.refs;
 	obsDeps = eng.obs.deps;
 	syncObservedDeps = eng.obs.syncObservedDeps;
-	compaction = eng.compaction;
-	uncompactedAtoms = eng.compaction.uncompactedAtoms;
+	episodeHolds = eng.episode.holds;
+	foldCandidates = eng.episode.foldCandidates;
 	batchOps = eng.batch;
 	idToBatch = eng.batch.idToBatch;
 	slots = eng.batch.slots;
 	renderOps = eng.render;
-	idToSubscription = eng.subs.idToSubscription;
-	mountCommittedObserver = eng.subs.mountCommittedObserver;
-	captureRun = eng.subs.captureRun;
-	captureRead = eng.subs.captureRead;
-	removeSubscription = eng.subs.removeSubscription;
-	replayReactEffect = eng.subs.replayReactEffect;
-	revalidateCommittedSubscriptions = eng.subs.revalidateCommittedSubscriptions;
+	idToSubscription = core.idToSubscription;
+	mountCommittedObserver = core.mountCommittedObserver;
+	captureRun = core.captureRun;
+	captureRead = core.captureRead;
+	removeSubscription = core.removeSubscription;
+	replayReactEffect = core.replayReactEffect;
+	revalidateCommittedSubscriptions = core.revalidateCommittedSubscriptions;
 	kernelTrackedReader = eng.kernelTrackedReader;
 	evaluate = core.evaluate;
 	foldAtomOp = core.foldAtom;
@@ -1355,7 +1376,7 @@ export function disposeComputed(handle: Computed<unknown>): void {
 }
 
 	// (purgeNodeFromArenas — the whole-arena shadow purge disposeComputed and
-	// the record-free scrub share — lives in WorldArena.ts; aliased above.)
+	// the record-free scrub share — lives in CosignalEngine.ts; aliased above.)
 
 /**
  * The record-free scrub (registered kernel-side via __setRecordFreeHook): a
@@ -1388,7 +1409,7 @@ function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 		obsDeps[ix] = undefined;
 		nodeToWatchers[ix] = undefined;
 	}
-	__clearUseCacheForIndex(ix); // the id-keyed ctx.use request cache (suspense.ts column)
+	__clearUseCacheForIndex(ix); // the id-keyed ctx.use request cache (the engine's evaluation-policy section)
 	purgeNodeFromArenas(ix);
 }
 
@@ -1407,8 +1428,10 @@ function clearHandleBacklink(node: AnyInternals): void {
  * Engine-side reclaim guards (installed kernel-side per composition — the
  * guard-table rows the kernel cannot see itself): watcher-
  * index membership (covers live, mounted-in-an-open-render, and reveal-
- * deferred watchers uniformly), observation retains (obsRefs > 0), a
- * non-empty write log, membership in any open render's arena, and membership
+ * deferred watchers uniformly), observation retains (obsRefs > 0), episode
+ * membership (the atom's write log holds entries — per-record membership in
+ * the episode's `holds` set, whose drop at the episode close is the retry
+ * trigger), membership in any open render's arena, and membership
  * in any arena's suspended list (committed arenas' plain membership is not a
  * guard: the record-free scrub purges their shadows). Cold: runs once per
  * finalizer fire / retry.
@@ -1422,10 +1445,10 @@ function reclaimGuardsImpl(id: NodeId, ix: NodeIndex): boolean {
 	// The guard runs on the live tenancy (reclaimNode verified the GEN stamp
 	// before consulting guards), so the dense row is this record's node.
 	const node = ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined;
-	if (node !== undefined && node.kind === 'atom' && node.log.n !== node.log.start) return true;
+	if (node !== undefined && node.kind === 'atom' && episodeHolds.has(node)) return true;
 	for (const p of rootToOpenRender.values()) {
 		const a = p.arena;
-		if (a !== undefined && ix < a.nodeToShadow.length && a.nodeToShadow[ix] !== 0) return true;
+		if (a !== undefined && arenaHasShadow(a, ix)) return true;
 	}
 	let suspended = false;
 	eachArena((a) => {
@@ -1517,11 +1540,11 @@ export function root(id: RootId): RootState {
 
 // ---------------------------------------------------- worlds and folds
 // The whole fold/evaluation family — the fold-purity bracket (runInFoldCallback),
-// foldAtom, isVisibleAt (the one visibility rule), applyOp, isAtomValueEqual (the one
+// foldAtom, isVisible (the one visibility rule), applyOp, isAtomValueEqual (the one
 // equality rule), evaluate, readKernelComputed, the fold-through readers, and the
 // read-routing resolution — lives in World.ts; the hot entries are aliased
 // as module bindings (see composeEngine). The arena serving/lifecycle layer
-// lives in WorldArena.ts; the settlement tap and the operation epilogue
+// lives in CosignalEngine.ts; the settlement tap and the operation epilogue
 // pair live in settlement.ts.
 
 /** Test seam: shrink the settlement-drain iteration cap. @internal */
@@ -1572,7 +1595,7 @@ function arenaQuiesceSweep(): void {
  */
 export function __checkerInternals(): ArenaCheckerInternals {
 	return {
-		// The layout view is built in WorldArena.ts, the enums' own file
+		// The layout view is built in CosignalEngine.ts, the enums' own file
 		// (same-file const enum discipline): in sync by construction.
 		layout: arenaCheckerLayout(),
 		get evalDepth(): number {
@@ -1673,7 +1696,7 @@ export function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): numbe
 }
 
 // (runInFoldTruthFrame — the armed checker's naive evaluation frame — lives in
-// WorldArena.ts with the serve-override state; __checkerInternals wires it.)
+// CosignalEngine.ts with the serve-override state; __checkerInternals wires it.)
 
 // ---- observed-closure maintenance ----
 // The observation index — shiftObservedCount/enterObservation/
@@ -1686,7 +1709,7 @@ export function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): numbe
 // ---- the routing walks (arenas route) ----
 // The arena-walking halves — walkArenaStrong, the watcher collection rows'
 // readers, the drain candidate collection, and the fixup closure's arena
-// leg — live in WorldArena.ts (same-file with the layout enums); the
+// leg — live in CosignalEngine.ts (same-file with the layout enums); the
 // orchestration — the delivery walk, the per-watcher delivery decision, the
 // durable/quiet drains, and correctWatcher — lives in NotificationQueue.ts
 // (createDeliveryWalks), reached through the core's late-bound slots (the
@@ -1709,7 +1732,7 @@ export function liveBatches(): Batch[] {
 	return batchOps.liveBatches();
 }
 
-export function internalsById(id: NodeId): AnyInternals {
+function internalsById(id: NodeId): AnyInternals {
 	// Public surface: the caller's id is not provably a node record id, so
 	// the row resolution carries its own identity check (a garbage id —
 	// e.g. a link record's — reads free-list residue as its NODE_INDEX and
@@ -1730,7 +1753,7 @@ export function internalsById(id: NodeId): AnyInternals {
  * quiet is base ≡ kernel newest ≡ every world's value, so a batch opened
  * later starts from a base that already contains the quiet history.
  * Clock coherence: the fold creates one sequence and stamps it into the
- * atom's baseSeq (compaction + the test-side model view read it) and the
+ * atom's baseSeq (the episode folds + the test-side model view read it) and the
  * committed-advance clock (committedAdvance), so baseline/fast-out checks see the fold. Observers: no
  * walk machinery is armed, so the small live-observer population is
  * reconciled value-gated, exactly like a durable drain (corrections for
@@ -1834,7 +1857,7 @@ export function bareWrite(node: AtomInternals, kind: WriteKind, payload: unknown
  * clock → member-slot fanout → apply to the kernel with stepwise equality
  * → arena delivery walk → newest-subscription flush after the walk returns.
  */
-export function writeInBatch(batchId: BatchId | undefined, node: AtomInternals, kind: WriteKind, payload: unknown): void {
+function writeInBatch(batchId: BatchId | undefined, node: AtomInternals, kind: WriteKind, payload: unknown): void {
 	const c = core; // one load; the frame guards/depth below stay one-property reads
 	if (c.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 	if (c.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
@@ -1868,10 +1891,17 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 	if (batch.state !== 'live') throw new ScheduleError(`write into retired batch ${batchId} — a retired batch accepts no new writes`);
 
 	const log = node.log;
-	// Drop check: only when the write log is empty and the op evaluates equal
-	// against base may a write be dropped — once log entries exist, worlds
-	// may fold different previous values, so equality here proves nothing.
-	if (log.n === log.start) {
+	// Drop check: a write may be dropped only when every world provably folds
+	// this atom to ONE value the op can be compared against — otherwise
+	// worlds may fold different previous values and equality proves nothing.
+	// Two such states exist: an empty write log (every world sees base), and
+	// a fully-retired log below every live render pin (every world sees the
+	// whole history — kernel newest, by the eager-apply invariant). The
+	// second state is where the reference model's log is EMPTY (it folds
+	// retired pin-clear history into base at every boundary; the engine
+	// keeps the entries for the episode's wholesale drop), so the acceptance
+	// decision must run there exactly as in the empty case.
+	if (log.length === 0) {
 		if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
 			// Fast arm — bench-pinned, do not fold into the general arm
 			// (A/B-measured: folding the two write-path fast arms
@@ -1896,6 +1926,27 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 				return;
 			}
 		}
+	} else if (log.unretired === 0 && log.maxRetiredSeq <= core.getMinLivePin()) {
+		// Retired-history drop check (the second one-value state). Kernel
+		// newest is the value every world folds to; untracked, so a write
+		// issued from inside a kernel effect frame records no link.
+		const newest = untracked(() => E.readAtom(node.id));
+		if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
+			if (Object.is(payload, newest)) {
+				const tr = core.trace;
+				if (tr !== undefined) tr.writeDropped(node, batchId);
+				endOperation();
+				return;
+			}
+		} else {
+			const evaluated = applyOp(node, kind, payload, newest);
+			if (isAtomValueEqual(node, newest, evaluated)) {
+				const tr = core.trace;
+				if (tr !== undefined) tr.writeDropped(node, batchId);
+				endOperation();
+				return;
+			}
+		}
 	}
 
 	// Intern slot, append log entry, bump the slot write clock.
@@ -1903,12 +1954,18 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 	const writeSeq = nextSeq();
 	log.push(kind, slot.id, writeSeq, batch.id, payload);
 	batch.lastWriteSeq = writeSeq;
-	batch.liveLogEntries++;
 	if (node.lastTouchBatch !== batch.id) {
 		node.lastTouchBatch = batch.id;
 		batch.atomsTouched.push(node);
 	}
-	if (log.n - log.start === 1) uncompactedAtoms.add(node);
+	// Episode membership rows: the first entry joins the atom to the episode
+	// (holds — also its reclamation guard row); growth to the valve threshold
+	// files the atom with the fold valve (equality is exact because length
+	// grows by one per push, and the valve removes a candidate only while its
+	// log is back under the threshold — the invariant on foldCandidates).
+	const logLen = log.length;
+	if (logLen === 1) episodeHolds.add(node);
+	else if (logLen === FOLD_VALVE_THRESHOLD) foldCandidates.add(node);
 	slot.writeClock = writeSeq;
 	if (roots.size !== 0) {
 		// A write into a committed-member slot moves committed truth immediately;
@@ -1930,7 +1987,7 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 		// node/op/batch/slot/seq — the decoder reconstructs the model-shaped
 		// 'write' event from this single record.
 		const tr = core.trace;
-		if (tr !== undefined) tr.logEntry(node, log.entryAt(log.n - 1));
+		if (tr !== undefined) tr.logEntry(node, log.tailEntry());
 	}
 
 	// Apply to the kernel eagerly with stepwise equality, so the newest
@@ -1983,10 +2040,10 @@ export function logCoreEffectRun(name: string, value: Value): void {
 // watcher mount/defer/reveal/re-render/removal family, the commit fan
 // (renderEnd + reclaim + deferred releases + the re-staled populator),
 // per-root commit lock-in, and mount fixup with its dependency-closure
-// walks — lives in RenderPass.ts; the public functions below are thin
-// delegates over its operation table.
+// walks — lives in the engine module's render-integration section; the
+// public functions below are thin delegates over its operation table.
 
-/** Open a render pass (see RenderPass.ts renderStart). */
+/** Open a render pass (see the engine's renderStart). */
 export function renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass {
 	return renderOps.renderStart(rootId, includeBatches);
 }
@@ -2006,7 +2063,8 @@ export function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, nam
 	return renderOps.mountWatcher(renderPassId, node, name);
 }
 
-/** Reveal-shaped mounts (React's Offscreen/Activity — see RenderPass.ts). */
+/** Reveal-shaped mounts (React's Offscreen/Activity — see the engine's
+ * render-integration section). */
 export function deferMountEffects(watcherId: WatcherId): void {
 	renderOps.deferMountEffects(watcherId);
 }
@@ -2015,19 +2073,21 @@ export function adoptRevealedMount(renderPassId: RenderPassId, watcherId: Watche
 	renderOps.adoptRevealedMount(renderPassId, watcherId);
 }
 
-/** An existing live watcher re-rendered by a render (see RenderPass.ts). */
+/** An existing live watcher re-rendered by a render (see the engine's
+ * renderWatcher). */
 export function renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
 	renderOps.renderWatcher(renderPassId, watcherId);
 }
 
-/** Full watcher removal — the bindings' unsubscribe surface (see RenderPass.ts). */
+/** Full watcher removal — the bindings' unsubscribe surface (see the
+ * engine's removeWatcher). */
 export function removeWatcher(watcherId: WatcherId): void {
 	renderOps.removeWatcher(watcherId);
 }
 
 /**
  * Per-root commit lock-in — the single owner of a root's committed-state
- * transition (RenderPass.ts commitBatches; the bindings' root-commit
+ * transition (the engine's commitBatches; the bindings' root-commit
  * report handler calls this public form). Returns whether any batch was
  * newly locked in.
  */
@@ -2036,7 +2096,7 @@ export function commitBatches(rootId: RootId, batches: Iterable<BatchId>): boole
 }
 
 /**
- * End a render (RenderPass.ts renderEnd — the commit fan's ordering
+ * End a render (the engine's renderEnd — the commit fan's ordering
  * story lives there).
  */
 export function renderEnd(id: RenderPassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
@@ -2045,9 +2105,9 @@ export function renderEnd(id: RenderPassId, kind: 'commit' | 'discard', opts?: {
 
 // ---------------------------------------------------------- retirement
 // Retirement — the batch's terminal transition and its cross-module fan
-// (stamp → compact → fan → drain → clear-membership → release) — lives in
-// Batch.ts with the rest of the batch lifecycle; these delegates are the
-// public/protocol surface.
+// (stamp → fold valve → fan → drain → clear-membership → release → episode
+// close) — lives in Batch.ts with the rest of the batch lifecycle; these
+// delegates are the public/protocol surface.
 
 /** Retirement fires exactly once per batch; parked async actions retire
  * only at settlement (see Batch.ts retire). */
@@ -2061,8 +2121,9 @@ export function settleAction(batchId: BatchId): void {
 	batchOps.settleAction(batchId);
 }
 
-/** Transitive dependency closure feeding a node (RenderPass.ts — the
- * triple walk; public embedding/diagnostics surface). */
+/** Transitive dependency closure feeding a node (the engine's
+ * dependencyClosureOf — the triple walk; public embedding/diagnostics
+ * surface). */
 export function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 	return renderOps.dependencyClosureOf(nodeId, render);
 }
@@ -2081,12 +2142,15 @@ export function quiescent(): boolean {
 }
 
 /**
- * Quiescence (no live batches, no live pins, no parked actions): the
- * epoch bumps, dead episode records drop, and
- * the arenas persist — their links are current structure, not an
+ * Quiescence (no live batches, no live pins, no parked actions): the epoch
+ * bumps and the arenas persist — their links are current structure, not an
  * episode log, so the routing coverage committed observers rely
  * on survives by persistence (nothing re-records because nothing
- * was lost). Two arena duties run, in order: the zero-consumer
+ * was lost). The episode's own records are ALREADY gone: the episode close
+ * (WriteLog.ts maybeCloseEpisode) ran inside the retirement or render close
+ * that reached quiescence, dropping write records and retired batch
+ * records wholesale — this operation is the public epoch/bookkeeping reset
+ * over what remains. Two arena duties run, in order: the zero-consumer
  * reclamation sweep, then the read-clock renumber over the survivors
  * only.
  *
@@ -2108,27 +2172,18 @@ export function quiescent(): boolean {
  */
 export function quiesce(): void {
 	if (!quiescent()) throw new ScheduleError('quiescence requires no live batches, pins, or parked actions');
-	// Residue check: with no live pins, the last retirement compacted every
-	// write log — so the uncompacted set (exactly the atoms with a non-empty
-	// write log, maintained at append and compaction) must be empty.
-	for (const n of uncompactedAtoms) {
-		if (n.log.n > n.log.start) {
-			throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.log.n - n.log.start} log entries`);
-		}
+	// Residue check: quiescent ⇒ the episode close already ran (it fires
+	// inside the transition that emptied the batch/render tables) — so the
+	// episode membership (exactly the atoms with a non-empty write log,
+	// maintained at append and drop) must be empty.
+	for (const n of episodeHolds) {
+		throw new InvariantViolation(`quiescence residue: atom ${n.name} still holds ${n.log.length} log entries`);
 	}
 	epoch++;
-	// Dead-episode records drop at the reset: nothing from a dead
-	// episode can validate in a live one; serial counters stay monotone.
-	for (const [id, p] of idToRenderPass) {
-		if (p.state === 'ended') idToRenderPass.delete(id);
-	}
-	for (const [id, t] of idToBatch) {
-		if (t.state === 'retired') idToBatch.delete(id);
-	}
-	lastBatchId = 0;
-	lastBatchRef = undefined;
-	// (No newest-side reset: kernel caches persist — nothing
-	// newest-visible changes at quiescence.)
+	// (Episode records — write logs, retired batch records — dropped at the
+	// episode close; ended render records drop at each render end. No
+	// newest-side reset either: kernel caches persist — nothing
+	// newest-visible changes at quiescence. Serial counters stay monotone.)
 	// Arena duties, in order: reclamation sweep, then the
 	// read-clock renumber over surviving consumer-populated arenas.
 	arenaQuiesceSweep();
@@ -2151,7 +2206,7 @@ export function quiesce(): void {
 // ------------------------------------------------------------ world reads
 
 /** The value of a node in a named world (adapter/test surface). */
-export function readWorldValue(node: AnyInternals, world: World): Value {
+function readWorldValue(node: AnyInternals, world: World): Value {
 	return evaluate(node, world);
 }
 
@@ -2203,7 +2258,7 @@ function assertIdleForReset(): void {
  *  2. the driver's protocol reset first (protocol v2's hook): the host's
  *     lane registry drops its full slot tenancy before the engine the ids
  *     point into disappears; then the driver slot clears.
- *  3. the kernel scrub (Kernel.ts __resetKernelForTest): watermark-bounded
+ *  3. the kernel scrub (CosignalEngine.ts __resetKernelForTest): watermark-bounded
  *     memory scrub — never a reallocation — allocator heads, counters,
  *     queued/pendingFree, VALUES/FNS side columns, walk scratch,
  *     desiredRecords; bumps the engine epoch (all cross-reset microtasks —
@@ -2380,13 +2435,13 @@ export const engine = {
 	set trace(hooks: TraceHooks | undefined) {
 		core.trace = hooks;
 	},
-	/** Optional compaction observer (test/diagnostics seam — see the
+	/** Optional log-entry drop observer (test/diagnostics seam — see the
 	 * module-state declaration). */
-	get onCompact(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined {
-		return onCompact;
+	get onLogEntryDrop(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined {
+		return onLogEntryDrop;
 	},
-	set onCompact(fn: ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined) {
-		onCompact = fn;
+	set onLogEntryDrop(fn: ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined) {
+		onLogEntryDrop = fn;
 	},
 	// direct listeners (the bindings' consumption surface — attachDriver
 	// assigns them too; these accessors are the test/diagnostics face)

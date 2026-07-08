@@ -19,7 +19,7 @@
  *  8  Atom.state host seam (index.ts)                  | kernel or world          | route-by-frame: world routing only with no kernel frame open; a kernel-frame read makes a kernel link + fills a kernel cache, so it must serve newest (a world-routed kernel-frame read would poison the kernel cache) | T6, one-core 'overlay world evaluation' pins the routed side
  *  9  Computed.state (no host seam)                    | kernel                   | kernel-only: standalone computeds are not world-routable (bindings reject via resolveNode) | T6, hooks.ts resolveNode error
  * 10  deliveryWalk (arena strong lists+nodeToWatchers) | arenas (strong)          | arena-only: kernel consumers already served by eager kernel apply; weak lists never traversed; may deliver fewer than the union-conservative model (⊆ bound; the dead-arena retreat pins the degraded case) | battery case 1, scars S2/S3, T5, arena-sb.spec
- * 11  core effect() reach (kernel flush)               | kernel                   | kernel-only: core effects are real kernel effects, flushed by the eager kernel apply over tracked links only (untracked deps invalidate values, never notify); sibling firing order under one op is implementation-defined (owner ruling) — the lockstep differ compares same-step runs as a multiset | fuzz (multiset differ), trace.spec core-effect stage
+ * 11  core effect() reach (kernel flush)               | kernel                   | kernel-only: core effects are real kernel effects, flushed by the eager kernel apply over tracked links only (untracked deps invalidate values, never notify); sibling firing order under one op is implementation-defined by contract — the lockstep differ compares same-step runs as a multiset | fuzz (multiset differ), trace.spec core-effect stage
  * 12  weak (untracked) links — segregated subs lists   | arena weak lists         | weak-only: mark propagation + drain candidates, never deliveries | battery 'taint member', arena-sa2 mixed-mode, arena-sb untracked-fan, fuzz
  * 13  arena reclamation (getConsumerCount sweep)          | watchers + committed subs | zero-consumer quiescence sweep; no reachability walk needed — coverage is the arena itself | arena-sa2 root-churn, long-seed fuzz (episode churn), T7
  * 14  drainCommittedObservers (arena dirty lists)      | arenas (strong+weak)     | arena-only, conservative: dirty-list seeds expand over both lists; entries persist until decay (drain seeding stands on it) | lockstep drain parity, scars S26, T9
@@ -43,7 +43,7 @@
  *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
  *  A8 render-pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's only slot-set form; model-view derives the reference model's Sets from the bits; lockstep render worlds
  *  A9 batch.atomsTouched ⊇ write log batch columns          | retirement stamping via touch lists; quiesce residue InvariantViolation + lockstep retirement visibility
- * A10 batch.liveLogEntries ≡ un-compacted log entries       | T10 (new pin: batch outlives pinned log entries, reclaims after compaction)
+ * A10 batch records are episode-lifetime                    | T10 (re-pinned: a retired batch outlives its log entries and drops with the episode)
  * A11 DIRTY flag ⇒ dirty-list membership (decay + drain seeding stand on it) | the structural validator at every armed epilogue; arena-sa2 decay pins
  * A12 shim previousCells ≡ last committed value        | cosignals-react hooks.spec 'ctx.previous returns the last committed value'
  */
@@ -295,16 +295,16 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 	});
 });
 
-describe('§2 A10 — batch.liveLogEntries gates reclamation against un-compacted log entries', () => {
-	it('T10: a retired batch outlives its pin-blocked log entries and reclaims exactly when they compact', () => {
+describe('§2 A10 — batch records are episode-lifetime (they outlive their log entries by construction)', () => {
+	it('T10: a retired batch record persists while the episode stays open and drops at the episode close', () => {
 		const b = bridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
-		const p = b.renderStart('A', []); // live pin below the coming retirement blocks compaction
+		const p = b.renderStart('A', []); // the open render holds the episode open past the retirement
 		b.retire(t.id);
 		expect(b.idToBatch.has(t.id)).toBe(true); // log entries still on the write log reference the batch by id
-		b.renderEnd(p.id, 'discard'); // pin released → compaction folds the log entry → gate opens
+		b.renderEnd(p.id, 'discard'); // last render closed, no live batches → the episode closes and drops its records
 		expect(b.idToBatch.has(t.id)).toBe(false);
 	});
 });

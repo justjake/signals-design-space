@@ -43,13 +43,12 @@ const ENGINE_MODULES = [
 	'src/WriteLog.ts',
 	'src/Batch.ts',
 	'src/World.ts',
-	'src/WorldArena.ts',
 	'src/settlement.ts',
-	'src/SubscriptionManager.ts',
-	'src/RenderPass.ts',
-	'src/Kernel.ts',
-	'src/suspense.ts',
-	'src/lifecycle.ts',
+	// The engine module — kernel, evaluation policy, observed lifecycle,
+	// world arenas, observer records, committed observers, render
+	// integration, reclamation — the same zero-cost scans cover every
+	// section.
+	'src/CosignalEngine.ts',
 ];
 
 function src(rel: string): string {
@@ -112,7 +111,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		}
 		// The engine-surface accessor pair is the only surface over the core field.
 		expect(src('src/concurrent.ts')).toMatch(/return core\.trace;/);
-		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/NotificationQueue.ts', 'src/RenderPass.ts', 'src/ConcurrentEngine.ts']) {
+		for (const rel of ['src/World.ts', 'src/CosignalEngine.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/NotificationQueue.ts', 'src/ConcurrentEngine.ts']) {
 			const lines2 = src(rel).split('\n');
 			for (const line of lines2) {
 				if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;

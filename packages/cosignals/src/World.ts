@@ -5,7 +5,7 @@
  * vocabulary — write log, batch, render pass, arena — is defined at the top
  * of concurrent.ts). This module owns:
  *
- *  - the `World` type and `isVisibleAt`, the two-clause visibility rule;
+ *  - the `World` type and `isVisible`, the two-clause visibility rule;
  *  - `foldAtom` / `applyOp` / `isAtomValueEqual` — the fold family (one op-application
  *    rule, one equality rule) and the fold-purity bracket (`runInFoldCallback`);
  *  - `evaluate` — world evaluation (arena-served render/committed worlds,
@@ -15,7 +15,7 @@
  *    world on stack → open capture frame → the driver's ambient provider),
  *    the routed read bodies (`routedAtomRead` / `routedComputedRead` — the
  *    public `.state` getters call them directly when `routingActive` is
- *    set), and the one-flag arming (`syncReadRouting` maintains Kernel.ts's
+ *    set), and the one-flag arming (`syncReadRouting` maintains CosignalEngine.ts's
  *    `routingActive` boolean at every world/capture/provider transition —
  *    one flag covers every routing source).
  *
@@ -34,15 +34,16 @@
  */
 
 import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js';
-import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './Kernel.js';
+import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './CosignalEngine.js';
+import type { Clock } from './CosignalEngine.js';
 import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
-import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
+import { FOLD_TRUTH, type WorldArena } from './CosignalEngine.js';
 import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
-import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
+import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, SubscriptionId, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { ObservationIndex } from './ObservationIndex.js';
-import type { CaptureFrame, SubscriptionManager } from './SubscriptionManager.js';
-import type { CompactionTable } from './WriteLog.js';
+import type { CaptureFrame, Subscription } from './CosignalEngine.js';
+import type { EpisodeLifecycle, WriteRecord } from './WriteLog.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
@@ -91,8 +92,9 @@ export type EngineCore = {
 	syncObservedDeps: ObservationIndex['syncObservedDeps'];
 	/** Watchers by id (identity alias). */
 	watchers: Map<WatcherId, Watcher>;
-	/** RenderPass records by id (identity alias — RenderPass.ts owns every
-	 * transition; the resident quiescence sweep reads it in place). */
+	/** RenderPass records by id (identity alias — the engine's render-
+	 * integration section owns every transition; the resident quiescence
+	 * sweep reads it in place). */
 	idToRenderPass: Map<RenderPassId, RenderPass>;
 	/** The one open render per root (identity alias). */
 	rootToOpenRender: Map<RootId, RenderPass>;
@@ -123,7 +125,9 @@ export type EngineCore = {
 	getSeq: ConcurrentEngineHost['getSeq'];
 	getCommittedAdvance: ConcurrentEngineHost['getCommittedAdvance'];
 	advanceCommitted: ConcurrentEngineHost['advanceCommitted'];
-	/** Initial arena buffer size in ints (EngineResetOptions knob). */
+	/** Initial arena buffer size in ints (EngineResetOptions knob; the
+	 * composition site fills the generous default — arenas grow by copy
+	 * past it). */
 	arenaInitInts: ArenaInitInts;
 
 	// ---- composition-assigned tables (assigned by the composition site right
@@ -132,9 +136,12 @@ export type EngineCore = {
 	/** The batch manager (Batch.ts — the render-close
 	 * orchestration and the resident write path reach it here). */
 	batch: BatchManager;
-	/** Write-log compaction over every candidate atom (WriteLog.ts
-	 * compactAll — retirement's fold step and the render-close pin release). */
-	compactAll: CompactionTable['compactAll'];
+	/** The episode lifecycle's boundary pair (WriteLog.ts): the bounded-
+	 * memory fold valve over retired write-log prefixes (retirement's fold
+	 * step and the render-close pin release) and the quiescence close
+	 * (durable handoff + wholesale episode drop). */
+	runFoldValve: EpisodeLifecycle['runFoldValve'];
+	maybeCloseEpisode: EpisodeLifecycle['maybeCloseEpisode'];
 
 	// ---- shared mutable state ----
 	/** The trace recorder slot — the engine's only instrumentation output
@@ -156,9 +163,9 @@ export type EngineCore = {
 	evalDepth: number;
 	/** True inside an updater/reducer/equals callback (reads+writes throw). (World) */
 	inFoldCallback: boolean;
-	/** The core capture frame `captureRun` opens (subscription-manager state;
-	 * the routing resolution consults it per routed read — see
-	 * SubscriptionManager.ts). */
+	/** The core capture frame `captureRun` opens (committed-observer state;
+	 * the routing resolution consults it per routed read — see the engine's
+	 * committed-observers section). */
 	captureFrame: CaptureFrame | undefined;
 	/** >0 while a hook-initiated evaluation may legally suspend the render
 	 * (the bindings' `evaluateSuspending` bumps it via the class accessor);
@@ -184,6 +191,14 @@ export type EngineCore = {
 	epilogueCheck: (() => void) | undefined;
 	/** Public-operation nesting (the settlement firing-context discriminant). */
 	opDepth: number;
+	/** The render currently COMMITTING (set for the span of renderEnd's
+	 * commit half, cleared in its finally): the watcher correction gate's
+	 * cross-world discriminant — a candidate re-rendered/mounted by this
+	 * very render compares its just-reset rendered register against
+	 * committed truth by value (the fixup-class render↔committed question
+	 * per-root clocks cannot express); every other candidate gates on
+	 * clocks alone. (RenderPass sets it; the delivery walks read it.) */
+	committingRender: RenderPass | undefined;
 	/** Per-walk visited generation source (delivery walk, drains, closures). */
 	walkGen: number;
 	/** Live subscription count (fast bail on the boundary-scan paths — owned
@@ -209,9 +224,9 @@ export type EngineCore = {
 	rootToArena: Map<RootId, WorldArena>;
 	/** Pooled released arena shells (WorldArena-owned; test seam reads it). */
 	arenaPool: WorldArena[];
-	/** Watchers re-staled by their own commit, per root (RenderPass.ts's
-	 * re-staled loop writes; the durable drain consumes; retirement and the
-	 * commit lock-in read the size as their drain gate). */
+	/** Watchers re-staled by their own commit, per root (the render
+	 * lifecycle's re-staled loop writes; the durable drain consumes;
+	 * retirement and the commit lock-in read the size as their drain gate). */
 	restaled: Map<RootId, Set<Watcher>>;
 
 	// ---- late-bound: World ----
@@ -238,6 +253,11 @@ export type EngineCore = {
 
 	// ---- late-bound: WorldArena ----
 	claimArena(kind: 'render' | 'committed', world: World, root: RootId): WorldArena;
+	/** Settle a node's per-root committed clock after an observer consult
+	 * (the one clock-advance site — see the engine's settleObserverClock). */
+	settleObserverClock(a: WorldArena, node: AnyInternals): Clock;
+	/** The capture sites' dep stamp (resolve arena + settle; 0 = no arena). */
+	committedDepStamp(rootId: RootId, node: AnyInternals): Clock;
 	releaseArena(a: WorldArena): void;
 	getArena(world: World): WorldArena | undefined;
 	eachArena(fn: (a: WorldArena) => void): void;
@@ -265,8 +285,17 @@ export type EngineCore = {
 	setSettleCap(n: number): void;
 	getPendingSettleCount(): number;
 
-	// ---- late-bound: the subscription manager ----
-	revalidateCommittedSubscriptions: SubscriptionManager['revalidateCommittedSubscriptions'];
+	// ---- late-bound: committed observers (the engine's observer section) ----
+	/** The committed `run`-action subscription store (factory-owned; the
+	 * engine surface and the resident readers — quiesce sweep, tests — alias
+	 * it by identity). */
+	idToSubscription: Map<SubscriptionId, Subscription>;
+	mountCommittedObserver(rootId: RootId, name: string, refire?: () => void): Subscription;
+	captureRun(id: SubscriptionId, body: () => void): void;
+	captureRead(node: AnyInternals): Value;
+	removeSubscription(id: SubscriptionId): void;
+	replayReactEffect(id: SubscriptionId): void;
+	revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void;
 
 	// ---- late-bound: deliver (the walk orchestration) ----
 	/** The one urgent pre-paint watcher correction (NotificationQueue.ts). */
@@ -275,10 +304,10 @@ export type EngineCore = {
 	drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void;
 	deliveryWalk(from: AtomInternals, batch: Batch, slot: BatchSlotMeta, seq: Seq): void;
 
-	// ---- late-bound: RenderPass ----
-	/** The watcher→node resolution (RenderPass.ts — generation-checked). */
+	// ---- late-bound: the render lifecycle ----
+	/** The watcher→node resolution (generation-checked). */
 	resolveWatcherInternals(w: Watcher): AnyInternals | undefined;
-	/** The minimum live render pin (compaction's pin clause floor). */
+	/** The minimum live render pin (the fold valve's pin clause floor). */
 	getMinLivePin(): Seq;
 };
 
@@ -321,7 +350,8 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		...deps,
 		// composition-assigned tables
 		batch: LATE,
-		compactAll: LATE,
+		runFoldValve: LATE,
+		maybeCloseEpisode: LATE,
 		// shared mutable state
 		trace: undefined,
 		activeWorld: undefined,
@@ -335,6 +365,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		suspendedCount: 0,
 		epilogueCheck: undefined,
 		opDepth: 0,
+		committingRender: undefined,
 		walkGen: 0,
 		committedSubCount: 0,
 		onDelivery: undefined,
@@ -362,6 +393,8 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		routedComputedRead: LATE,
 		// late-bound: WorldArena
 		claimArena: LATE,
+		settleObserverClock: LATE,
+		committedDepStamp: LATE,
 		releaseArena: LATE,
 		getArena: LATE,
 		eachArena: LATE,
@@ -387,7 +420,13 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		endOperation: LATE,
 		setSettleCap: LATE,
 		getPendingSettleCount: LATE,
-		// late-bound: the subscription manager
+		// late-bound: committed observers
+		idToSubscription: LATE,
+		mountCommittedObserver: LATE,
+		captureRun: LATE,
+		captureRead: LATE,
+		removeSubscription: LATE,
+		replayReactEffect: LATE,
 		revalidateCommittedSubscriptions: LATE,
 		// late-bound: deliver
 		correctWatcher: LATE,
@@ -445,7 +484,7 @@ export function createWorld(core: EngineCore): void {
 		syncReadRouting();
 	}
 
-	/** Arms/disarms read routing (Kernel.ts's one `routingActive` boolean —
+	/** Arms/disarms read routing (CosignalEngine.ts's one `routingActive` boolean —
 	 * the public `.state` getters' inline check): armed while an evaluation
 	 * world is on stack, an open capture frame exists, or a driver's ambient
 	 * provider could answer — so a driver-less quiet engine costs reads
@@ -505,7 +544,7 @@ export function createWorld(core: EngineCore): void {
 		const cap = routedCap;
 		const node = core.internalsForAtom(atom);
 		const v = routedRead(node, world);
-		if (cap !== undefined) cap.deps.push({ node, value: v });
+		if (cap !== undefined) cap.deps.push({ node, value: v, stamp: core.committedDepStamp(cap.sub.root, node) });
 		return v;
 	}
 
@@ -534,7 +573,7 @@ export function createWorld(core: EngineCore): void {
 			if (oc !== undefined) oc.push(node);
 		}
 		const v = evaluate(node, world);
-		if (cap !== undefined) cap.deps.push({ node, value: v });
+		if (cap !== undefined) cap.deps.push({ node, value: v, stamp: core.committedDepStamp(cap.sub.root, node) });
 		return v;
 	}
 
@@ -554,18 +593,16 @@ export function createWorld(core: EngineCore): void {
 	/**
 	 * The fold — replay visible entries over base in sequence order with
 	 * stepwise equality (an equal step keeps the old reference). Runs over
-	 * the packed columns.
+	 * the log's entry array (already in sequence order — the log appends in
+	 * order and folds only whole prefixes).
 	 */
 	function foldAtom(atom: AtomInternals, world: World): Value {
-		const log = atom.log;
-		const n = log.n;
+		const entries = atom.log.entries;
 		let value = atom.base;
-		const seqs = log.seqs;
-		const retired = log.retired;
-		const slots = log.slots;
-		for (let i = log.start; i < n; i++) {
-			if (!isVisibleAt(i, world, seqs, retired, slots)) continue;
-			const next = applyOp(atom, log.kinds[i]!, log.payloads[i], value);
+		for (let i = 0; i < entries.length; i++) {
+			const e = entries[i]!;
+			if (!isVisible(e, world)) continue;
+			const next = applyOp(atom, e.kind, e.payload, value);
 			// Equality order: isEqual(current, incoming) — per replayed entry
 			// (the fold re-invokes per entry by design; "once" is scoped to the
 			// write path's acceptance decision).
@@ -575,8 +612,8 @@ export function createWorld(core: EngineCore): void {
 	}
 
 	/**
-	 * The visibility rule — which log entries each world's fold replays (over the
-	 * packed columns; no WriteLogEntry object). The clauses:
+	 * The visibility rule — which log entries each world's fold replays (over
+	 * the stored records; no WriteLogEntry materialization). The clauses:
 	 *  - newest: every log entry (the kernel applies writes eagerly, so this
 	 *    world is also readable straight off the kernel arena);
 	 *  - render: (1) log entries retired at-or-before the render's pin — permanent
@@ -594,18 +631,18 @@ export function createWorld(core: EngineCore): void {
 	 * Single-caller but the one visibility rule: kept as a named function
 	 * deliberately (readability exception, documented here).
 	 */
-	function isVisibleAt(i: number, world: World, seqs: Seq[], retired: Seq[], slots: BatchSlot[]): boolean {
+	function isVisible(e: WriteRecord, world: World): boolean {
 		switch (world.kind) {
 			case 'newest':
 				return true;
 			case 'render': {
 				const w = world.render;
-				const r = retired[i]!;
-				if (r !== 0 && r <= w.pin) return true; // clause 1: retired by my pin
-				return ((w.includedBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= w.pin; // clause 2
+				const r = e.retiredSeq;
+				if (r !== undefined && r <= w.pin) return true; // clause 1: retired by my pin
+				return ((w.includedBits >>> e.slot) & 1) === 1 && e.seq <= w.pin; // clause 2
 			}
 			case 'committed': {
-				if (retired[i]! !== 0) return true; // committed truth at now
+				if (e.retiredSeq !== undefined) return true; // committed truth at now
 				// Membership consult materializes the root record (reference-model
 				// parity: the model's committedSlotsNow() creates it on first consult).
 				// Hot arm reads the aliased map directly — `root()` is
@@ -613,12 +650,12 @@ export function createWorld(core: EngineCore): void {
 				// the first consult takes the materializing miss arrow (a fresh
 				// record carries committedBits 0 either way, so the answer is
 				// value-identical — the arrow is kept for materialization parity).
-				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> slots[i]!) & 1) === 1;
+				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> e.slot) & 1) === 1;
 			}
 			case 'mountFix': {
-				if (((world.maskBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= world.pin) return true;
-				if (retired[i]! !== 0) return true; // committed truth as of now
-				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> slots[i]!) & 1) === 1; // hot get + materializing miss arrow (see the committed arm)
+				if (((world.maskBits >>> e.slot) & 1) === 1 && e.seq <= world.pin) return true;
+				if (e.retiredSeq !== undefined) return true; // committed truth as of now
+				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> e.slot) & 1) === 1; // hot get + materializing miss arrow (see the committed arm)
 			}
 		}
 	}
@@ -636,7 +673,7 @@ export function createWorld(core: EngineCore): void {
 		if (kind === 0 /* WriteKind.SET */) return payload;
 		return runInFoldCallback(() => {
 			// The kernel's fold-purity POISON table guards the replay exactly
-			// like the plain-path update() (Kernel.ts's fold-guard pair).
+			// like the plain-path update() (CosignalEngine.ts's fold-guard pair).
 			const saved = foldGuardSwap();
 			try {
 				return (payload as (p: Value) => Value)(prev);
@@ -648,7 +685,7 @@ export function createWorld(core: EngineCore): void {
 
 	/** How this atom compares two values — the one equality rule, one copy for
 	 * every site that asks (fold replay, the write path's drop check and
-	 * eager kernel apply, quiet-mode folds, write log compaction): Object.is when
+	 * eager kernel apply, quiet-mode folds, fold-valve folds): Object.is when
 	 * the atom carries the default, otherwise the atom's custom comparator
 	 * under the fold-purity guard (equality callbacks replay per world, so
 	 * signal reads/writes inside them throw — the updater contract). */

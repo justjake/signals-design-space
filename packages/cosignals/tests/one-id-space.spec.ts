@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import { Atom, Computed } from '../src/index.js';
 import { attachDriver, BATCH_NONE, engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type CosignalEngine, type Watcher } from '../src/concurrent.js';
-import { getKernelGeneration, getKernelNodeIndex } from '../src/WorldArena.js';
+import { getKernelGeneration, getKernelNodeIndex } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
 function bridge(): CosignalEngine {

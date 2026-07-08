@@ -27,7 +27,7 @@ import {
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
 import { __eachInternalsForTest, __internalsByIdForTest } from '../src/concurrent.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
 	comparableEvents,
@@ -322,7 +322,7 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __s
 //   - non-delivery comparable events per step (exact, in order — with ONE
 //     canonicalization: same-step contiguous core-effect-run blocks compare
 //     as a multiset, because sibling core-effect firing order is
-//     implementation-defined [owner ruling 2026-07-06]; see
+//     implementation-defined by contract; see
 //     canonicalizeCoreEffectBlocks);
 //   - delivery-decision events ('delivery'/'suppressed'/'mount-corrective'):
 //     cumulative multiset ⊆ the model's, keyed (type, watcher, batch, slot)
