@@ -543,6 +543,91 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     section — documented in the list comment).
     Suites: cosignals 362/1skip, oracle 82, react 72/72 — green.
 
+15. **At-least-once observers (commit D — the ruling's semantics; layout
+    v4)**. THE CENTRAL DESIGN DISCOVERY (the fuzz corpora convicted the
+    first cut): fold-time clock bumps make observer re-fire behavior depend
+    on READ TIMING — committed-member writes are committed-visible
+    immediately, so any committed read between boundaries (test asserts,
+    the differ's own per-step snapshots) refolds shadows and hops the
+    chain; a flip-flop consulted mid-window re-fired on the engine but not
+    the model (seed 137 / long seed 9004). The fix CONVERGES both sides:
+    **consult-driven clocks** — settleObserverClock (createWorldArena; core
+    slot) is the ONE clock-advance site, called by the observer consults
+    (durable drain, quiet drain, settlement drain, boundary re-check,
+    commit populator, capture reads via core.committedDepStamp) right after
+    their committed evaluations; it compares the shadow's folded value
+    against the new `cutoffVals` world column (the observer coalescing
+    register, layout v4) with the node's own change rule
+    (core.isValueChanged: custom isEqual, sentinel identity) and moves the
+    clock only on change (clock 0 = never consulted; evict scrubs both).
+    Plain reads refold values but never move clocks. The model's
+    per-(root,node) fold cache {v, counter} refreshes at exactly the
+    mirrored sites — the engine's (cutoff, clock) and the model's
+    (v, counter) are literal twins, so lockstep is exact BY CONSTRUCTION.
+    Fold-site bumps deleted (arenaUpdateShadow/arenaFoldOutcome/
+    arenaNoteThrow — budgets shrank; comments updated).
+    - Sub deps: {lastValidatedAt} on world-arena LINK records (one-sided
+      chain off SubscriptionField.DEP_HEAD/DEP_TAIL — on NO producer subs
+      list, so every walk/checker sees pre-observer structure; built by the
+      capture close from read-time stamps — read-time because effect bodies
+      may write mid-run; freed at recapture/removal via the generated link
+      scrub). The dep ARRAY (extras) keeps {node, value, stamp} — value is
+      a capture ARTIFACT (trace values array + sub.lastValue), never a gate.
+    - Re-check gate: skip iff shadow clean (VALID, no DIRTY/PENDING/BOX) ∧
+      tenancy GEN ok ∧ link.DEP still names the shadow ∧ clock === stamp ∧
+      Object.is(cutoff, vals) (the register-agreement conjunct: a plain
+      read may have consumed marks — only the cutoff knows); otherwise
+      evaluate → settle → re-fire iff settled clock ≠ stamp. Thrown
+      SuspendedRead: skip, NO settle (model mirror: refresh conveys thrown
+      outcomes WITHOUT caching) — still-pending suspensions are not flips
+      and unchanged round trips through a suspension stay quiet.
+    - Watchers: lastValidatedAt = the watcher record's kernel clock slot.
+      Drain/quiet/settlement corrections gate on clock-vs-stamp (stamp
+      advances at the correction). TWO CROSS-WORLD VALUE COMPARES SURVIVE
+      (the ruling's survivor clause, REPORTED as required): (1) mount
+      fixup's vFx compare (mountFix world vs the rendered register), (2)
+      candidates re-rendered/mounted by the CURRENTLY COMMITTING render
+      (core.committingRender, set for renderEnd's commit half) — their
+      registers were just reset from the RENDER world and the commit's own
+      lock-in moves committed truth by exactly what the screen already
+      shows; a clock gate would correct every watcher at every commit
+      (react-contract breaker). Per-root clocks cannot express
+      render↔committed equivalence. (3) the commit populator's
+      restale/validate decision keeps its value compare for the same
+      cross-world reason: register ≡ committed-now ⇒ stamp := clock-now;
+      differs ⇒ restaled + stamp := 0 (never — forces the next drain's
+      correction even if truth flips back; model mirrors identically).
+      lastRenderedValue SURVIVES as the rendered-content register (NOT a
+      gate): the bindings read it at mount and write it at resubscribe,
+      ctx.previous feeds from it at commits, and the correction records'
+      from/to payloads carry it (model-compared streams).
+    - arenaDecay keep-the-dirt gains the obsRefs clause: dropping an
+      OBSERVED shadow to cold would have made its next refold a cold
+      re-materialization; under consult-clocks it also keeps values
+      resident for the register compare.
+    - MODEL CO-EVOLUTION (sanctioned; all edits marked "[SANCTIONED MODEL
+      CO-EVOLUTION]"): committedFold cache + refreshCommitted; watcher
+      lastSeen + counter gates in drain/quiet; per-dep lastSeen stamped at
+      capture reads; effect re-check counter gate (thrown outcomes
+      conveyed, not cached); commit populator-analog + committingRender
+      discriminant; stamp rules mirrored exactly.
+    - PINS: ZERO existing cells needed rewriting — the consult-driven
+      chain coalesces exactly where the old value gate did (intra-window
+      flip-flops, unconsulted windows, equality-cutoff computeds), and the
+      sanctioned spurious class only opens when ANOTHER observer consulted
+      the intermediate state. THREE NEW at-least-once pins added to the
+      battery: (1) equal-value round trip with a co-consulting watcher +
+      deferred sub RE-FIRES (the spurious class, pinned on both twins),
+      (2) intra-batch round trip coalesces (boundary coalescing unchanged),
+      (3) the fast negative guard skips an untouched clean dep with ZERO
+      re-evaluation (engine leg, evaluation-counted).
+    - cosignals-react: useSignalEffect doc teaches the at-least-once
+      contract (idempotent bodies, Strict-Mode analogy).
+    Suites: cosignals 368/1skip (365 + 3 pins), oracle 82, react 72/72,
+    conformance 179×2, typecheck ×3 (one pre-existing worktree artifact:
+    an untracked user-draft src/Allocator.ts fails tsc locally — not mine,
+    not committed, left untouched).
+
 ## In progress / exact next actions
 
 **Priority 5 — observers/watchers/subscriptions as arena records.** Nothing

@@ -37,7 +37,7 @@
 
 import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
-import { E, Watcher, freeWatcherRecord, noteReclaimRetry, reclaimSkippedN, __setWatcherObservationShift } from './CosignalEngine.js';
+import { E, Watcher, committedNodeClock, freeWatcherRecord, noteReclaimRetry, reclaimSkippedN, __setWatcherObservationShift } from './CosignalEngine.js';
 import { getKernelGeneration, getKernelNodeIndex, type WatcherSnapshot, type WorldArena } from './CosignalEngine.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
 import type { ObservationIndex } from './ObservationIndex.js';
@@ -438,6 +438,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			renderEndInner(id, kind, opts);
 		} finally {
 			core.opDepth--;
+			core.committingRender = undefined; // the cross-world correction window closes with the operation
 		}
 		core.runOperationEpilogue();
 	}
@@ -493,6 +494,12 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			core.endOperation();
 			return;
 		}
+		// The cross-world correction window opens: drains fired by this
+		// commit's own retirements and lock-ins gate this render's
+		// re-rendered/mounted watchers by VALUE (see correctWatcher — their
+		// registers were just reset from the render world); cleared in
+		// renderEnd's finally.
+		core.committingRender = render;
 		// (1) Baseline capture at the commit's committed-side entry.
 		const baseline = { committedAdvance: core.getCommittedAdvance(), rootCommitGen: core.root(render.root).commitGen };
 		// The committing tree's content: re-rendered watchers take this render's
@@ -563,7 +570,30 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			const wInternals = resolveWatcherInternals(w);
 			if (wInternals === undefined) continue; // loud skip (live ⇒ alive in practice; belt for binding-side flips)
 			const committedNow = core.evaluate(wInternals, { kind: 'committed', root: render.root });
-			if (core.isValueChanged(wInternals, w.lastRenderedValue, committedNow)) markRestaled(w);
+			// The committed-render stamp rule (the at-least-once ruling's
+			// baseline-advance site): the populator's evaluation settled the
+			// watched node's per-root committed clock. When the rendered
+			// register agrees with committed-now, the screen is VALIDATED —
+			// stamp lastValidatedAt at the settled clock; when it differs,
+			// the watcher is re-staled — stamp 0 (never-validated), which
+			// forces the next durable drain's clock gate to correct it even
+			// if committed truth flips back meanwhile (spurious by accepted
+			// design; the value compare here is the cross-world render ↔
+			// committed commit-integrity check the ruling's survivor clause
+			// keeps — per-root clocks cannot express equivalence between two
+			// worlds).
+			// The populator is an observer consult: settle the watched node's
+			// committed clock before the stamp rule reads it.
+			{
+				const ra = core.rootToArena.get(render.root);
+				if (ra !== undefined) core.settleObserverClock(ra, wInternals);
+				if (core.isValueChanged(wInternals, w.lastRenderedValue, committedNow)) {
+					markRestaled(w);
+					w.lastValidatedAt = 0;
+				} else {
+					w.lastValidatedAt = ra === undefined ? 0 : committedNodeClock(ra, w.nodeIx);
+				}
+			}
 		}
 		// The population dev assert: after a commit of render P, every
 		// live watcher P re-rendered or mounted has a shadow for its node in

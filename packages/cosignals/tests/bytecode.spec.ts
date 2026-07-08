@@ -77,19 +77,19 @@ const BUDGETS: Record<string, number> = {
 	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (the arena counterpart of the kernel freeLink)
 	resolveShadow: 210, // 163
 	foldAtom: 190, // 142
-	arenaUpdateShadow: 230, // 173 (the readClock bump routed through arenaBumpReadClock)
+	arenaUpdateShadow: 230, // 150 (the readClock bump routed through arenaBumpReadClock; committed-clock stamping left at the at-least-once rework)
 	arenaBumpReadClock: 60, // 35: Int32 wrap guard on the consumption bump path
 	arenaBumpCycle: 60, // 37: Int32 wrap guard on the evaluation-cycle bump
 	arenaCheckDirty: 100, // 67: entry wrapper owning the arenaCheckSp restore
 	// (was a 567-byte walk monolith)
 	arenaCheckDirtyLoop: 450, // 407: the general arena walk, out of line
 	arenaUpdateAndShallow: 110, // 74: refold + sibling Pending->Dirty upgrade
-	arenaFoldOutcome: 385, // 367: fold-outcome classification, out of line —
+	arenaFoldOutcome: 385, // 322: fold-outcome classification, out of line —
 	// includes the comparator arm (custom-equality computeds compare against
 	// the arena-local previous, in head order; the user-fn call itself is out
 	// of line in arenaIsValueEqualCold, so the hot default arm stays
-	// closure-free) plus the committed-clock bump on changed outcomes (both
-	// the suspension and value arms test-and-stamp) — under the inline limit
+	// closure-free). The committed-clock stamping left this function at the
+	// at-least-once rework (clocks are consult-driven — settleObserverClock)
 	arenaSyncObservationAfterRefold: 90, // 65: out-of-line observation epilogue (observed nodes only)
 };
 

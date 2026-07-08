@@ -171,7 +171,7 @@ export type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see ArenaShape). */
 export type ValueIndex = number & IdBrand<'valueIndex'>;
 
-// #region GENERATED — layout v3 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
+// #region GENERATED — layout v4 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
 /**
  * Field offsets within a node arena record.
  * NodeId is an offset pointer to the first field of the record;
@@ -712,6 +712,7 @@ function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {
 		a.walk.push(0);
 		a.weakSubs.push(0);
 		a.weakSubsTail.push(0);
+		a.cutoffVals.push(undefined);
 	}
 }
 
@@ -726,6 +727,7 @@ function scrubWorldShadowColumnsOnEvict(a: WorldArena, sh: number): void {
 	const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 	a.vals[vi] = undefined;
 	a.clocks[vi] = 0;
+	a.cutoffVals[vi] = undefined;
 }
 
 /**
@@ -756,6 +758,7 @@ function resetWorldArenaColumnsOnRelease(a: WorldArena): void {
 	a.weakSubs.fill(0);
 	a.weakSubsTail.fill(0);
 	a.clocks.fill(0, 0, a.next >> ArenaGeom.ID_TO_COLUMN_SHIFT);
+	a.cutoffVals.fill(undefined);
 }
 // #endregion GENERATED layout
 
@@ -865,20 +868,24 @@ let checkSp = 0;
 //    result changed), and a computed evaluation whose outcome changed
 //    (including the first evaluation). Lazy computeds do not bump until
 //    someone evaluates them; dirty/pending state is unaffected.
-//  - A LINK record's slot is observer state — the last producer clock the
-//    owning subscriber validated against. The kernel never reads or writes
-//    it (the intra-run dedup stamp stays in the VERSION field); the observer
-//    machinery stamps it at validation. The allocators guarantee a fresh or
-//    reused link starts at 0 ("never validated") via the generated free
-//    scrub.
+//  - An OBSERVER record's slot (watcher / subscription — see the observer
+//    sections at the end of this module) is the observer's lastValidatedAt:
+//    the per-root committed clock it last validated against. Kernel LINK
+//    slots are reserved-unused (a subscription's per-dep stamps ride its
+//    WORLD-ARENA dependency links instead); the kernel never reads or
+//    writes them (the intra-run dedup stamp stays in the VERSION field),
+//    and the generated free scrub guarantees a fresh or reused record
+//    starts at 0 ("never validated").
 //
-// The skip rule for consumers: an observer may skip re-comparison only when
-// the producer is CLEAN and its clock matches the observer's last-validated
-// stamp; when the producer is dirty/pending, evaluate first, then compare
-// values against the observer's own baseline (`isEqual` may be asymmetric,
-// and a write-back-to-the-old-value sequence moves the clock while the
-// value-gated contract forbids a re-fire — so clocks gate re-comparison,
-// never replace it).
+// The skip rule for consumers (owner ruling: observer re-fires are
+// AT-LEAST-ONCE): an observer may skip only when the producer is CLEAN and
+// its clock matches the observer's last-validated stamp; otherwise it
+// evaluates, the consult settles the producer's per-root committed clock
+// (settleObserverClock — clocks move only on changed results, with the
+// node's own comparator inside the settle), and a settled clock that
+// differs from the stamp RE-FIRES — no value comparison at the re-fire
+// decision. Net-no-change sequences whose intermediate states other
+// consults settled re-fire spuriously by accepted design.
 //
 // Representation: a process-monotone float64 counter (never a wrapping u32 —
 // observers legally survive arbitrarily long; 2^53 stamps cannot exhaust in
@@ -3810,11 +3817,16 @@ export class WorldArena {
 	 * fixed at the same record reservation as {@link memory} (see the
 	 * schema's world column roster). */
 	readonly clocks: Float64Array;
-	/** Whether refolds stamp the clock column: committed arenas only —
-	 * render-world values are pin-frozen, so a render arena's clocks never
-	 * move (the bump-gate; set per tenancy at claim). */
+	/** Whether observer consults settle the clock column: committed arenas
+	 * only — render-world values are pin-frozen, so a render arena's clocks
+	 * never move (the settle gate; set per tenancy at claim). */
 	bumpsClocks: boolean;
 	vals: Value[] = [];
+	/** The observer coalescing register (see the schema's column roster):
+	 * the folded value as of the shadow's last observer consult — the
+	 * compare basis settleObserverClock moves the clock against. Valid iff
+	 * the clock slot is non-zero. */
+	cutoffVals: Value[] = [];
 	/** Per-record suspended-list slot + 1 (0 = not suspended) — the field is
 	 * the set bit and stores the dense index (swap-remove compaction). */
 	suspIdx: number[] = [];
@@ -4405,6 +4417,54 @@ export function createWorldArena(core: EngineCore): void {
 		reclaimRetryAllSkipped();
 	}
 
+	/**
+	 * Settle a node's per-root committed clock after an OBSERVER CONSULT —
+	 * the one clock-advance site of the world arenas (the plan's bump-table
+	 * rows for per-root committed clocks, re-expressed consult-driven).
+	 * Called by the observer machinery right after its committed evaluation
+	 * of the node: the drains, the boundary re-check, the commit populator,
+	 * and the capture reads. Compares the shadow's CURRENT folded value
+	 * against the cutoff register — the value as of the last consult — with
+	 * the node's own change rule (custom isEqual for computeds; sentinel
+	 * payloads by identity), and moves the clock only on a change.
+	 *
+	 * Consult-driven ON PURPOSE, not fold-driven: committed-member writes
+	 * are committed-visible immediately, so plain committed reads between
+	 * boundaries legitimately refold shadow values. If refolds moved the
+	 * clock, an unrelated read could consume a flip-flop's intermediate
+	 * state and CHANGE which re-fires observers see — re-fire behavior would
+	 * depend on read timing. Against the consult-owned cutoff register, a
+	 * multi-write flip-flop within one consult window coalesces to nothing
+	 * and one spanning consults re-fires (the at-least-once ruling's
+	 * accepted spurious class) — deterministically, whoever reads in
+	 * between. The reference model's per-(root, node) accepted-change
+	 * counters refresh at exactly the mirrored sites, which is what keeps
+	 * lockstep exact.
+	 *
+	 * A first consult (clock 0 — never consulted; evictions scrub back to 0)
+	 * counts as changed. Returns the settled clock. Render arenas never
+	 * settle (bumpsClocks — pin-frozen worlds have no committed clock).
+	 */
+	function settleObserverClock(a: WorldArena, node: AnyInternals): Clock {
+		const sh = node.ix < a.nodeToShadow.length ? a.nodeToShadow[node.ix]! : 0;
+		if (sh === 0 || !a.bumpsClocks) return 0;
+		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
+		const v = a.vals[vi];
+		const clock = a.clocks[vi]!;
+		if (clock !== 0 && !core.isValueChanged(node, a.cutoffVals[vi], v)) return clock;
+		a.cutoffVals[vi] = v;
+		return (a.clocks[vi] = ++clockSource);
+	}
+
+	/** The capture sites' dep stamp: resolve the root's committed arena and
+	 * settle the node's clock (a capture read IS an observer consult — the
+	 * returned clock seeds the dep's lastValidatedAt). 0 when the root has
+	 * no arena (an empty capture — deps imply the arena exists). */
+	function committedDepStamp(rootId: RootId, node: AnyInternals): Clock {
+		const a = rootToArena.get(rootId);
+		return a === undefined ? 0 : settleObserverClock(a, node);
+	}
+
 	/** The arena of a world: render arenas ride the render record (claimed at
 	 * renderStart; a dev assert below throws on dropped-arena touch);
 	 * committed arenas
@@ -4544,10 +4604,10 @@ export function createWorldArena(core: EngineCore): void {
 		const flags = memory[sh + ArenaField.FLAGS]!;
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		arenaBumpReadClock(a);
-		// A thrown outcome moves the committed clock conservatively (a bump
-		// with an unchanged payload only costs an observer one re-compare;
-		// a missed bump would be a stale-skip bug — the dangerous direction).
-		if (a.bumpsClocks) a.clocks[vi] = ++clockSource;
+		// (No clock movement here: the per-root committed clock is
+		// consult-driven — see settleObserverClock. A thrown outcome reaches
+		// observers only through evaluation paths that skip without settling,
+		// so fold-time stamping would be timing-dependent dead weight.)
 		if (err instanceof SuspendedRead) {
 			a.vals[vi] = err;
 			memory[sh + ArenaField.FLAGS] = (flags & ~(ArenaFlag.DIRTY | ArenaFlag.PENDING)) | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN;
@@ -4656,9 +4716,10 @@ export function createWorldArena(core: EngineCore): void {
 		if (prevValid && arenaIsValueEqual(prev, next)) {
 			return false;
 		}
-		// A changed fold outcome moves the shadow's per-root committed clock
-		// (committed arenas only — render-world values are pin-frozen).
-		if (a.bumpsClocks) a.clocks[vi] = ++clockSource;
+		// (No clock movement here: the per-root committed clock is
+		// consult-driven — settleObserverClock compares against the cutoff
+		// register at the observer consults, so plain reads that refold this
+		// shadow between boundaries cannot perturb observer re-fires.)
 		return true;
 	}
 
@@ -4756,8 +4817,7 @@ export function createWorldArena(core: EngineCore): void {
 			if (same) {
 				return false;
 			}
-			if (a.bumpsClocks) a.clocks[vi] = ++clockSource; // a fresh suspension is a changed tagged outcome
-			return true;
+			return true; // a fresh suspension is a changed outcome (clock movement is consult-driven — settleObserverClock)
 		}
 		const prevValid = (flags & ArenaFlag.VALID) !== 0 && (flags & ArenaFlag.HAS_BOX) === 0;
 		const changed = !(prevValid && (eq === undefined
@@ -4766,10 +4826,6 @@ export function createWorldArena(core: EngineCore): void {
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh);
 		if (changed) {
 			a.vals[vi] = value;
-			// The clock is over tagged outcomes: a box→value transition bumps
-			// even when the payloads are identity-equal (prevValid demands a
-			// plain previous value, so that transition always lands here).
-			if (a.bumpsClocks) a.clocks[vi] = ++clockSource;
 		}
 		a.memory[sh + ArenaField.FLAGS] = (a.memory[sh + ArenaField.FLAGS]! & ~(ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN)) | ArenaFlag.VALID;
 		return changed;
@@ -4962,8 +5018,17 @@ export function createWorldArena(core: EngineCore): void {
 			if ((flags & ArenaFlag.DIRTY) === 0) continue; // consumed by an evaluation: drop the entry
 			const nid = memory[sh + ArenaField.NODE]!;
 			const ws = nodeToWatchers[nid];
-			let watched = false;
-			if (ws !== undefined) {
+			// Keep-the-dirt while any live observer can still consume the
+			// mark: a live same-root watcher on the node, or ANY observation
+			// retain (obsRefs — a subscription's dep snapshot and every
+			// transitively-retained cone node). The observation clause is
+			// load-bearing under at-least-once observers: dropping an
+			// observed shadow to cold would make its next refold a cold
+			// materialization — a clock bump with no value change — and the
+			// observer would re-fire spuriously where the reference model
+			// (which retains every value by construction) does not.
+			let watched = obsRefs[nid]! > 0;
+			if (!watched && ws !== undefined) {
 				for (let j = 0; j < ws.length; j++) {
 					const w = ws[j]!;
 					if (w.live && w.root === a.root) {
@@ -5300,6 +5365,8 @@ export function createWorldArena(core: EngineCore): void {
 
 	// ---- the operation table (late-bound onto the shared core record) ----
 	core.claimArena = claimArena;
+	core.settleObserverClock = settleObserverClock;
+	core.committedDepStamp = committedDepStamp;
 	core.releaseArena = releaseArena;
 	core.getArena = getArena;
 	core.eachArena = eachArena;
@@ -5486,6 +5553,23 @@ export class Watcher {
 	}
 	set lastRenderedValue(v: Value) {
 		values[this.rec >> ArenaShape.ID_TO_VALUE_SHIFT] = v;
+	}
+
+	/** The watcher's lastValidatedAt stamp (the record's clock-column slot):
+	 * the per-root committed clock of the watched node at the last moment
+	 * the screen was known to agree with committed truth. Advance sites,
+	 * per the at-least-once ruling: a committed render whose rendered value
+	 * matched committed-now (the populator's cross-world check), and an
+	 * urgent correction (the drain just reconciled the screen). 0 = never —
+	 * a re-staled commit resets it to 0, which forces the next drain's
+	 * correction (a folded shadow's clock is never 0). Corrections outside
+	 * the committing render's own window gate on this stamp alone: clock
+	 * mismatch means re-fire, no value comparison. */
+	get lastValidatedAt(): Clock {
+		return E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT]!;
+	}
+	set lastValidatedAt(c: Clock) {
+		E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT] = c;
 	}
 
 	/** The rendered-world snapshot (see WatcherSnapshot). The getter serves
@@ -5710,8 +5794,79 @@ export class Subscription {
  * the dep snapshot. The FIELD lives on the shared engine core record (the
  * read-routing resolution consults it per routed read); the committed-
  * observers factory below is its one writer, through the core's
- * `setCaptureFrame`. */
-export type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value }[] };
+ * `setCaptureFrame`. Each entry carries the read's value (a capture
+ * artifact: the trace records and `lastValue` serve it — it never gates a
+ * re-fire) and the producer's committed clock AT THE READ (`stamp` — the
+ * dep's lastValidatedAt seed; read-time, not frame-close-time, because an
+ * effect body may WRITE mid-run and the boundary re-check must still see
+ * that write as newer than the snapshot). */
+export type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value; stamp: Clock }[] };
+
+/** A node's per-root committed clock by nodeIndex (0 = never consulted).
+ * Exported for the watcher correction gate and the commit populator's stamp
+ * rule (the layout enums are same-file here; the consumers live with the
+ * delivery walks and the render lifecycle). Reads the clock WITHOUT
+ * settling: callers run after a consult site already settled it. */
+export function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
+	const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
+	return sh === 0 ? 0 : a.clocks[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+}
+
+/** Free a subscription's dependency-link chain back to its arena's link
+ * pool (recapture replaces the snapshot wholesale; removal tears it down).
+ * The generated link scrub clears each link's clock slot on free. */
+function freeObserverDepChain(a: WorldArena, sub: Subscription): void {
+	const memory = E.buffer();
+	let l = memory[sub.rec + SubscriptionField.DEP_HEAD]!;
+	while (l !== 0) {
+		const next = a.memory[l + ArenaLinkField.NEXT_DEP]!;
+		arenaFreeLink(a, l);
+		l = next;
+	}
+	memory[sub.rec + SubscriptionField.DEP_HEAD] = 0;
+	memory[sub.rec + SubscriptionField.DEP_TAIL] = 0;
+}
+
+/**
+ * Build a subscription's dependency chain from a completed capture: one
+ * world-arena LINK record per dep read, in read order, threaded through the
+ * subscription record's DEP_HEAD/DEP_TAIL cursors. Each link's clock slot
+ * carries that dep's lastValidatedAt (the read-time stamp); its DEP field
+ * caches the producer's shadow at capture (a diagnostic hint — the re-check
+ * resolves the live shadow through nodeToShadow and falls back to
+ * evaluation on any mismatch, so a re-keyed shadow can never serve a stale
+ * skip). The links are ONE-SIDED on purpose: they live only on this chain,
+ * never on any producer's subscriber list, so every existing walk —
+ * delivery, mark propagation, drain candidate collection, the fixup
+ * closure, the structural checker — sees exactly the structure it saw
+ * before subscriptions had records at all (causal routing metadata is
+ * untouched; the chain is revalidation state).
+ */
+function buildObserverDepChain(a: WorldArena, sub: Subscription, deps: { node: AnyInternals; value: Value; stamp: Clock }[]): void {
+	freeObserverDepChain(a, sub);
+	const am = a.memory;
+	let head = 0;
+	let tail = 0;
+	for (let i = 0; i < deps.length; i++) {
+		const d = deps[i]!;
+		const l = arenaAllocLink(a);
+		am[l + ArenaLinkField.VERSION] = 0;
+		am[l + ArenaLinkField.DEP] = d.node.ix < a.nodeToShadow.length ? a.nodeToShadow[d.node.ix]! : 0;
+		am[l + ArenaLinkField.SUB] = 0; // one-sided: no subscriber-list membership, no owner shadow
+		am[l + ArenaLinkField.PREV_SUB] = 0;
+		am[l + ArenaLinkField.NEXT_SUB] = 0;
+		am[l + ArenaLinkField.PREV_DEP] = tail;
+		am[l + ArenaLinkField.NEXT_DEP] = 0;
+		am[l + ArenaLinkField.MODE] = ArenaLinkMode.WEAK;
+		a.clocks[l >> ArenaGeom.ID_TO_COLUMN_SHIFT] = d.stamp;
+		if (tail !== 0) am[tail + ArenaLinkField.NEXT_DEP] = l;
+		else head = l;
+		tail = l;
+	}
+	const memory = E.buffer();
+	memory[sub.rec + SubscriptionField.DEP_HEAD] = head;
+	memory[sub.rec + SubscriptionField.DEP_TAIL] = tail;
+}
 
 /**
  * The committed-observers factory — a factory in the kernel's own style: it
@@ -5785,6 +5940,13 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
 			setCaptureFrame(undefined);
 			sub.deps = frame.deps;
 			sub.lastValue = frame.deps.length === 0 ? undefined : frame.deps[frame.deps.length - 1]!.value;
+			// The completed recapture is the ONE stamp-advance site a
+			// subscription has: rebuild the dependency-link chain (each
+			// link's clock slot = that dep's read-time producer stamp).
+			// deps.length > 0 implies the committed arena exists — the
+			// capture's own evaluations materialized it.
+			const a = core.rootToArena.get(sub.root);
+			if (a !== undefined) buildObserverDepChain(a, sub, frame.deps);
 			// Observation re-point after the frame closes, so discovery
 			// evaluations run on a clean frame stack (same rule as
 			// syncObservedDeps).
@@ -5799,7 +5961,7 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
 		const frame = core.captureFrame;
 		if (frame === undefined) throw new ScheduleError('captureRead requires an open captureRun frame');
 		const v = evaluate(node, { kind: 'committed', root: frame.sub.root });
-		frame.deps.push({ node, value: v });
+		frame.deps.push({ node, value: v, stamp: core.committedDepStamp(frame.sub.root, node) });
 		return v;
 	}
 
@@ -5827,6 +5989,11 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
 			sub.obsDeps = undefined;
 			for (const dep of held) shiftObservedCount(dep, -1);
 		}
+		// Free the dependency-link chain back to its arena (the arena is
+		// alive while the subscription counted as a consumer; defensive
+		// probe anyway — a reset tears both down wholesale).
+		const a = core.rootToArena.get(sub.root);
+		if (a !== undefined) freeObserverDepChain(a, sub);
 		// Record free LAST (flags zero immediately — `live` reads false, so
 		// queued refires no-op; the free itself defers to the boundary sweep).
 		E.disposeObserver(sub.rec);
@@ -5869,15 +6036,38 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
 
 	/**
 	 * The boundary re-check: once per boundary OPERATION — per-root commit,
-	 * retirement, settlement, quiet fold — gated over each subscription's
-	 * dep snapshot, at the boundary value (multiple member writes coalesce),
-	 * and never while the subscription's own root has an open render frame
-	 * (the deferred flip flushes at that frame's close — commit or discard).
-	 * A retirement re-checks every root (a write-free retirement still
-	 * flushes pending member-write flips); a plain commit re-checks its own
-	 * root. Runs at the END of the boundary operation, after every
-	 * committed-side mutation of the boundary has landed (the same
-	 * mutate-then-notify ordering every boundary shares).
+	 * retirement, settlement, quiet fold — over each subscription's dep
+	 * snapshot, at the boundary value (multiple member writes coalesce), and
+	 * never while the subscription's own root has an open render frame (the
+	 * deferred flip flushes at that frame's close — commit or discard). A
+	 * retirement re-checks every root (a write-free retirement still flushes
+	 * pending member-write flips); a plain commit re-checks its own root.
+	 * Runs at the END of the boundary operation, after every committed-side
+	 * mutation of the boundary has landed (the same mutate-then-notify
+	 * ordering every boundary shares).
+	 *
+	 * The per-dep decision is the at-least-once clock rule (owner ruling —
+	 * no value comparison anywhere in it):
+	 *
+	 *  1. FAST NEGATIVE GUARD — skip without evaluating when the producer is
+	 *     provably unmoved: its shadow is CLEAN (VALID, no DIRTY/PENDING
+	 *     marks, no boxed outcome), its tenancy stamp matches the live
+	 *     kernel record, the chain link still names it, and its per-root
+	 *     committed clock equals the dep's lastValidatedAt. Clean means no
+	 *     committed flip has marked the cone since the last refold, so the
+	 *     fold — and therefore the clock — cannot have moved.
+	 *  2. Otherwise EVALUATE (the arena refold settles the producer's clock;
+	 *     a net-equal refold keeps the old value AND the old clock — the
+	 *     refold's own equality cutoff, where the node's custom isEqual
+	 *     participates, is the only comparison in the pipeline). A
+	 *     still-pending suspension thrown by the evaluation is not a flip
+	 *     (pinned in tests/concurrent-battery.spec.ts): skip the dep without
+	 *     touching its stamp — the settle transition moves the clock later.
+	 *  3. RE-FIRE iff the settled clock differs from the dep's
+	 *     lastValidatedAt. Net-no-change sequences whose intermediate states
+	 *     were refolded (a flip-flop spanning boundaries) re-fire spuriously
+	 *     BY ACCEPTED DESIGN; the stamp advances only through the re-fire's
+	 *     recapture, never here.
 	 */
 	function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void {
 		if (core.committedSubCount === 0) return;
@@ -5886,25 +6076,58 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
 			if (rootFilter !== undefined && sub.root !== rootFilter) continue;
 			if (rootToOpenRender.has(sub.root)) continue; // deferred to the frame's close
 			const world: World = { kind: 'committed', root: sub.root };
+			const a = core.rootToArena.get(sub.root);
+			const memory = E.buffer();
 			let changed = false;
 			const deps = sub.deps;
-			for (let i = 0; i < deps.length; i++) {
+			// The chain and the dep array are parallel by construction (both
+			// written by the same capture close, one entry per read).
+			let l = a === undefined ? 0 : memory[sub.rec + SubscriptionField.DEP_HEAD]!;
+			for (let i = 0; i < deps.length && (a === undefined || l !== 0); i++) {
 				const d = deps[i]!;
-				let now: Value;
+				const stamp = a === undefined ? 0 : a.clocks[l >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+				if (a !== undefined) {
+					const sh = d.node.ix < a.nodeToShadow.length ? a.nodeToShadow[d.node.ix]! : 0;
+					const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
+					if (
+						sh !== 0
+						&& sh === a.memory[l + ArenaLinkField.DEP]
+						&& (a.memory[sh + ArenaField.FLAGS]! & (ArenaFlag.VALID | ArenaFlag.DIRTY | ArenaFlag.PENDING | ArenaFlag.HAS_BOX)) === ArenaFlag.VALID
+						&& a.memory[sh + ArenaField.NODE_GEN] === getKernelGeneration(d.node.id)
+						&& a.clocks[vi] === stamp
+						// The registers must agree: a plain committed read may
+						// have refolded the shadow (consuming its marks) between
+						// consults — the value drifted while the clock stood
+						// still, and only the cutoff register knows. Identity
+						// here is conservative: a comparator-equal fresh
+						// reference just fails the guard and settles below.
+						&& Object.is(a.cutoffVals[vi], a.vals[vi])
+					) {
+						l = a.memory[l + ArenaLinkField.NEXT_DEP]!;
+						continue; // the fast negative guard: no evaluation, no comparison
+					}
+				}
 				try {
-					now = evaluate(d.node, world);
+					evaluate(d.node, world);
 				} catch (err) {
-					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (pinned in tests/concurrent-battery.spec.ts)
+					if (err instanceof SuspendedRead) {
+						if (a !== undefined) l = a.memory[l + ArenaLinkField.NEXT_DEP]!;
+						continue; // still-pending suspension: not a flip (pinned in tests/concurrent-battery.spec.ts; the clock stays unsettled — the settle transition decides)
+					}
 					throw err;
 				}
-				if (isValueChanged(d.node, d.value, now)) {
+				// The consult settles the producer's clock against the cutoff
+				// register; re-fire on stamp mismatch.
+				if (a !== undefined && core.settleObserverClock(a, d.node) !== stamp) {
 					changed = true;
 					break;
 				}
+				if (a !== undefined) l = a.memory[l + ArenaLinkField.NEXT_DEP]!;
 			}
 			if (changed) runCommittedSubscription(sub);
 		}
 	}
+
 
 	// ---- the operation table (late-bound onto the shared core record) ----
 	core.idToSubscription = idToSubscription;

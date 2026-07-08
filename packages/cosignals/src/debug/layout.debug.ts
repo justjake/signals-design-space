@@ -3,7 +3,7 @@
 // hydrators, and the side-column rosters. Imports nothing from the engine;
 // none of it ships on a hot path.
 
-export const LAYOUT_VERSION = 3;
+export const LAYOUT_VERSION = 4;
 
 export type FieldInfo = {
 	name: string;
@@ -140,6 +140,7 @@ export const COLUMNS: readonly ColumnInfo[] = [
 	{ name: "weakSubs", domain: 'worldArena', storage: "growArray", scrub: "release" },
 	{ name: "weakSubsTail", domain: 'worldArena', storage: "growArray", scrub: "release" },
 	{ name: "clocks", domain: 'worldArena', storage: "recordBuffer", scrub: "evict+release" },
+	{ name: "cutoffVals", domain: 'worldArena', storage: "growArray", scrub: "evict+release" },
 ];
 
 /** Decode a FLAGS word into the set flag names of one registry. */

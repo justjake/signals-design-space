@@ -35,6 +35,7 @@
 
 import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js';
 import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './CosignalEngine.js';
+import type { Clock } from './CosignalEngine.js';
 import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
 import { FOLD_TRUTH, type WorldArena } from './CosignalEngine.js';
@@ -188,6 +189,14 @@ export type EngineCore = {
 	epilogueCheck: (() => void) | undefined;
 	/** Public-operation nesting (the settlement firing-context discriminant). */
 	opDepth: number;
+	/** The render currently COMMITTING (set for the span of renderEnd's
+	 * commit half, cleared in its finally): the watcher correction gate's
+	 * cross-world discriminant — a candidate re-rendered/mounted by this
+	 * very render compares its just-reset rendered register against
+	 * committed truth by value (the fixup-class render↔committed question
+	 * per-root clocks cannot express); every other candidate gates on
+	 * clocks alone. (RenderPass sets it; the delivery walks read it.) */
+	committingRender: RenderPass | undefined;
 	/** Per-walk visited generation source (delivery walk, drains, closures). */
 	walkGen: number;
 	/** Live subscription count (fast bail on the boundary-scan paths — owned
@@ -242,6 +251,11 @@ export type EngineCore = {
 
 	// ---- late-bound: WorldArena ----
 	claimArena(kind: 'render' | 'committed', world: World, root: RootId): WorldArena;
+	/** Settle a node's per-root committed clock after an observer consult
+	 * (the one clock-advance site — see the engine's settleObserverClock). */
+	settleObserverClock(a: WorldArena, node: AnyInternals): Clock;
+	/** The capture sites' dep stamp (resolve arena + settle; 0 = no arena). */
+	committedDepStamp(rootId: RootId, node: AnyInternals): Clock;
 	releaseArena(a: WorldArena): void;
 	getArena(world: World): WorldArena | undefined;
 	eachArena(fn: (a: WorldArena) => void): void;
@@ -350,6 +364,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		suspendedCount: 0,
 		epilogueCheck: undefined,
 		opDepth: 0,
+		committingRender: undefined,
 		walkGen: 0,
 		committedSubCount: 0,
 		onDelivery: undefined,
@@ -377,6 +392,8 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		routedComputedRead: LATE,
 		// late-bound: WorldArena
 		claimArena: LATE,
+		settleObserverClock: LATE,
+		committedDepStamp: LATE,
 		releaseArena: LATE,
 		getArena: LATE,
 		eachArena: LATE,
@@ -526,7 +543,7 @@ export function createWorld(core: EngineCore): void {
 		const cap = routedCap;
 		const node = core.internalsForAtom(atom);
 		const v = routedRead(node, world);
-		if (cap !== undefined) cap.deps.push({ node, value: v });
+		if (cap !== undefined) cap.deps.push({ node, value: v, stamp: core.committedDepStamp(cap.sub.root, node) });
 		return v;
 	}
 
@@ -555,7 +572,7 @@ export function createWorld(core: EngineCore): void {
 			if (oc !== undefined) oc.push(node);
 		}
 		const v = evaluate(node, world);
-		if (cap !== undefined) cap.deps.push({ node, value: v });
+		if (cap !== undefined) cap.deps.push({ node, value: v, stamp: core.committedDepStamp(cap.sub.root, node) });
 		return v;
 	}
 
