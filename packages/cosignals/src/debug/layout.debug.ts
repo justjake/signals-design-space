@@ -49,6 +49,7 @@ export const FIELDS_BY_RECORD: Record<string, readonly FieldInfo[]> = {
 		{ name: "NODE_GEN", slot: 3, kind: "u31", doc: "The watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch." },
 		{ name: "DEDUP_BITS", slot: 4, kind: "packed", doc: "Per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway." },
 		{ name: "GEN", slot: 5, kind: "u31", doc: "Allocator-owned tenancy generation (shared meaning with NodeField.GEN): bumped when the record frees." },
+		{ name: "NODE_IX", slot: 6, kind: "ordinal", doc: "The watched record's NODE_INDEX, cached at mount. Slot-tied like every node index (a record slot keeps its index across tenants), so the cache never goes stale — the NODE_GEN stamp is what decides whether the watched TENANCY is still alive." },
 		{ name: "NODE_INDEX", slot: 7, kind: "ordinal", doc: "Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); watcher records consume ordinals but no dense column stores rows for them." },
 	],
 	subscription: [

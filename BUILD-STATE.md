@@ -497,6 +497,26 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     slots = subscription dep lastValidatedAt, no longer "reserved").
     allocNode is unbudgeted; arenaFreeLink stayed within its 50 budget.
 
+13. **Watchers as arena records (commit B1 — storage only, semantics
+    untouched)**: the Watcher class moved into CosignalEngine.ts's new
+    "observer records" section as a lean handle — own fields are ONLY
+    `id` (the monotone watcher id: deliveries/drains fire in id order =
+    the model's map order, so it never recycles) and `rec` (the kernel
+    record, allocated via the new Kernel.newObserver/disposeObserver ops;
+    POISON rows added). State storage: NODE/NODE_GEN/NODE_IX/DEDUP_BITS
+    Int32 fields (WatcherField), OBSERVER_LIVE flag bit (the live setter
+    shifts observation through a module slot RenderPass registers per
+    composition — __setWatcherObservationShift), lastRenderedValue in the
+    values column, name/root/flattened-snapshot in the extras object
+    (snapshot setter rewrites 5 fields in place — no commit allocation).
+    dropWatcher frees the record LAST (deferred to the boundary sweep;
+    generated scrub clears every column slot). RenderPass re-exports
+    Watcher/WatcherSnapshot so every import chain held. `name` gained a
+    setter (the bindings rename watchers after mount). NOTE for the lead's
+    pricing: deliver()'s dedupBits/root reads went from own-field loads to
+    E.buffer()/extras reads (the record-storage shape).
+    Suites: cosignals 362/1skip, oracle 82, react 72/72 — green.
+
 ## In progress / exact next actions
 
 **Priority 5 — observers/watchers/subscriptions as arena records.** Nothing

@@ -37,15 +37,19 @@
 
 import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
-import { E, noteReclaimRetry, reclaimSkippedN } from './CosignalEngine.js';
-import { getKernelGeneration, getKernelNodeIndex, type WorldArena } from './CosignalEngine.js';
+import { E, Watcher, freeWatcherRecord, noteReclaimRetry, reclaimSkippedN, __setWatcherObservationShift } from './CosignalEngine.js';
+import { getKernelGeneration, getKernelNodeIndex, type WatcherSnapshot, type WorldArena } from './CosignalEngine.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
 import type { ObservationIndex } from './ObservationIndex.js';
 import type { EngineCore } from './World.js';
-import type { AnyInternals, CommitGen, NodeId, NodeIndex, RenderPassId, RootId, Seq, Value, WatcherId } from './concurrent.js';
+import type { AnyInternals, CommitGen, NodeId, RenderPassId, RootId, Seq, WatcherId } from './concurrent.js';
 
-/** A kernel record's GEN field value: the id-tenancy stamp, bumped at free. */
-type Generation = number;
+// The Watcher record class and its rendered-world snapshot live in the
+// engine module (CosignalEngine.ts's observer-records section — watcher
+// state is arena/column storage); this module keeps the render LIFECYCLE
+// and re-exports both for the package surface.
+export { Watcher } from './CosignalEngine.js';
+export type { WatcherSnapshot } from './CosignalEngine.js';
 
 export type RenderPassState = 'open' | 'yielded' | 'ended';
 
@@ -77,85 +81,6 @@ export type RenderPass = {
 	 * engine-side only; the reference model has no counterpart). */
 	arena?: WorldArena;
 };
-
-/** The watcher's rendered-world snapshot: what the mounting render saw
- * (the render's slot sets copied by integer assignment — see RenderPass). */
-export type WatcherSnapshot = {
-	renderPassId: RenderPassId;
-	pin: Seq;
-	maskBits: BatchSlotSet;
-	includedBits: BatchSlotSet;
-	rootCommitGen: CommitGen;
-};
-
-export class Watcher {
-	readonly id: WatcherId;
-	name: string;
-	readonly root: RootId;
-	readonly node: NodeId;
-	/** The node record's NODE_INDEX, cached at mount (valid exactly while
-	 * `nodeRecordGen` still matches the record). @internal */
-	readonly nodeIx: NodeIndex;
-	/** The node record's tenancy generation (kernel GEN) at mount. Bare ids
-	 * alias reused records: kernel record ids recycle through the free list,
-	 * so every watcher→node resolution generation-checks this stamp and skips
-	 * loudly on mismatch — a dormant watcher whose node died must never bind
-	 * the record's next tenant. */
-	readonly nodeRecordGen: Generation;
-	/** The engine's observed-closure shift (the observation index's
-	 * shiftObservedCount): the `live`
-	 * setter feeds the watched node's observed-consumer refcount through it
-	 * (generation-checked engine-side — a stale watcher's flips shift
-	 * nothing), and the observation index propagates retains transitively
-	 * over the node's current strong dep set down to lifecycle-carrying
-	 * atoms. @internal */
-	readonly _observationShift: (w: Watcher, delta: 1 | -1) => void;
-	private _live = false;
-	lastRenderedValue: Value;
-	snapshot: WatcherSnapshot;
-	/** Per-(watcher, slot) delivery dedup bits, one int word: a second write
-	 * in the same slot delivers again only if no scheduled-but-unstarted
-	 * render will fold it anyway. */
-	dedupBits: BatchSlotSet = 0;
-
-	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, nodeIx: NodeIndex, nodeRecordGen: Generation, observationShift: (w: Watcher, delta: 1 | -1) => void, value: Value, snapshot: WatcherSnapshot) {
-		this.id = id;
-		this.name = name;
-		this.root = root;
-		this.node = node;
-		this.nodeIx = nodeIx;
-		this.nodeRecordGen = nodeRecordGen;
-		this._observationShift = observationShift;
-		this.lastRenderedValue = value;
-		this.snapshot = snapshot;
-	}
-
-	/**
-	 * Subscribed-for-delivery bit. The setter is the watcher half of the
-	 * observation union (AtomOptions.effect): a live watcher holds one
-	 * observed-consumer ref on its node, and the engine's observation
-	 * index (shiftObservedCount) carries that ref transitively — a watcher over an
-	 * atom node retains that atom's lifecycle directly; a watcher over an
-	 * engine computed retains every atom the computed's current evaluation
-	 * (transitively) reads. Every liveness site routes through here — the
-	 * commit layout loop and adoptRevealedMount reveals (engine side), and the
-	 * reveal resubscribe / StrictMode orphan sweep / debounce-finalized
-	 * unsubscribe (the React-bindings side, which flips this field directly)
-	 * — so kernel subscribers and watchers count into one refcount, and
-	 * same-tick flips coalesce in the kernel's microtask flush.
-	 * Edge-filtered: re-asserting the current state is a no-op.
-	 */
-	get live(): boolean {
-		return this._live;
-	}
-	set live(value: boolean) {
-		if (value === this._live) {
-			return;
-		}
-		this._live = value;
-		this._observationShift(this, value ? 1 : -1);
-	}
-}
 
 /** The resident-state edges the render lifecycle consumes (provided by the
  * engine's composition site), as a named slice of the observation index's
@@ -229,14 +154,16 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		return node;
 	}
 
-	/** The watcher liveness seam (one closure per engine; Watcher._observationShift):
-	 * generation-checked — a stale watcher's liveness flips shift nothing
-	 * (skips pair up: tenancy generations only ever grow, so a stale stamp
-	 * can never re-validate between a skipped retain and its release). */
+	/** The watcher liveness seam (one closure per engine, registered into the
+	 * engine module's observer-shift slot — the Watcher.live setter reaches it
+	 * there): generation-checked — a stale watcher's liveness flips shift
+	 * nothing (skips pair up: tenancy generations only ever grow, so a stale
+	 * stamp can never re-validate between a skipped retain and its release). */
 	const shiftWatcherObservation = (w: Watcher, delta: 1 | -1): void => {
 		const node = resolveWatcherInternals(w);
 		if (node !== undefined) shiftObservedCount(node, delta);
 	};
+	__setWatcherObservationShift(shiftWatcherObservation);
 
 	function getMinLivePin(): Seq {
 		let min = Number.POSITIVE_INFINITY;
@@ -322,7 +249,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		const p = getRenderPassById(renderPassId);
 		if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
 		const value = core.evaluate(node, { kind: 'render', render: p });
-		const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, getKernelGeneration(node.id), shiftWatcherObservation, value, {
+		const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, getKernelGeneration(node.id), value, {
 			renderPassId: p.id, pin: p.pin,
 			maskBits: p.maskBits, includedBits: p.includedBits,
 			rootCommitGen: core.root(p.root).commitGen,
@@ -395,7 +322,8 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		dropWatcher(watcherId);
 	}
 
-	/** Unlinks a watcher from the per-node index (discarded mounts). */
+	/** Unlinks a watcher from the per-node index (discarded mounts) and frees
+	 * its arena record. */
 	function dropWatcher(wid: WatcherId): void {
 		const w = watchers.get(wid);
 		if (w === undefined) return;
@@ -417,6 +345,11 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			// clears the guard. Size-0 bail first.
 			if (reclaimSkippedN !== 0 && nodeWatchers.length === 0) noteReclaimRetry(w.node);
 		}
+		// Record free LAST, after every store unlinked (the free defers to the
+		// next boundary sweep, so queued notifications holding the handle
+		// still read their own fields; the sweep's generated scrub then clears
+		// every column slot the record owned).
+		freeWatcherRecord(w);
 	}
 
 	/**
