@@ -1,0 +1,12 @@
+{
+	"name": "signals-royale-sh1",
+	"version": "0.0.0",
+	"type": "module",
+	"exports": "./src/index.ts",
+	"scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+	"devDependencies": {
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "^5.9.2",
+		"vitest": "^3.2.4"
+	}
+}
