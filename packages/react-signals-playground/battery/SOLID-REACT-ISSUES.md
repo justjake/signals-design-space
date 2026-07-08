@@ -37,6 +37,24 @@ by the package gate ("held transition leaves committed state on screen;
 urgent writes rebase on top" in `test/react-real.test.tsx` drives urgent
 commits through a promise-held transition).
 
+### Independent re-verification (battery side, 2026-07-08)
+
+Re-verified by the battery's owner after the fixes landed, from a fresh
+production build with real Solid memos in the shim:
+
+- Full battery: 214 passed / 4 ruled skips across all five projects — the
+  previously expected-fail rows now pass asserting the standard behavior.
+- Stress beyond battery parameters, all clean with zero page errors:
+  10 rapid urgent writes on a memo-subscribed page (exact arithmetic, no
+  wedge); filter/reseed/add-rows churn over ~3000 real-memo table rows;
+  a value-changing derived write during a held transition (the wedge class
+  that still locks up the alt-b implementation) stays responsive; three
+  lattice mount/unmount cycles at a 20 ms urgent-write interval with 15 ms
+  per-reader render cost — 26 commit-latch checks, zero torn frames in both
+  the pre-paint and the painted-frame latch, plus a clean useDeferredValue
+  cycle; same-scope read-back returns the staged value while ambient reads
+  stay committed-only.
+
 Where the evidence lives:
 
 - The app: `packages/react-signals-playground` — one React app that runs
