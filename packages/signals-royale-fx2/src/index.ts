@@ -314,7 +314,8 @@ export const untracked: <T>(fn: () => T) => T = graphUntracked;
 // SSR
 // ---------------------------------------------------------------------------
 
-type AtomMap = Record<string, Signal<unknown>> | Signal<unknown>[];
+/** Atoms under app-supplied keys: positional (array) or named (record). */
+type AtomMap = Record<string, Signal<any>> | Signal<any>[];
 
 function atomEntries(atoms: AtomMap): Array<[string, Signal<unknown>]> {
   return Array.isArray(atoms)
