@@ -37,7 +37,7 @@ import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js'
 import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './CosignalEngine.js';
 import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
-import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
+import { FOLD_TRUTH, type WorldArena } from './CosignalEngine.js';
 import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
 import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { ObservationIndex } from './ObservationIndex.js';

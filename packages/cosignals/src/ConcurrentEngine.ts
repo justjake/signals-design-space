@@ -41,7 +41,7 @@ import { createObservationIndex, type ObservationIndex } from './ObservationInde
 import { createCompaction, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
 import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
-import { createWorldArena } from './WorldArena.js';
+import { createWorldArena } from './CosignalEngine.js';
 import { createSettlement } from './settlement.js';
 import { createSubscriptionManager, type SubscriptionManager } from './SubscriptionManager.js';
 import { createRenderPassManager, type RenderPass, type RenderPassManager, type Watcher } from './RenderPass.js';

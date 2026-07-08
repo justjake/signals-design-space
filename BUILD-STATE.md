@@ -190,27 +190,48 @@ must be able to continue from it alone.
   subscriptions land (the plan's readers); bump sites match the bump table
   rows that exist at kernel level today.
 
+## Done (continued 2)
+
+7. **WorldArena moved into the engine** (verbatim carry, commit pending at
+   the time of writing): src/WorldArena.ts's whole body — the
+   ArenaField/ArenaLinkField/ArenaFlag/ArenaGeom/ArenaWalk const enums, the
+   WorldArena class, the arena walk family, createWorldArena — now lives in
+   CosignalEngine.ts as the "world arenas" section (after the test-reset
+   seams; section shuffle comes with the re-derivation). This is a
+   PREREQUISITE for the schema re-derivation: generated layout enums must
+   be same-file with the hot arena walks. Adjustments in the move: the
+   local `type Generation` and duplicate WALK_STACK_SEED dropped (the
+   engine's own serve); InvariantViolation joined the engine's errors
+   import; type-only imports of EngineCore/World (World.ts) and the entity
+   types (concurrent.ts) added — ERASED at emit, so the engine still never
+   imports machinery modules at runtime. Importers re-pointed (RenderPass,
+   NotificationQueue, ConcurrentEngine, World, concurrent,
+   tests/one-id-space). trace-off re-points documented: the dead
+   WorldArena.ts path left ENGINE_MODULES (covered by the CosignalEngine.ts
+   entry) and the trace-slot line scan.
+
 ## In progress / exact next actions
 
-**Priority 3 — worlds re-derived.** Nothing started. First actions:
-1. Read packages/cosignals/src/WorldArena.ts + World.ts fully (the current
-   per-world record design being re-derived), then alt-b
-   packages/cosignals-alt-b/src/engine.ts sections "M3: world memos and
-   certificates" and the growth/bump-reset discipline (its line-map is in
-   the section dividers; note alt-b's certificate approach was REJECTED —
-   only its arena mechanics transfer, not certificates).
-2. Design the world-record family/-ies in tools/schema.ts (layoutVersion 2):
-   per-world dependency records with clock fields per the bump table
-   (per-root committed clocks; render worlds pin-frozen), pooled arenas,
-   bump-reset, growth by closure rebuild (retire WorldArena's
-   mid-operation-growth-with-reload).
-3. Land the world machinery as new sections in CosignalEngine.ts between
-   the clocks section and the evaluation-policy section; keep
-   World.ts/WorldArena.ts alive until the new machinery passes the arena
-   suites, then re-point + delete (same coexistence-then-cutover pattern
-   as the kernel).
+**Priority 3 — worlds re-derived (the real work; nothing designed yet).**
+1. Read the world-arena section in CosignalEngine.ts (search
+   "world arenas (carried") + World.ts fully, then alt-b
+   packages/cosignals-alt-b/src/engine.ts world/memo + growth sections
+   (note alt-b's certificate approach was REJECTED — only its arena
+   mechanics transfer, not certificates).
+2. Extend tools/schema.ts (layoutVersion 2) with the world-arena record
+   families (shadow + arena link, MODE/weak-list rules, clock fields per
+   the bump table: per-root committed clocks, render worlds pin-frozen,
+   LAST_SEEN/lastValidatedAt on links) and per-column scrub metadata for
+   the arena side columns (vals/suspIdx/walk/weakSubs/dirty...); run
+   `pnpm gen`; replace the carried hand-written Arena* enums with the
+   generated ones.
+3. Retire WorldArena's mid-operation-growth-with-reload (`arenaGrow` +
+   callers reload `a.memory` after every growable call) in favor of the
+   kernel's discipline: per-operation slack reserved at boundaries, hot
+   walks close over the buffer, growth flags + rebuilds at operation
+   boundaries.
 4. The V-urgent-committed-branch battery case + arena-s{a,a2,a3,b,c,d}
-   specs are the contract.
+   specs + arena-freelist + one-id-space are the contract.
 
 ## Environment notes for successors
 
@@ -232,3 +253,16 @@ must be able to continue from it alone.
   research-stage shorthand in comments. The generator's output must stay
   clean too (it lands in src/CosignalEngine.ts, which is scanned).
 - Do NOT run perf benches (the lead owns A/B).
+- Known pre-existing (NOT flattening-caused): react-seam-bench's typecheck
+  fails on its dalien adapter (`Cannot find module 'dalien-signals'`) even
+  with the submodule initialized — the dalien package likely needs its own
+  build; its cosignals-facing code typechecks fine. Ignore unless working
+  on that bench.
+
+## Run log
+
+- Run 1 (first builder): commits 526f8ca (cherry-pick), b144141 (schema +
+  skeleton + clocks), 0e97bee (kernel cutover), 0e741c3 (world-arena move).
+  Tree at run end: flattening @ 0e741c3, only pnpm-lock.yaml uncommitted,
+  cosignals 360 green / react 72 / conformance 179×2 / oracle 82.
+  Next action: priority 3 step 1 in "In progress / exact next actions".

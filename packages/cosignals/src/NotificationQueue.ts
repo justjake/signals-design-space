@@ -28,7 +28,7 @@
  * instead of calls.
  */
 
-import { getKernelGeneration } from './WorldArena.js';
+import { getKernelGeneration } from './CosignalEngine.js';
 import type { Batch, BatchSlot, BatchSlotMeta } from './Batch.js';
 import type { AnyInternals, AtomInternals, RootId, Seq, Subscription, Value, Watcher } from './concurrent.js';
 import type { EngineCore, World } from './World.js';

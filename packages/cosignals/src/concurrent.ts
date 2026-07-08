@@ -187,7 +187,7 @@ import type { ObservationIndex } from './ObservationIndex.js';
 import { WriteLog, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
 import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchManager } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
-import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './WorldArena.js';
+import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
 import type { Subscription } from './SubscriptionManager.js';
 import { Watcher, type RenderPass, type RenderPassManager } from './RenderPass.js';
 
@@ -800,7 +800,7 @@ export function attachDriver(d: EngineDriver): void {
 // module re-exports the arena class (engine surface) and keeps module-level
 // aliases of the hot table entries so resident callers keep their one-load
 // call shapes.
-export { WorldArena } from './WorldArena.js';
+export { WorldArena } from './CosignalEngine.js';
 
 /**
  * The armed checker's window into the engine — returned by
