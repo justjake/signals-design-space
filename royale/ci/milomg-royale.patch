@@ -1,0 +1,753 @@
+diff --git a/packages/core/package.json b/packages/core/package.json
+index 79ccb51..975d9fd 100644
+--- a/packages/core/package.json
++++ b/packages/core/package.json
+@@ -22,11 +22,11 @@
+     "@tanstack/store": "0.11.0",
+     "@vue/reactivity": "^3.5.28",
+     "alien-signals": "file:../../../upstream-alien-signals",
+-    "dalien-signals": "file:../../../packages/dalien-signals",
++    "compostate": "^0.5.1",
+     "cosignals": "file:../../../packages/cosignals",
+     "cosignals-alt-a": "file:../../../packages/cosignals-alt-a",
+     "cosignals-alt-b": "file:../../../packages/cosignals-alt-b",
+-    "compostate": "^0.5.1",
++    "dalien-signals": "file:../../../packages/dalien-signals",
+     "esbuild": "^0.27.3",
+     "mobx": "^6.15.0",
+     "mol_wire_lib": "^1.0.1683",
+@@ -35,6 +35,18 @@
+     "preact": "^10.28.3",
+     "s-js": "^0.4.9",
+     "signal-polyfill": "^0.2.2",
++    "signals-royale-fh1": "file:../../../packages/signals-royale-fh1",
++    "signals-royale-fh2": "file:../../../packages/signals-royale-fh2",
++    "signals-royale-fm1": "file:../../../packages/signals-royale-fm1",
++    "signals-royale-fm2": "file:../../../packages/signals-royale-fm2",
++    "signals-royale-fx1": "file:../../../packages/signals-royale-fx1",
++    "signals-royale-fx2": "file:../../../packages/signals-royale-fx2",
++    "signals-royale-sh1": "file:../../../packages/signals-royale-sh1",
++    "signals-royale-sh2": "file:../../../packages/signals-royale-sh2",
++    "signals-royale-sm1": "file:../../../packages/signals-royale-sm1",
++    "signals-royale-sm2": "file:../../../packages/signals-royale-sm2",
++    "signals-royale-sx1": "file:../../../packages/signals-royale-sx1",
++    "signals-royale-sx2": "file:../../../packages/signals-royale-sx2",
+     "solid-js": "^1.9.11",
+     "svelte": "^5.51.1",
+     "typescript": "^5.9.3",
+diff --git a/packages/core/src/frameworks/royale-fh1.ts b/packages/core/src/frameworks/royale-fh1.ts
+new file mode 100644
+index 0000000..a725450
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-fh1.ts
+@@ -0,0 +1,51 @@
++/** ReactiveFramework adapter for the milomg js-reactivity-benchmark. */
++import {
++	atom,
++	computed,
++	effect,
++	effectScope,
++	batch,
++	type Atom,
++	type Computed,
++} from 'signals-royale-fh1';
++
++export interface ReactiveFramework<S = unknown> {
++	name: string;
++	createSignal(initialValue: unknown): S;
++	readSignal(signal: S): unknown;
++	writeSignal(signal: S, value: unknown): void;
++	createComputed(fn: () => unknown): S;
++	readComputed(cell: S): unknown;
++	effect(fn: () => void): void;
++	withBatch(fn: () => void): void;
++	withBuild<T>(fn: () => T): T;
++	cleanup(): void;
++}
++
++let disposeScope: (() => void) | null = null;
++
++export const royaleFh1Framework: ReactiveFramework = {
++	name: 'Royale FH1',
++	createSignal: (initialValue) => atom(initialValue),
++	readSignal: (signal) => (signal as Atom<unknown>).get(),
++	writeSignal: (signal, value) => (signal as Atom<unknown>).set(value),
++	createComputed: (fn) => computed(fn),
++	readComputed: (cell) => (cell as Computed<unknown>).get(),
++	effect: (fn) => void effect(fn),
++	withBatch: (fn) => batch(fn),
++	withBuild<T>(fn: () => T): T {
++		let out!: T;
++		disposeScope = effectScope(() => {
++			out = fn();
++		});
++		return out;
++	},
++	cleanup() {
++		if (disposeScope !== null) {
++			disposeScope();
++			disposeScope = null;
++		}
++	},
++};
++
++export default royaleFh1Framework;
+diff --git a/packages/core/src/frameworks/royale-fh2.ts b/packages/core/src/frameworks/royale-fh2.ts
+new file mode 100644
+index 0000000..c4fa117
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-fh2.ts
+@@ -0,0 +1,49 @@
++/**
++ * ReactiveFramework adapter for the milomg js-reactivity-benchmark.
++ */
++import { atom, computed, effect, effectScope, batch, read, set, type Atom, type Computed } from 'signals-royale-fh2';
++
++export interface ReactiveFramework<S = unknown> {
++	name: string;
++	createSignal(initialValue: unknown): S;
++	readSignal(signal: S): unknown;
++	writeSignal(signal: S, value: unknown): void;
++	createComputed(fn: () => unknown): S;
++	readComputed(cell: S): unknown;
++	effect(fn: () => void): void;
++	withBatch(fn: () => void): void;
++	withBuild<T>(fn: () => T): T;
++	cleanup(): void;
++}
++
++let disposeScope: (() => void) | null = null;
++
++export const royaleFh2Framework: ReactiveFramework = {
++	name: 'Royale FH2',
++	createSignal: (initialValue) => atom(initialValue),
++	readSignal: (signal) => read(signal as Atom<unknown>),
++	writeSignal: (signal, value) => set(signal as Atom<unknown>, value),
++	createComputed: (fn) => computed(fn),
++	readComputed: (cell) => read(cell as Computed<unknown>),
++	effect: (fn) => {
++		effect(fn);
++	},
++	withBatch: (fn) => {
++		batch(fn);
++	},
++	withBuild: <T,>(fn: () => T): T => {
++		let out!: T;
++		disposeScope = effectScope(() => {
++			out = fn();
++		});
++		return out;
++	},
++	cleanup: () => {
++		if (disposeScope !== null) {
++			disposeScope();
++			disposeScope = null;
++		}
++	},
++};
++
++export default royaleFh2Framework;
+diff --git a/packages/core/src/frameworks/royale-fm1.ts b/packages/core/src/frameworks/royale-fm1.ts
+new file mode 100644
+index 0000000..0a6a869
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-fm1.ts
+@@ -0,0 +1,57 @@
++/** ReactiveFramework adapter for the milomg js-reactivity-benchmark. */
++import {
++	Atom,
++	Computed,
++	atom,
++	batch,
++	computed,
++	effect,
++	effectScope,
++} from 'signals-royale-fm1';
++
++export interface ReactiveFramework<S = unknown> {
++	name: string;
++	createSignal(initialValue: unknown): S;
++	readSignal(signal: S): unknown;
++	writeSignal(signal: S, value: unknown): void;
++	createComputed(fn: () => unknown): S;
++	readComputed(cell: S): unknown;
++	effect(fn: () => void): void;
++	withBatch(fn: () => void): void;
++	withBuild<T>(fn: () => T): T;
++	cleanup(): void;
++}
++
++type Node = Atom<unknown> | Computed<unknown>;
++
++let disposeScope: (() => void) | null = null;
++
++export const royaleFm1Framework: ReactiveFramework<Node> = {
++	name: 'Royale FM1',
++	createSignal: (initialValue) => atom(initialValue),
++	readSignal: (signal) => (signal as Atom<unknown>).get(),
++	writeSignal: (signal, value) => (signal as Atom<unknown>).set(value),
++	createComputed: (fn) => computed(fn),
++	readComputed: (cell) => (cell as Computed<unknown>).get(),
++	effect: (fn) => {
++		effect(fn);
++	},
++	withBatch: (fn) => {
++		batch(fn);
++	},
++	withBuild<T>(fn: () => T): T {
++		let result!: T;
++		disposeScope = effectScope(() => {
++			result = fn();
++		});
++		return result;
++	},
++	cleanup() {
++		if (disposeScope !== null) {
++			disposeScope();
++			disposeScope = null;
++		}
++	},
++};
++
++export default royaleFm1Framework;
+diff --git a/packages/core/src/frameworks/royale-fm2.ts b/packages/core/src/frameworks/royale-fm2.ts
+new file mode 100644
+index 0000000..7b9e0e3
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-fm2.ts
+@@ -0,0 +1,49 @@
++/** ReactiveFramework adapter for the milomg js-reactivity-benchmark. */
++import {
++	atom,
++	computed,
++	batch,
++	EffectNode,
++	EffectScope,
++	type Atom,
++	type Computed,
++} from 'signals-royale-fm2';
++
++export interface ReactiveFramework<S = unknown> {
++	name: string;
++	createSignal(initialValue: unknown): S;
++	readSignal(signal: S): unknown;
++	writeSignal(signal: S, value: unknown): void;
++	createComputed(fn: () => unknown): S;
++	readComputed(cell: S): unknown;
++	effect(fn: () => void): void;
++	withBatch(fn: () => void): void;
++	withBuild<T>(fn: () => T): T;
++	cleanup(): void;
++}
++
++let buildScope: EffectScope | null = null;
++
++export const royaleFm2Framework: ReactiveFramework = {
++	name: 'Royale FM2',
++	createSignal: (initialValue) =>
++		atom(typeof initialValue === 'function' ? () => initialValue : initialValue),
++	readSignal: (signal) => (signal as Atom<unknown>).get(),
++	writeSignal: (signal, value) => (signal as Atom<unknown>).set(value),
++	createComputed: (fn) => computed(fn),
++	readComputed: (cell) => (cell as Computed<unknown>).get(),
++	effect(fn) {
++		new EffectNode(fn);
++	},
++	withBatch: (fn) => batch(fn),
++	withBuild<T>(fn: () => T): T {
++		buildScope = new EffectScope();
++		return buildScope.run(fn);
++	},
++	cleanup() {
++		buildScope?.dispose();
++		buildScope = null;
++	},
++};
++
++export default royaleFm2Framework;
+diff --git a/packages/core/src/frameworks/royale-fx1.ts b/packages/core/src/frameworks/royale-fx1.ts
+new file mode 100644
+index 0000000..6a3ec21
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-fx1.ts
+@@ -0,0 +1,63 @@
++/**
++ * ReactiveFramework adapter for the milomg js-reactivity-benchmark.
++ */
++import {
++  atom,
++  computed,
++  effect,
++  effectScope,
++  startBatch,
++  endBatch,
++  type Atom,
++  type Computed,
++} from "signals-royale-fx1";
++
++export interface ReactiveFramework<S = unknown> {
++  name: string;
++  createSignal(initialValue: unknown): S;
++  readSignal(signal: S): unknown;
++  writeSignal(signal: S, value: unknown): void;
++  createComputed(fn: () => unknown): S;
++  readComputed(cell: S): unknown;
++  effect(fn: () => void): void;
++  withBatch(fn: () => void): void;
++  withBuild<T>(fn: () => T): T;
++  cleanup(): void;
++}
++
++type Cell = Atom<unknown> | Computed<unknown>;
++
++let scopeDispose: (() => void) | null = null;
++
++export const royaleFx1Framework: ReactiveFramework<Cell> = {
++  name: "Royale FX1",
++  createSignal: (initialValue) => atom(initialValue),
++  readSignal: (s) => (s as Atom<unknown>).get(),
++  writeSignal: (s, value) => {
++    (s as Atom<unknown>).set(value);
++  },
++  createComputed: (fn) => computed(fn),
++  readComputed: (c) => (c as Computed<unknown>).get(),
++  effect: (fn) => {
++    effect(fn);
++  },
++  withBatch: (fn) => {
++    startBatch();
++    fn();
++    endBatch();
++  },
++  withBuild: <T>(fn: () => T): T => {
++    let out!: T;
++    scopeDispose = effectScope(() => {
++      out = fn();
++    });
++    return out;
++  },
++  cleanup: () => {
++    // Dispose the whole graph the build created: no leaks in the bench.
++    scopeDispose!();
++    scopeDispose = null;
++  },
++};
++
++export default royaleFx1Framework;
+diff --git a/packages/core/src/frameworks/royale-fx2.ts b/packages/core/src/frameworks/royale-fx2.ts
+new file mode 100644
+index 0000000..f9a4686
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-fx2.ts
+@@ -0,0 +1,75 @@
++/** ReactiveFramework adapter for the milomg js-reactivity-benchmark. */
++import {
++  Computed,
++  Signal,
++  batch,
++  computed,
++  effect,
++  effectScope,
++  signal,
++} from 'signals-royale-fx2';
++
++export interface ReactiveFramework<S = unknown> {
++  name: string;
++  createSignal(initialValue: unknown): S;
++  readSignal(signal: S): unknown;
++  writeSignal(signal: S, value: unknown): void;
++  createComputed(fn: () => unknown): S;
++  readComputed(cell: S): unknown;
++  effect(fn: () => void): void;
++  withBatch(fn: () => void): void;
++  withBuild<T>(fn: () => T): T;
++  cleanup(): void;
++}
++
++type Cell = Signal<unknown> | Computed<unknown>;
++
++let disposeScope: (() => void) | null = null;
++
++const framework: ReactiveFramework<Cell> = {
++  name: 'Royale FX2',
++  createSignal(initialValue) {
++    const s: Signal<unknown> = new Signal(initialValue, undefined);
++    if (typeof initialValue === 'function') {
++      // The benchmark stores plain values; opt out of lazy-initializer
++      // treatment for function-valued ones.
++      s.node.initializer = undefined;
++      s.node.value = initialValue;
++    }
++    return s;
++  },
++  readSignal(s) {
++    return (s as Signal<unknown>).get();
++  },
++  writeSignal(s, value) {
++    (s as Signal<unknown>).set(value);
++  },
++  createComputed(fn) {
++    return computed(fn);
++  },
++  readComputed(cell) {
++    return (cell as Computed<unknown>).get();
++  },
++  effect(fn) {
++    effect(fn);
++  },
++  withBatch(fn) {
++    batch(fn);
++  },
++  withBuild<T>(fn: () => T): T {
++    let out!: T;
++    // Effects created during the build attach to this scope; cleanup()
++    // disposes them all, so the benchmark never leaks graphs across runs.
++    disposeScope = effectScope(() => {
++      out = fn();
++    });
++    return out;
++  },
++  cleanup() {
++    disposeScope?.();
++    disposeScope = null;
++  },
++};
++
++export default framework;
++export { framework as royaleFx2Framework, signal };
+diff --git a/packages/core/src/frameworks/royale-sh1.ts b/packages/core/src/frameworks/royale-sh1.ts
+new file mode 100644
+index 0000000..0a8d7b3
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-sh1.ts
+@@ -0,0 +1,31 @@
++import { atom, batch, computed, effect, effectScope } from "signals-royale-sh1";
++
++type Cell = ReturnType<typeof atom<unknown>> | ReturnType<typeof computed<unknown>>;
++let disposeScope: (() => void) | undefined;
++
++export default {
++  name: "Royale SH1",
++  createSignal: (value: unknown) => atom(value),
++  readSignal: (cell: Cell) => cell.state,
++  writeSignal: (cell: Cell, value: unknown) =>
++    (cell as ReturnType<typeof atom<unknown>>).set(value),
++  createComputed: (fn: () => unknown) => computed(fn),
++  readComputed: (cell: Cell) => cell.state,
++  effect: (fn: () => void) => {
++    effect(fn);
++  },
++  withBatch: (fn: () => void) => {
++    batch(fn);
++  },
++  withBuild<T>(fn: () => T): T {
++    let value!: T;
++    disposeScope = effectScope(() => {
++      value = fn();
++    });
++    return value;
++  },
++  cleanup: () => {
++    disposeScope?.();
++    disposeScope = undefined;
++  },
++};
+diff --git a/packages/core/src/frameworks/royale-sh2.ts b/packages/core/src/frameworks/royale-sh2.ts
+new file mode 100644
+index 0000000..9dbcfc3
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-sh2.ts
+@@ -0,0 +1,54 @@
++import {
++  atomId,
++  batch,
++  computedId,
++  effect,
++  effectScope,
++  read,
++  reset,
++  set,
++  setAutomaticReclamation,
++} from "signals-royale-sh2";
++import type { CellId } from "signals-royale-sh2";
++
++export interface ReactiveFramework<S = unknown> {
++  name: string;
++  createSignal(initialValue: unknown): S;
++  readSignal(signal: S): unknown;
++  writeSignal(signal: S, value: unknown): void;
++  createComputed(fn: () => unknown): S;
++  readComputed(cell: S): unknown;
++  effect(fn: () => void): void;
++  withBatch(fn: () => void): void;
++  withBuild<T>(fn: () => T): T;
++  cleanup(): void;
++}
++
++let dispose: (() => void) | undefined;
++setAutomaticReclamation(false);
++const framework: ReactiveFramework<CellId> = {
++  name: "Royale SH2",
++  createSignal: atomId,
++  readSignal: read,
++  writeSignal: set,
++  createComputed: computedId,
++  readComputed: read,
++  effect(fn) {
++    effect(fn);
++  },
++  withBatch: batch,
++  withBuild<T>(fn: () => T): T {
++    let value!: T;
++    dispose = effectScope(() => {
++      value = fn();
++    });
++    return value;
++  },
++  cleanup() {
++    dispose?.();
++    dispose = undefined;
++    reset();
++  },
++};
++
++export default framework;
+diff --git a/packages/core/src/frameworks/royale-sm1.ts b/packages/core/src/frameworks/royale-sm1.ts
+new file mode 100644
+index 0000000..3dab848
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-sm1.ts
+@@ -0,0 +1,48 @@
++import { atom, batch, computed, effect, effectScope } from "signals-royale-sm1";
++
++export interface ReactiveFramework<S = unknown> {
++  name: string;
++  createSignal(initialValue: unknown): S;
++  readSignal(signal: S): unknown;
++  writeSignal(signal: S, value: unknown): void;
++  createComputed(fn: () => unknown): S;
++  readComputed(cell: S): unknown;
++  effect(fn: () => void): void;
++  withBatch(fn: () => void): void;
++  withBuild<T>(fn: () => T): T;
++  cleanup(): void;
++}
++
++type Cell = ReturnType<typeof atom<unknown>> | ReturnType<typeof computed<unknown>>;
++let disposeBuild: (() => void) | null = null;
++
++const adapter: ReactiveFramework<Cell> = {
++  name: "Royale SM1",
++  createSignal: (initialValue) => atom(initialValue),
++  readSignal: (signal) => signal.state,
++  writeSignal(signal, value) {
++    if (!("set" in signal)) throw new Error("Cannot write a computed.");
++    signal.set(value);
++  },
++  createComputed: (fn) => computed(fn),
++  readComputed: (cell) => cell.state,
++  effect(fn) {
++    effect(() => {
++      fn();
++    });
++  },
++  withBatch: batch,
++  withBuild<T>(fn: () => T): T {
++    let value!: T;
++    disposeBuild = effectScope(() => {
++      value = fn();
++    });
++    return value;
++  },
++  cleanup() {
++    disposeBuild?.();
++    disposeBuild = null;
++  },
++};
++
++export default adapter;
+diff --git a/packages/core/src/frameworks/royale-sm2.ts b/packages/core/src/frameworks/royale-sm2.ts
+new file mode 100644
+index 0000000..a09b313
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-sm2.ts
+@@ -0,0 +1,41 @@
++import { createRuntime, type Atom, type Computed } from "signals-royale-sm2";
++
++type Cell = Atom<unknown> | Computed<unknown>;
++const runtime = createRuntime();
++const builds: (() => void)[] = [];
++
++export default {
++  name: "Royale SM2",
++  createSignal(initialValue: unknown): Cell {
++    return runtime.atom(initialValue);
++  },
++  readSignal(signal: Cell): unknown {
++    return signal.get();
++  },
++  writeSignal(signal: Cell, value: unknown): void {
++    if ("set" in signal) signal.set(value);
++  },
++  createComputed(fn: () => unknown): Cell {
++    return runtime.computed(fn);
++  },
++  readComputed(cell: Cell): unknown {
++    return cell.get();
++  },
++  effect(fn: () => void): void {
++    runtime.effect(fn);
++  },
++  withBatch(fn: () => void): void {
++    runtime.batch(fn);
++  },
++  withBuild<T>(fn: () => T): T {
++    let result!: T;
++    builds.push(runtime.effectScope(() => {
++      result = fn();
++    }));
++    return result;
++  },
++  cleanup(): void {
++    for (const dispose of builds) dispose();
++    builds.length = 0;
++  },
++};
+diff --git a/packages/core/src/frameworks/royale-sx1.ts b/packages/core/src/frameworks/royale-sx1.ts
+new file mode 100644
+index 0000000..a3828d0
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-sx1.ts
+@@ -0,0 +1,45 @@
++import { atom, batch, computed, effect, effectScope } from 'signals-royale-sx1';
++
++export interface ReactiveFramework<S = unknown> {
++	name: string;
++	createSignal(initialValue: unknown): S;
++	readSignal(signal: S): unknown;
++	writeSignal(signal: S, value: unknown): void;
++	createComputed(fn: () => unknown): S;
++	readComputed(cell: S): unknown;
++	effect(fn: () => void): void;
++	withBatch(fn: () => void): void;
++	withBuild<T>(fn: () => T): T;
++	cleanup(): void;
++}
++
++type Cell = ReturnType<typeof atom<unknown>> | ReturnType<typeof computed<unknown>>;
++let dispose: (() => void) | undefined;
++
++const adapter: ReactiveFramework<Cell> = {
++	name: 'Royale SX1',
++	createSignal: atom,
++	readSignal: value => value.read(),
++	writeSignal(value, next) {
++		if ('set' in value) value.set(next);
++	},
++	createComputed: computed,
++	readComputed: value => value.read(),
++	effect(fn) {
++		effect(fn);
++	},
++	withBatch: batch,
++	withBuild(fn) {
++		let result!: ReturnType<typeof fn>;
++		dispose = effectScope(() => {
++			result = fn();
++		});
++		return result;
++	},
++	cleanup() {
++		dispose?.();
++		dispose = undefined;
++	},
++};
++
++export default adapter;
+diff --git a/packages/core/src/frameworks/royale-sx2.ts b/packages/core/src/frameworks/royale-sx2.ts
+new file mode 100644
+index 0000000..a1e7c9f
+--- /dev/null
++++ b/packages/core/src/frameworks/royale-sx2.ts
+@@ -0,0 +1,39 @@
++import {
++  atom,
++  batch,
++  computed,
++  effect,
++  effectScope,
++  type Atom,
++  type Computed,
++} from "signals-royale-sx2";
++
++type Cell = Atom<unknown> | Computed<unknown>;
++let disposeScope: (() => void) | undefined;
++
++export default {
++  name: "Royale SX2",
++  createSignal: (initialValue: unknown): Cell => atom(initialValue),
++  readSignal: (signal: Cell): unknown => signal.get(),
++  writeSignal: (signal: Cell, value: unknown): void =>
++    (signal as Atom<unknown>).set(value),
++  createComputed: (fn: () => unknown): Cell => computed(fn),
++  readComputed: (cell: Cell): unknown => cell.get(),
++  effect(fn: () => void): void {
++    effect(fn);
++  },
++  withBatch(fn: () => void): void {
++    batch(fn);
++  },
++  withBuild<T>(fn: () => T): T {
++    let value!: T;
++    disposeScope = effectScope(() => {
++      value = fn();
++    });
++    return value;
++  },
++  cleanup(): void {
++    disposeScope?.();
++    disposeScope = undefined;
++  },
++};
+diff --git a/packages/core/src/frameworksList.ts b/packages/core/src/frameworksList.ts
+index c4ee803..5d5b58d 100644
+--- a/packages/core/src/frameworksList.ts
++++ b/packages/core/src/frameworksList.ts
+@@ -19,6 +19,18 @@ import { tanstackStoreFramework } from "./frameworks/tanstackStore";
+ import { usignalFramework } from "./frameworks/inactive/uSignal";
+ import { vueReactivityFramework } from "./frameworks/inactive/vueReactivity";
+ import { xReactivityFramework } from "./frameworks/xReactivity";
++import royaleFm1Framework from "./frameworks/royale-fm1";
++import royaleFm2Framework from "./frameworks/royale-fm2";
++import royaleFh1Framework from "./frameworks/royale-fh1";
++import royaleFh2Framework from "./frameworks/royale-fh2";
++import royaleFx1Framework from "./frameworks/royale-fx1";
++import royaleFx2Framework from "./frameworks/royale-fx2";
++import royaleSh1Framework from "./frameworks/royale-sh1";
++import royaleSh2Framework from "./frameworks/royale-sh2";
++import royaleSx1Framework from "./frameworks/royale-sx1";
++import royaleSx2Framework from "./frameworks/royale-sx2";
++import royaleSm1Framework from "./frameworks/royale-sm1";
++import royaleSm2Framework from "./frameworks/royale-sm2";
+ 
+ // Currently failing kairoBench tests
+ // import { molWireFramework } from "./frameworks/molWire";
+@@ -49,6 +61,18 @@ export const frameworkInfo: FrameworkInfo[] = [
+   { framework: tanstackStoreFramework, testPullCounts: true },
+   { framework: vueReactivityFramework, testPullCounts: true },
+   { framework: xReactivityFramework, testPullCounts: true },
++  { framework: royaleFm1Framework, testPullCounts: true },
++  { framework: royaleFm2Framework, testPullCounts: true },
++  { framework: royaleFh1Framework, testPullCounts: true },
++  { framework: royaleFh2Framework, testPullCounts: true },
++  { framework: royaleFx1Framework, testPullCounts: true },
++  { framework: royaleFx2Framework, testPullCounts: true },
++  { framework: royaleSh1Framework, testPullCounts: true },
++  { framework: royaleSh2Framework, testPullCounts: true },
++  { framework: royaleSx1Framework, testPullCounts: true },
++  { framework: royaleSx2Framework, testPullCounts: true },
++  { framework: royaleSm1Framework, testPullCounts: true },
++  { framework: royaleSm2Framework, testPullCounts: true },
+ ];
+ 
+ export const allFrameworks: FrameworkInfo[] = [

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [
+    "src",
+    "tests",
+    "royale/harness-adapter.ts",
+    "royale/milomg-adapter.ts",
+    "vitest.config.ts"
+  ],
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "lib": ["ESNext", "DOM"]
+  }
+}

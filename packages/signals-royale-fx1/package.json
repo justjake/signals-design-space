@@ -1,0 +1,20 @@
+{
+	"name": "signals-royale-fx1",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

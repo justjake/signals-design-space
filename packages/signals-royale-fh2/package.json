@@ -1,0 +1,21 @@
+{
+	"name": "signals-royale-fh2",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "A concurrent signal engine for React: writable atoms, lazy computed values with async support, effects, and a world model where every pending React transition is a draft overlay that readers fold on demand.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

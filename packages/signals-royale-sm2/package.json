@@ -1,0 +1,15 @@
+{
+  "name": "signals-royale-sm2",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "reactive-framework-test-suite": "0.0.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.6"
+  }
+}

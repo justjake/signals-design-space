@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [],
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "tests", "royale"]
+}

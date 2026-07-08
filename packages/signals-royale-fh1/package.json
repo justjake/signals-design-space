@@ -1,0 +1,22 @@
+{
+	"name": "signals-royale-fh1",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "A concurrent signal engine where every write is a version-stamped record and every reader is a visibility predicate over small per-signal write histories.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

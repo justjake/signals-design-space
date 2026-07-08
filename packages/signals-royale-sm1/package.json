@@ -1,0 +1,17 @@
+{
+  "name": "signals-royale-sm1",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "bench:core": "esbuild royale/core-bench-run.ts --bundle --platform=node --format=esm --outfile=dist/core-bench-run.mjs && node --expose-gc dist/core-bench-run.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "reactive-framework-test-suite": "0.0.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.6"
+  }
+}

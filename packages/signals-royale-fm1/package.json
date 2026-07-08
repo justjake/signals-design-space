@@ -1,0 +1,22 @@
+{
+	"name": "signals-royale-fm1",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "A concurrent-React-ready signals engine built on immutable snapshot worlds: writes are epoch-versioned, every render pass pins a snapshot, commits are pointer swaps, and transition rebases replay write intents onto a fresh base.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@types/node": "^26.1.1",
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}
