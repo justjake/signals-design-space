@@ -137,7 +137,7 @@ function replay(steps: readonly Step[]): string | undefined {
 	}
 }
 
-test('event-log folds match the naive oracle', () => {
+test('300 x 90 event-log folds match the naive oracle', () => {
 	const seeds = Number(process.env.ORACLE_SEEDS ?? 300);
 	const steps = Number(process.env.ORACLE_STEPS ?? 90);
 	for (let seed = 1; seed <= seeds; seed++) {

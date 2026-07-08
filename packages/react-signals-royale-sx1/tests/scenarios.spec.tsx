@@ -125,8 +125,39 @@ describe('concurrent scenarios', () => {
 		expect(freshRenders).toBe(1);
 	});
 
+	test('a subscriber mounted into a suspending transition holds the old screen', async () => {
+		const value = atom(0);
+		const gate = deferred<void>();
+		let waiting = true;
+		let show!: (next: boolean) => void;
+		function Reader() { return <b>{useValue(value)}</b>; }
+		function Fresh() {
+			const current = useValue(value);
+			if (current === 1 && waiting) throw gate.promise;
+			return <i>{current}</i>;
+		}
+		function App() {
+			const [visible, setVisible] = React.useState(false);
+			show = setVisible;
+			return <><Reader /><React.Suspense fallback="fallback">{visible ? <Fresh /> : null}</React.Suspense></>;
+		}
+		const view = await mount(<App />);
+		await act(async () => {
+			startTransitionWrite(() => {
+				set(value, 1);
+				show(true);
+			});
+			await Promise.resolve();
+		});
+		expect(view.container.textContent).toBe('0');
+		waiting = false;
+		await act(async () => gate.resolve());
+		expect(view.container.textContent).toBe('11');
+	});
+
 	test('urgent branch update rebases before the pending transition reducer', async () => {
 		const value = atom(1);
+		const log = trace();
 		const block = atom(false);
 		const gate = deferred<void>();
 		let waiting = true;
@@ -147,6 +178,9 @@ describe('concurrent scenarios', () => {
 			gate.resolve();
 		});
 		expect(view.container.textContent).toBe('6');
+		const writes = log.events().filter(event => event.kind === 'write' && event.node === value.id);
+		expect(log.whyLastDelivery(value)).toContain(`write#${writes[0].id}`);
+		log.stop();
 	});
 
 	test('StrictMode nets one lifetime observation and unmount stops deliveries', async () => {
@@ -216,6 +250,22 @@ describe('concurrent scenarios', () => {
 		expect(view.container.textContent).toBe('false:2');
 	});
 
+	test('refresh settlement stays in its transition without a fallback flash', async () => {
+		let request = deferred<number>();
+		const value = computed(use => use(request.promise));
+		function App() { return <>{useValue(value)}</>; }
+		const view = await mount(<React.Suspense fallback="loading"><App /></React.Suspense>);
+		await act(async () => request.resolve(1));
+		request = deferred<number>();
+		await act(async () => {
+			startTransitionWrite(() => refresh(value));
+			await Promise.resolve();
+		});
+		expect(view.container.textContent).toBe('1');
+		await act(async () => request.resolve(2));
+		expect(view.container.textContent).toBe('2');
+	});
+
 	test('causality and the MutationObserver exclusion window are observable', async () => {
 		const value = atom(0);
 		const log = trace();
@@ -251,5 +301,19 @@ describe('concurrent scenarios', () => {
 		const view = await mount(<App />);
 		expect(view.container.textContent).toBe('9');
 		expect({ initialized, renders }).toEqual({ initialized: 0, renders: 1 });
+	});
+
+	test('lazy initialization happens at render read and before a pre-render set', async () => {
+		let calls = 0;
+		const first = atom(() => ++calls);
+		function First() { return <>{useValue(first)}</>; }
+		const firstView = await mount(<First />);
+		expect(firstView.container.textContent).toBe('1');
+		const second = atom(() => ++calls);
+		set(second, 8);
+		function Second() { return <>{useValue(second)}</>; }
+		const secondView = await mount(<Second />);
+		expect(secondView.container.textContent).toBe('8');
+		expect(calls).toBe(2);
 	});
 });
