@@ -13,4 +13,5 @@ declare module 'react' {
 	export function unstable_getCurrentUpdateLane(): number;
 	export function unstable_isTransitionLane(lane: number): boolean;
 	export function unstable_lanesInclude(lanes: number, lane: number): boolean;
+	export function unstable_runInLane<T>(lane: number, fn: () => T): T;
 }

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { flushSync as flushReactSync } from 'react-dom';
 import {
 	Atom,
 	Computed,
@@ -18,7 +19,9 @@ import {
 	retireBatch,
 	serializeAtomState,
 	subscribe,
+	subscribePending,
 	trace,
+	traceEvent,
 	untracked,
 	withWorld,
 	type BatchToken,
@@ -45,6 +48,7 @@ function tokenFor(lane: number): LaneToken | undefined {
 			roots: new Set(),
 			retireTicket: 0,
 		};
+		token.cause = traceEvent('batch-open', undefined, undefined, token);
 		tokens.set(lane, token);
 	}
 	return token;
@@ -73,13 +77,18 @@ export function register(): { errors: unknown[]; dispose(): void } {
 		throw new Error('react-signals-royale-sx1 requires its patched React build');
 	}
 	registered = true;
-	installHost({ currentBatch });
+	installHost({ currentBatch, isRendering: () => React.unstable_getRenderContext() !== null });
 	unregister = React.unstable_subscribeToExternalRuntime({
 		onRenderPassStart(container, lanes) {
+			traceEvent('render-pass-start');
 			for (const token of batchesIn(lanes)) (token as LaneToken).roots.add(container);
+		},
+		onRenderPassEnd() {
+			traceEvent('render-pass-end');
 		},
 		onCommit(container, lanes, remaining) {
 			const committedTokens = [...batchesIn(lanes)] as LaneToken[];
+			traceEvent('root-commit', committedTokens[0]?.cause);
 			commitRoot(container, committedTokens);
 			for (const token of committedTokens) {
 				token.roots.delete(container);
@@ -95,9 +104,11 @@ export function register(): { errors: unknown[]; dispose(): void } {
 			}
 		},
 		onBeforeMutation(container) {
+			traceEvent('dom-mutation-start');
 			for (const listener of mutationListeners) listener('start', container);
 		},
 		onAfterMutation(container) {
+			traceEvent('dom-mutation-stop');
 			for (const listener of mutationListeners) listener('stop', container);
 		},
 	});
@@ -116,6 +127,7 @@ export function resetForTest(): void {
 	reset();
 	tokens.clear();
 	mutationListeners.clear();
+	if (registered) installHost({ currentBatch, isRendering: () => React.unstable_getRenderContext() !== null });
 }
 
 register();
@@ -137,10 +149,16 @@ export function useValue<T>(value: Value<T>): T {
 	valueRef.current = value;
 	React.useLayoutEffect(() => {
 		let live = true;
-		const stop = subscribe(value as Atom<unknown> | Computed<unknown>, () => {
+		const stop = subscribe(value as Atom<unknown> | Computed<unknown>, cause => {
+			traceEvent('component-delivery', cause, value);
 			if (live) force();
 		});
-		if (rendered.root !== undefined && !Object.is(rendered.value, committed(value, rendered.root))) force();
+		if (rendered.root !== undefined && !Object.is(rendered.value, committed(value, rendered.root))) {
+			let owner: LaneToken | undefined;
+			for (const token of rendered.batches) if (token.deferred) owner = token as LaneToken;
+			if (owner === undefined) force();
+			else React.unstable_runInLane(owner.lane, force);
+		}
 		return () => {
 			live = false;
 			stop();
@@ -166,8 +184,9 @@ export function useCommitted<T>(value: Value<T>): T {
 	return committed(value, context?.container);
 }
 
-export function useIsPending(value: Value<unknown>): boolean {
-	useValue(value);
+export function useIsPending<T>(value: Value<T>): boolean {
+	const [, force] = React.useReducer((count: number) => count + 1, 0);
+	React.useLayoutEffect(() => subscribePending(value, () => flushReactSync(() => force())), [value]);
 	return isPending(value);
 }
 

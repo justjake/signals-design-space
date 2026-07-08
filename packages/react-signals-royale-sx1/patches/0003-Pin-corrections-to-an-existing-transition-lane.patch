@@ -1,0 +1,228 @@
+From 2c65ab69844af63077b84fbf76fbac82b7b7ef6e Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:32:51 -0400
+Subject: [PATCH 3/3] Pin corrections to an existing transition lane
+
+---
+ .../src/ReactFiberRootScheduler.js            | 11 ++++++++++
+ .../src/ReactFiberWorkLoop.js                 | 15 +++++++++++++
+ .../__tests__/ReactFiberRoyaleRuntime-test.js | 22 +++++++++++++++++++
+ packages/react/index.development.js           |  1 +
+ .../react/index.experimental.development.js   |  1 +
+ packages/react/index.experimental.js          |  1 +
+ packages/react/index.js                       |  1 +
+ packages/react/index.stable.development.js    |  1 +
+ packages/react/index.stable.js                |  1 +
+ packages/react/src/ReactClient.js             |  2 ++
+ packages/react/src/ReactExternalRuntime.js    |  6 +++++
+ 11 files changed, 62 insertions(+)
+
+diff --git a/packages/react-reconciler/src/ReactFiberRootScheduler.js b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+index cc97e21d54..ea95cad006 100644
+--- a/packages/react-reconciler/src/ReactFiberRootScheduler.js
++++ b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+@@ -701,6 +701,9 @@ export function requestTransitionLane(
+   // TODO: Make this non-nullable. Requires a tweak to useOptimistic.
+   transition: Transition | null,
+ ): Lane {
++  if (externalRuntimeLane !== NoLane) {
++    return externalRuntimeLane;
++  }
+   // The algorithm for assigning an update to a lane should be stable for all
+   // updates at the same priority within the same event. To do this, the
+   // inputs to the algorithm must be the same.
+@@ -723,6 +726,14 @@ export function requestTransitionLane(
+   return currentEventTransitionLane;
+ }
+ 
++let externalRuntimeLane: Lane = NoLane;
++
++export function setExternalRuntimeLane(lane: Lane): Lane {
++  const previous = externalRuntimeLane;
++  externalRuntimeLane = lane;
++  return previous;
++}
++
+ export function didCurrentEventScheduleTransition(): boolean {
+   return currentEventTransitionLane !== NoLane;
+ }
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index a996180dab..2817b2e8e8 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -413,6 +413,7 @@ import {
+   flushSyncWorkOnAllRoots,
+   flushSyncWorkOnLegacyRootsOnly,
+   requestTransitionLane,
++  setExternalRuntimeLane,
+ } from './ReactFiberRootScheduler';
+ import {getMaskedContext, getUnmaskedContext} from './ReactFiberLegacyContext';
+ import {logUncaughtError} from './ReactFiberErrorLogger';
+@@ -902,6 +903,20 @@ registerExternalRuntimeProvider({
+   lanesInclude(lanes: number, lane: number): boolean {
+     return (lanes & lane) !== 0;
+   },
++  runInLane<T>(lane: number, fn: () => T): T {
++    if ((executionContext & RenderContext) !== NoContext) {
++      throw new Error('runInLane must not be called while React is rendering.');
++    }
++    const previousTransition = ReactSharedInternals.T;
++    const previousLane = setExternalRuntimeLane(lane as Lane);
++    ReactSharedInternals.T = ({_updatedFibers: new Set()}: any);
++    try {
++      return fn();
++    } finally {
++      ReactSharedInternals.T = previousTransition;
++      setExternalRuntimeLane(previousLane);
++    }
++  },
+ });
+ 
+ function requestRetryLane(fiber: Fiber) {
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberRoyaleRuntime-test.js b/packages/react-reconciler/src/__tests__/ReactFiberRoyaleRuntime-test.js
+index b049331b6e..af3eb9b2d7 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberRoyaleRuntime-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberRoyaleRuntime-test.js
+@@ -101,4 +101,26 @@ describe('Royale external runtime protocol', () => {
+       events.filter(event => event === 'end').length,
+     );
+   });
++
++  it('pins corrective updates to the owning transition lane', async () => {
++    let setValue;
++    let renderedLanes = 0;
++    function App() {
++      const [value, set] = React.useState(0);
++      setValue = set;
++      renderedLanes = React.unstable_getRenderContext().renderLanes;
++      return <span>{value}</span>;
++    }
++    const root = ReactNoop.createRoot();
++    await act(() => root.render(<App />));
++    let lane;
++    React.startTransition(() => {
++      lane = React.unstable_getCurrentUpdateLane();
++    });
++    React.unstable_runInLane(lane, () => setValue(1));
++    await act(() => {});
++
++    expect(React.unstable_lanesInclude(renderedLanes, lane)).toBe(true);
++    expect(root).toMatchRenderedOutput(<span>1</span>);
++  });
+ });
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index 388e78fa2a..0c0884175e 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -57,6 +57,7 @@ export {
+   unstable_subscribeToExternalRuntime,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
++  unstable_runInLane,
+   unstable_isTransitionLane,
+   unstable_lanesInclude,
+   useId,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index b0031b5406..49a5cebd59 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -40,6 +40,7 @@ export {
+   unstable_subscribeToExternalRuntime,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
++  unstable_runInLane,
+   unstable_isTransitionLane,
+   unstable_lanesInclude,
+   useId,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 81b9439b3d..562ac53159 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -41,6 +41,7 @@ export {
+   unstable_subscribeToExternalRuntime,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
++  unstable_runInLane,
+   unstable_isTransitionLane,
+   unstable_lanesInclude,
+   useId,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 4a97d7fc77..99723ca0ff 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -58,6 +58,7 @@ export {
+   unstable_subscribeToExternalRuntime,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
++  unstable_runInLane,
+   unstable_isTransitionLane,
+   unstable_lanesInclude,
+   useId,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 8f3d80d003..8b4ed612c0 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -35,6 +35,7 @@ export {
+   unstable_subscribeToExternalRuntime,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
++  unstable_runInLane,
+   unstable_isTransitionLane,
+   unstable_lanesInclude,
+   startTransition,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 1e5e064922..ac44e8bc62 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -35,6 +35,7 @@ export {
+   unstable_subscribeToExternalRuntime,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
++  unstable_runInLane,
+   unstable_isTransitionLane,
+   unstable_lanesInclude,
+   startTransition,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 1aeed7e548..1ece9f09ca 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -70,6 +70,7 @@ import {
+   getExternalRuntimeCurrentUpdateLane,
+   externalRuntimeIsTransitionLane,
+   externalRuntimeLanesInclude,
++  externalRuntimeRunInLane,
+ } from './ReactExternalRuntime';
+ 
+ const Children = {
+@@ -132,6 +133,7 @@ export {
+   getExternalRuntimeCurrentUpdateLane as unstable_getCurrentUpdateLane,
+   externalRuntimeIsTransitionLane as unstable_isTransitionLane,
+   externalRuntimeLanesInclude as unstable_lanesInclude,
++  externalRuntimeRunInLane as unstable_runInLane,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactExternalRuntime.js b/packages/react/src/ReactExternalRuntime.js
+index 603f59334f..737b91e182 100644
+--- a/packages/react/src/ReactExternalRuntime.js
++++ b/packages/react/src/ReactExternalRuntime.js
+@@ -74,6 +74,7 @@ export type ExternalRuntimeProvider = {
+   getCurrentUpdateLane: () => number,
+   isTransitionLane: (lane: number) => boolean,
+   lanesInclude: (lanes: number, lane: number) => boolean,
++  runInLane: <T>(lane: number, fn: () => T) => T,
+ };
+ 
+ const listeners: Set<ExternalRuntimeListener> = new Set();
+@@ -174,3 +175,8 @@ export function externalRuntimeLanesInclude(
+   const providers = runtime.providers;
+   return providers.length > 0 ? providers[0].lanesInclude(lanes, lane) : false;
+ }
++
++export function externalRuntimeRunInLane<T>(lane: number, fn: () => T): T {
++  const providers = runtime.providers;
++  return providers.length > 0 ? providers[0].runInLane(lane, fn) : fn();
++}
+-- 
+2.50.1 (Apple Git-155)
+
