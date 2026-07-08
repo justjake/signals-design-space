@@ -65,6 +65,21 @@ export type ScheduleOp =
 	 * write classifies normally: ambient batch while pending, quiet fold at
 	 * rest — refereed against the engine's fused-apply effect writes). */
 	| { t: 'coreEffectWrite'; node: number; out: number }
+	/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * The converged-terminal band. `tap`/`sig`/`sib` are a DISJOINT atom
+	 * cluster (below), touched only by these ops, so the terminal scenarios
+	 * stay acyclic and order-free like out1/out2:
+	 *  - mountTermReader: a terminal reading `sig` (dep 0) or `sib` (dep 1);
+	 *  - mountTapCore: a core effect reading `tap`, writing `sig` — bug 1's
+	 *    cause (a core/quiet-path write to a terminal's dependency);
+	 *  - mountSibWriter: a terminal reading `tap`, writing `sib` — bug 2's
+	 *    cause (a terminal body writing a sibling terminal's dependency);
+	 *  - writeTap: the trigger — a quiet-only bare write to `tap` (the quiet
+	 *    write path where the converged terminal's boundary drain lives). */
+	| { t: 'mountTermReader'; root: string; dep: number }
+	| { t: 'mountTapCore' }
+	| { t: 'mountSibWriter'; root: string }
+	| { t: 'writeTap'; value: number }
 	| { t: 'discardAllWip' }
 	| { t: 'quiesce' };
 
@@ -107,7 +122,21 @@ export function buildTopology(m: CosignalModel) {
 	const q = m.atom('q', 0, Q_EQUALS);
 	const out1 = m.atom('out1', 0);
 	const out2 = m.atom('out2', 0);
-	return { atoms: [flag, a, b, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2] };
+	// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	// The converged-terminal cluster, appended LAST so every historical
+	// op-index slice (atoms 0..4, nodes 0..8, then q/out1/out2) resolves
+	// exactly as before. DISJOINT — read/written only by the terminal band's
+	// ops — so the scenarios stay acyclic and order-free:
+	//  - tap: the trigger; written by writeTap, read by the bug-1 core and the
+	//    bug-2 writing terminal;
+	//  - sig: the bug-1 terminal dep; written by the bug-1 core, read by a
+	//    terminal — the core/quiet-path write to a terminal's dependency;
+	//  - sib: the bug-2 sibling dep; written by the bug-2 terminal's body, read
+	//    by a terminal — a terminal body writing a sibling's dependency.
+	const tap = m.atom('tap', 0);
+	const sig = m.atom('sig', 0);
+	const sib = m.atom('sib', 0);
+	return { atoms: [flag, a, b, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2], tap, sig, sib };
 }
 
 export type RunResult = {
@@ -200,6 +229,44 @@ export function applyOneOp(m: CosignalModel, op: ScheduleOp): boolean {
 					if (e.writeTo === out) throw new ScheduleError(`output atom ${out.name} already has a writing effect`);
 				}
 				m.mountCoreEffect(nodes[op.node % nodes.length]!, `CE${uniq}`, out);
+				break;
+			}
+			// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+			case 'mountTermReader': {
+				// A committed terminal whose body reads `sig` (dep 0) or `sib`
+				// (dep 1) — the downstream side of bugs 1 and 2 respectively. The
+				// `#T${k}` ordinal keeps names unique when mounted at rest.
+				const dep = atomNamed(op.dep % 2 === 0 ? 'sig' : 'sib');
+				m.mountReactEffect(op.root, dep, `E${uniq}#T${m.terminalReactMounts++}`);
+				break;
+			}
+			case 'mountTapCore': {
+				// A core effect reading `tap`, writing `sig`: the bug-1 cause (a
+				// core/quiet-path write to a terminal's dependency). One writer
+				// per `sig` (order-freedom), identically to the out1/out2 rule.
+				const sig = atomNamed('sig');
+				for (const e of m.coreEffects.values()) {
+					if (e.writeTo === sig) throw new ScheduleError('sig already has a writing effect');
+				}
+				m.mountCoreEffect(atomNamed('tap'), `CE${uniq}`, sig);
+				break;
+			}
+			case 'mountSibWriter':
+				// A terminal reading `tap`, writing `sib`: the bug-2 cause (a
+				// terminal body writing a sibling terminal's dependency). Many
+				// writers are order-free — each writes min(tap,3), the same value.
+				// QUIET-ONLY (like writeTap): mounting while pending would run the
+				// body's sib write into a batch, taking the whole scenario off the
+				// quiet write path the converged terminal's drain lives on.
+				if (!m.isQuiet()) throw new ScheduleError('the writing terminal mounts only on the quiet path');
+				m.mountReactEffectWrite(op.root, atomNamed('tap'), atomNamed('sib'), `E${uniq}#T${m.terminalReactMounts++}`);
+				break;
+			case 'writeTap': {
+				// The trigger — QUIET-ONLY (the converged terminal's boundary
+				// drain is the quiet write path; legality decided by isQuiet on
+				// both sides). Distinct small values re-fire both families.
+				if (!m.isQuiet()) throw new ScheduleError('tap writes only on the quiet path');
+				m.bareWrite(atomNamed('tap'), { kind: 'set', value: op.value });
 				break;
 			}
 			case 'discardAllWip': m.discardAllWip(); break;
@@ -331,7 +398,25 @@ export function generateSchedule(seed: number, steps: number): ScheduleOp[] {
 		// R-3 corpus band: writing core effects (effect writes classify
 		// normally — the fused-apply fix's referee vocabulary).
 		else if (roll < 0.96) ops.push({ t: 'coreEffectWrite', node: pick(8), out: pick(2) });
-		else if (roll < 0.98) ops.push({ t: 'discardAllWip' });
+		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+		// The converged-terminal band, APPENDED after the historical bands (all
+		// thresholds below 0.96 keep their exact seed stream). Mount a terminal
+		// or its cause, then trigger via quiet tap writes — the two wave-1
+		// scenarios: bug 1 (a core/quiet-path write to a terminal's dependency)
+		// and bug 2 (a terminal body writing a sibling terminal's dependency).
+		else if (roll < 0.972) {
+			const root = ROOTS[pick(2)]!;
+			const which = pick(4);
+			if (which === 0) ops.push({ t: 'mountTermReader', root, dep: 0 });       // reads sig (bug 1 downstream)
+			else if (which === 1) ops.push({ t: 'mountTapCore' });                   // core writes sig (bug 1 cause)
+			else if (which === 2) ops.push({ t: 'mountTermReader', root, dep: 1 });   // reads sib (bug 2 downstream)
+			else ops.push({ t: 'mountSibWriter', root });                           // terminal writes sib (bug 2 cause)
+			// Trigger burst: quiet-only tap writes with distinct small values, so
+			// the core's sig payload (min(runs,3)) and the writer's sib payload
+			// (min(tap,3)) actually change and re-fire the reading terminals.
+			while (bool(0.6)) ops.push({ t: 'writeTap', value: pick(4) });
+		}
+		else if (roll < 0.985) ops.push({ t: 'discardAllWip' });
 		else ops.push({ t: 'quiesce' });
 	}
 	// Close out: retire everything then quiesce, so residue/epoch-reset rules run on most seeds.

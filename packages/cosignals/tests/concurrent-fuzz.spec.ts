@@ -14,7 +14,7 @@
  * candidate).
  */
 import { describe, expect, it } from 'vitest';
-import { generateSchedule, shrink, type ScheduleOp } from '../../cosignals-oracle/src/schedule.js';
+import { generateSchedule, runSchedule, shrink, type ScheduleOp } from '../../cosignals-oracle/src/schedule.js';
 import { diffAgainstModelTolerant, engineAsAdapter } from './oracle-adapter.js';
 import frozen from '../../cosignals-oracle/tests/frozen-schedules.json';
 
@@ -77,5 +77,28 @@ describe('CONCURRENT engine vs oracle (diffAgainstModel, step-by-step)', () => {
 		// lists (tests/frozen-schedules.json) so no generator change can ever
 		// silently rewrite them.
 		for (const seed of [29, 97, 173]) expectOpsDiffClean(FROZEN[`s${seed}x80`]!, seed);
+	});
+
+	// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	// The durable regression pins for the converged committed terminal. Each
+	// FROZEN schedule drives the exact wave-1 scenario on the quiet path and is
+	// what makes the randomized referee no longer BLIND to the terminal:
+	//  - bug 1: a core/quiet-path write to a terminal's dependency (`sig`) —
+	//    the terminal must keep its dep and re-fire on EVERY committed change,
+	//    never run inside the core-effect frame (where its reads record no dep);
+	//  - bug 2: a terminal body writing a sibling terminal's dependency (`sib`)
+	//    — the write must schedule the sibling at the boundary, never nest.
+	// The assertions pin BOTH that the terminal actually re-fires (else the pin
+	// is vacuous) AND that the engine matches the model step-for-step; the
+	// pre-fix engine diverges here (see the STEP-3 proof in the change report).
+	it('the converged-terminal pins (bugs 1 & 2) exercise the terminal AND diff clean — FROZEN literals', () => {
+		for (const key of ['terminal-bug1-quiet', 'terminal-bug2-quiet']) {
+			const ops = FROZEN[key]!;
+			const model = runSchedule(ops, true); // the naive spec: invariants after every step
+			expect(model.failure, `${key}: ${model.failure?.error.message}`).toBeUndefined();
+			const reFires = model.model.eventsOfType('react-effect-run').length;
+			expect(reFires, `${key} never re-fired the terminal — the pin is vacuous`).toBeGreaterThanOrEqual(2);
+			expectOpsDiffClean(ops); // engine ≡ model, step by step
+		}
 	});
 });

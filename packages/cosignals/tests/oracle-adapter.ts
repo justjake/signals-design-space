@@ -37,7 +37,7 @@ import {
 } from '../../cosignals-oracle/src/adapter.js';
 import { CosignalModel, type ModelEvent } from '../../cosignals-oracle/src/model.js';
 import { applyOneOp, buildTopology, Q_EQUALS, type ScheduleOp, type WriteKind } from '../../cosignals-oracle/src/schedule.js';
-import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick } from './helpers.js';
+import { mountEngineCoreEffect, mountEngineReactEffect, mountEngineReactEffectPick, mountEngineReactEffectWrite } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
 
 // (The TraceEvent ≡ ModelEvent type-parity pin moved to trace-events.ts,
@@ -59,7 +59,14 @@ export function buildEngineTopology(b: CosignalEngine) {
 	const q = b.atom('q', 0, Q_EQUALS);
 	const out1 = b.atom('out1', 0);
 	const out2 = b.atom('out2', 0);
-	return { atoms: [flag, a, bb, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2] };
+	// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	// The converged-terminal cluster (mirrors buildTopology): appended LAST so
+	// the op-index slices stay stable; disjoint — tap (trigger), sig (bug-1
+	// terminal dep, core-written), sib (bug-2 sibling dep, terminal-written).
+	const tap = b.atom('tap', 0);
+	const sig = b.atom('sig', 0);
+	const sib = b.atom('sib', 0);
+	return { atoms: [flag, a, bb, r], computeds: [cFlip, cSum, cChain, cMix], q, outs: [out1, out2], tap, sig, sib };
 }
 
 /**
@@ -70,7 +77,7 @@ export function buildEngineTopology(b: CosignalEngine) {
  * population itself to keep op resolution identical on both sides. Purely
  * an indexing-fidelity shim — no tolerance.
  */
-type EntityRegistry = { batches: number[]; renderPasses: number[]; outWriters: Set<string> };
+type EntityRegistry = { batches: number[]; renderPasses: number[]; outWriters: Set<string>; writerEffects: Set<number> };
 
 /** Keyed by ENGINE EPOCH (one schedule = one reset = one epoch): the engine
  * surface is a singleton, so object keying would leak the previous
@@ -80,7 +87,7 @@ const registries = new Map<number, EntityRegistry>();
 function registryOf(_b: CosignalEngine): EntityRegistry {
 	let r = registries.get(engineEpoch);
 	if (r === undefined) {
-		r = { batches: [], renderPasses: [], outWriters: new Set() };
+		r = { batches: [], renderPasses: [], outWriters: new Set(), writerEffects: new Set() };
 		registries.set(engineEpoch, r);
 	}
 	return r;
@@ -122,6 +129,19 @@ function effectAt(b: CosignalEngine, index: number): number {
  * matter here — when NAME PARITY with the model matters (lockstep), the
  * differ supplies the model's own event count as `namingEvents`. */
 const appliedOps = new Map<number, number>();
+
+/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+ * Per-schedule ordinal for the terminal band's react-effect mounts — the
+ * model's `terminalReactMounts` twin. Ticked per APPLIED
+ * mountTermReader/mountSibWriter (same order), so the `E${uniq}#T${k}` names
+ * agree even when terminals mount at rest (no seq/event/epoch advance to make
+ * the uniq unique). Keyed by engine epoch (one per schedule reset). */
+const terminalReactMounts = new Map<number, number>();
+function nextTerminalMount(): number {
+	const k = terminalReactMounts.get(engineEpoch) ?? 0;
+	terminalReactMounts.set(engineEpoch, k + 1);
+	return k;
+}
 
 /** Apply ONE schedule op to an engine holding the fixed topology (applyOneOp twin).
  * `namingEvents` (when given) replaces the engine's own op count in the
@@ -207,7 +227,15 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				);
 				break;
 			case 'removeReactEffect': b.removeSignalEffect(effectAt(b, op.effect)); break;
-			case 'replayReactEffect': b.replaySignalEffect(effectAt(b, op.effect)); break;
+			case 'replayReactEffect': {
+				// Symmetric with the model: force-replay of a WRITING terminal is
+				// scoped out (test-surface replay pollutes the trace-only values
+				// snapshot via committed-arena materialization; see model.ts).
+				const id = effectAt(b, op.effect);
+				if (reg.writerEffects.has(id)) throw new ScheduleError('writing terminals are not force-replayable in the referee');
+				b.replaySignalEffect(id);
+				break;
+			}
 			case 'coreEffect': mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`); break;
 			case 'coreEffectWrite': {
 				const outName = op.out % 2 === 0 ? 'out1' : 'out2';
@@ -218,6 +246,42 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 				const out = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === outName)!;
 				mountEngineCoreEffect(b, nodes[op.node % nodes.length]!, `CE${uniq}`, out);
 				reg.outWriters.add(outName);
+				break;
+			}
+			// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+			// The converged-terminal band (applyOneOp twins). `namedAtom` resolves
+			// the disjoint cluster by name — appended after the core eight, so the
+			// positional node lookups above are untouched.
+			case 'mountTermReader': {
+				const dep = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === (op.dep % 2 === 0 ? 'sig' : 'sib'))!;
+				mountEngineReactEffect(b, op.root, dep, `E${uniq}#T${nextTerminalMount()}`);
+				break;
+			}
+			case 'mountTapCore': {
+				// One writer per `sig` (the model's legality; order-freedom).
+				if (reg.outWriters.has('sig')) throw new ScheduleError('sig already has a writing effect');
+				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!;
+				const sig = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'sig')!;
+				mountEngineCoreEffect(b, tap, `CE${uniq}`, sig);
+				reg.outWriters.add('sig');
+				break;
+			}
+			case 'mountSibWriter': {
+				// QUIET-ONLY (b.quiet is the model's isQuiet twin): confine the
+				// body's sib write to the quiet fold path, never a batch.
+				if (!b.quiet) throw new ScheduleError('the writing terminal mounts only on the quiet path');
+				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!;
+				const sib = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'sib')!;
+				const w = mountEngineReactEffectWrite(b, op.root, tap, sib, `E${uniq}#T${nextTerminalMount()}`);
+				reg.writerEffects.add(w.id); // tag the writer — force-replay is scoped out (see the model's replayReactEffect)
+				break;
+			}
+			case 'writeTap': {
+				// QUIET-ONLY — the engine's `quiet` getter is the model's isQuiet
+				// twin, so legality is decided identically on both sides.
+				if (!b.quiet) throw new ScheduleError('tap writes only on the quiet path');
+				const tap = allNodes.find((n): n is AtomInternals => n.kind === 'atom' && n.name === 'tap')!;
+				b.bareWrite(tap, 0, op.value);
 				break;
 			}
 			case 'discardAllWip': b.discardAllWip(); break;
