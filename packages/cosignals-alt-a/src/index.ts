@@ -57,6 +57,8 @@ import { createAPI as _createAPI, type CosignalAPI as _API } from './api';
 /** The module-singleton engine + API (browser shape). */
 export const defaultEngine = _create();
 const defaultAPI = _createAPI(defaultEngine);
+/** The full default-engine API bundle (what registerAltAReact consumes). */
+export const defaultApi = defaultAPI;
 export const Atom = defaultAPI.Atom;
 export const ReducerAtom = defaultAPI.ReducerAtom;
 export const Computed = defaultAPI.Computed;

@@ -10,6 +10,7 @@ export const contenderNames = [
 	'baseline-context',
 	'baseline-local',
 	'alt-a-uses',
+	'alt-a-react',
 	'alt-b-uses',
 ] as const;
 

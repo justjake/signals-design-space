@@ -182,6 +182,7 @@ const enum C {
 // #endregion GENERATED layout v2
 
 import type { Container, ExternalRuntimeListener, ForkAdapter } from './fork-double';
+export type { Container } from './fork-double';
 import type { Tracer } from './tracing';
 import { TraceKind } from './tracing';
 
@@ -1546,8 +1547,27 @@ export function createCosignalEngine(options?: EngineOptions) {
 		};
 	}
 
+	// GAP DEGRADATION (real fork): the patched build emits no yield edge when
+	// a render pass exits by SUSPENDING, so the engine's edge-tracked context
+	// would stay RENDER into the gap where handlers run. When the engine
+	// believes a pass is executing but the fork's stack-accurate render
+	// context says otherwise, synthesize the missed yield (§10.1's edges,
+	// self-healed). Consulted only on the already-marked-RENDER paths — the
+	// steady NEWEST hot paths never ask the fork.
+	function healStaleRenderCtx(): boolean {
+		if (fork !== undefined && fork.getRenderContext() === undefined) {
+			passExecuting = 0;
+			readCtx = C.CTX_NEWEST;
+			return true;
+		}
+		return false;
+	}
+
 	function ambientWorld(): WorldDesc {
 		if (readCtx === C.CTX_RENDER) {
+			if (healStaleRenderCtx()) {
+				return NEWEST_WORLD;
+			}
 			return passWorld;
 		}
 		if (readCtx === C.CTX_COMMITTED) {
@@ -2404,7 +2424,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function writeOp(a: number, op: number, payload: unknown): void {
-		if (readCtx === C.CTX_RENDER && passExecuting !== 0) {
+		if (readCtx === C.CTX_RENDER && passExecuting !== 0 && !healStaleRenderCtx()) {
 			throw new Error('cosignal: writes during render are not allowed (§10.8)');
 		}
 		if (
@@ -2446,13 +2466,24 @@ export function createCosignalEngine(options?: EngineOptions) {
 				return;
 			}
 		}
-		let slot = internSlot(token);
+		let slot: number;
 		let pseudo = false;
 		let applied = !deferred;
-		if (slot < 0) {
+		if (token === 0) {
+			// BATCH_NONE: no batch context exists (real-fork edge; unreachable
+			// once a renderer registered its provider). Degrade to the §9.2
+			// pseudo shape: applied + retired-at-append, no slot, no retirement
+			// to wait for.
 			pseudo = true;
 			applied = true;
 			slot = 0;
+		} else {
+			slot = internSlot(token);
+			if (slot < 0) {
+				pseudo = true;
+				applied = true;
+				slot = 0;
+			}
 		}
 		appendLog(a, op, payload, applied, slot, pseudo);
 		if (tracer !== undefined) {
@@ -2892,7 +2923,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (
 			frameWorlds.length === 0
 			&& (M[a + C.FLAGS] & (C.LOGGED | C.DIRTY)) === 0
-			&& (canonicalEvalDepth > 0 || readCtx !== C.CTX_RENDER)
+			&& (canonicalEvalDepth > 0 || readCtx !== C.CTX_RENDER || healStaleRenderCtx())
 		) {
 			if (activeSub !== 0) {
 				link(a, activeSub, cycle);
@@ -3507,6 +3538,21 @@ export function createCosignalEngine(options?: EngineOptions) {
 		trackCommitted,
 		committedEffect,
 		subscribeWithFixup,
+		/** The open pass's fixup-relevant identity: pin + included tokens
+		 * (interned slots only — never-interned tokens carry no entries and
+		 * cannot affect any re-resolution). undefined outside passes. */
+		renderInfo(): { pin: number; tokens: number[]; container: Container } | undefined {
+			if (passOpen === 0) {
+				return undefined;
+			}
+			const tokens: number[] = [];
+			for (let s2 = 0; s2 < 32; ++s2) {
+				if (((passIncludeMask >> s2) & 1) !== 0 && batchToken[s2] !== 0) {
+					tokens.push(batchToken[s2]);
+				}
+			}
+			return { pin: passPin, tokens, container: passContainer };
+		},
 		/** §14.2 deterministic disposal of an atom/computed record (the same
 		 * path the FinalizationRegistry takes for collected handles). */
 		reclaim(h: SignalHandle): void {

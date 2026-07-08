@@ -16,6 +16,7 @@ const loaders: Record<ContenderName, () => Promise<{ default: Contender }>> = {
 	'baseline-context': () => import('./baselineContext.js'),
 	'baseline-local': () => import('./baselineLocal.js'),
 	'alt-a-uses': () => import('./altA.js'),
+	'alt-a-react': () => import('./altAConcurrent.js'),
 	'alt-b-uses': () => import('./altB.js'),
 };
 
