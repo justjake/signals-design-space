@@ -1,0 +1,3116 @@
+From da7a2366e82c32251ec87b69360f67d04bb7a73f Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Tue, 7 Jul 2026 07:18:10 -0400
+Subject: [PATCH 25/25] Protocol v2: the external runtime supplies batch ids
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The store's driver registers a batch-id allocator
+(unstable_registerBatchIdAllocator; second registration throws, error
+606); getOrCreateBatchId (was getOrMintBatchToken) calls it at the one
+batch-identity creation site — the empty slot-field arm of the
+persistent per-lane Slot — and stores the returned id in slot.batchId
+(was slot.token). Driverless usage falls back to a monotonic internal
+counter, so the protocol works stock. The deferred flag becomes a
+stored Slot field set at creation (the low-bit encoding dies); the
+run-in-batch scheduling branch and the async-action park decision read
+it; drivers learn deferredness via the allocator argument. Parked
+settlement callbacks capture their batchId and no-op if the slot moved.
+unstable_resetBatchRegistryForTest clears full slot tenancy (test-only,
+never emits retirements, never resets the counter). Token/mint
+vocabulary is gone from the protocol. Four protocol suites updated +
+4 new pins (driverless fallback, double-registration throw, reset
+tenancy scrub, parked self-invalidation across a reset): 41 passed.
+Flow clean, lint clean, error codes extracted.
+---
+ .../src/ReactFiberBatchRegistry.js            | 289 ++++++++++-----
+ .../src/ReactFiberExternalRuntime.js          |   4 +-
+ .../src/ReactFiberRootScheduler.js            |   2 +-
+ .../src/ReactFiberWorkLoop.js                 |  76 ++--
+ .../__tests__/ReactFiberBatchRegistry-test.js | 342 +++++++++++++-----
+ .../ReactFiberExternalRuntimeCommit-test.js   | 189 ++++++----
+ .../ReactFiberExternalRuntimePass-test.js     | 103 ++++--
+ .../__tests__/ReactFiberRunInBatch-test.js    | 234 ++++++------
+ packages/react/index.development.js           |   2 +
+ .../react/index.experimental.development.js   |   2 +
+ packages/react/index.experimental.js          |   2 +
+ packages/react/index.fb.js                    |   2 +
+ packages/react/index.js                       |   2 +
+ packages/react/index.stable.development.js    |   2 +
+ packages/react/index.stable.js                |   2 +
+ packages/react/src/ReactClient.js             |   4 +
+ packages/react/src/ReactExternalRuntime.js    | 151 ++++++--
+ scripts/error-codes/codes.json                |   5 +-
+ 18 files changed, 939 insertions(+), 474 deletions(-)
+
+diff --git a/packages/react-reconciler/src/ReactFiberBatchRegistry.js b/packages/react-reconciler/src/ReactFiberBatchRegistry.js
+index 548e28585f..2d3d0b1b95 100644
+--- a/packages/react-reconciler/src/ReactFiberBatchRegistry.js
++++ b/packages/react-reconciler/src/ReactFiberBatchRegistry.js
+@@ -19,7 +19,7 @@ import {
+ } from './ReactFiberAsyncAction';
+ 
+ /**
+- * Batch tokens: stable identities for "a batch of updates React renders and
++ * Batch ids: stable identities for "a batch of updates React renders and
+  * retires as a unit", exposed to external state libraries in place of raw
+  * lane bits (see ReactExternalRuntime.js).
+  *
+@@ -27,7 +27,7 @@ import {
+  * cursor wraps after 10 claims), so a bit cannot name a batch across time.
+  * The registry is EDGE-TRIGGERED from the places the reconciler already
+  * mutates its own bookkeeping — never sampled — so a reused bit can never be
+- * observed under a stale token:
++ * observed under a stale batch id:
+  *
+  *   claim   (requestTransitionLane's once-per-event claim)
+  *   pending (markRootUpdated: first time this batch gets work on a root)
+@@ -41,35 +41,54 @@ import {
+  *
+  * If a lane bit is claimed again while its previous batch is still pending,
+  * React itself cannot distinguish the two batches — they render and retire
+- * together. The registry mirrors reality: the existing token is REUSED
++ * together. The registry mirrors reality: the existing batch id is REUSED
+  * (explicit merge), rather than pretending two identities exist.
+  *
+- * Allocation discipline: a token is minted lazily, only when an external
++ * Allocation discipline: a batch id is created lazily, only when an external
+  * write actually asks for the current batch. Claims, pending edges, and
+- * finish edges on slots without tokens are integer/null checks.
++ * finish edges on slots without ids are integer/null checks.
++ *
++ * WHO allocates the id (protocol v2): a registered BATCH-ID ALLOCATOR when
++ * an external runtime has one (see registerExternalRuntimeBatchIdAllocator
++ * in ReactExternalRuntime.js) — the external store hands out the id from its
++ * own id space, so both sides speak ONE number space with no translation
++ * maps — and this module's own fallback counter otherwise (stock usage and
++ * driverless tests; the protocol keeps working without an allocator). The
++ * id is opaque to React either way: a positive integer, stable for the
++ * batch's life, never reused while live. Deferredness is NOT encoded in the
++ * id (there is no low-bit payload); it is a stored field on the slot, told
++ * to the allocator at creation.
+  */
+ 
+ /**
+- * A batch token is a non-zero integer: `serial << 1 | deferredBit`, written
+- * as `serial * 2 + deferredBit` so the serial is never truncated to 31 bits.
+- * 0 is reserved for "no batch" (see getExternalRuntimeCurrentWriteBatch).
+- *
+- *   token & 1              — 1 for transition-like (deferred) batches:
+- *                            renders don't block paint and the batch commits
+- *                            later. External stores fork pending state on
+- *                            these.
+- *   (token - (token & 1))/2 — the mint serial (debug only; stable for the
+- *                            token's life, never reused while live).
++ * A batch id is a positive integer naming one batch for its whole life.
++ * BATCH_NONE (0) is reserved for "no batch" (see
++ * getExternalRuntimeCurrentWriteBatch). The integer carries NO payload —
++ * ids from a registered allocator are that allocator's serials, fallback
++ * ids are this module's serials; consumers treat both as opaque.
+  */
+-export type BatchToken = number;
++export type BatchId = number;
++
++/** The reserved "no batch" id — never allocated, never stored in a slot. */
++export const BATCH_NONE: BatchId = 0;
+ 
+ type Slot = {
+-  token: BatchToken | null,
++  /** The live batch occupying this lane's slot, or null between batches
++   * (retirement clears this field and keeps the Slot). */
++  batchId: BatchId | null,
++  /** True for transition-like batches: renders don't block paint and the
++   * batch commits later. External stores fork pending state on these. Set
++   * at batch-identity creation from the lane kind; meaningless (false)
++   * while batchId is null. */
++  deferred: boolean,
++  /** The lane this slot serves — fixed at Slot creation (one persistent
++   * Slot per lane). */
++  lane: Lane,
+   /** Roots this batch has scheduled work on and not yet finished. */
+   roots: Set<FiberRoot> | null,
+   /** Roots that already committed this batch while it stays pending on
+    * others: renders on these roots must keep including the batch (their
+-   * committed tree already shows it) even though the token has not retired. */
++   * committed tree already shows it) even though the batch has not retired. */
+   committedRoots: Set<FiberRoot> | null,
+   /** Open async-action thenable this store-only batch is parked on: the
+    * close edge must not retire it until the action settles. */
+@@ -78,7 +97,10 @@ type Slot = {
+ 
+ // One slot per lane index (31 lanes).
+ const slots: Array<Slot | null> = new Array<Slot | null>(31).fill(null);
+-let nextTokenSerial = 1;
++// Fallback id source when no allocator is registered. Monotonic for the
++// module's life — never reset, even by resetBatchRegistryForTest — so a
++// stale id can never collide with a later batch.
++let nextFallbackBatchId = 1;
+ 
+ // Per-root commit generation: how many times each root has committed.
+ // Maintained unconditionally (like the rest of the registry's bookkeeping)
+@@ -115,55 +137,87 @@ function slotFor(lane: Lane): Slot {
+   const index = 31 - Math.clz32(lane);
+   let slot = slots[index];
+   if (slot === null) {
+-    slot = {token: null, roots: null, committedRoots: null, parked: null};
++    slot = {
++      batchId: null,
++      deferred: false,
++      lane,
++      roots: null,
++      committedRoots: null,
++      parked: null,
++    };
+     slots[index] = slot;
+   }
+   return slot;
+ }
+ 
+ /**
+- * Returns the token for the batch an external write issued right now belongs
+- * to, minting it on first use. `lane` is what requestUpdateLane would assign;
+- * `isDeferred` classifies it (transition-like or not).
++ * Returns the id of the batch an external write issued right now belongs
++ * to, creating the batch identity on first use — THE one creation site
++ * (every classification arm of getCurrentWriteBatch funnels here). `lane`
++ * is what requestUpdateLane would assign; `deferred` classifies it
++ * (transition-like or not).
++ *
++ * Creation asks the registered batch-id allocator when one exists —
++ * passing `deferred`, which is also how the allocator's owner learns each
++ * batch's classification — and falls back to this module's own counter
++ * otherwise. The allocator must return a positive integer never equal to a
++ * currently live id; it is called at whatever position the write happens
++ * (mid-render, mid-commit, inside listeners), so it must be re-entrant-safe
++ * and allocation-only on its own side.
+  */
+-export function getOrMintBatchToken(
+-  lane: Lane,
+-  isDeferred: boolean,
+-): BatchToken {
++export function getOrCreateBatchId(lane: Lane, deferred: boolean): BatchId {
+   const slot = slotFor(lane);
+-  if (slot.token === null) {
+-    slot.token = nextTokenSerial++ * 2 + (isDeferred ? 1 : 0);
++  const existing = slot.batchId;
++  if (existing !== null) {
++    return existing;
+   }
+-  return slot.token;
++  const runtime = getExternalRuntime();
++  const allocate = runtime !== null ? runtime.allocateBatchId : null;
++  const batchId =
++    allocate !== null ? allocate(deferred) : nextFallbackBatchId++;
++  if (__DEV__) {
++    if (!Number.isInteger(batchId) || batchId <= 0) {
++      console.error(
++        'The registered batch-id allocator returned %s. Batch ids must be ' +
++          'positive integers (0 is reserved for "no batch").',
++        batchId,
++      );
++    }
++  }
++  slot.batchId = batchId;
++  slot.deferred = deferred;
++  return batchId;
+ }
+ 
+ /**
+- * The lane a LIVE token's batch occupies, or NoLane (0) when the token is
+- * retired, unknown, or 0 ("no batch"). Used by runInBatch to resolve its
+- * scheduling target: a token is live exactly while its slot still holds it,
+- * including the window inside its retiring commit's onRootCommitted report
+- * (retirement emits are deferred until after that report, so a write
+- * delivered there lands on the outgoing token — the documented merge rule).
++ * The slot a LIVE batch occupies (its lane and deferred flag), or null when
++ * the id is retired, unknown, or BATCH_NONE. Used by runInBatch to resolve
++ * its scheduling target: a batch is live exactly while its slot still holds
++ * its id, including the window inside its retiring commit's onRootCommitted
++ * report (retirement emits are deferred until after that report, so a write
++ * delivered there lands on the outgoing batch — the documented merge rule).
+  */
+-export function lookupBatchTokenLane(token: BatchToken): Lane {
+-  if (token !== 0) {
++export function lookupLiveBatchSlot(
++  batchId: BatchId,
++): null | {+lane: Lane, +deferred: boolean, ...} {
++  if (batchId !== BATCH_NONE) {
+     for (let index = 0; index < slots.length; index++) {
+       const slot = slots[index];
+-      if (slot !== null && slot.token === token) {
+-        return (1 << index) as any;
++      if (slot !== null && slot.batchId === batchId) {
++        return slot;
+       }
+     }
+   }
+-  return 0 as any; // NoLane
++  return null;
+ }
+ 
+ /**
+  * Pending edge. Called from the markRootUpdated wrapper on every scheduled
+- * update; must be near-free when no token exists for the lane.
++ * update; must be near-free when no batch id exists for the lane.
+  */
+ export function batchRegistryOnRootUpdated(root: FiberRoot, lane: Lane): void {
+   const slot = slots[31 - Math.clz32(lane)];
+-  if (slot === null || slot.token === null) {
++  if (slot === null || slot.batchId === null) {
+     return;
+   }
+   if (slot.roots === null) {
+@@ -173,22 +227,22 @@ export function batchRegistryOnRootUpdated(root: FiberRoot, lane: Lane): void {
+ }
+ 
+ /**
+- * Pending-edge repair. The pending edge only records a root when the token
+- * already exists, so an update scheduled BEFORE its batch's first store write
+- * (`startTransition(() => { setState(x); store.write(y); })` — ordinary line
+- * order) is invisible to the registry. Called from the root scheduler's
+- * microtask for every root still holding work, before the close edge decides
+- * a batch is store-only: any live token whose lane is pending on the root
+- * records it, so the finish edge retires the batch at its real commit
+- * instead of the close edge retiring it early.
++ * Pending-edge repair. The pending edge only records a root when the batch
++ * id already exists, so an update scheduled BEFORE its batch's first store
++ * write (`startTransition(() => { setState(x); store.write(y); })` —
++ * ordinary line order) is invisible to the registry. Called from the root
++ * scheduler's microtask for every root still holding work, before the close
++ * edge decides a batch is store-only: any live batch whose lane is pending
++ * on the root records it, so the finish edge retires the batch at its real
++ * commit instead of the close edge retiring it early.
+  *
+- * Cost per scheduled root: iterates only slots holding live tokens
++ * Cost per scheduled root: iterates only slots holding live batches
+  * (typically 0–2); Set.add is idempotent for roots already recorded.
+  */
+ export function batchRegistryBackfillRoot(root: FiberRoot): void {
+   for (let index = 0; index < slots.length; index++) {
+     const slot = slots[index];
+-    if (slot === null || slot.token === null) {
++    if (slot === null || slot.batchId === null) {
+       continue;
+     }
+     if ((root.pendingLanes & (1 << index)) !== 0) {
+@@ -207,18 +261,18 @@ export function batchRegistryBackfillRoot(root: FiberRoot): void {
+  * pending on the root. A batch is done on a root when its lane is no longer
+  * pending there. Its lane is in finishedLanes only when this commit rendered
+  * its updates (directly or entangled); otherwise its updates died with
+- * deleted fibers and were pruned from the surviving tree. A token retires
++ * deleted fibers and were pruned from the surviving tree. A batch retires
+  * exactly once, when its last pending root is done with it.
+  *
+  * This edge is also the per-root commit report (spec §4.1 fact 3):
+  * onRootCommitted fires on every commit with the root's new commit
+  * generation and the batches this commit made visible on this root, BEFORE
+- * any retirement the commit causes — a token retires because its last
++ * any retirement the commit causes — a batch retires because its last
+  * pending root committed (or pruned) it, so the per-root report is the
+  * cause and the retirement edge its consequence (spec case-11 step 6).
+  * Listeners run between the bookkeeping mutation and the retirement emit;
+  * a write issued inside an onRootCommitted listener for a lane retiring in
+- * this very commit lands on the outgoing token (the registry's ordinary
++ * this very commit lands on the outgoing batch (the registry's ordinary
+  * merge-on-lane-reuse rule already covers reused lanes, and the retirement
+  * edge still fires exactly once, after).
+  *
+@@ -235,7 +289,7 @@ export function batchRegistryBackfillRoot(root: FiberRoot): void {
+  * lanes that merely got entangled mid-flight (updates not in this tree)
+  * out of the report.
+  *
+- * Cost: iterates only slots holding live tokens (typically 0–2), plus one
++ * Cost: iterates only slots holding live batches (typically 0–2), plus one
+  * WeakMap bump per commit.
+  */
+ export function batchRegistryOnRootFinished(
+@@ -257,7 +311,7 @@ export function batchRegistryOnRootFinished(
+         finishedLanes
+       : renderedLanesStash;
+ 
+-  let committedTokens: Array<BatchToken> | null = null;
++  let committedBatchIds: Array<BatchId> | null = null;
+   let retirements: Array<{slot: Slot, committed: boolean}> | null = null;
+ 
+   for (let index = 0; index < slots.length; index++) {
+@@ -265,8 +319,8 @@ export function batchRegistryOnRootFinished(
+     if (slot === null) {
+       continue;
+     }
+-    const token = slot.token;
+-    if (token === null) {
++    const batchId = slot.batchId;
++    if (batchId === null) {
+       continue;
+     }
+     const lane = 1 << index;
+@@ -285,10 +339,10 @@ export function batchRegistryOnRootFinished(
+         roots !== null &&
+         roots.has(root)
+       ) {
+-        if (committedTokens === null) {
+-          committedTokens = [];
++        if (committedBatchIds === null) {
++          committedBatchIds = [];
+         }
+-        committedTokens.push(token);
++        committedBatchIds.push(batchId);
+         if (slot.committedRoots === null) {
+           slot.committedRoots = new Set();
+         }
+@@ -302,16 +356,16 @@ export function batchRegistryOnRootFinished(
+     const committed = (finishedLanes & lane) !== 0;
+     if (committed) {
+       // This commit made the batch's updates visible on this root: part of
+-      // the root's committed-batch delta, whether or not the token also
++      // the root's committed-batch delta, whether or not the batch also
+       // retires here.
+-      if (committedTokens === null) {
+-        committedTokens = [];
++      if (committedBatchIds === null) {
++        committedBatchIds = [];
+       }
+-      committedTokens.push(token);
++      committedBatchIds.push(batchId);
+     }
+     roots.delete(root);
+     if (roots.size === 0) {
+-      // Last pending root: the token retires at this commit — but emit the
++      // Last pending root: the batch retires at this commit — but emit the
+       // per-root commit report first (see the function comment).
+       if (retirements === null) {
+         retirements = [];
+@@ -339,7 +393,7 @@ export function batchRegistryOnRootFinished(
+   if (runtime !== null && runtime.hasListeners) {
+     runtime.emitRootCommitted(
+       root.containerInfo,
+-      committedTokens === null ? [] : committedTokens,
++      committedBatchIds === null ? [] : committedBatchIds,
+       generation,
+     );
+   }
+@@ -353,16 +407,17 @@ export function batchRegistryOnRootFinished(
+ 
+ /**
+  * Close edge: the scheduling microtask for the current event is done
+- * (currentEventTransitionLane resets). A token whose batch never scheduled
+- * React work on any root will never see a finish edge — retire it now.
++ * (currentEventTransitionLane resets). A batch that never scheduled React
++ * work on any root will never see a finish edge — retire it now.
+  *
+- * Exception: a store-only batch whose transition turned out to be an async
+- * action (the scope returned a promise) must stay pending for the action's
+- * whole life — the action's post-await updates commit later, and retiring at
+- * event close would leak the batch's store writes into committed state
+- * mid-action. Entanglement is only knowable after the scope returns, which
+- * is before this microtask runs, so the check belongs exactly here: park the
+- * slot on the action thenable and re-run the close decision when it settles.
++ * Exception: a store-only DEFERRED batch whose transition turned out to be
++ * an async action (the scope returned a promise) must stay pending for the
++ * action's whole life — the action's post-await updates commit later, and
++ * retiring at event close would leak the batch's store writes into
++ * committed state mid-action. Entanglement is only knowable after the scope
++ * returns, which is before this microtask runs, so the check belongs
++ * exactly here: park the slot on the action thenable and re-run the close
++ * decision when it settles.
+  */
+ export function batchRegistryOnEventClosed(): void {
+   const actionLane = peekEntangledActionLane();
+@@ -370,13 +425,13 @@ export function batchRegistryOnEventClosed(): void {
+     const slot = slots[i];
+     if (
+       slot === null ||
+-      slot.token === null ||
++      slot.batchId === null ||
+       slot.parked !== null ||
+       (slot.roots !== null && slot.roots.size > 0)
+     ) {
+       continue;
+     }
+-    if ((slot.token & 1) === 1 && 1 << i === actionLane) {
++    if (slot.deferred && 1 << i === actionLane) {
+       const actionThenable = peekEntangledActionThenable();
+       if (actionThenable !== null) {
+         parkUntilActionSettles(slot, actionThenable);
+@@ -392,15 +447,24 @@ function parkUntilActionSettles(
+   actionThenable: Thenable<void>,
+ ): void {
+   slot.parked = actionThenable;
++  // Self-invalidation: the callback captures the batch id it parked for and
++  // no-ops if the slot's tenancy changed by the time the action settles —
++  // whether because a test reset scrubbed the slot (resetBatchRegistryForTest)
++  // or because retirement and a fresh claim recycled the lane. Without the
++  // id check, a stale settlement could retire an unrelated successor batch.
++  const parkedBatchId = slot.batchId;
+   const onSettle = () => {
+-    if (slot.parked !== actionThenable) {
++    if (slot.parked !== actionThenable || slot.batchId !== parkedBatchId) {
+       return;
+     }
+     slot.parked = null;
+     // The action settled. If its updates scheduled React work under this
+     // batch the finish edge owns retirement; a still store-only batch
+     // retires now, converging with the action's outcome.
+-    if (slot.token !== null && (slot.roots === null || slot.roots.size === 0)) {
++    if (
++      slot.batchId !== null &&
++      (slot.roots === null || slot.roots.size === 0)
++    ) {
+       retireSlot(slot, false);
+     }
+   };
+@@ -408,21 +472,50 @@ function parkUntilActionSettles(
+ }
+ 
+ function retireSlot(slot: Slot, committed: boolean): void {
+-  const token = slot.token;
+-  slot.token = null;
++  const batchId = slot.batchId;
++  slot.batchId = null;
++  slot.deferred = false;
+   slot.roots = null;
+   slot.committedRoots = null;
+   slot.parked = null;
+-  if (token !== null) {
++  if (batchId !== null) {
+     const runtime = getExternalRuntime();
+     if (runtime !== null && runtime.hasListeners) {
+-      runtime.emitBatchRetired(token, committed);
++      runtime.emitBatchRetired(batchId, committed);
+     }
+   }
+ }
+ 
+ /**
+- * The batches a render pass on `root` includes: the live tokens for its
++ * TEST-ONLY. Clears the FULL tenancy of every slot — batch id, deferred
++ * flag, root sets, committed-root sets, parked state — without emitting
++ * retirement events (this is a scrub, not a batch outcome). Test harnesses
++ * call it between tests so a stale slot from one test can never claim,
++ * merge with, or settle over a batch of the next (external allocators may
++ * restart their id space per test; a parked settlement that fires late
++ * additionally no-ops via its captured batch id). Never call this in
++ * production: live batches lose their retirement edge.
++ *
++ * The fallback id counter is NOT reset: fallback ids stay monotonic for the
++ * module's life, mirroring the allocator-side rule that batch ids are
++ * monotonic across engine resets.
++ */
++export function resetBatchRegistryForTest(): void {
++  for (let i = 0; i < slots.length; i++) {
++    const slot = slots[i];
++    if (slot === null) {
++      continue;
++    }
++    slot.batchId = null;
++    slot.deferred = false;
++    slot.roots = null;
++    slot.committedRoots = null;
++    slot.parked = null;
++  }
++}
++
++/**
++ * The batches a render pass on `root` includes: the live batch ids for its
+  * ENTANGLED render lanes, plus every still-pending batch this root has
+  * ALREADY committed — the root's committed tree shows those writes, so
+  * hiding them from its later renders (urgent ones especially) would tear
+@@ -434,22 +527,22 @@ function retireSlot(slot: Slot, committed: boolean): void {
+  * render. E.g. under enableParallelTransitions (www) a sibling transition
+  * renders on its own lane, but a second transition writing through a shared
+  * hook queue entangles with the first: the pass renders BOTH batches'
+- * updates and must report both tokens, or a consumer resolving reads
+- * against included-batches misses a write the tree visibly shows.
++ * updates and must report both ids, or a consumer resolving reads against
++ * included-batches misses a write the tree visibly shows.
+  */
+-export function batchTokensForRender(
++export function batchIdsForRender(
+   root: FiberRoot,
+   lanes: Lanes,
+-): Array<BatchToken> {
+-  const tokens: Array<BatchToken> = [];
++): Array<BatchId> {
++  const batchIds: Array<BatchId> = [];
+   const entangledRenderLanes = getEntangledLanes(root, lanes);
+   let remaining = entangledRenderLanes;
+   while (remaining !== 0) {
+     const index = 31 - Math.clz32(remaining);
+     remaining &= ~(1 << index);
+     const slot = slots[index];
+-    if (slot !== null && slot.token !== null) {
+-      tokens.push(slot.token);
++    if (slot !== null && slot.batchId !== null) {
++      batchIds.push(slot.batchId);
+     }
+   }
+   for (let i = 0; i < slots.length; i++) {
+@@ -457,15 +550,15 @@ export function batchTokensForRender(
+     if (slot === null) {
+       continue;
+     }
+-    const token = slot.token;
++    const batchId = slot.batchId;
+     if (
+-      token !== null &&
++      batchId !== null &&
+       slot.committedRoots !== null &&
+       slot.committedRoots.has(root) &&
+       ((entangledRenderLanes >> i) & 1) === 0 // not already collected above
+     ) {
+-      tokens.push(token);
++      batchIds.push(batchId);
+     }
+   }
+-  return tokens;
++  return batchIds;
+ }
+diff --git a/packages/react-reconciler/src/ReactFiberExternalRuntime.js b/packages/react-reconciler/src/ReactFiberExternalRuntime.js
+index ff519fb6b8..3478d4eaa7 100644
+--- a/packages/react-reconciler/src/ReactFiberExternalRuntime.js
++++ b/packages/react-reconciler/src/ReactFiberExternalRuntime.js
+@@ -16,7 +16,7 @@ import type {
+ 
+ import ReactSharedInternals from 'shared/ReactSharedInternals';
+ import {
+-  batchTokensForRender,
++  batchIdsForRender,
+   batchRegistryOnRenderStart,
+ } from './ReactFiberBatchRegistry';
+ 
+@@ -112,7 +112,7 @@ export function notifyRenderPassStart(root: FiberRoot, lanes: Lanes): void {
+     if (runtime.hasListeners) {
+       runtime.emitRenderPassStart(
+         root.containerInfo,
+-        batchTokensForRender(root, lanes),
++        batchIdsForRender(root, lanes),
+       );
+     }
+   }
+diff --git a/packages/react-reconciler/src/ReactFiberRootScheduler.js b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+index b2770c54a9..8f6c8948a7 100644
+--- a/packages/react-reconciler/src/ReactFiberRootScheduler.js
++++ b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+@@ -318,7 +318,7 @@ function processRootScheduleInMicrotask() {
+       prev = root;
+ 
+       // External-runtime batch registry: repair pending edges missed because
+-      // an update was scheduled before its batch's token was minted (see
++      // an update was scheduled before its batch's id was created (see
+       // batchRegistryBackfillRoot). Must run before the close edge below.
+       batchRegistryBackfillRoot(root);
+ 
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index 5ca22a862c..c5211e6bd7 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -230,8 +230,9 @@ import {
+ } from './ReactEventPriorities';
+ import {requestCurrentTransition} from './ReactFiberTransition';
+ import {
+-  getOrMintBatchToken,
+-  lookupBatchTokenLane,
++  getOrCreateBatchId,
++  lookupLiveBatchSlot,
++  resetBatchRegistryForTest,
+   batchRegistryOnRootUpdated,
+   batchRegistryOnRootFinished,
+ } from './ReactFiberBatchRegistry';
+@@ -891,9 +892,11 @@ registerExternalRuntimeProvider({
+     }
+     return null;
+   },
+-  // Batch identity for an external write happening right now: a non-zero
+-  // integer token with the deferred classification in its low bit. Minted
+-  // lazily (per batch, never per write); the call never allocates.
++  // Batch identity for an external write happening right now: a positive
++  // integer batch id. Created lazily (per batch, never per write — through
++  // the registered batch-id allocator when one exists, which is also where
++  // the batch's deferred classification is told to the store); per-write
++  // calls after creation never allocate.
+   getCurrentWriteBatch(): number {
+     let lane;
+     let deferred = false;
+@@ -912,39 +915,41 @@ registerExternalRuntimeProvider({
+         lane = eventPriorityToLane(resolveUpdatePriority());
+       }
+     }
+-    const token = getOrMintBatchToken(lane, deferred);
+-    // Minting a token must guarantee a close edge even if the batch never
+-    // schedules React work: make sure the scheduling microtask runs.
++    const batchId = getOrCreateBatchId(lane, deferred);
++    // Creating a batch id must guarantee a close edge even if the batch
++    // never schedules React work: make sure the scheduling microtask runs.
+     ensureScheduleIsScheduled();
+-    return token;
++    return batchId;
+   },
+   discardAllWip: discardAllWorkInProgress,
+   runInBatch: runInBatchImpl,
++  resetBatchRegistryForTest,
+ });
+ 
+ /**
+  * Run `fn` so the React updates it schedules are attributed to the batch
+- * identified by `token` (cosignal spec §4.1 fact 4: lane-scoped scheduling).
+- * This is how an external store's late correction rides INSIDE a pending
+- * batch and commits with it — a fresh startTransition would mint a lane
+- * React never entangles with the batch, so the two could commit separately
+- * (torn).
++ * identified by `batchId` (cosignal spec §4.1 fact 4: lane-scoped
++ * scheduling). This is how an external store's late correction rides INSIDE
++ * a pending batch and commits with it — a fresh startTransition would mint
++ * a lane React never entangles with the batch, so the two could commit
++ * separately (torn).
+  *
+- * Contract, by token state:
+- * - LIVE deferred token (`token & 1` === 1): `fn` runs inside a transition
+- *   pinned to the batch's own lane. Every update it schedules — setState,
+- *   useOptimistic, even a nested startTransition — joins that lane, and
+- *   same-lane updates entangle through React's ordinary hook-queue path. An
+- *   external write inside `fn` classifies into the same batch:
+- *   getCurrentWriteBatch() returns `token`.
+- * - LIVE urgent token: `fn` runs at the batch's own event priority (the
+- *   lane it was minted from), outside any transition.
+- * - RETIRED or unknown token (including 0): the documented fallback — `fn`
+- *   runs urgent (discrete priority, outside any transition), so a corrective
+- *   update flushes pre-paint. Note a token counts as live through its
+- *   retiring commit's onRootCommitted report (retirement emits follow the
+- *   report), so a delivery issued inside that listener still lands on the
+- *   outgoing token's lane while later calls take this fallback.
++ * Contract, by batch state:
++ * - LIVE deferred batch (its slot's stored deferred flag): `fn` runs inside
++ *   a transition pinned to the batch's own lane. Every update it schedules
++ *   — setState, useOptimistic, even a nested startTransition — joins that
++ *   lane, and same-lane updates entangle through React's ordinary
++ *   hook-queue path. An external write inside `fn` classifies into the same
++ *   batch: getCurrentWriteBatch() returns `batchId`.
++ * - LIVE urgent batch: `fn` runs at the batch's own event priority (the
++ *   lane it was created on), outside any transition.
++ * - RETIRED or unknown batch id (including BATCH_NONE): the documented
++ *   fallback — `fn` runs urgent (discrete priority, outside any
++ *   transition), so a corrective update flushes pre-paint. Note a batch
++ *   counts as live through its retiring commit's onRootCommitted report
++ *   (retirement emits follow the report), so a delivery issued inside that
++ *   listener still lands on the outgoing batch's lane while later calls
++ *   take this fallback.
+  *
+  * Legal from event handlers, effects (including layout effects and the
+  * commit-phase channel listeners), timers, and the yield gaps of an open
+@@ -959,7 +964,7 @@ registerExternalRuntimeProvider({
+  * synchronous extent (updates scheduled by code `fn` merely arranges to run
+  * later — timers, awaited continuations — classify ambiently).
+  */
+-function runInBatchImpl<R>(token: number, fn: () => R): R {
++function runInBatchImpl<R>(batchId: number, fn: () => R): R {
+   if ((executionContext & RenderContext) !== NoContext) {
+     throw new Error(
+       'runInBatch must not be called while React is rendering. Update ' +
+@@ -968,7 +973,8 @@ function runInBatchImpl<R>(token: number, fn: () => R): R {
+         "at the pass's yield or end edge.",
+     );
+   }
+-  const lane = lookupBatchTokenLane(token);
++  const slot = lookupLiveBatchSlot(batchId);
++  const lane = slot !== null ? slot.lane : NoLane;
+   const prevTransition = ReactSharedInternals.T;
+   const previousPriority = getCurrentUpdatePriority();
+   // Save/restore unconditionally: nested runInBatch calls compose, with the
+@@ -976,7 +982,7 @@ function runInBatchImpl<R>(token: number, fn: () => R): R {
+   // not leak an outer call's deferred pin into transitions started inside.
+   const previousRunInBatchLane = setRunInBatchTransitionLane(NoLane);
+   try {
+-    if (lane !== NoLane && (token & 1) === 1) {
++    if (slot !== null && lane !== NoLane && slot.deferred) {
+       // Live deferred batch: pin the transition lane and enter a transition
+       // scope shaped like startTransition's (ReactFiberHooks), so
+       // requestUpdateLane takes the transition path for every update in fn.
+@@ -998,7 +1004,7 @@ function runInBatchImpl<R>(token: number, fn: () => R): R {
+       }
+       ReactSharedInternals.T = transition;
+     } else {
+-      // Live urgent batch: the lane it was minted from. Retired or unknown
++      // Live urgent batch: the lane it was created on. Retired or unknown
+       // (lane === NoLane): the documented urgent fallback.
+       setCurrentUpdatePriority(
+         lane !== NoLane ? lanesToEventPriority(lane) : DiscreteEventPriority,
+@@ -1956,7 +1962,7 @@ function markRootUpdated(root: FiberRoot, updatedLanes: Lanes) {
+   _markRootUpdated(root, updatedLanes);
+ 
+   // External-runtime batch registry (pending edge): one array load + null
+-  // check when no external write minted a token for this lane.
++  // check when no external write created a batch id for this lane.
+   batchRegistryOnRootUpdated(root, updatedLanes);
+ 
+   if (enableInfiniteRenderLoopDetection) {
+@@ -4018,7 +4024,7 @@ function commitRoot(
+   notifyRenderPassCommitted(root);
+ 
+   // External-runtime batch registry (finish edge): lanes leaving
+-  // root.pendingLanes retire their batch tokens, exactly once, at the same
++  // root.pendingLanes retire their batches, exactly once, at the same
+   // moment React's own books change.
+   batchRegistryOnRootFinished(
+     root,
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js b/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js
+index a8792293d7..de4d1c730a 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js
+@@ -9,11 +9,17 @@
+  */
+ 
+ /**
+- * Reconciler-level tests for the external-runtime batch-token protocol
++ * Reconciler-level tests for the external-runtime batch-id protocol
+  * (ReactFiberBatchRegistry + ReactFiberExternalRuntime). These run against
+  * React source with the noop renderer, so the protocol can be validated —
+  * including mid-render, via time slicing — without any consumer library.
+  * The consumer-side contract lives in cosignal's patch-contract tests.
++ *
++ * Batch ids come from a registered allocator when a test installs one
++ * (installAllocator below — the stand-in for an external store, and the
++ * only way a consumer observes each batch's deferred classification, told
++ * to the allocator at creation) and from the registry's own fallback
++ * counter otherwise (the driverless mode, pinned explicitly).
+  */
+ 
+ 'use strict';
+@@ -51,15 +57,43 @@ describe('ReactFiberBatchRegistry', () => {
+       onRenderPassStart(container, includedBatches) {
+         events.passes.push({container, included: includedBatches.slice()});
+       },
+-      onBatchRetired(token, committed) {
+-        events.retired.push({token, committed});
++      onBatchRetired(batchId, committed) {
++        events.retired.push({batchId, committed});
+       },
+     });
+     return {events, unsubscribe};
+   }
+ 
+-  it('mints one token per batch: stable within a transition scope, distinct across events', async () => {
++  // Registers a batch-id allocator standing in for an external store: ids
++  // from its own serial space (offset so a fallback-counter id can never be
++  // mistaken for an allocated one), each id's deferred classification
++  // recorded at creation — the allocator argument is the protocol's one
++  // deferredness exposure.
++  function installAllocator() {
++    const allocated = new Map(); // batchId -> deferred
++    let nextId = 101;
++    const unregister = React.unstable_registerBatchIdAllocator(deferred => {
++      const batchId = nextId++;
++      allocated.set(batchId, deferred);
++      return batchId;
++    });
++    return {
++      allocated,
++      deferredOf(batchId) {
++        if (!allocated.has(batchId)) {
++          throw new Error(
++            `batch id ${batchId} was not allocated by this allocator`,
++          );
++        }
++        return allocated.get(batchId);
++      },
++      unregister,
++    };
++  }
++
++  it('creates one batch id per batch: stable within a transition scope, distinct across events', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let t1a = null;
+     let t1b = null;
+     let t2 = null;
+@@ -75,14 +109,18 @@ describe('ReactFiberBatchRegistry', () => {
+       });
+     });
+     expect(t1a).toBe(t1b);
+-    // Tokens are non-zero integers; the low bit is the deferred flag.
++    // Batch ids are the allocator's own positive integers; deferredness is
++    // not encoded in the id — it was told to the allocator at creation.
+     expect(Number.isInteger(t1a)).toBe(true);
+     expect(t1a).toBeGreaterThan(0);
+-    expect(t1a & 1).toBe(1);
++    expect(alloc.deferredOf(t1a)).toBe(true);
+     expect(t2).not.toBe(t1a);
++    // Exactly the two ids the allocator handed out, in creation order.
++    expect(Array.from(alloc.allocated.keys())).toEqual([t1a, t2]);
+     // Both store-only batches retired uncommitted at their event close.
+-    expect(events.retired.map(r => r.token)).toEqual([t1a, t2]);
++    expect(events.retired.map(r => r.batchId)).toEqual([t1a, t2]);
+     expect(events.retired.every(r => r.committed === false)).toBe(true);
++    alloc.unregister();
+     unsubscribe();
+   });
+ 
+@@ -100,23 +138,23 @@ describe('ReactFiberBatchRegistry', () => {
+     });
+     assertLog(['v=0']);
+ 
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setValue(1);
+       });
+     });
+     assertLog(['v=1']);
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {batchId, committed: true},
+     ]);
+     unsubscribe();
+   });
+ 
+-  it('retires at commit when React work was scheduled before the token was minted', async () => {
++  it('retires at commit when React work was scheduled before the batchId was minted', async () => {
+     // Ordinary line order inside one transition: setState first, store write
+-    // second. The pending edge misses the setState (no token existed yet);
++    // second. The pending edge misses the setState (no batchId existed yet);
+     // the root scheduler's back-fill repairs it before the close edge, so
+     // the batch retires committed at its real commit, not early at event
+     // close as "store-only".
+@@ -133,22 +171,23 @@ describe('ReactFiberBatchRegistry', () => {
+     });
+     assertLog(['v=0']);
+ 
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+         setValue(1); // React work FIRST
+-        token = React.unstable_getCurrentWriteBatch(); // minted after
++        batchId = React.unstable_getCurrentWriteBatch(); // minted after
+       });
+     });
+     assertLog(['v=1']);
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {batchId, committed: true},
+     ]);
+     unsubscribe();
+   });
+ 
+   it('render passes report included batches; interrupting urgent renders exclude pending transitions', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setUrgent;
+     let setValue;
+     function App() {
+@@ -164,33 +203,34 @@ describe('ReactFiberBatchRegistry', () => {
+     });
+     assertLog(['u=0 v=0']);
+ 
+-    let token = null;
+-    let urgentToken = null;
++    let batchId = null;
++    let urgentBatchId = null;
+     await act(async () => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setValue(1);
+       });
+       // Interrupt with an urgent update before the transition commits.
+-      urgentToken = React.unstable_getCurrentWriteBatch();
++      urgentBatchId = React.unstable_getCurrentWriteBatch();
+       setUrgent(1);
+     });
+     assertLog(['u=1 v=0', 'u=1 v=1']);
+-    // Urgent tokens carry a 0 deferred bit; transition tokens a 1.
+-    expect(urgentToken & 1).toBe(0);
+-    expect(token & 1).toBe(1);
++    // Urgent batches were created non-deferred; transition batches deferred.
++    expect(alloc.deferredOf(urgentBatchId)).toBe(false);
++    expect(alloc.deferredOf(batchId)).toBe(true);
+     // No pass includes both batches; the urgent pass excludes the pending
+     // transition, and the transition's own pass includes it.
+     const mixed = events.passes.filter(
+-      p => p.included.includes(token) && p.included.includes(urgentToken),
++      p => p.included.includes(batchId) && p.included.includes(urgentBatchId),
+     );
+     expect(mixed).toEqual([]);
+     expect(
+       events.passes.some(
+-        p => p.included.includes(urgentToken) && !p.included.includes(token),
++        p =>
++          p.included.includes(urgentBatchId) && !p.included.includes(batchId),
+       ),
+     ).toBe(true);
+-    expect(events.passes.some(p => p.included.includes(token))).toBe(true);
++    expect(events.passes.some(p => p.included.includes(batchId))).toBe(true);
+     unsubscribe();
+   });
+ 
+@@ -199,6 +239,7 @@ describe('ReactFiberBatchRegistry', () => {
+   // batch, committing and retiring like any other.
+   it('classifies discrete-event writes urgent, distinct from the ambient default batch', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     function App() {
+       const [value, _setValue] = useState(0);
+@@ -211,40 +252,43 @@ describe('ReactFiberBatchRegistry', () => {
+     });
+     assertLog(['v=0']);
+ 
+-    let discreteToken = null;
+-    let defaultToken = null;
++    let discreteBatchId = null;
++    let defaultBatchId = null;
+     await act(() => {
+       ReactNoop.discreteUpdates(() => {
+-        discreteToken = React.unstable_getCurrentWriteBatch();
++        discreteBatchId = React.unstable_getCurrentWriteBatch();
+         setValue(1);
+       });
+       // The same event, outside the discrete handler: the ambient default
+-      // batch — a different lane, a different token.
+-      defaultToken = React.unstable_getCurrentWriteBatch();
++      // batch — a different lane, a different batchId.
++      defaultBatchId = React.unstable_getCurrentWriteBatch();
+     });
+     assertLog(['v=1']);
+-    expect(discreteToken & 1).toBe(0);
+-    expect(defaultToken & 1).toBe(0);
+-    expect(defaultToken).not.toBe(discreteToken);
+-    expect(events.retired.filter(r => r.token === discreteToken)).toEqual([
+-      {token: discreteToken, committed: true},
++    expect(alloc.deferredOf(discreteBatchId)).toBe(false);
++    expect(alloc.deferredOf(defaultBatchId)).toBe(false);
++    expect(defaultBatchId).not.toBe(discreteBatchId);
++    expect(events.retired.filter(r => r.batchId === discreteBatchId)).toEqual([
++      {batchId: discreteBatchId, committed: true},
+     ]);
+     unsubscribe();
+   });
+ 
+   // Spec test 3: a write with no scope at all — a timer or network callback
+   // — classifies as the ambient default batch: urgent (not deferred), its
+-  // own token, retiring uncommitted when it schedules nothing.
++  // own batch id, retiring uncommitted when it schedules nothing.
+   it('classifies timer/network (ambient) writes as the default batch', async () => {
+     const {events, unsubscribe} = subscribe();
+-    let ambientToken = null;
++    const alloc = installAllocator();
++    let ambientBatchId = null;
+     await act(() => {
+       // act's callback runs like a timer callback: no event, no transition.
+-      ambientToken = React.unstable_getCurrentWriteBatch();
++      ambientBatchId = React.unstable_getCurrentWriteBatch();
+     });
+-    expect(ambientToken & 1).toBe(0);
++    expect(alloc.deferredOf(ambientBatchId)).toBe(false);
+     // Store-only ambient batch: retires uncommitted at its close edge.
+-    expect(events.retired).toEqual([{token: ambientToken, committed: false}]);
++    expect(events.retired).toEqual([
++      {batchId: ambientBatchId, committed: false},
++    ]);
+     unsubscribe();
+   });
+ 
+@@ -252,6 +296,7 @@ describe('ReactFiberBatchRegistry', () => {
+   // batch, which commits synchronously and retires committed.
+   it('classifies flushSync writes urgent; the batch commits synchronously', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     function App() {
+       const [value, _setValue] = useState(0);
+@@ -264,16 +309,16 @@ describe('ReactFiberBatchRegistry', () => {
+     });
+     assertLog(['v=0']);
+ 
+-    let token = null;
++    let batchId = null;
+     ReactNoop.flushSync(() => {
+-      token = React.unstable_getCurrentWriteBatch();
++      batchId = React.unstable_getCurrentWriteBatch();
+       setValue(1);
+     });
+     // Committed synchronously: the log is already there, no act needed.
+     assertLog(['v=1']);
+-    expect(token & 1).toBe(0);
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {token, committed: true},
++    expect(alloc.deferredOf(batchId)).toBe(false);
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {batchId, committed: true},
+     ]);
+     unsubscribe();
+   });
+@@ -284,6 +329,7 @@ describe('ReactFiberBatchRegistry', () => {
+   // transition around it stays deferred.
+   it('classifies nested scopes per callstack: transition-in-event and event-in-transition', async () => {
+     const {unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     const probes = {};
+     await act(() => {
+       ReactNoop.discreteUpdates(() => {
+@@ -294,8 +340,8 @@ describe('ReactFiberBatchRegistry', () => {
+         probes.handlerAfter = React.unstable_getCurrentWriteBatch();
+       });
+     });
+-    expect(probes.transitionInHandler & 1).toBe(1);
+-    expect(probes.handlerBefore & 1).toBe(0);
++    expect(alloc.deferredOf(probes.transitionInHandler)).toBe(true);
++    expect(alloc.deferredOf(probes.handlerBefore)).toBe(false);
+     // The handler's own classification is untouched by the nested scope.
+     expect(probes.handlerAfter).toBe(probes.handlerBefore);
+     expect(probes.transitionInHandler).not.toBe(probes.handlerBefore);
+@@ -309,8 +355,8 @@ describe('ReactFiberBatchRegistry', () => {
+         probes.scopeAfter = React.unstable_getCurrentWriteBatch();
+       });
+     });
+-    expect(probes.eventInScope & 1).toBe(0);
+-    expect(probes.scopeBefore & 1).toBe(1);
++    expect(alloc.deferredOf(probes.eventInScope)).toBe(false);
++    expect(alloc.deferredOf(probes.scopeBefore)).toBe(true);
+     expect(probes.scopeAfter).toBe(probes.scopeBefore);
+     expect(probes.eventInScope).not.toBe(probes.scopeBefore);
+     unsubscribe();
+@@ -318,11 +364,12 @@ describe('ReactFiberBatchRegistry', () => {
+ 
+   // Spec test 6: the fork side of the library's engine-batch contract —
+   // classification is PER WRITE, at write time. Writes interleaved across
+-  // scopes within one event each get their scope's token, stably: an
++  // scopes within one event each get their scope's batch id, stably: an
+   // engine batch() that defers delivery can replay each write against the
+   // context it was captured with.
+   it('preserves per-write context across interleaved scopes in one event', async () => {
+     const {unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let u1 = null;
+     let u2 = null;
+     let t1 = null;
+@@ -342,31 +389,32 @@ describe('ReactFiberBatchRegistry', () => {
+     expect(u2).toBe(u1);
+     expect(t2).toBe(t1);
+     expect(t1).not.toBe(u1);
+-    expect(u1 & 1).toBe(0);
+-    expect(t1 & 1).toBe(1);
++    expect(alloc.deferredOf(u1)).toBe(false);
++    expect(alloc.deferredOf(t1)).toBe(true);
+     unsubscribe();
+   });
+ 
+   it('parks a store-only async action until the action settles', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let resolveGate;
+     const gate = new Promise(resolve => {
+       resolveGate = resolve;
+     });
+-    let token = null;
++    let batchId = null;
+     startTransition(async () => {
+-      token = React.unstable_getCurrentWriteBatch();
++      batchId = React.unstable_getCurrentWriteBatch();
+       await gate;
+     });
+     // Let the event's scheduling microtask (the close edge) run.
+     await act(() => {});
+-    expect(token & 1).toBe(1);
+-    expect(events.retired.map(r => r.token)).not.toContain(token);
++    expect(alloc.deferredOf(batchId)).toBe(true);
++    expect(events.retired.map(r => r.batchId)).not.toContain(batchId);
+ 
+     resolveGate();
+     await act(() => gate);
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {token, committed: false},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {batchId, committed: false},
+     ]);
+     unsubscribe();
+   });
+@@ -374,47 +422,48 @@ describe('ReactFiberBatchRegistry', () => {
+   // Appendix B flag 3, pinned: while an async action is pending, a
+   // re-wrapped continuation (a startTransition after the await) claims the
+   // action's lane — requestTransitionLane consults the entangled action
+-  // lane — so it lands in the same slot and gets the SAME token: the parked
+-  // action token IS the re-wrap token (the registry's documented explicit-
+-  // merge rule). A bare (un-wrapped) continuation reports no transition and
+-  // classifies as the ambient default batch instead.
+-  it('a re-wrapped async-action continuation joins the parked token; a bare one is ambient', async () => {
++  // lane — so it lands in the same slot and gets the SAME batch id: the
++  // parked action's id IS the re-wrap id (the registry's documented
++  // explicit-merge rule). A bare (un-wrapped) continuation reports no
++  // transition and classifies as the ambient default batch instead.
++  it('a re-wrapped async-action continuation joins the parked batch; a bare one is ambient', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let resolveGate;
+     const gate = new Promise(resolve => {
+       resolveGate = resolve;
+     });
+-    let tokenBefore = null;
+-    let bareToken = null;
+-    let rewrapToken = null;
++    let batchIdBefore = null;
++    let bareBatchId = null;
++    let rewrapBatchId = null;
+     startTransition(async () => {
+-      tokenBefore = React.unstable_getCurrentWriteBatch();
++      batchIdBefore = React.unstable_getCurrentWriteBatch();
+       await gate;
+       // The bare continuation: no transition scope survives an await.
+-      bareToken = React.unstable_getCurrentWriteBatch();
++      bareBatchId = React.unstable_getCurrentWriteBatch();
+       // The re-wrapped continuation: a fresh startTransition while the
+       // action scope is still pending.
+       startTransition(() => {
+-        rewrapToken = React.unstable_getCurrentWriteBatch();
++        rewrapBatchId = React.unstable_getCurrentWriteBatch();
+       });
+     });
+-    // The close edge parks the store-only action token instead of retiring.
++    // The close edge parks the store-only action batch instead of retiring.
+     await act(() => {});
+-    expect(tokenBefore & 1).toBe(1);
+-    expect(events.retired.map(r => r.token)).not.toContain(tokenBefore);
++    expect(alloc.deferredOf(batchIdBefore)).toBe(true);
++    expect(events.retired.map(r => r.batchId)).not.toContain(batchIdBefore);
+ 
+     resolveGate();
+     await act(() => gate);
+-    // THE PIN: same lane ⇒ same slot ⇒ same token.
+-    expect(rewrapToken).toBe(tokenBefore);
++    // THE PIN: same lane ⇒ same slot ⇒ same batch id.
++    expect(rewrapBatchId).toBe(batchIdBefore);
+     // The bare continuation was ambient: urgent classification, a distinct
+-    // default-lane token.
+-    expect(bareToken & 1).toBe(0);
+-    expect(bareToken).not.toBe(tokenBefore);
++    // default-lane batch id.
++    expect(alloc.deferredOf(bareBatchId)).toBe(false);
++    expect(bareBatchId).not.toBe(batchIdBefore);
+     // Still store-only when the action settled: retired exactly once,
+     // uncommitted — the re-wrap did not double-retire or resurrect it.
+-    expect(events.retired.filter(r => r.token === tokenBefore)).toEqual([
+-      {token: tokenBefore, committed: false},
++    expect(events.retired.filter(r => r.batchId === batchIdBefore)).toEqual([
++      {batchId: batchIdBefore, committed: false},
+     ]);
+     unsubscribe();
+   });
+@@ -455,18 +504,18 @@ describe('ReactFiberBatchRegistry', () => {
+     });
+     assertLog(['B on=false']);
+ 
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setA(true);
+         setB(true);
+       });
+     });
+     // Root A committed the batch; root B is suspended on the gate, so the
+-    // token must not retire yet.
++    // batchId must not retire yet.
+     assertLog(['A on=true n=0']);
+-    expect(events.retired.map(r => r.token)).not.toContain(token);
++    expect(events.retired.map(r => r.batchId)).not.toContain(batchId);
+ 
+     // A later urgent render on root A includes the committed-but-unretired
+     // batch (root A's committed tree already shows it).
+@@ -477,15 +526,132 @@ describe('ReactFiberBatchRegistry', () => {
+     assertLog(['A on=true n=1']);
+     const aPasses = events.passes.filter(p => p.container === containerA);
+     expect(aPasses.length).toBeGreaterThan(0);
+-    expect(aPasses.every(p => p.included.includes(token))).toBe(true);
++    expect(aPasses.every(p => p.included.includes(batchId))).toBe(true);
+ 
+     // Root B settles: the batch commits everywhere and retires exactly once.
+     resolveGate();
+     await act(() => gate);
+     assertLog(['B on=true']);
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {batchId, committed: true},
++    ]);
++    unsubscribe();
++  });
++
++  // Protocol v2: with no registered allocator (stock usage), the registry
++  // numbers batches from its own fallback counter — the protocol keeps
++  // working driverless, with the same close-edge retirement.
++  it('works driverless: without an allocator, ids come from the fallback counter', async () => {
++    const {events, unsubscribe} = subscribe();
++    let t = null;
++    let u = null;
++    await act(() => {
++      startTransition(() => {
++        t = React.unstable_getCurrentWriteBatch();
++      });
++      u = React.unstable_getCurrentWriteBatch();
++    });
++    expect(Number.isInteger(t)).toBe(true);
++    expect(t).toBeGreaterThan(0);
++    expect(Number.isInteger(u)).toBe(true);
++    expect(u).toBeGreaterThan(0);
++    expect(u).not.toBe(t);
++    // Both store-only batches retired at the close edge, exactly as with a
++    // registered allocator.
++    expect(new Set(events.retired.map(r => r.batchId))).toEqual(
++      new Set([t, u]),
++    );
++    expect(events.retired.every(r => r.committed === false)).toBe(true);
++    unsubscribe();
++  });
++
++  // Protocol v2: batch ids are ONE number space owned by one allocator — a
++  // second registration throws; unregistering frees the slot.
++  it('a second allocator registration throws; unregistering frees the slot', () => {
++    const unregister = React.unstable_registerBatchIdAllocator(() => 1);
++    expect(() => React.unstable_registerBatchIdAllocator(() => 2)).toThrow(
++      /already registered/,
++    );
++    unregister();
++    const unregister2 = React.unstable_registerBatchIdAllocator(() => 3);
++    unregister2();
++  });
++
++  // Protocol v2 test seam: the reset hook clears the FULL slot tenancy, so
++  // the next same-lane write creates a FRESH batch identity instead of
++  // merging with the scrubbed one — and the scrub emits no retirement (it
++  // is a test-boundary scrub, not a batch outcome).
++  it('resetBatchRegistryForTest clears tenancy: fresh id after reset, no retirement for the scrubbed batch', async () => {
++    const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
++    let before = null;
++    let after = null;
++    await act(() => {
++      startTransition(() => {
++        before = React.unstable_getCurrentWriteBatch();
++        // Same scope, same lane: the ordinary merge rule returns the same id…
++        expect(React.unstable_getCurrentWriteBatch()).toBe(before);
++        React.unstable_resetBatchRegistryForTest();
++        // …but after the scrub the slot is empty, so a fresh identity is
++        // created (through the allocator again).
++        after = React.unstable_getCurrentWriteBatch();
++      });
++    });
++    expect(after).not.toBe(before);
++    expect(alloc.deferredOf(after)).toBe(true);
++    // Only the successor retires (ordinary close edge); the scrubbed batch
++    // lost its retirement edge with its tenancy.
++    expect(events.retired.map(r => r.batchId)).toEqual([after]);
++    alloc.unregister();
++    unsubscribe();
++  });
++
++  // Protocol v2 test seam: a parked settlement callback captures its batch
++  // id and no-ops if the slot's tenancy changed by the time the action
++  // settles. The dangerous shape: after a mid-action reset, a new
++  // transition re-claims the action's entangled lane and re-parks on the
++  // SAME action thenable — the stale callback sees the very thenable it
++  // captured and only the id check stops it from retiring the successor.
++  it('a parked settlement callback self-invalidates across a registry reset', async () => {
++    const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
++    let resolveGate;
++    const gate = new Promise(resolve => {
++      resolveGate = resolve;
++    });
++    let before = null;
++    startTransition(async () => {
++      before = React.unstable_getCurrentWriteBatch();
++      await gate;
++    });
++    // Close edge: the store-only action batch parks instead of retiring.
++    await act(() => {});
++    expect(events.retired.map(r => r.batchId)).not.toContain(before);
++
++    // Test-boundary scrub while the action is still pending.
++    React.unstable_resetBatchRegistryForTest();
++
++    // A transition while the action pends claims the action's entangled
++    // lane (the documented re-wrap rule): same slot, FRESH id, and its own
++    // close edge re-parks the slot on the same still-pending thenable.
++    let after = null;
++    await act(() => {
++      startTransition(() => {
++        after = React.unstable_getCurrentWriteBatch();
++      });
++    });
++    expect(after).not.toBe(before);
++    expect(events.retired.map(r => r.batchId)).not.toContain(after);
++
++    resolveGate();
++    await act(() => gate);
++    // The stale callback (captured `before`) no-oped; the live one retired
++    // `after` exactly once, uncommitted. The scrubbed batch never retires.
++    expect(events.retired.filter(r => r.batchId === before)).toEqual([]);
++    expect(events.retired.filter(r => r.batchId === after)).toEqual([
++      {batchId: after, committed: false},
+     ]);
++    alloc.unregister();
+     unsubscribe();
+   });
+ });
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimeCommit-test.js b/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimeCommit-test.js
+index 42a930c511..bea4dbd4b7 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimeCommit-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimeCommit-test.js
+@@ -13,12 +13,12 @@
+  * protocol (cosignal spec §4.1 fact 3, §4.4 tests 15–17 and 25): a batch
+  * spanning several roots commits on each root at its own time, and each of
+  * those commits is REPORTED per root — with a per-root commit generation —
+- * while the token stays live until its last pending root finishes.
++ * while the batchId stays live until its last pending root finishes.
+  *
+  * These tests pin current React behavior through the channel; the multi-root
+  * schedules here are the ones the spec calls out as never having had a
+  * current-generation existence proof. See ReactFiberBatchRegistry-test.js for
+- * the single-root token protocol and ReactFiberExternalRuntimePass-test.js
++ * the single-root batchId protocol and ReactFiberExternalRuntimePass-test.js
+  * for the pass/commit serialization facts.
+  */
+ 
+@@ -77,14 +77,14 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+         const entry = {
+           type: 'rootCommitted',
+           container,
+-          tokens: committedBatches.slice(),
++          batchIds: committedBatches.slice(),
+           generation: rootCommitGeneration,
+         };
+         events.log.push(entry);
+         events.commits.push(entry);
+       },
+-      onBatchRetired(token, committed) {
+-        const entry = {type: 'retired', token, committed};
++      onBatchRetired(batchId, committed) {
++        const entry = {type: 'retired', batchId, committed};
+         events.log.push(entry);
+         events.retired.push(entry);
+       },
+@@ -92,6 +92,31 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     return {events, unsubscribe};
+   }
+ 
++  // Registers a batch-id allocator standing in for an external store; the
++  // deferred classification of each batch is told to the allocator at
++  // creation — the protocol's one deferredness exposure.
++  function installAllocator() {
++    const allocated = new Map(); // batchId -> deferred
++    let nextId = 101;
++    const unregister = React.unstable_registerBatchIdAllocator(deferred => {
++      const batchId = nextId++;
++      allocated.set(batchId, deferred);
++      return batchId;
++    });
++    return {
++      allocated,
++      deferredOf(batchId) {
++        if (!allocated.has(batchId)) {
++          throw new Error(
++            `batch id ${batchId} was not allocated by this allocator`,
++          );
++        }
++        return allocated.get(batchId);
++      },
++      unregister,
++    };
++  }
++
+   function commitsOn(events, container) {
+     return events.commits.filter(commit => commit.container === container);
+   }
+@@ -102,8 +127,8 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+ 
+   // Spec test 15: two createRoots, one transition spanning both; the batch's
+   // commit on each root is reported per root, with that root's commit
+-  // generation, while the token stays live until the last root finishes.
+-  it('reports a spanning batch per root, with generations, while the token stays live', async () => {
++  // generation, while the batchId stays live until the last root finishes.
++  it('reports a spanning batch per root, with generations, while the batchId stays live', async () => {
+     const {events, unsubscribe} = subscribe();
+     let resolveGate;
+     const gate = new Promise(resolve => {
+@@ -143,16 +168,26 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     // Every commit is reported, including batchless mounts: generation 1,
+     // empty delta, one per root.
+     expect(commitsOn(events, containerA)).toEqual([
+-      {type: 'rootCommitted', container: containerA, tokens: [], generation: 1},
++      {
++        type: 'rootCommitted',
++        container: containerA,
++        batchIds: [],
++        generation: 1,
++      },
+     ]);
+     expect(commitsOn(events, containerB)).toEqual([
+-      {type: 'rootCommitted', container: containerB, tokens: [], generation: 1},
++      {
++        type: 'rootCommitted',
++        container: containerB,
++        batchIds: [],
++        generation: 1,
++      },
+     ]);
+ 
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setA(true);
+         setB(true);
+       });
+@@ -160,20 +195,25 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     // Root A committed the spanning batch; root B is suspended on the gate.
+     assertLog(['A on=true']);
+ 
+-    // The commit is reported on root A — and only root A — with the token in
++    // The commit is reported on root A — and only root A — with the batchId in
+     // the delta and A's bumped generation…
+     expect(commitsOn(events, containerA)).toEqual([
+-      {type: 'rootCommitted', container: containerA, tokens: [], generation: 1},
+       {
+         type: 'rootCommitted',
+         container: containerA,
+-        tokens: [token],
++        batchIds: [],
++        generation: 1,
++      },
++      {
++        type: 'rootCommitted',
++        container: containerA,
++        batchIds: [batchId],
+         generation: 2,
+       },
+     ]);
+     expect(commitsOn(events, containerB).length).toBe(1);
+-    // …while the token stays live: no retirement until root B commits.
+-    expect(events.retired.map(r => r.token)).not.toContain(token);
++    // …while the batchId stays live: no retirement until root B commits.
++    expect(events.retired.map(r => r.batchId)).not.toContain(batchId);
+ 
+     // Root B settles and commits: reported on B with B's own generation.
+     resolveGate();
+@@ -183,17 +223,17 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     expect(bCommit).toEqual({
+       type: 'rootCommitted',
+       container: containerB,
+-      tokens: [token],
++      batchIds: [batchId],
+       generation: 2,
+     });
+ 
+     // Retirement fires exactly once, committed — and AFTER the last root's
+     // commit report: the report is the cause, retirement its consequence.
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {type: 'retired', token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {type: 'retired', batchId, committed: true},
+     ]);
+     const retireIndex = events.log.findIndex(
+-      e => e.type === 'retired' && e.token === token,
++      e => e.type === 'retired' && e.batchId === batchId,
+     );
+     expect(retireIndex).toBeGreaterThan(events.log.indexOf(bCommit));
+     unsubscribe();
+@@ -242,10 +282,10 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     });
+     assertLog(['A on=false n=1']);
+ 
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setA(true);
+         setB(true);
+       });
+@@ -259,13 +299,13 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     const bCommits = commitsOn(events, containerB);
+     expect(aCommits.map(c => c.generation)).toEqual([1, 2, 3]);
+     expect(bCommits.map(c => c.generation)).toEqual([1, 2]);
+-    const aBatchCommits = aCommits.filter(c => c.tokens.includes(token));
+-    const bBatchCommits = bCommits.filter(c => c.tokens.includes(token));
++    const aBatchCommits = aCommits.filter(c => c.batchIds.includes(batchId));
++    const bBatchCommits = bCommits.filter(c => c.batchIds.includes(batchId));
+     expect(aBatchCommits).toEqual([
+       {
+         type: 'rootCommitted',
+         container: containerA,
+-        tokens: [token],
++        batchIds: [batchId],
+         generation: 3,
+       },
+     ]);
+@@ -273,17 +313,17 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+       {
+         type: 'rootCommitted',
+         container: containerB,
+-        tokens: [token],
++        batchIds: [batchId],
+         generation: 2,
+       },
+     ]);
+ 
+     // Exactly one retirement, positioned after BOTH per-root reports.
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {type: 'retired', token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {type: 'retired', batchId, committed: true},
+     ]);
+     const retireIndex = events.log.findIndex(
+-      e => e.type === 'retired' && e.token === token,
++      e => e.type === 'retired' && e.batchId === batchId,
+     );
+     expect(retireIndex).toBeGreaterThan(events.log.indexOf(aBatchCommits[0]));
+     expect(retireIndex).toBeGreaterThan(events.log.indexOf(bBatchCommits[0]));
+@@ -293,7 +333,7 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+   // Spec test 17: a root whose share of the batch is pruned (its pending
+   // update dies with a deleted subtree) never reports the batch as
+   // committed — its committed view never showed the batch's writes — while
+-  // the token still retires exactly once, committed=true, because the other
++  // the batchId still retires exactly once, committed=true, because the other
+   // root did commit it.
+   it('never reports a batch on a root where its work was pruned by deletion', async () => {
+     const {events, unsubscribe} = subscribe();
+@@ -331,10 +371,10 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     assertLog(['B on=false']);
+     const containerB = lastContainer(events);
+ 
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setA(true);
+         setB(true);
+       });
+@@ -342,10 +382,10 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     // A committed the batch; B is suspended, batch pending there.
+     assertLog(['A on=true']);
+     expect(
+-      commitsOn(events, containerA).filter(c => c.tokens.includes(token))
++      commitsOn(events, containerA).filter(c => c.batchIds.includes(batchId))
+         .length,
+     ).toBe(1);
+-    expect(events.retired.map(r => r.token)).not.toContain(token);
++    expect(events.retired.map(r => r.batchId)).not.toContain(batchId);
+ 
+     // Replace root B's tree with unrelated content. CompB unmounts, taking
+     // its pending transition update with it: root B is done with the batch
+@@ -355,23 +395,23 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     });
+     assertLog(['B replaced']);
+ 
+-    // No commit report on B ever contains the token: B's committed view
++    // No commit report on B ever contains the batchId: B's committed view
+     // never showed the batch's writes (prune ≠ commit).
+     expect(
+-      commitsOn(events, containerB).filter(c => c.tokens.includes(token)),
++      commitsOn(events, containerB).filter(c => c.batchIds.includes(batchId)),
+     ).toEqual([]);
+ 
+-    // The token still retired exactly once, committed=true (root A committed
++    // The batchId still retired exactly once, committed=true (root A committed
+     // it), at the commit that pruned B's share — after B's (batchless)
+     // commit report for that same commit.
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {type: 'retired', token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {type: 'retired', batchId, committed: true},
+     ]);
+     const bCommits = commitsOn(events, containerB);
+     const pruneCommit = bCommits[bCommits.length - 1];
+-    expect(pruneCommit.tokens).toEqual([]);
++    expect(pruneCommit.batchIds).toEqual([]);
+     const retireIndex = events.log.findIndex(
+-      e => e.type === 'retired' && e.token === token,
++      e => e.type === 'retired' && e.batchId === batchId,
+     );
+     expect(retireIndex).toBeGreaterThan(events.log.indexOf(pruneCommit));
+ 
+@@ -379,7 +419,7 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     resolveGate();
+     await act(() => gate);
+     assertLog([]);
+-    expect(events.retired.filter(r => r.token === token).length).toBe(1);
++    expect(events.retired.filter(r => r.batchId === batchId).length).toBe(1);
+     unsubscribe();
+   });
+ 
+@@ -391,20 +431,21 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+   // commit; a batch the root already committed is never dropped from one.
+   it('a commit exposes exactly the write set the committing pass rendered', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+ 
+     // Replays the whole event log, asserting the closure invariant at every
+     // commit of every root.
+     function assertWriteSetClosure() {
+       const lastPassByContainer = new Map();
+       const tableByContainer = new Map();
+-      const retiredTokens = new Set();
++      const retiredBatchIds = new Set();
+       let commitsChecked = 0;
+       for (let i = 0; i < events.log.length; i++) {
+         const entry = events.log[i];
+         if (entry.type === 'passStart') {
+           lastPassByContainer.set(entry.container, entry.included);
+         } else if (entry.type === 'retired') {
+-          retiredTokens.add(entry.token);
++          retiredBatchIds.add(entry.batchId);
+         } else if (entry.type === 'rootCommitted') {
+           const included = lastPassByContainer.get(entry.container) || [];
+           let table = tableByContainer.get(entry.container);
+@@ -414,13 +455,13 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+           }
+           const liveTable = [];
+           table.forEach(t => {
+-            if (!retiredTokens.has(t)) {
++            if (!retiredBatchIds.has(t)) {
+               liveTable.push(t);
+             }
+           });
+-          const exposed = new Set([...liveTable, ...entry.tokens]);
++          const exposed = new Set([...liveTable, ...entry.batchIds]);
+           expect(new Set(included)).toEqual(exposed);
+-          entry.tokens.forEach(t => table.add(t));
++          entry.batchIds.forEach(t => table.add(t));
+           commitsChecked++;
+         }
+       }
+@@ -485,18 +526,18 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     const urgentCommit = commitsOn(events, containerA)[1];
+     // The urgent commit's delta is exactly {u1}: the pending, unrendered t1
+     // stays out of the committed view.
+-    expect(urgentCommit.tokens).toEqual([u1]);
+-    expect(t1 & 1).toBe(1);
+-    expect(u1 & 1).toBe(0);
+-    expect(events.retired.map(r => r.token)).not.toContain(t1);
++    expect(urgentCommit.batchIds).toEqual([u1]);
++    expect(alloc.deferredOf(t1)).toBe(true);
++    expect(alloc.deferredOf(u1)).toBe(false);
++    expect(events.retired.map(r => r.batchId)).not.toContain(t1);
+ 
+     // t1 settles and commits: its own delta, in its own commit.
+     resolveGateA();
+     await act(() => gateA);
+     assertLog(['A v=1 n=1']);
+-    expect(commitsOn(events, containerA)[2].tokens).toEqual([t1]);
+-    expect(events.retired.filter(r => r.token === t1)).toEqual([
+-      {type: 'retired', token: t1, committed: true},
++    expect(commitsOn(events, containerA)[2].batchIds).toEqual([t1]);
++    expect(events.retired.filter(r => r.batchId === t1)).toEqual([
++      {type: 'retired', batchId: t1, committed: true},
+     ]);
+ 
+     // Phase 2 — lock-in inclusion: t2 spans roots A and B; A commits it
+@@ -518,7 +559,7 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+       });
+     });
+     assertLog(['A v=1 n=2']); // A committed t2; B suspended on gateB
+-    expect(commitsOn(events, containerA)[3].tokens).toEqual([t2]);
++    expect(commitsOn(events, containerA)[3].batchIds).toEqual([t2]);
+ 
+     let u2 = null;
+     await act(() => {
+@@ -529,7 +570,7 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     const lockInCommit = commitsOn(events, containerA)[4];
+     // Delta is only the urgent batch; the pass itself included the locked-in
+     // t2 as well — the closure check below proves included == table ∪ delta.
+-    expect(lockInCommit.tokens).toEqual([u2]);
++    expect(lockInCommit.batchIds).toEqual([u2]);
+     const lockInPassIndex = events.log.lastIndexOf(
+       events.passes[events.passes.length - 1],
+     );
+@@ -540,8 +581,8 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     resolveGateB();
+     await act(() => gateB);
+     assertLog(['B on=true']);
+-    expect(events.retired.filter(r => r.token === t2)).toEqual([
+-      {type: 'retired', token: t2, committed: true},
++    expect(events.retired.filter(r => r.batchId === t2)).toEqual([
++      {type: 'retired', batchId: t2, committed: true},
+     ]);
+ 
+     // The closure invariant held at every commit of every root above:
+@@ -553,11 +594,11 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+   });
+ 
+   // Write-set closure under ENTANGLED sibling transitions. Two transitions
+-  // claim separate lanes and separate tokens, but the second writes through
++  // claim separate lanes and separate batchIds, but the second writes through
+   // a hook queue that already holds the first's pending update, so React
+   // entangles the lanes: whichever lane names the render, the pass consumes
+   // BOTH batches' updates (entangledRenderLanes). The channel must report
+-  // the write set the tree actually shows — both tokens included in the
++  // the write set the tree actually shows — both batchIds included in the
+   // pass, both in the commit's delta, both retired committed=true — or a
+   // consumer resolving reads against included-batches misses a write the
+   // committed view visibly contains. (Under enableParallelTransitions —
+@@ -596,7 +637,7 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     assertLog([]); // suspended before logging anything
+     expect(commitsOn(events, container).length).toBe(1); // mount only
+ 
+-    // Transition 2, a separate event: its own lane, its own token — and an
++    // Transition 2, a separate event: its own lane, its own batchId — and an
+     // entanglement with t1 through the shared useState queue.
+     let t2 = null;
+     await act(() => {
+@@ -618,10 +659,10 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     const containerCommits = commitsOn(events, container);
+     const finalCommit = containerCommits[containerCommits.length - 1];
+     expect(containerCommits.length).toBe(2);
+-    expect(new Set(finalCommit.tokens)).toEqual(new Set([t1, t2]));
++    expect(new Set(finalCommit.batchIds)).toEqual(new Set([t1, t2]));
+     expect(
+       events.retired
+-        .filter(r => r.token === t1 || r.token === t2)
++        .filter(r => r.batchId === t1 || r.batchId === t2)
+         .map(r => r.committed),
+     ).toEqual([true, true]);
+ 
+@@ -668,10 +709,10 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+ 
+     // An update INSIDE the portal subtree: classified, rendered, and
+     // committed against the parent root's container.
+-    let token = null;
++    let batchId = null;
+     await act(() => {
+       startTransition(() => {
+-        token = React.unstable_getCurrentWriteBatch();
++        batchId = React.unstable_getCurrentWriteBatch();
+         setValue(1);
+       });
+     });
+@@ -687,17 +728,17 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+         expect(e.container).toBe(container);
+       }
+     });
+-    const tokenCommit = events.commits.find(c => c.tokens.includes(token));
+-    expect(tokenCommit).not.toBe(undefined);
+-    expect(tokenCommit.container).toBe(container);
++    const batchCommit = events.commits.find(c => c.batchIds.includes(batchId));
++    expect(batchCommit).not.toBe(undefined);
++    expect(batchCommit.container).toBe(container);
+     // Per-callstack render context inside the portal names the parent root.
+     expect(renderContexts.length).toBeGreaterThanOrEqual(2);
+     renderContexts.forEach(ctx => {
+       expect(ctx).not.toBe(null);
+       expect(ctx.container).toBe(container);
+     });
+-    expect(events.retired.filter(r => r.token === token)).toEqual([
+-      {type: 'retired', token, committed: true},
++    expect(events.retired.filter(r => r.batchId === batchId)).toEqual([
++      {type: 'retired', batchId, committed: true},
+     ]);
+     unsubscribe();
+   });
+@@ -738,13 +779,13 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+         log.push({
+           type: 'rootCommitted',
+           container,
+-          tokens: committedBatches.slice(),
++          batchIds: committedBatches.slice(),
+           generation: rootCommitGeneration,
+         });
+         mirror.generation = rootCommitGeneration;
+       },
+-      onBatchRetired(token, committed) {
+-        log.push({type: 'retired', token, committed});
++      onBatchRetired(batchId, committed) {
++        log.push({type: 'retired', batchId, committed});
+         mirror.retiredCount++;
+       },
+       onBeforeMutation(container) {
+@@ -820,7 +861,7 @@ describe('ReactFiberExternalRuntimeCommit', () => {
+     expect(entryIndex).not.toBe(-1);
+     expect(tail[entryIndex].committed).toBe(true);
+     expect(tableIndex).not.toBe(-1);
+-    expect(new Set(tail[tableIndex].tokens)).toEqual(new Set([t1, t2]));
++    expect(new Set(tail[tableIndex].batchIds)).toEqual(new Set([t1, t2]));
+     expect(firstFold).not.toBe(-1);
+     expect(lastFold).not.toBe(firstFold); // two folds due at this commit
+     expect(beforeIndex).not.toBe(-1);
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimePass-test.js b/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimePass-test.js
+index 6e55d8da8d..c100e0f996 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimePass-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberExternalRuntimePass-test.js
+@@ -94,14 +94,14 @@ describe('ReactFiberExternalRuntimePass', () => {
+         const entry = {
+           type: 'rootCommitted',
+           container,
+-          tokens: committedBatches.slice(),
++          batchIds: committedBatches.slice(),
+           generation: rootCommitGeneration,
+         };
+         events.log.push(entry);
+         events.commits.push(entry);
+       },
+-      onBatchRetired(token, committed) {
+-        const entry = {type: 'retired', token, committed};
++      onBatchRetired(batchId, committed) {
++        const entry = {type: 'retired', batchId, committed};
+         events.log.push(entry);
+         events.retired.push(entry);
+       },
+@@ -109,6 +109,31 @@ describe('ReactFiberExternalRuntimePass', () => {
+     return {events, unsubscribe};
+   }
+ 
++  // Registers a batch-id allocator standing in for an external store; the
++  // deferred classification of each batch is told to the allocator at
++  // creation — the protocol's one deferredness exposure.
++  function installAllocator() {
++    const allocated = new Map(); // batchId -> deferred
++    let nextId = 101;
++    const unregister = React.unstable_registerBatchIdAllocator(deferred => {
++      const batchId = nextId++;
++      allocated.set(batchId, deferred);
++      return batchId;
++    });
++    return {
++      allocated,
++      deferredOf(batchId) {
++        if (!allocated.has(batchId)) {
++          throw new Error(
++            `batch id ${batchId} was not allocated by this allocator`,
++          );
++        }
++        return allocated.get(batchId);
++      },
++      unregister,
++    };
++  }
++
+   // Events for one container, in order, as compact strings — the shape most
+   // assertions below want.
+   function frameEventsFor(events, container, fromIndex = 0) {
+@@ -325,6 +350,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+   // reaches the committed view through its own (earlier) commit.
+   it('wall-clock pass scope is wrong: a yield-gap write joins the ambient batch, not the open pass', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     let setUrgent;
+     function App() {
+@@ -348,7 +374,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+     const container = events.passes[0].container;
+ 
+     let t = null;
+-    let gapToken = null;
++    let gapBatchId = null;
+     await act(async () => {
+       startTransition(() => {
+         t = React.unstable_getCurrentWriteBatch();
+@@ -365,11 +391,11 @@ describe('ReactFiberExternalRuntimePass', () => {
+         frameEventsFor(events, container, events.log.indexOf(openFrame) + 1),
+       ).toEqual(['yield']);
+ 
+-      gapToken = React.unstable_getCurrentWriteBatch();
+-      setUrgent(1); // same callstack: joins gapToken's ambient batch
+-      expect(gapToken).not.toBe(t);
+-      expect(gapToken & 1).toBe(0); // urgent, not deferred
+-      expect(t & 1).toBe(1);
++      gapBatchId = React.unstable_getCurrentWriteBatch();
++      setUrgent(1); // same callstack: joins gapBatchId's ambient batch
++      expect(gapBatchId).not.toBe(t);
++      expect(alloc.deferredOf(gapBatchId)).toBe(false); // urgent, not deferred
++      expect(alloc.deferredOf(t)).toBe(true);
+ 
+       // Default priority does not preempt a transition: the open pass
+       // resumes and finishes WITHOUT the gap write (still U0), commits,
+@@ -380,13 +406,13 @@ describe('ReactFiberExternalRuntimePass', () => {
+     // The open pass committed exactly its own write set — the gap write,
+     // which wall-clock attribution would have folded into it (tearing the
+     // committed view), landed in its own distinct, later commit.
+-    const gapCommit = events.commits.find(c => c.tokens.includes(gapToken));
+-    const tCommit = events.commits.find(c => c.tokens.includes(t));
++    const gapCommit = events.commits.find(c => c.batchIds.includes(gapBatchId));
++    const tCommit = events.commits.find(c => c.batchIds.includes(t));
+     expect(gapCommit).not.toBe(undefined);
+     expect(tCommit).not.toBe(undefined);
+     expect(gapCommit).not.toBe(tCommit);
+-    expect(tCommit.tokens).toEqual([t]); // no gap-write leak into the pass
+-    expect(gapCommit.tokens).toEqual([gapToken]);
++    expect(tCommit.batchIds).toEqual([t]); // no gap-write leak into the pass
++    expect(gapCommit.batchIds).toEqual([gapBatchId]);
+     expect(events.log.indexOf(tCommit)).toBeLessThan(
+       events.log.indexOf(gapCommit),
+     );
+@@ -399,6 +425,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+   // pass's batch reaches the committed view only through a fresh pass.
+   it('an urgent commit discards an older yielded pass before any committed-view advance', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     let setUrgent;
+     function App() {
+@@ -442,8 +469,8 @@ describe('ReactFiberExternalRuntimePass', () => {
+         setUrgent(1);
+       });
+       assertLog(['U1', 'A0', 'B0', 'C0']);
+-      expect(t & 1).toBe(1);
+-      expect(u & 1).toBe(0);
++      expect(alloc.deferredOf(t)).toBe(true);
++      expect(alloc.deferredOf(u)).toBe(false);
+ 
+       // Serialization, with dispositions: after the yielded pass started,
+       // the first same-root pass-end is the DISCARD of that yielded pass,
+@@ -474,7 +501,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+       // The urgent commit exposes only the urgent batch; the discarded
+       // pass's transition batch stays out of the committed view.
+       const urgentCommit = tail[commitOffset];
+-      expect(urgentCommit.tokens).toEqual([u]);
++      expect(urgentCommit.batchIds).toEqual([u]);
+ 
+       // The interrupted transition then restarts from scratch and commits.
+       await waitForAll(['U1', 'A1', 'B1', 'C1']);
+@@ -483,19 +510,19 @@ describe('ReactFiberExternalRuntimePass', () => {
+     // The transition batch reached the committed view exactly once, through
+     // a fresh pass that started after the urgent commit — the discarded
+     // pass itself never committed.
+-    const commitsWithT = events.commits.filter(c => c.tokens.includes(t));
++    const commitsWithT = events.commits.filter(c => c.batchIds.includes(t));
+     expect(commitsWithT.length).toBe(1);
+     const passStartsWithT = events.passes.filter(p => p.included.includes(t));
+     expect(passStartsWithT.length).toBe(2); // original + post-discard restart
+     const urgentCommitIndex = events.log.findIndex(
+-      e => e.type === 'rootCommitted' && e.tokens.includes(u),
++      e => e.type === 'rootCommitted' && e.batchIds.includes(u),
+     );
+     const restartIndex = events.log.indexOf(passStartsWithT[1]);
+     const tCommitIndex = events.log.indexOf(commitsWithT[0]);
+     expect(urgentCommitIndex).toBeLessThan(restartIndex);
+     expect(restartIndex).toBeLessThan(tCommitIndex);
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+@@ -603,13 +630,13 @@ describe('ReactFiberExternalRuntimePass', () => {
+       </>,
+     );
+     expect(events.commits.length).toBe(2);
+-    expect(new Set(events.commits[1].tokens)).toEqual(new Set([tA, tB]));
++    expect(new Set(events.commits[1].batchIds)).toEqual(new Set([tA, tB]));
+     expect(
+       frameEventsFor(events, container, events.log.indexOf(passB) + 1),
+     ).toEqual(['end(commit)', 'rootCommitted']);
+     expect(
+       events.retired
+-        .filter(r => r.token === tA || r.token === tB)
++        .filter(r => r.batchId === tA || r.batchId === tB)
+         .map(r => r.committed),
+     ).toEqual([true, true]);
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+@@ -668,7 +695,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+     // frame that included the batch is STILL OPEN — under the
+     // end-disposition semantics a frame outlives render completion and
+     // waits for its commit or discard edge — so no pass-end fired, no
+-    // commit report followed, the token is live, the committed view
++    // commit report followed, the batchId is live, the committed view
+     // unchanged.
+     const completedPass = events.passes[events.passes.length - 1];
+     expect(completedPass.included).toEqual([t]);
+@@ -680,7 +707,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+       ),
+     ).toBe(false);
+     expect(events.commits.length).toBe(1); // the mount only
+-    expect(events.retired.map(r => r.token)).not.toContain(t);
++    expect(events.retired.map(r => r.batchId)).not.toContain(t);
+     expect(root).toMatchRenderedOutput('step 0');
+ 
+     // Insertion: an urgent update while the completed tree waits to commit.
+@@ -700,8 +727,8 @@ describe('ReactFiberExternalRuntimePass', () => {
+     // batch: no commit of the transition batch ever happened.
+     expect(events.commits.length).toBe(2);
+     const urgentCommit = events.commits[1];
+-    expect(urgentCommit.tokens).toEqual([u]);
+-    expect(events.retired.map(r => r.token)).not.toContain(t);
++    expect(urgentCommit.batchIds).toEqual([u]);
++    expect(events.retired.map(r => r.batchId)).not.toContain(t);
+ 
+     // The insertion is what finally closed the completed-but-uncommitted
+     // frame — with the DISCARD disposition (its pending commit was
+@@ -724,7 +751,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+     expect(restartIndex).toBeGreaterThan(urgentCommitIndex);
+ 
+     // The image resolves: the suspended commit proceeds, the batch reaches
+-    // the committed view exactly once, and the token retires.
++    // the committed view exactly once, and the batchId retires.
+     await act(() => {
+       ReactNoop.resolveSuspenseyThing('A');
+     });
+@@ -736,9 +763,9 @@ describe('ReactFiberExternalRuntimePass', () => {
+       </>,
+     );
+     expect(events.commits.length).toBe(3);
+-    expect(events.commits[2].tokens).toEqual([t]);
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.commits[2].batchIds).toEqual([t]);
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+ 
+     // The frame that closed here is the restarted pass's — closed exactly
+@@ -762,7 +789,7 @@ describe('ReactFiberExternalRuntimePass', () => {
+   // firing each frame's end(discard) edge before it returns and starting
+   // nothing new. The abandoned batches stay live; React re-schedules them,
+   // and every later retry is a FRESH pass (a new passStart over the same
+-  // tokens) that commits normally. A second call with nothing in flight is
++  // batchIds) that commits normally. A second call with nothing in flight is
+   // a no-op.
+   // @gate enableViewTransition
+   it('discardAllWip synchronously closes every open frame on every root; retries are fresh passes', async () => {
+@@ -862,13 +889,13 @@ describe('ReactFiberExternalRuntimePass', () => {
+     expect(aPasses.length).toBe(2); // original + post-discard fresh pass
+     const bPasses = events.passes.filter(p => p.included.includes(tB));
+     expect(bPasses.length).toBe(2);
+-    const aCommits = events.commits.filter(c => c.tokens.includes(tA));
++    const aCommits = events.commits.filter(c => c.batchIds.includes(tA));
+     expect(aCommits.length).toBe(1);
+     expect(aCommits[0].container).toBe(containerA);
+-    expect(events.retired.filter(r => r.token === tA)).toEqual([
+-      {type: 'retired', token: tA, committed: true},
++    expect(events.retired.filter(r => r.batchId === tA)).toEqual([
++      {type: 'retired', batchId: tA, committed: true},
+     ]);
+-    expect(events.retired.map(r => r.token)).not.toContain(tB);
++    expect(events.retired.map(r => r.batchId)).not.toContain(tB);
+ 
+     // The image resolves: root B's retried pass commits — its frame closes
+     // with the commit disposition, only now.
+@@ -876,11 +903,11 @@ describe('ReactFiberExternalRuntimePass', () => {
+       ReactNoop.resolveSuspenseyThing('X');
+     });
+     assertLog([]);
+-    const bCommits = events.commits.filter(c => c.tokens.includes(tB));
++    const bCommits = events.commits.filter(c => c.batchIds.includes(tB));
+     expect(bCommits.length).toBe(1);
+     expect(bCommits[0].container).toBe(containerB);
+-    expect(events.retired.filter(r => r.token === tB)).toEqual([
+-      {type: 'retired', token: tB, committed: true},
++    expect(events.retired.filter(r => r.batchId === tB)).toEqual([
++      {type: 'retired', batchId: tB, committed: true},
+     ]);
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberRunInBatch-test.js b/packages/react-reconciler/src/__tests__/ReactFiberRunInBatch-test.js
+index 72c0887f94..78d52fa921 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberRunInBatch-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberRunInBatch-test.js
+@@ -9,24 +9,24 @@
+  */
+ 
+ /**
+- * Lane-scoped scheduling: unstable_runInBatch(token, fn) (cosignal spec §4.1
++ * Lane-scoped scheduling: unstable_runInBatch(batchId, fn) (cosignal spec §4.1
+  * fact 4, §4.4 tests 18–19, plus the test-24 insertion interplay).
+  *
+  * Contract pinned here:
+- * - LIVE deferred token: fn's updates join the token's OWN lane — the
++ * - LIVE deferred batchId: fn's updates join the batchId's OWN lane — the
+  *   delivered correction rides inside the pending batch and commits WITH it,
+  *   atomically, exactly once. Inside fn, writes classify into the same
+- *   batch (getCurrentWriteBatch() === token), and a nested startTransition
++ *   batch (getCurrentWriteBatch() === batchId), and a nested startTransition
+  *   joins it too.
+- * - LIVE urgent token: fn runs at the batch's own event priority; writes
++ * - LIVE urgent batchId: fn runs at the batch's own event priority; writes
+  *   inside classify into the same batch.
+- * - RETIRED (or unknown, or 0) token: the documented fallback — fn runs
++ * - RETIRED (or unknown, or 0) batchId: the documented fallback — fn runs
+  *   URGENT (discrete), outside any transition. Discrete means it preempts
+  *   even a yielded same-root transition pass (default priority does not:
+  *   see the wall-clock test in the Pass file) and flushes pre-paint.
+- * - A token stays addressable through its own retiring commit's
++ * - A batchId stays addressable through its own retiring commit's
+  *   onRootCommitted report (retirement emits follow the report): a delivery
+- *   issued inside that listener lands on the outgoing token's lane. After
++ *   issued inside that listener lands on the outgoing batchId's lane. After
+  *   the retirement emit, calls take the urgent fallback.
+  * - Calls are legal from event handlers, timers, layout effects, channel
+  *   listeners, and yield gaps; calling during RENDER throws.
+@@ -101,7 +101,7 @@ describe('ReactFiberRunInBatch', () => {
+         const entry = {
+           type: 'rootCommitted',
+           container,
+-          tokens: committedBatches.slice(),
++          batchIds: committedBatches.slice(),
+           generation: rootCommitGeneration,
+         };
+         events.log.push(entry);
+@@ -110,8 +110,8 @@ describe('ReactFiberRunInBatch', () => {
+           extra.onRootCommitted(entry);
+         }
+       },
+-      onBatchRetired(token, committed) {
+-        const entry = {type: 'retired', token, committed};
++      onBatchRetired(batchId, committed) {
++        const entry = {type: 'retired', batchId, committed};
+         events.log.push(entry);
+         events.retired.push(entry);
+       },
+@@ -119,6 +119,31 @@ describe('ReactFiberRunInBatch', () => {
+     return {events, unsubscribe};
+   }
+ 
++  // Registers a batch-id allocator standing in for an external store; the
++  // deferred classification of each batch is told to the allocator at
++  // creation — the protocol's one deferredness exposure.
++  function installAllocator() {
++    const allocated = new Map(); // batchId -> deferred
++    let nextId = 101;
++    const unregister = React.unstable_registerBatchIdAllocator(deferred => {
++      const batchId = nextId++;
++      allocated.set(batchId, deferred);
++      return batchId;
++    });
++    return {
++      allocated,
++      deferredOf(batchId) {
++        if (!allocated.has(batchId)) {
++          throw new Error(
++            `batch id ${batchId} was not allocated by this allocator`,
++          );
++        }
++        return allocated.get(batchId);
++      },
++      unregister,
++    };
++  }
++
+   // Events for one container, in order, as compact strings.
+   function frameEventsFor(events, container, fromIndex = 0) {
+     const out = [];
+@@ -200,7 +225,7 @@ describe('ReactFiberRunInBatch', () => {
+   // Spec test 18, the delivery schedule that motivates the API: the binding
+   // learns mid-batch (here: in a yield gap of the batch's own pass) that a
+   // late subscriber needs a value-blind entanglement setState. Delivered
+-  // through runInBatch, the update joins the token's own lane.
++  // through runInBatch, the update joins the batchId's own lane.
+   //
+   // Pinned flush shape for a MID-RENDER delivery: React's interleaved-update
+   // semantics let the in-flight pass finish and commit WITHOUT the delivered
+@@ -209,11 +234,12 @@ describe('ReactFiberRunInBatch', () => {
+   // truthful across the split: the first commit reports the batch on this
+   // root (its rendered writes became visible) and LOCKS IT IN while the lane
+   // stays pending; the follow-up commit reports the batch again with the
+-  // delivered update; the token retires exactly once, at the end. The
++  // delivered update; the batchId retires exactly once, at the end. The
+   // delivery never mints a foreign batch and never leaks into any other
+   // batch's commit.
+-  it("a yield-gap delivery joins the token's own lanes and commits with the batch", async () => {
++  it("a yield-gap delivery joins the batch's own lanes and commits with the batch", async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     let setEntangled;
+     function App() {
+@@ -238,7 +264,7 @@ describe('ReactFiberRunInBatch', () => {
+ 
+     let t = null;
+     let insideDeferred = null;
+-    let insideToken = null;
++    let insideBatchId = null;
+     await act(async () => {
+       startTransition(() => {
+         t = React.unstable_getCurrentWriteBatch();
+@@ -251,34 +277,34 @@ describe('ReactFiberRunInBatch', () => {
+       // The delivery. Classification inside the callback resolves to the
+       // batch itself.
+       React.unstable_runInBatch(t, () => {
+-        insideDeferred = (React.unstable_getCurrentWriteBatch() & 1) === 1;
+-        insideToken = React.unstable_getCurrentWriteBatch();
++        insideBatchId = React.unstable_getCurrentWriteBatch();
++        insideDeferred = alloc.deferredOf(insideBatchId);
+         setEntangled(1);
+       });
+ 
+       await waitForAll(['B1', 'E0', 'A1', 'B1', 'E1']);
+     });
+     expect(insideDeferred).toBe(true);
+-    expect(insideToken).toBe(t);
++    expect(insideBatchId).toBe(t);
+ 
+     // Every commit that advanced this root carried the batch — first the
+     // pass the delivery interrupted (its rendered writes became visible and
+     // the still-pending batch locked in), then the follow-up pass carrying
+     // the delivered update. No batchless advance, no foreign batch.
+-    const commitsWithT = events.commits.filter(c => c.tokens.includes(t));
++    const commitsWithT = events.commits.filter(c => c.batchIds.includes(t));
+     expect(commitsWithT.length).toBe(2);
+-    expect(commitsWithT[0].tokens).toEqual([t]);
+-    expect(commitsWithT[1].tokens).toEqual([t]);
++    expect(commitsWithT[0].batchIds).toEqual([t]);
++    expect(commitsWithT[1].batchIds).toEqual([t]);
+     expect(commitsWithT[1].generation).toBe(commitsWithT[0].generation + 1);
+     expect(events.commits.length).toBe(commitsBefore + 2);
+     expect(root).toMatchRenderedOutput('A1B1E1');
+-    // The token retired exactly once, committed, at the flush that landed
++    // The batchId retired exactly once, committed, at the flush that landed
+     // the delivered update — after BOTH reports.
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+     expect(events.log.indexOf(commitsWithT[1])).toBeLessThan(
+-      events.log.findIndex(e => e.type === 'retired' && e.token === t),
++      events.log.findIndex(e => e.type === 'retired' && e.batchId === t),
+     );
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+@@ -300,7 +326,7 @@ describe('ReactFiberRunInBatch', () => {
+           probes.delivered = true;
+           probes.renderContext = React.unstable_getRenderContext();
+           React.unstable_runInBatch(t, () => {
+-            probes.insideToken = React.unstable_getCurrentWriteBatch();
++            probes.insideBatchId = React.unstable_getCurrentWriteBatch();
+             setEntangled(1);
+           });
+         }
+@@ -338,17 +364,17 @@ describe('ReactFiberRunInBatch', () => {
+     });
+     expect(probes.delivered).toBe(true);
+     expect(probes.renderContext).toBe(null); // per-callstack truth at the edge
+-    expect(probes.insideToken).toBe(t);
++    expect(probes.insideBatchId).toBe(t);
+     // Same truthful split as the gap delivery: every advance on this root
+     // carried the batch, and it retired exactly once at the end.
+-    const commitsWithT = events.commits.filter(c => c.tokens.includes(t));
++    const commitsWithT = events.commits.filter(c => c.batchIds.includes(t));
+     expect(commitsWithT.length).toBeGreaterThanOrEqual(1);
+     events.commits.slice(1).forEach(c => {
+-      expect(c.tokens).toEqual([t]);
++      expect(c.batchIds).toEqual([t]);
+     });
+     expect(root).toMatchRenderedOutput('A1B1E1');
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribeYield();
+@@ -405,12 +431,12 @@ describe('ReactFiberRunInBatch', () => {
+ 
+     // Two separate commits; the first exposes the batch without the
+     // correction (the tear runInBatch prevents).
+-    const tCommit = events.commits.find(c => c.tokens.includes(t));
+-    const t2Commit = events.commits.find(c => c.tokens.includes(t2));
++    const tCommit = events.commits.find(c => c.batchIds.includes(t));
++    const t2Commit = events.commits.find(c => c.batchIds.includes(t2));
+     expect(tCommit).not.toBe(undefined);
+     expect(t2Commit).not.toBe(undefined);
+     expect(tCommit).not.toBe(t2Commit);
+-    expect(tCommit.tokens).toEqual([t]);
++    expect(tCommit.batchIds).toEqual([t]);
+     expect(events.log.indexOf(tCommit)).toBeLessThan(
+       events.log.indexOf(t2Commit),
+     );
+@@ -418,12 +444,13 @@ describe('ReactFiberRunInBatch', () => {
+     unsubscribe();
+   });
+ 
+-  // A live URGENT token: fn runs at the batch's own event priority, and
++  // A live URGENT batchId: fn runs at the batch's own event priority, and
+   // writes inside classify into the same batch. Nested calls compose — the
+   // innermost pin wins for its extent, and the outer pin is restored when
+   // it returns.
+-  it('targets live urgent tokens at their own priority, and nested calls restore the outer pin', async () => {
++  it('targets live urgent batches at their own priority, and nested calls restore the outer pin', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     let setUrgent;
+     function App() {
+@@ -449,41 +476,41 @@ describe('ReactFiberRunInBatch', () => {
+       });
+       // The ambient (default-priority) batch of this same event.
+       u = React.unstable_getCurrentWriteBatch();
+-      expect(u & 1).toBe(0);
++      expect(alloc.deferredOf(u)).toBe(false);
+ 
+       React.unstable_runInBatch(t, () => {
+-        probes.outerToken = React.unstable_getCurrentWriteBatch();
+-        probes.outerDeferred = (React.unstable_getCurrentWriteBatch() & 1) === 1;
++        probes.outerBatchId = React.unstable_getCurrentWriteBatch();
++        probes.outerDeferred = alloc.deferredOf(probes.outerBatchId);
+         React.unstable_runInBatch(u, () => {
+-          probes.innerToken = React.unstable_getCurrentWriteBatch();
+-          probes.innerDeferred = (React.unstable_getCurrentWriteBatch() & 1) === 1;
++          probes.innerBatchId = React.unstable_getCurrentWriteBatch();
++          probes.innerDeferred = alloc.deferredOf(probes.innerBatchId);
+           setUrgent(1);
+         });
+         // The outer deferred pin is restored after the inner call returns.
+-        probes.restoredToken = React.unstable_getCurrentWriteBatch();
+-        probes.restoredDeferred = (React.unstable_getCurrentWriteBatch() & 1) === 1;
++        probes.restoredBatchId = React.unstable_getCurrentWriteBatch();
++        probes.restoredDeferred = alloc.deferredOf(probes.restoredBatchId);
+       });
+     });
+     // The urgent (default-priority) write commits in its own earlier flush;
+     // the transition follows.
+     assertLog(['v0 u1', 'v1 u1']);
+ 
+-    expect(probes.outerToken).toBe(t);
++    expect(probes.outerBatchId).toBe(t);
+     expect(probes.outerDeferred).toBe(true);
+-    expect(probes.innerToken).toBe(u);
++    expect(probes.innerBatchId).toBe(u);
+     expect(probes.innerDeferred).toBe(false);
+-    expect(probes.restoredToken).toBe(t);
++    expect(probes.restoredBatchId).toBe(t);
+     expect(probes.restoredDeferred).toBe(true);
+ 
+     // The urgent batch committed first (default preempts nothing, but
+     // renders before a pending transition), without the transition batch;
+     // the transition committed separately with its own write set.
+-    const uCommit = events.commits.find(c => c.tokens.includes(u));
+-    const tCommit = events.commits.find(c => c.tokens.includes(t));
++    const uCommit = events.commits.find(c => c.batchIds.includes(u));
++    const tCommit = events.commits.find(c => c.batchIds.includes(t));
+     expect(uCommit).not.toBe(undefined);
+     expect(tCommit).not.toBe(undefined);
+-    expect(uCommit.tokens).toEqual([u]);
+-    expect(tCommit.tokens).toEqual([t]);
++    expect(uCommit.batchIds).toEqual([u]);
++    expect(tCommit.batchIds).toEqual([t]);
+     expect(events.log.indexOf(uCommit)).toBeLessThan(
+       events.log.indexOf(tCommit),
+     );
+@@ -492,12 +519,13 @@ describe('ReactFiberRunInBatch', () => {
+     unsubscribe();
+   });
+ 
+-  // Spec test 19: a retired token makes fn run URGENT — the documented
++  // Spec test 19: a retired batchId makes fn run URGENT — the documented
+   // fallback. Classification inside is not-deferred and mints the ambient
+   // urgent batch, and the update commits without resurrecting the retired
+-  // token.
+-  it('retired token: fn runs urgent, classification falls back to the ambient batch', async () => {
++  // batchId.
++  it('retired batch id: fn runs urgent, classification falls back to the ambient batch', async () => {
+     const {events, unsubscribe} = subscribe();
++    const alloc = installAllocator();
+     let setValue;
+     function App() {
+       const [value, _setValue] = useState(0);
+@@ -510,7 +538,7 @@ describe('ReactFiberRunInBatch', () => {
+     });
+     assertLog(['v0']);
+ 
+-    // A store-only transition batch: mints a token, schedules no React
++    // A store-only transition batch: mints a batchId, schedules no React
+     // work, retires (uncommitted) at its event's close edge.
+     let t = null;
+     await act(() => {
+@@ -518,31 +546,31 @@ describe('ReactFiberRunInBatch', () => {
+         t = React.unstable_getCurrentWriteBatch();
+       });
+     });
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: false},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: false},
+     ]);
+ 
+-    let fallbackToken = null;
++    let fallbackBatchId = null;
+     let fallbackDeferred = null;
+     await act(() => {
+       React.unstable_runInBatch(t, () => {
+-        fallbackDeferred = (React.unstable_getCurrentWriteBatch() & 1) === 1;
+-        fallbackToken = React.unstable_getCurrentWriteBatch();
++        fallbackBatchId = React.unstable_getCurrentWriteBatch();
++        fallbackDeferred = alloc.deferredOf(fallbackBatchId);
+         setValue(1);
+       });
+     });
+     assertLog(['v1']);
+     expect(fallbackDeferred).toBe(false);
+-    expect(fallbackToken).not.toBe(t);
+-    expect(fallbackToken & 1).toBe(0); // urgent classification
+-    // The retired token retired exactly once, long before the fallback
++    expect(fallbackBatchId).not.toBe(t);
++    expect(alloc.deferredOf(fallbackBatchId)).toBe(false); // urgent classification
++    // The retired batchId retired exactly once, long before the fallback
+     // commit; the fallback commit carries only the ambient urgent batch.
+-    expect(events.retired.filter(r => r.token === t).length).toBe(1);
++    expect(events.retired.filter(r => r.batchId === t).length).toBe(1);
+     const fallbackCommit = events.commits.find(c =>
+-      c.tokens.includes(fallbackToken),
++      c.batchIds.includes(fallbackBatchId),
+     );
+     expect(fallbackCommit).not.toBe(undefined);
+-    expect(fallbackCommit.tokens).toEqual([fallbackToken]);
++    expect(fallbackCommit.batchIds).toEqual([fallbackBatchId]);
+     expect(root).toMatchRenderedOutput('v1');
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+@@ -550,10 +578,10 @@ describe('ReactFiberRunInBatch', () => {
+ 
+   // The urgency of the fallback, pinned against the pass-lifecycle events:
+   // DEFAULT priority does not preempt a yielded transition (Pass test 10),
+-  // but the retired-token fallback is DISCRETE — it discards the yielded
++  // but the retired-batchId fallback is DISCRETE — it discards the yielded
+   // pass, commits pre-paint, and the transition restarts after. This is
+   // what "urgent pre-paint correction" means through this channel.
+-  it('the retired-token fallback preempts a yielded transition pass (discrete, not default)', async () => {
++  it('the retired-batchId fallback preempts a yielded transition pass (discrete, not default)', async () => {
+     const {events, unsubscribe} = subscribe();
+     let setValue;
+     let setUrgent;
+@@ -577,14 +605,14 @@ describe('ReactFiberRunInBatch', () => {
+     assertLog(['U0', 'A0', 'B0']);
+     const container = events.passes[0].container;
+ 
+-    // Retire a store-only token in its own event.
++    // Retire a store-only batchId in its own event.
+     let retired = null;
+     await act(() => {
+       startTransition(() => {
+         retired = React.unstable_getCurrentWriteBatch();
+       });
+     });
+-    expect(events.retired.map(r => r.token)).toContain(retired);
++    expect(events.retired.map(r => r.batchId)).toContain(retired);
+ 
+     let t = null;
+     await act(async () => {
+@@ -622,7 +650,7 @@ describe('ReactFiberRunInBatch', () => {
+ 
+     // The urgent commit carried no transition batch; the transition batch
+     // committed exactly once, after it.
+-    const commitsWithT = events.commits.filter(c => c.tokens.includes(t));
++    const commitsWithT = events.commits.filter(c => c.batchIds.includes(t));
+     expect(commitsWithT.length).toBe(1);
+     expect(root).toMatchRenderedOutput('U1A1B1');
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+@@ -653,12 +681,12 @@ describe('ReactFiberRunInBatch', () => {
+     );
+   });
+ 
+-  // Delivery from a layout effect while the token is STILL LIVE (pending on
+-  // another root): the correction rides the token's own lane on this root,
++  // Delivery from a layout effect while the batchId is STILL LIVE (pending on
++  // another root): the correction rides the batchId's own lane on this root,
+   // producing a second reported commit of the same batch here — the
+   // merge-rule consequence: a batch that gains new visible updates on a
+   // root it already committed on is reported on that root again — while
+-  // the token retires exactly once, at its true last-root finish.
++  // the batchId retires exactly once, at its true last-root finish.
+   it('a layout-effect delivery on a committed-here-pending-elsewhere batch rides its lane and re-reports', async () => {
+     const {events, unsubscribe} = subscribe();
+     let resolveGate;
+@@ -666,7 +694,7 @@ describe('ReactFiberRunInBatch', () => {
+       resolveGate = resolve;
+     });
+     const probes = {};
+-    let tokenForEffect = null;
++    let batchIdForEffect = null;
+     let setA;
+     let setN;
+     let setB;
+@@ -679,8 +707,8 @@ describe('ReactFiberRunInBatch', () => {
+         if (on && n === 0) {
+           // The mount-fixup shape: deliver into the (still live) batch from
+           // the layout effect of the commit that landed it on this root.
+-          React.unstable_runInBatch(tokenForEffect, () => {
+-            probes.insideToken = React.unstable_getCurrentWriteBatch();
++          React.unstable_runInBatch(batchIdForEffect, () => {
++            probes.insideBatchId = React.unstable_getCurrentWriteBatch();
+             setN(1);
+           });
+         }
+@@ -711,57 +739,59 @@ describe('ReactFiberRunInBatch', () => {
+     await act(() => {
+       startTransition(() => {
+         t = React.unstable_getCurrentWriteBatch();
+-        tokenForEffect = t;
++        batchIdForEffect = t;
+         setA(true);
+         setB(true);
+       });
+     });
+     // Root A committed the batch, its layout effect delivered the
+-    // correction into the still-live token, and the correction committed
++    // correction into the still-live batchId, and the correction committed
+     // on root A through the batch's own lane.
+     assertLog(['A on=true n=0', 'A on=true n=1']);
+-    expect(probes.insideToken).toBe(t);
+-    expect(events.retired.map(r => r.token)).not.toContain(t);
++    expect(probes.insideBatchId).toBe(t);
++    expect(events.retired.map(r => r.batchId)).not.toContain(t);
+ 
+     const aCommitsWithT = events.commits.filter(
+-      c => c.container === containerA && c.tokens.includes(t),
++      c => c.container === containerA && c.batchIds.includes(t),
+     );
+     expect(aCommitsWithT.length).toBe(2); // the landing + the delivery
+     expect(aCommitsWithT[1].generation).toBe(aCommitsWithT[0].generation + 1);
+ 
+-    // Root B settles: the batch commits there and the token retires
++    // Root B settles: the batch commits there and the batchId retires
+     // exactly once, committed.
+     resolveGate();
+     await act(() => gate);
+     assertLog(['B on=true']);
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+   });
+ 
+   // The retiring-commit listener window: inside the onRootCommitted report
+-  // of the commit that retires the token, the token is still addressable —
+-  // a delivery there lands on the OUTGOING token's lane (the documented
+-  // merge rule). The token still retires exactly once, and the late update
++  // of the commit that retires the batchId, the batchId is still addressable —
++  // a delivery there lands on the OUTGOING batchId's lane (the documented
++  // merge rule). The batchId still retires exactly once, and the late update
+   // reaches the committed view through a later, batchless commit.
+-  it('a delivery inside the retiring commit report lands on the outgoing token', async () => {
++  it('a delivery inside the retiring commit report lands on the outgoing batch', async () => {
+     let t = null;
++    let alloc = null;
+     const probes = {};
+     let setLate;
+     const {events, unsubscribe} = subscribe({
+       onRootCommitted(entry) {
+-        if (t !== null && entry.tokens.includes(t) && !probes.delivered) {
++        if (t !== null && entry.batchIds.includes(t) && !probes.delivered) {
+           probes.delivered = true;
+           React.unstable_runInBatch(t, () => {
+-            probes.insideToken = React.unstable_getCurrentWriteBatch();
+-            probes.insideDeferred = (React.unstable_getCurrentWriteBatch() & 1) === 1;
++            probes.insideBatchId = React.unstable_getCurrentWriteBatch();
++            probes.insideDeferred = alloc.deferredOf(probes.insideBatchId);
+             setLate(1);
+           });
+         }
+       },
+     });
++    alloc = installAllocator();
+     let setValue;
+     function App() {
+       const [value, _setValue] = useState(0);
+@@ -784,26 +814,26 @@ describe('ReactFiberRunInBatch', () => {
+     });
+     assertLog(['v1 late0', 'v1 late1']);
+     expect(probes.delivered).toBe(true);
+-    // Inside the report window the token was still the write's identity.
+-    expect(probes.insideToken).toBe(t);
++    // Inside the report window the batchId was still the write's identity.
++    expect(probes.insideBatchId).toBe(t);
+     expect(probes.insideDeferred).toBe(true);
+     // …and it still retired exactly once, committed, at that commit.
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+     // The late update committed AFTER the retirement, through a commit
+-    // whose delta is empty (the token was already gone; lane bookkeeping
++    // whose delta is empty (the batchId was already gone; lane bookkeeping
+     // only). The committed view still shows the write.
+     const tCommitIndex = events.log.findIndex(
+-      e => e.type === 'rootCommitted' && e.tokens.includes(t),
++      e => e.type === 'rootCommitted' && e.batchIds.includes(t),
+     );
+     const retireIndex = events.log.findIndex(
+-      e => e.type === 'retired' && e.token === t,
++      e => e.type === 'retired' && e.batchId === t,
+     );
+     const lateCommit = events.commits[events.commits.length - 1];
+     expect(tCommitIndex).toBeLessThan(retireIndex);
+     expect(retireIndex).toBeLessThan(events.log.indexOf(lateCommit));
+-    expect(lateCommit.tokens).toEqual([]);
++    expect(lateCommit.batchIds).toEqual([]);
+     expect(root).toMatchRenderedOutput('v1 late1');
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+@@ -877,21 +907,21 @@ describe('ReactFiberRunInBatch', () => {
+     ).toEqual(['end(discard)', 'start']);
+ 
+     // The image resolves: ONE commit, carrying the batch, exposing both
+-    // writes at once; the token retires committed.
++    // writes at once; the batchId retires committed.
+     await act(() => {
+       ReactNoop.resolveSuspenseyThing('A');
+     });
+     assertLog([]);
+     expect(events.commits.length).toBe(2);
+-    expect(events.commits[1].tokens).toEqual([t]);
++    expect(events.commits[1].batchIds).toEqual([t]);
+     expect(root).toMatchRenderedOutput(
+       <>
+         step 1 +img
+         <suspensey-thing src="A" />
+       </>,
+     );
+-    expect(events.retired.filter(r => r.token === t)).toEqual([
+-      {type: 'retired', token: t, committed: true},
++    expect(events.retired.filter(r => r.batchId === t)).toEqual([
++      {type: 'retired', batchId: t, committed: true},
+     ]);
+     expect(checkFrameInvariants(events.log)).toEqual([]);
+     unsubscribe();
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index c337f2b0df..d46c742389 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -55,10 +55,12 @@ export {
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 3bb1c80ba1..a05dfc5ed7 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -38,10 +38,12 @@ export {
+   addTransitionType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 2234440476..73747e716a 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -39,10 +39,12 @@ export {
+   addTransitionType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.fb.js b/packages/react/index.fb.js
+index 5a0c0fd0aa..10199373c1 100644
+--- a/packages/react/index.fb.js
++++ b/packages/react/index.fb.js
+@@ -46,10 +46,12 @@ export {
+   addTransitionType as unstable_addTransitionType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   use,
+   useActionState,
+   useCallback,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 295fd25139..06a0e553db 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -56,10 +56,12 @@ export {
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 58b6551d32..70c2169fdf 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -33,10 +33,12 @@ export {
+   cacheSignal,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   startTransition,
+   useId,
+   useCallback,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 1d894f9394..3d1d47e568 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -33,10 +33,12 @@ export {
+   cacheSignal,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_registerBatchIdAllocator,
+   unstable_getCurrentWriteBatch,
+   unstable_getRenderContext,
+   unstable_discardAllWip,
+   unstable_runInBatch,
++  unstable_resetBatchRegistryForTest,
+   startTransition,
+   useId,
+   useCallback,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index a5a89d0617..3a79366329 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -66,10 +66,12 @@ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
+ import {
+   subscribeToExternalRuntime,
++  registerExternalRuntimeBatchIdAllocator,
+   getExternalRuntimeCurrentWriteBatch,
+   getExternalRuntimeRenderContext,
+   externalRuntimeDiscardAllWip,
+   externalRuntimeRunInBatch,
++  externalRuntimeResetBatchRegistryForTest,
+ } from './ReactExternalRuntime';
+ 
+ const Children = {
+@@ -128,10 +130,12 @@ export {
+   use,
+   // External-runtime introspection for external state libraries
+   subscribeToExternalRuntime as unstable_subscribeToExternalRuntime,
++  registerExternalRuntimeBatchIdAllocator as unstable_registerBatchIdAllocator,
+   getExternalRuntimeCurrentWriteBatch as unstable_getCurrentWriteBatch,
+   getExternalRuntimeRenderContext as unstable_getRenderContext,
+   externalRuntimeDiscardAllWip as unstable_discardAllWip,
+   externalRuntimeRunInBatch as unstable_runInBatch,
++  externalRuntimeResetBatchRegistryForTest as unstable_resetBatchRegistryForTest,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactExternalRuntime.js b/packages/react/src/ReactExternalRuntime.js
+index b023eb9db7..f0c5bb20f6 100644
+--- a/packages/react/src/ReactExternalRuntime.js
++++ b/packages/react/src/ReactExternalRuntime.js
+@@ -17,19 +17,29 @@
+  * cannot otherwise observe:
+  *
+  *   1. the identity of the batch a write issued *right now* belongs to
+- *      (getCurrentWriteBatch, with the deferred classification in the
+- *      token's low bit), so an external write can be attributed to the
+- *      same "version of the world" as the setState calls it batches with;
++ *      (getCurrentWriteBatch), so an external write can be attributed to
++ *      the same "version of the world" as the setState calls it batches
++ *      with;
+  *   2. which root is currently rendering and which batches that pass
+  *      includes (getRenderContext and the render-pass listener events), so
+  *      reads during render can resolve against the matching version;
+- *   3. when each batch retires (onBatchRetired, exactly once per token), so
++ *   3. when each batch retires (onBatchRetired, exactly once per batch), so
+  *      pending versions can be promoted to committed state — and, because a
+  *      batch spanning several roots commits on each root at its own time,
+  *      when each root commits (onRootCommitted, with the batches that commit
+  *      made visible on that root), so per-root committed views stay
+  *      self-consistent while the batch is still pending elsewhere.
+  *
++ * Batch ids are allocated by the external store itself when it registers a
++ * BATCH-ID ALLOCATOR (registerBatchIdAllocator below): at each batch's
++ * creation the reconciler calls the allocator with the batch's deferred
++ * classification and stores whatever id it returns, so React's batch ids
++ * and the store's batch ids are ONE number space — no translation tables on
++ * either side, and allocation is also where the store learns each batch's
++ * deferredness. Without a registered allocator the reconciler numbers
++ * batches from its own internal counter; the protocol is identical either
++ * way.
++ *
+  * Separately, onBeforeMutation/onAfterMutation bracket exactly the window in
+  * which React mutates the DOM during a commit, so a MutationObserver can
+  * ignore React's own mutations while observing everything else. The bracket
+@@ -41,14 +51,14 @@
+  * - This module is isomorphic; renderers register a provider (and call the
+  *   emit* methods) through ReactSharedInternals.E, following the same pattern
+  *   as ReactSharedInternals.S (onStartTransitionFinish).
+- * - Batches cross this boundary as integer tokens (see
+- *   ReactFiberBatchRegistry): non-zero integers, stable for the batch's
+- *   life, never reused while live. 0 is reserved for "no batch". The low
+- *   bit is the only documented payload: `token & 1` is 1 for deferred
+- *   (transition-like) batches. Everything else about a token is opaque.
+- *   Roots are identified by their container (for react-dom, the DOM
+- *   container element) — an identity token that is also what a
+- *   MutationObserver caller needs.
++ * - Batches cross this boundary as integer batch ids (see
++ *   ReactFiberBatchRegistry): positive integers, stable for the batch's
++ *   life, never reused while live. BATCH_NONE (0) is reserved for "no
++ *   batch". The integer carries no payload — deferredness is told to the
++ *   registered allocator at creation, not encoded in the id — and is
++ *   otherwise opaque. Roots are identified by their container (for
++ *   react-dom, the DOM container element) — an identity token that is also
++ *   what a MutationObserver caller needs.
+  * - Everything here is inert until the first listener subscribes; the
+  *   per-commit cost with no listeners is one property read and branch.
+  */
+@@ -56,9 +66,28 @@
+ import ReactSharedInternals from './ReactSharedInternalsClient';
+ import reportGlobalError from 'shared/reportGlobalError';
+ 
++/** The reserved "no batch" id (mirrored by ReactFiberBatchRegistry's
++ * BATCH_NONE — the two modules cannot share a constant across the
++ * isomorphic/reconciler boundary). */
++const BATCH_NONE = 0;
++
++/**
++ * An external store's batch-id allocator. Called by the reconciler exactly
++ * once per batch, at the batch's creation — the first time an external
++ * write asks for the current batch on a lane with no live batch — with the
++ * batch's deferred classification (true for transition-like batches whose
++ * renders don't block paint). Must return a positive integer that no live
++ * batch currently carries; the reconciler stores it as the batch's identity
++ * for its whole life (every event and provider method speaks it). Creation
++ * can happen mid-render, mid-commit, or inside protocol listeners, so the
++ * allocator must be allocation-only on its own side: hand out the id,
++ * record what it needs, run nothing else.
++ */
++export type BatchIdAllocator = (deferred: boolean) => number;
++
+ export type ExternalRuntimeListener = {
+   /** A render pass began on `container`, opening its pass FRAME.
+-   * `includedBatches` are the tokens of every live batch this pass renders
++   * `includedBatches` are the ids of every live batch this pass renders
+    * (see getCurrentWriteBatch). The frame stays open across yields
+    * (onRenderPassYield/onRenderPassResume) and across the
+    * completed-but-uncommitted period (e.g. a commit suspended on resources),
+@@ -93,21 +122,21 @@ export type ExternalRuntimeListener = {
+   onBeforeMutation?: (container: mixed) => void,
+   /** React finished mutating the host tree under `container`. */
+   onAfterMutation?: (container: mixed) => void,
+-  /** A batch retired — exactly once per token. `committed` is false only for
+-   * batches that never produced React work (their writes were external-only);
+-   * batches whose React updates were discarded by unmounts still retire
+-   * through an ordinary (empty) commit with committed = true. */
+-  onBatchRetired?: (token: number, committed: boolean) => void,
++  /** A batch retired — exactly once per batch id. `committed` is false only
++   * for batches that never produced React work (their writes were
++   * external-only); batches whose React updates were discarded by unmounts
++   * still retire through an ordinary (empty) commit with committed = true. */
++  onBatchRetired?: (batchId: number, committed: boolean) => void,
+   /** `container` committed. Fires on every commit of a root, in commit order.
+    * `committedBatches` is the delta this commit adds to the root's
+-   * committed-batch table: the tokens of live batches whose updates this
++   * committed-batch table: the ids of live batches whose updates this
+    * commit made visible on this root, exactly once per (root, batch). A batch
+    * still pending on a root (not rendered by the committing pass) never
+    * appears, and neither does a batch whose updates on this root died with
+    * deleted fibers (pruned): the table reflects what the root's committed
+    * tree actually shows. `rootCommitGeneration` counts this root's commits
+    * (monotonic, per root, starting at 1). Within one commit, this event
+-   * precedes the onBatchRetired edges the commit causes: a token retires
++   * precedes the onBatchRetired edges the commit causes: a batch retires
+    * BECAUSE its last pending root committed (or pruned) it. */
+   onRootCommitted?: (
+     container: mixed,
+@@ -120,8 +149,9 @@ export type ExternalRuntimeProviderMethods = {
+   /** Non-null while a render pass is executing on the current thread. */
+   getRenderContext: () => null | {container: mixed},
+   /** Identity of the batch an external write issued right now belongs to:
+-   * a non-zero integer, stable for the batch's life, with the deferred
+-   * classification in its low bit (`token & 1`). Never allocates. */
++   * a positive integer, stable for the batch's life. Creates the batch
++   * identity on first use for a batch (via the registered allocator, or the
++   * reconciler's fallback counter); allocation-free per write after that. */
+   getCurrentWriteBatch: () => number,
+   /** Synchronously abandon every work-in-progress pass on every root this
+    * renderer manages: every open pass frame closes with the discard
+@@ -129,11 +159,16 @@ export type ExternalRuntimeProviderMethods = {
+    * re-scheduled as fresh passes. Throws if called while the renderer is
+    * rendering or committing. */
+   discardAllWip: () => void,
+-  /** Run `fn` so the React updates it schedules join `token`'s batch (its
+-   * own lane while the token is live; the urgent fallback once it has
++  /** Run `fn` so the React updates it schedules join `batchId`'s batch (its
++   * own lane while the batch is live; the urgent fallback once it has
+    * retired). Returns fn's result. Throws if called while the renderer is
+    * rendering. */
+-  runInBatch: <R>(token: number, fn: () => R) => R,
++  runInBatch: <R>(batchId: number, fn: () => R) => R,
++  /** TEST-ONLY: clear the batch registry's full slot tenancy (batch ids,
++   * root sets, committed-root sets, parked state) without emitting
++   * retirement events. See resetBatchRegistryForTest in
++   * ReactFiberBatchRegistry. */
++  resetBatchRegistryForTest: () => void,
+ };
+ 
+ const listeners: Set<ExternalRuntimeListener> = new Set();
+@@ -160,6 +195,11 @@ export type ExternalRuntime = {
+    * thread, and the workspace never loads two. A second renderer's
+    * registration is ignored (first wins). */
+   provider: ExternalRuntimeProviderMethods | null,
++  /** The one registered batch-id allocator (see BatchIdAllocator), or null
++   * when no external store has registered one (the reconciler then numbers
++   * batches from its own counter). One allocator per runtime: batch ids are
++   * one number space, and two stores minting into it cannot compose. */
++  allocateBatchId: BatchIdAllocator | null,
+   hasListeners: boolean,
+   emitRenderPassStart: (
+     container: mixed,
+@@ -170,7 +210,7 @@ export type ExternalRuntime = {
+   emitRenderPassEnd: (container: mixed, committed: boolean) => void,
+   emitBeforeMutation: (container: mixed) => void,
+   emitAfterMutation: (container: mixed) => void,
+-  emitBatchRetired: (token: number, committed: boolean) => void,
++  emitBatchRetired: (batchId: number, committed: boolean) => void,
+   emitRootCommitted: (
+     container: mixed,
+     committedBatches: $ReadOnlyArray<number>,
+@@ -180,6 +220,7 @@ export type ExternalRuntime = {
+ 
+ const runtime: ExternalRuntime = {
+   provider: null,
++  allocateBatchId: null,
+   hasListeners: false,
+   emitRenderPassStart(container, includedBatches) {
+     emit('onRenderPassStart', container, includedBatches);
+@@ -199,8 +240,8 @@ const runtime: ExternalRuntime = {
+   emitAfterMutation(container) {
+     emit('onAfterMutation', container);
+   },
+-  emitBatchRetired(token, committed) {
+-    emit('onBatchRetired', token, committed);
++  emitBatchRetired(batchId, committed) {
++    emit('onBatchRetired', batchId, committed);
+   },
+   emitRootCommitted(container, committedBatches, rootCommitGeneration) {
+     emit('onRootCommitted', container, committedBatches, rootCommitGeneration);
+@@ -220,6 +261,47 @@ export function subscribeToExternalRuntime(
+   };
+ }
+ 
++/**
++ * Registers the external store's batch-id allocator (see BatchIdAllocator);
++ * returns the unregister function. From registration on, every batch React
++ * creates carries an id the allocator handed out. Throws if an allocator is
++ * already registered: ids form one number space, so exactly one store can
++ * own allocation — a store replacing itself must unregister first (and only
++ * do so when no batch it allocated is still live, or between tests after
++ * resetting the registry).
++ */
++export function registerExternalRuntimeBatchIdAllocator(
++  allocateBatchId: BatchIdAllocator,
++): () => void {
++  if (runtime.allocateBatchId !== null) {
++    throw new Error(
++      'A batch-id allocator is already registered. Batch ids are one ' +
++        'number space, so only one external store can allocate them; ' +
++        'unregister the previous allocator first.',
++    );
++  }
++  runtime.allocateBatchId = allocateBatchId;
++  return function unregister() {
++    if (runtime.allocateBatchId === allocateBatchId) {
++      runtime.allocateBatchId = null;
++    }
++  };
++}
++
++/**
++ * TEST-ONLY. Clears the renderer's batch registry — the full tenancy of
++ * every batch slot (batch id, deferred flag, root sets, committed-root
++ * sets, parked state) — without emitting retirement events. Test harnesses
++ * call it between tests so stale slots never leak batch identity across a
++ * test boundary. No-op when no renderer has registered a provider.
++ */
++export function externalRuntimeResetBatchRegistryForTest(): void {
++  const provider = runtime.provider;
++  if (provider !== null) {
++    provider.resetBatchRegistryForTest();
++  }
++}
++
+ export function getExternalRuntimeRenderContext(): null | {container: mixed} {
+   const provider = runtime.provider;
+   return provider !== null ? provider.getRenderContext() : null;
+@@ -227,9 +309,10 @@ export function getExternalRuntimeRenderContext(): null | {container: mixed} {
+ 
+ export function getExternalRuntimeCurrentWriteBatch(): number {
+   const provider = runtime.provider;
+-  // 0 = "no batch": no renderer has registered a provider (e.g. no renderer
+-  // module has loaded yet), so a write issued now precedes any React batch.
+-  return provider !== null ? provider.getCurrentWriteBatch() : 0;
++  // BATCH_NONE = "no batch": no renderer has registered a provider (e.g. no
++  // renderer module has loaded yet), so a write issued now precedes any
++  // React batch.
++  return provider !== null ? provider.getCurrentWriteBatch() : BATCH_NONE;
+ }
+ 
+ export function externalRuntimeDiscardAllWip(): void {
+@@ -239,13 +322,13 @@ export function externalRuntimeDiscardAllWip(): void {
+   }
+ }
+ 
+-export function externalRuntimeRunInBatch<R>(token: number, fn: () => R): R {
++export function externalRuntimeRunInBatch<R>(batchId: number, fn: () => R): R {
+   const provider = runtime.provider;
+   if (provider === null) {
+     // No renderer has registered a provider, so no batch can be live and
+     // there is no renderer scheduling state to pin: this is the retired-
+-    // token fallback with nothing to make urgent. Run fn plainly.
++    // batch fallback with nothing to make urgent. Run fn plainly.
+     return fn();
+   }
+-  return provider.runInBatch(token, fn);
++  return provider.runInBatch(batchId, fn);
+ }
+diff --git a/scripts/error-codes/codes.json b/scripts/error-codes/codes.json
+index 15b2a4457a..68faaeb63b 100644
+--- a/scripts/error-codes/codes.json
++++ b/scripts/error-codes/codes.json
+@@ -588,5 +588,6 @@
+   "600": "A rejected Promise was passed to React without a `reason` property. React threw a generic error from where the Promise was used to assist in identifying the problematic Promise. Make sure that instrumented Promises correctly set the `reason` property when setting `status` to `'rejected'`.",
+   "601": "A chunk pair is incomplete. This is a bug in React.",
+   "604": "discardAllWip must not be called while React is rendering or committing. Defer the call until React has yielded, e.g. in a microtask.",
+-  "605": "runInBatch must not be called while React is rendering. Update attribution during a render pass belongs to the pass itself; queue the call until React has yielded, e.g. in a microtask or at the pass's yield or end edge."
+-}
+\ No newline at end of file
++  "605": "runInBatch must not be called while React is rendering. Update attribution during a render pass belongs to the pass itself; queue the call until React has yielded, e.g. in a microtask or at the pass's yield or end edge.",
++  "606": "A batch-id allocator is already registered. Batch ids are one number space, so only one external store can allocate them; unregister the previous allocator first."
++}
+-- 
+2.50.1 (Apple Git-155)
+

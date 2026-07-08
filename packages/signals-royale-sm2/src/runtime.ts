@@ -1,5 +1,12 @@
 export type BatchId = number;
 
+export interface RuntimeEvent {
+  kind: string;
+  subject?: unknown;
+  batchId?: BatchId;
+  committed?: boolean;
+}
+
 export interface AtomOptions<T> {
   equals?: (a: T, b: T) => boolean;
   effect?: (ctx: { get(): T; set(value: T): void }) => void | (() => void);
@@ -200,6 +207,7 @@ class Reaction extends Scope implements Tracker {
     this.scheduled = false;
     if (!this.active || !this.shouldRun() || !this.active) return;
     this.firstRun = false;
+    this.runtime.emitDebug({ kind: 'effect-run', subject: this });
     this.runtime.untracked(() => super.dispose());
     this.runtime.untracked(() => this.cleanup?.());
     this.cleanup = undefined;
@@ -244,6 +252,14 @@ class Reaction extends Scope implements Tracker {
   }
 }
 
+const effectFinalizer = new FinalizationRegistry<Reaction>((reaction) => {
+  try {
+    reaction.dispose();
+  } catch {
+    // Finalizers cannot report cleanup failures to a caller.
+  }
+});
+
 class Watcher implements Subscriber {
   scheduled = false;
   cause: number | undefined;
@@ -257,8 +273,14 @@ class Watcher implements Subscriber {
 
   invalidate(cause?: number): void {
     if (!this.active) return;
+    if (this.runtime.suppressWatchers) return;
+    if (this.scheduled) {
+      if (this.runtime.isDeferredBatch(this.cause) && !this.runtime.isDeferredBatch(cause)) {
+        this.cause = cause;
+      }
+      return;
+    }
     this.cause = cause;
-    if (this.scheduled) return;
     this.scheduled = true;
     this.runtime.scheduleWatcher(this);
   }
@@ -296,6 +318,7 @@ export interface HostProtocol {
 
 export class Runtime {
   writesForbidden = 0;
+  suppressWatchers = false;
   private tracker: Tracker | null = null;
   private scope: Scope | null = null;
   private batchDepth = 0;
@@ -303,6 +326,9 @@ export class Runtime {
   private readonly reactions: Reaction[] = [];
   private readonly watchers: Watcher[] = [];
   private readonly observations = new Set<Atom<unknown>>();
+  private readonly batchWatchers = new Set<() => void>();
+  private readonly rootWatchers = new Set<(container: object, batches: readonly BatchId[]) => void>();
+  private readonly eventListeners = new Set<(event: RuntimeEvent) => void>();
   private observationsQueued = false;
   private host: HostProtocol | undefined;
   private nextBatchId = 1;
@@ -322,9 +348,15 @@ export class Runtime {
 
   effect(fn: () => void | (() => void)): () => void {
     const reaction = new Reaction(this, fn);
-    this.scope?.reactions.push(reaction);
+    const owner = this.scope;
+    owner?.reactions.push(reaction);
     reaction.run();
-    return () => reaction.dispose();
+    const dispose = () => {
+      effectFinalizer.unregister(dispose);
+      reaction.dispose();
+    };
+    if (owner === null) effectFinalizer.register(dispose, reaction, dispose);
+    return dispose;
   }
 
   effectScope(fn: () => void): () => void {
@@ -434,9 +466,14 @@ export class Runtime {
     this.host = host;
   }
 
+  renderBatches(): readonly BatchId[] | null {
+    return this.host?.getRenderBatches() ?? null;
+  }
+
   allocateBatch(deferred: boolean): BatchId {
     const id = this.nextBatchId++;
     this.liveBatches.set(id, { id, deferred, capsules: new Map() });
+    this.emitDebug({ kind: 'batch-open', batchId: id });
     return id;
   }
 
@@ -464,7 +501,7 @@ export class Runtime {
     return batches === undefined ? node.peek() : this.valueFor(node, batches);
   }
 
-  isPending(node: Atom<unknown> | Computed<unknown>): boolean {
+  isPending<T>(node: Atom<T> | Computed<T>): boolean {
     if (node instanceof Computed && node.isPending()) return true;
     for (const batch of this.liveBatches.values()) {
       if (batch.deferred && batch.capsules.has(node as Atom<unknown>)) return true;
@@ -472,7 +509,36 @@ export class Runtime {
     return false;
   }
 
-  refresh(node: Atom<unknown> | Computed<unknown>): void {
+  isDeferredBatch(id: BatchId | undefined): boolean {
+    return id !== undefined && this.liveBatches.get(id)?.deferred === true;
+  }
+
+  pendingBatchIds<T>(node: Atom<T> | Computed<T>): BatchId[] {
+    const ids: BatchId[] = [];
+    for (const batch of this.liveBatches.values()) {
+      if (
+        batch.deferred &&
+        (node instanceof Computed || batch.capsules.has(node as Atom<unknown>))
+      ) {
+        ids.push(batch.id);
+      }
+    }
+    return ids;
+  }
+
+  subscribeBatchState(callback: () => void): () => void {
+    this.batchWatchers.add(callback);
+    return () => this.batchWatchers.delete(callback);
+  }
+
+  subscribeRoot(
+    callback: (container: object, batches: readonly BatchId[]) => void,
+  ): () => void {
+    this.rootWatchers.add(callback);
+    return () => this.rootWatchers.delete(callback);
+  }
+
+  refresh<T>(node: Atom<T> | Computed<T>): void {
     if (node instanceof Computed) {
       node.refresh(true);
       node.invalidate();
@@ -487,12 +553,14 @@ export class Runtime {
     this.startBatch();
     try {
       const id = this.host?.getCurrentWriteBatch() ?? 0;
+      this.emitDebug({ kind: 'write', subject: atom, batchId: id || undefined });
       const batch = this.liveBatches.get(id);
       if (batch?.deferred) {
         let capsule = batch.capsules.get(atom as Atom<unknown>) as Capsule<T> | undefined;
         if (capsule === undefined) {
           capsule = { atom, value: atom.peek() };
           batch.capsules.set(atom as Atom<unknown>, capsule as Capsule);
+          for (const watcher of this.batchWatchers) watcher();
         }
         const value = update(capsule.value);
         if (!atom.equals(capsule.value, value)) {
@@ -524,16 +592,25 @@ export class Runtime {
       this.rootBatches.set(container, committed);
     }
     for (const id of batchIds) committed.add(id);
+    this.emitDebug({ kind: 'root-commit', subject: container, batchId: batchIds[0] });
+    for (const watcher of this.rootWatchers) watcher(container, batchIds);
   }
 
   retireBatch(id: BatchId, committed: boolean): void {
     const batch = this.liveBatches.get(id);
     if (batch === undefined) return;
     this.liveBatches.delete(id);
-    for (const capsule of batch.capsules.values()) {
-      if (committed) capsule.atom.apply(() => capsule.value, id);
-      else capsule.atom.notify(id);
+    this.emitDebug({ kind: 'batch-retire', batchId: id, committed });
+    this.suppressWatchers = committed;
+    try {
+      for (const capsule of batch.capsules.values()) {
+        if (committed) capsule.atom.apply(() => capsule.value, id);
+        else capsule.atom.notify(id);
+      }
+    } finally {
+      this.suppressWatchers = false;
     }
+    for (const watcher of this.batchWatchers) watcher();
     this.flush();
   }
 
@@ -554,6 +631,16 @@ export class Runtime {
 
   liveBatchCount(): number {
     return this.liveBatches.size;
+  }
+
+  subscribeDebug(listener: (event: RuntimeEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
+  }
+
+  emitDebug(event: RuntimeEvent): void {
+    if (this.eventListeners.size === 0) return;
+    for (const listener of this.eventListeners) listener(event);
   }
 
   private valueFor<T>(atom: Atom<T>, included: Iterable<BatchId>): T {
@@ -614,6 +701,7 @@ export class Computed<T> extends Node<T> implements Tracker {
   }
 
   get(): T {
+    if (this.runtime.renderBatches() !== null) return this.readWorld();
     this.refresh();
     this.runtime.track(this);
     if (this.pending !== undefined && !this.hasValue) throw this.pending;
@@ -636,6 +724,72 @@ export class Computed<T> extends Node<T> implements Tracker {
   isPending(): boolean {
     this.refresh();
     return this.pending !== undefined;
+  }
+
+  private readWorld(): T {
+    this.collecting.clear();
+    this.collectedValues.clear();
+    const pending: PromiseLike<unknown>[] = [];
+    const use = <U>(promise: PromiseLike<U>): U => {
+      const object = promise as object;
+      let state = thenables.get(object);
+      if (state === undefined) {
+        state = { status: 'pending', promise };
+        thenables.set(object, state);
+        const settle = () => {
+          this.settledDirty = true;
+          this.runtime.emitDebug({ kind: 'suspense-settlement', subject: this });
+          this.invalidate();
+          this.runtime.flush();
+        };
+        promise.then(
+          (value) => {
+            thenables.set(object, { status: 'fulfilled', value });
+            this.runtime.emitDebug({ kind: 'suspense-settlement', subject: this });
+            settle();
+          },
+          (error) => {
+            thenables.set(object, { status: 'rejected', error });
+            this.runtime.emitDebug({ kind: 'suspense-settlement', subject: this });
+            settle();
+          },
+        );
+      }
+      if (state.status === 'pending') {
+        pending.push(promise);
+        return undefined as U;
+      }
+      if (state.status === 'rejected') throw state.error;
+      return state.value as U;
+    };
+    let value!: T;
+    let error: unknown;
+    try {
+      value = this.runtime.evaluate(this, () => this.compute(use));
+    } catch (caught) {
+      error = caught;
+    }
+    for (const dependency of this.collecting) {
+      if (this.dependencies.has(dependency)) continue;
+      this.dependencies.add(dependency);
+      this.dependencyValues.set(dependency, this.collectedValues.get(dependency));
+      if (this.connected) dependency.add(this);
+    }
+    if (pending.length !== 0) {
+      this.pending = pending[0];
+      const batches = this.runtime.renderBatches();
+      if (!this.hasValue || batches?.some((id) => this.runtime.isDeferredBatch(id))) {
+        throw this.pending;
+      }
+      return this.value;
+    }
+    if (error !== undefined) throw error;
+    if (!this.hasValue) {
+      this.value = value;
+      this.hasValue = true;
+      ++this.version;
+    }
+    return value;
   }
 
   refresh(force = false): boolean {

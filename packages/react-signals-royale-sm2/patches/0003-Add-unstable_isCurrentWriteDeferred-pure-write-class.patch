@@ -1,0 +1,170 @@
+From 6574e1ebd64744fa9484f1f20907d1d00208ced4 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Thu, 2 Jul 2026 21:55:09 -0400
+Subject: [PATCH 03/25] Add unstable_isCurrentWriteDeferred: pure write
+ classification, no minting
+
+Lets external stores apply their observability gate before requesting a
+batch token, so immediate writes that need no bookkeeping allocate nothing.
+No lane computation, no claims, no side effects: render-phase renders answer
+from the in-progress lanes; otherwise it is just 'is a non-gesture
+transition scope active'.
+---
+ .../react-reconciler/src/ReactFiberWorkLoop.js    | 15 +++++++++++++++
+ packages/react/index.development.js               |  1 +
+ packages/react/index.experimental.development.js  |  1 +
+ packages/react/index.experimental.js              |  1 +
+ packages/react/index.js                           |  1 +
+ packages/react/index.stable.development.js        |  1 +
+ packages/react/index.stable.js                    |  1 +
+ packages/react/src/ReactClient.js                 |  2 ++
+ packages/react/src/ReactExternalRuntime.js        |  8 ++++++++
+ 9 files changed, 31 insertions(+)
+
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index 86256c81b0..bd9113314e 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -903,6 +903,21 @@ registerExternalRuntimeProvider({
+     }
+     return eventPriorityToLane(resolveUpdatePriority());
+   },
++  // Classification only — no token minting, no side effects. Lets external
++  // stores apply their observability gate BEFORE asking for a token, so a
++  // plain immediate write that needs no bookkeeping allocates nothing at all.
++  isCurrentWriteDeferred(): boolean {
++    if (
++      (executionContext & RenderContext) !== NoContext &&
++      workInProgressRootRenderLanes !== NoLanes
++    ) {
++      return laneIsTransitionLane(
++        pickArbitraryLane(workInProgressRootRenderLanes) as any,
++      );
++    }
++    const transition = requestCurrentTransition();
++    return transition !== null && !(transition as any).gesture;
++  },
+   // Batch identity for an external write happening right now. Mints the
+   // token lazily (per batch, never per write); returns the token itself so
+   // this call never allocates after the batch's first write.
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index 33260c7860..45773c5489 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -56,6 +56,7 @@ export {
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
+   unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
+   unstable_isTransitionLane,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 27cd9e8518..d3103af6ce 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -39,6 +39,7 @@ export {
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
+   unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
+   unstable_isTransitionLane,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 5152cf47dc..8d29a1f488 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -40,6 +40,7 @@ export {
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
+   unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
+   unstable_isTransitionLane,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 2898150e6e..8b09593d77 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -57,6 +57,7 @@ export {
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
+   unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
+   unstable_isTransitionLane,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 061b90ea15..67e013dca0 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -34,6 +34,7 @@ export {
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
+   unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
+   unstable_isTransitionLane,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 9b6b5e80aa..8587fa345a 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -34,6 +34,7 @@ export {
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
+   unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+   unstable_getCurrentUpdateLane,
+   unstable_isTransitionLane,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index a40f1fc40f..7f1decceb6 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -66,6 +66,7 @@ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
+ import {
+   subscribeToExternalRuntime,
++  externalRuntimeIsCurrentWriteDeferred,
+   getExternalRuntimeCurrentWriteBatch,
+   getExternalRuntimeRenderContext,
+   getExternalRuntimeCurrentUpdateLane,
+@@ -130,6 +131,7 @@ export {
+   // External-runtime introspection for external state libraries
+   subscribeToExternalRuntime as unstable_subscribeToExternalRuntime,
+   getExternalRuntimeCurrentWriteBatch as unstable_getCurrentWriteBatch,
++  externalRuntimeIsCurrentWriteDeferred as unstable_isCurrentWriteDeferred,
+   getExternalRuntimeRenderContext as unstable_getRenderContext,
+   getExternalRuntimeCurrentUpdateLane as unstable_getCurrentUpdateLane,
+   externalRuntimeIsTransitionLane as unstable_isTransitionLane,
+diff --git a/packages/react/src/ReactExternalRuntime.js b/packages/react/src/ReactExternalRuntime.js
+index 5f24c81a37..ec32c75d21 100644
+--- a/packages/react/src/ReactExternalRuntime.js
++++ b/packages/react/src/ReactExternalRuntime.js
+@@ -83,6 +83,9 @@ export type ExternalRuntimeProvider = {
+   getRenderContext: () => null | {container: mixed, renderLanes: number},
+   /** The lane an update scheduled right now would get. */
+   getCurrentUpdateLane: () => number,
++  /** Would a write issued right now belong to a deferred (transition-like)
++   * batch? Pure classification: no token minting, no side effects. */
++  isCurrentWriteDeferred: () => boolean,
+   /** Identity of the batch an external write issued right now belongs to.
+    * The returned token is stable for the batch's life and carries a
+    * `deferred` flag; the call allocates only on the batch's first use. */
+@@ -187,6 +190,11 @@ export function getExternalRuntimeCurrentUpdateLane(): number {
+   return providers.length > 0 ? providers[0].getCurrentUpdateLane() : 0;
+ }
+ 
++export function externalRuntimeIsCurrentWriteDeferred(): boolean {
++  const providers = runtime.providers;
++  return providers.length > 0 ? providers[0].isCurrentWriteDeferred() : false;
++}
++
+ export function getExternalRuntimeCurrentWriteBatch(): mixed {
+   const providers = runtime.providers;
+   return providers.length > 0 ? providers[0].getCurrentWriteBatch() : null;
+-- 
+2.50.1 (Apple Git-155)
+

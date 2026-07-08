@@ -1,0 +1,40 @@
+From d7b95440ec86a99777298152bcb5e31d5b7b3c8d Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Sun, 5 Jul 2026 03:36:57 -0400
+Subject: [PATCH 16/25] www entry: export the external-runtime surface from
+ index.fb.js
+
+The S1 exports (unstable_subscribeToExternalRuntime,
+unstable_externalRuntimeProtocol, unstable_getCurrentWriteBatch,
+unstable_isCurrentWriteDeferred, unstable_getRenderContext) reached every
+OSS entry point but never the fb one, so the whole fork suite failed on
+--release-channel=www-modern / www-classic with
+'unstable_subscribeToExternalRuntime is not a function' (pre-existing at
+the S1 tip; recorded in fork/S2-REPORT.md). The channel is isomorphic and
+channel-independent -- there is nothing www should be gated out of -- so
+the fix is the mechanical one: export the same surface from index.fb.js.
+
+Fork suite: 17/17 on default (experimental), www-modern, and www-classic.
+---
+ packages/react/index.fb.js | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/packages/react/index.fb.js b/packages/react/index.fb.js
+index d61af001a5..b7e1c06f10 100644
+--- a/packages/react/index.fb.js
++++ b/packages/react/index.fb.js
+@@ -45,6 +45,11 @@ export {
+   addTransitionType,
+   addTransitionType as unstable_addTransitionType,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
++  unstable_getCurrentWriteBatch,
++  unstable_isCurrentWriteDeferred,
++  unstable_getRenderContext,
+   use,
+   useActionState,
+   useCallback,
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,452 @@
+From fcd2bf8f8259a62677121ddaace04b2b85817a68 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Sun, 5 Jul 2026 02:34:31 -0400
+Subject: [PATCH 11/25] Versioned external-runtime handshake: v1 + capability
+ bits, loud on skew
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The protocol handshake (cosignal spec §4.1 fact 7), both sides:
+
+- react exports unstable_externalRuntimeProtocol: {version: 1,
+  capabilities, providerProtocols} — the consumer side. Capability bits
+  cover what this build implements (batch tokens, pass lifecycle,
+  retirement, mutation window); bits for the planned capabilities
+  (yield/resume, per-root commit, runInBatch, lineage, discardAllWip)
+  are reserved so a stale fork build fails a consumer's handshake
+  instead of silently missing events.
+- The reconciler bakes in its own copy of the constants and echoes
+  them as provider.protocol when it registers. Registration now
+  REFUSES a react package that lacks the registry or speaks a
+  different version (errors 602/603, extracted): version skew fails
+  loudly at renderer load, never a silent no-op. The prior behavior
+  (tolerate ReactSharedInternals.E === null by doing nothing) was
+  exactly the silently-degraded mode the spec forbids.
+- Suite grows to 10: handshake echo + both loud-failure paths.
+- Also: replace the emit() for..of with Set#forEach (repo lint).
+
+Precedent: gen-1 react-signals' unstable_reconcilerRuntime carried an
+explicit version === 1 check.
+---
+ .../src/ReactFiberBatchRegistry.js            |  7 +-
+ .../src/ReactFiberExternalRuntime.js          | 54 ++++++++++--
+ .../__tests__/ReactFiberBatchRegistry-test.js | 43 +++++++++
+ packages/react/index.development.js           |  1 +
+ .../react/index.experimental.development.js   |  1 +
+ packages/react/index.experimental.js          |  1 +
+ packages/react/index.js                       |  1 +
+ packages/react/index.stable.development.js    |  1 +
+ packages/react/index.stable.js                |  1 +
+ packages/react/src/ReactClient.js             |  2 +
+ packages/react/src/ReactExternalRuntime.js    | 87 ++++++++++++++++++-
+ scripts/error-codes/codes.json                |  4 +-
+ 12 files changed, 191 insertions(+), 12 deletions(-)
+
+diff --git a/packages/react-reconciler/src/ReactFiberBatchRegistry.js b/packages/react-reconciler/src/ReactFiberBatchRegistry.js
+index 9f7fa0d6a6..2a67bd4730 100644
+--- a/packages/react-reconciler/src/ReactFiberBatchRegistry.js
++++ b/packages/react-reconciler/src/ReactFiberBatchRegistry.js
+@@ -94,7 +94,10 @@ function slotFor(lane: Lane): Slot {
+  * to, minting it on first use. `lane` is what requestUpdateLane would assign;
+  * `isDeferred` classifies it (transition-like or not).
+  */
+-export function getOrMintBatchToken(lane: Lane, isDeferred: boolean): BatchToken {
++export function getOrMintBatchToken(
++  lane: Lane,
++  isDeferred: boolean,
++): BatchToken {
+   const slot = slotFor(lane);
+   if (slot.token === null) {
+     slot.token = nextTokenSerial++ * 2 + (isDeferred ? 1 : 0);
+@@ -217,7 +220,7 @@ export function batchRegistryOnEventClosed(): void {
+     ) {
+       continue;
+     }
+-    if ((slot.token & 1) === 1 && (1 << i) === actionLane) {
++    if ((slot.token & 1) === 1 && 1 << i === actionLane) {
+       const actionThenable = peekEntangledActionThenable();
+       if (actionThenable !== null) {
+         parkUntilActionSettles(slot, actionThenable);
+diff --git a/packages/react-reconciler/src/ReactFiberExternalRuntime.js b/packages/react-reconciler/src/ReactFiberExternalRuntime.js
+index 6ab523aea1..7b4d045ba4 100644
+--- a/packages/react-reconciler/src/ReactFiberExternalRuntime.js
++++ b/packages/react-reconciler/src/ReactFiberExternalRuntime.js
+@@ -11,7 +11,7 @@ import type {FiberRoot} from './ReactInternalTypes';
+ import type {Lanes} from './ReactFiberLane';
+ import type {
+   ExternalRuntime,
+-  ExternalRuntimeProvider,
++  ExternalRuntimeProviderMethods,
+ } from 'react/src/ReactExternalRuntime';
+ 
+ import ReactSharedInternals from 'shared/ReactSharedInternals';
+@@ -28,20 +28,62 @@ import {batchTokensForRender} from './ReactFiberBatchRegistry';
+  * No Fiber or FiberRoot shapes cross this boundary.
+  */
+ 
++// The protocol version + capability bits THIS reconciler build implements.
++// Deliberately a duplicated copy of the constants in
++// packages/react/src/ReactExternalRuntime.js (which also documents the bit
++// assignments), NOT a value import: a value import would be inlined into the
++// renderer bundle at build time either way, and keeping the copy explicit
++// makes it obvious that each artifact bakes its own numbers — which is
++// exactly what lets registerExternalRuntimeProvider detect version skew
++// between separately built react and renderer packages.
++const EXTERNAL_RUNTIME_PROTOCOL_VERSION = 1;
++const EXTERNAL_RUNTIME_CAPABILITIES = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
++
+ export function getExternalRuntime(): ExternalRuntime | null {
+   // The runtime exists once the isomorphic `react` module has evaluated.
+-  // It is null with mismatched react/renderer versions; every entry point
+-  // here tolerates that by doing nothing.
++  // Registration below refuses mismatched react/renderer pairs loudly, so
++  // the emit paths can only observe null before registration has run; they
++  // tolerate that by doing nothing.
+   return (ReactSharedInternals as any).E || null;
+ }
+ 
+ export function registerExternalRuntimeProvider(
+-  provider: ExternalRuntimeProvider,
++  methods: ExternalRuntimeProviderMethods,
+ ): void {
++  // The versioned handshake, renderer side (cosignal spec §4.1 fact 7).
++  // Failing loudly here is the point: pairing this renderer with a react
++  // package that lacks the registry (stock React) or speaks a different
++  // protocol version must not silently degrade into a mode where every
++  // external write classifies as "no batch".
+   const runtime = getExternalRuntime();
+-  if (runtime !== null) {
+-    runtime.providers.push(provider);
++  if (runtime === null || runtime.protocol == null) {
++    throw new Error(
++      'This renderer was built with external-runtime protocol v' +
++        EXTERNAL_RUNTIME_PROTOCOL_VERSION +
++        ', but the react package it loaded does not provide the ' +
++        'external-runtime registry. The react package and the renderer ' +
++        'must come from the same cosignal fork build.',
++    );
++  }
++  if (runtime.protocol.version !== EXTERNAL_RUNTIME_PROTOCOL_VERSION) {
++    throw new Error(
++      'External-runtime protocol version skew: the react package speaks v' +
++        runtime.protocol.version +
++        ' but this renderer was built for v' +
++        EXTERNAL_RUNTIME_PROTOCOL_VERSION +
++        '. The react package and the renderer must come from the same ' +
++        'cosignal fork build.',
++    );
+   }
++  runtime.providers.push({
++    protocol: {
++      version: EXTERNAL_RUNTIME_PROTOCOL_VERSION,
++      capabilities: EXTERNAL_RUNTIME_CAPABILITIES,
++    },
++    getRenderContext: methods.getRenderContext,
++    isCurrentWriteDeferred: methods.isCurrentWriteDeferred,
++    getCurrentWriteBatch: methods.getCurrentWriteBatch,
++  });
+ }
+ 
+ // Roots with a render pass currently in progress (spanning yields). Used to
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js b/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js
+index 99d389a235..c00c6c0568 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberBatchRegistry-test.js
+@@ -302,4 +302,47 @@ describe('ReactFiberBatchRegistry', () => {
+     ]);
+     unsubscribe();
+   });
++
++  describe('protocol handshake', () => {
++    const CAPABILITIES_V1 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
++
++    function getSharedInternals(ReactModule) {
++      return ReactModule.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
++    }
++
++    it('exposes version and capability bits on both sides of the channel', () => {
++      const protocol = React.unstable_externalRuntimeProtocol;
++      expect(protocol.version).toBe(1);
++      expect(protocol.capabilities).toBe(CAPABILITIES_V1);
++      // The renderer (required in beforeEach) registered a provider echoing
++      // the version and capabilities its reconciler was built with.
++      expect(protocol.providerProtocols).toEqual([
++        {version: 1, capabilities: CAPABILITIES_V1},
++      ]);
++    });
++
++    it('a renderer refuses to load against a react package without the registry (no silent no-op)', () => {
++      jest.resetModules();
++      const FreshReact = require('react');
++      // Simulate version skew: a react package that never created the
++      // external-runtime registry (stock React, or a pre-protocol build).
++      getSharedInternals(FreshReact).E = null;
++      expect(() => require('react-noop-renderer')).toThrow(
++        /does not provide the external-runtime registry/,
++      );
++    });
++
++    it('a renderer refuses to load across a protocol version mismatch (fails loudly)', () => {
++      jest.resetModules();
++      const FreshReact = require('react');
++      // Simulate a react package built for a future protocol version.
++      getSharedInternals(FreshReact).E.protocol = {
++        version: 2,
++        capabilities: 0,
++      };
++      expect(() => require('react-noop-renderer')).toThrow(
++        /protocol version skew: the react package speaks v2 but this renderer was built for v1/,
++      );
++    });
++  });
+ });
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index 9f5975e4ca..e3a9519bbb 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -55,6 +55,7 @@ export {
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
+   unstable_getCurrentWriteBatch,
+   unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index d3cf30c7c5..0c3cd6c4c0 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -38,6 +38,7 @@ export {
+   addTransitionType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
+   unstable_getCurrentWriteBatch,
+   unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 97533709ec..51413db3fa 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -39,6 +39,7 @@ export {
+   addTransitionType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
+   unstable_getCurrentWriteBatch,
+   unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index ef34f76e0a..2d82c5e0d3 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -56,6 +56,7 @@ export {
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
+   unstable_getCurrentWriteBatch,
+   unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index ed479d62b9..bdea868f91 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -33,6 +33,7 @@ export {
+   cacheSignal,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
+   unstable_getCurrentWriteBatch,
+   unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 0e82e796bc..30d832e24f 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -33,6 +33,7 @@ export {
+   cacheSignal,
+   unstable_useCacheRefresh,
+   unstable_subscribeToExternalRuntime,
++  unstable_externalRuntimeProtocol,
+   unstable_getCurrentWriteBatch,
+   unstable_isCurrentWriteDeferred,
+   unstable_getRenderContext,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 6ffed9b0de..624e818082 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -69,6 +69,7 @@ import {
+   externalRuntimeIsCurrentWriteDeferred,
+   getExternalRuntimeCurrentWriteBatch,
+   getExternalRuntimeRenderContext,
++  externalRuntimeProtocol,
+ } from './ReactExternalRuntime';
+ 
+ const Children = {
+@@ -130,6 +131,7 @@ export {
+   getExternalRuntimeCurrentWriteBatch as unstable_getCurrentWriteBatch,
+   externalRuntimeIsCurrentWriteDeferred as unstable_isCurrentWriteDeferred,
+   getExternalRuntimeRenderContext as unstable_getRenderContext,
++  externalRuntimeProtocol as unstable_externalRuntimeProtocol,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactExternalRuntime.js b/packages/react/src/ReactExternalRuntime.js
+index 94ecdd6afa..69845b18a7 100644
+--- a/packages/react/src/ReactExternalRuntime.js
++++ b/packages/react/src/ReactExternalRuntime.js
+@@ -53,6 +53,44 @@
+ import ReactSharedInternals from './ReactSharedInternalsClient';
+ import reportGlobalError from 'shared/reportGlobalError';
+ 
++// ── Protocol handshake (cosignal spec §4.1 fact 7) ──────────────────────────
++//
++// The protocol is versioned, with capability bits, on BOTH sides of the
++// channel: this isomorphic module carries the version the `react` package was
++// built with, and every renderer echoes the version its reconciler was built
++// with when it registers a provider (see ReactFiberExternalRuntime.js, which
++// keeps a deliberately duplicated copy of these constants). Consumers assert
++// both sides through `unstable_externalRuntimeProtocol` and refuse to run
++// otherwise. Version skew fails loudly — at provider registration for a
++// mismatched renderer, at the consumer handshake for everything else. There
++// is intentionally no silently-degraded mode: with a mismatched pair, writes
++// would classify as "no batch" and external stores would tear.
++//
++// Capability bits (grow-only; renumbering is a version bump):
++//   1 << 0  batch tokens        — integer write-classification tokens,
++//                                 mint/classify/retire (fact 1)
++//   1 << 1  pass lifecycle      — render-pass start/end events (fact 2, the
++//                                 start/end half)
++//   1 << 2  retirement          — exactly-once retirement with committed
++//                                 flag and async-action parking (fact 3)
++//   1 << 3  mutation window     — before/after host-mutation bracket
++//                                 (fact 6)
++// Reserved for capabilities this fork plans to add; a stale build lacking
++// one fails the consumer handshake instead of silently missing events:
++//   1 << 4  pass yield/resume edges + end disposition
++//   1 << 5  per-root commit reporting + baseline-capture ordering
++//   1 << 6  runInBatch (lane-scoped scheduling)
++//   1 << 7  render lineage ids
++//   1 << 8  discardAllWip
++export const EXTERNAL_RUNTIME_PROTOCOL_VERSION = 1;
++export const EXTERNAL_RUNTIME_CAPABILITIES =
++  (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
++
++export type ExternalRuntimeProtocol = {
++  version: number,
++  capabilities: number,
++};
++
+ export type ExternalRuntimeListener = {
+   /** A render pass began on `container`. `includedBatches` are the tokens of
+    * every live batch this pass renders (see getCurrentWriteBatch). Passes can
+@@ -76,7 +114,7 @@ export type ExternalRuntimeListener = {
+   onBatchRetired?: (token: number, committed: boolean) => void,
+ };
+ 
+-export type ExternalRuntimeProvider = {
++export type ExternalRuntimeProviderMethods = {
+   /** Non-null while a render pass is executing on the current thread. */
+   getRenderContext: () => null | {container: mixed},
+   /** Would a write issued right now belong to a deferred (transition-like)
+@@ -88,12 +126,20 @@ export type ExternalRuntimeProvider = {
+   getCurrentWriteBatch: () => number,
+ };
+ 
++export type ExternalRuntimeProvider = {
++  /** The protocol version + capability bits the registering renderer was
++   * built with (its side of the handshake). */
++  protocol: ExternalRuntimeProtocol,
++  ...ExternalRuntimeProviderMethods,
++};
++
+ const listeners: Set<ExternalRuntimeListener> = new Set();
+ 
+ function emit(event: string, a: mixed, b?: mixed): void {
+   // Deliver to every listener even if one throws; a listener error must not
+   // corrupt React's commit, so it is reported like an uncaught error.
+-  for (const listener of listeners) {
++  // (Set#forEach rather than for..of: repo lint bans for..of loops.)
++  listeners.forEach(listener => {
+     const handler = (listener as any)[event];
+     if (handler != null) {
+       try {
+@@ -102,10 +148,14 @@ function emit(event: string, a: mixed, b?: mixed): void {
+         reportGlobalError(error);
+       }
+     }
+-  }
++  });
+ }
+ 
+ export type ExternalRuntime = {
++  /** This (isomorphic) side of the versioned handshake. Renderers check it
++   * before registering a provider and refuse to register across a version
++   * mismatch. */
++  protocol: ExternalRuntimeProtocol,
+   providers: Array<ExternalRuntimeProvider>,
+   hasListeners: boolean,
+   emitRenderPassStart: (
+@@ -119,6 +169,10 @@ export type ExternalRuntime = {
+ };
+ 
+ const runtime: ExternalRuntime = {
++  protocol: {
++    version: EXTERNAL_RUNTIME_PROTOCOL_VERSION,
++    capabilities: EXTERNAL_RUNTIME_CAPABILITIES,
++  },
+   providers: [],
+   hasListeners: false,
+   emitRenderPassStart(container, includedBatches) {
+@@ -140,6 +194,33 @@ const runtime: ExternalRuntime = {
+ 
+ ReactSharedInternals.E = runtime;
+ 
++/**
++ * The consumer side of the handshake: everything a binding needs to refuse a
++ * degraded configuration before doing any work.
++ *
++ * A binding must assert, in order, and throw its own error if any fails:
++ *   1. this export exists (stock React has none),
++ *   2. `version` is the version it was written against,
++ *   3. `capabilities` contains every bit it requires,
++ *   4. after loading its renderer: `providerProtocols` contains an entry
++ *      whose version/capabilities pass the same checks (a renderer that is
++ *      missing entirely means a stock or mismatched renderer package —
++ *      registration of a MISMATCHED renderer already failed loudly at
++ *      renderer load, so an empty list here means no renderer loaded at all).
++ */
++export const externalRuntimeProtocol: {
++  version: number,
++  capabilities: number,
++  providerProtocols: Array<ExternalRuntimeProtocol>,
++} = {
++  version: EXTERNAL_RUNTIME_PROTOCOL_VERSION,
++  capabilities: EXTERNAL_RUNTIME_CAPABILITIES,
++  // $FlowFixMe[unsafe-getters-setters] live view of registered renderers
++  get providerProtocols(): Array<ExternalRuntimeProtocol> {
++    return runtime.providers.map(provider => provider.protocol);
++  },
++};
++
+ export function subscribeToExternalRuntime(
+   listener: ExternalRuntimeListener,
+ ): () => void {
+diff --git a/scripts/error-codes/codes.json b/scripts/error-codes/codes.json
+index f475821238..b5e5bf916c 100644
+--- a/scripts/error-codes/codes.json
++++ b/scripts/error-codes/codes.json
+@@ -586,5 +586,7 @@
+   "598": "Maximum update depth exceeded. This could be an infinite loop. This can happen when a component repeatedly calls setState during render phase or inside useLayoutEffect, causing infinite render loop. React limits the number of nested updates to prevent infinite loops.",
+   "599": "Expected an initialized chunk but got an initialized stream chunk instead. This payload may have been submitted by an older version of React.",
+   "600": "A rejected Promise was passed to React without a `reason` property. React threw a generic error from where the Promise was used to assist in identifying the problematic Promise. Make sure that instrumented Promises correctly set the `reason` property when setting `status` to `'rejected'`.",
+-  "601": "A chunk pair is incomplete. This is a bug in React."
++  "601": "A chunk pair is incomplete. This is a bug in React.",
++  "602": "This renderer was built with external-runtime protocol v%s, but the react package it loaded does not provide the external-runtime registry. The react package and the renderer must come from the same cosignal fork build.",
++  "603": "External-runtime protocol version skew: the react package speaks v%s but this renderer was built for v%s. The react package and the renderer must come from the same cosignal fork build."
+ }
+-- 
+2.50.1 (Apple Git-155)
+
