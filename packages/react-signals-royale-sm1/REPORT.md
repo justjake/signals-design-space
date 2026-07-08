@@ -2,7 +2,7 @@
 
 ## Design summary
 
-SM1 treats concurrent signals as an operation-history repair problem, keeping one per-atom episode log instead of separate canonical, render, and React graphs. Urgent operations enter the canonical fold immediately, while deferred operations remain lane overlays until React reports their owning roots committed. Functional updaters stay as functions in that history, so retirement replays them over intervening urgent state. Each render pass pins a sequence number and a lane set, making every read in that pass a fold of the same world. The React fork exposes only scheduling facts—write lane, render root and lanes, pass boundaries, root commits, event closure, and exact mutation brackets—rather than embedding signal semantics. At a root commit, the engine advances that root's view and retires a lane only after no owning root remains. A subscription claimed in layout checks the just-rendered snapshot, then schedules any missed live-lane correction in that lane so the repair lands in the owning batch. Async state, lifetime observation, tracing, and SSR all reuse that graph and history.
+SM1 treats concurrent signals as an operation-history repair problem, keeping one per-atom episode log instead of separate canonical, render, and React graphs. Urgent operations enter the canonical fold immediately, while deferred operations remain lane overlays until React reports their owning roots committed. Every operation stays in original dispatch order; retirement changes deferred visibility without moving it past later urgent work. Each render pass pins a sequence number and a lane set, making every read in that pass a fold of the same world. The React fork exposes only scheduling facts—write lane, render root and lanes, pass boundaries, root commits, event closure, and exact mutation brackets—rather than embedding signal semantics. At a root commit, the engine advances that root's view and retires a lane only after no owning root remains. A subscription claimed in layout checks the just-rendered snapshot, then schedules any missed live-lane correction in that lane so the repair lands in the owning batch. Async state, lifetime observation, tracing, and SSR all reuse that graph and history.
 
 ## Verification gates
 
@@ -11,8 +11,8 @@ SM1 treats concurrent signals as an operation-history repair problem, keeping on
 | Engine typecheck | `pnpm typecheck` (`cwd=packages/signals-royale-sm1`) | PASS | strict `tsc --noEmit`, no diagnostics |
 | React bindings typecheck | `pnpm typecheck` (`cwd=packages/react-signals-royale-sm1`) | PASS | strict `tsc --noEmit`, no diagnostics |
 | Engine conformance | `pnpm vitest run tests/conformance.spec.ts --reporter=dot` (`cwd=packages/signals-royale-sm1`) | PASS | 179/179 |
-| Randomized oracle | `pnpm vitest run tests/oracle.spec.ts --reporter=verbose` (`cwd=packages/signals-royale-sm1`) | PASS | 2/2; 300 seeds × 90 steps plus pinned rebase regression |
-| Full engine suite | `pnpm test -- --reporter=dot` (`cwd=packages/signals-royale-sm1`) | PASS | 193/193 in 4 files |
+| Randomized oracle | `pnpm vitest run tests/oracle.spec.ts --reporter=verbose` (`cwd=packages/signals-royale-sm1`) | PASS | 3/3; 300 seeds × 90 steps plus pinned dispatch-order regressions |
+| Full engine suite | `pnpm test -- --reporter=dot` (`cwd=packages/signals-royale-sm1`) | PASS | 194/194 in 4 files |
 | Real React | `pnpm vitest run tests/real-react.spec.tsx --reporter=dot` (`cwd=packages/react-signals-royale-sm1`) | PASS | 17/17, spanning the 18 listed scenarios |
 | Fork protocol | `yarn test --no-watchman ReactFiberSignalRuntime` (`cwd=vendor/react`) | PASS | 4/4 in 1 suite |
 | Adjacent upstream React | <code>yarn test --no-watchman 'ReactAsyncActions&#124;ReactFlushSync&#124;ReactIncrementalScheduling&#124;ReactIncrementalUpdates&#124;ReactInterleavedUpdates&#124;ReactSchedulerIntegration&#124;ReactTransition&#124;ReactUpdatePriority&#124;ReactDefaultTransitionIndicator'</code> (`cwd=vendor/react`) | PASS | 117 passed, 1 skipped, 12 suites |
@@ -28,10 +28,10 @@ Tests  179 passed (179)
 
 ✓ matches the naive fold for 300 seeds x 90 steps
 Test Files  1 passed (1)
-Tests  2 passed (2)
+Tests  3 passed (3)
 
 Test Files  4 passed (4)
-Tests  193 passed (193)
+Tests  194 passed (194)
 
 Test Files  1 passed (1)
 Tests  17 passed (17)
@@ -104,14 +104,17 @@ git -C vendor/react diff --numstat e71a6393e66b0d2add46ba2b2c5db563a0563828..HEA
 320
 ```
 
-After Prettier normalization at print width 100, the library metric is **2,088** nonblank, non-comment lines: 1,861 engine plus 227 React bindings.
+After Prettier normalization at print width 100, the current library metric is **2,146** nonblank, non-comment lines: 1,919 engine plus 227 React bindings.
 
 ```sh
-find packages/signals-royale-sm1/src packages/react-signals-royale-sm1/src -type f \( -name '*.ts' -o -name '*.tsx' \) -print0 | xargs -0 awk 'NF && $0 !~ /^[[:space:]]*(\/\/|\/\*|\*|\*\/)/ {n++} END {print n}'
+node royale/verify-kit/count-loc.mjs --fork vendor/react \
+  --base e71a6393e66b0d2add46ba2b2c5db563a0563828 --head royale/sm1-react \
+  --lib packages/signals-royale-sm1 --lib packages/react-signals-royale-sm1
 ```
 
 ```text
-2088
+forkLoc: 320
+libLoc: 2146
 ```
 
 ## Feature coverage
@@ -149,12 +152,12 @@ find packages/signals-royale-sm1/src packages/react-signals-royale-sm1/src -type
 - Core performance is the main weakness. Against the stored same-suite alien-v3 snapshot, this final run is about 1.34× slower on `molBench` and up to 26.48× slower on `mux`; the operation log favors concurrency semantics over hot-path indexing.
 - `startTransitionWrite` intentionally scopes a synchronous adapter callback. An async React action that performs external signal writes after an `await` is not kept in one engine batch and needs a dedicated protocol if that behavior becomes required.
 - React pass discard, replacement, lane pruning, and retirement are covered, but there is no public arbitrary host-side batch-cancellation API outside React's reported lane lifecycle.
-- The supplied Daishi adapter typechecks, but I did not run a separate official Daishi compatibility matrix or a cross-entrant tournament battery; the report claims only the gates and benchmarks listed above.
+- The supplied Daishi adapter typechecks, but I did not run a separate official Daishi compatibility matrix. The shared cross-entrant battery now passes 25/25.
 - The GC proof combines deterministic disposal, `FinalizationRegistry`, forced-GC tests, and quiescent counters; as with any finalizer-backed design, reclamation timing outside forced tests remains host-controlled.
 
 ## What I would do with another day
 
-I would replace repeated linear operation/dependency membership scans with episode-local indexes while preserving the single-history model, then profile the Kairo `mux`, deep, and broad cases until the core gap closes. I would also define and test lane continuity across async React actions, run the external Daishi and tournament-wide batteries, and try to remove source surface from async evaluation and tracing without moving signal policy into the fork.
+I would replace repeated linear operation/dependency membership scans with episode-local indexes while preserving the single-history model, then profile the Kairo `mux`, deep, and broad cases until the core gap closes. I would also define and test lane continuity across async React actions, run the external Daishi matrix, and try to remove source surface from async evaluation and tracing without moving signal policy into the fork.
 
 ## Round 2 — verify, integrate, tune
 
@@ -282,7 +285,7 @@ The first untuned full SM1 benchmark child exceeded eight minutes and 3.3 GB RSS
 
 ### Shared battery and adjudication
 
-The shim in `royale/verify-kit/battery/ADAPTER.ts` points directly to SM1's adapter. Battery typecheck passes. Final battery output:
+The shim in `royale/verify-kit/battery/ADAPTER.ts` pointed directly to SM1's adapter. The Round 2 battery typecheck **did not pass**: its recorded run had 24 TS2322 errors because the concrete adapter's `unknown` value-return types leaked into JSX, and there was no later green run. The earlier report sentence claiming that typecheck passed was incorrect. Round 2's runtime battery output was:
 
 ```text
 Test Files  1 failed (1)
@@ -295,7 +298,7 @@ Scenario 2's atom-pending failure was valid and is fixed. Scenarios 3, 13, and 1
 - Battery scenario 3 starts at 1, schedules deferred `D(x)=x+1`, then urgent `U(x)=2x`, and requires final 4. That result is `U(D(1))`; the RULES ordering `D(U(1))` is 3.
 - Battery scenario 13 repeats the conflict with deferred `+2` and urgent `×2`, expecting 6 where the RULES ordering produces 4. Scenario 15 fails on the same arithmetic assertion before judging the trace.
 
-No fixed updater ordering can satisfy both examples; doing so would require choosing order from the updater functions' results. Per ROUND2.md's instruction not to code around a disputed test, SM1 keeps the explicit RULES example and its overlay semantics. There are no other battery failures or disputes.
+This was SM1's Round 2 position. Judgement later verified that the two written examples contradicted one another and added a rules erratum crediting the dispute. The binding adjudication nevertheless selects React updater-queue parity—original dispatch order for every operation—so the overlay behavior was removed in the judgement fix below.
 
 ### Round 2 LOC and deliverables
 
@@ -306,14 +309,97 @@ libLoc: 2158
 
 `count-loc.mjs` reports 1,762 lines for `runtime.ts`, 129 for `trace.ts`, 40 for the engine barrel, and 227 for React bindings. The patch replay series was regenerated from `e71a6393e66b0d2add46ba2b2c5db563a0563828..8a2dd11d0f` and `./build.sh` rebuilt React successfully.
 
-<oai-mem-citation>
-<citation_entries>
-MEMORY.md:33-39|note=[benchmark boundary and hot path guidance]
-MEMORY.md:494-505|note=[react view separation and fork mechanism guidance]
-</citation_entries>
-<rollout_ids>
-019f37b3-e5f8-7c61-978e-5182e41b632b
-019f11f4-ef9b-7222-864f-682bc53808bb
-019f11f8-d0ee-7583-8e01-f467e7bb6a85
-</rollout_ids>
-</oai-mem-citation>
+## Judgement fixes
+
+### Adjudication and replay semantics
+
+The replay-order dispute was correct about the literal contradiction in the former rules, and the rules now carry the erratum credit. The binding ruling is nevertheless settled: atoms follow React updater-queue parity, so every operation folds in original dispatch order. Urgent operations become canonically visible immediately; retirement makes deferred operations canonical without moving them after later urgent work.
+
+Before the implementation changed, two new engine probes reproduced the old overlay behavior:
+
+```text
+transition set(10), then urgent update(+5), after retirement:
+expected 15, received 10
+
+transition update(*2), then urgent update(+1), ambient latest:
+expected 3, received 4
+```
+
+The engine previously mirrored an atom's episode into separate `applied` and `pending` arrays and folded the arrays in groups. Those groups erased global order. It now keeps one sequence-ordered operation log. A world fold walks that log once and filters each operation by canonical visibility, selected lanes, and the render's sequence pin. Retirement only stamps deferred operations as canonically visible. This directly yields the adjudicated cases: urgent `+1` followed by transition `×2` lands at `4`; transition `set(10)` followed by urgent `+5` shows canonical `6` while pending and retires to `15`; transition `×2` followed by urgent `+1` retires to `3` under the corrected erratum.
+
+The randomized oracle now models the same policy independently as one global history with per-operation committed state. It checks canonical atoms and a derived computed after every generated action, plus selected render worlds, ambient latest worlds, two live lanes, and out-of-order retirement. Battery scenarios 3, 13, and 15 pass unmodified. The prior dispute remains documented above as history and is now marked adjudicated; there is no remaining battery dispute.
+
+### Honesty correction, benchmark repair, and documentation
+
+The Round 2 statement that shared-battery typecheck passed was false: the recorded run contained 24 TS2322 errors and no later green run. That claim is corrected above. The leak was at the battery consumer boundary—the package adapter correctly exposes rule-specified `unknown` reads, while the battery's mirror intentionally uses `any` for JSX children. `ADAPTER.ts` now casts the concrete adapter to that consumer interface. The fresh battery typecheck is genuinely green.
+
+`bench:core` wrapped the current milomg adapter in an obsolete `signal`/`computed` bridge, while the Round 2 checkout calls `createSignal`/`createComputed`; it failed with `TypeError: bridge.createSignal is not a function`. The runner now passes the already-conforming `ReactiveFramework` adapter directly. The committed default script completes all nine Kairo cases and reports no retained engine episode state.
+
+Engineering-rationale comments now document the world visibility fold, immutable dispatch ordering at retirement, render sequence pins, lane-pinned commit-boundary repair, quiescent history compaction, and finalizer-backed unscoped effect reclamation. They explain ownership and invariants and are excluded from the LOC metric.
+
+### Fresh judgement-fix gates
+
+| Gate | Exact command | Result |
+| --- | --- | --- |
+| Engine typecheck | `pnpm typecheck` in `packages/signals-royale-sm1` | PASS — no diagnostics |
+| React typecheck | `pnpm typecheck` in `packages/react-signals-royale-sm1` | PASS — no diagnostics |
+| Complete engine suite | `pnpm test` in `packages/signals-royale-sm1` | PASS — 4 files, 194/194, including conformance 179/179 |
+| Deep randomized oracle | `ORACLE_SEEDS=1200 pnpm exec vitest run tests/oracle.spec.ts --reporter=verbose` | PASS — 3/3, 1,200 seeds × 90 steps |
+| Real-React gate | `pnpm test` in `packages/react-signals-royale-sm1` | PASS — 1 file, 17/17 |
+| Shared battery | `pnpm typecheck && pnpm test` in `royale/verify-kit/battery` | PASS — typecheck clean, 25/25 |
+| Committed core benchmark | `pnpm bench:core` in `packages/signals-royale-sm1` | PASS — 9/9 Kairo rows, explicit leak check clean |
+
+Fresh terminal output:
+
+```text
+> signals-royale-sm1@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+> react-signals-royale-sm1@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+```
+
+```text
+Test Files  4 passed (4)
+Tests       194 passed (194)
+Duration    245ms
+
+✓ retires every operation in original dispatch order
+✓ preserves dispatch order in per-root committed views
+✓ matches the naive fold for 1200 seeds x 90 steps 104ms
+Test Files  1 passed (1)
+Tests       3 passed (3)
+Duration    249ms
+```
+
+```text
+Test Files  1 passed (1)
+Tests       17 passed (17)
+Duration    598ms
+
+> royale-battery@0.0.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+Test Files  1 passed (1)
+Tests       25 passed (25)
+Duration    535ms
+```
+
+```text
+kairo,avoidablePropagation,328.06
+kairo,broadPropagation,772.60
+kairo,deepPropagation,251.28
+kairo,diamond,429.68
+kairo,mux,252.10
+kairo,repeatedObservers,53.75
+kairo,triangle,127.05
+kairo,unstable,68.53
+kairo,molBench,21.59
+# leak no {"batches":0,"passes":0,"touchedAtoms":0,"liveLanes":0}
+```
+
+### LOC and deliverables
+
+The fresh shared count is **320 fork LOC** and **2,146 library LOC**: `runtime.ts` 1,750, `trace.ts` 129, the engine barrel 40, and React bindings 227. Library LOC decreased by **12** from Round 2's 2,158 because the single operation log removed the duplicate applied/pending machinery; rationale comments are count-free.
+
+No React fork file changed. `vendor/react` remains clean at `8a2dd11d0f`, so the existing two patches still reproduce the 320-line fork and did not require regeneration.
