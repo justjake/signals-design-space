@@ -21,9 +21,9 @@
 import {
   type CellNode,
   type DerivedNode,
-  Flags,
   PARKED,
   adoptDepLink,
+  ensureFresh,
   hooks,
   invalidateDerived,
   isUninitialized,
@@ -34,6 +34,7 @@ import {
   setUseImpl,
   startBatch,
   endBatch,
+  untracked,
 } from './graph.ts';
 
 export type ThenableStatus = 'pending' | 'fulfilled' | 'rejected';
@@ -113,8 +114,11 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
   return fresh;
 }
 
-/** Settlement is a write: invalidate parked computeds, then release the
- * episodes so suspended renders retry against the settled graph. */
+/** Settlement is a write: invalidate parked computeds and eagerly bring
+ * them up to date (progressive evaluations park on their NEXT thenable
+ * without waiting for a reader, and passive probes observe final state when
+ * the wave's notifications run), then release the episodes so suspended
+ * renders retry against the settled graph. */
 function settle(box: ThenableBox): void {
   const cause = hooks.trace !== null ? hooks.trace('settle', null, NO_EVENT) : NO_EVENT;
   onSettlementEpoch?.();
@@ -125,7 +129,15 @@ function settle(box: ThenableBox): void {
   const prevCause = setCurrentCause(cause);
   startBatch();
   try {
-    for (const node of nodes) invalidateDerived(node, cause);
+    for (const node of nodes) {
+      invalidateDerived(node, cause);
+      try {
+        untracked(() => ensureFresh(node));
+      } catch {
+        // Evaluation state (pending/error) is recorded on the node; readers
+        // see it at their own read sites.
+      }
+    }
   } finally {
     endBatch();
     setCurrentCause(prevCause);

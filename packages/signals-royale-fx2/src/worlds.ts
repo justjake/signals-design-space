@@ -158,6 +158,7 @@ export function appendDraftIntent(
   worldEpoch++;
   if (hooks.trace !== null) {
     draft.lastWriteEvent = hooks.trace('write', cell, draft.openEvent, { draft: draft.id });
+    cell.causeEvent = draft.lastWriteEvent;
   }
   pokeLeafObservers(cell);
 }

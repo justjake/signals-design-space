@@ -36,10 +36,8 @@ import {
   useImpl,
   writeCell,
   ensureFresh,
-  currentWriteEpoch,
+  pokeLeafObservers,
   NO_EVENT,
-  setCurrentCause,
-  invalidateDerived,
 } from './graph.ts';
 import {
   type Envelope,
@@ -428,6 +426,23 @@ export const reactIntegration = {
   flushLifetimeTransitions,
   isPendingIn(x: AnyReadable, ids: readonly DraftId[] | null): boolean {
     return isPendingPassive(nodeOf(x), ids === null ? null : worldOf(ids));
+  },
+  hasLiveDrafts(ids: readonly DraftId[]): boolean {
+    return worldOf(ids).drafts.length > 0;
+  },
+  /** Committed-view snapshot with stable identity: the value, or a marker
+   * object carrying the stable error to rethrow at the call site. */
+  committedSnapshot(x: AnyReadable, container: object | undefined): unknown {
+    const env = resolveEnvelope(nodeOf(x), committedWorldOf(container));
+    if (env.kind === 'error') return { engineErrorBox: env.box.error };
+    return env.value;
+  },
+  /** Wake leaf observers of every cell the given live drafts touch (used
+   * after a per-root commit updates that root's committed view). */
+  pokeDraftCells(ids: readonly DraftId[]): void {
+    for (const draft of worldOf(ids).drafts) {
+      for (const cell of draft.cells) pokeLeafObservers(cell);
+    }
   },
 };
 
