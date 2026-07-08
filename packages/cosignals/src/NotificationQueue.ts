@@ -135,9 +135,9 @@ export function createNotificationQueue(deps: NotificationQueueDeps): Notificati
  * drain, the quiet-fold drain, and the one urgent correction — assigned onto
  * the shared engine core record's late-bound slots (the arena walk halves it
  * calls — `walkArenaStrong`, `collectWatchersAt`,
- * `arenaCollectDrainCandidates` — live in WorldArena.ts, same-file with the
- * layout enums; the watcher resolution lives in RenderPass.ts; all are read
- * off the core record at call time).
+ * `arenaCollectDrainCandidates` — live in the engine module, same-file with
+ * the layout enums; the watcher resolution lives in its render-integration
+ * section; all are read off the core record at call time).
  */
 export function createDeliveryWalks(core: EngineCore): void {
 	// Stable resident containers, aliased once (identity-shared).

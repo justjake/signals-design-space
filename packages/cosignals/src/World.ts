@@ -92,8 +92,9 @@ export type EngineCore = {
 	syncObservedDeps: ObservationIndex['syncObservedDeps'];
 	/** Watchers by id (identity alias). */
 	watchers: Map<WatcherId, Watcher>;
-	/** RenderPass records by id (identity alias — RenderPass.ts owns every
-	 * transition; the resident quiescence sweep reads it in place). */
+	/** RenderPass records by id (identity alias — the engine's render-
+	 * integration section owns every transition; the resident quiescence
+	 * sweep reads it in place). */
 	idToRenderPass: Map<RenderPassId, RenderPass>;
 	/** The one open render per root (identity alias). */
 	rootToOpenRender: Map<RootId, RenderPass>;
@@ -223,9 +224,9 @@ export type EngineCore = {
 	rootToArena: Map<RootId, WorldArena>;
 	/** Pooled released arena shells (WorldArena-owned; test seam reads it). */
 	arenaPool: WorldArena[];
-	/** Watchers re-staled by their own commit, per root (RenderPass.ts's
-	 * re-staled loop writes; the durable drain consumes; retirement and the
-	 * commit lock-in read the size as their drain gate). */
+	/** Watchers re-staled by their own commit, per root (the render
+	 * lifecycle's re-staled loop writes; the durable drain consumes;
+	 * retirement and the commit lock-in read the size as their drain gate). */
 	restaled: Map<RootId, Set<Watcher>>;
 
 	// ---- late-bound: World ----
@@ -303,8 +304,8 @@ export type EngineCore = {
 	drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void;
 	deliveryWalk(from: AtomInternals, batch: Batch, slot: BatchSlotMeta, seq: Seq): void;
 
-	// ---- late-bound: RenderPass ----
-	/** The watcher→node resolution (RenderPass.ts — generation-checked). */
+	// ---- late-bound: the render lifecycle ----
+	/** The watcher→node resolution (generation-checked). */
 	resolveWatcherInternals(w: Watcher): AnyInternals | undefined;
 	/** The minimum live render pin (the sealed-chunk fold valve's pin
 	 * clause floor). */

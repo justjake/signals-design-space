@@ -737,21 +737,84 @@ seam extraction + object implementation + dual gate.
       draft's 3), oracle 82/1skip, react 72/72, conformance 179×2,
       cosignals typecheck clean.
 
+18. **Render integration folded in (priority 6; leg 6 unit 2)** —
+    RenderPass.ts DELETED; its whole body (RenderPassState/RenderPass/
+    RenderPassManagerDeps/RenderPassManager types + createRenderPassManager:
+    renderStart/Yield/Resume/End, the commit fan, commitBatches lock-in,
+    mount/defer/reveal/re-render/removeWatcher, mount fixup + the
+    dependency-closure walks, the populator, markRestaled, deferred
+    releases) is the engine module's "render integration" section (file
+    end, after committed observers; the top doc's section list extended to
+    11 entries). Semantics preserved EXACTLY — verbatim carry except:
+    - **Owner ruling 3 discipline applied at the move**: the one direct
+      arena-storage read in the orchestration (the population dev assert's
+      `ra.nodeToShadow[...]` probe) now routes through a new named
+      membership query `arenaHasShadow(a, ix)` (module-local, beside
+      arenaHoldsSuspended); everything else already reached world state
+      through the core operation table (claimArena/releaseArena/evaluate/
+      fanAtomsToArena/arenaDecay/settleObserverClock/collectArenaClosure/
+      drains) or the named clock probe (committedNodeClock). The section
+      header documents the confinement. NO seam built (per ruling).
+    - **__setWatcherObservationShift seam DELETED**: the factory is
+      same-file now and assigns the `observerShift` module slot directly
+      (the slot itself survives — the Watcher class still needs no captured
+      composition state).
+    - collectKernelClosure now reads the engine's own same-file
+      NodeField/LinkField/NodeFlag const enums (literal inlining) instead
+      of index.js re-exports; SuspendedRead/E/Watcher/committedNodeClock/
+      freeWatcherRecord/noteReclaimRetry/reclaimSkippedN — all same-file.
+      New engine imports: getOrThrow (errors.js), type-only Batch/BatchId
+      (Batch.js — erased at emit; the dead BatchSlot import dropped).
+    - Importers re-pointed: ConcurrentEngine.ts (one merged CosignalEngine
+      import), concurrent.ts (import + the Watcher/RenderPass/
+      RenderPassState/WatcherSnapshot re-exports). Comment-level references
+      rewritten in NotificationQueue.ts, index.ts (module list), World.ts
+      (3 sites), concurrent.ts (8 sites), CosignalEngine.ts observer
+      section. tests/trace-off.spec.ts: RenderPass.ts left ENGINE_MODULES
+      + the trace-slot scan list (the CosignalEngine.ts entries cover the
+      section; documented in the list comment).
+    - **Worktree hazard survived (successor caution)**: the owner's editor
+      tooling ran a prettier-style reformat over CosignalEngine.ts +
+      package.json (tabs→spaces, line-width reflow — ~500 lines of noise,
+      NOT house style) while this unit was mid-edit; the engine file was
+      REBUILT deterministically from `git show HEAD:` + the exact intended
+      edits (python, count-asserted replaces), and the noise was never
+      committed. package.json's reformat is left uncommitted (theirs).
+      If a diff suddenly grows hundreds of reflow-only lines, STOP and
+      rebuild from HEAD rather than committing it.
+    - **Bytecode-spec transient observed once** (full-suite run, this box):
+      several budgeted functions (chainCheck/shallowPropagate/foldAtom/
+      arena walks) read as uncovered — their dumps landed BEFORE the
+      @@SMOKE-START marker in that one run; a manual --print-bytecode of
+      the same bundle shows them well after the marker, and solo + repeat
+      full-suite runs pass. Different flake than the (fixed) constant-pool
+      marker cut of item 8; likely parallel-load compile-timing. Left
+      unfixed (not reproducible); if it recurs, the parse-window rule
+      (compiled-before-marker = uncovered) is the place to look.
+    - Suites after the fold-in: cosignals 366/1skip (the owner moved their
+      draft spec out of tests/ mid-leg, so the untracked +6 disappeared
+      from tallies), oracle 82/1skip, react 72/72, conformance 179×2,
+      typecheck ×3 clean.
+
 ## In progress / exact next actions
 
 **Priority 5 (observers) is COMPLETE** (items 12-15 above; commits b22b174,
 853bc66, 65a3f42, ebd5244) **plus the lead-verdict fix round (item 16)**.
-**Growth restoration (leg 6 unit 1, item 17) is COMPLETE.** Successor
-order:
+**Growth restoration (leg 6 unit 1, item 17) and render integration
+(leg 6 unit 2, item 18) are COMPLETE.** Successor order:
 
-1. **Priority 6 — render integration** (RenderPass machinery folds into
-   the engine module; protocol v2 contract unchanged). Owner ruling 3's
-   discipline applies to the move: per-world state access in the moved
-   orchestration goes through the narrow function set (core operation
-   table + named probes), never direct arena-memory reads — but do NOT
-   build the storage seam itself yet. Then priorities 7-10 as listed
-   under "Unstarted", then ruling 3's seam extraction + object
-   implementation + dual gate (its own leg).
+1. **Priority 7 — reclamation re-expression review**: the guard table is
+   already mostly re-expressed across legs 4-5; the unit is verification
+   + moving the reclamation section to its documented place at the END of
+   the fused file + deleting any dead machinery.
+2. **Priority 8 — suite migration**: re-point internals-coupled specs off
+   dead module paths / old seams; document each (see the leg-6 inventory
+   below — most specs already import only live paths).
+3. **Priorities 9-10**: SSR serialize/initialize (alt-b react.ts §13.8
+   shape) LAST; bytecode re-pin (unique names + collision assertion) +
+   docs-gate final pass.
+4. **Owner ruling 3's storage A/B** (its own leg): seam extraction at the
+   narrow function set, the plain-object implementation, the dual gate.
 
 WORKTREE NOTE: the user is actively drafting src/Allocator.ts +
 tests/allocator.spec.ts (untracked) in THIS worktree — likely the growth

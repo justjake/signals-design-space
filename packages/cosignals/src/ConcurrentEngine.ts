@@ -42,9 +42,8 @@ import { createObservationIndex, type ObservationIndex } from './ObservationInde
 import { createEpisodeLifecycle, type EpisodeLifecycle, type WriteLogEntry } from './WriteLog.js';
 import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
-import { createCommittedObservers, createWorldArena, WORLD_ARENA_INIT_INTS } from './CosignalEngine.js';
+import { createCommittedObservers, createRenderPassManager, createWorldArena, WORLD_ARENA_INIT_INTS, type RenderPass, type RenderPassManager, type Watcher } from './CosignalEngine.js';
 import { createSettlement } from './settlement.js';
-import { createRenderPassManager, type RenderPass, type RenderPassManager, type Watcher } from './RenderPass.js';
 import type { Atom, Computed } from './index.js';
 import type { AnyInternals, AtomInternals, ComputedInternals, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
 
@@ -226,7 +225,8 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	core.foldSealedChunks = episode.foldSealedChunks;
 	core.maybeCloseEpisode = episode.maybeCloseEpisode;
 	// ---- the walk orchestration (NotificationQueue.ts) + render lifecycle
-	// (RenderPass.ts) — each assigns its late-bound core slots.
+	// (the engine module's render-integration section) — each assigns its
+	// late-bound core slots.
 	createDeliveryWalks(core);
 	const render = createRenderPassManager(core, { observation: obs });
 	// Kernel-frame tracked reader: captures `core` directly (see the

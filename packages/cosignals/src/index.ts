@@ -8,7 +8,7 @@
  * algorithm, clocks, the evaluation policy, the observed lifecycle, and
  * reclamation, in that order), then concurrent.ts (the concurrent-worlds
  * machinery and its vocabulary), then the mechanism modules it composes —
- * WriteLog.ts, Batch.ts, World.ts, RenderPass.ts,
+ * WriteLog.ts, Batch.ts, World.ts,
  * NotificationQueue.ts, ObservationIndex.ts,
  * settlement.ts, ConcurrentEngine.ts (the composition root) — with
  * errors.ts/Tracer.ts/graphviz.ts self-contained.

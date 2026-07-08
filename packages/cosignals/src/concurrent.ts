@@ -199,7 +199,7 @@ import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMet
 import { NEWEST, type EngineCore, type World } from './World.js';
 import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
 import type { Subscription } from './CosignalEngine.js';
-import { Watcher, type RenderPass, type RenderPassManager } from './RenderPass.js';
+import { Watcher, type RenderPass, type RenderPassManager } from './CosignalEngine.js';
 
 // ---- error carriers (errors.ts; re-exported — they are public surface) -----------
 
@@ -383,12 +383,12 @@ export type AnyInternals = AtomInternals | ComputedInternals;
 
 // (The `Batch` record and `BatchSlotMeta` slot-table entry types live in
 // Batch.ts with the batch mechanism; re-exported above. The `RenderPass`
-// record, the `Watcher` class, and the watcher snapshot live in
-// RenderPass.ts with the render lifecycle; re-exported here — they are
-// engine surface.)
+// record, the `Watcher` class, and the watcher snapshot live in the engine
+// module's observer-records + render-integration sections; re-exported
+// here — they are engine surface.)
 
-export { Watcher } from './RenderPass.js';
-export type { RenderPass, RenderPassState, WatcherSnapshot } from './RenderPass.js';
+export { Watcher } from './CosignalEngine.js';
+export type { RenderPass, RenderPassState, WatcherSnapshot } from './CosignalEngine.js';
 
 export type RootState = {
 	id: RootId;
@@ -2039,10 +2039,10 @@ export function logCoreEffectRun(name: string, value: Value): void {
 // watcher mount/defer/reveal/re-render/removal family, the commit fan
 // (renderEnd + reclaim + deferred releases + the re-staled populator),
 // per-root commit lock-in, and mount fixup with its dependency-closure
-// walks — lives in RenderPass.ts; the public functions below are thin
-// delegates over its operation table.
+// walks — lives in the engine module's render-integration section; the
+// public functions below are thin delegates over its operation table.
 
-/** Open a render pass (see RenderPass.ts renderStart). */
+/** Open a render pass (see the engine's renderStart). */
 export function renderStart(rootId: RootId, includeBatches: BatchId[]): RenderPass {
 	return renderOps.renderStart(rootId, includeBatches);
 }
@@ -2062,7 +2062,8 @@ export function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, nam
 	return renderOps.mountWatcher(renderPassId, node, name);
 }
 
-/** Reveal-shaped mounts (React's Offscreen/Activity — see RenderPass.ts). */
+/** Reveal-shaped mounts (React's Offscreen/Activity — see the engine's
+ * render-integration section). */
 export function deferMountEffects(watcherId: WatcherId): void {
 	renderOps.deferMountEffects(watcherId);
 }
@@ -2071,19 +2072,21 @@ export function adoptRevealedMount(renderPassId: RenderPassId, watcherId: Watche
 	renderOps.adoptRevealedMount(renderPassId, watcherId);
 }
 
-/** An existing live watcher re-rendered by a render (see RenderPass.ts). */
+/** An existing live watcher re-rendered by a render (see the engine's
+ * renderWatcher). */
 export function renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
 	renderOps.renderWatcher(renderPassId, watcherId);
 }
 
-/** Full watcher removal — the bindings' unsubscribe surface (see RenderPass.ts). */
+/** Full watcher removal — the bindings' unsubscribe surface (see the
+ * engine's removeWatcher). */
 export function removeWatcher(watcherId: WatcherId): void {
 	renderOps.removeWatcher(watcherId);
 }
 
 /**
  * Per-root commit lock-in — the single owner of a root's committed-state
- * transition (RenderPass.ts commitBatches; the bindings' root-commit
+ * transition (the engine's commitBatches; the bindings' root-commit
  * report handler calls this public form). Returns whether any batch was
  * newly locked in.
  */
@@ -2092,7 +2095,7 @@ export function commitBatches(rootId: RootId, batches: Iterable<BatchId>): boole
 }
 
 /**
- * End a render (RenderPass.ts renderEnd — the commit fan's ordering
+ * End a render (the engine's renderEnd — the commit fan's ordering
  * story lives there).
  */
 export function renderEnd(id: RenderPassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
@@ -2117,8 +2120,9 @@ export function settleAction(batchId: BatchId): void {
 	batchOps.settleAction(batchId);
 }
 
-/** Transitive dependency closure feeding a node (RenderPass.ts — the
- * triple walk; public embedding/diagnostics surface). */
+/** Transitive dependency closure feeding a node (the engine's
+ * dependencyClosureOf — the triple walk; public embedding/diagnostics
+ * surface). */
 export function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 	return renderOps.dependencyClosureOf(nodeId, render);
 }
