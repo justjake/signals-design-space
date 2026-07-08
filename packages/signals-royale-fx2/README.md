@@ -83,7 +83,10 @@ refresh(query)     // force a refetch with unchanged inputs; stale keeps serving
 
 Inside a computed evaluation (or a render pass, through the React bindings)
 `latest` and `get` resolve that context's own world — reading ahead of your
-world would be a tear.
+world would be a tear. In a canonical computed or effect, `latest(x)` is
+also a tracked dependency: when `x` changes, the reader re-runs. What
+distinguishes `latest` from `get` is that it never suspends, not that it
+reads a different world from inside an evaluation.
 
 ## Async values
 

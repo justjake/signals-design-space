@@ -195,41 +195,43 @@ if (scenario === 'fanout') {
   row('median-write-to-commit', median(lat));
 } else if (scenario === 'transition') {
   const { container, cells } = await mountTree(2000);
-  let setUrgent;
   let urgentShown = 0;
+  // Urgent input is modeled as REAL discrete events (clicks) through
+  // React's event system, the priority a user's keystroke gets — not a
+  // bare setState from a timer, which rides the default lane and queues
+  // FIFO behind other normal-priority scheduler tasks by design.
   function Urgent() {
     const [n, setN] = React.useState(0);
-    setUrgent = setN;
     React.useLayoutEffect(() => {
       urgentShown = n;
     });
-    return e('b', null, `u:${n}`);
+    return e('button', { id: 'urgent-btn', onClick: () => setN((x) => x + 1) }, `u:${n}`);
   }
   const uContainer = document.createElement('div');
   document.body.appendChild(uContainer);
   const uRoot = impl.createRoot(uContainer);
   uRoot.render(e(Urgent, null));
   await waitFor(() => uContainer.textContent === 'u:0');
+  const button = uContainer.querySelector('#urgent-btn');
+  const click = () =>
+    button.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
   // Urgent input at ~16ms intervals. In a single-threaded runtime a blocking
-  // bulk render shows up as INPUT DELAY: the tick (and its urgent commit)
-  // cannot even start until the block ends. Measure each tick's latency
-  // from its scheduled time to its committed urgent update — that includes
-  // queueing delay, which is what a user feels.
+  // bulk render shows up as INPUT DELAY: the tick cannot even start until
+  // the block ends. Measure per tick, from the moment the input was
+  // INTENDED (this tick's 16ms mark) to its committed urgent update — the
+  // gap a user would feel — without accumulating one tick's lag into the
+  // next (each tick re-anchors to its own intended moment).
   const lat = [];
-  let k = 0;
-  let fired = false;
   const t0 = performance.now();
-  while (k < 60) {
-    const scheduledAt = t0 + k * 16;
-    await new Promise((res) => setTimeout(res, Math.max(0, scheduledAt - performance.now())));
-    if (!fired && k === 5) {
-      fired = true;
+  for (let k = 1; k <= 60; k++) {
+    const intended = performance.now() + 16;
+    await new Promise((res) => setTimeout(res, 16));
+    if (k === 5) {
       impl.writeManyInTransition(cells, 7); // the bulk rewrite lands mid-stream
     }
-    k++;
-    setUrgent(k);
+    click();
     await waitFor(() => urgentShown === k, 60000);
-    lat.push(performance.now() - scheduledAt);
+    lat.push(performance.now() - intended);
   }
   row('p95-urgent-during-transition', p95(lat));
   row('max-urgent-during-transition', Math.max(...lat));
