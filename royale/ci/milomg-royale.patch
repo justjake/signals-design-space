@@ -1,40 +1,222 @@
 diff --git a/packages/core/package.json b/packages/core/package.json
-index 79ccb51..975d9fd 100644
+index 8e4a88e..729c873 100644
 --- a/packages/core/package.json
 +++ b/packages/core/package.json
-@@ -22,11 +22,11 @@
-     "@tanstack/store": "0.11.0",
-     "@vue/reactivity": "^3.5.28",
-     "alien-signals": "file:../../../upstream-alien-signals",
--    "dalien-signals": "file:../../../packages/dalien-signals",
-+    "compostate": "^0.5.1",
-     "cosignals": "file:../../../packages/cosignals",
-     "cosignals-alt-a": "file:../../../packages/cosignals-alt-a",
-     "cosignals-alt-b": "file:../../../packages/cosignals-alt-b",
--    "compostate": "^0.5.1",
-+    "dalien-signals": "file:../../../packages/dalien-signals",
-     "esbuild": "^0.27.3",
-     "mobx": "^6.15.0",
-     "mol_wire_lib": "^1.0.1683",
-@@ -35,6 +35,18 @@
-     "preact": "^10.28.3",
-     "s-js": "^0.4.9",
-     "signal-polyfill": "^0.2.2",
-+    "signals-royale-fh1": "file:../../../packages/signals-royale-fh1",
-+    "signals-royale-fh2": "file:../../../packages/signals-royale-fh2",
+@@ -34,7 +34,22 @@
+     "svelte": "^5.51.1",
+     "typescript": "^5.9.3",
+     "usignal": "^0.10.0",
+-    "vitest": "^4.0.18"
++    "vitest": "^4.0.18",
++    "cosignals": "file:../../../packages/cosignals",
++    "cosignals-alt-a": "file:../../../packages/cosignals-alt-a",
++    "cosignals-alt-b": "file:../../../packages/cosignals-alt-b",
 +    "signals-royale-fm1": "file:../../../packages/signals-royale-fm1",
 +    "signals-royale-fm2": "file:../../../packages/signals-royale-fm2",
++    "signals-royale-fh1": "file:../../../packages/signals-royale-fh1",
++    "signals-royale-fh2": "file:../../../packages/signals-royale-fh2",
 +    "signals-royale-fx1": "file:../../../packages/signals-royale-fx1",
 +    "signals-royale-fx2": "file:../../../packages/signals-royale-fx2",
 +    "signals-royale-sh1": "file:../../../packages/signals-royale-sh1",
 +    "signals-royale-sh2": "file:../../../packages/signals-royale-sh2",
-+    "signals-royale-sm1": "file:../../../packages/signals-royale-sm1",
-+    "signals-royale-sm2": "file:../../../packages/signals-royale-sm2",
 +    "signals-royale-sx1": "file:../../../packages/signals-royale-sx1",
 +    "signals-royale-sx2": "file:../../../packages/signals-royale-sx2",
-     "solid-js": "^1.9.11",
-     "svelte": "^5.51.1",
-     "typescript": "^5.9.3",
++    "signals-royale-sm1": "file:../../../packages/signals-royale-sm1",
++    "signals-royale-sm2": "file:../../../packages/signals-royale-sm2"
+   },
+   "packageManager": "pnpm@10.29.3"
+ }
+diff --git a/packages/core/src/frameworks/cosignal.ts b/packages/core/src/frameworks/cosignal.ts
+new file mode 100644
+index 0000000..5d9a452
+--- /dev/null
++++ b/packages/core/src/frameworks/cosignal.ts
+@@ -0,0 +1,46 @@
++import * as lib from "cosignals";
++import { ReactiveFramework } from "../util/reactiveFramework";
++
++// cosignals (the parent repo renamed cosignal -> cosignals when the engine
++// variants merged), routed through the public class API (Atom /
++// Computed `.state` and `.set`) so the benchmark measures the surface
++// applications use, policy wrapper included. Graphs are built inside an
++// effectScope and disposed in cleanup(), like the other adapters.
++// A cell is the Atom or Computed instance itself; both expose .state.
++type CosignalCell = lib.Atom<unknown> | lib.Computed<unknown>;
++
++let scope: (() => void) | null = null;
++
++export const cosignalFramework: ReactiveFramework<CosignalCell> = {
++  name: "Cosignal",
++  createSignal: (initialValue) => new lib.Atom(initialValue),
++  readSignal: (cell) => cell.state,
++  writeSignal: (cell, value) => {
++    (cell as lib.Atom<unknown>).set(value);
++  },
++  createComputed: (fn) => new lib.Computed(fn),
++  readComputed: (cell) => cell.state,
++  // The bench contract guarantees fn returns undefined, so returns are never
++  // treated as cleanup functions and fn passes through unwrapped.
++  effect: (fn) => {
++    lib.effect(fn);
++  },
++  withBatch: (fn) => {
++    lib.startBatch();
++    fn();
++    lib.endBatch();
++  },
++  withBuild: <T>(fn: () => T) => {
++    let out!: T;
++    scope = lib.effectScope(() => {
++      out = fn();
++    });
++    return out;
++  },
++  cleanup: () => {
++    if (scope !== null) {
++      scope();
++      scope = null;
++    }
++  },
++};
+diff --git a/packages/core/src/frameworks/cosignalAltA.ts b/packages/core/src/frameworks/cosignalAltA.ts
+new file mode 100644
+index 0000000..781314a
+--- /dev/null
++++ b/packages/core/src/frameworks/cosignalAltA.ts
+@@ -0,0 +1,49 @@
++import * as lib from "cosignals-alt-a";
++import { ReactiveFramework } from "../util/reactiveFramework";
++
++// cosignals-alt-a, routed through its public class API (Atom / Computed
++// `.state` and `.set`, options-object constructors) so the benchmark
++// measures the surface applications use, policy wrapper included. The
++// classes come from an API factory bound to the package's module-singleton
++// engine, so instance types are named via InstanceType rather than exported
++// type names. A cell is the Atom or Computed instance itself; both expose
++// .state. Graphs are built inside an effectScope and disposed in cleanup(),
++// like the other adapters.
++type AltAAtom = InstanceType<typeof lib.Atom<unknown>>;
++type AltACell = AltAAtom | InstanceType<typeof lib.Computed<unknown>>;
++
++let scope: (() => void) | null = null;
++
++export const cosignalAltAFramework: ReactiveFramework<AltACell> = {
++  name: "Cosignal Alt A",
++  createSignal: (initialValue) => new lib.Atom({ state: initialValue }),
++  readSignal: (cell) => cell.state,
++  writeSignal: (cell, value) => {
++    (cell as AltAAtom).set(value);
++  },
++  createComputed: (fn) => new lib.Computed({ fn }),
++  readComputed: (cell) => cell.state,
++  // The bench contract guarantees fn returns undefined, so returns are never
++  // treated as cleanup functions and fn passes through unwrapped.
++  effect: (fn) => {
++    lib.effect(fn);
++  },
++  withBatch: (fn) => {
++    lib.startBatch();
++    fn();
++    lib.endBatch();
++  },
++  withBuild: <T>(fn: () => T) => {
++    let out!: T;
++    scope = lib.effectScope(() => {
++      out = fn();
++    });
++    return out;
++  },
++  cleanup: () => {
++    if (scope !== null) {
++      scope();
++      scope = null;
++    }
++  },
++};
+diff --git a/packages/core/src/frameworks/cosignalAltB.ts b/packages/core/src/frameworks/cosignalAltB.ts
+new file mode 100644
+index 0000000..d934547
+--- /dev/null
++++ b/packages/core/src/frameworks/cosignalAltB.ts
+@@ -0,0 +1,78 @@
++import * as lib from "cosignals-alt-b";
++import { ReactiveFramework } from "../util/reactiveFramework";
++
++// cosignals-alt-b, routed through its public class API (Atom / Computed
++// `.state` and `.set`, options-object constructors) so the benchmark
++// measures the surface applications use, policy wrapper included. A cell is
++// the Atom or Computed instance itself; both expose .state. Graphs are
++// built inside an effectScope and disposed in cleanup(), like the other
++// adapters.
++type AltBCell = lib.Atom<unknown> | lib.Computed<unknown>;
++
++// The engine's typed-array planes regrow only at operation boundaries
++// (never inside an open effectScope), and the benches build whole graphs
++// inside one withBuild scope. Pre-size the module-singleton engine once,
++// before any node exists. 2^21 records = a 64 MiB Int32Array main plane:
++// the suite's largest single-operation create shape (sbench create1to1:
++// 1e5 signals + 1e5 computeds + their links) stays near 300k records, and
++// the dalien-signals example field builds ~1.2M records in one scope at
++// 320p. Larger field tiers exceed what a pre-size should pin and fail at
++// build with the engine's own "raise initialRecords" error.
++//
++// The pre-size runs on the adapter's FIRST USE, not at module load: every
++// benchmark child imports every adapter through frameworksList, so a
++// load-time arena (~250 MB of ArrayBuffers) would be billed to whichever
++// framework that child actually benchmarks and would drown the memory
++// columns of every other framework. First-use still precedes every node
++// this adapter creates, which is all the regrow constraint requires.
++const PRESIZED_RECORDS = 1 << 21;
++let presized = false;
++function ensurePresized(): void {
++  if (presized) return;
++  presized = true;
++  lib.__resetEngineForTests({ initialRecords: PRESIZED_RECORDS });
++}
++
++let scope: (() => void) | null = null;
++
++export const cosignalAltBFramework: ReactiveFramework<AltBCell> = {
++  name: "Cosignal Alt B",
++  createSignal: (initialValue) => {
++    ensurePresized();
++    return new lib.Atom({ state: initialValue });
++  },
++  readSignal: (cell) => cell.state,
++  writeSignal: (cell, value) => {
++    (cell as lib.Atom<unknown>).set(value);
++  },
++  createComputed: (fn) => {
++    ensurePresized();
++    return new lib.Computed({ fn });
++  },
++  readComputed: (cell) => cell.state,
++  // The bench contract guarantees fn returns undefined, so returns are never
++  // treated as cleanup functions and fn passes through unwrapped.
++  effect: (fn) => {
++    ensurePresized();
++    lib.effect(fn);
++  },
++  withBatch: (fn) => {
++    lib.startBatch();
++    fn();
++    lib.endBatch();
++  },
++  withBuild: <T>(fn: () => T) => {
++    ensurePresized();
++    let out!: T;
++    scope = lib.effectScope(() => {
++      out = fn();
++    });
++    return out;
++  },
++  cleanup: () => {
++    if (scope !== null) {
++      scope();
++      scope = null;
++    }
++  },
++};
 diff --git a/packages/core/src/frameworks/royale-fh1.ts b/packages/core/src/frameworks/royale-fh1.ts
 new file mode 100644
 index 0000000..a725450
@@ -710,13 +892,13 @@ index 0000000..a1e7c9f
 +  },
 +};
 diff --git a/packages/core/src/frameworksList.ts b/packages/core/src/frameworksList.ts
-index c4ee803..5d5b58d 100644
+index 30d3c8b..9b02096 100644
 --- a/packages/core/src/frameworksList.ts
 +++ b/packages/core/src/frameworksList.ts
-@@ -19,6 +19,18 @@ import { tanstackStoreFramework } from "./frameworks/tanstackStore";
- import { usignalFramework } from "./frameworks/inactive/uSignal";
- import { vueReactivityFramework } from "./frameworks/inactive/vueReactivity";
- import { xReactivityFramework } from "./frameworks/xReactivity";
+@@ -1,3 +1,18 @@
++import { cosignalFramework } from "./frameworks/cosignal";
++import { cosignalAltAFramework } from "./frameworks/cosignalAltA";
++import { cosignalAltBFramework } from "./frameworks/cosignalAltB";
 +import royaleFm1Framework from "./frameworks/royale-fm1";
 +import royaleFm2Framework from "./frameworks/royale-fm2";
 +import royaleFh1Framework from "./frameworks/royale-fh1";
@@ -729,13 +911,16 @@ index c4ee803..5d5b58d 100644
 +import royaleSx2Framework from "./frameworks/royale-sx2";
 +import royaleSm1Framework from "./frameworks/royale-sm1";
 +import royaleSm2Framework from "./frameworks/royale-sm2";
+ import type { FrameworkInfo } from "./util/frameworkTypes";
+ import { alienFramework } from "./frameworks/alienSignals";
+ import { angularFramework as angularFramework2 } from "./frameworks/angularSignals2";
+@@ -24,6 +39,21 @@ import { xReactivityFramework } from "./frameworks/xReactivity";
+ // import { obyFramework } from "./frameworks/inactive/oby";
  
- // Currently failing kairoBench tests
- // import { molWireFramework } from "./frameworks/molWire";
-@@ -49,6 +61,18 @@ export const frameworkInfo: FrameworkInfo[] = [
-   { framework: tanstackStoreFramework, testPullCounts: true },
-   { framework: vueReactivityFramework, testPullCounts: true },
-   { framework: xReactivityFramework, testPullCounts: true },
+ export const frameworkInfo: FrameworkInfo[] = [
++  { framework: cosignalFramework, testPullCounts: true },
++  { framework: cosignalAltAFramework, testPullCounts: true },
++  { framework: cosignalAltBFramework, testPullCounts: true },
 +  { framework: royaleFm1Framework, testPullCounts: true },
 +  { framework: royaleFm2Framework, testPullCounts: true },
 +  { framework: royaleFh1Framework, testPullCounts: true },
@@ -748,6 +933,6 @@ index c4ee803..5d5b58d 100644
 +  { framework: royaleSx2Framework, testPullCounts: true },
 +  { framework: royaleSm1Framework, testPullCounts: true },
 +  { framework: royaleSm2Framework, testPullCounts: true },
- ];
- 
- export const allFrameworks: FrameworkInfo[] = [
+   { framework: alienFramework, testPullCounts: true },
+   { framework: angularFramework2, testPullCounts: true },
+   { framework: compostateFramework, testPullCounts: true },
