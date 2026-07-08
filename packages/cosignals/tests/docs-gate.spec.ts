@@ -5,8 +5,9 @@
  *
  *  - BANNED WORDS, everywhere in shipped sources and READMEs (code,
  *    comments, identifiers, prose): "mint"/"minting"/"minted" (say
- *    create/created), "plane" as a word (world storage is an arena, never
- *    a plane), and "token" (a grouped update is always a BATCH / BatchId).
+ *    create/created), "plane"/"planes" as a word (world storage is an
+ *    arena, never a plane), and "token" (a grouped update is always a
+ *    BATCH / BatchId).
  *  - INTERNAL-DOCUMENT REFERENCES in the two README files: a published
  *    README must be self-contained, so section-sign references (§N) and
  *    references to the repo's internal planning documents ("plans/2026-")
@@ -17,9 +18,9 @@
  *    source file, and research-stage shorthand (NF2, RCC, CR5, OL1/OL2,
  *    S5R, RT6, EF2, W9, SPK-*, S-A…S-D) may not appear in comment text.
  *    The stage-code list is deliberately the low-collision subset: short
- *    codes that alias plausible identifiers or test-family names (D1…D7 —
- *    index.ts's own deviation enumeration — K1, B2, P1, m2, R-2, T1…) are
- *    not machine-checked; prose review owns those.
+ *    codes that alias plausible identifiers or test-family names (D1…D7,
+ *    K1, B2, P1, m2, R-2, T1…) are not machine-checked; prose review owns
+ *    those.
  *
  * Scope: every .ts source under packages/cosignals/src and
  * packages/cosignals-react/src (subdirectories included), and both
@@ -40,7 +41,7 @@ const reactPkgDir = join(pkgDir, '..', 'cosignals-react');
 /** Whole-word banned terms (case-insensitive). */
 const BANNED_WORDS: RegExp[] = [
 	/\bmint(?:ing|ed)?\b/i,
-	/\bplane\b/i,
+	/\bplanes?\b/i, // singular AND plural; the word-boundary spares "planet" and identifiers
 	/\btoken\b/i,
 ];
 

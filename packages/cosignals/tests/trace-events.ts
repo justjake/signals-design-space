@@ -5,8 +5,9 @@
  * and every event consumer — the lockstep
  * driver's comparison, the reference-model adapter, specs — attaches a
  * lossless session tracer at engine birth and decodes records back into
- * `TraceEvent` objects (the decoded shape, still declared in
- * src/concurrent.ts because the package entry re-exports it) on demand here.
+ * `TraceEvent` objects (the decoded shape, declared in src/CosignalEngine.ts
+ * — where the runtime now lives — and re-exported by the package entry) on
+ * demand here.
  *
  * The mapping is the exact inverse of the engine sites' packing, minus
  * trace-only enrichments (a write's op, a suppression's reason, a
