@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Atom, Computed, type AtomOptions, type Runtime } from "signals-royale-sm2";
-import { currentContainer, getRuntime, register } from "./protocol";
+import { currentContainer, expectBatchRoot, getRuntime, register } from "./protocol";
 
 export type Readable<T> = Atom<T> | Computed<T>;
 
@@ -8,13 +8,18 @@ function increment(value: number): number {
   return value + 1;
 }
 
-function useSubscription<T>(node: Readable<T>, runtime: Runtime): void {
+function useSubscription<T>(
+  node: Readable<T>,
+  runtime: Runtime,
+  container: object | undefined,
+): void {
   const [, bump] = React.useReducer(increment, 0);
   const version = node.version;
   React.useLayoutEffect(() => {
     let mounted = true;
     const deliver = (batchId?: number) => {
       if (!mounted) return;
+      if (batchId !== undefined && container !== undefined) expectBatchRoot(batchId, container);
       runtime.runInBatch(batchId ?? 0, bump);
     };
     const unsubscribe = runtime.subscribe(node, deliver);
@@ -25,12 +30,13 @@ function useSubscription<T>(node: Readable<T>, runtime: Runtime): void {
       mounted = false;
       unsubscribe();
     };
-  }, [node, runtime, version]);
+  }, [container, node, runtime, version]);
 }
 
 export function useValue<T>(node: Readable<T>): T {
   register();
   const runtime = getRuntime();
+  const container = currentContainer();
   const value = node.get();
   const batches = runtime.renderBatches();
   runtime.emitEvent(
@@ -38,7 +44,7 @@ export function useValue<T>(node: Readable<T>): T {
     node,
     batches === null ? undefined : batches[batches.length - 1],
   );
-  useSubscription(node, runtime);
+  useSubscription(node, runtime, container);
   return value;
 }
 
@@ -77,7 +83,10 @@ export function useCommitted<T>(node: Readable<T>): T {
   const [, bump] = React.useReducer(increment, 0);
   React.useLayoutEffect(() => {
     const unsubscribeNode = runtime.subscribe(node, (batchId) =>
-      runtime.runInBatch(batchId ?? 0, bump),
+      runtime.runInBatch(batchId ?? 0, () => {
+        if (batchId !== undefined && container !== undefined) expectBatchRoot(batchId, container);
+        bump();
+      }),
     );
     const unsubscribeRoot = runtime.subscribeRoot((committedContainer, batches) => {
       if (committedContainer === container && batches.length !== 0) {

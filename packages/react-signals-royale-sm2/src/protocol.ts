@@ -1,24 +1,26 @@
 import * as React from "react";
 import { createRuntime, type BatchId, type Runtime } from "signals-royale-sm2";
 
+interface RenderContext {
+  container: object;
+  lanes: number;
+}
+
 interface ForkListener {
-  onRenderPassStart?(container: object, batches: readonly BatchId[]): void;
-  onRenderPassYield?(container: object): void;
-  onRenderPassResume?(container: object): void;
-  onRenderPassEnd?(container: object, committed: boolean): void;
-  onBeforeMutation?(container: Element): void;
-  onAfterMutation?(container: Element): void;
-  onBatchRetired?(batchId: BatchId, committed: boolean): void;
-  onRootCommitted?(container: object, batches: readonly BatchId[], generation: number): void;
+  onRenderStart?(container: object, lanes: number): void;
+  onRenderStop?(container: object, lanes: number, committed: boolean, remainingLanes: number): void;
+  onCommitStart?(container: object, lanes: number): void;
+  onCommitStop?(container: object, lanes: number, remainingLanes: number): void;
+  onMutationStart?(container: Element): void;
+  onMutationStop?(container: Element): void;
 }
 
 interface ForkReact {
-  unstable_subscribeToExternalRuntime(listener: ForkListener): () => void;
-  unstable_registerBatchIdAllocator(allocate: (deferred: boolean) => BatchId): () => void;
-  unstable_getCurrentWriteBatch(): BatchId;
-  unstable_getRenderContext(): { container: object } | null;
-  unstable_runInBatch<T>(batchId: BatchId, fn: () => T): T;
-  unstable_resetBatchRegistryForTest(): void;
+  unstable_subscribeToSignalRuntime(listener: ForkListener): () => void;
+  unstable_getCurrentSignalWriteLane(): number;
+  unstable_isCurrentSignalWriteDeferred(): boolean;
+  unstable_getSignalRenderContext(): RenderContext | null;
+  unstable_runWithSignalLane<T>(lane: number, fn: () => T): T;
 }
 
 export interface RegistrationHandle {
@@ -27,23 +29,38 @@ export interface RegistrationHandle {
 }
 
 const fork = React as unknown as Partial<ForkReact>;
-const frames = new WeakMap<object, readonly BatchId[]>();
+const pendingRoots = new Map<BatchId, Set<object>>();
+const committedBatches = new Set<BatchId>();
 const mutationListeners = new Set<(phase: "start" | "stop", container: Element) => void>();
 let runtime = createRuntime();
 let registration: RegistrationHandle | undefined;
 
 function requiredFork(): ForkReact {
   if (
-    fork.unstable_subscribeToExternalRuntime === undefined ||
-    fork.unstable_registerBatchIdAllocator === undefined ||
-    fork.unstable_getCurrentWriteBatch === undefined ||
-    fork.unstable_getRenderContext === undefined ||
-    fork.unstable_runInBatch === undefined ||
-    fork.unstable_resetBatchRegistryForTest === undefined
+    fork.unstable_subscribeToSignalRuntime === undefined ||
+    fork.unstable_getCurrentSignalWriteLane === undefined ||
+    fork.unstable_isCurrentSignalWriteDeferred === undefined ||
+    fork.unstable_getSignalRenderContext === undefined ||
+    fork.unstable_runWithSignalLane === undefined
   ) {
     throw new Error("react-signals-royale-sm2 requires its patched React build");
   }
   return fork as ForkReact;
+}
+
+function retireFinishedBatch(batchId: BatchId): void {
+  const roots = pendingRoots.get(batchId);
+  if (roots !== undefined && roots.size !== 0) return;
+  pendingRoots.delete(batchId);
+  const committed = committedBatches.delete(batchId);
+  runtime.retireBatch(batchId, committed);
+}
+
+export function expectBatchRoot(batchId: BatchId, container: object): void {
+  if (!runtime.isDeferredBatch(batchId)) return;
+  let roots = pendingRoots.get(batchId);
+  if (roots === undefined) pendingRoots.set(batchId, (roots = new Set()));
+  roots.add(container);
 }
 
 export function getRuntime(): Runtime {
@@ -54,41 +71,62 @@ export function register(): RegistrationHandle {
   if (registration !== undefined) return registration;
   const api = requiredFork();
   const errors: unknown[] = [];
-  const unregisterAllocator = api.unstable_registerBatchIdAllocator((deferred) =>
-    runtime.allocateBatch(deferred),
-  );
   runtime.attachHost({
-    getCurrentWriteBatch: () => api.unstable_getCurrentWriteBatch(),
-    getRenderBatches() {
-      const context = api.unstable_getRenderContext();
-      return context === null ? null : frames.get(context.container) ?? [];
+    getCurrentWriteBatch() {
+      const lane = api.unstable_getCurrentSignalWriteLane();
+      if (api.unstable_isCurrentSignalWriteDeferred() && runtime.ensureBatch(lane, true)) {
+        queueMicrotask(() => {
+          if ((pendingRoots.get(lane)?.size ?? 0) === 0) committedBatches.add(lane);
+          retireFinishedBatch(lane);
+        });
+      }
+      return lane;
     },
-    getRenderContainer: () => api.unstable_getRenderContext()?.container ?? null,
-    runInBatch: (batchId, fn) => api.unstable_runInBatch(batchId, fn),
+    getRenderBatches() {
+      const context = api.unstable_getSignalRenderContext();
+      return context === null ? null : runtime.batchIdsForLanes(context.lanes);
+    },
+    getRenderContainer: () => api.unstable_getSignalRenderContext()?.container ?? null,
+    runInBatch: (batchId, fn) => api.unstable_runWithSignalLane(batchId, fn),
   });
-  const unsubscribe = api.unstable_subscribeToExternalRuntime({
-    onRenderPassStart(container, batches) {
-      frames.set(container, batches);
+  const unsubscribe = api.unstable_subscribeToSignalRuntime({
+    onRenderStart(container, lanes) {
+      const batches = runtime.batchIdsForLanes(lanes);
+      for (const batchId of batches) expectBatchRoot(batchId, container);
       runtime.emitDebug({ kind: "render-pass-start", subject: container, batchId: batches[0] });
     },
-    onRenderPassEnd(container, committed) {
+    onRenderStop(container, lanes, committed, remainingLanes) {
       runtime.emitDebug({
         kind: committed ? "render-pass-commit" : "render-pass-discard",
         subject: container,
+        batchId: runtime.batchIdsForLanes(lanes)[0],
       });
-      frames.delete(container);
+      if (committed) return;
+      const batches = runtime.batchIdsForLanes(lanes);
+      for (const batchId of batches) {
+        if ((remainingLanes & batchId) !== 0) continue;
+        pendingRoots.get(batchId)?.delete(container);
+        retireFinishedBatch(batchId);
+      }
     },
-    onBeforeMutation(container) {
-      for (const listener of mutationListeners) listener("start", container);
-    },
-    onAfterMutation(container) {
-      for (const listener of mutationListeners) listener("stop", container);
-    },
-    onRootCommitted(container, batches) {
+    onCommitStart(container, lanes) {
+      const batches = runtime.batchIdsForLanes(lanes);
+      for (const batchId of batches) committedBatches.add(batchId);
       runtime.rootCommitted(container, batches);
     },
-    onBatchRetired(batchId, committed) {
-      runtime.retireBatch(batchId, committed);
+    onCommitStop(container, lanes, remainingLanes) {
+      const batches = runtime.batchIdsForLanes(lanes);
+      for (const batchId of batches) {
+        if ((remainingLanes & batchId) !== 0) continue;
+        pendingRoots.get(batchId)?.delete(container);
+        retireFinishedBatch(batchId);
+      }
+    },
+    onMutationStart(container) {
+      for (const listener of mutationListeners) listener("start", container);
+    },
+    onMutationStop(container) {
+      for (const listener of mutationListeners) listener("stop", container);
     },
   });
   registration = {
@@ -97,7 +135,6 @@ export function register(): RegistrationHandle {
       if (registration !== this) return;
       runtime.attachHost(undefined);
       unsubscribe();
-      unregisterAllocator();
       registration = undefined;
     },
   };
@@ -106,13 +143,14 @@ export function register(): RegistrationHandle {
 
 export function resetForTest(): void {
   registration?.dispose();
-  requiredFork().unstable_resetBatchRegistryForTest();
+  pendingRoots.clear();
+  committedBatches.clear();
   runtime = createRuntime();
   register();
 }
 
 export function currentContainer(): object | undefined {
-  return requiredFork().unstable_getRenderContext()?.container;
+  return requiredFork().unstable_getSignalRenderContext()?.container;
 }
 
 export function onDomMutation(

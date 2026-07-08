@@ -499,6 +499,12 @@ export class Runtime {
 
   allocateBatch(deferred: boolean): BatchId {
     const id = this.nextBatchId++;
+    this.ensureBatch(id, deferred);
+    return id;
+  }
+
+  ensureBatch(id: BatchId, deferred: boolean): boolean {
+    if (!deferred || this.liveBatches.has(id)) return false;
     this.liveBatches.set(id, {
       id,
       deferred,
@@ -507,7 +513,16 @@ export class Runtime {
       roots: new Set(),
     });
     this.emitEvent("batch-open", undefined, id);
-    return id;
+    return true;
+  }
+
+  batchIdsForLanes(lanes: number): readonly BatchId[] {
+    if (this.liveBatches.size === 0) return noBatches;
+    const ids: BatchId[] = [];
+    for (const batch of this.liveBatches.values()) {
+      if ((batch.id & lanes) !== 0) ids.push(batch.id);
+    }
+    return ids;
   }
 
   readAtom<T>(atom: Atom<T>): T {
