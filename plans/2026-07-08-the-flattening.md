@@ -183,6 +183,26 @@ drained). What is episode-lifetime and what is not:
   subscriptions' episode state. All episode-lifetime, all dropped at
   quiescence.
 
+## World-state storage: two implementations, measured (owner amendment)
+
+The owner questions arena-style storage for per-world state. Ruling: build
+BOTH implementations behind a composition-time seam and let the benches
+decide. The seam is selected once at engine composition (never a runtime
+interface — call sites stay monomorphic; two processes compare two
+implementations, exactly how the A/B benches and the FRAMEWORK-parametrized
+suites already work). The contract: claim/release per world, shadow
+read/write, dependency record/purge, dirty marks, clock slots, and the
+reclamation-guard membership queries. The contract permits a DIFFERENT
+implementation per world kind: render-attempt worlds are episode-lifetime
+(eden territory — plain objects may win); committed-root worlds are
+persistent routing (data-oriented territory — arenas likely hold).
+Sequencing: growth restoration completes first (arenas remain an
+implementation regardless); render integration routes world access through
+the narrow function set as it moves; then the seam extraction + the object
+implementation + the dual gate. Default disposition after measurement:
+keep the winner per world kind, delete the loser (the seam and git history
+preserve revisitability) — unless the owner rules to keep both.
+
 ## Gate (all must hold before merge to main)
 
 - cosignals suite (reclaim probes, leak audit, docs-gate, bytecode budgets
