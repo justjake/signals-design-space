@@ -1,7 +1,7 @@
 From 12763dcc67f53297a507fd179d5d6c30352a6467 Mon Sep 17 00:00:00 2001
 From: Jake Teton-Landis <just.1.jake@gmail.com>
 Date: Wed, 8 Jul 2026 13:29:54 -0400
-Subject: [PATCH 2/3] Pin late signal deliveries to live batch lanes
+Subject: [PATCH 2/4] Pin late signal deliveries to live batch lanes
 
 ---
  .../src/ReactFiberSignalRuntime.js             | 18 ++++++++++++++++++
