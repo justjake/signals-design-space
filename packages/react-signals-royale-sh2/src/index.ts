@@ -1,24 +1,27 @@
-import * as React from 'react';
-import { flushSync } from 'react-dom';
-import { createRoot } from 'react-dom/client';
+import * as React from "react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 import {
   asyncComputed,
   atom,
   batch,
   beginDraft,
   commitDrafts,
+  commitIfUnscheduled,
   committed,
   computed,
-  causeFor,
+  deliveryCause,
   createTrace,
   disposeCell,
   effect,
   emit,
   enterRenderWorld,
   initializeAtomState,
+  installState,
   isPending,
   latest,
   leaveRenderWorld,
+  markDraftScheduled,
   pendingBatch,
   read,
   refresh,
@@ -36,9 +39,9 @@ import {
   type Cell,
   type ComputedOptions,
   type TraceView,
-} from 'signals-royale-sh2';
+} from "signals-royale-sh2";
 
-interface ForkReact extends Omit<typeof React, 'startTransition'> {
+interface ForkReact extends Omit<typeof React, "startTransition"> {
   startTransition(scope: () => void): void;
   unstable_registerSignalRuntime?(runtime: SignalRuntime): () => void;
   unstable_runWithSignalBatch?<T>(batch: number, scope: () => T): T;
@@ -54,26 +57,40 @@ interface SignalRuntime {
 }
 
 const Fork = React as ForkReact;
-const mutationListeners = new Set<(phase: 'start' | 'stop', container: Element) => void>();
+const mutationListeners = new Set<(phase: "start" | "stop", container: Element) => void>();
 const registrationErrors: unknown[] = [];
 let registered = false;
 
 const runtime: SignalRuntime = {
-  batchScheduled() {},
-  renderStart(_container, batches) { enterRenderWorld(batches); },
-  renderEnd() { leaveRenderWorld(); },
-  commit(container, batches) { commitDrafts(container, batches); },
+  batchScheduled(batch) {
+    markDraftScheduled(batch);
+  },
+  renderStart(_container, batches) {
+    enterRenderWorld(batches);
+  },
+  renderEnd() {
+    leaveRenderWorld();
+  },
+  commit(container, batches) {
+    commitDrafts(container, batches);
+  },
   mutation(start, container) {
-    for (const listener of mutationListeners) listener(start ? 'start' : 'stop', container);
+    for (const listener of mutationListeners) listener(start ? "start" : "stop", container);
   },
 };
 
-export interface RegistrationHandle { errors: unknown[]; dispose(): void }
+export interface RegistrationHandle {
+  errors: unknown[];
+  dispose(): void;
+}
 
 export function register(): RegistrationHandle {
   if (!registered) {
-    if (Fork.unstable_registerSignalRuntime === undefined || Fork.unstable_runInSignalBatch === undefined) {
-      throw new Error('This package requires the signals-royale-sh2 React fork.');
+    if (
+      Fork.unstable_registerSignalRuntime === undefined ||
+      Fork.unstable_runInSignalBatch === undefined
+    ) {
+      throw new Error("This package requires the signals-royale-sh2 React fork.");
     }
     Fork.unstable_registerSignalRuntime(runtime);
     registered = true;
@@ -88,20 +105,28 @@ export function useValue<T>(cell: Cell<T>): T {
   const revisionRef = React.useRef(renderedRevision);
   revisionRef.current = renderedRevision;
   React.useLayoutEffect(() => {
-    const stop = subscribe(cell, () => deliver(value => value + 1));
-    if (revision(cell) !== revisionRef.current) deliver(value => value + 1);
+    const stop = subscribe(cell, () => deliver((value) => value + 1));
+    if (revision(cell) !== revisionRef.current) deliver((value) => value + 1);
     const batch = pendingBatch(cell);
-    if (batch !== 0) Fork.unstable_runInSignalBatch!(batch, () => deliver(value => value + 1));
+    if (batch !== 0) Fork.unstable_runInSignalBatch!(batch, () => deliver((value) => value + 1));
     return stop;
   }, [cell]);
-  emit('component delivery', cell.id, causeFor(cell.id));
+  const cause = deliveryCause(cell);
+  React.useLayoutEffect(() => {
+    emit("component delivery", cell.id, cause);
+  }, [cell, cause, renderedRevision]);
   try {
     return read(cell);
   } catch (error) {
     const stale = staleValue(cell);
     if (
-      !renderIncludesDraft() && stale.available && error !== null && typeof error === 'object' && 'then' in error
-    ) return stale.value as T;
+      !renderIncludesDraft() &&
+      stale.available &&
+      error !== null &&
+      typeof error === "object" &&
+      "then" in error
+    )
+      return stale.value as T;
     throw error;
   }
 }
@@ -120,10 +145,20 @@ export function useIsPending(cell: Cell): boolean {
   register();
   const [, deliver] = React.useState(0);
   React.useLayoutEffect(() => {
-    const stop = subscribe(cell, () => deliver(value => value + 1));
+    let active = true;
+    const stop = subscribe(cell, () => {
+      if (pendingBatch(cell) !== 0) {
+        queueMicrotask(() => {
+          if (active) deliver((value) => value + 1);
+        });
+      } else deliver((value) => value + 1);
+    });
     const batch = pendingBatch(cell);
-    if (batch !== 0) Fork.unstable_runInSignalBatch!(batch, () => deliver(value => value + 1));
-    return stop;
+    if (batch !== 0) Fork.unstable_runInSignalBatch!(batch, () => deliver((value) => value + 1));
+    return () => {
+      active = false;
+      stop();
+    };
   }, [cell]);
   return isPending(cell);
 }
@@ -144,12 +179,17 @@ export function startTransitionWrite(scope: () => void): void {
   Fork.unstable_runWithSignalBatch!(id, () => {
     Fork.startTransition(() => withDraft(id, scope));
   });
+  queueMicrotask(() => commitIfUnscheduled(id));
 }
 
-export function onDomMutation(listener: (phase: 'start' | 'stop', container: Element) => void): () => void {
+export function onDomMutation(
+  listener: (phase: "start" | "stop", container: Element) => void,
+): () => void {
   register();
   mutationListeners.add(listener);
-  return () => { mutationListeners.delete(listener); };
+  return () => {
+    mutationListeners.delete(listener);
+  };
 }
 
 export function trace(capacity?: number): TraceView {
@@ -174,6 +214,7 @@ export {
   disposeCell,
   effect,
   initializeAtomState,
+  installState,
   isPending,
   latest,
   read,

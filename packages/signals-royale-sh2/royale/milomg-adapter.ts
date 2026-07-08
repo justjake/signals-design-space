@@ -1,5 +1,5 @@
-import { atom, batch, computed, effect, effectScope, read, set } from '../src';
-import type { Cell } from '../src';
+import { atom, batch, computed, effect, effectScope, read, set } from "../src";
+import type { Cell } from "../src";
 
 export interface ReactiveFramework<S = unknown> {
   name: string;
@@ -16,20 +16,27 @@ export interface ReactiveFramework<S = unknown> {
 
 let dispose: (() => void) | undefined;
 const framework: ReactiveFramework<Cell> = {
-  name: 'Royale SH2',
+  name: "Royale SH2",
   createSignal: atom,
   readSignal: read,
   writeSignal: set,
   createComputed: computed,
   readComputed: read,
-  effect(fn) { effect(fn); },
+  effect(fn) {
+    effect(fn);
+  },
   withBatch: batch,
   withBuild<T>(fn: () => T): T {
     let value!: T;
-    dispose = effectScope(() => { value = fn(); });
+    dispose = effectScope(() => {
+      value = fn();
+    });
     return value;
   },
-  cleanup() { dispose?.(); dispose = undefined; },
+  cleanup() {
+    dispose?.();
+    dispose = undefined;
+  },
 };
 
 export default framework;

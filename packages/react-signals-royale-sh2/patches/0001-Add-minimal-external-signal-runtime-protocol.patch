@@ -1,0 +1,503 @@
+From 6e28bc68d382387f69450940c4cdf29d29d3016f Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:16:06 -0400
+Subject: [PATCH 1/3] Add minimal external signal runtime protocol
+
+---
+ .../src/ReactFiberSignalRuntime.js            | 75 +++++++++++++++++
+ .../src/ReactFiberWorkLoop.js                 | 27 +++++-
+ .../__tests__/ReactFiberSignalRuntime-test.js | 82 +++++++++++++++++++
+ packages/react/index.development.js           |  2 +
+ .../react/index.experimental.development.js   |  2 +
+ packages/react/index.experimental.js          |  2 +
+ packages/react/index.fb.js                    |  2 +
+ packages/react/index.js                       |  2 +
+ packages/react/index.stable.development.js    |  2 +
+ packages/react/index.stable.js                |  2 +
+ packages/react/src/ReactClient.js             |  3 +
+ .../react/src/ReactSharedInternalsClient.js   |  4 +
+ packages/react/src/ReactSignalRuntime.js      | 31 +++++++
+ packages/react/src/ReactStartTransition.js    |  4 +
+ 14 files changed, 239 insertions(+), 1 deletion(-)
+ create mode 100644 packages/react-reconciler/src/ReactFiberSignalRuntime.js
+ create mode 100644 packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js
+ create mode 100644 packages/react/src/ReactSignalRuntime.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberSignalRuntime.js b/packages/react-reconciler/src/ReactFiberSignalRuntime.js
+new file mode 100644
+index 0000000000..cc38171ede
+--- /dev/null
++++ b/packages/react-reconciler/src/ReactFiberSignalRuntime.js
+@@ -0,0 +1,75 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++import type {FiberRoot} from './ReactInternalTypes';
++import type {Lanes, Lane} from './ReactFiberLane';
++import type {Transition} from 'react/src/ReactStartTransition';
++
++import ReactSharedInternals from 'shared/ReactSharedInternals';
++
++const batchesByLane: Int32Array = new Int32Array(31);
++const renderedBatches: Map<FiberRoot, Array<number>> = new Map();
++
++function batchesFor(lanes: Lanes): Array<number> {
++  const result = [];
++  let lane = 1;
++  for (let index = 0; index < 31; index++, lane *= 2) {
++    const batch = batchesByLane[index];
++    if ((lanes & lane) !== 0 && batch !== 0 && result.indexOf(batch) < 0) {
++      result.push(batch);
++    }
++  }
++  return result;
++}
++
++export function claimSignalBatch(lane: Lane, transition: Transition): void {
++  const batch = transition._signalBatch;
++  if (batch === undefined) return;
++  const index = 31 - Math.clz32(lane);
++  batchesByLane[index] = batch;
++  const runtime = ReactSharedInternals.R;
++  if (runtime !== null) runtime.batchScheduled(batch);
++}
++
++export function signalRenderStart(root: FiberRoot, lanes: Lanes): void {
++  const runtime = ReactSharedInternals.R;
++  const previous = renderedBatches.get(root);
++  if (runtime !== null && previous !== undefined) runtime.renderEnd(false);
++  if (lanes === 0) {
++    renderedBatches.delete(root);
++    return;
++  }
++  const batches = batchesFor(lanes);
++  renderedBatches.set(root, batches);
++  if (runtime !== null) runtime.renderStart(root.containerInfo, batches);
++}
++
++export function signalRenderResume(root: FiberRoot): void {
++  const runtime = ReactSharedInternals.R;
++  if (runtime !== null) {
++    runtime.renderStart(root.containerInfo, renderedBatches.get(root) || []);
++  }
++}
++
++export function signalRenderEnd(completed: boolean): void {
++  const runtime = ReactSharedInternals.R;
++  if (runtime !== null) runtime.renderEnd(completed);
++}
++
++export function signalCommit(root: FiberRoot, lanes: Lanes): void {
++  const runtime = ReactSharedInternals.R;
++  const batches = renderedBatches.get(root) || batchesFor(lanes);
++  renderedBatches.delete(root);
++  if (runtime !== null) runtime.commit(root.containerInfo, batches);
++}
++
++export function signalMutation(root: FiberRoot, start: boolean): void {
++  const runtime = ReactSharedInternals.R;
++  if (runtime !== null) runtime.mutation(start, root.containerInfo);
++}
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..0edc8db6c9 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -228,6 +228,14 @@ import {
+   eventPriorityToLane,
+ } from './ReactEventPriorities';
+ import {requestCurrentTransition} from './ReactFiberTransition';
++import {
++  claimSignalBatch,
++  signalCommit,
++  signalMutation,
++  signalRenderEnd,
++  signalRenderResume,
++  signalRenderStart,
++} from './ReactFiberSignalRuntime';
+ import {
+   SelectiveHydrationException,
+   beginWork,
+@@ -847,7 +855,9 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+       transition._updatedFibers.add(fiber);
+     }
+ 
+-    return requestTransitionLane(transition);
++    const lane = requestTransitionLane(transition);
++    claimSignalBatch(lane, transition);
++    return lane;
+   }
+ 
+   return eventPriorityToLane(resolveUpdatePriority());
+@@ -2007,6 +2017,7 @@ function finalizeRender(lanes: Lanes, finalizationTime: number): void {
+ }
+ 
+ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
++  signalRenderStart(root, lanes);
+   if (enableProfilerTimer && enableComponentPerformanceTrack) {
+     // The order of tracks within a group are determined by the earliest start time.
+     // Are tracks should show up in priority order and we should ideally always show
+@@ -2637,6 +2648,8 @@ function renderRootSync(
+ 
+     workInProgressTransitions = getTransitionsForLanes(root, lanes);
+     prepareFreshStack(root, lanes);
++  } else {
++    signalRenderResume(root);
+   }
+ 
+   if (enableSchedulingProfiler) {
+@@ -2750,6 +2763,8 @@ function renderRootSync(
+     finishQueueingConcurrentUpdates();
+   }
+ 
++  signalRenderEnd(workInProgress === null);
++
+   return exitStatus;
+ }
+ 
+@@ -2797,6 +2812,7 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+     // If we were previously in prerendering mode, check if we received any new
+     // data during an interleaved event.
+     workInProgressRootIsPrerendering = checkIfRootIsPrerendering(root, lanes);
++    signalRenderResume(root);
+   }
+ 
+   if (enableSchedulingProfiler) {
+@@ -3019,6 +3035,7 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+     if (enableSchedulingProfiler) {
+       markRenderYielded();
+     }
++    signalRenderEnd(false);
+     return RootInProgress;
+   } else {
+     // Completed the tree.
+@@ -3032,6 +3049,7 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+ 
+     // It's safe to process the queue now that the render phase is complete.
+     finishQueueingConcurrentUpdates();
++    signalRenderEnd(true);
+ 
+     // Return the final exit status.
+     return workInProgressRootExitStatus;
+@@ -3742,6 +3760,8 @@ function commitRoot(
+     remainingLanes &= ~GestureLane;
+   }
+ 
++  signalCommit(root, lanes);
++
+   markRootFinished(
+     root,
+     lanes,
+@@ -4013,6 +4033,7 @@ function flushMutationEffects(): void {
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
+     try {
++      signalMutation(root, true);
+       // The next phase is the mutation phase, where we mutate the host tree.
+       commitMutationEffects(root, finishedWork, lanes);
+ 
+@@ -4023,11 +4044,15 @@ function flushMutationEffects(): void {
+       }
+       resetAfterCommit(root.containerInfo);
+     } finally {
++      signalMutation(root, false);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+       ReactSharedInternals.T = prevTransition;
+     }
++  } else {
++    signalMutation(root, true);
++    signalMutation(root, false);
+   }
+ 
+   // The work-in-progress tree is now the current tree. This must come after
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js b/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js
+new file mode 100644
+index 0000000000..bbddcaa8a2
+--- /dev/null
++++ b/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js
+@@ -0,0 +1,82 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @emails react-core
++ * @jest-environment node
++ */
++
++'use strict';
++
++let React;
++let ReactNoop;
++let act;
++let events;
++
++describe('ReactFiberSignalRuntime', () => {
++  beforeEach(() => {
++    jest.resetModules();
++    React = require('react');
++    ReactNoop = require('react-noop-renderer');
++    act = require('internal-test-utils').act;
++    events = [];
++    React.unstable_registerSignalRuntime({
++      batchScheduled(batch) {
++        events.push(['batch', batch]);
++      },
++      renderStart(container, batches) {
++        events.push(['render', batches]);
++      },
++      renderEnd(completed) {
++        events.push(['end', completed]);
++      },
++      commit(container, batches) {
++        events.push(['commit', batches]);
++      },
++      mutation(start) {
++        events.push([start ? 'mutation-start' : 'mutation-stop']);
++      },
++    });
++  });
++
++  it('attributes a transition to its external batch', async () => {
++    await act(() => {
++      React.unstable_runWithSignalBatch(7, () => {
++        React.startTransition(() => ReactNoop.render(<div>seven</div>));
++      });
++    });
++
++    expect(events).toContainEqual(['batch', 7]);
++    expect(events).toContainEqual(['render', [7]]);
++    expect(events).toContainEqual(['commit', [7]]);
++  });
++
++  it('does not attribute a later urgent update to the transition', async () => {
++    await act(() => {
++      React.unstable_runWithSignalBatch(3, () => {
++        React.startTransition(() => ReactNoop.render(<div>draft</div>));
++      });
++    });
++    events = [];
++    await act(() => ReactNoop.render(<div>urgent</div>));
++
++    expect(events).toContainEqual(['render', []]);
++    expect(events).toContainEqual(['commit', []]);
++  });
++
++  it('brackets the host mutation phase', async () => {
++    await act(() => ReactNoop.render(<div>first</div>));
++    const start = events.findIndex(event => event[0] === 'mutation-start');
++    const stop = events.findIndex(event => event[0] === 'mutation-stop');
++    expect(start).toBeGreaterThanOrEqual(0);
++    expect(stop).toBe(start + 1);
++  });
++
++  it('rejects a second runtime', () => {
++    expect(() => React.unstable_registerSignalRuntime({})).toThrow(
++      'A different signal runtime is already registered.',
++    );
++  });
++});
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index 5ee39427fd..d6292a93d7 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -45,6 +45,8 @@ export {
+   cache,
+   cacheSignal,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   unstable_LegacyHidden,
+   Activity,
+   ViewTransition,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 8ff2e1d257..4663404763 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -29,6 +29,8 @@ export {
+   cache,
+   cacheSignal,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   optimisticKey,
+   Activity,
+   unstable_getCacheForType,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 881a71b250..95696e4ff6 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -29,6 +29,8 @@ export {
+   cache,
+   cacheSignal,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   optimisticKey,
+   Activity,
+   Activity as unstable_Activity,
+diff --git a/packages/react/index.fb.js b/packages/react/index.fb.js
+index d61af001a5..f08bb173c1 100644
+--- a/packages/react/index.fb.js
++++ b/packages/react/index.fb.js
+@@ -31,6 +31,8 @@ export {
+   Profiler,
+   PureComponent,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   StrictMode,
+   Suspense,
+   Activity,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 140174ec01..cdef8c4ec2 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -46,6 +46,8 @@ export {
+   cache,
+   cacheSignal,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   unstable_LegacyHidden,
+   Activity,
+   unstable_Scope,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 5fd89390bc..50e4570b75 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -33,6 +33,8 @@ export {
+   cacheSignal,
+   unstable_useCacheRefresh,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 830a4e9bb5..c514f4774f 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -33,6 +33,8 @@ export {
+   cacheSignal,
+   unstable_useCacheRefresh,
+   startTransition,
++  unstable_registerSignalRuntime,
++  unstable_runWithSignalBatch,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 5d1c7f3ac0..5f1e3e7b19 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -64,6 +64,7 @@ import {addTransitionType} from './ReactTransitionType';
+ import {act} from './ReactAct';
+ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
++import {registerSignalRuntime, runWithSignalBatch} from './ReactSignalRuntime';
+ 
+ const Children = {
+   map,
+@@ -119,6 +120,8 @@ export {
+   getCacheForType as unstable_getCacheForType,
+   useCacheRefresh as unstable_useCacheRefresh,
+   use,
++  registerSignalRuntime as unstable_registerSignalRuntime,
++  runWithSignalBatch as unstable_runWithSignalBatch,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 1599e57a6f..024b95c96b 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -27,6 +27,8 @@ export type SharedStateClient = {
+   T: null | Transition, // ReactCurrentBatchConfig for Transitions
+   S: null | onStartTransitionFinish,
+   G: null | onStartGestureTransitionFinish,
++  R: null | mixed, // Optional external signal runtime.
++  B: number, // External signal batch active while a transition is created.
+ 
+   // DEV-only
+ 
+@@ -62,6 +64,8 @@ const ReactSharedInternals: SharedStateClient = {
+   A: null,
+   T: null,
+   S: null,
++  R: null,
++  B: 0,
+ } as any;
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+diff --git a/packages/react/src/ReactSignalRuntime.js b/packages/react/src/ReactSignalRuntime.js
+new file mode 100644
+index 0000000000..8e0c7c6fc4
+--- /dev/null
++++ b/packages/react/src/ReactSignalRuntime.js
+@@ -0,0 +1,31 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++import ReactSharedInternals from './ReactSharedInternalsClient';
++
++export function registerSignalRuntime(runtime: mixed): () => void {
++  const current = ReactSharedInternals.R;
++  if (current !== null && current !== runtime) {
++    throw new Error('A different signal runtime is already registered.');
++  }
++  ReactSharedInternals.R = runtime;
++  return () => {
++    if (ReactSharedInternals.R === runtime) ReactSharedInternals.R = null;
++  };
++}
++
++export function runWithSignalBatch<T>(batch: number, scope: () => T): T {
++  const previous = ReactSharedInternals.B;
++  ReactSharedInternals.B = batch;
++  try {
++    return scope();
++  } finally {
++    ReactSharedInternals.B = previous;
++  }
++}
+diff --git a/packages/react/src/ReactStartTransition.js b/packages/react/src/ReactStartTransition.js
+index ec6c4b86aa..ad286a3aa3 100644
+--- a/packages/react/src/ReactStartTransition.js
++++ b/packages/react/src/ReactStartTransition.js
+@@ -28,6 +28,7 @@ import reportGlobalError from 'shared/reportGlobalError';
+ import noop from 'shared/noop';
+ 
+ export type Transition = {
++  _signalBatch?: number,
+   types: null | TransitionTypes, // enableViewTransition
+   gesture: null | GestureProvider, // enableGestureTransition
+   name: null | string, // enableTransitionTracing only
+@@ -48,6 +49,9 @@ export function startTransition(
+ ): void {
+   const prevTransition = ReactSharedInternals.T;
+   const currentTransition: Transition = {} as any;
++  if (ReactSharedInternals.B !== 0) {
++    currentTransition._signalBatch = ReactSharedInternals.B;
++  }
+   if (enableViewTransition) {
+     currentTransition.types =
+       prevTransition !== null
+-- 
+2.50.1 (Apple Git-155)
+

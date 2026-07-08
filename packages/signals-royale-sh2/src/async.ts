@@ -1,5 +1,5 @@
-import { computed, refresh, resolveComputed, type Cell, type ComputedOptions } from './core';
-import { emit } from './trace';
+import { computed, refresh, resolveComputed, type Cell, type ComputedOptions } from "./core";
+import { emit } from "./trace";
 
 interface PromiseRecord {
   status: 0 | 1 | 2;
@@ -23,8 +23,14 @@ export function asyncComputed<T>(
         record = { status: 0 };
         records.set(thenable as object, record);
         thenable.then(
-          value => { record!.status = 1; record!.value = value; },
-          error => { record!.status = 2; record!.value = error; },
+          (value) => {
+            record!.status = 1;
+            record!.value = value;
+          },
+          (error) => {
+            record!.status = 2;
+            record!.value = error;
+          },
         );
       }
       if (record.status === 1) return record.value as U;
@@ -34,18 +40,29 @@ export function asyncComputed<T>(
     };
     let result: T | undefined;
     let failure: unknown;
-    try { result = calculate(use); } catch (error) { failure = error; }
+    try {
+      result = calculate(use);
+    } catch (error) {
+      failure = error;
+    }
     if (pending.length !== 0) {
       let same = pending.length === lastPending.length;
       for (let i = 0; same && i < pending.length; i++) same = pending[i] === lastPending[i];
       if (!same) {
         lastPending = pending;
-        gate = Promise.all(pending.map(value => Promise.resolve(value))).then(
-          resolved => {
-            if (pending.length === 1 && result === undefined) resolveComputed(cell, resolved[0] as T);
-            else { emit('suspense settlement', cell.id); refresh(cell); }
+        gate = Promise.all(pending.map((value) => Promise.resolve(value))).then(
+          (resolved) => {
+            if (pending.length === 1 && result === undefined)
+              resolveComputed(cell, resolved[0] as T);
+            else {
+              emit("suspense settlement", cell.id);
+              refresh(cell);
+            }
           },
-          () => { emit('suspense settlement', cell.id); refresh(cell); },
+          () => {
+            emit("suspense settlement", cell.id);
+            refresh(cell);
+          },
         );
       }
       throw gate!;

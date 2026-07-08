@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test } from "vitest";
 import {
   atom,
   beginDraft,
@@ -11,7 +11,7 @@ import {
   set,
   update,
   withDraft,
-} from '../src';
+} from "../src";
 
 const seedCount = Number(
   (globalThis as typeof globalThis & { process?: { env: Record<string, string | undefined> } })
@@ -41,7 +41,7 @@ test(`randomized world-fold oracle (${seedCount} seeds x 90 steps)`, () => {
           base[slot] = amount;
         } else if (operation === 1) {
           schedule.push(`update ${slot} ${amount}`);
-          update(cells[slot], value => value + amount);
+          update(cells[slot], (value) => value + amount);
           base[slot] += amount;
         } else if (operation === 2 || worlds.size === 0) {
           const id = beginDraft();
@@ -50,15 +50,18 @@ test(`randomized world-fold oracle (${seedCount} seeds x 90 steps)`, () => {
         } else if (operation === 3 || operation === 4) {
           const ids = [...worlds.keys()];
           const id = ids[next(ids.length)];
-          schedule.push(`${operation === 3 ? 'draft-update' : 'draft-set'} ${id} ${slot} ${amount}`);
+          schedule.push(
+            `${operation === 3 ? "draft-update" : "draft-set"} ${id} ${slot} ${amount}`,
+          );
           withDraft(id, () => {
-            if (operation === 3) update(cells[slot], value => value + amount);
+            if (operation === 3) update(cells[slot], (value) => value + amount);
             else set(cells[slot], amount);
           });
           const actions = worlds.get(id)![slot];
           let current = base[slot];
           for (const [kind, value] of actions) current = kind === 1 ? current + value : value;
-          if (operation === 3 || current !== amount) actions.push([operation === 3 ? 1 : 0, amount]);
+          if (operation === 3 || current !== amount)
+            actions.push([operation === 3 ? 1 : 0, amount]);
         } else if (operation === 5) {
           const ids = [...worlds.keys()];
           const id = ids[next(ids.length)];
@@ -66,7 +69,8 @@ test(`randomized world-fold oracle (${seedCount} seeds x 90 steps)`, () => {
           enterRenderWorld([id]);
           for (let i = 0; i < cells.length; i++) {
             let expected = base[i];
-            for (const [kind, value] of worlds.get(id)![i]) expected = kind === 1 ? expected + value : value;
+            for (const [kind, value] of worlds.get(id)![i])
+              expected = kind === 1 ? expected + value : value;
             expect(read(cells[i])).toBe(expected);
           }
           leaveRenderWorld();
@@ -75,7 +79,8 @@ test(`randomized world-fold oracle (${seedCount} seeds x 90 steps)`, () => {
           schedule.push(`commit ${id}`);
           commitDrafts({}, [id]);
           for (let i = 0; i < cells.length; i++) {
-            for (const [kind, value] of worlds.get(id)![i]) base[i] = kind === 1 ? base[i] + value : value;
+            for (const [kind, value] of worlds.get(id)![i])
+              base[i] = kind === 1 ? base[i] + value : value;
           }
           worlds.delete(id);
         }
@@ -83,13 +88,16 @@ test(`randomized world-fold oracle (${seedCount} seeds x 90 steps)`, () => {
         for (let i = 0; i < cells.length; i++) {
           let expected = base[i];
           for (const actions of worlds.values()) {
-            for (const [kind, value] of actions[i]) expected = kind === 1 ? expected + value : value;
+            for (const [kind, value] of actions[i])
+              expected = kind === 1 ? expected + value : value;
           }
           expect(latest(cells[i])).toBe(expected);
         }
       }
     } catch (error) {
-      throw new Error(`oracle seed ${seed}; minimal failing prefix:\n${schedule.join('\n')}`, { cause: error });
+      throw new Error(`oracle seed ${seed}; minimal failing prefix:\n${schedule.join("\n")}`, {
+        cause: error,
+      });
     }
   }
 });

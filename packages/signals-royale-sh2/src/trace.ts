@@ -33,11 +33,12 @@ export function emit(kind: string, target?: number, cause?: number, detail?: str
       recorder.overflow++;
     }
     recorder.events.push(event);
-    if (target !== undefined && (kind === 'component delivery' || kind === 'effect run')) {
+    if (target !== undefined && (kind === "component delivery" || kind === "effect run")) {
       recorder.latest.set(target, id);
     }
   }
-  if (target !== undefined && kind !== 'component delivery' && kind !== 'effect run') causes.set(target, id);
+  if (target !== undefined && kind !== "component delivery" && kind !== "effect run")
+    causes.set(target, id);
   return id;
 }
 
@@ -54,15 +55,19 @@ export function createTrace(capacity = 1024): TraceView {
       let id = cell?.id === undefined ? undefined : recorder.latest.get(cell.id);
       const chain: string[] = [];
       while (id !== undefined) {
-        const event = recorder.events.find(candidate => candidate.id === id);
+        const event = recorder.events.find((candidate) => candidate.id === id);
         if (event === undefined) break;
-        chain.push(`${event.id}: ${event.kind}${event.detail === undefined ? '' : ` (${event.detail})`}`);
+        chain.push(
+          `${event.id}: ${event.kind}${event.detail === undefined ? "" : ` (${event.detail})`}`,
+        );
         id = event.cause;
       }
       if (recorder.overflow !== 0) chain.push(`overflow: ${recorder.overflow} event(s) dropped`);
       return chain;
     },
     events: () => recorder.events.slice(),
-    stop() { recorders.delete(recorder); },
+    stop() {
+      recorders.delete(recorder);
+    },
   };
 }

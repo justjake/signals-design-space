@@ -1,4 +1,4 @@
-import { causeFor, emit } from './trace';
+import { causeFor, emit } from "./trace";
 
 export type CellId = number;
 
@@ -52,7 +52,7 @@ const errors: unknown[] = [];
 let hasErrors = new Uint8Array(256);
 const labels: Array<string | undefined> = [];
 const keys: Array<string | undefined> = [];
-const lifetimeStarts: Array<AtomOptions<unknown>['effect']> = [];
+const lifetimeStarts: Array<AtomOptions<unknown>["effect"]> = [];
 const lifetimeStops: Array<(() => void) | undefined> = [];
 const children: CellId[][] = [];
 const listeners: Array<Set<() => void> | undefined> = [];
@@ -68,8 +68,13 @@ let pendingEffects: CellId[] = [];
 let scope: CellId[] | undefined;
 let batchValues: Map<CellId, [unknown, number]> | undefined;
 type DraftAction = unknown | ((previous: unknown) => unknown);
-interface Draft { actions: Map<CellId, DraftAction[]>; cause?: number }
+interface Draft {
+  actions: Map<CellId, DraftAction[]>;
+  causes: Map<CellId, number>;
+  cause?: number;
+}
 const drafts = new Map<number, Draft>();
+const scheduledDrafts = new Set<number>();
 let nextDraft = 1;
 let writeDraft = 0;
 let renderDrafts: number[] = [];
@@ -77,7 +82,7 @@ let inRenderWorld = false;
 let renderCache = new Map<CellId, unknown>();
 let rootViews = new WeakMap<object, Map<CellId, unknown>>();
 let commitCause: number | undefined;
-const finalizer = new FinalizationRegistry<{ id: CellId; generation: number }>(held => {
+const finalizer = new FinalizationRegistry<{ id: CellId; generation: number }>((held) => {
   if (generations[held.id] === held.generation) releaseCell(held.id);
 });
 
@@ -176,7 +181,8 @@ function valueInDrafts(id: CellId, batches: readonly number[]): unknown {
     const actions = drafts.get(batch)?.actions.get(id);
     if (actions === undefined) continue;
     for (const action of actions) {
-      value = typeof action === 'function' ? (action as (previous: unknown) => unknown)(value) : action;
+      value =
+        typeof action === "function" ? (action as (previous: unknown) => unknown)(value) : action;
     }
   }
   return value;
@@ -216,10 +222,11 @@ function addDependency(source: CellId): void {
   if (++observed[source] === 1 && lifetimeStarts[source] !== undefined) {
     queueMicrotask(() => {
       if (observed[source] !== 0 && lifetimeStops[source] === undefined) {
-        lifetimeStops[source] = lifetimeStarts[source]!({
-          get: () => read({ id: source }),
-          set: value => set({ id: source }, value),
-        }) ?? undefined;
+        lifetimeStops[source] =
+          lifetimeStarts[source]!({
+            get: () => read({ id: source }),
+            set: (value) => set({ id: source }, value),
+          }) ?? undefined;
       }
     });
   }
@@ -295,7 +302,7 @@ function evaluate(id: CellId): unknown {
     if (hasErrors[id] !== 0) throw errors[id];
     return values[id];
   }
-  if ((flags[id] & RUNNING) !== 0) throw new Error('Reactive cycle');
+  if ((flags[id] & RUNNING) !== 0) throw new Error("Reactive cycle");
   flags[id] = (flags[id] | RUNNING) & ~DIRTY;
   clearDependencies(id);
   const previousObserver = activeObserver;
@@ -369,7 +376,7 @@ function runEffect(id: CellId): void {
     flags[id] = (flags[id] | DIRTY) & ~MAYBE_DIRTY;
   }
   if ((flags[id] & DIRTY) === 0) return;
-  emit('effect run', id, causeFor(id), labels[id]);
+  emit("effect run", id, causeFor(id), labels[id]);
   const previousTracking = tracking;
   tracking = false;
   try {
@@ -382,7 +389,8 @@ function runEffect(id: CellId): void {
   }
   if ((flags[id] & ACTIVE) === 0) return;
   const result = evaluate(id);
-  if (typeof result === 'function' && (flags[id] & ACTIVE) !== 0) cleanups[id] = result as () => void;
+  if (typeof result === "function" && (flags[id] & ACTIVE) !== 0)
+    cleanups[id] = result as () => void;
 }
 
 function disposeEffect(id: CellId, rethrow: boolean): void {
@@ -396,8 +404,13 @@ function disposeEffect(id: CellId, rethrow: boolean): void {
   if (cleanup !== undefined) {
     const previous = tracking;
     tracking = false;
-    try { cleanup(); } catch (error) { if (rethrow) throw error; }
-    finally { tracking = previous; }
+    try {
+      cleanup();
+    } catch (error) {
+      if (rethrow) throw error;
+    } finally {
+      tracking = previous;
+    }
   }
 }
 
@@ -417,13 +430,13 @@ function flushEffects(): void {
 
 export function atom<T>(initial: T | (() => T), options: AtomOptions<T> = {}): Cell<T> {
   const id = createCell(SIGNAL);
-  if (typeof initial === 'function') initializers[id] = initial as () => T;
+  if (typeof initial === "function") initializers[id] = initial as () => T;
   else {
     values[id] = initial;
     flags[id] |= INITIALIZED;
   }
   equalities[id] = options.equals as ((a: unknown, b: unknown) => boolean) | undefined;
-  lifetimeStarts[id] = options.effect as AtomOptions<unknown>['effect'];
+  lifetimeStarts[id] = options.effect as AtomOptions<unknown>["effect"];
   labels[id] = options.label;
   keys[id] = options.key;
   const cell = { id };
@@ -459,21 +472,21 @@ export function read<T>(cell: Cell<T>): T {
 }
 
 export function set<T>(cell: Cell<T>, value: T): void {
-  if (writesForbidden !== 0) throw new Error('Writes are forbidden in this context');
+  if (writesForbidden !== 0) throw new Error("Writes are forbidden in this context");
   const id = cell.id;
-  if (kinds[id] !== SIGNAL) throw new Error('Only atoms are writable');
-  if (inRenderWorld) throw new Error('Signals cannot be written during render');
+  if (kinds[id] !== SIGNAL) throw new Error("Only atoms are writable");
+  if (inRenderWorld) throw new Error("Signals cannot be written during render");
   materialize(id);
   if (writeDraft !== 0) {
     const draft = drafts.get(writeDraft);
-    if (draft === undefined) throw new Error('The transition batch has retired');
+    if (draft === undefined) throw new Error("The transition batch has retired");
     const current = valueInDrafts(id, [writeDraft]);
     const equal = equalities[id] ?? Object.is;
     if (equal(current, value)) return;
     let actions = draft.actions.get(id);
-    if (actions === undefined) draft.actions.set(id, actions = []);
+    if (actions === undefined) draft.actions.set(id, (actions = []));
     actions.push(value);
-    emit('write', id, causeFor(writeDraft), `batch ${writeDraft}`);
+    draft.causes.set(id, emit("write", id, causeFor(writeDraft), `batch ${writeDraft}`));
     notifyListeners(id);
     return;
   }
@@ -485,7 +498,7 @@ export function set<T>(cell: Cell<T>, value: T): void {
   }
   values[id] = value;
   versions[id]++;
-  emit('write', id, commitCause, labels[id]);
+  emit("write", id, commitCause, labels[id]);
   invalidate(id);
   notifyListeners(id);
 }
@@ -495,11 +508,11 @@ export function update<T>(cell: Cell<T>, reducer: (previous: T) => T): void {
     const id = cell.id;
     materialize(id);
     const draft = drafts.get(writeDraft);
-    if (draft === undefined) throw new Error('The transition batch has retired');
+    if (draft === undefined) throw new Error("The transition batch has retired");
     let actions = draft.actions.get(id);
-    if (actions === undefined) draft.actions.set(id, actions = []);
+    if (actions === undefined) draft.actions.set(id, (actions = []));
     actions.push(reducer as (previous: unknown) => unknown);
-    emit('write', id, causeFor(writeDraft), `batch ${writeDraft}`);
+    draft.causes.set(id, emit("write", id, causeFor(writeDraft), `batch ${writeDraft}`));
     notifyListeners(id);
     return;
   }
@@ -513,7 +526,9 @@ export function effect(calculate: () => void | (() => void)): () => void {
   scope?.push(id);
   if (activeObserver >= 0 && kinds[activeObserver] === EFFECT) children[activeObserver].push(id);
   batchDepth++;
-  try { runEffect(id); } finally {
+  try {
+    runEffect(id);
+  } finally {
     if (--batchDepth === 0) flushEffects();
   }
   let active = true;
@@ -546,7 +561,7 @@ export function startBatch(): void {
 }
 
 export function endBatch(): void {
-  if (batchDepth === 0) throw new Error('No batch is open');
+  if (batchDepth === 0) throw new Error("No batch is open");
   if (--batchDepth === 0) {
     for (const [id, [value, version]] of batchValues ?? []) {
       const equal = equalities[id] ?? Object.is;
@@ -584,10 +599,11 @@ export function subscribe(cell: Cell, listener: () => void): () => void {
   if (++observed[id] === 1 && lifetimeStarts[id] !== undefined) {
     queueMicrotask(() => {
       if (observed[id] !== 0 && lifetimeStops[id] === undefined) {
-        lifetimeStops[id] = lifetimeStarts[id]!({
-          get: () => read({ id }),
-          set: value => set({ id }, value),
-        }) ?? undefined;
+        lifetimeStops[id] =
+          lifetimeStarts[id]!({
+            get: () => read({ id }),
+            set: (value) => set({ id }, value),
+          }) ?? undefined;
       }
     });
   }
@@ -624,46 +640,66 @@ export function installState<T>(cell: Cell<T>, value: T): void {
   flags[id] |= INITIALIZED;
 }
 
-export function serializeAtomState(atoms: Cell[], replacer?: (key: string, value: unknown) => unknown): string {
+export function serializeAtomState(
+  atoms: Cell[],
+  replacer?: (key: string, value: unknown) => unknown,
+): string {
   const state: Record<string, unknown> = {};
   for (const cell of atoms) {
     const key = keys[cell.id];
-    if (key === undefined) throw new Error('Every serialized atom needs a key');
+    if (key === undefined) throw new Error("Every serialized atom needs a key");
     state[key] = read(cell);
   }
   return JSON.stringify(state, replacer);
 }
 
-export function initializeAtomState(json: string, atoms: Cell[], reviver?: (key: string, value: unknown) => unknown): void {
+export function initializeAtomState(
+  json: string,
+  atoms: Cell[],
+  reviver?: (key: string, value: unknown) => unknown,
+): void {
   const state = JSON.parse(json, reviver) as Record<string, unknown>;
   for (const cell of atoms) {
     const key = keys[cell.id];
-    if (key !== undefined && Object.prototype.hasOwnProperty.call(state, key)) installState(cell, state[key]);
+    if (key !== undefined && Object.prototype.hasOwnProperty.call(state, key))
+      installState(cell, state[key]);
   }
 }
 
 export function beginDraft(): number {
   const id = nextDraft++;
-  drafts.set(id, { actions: new Map() });
-  emit('batch open', id);
+  drafts.set(id, { actions: new Map(), causes: new Map() });
+  emit("batch open", id);
   return id;
 }
 
 export function withDraft<T>(id: number, run: () => T): T {
   const previous = writeDraft;
   writeDraft = id;
-  try { return run(); } finally { writeDraft = previous; }
+  try {
+    return run();
+  } finally {
+    writeDraft = previous;
+  }
+}
+
+export function markDraftScheduled(id: number): void {
+  scheduledDrafts.add(id);
+}
+
+export function commitIfUnscheduled(id: number): void {
+  if (drafts.has(id) && !scheduledDrafts.has(id)) commitDrafts({}, [id]);
 }
 
 export function enterRenderWorld(batches: number[]): void {
   inRenderWorld = true;
   renderDrafts = batches;
   renderCache = new Map();
-  emit('render pass start', undefined, batches.length === 0 ? undefined : causeFor(batches[0]));
+  emit("render pass start", undefined, batches.length === 0 ? undefined : causeFor(batches[0]));
 }
 
 export function leaveRenderWorld(): void {
-  emit('render pass end');
+  emit("render pass end");
   renderDrafts = [];
   inRenderWorld = false;
   renderCache.clear();
@@ -678,32 +714,50 @@ export function commitDrafts(container: object, batches: number[]): void {
     }
   }
   rootViews.set(container, view);
-  emit('root commit', undefined, batches.length === 0 ? undefined : causeFor(batches[0]));
+  emit("root commit", undefined, batches.length === 0 ? undefined : causeFor(batches[0]));
   for (const batch of batches) {
     const draft = drafts.get(batch);
     if (draft === undefined) continue;
-    commitCause = emit('batch retire', batch, causeFor(batch));
+    commitCause = emit("batch retire", batch, causeFor(batch));
     for (const [id, actions] of draft.actions) {
       let value = values[id];
       for (const action of actions) {
-        value = typeof action === 'function' ? (action as (previous: unknown) => unknown)(value) : action;
+        value =
+          typeof action === "function" ? (action as (previous: unknown) => unknown)(value) : action;
       }
       set({ id }, value);
     }
     commitCause = undefined;
     drafts.delete(batch);
+    scheduledDrafts.delete(batch);
     for (const id of draft.actions.keys()) notifyListeners(id);
   }
 }
 
 export function latest<T>(cell: Cell<T>): T {
-  if (inRenderWorld) return read(cell);
+  if (inRenderWorld) {
+    try {
+      return read(cell);
+    } catch (error) {
+      if (error !== null && typeof error === "object" && "then" in error) {
+        return settled[cell.id] === 0 ? (undefined as T) : (values[cell.id] as T);
+      }
+      throw error;
+    }
+  }
   if (kinds[cell.id] !== SIGNAL) {
-    try { return read(cell); } catch (error) {
-      if (error !== null && typeof error === 'object' && 'then' in error && settled[cell.id] !== 0) {
+    try {
+      return read(cell);
+    } catch (error) {
+      if (
+        error !== null &&
+        typeof error === "object" &&
+        "then" in error &&
+        settled[cell.id] !== 0
+      ) {
         return values[cell.id] as T;
       }
-      if (error !== null && typeof error === 'object' && 'then' in error) return undefined as T;
+      if (error !== null && typeof error === "object" && "then" in error) return undefined as T;
       throw error;
     }
   }
@@ -721,19 +775,32 @@ export function committed<T>(cell: Cell<T>, container?: object): T {
 
 export function isPending(cell: Cell): boolean {
   const error = errors[cell.id];
-  if (hasErrors[cell.id] !== 0 && error !== null && typeof error === 'object' && 'then' in error) return true;
+  if (hasErrors[cell.id] !== 0 && error !== null && typeof error === "object" && "then" in error)
+    return true;
   for (const [id, draft] of drafts) {
     if (inRenderWorld && renderDrafts.includes(id)) continue;
-    if (draft.actions.has(cell.id) || kinds[cell.id] === COMPUTED && draft.actions.size !== 0) return true;
+    if (draft.actions.has(cell.id) || (kinds[cell.id] === COMPUTED && draft.actions.size !== 0))
+      return true;
   }
   return false;
 }
 
 export function pendingBatch(cell: Cell): number {
   for (const [id, draft] of drafts) {
-    if (draft.actions.has(cell.id) || kinds[cell.id] === COMPUTED && draft.actions.size !== 0) return id;
+    if (draft.actions.has(cell.id) || (kinds[cell.id] === COMPUTED && draft.actions.size !== 0))
+      return id;
   }
   return 0;
+}
+
+export function deliveryCause(cell: Cell): number | undefined {
+  if (inRenderWorld) {
+    for (let i = renderDrafts.length - 1; i >= 0; i--) {
+      const cause = drafts.get(renderDrafts[i])?.causes.get(cell.id);
+      if (cause !== undefined) return cause;
+    }
+  }
+  return causeFor(cell.id);
 }
 
 export function staleValue<T>(cell: Cell<T>): { available: boolean; value: T | undefined } {
@@ -760,7 +827,7 @@ export function resolveComputed<T>(cell: Cell<T>, value: T): void {
   settled[id] = 1;
   flags[id] &= ~(DIRTY | MAYBE_DIRTY);
   versions[id]++;
-  emit('suspense settlement', id);
+  emit("suspense settlement", id);
   notifyListeners(id);
 }
 
@@ -791,6 +858,7 @@ export function reset(): void {
   pendingEffects = [];
   batchValues = undefined;
   drafts.clear();
+  scheduledDrafts.clear();
   nextDraft = 1;
   writeDraft = 0;
   renderDrafts = [];
@@ -801,4 +869,8 @@ export function reset(): void {
 
 export function debugStats(): { cells: number; pendingEffects: number } {
   return { cells: liveCount, pendingEffects: pendingEffects.length };
+}
+
+export function debugEpisodeCount(): number {
+  return drafts.size;
 }

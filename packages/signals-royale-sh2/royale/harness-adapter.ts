@@ -1,7 +1,22 @@
-import { computed, effect, effectScope, endBatch, read, startBatch, atom, set, untracked } from '../src';
+import {
+  computed,
+  effect,
+  effectScope,
+  endBatch,
+  read,
+  startBatch,
+  atom,
+  set,
+  untracked,
+} from "../src";
 
-export interface AdapterSignal<T> { read(): T; write(value: T): void }
-export interface AdapterComputed<T> { read(): T }
+export interface AdapterSignal<T> {
+  read(): T;
+  write(value: T): void;
+}
+export interface AdapterComputed<T> {
+  read(): T;
+}
 export interface FrameworkAdapter {
   name: string;
   signal<T>(initialValue: T): AdapterSignal<T>;
@@ -14,7 +29,7 @@ export interface FrameworkAdapter {
 }
 
 const adapter: FrameworkAdapter = {
-  name: 'signals-royale-sh2',
+  name: "signals-royale-sh2",
   signal<T>(initialValue: T) {
     const cell = atom<T>(initialValue);
     return { read: () => read<T>(cell), write: (value: T) => set<T>(cell, value) };
