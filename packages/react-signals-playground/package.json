@@ -3,7 +3,7 @@
 	"private": true,
 	"version": "0.0.0",
 	"license": "MIT",
-	"description": "Vite + React playground that renders one shared App under three entrypoints, each backed by a different concurrent-signals implementation. App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
+	"description": "Vite + React playground that renders one shared App under four entrypoints, each backed by a different concurrent-signals implementation. App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
 	"type": "module",
 	"imports": {
 		"#concurrent-signals-shim": "./src/shims/index.ts"
@@ -16,6 +16,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
+		"concurrent-solid-react": "workspace:*",
 		"cosignals": "workspace:*",
 		"cosignals-react": "workspace:*",
 		"cosignals-alt-a": "workspace:*",

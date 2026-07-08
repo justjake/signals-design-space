@@ -14,6 +14,23 @@
  * no longer implementation-agnostic and should import the package directly.
  */
 
+/**
+ * How an implementation keeps a navigation-style transition open while the
+ * destination's async data is still in flight.
+ *
+ * - 'suspense': a component rendered inside the transition may throw the
+ *   pending data's promise (React Suspense). React keeps the transition
+ *   open — committed UI stays on screen and interactive, urgent updates
+ *   keep landing — and finishes it when the promise resolves. This is how
+ *   React's own startTransition behaves over suspending data reads.
+ * - 'defer-write': thrown promises inside transition renders are not safe
+ *   on this implementation; the app should await the data first and only
+ *   then run the transition's writes. The pending window is app-derived
+ *   state (compare an urgently-written target against the transitionally
+ *   written current value); no render ever suspends.
+ */
+export type TransitionHoldStyle = 'suspense' | 'defer-write';
+
 /** A readable reactive value: an atom or a derived value. */
 export interface ReadableSignal<T> {
 	readonly state: T;
@@ -77,4 +94,7 @@ export interface ConcurrentSignalsShim {
 	 * in between.
 	 */
 	startSignalTransition(scope: () => void): void;
+
+	/** How to hold a transition open on in-flight async data; see TransitionHoldStyle. */
+	readonly transitionHoldStyle: TransitionHoldStyle;
 }

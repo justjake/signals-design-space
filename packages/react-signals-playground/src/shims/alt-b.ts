@@ -20,9 +20,17 @@ import {
 	useSignal as bridgeUseSignal,
 	useSignalEffect as bridgeUseSignalEffect,
 } from 'cosignals-alt-b/react';
-import type { ReadableSignal, WritableSignal } from './interface';
+import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface';
 
 export const name = 'cosignals-alt-b';
+
+// The hold itself works: a thrown promise keeps the transition pending and
+// urgent updates commit. Known engine issue (kept visible on purpose, not
+// routed around): while a transition is held this way, an urgent write that
+// CHANGES a derived value's output — e.g. the playground's table filter —
+// locks the page in an infinite update loop. Writes whose deriveds come out
+// equal (equality cutoff) are unaffected.
+export const transitionHoldStyle: TransitionHoldStyle = 'suspense';
 
 export function register(): void {
 	registerAltBReact();

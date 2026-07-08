@@ -17,9 +17,14 @@ import {
 	useSignalEffect as bridgeUseSignalEffect,
 	type SignalSource,
 } from 'cosignals-alt-a/react';
-import type { ReadableSignal, WritableSignal } from './interface';
+import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './interface';
 
 export const name = 'cosignals-alt-a';
+
+// Verified in the playground's Playwright suite: a promise thrown from a
+// component inside a transition render keeps the transition pending while
+// urgent updates keep committing, exactly like stock React semantics.
+export const transitionHoldStyle: TransitionHoldStyle = 'suspense';
 
 export function register(): void {
 	registerAltAReact(defaultApi);

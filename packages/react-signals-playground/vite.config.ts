@@ -32,12 +32,18 @@ function redirectDirEntries(dirs: readonly string[]): Plugin {
 	};
 }
 
-export default defineConfig({
-	plugins: [react(), redirectDirEntries(['/alt-a', '/alt-b'])],
-	// MPA: /, /alt-a/, /alt-b/ are separate html entries. Disabling the SPA
-	// fallback makes an unmapped path 404 instead of silently serving the
-	// cosignals page under the wrong URL.
+export default defineConfig(({ mode }) => ({
+	plugins: [react(), redirectDirEntries(['/alt-a', '/alt-b', '/solid-react'])],
+	// MPA: /, /alt-a/, /alt-b/, /solid-react/ are separate html entries.
+	// Disabling the SPA fallback makes an unmapped path 404 instead of
+	// silently serving the cosignals page under the wrong URL.
 	appType: 'mpa',
+	// concurrent-solid-react's vendored Solid core guards its dev-mode
+	// diagnostics behind the __DEV__ compile-time constant (see that
+	// package's globals.d.ts): diagnostics on for dev serve, off for builds.
+	define: {
+		__DEV__: JSON.stringify(mode !== 'production'),
+	},
 	optimizeDeps: {
 		// react/react-dom/scheduler resolve to the workspace's patched React
 		// build (pnpm override → link:vendor/react/build/oss-experimental).
@@ -58,7 +64,8 @@ export default defineConfig({
 				cosignals: entry('index.html'),
 				'alt-a': entry('alt-a/index.html'),
 				'alt-b': entry('alt-b/index.html'),
+				'solid-react': entry('solid-react/index.html'),
 			},
 		},
 	},
-});
+}));

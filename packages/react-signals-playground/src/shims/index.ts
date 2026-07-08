@@ -8,7 +8,7 @@
  * claim exclusive React protocol registrations (exactly one batch-id
  * allocator per page), so the implementations that were NOT selected must
  * never initialize. A selector that re-exports synchronously would need
- * static imports of every implementation — initializing all three engines
+ * static imports of every implementation — initializing every engine
  * on every page. Keeping isolation therefore forces a dynamic import
  * somewhere, and doing it here keeps it in exactly one place: each
  * implementation becomes its own code-split chunk, only the selected chunk
@@ -19,25 +19,17 @@
  * the time any app code runs, the page's implementation is bound.
  */
 import type { ConcurrentSignalsShim } from './interface';
-
-// Typed loaders: each import() namespace is checked against the shim
-// interface at this map, so a shim missing part of the surface fails
-// typecheck here rather than at a use site.
-const implByPathSegment: Record<string, (() => Promise<ConcurrentSignalsShim>) | undefined> = {
-	'': () => import('./cosignals'),
-	'alt-a': () => import('./alt-a'),
-	'alt-b': () => import('./alt-b'),
-};
+import { implementations } from './implementations';
 
 // First non-empty segment: '/' → '', '/alt-a/' and '/alt-a/index.html' → 'alt-a'.
 // Assumes the app is served at base '/', like vite dev and vite preview here.
 const segment = window.location.pathname.split('/').find((part) => part !== '') ?? '';
-const load = implByPathSegment[segment];
-if (load === undefined) {
+const entry = implementations.find((impl) => impl.segment === segment);
+if (entry === undefined) {
 	throw new Error(`react-signals-playground: no implementation mapped for path segment "/${segment}"`);
 }
 
-const impl: ConcurrentSignalsShim = await load();
+const impl: ConcurrentSignalsShim = await entry.load();
 
 export const name = impl.name;
 export const register = impl.register;
@@ -47,5 +39,17 @@ export const useSignal = impl.useSignal;
 export const useComputed = impl.useComputed;
 export const useSignalEffect = impl.useSignalEffect;
 export const startSignalTransition = impl.startSignalTransition;
+export const transitionHoldStyle = impl.transitionHoldStyle;
 
-export type { ConcurrentSignalsShim, ReadableSignal, WritableSignal } from './interface';
+// The implementation table rides along for the app's tab bar: exporting it
+// here keeps components on the single '#concurrent-signals-shim' specifier.
+// Re-exporting the table triggers no implementation loads — rows hold
+// dynamic-import thunks, and only the selected one was invoked above.
+export { implementationHref, implementations } from './implementations';
+export type { Implementation } from './implementations';
+export type {
+	ConcurrentSignalsShim,
+	ReadableSignal,
+	TransitionHoldStyle,
+	WritableSignal,
+} from './interface';
