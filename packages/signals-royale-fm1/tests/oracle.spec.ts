@@ -1,7 +1,8 @@
 /**
  * Randomized oracle: a naive model of this engine's semantics — per-atom
  * canonical values, per-batch write-intent histories, memo-free rederivation
- * of computeds, and world folds — fuzzed against the real engine.
+ * of computeds, world folds, and mirror effects (urgent cross-atom writes
+ * fired synchronously mid-flush) — fuzzed against the real engine.
  *
  * FUZZ_SEEDS tunes the seed count (default 300, ~90 steps each). A failure
  * prints the seed plus a greedily shrunk schedule; pin found bugs as named
@@ -42,6 +43,12 @@ const N_COMPUTED = 6;
 
 type CompDef = { kind: 'add' | 'mul' | 'pick'; a: number; b: number; c: number };
 
+/** An engine effect that mirrors `src` into `dst` with an urgent write. It
+ * fires synchronously inside whatever flush changed `src` canonically — the
+ * mid-flush cross-atom write class (a suppression flag spanning a whole set()
+ * would swallow its rebase-log append while `dst` holds a live episode). */
+type MirrorRule = { src: number; dst: number; mult: number; add: number };
+
 type Step =
 	| { op: 'set'; atom: number; value: number }
 	| { op: 'update'; atom: number; mult: number; add: number }
@@ -55,6 +62,7 @@ interface Schedule {
 	defs: CompDef[];
 	steps: Step[];
 	liveComputeds: number[];
+	mirrors: MirrorRule[];
 }
 
 function genSchedule(rand: () => number, nSteps: number): Schedule {
@@ -108,7 +116,19 @@ function genSchedule(rand: () => number, nSteps: number): Schedule {
 		}
 	}
 	const liveComputeds = [N_COMPUTED - 1, Math.floor(rand() * N_COMPUTED)];
-	return { defs, steps, liveComputeds };
+	// Most schedules carry one mirror effect. dst != src keeps a single rule
+	// acyclic, so at most one mirror fires per step (deterministic model).
+	const mirrors: MirrorRule[] = [];
+	if (rand() < 0.7) {
+		const src = Math.floor(rand() * N_ATOMS);
+		mirrors.push({
+			src,
+			dst: (src + 1 + Math.floor(rand() * (N_ATOMS - 1))) % N_ATOMS,
+			mult: rand() < 0.5 ? 2 : 1,
+			add: Math.floor(rand() * 5) - 2,
+		});
+	}
+	return { defs, steps, liveComputeds, mirrors };
 }
 
 // --- The naive model ------------------------------------------------------
@@ -136,10 +156,16 @@ class Model {
 	batches: ModelBatch[] = [];
 	logs = new Map<number, ModelLog>();
 	defs: CompDef[];
+	mirrors: MirrorRule[];
 
-	constructor(defs: CompDef[]) {
+	constructor(defs: CompDef[], mirrors: MirrorRule[]) {
 		this.defs = defs;
+		this.mirrors = mirrors;
 		for (let i = 0; i < N_ATOMS; i++) this.values.push(i);
+		// Mirror effects run once at creation, before any step.
+		for (const m of mirrors) {
+			this.urgent(m.dst, { kind: 'set', value: this.values[m.src] * m.mult + m.add });
+		}
 	}
 
 	/** Memo-free rederivation of node `i` over a given atom valuation. */
@@ -216,6 +242,18 @@ class Model {
 	}
 
 	apply(step: Step): void {
+		// A step changes at most one mirror source canonically (mirror dsts are
+		// never sources), so before/after comparison decides which effect fires.
+		const srcBefore = this.mirrors.map((m) => this.values[m.src]);
+		this.applyStep(step);
+		for (let i = 0; i < this.mirrors.length; i++) {
+			const m = this.mirrors[i];
+			if (Object.is(this.values[m.src], srcBefore[i])) continue; // equality cutoff: no re-run
+			this.urgent(m.dst, { kind: 'set', value: this.values[m.src] * m.mult + m.add });
+		}
+	}
+
+	applyStep(step: Step): void {
 		switch (step.op) {
 			case 'set':
 				this.urgent(step.atom, { kind: 'set', value: step.value });
@@ -276,7 +314,7 @@ class Model {
 // --- Runner ----------------------------------------------------------------
 
 function runSchedule(schedule: Schedule): string | null {
-	const { defs, steps, liveComputeds } = schedule;
+	const { defs, steps, liveComputeds, mirrors } = schedule;
 	const atoms: Atom<number>[] = [];
 	for (let i = 0; i < N_ATOMS; i++) atoms.push(atom(i));
 	const nodes: (Atom<number> | Computed<number>)[] = [...atoms];
@@ -292,8 +330,15 @@ function runSchedule(schedule: Schedule): string | null {
 		nodes.push(node);
 	}
 	const disposers = liveComputeds.map((i) => effect(() => nodes[N_ATOMS + i].get()));
+	for (const m of mirrors) {
+		disposers.push(
+			effect(() => {
+				write(atoms[m.dst], atoms[m.src].get() * m.mult + m.add);
+			}),
+		);
+	}
 
-	const model = new Model(defs);
+	const model = new Model(defs, mirrors);
 	const batches: Batch[] = [];
 	try {
 		for (let s = 0; s < steps.length; s++) {
@@ -400,6 +445,7 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
 					`seed ${seed}: ${failure}`,
 					`shrunk schedule (${small.steps.length} steps):`,
 					JSON.stringify(small.defs),
+					JSON.stringify(small.mirrors),
 					JSON.stringify(small.steps),
 				].join('\n');
 				expect.fail(report);

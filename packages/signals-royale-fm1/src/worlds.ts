@@ -142,21 +142,34 @@ export function hasRebaseLog(atom: Atom<unknown>): boolean {
  * including direct engine-API `atom.set()` calls that never went through
  * `write`/`update`. Without this, retirement would replay the transition's
  * intents over the episode's stale base and silently undo the direct set.
- * `alreadyLogged` suppresses the hook when the entry exists (functional
- * updates log the function, not its result) or when the set IS a replay
- * (retirement folds).
+ *
+ * Suppression must not log when the entry already exists (functional updates
+ * log the function, not its result) or when the set IS a replay (retirement
+ * folds). It is one-shot and per-atom: the hook fires synchronously at the
+ * top of `set()` — before subscribers are notified, so before any effect can
+ * run — and CONSUMES the suppression there. A flag that instead spanned the
+ * whole `set()` call would also swallow the log appends of unrelated writes
+ * made by effects flushed synchronously inside that set, and retirement would
+ * replay stale drafts over them.
  */
-let alreadyLogged = false;
+let suppressLogFor: Atom<unknown> | null = null;
 setCanonicalSetHook((atom, v) => {
-	if (alreadyLogged || !rebaseLogs.has(atom)) return;
+	if (suppressLogFor === atom) {
+		suppressLogFor = null; // consumed: re-entrant sets (effects mid-flush) log normally
+		return;
+	}
+	if (!rebaseLogs.has(atom)) return;
 	logEntry(atom, { kind: 'set', value: v }, null);
 });
 function setWithoutLogging(atom: Atom<unknown>, v: unknown): void {
-	alreadyLogged = true;
+	const prev = suppressLogFor;
+	suppressLogFor = atom;
 	try {
 		atom.set(v);
 	} finally {
-		alreadyLogged = false;
+		// Normally already consumed by the hook; restore covers a set() that
+		// throws before the hook fires (write guard).
+		suppressLogFor = prev;
 	}
 }
 

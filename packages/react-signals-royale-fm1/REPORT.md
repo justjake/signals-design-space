@@ -272,3 +272,72 @@ npx tsc --noEmit -p tsconfig.json      (both clean, exit 0)
 == LOC (canonical counter, final)
 "forkLoc": 188, "libLoc": 1775
 ```
+
+### Fix round 2: per-atom suppression (regression in the round-1 `set()` fix)
+
+The re-judge confirmed a regression introduced by fix #2 above. The canonical-set
+hook used a module-wide `alreadyLogged` boolean to keep `setWithoutLogging`
+(retirement folds, urgent functional updates) from double-logging — but that flag
+stayed true for the WHOLE `atom.set()` call, and at batch depth 0 `set()` flushes
+effects synchronously before returning. So `update(a, fn)` outside a batch
+suppressed the rebase-log append of any UNRELATED urgent write made by an effect
+fired inside that flush: the write folded canonically, but retirement replayed the
+target atom's stale draft over it (judge probe: draft 100, urgent mirror 5 —
+retirement landed 100).
+
+**Fix.** Suppression is now per-atom and one-shot: `setWithoutLogging` arms
+`suppressLogFor = atom`; the hook — which fires at the very top of `set()`, before
+the equality cutoff and before any subscriber notification — consumes it
+(`suppressLogFor = null`) when it matches. By the time the sink queue drains inside
+that `set()`, the flag is clear, so every re-entrant write (cross-atom or
+same-atom) logs normally. The `finally` restore only matters for a `set()` that
+throws before the hook fires (write guard, initializer guard).
+
+**Re-entry audit** (every path that runs user code synchronously under `set()`):
+
+- Effect flush at depth 0 — the regression path; fires after the hook consumed
+  suppression. Covered (cross-atom, same-atom write-back, and retirement-fold
+  variants).
+- Watcher notifications — drain through the same sink queue, same timing, same
+  old-flag breakage. Covered (cross-atom watcher test).
+- Lifetime `onObserved` callbacks — microtask-deferred (`scheduleObserveCheck`),
+  never inside a suppression window; their `ctx.set` is a plain hooked set.
+- `commitBatch` folds — the whole fold loop sits in one `startBatch`/`endBatch`,
+  so effects flush at its `endBatch`, after every `setWithoutLogging` returned and
+  suppression cleared. Covered (fold-triggered mirror test).
+
+**Tests.** Four new engine tests in `worlds.spec.ts` (the judge's probe scenario,
+the same-atom write-back, the retirement-fold mirror, the watcher variant); three
+verified to fail under the old global flag (3 failed / 30 passed with 2a6ca9f
+sources; the fold variant passes there too — its flush lands outside the old
+window — and is kept as re-entry-path coverage). The oracle fuzzer now generates
+mirror effects — engine `effect()`s that urgently write a derived value to a
+DIFFERENT atom, firing synchronously mid-flush — modeled deterministically (one
+acyclic rule per schedule, equality-cutoff aware); the augmented oracle catches
+the old flag at default seeds, so this class stays covered.
+
+Fresh outputs (verbatim):
+
+```
+== judge probes (unmodified, /tmp/fm1-scratch/probe.mjs + probe2.mjs)
+b canonical after urgent mirror: 5
+b after retirement: 5 OK
+control (write trigger): b = 5 OK
+fold variant: b = 51 OK (call order: 100 then 51)
+== typecheck (engine + react packages)
+npx tsc --noEmit -p tsconfig.json      (both clean, exit 0)
+== engine suite (conformance 179 + worlds 33 + oracle + gc)
+ Test Files  4 passed (4)
+      Tests  217 passed (217)
+== deep fuzz (FUZZ_SEEDS=1200, mirror-augmented oracle)
+      Tests  1 passed (1)
+== real-React gate
+ Test Files  5 passed (5)
+      Tests  28 passed (28)
+== shared battery (royale/verify-kit/battery)
+ Test Files  1 passed (1)
+      Tests  25 passed (25)
+== LOC (canonical counter)
+"forkLoc": 188 (unchanged), "libLoc": 1780 (+5; worlds.ts is the only
+source file touched)
+```
