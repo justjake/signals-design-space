@@ -84,12 +84,13 @@ export const TAPE_CHUNK_ENTRIES = 1024;
  * One fixed-size chunk of int-packed log entry columns: recording a write is
  * a few integer stores, not an object allocation. Plain number arrays stay
  * SMI-packed (V8's fast small-integer array representation) and grow in
- * place up to the chunk capacity; a dropped chunk releases its arrays whole
- * — no memmove, no rebase, no per-entry fix-up ever runs. (`WriteKind` is
- * concurrent.ts's const enum, imported type-only: its hot comparison sites
- * live there, and this module's one kind branch — the materialized
- * test/trace surface — compares the bare 0/1 codes the two declarations
- * share by construction.)
+ * place up to the chunk capacity (a pooled shell arrives with its capacity
+ * already grown); a dropped chunk releases its entries whole and its shell
+ * returns to the chunk pool — no memmove, no rebase, no per-entry fix-up
+ * ever runs. (`WriteKind` is concurrent.ts's const enum, imported
+ * type-only: its hot comparison sites live there, and this module's one
+ * kind branch — the materialized test/trace surface — compares the bare
+ * 0/1 codes the two declarations share by construction.)
  */
 // Exported with the log: `WriteLog.chunks` is part of the log's inspectable
 // shape (tests and diagnostics read chunk counts and columns).
@@ -102,6 +103,13 @@ export class TapeChunk {
 	/** The chunk's newest retirement stamp — the fold valve's O(1) pin clause
 	 * (stamps are monotone, so plain assignment at each stamping maintains it). */
 	maxRetiredSeq: Seq = 0;
+	// The columns start empty and append-grow to at most the chunk capacity
+	// (packed the whole way: the writer only ever stores at index n). They
+	// are NOT preallocated at capacity — sparse logs are the common case
+	// (a wide commit touches many atoms a few writes each), and a 48KB
+	// preallocation per touched atom was measured at +86% on the wide-mask
+	// commit drain. Capacity retention across episodes comes from the shell
+	// pool instead — see acquireChunk.
 	kinds: WriteKind[] = [];
 	slots: BatchSlot[] = [];
 	seqs: Seq[] = [];
@@ -109,6 +117,49 @@ export class TapeChunk {
 	retired: Seq[] = [];
 	batches: BatchId[] = [];
 	payloads: unknown[] = [];
+}
+
+/** Pooled chunk shells the tape reuses across episodes (capped — see
+ * CHUNK_POOL_CAP). A shell's columns keep whatever capacity they grew, at
+ * most ~48KB (six 1024-slot columns), so the full pool holds under 1MB. */
+const CHUNK_POOL: TapeChunk[] = [];
+
+/** The chunk pool's shell cap: enough to cover several concurrently-tailed
+ * atoms' worth of steady write-storm churn without growing the heap, small
+ * enough that a burst's shells release back to the allocator. */
+const CHUNK_POOL_CAP = 16;
+
+/**
+ * Take a chunk shell from the pool (or allocate one). The pool is a priced
+ * decision, not tidiness: the episode close drops every chunk wholesale, so
+ * under a write storm each episode used to re-allocate six columns per
+ * chunk and re-grow them entry by entry — and a benchmark boundary's full
+ * GC left those fresh backing stores on cold pages, which convicted the
+ * storm line at +64-93% vs the pre-flattening log (whose flat arrays kept
+ * their capacity across compactions implicitly). A pooled shell keeps its
+ * columns' grown capacity and warmth across episodes: the storm's next
+ * episode writes into warm, full-capacity columns, while a sparse log's
+ * shell stays exactly as small as its history did (columns are never
+ * preallocated — see the TapeChunk column note). Stale numeric residue past
+ * `n` is never read, and the RELEASE scrubs the payload column so a parked
+ * shell can never pin values (leaks are bugs).
+ */
+function acquireChunk(): TapeChunk {
+	const ch = CHUNK_POOL.pop();
+	if (ch === undefined) return new TapeChunk();
+	ch.n = 0;
+	ch.unretired = 0;
+	ch.maxRetiredSeq = 0;
+	return ch;
+}
+
+/** Return a dropped chunk's shell to the pool (the episode close and the
+ * fold valve — every whole-chunk drop site). Scrubs the payload column (the
+ * one column holding object references); numeric residue is dead storage
+ * the next tenancy overwrites behind its own `n`. */
+function releaseChunk(ch: TapeChunk): void {
+	ch.payloads.fill(undefined);
+	if (CHUNK_POOL.length < CHUNK_POOL_CAP) CHUNK_POOL.push(ch);
 }
 
 /** The materialized face of one chunk entry (test/trace surface — see
@@ -150,16 +201,17 @@ export class WriteLog {
 		const chunks = this.chunks;
 		let ch = chunks.length === 0 ? undefined : chunks[chunks.length - 1]!;
 		if (ch === undefined || ch.n === TAPE_CHUNK_ENTRIES) {
-			ch = new TapeChunk();
+			ch = acquireChunk();
 			chunks.push(ch);
 		}
-		ch.kinds.push(kind);
-		ch.slots.push(slot);
-		ch.seqs.push(seq);
-		ch.retired.push(0);
-		ch.batches.push(batch);
-		ch.payloads.push(payload);
-		ch.n++;
+		const at = ch.n;
+		ch.kinds[at] = kind;
+		ch.slots[at] = slot;
+		ch.seqs[at] = seq;
+		ch.retired[at] = 0;
+		ch.batches[at] = batch;
+		ch.payloads[at] = payload;
+		ch.n = at + 1;
 		ch.unretired++;
 		this.length++;
 		this.unretired++;
@@ -184,6 +236,8 @@ export class WriteLog {
 	 * adopted the folded result, so the history is redundant). Object identity
 	 * is preserved: holders of the log keep a valid, empty log. */
 	reset(): void {
+		const chunks = this.chunks;
+		for (let i = 0; i < chunks.length; i++) releaseChunk(chunks[i]!);
 		this.chunks = [];
 		this.length = 0;
 		this.unretired = 0;
@@ -281,7 +335,8 @@ export function createEpisodeLifecycle(deps: EpisodeLifecycleDeps): EpisodeLifec
 				atom.baseSeq = ch.seqs[i]!;
 				if (onDrop !== undefined) onDrop(atom, chunkEntryAt(ch, i));
 			}
-			chunks.shift(); // the chunk drops WHOLE (its packed arrays release together)
+			chunks.shift(); // the chunk drops WHOLE (its shell returns to the pool)
+			releaseChunk(ch);
 			log.length -= ch.n;
 		}
 		// The whole-log stamp max may have lived in a dropped chunk: recompute

@@ -628,11 +628,49 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     an untracked user-draft src/Allocator.ts fails tsc locally — not mine,
     not committed, left untouched).
 
+## Done (continued 8) — leg 5 fix round (lead A/B verdict)
+
+16. **Storm conviction root-caused + fixed: the episode tape's chunk
+    churn — NOT the observer rebuild.** The lead's verdict blamed the
+    subscription revalidation; the convicted bench (spkb-sb untracked-fan
+    writeStormNsPerWrite) has NO subscriptions and its timed region is the
+    raw write loop. Commit-bisect on interleaved diagnostics: the
+    regression exists at LEG-5 START (8d61a97: 234ns vs main 95ns; leg-5
+    commits add ~10% on top) — it shipped with the EPISODES leg. Root
+    cause, isolated with per-phase + gc-toggle + arena-toggle
+    discriminators: the episode close drops every TapeChunk wholesale
+    (log.reset() — chunks = []), so under a write storm EVERY EPISODE
+    re-allocated six columns per chunk and re-grew them entry by entry;
+    the bench's per-rep full GC left those fresh backing stores cold
+    (gc-per-rep: +111%; no-gc: +13%). The pre-flattening log never paid
+    this: its flat arrays kept their capacity across compactions
+    implicitly. FIX: a capped TapeChunk shell pool (CHUNK_POOL_CAP = 16;
+    release scrubs the payload column — a parked shell can never pin
+    values) reused by acquire/release at the two whole-chunk drop sites
+    (episode close, fold valve), with index stores in push. A first cut
+    ALSO preallocated the columns at capacity — the wide-mask drain
+    convicted it immediately (+86%: a 48KB preallocation per touched atom;
+    sparse logs are the common case) — REVERTED: columns append-grow;
+    capacity retention comes from the pool alone. Gates (interleaved
+    medians-of-3, this box): storm WT 144.5 vs main 140.8 (+2.6%, within
+    ±5%; was +64-93% convicted); wide-mask WT 176.3 vs main 169.5 (+4.0%);
+    cold-render WT 394.0 vs main 416.7 (-5.4%, faster); logged watch1
+    112-120 vs leg-end's 162-244 (dramatically better, variance
+    collapsed; residual vs main +9%). Full suites re-green (cosignals 368
+    + user draft, oracle 82, react 72/72, conformance 179×2).
+    RESIDUAL, stated per the verdict's demand: ~+13% on the no-gc write
+    loop exists at leg-5 START vs main (151 vs 134 ns) — a pre-leg-5
+    branch-level residue (episodes/cutover era), NOT consult-clock cost
+    (the consult machinery never runs in the storm's timed region; the
+    at-least-once mechanism's cost is confined to boundary consults and
+    gates fine). Left for the lead's branch-level ledger; not silently
+    accepted.
+
 ## In progress / exact next actions
 
 **Priority 5 (observers) is COMPLETE** (items 12-15 above; commits b22b174,
-853bc66, 65a3f42, ebd5244). Successor order, per owner ruling 2's
-sequencing:
+853bc66, 65a3f42, ebd5244) **plus the lead-verdict fix round (item 16)**.
+Successor order, per owner ruling 2's sequencing:
 
 1. **World-arena growth restoration (owner ruling 2 — the unit the ruling
    queued immediately after observers).** Restore grow-by-copy (doubling)
