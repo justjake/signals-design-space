@@ -1,27 +1,11 @@
 /**
- * `cosignals/graphviz` — the DOT renderers of the diagnostics story. Both
- * functions emit DOT source (render with `dot -Tsvg`). Layering is strict:
- * `cosignals/trace` records without importing any visualizer, and this entry
- * imports only types from the trace and engine modules — its runtime module
- * graph is exactly {graphviz.ts}; either diagnostics entry loads without
- * the other.
- *
- *  - `dependencyGraphToDot(engine)` — a snapshot of the live dependency
- *    graph: atoms (annotated with how many log entries their history currently
- *    holds), computeds, the dependency edges the live per-world arenas
- *    currently hold (the structure the routing walks consult — links follow
- *    each world's latest evaluations and persist with their arenas), and
- *    live watchers and effects with their observation edges. Diffing two
- *    dumps is the workhorse for wiring bugs.
- *  - `traceToDot(events, filter?)` — the causal graph of a decoded trace
- *    (CAUSE edges: write → delivery → correction chains), one node per
- *    event, clustered by nothing (time flows top to bottom).
- *
- * Rendered-label glossary:
- *  - box = atom; ellipse = computed; house = watcher (one subscribed UI
- *    component); cds = subscription (a committed-world effect record).
- *  - `log:N` = N recorded writes not yet folded into the atom's base value.
- *  - solid edge = dependency; dashed = watcher's node; dotted = effect dep.
+ * `cosignals/graphviz` — emits engine diagnostics as DOT source (Graphviz's
+ * text graph format; render with `dot -Tsvg`). Imports are types only, so
+ * this entry's runtime module graph is exactly this one file. Legend:
+ *  - shapes: box = atom; ellipse = computed; house = watcher (one subscribed
+ *    UI component); cds = subscription (a committed-world effect record)
+ *  - edges: solid = dependency; dashed = watcher's node; dotted = effect dep
+ *  - `log:N` = N recorded writes not yet folded into the atom's base value
  */
 
 import type { CosignalEngine } from './CosignalEngine.js';
@@ -59,7 +43,7 @@ export function dependencyGraphToDot(engine: CosignalEngine): string {
 	return lines.join('\n');
 }
 
-/** The causal graph of a decoded trace slice; `filter` keeps matching events only. */
+/** The causal graph of a decoded trace slice (edges: cause → event); `filter` keeps matching events only. */
 export function traceToDot(events: TraceRecord[], filter?: (e: TraceRecord) => boolean): string {
 	const kept = filter === undefined ? events : events.filter(filter);
 	const ids = new Set(kept.map((e) => e.id));

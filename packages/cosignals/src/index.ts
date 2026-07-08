@@ -1,205 +1,98 @@
 /**
- * cosignals — the package entry: the policy layer over the kernel, the public
- * surface, and the re-export point for the concurrent engine (which composes
- * at module initialization — see "One core, one entry" below).
- *
- * Reading order for the package: this header (vocabulary), then
- * CosignalEngine.ts — the one engine module, whose header lists its twenty
- * sections in reading order: storage layout, the kernel algorithm, clocks,
- * the evaluation policy, the observed lifecycle, then the concurrent-worlds
- * machinery (its vocabulary, write logs, batches, worlds, arenas, delivery,
- * settlement, observers, render integration, the public dispatch, and the
- * composition), and reclamation last — with errors.ts/Tracer.ts/graphviz.ts
- * self-contained.
+ * cosignals — the package entry: the policy layer over the kernel, the
+ * public surface, and the re-export point for the concurrent engine (which
+ * composes at module initialization — see "One core, one entry" below).
+ * Both live in CosignalEngine.ts, whose header lists its sections in
+ * reading order; errors.ts, Tracer.ts, and graphviz.ts are self-contained.
  *
  * ## Vocabulary (in reading order; used throughout this package)
  *
- * **The kernel** is the dependency-tracking engine (CosignalEngine.ts). It stores every signal, computed, effect, and dependency edge as a
+ * **The kernel** is the dependency-tracking engine (CosignalEngine.ts): it
+ * stores every signal, computed, effect, and dependency edge as a
  * fixed-size integer record in shared arrays, and runs the reactive
- * algorithm — writes push staleness marks down the graph, reads lazily pull
- * recomputation — as index arithmetic over those records. The kernel knows
- * nothing about user options: it compares values by reference identity only,
- * has no error handling of its own, and no async story.
+ * algorithm — writes push staleness marks down the graph, reads lazily
+ * pull recomputation — as index arithmetic over those records. It compares
+ * values by reference identity only; errors and async are policy, not kernel.
  *
  * **The policy layer** is everything user-facing in this file — the
- * Atom / ReducerAtom / Computed classes, effect(), configure(), plus the
- * re-exported batch()/untracked() (kernel-state mechanisms living with
- * their counters in CosignalEngine.ts). "Policy" always means a user-visible behavior
- * decided outside the kernel: custom equality, what thrown errors and
- * pending async reads do, the purity rules. The split exists so the kernel's
- * hot paths stay small monomorphic integer code while every rule that could
- * change lives in ordinary cold JavaScript around it.
+ * Atom / ReducerAtom / Computed classes, effect(), configure(), the
+ * re-exported batch()/untracked(). "Policy" means a user-visible behavior
+ * decided outside the kernel: custom equality, error and async-read
+ * handling, purity rules. The split keeps the kernel's hot paths small
+ * monomorphic integer code; changeable rules live in cold JavaScript around it.
  *
  * Kernel storage terms:
- * - **The arena** is the one shared Int32Array (`memory` in createKernel) holding
- *   every record: a preallocated block that records are carved out of
- *   (error messages use the same word). A **record** is ArenaShape.STRIDE (8)
- *   consecutive Int32 slots; node records (signals/computeds/effects/scopes)
- *   and link records (one dependency edge each) share the arena, the stride,
- *   and one allocator.
- * - A record's id is **premultiplied**: it is the arena index of the record's
- *   first field (record ordinal × ArenaShape.STRIDE), so every field access is
- *   plain addition — memory[id + NodeField.FLAGS] — with no multiply anywhere.
- * - JavaScript values and functions cannot live in an Int32Array, so they
- *   sit in ordinary arrays running parallel to the arena — the **side columns**
- *   `values` and `fns` — indexed by shifting the same premultiplied id (see
- *   the ArenaShape const enum).
+ * - **The arena** is the one shared Int32Array holding every record. A
+ *   **record** is {@link ArenaShape.STRIDE} consecutive Int32 slots; node
+ *   records (signals/computeds/effects/scopes) and link records (one
+ *   dependency edge each) share the arena and one allocator.
+ * - A record's id is **premultiplied** — it is the arena index of the
+ *   record's first field — so every field access is plain addition
+ *   (memory[id + NodeField.FLAGS]), no multiply anywhere.
+ * - JavaScript values and functions cannot live in an Int32Array; they sit
+ *   in ordinary arrays running parallel to the arena — the **side columns**
+ *   {@link values} and {@link fns} — indexed by shifting the same id.
  *
- * Mechanics the whole package relies on (implementation and full stories in
- * CosignalEngine.ts):
- * - **Operation boundary**: a moment when no evaluation, effect run, or graph
- *   walk is anywhere on the call stack (`enterDepth === 0`). Deferred work —
- *   growing the arena, freeing disposed records — runs only at boundaries,
- *   because in-flight work holds direct references to the buffers.
- * - **Closure rebuild**: the kernel's functions are created by one factory
- *   (`createKernel`) and capture the arena as a closure constant — which is
- *   what lets V8 fold the buffer reference into compiled code. The cost of
- *   that choice: the buffer cannot be swapped under a live function. So to
- *   grow, the module allocates a doubled arena, copies the records over, and
- *   calls the factory again, producing a fresh set of functions closed over
- *   the new buffer. That wholesale re-creation is a "closure rebuild"; it
- *   happens only at operation boundaries. Scalar counters live at module
- *   level (not in the closure) precisely so a rebuilt kernel resumes where
- *   the old one stopped.
- * - **Fold**: applying a user's updater or reducer function to a value to
- *   produce the next value. The name comes from the concurrent machinery
- *   (the engine module's later sections), which reconstructs
- *   alternative views of the state ("worlds", see the README) by
- *   re-applying — folding — recorded write operations over a base value;
- *   that only works if updaters and reducers are pure. They therefore run
- *   under the same fold-purity guard on every path, engine-dispatched or
- *   standalone: signal reads and writes inside an updater or reducer throw
- *   (see runFold).
- *
- * With that vocabulary, the package's kernel-side layers and their homes:
- *
- *   1. Sentinels (SuspendedRead — the engine's evaluation-policy section; CycleError — errors.ts). A
- *      computed's function can fail
- *      to produce a value: it can throw, or it can read async data that
- *      isn't ready yet (`ctx.use` on a pending promise — a **suspension**).
- *      Rather than make every caller handle those cases, the engine stores
- *      the raw payload of what happened — the thrown value, or the pending
- *      thenable — in the slot where the value would have gone, and marks the
- *      outcome in the node's flags (HAS_BOX, plus BOX_SUSPENDED for
- *      suspensions). The cutoff treats "same payload + same outcome bits" as
- *      no change, so a re-thrown identical error causes no downstream churn,
- *      while an outcome flip propagates even when the payloads are
- *      identity-equal (throw undefined → return undefined). A read that hits
- *      an exceptional slot doesn't return it: it throws — the original error,
- *      or a SuspendedRead marker (stable per thenable) that tells the caller
- *      (e.g. React's Suspense machinery) "this value is still loading".
- *   2. The evaluation context — the one `ctx` object every computed function
- *      receives (`ctx.previous`, `ctx.use`; the ComputedCtx type below). Its
- *      members are getters that resolve "which computed is evaluating right
- *      now" from kernel state, so passing it costs zero per-recompute setup
- *      (the object lives in CosignalEngine.ts beside its capture site; the member
- *      functions and the whole suspension machinery live in its evaluation-policy section).
- *   3. The kernel (CosignalEngine.ts) — alien-signals v3.2.1's push-pull algorithm, re-expressed
- *      over arena records instead of linked JavaScript objects. Upstream's
- *      walk structure and flag transitions are preserved (plus a
- *      link/linkInsert hot/slow split, see linkInsert); buffers are closure
- *      constants; walks use persistent scratch stacks (module-level
- *      Int32Array stacks reused across walks, replacing upstream's per-walk
- *      linked-list allocations); capacity grows by closure rebuild over
- *      doubled buffers at operation boundaries. Validated against a 179-case
- *      conformance suite (179/179) for alien-signals-compatible semantics.
- *      Deviations from a plain transliteration of upstream are enumerated
- *      below (D1–D7).
- *   4. The policy layer (this file) — the classes and functions named above;
- *      custom equality by wrapper-returns-old-reference; errors/suspensions
- *      as sentinel boxes (the engine's evaluation-policy section); the observed lifecycle
- *      (AtomOptions.effect — the "first subscriber attached / last one
- *      detached" callback, counted over the union of kernel subscribers and
- *      engine watchers — the engine's observed-lifecycle section) with microtask flap damping; the
- *      fold-purity and writes-in-computeds disciplines.
+ * Mechanics the whole package relies on (implemented in CosignalEngine.ts):
+ * - An **operation boundary** is a moment when no evaluation, effect run,
+ *   or graph walk is anywhere on the call stack. Deferred work — growing
+ *   the arena, freeing disposed records — runs only at boundaries, because
+ *   in-flight work holds direct references to the buffers.
+ * - **Closure rebuild** is how capacity grows: the kernel's functions come
+ *   from one factory and capture the arena as a closure constant (V8 folds
+ *   the buffer reference into compiled code), so growth allocates a
+ *   doubled arena, copies the records, and re-runs the factory — fresh
+ *   functions over the new buffer, swapped in only at an operation boundary.
+ * - A **fold** applies a user's updater or reducer to a value to produce
+ *   the next value. The concurrent engine reconstructs alternative views
+ *   of the state — **worlds** — by re-applying recorded folds over a base
+ *   value; that only works if folds are pure, so signal reads and writes
+ *   inside an updater or reducer throw on every path ({@link runFold}).
+ * - A computed's function can fail to produce a value: it can throw, or
+ *   read async data that isn't ready yet (`ctx.use` on a pending promise —
+ *   a **suspension**). The kernel stores the raw payload where the value
+ *   would go and marks the outcome in flags; reading that slot throws —
+ *   the original error, or a stable `SuspendedRead` "still loading" marker.
  *
  * ## One core, one entry
  *
- * The `Kernel` record returned by `createKernel` is the kernel op table:
- * the one object whose function fields are the kernel's operations.
- * Every public operation routes through the module-level binding `E`
- * (`E.readAtom`, `E.write`, `E.computedRead`, …), and `E` is only ever
- * replaced at an operation boundary via closure rebuild — growth
- * (`boundaryWork` → `createKernel(records, carry)`) and nothing else. All
- * shared mutable state a rebuilt table needs (scalar heads, side columns,
- * queue, scratch stacks) lives at module level for exactly this reason.
- *
- * There is exactly one build of this library, and one engine — the
- * concurrent-worlds machinery (the engine module's later sections,
- * re-exported at the bottom of this file: `attachDriver`, the `engine`
- * surface, the engine types) composes at module initialization (always-concurrent: no installation
- * step exists). The public read/write methods dispatch into its paths
- * directly: writes test one module boolean (`standaloneQuiet` — quiet and
- * driver-less) and take the plain kernel path on the fast arm; reads test
- * one module boolean (`routingActive`) beside `activeSub` and take the
- * plain kernel read unless a routing context could answer. Sync-only apps
- * that never attach a driver and never open a batch keep both fast arms
- * forever: zero log entries, batches, or worlds are ever created
- * (tests/one-core.spec.ts asserts this behaviorally with engine probes).
- * The only other swapped table is POISON (fold purity — CosignalEngine.ts, swapped
- * through runFold below) — reachable exclusively by erroring code.
+ * Every public operation routes through {@link E} — the module-level
+ * binding of the kernel op table, the one object whose function fields are
+ * the kernel's operations — re-linked only by closure rebuild. The
+ * concurrent engine composes at module initialization (no installation
+ * step), and the public methods dispatch into it directly at the cost of
+ * two module booleans: writes test {@link standaloneQuiet} (the engine is
+ * quiet — no live batches, open renders, or pending write records — and no
+ * host driver is attached via `attachDriver`); reads test
+ * {@link routingActive} (a routing context — a world evaluation or ambient
+ * world — could answer) beside {@link activeSub}. Sync-only apps keep both
+ * fast arms forever: zero recorded writes, batches, or worlds are created.
  *
  * ## Deviations
  *
- * Kernel deviations from a plain transliteration of upstream alien-signals
- * (each is policy plumbing at a cold site — code off the hot read/write
- * paths, reached rarely; the hot walks are untouched — measured ≈parity on
- * benchmark workloads):
+ * The kernel re-expresses alien-signals v3.2.1's push-pull algorithm over
+ * arena records (semantics pinned by a 179-case conformance suite). The
+ * departures, each at a cold site off the hot walks (measured ≈parity):
  *
- *   D1. A record field, `NodeField.LIFECYCLE`, is set at creation for atoms
- *       carrying an observed-lifecycle effect, so the kernel's own liveness
- *       transitions can feed the observed-lifecycle option
- *       (AtomOptions.effect) — one consumer kind of the observation union
- *       (watchers and the observation index are the other; see the
- *       observed-lifecycle section). The kernel arm is a per-link refcount
- *       (linkInsert retains / unlink releases, lifecycle-flagged deps only,
- *       MACHINERY_OWNED subscribers excluded — machinery computeds carry
- *       their own observation arm); the union's observable edges (effect at
- *       0→1, cleanup at →0) count every consumer kind. Cleared with the
- *       flags word in freeNode.
- *   D2. computedRead throws CycleError when the computed is re-entered
- *       during its own evaluation: reading a computed while its own
- *       evaluation frame is open is a dependency cycle, and throwing beats
- *       silently serving the stale cache (upstream alien-signals serves the
- *       stale value). Cost: one test on the already-loaded flags word.
- *   D3. Computed getters in `fns` take the policy evaluation context as their
- *       one argument (upstream passes `previousValue`; `ctx.previous`
- *       reads the cache live via `activeSub`, so plain computeds pay zero
- *       policy instructions per recompute), and the two kernel eval sites
- *       (updateComputed, computedRead's first-eval branch) store exceptions
- *       via the cold `storeThrown` catch hook — a throwing getter never
- *       corrupts graph state; the kernel value slot then holds the raw
- *       thrown value / pending thenable (flagged HAS_BOX, + BOX_SUSPENDED
- *       for suspensions; unwrapped by the cold boxedRead read tail).
- *       computedRead is split hot/slow the same way link/linkInsert is: the
- *       D2+D3 additions pushed the monolith past V8's 460-byte inline cliff,
- *       and the outlined form measures faster than the un-split form on
- *       read-heavy workloads.
- *   D4. A computed's aux value slot — `values[(id >> 2) + 1]`, the "signal
- *       pending value or effect cleanup" column, unused for computeds —
- *       deliberately stays empty. Policy state that could ride it (the
- *       owning instance for ctx.use) is id-keyed in the evaluation-policy section instead,
- *       so the kernel never pins a public handle — a dropped handle's
- *       record must stay reclaimable.
- *   D5. The kernel op table gains cold policy ops the policy layer needs:
- *       invalidateComputed (settlement-invalidate), markLifecycle (D1),
- *       activeIsComputed (backs the forbidWritesInComputeds check).
- *   D6. Capacity is configurable: the COSIGNAL_INITIAL_RECORDS env var sizes
- *       the arena before first import, and configure({initialRecords})
- *       feeds the same growth machinery through `desiredRecords`.
- *   D7. The public API is the class layer (Atom/Computed) rather than
- *       upstream's closure handles (signal()/computed());
- *       effect/effectScope/batch/untracked stay thin function wrappers over
- *       the kernel ops.
+ *   D1. A {@link NodeField.LIFECYCLE} per-link refcount feeds the observed-
+ *       lifecycle option ({@link AtomOptions.effect}) from kernel liveness.
+ *   D2. Reading a computed during its own evaluation throws `CycleError` (a
+ *       dependency cycle) instead of serving the stale cache as upstream does.
+ *   D3. Computed getters take the evaluation context as their one argument
+ *       (upstream passes `previousValue`); eval sites store thrown values
+ *       and pending thenables via a cold hook, never corrupting graph state.
+ *   D4. A computed's spare value-column slot stays empty: policy state is
+ *       id-keyed outside the kernel, so a dropped handle's record stays reclaimable.
+ *   D5. The op table gains cold policy ops: invalidateComputed,
+ *       markLifecycle, activeIsComputed.
+ *   D6. Capacity is configurable: the COSIGNAL_INITIAL_RECORDS env var and
+ *       configure({initialRecords}) feed the same growth machinery.
+ *   D7. The public API is the class layer rather than upstream's closure
+ *       handles; effect/effectScope/batch/untracked stay thin wrappers.
  *
- * Everything else — growth (closure rebuild over doubled buffers, swap at
- * operation boundaries only) and reclamation (deferred free of disposed
- * effect/scope records, plus FinalizationRegistry-driven recovery of
- * atom/computed records whose handles were garbage-collected — the guard
- * table, retry triggers, and two-phase free path live in CosignalEngine.ts's
- * reclamation section) — is
- * kernel-wide behavior on every path, documented at its
- * implementation sites in CosignalEngine.ts.
+ * Reclamation — deferred free of disposed records, plus FinalizationRegistry
+ * recovery of records whose handles were garbage-collected — is kernel-wide
+ * behavior, documented at its implementation sites in CosignalEngine.ts.
  */
 
 import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, NOT_ROUTED, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, routedAtomRead, routedComputedRead, untracked, values, writeAtom, writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __TEST__resetLifecycle } from './CosignalEngine.js';
@@ -207,80 +100,35 @@ import type { AtomInternals, ComputedInternals, NodeId, ValueIndex } from './Cos
 
 // ---- sentinels ----------------------------------------------------------------
 
-// SuspendedRead — the stable "this value is still loading" sentinel thrown
-// by reads that observe a pending suspension — lives in the engine with the
-// rest of the suspension machinery; re-exported here (public surface).
 export { SuspendedRead } from './CosignalEngine.js';
 
-// CycleError — thrown when a computed is read while its own evaluation frame
-// is open (that read is a dependency cycle; cosignals fails loudly instead
-// of serving the stale cached value) — lives in errors.ts with the other
-// error carriers; re-exported here (public surface).
 export { CycleError } from './errors.js';
 
 
 // ---- the evaluation context ----------------------------------------------------
 
-/**
- * A `ctx.use(key, factory)` cache key: JSON-ish scalars and arrays thereof.
- * The key must carry every input that varies the request (query strings,
- * ids, page numbers) — the cache is per-key for the node's lifetime, so two
- * calls with the same key share one request. Functions and objects are
- * rejected loudly: they have no stable serialization, and a key that can't
- * serialize can't dedupe.
- */
+/** A `ctx.use(key, factory)` cache key: JSON-ish scalars and arrays thereof,
+ * carrying every input that varies the request (same key = one shared request
+ * for the node's lifetime). Functions and objects have no stable
+ * serialization and are rejected loudly. */
 export type UseKey = string | number | boolean | null | readonly UseKey[];
 
 export type ComputedCtx<T> = {
-	/**
-	 * The computed's last committed value — a hint only: no identity,
-	 * recency, or determinism is guaranteed, and the function must be
-	 * correct if `previous` were arbitrarily stale or undefined. For a plain
-	 * `Computed`: the cached value, read live; undefined on first evaluation
-	 * and while the cache holds an error/suspension outcome. (React-bound
-	 * computeds serve the last committed value instead — see cosignals-react.)
-	 */
+	/** The computed's last committed value — a hint only: the function must
+	 * be correct if it were arbitrarily stale or undefined. Undefined on first
+	 * evaluation and while the cache holds an error/suspension outcome. */
 	readonly previous: T | undefined;
-	/**
-	 * Reads a thenable inside a computed — React's `use()` contract, in two
-	 * forms:
-	 *
-	 * 1. `ctx.use(thenable)` — the CALLER caches the promise (data layer,
-	 *    component state). Fulfilled: returns the value. Rejected: throws the
-	 *    reason. Pending: suspends the computed — read sites observe a stable
-	 *    SuspendedRead until the thenable settles, and settlement invalidates
-	 *    the computed. Passing the same (now settled) promise on a later
-	 *    evaluation reads the resolved value synchronously; the engine stores
-	 *    nothing beyond instrumentation on the thenable itself.
-	 * 2. `ctx.use(key, factory)` — the batteries-included form: the node keeps
-	 *    a per-key cache for its own lifetime. Same key ⇒ same thenable (the
-	 *    factory is not re-invoked; pending work is shared, settled work
-	 *    replays); different keys coexist. The key must carry the inputs that
-	 *    vary the request. The cache dies with the node.
-	 *
-	 * There is no bare positional-factory form (`ctx.use(() => fetch(...))`):
-	 * an unkeyed factory is the "uncached promise" footgun and is
-	 * unsound across worlds asking different queries.
-	 */
+	/** Reads a thenable inside a computed — React's `use()` contract:
+	 * fulfilled returns the value, rejected throws the reason, pending
+	 * suspends the computed until the thenable settles. `use(thenable)` leaves
+	 * caching to the caller; `use(key, factory)` caches per key for the node's
+	 * lifetime. No unkeyed-factory form: it would re-request every evaluation. */
 	use<V>(source: PromiseLike<V>): V;
 	use<V>(key: UseKey, factory: () => PromiseLike<V>): V;
 };
 
-// (The one evaluation-context object the kernel passes every computed getter
-// — POLICY_CTX — lives in CosignalEngine.ts beside its capture site (createKernel
-// captures it at factory run, so it must be initialized before the kernel
-// builds); its members delegate to the engine's ctxPrevious/ctxUse.)
-
 // ---- the kernel (CosignalEngine.ts) --------------------------------------------------
-// The whole dependency-tracking engine — the record layout const enums
-// (NodeField/LinkField/NodeFlag, re-exported below for independent walkers;
-// ArenaShape addresses the side columns), allocation, the link/propagate/
-// checkDirty walk families, update/notify/run/dispose, the flush queue,
-// growth by closure rebuild, the `values`/`fns` side columns, the walk
-// scratch stacks, and the fold-purity POISON table — lives in CosignalEngine.ts. The
-// policy layer below reads the current operation table through the one
-// mutable slot `E` (re-linked only at growth boundaries) and the shared
-// side columns/scalars through their imported bindings.
+// Record-layout enums, re-exported for independent walkers of kernel records.
 export { NodeField, LinkField } from './CosignalEngine.js';
 
 
@@ -290,39 +138,21 @@ export { NodeField, LinkField } from './CosignalEngine.js';
 
 
 // ---- the engine dispatch ----------------------------------------------------------
-// One engine, always-concurrent: the concurrent-worlds machinery
-// (the engine module's later sections, re-exported at the bottom of this
-// file) composes at
-// module initialization, and the public methods below call its paths
-// directly — no nullable hooks, no arming, no registration step. The costs
-// on the plain paths are exactly two module-boolean checks: writes test
-// `standaloneQuiet` (quiet and no driver — the fast arm), reads test
-// `routingActive` (a routing context could answer) beside `activeSub`.
-// A process that never attaches a driver and never opens a batch keeps both
-// flags in their fast states forever, and zero log-entry/world work ever
-// runs (asserted behaviorally by tests/one-core.spec.ts).
 
-/** Whole-op codes for the engine write dispatch (0 = set, 1 = update).
- * Shares the 0/1 encoding with the engine's `const enum WriteKind` by
- * construction. Internal: consumers never name write kinds — the public
- * methods (set/update/dispatch) are the whole vocabulary. */
+/** Write-op code for the engine dispatch (0 = set, 1 = update); shares the
+ * engine's `const enum WriteKind` encoding by construction. */
 type WriteKind = 0 | 1;
 
-/** @internal Test seam (leak audit): a record's side-column slots. freeNode
- * must clear all three, or freed records pin dead values/closures for the
- * arena's life; tests/leak-audit.spec.ts probes exactly that. Read-only. */
+/** @internal Test seam (leak audit): a record's side-column slots, read-only
+ * — freed records must not pin dead values or closures. */
 export function __TEST__kernelSideColumns(id: NodeId): { value: unknown; aux: unknown; fn: Function | undefined } {
 	const v: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
 	return { value: values[v], aux: values[v + ArenaShape.AUX_VALUE_OFFSET], fn: fns[id >> ArenaShape.ID_TO_FN_SHIFT] };
 }
 
-/**
- * The plain-path write tail shared by the standalone fast arm and the
- * engine's internals-less arm: fold the op (updaters under the fold-purity
- * guard), then `writeAtom` — which applies the policy equality ONCE
- * (kernel order: `isEqual(current, incoming)`) at the acceptance decision
- * and takes the kernel write + flush. @internal
- */
+/** Plain-path write tail shared by the public methods' standalone fast arm
+ * and the engine's no-internals dispatch arm: fold the op, then
+ * {@link writeAtom}, which applies policy equality once at acceptance. @internal */
 export function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: unknown): void {
 	const id = atom._id;
 	const next = kind === 0
@@ -331,15 +161,10 @@ export function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: 
 	writeAtom(id, atom._isEqual, next);
 }
 
-/**
- * Handle-free write path for lifecycle contexts (id-keyed — the lifecycle
- * record deliberately holds no handle reference; see the observed-lifecycle section). Runs
- * the same policy assert as the public methods, then the engine dispatch
- * over the id-resolved node; an atom with no engine content takes the
- * plain kernel path (its comparator lives on the unreachable handle, so
- * the kernel's identity compare is the only equality — the engine internals,
- * once content exists, carries the comparator). @internal
- */
+/** Handle-free write path for the engine's lifecycle contexts, which hold
+ * node ids but no handle reference: the public methods' policy assert, then
+ * the engine dispatch. An atom with no engine internals takes the plain kernel
+ * write with identity equality — its comparator sits on the unreachable handle. @internal */
 export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown): void {
 	if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 		throw new Error('cosignals: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
@@ -355,98 +180,44 @@ export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown):
 	writeAtom(id, undefined, next);
 }
 
-// (The engine's lifecycle contexts write through __lifecycleWrite above by a
-// direct cyclic-module import — CosignalEngine.ts's dispatchLifecycleWrite.)
-
-/** Test-only policy scrub (`__TEST__resetEngine`'s index.ts half):
- * configure() state returns to defaults; the lifecycle map, queue, and its
- * scheduled flush drop (the flush microtask is engine-epoch guarded).
- * @internal */
+/** @internal Test-only policy scrub (`__TEST__resetEngine`'s index.ts half):
+ * configure() defaults restored; lifecycle map and queued flush dropped. */
 export function __TEST__resetPolicy(): void {
 	forbidWritesInComputeds = false;
 	__TEST__resetLifecycle();
 }
 
-// (maybeBoundary / boundaryWork / flush — the operation-boundary machinery
-// and the effect flush loop — live in CosignalEngine.ts with the queue and growth
-// state they drain; the policy layer imports maybeBoundary/flush directly.)
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Policy layer
-// ═══════════════════════════════════════════════════════════════════════════════
+// ════ Policy layer ═══════════════════════════════════════════════════════════
 
 // ---- policy state -------------------------------------------------------------
 
-// Hot-guard shape, both policy flags: `var` (a `let` module slot keeps a
-// per-access initialization hole-check in optimized code; var never does),
-// and guards compare `=== true` (a boolean-singleton pointer compare; a
-// truthiness test on module state compiles to the generic ToBoolean ladder
-// — smi test, four oddball compares, two map checks — per access).
+// Both policy flags: `var` (a `let` module slot pays a per-access hole-check
+// in optimized code); `=== true` guards (a boolean-singleton pointer compare,
+// cheaper than the generic ToBoolean ladder a truthiness test compiles to).
 // eslint-disable-next-line no-var
 var forbidWritesInComputeds = false;
 
-/**
- * quiet AND no driver attached — the public write path's ONE fast-arm check
- * (Atom.set/update): with a driver attached every write must make the one
- * foreign call (the driver's batch context can create batch identity on the
- * write itself), so the fast arm requires both. The flag LIVES HERE, in the
- * module that reads it on every write: index and concurrent import each
- * other circularly, and a read through the imported binding of a cyclic
- * module keeps a per-access initialization check that a same-module read
- * doesn't pay. The engine flips it through the setter below on the cold
- * quiet-derivation path (driver attach, batch open/close, log drain).
- *
- * `var`, deliberately: the engine composes during CosignalEngine.ts's MODULE
- * BODY, and when a consumer enters the cycle through this module that body
- * runs before ours — the initial derivation arrives via the setter while a
- * `let` here would still be uninitialized. var's hoisted slot accepts the
- * early write, both evaluation orders converge on `true` (no driver can
- * attach before module evaluation completes), and the per-write read never
- * carries an initialization check.
- */
+/** True while the engine is quiet AND no driver is attached — the public
+ * write path's one fast-arm check. It lives here because a hot read of a
+ * cyclic module's imported binding pays a per-access check a same-module
+ * read doesn't. `var`: the engine stores the initial derivation during its
+ * own module body, which can run before this one — the hoisted slot accepts
+ * that early write, and both evaluation orders converge. */
 // eslint-disable-next-line no-var
 var standaloneQuiet = true;
 
-/** @internal Engine seam: the engine's quiet derivation lands its
- * `quiet && no driver` result here. Cold — never on a per-write path.
- * Store only on change: a slot that is never re-stored stays constant-
- * trackable, so a process that never attaches a driver keeps a foldable
- * fast-arm guard (the store would de-constify it even with the same
- * value); the first real transition is the usual one-shot respecialization. */
+/** @internal Engine seam: lands the engine's quiet-and-driverless derivation.
+ * Cold; stores only on change so the untouched slot stays constant-trackable. */
 export function __setStandaloneQuiet(v: boolean): void {
 	if (v !== standaloneQuiet) {
 		standaloneQuiet = v;
 	}
 }
 
-// (throwFold / the POISON table's operations live in CosignalEngine.ts with the
-// table; runFold below swaps through CosignalEngine.ts's fold-guard pair.)
-
-// ---- observed lifecycle (AtomOptions.effect) -----------------------------------
-// The observed-lifecycle option — the per-atom state map, the union
-// refcount, and the flap-damped microtask flush — lives in the engine's
-// observed-lifecycle section (its header carries the full story). The Atom
-// constructor below marks each lifecycle-carrying atom's record; the kernel
-// arm feeds the refcount from linkInsert/unlink; the watcher arm enters
-// through the observation index, same-module with the seams it consumes.
-
-// ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
-// (writeAtom lives in CosignalEngine.ts: every binding it touches per call — values,
-// maybeBoundary, E, batchDepth, flush — is graph state, and a hot read of a
-// CYCLIC module's imported binding pays a per-access cell + initialization
-// check that a same-module read doesn't. Imported above with the rest.)
-
-/**
- * Runs a reducer/updater under the fold-purity guard. The rule: updaters and
- * reducers must be pure — the concurrent engine stores and replays them per
- * world — so signal reads and writes inside them always throw.
- * Mechanism: the operation table is swapped to the POISON table for the
- * duration (CosignalEngine.ts's fold-guard pair), so every read/write/creation the fold attempts throws at the
- * dispatch site — and the hot read/write paths carry zero fold instructions.
- * Folds are synchronous and never open kernel frames of their own; open
- * outer frames hold the real table's buffers as closure constants and are
- * unaffected by the swap.
- */
+/** Runs an updater/reducer under the fold-purity guard: `E` swaps to
+ * POISON, the engine's every-op-throws table, so a fold touching any signal
+ * throws at the dispatch site while the hot paths carry zero fold
+ * instructions; open outer frames hold the real table as closure constants. */
 function runFold<T>(fn: () => T): T {
 	const saved = foldGuardSwap();
 	try {
@@ -456,13 +227,8 @@ function runFold<T>(fn: () => T): T {
 	}
 }
 
-// ---- the computed evaluation policy (the engine's suspense section) ----------------
-// The suspension/exception machinery — the thenable protocol, the ctx.use
-// request cache, the kernel's storeThrown/boxedRead cold hooks, and the
-// settle tap — lives in the engine (its section header carries the full story).
-// __TEST__ctxUse is re-exported for the test suites (the arena and leak-audit
-// specs drive the request cache directly); the engine itself imports it
-// from './CosignalEngine.js'.
+// ---- the computed evaluation policy --------------------------------------------
+// __TEST__ctxUse: test seam over the engine's ctx.use request cache.
 export { __TEST__ctxUse } from './CosignalEngine.js';
 
 
@@ -485,37 +251,24 @@ export type AtomCtx<T> = {
 };
 
 export type AtomOptions<T> = {
-	/**
-	 * Observed lifecycle: runs when the atom gains its first subscriber of
-	 * any kind — a kernel subscriber (a live computed chain, a core
-	 * `effect()`) or a React component subscribed through the bindings (a
-	 * watcher; `useSignal`) — and the returned cleanup runs once the
-	 * last subscriber of every kind is gone. One observation state over the
-	 * union: an atom held by both kinds at once observes exactly once. Both
-	 * transitions are delivered in a microtask so observe/unobserve flaps
-	 * within one tick coalesce. Bare `.state` reads are not subscriptions and
-	 * do not observe. Intended for remote subscriptions.
-	 */
+	/** Observed lifecycle: runs when the atom gains its first subscriber of
+	 * any kind — kernel (a live computed chain, an `effect()`) or a React
+	 * watcher via the bindings — and the returned cleanup runs once the last
+	 * subscriber of every kind is gone. Delivered in a microtask, so flaps
+	 * within one tick coalesce; bare `.state` reads never observe. For remote subscriptions. */
 	effect?: (ctx: AtomCtx<T>) => void | (() => void);
-	/**
-	 * Policy equality for writes: an incoming value equal to the newest value
-	 * is dropped — unconditionally while the atom's write history is empty;
-	 * once un-retired log entries exist, different worlds may fold different
-	 * values, so recorded writes are kept and equality applies per fold step.
-	 * The kernel itself compares reference identity only; keep values
-	 * reference-stable rather than relying on deep equality.
-	 */
+	/** Policy equality for writes: an incoming value equal to the newest is
+	 * dropped. While recorded writes are live, different worlds may fold
+	 * different values, so the write is kept and equality applies per fold
+	 * step. The kernel itself compares reference identity only. */
 	isEqual?: (a: T, b: T) => boolean;
 	/** Debug label. */
 	label?: string;
 };
 
 export type ComputedOptions<T> = {
-	/**
-	 * Policy equality for recomputes: an equal result returns the previous
-	 * reference, so downstream sees no change (equality cutoff). The kernel
-	 * compares identity only.
-	 */
+	/** Policy equality for recomputes: an equal result returns the previous
+	 * reference, so downstream sees no change. The kernel compares identity only. */
 	isEqual?: (a: T, b: T) => boolean;
 	/** Debug label. */
 	label?: string;
@@ -527,24 +280,17 @@ export class Atom<T> {
 	readonly _id: NodeId;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
-	/** The engine internals, once this handle has ENGINE CONTENT (a log entry, a
-	 * watcher, arena presence, a routed read) — undefined until then. The
-	 * handle-node link is 1:1 for the handle's life; the record-free scrub
-	 * clears it. Creation is one step: the constructor makes the kernel
-	 * record, and the engine resolves the handle by its id — content
-	 * allocates lazily, never through any user-facing extra step. @internal */
+	/** Engine internals, allocated lazily at first engine content (a log
+	 * entry, a watcher, arena presence, a routed read); undefined until then,
+	 * 1:1 with the handle for its life, cleared by the record-free scrub. @internal */
 	_internals: AtomInternals | undefined = undefined;
 	readonly label: string | undefined;
 
 	constructor(initialState: T, options?: AtomOptions<T>) {
 		maybeBoundary();
-		// Reclamation: a dropped
-		// handle's record recovers via the finalizer; registration rides the
-		// allocation op. Direct lean-instance registration — Atom (and
-		// ReducerAtom, which registers here through super() and completes
-		// its shape with one post-constructor field) is a flat field record,
-		// the shape measured cheapest for the GC to collect.
-		// Constructor-only cost.
+		// Reclamation: a dropped handle's record recovers via the finalizer;
+		// registration rides the allocation op. The instance stays a flat
+		// field record — the shape measured cheapest for the GC to collect.
 		const id = E.newSignal(initialState, this);
 		this._id = id;
 		this._isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
@@ -552,40 +298,18 @@ export class Atom<T> {
 		const effect = options?.effect;
 		if (effect !== undefined) {
 			E.markLifecycle(id);
-			// THE DORMANT OWNER (see the engine's observed-lifecycle section): the user's callback
-			// lives in the atom's own record `fns` slot — atoms never use
-			// that column, it is engine memory addressed by id, and the
-			// record-free path clears it like every column. The ACTIVE
-			// lifecycle record (ctx, cleanup, refcount) is created id-keyed
-			// at the first watched transition (the observed-lifecycle REHYDRATION) and
-			// deleted at dormancy — the engine never stores a handle
-			// reference of its own (the ctx routes set/update BY ID through
-			// the engine write path).
+			// The callback parks in this atom's own `fns` slot (unused for
+			// atoms; record free clears it). The engine's active lifecycle
+			// record is id-keyed and never holds a handle reference.
 			fns[id >> ArenaShape.ID_TO_FN_SHIFT] = effect as (ctx: AtomCtx<unknown>) => void | (() => void);
 		}
 	}
 
-	/**
-	 * The atom's current value (registers a dependency inside evaluations).
-	 * With a routing context live (world evaluation / ambient world), the
-	 * engine serves the value of the world doing the asking. Inside a fold
-	 * frame the dispatch itself throws (POISON table).
-	 *
-	 * Kernel-frame reads are never world-routed (`activeSub === 0` guards the
-	 * routed arm): a read inside an open kernel evaluation (a `Computed`
-	 * getter, an `effect()` body) creates a K0 dependency link and its
-	 * result lands in a K0 cache slot, and K0 state is newest-world state by
-	 * the eager-apply invariant — serving a world-folded value there would
-	 * poison the kernel cache (a later newest read of the computed would
-	 * serve another world's value with no invalidation: tearing). World
-	 * routing belongs to overlay evaluations and render/effect call
-	 * contexts, all of which run with no kernel frame open. (Known pinhole,
-	 * same shape as the documented forbidWritesInComputeds one:
-	 * `untracked()` inside a kernel getter clears activeSub, so a routed
-	 * read there can still reach the getter's return value; untracked reads
-	 * leave no K0 link, but the cache slot still absorbs the result.)
-	 * Pinned by tests/graph-consumers.spec.ts.
-	 */
+	/** The atom's current value (a tracked read inside evaluations); with a
+	 * routing context live, the engine serves the asking world's value —
+	 * except inside kernel frames (`activeSub === 0` guards the routed arm):
+	 * kernel caches hold newest-world state, and a world-folded value landing
+	 * there would serve later reads with no invalidation. Folds throw on dispatch. */
 	get state(): T {
 		if (routingActive && activeSub === 0) {
 			const v = routedAtomRead(this as Atom<unknown>);
@@ -596,10 +320,8 @@ export class Atom<T> {
 		return E.readAtom(this._id) as T;
 	}
 
-	/** Replaces the atom's value. Policy asserts first; then the standalone
-	 * fast arm (no engine content, quiet, no driver — the plain kernel
-	 * write, policy equality once) or the engine dispatch (driver batch
-	 * context / quiet fold / ambient batch). */
+	/** Replaces the atom's value: the standalone fast arm (plain kernel
+	 * write) or the engine dispatch. */
 	set(value: T): void {
 		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 			throw new Error('cosignals: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
@@ -611,13 +333,9 @@ export class Atom<T> {
 		writeAtomConcurrent(this as Atom<unknown>, 0, value);
 	}
 
-	/**
-	 * Functional update. `fn` must be pure: it runs under the fold-purity
-	 * guard, so signal reads and writes inside it throw — read what you need
-	 * first, then update. An engine-dispatched update records the whole op
-	 * (the updater itself, replayed per world); the standalone fast arm
-	 * folds and applies immediately.
-	 */
+	/** Functional update. `fn` must be pure — it runs under the fold-purity
+	 * guard, so signal reads and writes inside it throw; read inputs first.
+	 * An engine-dispatched update records the whole op for per-world replay. */
 	update(fn: (current: T) => T): void {
 		if (forbidWritesInComputeds === true && E.activeIsComputed()) {
 			throw new Error('cosignals: writes inside computeds are forbidden (configure({ forbidWritesInComputeds: true })).');
@@ -634,14 +352,9 @@ export class Atom<T> {
 
 export type ReducerAtomOptions<S> = AtomOptions<S>;
 
-/**
- * An atom whose writes go through a reducer. The reducer is fixed at
- * creation and must be pure — it runs under the fold-purity guard.
- * A thin layer over `update`: dispatch(action) is exactly
- * `update(s => reduce(s, action))`, so an engine-dispatched dispatch
- * records an UPDATE whose closure carries the reducer and the
- * action — replayed per world like any other updater.
- */
+/** An atom whose writes go through a reducer, fixed at creation and pure
+ * (it runs under the fold-purity guard). `dispatch(action)` is exactly
+ * `update(s => reduce(s, action))`, replayed per world like any updater. */
 export class ReducerAtom<S, A> extends Atom<S> {
 	readonly reduce: (state: S, action: A) => S;
 
@@ -660,14 +373,12 @@ export class ReducerAtom<S, A> extends Atom<S> {
 export class Computed<T> {
 	/** Kernel record id; consumed by the React bindings (`cosignals-react`). @internal */
 	readonly _id: NodeId;
-	/** The engine internals, once this handle has ENGINE CONTENT (see Atom._internals —
-	 * same one-step-creation, content-lazy rule). @internal */
+	/** Engine internals, allocated lazily at first engine content (see
+	 * {@link Atom._internals}). @internal */
 	_internals: ComputedInternals | undefined = undefined;
-	/** Retention columns: the raw authored fn and the policy
-	 * comparator, kept on the owning instance (GC-owned, so a reused kernel
-	 * id can never serve another tenant's fn/comparator) — the engine's
-	 * world evaluations run the raw fn against WORLD-local previous values;
-	 * the kernel's own equality wrapper stays kernel-slot-scoped. @internal */
+	/** The raw authored fn, retained on the instance so a reused kernel id
+	 * can never serve another tenant's fn; the engine's world evaluations run
+	 * it against world-local previous values. @internal */
 	readonly _fn: (ctx: ComputedCtx<T>) => T;
 	/** @internal */
 	readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
@@ -679,23 +390,13 @@ export class Computed<T> {
 		this.label = options?.label;
 		const isEqual = options?.isEqual as ((a: unknown, b: unknown) => boolean) | undefined;
 		this._isEqual = isEqual;
-		// Reclamation: direct lean-instance registration, riding the
-		// allocation op (see Atom's note). The instance's fields REFER to
-		// user closures (_fn) but the dying target's own shape stays flat —
-		// the cheap GC-death shape.
+		// Reclamation rides the allocation op (see Atom's constructor note).
 		const id = E.newComputed(fn as (ctx: unknown) => unknown, this);
 		this._id = id;
-		// (ctx.use owner resolution is id-keyed — the engine resolves the
-		// evaluating record straight from `activeSub`, and the per-key
-		// request cache is a nodeIndex-keyed column scrubbed at record free.
-		// The aux slot stays empty for computeds: nothing kernel-side pins
-		// the handle, so a dropped handle's record can reclaim.)
 		if (isEqual !== undefined) {
 			// Only equality users pay a wrapper: an equal result returns the
 			// OLD reference so the kernel's identity compare sees no change.
-			// The wrapper runs inside the evaluation, where the eval-start
-			// rewrite preserved the exceptional bits — HAS_BOX set means `prev`
-			// is a residual error/thenable payload, not a comparable value.
+			// HAS_BOX set means `prev` is a residual error/thenable payload, not comparable.
 			const iv: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
 			fns[id >> ArenaShape.ID_TO_FN_SHIFT] = (ctxArg: unknown): unknown => {
 				const prev = values[iv];
@@ -708,18 +409,10 @@ export class Computed<T> {
 		}
 	}
 
-	/**
-	 * The computed's current value. Rethrows the evaluation's cached error;
-	 * throws SuspendedRead while suspended on a pending `ctx.use` thenable
-	 * (the kernel's boxed-read tail). Inside a fold frame the dispatch
-	 * itself throws (POISON table).
-	 *
-	 * With a routing context live (world evaluation / ambient world),
-	 * the engine serves the value of the world doing the asking — the
-	 * computed-read seam, exactly matching Atom.state's: armed only while a
-	 * routing context exists, gated on `activeSub === 0` (kernel-frame reads
-	 * are never world-routed — see Atom.state for the poisoning argument).
-	 */
+	/** The computed's current value: rethrows the evaluation's cached error;
+	 * throws `SuspendedRead` while suspended on a pending `ctx.use` thenable.
+	 * World routing and the kernel-frame guard match {@link Atom.state};
+	 * inside a fold frame the dispatch itself throws. */
 	get state(): T {
 		if (routingActive && activeSub === 0) {
 			const v = routedComputedRead(this as Computed<unknown>);
@@ -734,12 +427,9 @@ export class Computed<T> {
 /** Either public signal wrapper. */
 export type Signal<T> = Atom<T> | Computed<T>;
 
-/**
- * Runs `fn` immediately with dependency tracking and re-runs it when tracked
- * signals change. Effects always observe the newest world (every write
- * applied) — with no driver attached, simply the current values. `fn` may
- * return a cleanup run before each re-run and at dispose. Returns a disposer.
- */
+/** Runs `fn` immediately with dependency tracking and re-runs it when
+ * tracked signals change; effects always observe the newest world. `fn` may
+ * return a cleanup, run before each re-run and at dispose; returns a disposer. */
 export function effect(fn: () => void | (() => void)): () => void {
 	maybeBoundary();
 	const id = E.newEffect(fn);
@@ -767,29 +457,21 @@ export function effectScope(fn: () => void): () => void {
 	};
 }
 
-// batch()/startBatch()/endBatch() (synchronous effect coalescing over the
-// kernel's batchDepth counter — unrelated to the concurrent engine's Batch
-// records) and untracked() (clears the tracking frame) are kernel-state
-// mechanisms and live in CosignalEngine.ts with the counters they move; re-exported
-// here — they are public surface.
+// batch()/startBatch()/endBatch() coalesce synchronous effect runs over the
+// kernel's batch counter (unrelated to the engine's Batch records);
+// untracked() clears the tracking frame.
 export { batch, startBatch, endBatch, untracked } from './CosignalEngine.js';
 
 export type ConfigureOptions = {
-	/**
-	 * When true, any atom write during a computed evaluation throws. When
+	/** When true, any atom write during a computed evaluation throws. When
 	 * false (default), writes inside computeds are tolerated as long as they
 	 * do not re-enter the writing computed (evaluation cycles throw
-	 * CycleError; self-feedback writes settle by lazy revalidation,
-	 * alien-signals semantics).
-	 */
+	 * CycleError; self-feedback settles by lazy revalidation). */
 	forbidWritesInComputeds?: boolean;
-	/**
-	 * Capacity floor, in records (one signal/computed/effect node or one
-	 * dependency link each; the arena holds 3× this number — budgeted as one
-	 * node plus two links per unit). Raising it triggers growth at the next
-	 * operation boundary; it never shrinks. Also settable via the
-	 * COSIGNAL_INITIAL_RECORDS env var before first import.
-	 */
+	/** Capacity floor, in records (one node or one link each; the arena holds
+	 * 3× this number — one node plus two links per unit). Raising it grows at
+	 * the next operation boundary; it never shrinks. Also settable via the
+	 * COSIGNAL_INITIAL_RECORDS env var before first import. */
 	initialRecords?: number;
 };
 
@@ -807,27 +489,17 @@ export function configure(options: ConfigureOptions): void {
 }
 
 // ---- the concurrent-worlds engine ---------------------------------------------------
-// One public entry: the batch/world machinery lives in the engine module's
-// later sections and is re-exported here — `attachDriver()`, the `engine`
-// surface, the engine surface types (Seq, BatchSlotSet, WriteLogEntry,
-// TraceEvent, …). The engine composes at module initialization
-// (always-concurrent); a process that never attaches a driver and never
-// opens a batch keeps the plain read/write fast paths forever. CURATED (no
-// `export *`): engine internals — node/watcher class VALUES, module seams —
-// stay importable only from './CosignalEngine.js' inside this package;
-// consumers get the driver seam, the engine surface, its error classes,
-// the test seams the sibling packages' suites drive, and the engine-
-// surface TYPES.
+// The engine surface, re-exported: attachDriver(), `engine`, error classes,
+// test seams, and surface types. Curated (no `export *`): engine internals
+// stay importable only from './CosignalEngine.js'.
 export { ScheduleError, InvariantViolation } from './errors.js';
 export {
 	attachDriver,
 	engine,
-	// The reserved "no batch context" BatchId (0). The React bindings and the
-	// patched React build name the same sentinel — protocol v2 shares one
-	// batch-id space, so the sentinel is shared too.
+	// The reserved "no batch context" BatchId (0); the React bindings and the
+	// patched React build name the same sentinel in one shared batch-id space.
 	BATCH_NONE,
-	// @internal test seams (the suites reset the one engine per test and
-	// one-core.spec proves the zero-cost promise through the probes):
+	// @internal test seams (per-test engine reset; fast-path probes):
 	__TEST__resetEngine,
 	__TEST__coreProbes,
 	__TEST__internalsById,
@@ -846,11 +518,8 @@ export type {
 	AnyInternals,
 	RenderPass,
 	Subscription,
-	// operations and worlds (the tracing hook types stay on the
-	// `cosignals/trace` side of the seam; this entry never names them.
-	// Write ops travel as (kind, payload) scalars — WriteKind above is the
-	// kind's name; the object shape survives only inside WriteLogEntry, the
-	// materialized test/trace surface)
+	// operations and worlds (tracing hook types stay on the `cosignals/trace`
+	// side of the seam; this entry never names them)
 	WriteLogEntry,
 	World,
 	TraceEvent,
