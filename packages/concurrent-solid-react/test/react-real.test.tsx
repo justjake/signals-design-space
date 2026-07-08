@@ -559,12 +559,19 @@ describe("real React: Solid async API surface", () => {
       });
       return { remote };
     });
+    let start!: (fn: () => void) => void;
     function App() {
+      // useTransition's own isPending (rendered as "!") pins that the React
+      // transition is genuinely engaged by the refresh — the refetch must
+      // suspend the transition render, not just run as an urgent refetch.
+      const [inTransition, startTransition] = React.useTransition();
+      start = startTransition;
       const v = useSignal(remote);
       const pending = useIsPending(() => remote());
       return (
         <span>
           {v}:{pending ? "pending" : "settled"}
+          {inTransition ? "!" : ""}
         </span>
       );
     }
@@ -581,12 +588,14 @@ describe("real React: Solid async API surface", () => {
     const before = fetchCount;
     gate = deferred<string>();
     await act(async () => {
-      React.startTransition(() => {
+      start(() => {
         refresh(remote);
       });
     });
     expect(fetchCount).toBeGreaterThan(before); // real refetch
-    expect(text(el)).toBe("fresh-1:pending"); // stale content, no fallback
+    // stale content, no fallback; Solid isPending AND React's transition
+    // pending both visible while the batch is held open
+    expect(text(el)).toBe("fresh-1:pending!");
     await act(async () => {
       gate.resolve("fresh-2");
       await gate.promise;

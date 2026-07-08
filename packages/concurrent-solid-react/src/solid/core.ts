@@ -1271,7 +1271,18 @@ export function updatePendingSignal(el: Signal<any> | Computed<any>): void {
   if (el._pendingSignal) {
     const pending = computePendingState(el);
     const sig = el._pendingSignal;
-    setSignal(sig, pending);
+    // [react-adapt E1] Pending indicators are urgent state. Stock Solid
+    // flushed them through independent child lanes precisely so isPending
+    // updates never wait for the transition holding the source; here the
+    // write leaves the ambient world so it stages urgently and commits at
+    // the next flush even while the source's transition stays parked.
+    const prevWorld = activeTransition;
+    if (prevWorld) setActiveTransition(null);
+    try {
+      setSignal(sig, pending);
+    } finally {
+      if (prevWorld) setActiveTransition(currentTransition(prevWorld));
+    }
     // When override clears: merge sub-lane into source's lane
     if (!pending && sig._optimisticLane) {
       const sourceLane = resolveLane(el as any);
@@ -1467,8 +1478,19 @@ export function refresh<T>(target: Refreshable<T>): void {
     typeof node._fn === "function" &&
     !(node._flags & (REACTIVE_DISPOSED | REACTIVE_MANUAL_WRITE))
   ) {
-    node._flags = (node._flags & ~REACTIVE_CHECK) | REACTIVE_DIRTY;
-    insertIntoHeap(node, node._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue);
-    schedule();
+    // [react-adapt E3] refresh() is write-like, so it classifies like a
+    // write: a refresh inside startTransition must refetch in that batch's
+    // world so the transition is held until the new data lands. The actual
+    // recompute happens at flush time, after the ambient scope is gone, so
+    // the world rides the node's re-entry mark (E9) rather than the scope.
+    const restoreWorld = writeRouter !== null ? writeRouter(node) : undefined;
+    try {
+      if (activeTransition) node._reentryWorld = activeTransition;
+      node._flags = (node._flags & ~REACTIVE_CHECK) | REACTIVE_DIRTY;
+      insertIntoHeap(node, node._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue);
+      schedule();
+    } finally {
+      restoreWorld?.();
+    }
   }
 }
