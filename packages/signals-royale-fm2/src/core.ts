@@ -343,8 +343,8 @@ export function retireBatch(b: WorldBatch): void {
 	if (b.status !== 'open') return;
 	b.status = 'retired';
 	openBatches.delete(b.id);
-	emitTrace('batch-retire', b.traceId, { batch: b.id, disposition: 'committed' });
-	withCause(b.traceId, () => {
+	const ev = emitTrace('batch-retire', b.traceId, { batch: b.id, disposition: 'committed' });
+	withCause(ev === 0 ? currentCauseId() : ev, () => {
 		batch(() => {
 			for (const a of b.touched) a.replayBatch(b);
 		});
@@ -357,8 +357,8 @@ export function abortBatch(b: WorldBatch): void {
 	if (b.status !== 'open') return;
 	b.status = 'aborted';
 	openBatches.delete(b.id);
-	emitTrace('batch-retire', b.traceId, { batch: b.id, disposition: 'aborted' });
-	withCause(b.traceId, () => {
+	const ev = emitTrace('batch-retire', b.traceId, { batch: b.id, disposition: 'aborted' });
+	withCause(ev === 0 ? currentCauseId() : ev, () => {
 		batch(() => {
 			for (const a of b.touched) a.dropBatch(b);
 		});
@@ -390,21 +390,44 @@ export interface AtomOptions<T> {
 	effect?: (ctx: { get(): T; set(v: T): void }) => void | (() => void);
 }
 
+/** One queued write with its issuing batch (null = urgent). */
+interface QueuedOp<T> {
+	batch: WorldBatch | null;
+	op: DraftOp<T>;
+}
+
+/**
+ * Atom state model (React updater-queue semantics):
+ *
+ * - `base` is the committed fold point.
+ * - While any deferred batch has drafts here, every write (urgent included)
+ *   is queued in dispatch order. Canonical readers see `canonical` = base
+ *   folded through urgent ops only; a world folds base through urgent ops
+ *   plus its own batches' ops, still in dispatch order.
+ * - Retiring a batch folds base through that batch's ops AND the urgent ops
+ *   (dispatch order), so a functional update replays against the base the
+ *   urgent writes produced — the (1+1)*2 = 4 arithmetic.
+ * - With no deferred drafts anywhere, urgent writes skip the queue entirely
+ *   and land directly on base (the fast path).
+ */
 export class AtomNode<T> implements Producer {
 	version: NodeVersion = 1;
 	subs = new Set<Consumer>();
 	label?: string;
 
 	private base: T | typeof UNSET;
+	/** base folded through queued urgent ops (=== base when queue is null). */
+	private canonical: T | typeof UNSET;
 	private init: (() => T) | null;
 	private equals: Equals<T>;
 
-	/** Draft patches per open batch, in write order. */
-	private patches: Map<BatchId, { ops: DraftOp<T>[]; batch: WorldBatch }> | null = null;
+	/** Dispatch-ordered writes; non-null only while deferred drafts exist. */
+	private queue: QueuedOp<T>[] | null = null;
+	private deferredCount = 0;
 	/** Folded world values, keyed by world, stamped for invalidation. */
 	private worldCache: Map<string, { stamp: string; value: T }> | null = null;
 
-	/** Lifetime-effect bookkeeping (see observed.ts helpers below). */
+	/** Lifetime-effect bookkeeping. */
 	lifetime: LifetimeState<T> | null = null;
 
 	constructor(initial: T | (() => T), opts?: AtomOptions<T>) {
@@ -415,6 +438,7 @@ export class AtomNode<T> implements Producer {
 			this.base = initial;
 			this.init = null;
 		}
+		this.canonical = this.base;
 		this.equals = opts?.equals ?? (defaultEquals as Equals<T>);
 		this.label = opts?.label;
 		if (opts?.effect) this.lifetime = new LifetimeState(this, opts.effect);
@@ -433,8 +457,9 @@ export class AtomNode<T> implements Producer {
 			} finally {
 				initializerDepth--;
 			}
+			if (this.canonical === UNSET) this.canonical = this.base;
 		}
-		return this.base as T;
+		return this.canonical as T;
 	}
 
 	/** Canonical value: committed state plus applied urgent writes. */
@@ -454,33 +479,38 @@ export class AtomNode<T> implements Producer {
 			const p = currentCommittedRead.pending;
 			if (p.has(this as AtomNode<unknown>)) return p.get(this as AtomNode<unknown>) as T;
 		}
-		const base = this.materialize();
-		if (world === null || world.length === 0 || this.patches === null) return base;
+		const canonical = this.materialize();
+		const queue = this.queue;
+		if (world === null || world.length === 0 || queue === null) return canonical;
 		let relevant = false;
-		for (const b of world) if (this.patches.has(b.id)) relevant = true;
-		if (!relevant) return base;
+		for (const q of queue) {
+			if (q.batch !== null && world.includes(q.batch)) relevant = true;
+		}
+		// Urgent-only folds equal the canonical cache; skip the world machinery.
+		if (!relevant) return canonical;
 		const key = worldKey(world);
 		const stamp = worldStamp(world);
 		let cache = this.worldCache;
 		if (cache === null) cache = this.worldCache = new Map();
 		const hit = cache.get(key);
 		if (hit !== undefined && hit.stamp === stamp) return hit.value;
-		let v = base;
-		for (const b of world) {
-			const p = this.patches.get(b.id);
-			if (p === undefined) continue;
-			for (const op of p.ops) v = 'set' in op ? op.set : op.fn(v);
-			b.cacheHolders.add(this);
+		let v = this.base as T;
+		for (const q of queue) {
+			if (q.batch !== null && !world.includes(q.batch)) continue;
+			v = 'set' in q.op ? q.op.set : q.op.fn(v);
+			if (q.batch !== null) q.batch.cacheHolders.add(this);
 		}
 		cache.set(key, { stamp, value: v });
 		return v;
 	}
 
-	/** Newest intent: canonical folded through every open batch that drafted. */
+	/** Newest intent: base folded through the whole queue in dispatch order. */
 	latestValue(): T {
-		if (this.patches === null || this.patches.size === 0) return this.materialize();
-		const world = [...this.patches.values()].map((p) => p.batch).sort((a, b) => a.id - b.id);
-		return this.valueIn(world);
+		const canonical = this.materialize();
+		if (this.queue === null) return canonical;
+		let v = this.base as T;
+		for (const q of this.queue) v = 'set' in q.op ? q.op.set : q.op.fn(v);
+		return v;
 	}
 
 	write(op: DraftOp<T>): void {
@@ -493,73 +523,120 @@ export class AtomNode<T> implements Producer {
 			this.draft(b, op);
 			return;
 		}
-		// Canonical (urgent) write: applies to base immediately.
+		// Urgent write: canonically visible immediately.
 		const prev = this.materialize();
 		const next = 'set' in op ? op.set : op.fn(prev);
 		if (this.equals(prev, next)) return;
-		// Per-root committed views: the value on screen is `prev` until each
-		// root's next commit, so capture it before the base moves.
-		for (const view of committedViews) {
-			if (!view.pending.has(this as AtomNode<unknown>)) {
-				view.pending.set(this as AtomNode<unknown>, prev);
-			}
-		}
-		this.base = next;
-		this.version++;
-		globalVersion++;
-		emitTrace('write', currentCauseId(), {
-			atom: this.label ?? 'atom',
-			batch: b === null ? 0 : b.id,
-			node: this,
-		});
-		startBatch();
-		try {
-			// Check, not Dirty: consumers validate net change at flush time, so
-			// a write that reverts within a batch triggers nothing downstream.
-			for (const c of [...this.subs]) c.notify(false);
-		} finally {
-			endBatch();
-		}
+		if (this.queue !== null) this.queue.push({ batch: null, op });
+		else this.base = next;
+		this.applyCanonical(prev, next, null);
 	}
 
 	private draft(b: WorldBatch, op: DraftOp<T>): void {
 		// The equality contract compares against the drafted world's current
 		// value, so a lazy base must exist before the first draft lands.
+		this.materialize();
 		const before = this.valueIn([b]);
 		const after = 'set' in op ? op.set : op.fn(before);
-		if (this.equals(before, after) && 'set' in op) return;
-		let patches = this.patches;
-		if (patches === null) patches = this.patches = new Map();
-		let p = patches.get(b.id);
-		if (p === undefined) {
-			p = { ops: [], batch: b };
-			patches.set(b.id, p);
-			b.touched.add(this as AtomNode<unknown>);
-		}
-		p.ops.push(op);
+		if ('set' in op && this.equals(before, after)) return;
+		if (this.queue === null) this.queue = [];
+		this.queue.push({ batch: b, op });
+		this.deferredCount++;
+		b.touched.add(this as AtomNode<unknown>);
 		b.version++;
-		emitTrace('write', currentCauseId(), {
+		const ev = emitTrace('write', currentCauseId(), {
 			atom: this.label ?? 'atom',
 			batch: b.id,
 			deferred: true,
 			node: this,
 		});
-		notifyExternal(this, b);
+		withCause(ev === 0 ? currentCauseId() : ev, () => notifyExternal(this, b));
 	}
 
-	/** Retired batch: replay its ops as canonical writes, in order. */
+	/** Canonical moved from `prev` to `next`: stamp, trace, and notify. */
+	private applyCanonical(prev: T, next: T, retired: WorldBatch | null): void {
+		// Per-root committed views: the value on screen is `prev` until each
+		// root's next commit, so capture it before canonical moves.
+		for (const view of committedViews) {
+			if (!view.pending.has(this as AtomNode<unknown>)) {
+				view.pending.set(this as AtomNode<unknown>, prev);
+			}
+		}
+		this.canonical = next;
+		this.version++;
+		globalVersion++;
+		const ev = emitTrace('write', currentCauseId(), {
+			atom: this.label ?? 'atom',
+			batch: retired === null ? 0 : retired.id,
+			node: this,
+		});
+		withCause(ev === 0 ? currentCauseId() : ev, () => {
+			startBatch();
+			try {
+				// Check, not Dirty: consumers validate net change at flush time, so
+				// a write that reverts within a batch triggers nothing downstream.
+				for (const c of [...this.subs]) c.notify(false);
+			} finally {
+				endBatch();
+			}
+		});
+	}
+
+	private applyOp(op: DraftOp<T>, v: T): T {
+		return 'set' in op ? op.set : op.fn(v);
+	}
+
+	/** Consume the committed (batch-null) prefix of the queue into base. */
+	private compactQueue(): void {
+		const queue = this.queue!;
+		let i = 0;
+		let base = this.base as T;
+		while (i < queue.length && queue[i].batch === null) {
+			base = this.applyOp(queue[i].op, base);
+			i++;
+		}
+		this.base = base;
+		if (i > 0) queue.splice(0, i);
+		if (queue.length === 0) this.queue = null;
+	}
+
+	/**
+	 * Retirement: this batch's ops become committed ops in place (dispatch
+	 * order preserved — an urgent op queued after another still-open batch's
+	 * op stays behind it), then base advances through the committed prefix.
+	 */
 	replayBatch(b: WorldBatch): void {
-		const p = this.patches?.get(b.id);
-		if (p === undefined) return;
-		this.patches!.delete(b.id);
-		for (const op of p.ops) this.write(op);
+		const queue = this.queue;
+		if (queue === null) return;
+		let consumed = 0;
+		for (const q of queue) {
+			if (q.batch === b) {
+				q.batch = null;
+				consumed++;
+			}
+		}
+		if (consumed === 0) return;
+		this.deferredCount -= consumed;
+		const prev = this.canonical as T;
+		this.compactQueue();
+		let canon = this.base as T;
+		if (this.queue !== null) {
+			for (const q of this.queue) if (q.batch === null) canon = this.applyOp(q.op, canon);
+		}
+		if (!this.equals(prev, canon)) this.applyCanonical(prev, canon, b);
+		else this.canonical = canon;
 	}
 
-	/** Aborted batch: drop drafts and re-notify anyone who saw them. */
+	/** Aborted batch: drop its drafts and re-notify anyone who saw them. */
 	dropBatch(b: WorldBatch): void {
-		const p = this.patches?.get(b.id);
-		if (p === undefined) return;
-		this.patches!.delete(b.id);
+		const queue = this.queue;
+		if (queue === null) return;
+		const rest = queue.filter((q) => q.batch !== b);
+		const dropped = queue.length - rest.length;
+		if (dropped === 0) return;
+		this.deferredCount -= dropped;
+		this.queue = rest;
+		this.compactQueue();
 		notifyExternal(this, b);
 	}
 
@@ -582,18 +659,19 @@ export class AtomNode<T> implements Producer {
 
 	/** True while any open deferred batch holds drafts against this atom. */
 	hasOpenDrafts(): boolean {
-		return this.patches !== null && this.patches.size > 0;
+		return this.deferredCount > 0;
 	}
 
-	/** Net-change probe: does the current base equal a recorded read value? */
+	/** Net-change probe: does canonical equal a recorded read value? */
 	sameValue(recorded: unknown): boolean {
-		return this.base !== UNSET && this.equals(this.base as T, recorded as T);
+		return this.canonical !== UNSET && this.equals(this.canonical as T, recorded as T);
 	}
 
 	/** Install a server-serialized value: cancels the lazy initializer and
 	 * replaces the base without write semantics (no equality, no notify). */
 	install(value: T): void {
 		this.base = value;
+		this.canonical = value;
 		this.init = null;
 	}
 

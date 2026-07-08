@@ -39,16 +39,17 @@ describe('worlds and drafts', () => {
 		expect(openBatchCount()).toBe(0);
 	});
 
-	test('functional updates replay against the retirement base (rebase arithmetic)', () => {
+	test('functional updates replay in dispatch order (rebase arithmetic)', () => {
 		const a = atom(1);
 		const t = createBatch(true);
-		runInWriteBatch(t, () => a.update((x) => x * 2));
-		// Urgent write lands alone and immediately.
-		a.update((x) => x + 1);
+		runInWriteBatch(t, () => a.update((x) => x + 1));
+		// Urgent write lands alone and immediately: the +1 draft is skipped.
+		a.update((x) => x * 2);
 		expect(a.get()).toBe(2);
-		expect(withWorld([t], () => a.get())).toBe(4); // (1+1)*2 through the draft fn
+		// The transition world folds the whole queue in dispatch order.
+		expect(withWorld([t], () => a.get())).toBe(4); // (1+1)*2
 		retireBatch(t);
-		expect(a.get()).toBe(4); // not 2: the draft fn re-executed on base 2
+		expect(a.get()).toBe(4); // not 3: urgent x2 replays after the draft +1
 	});
 
 	test('aborting a batch drops drafts and re-notifies draft watchers', () => {

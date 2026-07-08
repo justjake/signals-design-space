@@ -78,8 +78,11 @@ function generate(rand: () => number, steps: number): Op[] {
 
 // -- the naive model ---------------------------------------------------------
 
+/** batch: null = urgent op; number = deferred batch id. */
+type ModelOp = { batch: number | null } & ({ set: number } | { add: number });
+
 type ModelNode =
-	| { kind: 'atom'; base: number; drafts: Map<number, Array<{ set: number } | { add: number }>> }
+	| { kind: 'atom'; base: number; queue: ModelOp[] }
 	| { kind: 'computed'; srcA: number; srcB: number; fnKind: number };
 
 interface Model {
@@ -87,14 +90,18 @@ interface Model {
 	openBatches: number[]; // model batch ids in creation order
 }
 
-function modelValue(m: Model, i: number, world: number[]): number {
+/**
+ * Memo-free rederivation. Atom value in a world = base folded through the
+ * dispatch-ordered queue, keeping urgent ops plus the world's batches
+ * (world 'all' = every op: the latest() fold).
+ */
+function modelValue(m: Model, i: number, world: number[] | 'all'): number {
 	const n = m.nodes[i];
 	if (n.kind === 'atom') {
 		let v = n.base;
-		for (const b of world) {
-			const ops = n.drafts.get(b);
-			if (!ops) continue;
-			for (const op of ops) v = 'set' in op ? op.set : v + op.add;
+		for (const op of n.queue) {
+			if (world !== 'all' && op.batch !== null && !world.includes(op.batch)) continue;
+			v = 'set' in op ? op.set : v + op.add;
 		}
 		return v;
 	}
@@ -105,7 +112,7 @@ function modelValue(m: Model, i: number, world: number[]): number {
 
 // -- run one schedule against engine + model ---------------------------------
 
-function runSchedule(ops: Op[]): string | null {
+export function runSchedule(ops: Op[]): string | null {
 	resetForTest();
 	const m: Model = { nodes: [], openBatches: [] };
 	const engineNodes: Array<Atom<number> | Computed<number>> = [];
@@ -123,7 +130,7 @@ function runSchedule(ops: Op[]): string | null {
 		for (const step of ops) {
 			switch (step.op) {
 				case 'atom': {
-					m.nodes.push({ kind: 'atom', base: step.value, drafts: new Map() });
+					m.nodes.push({ kind: 'atom', base: step.value, queue: [] });
 					engineNodes.push(atom(step.value));
 					break;
 				}
@@ -152,20 +159,20 @@ function runSchedule(ops: Op[]): string | null {
 					const bid = step.batch < 0 ? -1 : batchAt(step.batch);
 					const apply = () =>
 						step.op === 'set' ? en.set(step.value) : en.update((x) => x + step.delta);
+					const idx = m.nodes.indexOf(n);
 					if (bid < 0) {
 						apply();
-						if (step.op === 'set') n.base = step.value;
-						else n.base += step.delta;
+						if (step.op === 'set' && modelValue(m, idx, []) === step.value) break; // equal drop
+						n.queue.push(
+							step.op === 'set' ? { batch: null, set: step.value } : { batch: null, add: step.delta },
+						);
 					} else {
 						runInWriteBatch(engineBatches.get(bid)!, apply);
-						let ops2 = n.drafts.get(bid);
-						if (!ops2) n.drafts.set(bid, (ops2 = []));
-						if (step.op === 'set') {
-							// Engine drops equal-value first drafts (equality contract).
-							let cur = n.base;
-							for (const op of ops2) cur = 'set' in op ? op.set : cur + op.add;
-							if (cur !== step.value) ops2.push({ set: step.value });
-						} else ops2.push({ add: step.delta });
+						// Equal-value set drafts drop (compared in the batch's own world).
+						if (step.op === 'set' && modelValue(m, idx, [bid]) === step.value) break;
+						n.queue.push(
+							step.op === 'set' ? { batch: bid, set: step.value } : { batch: bid, add: step.delta },
+						);
 					}
 					break;
 				}
@@ -183,16 +190,18 @@ function runSchedule(ops: Op[]): string | null {
 					const eb = engineBatches.get(bid)!;
 					if (step.op === 'retire') {
 						retireBatch(eb);
+						// Retired ops become committed ops in place: dispatch order
+						// is preserved relative to still-open batches' drafts.
 						for (const n of m.nodes) {
 							if (n.kind !== 'atom') continue;
-							const ops2 = n.drafts.get(bid);
-							if (!ops2) continue;
-							for (const op of ops2) n.base = 'set' in op ? op.set : n.base + op.add;
-							n.drafts.delete(bid);
+							for (const op of n.queue) if (op.batch === bid) op.batch = null;
 						}
 					} else {
 						abortBatch(eb);
-						for (const n of m.nodes) if (n.kind === 'atom') n.drafts.delete(bid);
+						for (const n of m.nodes) {
+							if (n.kind !== 'atom') continue;
+							n.queue = n.queue.filter((op) => op.batch !== bid);
+						}
 					}
 					engineBatches.delete(bid);
 					break;
@@ -227,7 +236,7 @@ function runSchedule(ops: Op[]): string | null {
 				if (canonical !== expectCanonical)
 					return `node ${i} canonical: engine ${canonical} != model ${expectCanonical}`;
 				const lat = latest(engineNodes[i]);
-				const expectLatest = modelValue(m, i, [...m.openBatches].sort((a, b) => a - b));
+				const expectLatest = modelValue(m, i, 'all');
 				if (lat !== expectLatest) return `node ${i} latest: engine ${lat} != model ${expectLatest}`;
 				for (const bid of m.openBatches) {
 					const eb = engineBatches.get(bid)!;
