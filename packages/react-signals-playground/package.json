@@ -1,0 +1,34 @@
+{
+	"name": "react-signals-playground",
+	"private": true,
+	"version": "0.0.0",
+	"license": "MIT",
+	"description": "Vite + React playground that renders one shared App under three entrypoints, each backed by a different concurrent-signals implementation. App code imports everything reactive from '#concurrent-signals-shim'; the page path decides which implementation that specifier resolves to.",
+	"type": "module",
+	"imports": {
+		"#concurrent-signals-shim": "./src/shims/index.ts"
+	},
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview",
+		"check": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"cosignals": "workspace:*",
+		"cosignals-react": "workspace:*",
+		"cosignals-alt-a": "workspace:*",
+		"cosignals-alt-b": "workspace:*",
+		"react": "*",
+		"react-dom": "*"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"@vitejs/plugin-react": "6.0.2",
+		"typescript": "6.0.3",
+		"vite": "8.1.0"
+	}
+}
