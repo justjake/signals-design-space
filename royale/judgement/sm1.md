@@ -1,6 +1,6 @@
 # Judgement scorecard: sm1
 
-**Verdict: issues** · fork LOC 320 · lib LOC 2158
+**Verdict: clean (after adjudication fix round; honesty warning on record)** · final fork LOC 320 · final lib LOC 2146 · fork LOC 320 · lib LOC 2158
 
 ## Gates (claimed vs observed)
 
@@ -17,3 +17,20 @@ All re-run by me on a quiet workspace (HEAD 4652975 unchanged): engine typecheck
 ## Notes
 
 Round 2 orders were followed: entry-specific (a) SATISFIED — a real 3-round isolated milomg run with live Alien side-by-side exists in the committed submodule (cde40f9) and reproduces (my rerun 5.17x overall; Round 1's stored-snapshot 26x mux is now a live 3.5-4x), and react-bench gained the required stock-uSES baseline with honest framing that the baseline wins urgent p95 in this shape; (b) leak-verdict machinery is real — debugState() zero-state counters printed and enforced (exit 1) at the end of bench:seam and bench:core, observed printing all zeros, and the report honestly discloses the external milomg runner has no heap inspection; (c) both causality chains verified in the entrant suite (battery scenario 15's trace half is blocked by the arithmetic dispute). Originality: recognizably its own design — one per-atom operation history with functional updaters kept replayable, worlds as lane-mask folds over that history, per-world computed evaluation caches, and a 320-line fork exposing only scheduling facts (five unstable_* functions; synthetic-transition lane pin via setSignalTransitionLane so corrections join the owning batch — a distinct mechanism satisfying binding ruling 2, asserted by fork tests and my probe of subscribeReact's host.runInLane(batch.lane,...) path). Stance drift: PARTIAL — day-to-day visibility is read-time world folding (renders read their pinned world), with genuine commit-boundary repair confined to the subscription-claim seam (post-subscribe canonical repair + missed live-lane correction in the owning lane); legal, but the ledger should record it as hybrid rather than pure detect-at-commit-and-repair. Ideas worth stealing: the minimal 5-function fork protocol + synthetic-transition lane pin; enforced zero-state leak verdict lines on every bench; retirement-replay of updater functions over intervening urgent state. Readability: clean prettier-normalized code, good names, no line-golfing — but essentially zero comments across 2,158 lines (one block comment), against the house rule that comments are free; an undocumented engine is this entry's main craft weakness. Score-relevant headline: all required gates green and reproducible, fork metric 320 (vs incumbent 1510), lib 2158 (vs 4700-5000), core perf 5-6.5x off Alien (worst-in-class risk remains but now honestly measured), 3 battery failures under adjudicated ruling, one honesty blemish for the owner to weigh.
+
+
+## Re-judgement after adjudication fix round (closing)
+
+**Verdict: clean** · fork LOC 320 · lib LOC 2146
+
+### Fixes verified
+
+All four ordered fixes verified. (1) Replay order: commit a2ea9cf unifies applied/pending into one dispatch-ordered operations log; retirement stamps visibility without reordering; my own engine-level FakeHost probes confirm urgent+1 then transition*2 => 2 canonical pending, 4 at retirement, and transition set(10) then urgent +5 => 6 pending, 15 at retirement; battery scenarios 3/13/15 pass unmodified; oracle MODEL also converged to dispatch-order (single history + committed flag), not just the engine. (2) Typecheck misreport corrected: battery tsc genuinely clean, REPORT retracts the false Round 2 claim and explains the @types leak fix at the ADAPTER boundary. (3) bench:core repaired (framework=adapter), smoke run emits 9/9 Kairo rows + clean leak line. (4) Engineering-rationale comments added at all four named seams (world folding, retirement replay, lane pinning x2, reclamation x2) — substantive but minimal (~19 lines / 6 blocks). Suites: engine 194/194, oracle default 3/3 + deep ORACLE_SEEDS=1200 confirmed in verbose title, real-React gate 17/17 (assertions legitimately flipped to ruled semantics), both typechecks clean. Quiet confirmed; tracked tree left clean.
+
+### Battery
+
+25/25 PASS; tamper check fresh and byte-identical for battery.spec.tsx/royale-types.ts/vitest.config.ts/global.d.ts vs canonical /Users/jitl/src/alien-signals-opt/royale/verify/battery; only the designated ADAPTER.ts shim changed (RoyaleAdapter cast); battery typecheck exits 0 and REPORT's claim now matches reality with the prior false claim explicitly retracted
+
+### Notes
+
+forkLoc 320 unchanged; libLoc 2146 (down 12 from 2158 — replay unification deleted code; comments free as expected; REPORT's historical Round 2 section still cites 2158). REPORT.md has the Judgement fixes section, dispute marked adjudicated with erratum credit and 'no remaining battery dispute', and a fresh gates table matching my independent runs. Documentation pass is compliant but thin (~19 comment lines on a 1872-line engine) — each comment is genuine rationale, none perfunctory. Honesty warning remains on sm1's record per the adjudication; nothing new of that kind observed this round. Entry closes clean.
