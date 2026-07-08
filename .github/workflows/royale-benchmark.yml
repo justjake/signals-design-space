@@ -1,0 +1,124 @@
+# Signals Royale authoritative core benchmark: all 12 tournament entries vs
+# alien-signals and the cosignals incumbents on one runner. Manual dispatch
+# only. Same harness + methodology as benchmark.yml (milomg isolated runner,
+# median of interleaved rounds); royale registrations applied to the milomg
+# submodule from royale/ci/milomg-royale.patch. sx1 runs separately with the
+# cellx suite excluded (known non-terminating) under a 30-minute guard.
+name: royale-benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: 'Interleaved rounds per framework'
+        required: false
+        default: '3'
+
+concurrency:
+  group: royale-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ROUNDS: ${{ inputs.rounds || '3' }}
+  FIELD: '"Alien Signals" "Cosignal" "Cosignal Alt A" "Cosignal Alt B" "Royale FM1" "Royale FM2" "Royale FH1" "Royale FH2" "Royale FX1" "Royale FX2" "Royale SH1" "Royale SH2" "Royale SX2" "Royale SM1" "Royale SM2"'
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init benchmark submodules + apply royale registrations
+        run: |
+          git submodule update --init \
+            packages/dalien-signals \
+            milomg-reactivity-benchmark \
+            upstream-alien-signals
+          git -C milomg-reactivity-benchmark apply --binary \
+            "$GITHUB_WORKSPACE/royale/ci/milomg-royale.patch"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm install -g pnpm@10
+
+      - name: Build upstream alien-signals (esm/ is a local build artifact)
+        working-directory: upstream-alien-signals
+        run: |
+          npm install
+          npm run build
+
+      - name: Build dalien-signals (bundled by frameworksList even when not run)
+        working-directory: packages/dalien-signals
+        run: |
+          pnpm install --ignore-workspace
+          node build.js
+
+      - name: Build benchmark runner
+        working-directory: milomg-reactivity-benchmark
+        run: |
+          pnpm install --no-frozen-lockfile
+          cd packages/node
+          npx esbuild src/index.ts src/isolated.ts --bundle --format=esm --platform=node --target=esnext --outdir=dist --sourcemap=external
+
+      - name: Adapter sanity gate (all royale rows must pass before timing)
+        working-directory: milomg-reactivity-benchmark/packages/core
+        run: |
+          pnpm exec vitest run frameworks.test.ts 2>&1 | tee /tmp/sanity.log || true
+          # the lone pre-existing x-reactivity pull-count failure is tolerated;
+          # any Royale failure is fatal
+          if grep -E "✗|FAIL" /tmp/sanity.log | grep -qi royale; then
+            echo "::error::a Royale adapter failed sanity"; exit 1
+          fi
+
+      - name: Run field benchmark
+        working-directory: milomg-reactivity-benchmark/packages/node
+        run: |
+          echo "$FIELD" | xargs node dist/isolated.js --rounds "$ROUNDS" \
+            > "$GITHUB_WORKSPACE/results-field.csv"
+          cat "$GITHUB_WORKSPACE/results-field.csv"
+
+      - name: Run SX1 (cellx excluded, 30m guard)
+        working-directory: milomg-reactivity-benchmark/packages/node
+        run: |
+          SUITES=sbench,kairo,dynamic timeout 1800 \
+            node dist/isolated.js --rounds "$ROUNDS" "Royale SX1" \
+            > "$GITHUB_WORKSPACE/results-sx1.csv" || echo "::warning::SX1 run hit the guard"
+          cat "$GITHUB_WORKSPACE/results-sx1.csv"
+
+      - name: Verify every field framework produced results
+        run: |
+          missing=0
+          eval "set -- $FIELD"
+          for fw in "$@"; do
+            if ! grep -q "^$fw *," results-field.csv; then
+              echo "::error::$fw produced no benchmark rows"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Job summary
+        run: |
+          {
+            echo "### Signals Royale core field (median of $ROUNDS interleaved isolated rounds)"
+            echo ""
+            echo '| framework | total (ms) |'
+            echo '| --- | ---: |'
+            awk -F',' 'NR>1 && $3+0>0 {gsub(/^ +| +$/,"",$1); t[$1]+=$3} END {for (f in t) printf "| %s | %d |\n", f, t[f]}' \
+              results-field.csv | sort -t'|' -k3 -n
+            echo ""
+            echo "SX1 (cellx excluded):"
+            awk -F',' 'NR>1 && $3+0>0 {gsub(/^ +| +$/,"",$1); t[$1]+=$3} END {for (f in t) printf "| %s | %d |\n", f, t[f]}' \
+              results-sx1.csv
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: royale-benchmark
+          path: |
+            results-field.csv
+            results-sx1.csv
+          if-no-files-found: error
