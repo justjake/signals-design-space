@@ -125,8 +125,7 @@ export class Atom<T> {
   frameMark = 0;
   pendingState = false;
   cause: number | undefined;
-  applied: Operation<T>[] | null = null;
-  pending: Operation<T>[] | null = null;
+  operations: Operation<T>[] | null = null;
   readonly observers = new Set<CoreObserver>();
   readonly reactObservers = new Set<ReactObserver>();
   readonly pendingObservers = new Set<ReactObserver>();
@@ -275,6 +274,9 @@ const thenableRecords = new WeakMap<object, AsyncRecord>();
 let lifetimeScheduled = false;
 let pendingNotificationScheduled = false;
 
+// An unscoped effect may outlive every reference to its disposer. The registry
+// holds only the reactive node, so losing that public handle still detaches the
+// graph without retaining the handle through its own cleanup closure.
 const disposalRegistry = new FinalizationRegistry<ReactiveEffect>(disposeEffect);
 
 export function atom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<T> {
@@ -306,6 +308,8 @@ function currentWorld(): World {
   if (activeWorld !== null) return activeWorld;
   const context = host?.renderContext();
   if (context !== null && context !== undefined) {
+    // Pinning a render to one sequence boundary prevents later dispatches from
+    // leaking into siblings or retries that belong to the same React pass.
     let pass = passes.get(context.container);
     if (pass === undefined) {
       const lanes = context.lanes | (rootViews.get(context.container) ?? 0);
@@ -359,23 +363,22 @@ function applyOperation<T>(operation: Operation<T>, value: T): T {
 function readAtomInWorld<T>(target: Atom<T>, world: World): T {
   materialize(target);
   let value = target.base;
-  const applied = target.applied;
-  if (applied !== null) {
-    for (const operation of applied) {
-      if (operation.appliedAt <= world.pin) value = applyOperation(operation, value);
-    }
-  }
-  const pending = target.pending;
-  if (pending !== null && world.lanes !== 0) {
-    for (const operation of pending) {
-      const batch = operation.batch as Batch;
-      if (
-        operation.seq <= world.pin &&
-        (batch.retiredAt === 0 || batch.retiredAt > world.pin) &&
-        (world.lanes & batch.lane) !== 0
-      ) {
-        value = applyOperation(operation, value);
-      }
+  const operations = target.operations;
+  if (operations === null) return value;
+  // One sequence-ordered log is the source of truth for every world. Urgent
+  // operations are visible immediately; a deferred operation is visible only
+  // to its lane until retirement makes it canonical. Filtering visibility while
+  // preserving this order gives React updater-queue replay without copying or
+  // sorting histories per render.
+  for (const operation of operations) {
+    if (operation.seq > world.pin) break;
+    const batch = operation.batch;
+    if (
+      batch === null ||
+      (operation.appliedAt !== 0 && operation.appliedAt <= world.pin) ||
+      ((batch.retiredAt === 0 || batch.retiredAt > world.pin) && (world.lanes & batch.lane) !== 0)
+    ) {
+      value = applyOperation(operation, value);
     }
   }
   return value;
@@ -505,13 +508,12 @@ function writeAtom<T>(target: Atom<T>, update: boolean, input: T | ((previous: T
     cause,
   };
   touchedAtoms.add(target);
+  (target.operations ??= []).push(operation);
   if (deferred) {
-    (target.pending ??= []).push(operation);
     batch?.operations.push(operation);
     setPendingState(target, true, cause);
     deliverAtom(target, lane, cause);
   } else {
-    (target.applied ??= []).push(operation);
     target.version++;
     invalidateAtom(target, cause);
     deliverAtom(target, 0, cause);
@@ -1465,6 +1467,9 @@ export function subscribeReact<T>(snapshot: ReactRead<T>, observer: ReactObserve
       batch: batch.lane,
       detail: "commit-boundary repair",
     });
+    // A subscription claimed at commit may have missed the batch's original
+    // notification. Pinning this repair to that lane makes React finish it as
+    // part of the owning transition instead of exposing a second commit beside it.
     if (host === null) observer.notify(delivery || batch.cause);
     else host.runInLane(batch.lane, () => observer.notify(delivery || batch.cause));
   }
@@ -1609,10 +1614,12 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
   batches.delete(batch.lane);
   liveLanes &= ~batch.lane;
   const changed: Atom<any>[] = [];
+  // Retirement changes visibility, not ordering. Operations stay in their
+  // atom's dispatch log and receive one canonical visibility timestamp, so a
+  // later urgent updater remains later even when this lane finishes afterward.
   for (const operation of batch.operations) {
     operation.appliedAt = retirement;
     const atom = operation.atom;
-    (atom.applied ??= []).push(operation);
     if (!changed.includes(atom)) changed.push(atom);
   }
   for (const root of batch.committedRoots) {
@@ -1625,9 +1632,9 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
   });
   for (const atom of changed) {
     let pending = false;
-    if (atom.pending !== null) {
-      for (const operation of atom.pending) {
-        if ((operation.batch as Batch).retiredAt === 0) {
+    if (atom.operations !== null) {
+      for (const operation of atom.operations) {
+        if (operation.batch !== null && operation.batch.retiredAt === 0) {
           pending = true;
           break;
         }
@@ -1684,10 +1691,12 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
 function sweepIfQuiescent(): void {
   if (activePassCount !== 0 || batches.size !== 0) return;
   canonicalWorld.pin = sequence;
+  // Once no render or deferred lane can refer to an older world, folding each
+  // log into the base releases every episode-only operation and batch reference.
+  // Quiescent reads therefore return to the single-value fast path.
   for (const atom of touchedAtoms) {
     atom.base = readAtomInWorld(atom, canonicalWorld);
-    atom.applied = null;
-    atom.pending = null;
+    atom.operations = null;
   }
   touchedAtoms.clear();
   episodeBatches.length = 0;
@@ -1777,8 +1786,7 @@ export function installState<T>(target: Atom<T>, value: T): void {
   target.base = value;
   target.initialized = true;
   target.initializer = null;
-  target.applied = null;
-  target.pending = null;
+  target.operations = null;
   target.pendingState = false;
 }
 
@@ -1840,8 +1848,7 @@ export function resetForTest(): void {
   passes = new WeakMap();
   rootViews = new WeakMap();
   for (const atom of touchedAtoms) {
-    atom.applied = null;
-    atom.pending = null;
+    atom.operations = null;
     atom.pendingState = false;
   }
   touchedAtoms.clear();

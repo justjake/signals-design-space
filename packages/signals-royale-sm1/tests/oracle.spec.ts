@@ -17,7 +17,7 @@ type ModelOperation = {
   kind: 0 | 1 | 2;
   value: number;
   lane: number;
-  active: boolean;
+  committed: boolean;
 };
 type Action = [kind: number, target: number, value: number];
 
@@ -75,15 +75,15 @@ function runSchedule(actions: Action[]): string | null {
   const root = {};
   const atoms = [atom(1), atom(2)] as const;
   const derived = computed(() => atoms[0].state * 3 + atoms[1].state);
-  const canonical = [1, 2];
+  const initial = [1, 2];
   const drafts = new Map<number, ModelOperation[]>();
-  const draftOrder: ModelOperation[] = [];
+  const history: ModelOperation[] = [];
   let liveMask = 0;
 
   function modelValue(target: 0 | 1, lanes: number): number {
-    let value = canonical[target];
-    for (const operation of draftOrder) {
-      if (operation.active && (lanes & operation.lane) !== 0 && operation.target === target) {
+    let value = initial[target];
+    for (const operation of history) {
+      if (operation.target === target && (operation.committed || (lanes & operation.lane) !== 0)) {
         value = apply(value, operation);
       }
     }
@@ -99,31 +99,37 @@ function runSchedule(actions: Action[]): string | null {
         kind: (rawValue % 3) as 0 | 1 | 2,
         value: (rawValue % 5) + 1,
         lane: 0,
-        active: true,
+        committed: false,
       };
       if (kind < 3) {
         host.classification = 0;
+        const dropped = operation.kind === 0 && modelValue(target, 0) === operation.value;
         if (operation.kind === 0) atoms[target].set(operation.value);
         else if (operation.kind === 1) atoms[target].update((value) => value + operation.value);
         else atoms[target].update((value) => value * operation.value);
-        canonical[target] = apply(canonical[target], operation);
+        if (!dropped) {
+          operation.committed = true;
+          history.push(operation);
+        }
       } else if (kind < 6) {
         const lane = rawValue & 1 ? 128 : 256;
-        if (operation.kind === 0 && modelValue(target, lane) === operation.value) continue;
+        const dropped = operation.kind === 0 && modelValue(target, lane) === operation.value;
         host.classification = -lane;
         if (operation.kind === 0) atoms[target].set(operation.value);
         else if (operation.kind === 1) atoms[target].update((value) => value + operation.value);
         else atoms[target].update((value) => value * operation.value);
-        let operations = drafts.get(lane);
-        if (operations === undefined) {
-          operations = [];
-          drafts.set(lane, operations);
+        if (!dropped) {
+          let laneOperations = drafts.get(lane);
+          if (laneOperations === undefined) {
+            laneOperations = [];
+            drafts.set(lane, laneOperations);
+          }
+          operation.lane = lane;
+          laneOperations.push(operation);
+          history.push(operation);
+          liveMask |= lane;
+          host.listener?.onRootPending(root, liveMask);
         }
-        operation.lane = lane;
-        operations.push(operation);
-        draftOrder.push(operation);
-        liveMask |= lane;
-        host.listener?.onRootPending(root, liveMask);
       } else if (kind === 6) {
         const lanes = rawValue % 3 === 0 ? liveMask : rawValue & 1 ? 128 : 256;
         host.listener?.onRenderStart(root, lanes);
@@ -148,19 +154,27 @@ function runSchedule(actions: Action[]): string | null {
         }
       } else {
         const lane = rawValue & 1 ? 128 : 256;
-        const operations = drafts.get(lane);
-        if (operations !== undefined) {
+        const laneOperations = drafts.get(lane);
+        if (laneOperations !== undefined) {
           liveMask &= ~lane;
           host.listener?.onRootCommit(root, lane, liveMask);
-          for (const item of operations) {
-            canonical[item.target] = apply(canonical[item.target], item);
-            item.active = false;
-          }
+          for (const item of laneOperations) item.committed = true;
           drafts.delete(lane);
         }
-        if (read(atoms[0]) !== canonical[0] || read(atoms[1]) !== canonical[1]) {
-          return `step ${step}: canonical mismatch`;
-        }
+      }
+      const canonicalA = modelValue(0, 0);
+      const canonicalB = modelValue(1, 0);
+      const actualA = read(atoms[0]);
+      const actualB = read(atoms[1]);
+      const actualDerived = read(derived);
+      if (
+        actualA !== canonicalA ||
+        actualB !== canonicalB ||
+        actualDerived !== canonicalA * 3 + canonicalB
+      ) {
+        return `step ${step}: canonical got ${actualA},${actualB},${actualDerived} expected ${canonicalA},${canonicalB},${
+          canonicalA * 3 + canonicalB
+        }`;
       }
     }
     return null;
@@ -185,7 +199,34 @@ function minimize(actions: Action[]): Action[] {
 }
 
 describe("world-fold oracle", () => {
-  it("rebases the rules example and preserves per-root committed views", () => {
+  it("retires every operation in original dispatch order", () => {
+    resetForTest();
+    const host = new FakeHost();
+    const detach = attachHost(host);
+    const root = {};
+
+    const urgentFirst = atom(1);
+    urgentFirst.update((current) => current + 1);
+    host.classification = -128;
+    urgentFirst.update((current) => current * 2);
+    host.listener?.onRootPending(root, 128);
+    host.listener?.onRootCommit(root, 128, 0);
+    expect(read(urgentFirst)).toBe(4);
+
+    const deferredSet = atom(1);
+    host.classification = -256;
+    deferredSet.set(10);
+    host.listener?.onRootPending(root, 256);
+    host.classification = 0;
+    deferredSet.update((current) => current + 5);
+    expect(read(deferredSet)).toBe(6);
+    host.listener?.onRootCommit(root, 256, 0);
+    expect(read(deferredSet)).toBe(15);
+
+    detach();
+  });
+
+  it("preserves dispatch order in per-root committed views", () => {
     resetForTest();
     const host = new FakeHost();
     const detach = attachHost(host);
@@ -199,12 +240,12 @@ describe("world-fold oracle", () => {
     host.classification = 0;
     value.update((current) => current + 1);
     expect(read(value)).toBe(2);
-    expect(latest(value)).toBe(4);
+    expect(latest(value)).toBe(3);
     host.listener?.onRootCommit(firstRoot, 128, 0);
-    expect(committed(value, firstRoot)).toBe(4);
+    expect(committed(value, firstRoot)).toBe(3);
     expect(committed(value, secondRoot)).toBe(2);
     host.listener?.onRootCommit(secondRoot, 128, 0);
-    expect(read(value)).toBe(4);
+    expect(read(value)).toBe(3);
     detach();
   });
 

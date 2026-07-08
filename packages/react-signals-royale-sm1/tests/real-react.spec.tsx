@@ -125,13 +125,13 @@ describe("real React protocol", () => {
 
     await act(async () => {
       startTransitionWrite(() => {
-        count.update((value) => value * 2);
+        count.update((value) => value + 1);
         blocked.set(true);
       });
     });
     expect(container.textContent).toBe("1:ready:pending");
 
-    await act(async () => count.update((value) => value + 1));
+    await act(async () => count.update((value) => value * 2));
     expect(container.textContent).toBe("2:ready:pending");
 
     await act(async () => {
@@ -182,7 +182,7 @@ describe("real React protocol", () => {
       gate.resolve();
       await gate.promise;
     });
-    expect(container.textContent).toBe("1010");
+    expect(container.textContent).toBe("33");
     expect(committedFrames.every((frame) => frame.split("/")[0] === frame.split("/")[1])).toBe(
       true,
     );
@@ -458,11 +458,11 @@ describe("real React protocol", () => {
     );
     await act(async () => {
       startTransitionWrite(() => {
-        value.update((current) => current * 2);
+        value.update((current) => current + 1);
         blocked.set(true);
       });
     });
-    await act(async () => value.update((current) => current + 1));
+    await act(async () => value.update((current) => current * 2));
     expect(container.textContent).toBe("2:ready");
     let urgentWrite = 0;
     let urgentDelivery = 0;
