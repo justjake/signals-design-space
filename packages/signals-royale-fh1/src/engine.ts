@@ -157,6 +157,9 @@ export class Batch {
 	discard(): void {
 		if (this.state !== 0) return;
 		this.state = 2;
+		// Discard is a visibility change: worlds listing this batch fold
+		// differently now, so their caches must revalidate.
+		writeSeq++;
 		const ev = tracing ? emit('batch-discard', `B${this.id}`) : 0;
 		const prevCause = setCause(ev);
 		try {
@@ -1520,12 +1523,12 @@ export function refresh(xx: Node): void {
 
 /** Serialize the canonical values of app-keyed atoms to JSON. */
 export function serializeAtomState(
-	atoms: Record<string, AnyAtom>,
+	atoms: Record<string, Atom<any>>,
 	replacer?: (key: string, value: unknown) => unknown,
 ): string {
 	const out: Record<string, unknown> = {};
 	for (const key of Object.keys(atoms)) {
-		const a = atoms[key];
+		const a = atoms[key] as AnyAtom;
 		materialize(a);
 		out[key] = a.v;
 	}
@@ -1536,7 +1539,7 @@ export function serializeAtomState(
  * write: no notifications, no history, and lazy initializers do not run. */
 export function initializeAtomState(
 	json: string,
-	atoms: Record<string, AnyAtom>,
+	atoms: Record<string, Atom<any>>,
 	reviver?: (key: string, value: unknown) => unknown,
 ): void {
 	const data = JSON.parse(json, reviver) as Record<string, unknown>;
@@ -1544,11 +1547,11 @@ export function initializeAtomState(
 }
 
 export function installState(
-	atoms: Record<string, AnyAtom>,
+	atoms: Record<string, Atom<any>>,
 	values: Record<string, unknown>,
 ): void {
 	for (const key of Object.keys(values)) {
-		const a = atoms[key];
+		const a = atoms[key] as AnyAtom | undefined;
 		if (a !== undefined) installValue(a, values[key]);
 	}
 }

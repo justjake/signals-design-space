@@ -327,3 +327,18 @@ describe('batch() coalescing is orthogonal to deferred batches', () => {
 		dispose();
 	});
 });
+
+describe('fuzz pins', () => {
+	test('seed 207: discarding a batch invalidates world caches that listed it', () => {
+		const a = atom(1);
+		const c = computed(() => a.get() * 2);
+		const b = createBatch();
+		const w = makeWorld([b.id]);
+		expect(readInWorld(c, w)).toBe(2);
+		b.run(() => a.set(11));
+		expect(readInWorld(c, w)).toBe(22);
+		b.discard();
+		expect(readInWorld(c, w)).toBe(2); // the cached 22 must not survive the discard
+		w.release();
+	});
+});

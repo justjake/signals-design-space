@@ -5,10 +5,6 @@ export default defineConfig({
 		include: ['tests/**/*.spec.ts'],
 		watch: false,
 		pool: 'forks',
-		poolOptions: {
-			forks: {
-				execArgv: ['--expose-gc'],
-			},
-		},
+		execArgv: ['--expose-gc'],
 	},
 });
