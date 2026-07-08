@@ -154,7 +154,10 @@ function maybeQuiesce() {
     a.episodeBaseSeq = 0;
   }
   logged.clear();
-  for (const s of draftEdgeSources) s.draftSubs = null;
+  for (const s of draftEdgeSources) {
+    if (s.draftSubs !== null) pokeTargets -= s.draftSubs.size;
+    s.draftSubs = null;
+  }
   draftEdgeSources.clear();
 }
 function valueAt(hist, cutoff) {
@@ -419,6 +422,8 @@ function linkBack(src, sub, i) {
     else observedMaybeChanged(src);
   }
 }
+var deferredStack = [];
+var deferredDepth = 0;
 function unlinkBack(src, sub, i) {
   const slot = sub.srcSlots[i];
   if (slot < 0) return;
@@ -431,11 +436,19 @@ function unlinkBack(src, sub, i) {
     lastObs.srcSlots[lastSlot] = slot;
   }
   if (src.obs.length === 0) {
-    if (src.k === 1) {
-      if (src.hookSubs === null || src.hookSubs.size === 0) deactivate(src);
+    if (deferredDepth > 0) {
+      deferredStack.push(src);
     } else {
-      observedMaybeChanged(src);
+      settleUnobserved(src);
     }
+  }
+}
+function settleUnobserved(src) {
+  if (src.obs.length !== 0) return;
+  if (src.k === 1) {
+    if (src.hookSubs === null || src.hookSubs.size === 0) deactivate(src);
+  } else {
+    observedMaybeChanged(src);
   }
 }
 function activate(c) {
@@ -452,11 +465,30 @@ function deactivate(c) {
 function trackRead(src) {
   const sub = activeSub;
   if (sub === null) return;
-  const i = sub.srcs.length;
-  sub.srcs.push(src);
+  const i = sub.trackCursor;
+  const srcs = sub.srcs;
+  if (i < srcs.length) {
+    if (srcs[i] === src) {
+      sub.srcVers[i] = src.k === 0 ? src.v : src.ver;
+      sub.trackCursor = i + 1;
+      return;
+    }
+    trimSourcesFrom(sub, i);
+  }
+  sub.trackCursor = i + 1;
+  srcs.push(src);
   sub.srcVers.push(src.k === 0 ? src.v : src.ver);
   sub.srcSlots.push(-1);
   if (sub.k === 2 || isLive(sub)) linkBack(src, sub, i);
+}
+function trimSourcesFrom(sub, from) {
+  const srcs = sub.srcs;
+  for (let j = from; j < srcs.length; j++) {
+    if (sub.srcSlots[j] >= 0) unlinkBack(srcs[j], sub, j);
+  }
+  srcs.length = from;
+  sub.srcVers.length = from;
+  sub.srcSlots.length = from;
 }
 function markObs(source, state) {
   const obs = source.obs;
@@ -528,7 +560,9 @@ function untracked(fn) {
   }
 }
 var pokeEpoch = 0;
+var pokeTargets = 0;
 function pokeHooks(origin, stamp, causeEv) {
+  if (pokeTargets === 0) return;
   const epoch = ++pokeEpoch;
   const prevCause = causeEv !== 0 ? setCause(causeEv) : -1;
   const stack = [origin];
@@ -558,14 +592,16 @@ function subscribeHook(xx, cb) {
   const x = xx;
   const wasLive = x.k === 1 && isLive(x);
   (x.hookSubs ??= /* @__PURE__ */ new Set()).add(cb);
+  pokeTargets++;
   if (x.k === 1) {
     if (!wasLive && x.obs.length === 0) activate(x);
   } else {
     observedMaybeChanged(x);
   }
   return () => {
-    if (x.hookSubs === null) return;
+    if (x.hookSubs === null || !x.hookSubs.has(cb)) return;
     x.hookSubs.delete(cb);
+    pokeTargets--;
     if (x.hookSubs.size === 0) {
       if (x.k === 1) {
         if (x.obs.length === 0) deactivate(x);
@@ -609,8 +645,10 @@ function settleObserved() {
 }
 function noopCleanup() {
 }
-function makeUse(c, entry, epochVal) {
+var activeUseEpoch = 0;
+function makeUse(c, entry) {
   return ((a, factory) => {
+    const epochVal = activeUseEpoch;
     let t;
     if (factory !== void 0) {
       const epochCache = c.useCache ??= /* @__PURE__ */ new Map();
@@ -650,7 +688,11 @@ function recordWorldDep(src, token) {
   entry.depVals.push(token);
   const consumer = activeWorldConsumer;
   if (consumer !== null && consumer !== src) {
-    (src.draftSubs ??= /* @__PURE__ */ new Set()).add(consumer);
+    const subs = src.draftSubs ??= /* @__PURE__ */ new Set();
+    if (!subs.has(consumer)) {
+      subs.add(consumer);
+      pokeTargets++;
+    }
     draftEdgeSources.add(src);
   }
 }
@@ -723,8 +765,8 @@ function evaluateWorldEntry(c, w, entry) {
   activeSub = null;
   activeWorldConsumer = c;
   try {
-    const epochVal = c.epoch !== null ? foldAtom(c.epoch, w) : 0;
-    entry.v = c.fn(makeUse(c, entry, epochVal));
+    activeUseEpoch = c.epoch !== null ? foldAtom(c.epoch, w) : 0;
+    entry.v = c.fn(makeUse(c, entry));
   } catch (e) {
     if (e instanceof PendingValue) entry.pend = e;
     else entry.err = e;
