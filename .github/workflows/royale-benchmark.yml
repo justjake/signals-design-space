@@ -52,6 +52,7 @@ jobs:
         working-directory: upstream-alien-signals
         run: |
           npm install
+          npm install --no-save typescript@5.8
           npm run build
 
       - name: Build dalien-signals (frameworksList bundles it even when not run)
