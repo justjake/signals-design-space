@@ -1,222 +1,40 @@
 diff --git a/packages/core/package.json b/packages/core/package.json
-index 8e4a88e..729c873 100644
+index 79ccb51..975d9fd 100644
 --- a/packages/core/package.json
 +++ b/packages/core/package.json
-@@ -34,7 +34,22 @@
-     "svelte": "^5.51.1",
-     "typescript": "^5.9.3",
-     "usignal": "^0.10.0",
--    "vitest": "^4.0.18"
-+    "vitest": "^4.0.18",
-+    "cosignals": "file:../../../packages/cosignals",
-+    "cosignals-alt-a": "file:../../../packages/cosignals-alt-a",
-+    "cosignals-alt-b": "file:../../../packages/cosignals-alt-b",
-+    "signals-royale-fm1": "file:../../../packages/signals-royale-fm1",
-+    "signals-royale-fm2": "file:../../../packages/signals-royale-fm2",
+@@ -22,11 +22,11 @@
+     "@tanstack/store": "0.11.0",
+     "@vue/reactivity": "^3.5.28",
+     "alien-signals": "file:../../../upstream-alien-signals",
+-    "dalien-signals": "file:../../../packages/dalien-signals",
++    "compostate": "^0.5.1",
+     "cosignals": "file:../../../packages/cosignals",
+     "cosignals-alt-a": "file:../../../packages/cosignals-alt-a",
+     "cosignals-alt-b": "file:../../../packages/cosignals-alt-b",
+-    "compostate": "^0.5.1",
++    "dalien-signals": "file:../../../packages/dalien-signals",
+     "esbuild": "^0.27.3",
+     "mobx": "^6.15.0",
+     "mol_wire_lib": "^1.0.1683",
+@@ -35,6 +35,18 @@
+     "preact": "^10.28.3",
+     "s-js": "^0.4.9",
+     "signal-polyfill": "^0.2.2",
 +    "signals-royale-fh1": "file:../../../packages/signals-royale-fh1",
 +    "signals-royale-fh2": "file:../../../packages/signals-royale-fh2",
++    "signals-royale-fm1": "file:../../../packages/signals-royale-fm1",
++    "signals-royale-fm2": "file:../../../packages/signals-royale-fm2",
 +    "signals-royale-fx1": "file:../../../packages/signals-royale-fx1",
 +    "signals-royale-fx2": "file:../../../packages/signals-royale-fx2",
 +    "signals-royale-sh1": "file:../../../packages/signals-royale-sh1",
 +    "signals-royale-sh2": "file:../../../packages/signals-royale-sh2",
++    "signals-royale-sm1": "file:../../../packages/signals-royale-sm1",
++    "signals-royale-sm2": "file:../../../packages/signals-royale-sm2",
 +    "signals-royale-sx1": "file:../../../packages/signals-royale-sx1",
 +    "signals-royale-sx2": "file:../../../packages/signals-royale-sx2",
-+    "signals-royale-sm1": "file:../../../packages/signals-royale-sm1",
-+    "signals-royale-sm2": "file:../../../packages/signals-royale-sm2"
-   },
-   "packageManager": "pnpm@10.29.3"
- }
-diff --git a/packages/core/src/frameworks/cosignal.ts b/packages/core/src/frameworks/cosignal.ts
-new file mode 100644
-index 0000000..5d9a452
---- /dev/null
-+++ b/packages/core/src/frameworks/cosignal.ts
-@@ -0,0 +1,46 @@
-+import * as lib from "cosignals";
-+import { ReactiveFramework } from "../util/reactiveFramework";
-+
-+// cosignals (the parent repo renamed cosignal -> cosignals when the engine
-+// variants merged), routed through the public class API (Atom /
-+// Computed `.state` and `.set`) so the benchmark measures the surface
-+// applications use, policy wrapper included. Graphs are built inside an
-+// effectScope and disposed in cleanup(), like the other adapters.
-+// A cell is the Atom or Computed instance itself; both expose .state.
-+type CosignalCell = lib.Atom<unknown> | lib.Computed<unknown>;
-+
-+let scope: (() => void) | null = null;
-+
-+export const cosignalFramework: ReactiveFramework<CosignalCell> = {
-+  name: "Cosignal",
-+  createSignal: (initialValue) => new lib.Atom(initialValue),
-+  readSignal: (cell) => cell.state,
-+  writeSignal: (cell, value) => {
-+    (cell as lib.Atom<unknown>).set(value);
-+  },
-+  createComputed: (fn) => new lib.Computed(fn),
-+  readComputed: (cell) => cell.state,
-+  // The bench contract guarantees fn returns undefined, so returns are never
-+  // treated as cleanup functions and fn passes through unwrapped.
-+  effect: (fn) => {
-+    lib.effect(fn);
-+  },
-+  withBatch: (fn) => {
-+    lib.startBatch();
-+    fn();
-+    lib.endBatch();
-+  },
-+  withBuild: <T>(fn: () => T) => {
-+    let out!: T;
-+    scope = lib.effectScope(() => {
-+      out = fn();
-+    });
-+    return out;
-+  },
-+  cleanup: () => {
-+    if (scope !== null) {
-+      scope();
-+      scope = null;
-+    }
-+  },
-+};
-diff --git a/packages/core/src/frameworks/cosignalAltA.ts b/packages/core/src/frameworks/cosignalAltA.ts
-new file mode 100644
-index 0000000..781314a
---- /dev/null
-+++ b/packages/core/src/frameworks/cosignalAltA.ts
-@@ -0,0 +1,49 @@
-+import * as lib from "cosignals-alt-a";
-+import { ReactiveFramework } from "../util/reactiveFramework";
-+
-+// cosignals-alt-a, routed through its public class API (Atom / Computed
-+// `.state` and `.set`, options-object constructors) so the benchmark
-+// measures the surface applications use, policy wrapper included. The
-+// classes come from an API factory bound to the package's module-singleton
-+// engine, so instance types are named via InstanceType rather than exported
-+// type names. A cell is the Atom or Computed instance itself; both expose
-+// .state. Graphs are built inside an effectScope and disposed in cleanup(),
-+// like the other adapters.
-+type AltAAtom = InstanceType<typeof lib.Atom<unknown>>;
-+type AltACell = AltAAtom | InstanceType<typeof lib.Computed<unknown>>;
-+
-+let scope: (() => void) | null = null;
-+
-+export const cosignalAltAFramework: ReactiveFramework<AltACell> = {
-+  name: "Cosignal Alt A",
-+  createSignal: (initialValue) => new lib.Atom({ state: initialValue }),
-+  readSignal: (cell) => cell.state,
-+  writeSignal: (cell, value) => {
-+    (cell as AltAAtom).set(value);
-+  },
-+  createComputed: (fn) => new lib.Computed({ fn }),
-+  readComputed: (cell) => cell.state,
-+  // The bench contract guarantees fn returns undefined, so returns are never
-+  // treated as cleanup functions and fn passes through unwrapped.
-+  effect: (fn) => {
-+    lib.effect(fn);
-+  },
-+  withBatch: (fn) => {
-+    lib.startBatch();
-+    fn();
-+    lib.endBatch();
-+  },
-+  withBuild: <T>(fn: () => T) => {
-+    let out!: T;
-+    scope = lib.effectScope(() => {
-+      out = fn();
-+    });
-+    return out;
-+  },
-+  cleanup: () => {
-+    if (scope !== null) {
-+      scope();
-+      scope = null;
-+    }
-+  },
-+};
-diff --git a/packages/core/src/frameworks/cosignalAltB.ts b/packages/core/src/frameworks/cosignalAltB.ts
-new file mode 100644
-index 0000000..d934547
---- /dev/null
-+++ b/packages/core/src/frameworks/cosignalAltB.ts
-@@ -0,0 +1,78 @@
-+import * as lib from "cosignals-alt-b";
-+import { ReactiveFramework } from "../util/reactiveFramework";
-+
-+// cosignals-alt-b, routed through its public class API (Atom / Computed
-+// `.state` and `.set`, options-object constructors) so the benchmark
-+// measures the surface applications use, policy wrapper included. A cell is
-+// the Atom or Computed instance itself; both expose .state. Graphs are
-+// built inside an effectScope and disposed in cleanup(), like the other
-+// adapters.
-+type AltBCell = lib.Atom<unknown> | lib.Computed<unknown>;
-+
-+// The engine's typed-array planes regrow only at operation boundaries
-+// (never inside an open effectScope), and the benches build whole graphs
-+// inside one withBuild scope. Pre-size the module-singleton engine once,
-+// before any node exists. 2^21 records = a 64 MiB Int32Array main plane:
-+// the suite's largest single-operation create shape (sbench create1to1:
-+// 1e5 signals + 1e5 computeds + their links) stays near 300k records, and
-+// the dalien-signals example field builds ~1.2M records in one scope at
-+// 320p. Larger field tiers exceed what a pre-size should pin and fail at
-+// build with the engine's own "raise initialRecords" error.
-+//
-+// The pre-size runs on the adapter's FIRST USE, not at module load: every
-+// benchmark child imports every adapter through frameworksList, so a
-+// load-time arena (~250 MB of ArrayBuffers) would be billed to whichever
-+// framework that child actually benchmarks and would drown the memory
-+// columns of every other framework. First-use still precedes every node
-+// this adapter creates, which is all the regrow constraint requires.
-+const PRESIZED_RECORDS = 1 << 21;
-+let presized = false;
-+function ensurePresized(): void {
-+  if (presized) return;
-+  presized = true;
-+  lib.__resetEngineForTests({ initialRecords: PRESIZED_RECORDS });
-+}
-+
-+let scope: (() => void) | null = null;
-+
-+export const cosignalAltBFramework: ReactiveFramework<AltBCell> = {
-+  name: "Cosignal Alt B",
-+  createSignal: (initialValue) => {
-+    ensurePresized();
-+    return new lib.Atom({ state: initialValue });
-+  },
-+  readSignal: (cell) => cell.state,
-+  writeSignal: (cell, value) => {
-+    (cell as lib.Atom<unknown>).set(value);
-+  },
-+  createComputed: (fn) => {
-+    ensurePresized();
-+    return new lib.Computed({ fn });
-+  },
-+  readComputed: (cell) => cell.state,
-+  // The bench contract guarantees fn returns undefined, so returns are never
-+  // treated as cleanup functions and fn passes through unwrapped.
-+  effect: (fn) => {
-+    ensurePresized();
-+    lib.effect(fn);
-+  },
-+  withBatch: (fn) => {
-+    lib.startBatch();
-+    fn();
-+    lib.endBatch();
-+  },
-+  withBuild: <T>(fn: () => T) => {
-+    ensurePresized();
-+    let out!: T;
-+    scope = lib.effectScope(() => {
-+      out = fn();
-+    });
-+    return out;
-+  },
-+  cleanup: () => {
-+    if (scope !== null) {
-+      scope();
-+      scope = null;
-+    }
-+  },
-+};
+     "solid-js": "^1.9.11",
+     "svelte": "^5.51.1",
+     "typescript": "^5.9.3",
 diff --git a/packages/core/src/frameworks/royale-fh1.ts b/packages/core/src/frameworks/royale-fh1.ts
 new file mode 100644
 index 0000000..a725450
@@ -892,13 +710,13 @@ index 0000000..a1e7c9f
 +  },
 +};
 diff --git a/packages/core/src/frameworksList.ts b/packages/core/src/frameworksList.ts
-index 30d3c8b..9b02096 100644
+index c4ee803..5d5b58d 100644
 --- a/packages/core/src/frameworksList.ts
 +++ b/packages/core/src/frameworksList.ts
-@@ -1,3 +1,18 @@
-+import { cosignalFramework } from "./frameworks/cosignal";
-+import { cosignalAltAFramework } from "./frameworks/cosignalAltA";
-+import { cosignalAltBFramework } from "./frameworks/cosignalAltB";
+@@ -19,6 +19,18 @@ import { tanstackStoreFramework } from "./frameworks/tanstackStore";
+ import { usignalFramework } from "./frameworks/inactive/uSignal";
+ import { vueReactivityFramework } from "./frameworks/inactive/vueReactivity";
+ import { xReactivityFramework } from "./frameworks/xReactivity";
 +import royaleFm1Framework from "./frameworks/royale-fm1";
 +import royaleFm2Framework from "./frameworks/royale-fm2";
 +import royaleFh1Framework from "./frameworks/royale-fh1";
@@ -911,16 +729,13 @@ index 30d3c8b..9b02096 100644
 +import royaleSx2Framework from "./frameworks/royale-sx2";
 +import royaleSm1Framework from "./frameworks/royale-sm1";
 +import royaleSm2Framework from "./frameworks/royale-sm2";
- import type { FrameworkInfo } from "./util/frameworkTypes";
- import { alienFramework } from "./frameworks/alienSignals";
- import { angularFramework as angularFramework2 } from "./frameworks/angularSignals2";
-@@ -24,6 +39,21 @@ import { xReactivityFramework } from "./frameworks/xReactivity";
- // import { obyFramework } from "./frameworks/inactive/oby";
  
- export const frameworkInfo: FrameworkInfo[] = [
-+  { framework: cosignalFramework, testPullCounts: true },
-+  { framework: cosignalAltAFramework, testPullCounts: true },
-+  { framework: cosignalAltBFramework, testPullCounts: true },
+ // Currently failing kairoBench tests
+ // import { molWireFramework } from "./frameworks/molWire";
+@@ -49,6 +61,18 @@ export const frameworkInfo: FrameworkInfo[] = [
+   { framework: tanstackStoreFramework, testPullCounts: true },
+   { framework: vueReactivityFramework, testPullCounts: true },
+   { framework: xReactivityFramework, testPullCounts: true },
 +  { framework: royaleFm1Framework, testPullCounts: true },
 +  { framework: royaleFm2Framework, testPullCounts: true },
 +  { framework: royaleFh1Framework, testPullCounts: true },
@@ -933,335 +748,6 @@ index 30d3c8b..9b02096 100644
 +  { framework: royaleSx2Framework, testPullCounts: true },
 +  { framework: royaleSm1Framework, testPullCounts: true },
 +  { framework: royaleSm2Framework, testPullCounts: true },
-   { framework: alienFramework, testPullCounts: true },
-   { framework: angularFramework2, testPullCounts: true },
-   { framework: compostateFramework, testPullCounts: true },
-diff --git a/packages/node/src/isolated.ts b/packages/node/src/isolated.ts
-new file mode 100644
-index 0000000..eb87019
---- /dev/null
-+++ b/packages/node/src/isolated.ts
-@@ -0,0 +1,323 @@
-+/**
-+ * Runs the benchmark suite with each framework in its own node process, so
-+ * that one framework's JIT warmup, GC pressure, and polymorphic call sites
-+ * can't affect another framework's numbers.
-+ *
-+ * Frameworks are run in ROUNDS, round-robin (A B C, A B C, ...), and each
-+ * test's final time is the MEDIAN of its per-round times. Interleaving
-+ * decorrelates slow machine drift (thermals, background load) from any one
-+ * framework, and the median discards lucky/unlucky rounds; a single
-+ * sequential pass can move a framework's totals by ~10% on a laptop, which
-+ * is larger than many of the gaps being measured.
-+ *
-+ * Memory columns (see memoryStats.ts for the fairness rule and column
-+ * semantics) ride along in two ways:
-+ * - GC pause counts/durations and peak sizes come from the SAME timed runs
-+ *   (a passive observer + coarse sampler in the child), so they describe
-+ *   real conditions; medians are taken across rounds like the times.
-+ * - Retained "floor" columns come from one extra --memory pass per framework
-+ *   with --expose-gc and forced-GC brackets at test boundaries. That pass's
-+ *   timing is perturbed by design, so only its floor columns are kept.
-+ *
-+ * Usage: node dist/isolated.js [--rounds N] [--memory] [--no-memory]
-+ *                              [--deep-memory] [frameworkName...]
-+ *   --memory      add the retained/floor pass (fills floorMb/floorDeltaMb)
-+ *   --no-memory   legacy 3-column CSV; also the timing-perturbation A/B knob
-+ *   --deep-memory bisect the minimum --max-old-space-size per framework on a
-+ *                 representative creation-heavy suite (see caveat at the flag)
-+ */
-+// Imported from the individual source modules, not the index: the index
-+// pulls the eager frameworksList, and several adapter imports allocate
-+// arena memory at module load. The host never benchmarks anything itself,
-+// but staying lazy here keeps its footprint small and its startup honest.
-+import {
-+  formatPerfResult,
-+  perfResultHeaders,
-+} from "js-reactivity-benchmark/src/util/perfLogging";
-+import { lazyFrameworkInfo } from "js-reactivity-benchmark/src/frameworksLazy";
-+import { spawnSync } from "node:child_process";
-+import { fileURLToPath } from "node:url";
-+import path from "node:path";
-+import {
-+  emptyMemoryRow,
-+  formatMemoryColumns,
-+  formatMemoryValue,
-+  memoryHeaderRow,
-+  MEMORY_COLUMNS,
-+  MemoryColumn,
-+  MemoryRow,
-+} from "./memoryStats";
-+
-+const indexJs = path.join(
-+  path.dirname(fileURLToPath(import.meta.url)),
-+  "index.js",
-+);
-+
-+const argv = process.argv.slice(2);
-+let rounds = 3;
-+const roundsAt = argv.indexOf("--rounds");
-+if (roundsAt !== -1) {
-+  rounds = Number(argv[roundsAt + 1]);
-+  if (!Number.isInteger(rounds) || rounds < 1) {
-+    console.error(`--rounds expects a positive integer`);
-+    process.exit(1);
-+  }
-+  argv.splice(roundsAt, 2);
-+}
-+const takeFlag = (name: string): boolean => {
-+  const at = argv.indexOf(name);
-+  if (at === -1) return false;
-+  argv.splice(at, 1);
-+  return true;
-+};
-+const retainedPassWanted = takeFlag("--memory");
-+const memoryDisabled = takeFlag("--no-memory");
-+const deepMemoryWanted = takeFlag("--deep-memory");
-+if (memoryDisabled && (retainedPassWanted || deepMemoryWanted)) {
-+  console.error(`--no-memory contradicts --memory/--deep-memory`);
-+  process.exit(1);
-+}
-+
-+const requested = argv;
-+const names = lazyFrameworkInfo.map((f) => f.name);
-+const unknown = requested.filter((name) => !names.includes(name));
-+if (unknown.length > 0) {
-+  console.error(
-+    `unknown frameworks: ${unknown.join(", ")}; available: ${names.join(", ")}`,
-+  );
-+  process.exit(1);
-+}
-+const selected = requested.length > 0 ? requested : names;
-+
-+function medianOf(times: number[]): number {
-+  const sorted = [...times].sort((a, b) => a - b);
-+  const mid = Math.floor(sorted.length / 2);
-+  return sorted.length % 2 === 1
-+    ? sorted[mid]
-+    : (sorted[mid - 1] + sorted[mid]) / 2;
-+}
-+
-+interface TestSamples {
-+  times: number[];
-+  /** column -> per-round values; a column absent in a round contributes nothing. */
-+  memory: Map<MemoryColumn, number[]>;
-+}
-+
-+// (framework, test) -> per-round samples; test order preserved per framework.
-+const samples = new Map<string, Map<string, TestSamples>>();
-+for (const name of selected) samples.set(name, new Map());
-+// (framework, test) -> floor columns from the retained pass.
-+const floors = new Map<string, Map<string, Pick<MemoryRow, "floorMb" | "floorDeltaMb">>>();
-+let failures = 0;
-+
-+const FRAMEWORK_COLUMN = 0;
-+const TEST_COLUMN = 1;
-+const TIME_COLUMN = 2;
-+const FIRST_MEMORY_COLUMN = 3;
-+
-+/** Split a child CSV line; undefined for headers/noise/other frameworks. */
-+function parseChildRow(
-+  line: string,
-+  name: string,
-+): { test: string; time: number; memory: Map<MemoryColumn, number> } | undefined {
-+  const parts = line.split(",").map((p) => p.trim());
-+  if (parts.length < 3 || parts[FRAMEWORK_COLUMN] !== name) return undefined;
-+  const time = Number(parts[TIME_COLUMN]);
-+  if (!Number.isFinite(time)) return undefined;
-+  const memory = new Map<MemoryColumn, number>();
-+  // Positional wire protocol shared with index.ts via MEMORY_COLUMNS; empty
-+  // cells mean "not collected in this mode/runtime" and stay absent.
-+  for (let i = 0; i < MEMORY_COLUMNS.length; i++) {
-+    const cell = parts[FIRST_MEMORY_COLUMN + i];
-+    if (cell === undefined || cell === "") continue;
-+    const value = Number(cell);
-+    if (Number.isFinite(value)) memory.set(MEMORY_COLUMNS[i], value);
-+  }
-+  return { test: parts[TEST_COLUMN], time, memory };
-+}
-+
-+function spawnChild(nodeArgs: string[], childArgs: string[], env?: NodeJS.ProcessEnv) {
-+  return spawnSync(process.execPath, [...nodeArgs, indexJs, ...childArgs], {
-+    stdio: ["ignore", "pipe", "inherit"],
-+    encoding: "utf8",
-+    maxBuffer: 64 * 1024 * 1024,
-+    env: env ?? process.env,
-+  });
-+}
-+
-+// --- Timed rounds -----------------------------------------------------------
-+for (let round = 0; round < rounds; round++) {
-+  for (const name of selected) {
-+    console.error(`round ${round + 1}/${rounds}: ${name}`);
-+    // No --expose-gc, matching upstream's node runner: forced double-majors
-+    // between tests are untimed but evict every framework's working set, so
-+    // the following timed regions start cache-cold — measured to distort
-+    // comparisons more than the cross-suite GC billing it removes.
-+    // (Retained/floor numbers, which DO need forced GC, come from the
-+    // separate --memory pass below so this pass stays undisturbed.)
-+    const result = spawnChild(
-+      [],
-+      [name],
-+      memoryDisabled ? { ...process.env, MEMORY_STATS: "off" } : undefined,
-+    );
-+    if (result.status !== 0) {
-+      failures++;
-+      console.error(
-+        `⚠ ${name} round ${round + 1} exited with ${
-+          result.status !== null ? `code ${result.status}` : result.signal
-+        } (keeping rows from its other rounds)`,
-+      );
-+    }
-+    const perTest = samples.get(name)!;
-+    for (const line of (result.stdout ?? "").split("\n")) {
-+      const row = parseChildRow(line, name);
-+      if (row === undefined) continue;
-+      let entry = perTest.get(row.test);
-+      if (entry === undefined) {
-+        entry = { times: [], memory: new Map() };
-+        perTest.set(row.test, entry);
-+      }
-+      entry.times.push(row.time);
-+      for (const [column, value] of row.memory) {
-+        let values = entry.memory.get(column);
-+        if (values === undefined) {
-+          values = [];
-+          entry.memory.set(column, values);
-+        }
-+        values.push(value);
-+      }
-+    }
-+  }
-+}
-+
-+// --- Retained/floor pass (--memory) -----------------------------------------
-+// One pass per framework, after all timed rounds so it cannot share a machine
-+// moment with them. --expose-gc both enables the collector's forced-GC
-+// brackets and activates the benches' own gc() calls; timing from this pass
-+// is therefore meaningless and discarded — only floor columns are kept.
-+if (retainedPassWanted) {
-+  for (const name of selected) {
-+    console.error(`retained pass: ${name}`);
-+    const result = spawnChild(["--expose-gc"], ["--retained", name]);
-+    if (result.status !== 0) {
-+      console.error(
-+        `⚠ ${name} retained pass exited with ${
-+          result.status !== null ? `code ${result.status}` : result.signal
-+        } (floor columns left empty)`,
-+      );
-+      continue;
-+    }
-+    const perTest = new Map<string, Pick<MemoryRow, "floorMb" | "floorDeltaMb">>();
-+    for (const line of (result.stdout ?? "").split("\n")) {
-+      const row = parseChildRow(line, name);
-+      if (row === undefined) continue;
-+      const floorMb = row.memory.get("floorMb");
-+      const floorDeltaMb = row.memory.get("floorDeltaMb");
-+      if (floorMb === undefined || floorDeltaMb === undefined) continue;
-+      perTest.set(row.test, {
-+        floorMb: formatMemoryValue("floorMb", floorMb),
-+        floorDeltaMb: formatMemoryValue("floorDeltaMb", floorDeltaMb),
-+      });
-+    }
-+    floors.set(name, perTest);
-+  }
-+}
-+
-+// --- Final CSV ---------------------------------------------------------------
-+const baseHeader = formatPerfResult(perfResultHeaders());
-+console.log(
-+  memoryDisabled
-+    ? baseHeader
-+    : `${baseHeader} , ${formatMemoryColumns(memoryHeaderRow())}`,
-+);
-+for (const name of selected) {
-+  const perTest = samples.get(name)!;
-+  const perTestFloors = floors.get(name);
-+  for (const [test, entry] of perTest) {
-+    if (entry.times.length < rounds) {
-+      console.error(
-+        `⚠ ${name} / ${test}: only ${entry.times.length}/${rounds} rounds completed`,
-+      );
-+    }
-+    const base = formatPerfResult({
-+      framework: name,
-+      test,
-+      time: medianOf(entry.times).toFixed(2),
-+    });
-+    if (memoryDisabled) {
-+      console.log(base);
-+      continue;
-+    }
-+    // Median across rounds for observer stats (gc counts/pauses, peaks) —
-+    // same robustness argument as the times. Floors come from the single
-+    // retained pass, so they pass through unaggregated.
-+    const memory = emptyMemoryRow();
-+    for (const [column, values] of entry.memory) {
-+      memory[column] = formatMemoryValue(column, medianOf(values));
-+    }
-+    const floor = perTestFloors?.get(test);
-+    if (floor !== undefined) {
-+      memory.floorMb = floor.floorMb;
-+      memory.floorDeltaMb = floor.floorDeltaMb;
-+    }
-+    console.log(`${base} , ${formatMemoryColumns(memory)}`);
-+  }
-+}
-+
-+// --- Deep mode (--deep-memory): minimum old-space cap by bisection -----------
-+// Bisects the smallest --max-old-space-size at which one representative
-+// creation-heavy suite (cellx: thousands of computeds+effects per graph)
-+// completes. CAVEAT, and the reason this is opt-in rather than the headline:
-+// the old-space cap governs the V8 JS heap only — ArrayBuffer backing stores
-+// live outside it — so this UNDER-measures arena designs that keep their
-+// graph in typed arrays. The fair headline is peakTotalMb above.
-+const DEEP_SUITE = "cellx";
-+const DEEP_CAP_START_MB = 16; //     below Node's practical minimum; first probe
-+const DEEP_CAP_CEILING_MB = 4096; // give up above this: something else is wrong
-+const DEEP_CAP_GRANULARITY_MB = 8;
-+const DEEP_CHILD_TIMEOUT_MS = 300_000; // near-OOM GC thrash counts as failure
-+
-+function deepPassSucceeds(name: string, capMb: number): boolean {
-+  const result = spawnSync(
-+    process.execPath,
-+    [`--max-old-space-size=${capMb}`, indexJs, name],
-+    {
-+      stdio: ["ignore", "ignore", "ignore"],
-+      env: { ...process.env, SUITES: DEEP_SUITE, MEMORY_STATS: "off" },
-+      timeout: DEEP_CHILD_TIMEOUT_MS,
-+    },
-+  );
-+  return result.status === 0;
-+}
-+
-+if (deepMemoryWanted) {
-+  const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
-+  if (isBun) {
-+    console.error("deep-memory: skipped under Bun (no --max-old-space-size)");
-+  } else {
-+    for (const name of selected) {
-+      let hi = DEEP_CAP_START_MB;
-+      let lo = 0;
-+      while (!deepPassSucceeds(name, hi)) {
-+        lo = hi;
-+        hi *= 2;
-+        if (hi > DEEP_CAP_CEILING_MB) break;
-+      }
-+      if (hi > DEEP_CAP_CEILING_MB) {
-+        console.error(`deep-memory: ${name} failed even at ${DEEP_CAP_CEILING_MB}MB`);
-+        continue;
-+      }
-+      while (hi - lo > DEEP_CAP_GRANULARITY_MB) {
-+        const mid = Math.floor((lo + hi) / 2);
-+        if (deepPassSucceeds(name, mid)) hi = mid;
-+        else lo = mid;
-+      }
-+      console.error(`deep-memory: ${name} minimum old-space cap ~${hi}MB (${DEEP_SUITE})`);
-+      // Four fields on purpose: every CSV consumer here keys on 3-field rows
-+      // (or on the framework column), so this line is ignorable noise to them.
-+      console.log(`# deepMemory , ${name} , minOldSpaceMb , ${hi}`);
-+    }
-+  }
-+}
-+
-+process.exit(failures > 0 && samples.size === 0 ? 1 : 0);
+ ];
+ 
+ export const allFrameworks: FrameworkInfo[] = [
