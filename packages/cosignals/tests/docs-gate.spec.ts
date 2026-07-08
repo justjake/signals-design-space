@@ -192,9 +192,14 @@ describe('docs gate: test-seam naming (__TEST__ prefix)', () => {
 	it('no identifier anywhere uses the retired *ForTest suffix', () => {
 		// Scans every identifier, not just exports: internal helpers must not
 		// carry the retired convention either (test-only naming is __TEST__*).
+		// Foreign API names we call but do not define are allowlisted: the
+		// React fork follows the reconciler's own naming conventions.
+		const foreignApi = new Set(['externalRuntimeResetBatchRegistryForTest']);
 		for (const dir of srcDirs) {
 			for (const file of sourceFiles(dir)) {
-				const hits = [...readFileSync(file, 'utf8').matchAll(/\b_{0,2}\w+ForTests?\b/g)].map((m) => m[0]);
+				const hits = [...readFileSync(file, 'utf8').matchAll(/\b_{0,2}\w+ForTests?\b/g)]
+					.map((m) => m[0])
+					.filter((n) => !foreignApi.has(n));
 				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
 			}
 		}
