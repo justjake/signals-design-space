@@ -85,7 +85,13 @@ describe('M2 applied vs unapplied (§9.4)', () => {
 		expect(e.debug.unappliedEntries()).toBe(1);
 		expect(effectSeen).toEqual([1]); // no kernel effect for deferred write
 		expect(e.debug.readWorld(a, { kind: 'w0' })).toBe(1); // canonical untouched
-		expect(a.state).toBe(5); // NEWEST sees everything
+		// ALT-FAMILY AMBIENT RULE: the deferred draft is hidden from ambient
+		// reads (W0); visible via the explicit Wn selector and in-scope.
+		expect(a.state).toBe(1);
+		expect(e.debug.readWorld(a, { kind: 'newest' })).toBe(5);
+		t.run(() => {
+			expect(a.state).toBe(5); // read-your-own-draft
+		});
 		expect(e.readCommitted(a)).toBe(0); // nothing retired yet... event batch pending
 		fork.closeEvent(); // retire the urgent event batch → its entry retires
 		expect(e.readCommitted(a)).toBe(1); // committed now includes the urgent write
@@ -100,7 +106,8 @@ describe('M2 applied vs unapplied (§9.4)', () => {
 		const a = e.atom(10);
 		const t = fork.openBatch('deferred');
 		t.run(() => a.update((x) => x + 1));
-		expect(a.state).toBe(11); // newest replays the fn over the base
+		expect(a.state).toBe(10); // ambient = W0: the deferred draft is hidden
+		expect(e.debug.readWorld(a, { kind: 'newest' })).toBe(11); // Wn replays the fn
 		expect(e.debug.readWorld(a, { kind: 'w0' })).toBe(10); // canonical untouched
 		a.set(100); // urgent SET lands after the update in seq order
 		expect(a.state).toBe(100); // newest fold: 10 → +1 → SET 100
@@ -202,9 +209,12 @@ describe('M2 marks (§9.3 tape creation, §8.7.3 repair)', () => {
 		// linkInsert repairs the mark mid-evaluation, and the post-eval
 		// re-check must answer the NEWEST world (which includes x=7).
 		flag.set(true);
-		expect(a_state(c)).toBe(7);
+		// The explicit Wn read triggers the canonical re-evaluation, the
+		// linkInsert repair, and the post-eval re-check — answering Wn.
+		expect(e.debug.readWorld(c, { kind: 'newest' })).toBe(7);
 		expect(e.debug.isMarked(c)).toBe(true);
-		// Canonical W0 value: x's deferred write is unapplied → 0.
+		// Ambient = W0: x's deferred write is unapplied → 0.
+		expect(a_state(c)).toBe(0);
 		expect(e.debug.readWorld(c, { kind: 'w0' })).toBe(0);
 		fork.closeEvent();
 		t.retire();
@@ -230,7 +240,8 @@ describe('M2 slots (§9.2)', () => {
 		// A new batch can claim the slot; old entries are gone.
 		const t2 = fork.openBatch('deferred');
 		t2.run(() => a.set(2));
-		expect(a.state).toBe(2);
+		expect(a.state).toBe(1); // ambient = W0; the new draft is hidden
+		expect(e.debug.readWorld(a, { kind: 'newest' })).toBe(2);
 		t2.retire();
 		expect(e.debug.quiescent()).toBe(true);
 		e.debug.verify();
@@ -286,7 +297,7 @@ describe('M2 coalescing (§9.3)', () => {
 				a.set(i);
 			}
 		});
-		expect(a.state).toBe(100);
+		expect(a.state).toBe(0); // ambient = W0; coalesced draft hidden
 		expect(e.debug.readWorld(a, { kind: 'writer', token: t.token })).toBe(100);
 		t.retire();
 		expect(e.readCommitted(a)).toBe(100);

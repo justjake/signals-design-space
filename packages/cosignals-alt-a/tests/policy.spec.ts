@@ -354,7 +354,13 @@ describe('Solid-2.0 async API set (isPending / refresh / latest)', () => {
 		t.run(() => x.set(2));
 		// upstream: latest() samples the NEWEST world (Wn) → the in-flight 2.
 		expect(api.latest(x)).toBe(2);
-		expect(x.state).toBe(2); // NEWEST ambient read agrees outside render
+		// ALT-FAMILY AMBIENT RULE: `.state` outside the batch's own scope is
+		// W0 — the pending deferred draft is invisible; latest() above is THE
+		// explicit drafts-included read.
+		expect(x.state).toBe(1);
+		t.run(() => {
+			expect(x.state).toBe(2); // read-your-own-draft inside the scope
+		});
 		expect(api.engine.readCommitted(x.handle)).toBe(1);
 		// sync memo downstream of x: latest = in-flight derivation.
 		expect(api.latest(doubled)).toBe(4);

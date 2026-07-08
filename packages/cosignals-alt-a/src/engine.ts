@@ -1563,17 +1563,38 @@ export function createCosignalEngine(options?: EngineOptions) {
 		return false;
 	}
 
+	// ALT-FAMILY VISIBILITY RULE (owner-approved divergence from mainline
+	// cosignal's NEWEST-ambient; recorded in SPEC-RESOLUTIONS): ambient
+	// top-level/handler reads are W0 — committed + applied urgent; pending
+	// DEFERRED batches are invisible outside their own context until commit.
+	// Inside an open deferred batch's own write scope, reads see that
+	// batch's writer world (read-your-own-draft). latest() remains the
+	// explicit Wn read (NEWEST_WORLD, latestValue below).
+	function ambientScopeWorld(): WorldDesc {
+		if (
+			fork !== undefined
+			&& writeMode === C.MODE_LOGGED
+			&& (liveDeferredMask & ~retiredSlotMask) !== 0
+			// Non-minting probe first: getCurrentWriteBatch outside a scope
+			// MINTS the urgent event batch — a read must never mint.
+			&& fork.isCurrentWriteDeferred()
+		) {
+			return writerWorld(fork.getCurrentWriteBatch());
+		}
+		return W0_WORLD;
+	}
+
 	function ambientWorld(): WorldDesc {
 		if (readCtx === C.CTX_RENDER) {
 			if (healStaleRenderCtx()) {
-				return NEWEST_WORLD;
+				return ambientScopeWorld();
 			}
 			return passWorld;
 		}
 		if (readCtx === C.CTX_COMMITTED) {
 			return COMMITTED_WORLD;
 		}
-		return NEWEST_WORLD;
+		return ambientScopeWorld();
 	}
 
 	function worldSensitive(world: WorldDesc): boolean {
@@ -2943,7 +2964,16 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if ((M[a + C.FLAGS] & C.LOGGED) === 0 && readCtx !== C.CTX_RENDER) {
 			return kernelReadAtom(a);
 		}
-		const v = resolveAtomInWorld(a, ambientWorld());
+		if (readCtx === C.CTX_NEWEST && (liveDeferredMask & ~retiredSlotMask) === 0) {
+			return kernelReadAtom(a); // W0-ambient: urgent-only tapes are applied
+		}
+		const world = ambientWorld();
+		if (world.k === C.WK_W0) {
+			// Ambient under a live deferred batch, outside its scope: the
+			// kernel value IS the answer — one tracked read, no overlay hop.
+			return kernelReadAtom(a);
+		}
+		const v = resolveAtomInWorld(a, world);
 		if (activeSub !== 0 && readCtx !== C.CTX_RENDER) {
 			link(a, activeSub, cycle); // §10.3: render never mutates topology
 		}
@@ -2952,9 +2982,14 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	function readComputedPublic(c: number): unknown {
 		// Inline-budget fast dispatch; one real call in the common case.
+		// W0-ambient widens the fast path: with no live unretired DEFERRED
+		// batch, the ambient world IS the kernel (urgent tapes are applied) —
+		// unapplied-entry folds never gate ambient reads anymore.
 		if (
 			frameWorlds.length === 0
-			&& (canonicalEvalDepth > 0 || (loggedAtomCount === 0 && readCtx !== C.CTX_RENDER))
+			&& (canonicalEvalDepth > 0
+				|| (loggedAtomCount === 0 && readCtx !== C.CTX_RENDER)
+				|| (readCtx === C.CTX_NEWEST && (liveDeferredMask & ~retiredSlotMask) === 0))
 		) {
 			return kernelComputedRead(c);
 		}
@@ -2969,7 +3004,15 @@ export function createCosignalEngine(options?: EngineOptions) {
 			// never invoke kernel evaluation).
 			return overlayEvaluate(c, frameWorlds[frameWorlds.length - 1]);
 		}
-		const v = resolveComputedInWorld(c, ambientWorld());
+		const world = ambientWorld();
+		if (world.k === C.WK_W0) {
+			// Ambient under a live deferred batch, outside its scope: route
+			// straight to the tracked kernel read (ambientWorld only answers
+			// W0 in CTX_NEWEST, so tracking is legal here) — this is the G-8
+			// hot shape under the alt-family visibility rule.
+			return kernelComputedRead(c);
+		}
+		const v = resolveComputedInWorld(c, world);
 		if (activeSub !== 0 && readCtx !== C.CTX_RENDER) {
 			link(c, activeSub, cycle);
 		}
@@ -3547,11 +3590,25 @@ export function createCosignalEngine(options?: EngineOptions) {
 			}
 			return readComputedPublic(id);
 		},
-		/** Solid's latest(): sample the NEWEST world (Wn — every write
-		 * visible, our staged-value analog) without pending registration;
-		 * tracked callers still subscribe. */
+		/** Solid's latest(): sample without pending registration; tracked
+		 * callers still subscribe. PER-CONTEXT TABLE (family convergence,
+		 * alt-b adjudicated — sampling Wn inside a committed replay is a
+		 * tear by definition, and inside a memoized eval it would poison
+		 * per-world certificates):
+		 *  - inside an EVAL frame → the frame's world (a normal read);
+		 *  - inside RENDER → the pass world (never ahead of the pin;
+		 *    render-time loading indicators are useIsPending's job);
+		 *  - top-level / handlers / effects → Wn (drafts included). */
 		latestValue(id: number): unknown {
-			const v = worldValueOf(id, NEWEST_WORLD);
+			let v: unknown;
+			if (frameWorlds.length > 0) {
+				const w = frameWorlds[frameWorlds.length - 1];
+				v = (M[id + C.FLAGS] & C.K_ATOM) !== 0 ? overlayReadAtom(id) : overlayEvaluate(id, w);
+			} else if (readCtx === C.CTX_RENDER && !healStaleRenderCtx()) {
+				v = worldValueOf(id, passWorld);
+			} else {
+				v = worldValueOf(id, NEWEST_WORLD);
+			}
 			if (activeSub !== 0 && readCtx !== C.CTX_RENDER) {
 				link(id, activeSub, cycle);
 			}

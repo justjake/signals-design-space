@@ -417,7 +417,11 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 			} catch (err) {
 				return fail(step, op, `latest(${i}) threw: ${String(err)}`);
 			}
-			const newest = oracle.value(i, { k: 'newest' });
+			// Per-context table: inside a pass latest() samples the PASS world
+			// (never ahead of the pin); otherwise Wn.
+			const newest = passExecuting()
+				? oracle.value(i, { k: 'pass', pin: passPin, include: passInclude })
+				: oracle.value(i, { k: 'newest' });
 			if (!isOraclePending(newest)) {
 				if (!Object.is(l, newest)) {
 					return fail(step, op, `latest(${i}) = ${String(l)}, newest = ${String(newest)}`);
@@ -459,15 +463,42 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 					return fail(step, op, `node ${i} pass: engine=${String(pe)} oracle=${String(po)}`);
 				}
 			} else {
+				// ALT-FAMILY AMBIENT RULE: outside a pass and outside any
+				// deferred scope, `.state` reads W0 — pending deferred batches
+				// are invisible (drafts-hidden). Mainline cosignal asserts
+				// NEWEST-ambient here; never port that expectation into this
+				// suite (SPEC-RESOLUTIONS divergence note).
 				const ne = (h as { state?: unknown }).state;
-				const no = oracle.value(i, { k: 'newest' });
+				const no = oracle.value(i, { k: 'w0' });
 				if (!eqCompare(i, ne, no)) {
-					return fail(step, op, `node ${i} newest: engine=${String(ne)} oracle=${String(no)}`);
+					return fail(step, op, `node ${i} ambient(W0): engine=${String(ne)} oracle=${String(no)}`);
+				}
+				// Wn fold correctness stays covered via the EXPLICIT selector
+				// (the spec'd surface for "intent including drafts").
+				const we = engine.debug.readWorld(h, { kind: 'newest' });
+				const wo = oracle.value(i, { k: 'newest' });
+				if (!eqCompare(i, we, wo)) {
+					return fail(step, op, `node ${i} newest: engine=${String(we)} oracle=${String(wo)}`);
 				}
 				const ce = engine.readCommitted(h);
 				const co = oracle.value(i, { k: 'committed' });
 				if (!eqCompare(i, ce, co)) {
 					return fail(step, op, `node ${i} committed: engine=${String(ce)} oracle=${String(co)}`);
+				}
+				// Read-your-own-draft: inside each live deferred batch's scope,
+				// ambient `.state` sees that batch's writer world.
+				for (const b of batches) {
+					if (!b.deferred || b.retired || !oracle.liveDeferredTokens().includes(b.token)) {
+						continue;
+					}
+					let se: unknown;
+					b.run(() => {
+						se = (h as { state?: unknown }).state;
+					});
+					const so = oracle.value(i, { k: 'writer', token: b.token });
+					if (!eqCompare(i, se, so)) {
+						return fail(step, op, `node ${i} in-scope(${b.token}): engine=${String(se)} oracle=${String(so)}`);
+					}
 				}
 			}
 		}

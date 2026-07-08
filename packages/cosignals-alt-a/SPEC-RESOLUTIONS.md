@@ -123,13 +123,18 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
    the same promise commits together with signals consumers (no tearing,
    no early stale commit); urgent refetches keep serving latest (no
    flash).
-10. **latest(x)** as WORLD SAMPLING (no new buffers): always samples the
-    NEWEST world (Wn — every write visible, our analog of Solid's staged
-    `_pendingValue`), in every read context (render included, deliberately
-    reading ahead of the pass pin — the loading-indicator pattern). The
-    async node itself → `box.latest` (stale committed value, never
-    suspends, never registers pending); upstream/sync-derived nodes → the
-    in-flight Wn value. Tracked callers subscribe to the sampled node.
+10. **latest(x)** as WORLD SAMPLING (no new buffers), PER-CONTEXT (family
+    convergence, alt-b adjudicated): top-level/handlers/effects sample the
+    NEWEST world (Wn — every write visible, drafts included, our analog of
+    Solid's staged `_pendingValue`); INSIDE RENDER it samples the PASS
+    WORLD — sampling Wn inside a committed replay is a TEAR by definition
+    (a replayed render observing values ahead of its pass pin can commit
+    mixed frames); INSIDE A MEMOIZED EVAL it samples the eval's own world
+    (a Wn read there would poison per-world certificates). Render-time
+    loading indicators are useIsPending's job. The async node itself →
+    `box.latest` (stale committed value, never suspends, never registers
+    pending); upstream/sync-derived nodes → the sampled world's in-flight
+    value. Tracked callers subscribe to the sampled node.
     Under rule 7(a) latest() is the per-site opt-out INSIDE transitions
     too: a component that prefers stale-while-refreshing over holding the
     transition reads latest() instead of the suspending accessor.
@@ -148,13 +153,47 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
     always-resolving (rejections surface through the error-box path, never
     as unhandled rejections).
 
-12. **VENDOR-BUILD GAP (documented degradation)**: the patched React
-    build's URGENT-lane retry never pings for use(P) suspensions — a plain
-    `React.use(promise)` with zero signals involvement stalls on the
-    Suspense fallback forever after an urgent-lane suspension. The
-    TRANSITION retry path works correctly, and the legacy thrown-thenable
-    path (what our boundary throws) works on both lanes. Consequence for
-    apps on this build: React-land use(P) consumers should first mount
-    with settled/pre-instrumented promises or suspend only inside
-    transitions; signals-side consumers are unaffected. Not worked around
-    in the bridge (would require patching React).
+12. **TEST-HARNESS PITFALL (upstream behavior, NOT a fork bug)**: a use()
+    suspension inside a NON-AWAITED synchronous `act` scope
+    (`act(() => root.render(...))`) permanently wedges the root — an
+    abandoned prewarm task + dead callbackNode reuse; identical on pristine
+    upstream at the fork base on all channels, and warned by React. Real
+    apps (no act) are unaffected; urgent use() retries work correctly.
+    Remedy: AWAIT the act (async act scope) everywhere a suspension can
+    occur — this suite's mount helper does. (Forensics:
+    research/urgent-use-repro/ + the regression test at vendor/react/
+    packages/react-dom/src/__tests__/ReactDOMUseUrgentActStall-test.js.)
+
+---
+
+## AMBIENT VISIBILITY DIVERGENCE (owner-approved; alt family ONLY)
+
+**THE RULE** (deliberate, recorded divergence — mainline cosignal keeps
+NEWEST-ambient; never port either family's expectation into the other's
+suite):
+
+1. Ambient top-level/handler/effect reads (`.state`) = **W0** (committed +
+   applied urgent). Pending DEFERRED batches are INVISIBLE outside their
+   own context until commit.
+2. Inside a deferred batch's own scope (open transition write scope) or
+   its render pass: that batch's world — read-your-own-draft preserved;
+   urgent/batch() read-own-writes unchanged (conformance-critical).
+3. The READ FAMILY:
+   - `.state`        → real      (W0; drafts hidden)
+   - `latest(x)`     → intent    (Wn incl. drafts; per-context table, rule 10)
+   - `committed(x)`  → on screen (per-root committed views; + useCommitted)
+   - `isPending(x)`  → loading   (flip-only probe)
+
+**WHY**: (a) React-model alignment — a pending transition's lane state is
+invisible to urgent handlers in React itself; (b) speculation-leak
+elimination — an urgent write derived from `.state` during a pending
+transition must not bake the draft into the committed lineage (the abort
+case would leave contamination; see the write-gate (v) tests and the
+pinned oracle scenario); (c) harmony with the context-sensitive suspense
+rule (7a): both make "inside the transition" the only place its
+speculative state is observable.
+
+**PERF NOTE**: ambient reads with only urgent (applied) tapes now take the
+kernel fast path outright — unapplied deferred entries no longer force
+overlay folds on unrelated ambient reads (fast-path hits increase;
+measured G-8 movement reported in the landing report).

@@ -20,6 +20,7 @@ import {
 	useAtom,
 	useComputed,
 	useReducerAtom,
+	useCommitted,
 	useIsPending,
 	useSignal,
 	useSignalEffect,
@@ -50,13 +51,17 @@ afterEach(async () => {
 	expect(handle.bridge.errors).toEqual([]);
 });
 
-function mount(node: React.ReactNode): HTMLElement {
+// AWAITED async act: a use()/thenable suspension inside a NON-AWAITED
+// synchronous act scope permanently wedges the root (upstream React act
+// semantics, not a fork bug — see SPEC-RESOLUTIONS note 12); awaiting the
+// act lets the prewarm/retry tasks run to completion.
+async function mount(node: React.ReactNode): Promise<HTMLElement> {
 	const container = document.createElement('div');
 	document.body.appendChild(container);
 	const root = createRoot(container);
 	roots.push(root);
 	containers.push(container);
-	act(() => {
+	await act(async () => {
 		root.render(node);
 	});
 	return container;
@@ -74,7 +79,7 @@ describe('real React: basics', () => {
 			++renders;
 			return <span data-testid="v">{useSignal(count)}</span>;
 		}
-		const c = mount(<View />);
+		const c = await mount(<View />);
 		expect(c.textContent).toBe('1');
 		await act(async () => {
 			count.set(2);
@@ -95,7 +100,7 @@ describe('real React: basics', () => {
 			};
 			return <span>{`${local.state}:${doubled}:${total}`}</span>;
 		}
-		const c = mount(<View />);
+		const c = await mount(<View />);
 		expect(c.textContent).toBe('5:10:100');
 		await act(async () => {
 			clicks();
@@ -117,7 +122,7 @@ describe('real React: transitions', () => {
 			frames.push(frame);
 			return <span>{frame}</span>;
 		}
-		const c = mount(<View />);
+		const c = await mount(<View />);
 		expect(c.textContent).toBe('a0/r0');
 		await act(async () => {
 			startSignalTransition(() => {
@@ -158,7 +163,7 @@ describe('real React: transitions', () => {
 				</>
 			);
 		}
-		const c = mount(
+		const c = await mount(
 			<React.Suspense fallback={<i>wait</i>}>
 				<View />
 			</React.Suspense>,
@@ -229,7 +234,7 @@ describe('real React: transitions', () => {
 			const v = useSignal(sig);
 			return <span>{`late=${v};`}</span>;
 		}
-		const c = mount(<App />);
+		const c = await mount(<App />);
 		expect(c.textContent).toBe('a=old;');
 		await act(async () => {
 			startSignalTransition(() => {
@@ -264,7 +269,7 @@ describe('real React: suspense via ctx.use', () => {
 		function View(): React.ReactNode {
 			return <span>{useSignal(remote)}</span>;
 		}
-		const c = mount(
+		const c = await mount(
 			<React.Suspense fallback={<i>loading</i>}>
 				<View />
 			</React.Suspense>,
@@ -308,7 +313,7 @@ describe('real React: interleaved suspending works (impossible under the old lin
 		function View(): React.ReactNode {
 			return <span>{useSignal(remote)}</span>;
 		}
-		const c = mount(
+		const c = await mount(
 			<React.Suspense fallback={<i>wait</i>}>
 				<View />
 			</React.Suspense>,
@@ -370,7 +375,7 @@ describe('real React: flushSync parity (the §9.1 case, in its honest form)', ()
 			frames.push(`${s}/${mirror}/${other}`);
 			return <span>{`${s}/${mirror}/${other}`}</span>;
 		}
-		const c = mount(<View />);
+		const c = await mount(<View />);
 		expect(c.textContent).toBe('42/42/0');
 		let atFlush = '';
 		await act(async () => {
@@ -406,8 +411,8 @@ describe('real React: multi-root and committed effects', () => {
 		function B(): React.ReactNode {
 			return <i>{useSignal(sig)}</i>;
 		}
-		const ca = mount(<A />);
-		const cb = mount(<B />);
+		const ca = await mount(<A />);
+		const cb = await mount(<B />);
 		expect(ca.textContent).toBe('0');
 		expect(cb.textContent).toBe('0');
 		await act(async () => {
@@ -443,7 +448,7 @@ describe('real React: multi-root and committed effects', () => {
 				</>
 			);
 		}
-		const c = mount(
+		const c = await mount(
 			<React.Suspense fallback={null}>
 				<View />
 			</React.Suspense>,
@@ -491,7 +496,7 @@ describe('real React: Solid-2.0 async API set', () => {
 		function View(): React.ReactNode {
 			return <span>{useSignal(remote)}</span>;
 		}
-		const c = mount(
+		const c = await mount(
 			<React.Suspense fallback={<i>loading</i>}>
 				<View />
 			</React.Suspense>,
@@ -522,19 +527,7 @@ describe('real React: Solid-2.0 async API set', () => {
 	it('refresh-in-transition: the transition HOLDS until settle; use(P) and signals consumers commit together (no tearing)', async () => {
 		// Data layer the test controls: the signals side (ctx.use) and the
 		// React side (use(P)) consume the SAME promise object.
-		//
-		// VENDOR-BUILD GAP (documented in SPEC-RESOLUTIONS): this patched
-		// React's URGENT-lane retry never pings for use(P) suspensions (a
-		// plain promise with zero signals involvement stalls on fallback
-		// forever); the TRANSITION retry path works, and the legacy
-		// thrown-thenable path (what our boundary throws) works on both.
-		// So the use(P) consumer's initial promise is pre-instrumented with
-		// React's protocol fields (renders synchronously, no urgent
-		// suspension) and the shared-P2 suspension happens inside the
-		// transition — exactly the no-tearing case under test.
-		const p1 = Promise.resolve('fresh-1') as Promise<string> & { status?: string; value?: string };
-		p1.status = 'fulfilled';
-		p1.value = 'fresh-1';
+		const p1: Promise<string> = Promise.resolve('fresh-1');
 		let currentPromise: Promise<string> = p1;
 		let fetches = 0;
 		const remote = new api.Computed<string>({
@@ -570,7 +563,7 @@ describe('real React: Solid-2.0 async API set', () => {
 			});
 			return null;
 		}
-		const c = mount(<App />);
+		const c = await mount(<App />);
 		await act(async () => {
 			await tick();
 			await tick();
@@ -628,7 +621,7 @@ describe('real React: Solid-2.0 async API set', () => {
 		function View(): React.ReactNode {
 			return <span>{useSignal(remote)}</span>;
 		}
-		const c = mount(
+		const c = await mount(
 			<React.Suspense fallback={<i>loading</i>}>
 				<View />
 			</React.Suspense>,
@@ -652,13 +645,95 @@ describe('real React: Solid-2.0 async API set', () => {
 	});
 });
 
+describe('real React: ambient W0 visibility (alt-family rule)', () => {
+	// SPEC-RESOLUTIONS divergence: `.state` outside a batch's own scope is
+	// W0 — a pending transition's draft is invisible to urgent handlers.
+	it('the onClick example: urgent handler derivation reads W0 (0*2=0); the transition is superseded', async () => {
+		const A = new api.Atom({ state: 0 });
+		function View(): React.ReactNode {
+			return <span>{useSignal(A)}</span>;
+		}
+		const c = await mount(<View />);
+		expect(c.textContent).toBe('0');
+		// Async action holds the transition batch pending across the handler.
+		let releaseAction!: () => void;
+		await act(async () => {
+			React.startTransition(async () => {
+				api.batch(() => A.set(1)); // the draft
+				await new Promise<void>((r) => (releaseAction = r));
+			});
+			await tick();
+		});
+		expect(A.state).toBe(0); // ambient = W0: the draft is invisible
+		expect(api.latest(A)).toBe(1); // the explicit drafts-included read
+		// The urgent "onClick handler": derives its write from .state.
+		await act(async () => {
+			A.set(A.state * 2); // 0*2 = 0 — NEVER 1*2 (no speculation leak)
+		});
+		expect(c.textContent).toBe('0');
+		await act(async () => {
+			releaseAction();
+			await tick();
+			await tick();
+		});
+		// Rebase fold: SET 1 (transition) then SET 0 (later urgent) → the
+		// transition lands superseded; the screen never showed 1 or 2.
+		expect(c.textContent).toBe('0');
+		expect(A.state).toBe(0);
+	});
+
+	it('cross-context write-then-read before commit: in-scope sees the draft, ambient does not', async () => {
+		const A = new api.Atom({ state: 0 });
+		const inScope: number[] = [];
+		function View(): React.ReactNode {
+			return <span>{useSignal(A)}</span>;
+		}
+		const c = await mount(<View />);
+		let release!: () => void;
+		await act(async () => {
+			React.startTransition(async () => {
+				api.batch(() => {
+					A.set(1);
+					inScope.push(A.state as number); // read-your-own-draft
+				});
+				await new Promise<void>((r) => (release = r));
+			});
+			await tick();
+		});
+		expect(inScope).toEqual([1]); // the scope saw its own write
+		expect(A.state).toBe(0); // ambient stays W0 until commit
+		expect(c.textContent).toBe('0'); // nothing committed yet
+		await act(async () => {
+			release();
+			await tick();
+			await tick();
+		});
+		expect(A.state).toBe(1); // committed: now the real value
+		expect(c.textContent).toBe('1');
+	});
+
+	it('useCommitted renders what is on screen and follows commits', async () => {
+		const A = new api.Atom({ state: 5 });
+		function View(): React.ReactNode {
+			return <span>{useCommitted(A) ?? 'none'}</span>;
+		}
+		const c = await mount(<View />);
+		expect(c.textContent).toBe('5');
+		await act(async () => {
+			A.set(6);
+			await tick();
+		});
+		expect(c.textContent).toBe('6');
+	});
+});
+
 describe('real React: StrictMode', () => {
 	it('double-rendering nets to one live subscription and stays correct', async () => {
 		const sig = new api.Atom({ state: 1 });
 		function View(): React.ReactNode {
 			return <span>{useSignal(sig)}</span>;
 		}
-		const c = mount(
+		const c = await mount(
 			<React.StrictMode>
 				<View />
 			</React.StrictMode>,

@@ -68,7 +68,7 @@ describe('M3 visibility rule (§10.2)', () => {
 		e.debug.verify();
 	});
 
-	it('yield gaps read NEWEST; the resumed pass still reads its pinned world (§10.1)', () => {
+	it('yield gaps read AMBIENT (W0, drafts hidden); the resumed pass still reads its pinned world (§10.1)', () => {
 		const { e, fork } = activated();
 		const a = e.atom(0);
 		const t = fork.openBatch('deferred');
@@ -76,7 +76,10 @@ describe('M3 visibility rule (§10.2)', () => {
 		const pass = fork.startPass('root'); // does NOT include t
 		expect(a.state).toBe(0); // pass world excludes the pending batch
 		pass.yield();
-		expect(a.state).toBe(1); // gap code reads newest
+		// ALT-FAMILY AMBIENT RULE: gap code reads W0 — the pending deferred
+		// draft stays hidden; Wn is the explicit selector read.
+		expect(a.state).toBe(0);
+		expect(e.debug.readWorld(a, { kind: 'newest' })).toBe(1);
 		a.set(50); // urgent write from a "handler" in the gap: legal
 		pass.resume();
 		expect(a.state).toBe(0); // pin: the urgent write is after the pin
@@ -168,11 +171,12 @@ describe('M3 world memos and certificates (§10.5)', () => {
 		const t = fork.openBatch('deferred');
 		t.run(() => a.set(2)); // unapplied > 0 → NEWEST is world-sensitive
 		const n0 = evals;
-		expect(c.state).toBe(20); // overlay evaluation, memoized (key 0)
-		expect(c.state).toBe(20);
+		// Explicit Wn selector reads (ambient .state is W0 in the alt family).
+		expect(e.debug.readWorld(c, { kind: 'newest' })).toBe(20); // overlay evaluation, memoized (key 0)
+		expect(e.debug.readWorld(c, { kind: 'newest' })).toBe(20);
 		expect(evals).toBe(n0 + 1);
 		t.run(() => a.set(3)); // append moves the tail seq → certificate mismatch
-		expect(c.state).toBe(30); // re-evaluates
+		expect(e.debug.readWorld(c, { kind: 'newest' })).toBe(30); // re-evaluates
 		expect(evals).toBe(n0 + 2);
 		t.retire();
 		e.debug.verify();
@@ -343,14 +347,14 @@ describe('M3 sweep and quiescence (§9.6, §9.7)', () => {
 		// Era 1: identical tape shape to era 2 (same seq values will recur).
 		const t1 = fork.openBatch('deferred');
 		t1.run(() => a.set(2));
-		expect(c.state).toBe(20); // newest overlay memo recorded with era-1 seqs
+		expect(e.debug.readWorld(c, { kind: 'newest' })).toBe(20); // newest overlay memo recorded with era-1 seqs
 		const n1 = evals;
 		t1.retire();
 		expect(e.debug.quiescent()).toBe(true);
 		// Era 2: craft the same seq pattern (seqCounter restarted at 1).
 		const t2 = fork.openBatch('deferred');
 		t2.run(() => a.set(3)); // same tail seq values as era 1's tape
-		expect(c.state).toBe(30); // MUST re-evaluate — a revived memo would say 20
+		expect(e.debug.readWorld(c, { kind: 'newest' })).toBe(30); // MUST re-evaluate — a revived memo would say 20
 		expect(evals).toBeGreaterThan(n1);
 		t2.retire();
 		e.debug.verify();

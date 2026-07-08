@@ -28,6 +28,20 @@ const PINNED_UNIVERSE: NodeSpec[] = [
 
 // UPDATE_FNS indexes: 0 = x+1, 1 = x*2 %1000, 2 = identity, 3 = x-3.
 const pinned: Record<string, Op[]> = {
+	// ALT-FAMILY AMBIENT RULE pin (speculation-leak elimination): the urgent
+	// "handler" write DERIVES from the current value while a transition's
+	// draft is pending — the derivation must read W0 (atom0 = 1 → *2 = 2,
+	// never the draft 9 → 18), and ABORTING the transition leaves no
+	// contamination in any world.
+	'speculation leak: urgent derivation reads W0 under a pending transition; abort is clean': [
+		{ t: 'watch', n: 0 },
+		{ t: 'watch', n: 5 },
+		{ t: 'openDeferred' }, // 0 = the transition
+		{ t: 'write', w: { batch: 0, atom: 0, op: 'set', v: 9 } }, // the draft
+		{ t: 'write', w: { batch: -1, atom: 0, op: 'update', v: 1 } }, // handler: *2 of W0
+		{ t: 'closeEvent' }, // the handler's event batch retires
+		{ t: 'retire', b: 0, committed: false }, // ABORT the transition
+	],
 	'rebase walkthrough (§10.7)': [
 		{ t: 'openDeferred' },
 		{ t: 'write', w: { batch: 0, atom: 0, op: 'update', v: 0 } }, // +1 deferred

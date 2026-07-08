@@ -257,6 +257,62 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 	);
 }
 
+// ---- useCommitted -------------------------------------------------------------------
+
+/**
+ * Reactive committed read (§13.4 family): renders what is ON SCREEN — the
+ * owning root's committed view of `source` — and re-renders after commits
+ * that change it. The reactive counterpart of api.committed; drafts and
+ * pending state never appear (a committed pending box serves its carried
+ * latest, or undefined before first settlement).
+ */
+export function useCommitted<T>(source: SignalSource<T>): T | undefined {
+	const { api, engine, bridge } = requireActive();
+	const h = handleOf(source as SignalSource<unknown>);
+	const containerRef = React.useRef<Container>(undefined);
+	const ctx = (bridge.engine === engine ? engine.renderInfo() : undefined);
+	if (ctx !== undefined) {
+		containerRef.current = ctx.container;
+	}
+	const [, force] = React.useReducer((c: number) => c + 1, 0);
+	const value = api.committed<T>(h, containerRef.current);
+	// Two subscriptions close the loop:
+	//  - a W0 effect DRIVES renders when the value changes (a lone
+	//    useCommitted consumer otherwise never re-renders — no watcher, no
+	//    commit, no committed movement);
+	//  - the committedEffect recheck advances the render one more step
+	//    after each commit (the render that a W0 change forces still reads
+	//    the PRE-commit view — "on screen" trails by exactly one commit).
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	React.useEffect(() => {
+		let first = true;
+		const disposeW0 = engine.effect(() => {
+			void (h as { state?: unknown }).state; // raw read: boxes never throw
+			if (first) {
+				return; // the mount run
+			}
+			force();
+		});
+		first = false;
+		let firstCommitted = true;
+		const disposeCommitted = engine.committedEffect(containerRef.current, () => {
+			// Tracked committed read: registers the leaf dependency set the
+			// recheck watches.
+			void (h as { state?: unknown }).state;
+			if (firstCommitted) {
+				firstCommitted = false;
+				return;
+			}
+			force();
+		});
+		return () => {
+			disposeW0();
+			disposeCommitted();
+		};
+	}, [engine, h.id]);
+	return value;
+}
+
 // ---- useIsPending -------------------------------------------------------------------
 
 /** Reactive pending indicator: flips only on pending↔settled transitions of

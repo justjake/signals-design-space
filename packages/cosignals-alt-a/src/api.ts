@@ -604,15 +604,46 @@ export function createAPI(engine: CosignalEngine) {
 	 *    loading indicator can show the in-flight input while the async
 	 *    output stays stale.
 	 *
-	 * World sampled per read context (documented): ALWAYS Wn — event
-	 * handlers, effects (committed contexts included) and renders all sample
-	 * the in-flight overlay; inside a render pass this deliberately reads
-	 * AHEAD of the pass's pinned world (that is the point of a loading
-	 * indicator). Tracked callers still subscribe to the node.
+	 * World sampled PER READ CONTEXT (family convergence, alt-b
+	 * adjudicated): top-level/handlers/effects sample Wn (drafts included);
+	 * inside RENDER it samples the PASS WORLD (reading ahead of the pin
+	 * would be a tear — a replayed render could commit mixed frames; use
+	 * useIsPending for render-time loading indicators); inside a memoized
+	 * evaluation it samples the eval's own world (certificates stay
+	 * per-world). Tracked callers still subscribe to the node.
 	 */
 	function latest<T>(source: { handle: SignalHandle } | SignalHandle): T | undefined {
 		const h = handleOfSource(source);
 		const v = engine.latestValue(h.id);
+		if (isBox(v)) {
+			if (v.kind === 'error') {
+				throw v.error;
+			}
+			return ((v as SuspendedBox).hasLatest ? (v as SuspendedBox).latest : undefined) as T | undefined;
+		}
+		return v as T;
+	}
+
+	/**
+	 * Read the COMMITTED value — what is ON SCREEN (per-root when a
+	 * container is given, the global committed view otherwise). The fourth
+	 * member of the read family (ALT-FAMILY VISIBILITY RULE):
+	 *
+	 *   .state        → real      (W0: committed + applied urgent; drafts hidden)
+	 *   latest(x)     → intent    (Wn: newest, pending drafts included)
+	 *   committed(x)  → on screen (retired batches a root has committed)
+	 *   isPending(x)  → loading   (flip-only probe)
+	 *
+	 * Boxes unbox like latest(): errors throw; a committed pending box
+	 * serves its carried latest (or undefined before any settlement).
+	 * Never subscribes — pair with useCommitted for reactive reads.
+	 */
+	function committed<T>(
+		source: { handle: SignalHandle } | SignalHandle,
+		container?: unknown,
+	): T | undefined {
+		const h = handleOfSource(source);
+		const v = engine.readCommitted(h, container);
 		if (isBox(v)) {
 			if (v.kind === 'error') {
 				throw v.error;
@@ -668,6 +699,7 @@ export function createAPI(engine: CosignalEngine) {
 		pendingProbe,
 		refresh,
 		latest,
+		committed,
 		effect: engine.effect,
 		effectScope: engine.effectScope,
 		batch: engine.batch,

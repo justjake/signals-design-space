@@ -7,6 +7,11 @@
  * this runner compares every node in every available world after every op,
  * which subsumes them. Their `sweep` op is engine-internal here (sweeps run
  * at retirement/pass-end/boundaries).
+ *
+ * PARAMETERIZATION NOTE: this suite asserts the ALT-FAMILY ambient rule
+ * (drafts-hidden `.state` = W0) through the shared oracle harness; the
+ * mainline-cosignal ports of these scripts assert NEWEST-ambient. Never
+ * copy expectations across families (SPEC-RESOLUTIONS divergence entry).
  */
 import { describe, expect, it } from 'vitest';
 import { runSchedule, type NodeSpec, type Op } from './helpers/oracle';
