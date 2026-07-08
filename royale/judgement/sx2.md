@@ -1,6 +1,6 @@
 # Judgement scorecard: sx2
 
-**Verdict: issues** · fork LOC 112 · lib LOC 1330
+**Verdict: clean (after fix round; originally issues)** · final fork LOC 112 · final lib LOC 1367 · fork LOC 112 · lib LOC 1330
 
 ## Gates (claimed vs observed)
 
@@ -17,3 +17,20 @@ All claimed gates re-run and confirmed. Quiet: no codex process, last commit 15:
 ## Notes
 
 Entry-specific checks: (a) Round-2 benchmarks now exist with honest methodology — isolated runner, 3 rounds, alien side-by-side, documented esbuild --platform=node deviation, pre-existing x-reactivity failure honestly isolated (verified pre-existing in canonical clone), leak symmetry stated and adapter cleanup() genuinely disposes the scope; react-bench is a fair paired jsdom/child-process harness with a real per-cell uSES baseline (minor nit: bindings.register() runs at module load for both contenders, so the stock baseline also pays sx2's commit-listener overhead — negligible vs measured latencies and sx2 loses 2 of 3 scenarios anyway). (b) Computed render subscribers REMAIN graph-wide: subscribeView(computed) adds to a global viewSubscribers set (engine index.ts:1156) while atoms are cell-local — disclosed in Round 1, not repeated in Round 2 but not claimed fixed; perf implication: every write notifies every computed-subscribed component. (c) Confirmed — battery scenario 12 passes on the pristine-built fork with genuine interruption; the Round-1 deletion of the inconclusive test was honest and is now superseded. (d) The 112-line fork verified line-by-line: one shared-internals slot L exposing subscribe/getWriteLane/getRenderContext/runInLane, pass start/discard/commit + commit-lanes events, mutation start/stop bracketing exactly commitMutationEffects+resetAfterCommit inside flushMutationEffects (layout/passive outside); lane pinning via setExternalSignalLane in requestTransitionLane; fork jest 5/5 suites + battery 15/16 pass, so both binding rulings genuinely hold at 112 lines. (e) Async-first core bet holds at the tested surface: battery scenario 11 (3/3) + entrant refresh/stale tests pass; thenable records are engine graph state with stable aggregate identity; the placeholder-continuation limitation is honestly disclosed. Originality: consistent with the stated async-first-cells stance — per-atom operation histories with batch-keyed replay, world-keyed computed value cache, thenable records with WeakRef owners; no incumbent imports, no copied incumbent style; code is readable (named types, no golfing; comments engineering-rationale). Ideas worth stealing: the single-slot L facts-protocol fork (10x smaller than incumbent 1510), runInLane transition pinning, observed-before-first-evaluation to prevent unobserved lazy-DAG revalidation blowup, per-atom scheduling-order op history for reducer rebasing. Round-2 write suite honesty positive: removed a measured-but-marginal 35-line specialization.
+
+
+## Re-judgement after fix round (closing)
+
+**Verdict: clean** · fork LOC 112 · lib LOC 1367
+
+### Fixes verified
+
+latest() context rule fixed at the right layer: binding installs a world provider from React's render context (register/dispose symmetric), engine latest() consults it when no world is active, and computed evaluation pins a shared canonical world — render-body coverage does not depend on useValue. Rebuilt all four judge probes independently (temp spec, latest() not via useValue): urgent render body -> 0, canonical computed -> 0, ambient -> 1, transition's own render -> 1; all pass, plus post-commit convergence. Both shipped regression tests verified failing against pre-fix code in a throwaway worktree (engine: expected 10 to be 0; react: expected '1:1' to be '1:0'). Oracle extension is real (per-cell latest()-calling computeds checked canonical + selected-batch + ambient each step) and passes at default 300 seeds. oai-mem-citation block removed (grep clean); read-family row corrected honestly.
+
+### Battery
+
+25/25 PASS with fresh byte-identical canonical battery.spec.tsx/royale-types.ts copied over from /Users/jitl/src/alien-signals-opt/royale/verify/battery (pre-copy diff already identical; only entry package.json link + ADAPTER.ts differ, as expected). Engine suite 194/194, react gate 14/14, both typechecks clean, all run sequentially.
+
+### Notes
+
+Canonical counter: forkLoc 112, libLoc 1367 (engine index.ts 1083 + binding index.ts 284) — matches REPORT.md fix-round section exactly; Round 2's 1,330 retained as historical, clearly labeled. vendor/react clean at d9034d1ca3, four patches untouched since original entry commit (no fork source changed). Quiet confirmed (no codex process; last commit 1d50fa7 16:12 before judging). Nothing in the entry was modified: probe spec deleted, worktree removed, git status shows only pre-existing untracked artifacts. Supporting cache fix (invalidateWorldValues on writes clearing live-batch world caches) is conservative-correct and oracle-covered. Recommend closing sx2 as clean.
