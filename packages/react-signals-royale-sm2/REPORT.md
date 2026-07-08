@@ -2,11 +2,11 @@
 
 ## 1. Design summary
 
-SM2's distinguishing idea is a reducer capsule: every live React batch owns only the atoms it has touched, with each capsule holding that batch's materialized value rather than a global world table or write tape. Urgent writes update canonical state immediately and flow through live capsules so deferred work can retire with React updater-queue ordering. Computeds remain one lazy push-pull graph, while each live batch records only the dependency set observed in that render world. Explicit `latest` and per-root `committed` reads reuse that capsule evaluator, including through nested computeds. React remains responsible for scheduling, interruption, commit, and retirement; the binding translates engine invalidations into state updates pinned to the owning batch. Pending thenables are graph state with weak settlement listeners, stable identity, stale-value serving, and settlement invalidation. At quiescence there are no live capsules or root-to-batch entries, and ordinary hostless writes take a direct path. The React branch uses the allowed 25-commit external-runtime seam, so this entry's architectural originality is in the capsule engine and binding rather than in a novel fork protocol.
+SM2's distinguishing idea is a reducer capsule: every live React batch owns only the atoms it has touched, with each capsule holding that batch's materialized value rather than a global world table or write tape. Urgent writes update canonical state immediately and flow through live capsules so deferred work can retire with React updater-queue ordering. Computeds remain one lazy push-pull graph, while each live batch records only the dependency set observed in that render world. Explicit `latest` and per-root `committed` reads reuse that capsule evaluator, including through nested computeds. React remains responsible for scheduling, interruption, commit, and retirement; the binding translates engine invalidations into state updates pinned to the owning batch. Pending thenables are graph state with weak settlement listeners, stable identity, stale-value serving, and settlement invalidation. At quiescence there are no live capsules or root-to-batch entries, and ordinary hostless writes take a direct path. The rewritten React fork identifies a capsule batch directly with React's lane bit and exposes only scheduling facts and edges that React already computes.
 
-## Round 2
+## Round 2 (historical; superseded by the fork rewrite)
 
-All required gates pass.
+All required gates passed at the Round 2 checkpoint. The benchmark measurements and the 1510-line fork references in this historical section predate the fork rewrite below.
 
 | Gate | Exact command | Result |
 |---|---|---|
@@ -114,6 +114,66 @@ Earlier Round 2 tuning removed eager subscriber, scope, and async allocations; c
 - SM2 disposes every scope created by `withBuild`. The bundled Alien adapter retains only its latest scope disposer, so its earlier warmup scopes are a disclosed cleanup asymmetry.
 - The shared battery passes 25/25 and there are no disputed tests.
 
+## Fork rewrite
+
+The incumbent-derived `royale/sm2-react` branch is retained at `da7a2366e8`; the active fork was rewritten from the pinned upstream base on the fresh `royale/sm2-react-rewrite` branch and committed at `5a968f65b4`. The protocol identifies an engine batch directly with the React lane chosen for that write: React exposes the current write lane, the active render's container plus lane set, render/commit edges, the exact mutation window, and one scoped lane pin. There is no React-side batch registry, token allocator, root table, or retirement table. The binding records only roots actually invalidated by each deferred lane, folds render lane sets into live capsules, and retires a capsule after every owning root's `remainingLanes` excludes it. Commit-stop is emitted after layout effects, so a mount-time corrective update pinned during layout leaves its lane pending; the rewritten Jest suite proves the corrective render uses that same lane before retirement. Lane zero temporarily clears the surrounding transition, which keeps `useIsPending` and other urgent corrections outside deferred work. Mutation start/stop are emitted immediately around React's mutation phase, before `commitMutationEffects` can change the host tree and after `resetAfterCommit`, while before-mutation, layout, and passive effects remain outside the window.
+
+All required gates pass on the rewritten fork.
+
+| Gate | Exact command | Result |
+|---|---|---|
+| Core typecheck | `(cd packages/signals-royale-sm2 && pnpm typecheck)` | Pass |
+| React typecheck | `(cd packages/react-signals-royale-sm2 && pnpm typecheck)` | Pass |
+| Engine conformance | `(cd packages/signals-royale-sm2 && pnpm exec vitest run tests/conformance.spec.ts --reporter=dot)` | Pass, 179/179 |
+| Default oracle | `(cd packages/signals-royale-sm2 && pnpm exec vitest run tests/oracle.spec.ts --reporter=verbose)` | Pass, 300 seeds × 90 steps plus 2 regressions |
+| Deep oracle | `(cd packages/signals-royale-sm2 && ORACLE_SEEDS=1200 pnpm exec vitest run tests/oracle.spec.ts --reporter=verbose)` | Pass, 1200 seeds × 90 steps plus 2 regressions |
+| Full core suite | `(cd packages/signals-royale-sm2 && pnpm test)` | Pass, 4 files / 192 tests |
+| Core leak audit | `(cd packages/signals-royale-sm2 && pnpm exec vitest run tests/gc-leaks.spec.ts --reporter=verbose)` | Pass, 2/2 |
+| Component-atom leak audit | `(cd packages/react-signals-royale-sm2 && pnpm exec vitest run tests/gc-leaks.spec.tsx --reporter=verbose)` | Pass, 1/1 |
+| Fork protocol | `(cd vendor/react && yarn test --no-watchman ReactSignalRuntime)` | Pass, 1 suite / 6 tests |
+| Pristine-patch fork build | Detach `vendor/react` at `e71a6393e66b0d2add46ba2b2c5db563a0563828`, then `./packages/react-signals-royale-sm2/build.sh` | Pass, one patch applied; `Built: 19.3.0 (52c804665d)` |
+| Adjacent upstream React | `(cd vendor/react && yarn test --no-watchman ReactAsyncActions ReactBatching.internal ReactFlushSync ReactIncrementalScheduling ReactIncrementalUpdates ReactInterleavedUpdates ReactSchedulerIntegration ReactTransition ReactUpdatePriority ReactDefaultTransitionIndicator)` | Pass, 12 suites / 117 passed / 1 skipped |
+| Own Real-React suite | `(cd packages/react-signals-royale-sm2 && pnpm test)` | Pass, 5 files / 17 tests |
+| Shared Real-React battery | `(cd royale/verify-kit/battery && pnpm typecheck && pnpm test)` | Pass, 25/25 |
+| Diff hygiene | `git diff --check` in both repositories | Pass |
+
+```text
+Engine conformance
+Test Files  1 passed (1)
+Tests       179 passed (179)
+
+Default oracle / deep oracle
+matches a memo-free world-fold model for 300 seeds x 90 steps
+matches a memo-free world-fold model for 1200 seeds x 90 steps
+Tests       3 passed (3) in each run
+
+Leak audits
+core:  Tests 2 passed (2)
+React: Tests 1 passed (1)
+
+Fork protocol
+Test Suites: 1 passed, 1 total
+Tests:       6 passed, 6 total
+
+Pristine patch build
+Applying: Add lane-fact signal runtime protocol
+Built: 19.3.0 (52c804665d)
+
+Adjacent upstream React
+Test Suites: 12 passed, 12 total
+Tests:       1 skipped, 117 passed, 118 total
+
+Own Real-React suite
+Test Files  5 passed (5)
+Tests       17 passed (17)
+
+Shared battery
+Test Files  1 passed (1)
+Tests       25 passed (25)
+```
+
+The regenerated `patches/` directory contains one 564-line mail patch, including the excluded Jest suite; applying it to the pristine base produced the successful build above. The tournament LOC command reports `forkLoc: 186` and `libLoc: 1524`. Fork LOC is 186 insertions and zero deletions: 65 in `ReactFiberWorkLoop`, 59 in the new public protocol module, 35 in shared-internals state, 12 in `ReactClient`, and 15 across the three client entrypoints. The library split is 1089 normalized source lines in the engine and 435 in the React binding. This replaces the 1510-line fork with 186 lines, a reduction of 1324 lines; the binding-side lane/root bookkeeping accounts for the library increase from 1467 to 1524 lines. The Round 2 performance tables above were not rerun for this ruling and remain explicitly pre-rewrite measurements.
+
 ## 3. LOC self-count
 
 Command:
@@ -122,12 +182,12 @@ Command:
 node royale/verify-kit/count-loc.mjs \
   --fork vendor/react \
   --base e71a6393e66b0d2add46ba2b2c5db563a0563828 \
-  --head royale/sm2-react \
+  --head royale/sm2-react-rewrite \
   --lib packages/signals-royale-sm2 \
   --lib packages/react-signals-royale-sm2
 ```
 
-Authoritative output: `forkLoc: 1510`, `libLoc: 1467`. The library split is 1076 lines for the core package (`src/index.ts` 64 + `src/runtime.ts` 1012) and 391 lines for the React package. The fork branch is `da7a2366e8`; the checked-in patch series contains the same 25 commits from the pinned base.
+Authoritative output: `forkLoc: 186`, `libLoc: 1524`. The library split is 1089 lines for the core package (`src/index.ts` 64 + `src/runtime.ts` 1025) and 435 lines for the React package. The active fork branch is `royale/sm2-react-rewrite` at `5a968f65b4`; the checked-in patch series contains its single commit from the pinned base. The superseded `royale/sm2-react` branch remains available at `da7a2366e8` for the record.
 
 ## 4. Feature coverage
 
@@ -157,7 +217,7 @@ Authoritative output: `forkLoc: 1510`, `libLoc: 1467`. The library split is 1076
 
 ## 5. Known gaps and honest risks
 
-- The primary size objective is not competitive: the React fork is 1510 LOC, exactly the incumbent baseline, because this entry reused the allowed complete external-runtime seam instead of reducing it.
+- The rewritten fork has one listener slot per React instance; registration is intentionally single-runtime and fails loudly on a second live registrant.
 - Core performance is not at Alien parity: the final summed-median ratio is 2.990×, with the largest deficits in update propagation and large synthetic graphs.
 - The final React run is close on mount but behind the plain store on fanout and urgent p95; shared-machine noise is visible across runs, so the CSV above is the final run rather than a selected best run.
 - The oracle opens up to three simultaneous deferred batches and checks arbitrary included-world sets, but its generated updates are additive; nonlinear replay has pinned regressions rather than broad generated coverage.
@@ -167,4 +227,4 @@ Authoritative output: `forkLoc: 1510`, `libLoc: 1467`. The library split is 1076
 
 ## 6. What I would do with another day
 
-I would first replace the inherited 1510-line React protocol with a narrow allocator/render-world/retirement/mutation seam and pin the same 41 protocol behaviors against it. Next I would profile the large propagation cases, focusing on watcher delivery and dependency reconciliation without weakening lazy pull counts. I would expand the oracle to generate nonlinear reducers, async settlement races, and roots committing the same batch at different times. Finally, I would run more isolated React samples under a quieter machine allocation and tune subscription mount cost from profiles rather than timing variance.
+I would add a generated multi-root interruption oracle around the new lane/root retirement bookkeeping, including completed-but-delayed commits and discarded suspended passes. Next I would profile the large propagation cases, focusing on watcher delivery and dependency reconciliation without weakening lazy pull counts. I would expand the engine oracle to generate nonlinear reducers and async settlement races. Finally, I would rerun the isolated React benchmarks under a quieter machine allocation and tune subscription mount cost from profiles rather than timing variance.
