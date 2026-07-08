@@ -9,11 +9,11 @@ import {
   resetForTest,
   startTransitionWrite,
   trace,
-  useCommitted,
+  useCommitted as useCommittedHook,
   useComputed,
   useIsPending,
   useSignalEffect,
-  useValue,
+  useValue as useValueHook,
 } from "../src/index";
 
 type Readable = Atom<unknown> | Computed<unknown>;
@@ -63,7 +63,10 @@ const adapter = {
     return getRuntime().latest(value as Readable);
   },
   committed(value: unknown, container?: unknown): unknown {
-    return getRuntime().committed(value as Readable, container as object | undefined);
+    return getRuntime().committed(
+      value as Readable,
+      container as object | undefined,
+    );
   },
   isPending(value: unknown): boolean {
     return getRuntime().isPending(value as Readable);
@@ -96,11 +99,15 @@ const adapter = {
       if (Object.hasOwn(state, key)) atom.install(state[key]);
     }
   },
-  useValue,
+  useValue(value: unknown): any {
+    return useValueHook(value as Readable);
+  },
   useComputed,
   useSignalEffect,
   useIsPending,
-  useCommitted,
+  useCommitted(value: unknown): any {
+    return useCommittedHook(value as Readable);
+  },
   startTransitionWrite,
   trace,
   onDomMutation,
