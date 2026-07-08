@@ -21,7 +21,8 @@ export type NodeDef =
 	| { type: 'reducer'; initial: number } // reducer: (s, a) => s + a
 	| { type: 'sum'; deps: number[] } // sum of node values
 	| { type: 'branch'; cond: number; ifTrue: number; ifFalse: number } // cond odd?
-	| { type: 'chain'; dep: number }; // dep + 1
+	| { type: 'chain'; dep: number } // dep + 1
+	| { type: 'async'; dep: number }; // dep + ctx.use(t); t settles ONCE, globally
 
 /** Indexed pure update functions (shared with alt-a's pinned cases). */
 export const UPDATE_FNS: ReadonlyArray<(x: number) => number> = [
@@ -30,6 +31,18 @@ export const UPDATE_FNS: ReadonlyArray<(x: number) => number> = [
 	(x) => x,
 	(x) => x - 3,
 ];
+
+/**
+ * Status sentinels (§12.3, Solid-async model): pending/error are VALUES
+ * derived per world, not control flow. A pending value is encoded as
+ * PENDING_BASE + (origin async node index) — the origin is the FIRST
+ * unsettled thenable an evaluation observes, which is exactly the engine's
+ * node-held box identity key: pending→pending transitions that swap origin
+ * are broadcast-visible (new box), same-origin re-derivations are not (box
+ * reuse). Real fuzz values are tiny; the sentinel bands cannot collide.
+ */
+export const PENDING_BASE = 2 ** 40;
+export const ERRORED = -(2 ** 40);
 
 export type OracleWorld =
 	| { kind: 'newest' }
@@ -68,13 +81,31 @@ export class Oracle {
 		return this.tickCounter;
 	}
 
+	private asyncStates = new Map<number, { status: 'pending' | 'resolved' | 'rejected'; value: number }>();
+
 	addNode(def: NodeDef): number {
 		this.defs.push(def);
 		const idx = this.defs.length - 1;
 		if (def.type === 'atom' || def.type === 'reducer') {
 			this.entries.set(idx, []);
 		}
+		if (def.type === 'async') {
+			this.asyncStates.set(idx, { status: 'pending', value: 0 });
+		}
 		return idx;
+	}
+
+	/** Settlement is GLOBAL-instant (a thenable resolves once for every
+	 * world); the engine invalidates + re-derives, so even pass-pinned worlds
+	 * see the settled value on their next read. */
+	settleAsync(idx: number, value: number): void {
+		const st = this.asyncStates.get(idx)!;
+		st.status = 'resolved';
+		st.value = value;
+	}
+
+	rejectAsync(idx: number): void {
+		this.asyncStates.get(idx)!.status = 'rejected';
 	}
 
 	addWatcher(watched: number, liveDeferredTokens: Iterable<number>): number {
@@ -167,18 +198,67 @@ export class Oracle {
 				return acc;
 			}
 			case 'sum': {
+				// Engine eval order: an ERROR dep read THROWS and aborts (later
+				// deps unread, but any error yields ERRORED anyway); a PENDING
+				// dep forwards — evaluation continues, first origin wins.
 				let s = 0;
+				let firstPending = 0;
 				for (const d of def.deps) {
-					s += this.value(d, world);
+					const v = this.value(d, world);
+					if (v === ERRORED) {
+						return ERRORED;
+					}
+					if (v >= PENDING_BASE) {
+						if (firstPending === 0) {
+							firstPending = v;
+						}
+						continue;
+					}
+					s += v;
 				}
-				return s;
+				return firstPending !== 0 ? firstPending : s;
 			}
-			case 'branch':
-				return this.value(def.cond, world) % 2 === 1
-					? this.value(def.ifTrue, world)
-					: this.value(def.ifFalse, world);
-			case 'chain':
-				return this.value(def.dep, world) + 1;
+			case 'branch': {
+				const cond = this.value(def.cond, world);
+				if (cond === ERRORED) {
+					return ERRORED;
+				}
+				if (cond >= PENDING_BASE) {
+					// A pending cond would select an arm via box.latest — a
+					// history the replay oracle deliberately does not model.
+					// The generator never taints branch conds.
+					throw new Error('oracle: branch cond must not be async-tainted');
+				}
+				return this.value(cond % 2 === 1 ? def.ifTrue : def.ifFalse, world);
+			}
+			case 'chain': {
+				const v = this.value(def.dep, world);
+				if (v === ERRORED || v >= PENDING_BASE) {
+					return v; // status propagates; pending keeps its origin
+				}
+				return v + 1;
+			}
+			case 'async': {
+				// fn = depRead + ctx.use(t): the dep read comes first (error
+				// there aborts before ctx.use); a rejected t THROWS at ctx.use
+				// even when the dep is pending; a pending dep's origin wins
+				// over own-pending (evalPending is first-write).
+				const dep = this.value(def.dep, world);
+				if (dep === ERRORED) {
+					return ERRORED;
+				}
+				const st = this.asyncStates.get(idx)!;
+				if (st.status === 'rejected') {
+					return ERRORED;
+				}
+				if (dep >= PENDING_BASE) {
+					return dep;
+				}
+				if (st.status === 'pending') {
+					return PENDING_BASE + idx;
+				}
+				return dep + st.value;
+			}
 		}
 	}
 

@@ -31,6 +31,7 @@ import {
 	disposeSignal,
 	effect as engineEffect,
 	installState,
+	isErrorBox,
 	isSuspendedBox,
 	readById,
 	withRootCommitted,
@@ -133,9 +134,12 @@ export function createReactBindings(fork: ForkLike) {
 		}
 
 		/** Render phase (pure): read the pass's world Wp and remember it.
-		 * Suspends (throws the thenable) if the value is a SuspendedBox. */
+		 * Returns the RAW value — status boxes (SuspendedBox/ErrorBox) ride
+		 * along as values; the hook layer unboxes (pending hands the node-held
+		 * thenable to React use(); errors rethrow). Raw is required: throwing
+		 * here would hide the node-held box the retry identity depends on. */
 		renderRead(): T {
-			const value = this.signal.state; // engine resolves RENDER ctx
+			const value = readById(this.signal.id) as T; // engine resolves RENDER ctx
 			this.rendered =
 				currentPass !== undefined
 					? { pin: currentPass.pin, tokens: currentPass.tokens, value }
@@ -419,12 +423,10 @@ export function initializeAtomState(
 //   creation with its deferred classification. That call IS the §6.2
 //   claim/mint edge: we mint `(serial << 1) | deferred` (the spec's token
 //   encoding), so bit 0 answers isCurrentWriteDeferred with no second call.
-// - No render lineage (§6.3). Degradation: a synthesized lineage, stable per
-//   container until a pass COMMITS there (so restarts and suspense retries
-//   of in-flight work share one lineage — the property the per-world
-//   thenable cache needs). LIMITATION: two distinct interleaved works on one
-//   root share a lineage until one commits; worst case the positional
-//   thenable cache over-shares identities across them.
+// - No render lineage (§6.3) — and none is needed: pending state is a
+//   node-held box (Solid-async model), so suspense-retry identity is keyed
+//   by the NODE, not by which render attempt asked. Interleaved works on one
+//   root cannot alias each other's thenables.
 // - onRootCommitted(container, batches[], generation) replaces
 //   onBatchCommitted(container, token): fanned out per batch id.
 // - onRenderPassEnd carries `committed`; the engine's §6 listener ignores it
@@ -463,8 +465,6 @@ export class ReactFork implements ForkLike {
 	private live = new Map<number, boolean>(); // token → deferred
 	private serial = 0;
 	private passContainer: Container | undefined = undefined;
-	private lineages = new Map<Container, number>();
-	private lineageSerial = 0;
 	private unsubs: Array<() => void> = [];
 	/** runInBatch outcomes, for entanglement assertions (test parity with the double). */
 	readonly entangleLog: Array<{ token: number; ran: boolean }> = [];
@@ -493,8 +493,10 @@ export class ReactFork implements ForkLike {
 					}
 					this.passContainer = container;
 					const tokens = included.filter((t) => this.live.has(t));
-					const lineage = this.lineageFor(container);
-					this.emit((l) => l.onRenderPassStart?.(container, tokens, lineage));
+					// Lineage is dead protocol weight in the Solid-async model
+					// (pending state is node-held, not positional); 0 keeps the
+					// listener signature shared with the test double.
+					this.emit((l) => l.onRenderPassStart?.(container, tokens, 0));
 				},
 				onRenderPassYield: (container) => {
 					if (this.passContainer === container) {
@@ -511,9 +513,7 @@ export class ReactFork implements ForkLike {
 						return;
 					}
 					this.passContainer = undefined;
-					if (committed) {
-						this.lineages.delete(container); // the work is done; next work = new lineage
-					}
+					void committed; // §6 listener derives commit state from onBatchRetired
 					this.emit((l) => l.onRenderPassEnd?.(container));
 				},
 				onBatchRetired: (token, committed) => {
@@ -529,15 +529,6 @@ export class ReactFork implements ForkLike {
 				onAfterMutation: (container) => this.emit((l) => l.onAfterMutation?.(container)),
 			}),
 		);
-	}
-
-	private lineageFor(container: Container): number {
-		let v = this.lineages.get(container);
-		if (v === undefined) {
-			v = ++this.lineageSerial;
-			this.lineages.set(container, v);
-		}
-		return v;
 	}
 
 	private emit(fn: (l: ExternalRuntimeListener) => void): void {
@@ -698,7 +689,7 @@ export function useSignal<T>(signal: SignalLike & { state: T }): T {
 			of: signal,
 		};
 	}
-	const value = ref.current.hook.renderRead() as T;
+	const value: unknown = ref.current.hook.renderRead();
 	ReactNS.useLayoutEffect(() => {
 		// Every commit: idempotent watcher creation + the §13.2 fixup for
 		// writes that raced into the render→commit gap. StrictMode's
@@ -710,7 +701,32 @@ export function useSignal<T>(signal: SignalLike & { state: T }): T {
 			ref.current?.hook.unmount();
 		};
 	}, []);
-	return value;
+	if (isErrorBox(value)) {
+		throw value.error;
+	}
+	if (isSuspendedBox(value)) {
+		// Hand the NODE-HELD thenable to React use(): its identity is store-
+		// stable across retries (foldEvalResult preserves the box while the
+		// thenable is unchanged), so React resumes instead of looping. use()
+		// is exempt from hook-order rules, so the conditional call is legal.
+		const use = (ReactNS as { use?: (t: PromiseLike<unknown>) => unknown }).use;
+		if (use === undefined) {
+			throw value.thenable; // pre-use() React: classic thrown-thenable suspend
+		}
+		use(value.thenable);
+		// use() returned without suspending: the thenable already settled and
+		// the engine's settlement write (registered first) has landed —
+		// re-read for the post-settlement value.
+		const again: unknown = ref.current.hook.renderRead();
+		if (isErrorBox(again)) {
+			throw again.error;
+		}
+		if (isSuspendedBox(again)) {
+			throw again.thenable; // still pending in this world: classic suspend
+		}
+		return again as T;
+	}
+	return value as T;
 }
 
 /** Holder pattern (§13.5): component-owned nodes survive StrictMode's

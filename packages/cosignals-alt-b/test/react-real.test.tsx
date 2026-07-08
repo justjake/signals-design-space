@@ -213,9 +213,101 @@ describe('suspense through ctx.use (§12.3)', () => {
 			gate.resolve(21);
 			await gate.promise;
 		});
-		// Retry re-renders through the (lineage-keyed) thenable cache and
-		// converges — no refetch loop.
+		// Retry re-renders through the NODE-HELD pending box (identity stable
+		// across retries) and converges — no refetch loop.
 		expect(el.textContent).toBe('c:42');
+	});
+
+	it('two interleaved suspending works on one root keep distinct node-held data (no aliasing)', async () => {
+		// The lineage-keyed positional cache this replaced shared one
+		// synthesized lineage between interleaved works on a root, so their
+		// per-attempt thenable slots could alias. With node-held boxes the
+		// identity is the NODE: two works can never observe each other's
+		// thenables or data.
+		const gateA = deferred<string>();
+		const gateB = deferred<string>();
+		const flagA = new Atom({ state: false });
+		const flagB = new Atom({ state: false });
+		const cA = new Computed<string>({
+			fn: (ctx) => (flagA.state ? ctx.use(gateA.promise) : 'a0'),
+		});
+		const cB = new Computed<string>({
+			fn: (ctx) => (flagB.state ? ctx.use(gateB.promise) : 'b0'),
+		});
+		function A() {
+			return <span>{useSignal(cA)}</span>;
+		}
+		function B() {
+			return <em>{useSignal(cB)}</em>;
+		}
+		const el = await mount(
+			<React.Suspense fallback={<i>loading</i>}>
+				<A />
+				<B />
+			</React.Suspense>,
+		);
+		expect(el.textContent).toBe('a0b0');
+		// Work 1: A's world starts suspending (held open — no fallback).
+		await act(async () => {
+			React.startTransition(() => flagA.set(true));
+		});
+		expect(el.textContent).toBe('a0b0');
+		// Work 2 interleaves on the SAME root while work 1 is still pending.
+		await act(async () => {
+			React.startTransition(() => flagB.set(true));
+		});
+		expect(el.textContent).toBe('a0b0');
+		// Settle B first. Whether or not React entangles the two lanes, no
+		// frame may ever show one work's data in the other's slot.
+		await act(async () => {
+			gateB.resolve('B2');
+			await gateB.promise;
+		});
+		expect(el.textContent === 'a0B2' || el.textContent === 'a0b0').toBe(true);
+		expect(el.textContent).not.toContain('A1');
+		await act(async () => {
+			gateA.resolve('A1');
+			await gateA.promise;
+		});
+		expect(el.textContent).toBe('A1B2'); // both works landed with their own data
+	});
+
+	it('suspense converges identically under strictLanes (gate mode is orthogonal to pending)', async () => {
+		configure({ strictLanes: true });
+		try {
+			const gate = deferred<number>();
+			const flag = new Atom({ state: false });
+			const c = new Computed<number>({
+				fn: (ctx) => (flag.state ? ctx.use(gate.promise) * 2 : -1),
+			});
+			function App() {
+				return <span>c:{useSignal(c)}</span>;
+			}
+			const el = await mount(
+				<React.Suspense fallback={<i>loading</i>}>
+					<App />
+				</React.Suspense>,
+			);
+			expect(el.textContent).toBe('c:-1');
+			expect(__debug.isDirect()).toBe(false); // pinned LOGGED
+			// Urgent write flips into pending: no transition holds it open, so
+			// the boundary shows its fallback — pending is value-state, and the
+			// LOGGED write path must carry the box exactly like DIRECT does.
+			// (React HIDES re-suspended content rather than unmounting it, so
+			// textContent still carries the hidden 'c:-1'.)
+			await act(async () => {
+				flag.set(true);
+			});
+			expect(el.textContent).toContain('loading');
+			// Settlement is a normal (logged) write: invalidate → propagate.
+			await act(async () => {
+				gate.resolve(21);
+				await gate.promise;
+			});
+			expect(el.textContent).toBe('c:42');
+		} finally {
+			configure({ strictLanes: false });
+		}
 	});
 });
 

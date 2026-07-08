@@ -12,8 +12,9 @@ import {
 	batch,
 	createWatcher,
 } from '../src/index';
-import { Oracle, UPDATE_FNS } from './oracle';
+import { ERRORED, Oracle, PENDING_BASE, UPDATE_FNS } from './oracle';
 import type { NodeDef } from './oracle';
+import { isErrorBox, isSuspendedBox } from '../src/index';
 
 // ---- op vocabulary (concrete, replayable, shrinkable) --------------------------
 
@@ -32,6 +33,9 @@ export type Op =
 	| { t: 'sum'; deps: number[] }
 	| { t: 'branch'; cond: number; ifTrue: number; ifFalse: number }
 	| { t: 'chain'; dep: number }
+	| { t: 'async'; dep: number } // dep + ctx.use(t); t is driver-held, settles once
+	| { t: 'settleAsync'; node: number; v: number }
+	| { t: 'rejectAsync'; node: number }
 	| { t: 'watcher'; node: number }
 	| { t: 'open'; deferred: boolean }
 	| { t: 'write'; w: WriteSpec } // w.batch === -1 → DIRECT (quiescent only)
@@ -63,6 +67,55 @@ function mulberry32(seed: number): () => number {
 
 type Handle = Atom<number> | ReducerAtom<number, number> | Computed<number>;
 
+/** The one rejection reason the fuzz vocabulary produces. */
+const FUZZ_REJECT = new Error('fuzz: rejected thenable');
+
+/** A thenable whose settlement flushes callbacks SYNCHRONOUSLY, keeping
+ * runScript synchronous: the engine's settlement write (invalidate →
+ * propagate → drain) completes inside the settle op. */
+type SyncThenable = PromiseLike<number> & {
+	settleNow(v: number): void;
+	rejectNow(e: unknown): void;
+};
+
+function makeSyncThenable(): SyncThenable {
+	type Cb = [
+		((v: number) => unknown) | undefined | null,
+		((e: unknown) => unknown) | undefined | null,
+	];
+	const cbs: Cb[] = [];
+	let state: 'pending' | 'fulfilled' | 'rejected' = 'pending';
+	let val = 0;
+	let err: unknown;
+	const t = {
+		then(onF?: ((v: number) => unknown) | null, onR?: ((e: unknown) => unknown) | null) {
+			if (state === 'fulfilled') {
+				onF?.(val);
+			} else if (state === 'rejected') {
+				onR?.(err);
+			} else {
+				cbs.push([onF, onR]);
+			}
+			return t;
+		},
+		settleNow(v: number) {
+			state = 'fulfilled';
+			val = v;
+			for (const [f] of cbs.splice(0)) {
+				f?.(v);
+			}
+		},
+		rejectNow(e: unknown) {
+			state = 'rejected';
+			err = e;
+			for (const [, r] of cbs.splice(0)) {
+				r?.(e);
+			}
+		},
+	};
+	return t as unknown as SyncThenable;
+}
+
 type RunState = {
 	fork: ForkDouble;
 	oracle: Oracle;
@@ -74,6 +127,11 @@ type RunState = {
 	pass: { yielded: boolean; pin: number; tokens: number[] } | undefined;
 	engineNotifs: Array<[number, number]>;
 	watcherCount: number;
+	/** static async-taint per node (creation-time property; never changes) */
+	taints: boolean[];
+	asyncs: Map<number, SyncThenable>; // async node index → its thenable
+	asyncPending: Set<number>; // async node indices not yet settled/rejected
+	thenableOrigin: Map<unknown, number>; // thenable → origin async node index
 };
 
 function isAtomNode(def: NodeDef): boolean {
@@ -95,8 +153,40 @@ function sortPairs(pairs: Array<[number, number]>): string {
 		.join(',');
 }
 
+/** Map a raw engine value (status boxes included) onto the oracle's number
+ * codomain: SuspendedBox → PENDING_BASE + origin, ErrorBox → ERRORED. */
+function mapRaw(s: RunState, v: unknown): number {
+	if (isSuspendedBox(v)) {
+		const origin = s.thenableOrigin.get(v.thenable);
+		if (origin === undefined) {
+			throw new Error('driver: suspended box holds an unknown thenable');
+		}
+		return PENDING_BASE + origin;
+	}
+	if (isErrorBox(v)) {
+		if (v.error === FUZZ_REJECT) {
+			return ERRORED;
+		}
+		throw v.error;
+	}
+	return v as number;
+}
+
+/** Top-level getter read: pending THROWS the node-held thenable, errors
+ * rethrow — map both back to sentinels. */
 function nodeValue(s: RunState, node: number): number {
-	return (s.handles[node] as { state: number }).state;
+	try {
+		return (s.handles[node] as { state: number }).state;
+	} catch (thrown) {
+		const origin = s.thenableOrigin.get(thrown);
+		if (origin !== undefined) {
+			return PENDING_BASE + origin;
+		}
+		if (thrown === FUZZ_REJECT) {
+			return ERRORED;
+		}
+		throw thrown;
+	}
 }
 
 /** Execute one op against engine + oracle. Returns false if preconditions
@@ -108,6 +198,7 @@ function applyOp(s: RunState, op: Op): boolean {
 			s.defs.push({ type: 'atom', initial: op.v });
 			o.addNode({ type: 'atom', initial: op.v });
 			s.handles.push(new Atom({ state: op.v }));
+			s.taints.push(false);
 			return true;
 		}
 		case 'reducer': {
@@ -116,6 +207,7 @@ function applyOp(s: RunState, op: Op): boolean {
 			s.handles.push(
 				new ReducerAtom<number, number>({ state: op.v, reducer: (st, a) => st + a }),
 			);
+			s.taints.push(false);
 			return true;
 		}
 		case 'sum': {
@@ -123,6 +215,7 @@ function applyOp(s: RunState, op: Op): boolean {
 				return false;
 			}
 			const deps = op.deps;
+			s.taints.push(deps.some((dep) => s.taints[dep]));
 			s.defs.push({ type: 'sum', deps });
 			o.addNode({ type: 'sum', deps });
 			const handles = s.handles;
@@ -148,6 +241,13 @@ function applyOp(s: RunState, op: Op): boolean {
 				return false;
 			}
 			const { cond, ifTrue, ifFalse } = op;
+			if (s.taints[cond]) {
+				// A pending cond selects arms through box.latest history — out
+				// of the oracle's modeled domain (also keeps shrinking from
+				// morphing node indices into unmodeled shapes).
+				return false;
+			}
+			s.taints.push(s.taints[ifTrue] || s.taints[ifFalse]);
 			s.defs.push({ type: 'branch', cond, ifTrue, ifFalse });
 			o.addNode({ type: 'branch', cond, ifTrue, ifFalse });
 			const handles = s.handles;
@@ -166,6 +266,7 @@ function applyOp(s: RunState, op: Op): boolean {
 				return false;
 			}
 			const dep = op.dep;
+			s.taints.push(s.taints[dep]);
 			s.defs.push({ type: 'chain', dep });
 			o.addNode({ type: 'chain', dep });
 			const handles = s.handles;
@@ -174,6 +275,50 @@ function applyOp(s: RunState, op: Op): boolean {
 					fn: () => (handles[dep] as { state: number }).state + 1,
 				}),
 			);
+			return true;
+		}
+		case 'async': {
+			if (op.dep >= s.handles.length) {
+				return false;
+			}
+			const dep = op.dep;
+			const t = makeSyncThenable();
+			s.taints.push(true);
+			s.defs.push({ type: 'async', dep });
+			const idx = o.addNode({ type: 'async', dep });
+			s.asyncs.set(idx, t);
+			s.asyncPending.add(idx);
+			s.thenableOrigin.set(t, idx);
+			const handles = s.handles;
+			s.handles.push(
+				new Computed<number>({
+					fn: (ctx) => (handles[dep] as { state: number }).state + ctx.use(t),
+				}),
+			);
+			return true;
+		}
+		case 'settleAsync':
+		case 'rejectAsync': {
+			if (
+				passExecuting(s)
+				|| op.node >= s.defs.length
+				|| s.defs[op.node].type !== 'async'
+				|| !s.asyncPending.has(op.node)
+			) {
+				return false;
+			}
+			s.asyncPending.delete(op.node);
+			const t = s.asyncs.get(op.node)!;
+			if (op.t === 'settleAsync') {
+				o.settleAsync(op.node, op.v);
+				t.settleNow(op.v);
+			} else {
+				o.rejectAsync(op.node);
+				t.rejectNow(FUZZ_REJECT);
+			}
+			// Settlement is a global write: W0 and every live writer's world
+			// may broadcast.
+			checkBroadcasts(s, [0, ...liveDeferredTokens(s)]);
 			return true;
 		}
 		case 'urgentWrite': {
@@ -366,10 +511,13 @@ function applyOp(s: RunState, op: Op): boolean {
 						return false;
 					}
 					const token = s.batches[op.batch].token;
-					engineV = __debug.readInWorld(s.handles[op.node] as { id: number }, {
-						kind: 'writer',
-						token,
-					}) as number;
+					engineV = mapRaw(
+						s,
+						__debug.readInWorld(s.handles[op.node] as { id: number }, {
+							kind: 'writer',
+							token,
+						}),
+					);
 					oracleV = s.oracle.value(op.node, { kind: 'writer', token });
 					break;
 				}
@@ -534,6 +682,10 @@ export function runScript(script: Op[]): { failed: false } | { failed: true; err
 		pass: undefined,
 		engineNotifs: [],
 		watcherCount: 0,
+		taints: [],
+		asyncs: new Map(),
+		asyncPending: new Set(),
+		thenableOrigin: new Map(),
 	};
 	for (let i = 0; i < script.length; ++i) {
 		try {
@@ -558,6 +710,11 @@ export function genScript(seed: number, steps: number): Op[] {
 	const script: Op[] = [];
 	// Abstract mirror for generating valid-ish ops (executor re-checks).
 	let nodes: Array<'atom' | 'reducer' | 'computed'> = [];
+	// async-taint per node: a tainted node may be pending/errored — legal
+	// everywhere EXCEPT as a branch cond (the oracle refuses to model arm
+	// selection through box.latest history).
+	const taint: boolean[] = [];
+	const unsettled: number[] = []; // async node indices not yet settled
 	let batches: Array<{ deferred: boolean; retired: boolean }> = [];
 	let passOpen = false;
 	let yielded = false;
@@ -592,26 +749,48 @@ export function genScript(seed: number, steps: number): Op[] {
 				script.push({ t: 'reducer', v });
 				nodes.push('reducer');
 			}
+			taint.push(false);
 		} else if (r < 0.14) {
 			// computed: branch shapes are the divergence workhorse
 			const shape = rnd();
-			if (shape < 0.15) {
-				script.push({ t: 'chain', dep: pick(nodes.length) });
-			} else if (shape < 0.5 && nodes.length >= 1) {
+			const untainted = taint
+				.map((tn, idx) => [tn, idx] as const)
+				.filter(([tn]) => !tn)
+				.map(([, idx]) => idx);
+			if (shape < 0.13) {
+				const dep = pick(nodes.length);
+				script.push({ t: 'chain', dep });
+				taint.push(taint[dep]);
+			} else if (shape < 0.28) {
+				// async: dep + ctx.use(t) — pending/error ride as values
+				const dep = pick(nodes.length);
+				script.push({ t: 'async', dep });
+				taint.push(true);
+				unsettled.push(nodes.length);
+			} else if (shape < 0.6 || untainted.length === 0) {
 				const deps = [pick(nodes.length)];
 				if (rnd() < 0.6) {
 					deps.push(pick(nodes.length));
 				}
 				script.push({ t: 'sum', deps });
+				taint.push(deps.some((dep) => taint[dep]));
 			} else {
-				script.push({
-					t: 'branch',
-					cond: pick(nodes.length),
-					ifTrue: pick(nodes.length),
-					ifFalse: pick(nodes.length),
-				});
+				const cond = untainted[pick(untainted.length)];
+				const ifTrue = pick(nodes.length);
+				const ifFalse = pick(nodes.length);
+				script.push({ t: 'branch', cond, ifTrue, ifFalse });
+				taint.push(taint[ifTrue] || taint[ifFalse]);
 			}
 			nodes.push('computed');
+		} else if (r < 0.18 && unsettled.length !== 0 && !(passOpen && !yielded)) {
+			const at = pick(unsettled.length);
+			const node = unsettled[at];
+			unsettled.splice(at, 1);
+			if (rnd() < 0.85) {
+				script.push({ t: 'settleAsync', node, v: pick(10) });
+			} else {
+				script.push({ t: 'rejectAsync', node });
+			}
 		} else if (r < 0.22 && watchers < 12 && !(passOpen && !yielded)) {
 			script.push({ t: 'watcher', node: pick(nodes.length) });
 			++watchers;
@@ -707,6 +886,9 @@ export function genScript(seed: number, steps: number): Op[] {
 	// Close everything so quiescence assertions run at the end.
 	if (passOpen) {
 		script.push({ t: 'endPass' });
+	}
+	for (const node of unsettled) {
+		script.push({ t: 'settleAsync', node, v: pick(10) });
 	}
 	script.push({ t: 'closeEvent' });
 	for (let bi = 0; bi < batches.length; ++bi) {

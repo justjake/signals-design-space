@@ -137,7 +137,13 @@ const WORLD_W0: World = { kind: WK.W0, key: -1, pin: 0, mask: 0, slot: -1, token
 
 // Sentinel boxes (spec §11.3) — policy vocabulary, opaque to the kernel.
 export type ErrorBox = { kind: 'error'; error: unknown };
-export type SuspendedBox = { kind: 'suspended'; thenable: PromiseLike<unknown> };
+export type SuspendedBox = {
+	kind: 'suspended';
+	thenable: PromiseLike<unknown>;
+	/** The node's latest SETTLED value (undefined = uninitialized): pending
+	 * forwards downstream while the last good value stays available. */
+	latest?: unknown;
+};
 export function isErrorBox(v: unknown): v is ErrorBox {
 	return typeof v === 'object' && v !== null && (v as ErrorBox).kind === 'error' && 'error' in v;
 }
@@ -146,7 +152,34 @@ export function isSuspendedBox(v: unknown): v is SuspendedBox {
 		typeof v === 'object' && v !== null && (v as SuspendedBox).kind === 'suspended' && 'thenable' in v
 	);
 }
-const SUSPEND_MARKER: { marker: true } = { marker: true };
+// Ambient evaluation frame: the FIRST unresolved thenable this evaluation
+// encountered (via ctx.use or a pending dep read). Never thrown — evaluation
+// continues so every dep registers (parallel fetches, no waterfalls); the
+// wrapper folds it into a PENDING result at frame exit. Saved/restored like
+// activeSub for nesting.
+let evalPending: PromiseLike<unknown> | undefined;
+
+/** Is a computed evaluation frame active (canonical or overlay)? Pending dep
+ * reads forward inside frames; top-level consumers get the throw/suspend. */
+function inEvalFrame(): boolean {
+	return ovDepth !== 0 || (activeSub !== 0 && (E.nodeFlags(activeSub) & 2048) !== 0); // C.K_COMPUTED
+}
+
+/** Fold an evaluation's outcome with the ambient pending frame: pending is a
+ * RESULT (a node-held box carrying the latest settled value), never control
+ * flow. Box identity is stable while the thenable and latest are unchanged —
+ * that is what React use() retries key on. */
+function foldEvalResult(prev: unknown, next: unknown, pend: PromiseLike<unknown> | undefined): unknown {
+	if (pend !== undefined) {
+		const latest = isSuspendedBox(prev) ? prev.latest : isErrorBox(prev) ? undefined : prev;
+		if (isSuspendedBox(prev) && prev.thenable === pend && Object.is(prev.latest, latest)) {
+			return prev;
+		}
+		return { kind: 'suspended', thenable: pend, latest } as SuspendedBox;
+	}
+	return next;
+}
+
 
 export type AtomCtx<T> = {
 	/** Read current value without registering a dependency. */
@@ -162,7 +195,6 @@ type NodeMeta = {
 	rawFn?: (ctx: ComputedCtxImpl) => unknown;
 	/** fn declares a ctx parameter (arity > 0): build the ComputedCtx. */
 	wantsCtx?: boolean;
-	thenableCache?: Map<number, PromiseLike<unknown>[]>;
 	// atom observed-lifecycle (§12.4):
 	observeEffect?: (ctx: AtomCtx<unknown>) => (() => void) | void;
 	observeMounted?: boolean;
@@ -417,9 +449,7 @@ const finalizeRetry: number[] = [];
 // retirement/quiescence or a long-lived watcher's Map grows (pinning one
 // value) per batch forever.
 const liveWatcherIds = new Set<number>();
-// Nodes whose meta carries a thenableCache (render-lineage keyed): pruned
-// at quiescence so retired lineages' thenables do not pin forever.
-const thenableCacheNodes = new Set<number>();
+
 let cfgInitialRecords = 8192;
 let cfgInitialLogRecords = 1024;
 let cfgInitialMemoRecords = 1024;
@@ -536,7 +566,6 @@ function freeNode(id: number): void {
 	if (finalizeSkipped.size !== 0) {
 		finalizeSkipped.delete(id);
 	}
-	thenableCacheNodes.delete(id);
 	M[id + C.DEPS] = nodeFreeHead;
 	nodeFreeHead = id;
 }
@@ -1880,7 +1909,7 @@ function overlayEvaluate(c: number, world: World): unknown {
 	}
 	let val: unknown;
 	try {
-		val = runComputedFn(c, prevVal, world.kind === WK.PASS ? passLineage : 0);
+		val = runComputedFn(c, prevVal);
 	} finally {
 		--ovDepth;
 		ovWorld = prevWorld;
@@ -1988,12 +2017,26 @@ function onThenableSettled(t: PromiseLike<unknown>, st: ThenableState): void {
 	// (nothing else would invalidate a writer's-world memo holding the box).
 	if (loggedAtomCount !== 0) {
 		++overlayEpoch;
-	++worldStamp;
+		++worldStamp;
 	}
+	// Settlement is a GLOBAL write: a waiter may hold t only in a diverged
+	// world's box while its canonical value is settled or pending on a
+	// DIFFERENT origin (e.g. a branch whose cond differs per world), so no
+	// canonical-box guard is sound. Shape it exactly like an urgent write
+	// from each waiter: canonical invalidation + a token-0 collecting walk,
+	// with drainUrgent expanding re-validation to every live writer's world.
+	// With no logged entries and no slots every world ≡ W0 — kernel
+	// propagation alone decides, and skipping the walk keeps the planes at
+	// baseline (nothing would prune marks laid down while fully quiescent).
+	const overlayLive = loggedAtomCount !== 0 || liveSlotMask !== 0;
 	for (const c of st.waiters) {
-		const cached = values[c >> 2];
-		if (isSuspendedBox(cached) && cached.thenable === t) {
-			invalidate(c);
+		if ((M[c + C.FLAGS] & C.KIND_MASK) === 0) {
+			continue; // freed since it waited
+		}
+		invalidate(c);
+		if (overlayLive) {
+			drainUrgent = true;
+			pendingWalks.push(c, 0);
 		}
 	}
 	st.waiters.clear();
@@ -2003,86 +2046,58 @@ function onThenableSettled(t: PromiseLike<unknown>, st: ThenableState): void {
 
 /** Run a computed's user fn; returns a value or a sentinel box. Boxes are
  * reference-stable while the state is unchanged (§11.2). */
-function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
+function runComputedFn(c: number, prev: unknown): unknown {
 	const m = metaCol[c >> 3];
 	const rawFn = m?.rawFn;
 	if (rawFn === undefined) {
 		throw new Error('cosignals-alt-b: computed has no fn');
 	}
-	if (m!.wantsCtx !== true) {
-		// Zero-allocation evaluation for ctx-less fns (no suspense possible).
-		let next: unknown;
-		++enterDepth;
-		try {
-			next = (rawFn as unknown as () => unknown)();
-		} catch (e) {
-			if (isErrorBox(prev) && Object.is(prev.error, e)) {
-				return prev;
-			}
-			return { kind: 'error', error: e } as ErrorBox;
-		} finally {
-			--enterDepth;
-		}
-		if (
-			prev !== undefined
-			&& !isErrorBox(prev)
-			&& !isSuspendedBox(prev)
-			&& !isErrorBox(next)
-			&& !isSuspendedBox(next)
-			&& isEqualPolicy(c, prev, next)
-		) {
-			return prev;
-		}
-		return next;
-	}
-	let useIndex = 0;
-	let suspended: PromiseLike<unknown> | undefined;
-	const ctx: ComputedCtxImpl = {
-		previous: isErrorBox(prev) || isSuspendedBox(prev) ? undefined : prev,
-		use<U>(thenable: PromiseLike<U>): U {
-			let cache = m!.thenableCache;
-			if (cache === undefined) {
-				cache = m!.thenableCache = new Map();
-				thenableCacheNodes.add(c); // quiescence prunes lineage keys
-			}
-			let arr = cache.get(cacheKey);
-			if (arr === undefined) {
-				arr = [];
-				cache.set(cacheKey, arr);
-			}
-			const idx = useIndex++;
-			const t = (arr[idx] ?? (arr[idx] = thenable)) as PromiseLike<U>;
-			const st = stampThenable(t, c);
-			if (st.status === 'fulfilled') {
-				return st.value as U;
-			}
-			if (st.status === 'rejected') {
-				throw st.reason;
-			}
-			suspended = t;
-			throw SUSPEND_MARKER;
-		},
-	};
+	const savedPending = evalPending;
+	evalPending = undefined;
 	let next: unknown;
 	++enterDepth;
 	try {
-		next = rawFn(ctx);
-	} catch (e) {
-		if (e === SUSPEND_MARKER) {
-			if (isSuspendedBox(prev) && prev.thenable === suspended) {
-				return prev;
-			}
-			return { kind: 'suspended', thenable: suspended } as SuspendedBox;
+		if (m!.wantsCtx !== true) {
+			next = (rawFn as unknown as () => unknown)();
+		} else {
+			const ctx: ComputedCtxImpl = {
+				previous: isErrorBox(prev) || isSuspendedBox(prev) ? undefined : prev,
+				use<U>(thenable: PromiseLike<U>): U {
+					// No positional cache and no thrown promise: register the
+					// thenable (all use() calls in one eval register before
+					// pending surfaces — parallel fetches, no waterfalls) and
+					// keep evaluating. The box built at frame exit holds it ON
+					// THE NODE; React retries re-read that same box.
+					const st = stampThenable(thenable, c);
+					if (st.status === 'fulfilled') {
+						return st.value as U;
+					}
+					if (st.status === 'rejected') {
+						throw st.reason;
+					}
+					if (evalPending === undefined) {
+						evalPending = thenable;
+					}
+					return undefined as U;
+				},
+			};
+			next = rawFn(ctx);
 		}
-		if (isErrorBox(prev) && Object.is(prev.error, e)) {
+	} catch (err) {
+		evalPending = savedPending;
+		if (isErrorBox(prev) && Object.is(prev.error, err)) {
 			return prev;
 		}
-		return { kind: 'error', error: e } as ErrorBox;
+		return { kind: 'error', error: err } as ErrorBox;
 	} finally {
 		--enterDepth;
 	}
+	const pend = evalPending;
+	evalPending = savedPending;
+	const result = foldEvalResult(prev, next, pend);
 	if (
-		prev !== undefined
+		result === next
+		&& prev !== undefined
 		&& !isErrorBox(prev)
 		&& !isSuspendedBox(prev)
 		&& !isErrorBox(next)
@@ -2091,15 +2106,25 @@ function runComputedFn(c: number, prev: unknown, cacheKey: number): unknown {
 	) {
 		return prev;
 	}
-	return next;
+	return result;
 }
 
 function broadcastEqual(node: number, a: unknown, b: unknown): boolean {
 	if (Object.is(a, b)) {
 		return true;
 	}
-	if (isErrorBox(a) || isErrorBox(b) || isSuspendedBox(a) || isSuspendedBox(b)) {
-		return false; // boxes compare by identity only
+	// Status boxes compare STRUCTURALLY: evaluations in different worlds (or
+	// after memo eviction) mint distinct box objects for the same pending
+	// state, and a broadcast decision must track state, not allocation. The
+	// state IS the thenable: `latest` cannot really change while a world stays
+	// continuously pending (foldEvalResult freezes it through prev; a real
+	// change requires exiting pending, which broadcasts on its own), so latest
+	// differences between boxes are prev-eviction artifacts, never news.
+	if (isSuspendedBox(a) || isSuspendedBox(b)) {
+		return isSuspendedBox(a) && isSuspendedBox(b) && a.thenable === b.thenable;
+	}
+	if (isErrorBox(a) || isErrorBox(b)) {
+		return isErrorBox(a) && isErrorBox(b) && Object.is(a.error, b.error);
 	}
 	return isEqualPolicy(node, a, b);
 }
@@ -2793,23 +2818,6 @@ function maybeQuiesce(): void {
 	++worldStamp; // cross-era invalidator (seqs repeat across eras)
 	seqCounter = 1;
 	pruneWatcherBaselines(); // all slots empty: only the W0 baseline survives
-	// Retired render lineages' thenable caches: only the canonical (key 0)
-	// positions can be consulted again after full quiescence — a suspended
-	// pass would have kept its batch live and blocked quiescence.
-	if (thenableCacheNodes.size !== 0) {
-		for (const id of thenableCacheNodes) {
-			const cache = metaCol[id >> 3]?.thenableCache;
-			if (cache === undefined) {
-				thenableCacheNodes.delete(id);
-				continue;
-			}
-			for (const key of cache.keys()) {
-				if (key !== 0) {
-					cache.delete(key);
-				}
-			}
-		}
-	}
 	if (walkCounter > 1 << 30) {
 		// Safety valve: zero every node's OVERLAY_STAMP at an idle moment.
 		for (let i = 0; i < nodeIds.length; ++i) {
@@ -3555,7 +3563,6 @@ export function __resetEngineForTests(options?: {
 	finalizeSkipped.clear();
 	finalizeRetry.length = 0;
 	liveWatcherIds.clear();
-	thenableCacheNodes.clear();
 	cfgInitialRecords = options?.initialRecords ?? 8192;
 	cfgInitialLogRecords = options?.initialLogRecords ?? 1024;
 	cfgInitialMemoRecords = options?.initialMemoRecords ?? 1024;
@@ -3884,28 +3891,46 @@ export class Computed<T> {
 			// growth guard. Touches no plane buffers: rebuild-safe.
 			const raw = options.fn as unknown as () => unknown;
 			fns[id >> 3] = (prev: unknown): unknown => {
+				const saved = evalPending;
+				evalPending = undefined;
 				try {
-					return raw();
-				} catch (e) {
-					if (isErrorBox(prev) && Object.is(prev.error, e)) {
+					const next = raw();
+					const pend = evalPending;
+					if (pend !== undefined) {
+						return foldEvalResult(prev, next, pend);
+					}
+					return prev !== undefined && Object.is(prev, next) ? prev : next;
+				} catch (err) {
+					if (isErrorBox(prev) && Object.is(prev.error, err)) {
 						return prev;
 					}
-					return { kind: 'error', error: e } as ErrorBox;
+					return { kind: 'error', error: err } as ErrorBox;
+				} finally {
+					evalPending = saved;
 				}
 			};
 		} else {
 			// Late-bound through E so the closure survives engine rebuilds.
-			fns[id >> 3] = (prev: unknown) => E.runComputedFn(id, prev, 0);
+			fns[id >> 3] = (prev: unknown) => E.runComputedFn(id, prev);
 		}
 		E.registerHandle(this, id);
 	}
-	/** Rethrows cached errors; throws the thenable while suspended (§11.3). */
+	/** Inside an evaluation frame, pending/error FORWARD (status is graph
+	 * state: the reader notes the dep's thenable and continues over the
+	 * dep's latest settled value). Top-level: rethrows cached errors, throws
+	 * the thenable while suspended (§11.3). */
 	get state(): T {
 		const v = hotReadComputed(this.id);
 		if (isErrorBox(v)) {
 			throw v.error;
 		}
 		if (isSuspendedBox(v)) {
+			if (inEvalFrame()) {
+				if (evalPending === undefined) {
+					evalPending = v.thenable;
+				}
+				return v.latest as T;
+			}
 			throw v.thenable;
 		}
 		return v as T;
@@ -4174,10 +4199,10 @@ export const __debug = {
 	watcherBaselineCount(watcher: { id: number }): number {
 		return metaCol[watcher.id >> 3]?.lastBroadcast?.size ?? 0;
 	},
-	/** Lineage keys held by a computed's thenable cache (leak tests: retired
-	 * lineages must be pruned at quiescence; key 0 is the canonical slot). */
-	thenableLineageKeys(signal: SignalLike): number[] {
-		return [...(metaCol[signal.id >> 3]?.thenableCache?.keys() ?? [])];
+	/** Positional thenable caches no longer exist (the node-held pending box
+	 * is the only holder); always empty — kept for leak-test source compat. */
+	thenableLineageKeys(_signal: SignalLike): number[] {
+		return [];
 	},
 	/** Is the node currently LIVE (transitively watched)? */
 	isLive(signal: SignalLike): boolean {

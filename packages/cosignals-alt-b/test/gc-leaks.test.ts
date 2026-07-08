@@ -390,35 +390,43 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		__debug.verify();
 	});
 
-	it('FIXED LEAK: retired render lineages release their thenable-cache slots at quiescence', () => {
+	it('DELETED LEAK CLASS: no positional thenable caches exist — the pending box IS the only holder, replaced on settlement', async () => {
 		const fork = new ForkDouble();
 		attachFork(fork);
 		const a = new Atom({ state: 1 });
-		const forever: PromiseLike<number> = {
-			then() {
-				return forever; // pending forever
-			},
-		} as unknown as PromiseLike<number>;
+		let resolveIt!: (v: number) => void;
+		const p = new Promise<number>((res) => {
+			resolveIt = res;
+		});
 		const c = new Computed<number>({
-			fn: (ctx) => (a.state as number) + ctx.use(forever),
+			fn: (ctx) => (a.state as number) + ctx.use(p),
 		});
 		const token = fork.openBatch(true);
 		fork.inBatch(token, () => a.set(2)); // tape below c → pass reads divert to the overlay
 		fork.startRenderPass('root', [token], 42);
 		let thrown: unknown;
 		try {
-			void c.state; // suspends: caches `forever` under lineage 42 (and 0 via the kernel eval)
-		} catch (t) {
-			thrown = t;
+			void c.state; // pending: throws the NODE-HELD thenable (top-level read)
+		} catch (thrownValue) {
+			thrown = thrownValue;
 		}
-		expect(thrown).toBe(forever);
-		expect(__debug.thenableLineageKeys(c)).toContain(42);
+		expect(thrown).toBe(p);
+		// The Solid-adapted model keeps NO per-lineage positional cache: the
+		// thenable's only engine-side homes are the node-held pending box and
+		// the (weak) thenable-state map. Re-reads return the SAME box (React
+		// use() retry identity) without any cache bookkeeping.
+		expect(__debug.thenableLineageKeys(c)).toEqual([]);
 		fork.endRenderPass();
 		fork.retireBatch(token, false);
-		// Quiescence pruned the retired lineage; only the canonical slot stays.
-		const keys = __debug.thenableLineageKeys(c);
-		expect(keys).not.toContain(42);
-		expect(keys.every((k) => k === 0)).toBe(true);
+		// Settlement is a normal write: the box is REPLACED by the value —
+		// the node no longer references the thenable at all. (The retired
+		// batch's write settled back to canonical — React never drops queued
+		// updates, only renders abort — so a=2 here.)
+		resolveIt(10);
+		await p;
+		await Promise.resolve();
+		expect(c.state).toBe(12);
+		expect(__debug.thenableLineageKeys(c)).toEqual([]);
 		__debug.verify();
 	});
 });
