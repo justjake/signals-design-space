@@ -14,7 +14,7 @@
  * readers who opt into a world.
  */
 
-import { emitTrace, emitAndRun, withCause, currentCauseId } from './tracer.ts';
+import { emitTrace, emitAndRun, traceActive, withCause, currentCauseId } from './tracer.ts';
 
 declare const queueMicrotask: (fn: () => void) => void;
 declare const console: { error(...args: unknown[]): void };
@@ -83,17 +83,46 @@ export function readGlobalVersion(): GlobalVersion {
 	return globalVersion;
 }
 
+/** Shared empties: consumers start with no deps and no allocations. */
+const EMPTY_DEPS: Producer[] = [];
+const EMPTY_VERSIONS: NodeVersion[] = [];
+const EMPTY_VALUES: unknown[] = [];
+
 let currentConsumer: Consumer | null = null;
-/** During tracked evaluation: dependencies recorded in read order. */
+/** In-place re-tracking cursor: position within currentConsumer's dep list. */
+let trackIndex = 0;
+/** Set once the evaluation's dep sequence diverges from the recorded one. */
+let trackDiverged = false;
+/** Divergence fallback: dependencies collected in read order. */
 let trackDeps: Producer[] | null = null;
-/** Dep versions captured at read time (a same-evaluation write must dirty). */
 let trackVersions: NodeVersion[] | null = null;
-/** Atom dep values captured at read time (for net-change validation). */
 let trackValues: unknown[] | null = null;
 
+/**
+ * Record a dependency read. Stable dep shapes (the overwhelmingly common
+ * case) re-stamp versions in place with zero allocation; the first shape
+ * divergence falls back to collecting fresh arrays for reconciliation.
+ */
 function recordDep(p: Producer): void {
-	if (trackDeps !== null && trackDeps[trackDeps.length - 1] !== p) {
-		trackDeps.push(p);
+	const consumer = currentConsumer;
+	if (consumer === null) return;
+	if (!trackDiverged) {
+		const deps = consumer.deps;
+		if (trackIndex > 0 && deps[trackIndex - 1] === p) return; // consecutive dup
+		if (trackIndex < deps.length && deps[trackIndex] === p) {
+			consumer.depVersions[trackIndex] = p.version;
+			consumer.depValues[trackIndex] = p instanceof AtomNode ? p.baseValue() : undefined;
+			trackIndex++;
+			return;
+		}
+		// Shape changed: replay the stable prefix into fresh arrays.
+		trackDiverged = true;
+		trackDeps = deps.slice(0, trackIndex);
+		trackVersions = consumer.depVersions.slice(0, trackIndex);
+		trackValues = consumer.depValues.slice(0, trackIndex);
+	}
+	if (trackDeps![trackDeps!.length - 1] !== p) {
+		trackDeps!.push(p);
 		trackVersions!.push(p.version);
 		trackValues!.push(p instanceof AtomNode ? p.baseValue() : undefined);
 	}
@@ -102,26 +131,39 @@ function recordDep(p: Producer): void {
 /** Run `fn` recording its dependency reads, then reconcile edge subscriptions. */
 function trackedEvaluate<T>(consumer: Consumer, fn: () => T): T {
 	const prevConsumer = currentConsumer;
+	const prevIndex = trackIndex;
+	const prevDiverged = trackDiverged;
 	const prevDeps = trackDeps;
 	const prevVersions = trackVersions;
 	const prevValues = trackValues;
 	currentConsumer = consumer;
-	trackDeps = [];
-	trackVersions = [];
-	trackValues = [];
+	trackIndex = 0;
+	trackDiverged = false;
+	trackDeps = null;
+	trackVersions = null;
+	trackValues = null;
 	consumer.flags |= Flags.Running;
 	try {
 		return fn();
 	} finally {
 		consumer.flags &= ~Flags.Running;
-		const newDeps = trackDeps!;
-		const newVersions = trackVersions!;
-		const newValues = trackValues!;
+		if (trackDiverged) {
+			reconcileDeps(consumer, trackDeps!, trackVersions!, trackValues!);
+		} else if (trackIndex !== consumer.deps.length) {
+			// Same prefix, fewer deps: trim the tail.
+			reconcileDeps(
+				consumer,
+				consumer.deps.slice(0, trackIndex),
+				consumer.depVersions.slice(0, trackIndex),
+				consumer.depValues.slice(0, trackIndex),
+			);
+		}
 		currentConsumer = prevConsumer;
+		trackIndex = prevIndex;
+		trackDiverged = prevDiverged;
 		trackDeps = prevDeps;
 		trackVersions = prevVersions;
 		trackValues = prevValues;
-		reconcileDeps(consumer, newDeps, newVersions, newValues);
 	}
 }
 
@@ -165,14 +207,11 @@ function depsChanged(consumer: Consumer): boolean {
 
 export function untracked<T>(fn: () => T): T {
 	const prevConsumer = currentConsumer;
-	const prevDeps = trackDeps;
 	currentConsumer = null;
-	trackDeps = null;
 	try {
 		return fn();
 	} finally {
 		currentConsumer = prevConsumer;
-		trackDeps = prevDeps;
 	}
 }
 
@@ -544,13 +583,17 @@ export class AtomNode<T> implements Producer {
 		this.deferredCount++;
 		b.touched.add(this as AtomNode<unknown>);
 		b.version++;
-		const ev = emitTrace('write', currentCauseId(), {
-			atom: this.label ?? 'atom',
-			batch: b.id,
-			deferred: true,
-			node: this,
-		});
-		withCause(ev === 0 ? currentCauseId() : ev, () => notifyExternal(this, b));
+		if (traceActive()) {
+			const ev = emitTrace('write', currentCauseId(), {
+				atom: this.label ?? 'atom',
+				batch: b.id,
+				deferred: true,
+				node: this,
+			});
+			withCause(ev, () => notifyExternal(this, b));
+			return;
+		}
+		notifyExternal(this, b);
 	}
 
 	/** Canonical moved from `prev` to `next`: stamp, trace, and notify. */
@@ -558,21 +601,27 @@ export class AtomNode<T> implements Producer {
 		this.canonical = next;
 		this.version++;
 		globalVersion++;
-		const ev = emitTrace('write', currentCauseId(), {
-			atom: this.label ?? 'atom',
-			batch: retired === null ? 0 : retired.id,
-			node: this,
-		});
-		withCause(ev === 0 ? currentCauseId() : ev, () => {
-			startBatch();
-			try {
-				// Check, not Dirty: consumers validate net change at flush time, so
-				// a write that reverts within a batch triggers nothing downstream.
-				for (const c of [...this.subs]) c.notify(false);
-			} finally {
-				endBatch();
-			}
-		});
+		if (traceActive()) {
+			const ev = emitTrace('write', currentCauseId(), {
+				atom: this.label ?? 'atom',
+				batch: retired === null ? 0 : retired.id,
+				node: this,
+			});
+			withCause(ev, () => this.notifyCanonical());
+			return;
+		}
+		this.notifyCanonical();
+	}
+
+	private notifyCanonical(): void {
+		startBatch();
+		try {
+			// Check, not Dirty: consumers validate net change at flush time, so
+			// a write that reverts within a batch triggers nothing downstream.
+			for (const c of this.subs) c.notify(false);
+		} finally {
+			endBatch();
+		}
 	}
 
 	private applyOp(op: DraftOp<T>, v: T): T {
@@ -734,6 +783,53 @@ interface Evaluation {
 
 let currentEvaluation: Evaluation | null = null;
 
+/** Shared evaluation thunk: runs the current evaluation's computed fn. */
+function evalComputed(): unknown {
+	return currentEvaluation!.node.fn(sharedUse as UseFn);
+}
+
+/**
+ * The async-read helper handed to computed functions. One shared function:
+ * it resolves against the computed evaluation running right now, so computed
+ * construction allocates no per-instance closure.
+ */
+function sharedUse<U>(keyOrThenable: unknown, factory?: () => PromiseLike<U>): U {
+	const ev = currentEvaluation;
+	if (ev === null) {
+		throw new Error('signals-royale-fm2: use() may only be called during a computed evaluation');
+	}
+	const node = ev.node;
+	const key = keyOrThenable;
+	let map = node.thenables;
+	if (map === null) map = node.thenables = new Map();
+	let entry = map.get(key);
+	if (entry === undefined || entry.epoch < node.epoch) {
+		const t = factory !== undefined ? factory() : (keyOrThenable as PromiseLike<U>);
+		const fresh = {
+			t,
+			status: 'pending' as ThenableStatus,
+			result: undefined as unknown,
+			epoch: node.epoch,
+			used: true,
+			owner: node.refreshOwner ?? ev.world?.[ev.world.length - 1] ?? null,
+		};
+		// A replaced entry keeps nothing: latest-wins on refresh races.
+		map.set(key, fresh);
+		entry = fresh;
+		t.then(
+			(v) => node.onThenableSettled(fresh, 'value', v),
+			(e) => node.onThenableSettled(fresh, 'error', e),
+		);
+	}
+	if (ev.world === null) (node.canonicalKeys ??= new Set()).add(key);
+	else node.collectKeys?.add(key);
+	if (entry.status === 'value') return entry.result as U;
+	if (entry.status === 'error') throw entry.result;
+	const susp = (ev.forwarded ??= new Suspension());
+	if (!susp.thenables.includes(entry.t)) susp.thenables.push(entry.t);
+	throw susp;
+}
+
 // ---------------------------------------------------------------------------
 // Computeds
 // ---------------------------------------------------------------------------
@@ -755,13 +851,14 @@ export interface ComputedOptions<T> {
 export class ComputedNode<T> implements Producer, Consumer {
 	version: NodeVersion = 1;
 	subs = new Set<Consumer>();
-	deps: Producer[] = [];
-	depVersions: NodeVersion[] = [];
-	depValues: unknown[] = [];
+	deps: Producer[] = EMPTY_DEPS;
+	depVersions: NodeVersion[] = EMPTY_VERSIONS;
+	depValues: unknown[] = EMPTY_VALUES;
 	flags = Flags.Dirty;
 	label?: string;
 
-	private fn: (use: UseFn) => T;
+	/** Internal: the user computation (see evalComputed). */
+	fn: (use: UseFn) => T;
 	private equals: Equals<T>;
 
 	/** Last settled canonical outcome; keeps serving while a refetch runs. */
@@ -774,19 +871,21 @@ export class ComputedNode<T> implements Producer, Consumer {
 	epoch = 0;
 	/** Refresh issued inside a transition: settlements belong to that batch. */
 	refreshOwner: WorldBatch | null = null;
-	private thenables: Map<unknown, ThenableEntry & { owner: WorldBatch | null }> | null = null;
-	private canonicalKeys = new Set<unknown>();
+	/** Internal: keyed thenable cache for use() (see sharedUse). */
+	thenables: Map<unknown, ThenableEntry & { owner: WorldBatch | null }> | null = null;
+	/** Internal: keys touched by the current canonical evaluation (lazy). */
+	canonicalKeys: Set<unknown> | null = null;
 
 	private worlds: Map<string, WorldEntry<T>> | null = null;
-
-	private useFn: UseFn;
 
 	constructor(fn: (use: UseFn) => T, opts?: ComputedOptions<T>) {
 		this.fn = fn;
 		this.equals = opts?.equals ?? (defaultEquals as Equals<T>);
 		this.label = opts?.label;
-		this.useFn = this.makeUse();
 	}
+
+	/** Evaluation thunk shape for trackedEvaluate (no per-instance closure). */
+	private evalFn = evalComputed as unknown as () => T;
 
 	// -- graph protocol ------------------------------------------------------
 
@@ -812,7 +911,7 @@ export class ComputedNode<T> implements Producer, Consumer {
 		const had = this.flags & (Flags.Dirty | Flags.Check);
 		this.flags |= dirty ? Flags.Dirty : Flags.Check;
 		if (had === 0) {
-			for (const c of [...this.subs]) c.notify(false);
+			for (const c of this.subs) c.notify(false);
 		}
 	}
 
@@ -824,6 +923,12 @@ export class ComputedNode<T> implements Producer, Consumer {
 		}
 		if ((this.flags & (Flags.Dirty | Flags.Check)) === 0) {
 			if (this.lastGV === globalVersion) return;
+			// Live nodes hold push edges on every dependency: an unflagged live
+			// node cannot have changed, whatever the global clock says.
+			if ((this.flags & Flags.Live) !== 0) {
+				this.lastGV = globalVersion;
+				return;
+			}
 			if (this.lastGV !== 0) {
 				// Nothing pushed at us; validate dep versions before recomputing.
 				if (!depsChanged(this)) {
@@ -850,38 +955,32 @@ export class ComputedNode<T> implements Producer, Consumer {
 		const prevEval = currentEvaluation;
 		const ev: Evaluation = { forwarded: null, node: this as ComputedNode<unknown>, world: null };
 		currentEvaluation = ev;
-		this.canonicalKeys = new Set();
-		let outcome: Settled<T> | null = null;
-		let pending: Suspension | null = null;
+		const prevWorld = currentWorld;
+		currentWorld = null;
+		this.canonicalKeys = null;
+		const prev = this.settled;
 		try {
-			const value = withWorld(null, () => trackedEvaluate(this, () => this.fn(this.useFn)));
-			outcome = { kind: 'value', value };
-			pending = ev.forwarded;
+			const value = trackedEvaluate(this, this.evalFn);
+			this.pendingSusp = ev.forwarded;
+			if (prev === null || prev.kind !== 'value' || !this.equals(prev.value, value)) {
+				this.settled = { kind: 'value', value };
+				this.version++;
+			}
 		} catch (e) {
 			if (isSuspension(e)) {
-				pending = e;
+				this.pendingSusp = e;
 			} else {
-				outcome = { kind: 'error', error: e };
+				this.pendingSusp = null;
+				if (prev === null || prev.kind !== 'error' || prev.error !== e) {
+					this.settled = { kind: 'error', error: e };
+					this.version++;
+				}
 			}
 		} finally {
 			currentEvaluation = prevEval;
+			currentWorld = prevWorld;
 		}
-		this.pendingSusp = pending;
-		if (outcome !== null) {
-			const prev = this.settled;
-			const changed =
-				prev === null ||
-				prev.kind !== outcome.kind ||
-				(outcome.kind === 'value' &&
-					prev.kind === 'value' &&
-					!this.equals(prev.value, outcome.value)) ||
-				(outcome.kind === 'error' && prev.kind === 'error' && prev.error !== outcome.error);
-			if (changed) {
-				this.settled = outcome;
-				this.version++;
-			}
-		}
-		this.trimThenables();
+		if (this.thenables !== null) this.trimThenables();
 	}
 
 	/** Unwrap an outcome at a read site, forwarding pending to the caller. */
@@ -924,7 +1023,7 @@ export class ComputedNode<T> implements Producer, Consumer {
 		const ev: Evaluation = { forwarded: null, node: this as ComputedNode<unknown>, world: null };
 		currentEvaluation = ev;
 		try {
-			const value = untracked(() => this.fn(this.useFn));
+			const value = untracked(() => this.fn(sharedUse as UseFn));
 			if (ev.forwarded !== null) throw ev.forwarded;
 			return value;
 		} catch (e) {
@@ -972,7 +1071,7 @@ export class ComputedNode<T> implements Producer, Consumer {
 		let settled: Settled<T> | null = hit?.settled ?? this.settled;
 		let pending: Suspension | null = null;
 		try {
-			const value = withWorld(w, () => untracked(() => this.fn(this.useFn)));
+			const value = withWorld(w, () => untracked(() => this.fn(sharedUse as UseFn)));
 			pending = ev.forwarded;
 			const prev = hit?.settled ?? this.settled;
 			settled =
@@ -1007,51 +1106,11 @@ export class ComputedNode<T> implements Producer, Consumer {
 
 	// -- async reads -----------------------------------------------------------
 
-	/** Key-use collector for the world entry currently evaluating. */
-	private collectKeys: Set<unknown> | null = null;
+	/** Internal: key-use collector for the world entry currently evaluating. */
+	collectKeys: Set<unknown> | null = null;
 
-	private makeUse(): UseFn {
-		const use = <U>(keyOrThenable: unknown, factory?: () => PromiseLike<U>): U => {
-			const ev = currentEvaluation;
-			if (ev === null || ev.node !== (this as ComputedNode<unknown>)) {
-				throw new Error(
-					'signals-royale-fm2: use() may only be called during its own computed evaluation',
-				);
-			}
-			const key = keyOrThenable;
-			const make = factory ?? (() => keyOrThenable as PromiseLike<U>);
-			let map = this.thenables;
-			if (map === null) map = this.thenables = new Map();
-			let entry = map.get(key);
-			if (entry === undefined || entry.epoch < this.epoch) {
-				const t = make();
-				const fresh = {
-					t,
-					status: 'pending' as ThenableStatus,
-					result: undefined as unknown,
-					epoch: this.epoch,
-					used: true,
-					owner: this.refreshOwner ?? ev.world?.[ev.world.length - 1] ?? null,
-				};
-				// A replaced entry keeps nothing: latest-wins on refresh races.
-				map.set(key, fresh);
-				entry = fresh;
-				t.then(
-					(v) => this.onThenableSettled(fresh, 'value', v),
-					(e) => this.onThenableSettled(fresh, 'error', e),
-				);
-			}
-			(ev.world === null ? this.canonicalKeys : this.collectKeys)?.add(key);
-			if (entry.status === 'value') return entry.result as U;
-			if (entry.status === 'error') throw entry.result;
-			const susp = (ev.forwarded ??= new Suspension());
-			if (!susp.thenables.includes(entry.t)) susp.thenables.push(entry.t);
-			throw susp;
-		};
-		return use as UseFn;
-	}
-
-	private onThenableSettled(
+	/** Internal: sharedUse settlement entry point. */
+	onThenableSettled(
 		entry: ThenableEntry & { owner: WorldBatch | null },
 		status: ThenableStatus,
 		result: unknown,
@@ -1063,18 +1122,20 @@ export class ComputedNode<T> implements Producer, Consumer {
 		entry.status = status;
 		entry.result = result;
 		const owner = entry.owner !== null && entry.owner.status === 'open' ? entry.owner : null;
-		emitTrace('settle', currentCauseId(), {
-			computed: this.label ?? 'computed',
-			batch: owner?.id ?? 0,
-			node: this,
-		});
+		if (traceActive()) {
+			emitTrace('settle', currentCauseId(), {
+				computed: this.label ?? 'computed',
+				batch: owner?.id ?? 0,
+				node: this,
+			});
+		}
 		// Settlement behaves as a write: invalidate and propagate. Check, not
 		// Dirty, downstream: equality cutoff still applies after recompute.
 		this.flags |= Flags.Dirty;
 		globalVersion++;
 		startBatch();
 		try {
-			for (const c of [...this.subs]) c.notify(false);
+			for (const c of this.subs) c.notify(false);
 		} finally {
 			endBatch();
 		}
@@ -1086,7 +1147,7 @@ export class ComputedNode<T> implements Producer, Consumer {
 		const map = this.thenables;
 		if (map === null) return;
 		for (const [key, entry] of map) {
-			if (this.canonicalKeys.has(key)) continue;
+			if (this.canonicalKeys !== null && this.canonicalKeys.has(key)) continue;
 			let usedByWorld = false;
 			if (this.worlds !== null) {
 				for (const w of this.worlds.values()) {
@@ -1105,17 +1166,19 @@ export class ComputedNode<T> implements Producer, Consumer {
 		this.flags |= Flags.Dirty;
 		globalVersion++;
 		if (this.refreshOwner !== null) this.refreshOwner.version++;
-		emitTrace('write', currentCauseId(), {
-			computed: this.label ?? 'computed',
-			refresh: true,
-			batch: this.refreshOwner?.id ?? 0,
-			node: this,
-		});
+		if (traceActive()) {
+			emitTrace('write', currentCauseId(), {
+				computed: this.label ?? 'computed',
+				refresh: true,
+				batch: this.refreshOwner?.id ?? 0,
+				node: this,
+			});
+		}
 		startBatch();
 		try {
 			// Check, not Dirty: downstream values are unchanged while the stale
 			// value serves, so equality cutoff must keep effects quiet.
-			for (const c of [...this.subs]) c.notify(false);
+			for (const c of this.subs) c.notify(false);
 		} finally {
 			endBatch();
 		}
@@ -1194,9 +1257,9 @@ function runCleanup(cleanup: void | (() => void)): void {
 }
 
 export class EffectNode implements Consumer, EffectOwner {
-	deps: Producer[] = [];
-	depVersions: NodeVersion[] = [];
-	depValues: unknown[] = [];
+	deps: Producer[] = EMPTY_DEPS;
+	depVersions: NodeVersion[] = EMPTY_VERSIONS;
+	depValues: unknown[] = EMPTY_VALUES;
 	flags = Flags.Live | Flags.Dirty;
 	label?: string;
 	/** Effects created during this effect's run; disposed before each re-run. */
@@ -1231,19 +1294,34 @@ export class EffectNode implements Consumer, EffectOwner {
 		// Validation can run arbitrary computeds, which may dispose us.
 		if (this.flags & Flags.Disposed) return;
 		this.flags &= ~(Flags.Dirty | Flags.Check);
-		for (const c of [...this.children]) c.dispose();
-		this.children.clear();
-		runCleanup(this.cleanup);
-		this.cleanup = undefined;
-		emitAndRun('effect-run', { effect: this.label ?? 'effect', node: this }, () => {
-			const prevScope = currentScope;
-			currentScope = this;
-			try {
-				this.cleanup = withWorld(null, () => trackedEvaluate(this, this.fn));
-			} finally {
-				currentScope = prevScope;
-			}
-		});
+		if (this.children.size > 0) {
+			for (const c of [...this.children]) c.dispose();
+			this.children.clear();
+		}
+		if (this.cleanup !== undefined) {
+			runCleanup(this.cleanup);
+			this.cleanup = undefined;
+		}
+		if (traceActive()) {
+			emitAndRun('effect-run', { effect: this.label ?? 'effect', node: this }, () =>
+				this.runTracked(),
+			);
+		} else {
+			this.runTracked();
+		}
+	}
+
+	private runTracked(): void {
+		const prevScope = currentScope;
+		const prevWorld = currentWorld;
+		currentScope = this;
+		currentWorld = null;
+		try {
+			this.cleanup = trackedEvaluate(this, this.fn);
+		} finally {
+			currentScope = prevScope;
+			currentWorld = prevWorld;
+		}
 	}
 
 	dispose(): void {

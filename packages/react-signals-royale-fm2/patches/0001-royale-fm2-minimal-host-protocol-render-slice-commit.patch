@@ -1,7 +1,7 @@
 From e7db42c0ca6ccddbca7485e7231506821436c80b Mon Sep 17 00:00:00 2001
 From: Jake Teton-Landis <just.1.jake@gmail.com>
 Date: Wed, 8 Jul 2026 14:23:31 -0400
-Subject: [PATCH] =?UTF-8?q?royale-fm2:=20minimal=20host=20protocol=20?=
+Subject: [PATCH 1/2] =?UTF-8?q?royale-fm2:=20minimal=20host=20protocol=20?=
  =?UTF-8?q?=E2=80=94=20render=20slice=20+=20commit=20+=20mutation=20window?=
  =?UTF-8?q?=20events,=20lane=20probe,=20lane=20pinning=20(single-file=20pa?=
  =?UTF-8?q?tch=20in=20ReactFiberWorkLoop)?=
