@@ -35,8 +35,12 @@ The preferred holding mechanism is Suspense: the destination throws its resource
 
 - `cosignals`, `cosignals-alt-a` — `'suspense'`: the transition stays pending, urgent updates keep committing throughout.
 - `cosignals-alt-b` — `'suspense'`: the hold works, but a known engine issue is kept visible on purpose: while a transition is held, an urgent write that changes a derived value's output (the table filter, add/remove rows) locks the page in an update loop. Writes whose deriveds come out equal (the counter, the evens toggle) are unaffected.
-- `concurrent-solid-react` — `'defer-write'`: a foreign thrown promise freezes all commits (urgent ones included) until it resolves, then React recovers with a synchronous root render. The app therefore awaits the data first and runs the transition's writes after; the pending window is app-derived either way, so the chrome behaves identically.
+- `concurrent-solid-react` — `'defer-write'`: originally a foreign thrown promise froze all commits (urgent ones included) until it resolved, then React recovered with a synchronous root render. The battery's 2026-07-08 retest (`FIND-THENABLE.gate`) shows thrown promises now hold cleanly on current engine sources, but defer-write stays for the navigation flow: this bridge's own Suspense story is its async-memo machinery, and the app-derived pending window behaves identically either way.
 - `concurrent-solid-react` also currently runs with memos degraded to unmemoized tracked reads (see `src/shims/solid-react.ts` for the mechanism and repro): as of the engine sources current on 2026-07-08, one urgent signal write with any memo-subscribed component — outside a live transition — parks the bridge's shared render-probe node in the engine's dirty heap with cleared flags, and the flush loop spins forever. The package's own tests pass; the trigger needs the write to land with no transition open.
+
+## The verification battery
+
+`battery/` is a Playwright battery that drives this app in bundled Chromium against all four implementations and asserts the React compliance contract's browser-observable clauses, ported source-suite scenarios (including all 10 daishi-benchmark levels), and pinned findings. See `battery/README.md` to run it, `battery/MANIFEST.md` for the scenario contract, and `battery/TESTIDS.md` for the instrumentation contract (`?test=1` enables `src/testkit.tsx`).
 
 ## Adding implementation #5
 

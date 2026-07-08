@@ -32,15 +32,20 @@ import type { ReadableSignal, TransitionHoldStyle, WritableSignal } from './inte
 
 export const name = 'concurrent-solid-react';
 
-// Measured in the playground's Playwright suite: a foreign promise thrown
-// from a component inside a transition render does NOT hold this bridge's
-// transition open — it freezes ALL commits (urgent ones included) until the
-// promise resolves, and React then recovers with a synchronous root render
-// plus a recoverable-error report. This bridge's Suspense integration is
-// built around its own async machinery (async memos whose pending reads
-// surface as node-held thenables), not thenables thrown mid-render by app
-// code — so the app must await data first and run the transition's writes
-// after.
+// Originally measured in the playground's Playwright suite: a foreign
+// promise thrown from a component inside a transition render did NOT hold
+// this bridge's transition open — it froze ALL commits (urgent ones
+// included) until the promise resolved, and React then recovered with a
+// synchronous root render plus a recoverable-error report. Re-measured
+// 2026-07-08 by the verification battery (battery/, FIND-THENABLE.gate):
+// against current engine sources — with this shim's memo degradation in
+// place — the freeze no longer reproduces; thrown promises (native or
+// foreign thenable) hold the transition exactly like the suspense-style
+// implementations. defer-write stays for the app's navigation flow because
+// this bridge's own Suspense integration is still built around its async
+// machinery (async memos whose pending reads surface as node-held
+// thenables), not thenables thrown mid-render by app code; the battery
+// exercises both styles and pins the currently-working hold.
 export const transitionHoldStyle: TransitionHoldStyle = 'defer-write';
 
 export function register(): void {
