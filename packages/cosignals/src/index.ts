@@ -215,17 +215,11 @@ import type { NodeId, ValueIndex } from './Kernel.js';
 // rest of the suspension machinery; re-exported here (public surface).
 export { SuspendedRead } from './suspense.js';
 
-/**
- * Thrown when a computed is read while its own evaluation frame is open —
- * that read is a dependency cycle. cosignals fails loudly instead of serving
- * the stale cached value (which is what upstream alien-signals does).
- */
-export class CycleError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = 'CycleError';
-	}
-}
+// CycleError — thrown when a computed is read while its own evaluation frame
+// is open (that read is a dependency cycle; cosignals fails loudly instead
+// of serving the stale cached value) — lives in errors.ts with the other
+// error carriers; re-exported here (public surface).
+export { CycleError } from './errors.js';
 
 
 // ---- the evaluation context ----------------------------------------------------
