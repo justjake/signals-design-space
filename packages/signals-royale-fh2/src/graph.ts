@@ -558,6 +558,9 @@ export function createComputedNode(fn: () => unknown, equals: Equality): Compute
  * subscriber. World-scoped reads divert to the engine's world resolver but
  * still link (the canonical edge is what makes draft delivery reachable). */
 export function readAtom(s: AtomNode): unknown {
+	if (worldHooks.active) {
+		return worldHooks.atomValue(s);
+	}
 	if (s.flags & Flags.Dirty) {
 		if (updateAtom(s)) {
 			const subs = s.subs;
@@ -570,10 +573,34 @@ export function readAtom(s: AtomNode): unknown {
 	if (sub !== undefined) {
 		link(s, sub, cycle);
 	}
-	if (worldHooks.active) {
-		return worldHooks.atomValue(s);
+	return s.value;
+}
+
+/** The settled canonical value of an atom (staged write promoted), with no
+ * dependency linking: the base a world fold starts from. */
+export function canonicalAtomValue(s: AtomNode): unknown {
+	if (s.flags & Flags.Dirty) {
+		if (updateAtom(s)) {
+			const subs = s.subs;
+			if (subs !== undefined) {
+				shallowPropagate(subs);
+			}
+		}
 	}
 	return s.value;
+}
+
+/** Marks a computed dirty and propagates, as a write would: the engine's
+ * async settlements invalidate through here. Flushes when unbatched. */
+export function invalidateComputed(c: ComputedNode): void {
+	c.flags |= Flags.Dirty;
+	const subs = c.subs;
+	if (subs !== undefined) {
+		propagate(subs, runDepth > 0);
+		if (!batchDepth) {
+			flush();
+		}
+	}
 }
 
 /** Canonical atom write: stages the value, dirties, propagates, and flushes
@@ -593,6 +620,9 @@ export function writeAtom(s: AtomNode, value: unknown): void {
 }
 
 export function readComputed(c: ComputedNode): unknown {
+	if (worldHooks.active) {
+		return worldHooks.computedValue(c);
+	}
 	const flags = c.flags;
 	if (
 		flags & Flags.Dirty ||
@@ -617,9 +647,6 @@ export function readComputed(c: ComputedNode): unknown {
 	const sub = activeSub;
 	if (sub !== undefined) {
 		link(c, sub, cycle);
-	}
-	if (worldHooks.active) {
-		return worldHooks.computedValue(c);
 	}
 	return c.value;
 }
