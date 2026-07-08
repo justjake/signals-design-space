@@ -25,7 +25,7 @@ function useSubscription<T>(node: Readable<T>, runtime: Runtime): void {
       mounted = false;
       unsubscribe();
     };
-  }, [node, runtime]);
+  }, [node, runtime, version]);
 }
 
 export function useValue<T>(node: Readable<T>): T {
