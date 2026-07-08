@@ -96,7 +96,16 @@ test("a deferred reducer replays over an urgent write", () => {
   expect(latest(value)).toBe(2);
   value.update((previous) => previous + 1);
   expect(value.get()).toBe(2);
-  expect(withWorld({ lanes: 8, deferred: true }, () => value.get())).toBe(4);
+  expect(withWorld({ lanes: 8, deferred: true }, () => value.get())).toBe(3);
+  retireBatch(8, true);
+  expect(value.get()).toBe(3);
+});
+
+test("an urgent reducer keeps its place after a deferred reducer", () => {
+  const value = atom(1);
+  withWriteBatch(8, () => value.update((previous) => previous + 1));
+  value.update((previous) => previous * 2);
+  expect(value.get()).toBe(2);
   retireBatch(8, true);
   expect(value.get()).toBe(4);
 });

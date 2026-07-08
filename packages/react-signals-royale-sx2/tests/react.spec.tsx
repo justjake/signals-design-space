@@ -90,13 +90,13 @@ test("a suspended transition stays hidden and rebases over urgent state", async 
   );
   await act(async () => {
     startTransitionWrite(() => {
-      reduce(value, (previous) => previous * 2);
+      reduce(value, (previous) => previous + 1);
       write(blocker, 1);
     });
   });
   expect(view.textContent).toBe("1:true");
   expect(latest(value)).toBe(2);
-  await act(async () => reduce(value, (previous) => previous + 1));
+  await act(async () => reduce(value, (previous) => previous * 2));
   expect(view.textContent).toBe("2:true");
   expect(tracer.whyLastDelivery(value)[1]).toBe("write [batch 0]");
   gate.settled = true;

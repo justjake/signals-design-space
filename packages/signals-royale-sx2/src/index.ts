@@ -11,7 +11,11 @@ type Source = {
   remove(subscriber: Subscriber): void;
 };
 type Link = { source: Source; version: number };
-type DraftOperation<T> = { apply(previous: T): T; cause?: number };
+type DraftOperation<T> = {
+  batch: BatchId;
+  apply(previous: T): T;
+  cause?: number;
+};
 
 export interface RenderWorld {
   lanes: number;
@@ -294,7 +298,9 @@ export class Atom<T> implements Source {
   private readonly subscribers = new Set<Subscriber>();
   private readonly viewSubscribers = new Set<ViewSubscriber>();
   private readonly pendingSubscribers = new Set<() => void>();
-  private readonly drafts = new Map<BatchId, DraftOperation<T>[]>();
+  private readonly drafts = new Set<BatchId>();
+  private history?: DraftOperation<T>[];
+  private historyBase!: T;
   private readonly observe?: (context: {
     get(): T;
     set(value: T): void;
@@ -342,8 +348,17 @@ export class Atom<T> implements Source {
       this.writeDraft(() => value);
       return;
     }
+    this.writeUrgent(value, () => value);
+  }
+
+  private writeUrgent(value: T, apply: (previous: T) => T): void {
+    let cause: number | undefined;
+    if (!retiring && this.history !== undefined) {
+      cause = emitTrace("write", undefined, 0);
+      this.history.push({ batch: 0, apply, cause });
+    }
     if (this.equals(this.value, value)) return;
-    const cause = emitTrace("write", undefined, 0);
+    cause ??= emitTrace("write", undefined, 0);
     let original = batchAtoms?.get(this as Atom<unknown>);
     if (batchAtoms !== undefined && original === undefined) {
       original = { value: this.value, version: this.version };
@@ -370,7 +385,8 @@ export class Atom<T> implements Source {
       this.writeDraft(fn);
       return;
     }
-    this.set(fn(untracked(() => this.get())));
+    this.ensure();
+    this.writeUrgent(fn(untracked(() => this.get())), fn);
   }
 
   install(value: T): void {
@@ -385,7 +401,7 @@ export class Atom<T> implements Source {
   }
 
   isPending(): boolean {
-    for (const [batchId] of this.drafts) {
+    for (const batchId of this.drafts) {
       if (activeWorld === undefined || (activeWorld.lanes & batchId) === 0) {
         return true;
       }
@@ -395,36 +411,45 @@ export class Atom<T> implements Source {
 
   latest(): T {
     this.ensure();
-    let value = this.value;
-    for (const [batchId] of liveBatches) value = this.apply(batchId, value);
+    const history = this.history;
+    if (history === undefined) return this.value;
+    let value = this.historyBase;
+    for (const operation of history) value = operation.apply(value);
     return value;
   }
 
   retire(batchId: BatchId, commit: boolean): void {
-    const operations = this.drafts.get(batchId);
-    if (operations === undefined) return;
+    if (!this.drafts.has(batchId)) return;
     const wasPending = this.drafts.size !== 0;
     this.drafts.delete(batchId);
     if (wasPending && this.drafts.size === 0) this.notifyPending();
-    if (!commit) return;
-    let value = this.value;
-    for (const operation of operations) value = operation.apply(value);
-    this.set(value);
+    const history = this.history as DraftOperation<T>[];
+    let write = 0;
+    for (const operation of history) {
+      if (operation.batch === batchId) {
+        if (!commit) continue;
+        operation.batch = 0;
+      }
+      history[write++] = operation;
+    }
+    history.length = write;
+    let value = this.historyBase;
+    for (const operation of history) {
+      if (operation.batch === 0) value = operation.apply(value);
+    }
+    this.writeUrgent(value, () => value);
+    if (this.drafts.size === 0) this.history = undefined;
   }
 
   private valueFor(lanes: number): T {
-    let value = this.value;
-    for (const [batchId] of liveBatches) {
-      if ((batchId & lanes) !== 0) value = this.apply(batchId, value);
+    const history = this.history;
+    if (history === undefined) return this.value;
+    let value = this.historyBase;
+    for (const operation of history) {
+      if (operation.batch === 0 || (operation.batch & lanes) !== 0) {
+        value = operation.apply(value);
+      }
     }
-    return value;
-  }
-
-  private apply(batchId: BatchId, initial: T): T {
-    const operations = this.drafts.get(batchId);
-    if (operations === undefined) return initial;
-    let value = initial;
-    for (const operation of operations) value = operation.apply(value);
     return value;
   }
 
@@ -433,14 +458,16 @@ export class Atom<T> implements Source {
     const value = apply(previous);
     if (this.equals(previous, value)) return;
     const wasPending = this.drafts.size !== 0;
-    let operations = this.drafts.get(writeBatch);
-    if (operations === undefined) {
-      operations = [];
-      this.drafts.set(writeBatch, operations);
+    let history = this.history;
+    if (history === undefined) {
+      this.historyBase = this.value;
+      history = [];
+      this.history = history;
     }
+    this.drafts.add(writeBatch);
     const live = liveBatches.get(writeBatch);
     const cause = emitTrace("write", live?.openCause, writeBatch);
-    operations.push({ apply, cause });
+    history.push({ batch: writeBatch, apply, cause });
     if (!wasPending) this.notifyPending();
     live?.atoms.add(this as Atom<unknown>);
     if (live !== undefined) live.lastCause = cause;

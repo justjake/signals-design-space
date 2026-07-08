@@ -10,6 +10,7 @@ import {
 } from "../src/index";
 
 type Operation = { kind: "add" | "multiply" | "set"; value: number };
+type ScheduledOperation = Operation & { batch: number };
 
 function apply(value: number, operation: Operation): number {
   if (operation.kind === "add") return value + operation.value;
@@ -29,17 +30,22 @@ function run(seed: number): void {
   const cells = [atom(0), atom(1), atom(2), atom(3)];
   const canonical = [0, 1, 2, 3];
   const drafts = new Map<number, Map<number, Operation[]>>();
-  const order: number[] = [];
+  const histories = new Map<number, ScheduledOperation[]>();
+  const bases = canonical.slice();
   const schedule: string[] = [];
   const batches = [8, 16, 32];
 
   const fold = (index: number, selected?: number) => {
-    let value = canonical[index];
-    for (const batchId of order) {
-      if (selected !== undefined && selected !== batchId) continue;
-      const operations = drafts.get(batchId)?.get(index);
-      if (operations !== undefined) {
-        for (const operation of operations) value = apply(value, operation);
+    const history = histories.get(index);
+    if (history === undefined) return canonical[index];
+    let value = bases[index];
+    for (const operation of history) {
+      if (
+        selected === undefined ||
+        operation.batch === 0 ||
+        operation.batch === selected
+      ) {
+        value = apply(value, operation);
       }
     }
     return value;
@@ -52,7 +58,14 @@ function run(seed: number): void {
     const amount = (next() % 5) + 1;
     try {
       if (choice <= 1) {
-        canonical[index] += amount;
+        const operation: ScheduledOperation = {
+          kind: "add",
+          value: amount,
+          batch: 0,
+        };
+        histories.get(index)?.push(operation);
+        canonical[index] =
+          histories.has(index) ? fold(index, 0) : apply(canonical[index], operation);
         schedule.push(`urgent a${index} += ${amount}`);
         cells[index].update((value) => value + amount);
       } else if (choice <= 4) {
@@ -67,15 +80,22 @@ function run(seed: number): void {
         if (byCell === undefined) {
           byCell = new Map();
           drafts.set(batchId, byCell);
-          order.push(batchId);
         }
         let operations = byCell.get(index);
         if (operations === undefined) {
           operations = [];
           byCell.set(index, operations);
         }
-        if (!Object.is(previous, apply(previous, operation)))
+        if (!Object.is(previous, apply(previous, operation))) {
           operations.push(operation);
+          let history = histories.get(index);
+          if (history === undefined) {
+            bases[index] = canonical[index];
+            history = [];
+            histories.set(index, history);
+          }
+          history.push({ ...operation, batch: batchId });
+        }
         schedule.push(
           `${batchId}: a${index} ${operation.kind} ${operation.value}`,
         );
@@ -89,15 +109,35 @@ function run(seed: number): void {
       } else if (choice === 5 && drafts.has(batchId)) {
         schedule.push(`commit ${batchId}`);
         for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
-          canonical[cellIndex] = fold(cellIndex, batchId);
+          const history = histories.get(cellIndex);
+          if (history === undefined) continue;
+          let pending = false;
+          for (const operation of history) {
+            if (operation.batch === batchId) operation.batch = 0;
+            else if (operation.batch !== 0) pending = true;
+          }
+          canonical[cellIndex] = fold(cellIndex, 0);
+          if (!pending) histories.delete(cellIndex);
         }
         drafts.delete(batchId);
-        order.splice(order.indexOf(batchId), 1);
         retireBatch(batchId, true);
       } else if (choice === 6 && drafts.has(batchId)) {
         schedule.push(`discard ${batchId}`);
+        for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+          const history = histories.get(cellIndex);
+          if (history === undefined) continue;
+          let write = 0;
+          let pending = false;
+          for (const operation of history) {
+            if (operation.batch === batchId) continue;
+            history[write++] = operation;
+            if (operation.batch !== 0) pending = true;
+          }
+          history.length = write;
+          canonical[cellIndex] = fold(cellIndex, 0);
+          if (!pending) histories.delete(cellIndex);
+        }
         drafts.delete(batchId);
-        order.splice(order.indexOf(batchId), 1);
         retireBatch(batchId, false);
       } else {
         schedule.push(`read a${index}`);
