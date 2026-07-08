@@ -36,6 +36,8 @@ jobs:
             packages/dalien-signals \
             milomg-reactivity-benchmark \
             upstream-alien-signals
+          git -C packages/dalien-signals fetch origin refs/heads/dalien-signals
+          git -C packages/dalien-signals checkout 1fd018cbcdecd5e4dbc7c1c7396be3fe40d16d1e
           git -C milomg-reactivity-benchmark fetch \
             https://github.com/justjake/js-reactivity-benchmark.git refs/heads/dalien-signals
           git -C milomg-reactivity-benchmark checkout "$MILOMG_FORK_SHA"
