@@ -2133,16 +2133,15 @@ export function refresh(node: Node): void {
   node.settleRerun = true; // inputs unchanged; slot reset above forces fetches
   pendingEpoch++;
   if (trace !== null) trace.emit('refresh', traceCause, node.label, node);
-  if (node.live > 0 || (node.subs !== null && node.subs.size > 0)) {
-    // Start the refetch now for live consumers; it parks and stale serves.
-    untracked(() => {
-      try {
-        readCanonical(node);
-      } catch {
-        // pending or failure: surfaced at consumer read sites
-      }
-    });
-  }
+  // Start the refetch now — refresh means "fetch", not "fetch when read".
+  // The evaluation parks and the settled value keeps serving meanwhile.
+  untracked(() => {
+    try {
+      readCanonical(node);
+    } catch {
+      // pending or failure: surfaced at consumer read sites
+    }
+  });
   notifyDownstream(node, null);
   flushAll();
 }
