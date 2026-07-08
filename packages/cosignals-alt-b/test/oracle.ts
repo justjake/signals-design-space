@@ -35,10 +35,11 @@ export const UPDATE_FNS: ReadonlyArray<(x: number) => number> = [
 /**
  * Status sentinels (§12.3, Solid-async model): pending/error are VALUES
  * derived per world, not control flow. A pending value is encoded as
- * PENDING_BASE + (origin async node index) — the origin is the FIRST
+ * PENDING_BASE + (origin thenable SERIAL) — the origin is the FIRST
  * unsettled thenable an evaluation observes, which is exactly the engine's
  * node-held box identity key: pending→pending transitions that swap origin
- * are broadcast-visible (new box), same-origin re-derivations are not (box
+ * (including refresh() minting a fresh request for the same node) are
+ * broadcast-visible (new box), same-origin re-derivations are not (box
  * reuse). Real fuzz values are tiny; the sentinel bands cannot collide.
  */
 export const PENDING_BASE = 2 ** 40;
@@ -81,7 +82,11 @@ export class Oracle {
 		return this.tickCounter;
 	}
 
-	private asyncStates = new Map<number, { status: 'pending' | 'resolved' | 'rejected'; value: number }>();
+	private asyncStates = new Map<
+		number,
+		{ status: 'pending' | 'resolved' | 'rejected'; value: number; serial: number }
+	>();
+	private originSerialCounter = 0;
 
 	addNode(def: NodeDef): number {
 		this.defs.push(def);
@@ -90,9 +95,28 @@ export class Oracle {
 			this.entries.set(idx, []);
 		}
 		if (def.type === 'async') {
-			this.asyncStates.set(idx, { status: 'pending', value: 0 });
+			this.asyncStates.set(idx, {
+				status: 'pending',
+				value: 0,
+				serial: ++this.originSerialCounter,
+			});
 		}
 		return idx;
+	}
+
+	/** The origin serial of an async node's CURRENT request (the driver keys
+	 * thenable identity on this — refresh mints a new one). */
+	asyncSerial(idx: number): number {
+		return this.asyncStates.get(idx)!.serial;
+	}
+
+	/** §7 refresh on an async node: a NEW request begins (fresh serial —
+	 * fresh thenable identity), status returns to pending. GLOBAL-instant
+	 * like settlement (the engine's refresh drain re-derives every world). */
+	refreshAsync(idx: number): void {
+		const st = this.asyncStates.get(idx)!;
+		st.status = 'pending';
+		st.serial = ++this.originSerialCounter;
 	}
 
 	/** Settlement is GLOBAL-instant (a thenable resolves once for every
@@ -255,7 +279,7 @@ export class Oracle {
 					return dep;
 				}
 				if (st.status === 'pending') {
-					return PENDING_BASE + idx;
+					return PENDING_BASE + st.serial;
 				}
 				return dep + st.value;
 			}

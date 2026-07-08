@@ -14,7 +14,7 @@ import {
 } from '../src/index';
 import { ERRORED, Oracle, PENDING_BASE, UPDATE_FNS } from './oracle';
 import type { NodeDef } from './oracle';
-import { isErrorBox, isSuspendedBox } from '../src/index';
+import { isErrorBox, isSuspendedBox, latest as latestRead, refresh } from '../src/index';
 
 // ---- op vocabulary (concrete, replayable, shrinkable) --------------------------
 
@@ -33,9 +33,12 @@ export type Op =
 	| { t: 'sum'; deps: number[] }
 	| { t: 'branch'; cond: number; ifTrue: number; ifFalse: number }
 	| { t: 'chain'; dep: number }
-	| { t: 'async'; dep: number } // dep + ctx.use(t); t is driver-held, settles once
-	| { t: 'settleAsync'; node: number; v: number }
+	| { t: 'async'; dep: number } // dep + ctx.use(cell(epoch)); cells settle once each
+	| { t: 'settleAsync'; node: number; v: number } // settles the CURRENT epoch's cell
 	| { t: 'rejectAsync'; node: number }
+	| { t: 'refreshAsync'; node: number } // §7 refresh: new epoch → fresh thenable
+	| { t: 'refreshNode'; node: number } // §7 refresh on a non-async computed (no-op value-wise)
+	| { t: 'latestRead'; node: number } // §7 latest: top-level, never suspends
 	| { t: 'watcher'; node: number }
 	| { t: 'open'; deferred: boolean }
 	| { t: 'write'; w: WriteSpec } // w.batch === -1 → DIRECT (quiescent only)
@@ -129,9 +132,11 @@ type RunState = {
 	watcherCount: number;
 	/** static async-taint per node (creation-time property; never changes) */
 	taints: boolean[];
-	asyncs: Map<number, SyncThenable>; // async node index → its thenable
-	asyncPending: Set<number>; // async node indices not yet settled/rejected
-	thenableOrigin: Map<unknown, number>; // thenable → origin async node index
+	/** async node index → per-epoch thenable cell factory */
+	asyncCellFns: Map<number, (epoch: number) => SyncThenable>;
+	asyncEpoch: Map<number, number>; // async node index → current refresh epoch
+	asyncPending: Set<number>; // async node indices whose CURRENT cell is unsettled
+	thenableOrigin: Map<unknown, number>; // thenable → origin serial (oracle numbering)
 };
 
 function isAtomNode(def: NodeDef): boolean {
@@ -282,17 +287,30 @@ function applyOp(s: RunState, op: Op): boolean {
 				return false;
 			}
 			const dep = op.dep;
-			const t = makeSyncThenable();
 			s.taints.push(true);
 			s.defs.push({ type: 'async', dep });
 			const idx = o.addNode({ type: 'async', dep });
-			s.asyncs.set(idx, t);
+			// Resource idiom: one thenable per refresh epoch, minted lazily at
+			// eval; identity (origin serial) is the oracle's CURRENT serial for
+			// this node — refreshAsync bumps the serial BEFORE the next eval.
+			const cells = new Map<number, SyncThenable>();
+			const cellFor = (epoch: number): SyncThenable => {
+				let t = cells.get(epoch);
+				if (t === undefined) {
+					t = makeSyncThenable();
+					cells.set(epoch, t);
+					s.thenableOrigin.set(t, o.asyncSerial(idx));
+				}
+				return t;
+			};
+			s.asyncCellFns.set(idx, cellFor);
+			s.asyncEpoch.set(idx, 0);
 			s.asyncPending.add(idx);
-			s.thenableOrigin.set(t, idx);
 			const handles = s.handles;
 			s.handles.push(
 				new Computed<number>({
-					fn: (ctx) => (handles[dep] as { state: number }).state + ctx.use(t),
+					fn: (ctx) =>
+						(handles[dep] as { state: number }).state + ctx.use(cellFor(ctx.refreshEpoch)),
 				}),
 			);
 			return true;
@@ -308,7 +326,7 @@ function applyOp(s: RunState, op: Op): boolean {
 				return false;
 			}
 			s.asyncPending.delete(op.node);
-			const t = s.asyncs.get(op.node)!;
+			const t = s.asyncCellFns.get(op.node)!(s.asyncEpoch.get(op.node)!);
 			if (op.t === 'settleAsync') {
 				o.settleAsync(op.node, op.v);
 				t.settleNow(op.v);
@@ -319,6 +337,74 @@ function applyOp(s: RunState, op: Op): boolean {
 			// Settlement is a global write: W0 and every live writer's world
 			// may broadcast.
 			checkBroadcasts(s, [0, ...liveDeferredTokens(s)]);
+			return true;
+		}
+		case 'refreshAsync': {
+			if (
+				passExecuting(s)
+				|| op.node >= s.defs.length
+				|| s.defs[op.node].type !== 'async'
+			) {
+				return false;
+			}
+			// New request: oracle serial first (the next eval's fresh cell
+			// adopts it), then the engine's epoch bump + invalidation drain.
+			s.asyncEpoch.set(op.node, s.asyncEpoch.get(op.node)! + 1);
+			o.refreshAsync(op.node);
+			s.asyncPending.add(op.node);
+			refresh(s.handles[op.node]);
+			checkBroadcasts(s, [0, ...liveDeferredTokens(s)]);
+			return true;
+		}
+		case 'refreshNode': {
+			if (
+				passExecuting(s)
+				|| op.node >= s.defs.length
+				|| isAtomNode(s.defs[op.node])
+				|| s.defs[op.node].type === 'async'
+			) {
+				return false;
+			}
+			// Deterministic fns: a forced re-run reproduces the same value in
+			// every world — the oracle is unchanged and no broadcast may fire.
+			refresh(s.handles[op.node]);
+			checkBroadcasts(s, [0, ...liveDeferredTokens(s)]);
+			return true;
+		}
+		case 'latestRead': {
+			if (op.node >= s.handles.length || passExecuting(s)) {
+				return false;
+			}
+			let engineV: number | undefined;
+			let threw: unknown;
+			try {
+				engineV = latestRead(s.handles[op.node] as { id: number; state: number });
+			} catch (e) {
+				threw = e;
+			}
+			const oracleV = o.value(op.node, { kind: 'newest' });
+			if (oracleV === ERRORED) {
+				if (threw !== FUZZ_REJECT) {
+					throw new Error(`latestRead node ${op.node}: expected error rethrow, got ${String(threw ?? engineV)}`);
+				}
+			} else if (oracleV >= PENDING_BASE) {
+				// Pending: latest must NEVER suspend or return a box — the value
+				// is per-world last-settled history the oracle does not model.
+				if (threw !== undefined) {
+					throw new Error(`latestRead node ${op.node}: latest threw while pending: ${String(threw)}`);
+				}
+				if (isSuspendedBox(engineV) || isErrorBox(engineV)) {
+					throw new Error(`latestRead node ${op.node}: latest leaked a box`);
+				}
+			} else {
+				if (threw !== undefined) {
+					throw new Error(`latestRead node ${op.node}: unexpected throw ${String(threw)}`);
+				}
+				if (!Object.is(engineV, oracleV)) {
+					throw new Error(`latestRead node ${op.node}: engine ${engineV}, oracle ${oracleV}`);
+				}
+			}
+			checkBroadcasts(s, []); // reads never broadcast
 			return true;
 		}
 		case 'urgentWrite': {
@@ -683,7 +769,8 @@ export function runScript(script: Op[]): { failed: false } | { failed: true; err
 		engineNotifs: [],
 		watcherCount: 0,
 		taints: [],
-		asyncs: new Map(),
+		asyncCellFns: new Map(),
+		asyncEpoch: new Map(),
 		asyncPending: new Set(),
 		thenableOrigin: new Map(),
 	};
@@ -714,7 +801,9 @@ export function genScript(seed: number, steps: number): Op[] {
 	// everywhere EXCEPT as a branch cond (the oracle refuses to model arm
 	// selection through box.latest history).
 	const taint: boolean[] = [];
-	const unsettled: number[] = []; // async node indices not yet settled
+	const unsettled: number[] = []; // async node indices whose current request is unsettled
+	const asyncNodes: number[] = []; // every async node index (refresh targets)
+	const computedNodes: number[] = []; // non-async computeds (refreshNode targets)
 	let batches: Array<{ deferred: boolean; retired: boolean }> = [];
 	let passOpen = false;
 	let yielded = false;
@@ -761,12 +850,14 @@ export function genScript(seed: number, steps: number): Op[] {
 				const dep = pick(nodes.length);
 				script.push({ t: 'chain', dep });
 				taint.push(taint[dep]);
+				computedNodes.push(nodes.length);
 			} else if (shape < 0.28) {
-				// async: dep + ctx.use(t) — pending/error ride as values
+				// async: dep + ctx.use(cell) — pending/error ride as values
 				const dep = pick(nodes.length);
 				script.push({ t: 'async', dep });
 				taint.push(true);
 				unsettled.push(nodes.length);
+				asyncNodes.push(nodes.length);
 			} else if (shape < 0.6 || untainted.length === 0) {
 				const deps = [pick(nodes.length)];
 				if (rnd() < 0.6) {
@@ -774,22 +865,36 @@ export function genScript(seed: number, steps: number): Op[] {
 				}
 				script.push({ t: 'sum', deps });
 				taint.push(deps.some((dep) => taint[dep]));
+				computedNodes.push(nodes.length);
 			} else {
 				const cond = untainted[pick(untainted.length)];
 				const ifTrue = pick(nodes.length);
 				const ifFalse = pick(nodes.length);
 				script.push({ t: 'branch', cond, ifTrue, ifFalse });
 				taint.push(taint[ifTrue] || taint[ifFalse]);
+				computedNodes.push(nodes.length);
 			}
 			nodes.push('computed');
-		} else if (r < 0.18 && unsettled.length !== 0 && !(passOpen && !yielded)) {
-			const at = pick(unsettled.length);
-			const node = unsettled[at];
-			unsettled.splice(at, 1);
-			if (rnd() < 0.85) {
-				script.push({ t: 'settleAsync', node, v: pick(10) });
-			} else {
-				script.push({ t: 'rejectAsync', node });
+		} else if (r < 0.18 && asyncNodes.length !== 0 && !(passOpen && !yielded)) {
+			const act = rnd();
+			if (act < 0.6 && unsettled.length !== 0) {
+				const at = pick(unsettled.length);
+				const node = unsettled[at];
+				unsettled.splice(at, 1);
+				if (rnd() < 0.85) {
+					script.push({ t: 'settleAsync', node, v: pick(10) });
+				} else {
+					script.push({ t: 'rejectAsync', node });
+				}
+			} else if (act < 0.85) {
+				// refresh: settled → refresh-pending; pending → new request
+				const node = asyncNodes[pick(asyncNodes.length)];
+				script.push({ t: 'refreshAsync', node });
+				if (!unsettled.includes(node)) {
+					unsettled.push(node);
+				}
+			} else if (computedNodes.length !== 0) {
+				script.push({ t: 'refreshNode', node: computedNodes[pick(computedNodes.length)] });
 			}
 		} else if (r < 0.22 && watchers < 12 && !(passOpen && !yielded)) {
 			script.push({ t: 'watcher', node: pick(nodes.length) });
@@ -835,15 +940,19 @@ export function genScript(seed: number, steps: number): Op[] {
 				script.push({ t: 'group', writes });
 			}
 		} else if (r < 0.72) {
-			const ctxs = ['newest', 'committed', 'render', 'writer'] as const;
-			const ctx = ctxs[pick(4)];
-			const live = liveBatchIndices();
-			script.push({
-				t: 'read',
-				node: pick(nodes.length),
-				ctx,
-				batch: live.length !== 0 ? live[pick(live.length)] : undefined,
-			});
+			if (rnd() < 0.12) {
+				script.push({ t: 'latestRead', node: pick(nodes.length) });
+			} else {
+				const ctxs = ['newest', 'committed', 'render', 'writer'] as const;
+				const ctx = ctxs[pick(4)];
+				const live = liveBatchIndices();
+				script.push({
+					t: 'read',
+					node: pick(nodes.length),
+					ctx,
+					batch: live.length !== 0 ? live[pick(live.length)] : undefined,
+				});
+			}
 		} else if (r < 0.8) {
 			const live = liveBatchIndices();
 			if (live.length !== 0) {

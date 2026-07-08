@@ -14,7 +14,11 @@ export {
 	detachFork,
 	createWatcher,
 	isErrorBox,
+	isPending,
 	isSuspendedBox,
+	latest,
+	pendingComputedOf,
+	refresh,
 	__debug,
 	__resetEngineForTests,
 } from './engine';

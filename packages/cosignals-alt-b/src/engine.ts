@@ -193,6 +193,8 @@ type NodeMeta = {
 	isEqual?: (a: unknown, b: unknown) => boolean;
 	reducer?: (s: unknown, a: unknown) => unknown;
 	rawFn?: (ctx: ComputedCtxImpl) => unknown;
+	/** refresh() generation for this node (ctx.refreshEpoch). */
+	refreshEpoch?: number;
 	/** fn declares a ctx parameter (arity > 0): build the ComputedCtx. */
 	wantsCtx?: boolean;
 	// atom observed-lifecycle (§12.4):
@@ -210,6 +212,9 @@ type NodeMeta = {
 export type ComputedCtxImpl = {
 	use<U>(thenable: PromiseLike<U>): U;
 	previous: unknown;
+	/** Bumped by refresh(); resource fns key their request cache on
+	 * (params, refreshEpoch) so a refresh mints a fresh thenable. */
+	refreshEpoch: number;
 };
 
 // ---- mutable module state (reset by __resetEngineForTests) --------------------
@@ -1907,6 +1912,15 @@ function overlayEvaluate(c: number, world: World): unknown {
 		const oldRec = memoLookup(c, world.key);
 		prevVal = oldRec !== 0 ? memoVals[W[oldRec + C.W_VAL]] : undefined;
 	}
+	if (prevVal === undefined) {
+		// No world history (fresh or evicted memo): seed prev from the
+		// canonical slot — worlds fork FROM canonical, so it is the node's
+		// genuine previous almost everywhere it matters. Without this, a
+		// pending eval in a diverged world folds `latest = undefined` and a
+		// refresh presents as a FIRST LOAD there (fallback flash in
+		// transition renders; per-world isPending misreads).
+		prevVal = values[c >> 2];
+	}
 	let val: unknown;
 	try {
 		val = runComputedFn(c, prevVal);
@@ -2039,6 +2053,16 @@ function onThenableSettled(t: PromiseLike<unknown>, st: ThenableState): void {
 			pendingWalks.push(c, 0);
 		}
 	}
+	// MATERIALIZE (Solid's _blocked-rerun equivalent): evaluate each waiter
+	// canonically NOW, observed or not. Without this an unobserved node's
+	// settled value never lands in its slot, and the next re-pend
+	// (refresh/param change) would fold `latest = undefined` — presenting a
+	// refresh as a first load. This is also what starts a chained refetch.
+	for (const c of st.waiters) {
+		if ((M[c + C.FLAGS] & C.KIND_MASK) !== 0) {
+			resolveNode(c, WORLD_W0);
+		}
+	}
 	st.waiters.clear();
 	flush();
 	drainAll();
@@ -2062,6 +2086,7 @@ function runComputedFn(c: number, prev: unknown): unknown {
 		} else {
 			const ctx: ComputedCtxImpl = {
 				previous: isErrorBox(prev) || isSuspendedBox(prev) ? undefined : prev,
+				refreshEpoch: m!.refreshEpoch ?? 0,
 				use<U>(thenable: PromiseLike<U>): U {
 					// No positional cache and no thrown promise: register the
 					// thenable (all use() calls in one eval register before
@@ -3358,6 +3383,38 @@ function processFinalizeRetries(): void {
 			}
 		},
 		onThenableSettled,
+		/** §7 refresh: write-like invalidation of ONE computed — forces its fn
+		 * to re-run (ctx.use re-registers fresh thenables) without touching
+		 * upstream. Shaped like the settlement write: worlds re-derive, and
+		 * with live overlay state every writer's world re-decides. prev is
+		 * threaded through the ordinary eval path, so a re-run that lands
+		 * pending folds the last settled value into box.latest
+		 * (= refresh-pending, never uninitialized). No-op on atoms. */
+		refreshNode: (id: number) => {
+			if ((M[id + C.FLAGS] & C.K_COMPUTED) === 0) {
+				return;
+			}
+			const m = metaCol[id >> 3];
+			if (m !== undefined) {
+				m.refreshEpoch = (m.refreshEpoch ?? 0) + 1;
+			}
+			if (loggedAtomCount !== 0) {
+				++overlayEpoch;
+				++worldStamp;
+			}
+			invalidate(id);
+			if (loggedAtomCount !== 0 || liveSlotMask !== 0) {
+				drainUrgent = true;
+				pendingWalks.push(id, 0);
+			}
+			// Kick the refetch NOW (Solid: refresh marks dirty + schedules;
+			// our synchronous drain is the schedule): the canonical eval
+			// re-runs the fn — ctx.use registers the fresh request — and
+			// folds the pre-refresh value into box.latest (refresh-pending).
+			resolveNode(id, WORLD_W0);
+			flush();
+			drainAll();
+		},
 		observeWanted: (node: number) =>
 			(M[node + C.FLAGS] & C.KIND_MASK) !== 0 && isLiveNode(node),
 		isLive: isLiveNode,
@@ -3859,6 +3916,8 @@ export class ReducerAtom<S, A> {
 export type ComputedCtx<T> = {
 	use<U>(thenable: PromiseLike<U>): U;
 	previous: T | undefined;
+	/** Bumped by refresh(); key request caches on (params, refreshEpoch). */
+	refreshEpoch: number;
 };
 
 export type ComputedOptions<T> = {
@@ -3962,6 +4021,87 @@ export function effectScope(fn: () => void): () => void {
 		reclaimBoundary();
 		boundary();
 	};
+}
+
+// ---- Solid-2.0 async API set (isPending / refresh / latest; policy only) ----------
+//
+// UNINITIALIZED-clears-at-COMMIT (recorded rule): Solid clears the
+// STATUS_UNINITIALIZED bit when the first real value COMMITS at flush, not
+// when the promise resolves. Our equivalent: "uninitialized" is
+// `box.latest === undefined`, and it disappears exactly when the settlement
+// WRITE replaces the box with the value in the drain (onThenableSettled →
+// invalidate → re-eval) — commit-time, not resolve-time. Any later re-pend
+// folds the settled value into the next box's `latest` (foldEvalResult), so
+// a once-settled node presents as refresh-pending from then on.
+
+const pendingProbes = new WeakMap<SignalLike, Computed<boolean>>();
+
+/** Lazily-created cached probe computed over the node's box SHAPE. Boolean
+ * equality is the flip-only cutoff: upstream value churn re-evaluates the
+ * probe but only pending↔settled transitions propagate to its observers.
+ * Raw reads keep the probe from suspending or registering pending itself
+ * (Solid's "probes never refetch/suspend" stance, §2.3 adapted). */
+export function pendingComputedOf(signal: SignalLike): Computed<boolean> {
+	let probe = pendingProbes.get(signal);
+	if (probe === undefined) {
+		probe = new Computed<boolean>({
+			fn: () => {
+				const v = readById(signal.id);
+				// First load (uninitialized: latest === undefined) is NOT
+				// pending — "pending" strictly means stale data exists while
+				// newer data loads (§3 computePendingState).
+				return isSuspendedBox(v) && v.latest !== undefined;
+			},
+		});
+		pendingProbes.set(signal, probe);
+	}
+	return probe;
+}
+
+/** §7 isPending: reactive boolean — is `signal` showing stale data while a
+ * refetch is in flight? Reactive when read from a tracked scope (it is an
+ * ordinary computed read); per-world correct (the probe evaluates in the
+ * ambient world like any node). False on first load and on errors. */
+export function isPending(signal: SignalLike): boolean {
+	return pendingComputedOf(signal).state as boolean;
+}
+
+/** §7 refresh: re-run a computed's fn so ctx.use re-registers (a resource-
+ * style fn mints a fresh thenable → refresh-pending with latest preserved).
+ * Latest-wins under races: a superseded settlement re-runs the fn, which
+ * registers the CURRENT thenable again. No-op on atoms/plain signals. */
+export function refresh(signal: SignalLike): void {
+	boundary();
+	enter(() => E.refreshNode(signal.id));
+}
+
+/** §7 latest: read current-or-stale — never suspends, never registers
+ * pending (raw read; no evalPending touch). Errors rethrow.
+ *
+ * Per-context world choice (documented contract):
+ * - top level (events, gap code, engine effects): ambient = NEWEST — the
+ *   in-flight world, so latest(upstreamAtom) sees a deferred batch's staged
+ *   write (Solid's staged-read asymmetry, via world reads instead of a
+ *   staged buffer);
+ * - inside a computed/overlay eval: that eval's world (world consistency is
+ *   load-bearing for memo certificates — sampling NEWEST here would poison
+ *   per-world memos);
+ * - inside a render pass: the pass's world Wp (render purity/replay; a
+ *   committed-pass component wanting in-flight signals should use
+ *   isPending/useIsPending, not a torn NEWEST sample);
+ * - inside withRootCommitted (useSignalEffect bodies): the root's committed
+ *   view.
+ * For the async node itself, pending unwraps to box.latest (the last value
+ * that settled in the reading world); uninitialized reads as undefined. */
+export function latest<T>(signal: SignalLike & { state: T }): T | undefined {
+	const raw = readById(signal.id);
+	if (isErrorBox(raw)) {
+		throw raw.error;
+	}
+	if (isSuspendedBox(raw)) {
+		return raw.latest as T | undefined;
+	}
+	return raw as T;
 }
 
 /** Coalesce writes: one flush + one drain (one walk ticket) at close (§9.8). */

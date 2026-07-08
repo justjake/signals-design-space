@@ -19,11 +19,14 @@ import {
 	registerAltBReact,
 	useAtom,
 	useComputed,
+	useIsPending,
+	useLatest,
 	useSignal,
 	useSignalEffect,
 	useSignalTransition,
 	type AltBReactHandle,
 } from '../src/react';
+import { latest, refresh } from '../src/index';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -290,15 +293,14 @@ describe('suspense through ctx.use (§12.3)', () => {
 			);
 			expect(el.textContent).toBe('c:-1');
 			expect(__debug.isDirect()).toBe(false); // pinned LOGGED
-			// Urgent write flips into pending: no transition holds it open, so
-			// the boundary shows its fallback — pending is value-state, and the
+			// Urgent write flips into pending — but the node already settled
+			// (-1), so this is REFRESH-pending: the two-level suspense rule
+			// serves the stale value through with no fallback flash, and the
 			// LOGGED write path must carry the box exactly like DIRECT does.
-			// (React HIDES re-suspended content rather than unmounting it, so
-			// textContent still carries the hidden 'c:-1'.)
 			await act(async () => {
 				flag.set(true);
 			});
-			expect(el.textContent).toContain('loading');
+			expect(el.textContent).toBe('c:-1'); // stale-through, never 'loading'
 			// Settlement is a normal (logged) write: invalidate → propagate.
 			await act(async () => {
 				gate.resolve(21);
@@ -308,6 +310,277 @@ describe('suspense through ctx.use (§12.3)', () => {
 		} finally {
 			configure({ strictLanes: false });
 		}
+	});
+});
+
+describe('Solid-2.0 async API set against real React (§2/§7, solid2-async-model)', () => {
+	/** Resource idiom: one promise per (param, refreshEpoch) request key. */
+	function makeResource() {
+		const param = new Atom({ state: 1 });
+		const gates = new Map<string, { promise: Promise<string>; resolve: (v: string) => void }>();
+		function gateFor(key: string) {
+			let g = gates.get(key);
+			if (g === undefined) {
+				let resolve!: (v: string) => void;
+				const promise = new Promise<string>((res) => {
+					resolve = res;
+				});
+				g = { promise, resolve };
+				gates.set(key, g);
+			}
+			return g;
+		}
+		const data = new Computed<string>({
+			fn: (ctx) => ctx.use(gateFor(`${param.state}:${ctx.refreshEpoch}`).promise),
+		});
+		return { param, data, gateFor };
+	}
+
+	async function settleKey(r: ReturnType<typeof makeResource>, key: string, v: string) {
+		await act(async () => {
+			r.gateFor(key).resolve(v);
+			await r.gateFor(key).promise;
+			await Promise.resolve();
+		});
+	}
+
+	async function firstLoadVsRefetch(strict: boolean) {
+		configure({ strictLanes: strict });
+		try {
+			const r = makeResource();
+			function App() {
+				return <span>d:{useSignal(r.data)}</span>;
+			}
+			const el = await mount(
+				<React.Suspense fallback={<i>loading</i>}>
+					<App />
+				</React.Suspense>,
+			);
+			// TWO-LEVEL RULE half 1: first load (uninitialized) → fallback.
+			expect(el.textContent).toBe('loading');
+			await settleKey(r, '1:0', 'one');
+			expect(el.textContent).toBe('d:one');
+			// TWO-LEVEL RULE half 2: refetch (refresh-pending) → the stale
+			// value STAYS; no fallback flash. Settlement writes meet the
+			// quiescence gate like any write — identical in both modes.
+			await act(async () => {
+				refresh(r.data);
+			});
+			expect(el.textContent).toBe('d:one'); // stale-through, never 'loading'
+			await settleKey(r, '1:1', 'two');
+			expect(el.textContent).toBe('d:two');
+		} finally {
+			configure({ strictLanes: false });
+		}
+	}
+
+	it('first-load → fallback; refetch → stale stays (loose)', async () => {
+		await firstLoadVsRefetch(false);
+	});
+
+	it('first-load → fallback; refetch → stale stays (strictLanes)', async () => {
+		await firstLoadVsRefetch(true);
+	});
+
+	async function refreshInTransition(strict: boolean) {
+		configure({ strictLanes: strict });
+		try {
+			const r = makeResource();
+			function App() {
+				const pending = useIsPending(r.data);
+				return (
+					<span>
+						d:{useSignal(r.data)}
+						{pending ? '!' : ''}
+					</span>
+				);
+			}
+			const el = await mount(
+				<React.Suspense fallback={<i>loading</i>}>
+					<App />
+				</React.Suspense>,
+			);
+			await settleKey(r, '1:0', 'one');
+			expect(el.textContent).toBe('d:one');
+			// Refresh requested inside a transition: rule (a) — the transition
+			// pass ALWAYS suspends on the pending box (even refresh-pending),
+			// so React HOLDS the transition until settlement. No early commit
+			// with stale data; no fallback (suspend-in-transition keeps old
+			// UI); the committed screen keeps the old value, with the pending
+			// flag arriving through the urgent probe flip.
+			await act(async () => {
+				React.startTransition(() => {
+					r.param.set(2);
+					refresh(r.data);
+				});
+			});
+			// Held: the old frame stays, no fallback, no early commit. (The
+			// probe flip fired inside the transition scope, so React
+			// entangles it with the held lane — the '!' never paints early;
+			// an URGENT refresh would paint it, see the flip-only test.)
+			expect(el.textContent).toBe('d:one');
+			await settleKey(r, '2:1', 'TWO');
+			expect(el.textContent).toBe('d:TWO'); // one settlement commit, probe idle
+		} finally {
+			configure({ strictLanes: false });
+		}
+	}
+
+	it('refresh-in-transition converges with stale-hold (loose)', async () => {
+		await refreshInTransition(false);
+	});
+
+	it('refresh-in-transition converges with stale-hold (strictLanes)', async () => {
+		await refreshInTransition(true);
+	});
+
+	async function useAlignment(strict: boolean) {
+		configure({ strictLanes: strict });
+		try {
+			// Rule (a) alignment: a signals consumer (useSignal → node-held
+			// box → React use()) and a DIRECT React.use() consumer of the
+			// SAME promise must land in the SAME transition commit — never a
+			// frame with one side new and the other old.
+			const gate = deferred<string>();
+			const flag = new Atom({ state: false });
+			const sig = new Computed<string>({
+				fn: (ctx) => (flag.state ? ctx.use(gate.promise) : 'off'),
+			});
+			function SignalSide() {
+				return <span>s:{useSignal(sig)}</span>;
+			}
+			function UseSide({ go }: { go: boolean }) {
+				return <b>u:{go ? React.use(gate.promise) : 'off'}</b>;
+			}
+			const commits: string[] = [];
+			let target: HTMLElement | null = null;
+			function Recorder() {
+				React.useLayoutEffect(() => {
+					commits.push(target?.textContent ?? '');
+				});
+				return null;
+			}
+			let setGo!: (b: boolean) => void;
+			function App() {
+				const [go, set] = React.useState(false);
+				setGo = set;
+				return (
+					<React.Suspense fallback={<i>loading</i>}>
+						<SignalSide />
+						<UseSide go={go} />
+						<Recorder />
+					</React.Suspense>
+				);
+			}
+			const el = await mount(<App />);
+			target = el;
+			expect(el.textContent).toBe('s:offu:off');
+			await act(async () => {
+				React.startTransition(() => {
+					flag.set(true); // sig → refresh-pending (latest 'off') on gate.promise
+					setGo(true); // UseSide → React.use(gate.promise)
+				});
+			});
+			// Both sides suspended INSIDE the transition: held, no fallback,
+			// no early commit — the old frame stays.
+			expect(el.textContent).toBe('s:offu:off');
+			await act(async () => {
+				gate.resolve('DATA');
+				await gate.promise;
+			});
+			expect(el.textContent).toBe('s:DATAu:DATA');
+			// The no-tearing assertion: every committed frame is fully-old or
+			// fully-new; the two waiters of one promise never split a commit.
+			// (The mount commit records '' — the target ref is assigned after
+			// mount returns; only real frames are checked.)
+			for (const frame of commits.filter((f) => f !== '')) {
+				const oldFrame = frame.includes('s:off') && frame.includes('u:off');
+				const newFrame = frame.includes('s:DATA') && frame.includes('u:DATA');
+				expect(oldFrame || newFrame).toBe(true);
+			}
+		} finally {
+			configure({ strictLanes: false });
+		}
+	}
+
+	it('signals-side and React-side waiters of one promise commit together (loose)', async () => {
+		await useAlignment(false);
+	});
+
+	it('signals-side and React-side waiters of one promise commit together (strictLanes)', async () => {
+		await useAlignment(true);
+	});
+
+	it('useIsPending is flip-only: settled value changes do not re-render the probe consumer', async () => {
+		const r = makeResource();
+		let probeRenders = 0;
+		function Probe() {
+			++probeRenders;
+			const pending = useIsPending(r.data);
+			return <em>{pending ? 'pending' : 'idle'}</em>;
+		}
+		function Value() {
+			return <span>{useSignal(r.data)}</span>;
+		}
+		const el = await mount(
+			<React.Suspense fallback={<i>loading</i>}>
+				<Value />
+				<Probe />
+			</React.Suspense>,
+		);
+		await settleKey(r, '1:0', 'one');
+		expect(el.textContent).toBe('oneidle');
+		const before = probeRenders;
+		// A refetch settling to a DIFFERENT value: the Value component
+		// re-renders for the data; the probe re-renders only for the two
+		// pending flips — bounded, not per-value-change.
+		await act(async () => {
+			refresh(r.data);
+		});
+		expect(el.textContent).toBe('onepending');
+		await settleKey(r, '1:1', 'two');
+		expect(el.textContent).toBe('twoidle');
+		const flips = probeRenders - before;
+		expect(flips).toBeGreaterThanOrEqual(2); // pending→idle→... both flips seen
+		// Now a settled→settled change with NO pending phase visible to the
+		// probe world: none exists in this model (every refetch pends), so
+		// assert the complementary bound instead: renders track flips, not
+		// values — 2 flips per cycle.
+		await act(async () => {
+			refresh(r.data);
+		});
+		await settleKey(r, '1:2', 'three');
+		expect(el.textContent).toBe('threeidle');
+		expect(probeRenders - before).toBeLessThanOrEqual(2 * flips + 2);
+	});
+
+	it('useLatest never suspends: undefined on first load, stale during refetch (latest asymmetry)', async () => {
+		const r = makeResource();
+		function App() {
+			const v = useLatest(r.data);
+			return <span>v:{v ?? 'none'}</span>;
+		}
+		// NO Suspense boundary needed — useLatest cannot suspend.
+		const el = await mount(<App />);
+		expect(el.textContent).toBe('v:none'); // uninitialized: no stale value
+		await settleKey(r, '1:0', 'one');
+		expect(el.textContent).toBe('v:one');
+		await act(async () => {
+			refresh(r.data);
+		});
+		expect(el.textContent).toBe('v:one'); // stale through the refetch
+		await settleKey(r, '1:1', 'two');
+		expect(el.textContent).toBe('v:two');
+		// The asymmetric upstream case at top level (outside render): a
+		// deferred write is IN-FLIGHT — latest(atom) samples NEWEST.
+		let staged = '';
+		await act(async () => {
+			React.startTransition(() => {
+				r.param.set(9);
+				staged = `${latest(r.param)}`;
+			});
+		});
+		expect(staged).toBe('9'); // in-flight value visible to latest()
 	});
 });
 

@@ -34,6 +34,8 @@ import {
 	createWatcher,
 	effect,
 	effectScope,
+	isSuspendedBox,
+	refresh,
 } from '../src/index';
 import { ForkDouble } from '../src/fork';
 import { PackedTracer } from '../src/trace';
@@ -427,6 +429,111 @@ describe('lifecycle (e): 100 transition open/commit/abort/truncate cycles', () =
 		await Promise.resolve();
 		expect(c.state).toBe(12);
 		expect(__debug.thenableLineageKeys(c)).toEqual([]);
+		__debug.verify();
+	});
+});
+
+// ---- (e2) refresh: superseded requests must not be pinned ------------------------
+
+describe('refresh() and superseded thenables', () => {
+	it('the node holds only the CURRENT request; superseded thenables have no engine home', async () => {
+		const fork = new ForkDouble();
+		attachFork(fork);
+		const gates: Array<{ promise: Promise<number>; resolve: (v: number) => void }> = [];
+		const gateFor = (epoch: number) => {
+			let g = gates[epoch];
+			if (g === undefined) {
+				let resolve!: (v: number) => void;
+				const promise = new Promise<number>((res) => {
+					resolve = res;
+				});
+				g = { promise, resolve };
+				gates[epoch] = g;
+			}
+			return g;
+		};
+		const c = new Computed<number>({ fn: (ctx) => ctx.use(gateFor(ctx.refreshEpoch).promise) });
+		gateFor(0).resolve(1);
+		try {
+			void c.state;
+		} catch {
+			// first-load pending: evaluation subscribed
+		}
+		await gateFor(0).promise;
+		await Promise.resolve();
+		expect(c.state).toBe(1);
+		// Refresh 20 times without settling: every superseded box is REPLACED
+		// by the next request's box; the value slot only references the
+		// current thenable (weak thenable-state map aside, which cannot pin).
+		for (let i = 0; i < 20; ++i) {
+			refresh(c);
+		}
+		const raw = __debug.readInWorld(c, { kind: 'newest' });
+		expect(isSuspendedBox(raw)).toBe(true);
+		expect((raw as { thenable: unknown }).thenable).toBe(gateFor(21 - 1).promise);
+		// Settle the CURRENT request; converge.
+		gateFor(20).resolve(99);
+		await gateFor(20).promise;
+		await Promise.resolve();
+		expect(c.state).toBe(99);
+		__debug.verify();
+	});
+
+	it.runIf(hasGC)('GC reclaims superseded request promises after refresh (no pinning)', async () => {
+		const fork = new ForkDouble();
+		attachFork(fork);
+		const epochHole: Array<Promise<number> | undefined> = [];
+		const resolvers: Array<(v: number) => void> = [];
+		const gateFor = (epoch: number): PromiseLike<number> => {
+			let p = epochHole[epoch];
+			if (p === undefined) {
+				p = new Promise<number>((res) => {
+					resolvers[epoch] = res;
+				});
+				epochHole[epoch] = p;
+			}
+			return p;
+		};
+		const c = new Computed<number>({ fn: (ctx) => ctx.use(gateFor(ctx.refreshEpoch)) });
+		resolvers.length = 0;
+		try {
+			void c.state;
+		} catch {
+			// subscribed
+		}
+		resolvers[0]?.(1);
+		await epochHole[0];
+		await Promise.resolve();
+		expect(c.state).toBe(1);
+		const weakRefs: WeakRef<object>[] = [];
+		for (let i = 0; i < 10; ++i) {
+			refresh(c); // supersedes the previous epoch's request
+			const epoch = i + 1;
+			weakRefs.push(new WeakRef(epochHole[epoch] as object));
+		}
+		// Drop every test-side strong ref to the SUPERSEDED promises (epochs
+		// 0..9); keep the CURRENT one (epoch 10) alive — the fn must keep
+		// returning the same promise for the current epoch (resource idiom).
+		const current = epochHole[10]!;
+		const currentResolve = resolvers[10]!;
+		for (let i = 0; i < 10; ++i) {
+			epochHole[i] = undefined;
+			resolvers[i] = undefined as unknown as (v: number) => void;
+		}
+		await gcSettle();
+		let supersededAlive = 0;
+		for (let i = 0; i < 9; ++i) {
+			if (weakRefs[i].deref() !== undefined) {
+				++supersededAlive;
+			}
+		}
+		// The weak thenable-state map and the node's box must not pin them.
+		expect(supersededAlive).toBe(0);
+		expect(weakRefs[9].deref()).toBe(current); // current is still held (by us)
+		currentResolve(7);
+		await current;
+		await Promise.resolve();
+		expect(c.state).toBe(7);
 		__debug.verify();
 	});
 });

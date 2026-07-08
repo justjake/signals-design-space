@@ -33,6 +33,8 @@ import {
 	installState,
 	isErrorBox,
 	isSuspendedBox,
+	latest,
+	pendingComputedOf,
 	readById,
 	withRootCommitted,
 } from './engine';
@@ -356,6 +358,12 @@ export function createReactBindings(fork: ForkLike) {
 		): SignalHook<T> {
 			return new SignalHook(signal, onSetState);
 		},
+		/** Is the currently-executing render pass a TRANSITION pass (any
+		 * included batch deferred)? Drives the context-sensitive half of the
+		 * two-level suspense rule. */
+		renderingDeferredPass(): boolean {
+			return currentPass !== undefined && currentPass.tokens.some((t) => (t & 1) === 1);
+		},
 		signalEffect(container: Container, fn: () => void | (() => void)): EffectHook {
 			return new EffectHook(container, fn);
 		},
@@ -678,7 +686,8 @@ type AnySignalHook = ReturnType<ReactBindings['mountSignal']>;
  * world-aware post-subscribe fixup (corrections entangled into pending
  * batches' own lanes). Suspends while the value is a SuspendedBox.
  */
-export function useSignal<T>(signal: SignalLike & { state: T }): T {
+/** Shared hook body: mount/subscribe + render-read RAW (boxes included). */
+function useSignalRaw(signal: SignalLike & { state: unknown }): unknown {
 	const b = requireBindings();
 	const [, bump] = ReactNS.useReducer((c: number) => (c + 1) | 0, 0);
 	const ref = ReactNS.useRef<{ hook: AnySignalHook; of: SignalLike } | null>(null);
@@ -701,14 +710,35 @@ export function useSignal<T>(signal: SignalLike & { state: T }): T {
 			ref.current?.hook.unmount();
 		};
 	}, []);
+	return value;
+}
+
+export function useSignal<T>(signal: SignalLike & { state: T }): T {
+	const value: unknown = useSignalRaw(signal);
 	if (isErrorBox(value)) {
 		throw value.error;
 	}
 	if (isSuspendedBox(value)) {
-		// Hand the NODE-HELD thenable to React use(): its identity is store-
-		// stable across retries (foldEvalResult preserves the box while the
-		// thenable is unchanged), so React resumes instead of looping. use()
-		// is exempt from hook-order rules, so the conditional call is legal.
+		// TWO-LEVEL SUSPENSE RULE, CONTEXT-SENSITIVE (solid2-async-model §2,
+		// amended): (a) inside a TRANSITION pass, ALWAYS hand the thenable to
+		// React use() — React natively holds old UI for suspends-in-
+		// transition (no fallback flash) and keeps the transition pending
+		// until settlement, so signals-side and React-side waiters of the
+		// same promise land in ONE commit (no early commit with stale data);
+		// (b) in an urgent/sync pass with a settled history, serve latest
+		// through (suspending here would flash the fallback) — pending
+		// surfaces via useIsPending; (c) never-settled always suspends.
+		// Per-site opt-outs: latest() / isPending(). The engine never holds
+		// transitions itself — React is the single waiter.
+		const inTransitionPass = requireBindings().renderingDeferredPass();
+		if (value.latest !== undefined && !inTransitionPass) {
+			return value.latest as T; // (b) urgent stale-through
+		}
+		// (a)/(c): hand the NODE-HELD thenable to React use(): its identity
+		// is store-stable across retries (foldEvalResult preserves the box
+		// while the thenable is unchanged), so React resumes instead of
+		// looping. use() is exempt from hook-order rules, so the conditional
+		// call is legal.
 		const use = (ReactNS as { use?: (t: PromiseLike<unknown>) => unknown }).use;
 		if (use === undefined) {
 			throw value.thenable; // pre-use() React: classic thrown-thenable suspend
@@ -716,17 +746,41 @@ export function useSignal<T>(signal: SignalLike & { state: T }): T {
 		use(value.thenable);
 		// use() returned without suspending: the thenable already settled and
 		// the engine's settlement write (registered first) has landed —
-		// re-read for the post-settlement value.
-		const again: unknown = ref.current.hook.renderRead();
+		// re-read (raw, ambient render context) for the post-settlement value.
+		const again: unknown = readById(signal.id);
 		if (isErrorBox(again)) {
 			throw again.error;
 		}
 		if (isSuspendedBox(again)) {
-			throw again.thenable; // still pending in this world: classic suspend
+			if (again.latest !== undefined && !inTransitionPass) {
+				return again.latest as T; // re-pending on a NEW fetch: urgent stale-through
+			}
+			throw again.thenable; // still pending in this context: classic suspend
 		}
 		return again as T;
 	}
 	return value as T;
+}
+
+/** §7 isPending as a hook: reactive "stale data while newer loads" boolean.
+ * Flip-only re-renders — the probe computed's boolean equality suppresses
+ * upstream value churn; first load and errors read false. */
+export function useIsPending(signal: SignalLike): boolean {
+	return useSignal(pendingComputedOf(signal));
+}
+
+/** §7 latest as a hook: subscribe like useSignal but NEVER suspend — pending
+ * unwraps to box.latest (undefined while uninitialized), errors rethrow.
+ * World choice follows the render pass like useSignal (purity/replay). */
+export function useLatest<T>(signal: SignalLike & { state: T }): T | undefined {
+	const raw = useSignalRaw(signal);
+	if (isErrorBox(raw)) {
+		throw raw.error;
+	}
+	if (isSuspendedBox(raw)) {
+		return raw.latest as T | undefined;
+	}
+	return raw as T;
 }
 
 /** Holder pattern (§13.5): component-owned nodes survive StrictMode's
