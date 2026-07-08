@@ -15,7 +15,7 @@
 		"build:react": "./build.sh"
 	},
 	"dependencies": {
-		"signals-royale-fm1": "file:../signals-royale-fm1"
+		"signals-royale-fm1": "link:../signals-royale-fm1"
 	},
 	"devDependencies": {
 		"@types/node": "24.10.9",

@@ -96,7 +96,14 @@ export function useIsPending(node: Readable<unknown>): boolean {
 	React.useEffect(() => {
 		const probe = () => setPending(isPending(node));
 		probe();
-		return onPendingMaybeChanged(probe);
+		// Runtime probes cover transition drafts and commits; the engine
+		// watcher covers async pending flips (refresh, settlement).
+		const disposeProbe = onPendingMaybeChanged(probe);
+		const watcher = new Watcher(node as Readable<unknown>, probe);
+		return () => {
+			disposeProbe();
+			watcher.dispose();
+		};
 	}, [node]);
 	return pending;
 }

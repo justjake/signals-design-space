@@ -61,7 +61,10 @@ function settle(t: PromiseLike<unknown>, next: ThenableState): void {
 			c.checkEpoch = 0;
 			c.seenRefresh = c.refreshVersion - 1; // force the next ensure to recompute
 			c.markStale();
-			if (c.subs.size > 0) c.ensure();
+			// Re-evaluate now even without live subscribers: a suspended React
+			// boundary holds this computed's park promise, and only a recompute
+			// that leaves the pending state resolves it (the retry signal).
+			c.ensure();
 		}
 	} finally {
 		endBatch();

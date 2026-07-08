@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       signals-royale-fm1:
-        specifier: file:../signals-royale-fm1
-        version: file:../signals-royale-fm1
+        specifier: link:../signals-royale-fm1
+        version: link:../signals-royale-fm1
     devDependencies:
       '@types/node':
         specifier: 24.10.9
@@ -506,9 +506,6 @@ packages:
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
-
-  signals-royale-fm1@file:../signals-royale-fm1:
-    resolution: {directory: ../signals-royale-fm1, type: directory}
 
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
@@ -1102,8 +1099,6 @@ snapshots:
       xmlchars: 2.2.0
 
   siginfo@2.0.0: {}
-
-  signals-royale-fm1@file:../signals-royale-fm1: {}
 
   source-map-js@1.2.1: {}
 
