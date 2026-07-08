@@ -46,9 +46,10 @@ consumed by both bridges. Owner rulings behind this are in
   TypeScript below is the normative shape.
 - **Monorepo submodule rule**: a commit inside `vendor/react` is followed by a
   parent-repo pointer bump in the same work unit.
-- Steps 2 and 7 modify `ReactFiberWorkLoop.js` / `ReactFiberRootScheduler.js`,
-  which the repo owner may concurrently edit — land those two steps as small,
-  isolated diffs and coordinate with the owner before starting each.
+- The branch modifies `ReactFiberWorkLoop.js` / `ReactFiberRootScheduler.js`,
+  which the repo owner may concurrently edit — rebase onto the fork branch tip
+  before merging and flag any conflict to the owner rather than resolving it
+  silently.
 
 ## The protocol: the complete surface the cleaned-up fork exposes
 
@@ -232,65 +233,67 @@ not rewritten**: the shipping code is proven by 657 lines of tests and two
 past seam bugs lived exactly in these edges. Size target ~600 lines including
 npm-standalone docs.
 
-## Step-by-step (each step lands green; do not start a step with a red gate)
+## The work: one hardening commit, then one branch, merged when green
 
-**Gate battery** (run after every step): alt-a full suite
+No feature flags, no dual-transport CI, no soak window: both consumers live in
+this monorepo, so the cutover is atomic and the rollback is `git revert`. This
+supersedes PLAN §6's staged migration; PLAN §1–5 and §7 remain normative for
+WHAT to build. Intermediate branch commits should each build and pass the
+suites that exist at that commit, but no commit needs old and new transports
+working side by side.
+
+**Gate battery** (the merge gate; also run it as you go): alt-a full suite
 (`packages/cosignals-alt-a`: `pnpm typecheck && pnpm test`), alt-b full suite
-(same commands), surviving fork jest
-(`cd vendor/react && yarn test packages/react-dom/src/__tests__/ReactDOMUseUrgentActStall-test.js`
-plus the fork families still alive at that step), fork build
-(`fork/build-react.sh`), and from step 2 on, the setState-burst floor (below).
+(same commands), surviving fork jest, fork build (`fork/build-react.sh`), and
+the setState-burst floor (below).
 
-1. **Harden gates before moving anything.** Add the blind-spot tests: RTL
+1. **On main first: harden the blind spots.** Add the missing tests: RTL
    state-before-store backfill; staggered two-root commit; a RAW store-only
    `startTransition(async …)` parking scenario (today's RTL suites exercise
    parking only indirectly); deterministic yield-gap write; mutation bracket
    `finally` placement. Fork test files + both engines' test dirs only.
-2. **Introduce taps BESIDE the registry** (`vendor/react`). Add
-   `ReactFiberSignalsTaps.js`, the nine call sites, the three pull methods —
-   transitional: the host object hangs at `internals.E.taps` while the legacy
-   channel keeps owning `E`. Registry and channel untouched. Add the fork taps
-   jest suite (raw emission points, mask capture correctness, yield/resume
-   double-fire cases). Add a coarse perf floor: a setState-burst benchmark
-   (React-only updates, no live batches) proving the watchedLanes-gated tap
-   keeps today's idle profile; PLAN §7.2 flags this cost as unmeasured — measure
-   it here before proceeding.
-3. **Build `react-signals-utils` against the taps.** The registry port, a
-   scripted `TapsDouble` driver (model it on alt-b's `ForkDouble`,
-   `packages/cosignals-alt-b/src/fork.ts:102-128`, but speaking the raw tap
-   surface), the vitest suite (port fork-jest scenario NAMES first — PLAN §5.1
-   maps each family to its new home — then the three named drift tests of PLAN
-   §5.2: backfill leak, lock-in tear, parking mid-action visibility), the
-   package fuzz (random tap interleavings asserting: retire exactly once,
-   report precedes retirement, includes ⊇ lock-ins, no slot leaks), leak tests,
-   and the differential harness (package cooked stream vs live legacy channel,
-   event for event). Before step 4: the remount-into-same-container vitest
-   (PLAN §7.4); if container keying misbehaves, add an opaque root token to
-   taps 1/2/7 rather than switching keys.
-4. **Port the alt-b bridge behind a flag.** `ReactFork` gains a package-backed
-   construction path selected by an env flag; CI runs alt-b RTL in BOTH
-   transports. alt-b keeps its engine-specific pieces (ambient-token probes,
-   `hasOpenWork`'s transition-slot arm, startTransition token capture,
-   entangleLog). Expected net ≈ −80 lines (PLAN §2.6).
-5. **Port the alt-a bridge** the same way (drop its allocator + pass-pairing
-   defense; keep the ForkAdapter shaping and the side-effect-free deferred
-   probe). Expected net ≈ −30 lines.
-6. **Soak.** Both engines package-backed by default; full RTL + oracle fuzz +
-   differential comparison for a burn-in window. The fork registry stays alive
-   through this step ON PURPOSE — it is the oracle; any stream divergence is a
-   package bug. Pass-frame pairing is the one RECONSTRUCTED (not relocated)
-   behavior, and this soak is its specific gate (PLAN §7.3).
-7. **Delete** (`vendor/react`): `ReactFiberBatchRegistry.js`,
-   `ReactExternalRuntime.js`, `ReactFiberExternalRuntime.js` (its ~55
-   surviving lines land in the taps module, which now owns `internals.E`
-   directly), the ReactClient/index `unstable_*` exports, `discardAllWip` +
-   noop-renderer patch + errors 604/606. Bridges drop legacy paths and flags;
-   both RTL harnesses switch reset call sites to the package's
-   `resetForTest()`. Target: fork ≈230 product lines, ≈175 in upstream-owned
-   files (PLAN §3 has the file-by-file budget).
-8. **Prune fork tests** per PLAN §5.1 (port names first, delete second; keep
-   the runInBatch capability suite, the mutation-window suite, the taps suite,
-   and the act-stall pin — target ≈900–1,100 fork jest lines).
+2. **Branch: everything else**, as a reviewable commit sequence —
+   - **Taps** (`vendor/react`): add `ReactFiberSignalsTaps.js`, the nine call
+     sites, the three pull methods; fork taps jest suite (raw emission points,
+     mask capture correctness, yield/resume double-fire cases). Measure the
+     setState-burst floor here (React-only updates, no live batches): PLAN
+     §7.2 flags the per-update tap cost as the one unmeasured number — the
+     watchedLanes gate must keep today's idle profile.
+   - **Package**: build `react-signals-utils` — the registry port, a scripted
+     `TapsDouble` driver (model on alt-b's `ForkDouble`,
+     `packages/cosignals-alt-b/src/fork.ts:102-128`, speaking the raw tap
+     surface), the vitest suite (port fork-jest scenario NAMES first — PLAN
+     §5.1 maps each family to its new home — then the three named drift tests
+     of PLAN §5.2: backfill leak, lock-in tear, parking mid-action
+     visibility), package fuzz (random tap interleavings asserting: retire
+     exactly once, report precedes retirement, includes ⊇ lock-ins, no slot
+     leaks), leak tests, and the remount-into-same-container test (PLAN §7.4;
+     if container keying misbehaves, add an opaque root token to the
+     onRootUpdated/onScheduledRootPending/onRootCommitted taps rather than
+     switching keys). While the registry is still alive in these commits you
+     MAY use it as a comparison oracle in a dev-time test if a behavior is
+     hard to pin — that is a debugging aid, not a shipped mode.
+   - **Cut both bridges over** — just change the code. alt-b's `ReactFork`
+     drops its live map, serial, allocator registration, pass-container
+     filtering, fan-out (≈ −80 lines); keeps ambient-token probes,
+     `hasOpenWork`'s transition-slot arm, startTransition token capture,
+     entangleLog. alt-a's bridge drops its allocator and pass-pairing defense
+     (≈ −30); keeps the ForkAdapter shaping and the side-effect-free deferred
+     probe. Engines (`engine.ts`) untouched on both sides.
+   - **Delete** (`vendor/react`): `ReactFiberBatchRegistry.js`,
+     `ReactExternalRuntime.js`, `ReactFiberExternalRuntime.js` (its ~55
+     surviving lines land in the taps module, which now owns `internals.E`
+     directly), the ReactClient/index `unstable_*` exports, `discardAllWip` +
+     noop-renderer patch + errors 604/606; both RTL harnesses switch reset
+     call sites to the package's `resetForTest()`. Target: fork ≈230 product
+     lines, ≈175 in upstream-owned files (PLAN §3 has the file-by-file
+     budget).
+   - **Prune fork tests** per PLAN §5.1 (port names first, delete second;
+     keep the runInBatch capability suite, the mutation-window suite, the
+     taps suite, and the act-stall pin — target ≈900–1,100 fork jest lines).
+3. **Merge when the full battery is green.** Commit the fork branch, push it,
+   bump the parent submodule pointer, and land the parent branch — same work
+   unit (monorepo rule above).
 
 ## Acceptance criteria
 
@@ -299,8 +302,9 @@ plus the fork families still alive at that step), fork build
   is the measure.
 - Both engines: full suites green, zero engine (`engine.ts`) changes.
 - Package: every PLAN §1.6 behavior has a test; the three drift scenarios are
-  named tests; fuzz + leak families pass; differential soak recorded clean
-  before the step-7 deletion.
+  named tests; fuzz + leak families pass. Pass-frame pairing is the one
+  RECONSTRUCTED (not relocated) behavior (PLAN §7.3) — its raw double-fire
+  cases and pairing tests must exist before the deletion commit.
 - Perf: setState-burst floor at parity with pre-tap baseline; both engines'
   existing coarse perf gates unchanged (no steady-state deoptimizations).
 - Every claim of "unconsumed, safe to delete" carries a citation into both
