@@ -55,9 +55,6 @@ let activeScope: Set<ReactiveEffect> | undefined;
 let batchAtoms:
   | Map<Atom<unknown>, { value: unknown; version: number }>
   | undefined;
-let batchAtom: Atom<unknown> | undefined;
-let batchAtomValue: unknown;
-let batchAtomVersion = 0;
 let activeWorld: RenderWorld | undefined;
 let writeBatch: BatchId = 0;
 let retiring = false;
@@ -381,49 +378,18 @@ export class Atom<T> implements Source {
     }
     if (this.equals(this.value, value)) return;
     cause ??= emitTrace("write", undefined, 0);
-    const current = this as Atom<unknown>;
-    const saved = batchAtoms?.get(current);
-    let originalValue: unknown;
-    let originalVersion = 0;
-    let hasOriginal = false;
-    if (batchAtom === current) {
-      originalValue = batchAtomValue;
-      originalVersion = batchAtomVersion;
-      hasOriginal = true;
-    } else if (saved !== undefined) {
-      originalValue = saved.value;
-      originalVersion = saved.version;
-      hasOriginal = true;
-    }
-    if (batchDepth !== 0 && !hasOriginal) {
-      originalValue = this.value;
-      originalVersion = this.version;
-      hasOriginal = true;
-      if (batchAtom === undefined) {
-        batchAtom = current;
-        batchAtomValue = this.value;
-        batchAtomVersion = this.version;
-      } else {
-        if (batchAtoms === undefined) {
-          batchAtoms = new Map();
-          batchAtoms.set(batchAtom, {
-            value: batchAtomValue,
-            version: batchAtomVersion,
-          });
-        }
-        batchAtoms.set(current, {
-          value: originalValue,
-          version: originalVersion,
-        });
-      }
+    let original = batchAtoms?.get(this as Atom<unknown>);
+    if (batchAtoms !== undefined && original === undefined) {
+      original = { value: this.value, version: this.version };
+      batchAtoms.set(this as Atom<unknown>, original);
     }
     this.value = value;
     this.version =
-      !hasOriginal
+      original === undefined
         ? this.version + 1
-        : this.equals(originalValue as T, value)
-        ? originalVersion
-        : originalVersion + 1;
+        : this.equals(original.value as T, value)
+        ? original.version
+        : original.version + 1;
     for (const subscriber of this.subscribers) subscriber.notify(cause);
     if (!retiring) {
       this.notifyViews(0, cause);
@@ -1001,6 +967,7 @@ export function effectScope(fn: () => void): () => void {
 }
 
 export function startBatch(): void {
+  if (batchDepth === 0) batchAtoms = new Map();
   batchDepth++;
 }
 
@@ -1008,8 +975,6 @@ export function endBatch(): void {
   if (batchDepth === 0) throw new Error("endBatch without startBatch");
   if (--batchDepth === 0) {
     batchAtoms = undefined;
-    batchAtom = undefined;
-    batchAtomValue = undefined;
     flushEffects();
   }
 }
