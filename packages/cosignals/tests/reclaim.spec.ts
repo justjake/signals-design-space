@@ -201,7 +201,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 		expect(genOf(id)).toBe(gen + 1);
 	});
 
-	it('WriteLog row: skip while log entries exist; compaction tape-empty transition retries and frees', async () => {
+	it('WriteLog row: skip while episode membership holds (a non-empty write log); the episode drop retries and frees', async () => {
 		const b = bridge();
 		const at = new Atom(0);
 		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
@@ -210,9 +210,9 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 		const id = idOf(at);
 		const gen = genOf(id);
 		__simulateReclaimForTest(id);
-		expect(stats().skipped).toBe(1); // guarded: a non-empty write log
-		b.retire(t.id); // retirement compacts the log to empty -> the transition files the retry
-		expect(an.log.n - an.log.start).toBe(0);
+		expect(stats().skipped).toBe(1); // guarded: episode membership (the write log holds entries)
+		b.retire(t.id); // the last retirement closes the episode; the drop is the retry trigger
+		expect(an.log.length).toBe(0);
 		await tick();
 		expect(stats().skipped).toBe(0);
 		expect(genOf(id)).toBe(gen + 1);
@@ -422,7 +422,7 @@ describe.runIf(hasGC)('P-L2: engine columns and maps release with the record', (
 			for (let i = 0; i < n; ++i) {
 				const at = new Atom(i);
 				const an = b.internalsForAtom(at as unknown as Atom<unknown>);
-				commitWrite(b, an, i + 1); // log entry + retirement compaction (guard exercised and cleared)
+				commitWrite(b, an, i + 1); // log entry + retirement's episode close (guard exercised and cleared)
 			}
 		};
 		churn(16);

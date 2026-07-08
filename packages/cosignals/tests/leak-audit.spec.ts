@@ -291,7 +291,7 @@ describe('4. ARENA POOL', () => {
 });
 
 describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
-	it('never-quiescent open/write/retire churn incl. parked actions stays bounded MID-EPISODE (SPK-K1 regression: mid-episode reclamation; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
+	it('open/write/retire churn incl. parked actions stays bounded with NO quiesce() call (SPK-K1 regression: each episode close drops its records; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
 		const b = bridge(); // production posture: no referee, no tracer, no armed checker
 		const an = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(an));
@@ -300,9 +300,9 @@ describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 			const t = b.openBatch();
 			b.write(t.id, an, 0, i);
 			if (i % 8 === 0) {
-				const p = b.renderStart('R', [t.id]); // an open render pin-blocks compaction…
+				const p = b.renderStart('R', [t.id]); // an open render holds the episode open…
 				b.renderWatcher(p.id, w.id);
-				b.renderEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // …and its close drains it
+				b.renderEnd(p.id, 'commit', { retireAtCommit: [t.id] }); // …and its close ends it (retirement folded in)
 			} else {
 				b.retire(t.id);
 			}
@@ -312,10 +312,10 @@ describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 				b.settleAction(act.id); // …parks then settles
 			}
 		}
-		expect(b.idToBatch.size).toBe(0); // retired batches reclaimed mid-episode — NO quiesce ran
+		expect(b.idToBatch.size).toBe(0); // retired batches dropped at the episode closes — NO quiesce ran
 		expect(b.idToRenderPass.size).toBe(0); // ended renders reclaimed at render end
-		expect(an.log.n - an.log.start).toBe(0); // write logs fully compacted
-		expect(an.log.kinds.length).toBe(0); // packed columns reset with the empty window
+		expect(an.log.length).toBe(0); // write logs dropped whole at the episode closes
+		expect(an.log.chunks.length).toBe(0); // no chunk survives the drop
 		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing created anywhere)
 		expect(b.__arenaStats().dirty).toBeLessThanOrEqual(4); // boundary decay keeps the dirty lists to live cones
 		expect(b.committedValue(c, 'R')).toBe(1400);

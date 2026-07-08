@@ -16,15 +16,15 @@
  *   2. the core record (resident containers + clock/quiet edges in);
  *   3. World, WorldArena, settlement — the strongly-connected trio;
  *   4. Batch (mechanism + retirement — captures core);
- *   5. compaction (its fold deps are World's now-assigned slots; its batch
- *      edge is the batch manager's releaseLogEntry);
+ *   5. the episode lifecycle (its fold deps are World's now-assigned slots;
+ *      its close sweeps the batch manager's record registry);
  *   6. deliver's walk orchestration, then the render-pass manager (each
  *      assigns its late-bound slots);
  *   7. the subscription manager (its boundary revalidation joins the core
  *      table).
  *
  * The quiet derivation lives here: quiet ⇔ zero live batches and zero open
- * renders and every write log compacted — recomputed only at pipeline
+ * renders and no episode write records held — recomputed only at pipeline
  * transitions (batch open/retire, render start/end, driver attach). The
  * flags themselves stay module lets in concurrent.ts (the write path's hot
  * reads); this module owns the rule.
@@ -38,7 +38,7 @@
 
 import { createNotificationQueue, createDeliveryWalks, type NotificationQueue } from './NotificationQueue.js';
 import { createObservationIndex, type ObservationIndex } from './ObservationIndex.js';
-import { createCompaction, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
+import { createEpisodeLifecycle, type EpisodeLifecycle, type WriteLogEntry } from './WriteLog.js';
 import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
 import { createWorldArena } from './CosignalEngine.js';
@@ -95,8 +95,14 @@ export type ConcurrentEngineHost = {
 	internalsForComputed(c: Computed<unknown>): ComputedInternals;
 	getKernelStrongDeps(node: ComputedInternals): AnyInternals[];
 	readKernelValue(dep: AnyInternals): Value;
-	/** The optional compaction observer slot (the engine's public `onCompact`). */
-	getOnCompact(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined;
+	/** The untracked kernel newest read of one atom (the episode close's
+	 * durable handoff adopts it — untracked so a close reached from inside a
+	 * kernel effect frame records no link). */
+	readNewestUntracked(atom: AtomInternals): Value;
+	/** The optional log-entry drop observer slot (the engine's public
+	 * `onLogEntryDrop` — fired per entry as it leaves a write log, at
+	 * sealed-chunk folds and the episode drop). */
+	getOnLogEntryDrop(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined;
 	/** The driver slot's presence + the devChecks switch (openBatch's
 	 * dev-time guard reads both). */
 	isDriverAttached(): boolean;
@@ -120,7 +126,7 @@ export type ConcurrentEngine = {
 	core: EngineCore;
 	notify: NotificationQueue;
 	obs: ObservationIndex;
-	compaction: CompactionTable;
+	episode: EpisodeLifecycle;
 	batch: BatchManager;
 	render: RenderPassManager;
 	subs: SubscriptionManager;
@@ -154,7 +160,10 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	const obs = createObservationIndex({ host });
 	/**
 	 * The armed quiet-state derivation — quiet ⇔ zero live batches and zero
-	 * open renders and every write log compacted — recomputed only at state
+	 * open renders and no episode write records held (the episode close
+	 * empties `holds` at exactly the transition the first two clauses
+	 * detect, so the third is a belt matching the reference model's
+	 * derivation shape) — recomputed only at state
 	 * transitions (batch open/retire, render start/end, driver attach); the
 	 * booleans the write path branches on stay module lets (host.setQuiet
 	 * maintains both `quiet` and `standaloneQuiet`). There is no registered
@@ -165,7 +174,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 		host.setQuiet(
 			batchOps.getLiveBatchCount() === 0
 			&& rootToOpenRender.size === 0
-			&& compaction.uncompactedAtoms.size === 0,
+			&& episode.holds.size === 0,
 		);
 	}
 	// ---- One shared core record. It is created with the resident-state
@@ -211,10 +220,12 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// last-batch cache clear (the cache must not outlive a reclaimed record).
 	const batchOps = createBatchManager(core, { host });
 	core.batch = batchOps;
-	// ---- write-log compaction (after createWorld: its fold deps are the
-	// core's now-assigned World slots; the batch edge is the batch manager's).
-	const compaction = createCompaction({ core, host, batch: batchOps });
-	core.compactAll = compaction.compactAll;
+	// ---- the episode lifecycle (after createWorld: its fold deps are the
+	// core's now-assigned World slots; its close sweeps the batch manager's
+	// record registry).
+	const episode = createEpisodeLifecycle({ core, host, batch: batchOps });
+	core.foldSealedChunks = episode.foldSealedChunks;
+	core.maybeCloseEpisode = episode.maybeCloseEpisode;
 	// ---- the walk orchestration (NotificationQueue.ts) + render lifecycle
 	// (RenderPass.ts) — each assigns its late-bound core slots.
 	createDeliveryWalks(core);
@@ -233,5 +244,5 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// core fields (trace, captureFrame, guards, the live count) in place.
 	const subs = createSubscriptionManager({ core, observation: obs });
 	core.revalidateCommittedSubscriptions = subs.revalidateCommittedSubscriptions;
-	return { core, notify, obs, compaction, batch: batchOps, render, subs, recomputeQuiet, kernelTrackedReader };
+	return { core, notify, obs, episode, batch: batchOps, render, subs, recomputeQuiet, kernelTrackedReader };
 }

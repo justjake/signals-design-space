@@ -7,7 +7,7 @@
  * `rootToOpenRender`-backed maps, slot/batch/root registries) plus the one
  * thing packed state cannot answer — the FULL history behind compaction —
  * which a driver-side mirror retains: per-atom archives fed by the engine's
- * `onCompact` hook and per-atom origins maintained at the ops that move them
+ * `onLogEntryDrop` hook and per-atom origins maintained at the ops that move them
  * (creation, adoption, quiesce). The shadow fold reimplements the
  * model's WriteLogEntry-shaped fold over that full history, replaying the oracle's
  * exported `visible` rule (imported — the one WriteLogEntry-shaped statement of
@@ -41,9 +41,11 @@ export class RefereeMirror {
 	private origins = new Map<AtomInternals, Value>();
 	private archives = new Map<AtomInternals, WriteLogEntry[]>();
 
-	/** Install the compaction feed on a bridge (call once, at driver setup). */
+	/** Install the drop feed on a bridge (call once, at driver setup): every
+	 * entry leaving a write log — sealed-chunk fold or episode drop —
+	 * archives here. */
 	attach(engine: CosignalEngine): void {
-		engine.onCompact = (atom, entry) => this.archiveOf(atom).push(entry);
+		engine.onLogEntryDrop = (atom, entry) => this.archiveOf(atom).push(entry);
 	}
 
 	/** Record an atom's origin (at creation; refreshed by originsFromBase). */

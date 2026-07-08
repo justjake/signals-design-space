@@ -4,13 +4,18 @@
  * slot interning / release / the loud release-anyway backstop, the
  * committed-bits rebuild, the live-batch bookkeeping, the ambient default
  * batch, and retirement — the batch's terminal transition, whose fan
- * (compaction, arena fan-out, durable drains, per-root membership clears,
- * slot release) reaches the other mechanisms through the shared engine core
- * record's late-bound slots. A batch is the group of writes belonging to
- * one UI update; a slot is the batch's position in the 31-entry table while
- * it is live-and-written, so "which batches affect X" fits one 31-bit
- * integer word (a `BatchSlotSet`) — the vocabulary is defined in full at the
- * top of concurrent.ts.
+ * (sealed-chunk folds, arena fan-out, durable drains, per-root membership
+ * clears, slot release, the episode close) reaches the other mechanisms
+ * through the shared engine core record's late-bound slots. A batch is the
+ * group of writes belonging to one UI update; a slot is the batch's
+ * position in the 31-entry table while it is live-and-written, so "which
+ * batches affect X" fits one 31-bit integer word (a `BatchSlotSet`) — the
+ * vocabulary is defined in full at the top of concurrent.ts.
+ *
+ * Batch records are EPISODE-LIFETIME (WriteLog.ts's episode lifecycle): a
+ * retired record persists — write-log entries reference batches by id, so
+ * the record must outlive them — and drops wholesale at the episode close,
+ * never by per-record bookkeeping.
  *
  * `createBatchManager` is a factory in the kernel's own style (index.ts
  * `createKernel`): it closes over its state and returns its operation
@@ -21,8 +26,7 @@
  * uses for its `values`/`fns` side columns). It takes the shared core
  * record for retirement's cross-module fan (every such call reads its
  * late-bound slot at call time); the remaining resident-state edges
- * (the driver/devChecks presence, the write path's last-batch cache) come
- * in through `deps` as a host slice.
+ * (the driver/devChecks presence) come in through `deps` as a host slice.
  */
 
 import { ScheduleError } from './errors.js';
@@ -72,9 +76,6 @@ export type Batch = {
 	lastWriteSeq: Seq;
 	/** Atoms this batch appended to (may hold benign duplicates; deduped at retirement). */
 	atomsTouched: AtomInternals[];
-	/** Un-compacted log entries still on write logs. Log entries reference batches by id,
-	 * so the batch record must outlive them (reclamation gate). */
-	liveLogEntries: number;
 	ambient: boolean;
 };
 
@@ -121,11 +122,8 @@ export type BatchManagerDeps = {
 	 * devChecks switch — openBatch's dev guard (with devChecks armed, opening
 	 * a batch with no driver attached
 	 * throws: the documented host contract is "hosts that open batches must
-	 * retire them"; the guard catches harnesses that forgot to attach) — and
-	 * reclamation's edge into the write path's last-batch cache (clear the
-	 * cache iff it names the reclaimed id; the cache stays resident beside
-	 * the write path that reads it per write). */
-	host: Pick<ConcurrentEngineHost, 'isDriverAttached' | 'isDevChecksEnabled' | 'invalidateBatchCache'>;
+	 * retire them"; the guard catches harnesses that forgot to attach). */
+	host: Pick<ConcurrentEngineHost, 'isDriverAttached' | 'isDevChecksEnabled'>;
 };
 
 export type BatchManager = {
@@ -154,11 +152,6 @@ export type BatchManager = {
 	/** The retirement fold itself (render-commit's retire-at-commit calls it
 	 * inside the commit's own operation frame). */
 	retireInner(batch: Batch): void;
-	/** Mid-episode batch reclamation re-check (render close lapses mask retention). */
-	maybeReclaimBatch(t: Batch): void;
-	/** The compaction→batch edge: a compacted log entry stops pinning its
-	 * batch record (live-entry decrement + reclaim re-check). */
-	releaseLogEntry(batch: BatchId): void;
 };
 
 export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): BatchManager {
@@ -166,7 +159,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	// functions bind once at composition (the codegen doctrine).
 	const roots = core.roots;
 	const rootToOpenRender = core.rootToOpenRender;
-	const { isDriverAttached, isDevChecksEnabled, invalidateBatchCache } = deps.host;
+	const { isDriverAttached, isDevChecksEnabled } = deps.host;
 
 	const idToBatch = new Map<BatchId, Batch>();
 	const slots: BatchSlotMeta[] = [];
@@ -214,7 +207,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			parked, // async-action batches park (cannot retire) until their promise settles
 			deferred: opts?.deferred ?? false, // driver-owned annotation (see Batch.deferred)
 			state: 'live', slot: undefined,
-			retiredSeq: undefined, lastWriteSeq: 0, atomsTouched: [], liveLogEntries: 0,
+			retiredSeq: undefined, lastWriteSeq: 0, atomsTouched: [],
 			ambient: opts?.ambient ?? false,
 		};
 		idToBatch.set(batch.id, batch);
@@ -296,7 +289,8 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		}
 		slot.tenant = undefined;
 		slot.releasePending = false;
-		if (tenant !== undefined) maybeReclaimBatch(tenant); // identity gone; mask/log-entry gates re-check
+		// (The released tenant's record persists: batch records are
+		// episode-lifetime and drop wholesale at the episode close.)
 	}
 
 	function rebuildCommittedBits(r: RootState): void {
@@ -313,41 +307,6 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			if ((p.maskBits >>> slot) & 1) return true;
 		}
 		return false;
-	}
-
-	function isBatchMaskedByOpenRender(id: BatchId): boolean {
-		for (const p of rootToOpenRender.values()) {
-			if (p.maskBatches.has(id)) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Mid-episode batch reclamation: a batch record is reclaimable once it
-	 * is retired, its slot identity is fully released (not deferred), no
-	 * open render's mask names it, and none of its log entries remain
-	 * un-compacted (write logs reference batches by id, so a batch must outlive
-	 * its log entries). Touched bits/lists are untouched — they are
-	 * tenant-agnostic conservative dirt (keep-the-dirt discipline).
-	 */
-	function maybeReclaimBatch(t: Batch): void {
-		if (t.state !== 'retired') return;
-		if (t.slot !== undefined) return; // identity still held (deferred release keeps tenant)
-		if (t.liveLogEntries > 0) return;
-		if (t.id === ambientBatch) return;
-		if (isBatchMaskedByOpenRender(t.id)) return;
-		idToBatch.delete(t.id);
-		invalidateBatchCache(t.id); // the write path's last-batch cache must not outlive the record
-	}
-
-	/** The compaction→batch edge (WriteLog.ts's `releaseLogEntry` dep): a
-	 * compacted log entry stops pinning its batch record. */
-	function releaseLogEntry(batchId: BatchId): void {
-		const batch = idToBatch.get(batchId);
-		if (batch !== undefined) {
-			batch.liveLogEntries--;
-			if (batch.liveLogEntries === 0) maybeReclaimBatch(batch);
-		}
 	}
 
 	// ---------------------------------------------------------- retirement
@@ -392,13 +351,14 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 
 	/**
 	 * Retirement — the batch's writes become permanent history visible to
-	 * every world. The internal order matters: stamp log entries, fold
-	 * (compaction), retirement stamps + committed-advance, durable drains,
-	 * clear per-root rows (the retired clause now subsumes membership), and
-	 * only then release the slot (deferred if an open render's render mask
-	 * still names it). Retirement is disposition-blind: a batch React
-	 * abandoned retires through this same path — whether writes persist
-	 * never depends on who was subscribed (the bindings record the
+	 * every world. The internal order matters: stamp log entries, fold what
+	 * the stamps made foldable (the sealed-chunk valve), retirement stamps +
+	 * committed-advance, durable drains, clear per-root rows (the retired
+	 * clause now subsumes membership), release the slot (deferred if an open
+	 * render's render mask still names it), and close the episode when this
+	 * was the last pending durable work. Retirement is disposition-blind: a
+	 * batch React abandoned retires through this same path — whether writes
+	 * persist never depends on who was subscribed (the bindings record the
 	 * committed/abandoned report diagnostically at its source; see
 	 * TraceHooks.batchDisposition).
 	 */
@@ -418,16 +378,28 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			const n = touchedAtoms[i]!;
 			if (n.retirementStamp === retiredSeq) continue; // duplicate touch entry
 			const log = n.log;
-			const batches = log.batches;
-			const retired = log.retired;
+			const chunks = log.chunks;
 			let hit = false;
-			for (let j = log.start; j < log.n; j++) {
-				if (batches[j] === batch.id && retired[j] === 0) {
-					retired[j] = retiredSeq;
+			for (let c = 0; c < chunks.length; c++) {
+				const ch = chunks[c]!;
+				const batches = ch.batches;
+				const retired = ch.retired;
+				let stamped = 0;
+				for (let j = 0; j < ch.n; j++) {
+					if (batches[j] === batch.id && retired[j] === 0) {
+						retired[j] = retiredSeq;
+						stamped++;
+					}
+				}
+				if (stamped !== 0) {
+					ch.unretired -= stamped;
+					ch.maxRetiredSeq = retiredSeq; // stamps are monotone: plain assignment maintains the max
+					log.unretired -= stamped;
 					hit = true;
 				}
 			}
 			if (hit) {
+				log.maxRetiredSeq = retiredSeq; // whole-log max, same monotonicity
 				// Create the retirement stamp per touched atom (visibility of its
 				// history changed; fingerprints must reflect that).
 				n.retirementStamp = retiredSeq;
@@ -435,12 +407,13 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			}
 		}
 		if (touchedAny) core.advanceCommitted();
-		// Fold/compaction (see WriteLog.ts compactAll for the two-clause predicate).
-		core.compactAll();
+		// The bounded-memory fold valve (see WriteLog.ts foldSealedChunks for
+		// the two-clause predicate) — a size check unless a sealed chunk exists.
+		core.foldSealedChunks();
 		// Committed-truth flip site: retirement — after stamps +
-		// committedAdvance + compaction, before the drain loop (the ordering
-		// joint every flip site shares: mutate → fan → drain), fan the
-		// retiring batch's touched atoms into every committed arena.
+		// committedAdvance + the fold valve, before the drain loop (the
+		// ordering joint every flip site shares: mutate → fan → drain), fan
+		// the retiring batch's touched atoms into every committed arena.
 		if (touchedAny) core.fanAtomsToCommittedArenas(batch.atomsTouched);
 		{
 			const tr = core.trace;
@@ -479,8 +452,14 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			}
 		}
 		if (ambientBatch === batch.id) ambientBatch = undefined;
-		maybeReclaimBatch(batch);
-		core.recomputeQuiet(); // the last retirement (with every write log compacted) re-arms quiet
+		// The last retirement with every render closed ends the episode: the
+		// durable handoff runs and the episode's records drop wholesale
+		// (WriteLog.ts maybeCloseEpisode) — before quiet re-derives below, so
+		// notification/settlement callbacks of this same operation classify
+		// their writes against the post-episode state, exactly as the
+		// reference model's derivation does.
+		core.maybeCloseEpisode();
+		core.recomputeQuiet(); // the last retirement (episode closed) re-arms quiet
 	}
 
 	return {
@@ -501,7 +480,5 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		retire,
 		settleAction,
 		retireInner,
-		maybeReclaimBatch,
-		releaseLogEntry,
 	};
 }

@@ -42,7 +42,7 @@ import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from
 import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { ObservationIndex } from './ObservationIndex.js';
 import type { CaptureFrame, SubscriptionManager } from './SubscriptionManager.js';
-import type { CompactionTable } from './WriteLog.js';
+import type { EpisodeLifecycle } from './WriteLog.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
@@ -133,9 +133,12 @@ export type EngineCore = {
 	/** The batch manager (Batch.ts — the render-close
 	 * orchestration and the resident write path reach it here). */
 	batch: BatchManager;
-	/** Write-log compaction over every candidate atom (WriteLog.ts
-	 * compactAll — retirement's fold step and the render-close pin release). */
-	compactAll: CompactionTable['compactAll'];
+	/** The episode lifecycle's boundary pair (WriteLog.ts): the bounded-
+	 * memory fold valve over sealed write-log chunks (retirement's fold step
+	 * and the render-close pin release) and the quiescence close (durable
+	 * handoff + wholesale episode drop). */
+	foldSealedChunks: EpisodeLifecycle['foldSealedChunks'];
+	maybeCloseEpisode: EpisodeLifecycle['maybeCloseEpisode'];
 
 	// ---- shared mutable state ----
 	/** The trace recorder slot — the engine's only instrumentation output
@@ -279,7 +282,8 @@ export type EngineCore = {
 	// ---- late-bound: RenderPass ----
 	/** The watcher→node resolution (RenderPass.ts — generation-checked). */
 	resolveWatcherInternals(w: Watcher): AnyInternals | undefined;
-	/** The minimum live render pin (compaction's pin clause floor). */
+	/** The minimum live render pin (the sealed-chunk fold valve's pin
+	 * clause floor). */
 	getMinLivePin(): Seq;
 };
 
@@ -322,7 +326,8 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		...deps,
 		// composition-assigned tables
 		batch: LATE,
-		compactAll: LATE,
+		foldSealedChunks: LATE,
+		maybeCloseEpisode: LATE,
 		// shared mutable state
 		trace: undefined,
 		activeWorld: undefined,
@@ -555,22 +560,26 @@ export function createWorld(core: EngineCore): void {
 	/**
 	 * The fold — replay visible entries over base in sequence order with
 	 * stepwise equality (an equal step keeps the old reference). Runs over
-	 * the packed columns.
+	 * the packed chunk columns (chunks are already in sequence order — the
+	 * log appends in order and folds only whole prefixes).
 	 */
 	function foldAtom(atom: AtomInternals, world: World): Value {
-		const log = atom.log;
-		const n = log.n;
+		const chunks = atom.log.chunks;
 		let value = atom.base;
-		const seqs = log.seqs;
-		const retired = log.retired;
-		const slots = log.slots;
-		for (let i = log.start; i < n; i++) {
-			if (!isVisibleAt(i, world, seqs, retired, slots)) continue;
-			const next = applyOp(atom, log.kinds[i]!, log.payloads[i], value);
-			// Equality order: isEqual(current, incoming) — per replayed entry
-			// (the fold re-invokes per entry by design; "once" is scoped to the
-			// write path's acceptance decision).
-			if (!isAtomValueEqual(atom, value, next)) value = next;
+		for (let c = 0; c < chunks.length; c++) {
+			const ch = chunks[c]!;
+			const n = ch.n;
+			const seqs = ch.seqs;
+			const retired = ch.retired;
+			const slots = ch.slots;
+			for (let i = 0; i < n; i++) {
+				if (!isVisibleAt(i, world, seqs, retired, slots)) continue;
+				const next = applyOp(atom, ch.kinds[i]!, ch.payloads[i], value);
+				// Equality order: isEqual(current, incoming) — per replayed entry
+				// (the fold re-invokes per entry by design; "once" is scoped to the
+				// write path's acceptance decision).
+				if (!isAtomValueEqual(atom, value, next)) value = next;
+			}
 		}
 		return value;
 	}
@@ -649,7 +658,7 @@ export function createWorld(core: EngineCore): void {
 
 	/** How this atom compares two values — the one equality rule, one copy for
 	 * every site that asks (fold replay, the write path's drop check and
-	 * eager kernel apply, quiet-mode folds, write log compaction): Object.is when
+	 * eager kernel apply, quiet-mode folds, sealed-chunk folds): Object.is when
 	 * the atom carries the default, otherwise the atom's custom comparator
 	 * under the fold-purity guard (equality callbacks replay per world, so
 	 * signal reads/writes inside them throw — the updater contract). */

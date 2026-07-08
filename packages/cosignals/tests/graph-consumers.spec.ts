@@ -43,7 +43,7 @@
  *  A7 committedBits ≡ committedBatches×slot             | rebuildCommittedBits at retire + internSlot back-fill; battery case 11, scars S19a
  *  A8 render-pass maskBits/includedBits ≡ the model's mask/captured slot sets | the engine's only slot-set form; model-view derives the reference model's Sets from the bits; lockstep render worlds
  *  A9 batch.atomsTouched ⊇ write log batch columns          | retirement stamping via touch lists; quiesce residue InvariantViolation + lockstep retirement visibility
- * A10 batch.liveLogEntries ≡ un-compacted log entries       | T10 (new pin: batch outlives pinned log entries, reclaims after compaction)
+ * A10 batch records are episode-lifetime                    | T10 (re-pinned: a retired batch outlives its log entries and drops with the episode)
  * A11 DIRTY flag ⇒ dirty-list membership (decay + drain seeding stand on it) | the structural validator at every armed epilogue; arena-sa2 decay pins
  * A12 shim previousCells ≡ last committed value        | cosignals-react hooks.spec 'ctx.previous returns the last committed value'
  */
@@ -295,16 +295,16 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 	});
 });
 
-describe('§2 A10 — batch.liveLogEntries gates reclamation against un-compacted log entries', () => {
-	it('T10: a retired batch outlives its pin-blocked log entries and reclaims exactly when they compact', () => {
+describe('§2 A10 — batch records are episode-lifetime (they outlive their log entries by construction)', () => {
+	it('T10: a retired batch record persists while the episode stays open and drops at the episode close', () => {
 		const b = bridge();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
-		const p = b.renderStart('A', []); // live pin below the coming retirement blocks compaction
+		const p = b.renderStart('A', []); // the open render holds the episode open past the retirement
 		b.retire(t.id);
 		expect(b.idToBatch.has(t.id)).toBe(true); // log entries still on the write log reference the batch by id
-		b.renderEnd(p.id, 'discard'); // pin released → compaction folds the log entry → gate opens
+		b.renderEnd(p.id, 'discard'); // last render closed, no live batches → the episode closes and drops its records
 		expect(b.idToBatch.has(t.id)).toBe(false);
 	});
 });

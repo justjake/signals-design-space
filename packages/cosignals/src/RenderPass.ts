@@ -551,7 +551,8 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			if (tr !== undefined) tr.renderDiscarded(render);
 			reevaluateDeferredReleases();
 			reclaimAfterRenderEnd(render);
-			core.recomputeQuiet(); // render closed (and its pin unblocked compaction): quiet may re-arm
+			core.maybeCloseEpisode(); // the last open render just closed: the episode may end here
+			core.recomputeQuiet(); // render closed (episode possibly ended): quiet may re-arm
 			// Boundary rule: the frame close is the deferred flush point for
 			// boundaries that occurred while this root's frame was open (the discard
 			// itself advances nothing; committed truth may already have moved).
@@ -665,7 +666,8 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		}
 		reevaluateDeferredReleases();
 		reclaimAfterRenderEnd(render);
-		core.recomputeQuiet(); // render closed (and its pin unblocked compaction): quiet may re-arm
+		core.maybeCloseEpisode(); // the last open render just closed: the episode may end here
+		core.recomputeQuiet(); // render closed (episode possibly ended): quiet may re-arm
 		// Boundary rule: one committed-subscription re-check per commit
 		// operation, at the boundary value — a render locking in two batches
 		// re-checks once, not per batch.
@@ -676,10 +678,12 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	}
 
 	/**
-	 * Mid-episode reclamation, render-end site: the ended render record drops
+	 * Render-end reclamation: the ended render record drops
 	 * (its memos and mask mappings die with it — nothing from a dead render
-	 * can validate later), and its mask batches re-check reclaimability
-	 * (the mask retention just lapsed).
+	 * can validate later). Render-attempt state is episode-lifetime at most:
+	 * the record and its arena go here, at the attempt's own close. (Batch
+	 * records the mask retained persist — they are episode-lifetime and drop
+	 * wholesale at the episode close.)
 	 */
 	function reclaimAfterRenderEnd(p: RenderPass): void {
 		idToRenderPass.delete(p.id);
@@ -690,10 +694,6 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			core.releaseArena(p.arena);
 			p.arena = undefined;
 		}
-		for (const tid of p.maskBatches) {
-			const t = idToBatch.get(tid);
-			if (t !== undefined) batch.maybeReclaimBatch(t);
-		}
 	}
 
 	/** Deferred releases re-evaluate at every render end, commit and discard alike. */
@@ -702,8 +702,9 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			if (!s.releasePending) continue;
 			if (!batch.isSlotRetainedByOpenMask(s.id)) batch.releaseSlot(s);
 		}
-		// A render ending releases its pin, which can unblock pin-gated compaction.
-		core.compactAll();
+		// A render ending releases its pin, which can unlock sealed-chunk
+		// folds (the bounded-memory valve's pin clause).
+		core.foldSealedChunks();
 	}
 
 	/**

@@ -307,19 +307,114 @@ must be able to continue from it alone.
    - Suites after re-apply: cosignals 360 green (incl. regen-diff), react
      72/72, conformance 179/179, oracle 82 green.
 
+## Done (continued 5)
+
+10. **Episodes (priority 4) — the episode lifecycle replaces WriteLog
+    compaction** (this run's one commit):
+    - **WriteLog reshaped into the chunked episode tape** (WriteLog.ts):
+      entries live in fixed-size `TapeChunk`s (TAPE_CHUNK_ENTRIES = 1024,
+      power of two; every non-tail chunk is FULL/sealed by construction, so
+      the write path detects the seal transition with one mask). No window,
+      no rebase, no per-entry fix-ups: a dropped chunk releases its packed
+      arrays whole. Log-level `length`/`unretired`/`maxRetiredSeq` fields;
+      per-chunk `n`/`unretired`/`maxRetiredSeq` (retirement stamping
+      maintains all of them; stamps are monotone so plain assignment
+      maintains the maxes, recomputed only when a fold drops a chunk).
+    - **createCompaction → createEpisodeLifecycle** (same factory style):
+      `holds` (touched atoms with live tapes — membership added by the write
+      path at first entry, EXACTLY the old uncompactedAtoms shape) +
+      `sealedLogs` (fold-valve candidates, added at the seal transition) +
+      `foldSealedChunks()` (the bounded-memory valve: a sealed PREFIX chunk
+      all-retired and ≤ every live render pin folds into base per entry —
+      replay fidelity — and drops whole; runs at retirement and render end,
+      one size check when no sealed chunk exists, i.e. every normal
+      episode) + `maybeCloseEpisode()` (the close: at liveBatchCount 0 ∧
+      openRenders 0, per-holds-atom DURABLE HANDOFF — base ← kernel newest
+      BY IDENTITY (untracked read), baseSeq ← tape's newest seq, tape reset
+      — then holds/sealedLogs clear, retired batch records drop wholesale
+      (+ per-id write-path batch-cache invalidation), then
+      reclaimRetryAllSkipped(), the membership row's wholesale retry
+      trigger).
+    - **Close placement (deviation from the plan's letter, documented)**:
+      the plan says the drop happens "after operation/notification/
+      settlement queues drain"; the close actually runs INSIDE the
+      transition operation (retireInner tail — after slot release + ambient
+      clear, before recomputeQuiet; renderEnd both arms — after
+      reclaimAfterRenderEnd, before recomputeQuiet). Reason: quiet must
+      re-arm exactly where the reference model's derivation does, so
+      notification/settlement callbacks of the same operation classify
+      their writes identically (model parity is observable through
+      quiet-write vs write events). Verified value-transparent to queued
+      work: notifications hold object refs (never id lookups), settlement
+      folds read post-handoff state that is fold-identical by the
+      eager-apply invariant.
+    - **The retired-history drop arm** (writeInBatchInner — REQUIRED for
+      lockstep; the fuzz caught its absence at seed 5/step 43): the model's
+      eager boundary folds empty its log, re-arming its empty-log drop
+      check; the engine's equivalent one-value state is `log.unretired ===
+      0 && log.maxRetiredSeq <= getMinLivePin()` (provably exactly the
+      states where the model's log is empty — argued both directions in the
+      arm's comment), comparing against kernel newest (untracked read; the
+      one value every world folds to). Same acceptance counts as the
+      empty-log cell; pinned in the rewritten matrix.
+    - **THE ONE SANCTIONED SEMANTIC CHANGE executed**: equality-
+      semantics.spec.ts rewritten — retirement's per-entry compaction
+      equality re-invocation REPEALED (the close adopts newest by identity:
+      comparator invoked ZERO times, pinned); world folds still re-invoke
+      per entry (unchanged, pinned); NEW pins for the retired-history drop
+      cell and for the sealed-chunk valve (parked action holds the episode
+      open across 1224 writes; the valve replays exactly the 1024 sealed
+      entries in kernel order, the close then drops the tail with zero
+      invocations). Acceptance-decision semantics untouched.
+    - **Batch bookkeeping is episode-lifetime**: Batch.liveLogEntries,
+      releaseLogEntry, maybeReclaimBatch, isBatchMaskedByOpenRender DELETED
+      (records persist to the close; the never-quiescent leak-audit churn
+      still bounds because each iteration's close drops them).
+      renderEnd's mask-lapse reclaim loop deleted with it. quiesce()'s
+      retired-batch/ended-render sweeps + cache reset removed (dead by
+      construction — the close owns them); its residue check now reads
+      `episodeHolds`.
+    - **Reclamation**: the write-log guard row is now per-record episode
+      membership (`episodeHolds.has(node)`); retry triggers = the close's
+      wholesale sweep + the per-atom edge trigger when a mid-episode chunk
+      fold empties a tape.
+    - **onCompact → onLogEntryDrop** (engine surface + host slice
+      getOnLogEntryDrop): fires per entry leaving the tape (chunk folds,
+      episode drop); feeds the referee mirror (model-view retention shadow
+      fold) and cosignals-react's test harness unchanged in role.
+    - **World.ts foldAtom** restructured over chunks: measured 170 bytes vs
+      the 190 budget — NO re-pin needed. EngineCore: `compactAll` slot →
+      `foldSealedChunks` + `maybeCloseEpisode`.
+    - Boundary revalidation table verified UNCHANGED at all five rows
+      (per-root commit → that root; retirement/settlement → all roots even
+      write-free; quiet folds → all roots; open frames defer to close;
+      effect writes classify by pending durable work —
+      effect-write-classify green).
+    - Test re-points (documented; assertions preserved unless noted):
+      graph-consumers A10/T10 (batch records episode-lifetime — same
+      asserts), reclaim.spec WriteLog row (membership wording +
+      `log.length`), leak-audit churn (`log.length`/`chunks.length`),
+      helpers.ts + model-view.ts (mirror feed rename), cosignals-react
+      tests/helpers.tsx (rename).
+    - **Known accepted memory shape**: under a HELD-OPEN episode, retired
+      batch records accumulate until the close (episode-lifetime by plan);
+      the hard entry budget with backpressure stays the documented fallback
+      if the lead's A/B convicts it.
+
 ## In progress / exact next actions
 
-**Priority 4 — episodes (batches/log/handoff/drop).** Nothing started.
-The write/action records, batch bookkeeping, and render-attempt worlds
-become episode-lifetime JS-heap state dropped wholesale at quiescence;
-WriteLog compaction is replaced by the episode lifecycle (sealed chunks
-folding into base whole; durable handoff at quiescence; the ONE sanctioned
-semantic change is the equality-count pin rewrite in
-equality-semantics.spec.ts). Read WriteLog.ts + Batch.ts +
-concurrent.ts's log/batch sections + settlement.ts first; the plan's
-"Episode lifecycle replaces compaction" section is normative, including
-the boundary lists and the reclamation membership row
-(episode.holds).
+**Priority 5 — observers/watchers/subscriptions as arena records.** Nothing
+started. The extras column joins the schema (tools/schema.ts, layoutVersion
+bump); subscription dependency = {lastValue, lastValidatedAt} rides the
+RESERVED link clock slots (the world-arena clock column's link slots,
+reserved since priority 3); watchers keep lastRenderedValue; baselines
+advance only after committed render / urgent correction / completed
+recapture; corrective delivery + mount fixups keep ALL causal metadata
+(clocks only gate re-comparison — the bump table's reader half finally
+lands). Watcher/Subscription classes + managers die. Read RenderPass.ts
+(Watcher + snapshots), SubscriptionManager.ts, ObservationIndex.ts, and
+alt-b's observer sections first. The V-urgent-committed-branch pin and the
+oracle lockstep remain the contract.
 
 ## Environment notes for successors
 
@@ -354,3 +449,17 @@ the boundary lists and the reclamation membership row
   Tree at run end: flattening @ 0e741c3, only pnpm-lock.yaml uncommitted,
   cosignals 360 green / react 72 / conformance 179×2 / oracle 82.
   Next action: priority 3 step 1 in "In progress / exact next actions".
+- Run 4 (second builder, priority 4 — episodes): one commit (episodes; see
+  Done continued 5). Suites at run end: cosignals 31 files / 362 passed /
+  1 skipped (the 2 new equality pins joined), oracle 82 passed,
+  cosignals-react 72/72, conformance FRAMEWORK=cosignals 179/179 +
+  cosignals-concurrent 179/179 (run from THIS worktree's harness — its
+  node_modules/cosignals symlinks this worktree's package), typecheck clean
+  for cosignals + cosignals-react + cosignals-oracle. WORKTREE-ONLY
+  environment artifact (not flattening-caused, main-repo harness
+  typechecks clean): `pnpm -C harness typecheck` fails on bench/child.ts
+  TS7006 because the untracked milomg-reactivity-benchmark dir does not
+  propagate into worktrees (never-touch; ignore). Bench child measured:
+  foldAtom 170 (budget 190 — no re-pin). NOT run: daishi verifier, perf
+  benches (lead owns). Next action: priority 5 in "In progress / exact
+  next actions".
