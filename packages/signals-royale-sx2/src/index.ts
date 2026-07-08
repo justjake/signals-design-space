@@ -137,7 +137,10 @@ class Tracer {
       this.overflow++;
     }
     this.log.push(event);
-    if (target !== undefined && event.kind === "component delivery") {
+    if (
+      target !== undefined &&
+      (event.kind === "component delivery" || event.kind === "effect run")
+    ) {
       this.deliveries.set(target, event.id);
     }
   }
@@ -810,11 +813,11 @@ class ReactiveEffect extends Observer {
   private hasRun = false;
   private cause?: number;
   private readonly children = new Set<ReactiveEffect>();
+  traceTarget?: object;
 
   constructor(fn: () => Cleanup) {
     super();
     this.fn = fn;
-    this.flush();
   }
 
   get observesSources(): boolean {
@@ -845,7 +848,12 @@ class ReactiveEffect extends Observer {
       const parentScope = activeScope;
       activeScope = this.children;
       try {
-        emitTrace("effect run", this.cause, undefined, this);
+        emitTrace(
+          "effect run",
+          this.cause,
+          undefined,
+          this.traceTarget ?? this,
+        );
         const result = this.evaluate(this.fn);
         if (typeof result === "function") this.cleanup = result;
         this.hasRun = true;
@@ -885,9 +893,12 @@ export function computed<T>(
 
 export function effect(fn: () => Cleanup): () => void {
   const reactiveEffect = new ReactiveEffect(fn);
+  const dispose = () => reactiveEffect.dispose();
+  reactiveEffect.traceTarget = dispose;
+  reactiveEffect.flush();
   activeScope?.add(reactiveEffect);
   flushEffects();
-  return () => reactiveEffect.dispose();
+  return dispose;
 }
 
 export function effectScope(fn: () => void): () => void {

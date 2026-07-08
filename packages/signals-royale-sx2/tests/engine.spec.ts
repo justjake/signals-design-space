@@ -8,6 +8,7 @@ import {
   isPending,
   refresh,
   retireBatch,
+  trace,
   useThenable,
   withWorld,
   withWriteBatch,
@@ -170,4 +171,19 @@ test("refresh serves stale while a replacement settles", async () => {
   await Promise.resolve();
   await Promise.resolve();
   expect(value.get()).toBe(2);
+});
+
+test("trace explains an effect run back to its write", () => {
+  const value = atom(0);
+  const tracer = trace();
+  const dispose = effect(() => {
+    value.get();
+  });
+  value.set(1);
+  expect(tracer.whyLastDelivery(dispose)).toEqual([
+    "effect run",
+    "write [batch 0]",
+  ]);
+  dispose();
+  tracer.stop();
 });
