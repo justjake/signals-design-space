@@ -23,6 +23,8 @@ export {
 	setExternalObserverCount,
 	setWriteGuard,
 	pinCount as pinCountForTest,
+	traceEvent,
+	setCurrentCause,
 	UNSET,
 	type AtomOptions,
 	type Epoch,

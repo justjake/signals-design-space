@@ -63,6 +63,14 @@ export function setCurrentCause(c: TraceId | undefined): TraceId | undefined {
 	currentCause = c;
 	return prev;
 }
+/** Emit a trace event chained to the ambient cause (no-op when detached). */
+export function traceEvent(
+	kind: string,
+	detail?: Record<string, unknown>,
+	cause: TraceId | undefined = currentCause,
+): TraceId | undefined {
+	return emitTrace !== null ? emitTrace(kind, cause, detail) : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Dependency recording
