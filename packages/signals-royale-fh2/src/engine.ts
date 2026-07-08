@@ -21,13 +21,11 @@ import {
 	type Equality,
 	type ReactiveNode,
 	NodeKind,
-	batch as graphBatch,
 	canonicalAtomValue,
 	collectWatchers,
 	createEffect,
 	createScope,
 	disposeEffect,
-	getActiveSub,
 	graphQuiescent,
 	invalidateComputed,
 	readAtom,
@@ -39,7 +37,7 @@ import {
 	worldHooks,
 	writeAtom,
 } from './graph';
-import { ambientCause, emit, tracing, withCause } from './tracer';
+import { emit, tracing, withCause } from './tracer';
 
 // ---------------------------------------------------------------------------
 // Public handle types (opaque brands over internal records).
@@ -127,8 +125,6 @@ interface ComputedRec extends ComputedNode {
 	lastSettled: unknown;
 	hasSettled: boolean;
 	canonicalEntry: AsyncEntry | undefined;
-	/** Set by settlement so the triggered re-evaluation keeps its slots. */
-	reuseEntry: AsyncEntry | undefined;
 	/** In-flight refresh: the stale value keeps serving until this settles. */
 	refreshing: AsyncEntry | undefined;
 }
@@ -697,7 +693,6 @@ export function computed<T>(fn: (use: Use) => T, options?: ComputedOptions<T>): 
 		lastSettled: undefined,
 		hasSettled: false,
 		canonicalEntry: undefined,
-		reuseEntry: undefined,
 		refreshing: undefined,
 	};
 	return rec as unknown as Computed<T>;
