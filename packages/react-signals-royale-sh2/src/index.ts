@@ -9,6 +9,7 @@ import {
   commitDrafts,
   committed,
   computed,
+  causeFor,
   createTrace,
   disposeCell,
   effect,
@@ -18,12 +19,15 @@ import {
   isPending,
   latest,
   leaveRenderWorld,
+  pendingBatch,
   read,
   refresh,
   revision,
   reset,
+  renderIncludesDraft,
   serializeAtomState,
   set,
+  staleValue,
   subscribe,
   untracked,
   update,
@@ -38,6 +42,7 @@ interface ForkReact extends Omit<typeof React, 'startTransition'> {
   startTransition(scope: () => void): void;
   unstable_registerSignalRuntime?(runtime: SignalRuntime): () => void;
   unstable_runWithSignalBatch?<T>(batch: number, scope: () => T): T;
+  unstable_runInSignalBatch?<T>(batch: number, scope: () => T): T;
 }
 
 interface SignalRuntime {
@@ -67,7 +72,7 @@ export interface RegistrationHandle { errors: unknown[]; dispose(): void }
 
 export function register(): RegistrationHandle {
   if (!registered) {
-    if (Fork.unstable_registerSignalRuntime === undefined) {
+    if (Fork.unstable_registerSignalRuntime === undefined || Fork.unstable_runInSignalBatch === undefined) {
       throw new Error('This package requires the signals-royale-sh2 React fork.');
     }
     Fork.unstable_registerSignalRuntime(runtime);
@@ -85,10 +90,20 @@ export function useValue<T>(cell: Cell<T>): T {
   React.useLayoutEffect(() => {
     const stop = subscribe(cell, () => deliver(value => value + 1));
     if (revision(cell) !== revisionRef.current) deliver(value => value + 1);
+    const batch = pendingBatch(cell);
+    if (batch !== 0) Fork.unstable_runInSignalBatch!(batch, () => deliver(value => value + 1));
     return stop;
   }, [cell]);
-  emit('component delivery', cell.id, undefined);
-  return read(cell);
+  emit('component delivery', cell.id, causeFor(cell.id));
+  try {
+    return read(cell);
+  } catch (error) {
+    const stale = staleValue(cell);
+    if (
+      !renderIncludesDraft() && stale.available && error !== null && typeof error === 'object' && 'then' in error
+    ) return stale.value as T;
+    throw error;
+  }
 }
 
 export function useComputed<T>(calculate: () => T, dependencies: unknown[]): T {
@@ -104,7 +119,12 @@ export function useSignalEffect(calculate: () => void | (() => void)): void {
 export function useIsPending(cell: Cell): boolean {
   register();
   const [, deliver] = React.useState(0);
-  React.useLayoutEffect(() => subscribe(cell, () => deliver(value => value + 1)), [cell]);
+  React.useLayoutEffect(() => {
+    const stop = subscribe(cell, () => deliver(value => value + 1));
+    const batch = pendingBatch(cell);
+    if (batch !== 0) Fork.unstable_runInSignalBatch!(batch, () => deliver(value => value + 1));
+    return stop;
+  }, [cell]);
   return isPending(cell);
 }
 

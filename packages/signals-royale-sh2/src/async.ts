@@ -1,4 +1,4 @@
-import { computed, refresh, type Cell, type ComputedOptions } from './core';
+import { computed, refresh, resolveComputed, type Cell, type ComputedOptions } from './core';
 import { emit } from './trace';
 
 interface PromiseRecord {
@@ -23,8 +23,8 @@ export function asyncComputed<T>(
         record = { status: 0 };
         records.set(thenable as object, record);
         thenable.then(
-          value => { record!.status = 1; record!.value = value; emit('suspense settlement', cell.id); refresh(cell); },
-          error => { record!.status = 2; record!.value = error; emit('suspense settlement', cell.id); refresh(cell); },
+          value => { record!.status = 1; record!.value = value; },
+          error => { record!.status = 2; record!.value = error; },
         );
       }
       if (record.status === 1) return record.value as U;
@@ -40,7 +40,13 @@ export function asyncComputed<T>(
       for (let i = 0; same && i < pending.length; i++) same = pending[i] === lastPending[i];
       if (!same) {
         lastPending = pending;
-        gate = Promise.all(pending.map(value => Promise.resolve(value))).then(() => undefined);
+        gate = Promise.all(pending.map(value => Promise.resolve(value))).then(
+          resolved => {
+            if (pending.length === 1 && result === undefined) resolveComputed(cell, resolved[0] as T);
+            else { emit('suspense settlement', cell.id); refresh(cell); }
+          },
+          () => { emit('suspense settlement', cell.id); refresh(cell); },
+        );
       }
       throw gate!;
     }

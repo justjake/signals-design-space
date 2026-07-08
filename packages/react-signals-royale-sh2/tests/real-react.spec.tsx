@@ -1,15 +1,19 @@
 /** @vitest-environment jsdom */
-import React, { StrictMode, useLayoutEffect, useState } from 'react';
+import React, { StrictMode, Suspense, useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   atom,
+  asyncComputed,
   batch,
+  initializeAtomState,
   onDomMutation,
   read,
   resetForTest,
   set,
+  serializeAtomState,
   startTransitionWrite,
+  trace,
   update,
   useIsPending,
   useValue,
@@ -139,5 +143,190 @@ describe('real React protocol', () => {
     await React.act(() => root.render(<App />));
     expect(initialize).toHaveBeenCalledOnce();
     expect(read(value)).toBe(5);
+  });
+
+  test('Suspense first load and stale refetch use stable thenables', async () => {
+    let resolveFirst!: (value: string) => void;
+    const first = new Promise<string>(resolve => { resolveFirst = resolve; });
+    const request = atom<Promise<string>>(first);
+    const resource = asyncComputed(use => use(read(request)));
+    function App() {
+      const value = useValue(resource);
+      return <span>{value}:{useIsPending(resource) ? 'pending' : 'idle'}</span>;
+    }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    await React.act(() => root.render(<Suspense fallback="loading"><App /></Suspense>));
+    expect(container.textContent).toBe('loading');
+    await React.act(async () => { resolveFirst('first'); await first; });
+    expect(container.textContent).toBe('first:idle');
+
+    let resolveSecond!: (value: string) => void;
+    const second = new Promise<string>(resolve => { resolveSecond = resolve; });
+    await React.act(() => set(request, second));
+    expect(container.textContent).toBe('first:pending');
+    await React.act(async () => { resolveSecond('second'); await second; });
+    expect(container.textContent).toBe('second:idle');
+  });
+
+  test('one transition advances two roots consistently', async () => {
+    const value = atom(0);
+    function App() { return <>{useValue(value)}</>; }
+    const left = document.createElement('div');
+    const right = document.createElement('div');
+    const leftRoot = createRoot(left);
+    const rightRoot = createRoot(right);
+    roots.push(leftRoot, rightRoot);
+    await React.act(() => { leftRoot.render(<App />); rightRoot.render(<App />); });
+    await React.act(() => startTransitionWrite(() => set(value, 1)));
+    expect([left.textContent, right.textContent]).toEqual(['1', '1']);
+  });
+
+  test('a subscriber mounted mid-transition is pinned to the live batch', async () => {
+    const value = atom(0);
+    let setSlow!: (value: boolean) => void;
+    let resolve!: () => void;
+    let ready = false;
+    const gate = new Promise<void>(done => { resolve = () => { ready = true; done(); }; });
+    function HoldingRoot() {
+      const current = useValue(value);
+      const [slow, changeSlow] = useState(false);
+      setSlow = changeSlow;
+      if (slow && !ready) throw gate;
+      return <>{current}</>;
+    }
+    const commits: number[] = [];
+    function LateReader() {
+      const current = useValue(value);
+      useLayoutEffect(() => { commits.push(current); });
+      return <>{current}</>;
+    }
+    const first = document.createElement('div');
+    const second = document.createElement('div');
+    const firstRoot = createRoot(first);
+    const secondRoot = createRoot(second);
+    roots.push(firstRoot, secondRoot);
+    await React.act(() => firstRoot.render(<HoldingRoot />));
+    React.act(() => startTransitionWrite(() => { set(value, 1); setSlow(true); }));
+    await React.act(() => secondRoot.render(<LateReader />));
+    expect(commits).toEqual([0, 1]);
+    await React.act(async () => { resolve(); await gate; });
+    expect([first.textContent, second.textContent]).toEqual(['1', '1']);
+  });
+
+  test('a suspending subscriber mounted mid-transition keeps its settled screen', async () => {
+    const request = atom<Promise<string>>(Promise.resolve('old'));
+    const resource = asyncComputed(use => use(read(request)));
+    function Reader() { return <>{useValue(resource)}</>; }
+    const first = document.createElement('div');
+    const second = document.createElement('div');
+    const firstRoot = createRoot(first);
+    const secondRoot = createRoot(second);
+    roots.push(firstRoot, secondRoot);
+    await React.act(async () => { firstRoot.render(<Suspense fallback="loading"><Reader /></Suspense>); });
+    expect(first.textContent).toBe('old');
+    let resolve!: (value: string) => void;
+    const pending = new Promise<string>(done => { resolve = done; });
+    React.act(() => startTransitionWrite(() => set(request, pending)));
+    await React.act(() => secondRoot.render(<Suspense fallback="loading"><Reader /></Suspense>));
+    expect([first.textContent, second.textContent]).toEqual(['old', 'old']);
+    await React.act(async () => { resolve('new'); await pending; });
+    expect([first.textContent, second.textContent]).toEqual(['new', 'new']);
+  });
+
+  test('flushSync leaves a suspended transition out of its commit', async () => {
+    const value = atom(1);
+    let setSlow!: (value: boolean) => void;
+    let resolve!: () => void;
+    let ready = false;
+    const gate = new Promise<void>(done => { resolve = () => { ready = true; done(); }; });
+    function App() {
+      const current = useValue(value);
+      const [slow, changeSlow] = useState(false);
+      setSlow = changeSlow;
+      if (slow && !ready) throw gate;
+      return <>{current}</>;
+    }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    await React.act(() => root.render(<App />));
+    React.act(() => startTransitionWrite(() => { set(value, 2); setSlow(true); }));
+    const { flushSync } = await import('react-dom');
+    flushSync(() => set(value, 3));
+    expect(container.textContent).toBe('3');
+    await React.act(async () => { resolve(); await gate; });
+    expect(container.textContent).toBe('2');
+  });
+
+  test('unmounted subscribers receive no component deliveries', async () => {
+    const value = atom(0);
+    const log = trace();
+    function App() { return <>{useValue(value)}</>; }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    await React.act(() => root.render(<App />));
+    await React.act(() => root.render(null));
+    const deliveries = log.events().filter(event => event.kind === 'component delivery').length;
+    await React.act(() => set(value, 1));
+    expect(log.events().filter(event => event.kind === 'component delivery')).toHaveLength(deliveries);
+    log.stop();
+  });
+
+  test('causality links a delivery to its write', async () => {
+    const value = atom(0);
+    const log = trace();
+    function App() { return <>{useValue(value)}</>; }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    await React.act(() => root.render(<App />));
+    await React.act(() => set(value, 1));
+    const explanation = log.whyLastDelivery(value);
+    expect(explanation.some(line => line.includes('component delivery'))).toBe(true);
+    expect(explanation.some(line => line.includes('write'))).toBe(true);
+    log.stop();
+  });
+
+  test('writes during render fail loudly', async () => {
+    const value = atom(0);
+    class Boundary extends React.Component<React.PropsWithChildren, { failed: boolean }> {
+      state = { failed: false };
+      static getDerivedStateFromError() { return { failed: true }; }
+      render() { return this.state.failed ? 'failed' : this.props.children; }
+    }
+    function Bad() { set(value, 1); return null; }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await React.act(() => root.render(<Boundary><Bad /></Boundary>));
+    expect(container.textContent).toBe('failed');
+    expect(consoleError.mock.calls.flat().join(' ')).toContain('Signals cannot be written during render');
+    consoleError.mockRestore();
+  });
+
+  test('SSR state installation matches the first client commit', async () => {
+    const server = atom(9, { key: 'count' });
+    const json = serializeAtomState([server]);
+    resetForTest();
+    const initialize = vi.fn(() => 0);
+    const client = atom(initialize, { key: 'count' });
+    initializeAtomState(json, [client]);
+    const commits = vi.fn();
+    function App() {
+      const value = useValue(client);
+      useLayoutEffect(commits);
+      return <>{value}</>;
+    }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    roots.push(root);
+    await React.act(() => root.render(<App />));
+    expect(container.textContent).toBe('9');
+    expect(initialize).not.toHaveBeenCalled();
+    expect(commits).toHaveBeenCalledOnce();
   });
 });

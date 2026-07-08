@@ -37,6 +37,7 @@ let versions = new Uint32Array(capacity);
 let invalidationMarks = new Uint32Array(capacity);
 let deliveryVersions = new Uint32Array(capacity);
 let generations = new Uint32Array(capacity);
+let settled = new Uint8Array(capacity);
 let nextGeneration = 1;
 let invalidationEpoch = 0;
 let observers: Uint32Array[] = [];
@@ -75,6 +76,7 @@ let renderDrafts: number[] = [];
 let inRenderWorld = false;
 let renderCache = new Map<CellId, unknown>();
 let rootViews = new WeakMap<object, Map<CellId, unknown>>();
+let commitCause: number | undefined;
 const finalizer = new FinalizationRegistry<{ id: CellId; generation: number }>(held => {
   if (generations[held.id] === held.generation) releaseCell(held.id);
 });
@@ -88,6 +90,7 @@ function grow(): void {
   const nextInvalidationMarks = new Uint32Array(capacity);
   const nextDeliveryVersions = new Uint32Array(capacity);
   const nextGenerations = new Uint32Array(capacity);
+  const nextSettled = new Uint8Array(capacity);
   const nextObserved = new Uint32Array(capacity);
   const nextHasErrors = new Uint8Array(capacity);
   nextKinds.set(kinds);
@@ -96,6 +99,7 @@ function grow(): void {
   nextInvalidationMarks.set(invalidationMarks);
   nextDeliveryVersions.set(deliveryVersions);
   nextGenerations.set(generations);
+  nextSettled.set(settled);
   nextObserved.set(observed);
   nextHasErrors.set(hasErrors);
   kinds = nextKinds;
@@ -104,6 +108,7 @@ function grow(): void {
   invalidationMarks = nextInvalidationMarks;
   deliveryVersions = nextDeliveryVersions;
   generations = nextGenerations;
+  settled = nextSettled;
   observed = nextObserved;
   hasErrors = nextHasErrors;
   const words = capacity >>> 5;
@@ -136,7 +141,7 @@ function createCell(kind: number): CellId {
 
 function releaseCell(id: CellId): void {
   if (kinds[id] === 0) return;
-  clearDependencies(id);
+  clearDependencies(id, true);
   for (const child of children[id]) disposeEffect(child, false);
   kinds[id] = 0;
   flags[id] = 0;
@@ -251,7 +256,7 @@ function hasStaleDependency(id: CellId): boolean {
   return false;
 }
 
-function clearDependencies(id: CellId): void {
+function clearDependencies(id: CellId, orphan = false): void {
   const mask = dependencies[id];
   for (let word = 0; word < mask.length; word++) {
     let bits = mask[word];
@@ -259,7 +264,11 @@ function clearDependencies(id: CellId): void {
       const bit = bits & -bits;
       const source = (word << 5) + (31 - Math.clz32(bit));
       observers[source][id >>> 5] &= ~(1 << (id & 31));
-      if (--observed[source] === 0 && lifetimeStarts[source] !== undefined) {
+      if (--observed[source] === 0 && kinds[source] === COMPUTED && orphan) {
+        flags[source] |= DIRTY;
+        clearDependencies(source, true);
+      }
+      if (observed[source] === 0 && lifetimeStarts[source] !== undefined) {
         queueMicrotask(() => {
           if (observed[source] === 0) {
             lifetimeStops[source]?.();
@@ -310,6 +319,7 @@ function evaluate(id: CellId): unknown {
       values[id] = next;
       versions[id]++;
     }
+    settled[id] = 1;
     return values[id];
   } finally {
     activeObserver = previousObserver;
@@ -378,7 +388,7 @@ function runEffect(id: CellId): void {
 function disposeEffect(id: CellId, rethrow: boolean): void {
   if ((flags[id] & ACTIVE) === 0) return;
   flags[id] &= ~(ACTIVE | DIRTY | MAYBE_DIRTY);
-  clearDependencies(id);
+  clearDependencies(id, true);
   for (const child of children[id]) disposeEffect(child, rethrow);
   children[id] = [];
   const cleanup = cleanups[id];
@@ -452,7 +462,7 @@ export function set<T>(cell: Cell<T>, value: T): void {
   if (writesForbidden !== 0) throw new Error('Writes are forbidden in this context');
   const id = cell.id;
   if (kinds[id] !== SIGNAL) throw new Error('Only atoms are writable');
-  if (renderDrafts.length !== 0) throw new Error('Signals cannot be written during render');
+  if (inRenderWorld) throw new Error('Signals cannot be written during render');
   materialize(id);
   if (writeDraft !== 0) {
     const draft = drafts.get(writeDraft);
@@ -475,7 +485,7 @@ export function set<T>(cell: Cell<T>, value: T): void {
   }
   values[id] = value;
   versions[id]++;
-  emit('write', id, undefined, labels[id]);
+  emit('write', id, commitCause, labels[id]);
   invalidate(id);
   notifyListeners(id);
 }
@@ -591,6 +601,10 @@ export function subscribe(cell: Cell, listener: () => void): () => void {
         }
       });
     }
+    if (observed[id] === 0 && kinds[id] === COMPUTED) {
+      flags[id] |= DIRTY;
+      clearDependencies(id, true);
+    }
   };
 }
 
@@ -668,6 +682,7 @@ export function commitDrafts(container: object, batches: number[]): void {
   for (const batch of batches) {
     const draft = drafts.get(batch);
     if (draft === undefined) continue;
+    commitCause = emit('batch retire', batch, causeFor(batch));
     for (const [id, actions] of draft.actions) {
       let value = values[id];
       for (const action of actions) {
@@ -675,15 +690,23 @@ export function commitDrafts(container: object, batches: number[]): void {
       }
       set({ id }, value);
     }
+    commitCause = undefined;
     drafts.delete(batch);
-    emit('batch retire', batch, causeFor(batch));
     for (const id of draft.actions.keys()) notifyListeners(id);
   }
 }
 
 export function latest<T>(cell: Cell<T>): T {
   if (inRenderWorld) return read(cell);
-  if (kinds[cell.id] !== SIGNAL) return read(cell);
+  if (kinds[cell.id] !== SIGNAL) {
+    try { return read(cell); } catch (error) {
+      if (error !== null && typeof error === 'object' && 'then' in error && settled[cell.id] !== 0) {
+        return values[cell.id] as T;
+      }
+      if (error !== null && typeof error === 'object' && 'then' in error) return undefined as T;
+      throw error;
+    }
+  }
   materialize(cell.id);
   return valueInDrafts(cell.id, [...drafts.keys()]) as T;
 }
@@ -697,6 +720,8 @@ export function committed<T>(cell: Cell<T>, container?: object): T {
 }
 
 export function isPending(cell: Cell): boolean {
+  const error = errors[cell.id];
+  if (hasErrors[cell.id] !== 0 && error !== null && typeof error === 'object' && 'then' in error) return true;
   for (const [id, draft] of drafts) {
     if (inRenderWorld && renderDrafts.includes(id)) continue;
     if (draft.actions.has(cell.id) || kinds[cell.id] === COMPUTED && draft.actions.size !== 0) return true;
@@ -704,11 +729,38 @@ export function isPending(cell: Cell): boolean {
   return false;
 }
 
+export function pendingBatch(cell: Cell): number {
+  for (const [id, draft] of drafts) {
+    if (draft.actions.has(cell.id) || kinds[cell.id] === COMPUTED && draft.actions.size !== 0) return id;
+  }
+  return 0;
+}
+
+export function staleValue<T>(cell: Cell<T>): { available: boolean; value: T | undefined } {
+  return { available: settled[cell.id] !== 0, value: values[cell.id] as T | undefined };
+}
+
+export function renderIncludesDraft(): boolean {
+  return inRenderWorld && renderDrafts.length !== 0;
+}
+
 export function refresh(cell: Cell): void {
   const id = cell.id;
   if (kinds[id] !== COMPUTED) return;
   flags[id] |= DIRTY;
   invalidate(id);
+  notifyListeners(id);
+}
+
+export function resolveComputed<T>(cell: Cell<T>, value: T): void {
+  const id = cell.id;
+  values[id] = value;
+  errors[id] = undefined;
+  hasErrors[id] = 0;
+  settled[id] = 1;
+  flags[id] &= ~(DIRTY | MAYBE_DIRTY);
+  versions[id]++;
+  emit('suspense settlement', id);
   notifyListeners(id);
 }
 
@@ -722,6 +774,7 @@ export function reset(): void {
   invalidationMarks = new Uint32Array(capacity);
   deliveryVersions = new Uint32Array(capacity);
   generations = new Uint32Array(capacity);
+  settled = new Uint8Array(capacity);
   invalidationEpoch = 0;
   observed = new Uint32Array(capacity);
   observers = [];
