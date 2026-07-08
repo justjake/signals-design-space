@@ -9,9 +9,9 @@
  * The module reads top to bottom with progressive disclosure; its sections,
  * in order:
  *
- *   1. Storage layout — the arena, the generated record layout (from
- *      tools/schema.ts), the side columns, and the shared mutable state that
- *      survives closure rebuilds.
+ *   1. Storage layout — the arena, the record layout and its
+ *      column-coherence functions, the side columns, and the shared mutable
+ *      state that survives closure rebuilds.
  *   2. The kernel algorithm — allocation, the link/propagate/checkDirty walk
  *      families, update/notify/run/dispose. This layer knows nothing about
  *      user options: it compares values by reference identity only, has no
@@ -49,9 +49,10 @@
  * every field access is plain addition. JavaScript values live in the side
  * columns {@link values}/{@link fns}, and clock stamps in the {@link Clock}
  * buffer, indexed by shifting the same premultiplied id. The layout — field
- * slots, flag bits, shape constants, and the per-column scrub/reset
- * functions — is generated from tools/schema.ts into the marked region
- * below, so free/reset correctness is generated, not hand-maintained.
+ * slots, flag bits, shape constants, and the per-column grow/scrub/reset
+ * functions — is declared in one region below, whose head note carries the
+ * maintenance rule: a layout edit updates the coherence functions together,
+ * in the same edit, so free/reset correctness stays one reviewable change.
  *
  * ## Mechanics this module owns
  *
@@ -180,7 +181,28 @@ export type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see ArenaShape). */
 export type ValueIndex = number & IdBrand<'valueIndex'>;
 
-// #region GENERATED — layout v5 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
+// ---- the record layout --------------------------------------------------------
+// One region declares the whole record layout: the field/flag/shape enums
+// for both record domains (kernel records here, world-arena records further
+// down) and the column-coherence functions beside them. The maintenance
+// rule: a layout edit — a new field, flag bit, column, or record family —
+// updates the growth, scrub, and reset functions TOGETHER, in the same
+// edit, or a freed slot's next tenant observes the dead tenant's state.
+// The coherence set, kernel then world arena:
+//  - scrubNodeColumnsOnFree / scrubLinkColumnsOnFree — the two allocators'
+//    free paths (every side-column slot of a freed record).
+//  - growNodeSideColumns — the node allocator's grown-together column loop.
+//  - resetSideColumnsForTest — the test reset's column half.
+//  - growWorldArenaBuffers — the record store + every record-keyed buffer
+//    column, doubled by copy together.
+//  - growWorldArenaColumns — the shadow allocator's grown-together loop.
+//  - scrubWorldShadowColumnsOnEvict / scrubWorldLinkColumnsOnFree — the
+//    evict and link-free scrubs.
+//  - resetWorldArenaColumnsOnRelease — the pool-release scrub.
+// A new column joins its family's grow, scrub, and reset in one edit; the
+// reclaim probes and the leak audit catch a missed scrub, but only for
+// state they know to poke — the rule is the contract, the suites are the
+// net.
 /**
  * Field offsets within a node arena record.
  * NodeId is an offset pointer to the first field of the record;
@@ -203,7 +225,7 @@ export type ValueIndex = number & IdBrand<'valueIndex'>;
  *
  * ## Why exported?
  *
- * The layout is generated into this file — the engine owns its record
+ * The layout is declared in this file — the engine owns its record
  * layout — and the enums other modules walk engine records with are
  * exported so those consumers import the one definition instead of
  * hand-copying numbers a field reorder would silently orphan. A cross-file
@@ -291,7 +313,8 @@ export const enum LinkField {
  * Field offsets within a WATCHER record — one subscribed component
  * instance, stored as a kernel arena record (allocated by the node
  * allocator: same free list, same GEN tenancy stamp, same side-column
- * scrub — see ALLOCATOR_FAMILIES in tools/schema.ts). A watcher record
+ * scrub — {@link scrubNodeColumnsOnFree} covers every family the node
+ * allocator serves). A watcher record
  * carries no kernel dependency links, so the kernel walks never reach
  * it; the engine interprets slots 0-4 and 6, while slots 1/5/7 keep
  * their allocator meanings (free-list thread / GEN / NODE_INDEX). The
@@ -499,8 +522,9 @@ export const enum ArenaShape {
 
 /**
  * Scrub a freed record's side-column slots on the node allocator's
- * free path (generated from the column roster; covers every family the
- * allocator serves: node/watcher/subscription records). The slot's next tenant must
+ * free path (covers every family the allocator serves:
+ * node/watcher/subscription records; a new column joins this scrub — the
+ * layout note above). The slot's next tenant must
  * never observe the old tenant's values, closures, or clock stamps.
  * recordBuffer columns are closure-owned, so the caller passes its
  * buffer.
@@ -516,8 +540,9 @@ function scrubNodeColumnsOnFree(id: NodeId, clocks: Float64Array): void {
 
 /**
  * Scrub a freed record's side-column slots on the link allocator's
- * free path (generated from the column roster; covers every family the
- * allocator serves: link records). The slot's next tenant must
+ * free path (covers every family the allocator serves: link records;
+ * a new column joins this scrub — the layout note above). The slot's next
+ * tenant must
  * never observe the old tenant's values, closures, or clock stamps.
  * recordBuffer columns are closure-owned, so the caller passes its
  * buffer.
@@ -528,8 +553,8 @@ function scrubLinkColumnsOnFree(id: LinkId, clocks: Float64Array): void {
 
 /**
  * Grow the kernel's grown-together side columns to cover one record id
- * (generated from the column roster — a new column cannot miss the
- * growth loop). Called by the node allocator for every family it serves
+ * (a new grow-array column joins this loop — the layout note above).
+ * Called by the node allocator for every family it serves
  * (node/watcher/subscription records); record-buffer columns are
  * factory-carried and grow by kernel rebuild instead.
  */
@@ -546,8 +571,9 @@ function growNodeSideColumns(id: RecordId): void {
 }
 
 /**
- * Reset every kernel side column to its record-zero seed (generated from
- * the column roster; the test reset's column half). Grow-arrays truncate;
+ * Reset every kernel side column to its record-zero seed (the test
+ * reset's column half; every declared column resets — the layout note
+ * above). Grow-arrays truncate;
  * record buffers zero-fill in place (the arena keeps its capacity).
  */
 function resetSideColumnsForTest(clocks: Float64Array): void {
@@ -714,16 +740,16 @@ const enum ArenaGeom {
 
 /**
  * Grow one world arena's record store and every record-keyed buffer
- * column BY COPY (doubling) to cover `needInts` Int32 slots (generated
- * from the column roster — a new record-buffer column cannot miss the
- * growth; exhaustion is never fatal, by owner ruling). Mid-operation
+ * column BY COPY (doubling) to cover `needInts` Int32 slots (a new
+ * record-keyed buffer column joins this growth — the layout note above;
+ * exhaustion is never fatal, growth replaces it). Mid-operation
  * growth is safe through the shell indirection: only the buffer
  * OBJECTS change — record ids, and every structure holding them
  * (observer dep chains included), stay stable — and the replacement
  * buffers are zeroed past the copied prefix, preserving the
  * fresh-record invariant. The price is the reload-after-allocation
- * discipline, confined to the sites enumerated here
- * (generated-or-listed, never folklore):
+ * discipline, confined to the sites enumerated here (an allocating site
+ * joins this list in the same edit, never folklore):
  *  - arenaAllocShadow / arenaAllocLink:
  *    the ONLY growth triggers (the bump arm doubles before issuing the
  *    id); arenaAllocShadow caches `a.memory` only after that arm,
@@ -759,8 +785,8 @@ function growWorldArenaBuffers(a: WorldArena, needInts: number): void {
 
 /**
  * Grow the world arena's grown-together per-record columns to cover one
- * column index (generated from the column roster — a new column cannot
- * miss the growth loop). Called by the shadow allocator; record-buffer
+ * column index (a new grow-array column joins this loop — the layout
+ * note above). Called by the shadow allocator; record-buffer
  * columns grow with the record store instead (growWorldArenaBuffers).
  */
 function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {
@@ -775,8 +801,9 @@ function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {
 }
 
 /**
- * Scrub an evicted shadow record's per-record column slots (generated
- * from the column roster): a re-keyed or purged record's next tenant must
+ * Scrub an evicted shadow record's per-record column slots (a new
+ * column joins this scrub — the layout note above): a re-keyed or
+ * purged record's next tenant must
  * never observe the dead tenancy's value or clock stamp. List-coupled
  * columns (suspIdx, the weak heads) clear through their list operations
  * instead; walk stamps are inert by generation monotonicity.
@@ -790,7 +817,8 @@ function scrubWorldShadowColumnsOnEvict(a: WorldArena, sh: number): void {
 
 /**
  * Scrub a freed world-arena link record's observer-state column slots
- * (generated from the column roster): only subscription dependency links
+ * (a new column joins this scrub — the layout note above): only
+ * subscription dependency links
  * ever write these, but the free-path scrub is unconditional so a reused
  * link record can never carry a dead tenancy's stamp regardless of which
  * path freed it (the kernel freeLink's clock-scrub twin).
@@ -800,8 +828,9 @@ function scrubWorldLinkColumnsOnFree(a: WorldArena, id: number): void {
 }
 
 /**
- * Reset every world-arena side column at release (generated from the
- * column roster; the release scrub's column half). Keeps each column's
+ * Reset every world-arena side column at release (the release scrub's
+ * column half; every declared column resets — the layout note above).
+ * Keeps each column's
  * CAPACITY across pool tenancies (a priced cold-render saving: truncating
  * to 0 forced re-pushing every element on every claim — ~2k pushes per
  * cold render); fill() scrubs the same residue truncation would have
@@ -818,7 +847,6 @@ function resetWorldArenaColumnsOnRelease(a: WorldArena): void {
 	a.clocks.fill(0, 0, a.next >> ArenaGeom.ID_TO_COLUMN_SHIFT);
 	a.cutoffVals.fill(undefined);
 }
-// #endregion GENERATED layout
 
 /**
  * Mass-teardown bounds for the boundary sweep (ported from dalien-signals
@@ -894,8 +922,7 @@ const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the 
 export const values: unknown[] = [undefined, undefined];
 export const fns: (Function | undefined)[] = [undefined];
 /** The general per-record object side column (extras[id >> 3]): cold
- * oddments that don't earn a dedicated column — see the generated column
- * roster. Module-internal: its only readers are this module's observer
+ * oddments that don't earn a dedicated column. Module-internal: its only readers are this module's observer
  * record accessors. */
 const extras: unknown[] = [undefined];
 
@@ -1075,7 +1102,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 			memory[id + NodeField.NODE_INDEX] = nextNodeIndex++; // a never-yet-node slot gets a fresh index
 		}
 		memory[id + NodeField.FLAGS] = flags;
-		growNodeSideColumns(id); // generated: every grown-together column covers the record, by construction
+		growNodeSideColumns(id); // every grown-together column covers the record (the layout region's coherence set)
 		return id;
 	}
 
@@ -1086,7 +1113,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 		memory[id + NodeField.SUBS] = 0;
 		memory[id + NodeField.SUBS_TAIL] = 0;
 		++memory[id + NodeField.GEN];
-		scrubNodeColumnsOnFree(id, clocks); // generated: every declared column clears, by construction
+		scrubNodeColumnsOnFree(id, clocks); // every declared column clears (the layout region's coherence set)
 		memory[id + NodeField.DEPS] = nodeFreeHead; // NODE_INDEX (field 7) deliberately survives — see NodeField
 		nodeFreeHead = id;
 		// The record-free hook: hosts keying dense side tables by NODE_INDEX
@@ -1200,7 +1227,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 	}
 
 	function freeLink(id: LinkId): void {
-		scrubLinkColumnsOnFree(id, clocks); // generated: a reused link must not carry the old tenant's clock stamp
+		scrubLinkColumnsOnFree(id, clocks); // a reused link must not carry the old tenant's clock stamp
 		memory[id + LinkField.FREE_NEXT] = linkFreeHead;
 		linkFreeHead = id;
 	}
@@ -2290,7 +2317,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 // A fast negative guard for observers, never a replacement for dirty-state,
 // value baselines, or delivery metadata. Every record owns one float64 clock
 // slot (the `clocks` buffer created beside the arena in createKernel; layout
-// metadata in the generated region above):
+// constants in the record-layout region above):
 //
 //  - A NODE record's slot is its durable updated-at clock: a process-monotone
 //    stamp moved when the node's TAGGED OUTCOME changes — value, thrown, or
@@ -2308,7 +2335,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 //    slots are reserved-unused (a subscription's per-dep stamps ride its
 //    WORLD-ARENA dependency links instead); the kernel never reads or
 //    writes them (the intra-run dedup stamp stays in the VERSION field),
-//    and the generated free scrub guarantees a fresh or reused record
+//    and the free-path scrub guarantees a fresh or reused record
 //    starts at 0 ("never validated").
 //
 // The skip rule for consumers (owner ruling: observer re-fires are
@@ -3257,8 +3284,8 @@ export function __lifecycleRelease(id: NodeId): void {
  * fold, batch, watcher) is defined at the top of concurrent.ts.
  *
  * Layout discipline: ArenaField/ArenaLinkField/ArenaFlag/ArenaGeom/ArenaWalk
- * are same-file const enums, generated from tools/schema.ts into the marked
- * region above — every hot arena walk lives in this module so the members
+ * are same-file const enums declared in the record-layout region above —
+ * every hot arena walk lives in this module so the members
  * inline as literals under every esbuild-based toolchain. The test-side
  * checker reads the layout through `arenaCheckerLayout()` (data passing),
  * never through exported enums.
@@ -3330,9 +3357,9 @@ export function getKernelNodeIndex(id: NodeId): NodeIndex {
 // shadow-specific things the kernel's fields don't.
 
 // (ArenaField/ArenaLinkField/ArenaLinkMode/ArenaFlag/ArenaGeom — the world
-// arenas' layout — are generated from tools/schema.ts into the marked
-// region above, same-file with these walks so the members inline as
-// literals under every toolchain.)
+// arenas' layout — are declared in the record-layout region above,
+// same-file with these walks so the members inline as literals under
+// every toolchain.)
 
 /** Bounds the arena pool: releaseArena keeps at most this many scrubbed
  * shells (further releases drop the shell). Also the pool's address-space
@@ -3370,17 +3397,17 @@ export class WorldArena {
 	/**
 	 * The arena's records: a plain fixed-length Int32Array (full V8
 	 * element-access optimization; length-tracking resizable-buffer views
-	 * were tried at the schema re-derivation, measured +56% on cold renders
-	 * and +18-31% on wide fanout masks, and stay banned). Allocated at the
+	 * measured +56% on cold renders and +18-31% on wide fanout masks, and
+	 * stay banned). Allocated at the
 	 * generous initial reservation — ArenaGeom.INIT_BUFFER_BYTES by
 	 * default, EngineResetOptions.arenaInitInts when set — and grown BY
 	 * COPY (doubling) whenever an allocation outruns it: exhaustion is
-	 * never fatal, by owner ruling. Growth mid-operation is safe through
+	 * never fatal, growth replaces it. Growth mid-operation is safe through
 	 * this shell indirection — growWorldArenaBuffers reassigns the field,
 	 * record ids never change (observer dep chains and every other
 	 * id-holding structure are untouched), and the sites that cache the
 	 * view across an allocating call re-load it after (the discipline is
-	 * enumerated in growWorldArenaBuffers' doc, generated-or-listed).
+	 * enumerated in growWorldArenaBuffers' doc, kept current there).
 	 * Growth stays RARE by the reservation's generosity: a fresh zeroed
 	 * allocation that size is nearly free — the pages are zero-fill
 	 * demand-paged, so it costs address space while resident memory tracks
@@ -3390,14 +3417,14 @@ export class WorldArena {
 	memory: Int32Array;
 	/** The per-world updated-at clock column: one float64 slot per record,
 	 * sized with the {@link memory} record store and grown by copy beside
-	 * it (see the schema's world column roster). */
+	 * it (growWorldArenaBuffers grows both together). */
 	clocks: Float64Array;
 	/** Whether observer consults settle the clock column: committed arenas
 	 * only — render-world values are pin-frozen, so a render arena's clocks
 	 * never move (the settle gate; set per tenancy at claim). */
 	bumpsClocks: boolean;
 	vals: Value[] = [];
-	/** The observer coalescing register (see the schema's column roster):
+	/** The observer coalescing register:
 	 * the folded value as of the shadow's last observer consult — the
 	 * compare basis settleObserverClock moves the clock against. Valid iff
 	 * the clock slot is non-zero. */
@@ -3545,7 +3572,7 @@ function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: numb
 	memory[id + ArenaField.FLAGS] = flags;
 	memory[id + ArenaField.NODE] = ix;
 	memory[id + ArenaField.NODE_GEN] = gen;
-	growWorldArenaColumns(a, id >> ArenaGeom.ID_TO_COLUMN_SHIFT); // generated: the grown-together columns
+	growWorldArenaColumns(a, id >> ArenaGeom.ID_TO_COLUMN_SHIFT); // the grown-together columns
 	while (a.nodeToShadow.length <= ix) a.nodeToShadow.push(0); // stay packed, never holey
 	a.nodeToShadow[ix] = id;
 	return id;
@@ -3566,7 +3593,7 @@ function arenaAllocLink(a: WorldArena): number {
 }
 
 function arenaFreeLink(a: WorldArena, id: number): void {
-	scrubWorldLinkColumnsOnFree(a, id); // generated: a reused link must not carry a dead tenancy's observer stamp
+	scrubWorldLinkColumnsOnFree(a, id); // a reused link must not carry a dead tenancy's observer stamp
 	a.memory[id + ArenaLinkField.FREE_NEXT] = a.linkFree;
 	a.linkFree = id;
 	a.links--;
@@ -3977,7 +4004,7 @@ export function createWorldArena(core: EngineCore): void {
 		// released (no pooled-arena leak), nodeToShadow reads 0 (= none), suspIdx
 		// reads 0 (= not suspended) — while the packed length persists, so
 		// the next tenancy's growth loops are no-ops up to this watermark.
-		resetWorldArenaColumnsOnRelease(a); // generated: every declared column resets, by construction
+		resetWorldArenaColumnsOnRelease(a); // every declared column resets (the layout region's coherence set)
 		a.dirty.length = 0;
 		a.suspended.length = 0;
 		// Scrub the written record prefix so pooled buffers re-claim all-zero
@@ -4112,7 +4139,7 @@ export function createWorldArena(core: EngineCore): void {
 			}
 		}
 		if ((a.memory[sh + ArenaField.FLAGS]! & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh);
-		scrubWorldShadowColumnsOnEvict(a, sh); // generated: value + clock slots clear together
+		scrubWorldShadowColumnsOnEvict(a, sh); // value + clock slots clear together
 	}
 
 	/** Arena dep recording (arena fn-reader hook): first-occurrence mode
@@ -5010,8 +5037,8 @@ export type WatcherSnapshot = {
 	rootCommitGen: CommitGen;
 };
 
-/** The extras-column object of a watcher record (see the generated column
- * roster): the cold oddments — name, owning root, and the flattened
+/** The extras-column object of a watcher record: the cold oddments —
+ * name, owning root, and the flattened
  * rendered-world snapshot. One object per watcher, created at mount; the
  * snapshot setter rewrites the five snapshot fields in place (monomorphic,
  * allocation-free at commit). */
@@ -5200,7 +5227,7 @@ export class Watcher {
 /** Free a watcher's arena record (the render lifecycle's drop tail —
  * unmount, discard, removal). The free defers to the next operation
  * boundary (queued notifications may still hold the handle; its own id
- * fields stay readable), where the generated column scrub clears every
+ * fields stay readable), where {@link scrubNodeColumnsOnFree} clears every
  * slot the record owned. */
 function freeWatcherRecord(w: Watcher): void {
 	E.disposeObserver(w.rec);
@@ -5392,7 +5419,7 @@ export function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
 
 /** Free a subscription's dependency-link chain back to its arena's link
  * pool (recapture replaces the snapshot wholesale; removal tears it down).
- * The generated link scrub clears each link's clock slot on free. */
+ * {@link scrubWorldLinkColumnsOnFree} clears each link's clock slot on free. */
 function freeObserverDepChain(a: WorldArena, sub: Subscription): void {
 	const memory = E.buffer();
 	let l = memory[sub.rec + SubscriptionField.DEP_HEAD]!;
