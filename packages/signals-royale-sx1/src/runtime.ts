@@ -131,7 +131,10 @@ function applies(op: Operation, mode: 'canonical' | 'latest' | 'committed'): boo
 function fold<T>(atom: Atom<T>, mode: 'canonical' | 'latest' | 'committed'): T {
 	let value = atom.materialize();
 	for (const op of operations) {
-		if (op.atom === atom && applies(op, mode)) value = (op as Operation<T>).reduce(value);
+		if (op.atom === atom && op.batch?.deferred !== true && applies(op, mode)) value = (op as Operation<T>).reduce(value);
+	}
+	for (const op of operations) {
+		if (op.atom === atom && op.batch?.deferred === true && applies(op, mode)) value = (op as Operation<T>).reduce(value);
 	}
 	return value;
 }
@@ -578,7 +581,7 @@ export function commitRoot(root: object, committed: readonly BatchToken[]): void
 export function retireBatch(token: BatchToken, didCommit: boolean): void {
 	token.live = false;
 	token.committed = didCommit;
-	if (didCommit) {
+	if (didCommit && token.deferred) {
 		const touched = new Set<Atom<unknown>>();
 		for (const op of operations) if (op.batch === token) touched.add(op.atom);
 		for (const target of touched) {

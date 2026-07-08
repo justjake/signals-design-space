@@ -1,0 +1,653 @@
+From 2b30d482f0c8656895dc935cf006960d16a790a1 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Thu, 2 Jul 2026 12:03:55 -0400
+Subject: [PATCH] Add external-runtime introspection channel for external state
+ libraries
+
+Exposes, via ReactSharedInternals (the onStartTransitionFinish pattern):
+- unstable_subscribeToExternalRuntime: render-pass start/end, commit
+  (with committed/remaining lanes), and before/after host-mutation events,
+  all keyed by the root's container. The mutation bracket lives in
+  flushMutationEffects so View Transition commits are bracketed correctly.
+- unstable_getCurrentUpdateLane / unstable_getRenderContext /
+  unstable_isTransitionLane / unstable_lanesInclude: lane attribution for
+  external writes and world selection for external reads during render.
+
+Lanes cross the boundary as opaque numbers; no Fiber/FiberRoot shapes leak.
+All hooks are inert (one property read + branch) until a listener subscribes.
+---
+ .../src/ReactFiberExternalRuntime.js          | 136 ++++++++++++++
+ .../src/ReactFiberWorkLoop.js                 |  76 ++++++++
+ packages/react/index.development.js           |   5 +
+ .../react/index.experimental.development.js   |   5 +
+ packages/react/index.experimental.js          |   5 +
+ packages/react/index.js                       |   5 +
+ packages/react/index.stable.development.js    |   5 +
+ packages/react/index.stable.js                |   5 +
+ packages/react/src/ReactClient.js             |  13 ++
+ packages/react/src/ReactExternalRuntime.js    | 176 ++++++++++++++++++
+ .../react/src/ReactSharedInternalsClient.js   |   5 +
+ 11 files changed, 436 insertions(+)
+ create mode 100644 packages/react-reconciler/src/ReactFiberExternalRuntime.js
+ create mode 100644 packages/react/src/ReactExternalRuntime.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberExternalRuntime.js b/packages/react-reconciler/src/ReactFiberExternalRuntime.js
+new file mode 100644
+index 0000000000..2280768a95
+--- /dev/null
++++ b/packages/react-reconciler/src/ReactFiberExternalRuntime.js
+@@ -0,0 +1,136 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++import type {FiberRoot} from './ReactInternalTypes';
++import type {Lanes} from './ReactFiberLane';
++
++import ReactSharedInternals from 'shared/ReactSharedInternals';
++
++/**
++ * Reconciler side of the external-runtime introspection channel (see
++ * packages/react/src/ReactExternalRuntime.js for what it is for). The work
++ * loop calls the notify* functions at documented lifecycle points; they no-op
++ * unless a listener has subscribed on the isomorphic side.
++ *
++ * Roots are reported to userspace as their container (root.containerInfo):
++ * an identity token that is also the object a MutationObserver caller needs.
++ * No Fiber or FiberRoot shapes cross this boundary.
++ */
++
++type ExternalRuntimeLike = {
++  providers: Array<mixed>,
++  hasListeners: boolean,
++  emitRenderPassStart: (container: mixed, renderLanes: number) => void,
++  emitRenderPassEnd: (container: mixed) => void,
++  emitCommit: (
++    container: mixed,
++    committedLanes: number,
++    remainingLanes: number,
++  ) => void,
++  emitBeforeMutation: (container: mixed) => void,
++  emitAfterMutation: (container: mixed) => void,
++};
++
++function getRuntime(): ExternalRuntimeLike | null {
++  // The registry exists once the isomorphic `react` module has evaluated.
++  // It is null with mismatched react/renderer versions; every entry point
++  // below tolerates that by doing nothing.
++  return (ReactSharedInternals as any).E || null;
++}
++
++export function registerExternalRuntimeProvider(provider: mixed): void {
++  const runtime = getRuntime();
++  if (runtime !== null) {
++    runtime.providers.push(provider);
++  }
++}
++
++// Roots with a render pass currently in progress (spanning yields). Used to
++// pair start/end events exactly even when a pass is discarded by a restart.
++const rootsWithActivePass: WeakSet<FiberRoot> = new WeakSet();
++
++/**
++ * Called from prepareFreshStack: a fresh work-in-progress stack is being
++ * prepared for `root`. Any pass previously active on this root is implicitly
++ * over (its partial tree was discarded). `lanes` is NoLanes when the stack is
++ * reset without starting new work (e.g. interrupting a suspended render).
++ */
++export function notifyRenderPassStart(root: FiberRoot, lanes: Lanes): void {
++  const runtime = getRuntime();
++  if (runtime === null) {
++    return;
++  }
++  if (rootsWithActivePass.has(root)) {
++    rootsWithActivePass.delete(root);
++    if (runtime.hasListeners) {
++      runtime.emitRenderPassEnd(root.containerInfo);
++    }
++  }
++  if (lanes !== 0) {
++    rootsWithActivePass.add(root);
++    if (runtime.hasListeners) {
++      runtime.emitRenderPassStart(root.containerInfo, lanes);
++    }
++  }
++}
++
++/**
++ * Called when the render phase for `root` completed (the work loop finished
++ * the whole tree — committed or not). Idempotent: yielded passes that resume
++ * end exactly once.
++ */
++export function notifyRenderPassEnd(root: FiberRoot): void {
++  const runtime = getRuntime();
++  if (runtime === null) {
++    return;
++  }
++  if (rootsWithActivePass.has(root)) {
++    rootsWithActivePass.delete(root);
++    if (runtime.hasListeners) {
++      runtime.emitRenderPassEnd(root.containerInfo);
++    }
++  }
++}
++
++/**
++ * Called from flushMutationEffects after the tree swap (root.current points
++ * at the finished work): the commit's host mutations are done and the
++ * committed picture includes `committedLanes`.
++ */
++export function notifyCommit(
++  root: FiberRoot,
++  committedLanes: Lanes,
++  remainingLanes: Lanes,
++): void {
++  const runtime = getRuntime();
++  if (runtime !== null && runtime.hasListeners) {
++    runtime.emitCommit(root.containerInfo, committedLanes, remainingLanes);
++  }
++}
++
++/**
++ * Bracket exactly the window in which React mutates the host tree during a
++ * commit. Fired only when there are mutation effects to apply. These live in
++ * flushMutationEffects (not commitRoot) so View Transition commits — whose
++ * mutation phase runs later, inside the browser's startViewTransition update
++ * callback — are bracketed correctly too.
++ */
++export function notifyBeforeMutation(root: FiberRoot): void {
++  const runtime = getRuntime();
++  if (runtime !== null && runtime.hasListeners) {
++    runtime.emitBeforeMutation(root.containerInfo);
++  }
++}
++
++export function notifyAfterMutation(root: FiberRoot): void {
++  const runtime = getRuntime();
++  if (runtime !== null && runtime.hasListeners) {
++    runtime.emitAfterMutation(root.containerInfo);
++  }
++}
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..a996180dab 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -192,6 +192,7 @@ import {
+   includesOnlyTransitions,
+   includesBlockingLane,
+   includesTransitionLane,
++  isTransitionLane as laneIsTransitionLane,
+   includesRetryLane,
+   includesIdleGroupLanes,
+   includesExpiredLane,
+@@ -228,6 +229,14 @@ import {
+   eventPriorityToLane,
+ } from './ReactEventPriorities';
+ import {requestCurrentTransition} from './ReactFiberTransition';
++import {
++  registerExternalRuntimeProvider,
++  notifyRenderPassStart,
++  notifyRenderPassEnd,
++  notifyCommit,
++  notifyBeforeMutation,
++  notifyAfterMutation,
++} from './ReactFiberExternalRuntime';
+ import {
+   SelectiveHydrationException,
+   beginWork,
+@@ -853,6 +862,48 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+   return eventPriorityToLane(resolveUpdatePriority());
+ }
+ 
++// External-runtime introspection provider (see ReactFiberExternalRuntime).
++// getCurrentUpdateLane mirrors requestUpdateLane above, minus the
++// fiber-specific legacy-mode case (external state has no fiber yet) and with
++// gesture transitions treated as plain event-priority updates rather than an
++// error — an external write during a gesture is not schedulable state.
++// requestTransitionLane is idempotent within one event, so querying the lane
++// here returns exactly the lane the caller's subsequent setState calls get.
++registerExternalRuntimeProvider({
++  getRenderContext(): null | {container: mixed, renderLanes: number} {
++    if (
++      (executionContext & RenderContext) !== NoContext &&
++      workInProgressRoot !== null &&
++      workInProgressRootRenderLanes !== NoLanes
++    ) {
++      return {
++        container: workInProgressRoot.containerInfo,
++        renderLanes: workInProgressRootRenderLanes,
++      };
++    }
++    return null;
++  },
++  getCurrentUpdateLane(): number {
++    if (
++      (executionContext & RenderContext) !== NoContext &&
++      workInProgressRootRenderLanes !== NoLanes
++    ) {
++      return pickArbitraryLane(workInProgressRootRenderLanes);
++    }
++    const transition = requestCurrentTransition();
++    if (transition !== null && !(transition as any).gesture) {
++      return requestTransitionLane(transition);
++    }
++    return eventPriorityToLane(resolveUpdatePriority());
++  },
++  isTransitionLane(lane: number): boolean {
++    return laneIsTransitionLane(lane as any);
++  },
++  lanesInclude(lanes: number, lane: number): boolean {
++    return (lanes & lane) !== 0;
++  },
++});
++
+ function requestRetryLane(fiber: Fiber) {
+   // This is a fork of `requestUpdateLane` designed specifically for Suspense
+   // "retries" — a special update that attempts to flip a Suspense boundary
+@@ -2269,6 +2320,11 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
+ 
+   finishQueueingConcurrentUpdates();
+ 
++  // External-runtime lifecycle: a fresh stack starts (or, for NoLanes,
++  // resets) the render pass on this root. Fires after the concurrent update
++  // queue drained so listeners observe a consistent world.
++  notifyRenderPassStart(root, lanes);
++
+   if (__DEV__) {
+     resetOwnerStackLimit();
+ 
+@@ -2748,6 +2804,9 @@ function renderRootSync(
+ 
+     // It's safe to process the queue now that the render phase is complete.
+     finishQueueingConcurrentUpdates();
++
++    // External-runtime lifecycle: the render pass is over.
++    notifyRenderPassEnd(root);
+   }
+ 
+   return exitStatus;
+@@ -3033,6 +3092,9 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+     // It's safe to process the queue now that the render phase is complete.
+     finishQueueingConcurrentUpdates();
+ 
++    // External-runtime lifecycle: the render pass is over.
++    notifyRenderPassEnd(root);
++
+     // Return the final exit status.
+     return workInProgressRootExitStatus;
+   }
+@@ -4012,6 +4074,12 @@ function flushMutationEffects(): void {
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
++    // External-runtime lifecycle: bracket exactly the window in which React
++    // mutates the host tree (e.g. so a MutationObserver can ignore React's
++    // own mutations). This must live here — not in commitRoot — because View
++    // Transition commits run this phase later, inside the browser's
++    // startViewTransition update callback.
++    notifyBeforeMutation(root);
+     try {
+       // The next phase is the mutation phase, where we mutate the host tree.
+       commitMutationEffects(root, finishedWork, lanes);
+@@ -4023,6 +4091,9 @@ function flushMutationEffects(): void {
+       }
+       resetAfterCommit(root.containerInfo);
+     } finally {
++      // The bracket closes in a finally so an error during the mutation
++      // phase cannot leave listeners (observers) permanently paused.
++      notifyAfterMutation(root);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+@@ -4036,6 +4107,11 @@ function flushMutationEffects(): void {
+   // work is current during componentDidMount/Update.
+   root.current = finishedWork;
+   pendingEffectsStatus = PENDING_LAYOUT_PHASE;
++
++  // External-runtime lifecycle: the committed picture now includes this
++  // commit's lanes. root.pendingLanes was already updated by
++  // markRootFinished in commitRoot.
++  notifyCommit(root, lanes, root.pendingLanes);
+ }
+ 
+ function flushLayoutEffects(): void {
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index 5ee39427fd..388e78fa2a 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -54,6 +54,11 @@ export {
+   unstable_TracingMarker,
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_getRenderContext,
++  unstable_getCurrentUpdateLane,
++  unstable_isTransitionLane,
++  unstable_lanesInclude,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 8ff2e1d257..b0031b5406 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -37,6 +37,11 @@ export {
+   unstable_startGestureTransition,
+   addTransitionType,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_getRenderContext,
++  unstable_getCurrentUpdateLane,
++  unstable_isTransitionLane,
++  unstable_lanesInclude,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 881a71b250..81b9439b3d 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -38,6 +38,11 @@ export {
+   unstable_startGestureTransition,
+   addTransitionType,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_getRenderContext,
++  unstable_getCurrentUpdateLane,
++  unstable_isTransitionLane,
++  unstable_lanesInclude,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 140174ec01..4a97d7fc77 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -55,6 +55,11 @@ export {
+   addTransitionType,
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_getRenderContext,
++  unstable_getCurrentUpdateLane,
++  unstable_isTransitionLane,
++  unstable_lanesInclude,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 5fd89390bc..8f3d80d003 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -32,6 +32,11 @@ export {
+   cache,
+   cacheSignal,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_getRenderContext,
++  unstable_getCurrentUpdateLane,
++  unstable_isTransitionLane,
++  unstable_lanesInclude,
+   startTransition,
+   useId,
+   useCallback,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 830a4e9bb5..1e5e064922 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -32,6 +32,11 @@ export {
+   cache,
+   cacheSignal,
+   unstable_useCacheRefresh,
++  unstable_subscribeToExternalRuntime,
++  unstable_getRenderContext,
++  unstable_getCurrentUpdateLane,
++  unstable_isTransitionLane,
++  unstable_lanesInclude,
+   startTransition,
+   useId,
+   useCallback,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 5d1c7f3ac0..1aeed7e548 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -64,6 +64,13 @@ import {addTransitionType} from './ReactTransitionType';
+ import {act} from './ReactAct';
+ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
++import {
++  subscribeToExternalRuntime,
++  getExternalRuntimeRenderContext,
++  getExternalRuntimeCurrentUpdateLane,
++  externalRuntimeIsTransitionLane,
++  externalRuntimeLanesInclude,
++} from './ReactExternalRuntime';
+ 
+ const Children = {
+   map,
+@@ -119,6 +126,12 @@ export {
+   getCacheForType as unstable_getCacheForType,
+   useCacheRefresh as unstable_useCacheRefresh,
+   use,
++  // External-runtime introspection for external state libraries
++  subscribeToExternalRuntime as unstable_subscribeToExternalRuntime,
++  getExternalRuntimeRenderContext as unstable_getRenderContext,
++  getExternalRuntimeCurrentUpdateLane as unstable_getCurrentUpdateLane,
++  externalRuntimeIsTransitionLane as unstable_isTransitionLane,
++  externalRuntimeLanesInclude as unstable_lanesInclude,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactExternalRuntime.js b/packages/react/src/ReactExternalRuntime.js
+new file mode 100644
+index 0000000000..603f59334f
+--- /dev/null
++++ b/packages/react/src/ReactExternalRuntime.js
+@@ -0,0 +1,176 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++/**
++ * Experimental introspection channel for external state libraries.
++ *
++ * Concurrent React renders the same app state at different priorities
++ * ("lanes"): a transition render and an urgent render may be in flight around
++ * one another, and a render pass may be discarded and restarted. State that
++ * lives outside React cannot participate correctly without knowing three
++ * things userspace cannot otherwise observe:
++ *
++ *   1. the lane an update scheduled *right now* would be assigned
++ *      (getCurrentUpdateLane), so an external write can be attributed to the
++ *      same "version of the world" as the setState calls it batches with;
++ *   2. which root/lanes are currently rendering (getRenderContext and the
++ *      render-pass listener events), so reads during render can resolve
++ *      against the matching version;
++ *   3. when a commit lands and with which lanes (onCommit), so pending
++ *      versions can be promoted to committed state.
++ *
++ * Separately, onBeforeMutation/onAfterMutation bracket exactly the window in
++ * which React mutates the DOM during a commit, so a MutationObserver can
++ * ignore React's own mutations while observing everything else. The bracket
++ * covers React's reconciliation mutations; it intentionally does not cover
++ * user code in effects, imperative preload()-style inserts, or the
++ * suspensey-CSS/img-decode paths (see the react-signals DESIGN.md notes).
++ *
++ * Design notes:
++ * - This module is isomorphic; renderers register a provider (and call the
++ *   emit* methods) through ReactSharedInternals.E, following the same pattern
++ *   as ReactSharedInternals.S (onStartTransitionFinish).
++ * - Lane values cross this boundary as opaque numbers: stable to compare with
++ *   the helpers here, meaningless to inspect. Roots are identified by their
++ *   container (for react-dom, the DOM container element) — an identity token
++ *   that is also what a MutationObserver caller needs.
++ * - Everything here is inert until the first listener subscribes; the
++ *   per-commit cost with no listeners is one property read and branch.
++ */
++
++import ReactSharedInternals from './ReactSharedInternalsClient';
++import reportGlobalError from 'shared/reportGlobalError';
++
++export type ExternalRuntimeListener = {
++  /** A render pass began on `container` for `renderLanes`. Passes can yield
++   * to the browser and resume; a pass ends by completing or restarting. */
++  onRenderPassStart?: (container: mixed, renderLanes: number) => void,
++  /** The render pass on `container` completed or was discarded. */
++  onRenderPassEnd?: (container: mixed) => void,
++  /** A commit's host-tree mutations finished; the committed tree is current.
++   * `committedLanes` were rendered; `remainingLanes` are still pending. */
++  onCommit?: (
++    container: mixed,
++    committedLanes: number,
++    remainingLanes: number,
++  ) => void,
++  /** React is about to mutate the host tree under `container`. Fires only
++   * when there are mutations to apply. */
++  onBeforeMutation?: (container: mixed) => void,
++  /** React finished mutating the host tree under `container`. */
++  onAfterMutation?: (container: mixed) => void,
++};
++
++export type ExternalRuntimeProvider = {
++  /** Non-null while a render pass is executing on the current thread. */
++  getRenderContext: () => null | {container: mixed, renderLanes: number},
++  /** The lane an update scheduled right now would get. */
++  getCurrentUpdateLane: () => number,
++  isTransitionLane: (lane: number) => boolean,
++  lanesInclude: (lanes: number, lane: number) => boolean,
++};
++
++const listeners: Set<ExternalRuntimeListener> = new Set();
++
++function emit(event: string, a: mixed, b?: mixed, c?: mixed): void {
++  // Deliver to every listener even if one throws; a listener error must not
++  // corrupt React's commit, so it is reported like an uncaught error.
++  for (const listener of listeners) {
++    const handler = (listener as any)[event];
++    if (handler != null) {
++      try {
++        handler(a, b, c);
++      } catch (error) {
++        reportGlobalError(error);
++      }
++    }
++  }
++}
++
++export type ExternalRuntime = {
++  providers: Array<ExternalRuntimeProvider>,
++  hasListeners: boolean,
++  emitRenderPassStart: (container: mixed, renderLanes: number) => void,
++  emitRenderPassEnd: (container: mixed) => void,
++  emitCommit: (
++    container: mixed,
++    committedLanes: number,
++    remainingLanes: number,
++  ) => void,
++  emitBeforeMutation: (container: mixed) => void,
++  emitAfterMutation: (container: mixed) => void,
++};
++
++const runtime: ExternalRuntime = {
++  providers: [],
++  hasListeners: false,
++  emitRenderPassStart(container, renderLanes) {
++    emit('onRenderPassStart', container, renderLanes);
++  },
++  emitRenderPassEnd(container) {
++    emit('onRenderPassEnd', container);
++  },
++  emitCommit(container, committedLanes, remainingLanes) {
++    emit('onCommit', container, committedLanes, remainingLanes);
++  },
++  emitBeforeMutation(container) {
++    emit('onBeforeMutation', container);
++  },
++  emitAfterMutation(container) {
++    emit('onAfterMutation', container);
++  },
++};
++
++ReactSharedInternals.E = runtime;
++
++export function subscribeToExternalRuntime(
++  listener: ExternalRuntimeListener,
++): () => void {
++  listeners.add(listener);
++  runtime.hasListeners = true;
++  return function unsubscribe() {
++    listeners.delete(listener);
++    runtime.hasListeners = listeners.size > 0;
++  };
++}
++
++export function getExternalRuntimeRenderContext(): null | {
++  container: mixed,
++  renderLanes: number,
++} {
++  const providers = runtime.providers;
++  for (let i = 0; i < providers.length; i++) {
++    const context = providers[i].getRenderContext();
++    if (context !== null) {
++      return context;
++    }
++  }
++  return null;
++}
++
++export function getExternalRuntimeCurrentUpdateLane(): number {
++  const providers = runtime.providers;
++  // Only one renderer can be processing an event / rendering at a time on a
++  // thread; the first registered provider answers. With multiple renderers
++  // loaded, lane attribution is best-effort (documented limitation).
++  return providers.length > 0 ? providers[0].getCurrentUpdateLane() : 0;
++}
++
++export function externalRuntimeIsTransitionLane(lane: number): boolean {
++  const providers = runtime.providers;
++  return providers.length > 0 ? providers[0].isTransitionLane(lane) : false;
++}
++
++export function externalRuntimeLanesInclude(
++  lanes: number,
++  lane: number,
++): boolean {
++  const providers = runtime.providers;
++  return providers.length > 0 ? providers[0].lanesInclude(lanes, lane) : false;
++}
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 1599e57a6f..532e5a9b9a 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -27,6 +27,10 @@ export type SharedStateClient = {
+   T: null | Transition, // ReactCurrentBatchConfig for Transitions
+   S: null | onStartTransitionFinish,
+   G: null | onStartGestureTransitionFinish,
++  // External-runtime introspection registry, created by ReactExternalRuntime.
++  // Renderers register providers and deliver render/commit lifecycle events
++  // through this object (same renderer↔isomorphic pattern as S above).
++  E: null | mixed,
+ 
+   // DEV-only
+ 
+@@ -62,6 +66,7 @@ const ReactSharedInternals: SharedStateClient = {
+   A: null,
+   T: null,
+   S: null,
++  E: null,
+ } as any;
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+-- 
+2.50.1 (Apple Git-155)
+

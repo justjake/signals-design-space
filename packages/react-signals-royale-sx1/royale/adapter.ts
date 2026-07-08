@@ -1,0 +1,65 @@
+import * as React from 'react';
+import * as ReactDOMClient from 'react-dom/client';
+import { flushSync } from 'react-dom';
+import {
+	atom,
+	batch,
+	committed,
+	computed,
+	effect,
+	initializeAtomState,
+	isPending,
+	latest,
+	onDomMutation,
+	read,
+	refresh,
+	register,
+	resetForTest,
+	serializeAtomState,
+	set,
+	startTransitionWrite,
+	trace,
+	untracked,
+	update,
+	useCommitted,
+	useComputed,
+	useIsPending,
+	useSignalEffect,
+	useValue,
+} from '../src/index.js';
+
+const adapter = {
+	slug: 'sx1',
+	React,
+	ReactDOMClient,
+	act: React.act,
+	flushSync,
+	register,
+	resetForTest,
+	atom(initial: unknown, options?: { equals?(a: unknown, b: unknown): boolean; onObserved?(ctx: { get(): unknown; set(value: unknown): void }): void | (() => void); label?: string }) {
+		return atom(initial, { equals: options?.equals, effect: options?.onObserved, label: options?.label });
+	},
+	set,
+	update,
+	computed,
+	read,
+	latest,
+	committed,
+	isPending,
+	refresh,
+	effect,
+	batch,
+	untracked,
+	serialize: serializeAtomState,
+	initialize: initializeAtomState,
+	useValue,
+	useComputed,
+	useSignalEffect,
+	useIsPending,
+	useCommitted,
+	startTransitionWrite,
+	trace,
+	onDomMutation,
+};
+
+export default adapter;
