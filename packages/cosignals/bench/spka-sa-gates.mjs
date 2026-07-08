@@ -13,12 +13,17 @@
 import process from 'node:process';
 
 const ROOT = process.env.COSIGNAL_ROOT ?? '/Users/jitl/src/alien-signals-opt';
-const mod = await import(`${ROOT}/packages/cosignals/src/concurrent.ts`);
+// The engine module moved (concurrent.ts fused into CosignalEngine.ts);
+// this bench drives A/B across generations, so try the fused module first
+// and fall back to the old path on pre-fusion trees.
+const mod = await import(`${ROOT}/packages/cosignals/src/CosignalEngine.ts`).catch(
+	() => import(`${ROOT}/packages/cosignals/src/concurrent.ts`),
+);
 
 /**
  * A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree constructs one
  * bridge per shape; this tree has ONE module engine, so each shape gets one
- * `__resetEngineForTest()` instead. The reset asserts quiescence — both
+ * the engine reset seam (`__TEST__resetEngine`; `__resetEngineForTest` on pre-fusion trees) instead. The reset asserts quiescence — both
  * shapes below already end quiescent (every render ends, every batch
  * retires at commit) — and the drain below is insurance for leftovers.
  */
@@ -38,7 +43,7 @@ function acquireEngine() {
 	const e = mod.engine;
 	e.discardAllWip();
 	for (const t of e.liveBatches()) (t.parked ? e.settleAction(t.id) : e.retire(t.id));
-	mod.__resetEngineForTest();
+	(mod.__TEST__resetEngine ?? mod.__resetEngineForTest)();
 	return e;
 }
 
