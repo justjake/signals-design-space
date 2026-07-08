@@ -5,7 +5,8 @@
  *
  * Reading order for the package: this header (vocabulary), then
  * CosignalEngine.ts (the engine module — storage layout, the kernel
- * algorithm, clocks, the evaluation policy, the observed lifecycle, and
+ * algorithm, clocks, the evaluation policy, the observed lifecycle, world
+ * arenas, observer records, committed observers, render integration, and
  * reclamation, in that order), then concurrent.ts (the concurrent-worlds
  * machinery and its vocabulary), then the mechanism modules it composes —
  * WriteLog.ts, Batch.ts, World.ts,

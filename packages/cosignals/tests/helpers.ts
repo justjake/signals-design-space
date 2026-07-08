@@ -143,8 +143,8 @@ const coreEffectMounts = new Map<number, number>();
  * through the bridge's `logCoreEffectRun` trace seam.
  *
  * Names take a per-mount ordinal suffix (`#k`): sibling core-effect firing
- * order under one operation is implementation-defined (owner ruling
- * 2026-07-06), so the lockstep differ compares same-step runs as a multiset
+ * order under one operation is implementation-defined by contract, so the
+ * lockstep differ compares same-step runs as a multiset
  * sorted on (effect, value) — duplicate names (two mounts with no
  * intervening event/seq used to create the same `CE${events}.${seq}.${epoch}`
  * uniq) would make that comparison ambiguous.

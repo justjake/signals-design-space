@@ -341,7 +341,7 @@ describe('batch and untracked contracts', () => {
 	});
 });
 
-describe('dispose and reclamation (donor paths)', () => {
+describe('dispose and reclamation', () => {
 	test('effect cleanup runs before each re-run and at dispose', () => {
 		const a = new Atom(0);
 		const log: string[] = [];

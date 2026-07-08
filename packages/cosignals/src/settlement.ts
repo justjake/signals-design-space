@@ -123,7 +123,7 @@ export function createSettlement(core: EngineCore): void {
 						// Scan the suspended list (dense — O(current suspensions))
 						// for shadows whose box payload is this sentinel —
 						// the arena half (marks + propagation + the read-clock
-						// bump) lives with the layout enums: WorldArena.ts
+						// bump) lives with the layout enums: CosignalEngine.ts
 						// arenaInvalidateSettled. The marks are the invalidation
 						// (arenas serve world reads); committed roots
 						// also join the cone drain below. Open-render arenas keep

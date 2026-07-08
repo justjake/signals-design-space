@@ -19,7 +19,7 @@
  *    below) plus its entries; every world folds from that base.
  *  - DURABLE HANDOFF at the close: with every batch retired and every render
  *    closed, each world's fold over the whole log equals the kernel's newest
- *    value (the eager-apply invariant, referee-verified), so the close
+ *    value (the eager-apply invariant, pinned by the lockstep suites), so the close
  *    adopts kernel newest as the new base BY IDENTITY — zero op replays,
  *    zero equality re-invocations — and the log drops whole. Retired batch
  *    records drop in the same sweep (write records reference batches by id,
@@ -87,9 +87,10 @@ export type WriteRecord = {
 
 /**
  * The bounded-memory valve's trigger: how many foldable prefix entries a
- * log accumulates before the valve folds that prefix into base (the same
- * magnitude as the chunked design's chunk capacity, so the per-atom residue
- * bound is unchanged). The write path files an atom with the valve's
+ * log accumulates before the valve folds that prefix into base — large
+ * enough that episodes which quiesce normally never fold, small enough
+ * that a held-open episode's foldable residue stays modest per atom. The
+ * write path files an atom with the valve's
  * candidate set when its log reaches exactly this length — see the
  * candidate-set invariant on `EpisodeLifecycle.foldCandidates`.
  */
@@ -197,7 +198,7 @@ export type EpisodeLifecycle = {
 };
 
 export function createEpisodeLifecycle(deps: EpisodeLifecycleDeps): EpisodeLifecycle {
-	// Composition-time locals (the codegen doctrine): the per-entry fold
+	// Composition-time locals: the per-entry fold
 	// calls bind once (applyOp/isAtomValueEqual are assigned before this
 	// factory runs, as is the batch table); `getMinLivePin` is a late-bound
 	// core slot (assigned by the render-pass factory, which composes after

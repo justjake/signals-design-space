@@ -1035,7 +1035,7 @@ describe('case 17 — optimistic rollback: the feature is deleted', () => {
 	});
 });
 
-describe('at-least-once observers (owner ruling: re-fires are clock-gated; per-dep value baselines repealed)', () => {
+describe('at-least-once observers (re-fires are clock-gated; no per-dep value baselines)', () => {
 	// The rewritten value-gate pins. The old contract compared each dep's
 	// committed value against a per-observer baseline; the ruling replaces
 	// the re-fire decision with the per-(root, node) committed clock —

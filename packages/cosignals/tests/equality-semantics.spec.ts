@@ -41,9 +41,7 @@
  *   exist: world folds, and the bounded-memory prefix fold that keeps
  *   a held-open episode's log finite (WriteLog.ts foldRetiredPrefix).
  *
- *   THE EPISODE CLOSE RE-INVOKES NOTHING (the flattening's one sanctioned
- *   semantic change, replacing the repealed per-entry re-invocation at
- *   retirement): when the last batch retires with every render closed, each
+ *   THE EPISODE CLOSE RE-INVOKES NOTHING: when the last batch retires with every render closed, each
  *   touched atom's base adopts kernel newest BY IDENTITY — every write's
  *   acceptance gate was already paid at the write — and the log drops
  *   whole. ZERO comparator invocations, pinned below.
@@ -186,10 +184,7 @@ describe('R-2 order: isEqual(current, incoming), everywhere', () => {
 		expect(p.calls).toEqual([[0, 1], [1, 2]]);
 		engine.renderEnd(render.id, 'discard');
 		p.reset();
-		// THE REWRITTEN PIN (the flattening's one sanctioned semantic change).
-		// The repealed contract: retirement's fold once re-invoked the
-		// comparator per entry as it folded the retired prefix into base. The
-		// new mechanism: this retirement is the last pending durable work, so
+		// THE CLOSE PIN: this retirement is the last pending durable work, so
 		// the EPISODE CLOSES — base adopts kernel newest by identity (each
 		// write's sole acceptance gate already ran at the write, pinned
 		// above), the log drops whole, and the comparator runs ZERO times.

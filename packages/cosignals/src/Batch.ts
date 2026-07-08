@@ -156,7 +156,7 @@ export type BatchManager = {
 
 export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): BatchManager {
 	// Stable resident containers, aliased once (identity-shared); host
-	// functions bind once at composition (the codegen doctrine).
+	// functions bind once at composition, so warm call sites stay direct.
 	const roots = core.roots;
 	const rootToOpenRender = core.rootToOpenRender;
 	const { isDriverAttached, isDevChecksEnabled } = deps.host;

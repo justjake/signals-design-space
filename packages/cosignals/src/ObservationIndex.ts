@@ -59,8 +59,8 @@ export type ObservationIndex = {
 };
 
 export function createObservationIndex(deps: ObservationIndexDeps): ObservationIndex {
-	// Composition-time locals (the codegen doctrine): the dense node column is
-	// aliased by identity; the kernel walk binds once.
+	// Composition-time locals: the dense node column is aliased by
+	// identity; the kernel walk binds once, so its call sites stay direct.
 	const nodeIndexToInternals = deps.host.nodeIndexToInternals;
 	const { getKernelStrongDeps } = deps.host;
 	const obsRefs: number[] = [0];

@@ -807,7 +807,7 @@ export function attachDriver(d: EngineDriver): void {
 // The WorldArena record class, its same-file layout const enums, the
 // transliterated walk family, and the whole serving/lifecycle layer
 // (serve/refold, claim/release/pool, fanout, decay, the routing walks) live
-// in WorldArena.ts; the FOLD_TRUTH serve-override marker and the world
+// in CosignalEngine.ts's world-arena sections; the FOLD_TRUTH serve-override marker and the world
 // fold/evaluation/read-routing layer live in World.ts. Both are composed by
 // ConcurrentEngine.ts (createConcurrentEngine, called at module initialization below)
 // through one shared engine-core record (World.ts
@@ -1376,7 +1376,7 @@ export function disposeComputed(handle: Computed<unknown>): void {
 }
 
 	// (purgeNodeFromArenas — the whole-arena shadow purge disposeComputed and
-	// the record-free scrub share — lives in WorldArena.ts; aliased above.)
+	// the record-free scrub share — lives in CosignalEngine.ts; aliased above.)
 
 /**
  * The record-free scrub (registered kernel-side via __setRecordFreeHook): a
@@ -1544,7 +1544,7 @@ export function root(id: RootId): RootState {
 // equality rule), evaluate, readKernelComputed, the fold-through readers, and the
 // read-routing resolution — lives in World.ts; the hot entries are aliased
 // as module bindings (see composeEngine). The arena serving/lifecycle layer
-// lives in WorldArena.ts; the settlement tap and the operation epilogue
+// lives in CosignalEngine.ts; the settlement tap and the operation epilogue
 // pair live in settlement.ts.
 
 /** Test seam: shrink the settlement-drain iteration cap. @internal */
@@ -1595,7 +1595,7 @@ function arenaQuiesceSweep(): void {
  */
 export function __checkerInternals(): ArenaCheckerInternals {
 	return {
-		// The layout view is built in WorldArena.ts, the enums' own file
+		// The layout view is built in CosignalEngine.ts, the enums' own file
 		// (same-file const enum discipline): in sync by construction.
 		layout: arenaCheckerLayout(),
 		get evalDepth(): number {
@@ -1696,7 +1696,7 @@ export function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): numbe
 }
 
 // (runInFoldTruthFrame — the armed checker's naive evaluation frame — lives in
-// WorldArena.ts with the serve-override state; __checkerInternals wires it.)
+// CosignalEngine.ts with the serve-override state; __checkerInternals wires it.)
 
 // ---- observed-closure maintenance ----
 // The observation index — shiftObservedCount/enterObservation/
@@ -1709,7 +1709,7 @@ export function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): numbe
 // ---- the routing walks (arenas route) ----
 // The arena-walking halves — walkArenaStrong, the watcher collection rows'
 // readers, the drain candidate collection, and the fixup closure's arena
-// leg — live in WorldArena.ts (same-file with the layout enums); the
+// leg — live in CosignalEngine.ts (same-file with the layout enums); the
 // orchestration — the delivery walk, the per-watcher delivery decision, the
 // durable/quiet drains, and correctWatcher — lives in NotificationQueue.ts
 // (createDeliveryWalks), reached through the core's late-bound slots (the
@@ -1732,7 +1732,7 @@ export function liveBatches(): Batch[] {
 	return batchOps.liveBatches();
 }
 
-export function internalsById(id: NodeId): AnyInternals {
+function internalsById(id: NodeId): AnyInternals {
 	// Public surface: the caller's id is not provably a node record id, so
 	// the row resolution carries its own identity check (a garbage id —
 	// e.g. a link record's — reads free-list residue as its NODE_INDEX and
@@ -1857,7 +1857,7 @@ export function bareWrite(node: AtomInternals, kind: WriteKind, payload: unknown
  * clock → member-slot fanout → apply to the kernel with stepwise equality
  * → arena delivery walk → newest-subscription flush after the walk returns.
  */
-export function writeInBatch(batchId: BatchId | undefined, node: AtomInternals, kind: WriteKind, payload: unknown): void {
+function writeInBatch(batchId: BatchId | undefined, node: AtomInternals, kind: WriteKind, payload: unknown): void {
 	const c = core; // one load; the frame guards/depth below stay one-property reads
 	if (c.evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 	if (c.inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
@@ -2206,7 +2206,7 @@ export function quiesce(): void {
 // ------------------------------------------------------------ world reads
 
 /** The value of a node in a named world (adapter/test surface). */
-export function readWorldValue(node: AnyInternals, world: World): Value {
+function readWorldValue(node: AnyInternals, world: World): Value {
 	return evaluate(node, world);
 }
 

@@ -219,7 +219,7 @@ export function createDeliveryWalks(core: EngineCore): void {
 	 * lastValidatedAt stamp, re-arm the dedup bits, and queue the kind-2
 	 * notify together — all four correction sites (settlement drain, quiet
 	 * drain, durable drain, mount fixup) share this body so the tuple can
-	 * never drift. The GATE is split by the at-least-once ruling:
+	 * never drift. The gate is split by the at-least-once contract:
 	 *
 	 *  - Drain causes (retirement / per-root-commit / quiet) gate on CLOCKS:
 	 *    the candidate's evaluation just settled the watched node's per-root
@@ -249,7 +249,7 @@ export function createDeliveryWalks(core: EngineCore): void {
 	function correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
 		const committing = core.committingRender;
 		if (cause === 'mount' || (committing !== undefined && w.snapshot.renderPassId === committing.id)) {
-			// Cross-world gate (kept by the ruling's survivor clause).
+			// Cross-world gate (the value compare per-root clocks cannot replace).
 			if (!core.isValueChanged(wInternals, w.lastRenderedValue, now)) return false;
 			if (cause !== 'mount') {
 				const a = core.rootToArena.get(w.root);
@@ -322,7 +322,7 @@ export function createDeliveryWalks(core: EngineCore): void {
 		ws.length = 0;
 		// Candidate collection: the root arena's dirty list seeds a
 		// walk over all arena links — weak included (the walk itself lives in
-		// WorldArena.ts, same-file with the layout enums).
+		// CosignalEngine.ts's world-arena sections, same-file with the enums).
 		const a = c.rootToArena.get(rootId);
 		if (a !== undefined && a.dirty.length !== 0) {
 			c.arenaCollectDrainCandidates(a, gen, rootId, ws);

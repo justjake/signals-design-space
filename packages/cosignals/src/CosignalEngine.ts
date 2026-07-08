@@ -152,13 +152,13 @@ export type IdBrand<P extends string> = { [IdOf]?: P };
  * (id = record ordinal × ArenaShape.STRIDE). 0 = "none" (record 0 is burned). */
 export type NodeId = number & IdBrand<'node'>;
 /** Premultiplied link record id (links share the arena and stride with nodes). 0 = "none". */
-export type LinkId = number & IdBrand<'link'>;
+type LinkId = number & IdBrand<'link'>;
 /** A premultiplied record id of either kind — the shared allocator's
  * currency: both id kinds draw from one bump pointer (`recNext`), so a value
  * that is legitimately "either kind" needs a home. A RecordId only becomes a
  * NodeId or LinkId at the allocator's decision point ({@link allocNode} /
  * allocLink), which cast it into the chosen id space. */
-export type RecordId = NodeId | LinkId;
+type RecordId = NodeId | LinkId;
 /** The record's dense per-node ordinal (NodeField.NODE_INDEX): assigned once
  * when a slot first hosts a node, inherited by every later tenant of the
  * slot, and never an identity. Dense per-node side tables key by it (node
@@ -171,13 +171,13 @@ export type NodeIndex = number & IdBrand<'nodeIndex'>;
  * {@link clockSource} (see the UpdatedAt clocks section). 0 = "never". */
 export type Clock = number & IdBrand<'clock'>;
 /** A node's FLAGS field value: a bitwise OR of NodeFlag members. */
-export type NodeFlags = number;
+type NodeFlags = number;
 /** The global evaluation cycle counter, stamped into link VERSION fields on re-track. */
-export type Version = number;
+type Version = number;
 /** A node's GEN field value: bumped on free so disposers can defuse stale ids. */
-export type Generation = number;
+type Generation = number;
 /** A count of fixed-stride records (nodes and links draw from one shared pool). */
-export type RecordCount = number;
+type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see ArenaShape). */
 export type ValueIndex = number & IdBrand<'valueIndex'>;
 
@@ -323,7 +323,7 @@ export const enum LinkField {
  * the rendered-world snapshot); the Watcher handle object holds only
  * the record id and the monotone watcher id (delivery order).
  */
-export const enum WatcherField {
+const enum WatcherField {
 	/** Kind + observer-state bits (NodeFlag.K_WATCHER, NodeFlag.OBSERVER_LIVE). */
 	FLAGS = 0,
 	/** Allocator-owned: the node free list threads here while the record is freed (0 while live — watcher records hold no dependency links). */
@@ -359,7 +359,7 @@ export const enum WatcherField {
  * handle keeps the object reference while the column slot scrubs at
  * free). The values slots stay empty on purpose.
  */
-export const enum SubscriptionField {
+const enum SubscriptionField {
 	/** Kind + observer-state bits (NodeFlag.K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE). */
 	FLAGS = 0,
 	/** Allocator-owned: the node free list threads here while the record is freed (0 while live). */
@@ -497,6 +497,8 @@ export const enum ArenaShape {
 	ID_TO_EXTRAS_SHIFT = 3,
 	/** id >> ID_TO_CLOCK_SHIFT: premultiplied id → the record's base slot in the `clocks` column (1 slot per record). */
 	ID_TO_CLOCK_SHIFT = 3,
+	/** id >> ID_TO_ORDINAL_SHIFT: premultiplied id → the record ordinal (log2 of STRIDE; a stride change updates both). */
+	ID_TO_ORDINAL_SHIFT = 3,
 	/**
 	 * valueIndex + AUX_VALUE_OFFSET: the record's second value slot — a
 	 * signal's pending value or an effect's cleanup fn. Computeds leave it
@@ -729,7 +731,7 @@ const enum ArenaGeom {
 	 * (the dalien-signals record-store pattern). NOT a ceiling: an
 	 * allocation past the current capacity doubles the buffers by copy,
 	 * mid-operation (growWorldArenaBuffers) — exhaustion is never fatal,
-	 * by owner ruling. EngineResetOptions.arenaInitInts overrides the
+	 * growth replaces it. EngineResetOptions.arenaInitInts overrides the
 	 * initial size (the arena suites shrink it to force mid-operation
 	 * growth). The views stay plain fixed-length typed arrays (full V8
 	 * element-access optimization): length-tracking resizable-buffer
@@ -1179,9 +1181,9 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 	 */
 	function sortLinkFreeList(): void {
 		let n = 0;
-		const words = new Uint32Array(((recNext >> 3) + 32) >> 5);
+		const words = new Uint32Array(((recNext >> ArenaShape.ID_TO_ORDINAL_SHIFT) + 32) >> 5);
 		for (let id = linkFreeHead; id !== 0; id = memory[id + LinkField.FREE_NEXT]) {
-			const rec = id >> 3;
+			const rec = id >> ArenaShape.ID_TO_ORDINAL_SHIFT;
 			words[rec >> 5] |= 1 << (rec & 31);
 			++n;
 		}
@@ -1195,7 +1197,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 			while (bits !== 0) {
 				const bit = bits & -bits;
 				bits ^= bit;
-				const id: LinkId = ((w << 5) + (31 - Math.clz32(bit))) << 3;
+				const id: LinkId = ((w << 5) + (31 - Math.clz32(bit))) << ArenaShape.ID_TO_ORDINAL_SHIFT;
 				if (tail === 0) {
 					head = id;
 				} else {
@@ -1233,9 +1235,9 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 	}
 
 	// ---- upstream system.ts, transliterated -------------------------------------
-	// The arena walks in WorldArena.ts re-derive these algorithms over a
-	// different record layout on purpose (weak-subs second list, VALID/BOX
-	// bits, guard counters — see the header there). Behavioral drift between
+	// The arena walks (the world-arena sections below) re-derive these
+	// algorithms over a different record layout on purpose (weak-subs second
+	// list, VALID/BOX bits, guard counters — see that section's header). Behavioral drift between
 	// the twins is caught by the model-comparison fuzz suites and the
 	// conformance suite; that enforcement, not this comment, is the
 	// guarantee. When changing either side, port the rule, not the text.
@@ -2338,8 +2340,8 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 //    and the free-path scrub guarantees a fresh or reused record
 //    starts at 0 ("never validated").
 //
-// The skip rule for consumers (owner ruling: observer re-fires are
-// AT-LEAST-ONCE): an observer may skip only when the producer is CLEAN and
+// The skip rule for consumers (the contract: observer re-fires are
+// at-least-once): an observer may skip only when the producer is CLEAN and
 // its clock matches the observer's last-validated stamp; otherwise it
 // evaluates, the consult settles the producer's per-root committed clock
 // (settleObserverClock — clocks move only on changed results, with the
@@ -2361,7 +2363,7 @@ let clockSource: Clock = 0;
 // ---- the live op table + growth ------------------------------------------------
 
 /** Default capacity floor, in records, when neither the env var nor configure() sets one. */
-export const DEFAULT_INITIAL_RECORDS = 1 << 20;
+const DEFAULT_INITIAL_RECORDS = 1 << 20;
 /** Smallest legal capacity floor, in records — the env parse and configure() validation both enforce it. */
 export const MIN_INITIAL_RECORDS = 2;
 
@@ -3065,7 +3067,7 @@ export function boxedRead(c: NodeId, flags: NodeFlags): unknown {
  *    lives.
  */
 
-export type LifecycleState = {
+type LifecycleState = {
 	/** The atom's record id (the map key, carried for the dormancy delete). */
 	id: NodeId;
 	effect: (ctx: AtomCtx<unknown>) => void | (() => void);
@@ -3083,7 +3085,7 @@ export type LifecycleState = {
 
 /** Active lifecycle records by id (watched, or with a pending shift) — see
  * the module header for the dormant/active/rehydration story. */
-export const lifecycleStates = new Map<NodeId, LifecycleState>();
+const lifecycleStates = new Map<NodeId, LifecycleState>();
 let lifecycleQueue: LifecycleState[] = [];
 let lifecycleFlushScheduled = false;
 
@@ -3246,11 +3248,11 @@ function shiftLifecycleCount(id: NodeId, delta: -1 | 1): void {
  * every such link removed (the union count hitting zero schedules the
  * flap-damped cleanup).
  */
-export function retainLifecycle(id: NodeId): void {
+function retainLifecycle(id: NodeId): void {
 	shiftLifecycleCount(id, 1);
 }
 
-export function releaseLifecycle(id: NodeId): void {
+function releaseLifecycle(id: NodeId): void {
 	shiftLifecycleCount(id, -1);
 }
 
@@ -3494,7 +3496,7 @@ export function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
 }
 
 /** Membership probe (one of the named world-state queries orchestration
- * and the reclamation guards are confined to — owner ruling: world state
+ * and the reclamation guards are confined to — the discipline: world state
  * is read through the narrow function set, never arena storage directly):
  * whether this arena currently holds a shadow record for the node index.
  * Cold — the reclamation guard's open-render row, the render lifecycle's
@@ -4027,9 +4029,9 @@ export function createWorldArena(core: EngineCore): void {
 	}
 
 	/**
-	 * Settle a node's per-root committed clock after an OBSERVER CONSULT —
-	 * the one clock-advance site of the world arenas (the plan's bump-table
-	 * rows for per-root committed clocks, re-expressed consult-driven).
+	 * Settle a node's per-root committed clock after an observer consult —
+	 * the one clock-advance site of the world arenas (the bump rule for
+	 * per-root committed clocks, consult-driven).
 	 * Called by the observer machinery right after its committed evaluation
 	 * of the node: the drains, the boundary re-check, the commit populator,
 	 * and the capture reads. Compares the shadow's CURRENT folded value
@@ -4044,7 +4046,7 @@ export function createWorldArena(core: EngineCore): void {
 	 * state and CHANGE which re-fires observers see — re-fire behavior would
 	 * depend on read timing. Against the consult-owned cutoff register, a
 	 * multi-write flip-flop within one consult window coalesces to nothing
-	 * and one spanning consults re-fires (the at-least-once ruling's
+	 * and one spanning consults re-fires (the at-least-once contract's
 	 * accepted spurious class) — deterministically, whoever reads in
 	 * between. The reference model's per-(root, node) accepted-change
 	 * counters refresh at exactly the mirrored sites, which is what keeps
@@ -5148,9 +5150,9 @@ export class Watcher {
 	}
 
 	/** What the committed screen shows for this watcher — the rendered-value
-	 * register (the record's values-column slot). NOT a re-fire gate: the
-	 * at-least-once ruling decides corrections by clocks; this register
-	 * survives because non-gating contracts read it — the bindings' mount
+	 * register (the record's values-column slot). Not a re-fire gate:
+	 * corrections are clock-decided (the at-least-once contract); this
+	 * register survives because non-gating contracts read it — the bindings' mount
 	 * value and resubscribe seed, ctx.previous feeding at commits, and the
 	 * correction records' from/to payloads. */
 	get lastRenderedValue(): Value {
@@ -5163,7 +5165,7 @@ export class Watcher {
 	/** The watcher's lastValidatedAt stamp (the record's clock-column slot):
 	 * the per-root committed clock of the watched node at the last moment
 	 * the screen was known to agree with committed truth. Advance sites,
-	 * per the at-least-once ruling: a committed render whose rendered value
+	 * per the at-least-once contract: a committed render whose rendered value
 	 * matched committed-now (the populator's cross-world check), and an
 	 * urgent correction (the drain just reconciled the screen). 0 = never —
 	 * a re-staled commit resets it to 0, which forces the next drain's
@@ -5484,8 +5486,8 @@ function buildObserverDepChain(a: WorldArena, sub: Subscription, deps: { node: A
  * retains).
  */
 export function createCommittedObservers(core: EngineCore, observation: Pick<ObservationIndex, 'syncSubscriptionObservation' | 'shiftObservedCount'>): void {
-	// Composition-time locals (the codegen doctrine): every function a warm
-	// path calls binds once; mutable core state (trace, captureFrame, the
+	// Composition-time locals: every function a warm path calls binds
+	// once, so those call sites stay direct; mutable core state (trace, captureFrame, the
 	// guards, the live count) stays plain field reads off the core record.
 	const { evaluate, isValueChanged, root, setCaptureFrame } = core;
 	const rootToOpenRender = core.rootToOpenRender;
@@ -5651,8 +5653,8 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
 	 * mutation of the boundary has landed (the same mutate-then-notify
 	 * ordering every boundary shares).
 	 *
-	 * The per-dep decision is the at-least-once clock rule (owner ruling —
-	 * no value comparison anywhere in it):
+	 * The per-dep decision is the at-least-once clock rule (no value
+	 * comparison anywhere in it):
 	 *
 	 *  1. FAST NEGATIVE GUARD — skip without evaluating when the producer is
 	 *     provably unmoved: its shadow is CLEAN (VALID, no DIRTY/PENDING
@@ -5783,7 +5785,7 @@ export function createCommittedObservers(core: EngineCore, observation: Pick<Obs
  * this section owns every transition; the resident registry's gap-fill,
  * the record-free scrub, and the quiescence sweep read them in place.
  *
- * Per-world state discipline (owner ruling): the orchestration here reads
+ * Per-world state discipline: the orchestration here reads
  * and writes world state ONLY through the narrow function set — the core
  * operation table (claim/release, evaluate, fanout, decay, drains, clock
  * settling, closure collection) and the named probes (committedNodeClock,
@@ -5826,7 +5828,7 @@ export type RenderPass = {
 /** The resident-state edges the render lifecycle consumes (provided by the
  * engine's composition site), as a named slice of the observation index's
  * record type. */
-export type RenderPassManagerDeps = {
+type RenderPassManagerDeps = {
 	/** The observation index (ObservationIndex.ts): its refcount shift — the
 	 * watcher liveness seam feeds it, generation-checked. */
 	observation: Pick<ObservationIndex, 'shiftObservedCount'>;
@@ -5851,7 +5853,7 @@ export type RenderPassManager = {
 
 export function createRenderPassManager(core: EngineCore, deps: RenderPassManagerDeps): RenderPassManager {
 	// Stable resident containers and tables, aliased once (identity-shared);
-	// the observation shift binds once at composition (the codegen doctrine).
+	// the observation shift binds once at composition (direct call sites).
 	const { shiftObservedCount } = deps.observation;
 	const nodeIndexToInternals = core.nodeIndexToInternals;
 	const idToRenderPass = core.idToRenderPass;
@@ -6313,7 +6315,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			const wInternals = resolveWatcherInternals(w);
 			if (wInternals === undefined) continue; // loud skip (live ⇒ alive in practice; belt for binding-side flips)
 			const committedNow = core.evaluate(wInternals, { kind: 'committed', root: render.root });
-			// The committed-render stamp rule (the at-least-once ruling's
+			// The committed-render stamp rule (the at-least-once contract's
 			// baseline-advance site): the populator's evaluation settled the
 			// watched node's per-root committed clock. When the rendered
 			// register agrees with committed-now, the screen is VALIDATED —
@@ -6322,8 +6324,8 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			// forces the next durable drain's clock gate to correct it even
 			// if committed truth flips back meanwhile (spurious by accepted
 			// design; the value compare here is the cross-world render ↔
-			// committed commit-integrity check the ruling's survivor clause
-			// keeps — per-root clocks cannot express equivalence between two
+			// committed commit-integrity check clocks cannot replace —
+			// per-root clocks cannot express equivalence between two
 			// worlds).
 			// The populator is an observer consult: settle the watched node's
 			// committed clock before the stamp rule reads it.
@@ -7032,7 +7034,7 @@ export function __reclaimStatsForTest(): {
  * any live kernel frame would corrupt the next test instead of failing this
  * one. @internal
  */
-export function __assertKernelIdleForReset(): void {
+function __assertKernelIdleForReset(): void {
 	if (enterDepth !== 0) throw new Error('cosignals: __resetEngineForTest inside an open kernel frame (enterDepth !== 0)');
 	if (batchDepth !== 0) throw new Error('cosignals: __resetEngineForTest inside batch() (batchDepth !== 0)');
 	if (runDepth !== 0) throw new Error('cosignals: __resetEngineForTest inside an effect run');

@@ -45,8 +45,7 @@ const BUDGETS: Record<string, number> = {
 	isValidLink: 60, // 47
 	update: 90, // 74
 	updateComputed: 445, // 432: the durable-clock bump on changed outcomes
-	// (both return arms test-and-stamp; the flattening's bump table) — still
-	// under the inline limit
+	// (both return arms test-and-stamp) — still under the inline limit
 	updateSignal: 80, // 62
 	notify: 210, // 178
 	run: 390, // 333

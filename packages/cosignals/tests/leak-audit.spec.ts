@@ -291,7 +291,7 @@ describe('4. ARENA POOL', () => {
 });
 
 describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
-	it('open/write/retire churn incl. parked actions stays bounded with NO quiesce() call (SPK-K1 regression: each episode close drops its records; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
+	it('open/write/retire churn incl. parked actions stays bounded with NO quiesce() call (regression pin: each episode close drops its records; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
 		const b = bridge(); // production posture: no referee, no tracer, no armed checker
 		const an = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(an));
