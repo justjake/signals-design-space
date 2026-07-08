@@ -1,6 +1,6 @@
 # Judgement scorecard: fh1
 
-**Verdict: issues** · fork LOC 167 · lib LOC 1941
+**Verdict: clean (after fix round; originally issues)** · final fork LOC 167 · final lib LOC 1957 · fork LOC 167 · lib LOC 1941
 
 ## Gates (claimed vs observed)
 
@@ -17,3 +17,20 @@ All gates re-run independently at HEAD dd880bb (fork 1492d0d57c), all green: typ
 ## Notes
 
 Feature spot audits: (a) lifetime effects GENUINE — my engine probe confirmed one observation across the union of kinds (computed-chain, engine effect, hook subscriber), subscribe/unsubscribe flap within a tick nets zero callbacks, StrictMode nets one (entry test + battery). (b) latest() context rule FAILS — see red flags; this entry joins the failing pair on that discriminator. (c) mutation window GENUINE — fork emits onMutation(true/false) bracketing exactly commitMutationEffects+resetAfterCommit inside flushMutationEffects (layout/passive effects outside); entry test uses a real MutationObserver with disconnect-on-start/reconnect-on-stop, asserts zero leaked React records AND a positive control that third-party appendChild IS observed; fork jest test additionally pins "no bracket for a commit with no host mutations". Entry-specific: (a) quiescence self-destruction GENUINE — probe confirmed hist/log/episodeBase/draftSubs all reclaimed on BOTH retire and discard paths; gc test asserts internals plus WeakRef collection; retention is gated on liveBatches empty AND openWorlds==0 (a host that leaks a World would pin histories, but the seam releases pass worlds at commit and onPassStart). (b) seam narrowness CONFIRMED — exactly 4 fact callbacks (onPassStart/onRootUpdated/onCommit/onMutation) + 2 queries (getWriteLane, getRenderContainer) + 1 control (pinnedTransitionLane); the mutation window is a fact callback, not a query, so the narrow-seam claim holds; corrective re-renders use pinnedTransitionLane around React.startTransition in runInBatch so the join-fixup commits inside the owning batch's lane (fork test pins the lane routing; battery scenario 5 passes). (c) rebase direction AGREES with the calibrated battery — urgent-alone applies to base (1*2=2), retirement refolds the whole interleaved log in scheduling order ((1+1)*2=4), and a constant draft recorded before an urgent update folds in call order rather than clobbering (probe: set(10) draft then urgent +5 retires to 15). Originality/stance: the version-stamped-visibility design is real and recognizably distinct — no world tables or overlay stores anywhere; worlds are (cutoff, batch-list) predicates folded over per-signal logs, per-root committed views are just latched cutoffs. Ideas worth stealing: the 107-line ReactFiberSignalSeam.js published on ReactSharedInternals with absence-as-feature-detection; the pinnedTransitionLane one-field control (vs heavier incumbent mechanisms); episode-scoped histories that make quiescence-costs-nothing structural rather than a cleanup pass; the orphan-batch double-microtask probe. Readability is strong: generously documented with engineering rationale, named number types, no line-golfing (1941 lines includes real doc comments). Known-gaps section is unusually candid. Verdict rationale: all claimed gates verified green and honestly reported; the two real dings are the undisclosed latest()-context failure (a required-feature defect misreported as done) and the stale lib LOC — issues for ranking, not disqualification-level gaming.
+
+
+## Re-judgement after fix round (closing)
+
+**Verdict: clean** · fork LOC 167 · lib LOC 1957
+
+### Fixes verified
+
+All claims verified. (1) Canonical latest() is genuinely TRACKED: Computed.get runs trackRead in finally before rethrowing pend, so the dependency registers even on pending reads; independent probe shows effect re-fires after urgent writes. (2) Never-suspend survives: pending async canonical read serves the settled fallback (probe: 42 served while refetch pending, re-fires to 99 on land); never-settled pending rethrows, same as prior free-context contract. (3) setRenderWorldProvider installed by installProviders, re-installed on register() re-entry, restored by __resetEngine. (4) Render-body probe: latest===useValue in every pass — urgent pass beside held transition serves canon, transition pass resolves its draft. (5) Free-context draft visibility intact. (6) All 3 engine regressions + react-gate 2b verified FAILING against pre-fix dd880bb sources. (7) Oracle viaLatest p=0.35 present; pre-fix fails at seed 1 (computed5: got 38 want 54, matching REPORT verbatim); 1200-seed deep fuzz green post-fix and scales linearly (12000 seeds also green). Gates re-run: engine 209/209, react gate 20/20, battery 25/25, both typechecks clean.
+
+### Battery
+
+25/25 (byte-identical tamper check passed vs royale/verify/battery, sha256 match on all 4 files)
+
+### Notes
+
+forkLoc 167 / libLoc 1957 via canonical count-loc.mjs, agreeing with REPORT §3, §Judgement-fixes, and the corrected self-count narrative (1876 staleness explanation accurate). REPORT §5 defect moved out of done; defect narrative matches independently observed behavior including the exact oracle failure string. Worktree left as found; temporary judge probe spec deleted after run. One documented residual (not a defect): a pending computed that has NEVER settled still propagates its PendingValue through canonical latest() — there is no value to serve; consistent with pre-existing free-context semantics and the documented contract. This closes fh1 as clean.
