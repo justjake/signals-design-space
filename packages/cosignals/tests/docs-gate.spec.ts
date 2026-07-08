@@ -21,8 +21,9 @@
  *    index.ts's own deviation enumeration — K1, B2, P1, m2, R-2, T1…) are
  *    not machine-checked; prose review owns those.
  *
- * Scope: every packages/cosignals/src/*.ts, every
- * packages/cosignals-react/src/*.ts, and both packages' README.md files.
+ * Scope: every .ts source under packages/cosignals/src and
+ * packages/cosignals-react/src (subdirectories included), and both
+ * packages' README.md files.
  * Allowance: in cosignals-react sources ONLY, occurrences inside the string
  * names of React's own `unstable_*` protocol entry points are exempt (the
  * protocol's names are React's to choose); cosignals itself has no
@@ -65,10 +66,17 @@ const COMMENT_STAGE_CODES: RegExp[] = [
 	/\bS-[ABCD]\b/,
 ];
 
+/** Every .ts source under `dir`, subdirectories included; asserts the scan
+ * found something, so a moved directory can never silently empty the gate. */
 function sourceFiles(dir: string): string[] {
-	return readdirSync(dir)
-		.filter((f) => f.endsWith('.ts'))
-		.map((f) => join(dir, f));
+	const out: string[] = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+		if (entry.isFile() && entry.name.endsWith('.ts')) {
+			out.push(join(entry.parentPath, entry.name));
+		}
+	}
+	expect(out, `docs-gate scanned no sources under ${dir}`).not.toEqual([]);
+	return out;
 }
 
 /** The comment text of a TS source, line-aligned with the original (code
