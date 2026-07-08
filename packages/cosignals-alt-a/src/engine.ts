@@ -34,7 +34,7 @@
  * structured for the §15 codegen to take over later.
  */
 
-// #region GENERATED — layout v1 (from tools/schema.ts; run pnpm gen) — DO NOT EDIT
+// #region GENERATED — layout v2 (from tools/schema.ts; run pnpm gen) — DO NOT EDIT
 const enum C {
 	// ---- node record (plane M, stride 8): main plane: nodes and links interleaved (ids pre-multiplied by 8; record 0 burned) ----
 	/** state machine + kind bits [flags; owner: alloc writes; free zeroes] */
@@ -117,7 +117,7 @@ const enum C {
 	LOGGED = 128,
 	/** watchers only: notify synchronously via the broadcast list instead of the effect queue */
 	IMMEDIATE = 256,
-	/** transitively watched by some effect/watcher (liveness split, drives the observed-lifecycle) */
+	/** RESERVED: superseded by the liveCount side-column refcount (§8.6 conversion); bit kept for layout stability */
 	LIVE = 512,
 	/** kind bit: atom */
 	K_ATOM = 1024,
@@ -179,7 +179,7 @@ const enum C {
 	/** infinity for pin comparisons */
 	MAX_SEQ = 0x7fffffff,
 }
-// #endregion GENERATED layout v1
+// #endregion GENERATED layout v2
 
 import type { Container, ExternalRuntimeListener, ForkAdapter } from './fork-double';
 import type { Tracer } from './tracing';
@@ -311,6 +311,11 @@ export function createCosignalEngine(options?: EngineOptions) {
 	const memoVals: unknown[] = [];
 	const memoCheckedAt: number[] = [0]; // per memo record: certGen at last validation
 	const newestValidAt: number[] = [0]; // per node: certGen when values[+1] cached a NEWEST value
+	// §8.6 as a REFCOUNT (owner-approved conversion): per-node count of LIVE
+	// direct subscribers, in a side column (plane M has no spare slot and the
+	// count must stay out of the kernel-rewritten flags word).
+	// LIVE(node) := liveCount > 0 || intrinsically live (effect/scope/watcher).
+	const liveCount: number[] = [0];
 
 	// ---- kernel scalars -----------------------------------------------------------
 	let cycle = 0;
@@ -556,6 +561,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 			metas.push(undefined);
 			unappliedStamp.push(0);
 			newestValidAt.push(0);
+			liveCount.push(0);
 		}
 		return id;
 	}
@@ -568,6 +574,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		M[id + C.LOG_HEAD] = 0;
 		M[id + C.LOG_TAIL] = 0;
 		++M[id + C.GEN];
+		liveCount[id >> 3] = 0;
 		const v = id >> 2;
 		values[v] = undefined;
 		values[v + 1] = undefined;
@@ -705,10 +712,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 		} else {
 			M[dep + C.SUBS] = newLink;
 		}
-		// §8.6: a LIVE consumer attaching to a non-LIVE producer moves the
-		// liveness boundary — flow the bit down the producer's dependency list.
-		if ((M[sub + C.FLAGS] & C.LIVE) !== 0 && (M[dep + C.FLAGS] & C.LIVE) === 0) {
-			flowLiveDown(dep);
+		// §8.6: a live consumer's new edge contributes one live subscriber to
+		// the producer (cascades only on the producer's 0-crossing).
+		if (isLiveNode(sub)) {
+			incLive(dep);
 		}
 		// Overlay mark repair (§8.7.3): a canonical evaluation just picked up a
 		// logged/marked producer mid-era — stamp the consumer's cone so
@@ -769,43 +776,49 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 	}
 
-	function flowLiveDown(dep: number): void {
-		if ((M[dep + C.FLAGS] & C.LIVE) !== 0) {
-			return;
-		}
-		M[dep + C.FLAGS] |= C.LIVE;
-		if ((M[dep + C.FLAGS] & C.K_ATOM) !== 0) {
-			onAtomLiveChange(dep, true);
-			return;
-		}
-		let lnk = M[dep + C.DEPS];
-		while (lnk !== 0) {
-			flowLiveDown(M[lnk + C.DEP]);
-			lnk = M[lnk + C.NEXT_DEP];
+	function isLiveNode(id: number): boolean {
+		return liveCount[id >> 3] > 0
+			|| (M[id + C.FLAGS] & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0;
+	}
+
+	// Refcount transitions cascade ONLY on 0-crossings, and only for nodes
+	// whose liveness the count actually determines (intrinsically live
+	// effects/scopes/watchers never change liveness from count movement).
+	function incLive(dep: number): void {
+		if (++liveCount[dep >> 3] === 1) {
+			const flags = M[dep + C.FLAGS];
+			if ((flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0) {
+				return; // intrinsic: no liveness change
+			}
+			if ((flags & C.K_ATOM) !== 0) {
+				onAtomLiveChange(dep, true);
+				return;
+			}
+			// The node became live: it now counts as a live subscriber of each
+			// of its own dependencies.
+			let lnk = M[dep + C.DEPS];
+			while (lnk !== 0) {
+				incLive(M[lnk + C.DEP]);
+				lnk = M[lnk + C.NEXT_DEP];
+			}
 		}
 	}
 
-	function recheckLive(dep: number): void {
-		const flags = M[dep + C.FLAGS];
-		if ((flags & C.LIVE) === 0 || (flags & (C.K_EFFECT | C.K_WATCHER | C.K_SCOPE)) !== 0) {
-			return; // effects/watchers/scopes are born LIVE
-		}
-		let lnk = M[dep + C.SUBS];
-		while (lnk !== 0) {
-			if ((M[M[lnk + C.SUB] + C.FLAGS] & C.LIVE) !== 0) {
-				return; // still transitively watched
+	function decLive(dep: number): void {
+		if (--liveCount[dep >> 3] === 0) {
+			const flags = M[dep + C.FLAGS];
+			if ((flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0) {
+				return;
 			}
-			lnk = M[lnk + C.NEXT_SUB];
-		}
-		M[dep + C.FLAGS] &= ~C.LIVE;
-		if ((flags & C.K_ATOM) !== 0) {
-			onAtomLiveChange(dep, false);
-			return;
-		}
-		let d = M[dep + C.DEPS];
-		while (d !== 0) {
-			recheckLive(M[d + C.DEP]);
-			d = M[d + C.NEXT_DEP];
+			if ((flags & C.K_ATOM) !== 0) {
+				onAtomLiveChange(dep, false);
+				return;
+			}
+			let lnk = M[dep + C.DEPS];
+			while (lnk !== 0) {
+				decLive(M[lnk + C.DEP]);
+				lnk = M[lnk + C.NEXT_DEP];
+			}
 		}
 	}
 
@@ -836,17 +849,12 @@ export function createCosignalEngine(options?: EngineOptions) {
 		} else if ((M[dep + C.SUBS] = nextSub) === 0) {
 			unwatched(dep);
 		}
-		// §8.6: removing a subscriber may clear the producer's liveness — but
-		// only a LIVE subscriber's departure can move the boundary, and only
-		// when no remaining FIRST subscriber is LIVE (the overwhelmingly
-		// common steady case for dynamic-dep churn, kairo `unstable`).
-		if ((M[dep + C.FLAGS] & C.LIVE) !== 0) {
-			// (No sub-side gate: dispose() zeroes the departing node's flags
-			// before unlinking, so the departed sub's LIVE bit is unreadable.)
-			const first = M[dep + C.SUBS];
-			if (first === 0 || (M[M[first + C.SUB] + C.FLAGS] & C.LIVE) === 0) {
-				recheckLive(dep);
-			}
+		// §8.6: a live subscriber's departure releases its contribution.
+		// Exact pairing note: dispose() cascades its own departure BEFORE
+		// zeroing flags/unlinking, so a disposed sub reads not-live here and
+		// is never double-decremented.
+		if (isLiveNode(sub)) {
+			decLive(dep);
 		}
 		return nextDep;
 	}
@@ -1033,7 +1041,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (flags & C.K_ATOM) {
 			return updateAtom(node);
 		}
-		M[node + C.FLAGS] = (flags & (C.KIND_MASK | C.IMMEDIATE | C.LIVE)) | C.MUTABLE;
+		M[node + C.FLAGS] = (flags & (C.KIND_MASK | C.IMMEDIATE)) | C.MUTABLE;
 		return true;
 	}
 
@@ -1065,7 +1073,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 		const flags = M[node + C.FLAGS];
 		if (flags & C.K_COMPUTED) {
 			if (M[node + C.DEPS_TAIL] !== 0) {
-				M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY | (flags & (C.LIVE | C.LOGGED));
+				M[node + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.DIRTY | (flags & C.LOGGED);
 				disposeAllDepsInReverse(node);
 			}
 			noteReclaimRetry(node); // last subscriber gone: retry a GC-skipped reclaim
@@ -1092,9 +1100,8 @@ export function createCosignalEngine(options?: EngineOptions) {
 		if (M[c + C.FLAGS] & C.HAS_CHILD_EFFECT) {
 			unlinkChildEffects(c);
 		}
-		const keep = M[c + C.FLAGS] & C.LIVE;
 		M[c + C.DEPS_TAIL] = 0;
-		M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK | keep;
+		M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
 		const prevSub = activeSub;
 		activeSub = c;
 		++enterDepth;
@@ -1114,7 +1121,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function updateAtom(s: number): boolean {
-		M[s + C.FLAGS] = (M[s + C.FLAGS] & (C.LOGGED | C.LIVE)) | C.K_ATOM | C.MUTABLE;
+		M[s + C.FLAGS] = (M[s + C.FLAGS] & C.LOGGED) | C.K_ATOM | C.MUTABLE;
 		const v = s >> 2;
 		return values[v] !== (values[v] = values[v + 1]);
 	}
@@ -1136,7 +1143,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				}
 			}
 			M[e + C.DEPS_TAIL] = 0;
-			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK | C.LIVE;
+			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK;
 			const prevSub = activeSub;
 			activeSub = e;
 			++enterDepth;
@@ -1152,7 +1159,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				purgeDeps(e);
 			}
 		} else if (M[e + C.DEPS] !== 0) {
-			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.LIVE | (flags & C.HAS_CHILD_EFFECT);
+			M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & C.HAS_CHILD_EFFECT);
 		}
 	}
 
@@ -1184,6 +1191,16 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 		if (flags & C.K_WATCHER) {
 			liveWatchers.delete(e);
+		}
+		// §8.6 refcount pairing: this node's liveness contribution departs NOW,
+		// while its kind bits and dep links are still intact; the unlinks below
+		// then see it as not-live (flags zeroed) and do not double-decrement.
+		if (isLiveNode(e)) {
+			let lnk = M[e + C.DEPS];
+			while (lnk !== 0) {
+				decLive(M[lnk + C.DEP]);
+				lnk = M[lnk + C.NEXT_DEP];
+			}
 		}
 		M[e + C.FLAGS] = 0;
 		disposeAllDepsInReverse(e);
@@ -2930,7 +2947,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 
 	// ---- node constructors ---------------------------------------------------------
 	function newEffectNode(fn: () => (() => void) | void): number {
-		const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK | C.LIVE);
+		const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK);
 		fns[e >> 3] = fn;
 		const prevSub = activeSub;
 		activeSub = e;
@@ -2952,7 +2969,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function newScopeNode(fn: () => void): number {
-		const e = allocNode(C.K_SCOPE | C.MUTABLE | C.LIVE);
+		const e = allocNode(C.K_SCOPE | C.MUTABLE);
 		const prevSub = activeSub;
 		activeSub = e;
 		if (prevSub !== 0) {
@@ -3098,7 +3115,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 	function watch(target: SignalHandle, onBroadcast?: (ev: BroadcastEvent) => void): WatcherHandle {
 		maybeBoundary();
 		const targetId = target.id;
-		const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE | C.LIVE);
+		const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE);
 		const meta: NodeMeta = { watchedId: targetId, lastBroadcast: new Map(), onBroadcast };
 		metas[w >> 3] = meta;
 		liveWatchers.add(w);
@@ -3294,6 +3311,26 @@ export function createCosignalEngine(options?: EngineOptions) {
 				++steps;
 			}
 			if (rec !== 0) problems.push(`slot ${s} memo chain cyclic`);
+		}
+		// §8.6 refcount invariant: every node's liveCount equals the number of
+		// its subscriber links whose consumer is live (count > 0 or intrinsic).
+		for (const id of allNodes) {
+			if ((M[id + C.FLAGS] & C.KIND_MASK) === 0) {
+				continue; // freed
+			}
+			let n = 0;
+			let lnk = M[id + C.SUBS];
+			let steps = 0;
+			while (lnk !== 0 && steps < 1_000_000) {
+				if (isLiveNode(M[lnk + C.SUB])) {
+					++n;
+				}
+				lnk = M[lnk + C.NEXT_SUB];
+				++steps;
+			}
+			if (liveCount[id >> 3] !== n) {
+				problems.push(`liveCount[${id}] = ${liveCount[id >> 3]}, recount = ${n}`);
+			}
 		}
 		if (loggedAtomCount === 0 && passOpen === 0 && liveSlotMask === 0 && pendingWalks.length === 0) {
 			// Quiescence postconditions (§8.8/§9.7/§14.3).
@@ -3510,7 +3547,7 @@ export function createCosignalEngine(options?: EngineOptions) {
 				return passLineage;
 			},
 			isLive(h: SignalHandle): boolean {
-				return (M[h.id + C.FLAGS] & C.LIVE) !== 0;
+				return isLiveNode(h.id);
 			},
 		},
 		debug: {

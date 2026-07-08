@@ -79,7 +79,7 @@ export function defineSchema(s: Schema): Schema {
 }
 
 export const schema: Schema = defineSchema({
-	layoutVersion: 1,
+	layoutVersion: 2,
 	planes: {
 		M: { stride: 8, doc: 'main plane: nodes and links interleaved (ids pre-multiplied by 8; record 0 burned)' },
 		G: { stride: 4, doc: 'log plane: write-log entries (ids pre-multiplied by 4; record 0 burned; bulk-reset at quiescence)' },
@@ -148,7 +148,7 @@ export const schema: Schema = defineSchema({
 		{ name: 'HAS_CHILD_EFFECT', value: 64, doc: 'my dep list contains child effects/scopes (slow-path cleanup)' },
 		{ name: 'LOGGED', value: 128, doc: 'atoms only: LOG_HEAD !== 0. The read gate.' },
 		{ name: 'IMMEDIATE', value: 256, doc: 'watchers only: notify synchronously via the broadcast list instead of the effect queue' },
-		{ name: 'LIVE', value: 512, doc: 'transitively watched by some effect/watcher (liveness split, drives the observed-lifecycle)' },
+		{ name: 'LIVE', value: 512, doc: 'RESERVED: superseded by the liveCount side-column refcount (§8.6 conversion); bit kept for layout stability' },
 		{ name: 'K_ATOM', value: 1024, doc: 'kind bit: atom' },
 		{ name: 'K_COMPUTED', value: 2048, doc: 'kind bit: computed' },
 		{ name: 'K_EFFECT', value: 4096, doc: 'kind bit: effect' },
@@ -213,6 +213,7 @@ export const schema: Schema = defineSchema({
 		{ name: 'memos', index: 'id >> 3', doc: "node memo-chain head in plane W (guarded by W_NODE, §7.4)" },
 		{ name: 'metas', index: 'id >> 3', doc: 'policy metadata object (isEqual, reducer, rawFn, lastBroadcast, observeEffect)' },
 		{ name: 'unappliedStamp', index: 'id >> 3', doc: 'era-scoped "unapplied entries below me" walk-ticket stamps (per-cone NEWEST gate)' },
+		{ name: 'liveCount', index: 'id >> 3', doc: 'count of LIVE direct subscribers; LIVE(node) := count > 0 || effect/scope/watcher kind (§8.6 refcount)' },
 		{ name: 'logVals', index: 'gid >> 2', doc: 'log-entry payload: SET value / UPDATE fn / DISPATCH action / BASE snapshot' },
 		{ name: 'memoVals', index: 'allocated', doc: 'world-memo values (undefined for tombstones)' },
 	],

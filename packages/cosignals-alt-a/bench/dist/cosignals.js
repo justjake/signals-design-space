@@ -216,6 +216,7 @@ function createCosignalEngine(options) {
   const memoVals = [];
   const memoCheckedAt = [0];
   const newestValidAt = [0];
+  const liveCount = [0];
   let cycle = 0;
   let runDepth = 0;
   let batchDepth = 0;
@@ -383,6 +384,7 @@ function createCosignalEngine(options) {
       metas.push(void 0);
       unappliedStamp.push(0);
       newestValidAt.push(0);
+      liveCount.push(0);
     }
     return id;
   }
@@ -394,6 +396,7 @@ function createCosignalEngine(options) {
     M[id + 6 /* LOG_HEAD */] = 0;
     M[id + 7 /* LOG_TAIL */] = 0;
     ++M[id + 5 /* GEN */];
+    liveCount[id >> 3] = 0;
     const v = id >> 2;
     values[v] = void 0;
     values[v + 1] = void 0;
@@ -513,8 +516,8 @@ function createCosignalEngine(options) {
     } else {
       M[dep + 3 /* SUBS */] = newLink;
     }
-    if ((M[sub + 0 /* FLAGS */] & 512 /* LIVE */) !== 0 && (M[dep + 0 /* FLAGS */] & 512 /* LIVE */) === 0) {
-      flowLiveDown(dep);
+    if (isLiveNode(sub)) {
+      incLive(dep);
     }
     if (loggedAtomCount !== 0) {
       const df = M[dep + 0 /* FLAGS */];
@@ -559,42 +562,41 @@ function createCosignalEngine(options) {
       }
     }
   }
-  function flowLiveDown(dep) {
-    if ((M[dep + 0 /* FLAGS */] & 512 /* LIVE */) !== 0) {
-      return;
-    }
-    M[dep + 0 /* FLAGS */] |= 512 /* LIVE */;
-    if ((M[dep + 0 /* FLAGS */] & 1024 /* K_ATOM */) !== 0) {
-      onAtomLiveChange(dep, true);
-      return;
-    }
-    let lnk = M[dep + 1 /* DEPS */];
-    while (lnk !== 0) {
-      flowLiveDown(M[lnk + 1 /* DEP */]);
-      lnk = M[lnk + 6 /* NEXT_DEP */];
-    }
+  function isLiveNode(id) {
+    return liveCount[id >> 3] > 0 || (M[id + 0 /* FLAGS */] & (4096 /* K_EFFECT */ | 8192 /* K_SCOPE */ | 16384 /* K_WATCHER */)) !== 0;
   }
-  function recheckLive(dep) {
-    const flags = M[dep + 0 /* FLAGS */];
-    if ((flags & 512 /* LIVE */) === 0 || (flags & (4096 /* K_EFFECT */ | 16384 /* K_WATCHER */ | 8192 /* K_SCOPE */)) !== 0) {
-      return;
-    }
-    let lnk = M[dep + 3 /* SUBS */];
-    while (lnk !== 0) {
-      if ((M[M[lnk + 2 /* SUB */] + 0 /* FLAGS */] & 512 /* LIVE */) !== 0) {
+  function incLive(dep) {
+    if (++liveCount[dep >> 3] === 1) {
+      const flags = M[dep + 0 /* FLAGS */];
+      if ((flags & (4096 /* K_EFFECT */ | 8192 /* K_SCOPE */ | 16384 /* K_WATCHER */)) !== 0) {
         return;
       }
-      lnk = M[lnk + 4 /* NEXT_SUB */];
+      if ((flags & 1024 /* K_ATOM */) !== 0) {
+        onAtomLiveChange(dep, true);
+        return;
+      }
+      let lnk = M[dep + 1 /* DEPS */];
+      while (lnk !== 0) {
+        incLive(M[lnk + 1 /* DEP */]);
+        lnk = M[lnk + 6 /* NEXT_DEP */];
+      }
     }
-    M[dep + 0 /* FLAGS */] &= ~512 /* LIVE */;
-    if ((flags & 1024 /* K_ATOM */) !== 0) {
-      onAtomLiveChange(dep, false);
-      return;
-    }
-    let d = M[dep + 1 /* DEPS */];
-    while (d !== 0) {
-      recheckLive(M[d + 1 /* DEP */]);
-      d = M[d + 6 /* NEXT_DEP */];
+  }
+  function decLive(dep) {
+    if (--liveCount[dep >> 3] === 0) {
+      const flags = M[dep + 0 /* FLAGS */];
+      if ((flags & (4096 /* K_EFFECT */ | 8192 /* K_SCOPE */ | 16384 /* K_WATCHER */)) !== 0) {
+        return;
+      }
+      if ((flags & 1024 /* K_ATOM */) !== 0) {
+        onAtomLiveChange(dep, false);
+        return;
+      }
+      let lnk = M[dep + 1 /* DEPS */];
+      while (lnk !== 0) {
+        decLive(M[lnk + 1 /* DEP */]);
+        lnk = M[lnk + 6 /* NEXT_DEP */];
+      }
     }
   }
   function unlink(id, sub = M[id + 2 /* SUB */]) {
@@ -624,11 +626,8 @@ function createCosignalEngine(options) {
     } else if ((M[dep + 3 /* SUBS */] = nextSub) === 0) {
       unwatched(dep);
     }
-    if ((M[dep + 0 /* FLAGS */] & 512 /* LIVE */) !== 0) {
-      const first = M[dep + 3 /* SUBS */];
-      if (first === 0 || (M[M[first + 2 /* SUB */] + 0 /* FLAGS */] & 512 /* LIVE */) === 0) {
-        recheckLive(dep);
-      }
+    if (isLiveNode(sub)) {
+      decLive(dep);
     }
     return nextDep;
   }
@@ -794,7 +793,7 @@ function createCosignalEngine(options) {
     if (flags & 1024 /* K_ATOM */) {
       return updateAtom(node);
     }
-    M[node + 0 /* FLAGS */] = flags & (31744 /* KIND_MASK */ | 256 /* IMMEDIATE */ | 512 /* LIVE */) | 1 /* MUTABLE */;
+    M[node + 0 /* FLAGS */] = flags & (31744 /* KIND_MASK */ | 256 /* IMMEDIATE */) | 1 /* MUTABLE */;
     return true;
   }
   function notify(e) {
@@ -821,7 +820,7 @@ function createCosignalEngine(options) {
     const flags = M[node + 0 /* FLAGS */];
     if (flags & 2048 /* K_COMPUTED */) {
       if (M[node + 2 /* DEPS_TAIL */] !== 0) {
-        M[node + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 16 /* DIRTY */ | flags & (512 /* LIVE */ | 128 /* LOGGED */);
+        M[node + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 16 /* DIRTY */ | flags & 128 /* LOGGED */;
         disposeAllDepsInReverse(node);
       }
       noteReclaimRetry(node);
@@ -846,9 +845,8 @@ function createCosignalEngine(options) {
     if (M[c + 0 /* FLAGS */] & 64 /* HAS_CHILD_EFFECT */) {
       unlinkChildEffects(c);
     }
-    const keep = M[c + 0 /* FLAGS */] & 512 /* LIVE */;
     M[c + 2 /* DEPS_TAIL */] = 0;
-    M[c + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 4 /* RECURSED_CHECK */ | keep;
+    M[c + 0 /* FLAGS */] = 2048 /* K_COMPUTED */ | 1 /* MUTABLE */ | 4 /* RECURSED_CHECK */;
     const prevSub = activeSub;
     activeSub = c;
     ++enterDepth;
@@ -867,7 +865,7 @@ function createCosignalEngine(options) {
     }
   }
   function updateAtom(s) {
-    M[s + 0 /* FLAGS */] = M[s + 0 /* FLAGS */] & (128 /* LOGGED */ | 512 /* LIVE */) | 1024 /* K_ATOM */ | 1 /* MUTABLE */;
+    M[s + 0 /* FLAGS */] = M[s + 0 /* FLAGS */] & 128 /* LOGGED */ | 1024 /* K_ATOM */ | 1 /* MUTABLE */;
     const v = s >> 2;
     return values[v] !== (values[v] = values[v + 1]);
   }
@@ -885,7 +883,7 @@ function createCosignalEngine(options) {
         }
       }
       M[e + 2 /* DEPS_TAIL */] = 0;
-      M[e + 0 /* FLAGS */] = 4096 /* K_EFFECT */ | 2 /* WATCHING */ | 4 /* RECURSED_CHECK */ | 512 /* LIVE */;
+      M[e + 0 /* FLAGS */] = 4096 /* K_EFFECT */ | 2 /* WATCHING */ | 4 /* RECURSED_CHECK */;
       const prevSub = activeSub;
       activeSub = e;
       ++enterDepth;
@@ -901,7 +899,7 @@ function createCosignalEngine(options) {
         purgeDeps(e);
       }
     } else if (M[e + 1 /* DEPS */] !== 0) {
-      M[e + 0 /* FLAGS */] = 4096 /* K_EFFECT */ | 2 /* WATCHING */ | 512 /* LIVE */ | flags & 64 /* HAS_CHILD_EFFECT */;
+      M[e + 0 /* FLAGS */] = 4096 /* K_EFFECT */ | 2 /* WATCHING */ | flags & 64 /* HAS_CHILD_EFFECT */;
     }
   }
   function requeueAbort(e) {
@@ -930,6 +928,13 @@ function createCosignalEngine(options) {
     }
     if (flags & 16384 /* K_WATCHER */) {
       liveWatchers.delete(e);
+    }
+    if (isLiveNode(e)) {
+      let lnk = M[e + 1 /* DEPS */];
+      while (lnk !== 0) {
+        decLive(M[lnk + 1 /* DEP */]);
+        lnk = M[lnk + 6 /* NEXT_DEP */];
+      }
     }
     M[e + 0 /* FLAGS */] = 0;
     disposeAllDepsInReverse(e);
@@ -2337,7 +2342,7 @@ function createCosignalEngine(options) {
     return v;
   }
   function newEffectNode(fn) {
-    const e = allocNode(4096 /* K_EFFECT */ | 2 /* WATCHING */ | 4 /* RECURSED_CHECK */ | 512 /* LIVE */);
+    const e = allocNode(4096 /* K_EFFECT */ | 2 /* WATCHING */ | 4 /* RECURSED_CHECK */);
     fns[e >> 3] = fn;
     const prevSub = activeSub;
     activeSub = e;
@@ -2358,7 +2363,7 @@ function createCosignalEngine(options) {
     return e;
   }
   function newScopeNode(fn) {
-    const e = allocNode(8192 /* K_SCOPE */ | 1 /* MUTABLE */ | 512 /* LIVE */);
+    const e = allocNode(8192 /* K_SCOPE */ | 1 /* MUTABLE */);
     const prevSub = activeSub;
     activeSub = e;
     if (prevSub !== 0) {
@@ -2470,7 +2475,7 @@ function createCosignalEngine(options) {
   function watch(target, onBroadcast) {
     maybeBoundary();
     const targetId = target.id;
-    const w = allocNode(16384 /* K_WATCHER */ | 2 /* WATCHING */ | 256 /* IMMEDIATE */ | 512 /* LIVE */);
+    const w = allocNode(16384 /* K_WATCHER */ | 2 /* WATCHING */ | 256 /* IMMEDIATE */);
     const meta = { watchedId: targetId, lastBroadcast: /* @__PURE__ */ new Map(), onBroadcast };
     metas[w >> 3] = meta;
     liveWatchers.add(w);
@@ -2635,6 +2640,24 @@ function createCosignalEngine(options) {
         ++steps;
       }
       if (rec !== 0) problems.push(`slot ${s} memo chain cyclic`);
+    }
+    for (const id of allNodes) {
+      if ((M[id + 0 /* FLAGS */] & 31744 /* KIND_MASK */) === 0) {
+        continue;
+      }
+      let n = 0;
+      let lnk = M[id + 3 /* SUBS */];
+      let steps = 0;
+      while (lnk !== 0 && steps < 1e6) {
+        if (isLiveNode(M[lnk + 2 /* SUB */])) {
+          ++n;
+        }
+        lnk = M[lnk + 4 /* NEXT_SUB */];
+        ++steps;
+      }
+      if (liveCount[id >> 3] !== n) {
+        problems.push(`liveCount[${id}] = ${liveCount[id >> 3]}, recount = ${n}`);
+      }
     }
     if (loggedAtomCount === 0 && passOpen === 0 && liveSlotMask === 0 && pendingWalks.length === 0) {
       if (gNext !== 4) problems.push(`quiescent but gNext=${gNext}`);
@@ -2818,7 +2841,7 @@ function createCosignalEngine(options) {
         return passLineage;
       },
       isLive(h) {
-        return (M[h.id + 0 /* FLAGS */] & 512 /* LIVE */) !== 0;
+        return isLiveNode(h.id);
       }
     },
     debug: {

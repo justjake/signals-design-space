@@ -1,4 +1,4 @@
-# Layout v1 (generated from tools/schema.ts — run pnpm gen)
+# Layout v2 (generated from tools/schema.ts — run pnpm gen)
 
 ## node record (plane M, stride 8)
 
@@ -68,7 +68,7 @@ world-memo plane: overlay memo records (certificate region lives in a companion 
 | 64 | `HAS_CHILD_EFFECT` | my dep list contains child effects/scopes (slow-path cleanup) |
 | 128 | `LOGGED` | atoms only: LOG_HEAD !== 0. The read gate. |
 | 256 | `IMMEDIATE` | watchers only: notify synchronously via the broadcast list instead of the effect queue |
-| 512 | `LIVE` | transitively watched by some effect/watcher (liveness split, drives the observed-lifecycle) |
+| 512 | `LIVE` | RESERVED: superseded by the liveCount side-column refcount (§8.6 conversion); bit kept for layout stability |
 | 1024 | `K_ATOM` | kind bit: atom |
 | 2048 | `K_COMPUTED` | kind bit: computed |
 | 4096 | `K_EFFECT` | kind bit: effect |
@@ -133,5 +133,6 @@ the §9.1 monotonic gate
 | `memos` | `id >> 3` | node memo-chain head in plane W (guarded by W_NODE, §7.4) |
 | `metas` | `id >> 3` | policy metadata object (isEqual, reducer, rawFn, lastBroadcast, observeEffect) |
 | `unappliedStamp` | `id >> 3` | era-scoped "unapplied entries below me" walk-ticket stamps (per-cone NEWEST gate) |
+| `liveCount` | `id >> 3` | count of LIVE direct subscribers; LIVE(node) := count > 0 || effect/scope/watcher kind (§8.6 refcount) |
 | `logVals` | `gid >> 2` | log-entry payload: SET value / UPDATE fn / DISPATCH action / BASE snapshot |
 | `memoVals` | `allocated` | world-memo values (undefined for tombstones) |

@@ -5,7 +5,7 @@
  * ships in the hot build.
  */
 
-export const LAYOUT_VERSION = 1;
+export const LAYOUT_VERSION = 2;
 
 export type FieldInfo = { name: string; slot: number; kind: string; doc: string };
 
