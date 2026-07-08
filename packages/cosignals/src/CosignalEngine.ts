@@ -3583,13 +3583,18 @@ function maybeCloseEpisode(): void {
 }
 
 // ---- batches + retirement --------------------------------------------------------------
-// Batch identity and lifetime. Each batch is one `Batch` record in the
-// `idToBatch` registry, keyed by a never-reused `BatchId`; a written batch
-// occupies a slot in the 31-entry recycling table (`slots`) from its first
-// write until the slot's release after retirement (`retireInner`, the
-// batch's terminal transition). Batch records are episode-lifetime:
-// write-log entries reference batches by id, so a retired record persists
-// until the episode close drops it wholesale.
+// A batch, in the concurrent machinery, is the group of writes belonging to
+// one UI update — one event handler, one transition, one async action — the
+// unit the host schedules, renders, and commits together. (Distinct from the
+// kernel's {@link batch} function, which only defers effect flushes within
+// one synchronous call.) Each batch is one `Batch` record in the `idToBatch`
+// registry, keyed by a never-reused `BatchId`; a written batch occupies a
+// slot in a 31-entry recycling table (`slots` — 31 so a set of slots fits
+// one int as a bit mask) from its first write until the slot's release
+// after retirement, the batch's terminal transition ({@link retireInner}).
+// Batch records are episode-lifetime: write-log entries reference batches by
+// id, so a retired record persists until the episode close drops it
+// wholesale.
 
 // Leniently branded batch scalars (see `IdBrand` above): plain numbers
 // assign in cast-free, but the brands are mutually exclusive — a slot
