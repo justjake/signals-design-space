@@ -43,7 +43,10 @@ export class Trace {
     this.ring[index] = event;
     this.byId.set(event.id, event);
     this.size++;
-    if (target !== undefined && event.kind === "component delivery") {
+    if (
+      target !== undefined &&
+      (event.kind === "component delivery" || event.kind === "effect run")
+    ) {
       this.latestDelivery.set(target, event.id);
     }
   }

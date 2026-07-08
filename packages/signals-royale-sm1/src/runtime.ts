@@ -65,6 +65,7 @@ type Batch = {
   committedRoots: Set<RootToken>;
   operations: Operation<any>[];
   refreshes: Computed<any>[];
+  refreshResults: Map<Computed<any>, Evaluation<any>> | null;
   cause: number;
 };
 
@@ -79,6 +80,7 @@ type Pass = {
   id: PassId;
   world: World;
   computeds: Set<Computed<any>> | null;
+  traceStart: number;
 };
 
 type AsyncRecord = {
@@ -220,6 +222,7 @@ type ReactiveEffect = {
   active: boolean;
   queued: boolean;
   cause: number | undefined;
+  handle: WeakRef<() => void> | null;
 };
 
 type EffectScope = {
@@ -307,6 +310,7 @@ function currentWorld(): World {
           deferred: (lanes & liveLanes) !== 0,
         },
         computeds: null,
+        traceStart: traceEmit("render pass start", { detail: "fallback" }),
       };
       passes.set(context.container, pass);
       activePassCount++;
@@ -425,6 +429,7 @@ function getOrCreateBatch(lane: Lane, createdAt: number, cause: number): Batch {
     committedRoots: new Set(),
     operations: [],
     refreshes: [],
+    refreshResults: null,
     cause,
   };
   batches.set(lane, batch);
@@ -849,7 +854,11 @@ function evaluateInWorld<T>(target: Computed<T>, world: World): Evaluation<T> {
   } else if (world.pass === -2 && target.latestRevision === worldRevision) {
     return target.latestEvaluation as Evaluation<T>;
   }
-  const visibleLanes = world.lanes & liveLanes;
+  let lanesVisibleAtPin = liveLanes;
+  for (const batch of episodeBatches) {
+    if (batch.retiredAt > world.pin) lanesVisibleAtPin |= batch.lane;
+  }
+  const visibleLanes = world.lanes & lanesVisibleAtPin;
   if (
     target.lastWorldEvaluation !== null &&
     target.lastWorldPin === world.pin &&
@@ -858,6 +867,11 @@ function evaluateInWorld<T>(target: Computed<T>, world: World): Evaluation<T> {
     return target.lastWorldEvaluation;
   }
   const evaluation = runEvaluation(target, world, false);
+  for (const batch of batches.values()) {
+    if ((world.lanes & batch.lane) !== 0 && batch.refreshes.includes(target)) {
+      (batch.refreshResults ??= new Map()).set(target, evaluation);
+    }
+  }
   target.lastWorldPin = world.pin;
   target.lastWorldLanes = visibleLanes;
   target.lastWorldEvaluation = evaluation;
@@ -1043,7 +1057,10 @@ function runEffect(target: ReactiveEffect): void {
   activeObserver = target;
   activeEffect = target;
   activeScope = target.scope;
-  const event = traceEmit("effect run", { cause: target.cause });
+  const event = traceEmit("effect run", {
+    cause: target.cause,
+    target: target.handle?.deref(),
+  });
   try {
     target.cleanup = withTraceCause(event || target.cause, target.fn) ?? null;
   } finally {
@@ -1163,11 +1180,13 @@ export function effect(fn: () => void | (() => void)): () => void {
     active: true,
     queued: false,
     cause: currentTraceCause(),
+    handle: null,
   };
   if (activeEffect !== null) activeEffect.children.push(target);
   if (activeScope !== null) activeScope.effects.push(target);
-  runEffect(target);
   const dispose = () => disposeEffect(target);
+  target.handle = new WeakRef(dispose);
+  runEffect(target);
   disposalRegistry.register(dispose, () => disposeEffect(target));
   return dispose;
 }
@@ -1279,6 +1298,61 @@ export function collectReactRead<T>(target: Atom<T> | Computed<T>, cause?: numbe
     };
   } finally {
     activeCollector = previous;
+  }
+}
+
+export function collectCommittedReactRead<T>(
+  target: Atom<T> | Computed<T>,
+  container: RootToken,
+  cause?: number,
+): ReactRead<T> {
+  const collector: ReadCollector = { atoms: [], computeds: [] };
+  const world =
+    passes.get(container)?.world ??
+    ({
+      pin: sequence,
+      lanes: rootViews.get(container) ?? 0,
+      pass: -3,
+      deferred: false,
+    } satisfies World);
+  const previousCollector = activeCollector;
+  const previousWorld = activeWorld;
+  activeCollector = collector;
+  activeWorld = world;
+  try {
+    let value: T | undefined;
+    if (target.kind === 0) {
+      collectAtom(target);
+      value = readAtomInWorld(target, world);
+    } else {
+      collector.computeds.push(target);
+      const evaluation = evaluateInWorld(target, world);
+      if (evaluation.status === 2) throw evaluation.error?.error;
+      for (const atom of evaluation.atoms) {
+        if (!collector.atoms.includes(atom)) collector.atoms.push(atom);
+      }
+      value = evaluation.value;
+    }
+    const versions: number[] = [];
+    const atomValues: unknown[] = [];
+    for (const atom of collector.atoms) {
+      versions.push(atom.version);
+      atomValues.push(readAtomInWorld(atom, world));
+    }
+    traceEmit("component re-render", { cause, target, label: target.label });
+    return {
+      target,
+      value: value as T,
+      atoms: collector.atoms,
+      computeds: collector.computeds,
+      versions,
+      atomValues,
+      lanes: world.lanes,
+      cause,
+    };
+  } finally {
+    activeWorld = previousWorld;
+    activeCollector = previousCollector;
   }
 }
 
@@ -1461,6 +1535,7 @@ function clearPass(container: RootToken, committedPass: boolean): void {
     for (const target of pass.computeds) target.worldCache?.delete(pass.id);
   }
   traceEmit("render pass end", {
+    cause: pass.traceStart || undefined,
     batch: pass.world.lanes & liveLanes || undefined,
     detail: committedPass ? "commit" : "discard",
   });
@@ -1500,6 +1575,39 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
       detail: "committed lane",
     });
   }
+  for (const target of batch.refreshes) {
+    const evaluation = batch.refreshResults?.get(target);
+    if (evaluation === undefined || evaluation.status === 1) {
+      target.forced = true;
+      markComputedDirty(target, retirementCause || batch.cause);
+      continue;
+    }
+    const changedValue =
+      evaluation.status !== target.status ||
+      (evaluation.status === 0 &&
+        (!target.settled || !target.equals(target.value, evaluation.value)));
+    target.initialized = true;
+    target.dirty = false;
+    target.forced = false;
+    target.status = evaluation.status;
+    target.thenable = evaluation.thenable;
+    target.error = evaluation.error;
+    target.evaluation = evaluation;
+    if (evaluation.status === 0) {
+      target.value = evaluation.value;
+      target.settled = true;
+    }
+    target.pendingLanes &= ~batch.lane;
+    setPendingState(
+      target,
+      target.urgentPending || target.pendingLanes !== 0,
+      retirementCause || batch.cause,
+    );
+    if (changedValue) {
+      target.version++;
+      propagateComputed(target, retirementCause || batch.cause);
+    }
+  }
   flushIfReady();
   sweepIfQuiescent();
 }
@@ -1532,6 +1640,18 @@ const hostListener: SignalHostListener = {
     if (passes.has(container)) clearPass(container, false);
     const visibleLanes = lanes | (rootViews.get(container) ?? 0);
     const id = nextPassId++;
+    let cause: number | undefined;
+    for (const batch of batches.values()) {
+      if ((visibleLanes & batch.lane) !== 0) {
+        cause = batch.cause;
+        break;
+      }
+    }
+    const traceStart = traceEmit("render pass start", {
+      cause,
+      batch: visibleLanes & liveLanes || undefined,
+      detail: `pass ${id}`,
+    });
     passes.set(container, {
       id,
       world: {
@@ -1541,15 +1661,12 @@ const hostListener: SignalHostListener = {
         deferred: (visibleLanes & liveLanes) !== 0,
       },
       computeds: null,
+      traceStart,
     });
     activePassCount++;
     for (const batch of batches.values()) {
       if ((lanes & batch.lane) !== 0) batch.roots.add(container);
     }
-    traceEmit("render pass start", {
-      batch: visibleLanes & liveLanes || undefined,
-      detail: `pass ${id}`,
-    });
   },
   onRenderEnd(container, committedPass) {
     clearPass(container, committedPass);

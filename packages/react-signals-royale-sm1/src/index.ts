@@ -6,6 +6,7 @@ import {
   atom,
   attachHost,
   batch,
+  collectCommittedReactRead,
   collectReactRead,
   committed,
   computed,
@@ -169,9 +170,23 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 }
 
 export function useCommitted<T>(target: Atom<T> | Computed<T>): T {
-  useValue(target);
+  requireRegistration();
+  const [, renderAgain] = React.useReducer((value: number) => value + 1, 0);
+  const cause = React.useRef<number | undefined>(undefined);
   const root = Fork.unstable_getSignalRenderRoot?.();
-  return committed(target, root ?? undefined);
+  if (root == null) throw new Error("useCommitted must run during a React render.");
+  const snapshot = collectCommittedReactRead(target, root, cause.current);
+  React.useLayoutEffect(() => {
+    const observer: ReactObserver = {
+      root,
+      notify(nextCause) {
+        cause.current = nextCause;
+        renderAgain();
+      },
+    };
+    return subscribeReact(snapshot, observer);
+  });
+  return snapshot.value;
 }
 
 export function useIsPending<T>(target: Atom<T> | Computed<T>): boolean {

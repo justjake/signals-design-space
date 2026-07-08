@@ -7,6 +7,7 @@ import {
   atom,
   batch,
   computed,
+  effect,
   flushSync,
   initializeAtomState,
   onDomMutation,
@@ -550,9 +551,11 @@ describe("real React protocol", () => {
     let request = 0;
     const remote = computed(() => requests[request].promise);
     function App() {
+      const value = useValue(remote) as unknown as string;
+      const onScreen = useCommitted(remote) as unknown as string;
       return (
         <span>
-          {useValue(remote) as unknown as string}:{useIsPending(remote) ? "pending" : "settled"}
+          {value}:{useIsPending(remote) ? "pending" : "settled"}:{onScreen}
         </span>
       );
     }
@@ -565,15 +568,21 @@ describe("real React protocol", () => {
       requests[0].resolve("one");
       await requests[0].promise;
     });
-    expect(container.textContent).toBe("one:settled");
+    expect(container.textContent).toBe("one:settled:one");
+    const effectValues: string[] = [];
+    const stopEffect = effect(() => {
+      effectValues.push(remote.state as unknown as string);
+    });
     request = 1;
     await act(async () => startTransitionWrite(() => refresh(remote)));
-    expect(container.textContent).toBe("one:pending");
+    expect(container.textContent).toBe("one:pending:one");
     await act(async () => {
       requests[1].resolve("two");
       await requests[1].promise;
     });
-    expect(container.textContent).toBe("two:settled");
+    expect(container.textContent).toBe("two:settled:two");
+    expect(effectValues).toEqual(["one", "two"]);
+    stopEffect();
   });
 
   it("materializes lazy atoms at first render and before set-before-read", async () => {

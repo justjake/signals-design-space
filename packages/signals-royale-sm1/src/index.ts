@@ -4,6 +4,7 @@ export {
   atom,
   attachHost,
   batch,
+  collectCommittedReactRead,
   collectReactRead,
   committed,
   computed,

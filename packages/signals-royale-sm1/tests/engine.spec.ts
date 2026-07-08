@@ -140,6 +140,32 @@ describe("engine features", () => {
     expect(() => read(remote)).toThrow(failure);
   });
 
+  it("keeps the newest refresh when an older request settles late", async () => {
+    const requests = [deferred<string>(), deferred<string>(), deferred<string>()];
+    let request = 0;
+    const remote = computed(() => requests[request].promise);
+    expect(() => read(remote)).toThrow(requests[0].promise);
+    requests[0].resolve("base");
+    await requests[0].promise;
+    await Promise.resolve();
+    expect(read(remote)).toBe("base");
+
+    request = 1;
+    refresh(remote);
+    expect(read(remote)).toBe("base");
+    request = 2;
+    refresh(remote);
+    expect(read(remote)).toBe("base");
+    requests[2].resolve("newest");
+    await requests[2].promise;
+    await Promise.resolve();
+    expect(read(remote)).toBe("newest");
+    requests[1].resolve("old");
+    await requests[1].promise;
+    await Promise.resolve();
+    expect(read(remote)).toBe("newest");
+  });
+
   it("serializes keyed state with replacer and installs it with a reviver", () => {
     const source = atom(new Date("2026-01-02T00:00:00.000Z"), { key: "date" });
     const json = serializeAtomState({ date: source }, function (key, value) {
@@ -166,6 +192,18 @@ describe("engine features", () => {
     value.set(3);
     expect(trace.events()).toHaveLength(2);
     expect(trace.overflow).toBeGreaterThan(0);
+    trace.stop();
+  });
+
+  it("explains an effect run back to its write", () => {
+    const trace = startTrace();
+    const value = atom(0);
+    const dispose = effect(() => {
+      value.state;
+    });
+    value.set(1);
+    expect(trace.whyLastDelivery(dispose).join("\n")).toMatch(/effect run[\s\S]*write/);
+    dispose();
     trace.stop();
   });
 });
