@@ -1,5 +1,5 @@
-import type { ComponentType, ReactNode } from 'react';
-import { atom, batch, register, startTransitionWrite, useValue, type Atom } from '../src/index.ts';
+import type { ComponentType, ReactNode } from "react";
+import { atom, batch, register, startTransitionWrite, useValue, type Atom } from "../src/index.ts";
 
 export interface CellStore {
   useCell(index: number): number;
@@ -18,7 +18,7 @@ export interface Contender {
 register();
 
 const contender: Contender = {
-  name: 'royale-sm1',
+  name: "royale-sm1",
   createCells(count) {
     const cells: Atom<number>[] = [];
     for (let index = 0; index < count; index++) cells.push(atom(0));

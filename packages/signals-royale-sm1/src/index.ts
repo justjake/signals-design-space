@@ -35,6 +35,6 @@ export {
   type SignalHost,
   type SignalHostListener,
   type Trace,
-} from './runtime.ts';
+} from "./runtime.ts";
 
-export type { TraceEvent } from './trace.ts';
+export type { TraceEvent } from "./trace.ts";

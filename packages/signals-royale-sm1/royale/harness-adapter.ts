@@ -1,4 +1,12 @@
-import { Atom, computed, effect, effectScope, startBatch, endBatch, untracked } from '../src/index.ts';
+import {
+  Atom,
+  computed,
+  effect,
+  effectScope,
+  startBatch,
+  endBatch,
+  untracked,
+} from "../src/index.ts";
 
 export interface AdapterSignal<T> {
   read(): T;
@@ -31,7 +39,7 @@ function createComputed<T>(fn: () => T): AdapterComputed<T> {
 }
 
 const adapter: FrameworkAdapter = {
-  name: 'signals-royale-sm1',
+  name: "signals-royale-sm1",
   signal: createSignal,
   computed: createComputed,
   effect,

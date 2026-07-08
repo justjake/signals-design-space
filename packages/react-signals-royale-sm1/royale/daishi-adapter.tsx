@@ -1,4 +1,4 @@
-import { atom, register, useValue } from '../src/index.ts';
+import { atom, register, useValue } from "../src/index.ts";
 
 register();
 const count = atom(0);

@@ -5,7 +5,7 @@ import {
   traceEmit,
   withTraceCause,
   type Trace,
-} from './trace.ts';
+} from "./trace.ts";
 
 export type Lane = number;
 export type PassId = number;
@@ -64,6 +64,7 @@ type Batch = {
   roots: Set<RootToken>;
   committedRoots: Set<RootToken>;
   operations: Operation<any>[];
+  refreshes: Computed<any>[];
   cause: number;
 };
 
@@ -112,7 +113,7 @@ export class Atom<T> {
   readonly equals: (a: T, b: T) => boolean;
   readonly label?: string;
   readonly key?: string;
-  readonly observation?: AtomOptions<T>['effect'];
+  readonly observation?: AtomOptions<T>["effect"];
   initialized = false;
   initializer: (() => T) | null;
   base!: T;
@@ -128,7 +129,7 @@ export class Atom<T> {
     this.label = options.label;
     this.key = options.key;
     this.observation = options.effect;
-    this.initializer = typeof initial === 'function' ? (initial as () => T) : null;
+    this.initializer = typeof initial === "function" ? (initial as () => T) : null;
     if (this.initializer === null) {
       this.base = initial as T;
       this.initialized = true;
@@ -178,6 +179,7 @@ export class Computed<T> {
   readonly observers = new Set<CoreObserver>();
   readonly reactObservers = new Set<ReactObserver>();
   readonly pendingObservers = new Set<ReactObserver>();
+  canonicalFrame: EvaluationFrame | null = null;
   evaluation: Evaluation<T> | null = null;
   worldCache: Map<PassId, Evaluation<T>> | null = null;
   latestRevision = -1;
@@ -253,6 +255,7 @@ const pendingEffects: ReactiveEffect[] = [];
 const batches = new Map<Lane, Batch>();
 const episodeBatches: Batch[] = [];
 const touchedAtoms = new Set<Atom<any>>();
+const worldComputeds = new Set<Computed<any>>();
 let passes = new WeakMap<RootToken, Pass>();
 let rootViews = new WeakMap<RootToken, number>();
 const lifetimeQueue = new Set<Atom<any>>();
@@ -317,9 +320,9 @@ function currentWorld(): World {
 function materialize<T>(target: Atom<T>): void {
   if (target.initialized) return;
   const initializer = target.initializer;
-  if (initializer === null) throw new Error('Atom has no initial value.');
+  if (initializer === null) throw new Error("Atom has no initial value.");
   if (initializerDepth !== 0) {
-    throw new Error(`Cyclic lazy initializer${target.label ? ` for ${target.label}` : ''}.`);
+    throw new Error(`Cyclic lazy initializer${target.label ? ` for ${target.label}` : ""}.`);
   }
   const previousObserver = activeObserver;
   const previousCollector = activeCollector;
@@ -338,9 +341,7 @@ function materialize<T>(target: Atom<T>): void {
 }
 
 function applyOperation<T>(operation: Operation<T>, value: T): T {
-  return operation.update
-    ? (operation.value as (previous: T) => T)(value)
-    : (operation.value as T);
+  return operation.update ? (operation.value as (previous: T) => T)(value) : (operation.value as T);
 }
 
 function readAtomInWorld<T>(target: Atom<T>, world: World): T {
@@ -375,24 +376,21 @@ function collectAtom(target: Atom<any>): void {
   if (collector !== null && !collector.atoms.includes(target)) collector.atoms.push(target);
 }
 
-function trackSource(source: Source): void {
+function trackSource(source: Source, value: unknown): void {
   const observer = activeObserver;
   if (observer === null) return;
   const next = observer.nextSources;
-  if (next.includes(source)) return;
+  if (observer.sources[next.length] !== source && next.includes(source)) return;
   next.push(source);
-  canonicalWorld.pin = sequence;
   observer.nextSourceVersions.push(source.version);
-  observer.nextSourceValues.push(
-    source.kind === 0 ? readAtomInWorld(source, canonicalWorld) : source.value,
-  );
+  observer.nextSourceValues.push(value);
 }
 
 export function read<T>(target: Atom<T> | Computed<T>): T {
   if (target.kind === 0) {
     collectAtom(target);
     const value = readAtomInWorld(target, currentWorld());
-    trackSource(target);
+    trackSource(target, value);
     return value;
   }
   const collector = activeCollector;
@@ -405,7 +403,7 @@ export function read<T>(target: Atom<T> | Computed<T>): T {
       ? evaluateCanonical(target)
       : evaluateInWorld(target, world);
   mergeEvaluation(evaluation as Evaluation<unknown>);
-  trackSource(target);
+  trackSource(target, evaluation.value);
   if (activeFrame !== null && activeFrame.computed !== target) {
     return evaluation.value as T;
   }
@@ -426,36 +424,29 @@ function getOrCreateBatch(lane: Lane, createdAt: number, cause: number): Batch {
     roots: new Set(),
     committedRoots: new Set(),
     operations: [],
+    refreshes: [],
     cause,
   };
   batches.set(lane, batch);
   episodeBatches.push(batch);
   liveLanes |= lane;
-  traceEmit('batch open', { cause, batch: lane });
+  traceEmit("batch open", { cause, batch: lane });
   return batch;
 }
 
 function writeAtom<T>(target: Atom<T>, update: boolean, input: T | ((previous: T) => T)): void {
-  if (initializerDepth !== 0) throw new Error('A lazy initializer must not write signals.');
-  if (host?.renderContext() != null) throw new Error('Signals must not be written during render.');
+  if (initializerDepth !== 0) throw new Error("A lazy initializer must not write signals.");
+  if (host?.renderContext() != null) throw new Error("Signals must not be written during render.");
   materialize(target);
 
   const classification = host?.currentWriteLane() ?? 0;
   const deferred = classification < 0;
   const lane = deferred ? -classification : 0;
-  const writerWorld: World = {
-    pin: sequence,
-    lanes: lane,
-    pass: -1,
-    deferred,
-  };
-  const previous = readAtomInWorld(target, writerWorld);
-  if (!update && target.equals(previous, input as T)) return;
-
   if (!deferred && activePassCount === 0 && batches.size === 0) {
+    const previous = target.base;
     const next = update ? (input as (value: T) => T)(previous) : (input as T);
     if (target.equals(previous, next)) return;
-    const cause = traceEmit('write', { label: target.label, detail: 'urgent' });
+    const cause = traceEmit("write", { label: target.label, detail: "urgent" });
     sequence++;
     worldRevision++;
     target.base = next;
@@ -465,13 +456,21 @@ function writeAtom<T>(target: Atom<T>, update: boolean, input: T | ((previous: T
     flushIfReady();
     return;
   }
+  const writerWorld: World = {
+    pin: sequence,
+    lanes: lane,
+    pass: -1,
+    deferred,
+  };
+  const previous = readAtomInWorld(target, writerWorld);
+  if (!update && target.equals(previous, input as T)) return;
 
   const seq = ++sequence;
   worldRevision++;
-  const cause = traceEmit('write', {
+  const cause = traceEmit("write", {
     batch: deferred ? lane : undefined,
     label: target.label,
-    detail: deferred ? 'deferred' : 'urgent',
+    detail: deferred ? "deferred" : "urgent",
   });
   const batch = deferred ? getOrCreateBatch(lane, seq, cause) : null;
   const operation: Operation<T> = {
@@ -550,9 +549,9 @@ function settleAsync(record: AsyncRecord, status: 1 | 2, value: unknown): void {
   if (status === 1) record.value = value;
   else record.error = { error: value };
   worldRevision++;
-  const settlement = traceEmit('suspense settlement', {
+  const settlement = traceEmit("suspense settlement", {
     cause: record.cause || undefined,
-    detail: status === 1 ? 'fulfilled' : 'rejected',
+    detail: status === 1 ? "fulfilled" : "rejected",
   });
   for (const reference of record.users) {
     const target = reference.deref();
@@ -606,11 +605,7 @@ function settleAsync(record: AsyncRecord, status: 1 | 2, value: unknown): void {
     if (!stillPending) {
       if (lanes === 0) target.urgentPending = false;
       else target.pendingLanes &= ~lanes;
-      setPendingState(
-        target,
-        target.urgentPending || target.pendingLanes !== 0,
-        settlement,
-      );
+      setPendingState(target, target.urgentPending || target.pendingLanes !== 0, settlement);
     }
     if (target.latestEvaluation?.pending.includes(record)) {
       target.latestRevision = -1;
@@ -656,16 +651,34 @@ function consumeThenable<U>(
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (
     value !== null &&
-    (typeof value === 'object' || typeof value === 'function') &&
-    typeof (value as { then?: unknown }).then === 'function'
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
   );
+}
+
+function useDuringEvaluation<U>(thenable: PromiseLike<U>): U {
+  const frame = activeFrame;
+  const world = activeWorld;
+  if (frame === null || world === null) {
+    throw new Error("A computed use function cannot be called after its evaluation ends.");
+  }
+  return consumeThenable(frame.computed, frame, world, thenable);
 }
 
 function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean): Evaluation<T> {
   if (target.evaluating) {
-    throw new Error(`Cyclic computed${target.label ? ` ${target.label}` : ''}.`);
+    throw new Error(`Cyclic computed${target.label ? ` ${target.label}` : ""}.`);
   }
-  const frame: EvaluationFrame = { computed: target, atoms: [], pending: [] };
+  let frame: EvaluationFrame;
+  if (canonical) {
+    frame = target.canonicalFrame ?? { computed: target, atoms: [], pending: [] };
+    target.canonicalFrame = frame;
+    frame.atoms.length = 0;
+    frame.pending.length = 0;
+    frame.error = undefined;
+  } else {
+    frame = { computed: target, atoms: [], pending: [] };
+  }
   const previousFrame = activeFrame;
   const previousWorld = activeWorld;
   const previousObserver = activeObserver;
@@ -680,7 +693,7 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
   let direct: AsyncRecord | undefined;
   let syncError: { error: unknown } | undefined;
   try {
-    value = target.fn(<U>(thenable: PromiseLike<U>) => consumeThenable(target, frame, world, thenable));
+    value = target.fn(useDuringEvaluation);
     if (isThenable(value)) {
       direct = asyncRecord(value, target.cause ?? currentTraceCause() ?? 0);
       value = consumeThenable(target, frame, world, value) as T;
@@ -706,30 +719,38 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
       thenable = Promise.all(thenables);
     }
   }
-  const hadSettled = canonical
+  const hadSettled = canonical ? target.settled : target.worldSettled || target.settled;
+  const staleValue = canonical
     ? target.settled
-    : target.worldSettled || target.settled;
-  const evaluation: Evaluation<T> = {
-    status,
-    settled: hadSettled,
-    value:
-      status === 0
-        ? value
-        : canonical
-          ? target.settled
-            ? target.value
-            : undefined
-          : target.worldSettled
-            ? target.worldValue
-            : target.settled
-              ? target.value
-              : undefined,
-    thenable,
-    error,
-    atoms: frame.atoms,
-    pending: frame.pending,
-    direct,
-  };
+      ? target.value
+      : undefined
+    : target.worldSettled
+    ? target.worldValue
+    : target.settled
+    ? target.value
+    : undefined;
+  let evaluation = canonical ? target.evaluation : null;
+  if (evaluation === null) {
+    evaluation = {
+      status,
+      settled: hadSettled,
+      value: status === 0 ? value : staleValue,
+      thenable,
+      error,
+      atoms: frame.atoms,
+      pending: frame.pending,
+      direct,
+    };
+  } else {
+    evaluation.status = status;
+    evaluation.settled = hadSettled;
+    evaluation.value = status === 0 ? value : staleValue;
+    evaluation.thenable = thenable;
+    evaluation.error = error;
+    evaluation.atoms = frame.atoms;
+    evaluation.pending = frame.pending;
+    evaluation.direct = direct;
+  }
 
   if (!canonical) {
     if (status === 0) {
@@ -744,11 +765,7 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
       if (ownerLanes === 0) target.urgentPending = false;
       else target.pendingLanes &= ~ownerLanes;
     }
-    setPendingState(
-      target,
-      target.urgentPending || target.pendingLanes !== 0,
-      target.cause ?? 0,
-    );
+    setPendingState(target, target.urgentPending || target.pendingLanes !== 0, target.cause ?? 0);
     return evaluation;
   }
   const oldStatus = target.status;
@@ -767,11 +784,7 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
     evaluation.settled = true;
   }
   target.urgentPending = status === 1 && target.settled;
-  setPendingState(
-    target,
-    target.urgentPending || target.pendingLanes !== 0,
-    target.cause ?? 0,
-  );
+  setPendingState(target, target.urgentPending || target.pendingLanes !== 0, target.cause ?? 0);
   if (
     oldStatus !== status ||
     oldSettled !== target.settled ||
@@ -829,6 +842,7 @@ function evaluateCanonical<T>(target: Computed<T>): Evaluation<T> {
 }
 
 function evaluateInWorld<T>(target: Computed<T>, world: World): Evaluation<T> {
+  worldComputeds.add(target);
   if (world.pass > 0) {
     const cached = target.worldCache?.get(world.pass);
     if (cached !== undefined) return cached;
@@ -920,11 +934,24 @@ function removeCoreObserver(source: Source, observer: CoreObserver): void {
   }
 }
 
-function reconcileSources(
-  observer: Computed<any> | ReactiveEffect,
-  nextSources: Source[],
-): void {
+function reconcileSources(observer: Computed<any> | ReactiveEffect, nextSources: Source[]): void {
   const previous = observer.sources;
+  if (previous.length === nextSources.length) {
+    let sameOrder = true;
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i] !== nextSources[i]) {
+        sameOrder = false;
+        break;
+      }
+    }
+    if (sameOrder) {
+      for (let i = 0; i < nextSources.length; i++) {
+        observer.sourceVersions[i] = observer.nextSourceVersions[i];
+        observer.sourceValues[i] = observer.nextSourceValues[i];
+      }
+      return;
+    }
+  }
   for (const source of previous) {
     if (!nextSources.includes(source)) removeCoreObserver(source, observer);
   }
@@ -1016,7 +1043,7 @@ function runEffect(target: ReactiveEffect): void {
   activeObserver = target;
   activeEffect = target;
   activeScope = target.scope;
-  const event = traceEmit('effect run', { cause: target.cause });
+  const event = traceEmit("effect run", { cause: target.cause });
   try {
     target.cleanup = withTraceCause(event || target.cause, target.fn) ?? null;
   } finally {
@@ -1068,11 +1095,11 @@ function setPendingState(target: Computed<any>, pending: boolean, cause: number)
     pendingNotificationScheduled = false;
     for (const computed of pendingNotifications) {
       for (const observer of computed.pendingObservers) {
-        const delivery = traceEmit('component delivery', {
+        const delivery = traceEmit("component delivery", {
           cause: computed.cause,
           target: computed,
           label: computed.label,
-          detail: computed.pendingState ? 'pending' : 'settled',
+          detail: computed.pendingState ? "pending" : "settled",
         });
         observer.notify(delivery || computed.cause || 0);
       }
@@ -1082,33 +1109,41 @@ function setPendingState(target: Computed<any>, pending: boolean, cause: number)
 }
 
 function deliverAtom(target: Atom<any>, lane: Lane, cause: number): void {
+  if (target.reactObservers.size === 0) return;
   const batch = lane === 0 ? undefined : batches.get(lane);
-  for (const observer of target.reactObservers) {
-    if (batch !== undefined) batch.roots.add(observer.root);
-    const delivery = traceEmit('component delivery', {
-      cause,
-      target,
-      batch: lane || undefined,
-      label: target.label,
-    });
-    if (lane === 0 || host === null) observer.notify(delivery || cause);
-    else host.runInLane(lane, () => observer.notify(delivery || cause));
-  }
+  const notify = () => {
+    for (const observer of target.reactObservers) {
+      if (batch !== undefined) batch.roots.add(observer.root);
+      const delivery = traceEmit("component delivery", {
+        cause,
+        target,
+        batch: lane || undefined,
+        label: target.label,
+      });
+      observer.notify(delivery || cause);
+    }
+  };
+  if (lane === 0 || host === null) notify();
+  else host.runInLane(lane, notify);
 }
 
 function deliverComputed(target: Computed<any>, lane: Lane, cause: number): void {
+  if (target.reactObservers.size === 0) return;
   const batch = lane === 0 ? undefined : batches.get(lane);
-  for (const observer of target.reactObservers) {
-    if (batch !== undefined) batch.roots.add(observer.root);
-    const delivery = traceEmit('component delivery', {
-      cause,
-      target,
-      batch: lane || undefined,
-      label: target.label,
-    });
-    if (lane === 0 || host === null) observer.notify(delivery || cause);
-    else host.runInLane(lane, () => observer.notify(delivery || cause));
-  }
+  const notify = () => {
+    for (const observer of target.reactObservers) {
+      if (batch !== undefined) batch.roots.add(observer.root);
+      const delivery = traceEmit("component delivery", {
+        cause,
+        target,
+        batch: lane || undefined,
+        label: target.label,
+      });
+      observer.notify(delivery || cause);
+    }
+  };
+  if (lane === 0 || host === null) notify();
+  else host.runInLane(lane, notify);
 }
 
 export function effect(fn: () => void | (() => void)): () => void {
@@ -1173,7 +1208,7 @@ export function startBatch(): void {
 }
 
 export function endBatch(): void {
-  if (batchDepth === 0) throw new Error('endBatch called without startBatch.');
+  if (batchDepth === 0) throw new Error("endBatch called without startBatch.");
   batchDepth--;
   flushIfReady();
 }
@@ -1227,7 +1262,7 @@ export function collectReactRead<T>(target: Atom<T> | Computed<T>, cause?: numbe
       versions.push(atom.version);
       atomValues.push(readAtomInWorld(atom, world));
     }
-    traceEmit('component re-render', {
+    traceEmit("component re-render", {
       cause,
       target,
       label: target.label,
@@ -1263,9 +1298,9 @@ export function subscribeReact<T>(snapshot: ReactRead<T>, observer: ReactObserve
       atom.version !== snapshot.versions[i] &&
       !atom.equals(snapshot.atomValues[i], readAtomInWorld(atom, canonicalWorld))
     ) {
-      staleCause = traceEmit('component delivery', {
+      staleCause = traceEmit("component delivery", {
         target: snapshot.target,
-        detail: 'post-subscribe canonical repair',
+        detail: "post-subscribe canonical repair",
       });
       observer.notify(staleCause);
       break;
@@ -1280,13 +1315,21 @@ export function subscribeReact<T>(snapshot: ReactRead<T>, observer: ReactObserve
         break;
       }
     }
+    if (!touched) {
+      for (const computed of batch.refreshes) {
+        if (snapshot.computeds.includes(computed)) {
+          touched = true;
+          break;
+        }
+      }
+    }
     if (!touched) continue;
     batch.roots.add(observer.root);
-    const delivery = traceEmit('component delivery', {
+    const delivery = traceEmit("component delivery", {
       cause: batch.cause,
       target: snapshot.target,
       batch: batch.lane,
-      detail: 'commit-boundary repair',
+      detail: "commit-boundary repair",
     });
     if (host === null) observer.notify(delivery || batch.cause);
     else host.runInLane(batch.lane, () => observer.notify(delivery || batch.cause));
@@ -1339,17 +1382,40 @@ function readInWorldWithoutTracking<T>(target: Atom<T> | Computed<T>, world: Wor
 }
 
 export function latest<T>(target: Atom<T> | Computed<T>): T {
-  if (activeWorld !== null || host?.renderContext() != null) return read(target);
-  return readInWorldWithoutTracking(target, {
-    pin: sequence,
-    lanes: liveLanes,
-    pass: -2,
-    deferred: false,
-  }) as T;
+  const world =
+    activeWorld !== null || host?.renderContext() != null
+      ? currentWorld()
+      : { pin: sequence, lanes: liveLanes, pass: -2, deferred: false };
+  if (target.kind === 0) {
+    collectAtom(target);
+    const value = readAtomInWorld(target, world);
+    trackSource(target, value);
+    return value;
+  }
+  const collector = activeCollector;
+  if (collector !== null && !collector.computeds.includes(target)) collector.computeds.push(target);
+  const evaluation =
+    world.lanes === 0 && world.pass <= 0
+      ? evaluateCanonical(target)
+      : evaluateInWorld(target, world);
+  const frame = activeFrame;
+  if (frame !== null) {
+    for (const atom of evaluation.atoms) {
+      if (!frame.atoms.includes(atom)) frame.atoms.push(atom);
+    }
+  }
+  if (collector !== null) {
+    for (const atom of evaluation.atoms) {
+      if (!collector.atoms.includes(atom)) collector.atoms.push(atom);
+    }
+  }
+  trackSource(target, evaluation.value);
+  if (evaluation.status === 2) throw evaluation.error?.error;
+  return evaluation.value as T;
 }
 
 export function committed<T>(target: Atom<T> | Computed<T>, container?: RootToken): T {
-  const lanes = container === undefined ? 0 : (rootViews.get(container) ?? 0);
+  const lanes = container === undefined ? 0 : rootViews.get(container) ?? 0;
   return readInWorldWithoutTracking(target, {
     pin: sequence,
     lanes,
@@ -1366,10 +1432,10 @@ export function refresh(target: Computed<any>): void {
   const classification = host?.currentWriteLane() ?? 0;
   const lane = classification < 0 ? -classification : 0;
   worldRevision++;
-  const cause = traceEmit('write', {
+  const cause = traceEmit("write", {
     batch: lane || undefined,
     label: target.label,
-    detail: 'refresh',
+    detail: "refresh",
   });
   target.latestRevision = -1;
   target.worldCache?.clear();
@@ -1379,7 +1445,8 @@ export function refresh(target: Computed<any>): void {
     markComputedDirty(target, cause);
     deliverComputed(target, 0, cause);
   } else {
-    getOrCreateBatch(lane, ++sequence, cause);
+    const batch = getOrCreateBatch(lane, ++sequence, cause);
+    if (!batch.refreshes.includes(target)) batch.refreshes.push(target);
     deliverComputed(target, lane, cause);
   }
   flushIfReady();
@@ -1393,9 +1460,9 @@ function clearPass(container: RootToken, committedPass: boolean): void {
   if (pass.computeds !== null) {
     for (const target of pass.computeds) target.worldCache?.delete(pass.id);
   }
-  traceEmit('render pass end', {
+  traceEmit("render pass end", {
     batch: pass.world.lanes & liveLanes || undefined,
-    detail: committedPass ? 'commit' : 'discard',
+    detail: committedPass ? "commit" : "discard",
   });
   sweepIfQuiescent();
 }
@@ -1417,20 +1484,20 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
   for (const root of batch.committedRoots) {
     rootViews.set(root, (rootViews.get(root) ?? 0) & ~batch.lane);
   }
-  const retirementCause = traceEmit('batch retire', {
+  const retirementCause = traceEmit("batch retire", {
     cause: cause ?? batch.cause,
     batch: batch.lane,
-    detail: committedBatch ? 'committed' : 'external-only',
+    detail: committedBatch ? "committed" : "external-only",
   });
   for (const atom of changed) {
     atom.version++;
     invalidateAtom(atom, retirementCause || batch.cause);
-    traceEmit('component delivery', {
+    traceEmit("component delivery", {
       cause: retirementCause || batch.cause,
       target: atom,
       batch: batch.lane,
       label: atom.label,
-      detail: 'committed lane',
+      detail: "committed lane",
     });
   }
   flushIfReady();
@@ -1447,6 +1514,17 @@ function sweepIfQuiescent(): void {
   }
   touchedAtoms.clear();
   episodeBatches.length = 0;
+  for (const target of worldComputeds) {
+    target.worldCache?.clear();
+    if (target.lastWorldEvaluation?.status !== 1) target.lastWorldEvaluation = null;
+    if (target.latestEvaluation?.status !== 1) {
+      target.latestEvaluation = null;
+      target.latestRevision = -1;
+    }
+    if (target.lastWorldEvaluation === null && target.latestEvaluation === null) {
+      worldComputeds.delete(target);
+    }
+  }
 }
 
 const hostListener: SignalHostListener = {
@@ -1468,7 +1546,7 @@ const hostListener: SignalHostListener = {
     for (const batch of batches.values()) {
       if ((lanes & batch.lane) !== 0) batch.roots.add(container);
     }
-    traceEmit('render pass start', {
+    traceEmit("render pass start", {
       batch: visibleLanes & liveLanes || undefined,
       detail: `pass ${id}`,
     });
@@ -1490,7 +1568,7 @@ const hostListener: SignalHostListener = {
         cause = batch.cause;
       }
     }
-    const commit = traceEmit('root commit', { cause, detail: String(finishedLanes) });
+    const commit = traceEmit("root commit", { cause, detail: String(finishedLanes) });
     const retiring: Batch[] = [];
     for (const batch of batches.values()) {
       if ((remainingLanes & batch.lane) === 0) batch.roots.delete(container);
@@ -1579,6 +1657,7 @@ export function resetForTest(): void {
     atom.pending = null;
   }
   touchedAtoms.clear();
+  worldComputeds.clear();
   episodeBatches.length = 0;
   dirtyComputeds.length = 0;
   pendingEffects.length = 0;

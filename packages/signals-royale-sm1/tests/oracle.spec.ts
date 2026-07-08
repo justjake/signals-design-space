@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   atom,
   attachHost,
@@ -10,7 +10,7 @@ import {
   type RootToken,
   type SignalHost,
   type SignalHostListener,
-} from '../src/index.ts';
+} from "../src/index.ts";
 
 type ModelOperation = {
   target: 0 | 1;
@@ -136,7 +136,9 @@ function runSchedule(actions: Action[]): string | null {
         const expectedA = modelValue(0, lanes);
         const expectedB = modelValue(1, lanes);
         if (a !== expectedA || b !== expectedB || c !== expectedA * 3 + expectedB) {
-          return `step ${step}: render ${lanes} got ${a},${b},${c} expected ${expectedA},${expectedB},${expectedA * 3 + expectedB}`;
+          return `step ${step}: render ${lanes} got ${a},${b},${c} expected ${expectedA},${expectedB},${
+            expectedA * 3 + expectedB
+          }`;
         }
       } else if (kind === 7) {
         const a = latest(atoms[0]);
@@ -182,8 +184,8 @@ function minimize(actions: Action[]): Action[] {
   return candidate;
 }
 
-describe('world-fold oracle', () => {
-  it('rebases the rules example and preserves per-root committed views', () => {
+describe("world-fold oracle", () => {
+  it("rebases the rules example and preserves per-root committed views", () => {
     resetForTest();
     const host = new FakeHost();
     const detach = attachHost(host);
@@ -206,8 +208,8 @@ describe('world-fold oracle', () => {
     detach();
   });
 
-  const environment = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
-    ?.env;
+  const environment = (globalThis as { process?: { env: Record<string, string | undefined> } })
+    .process?.env;
   const seeds = Number(environment?.ORACLE_SEEDS ?? 300);
   const steps = Number(environment?.ORACLE_STEPS ?? 90);
 

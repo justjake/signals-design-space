@@ -4,6 +4,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": {
+    "bench:seam": "esbuild royale/seam-bench-run.ts --bundle --platform=node --format=esm --external:react --external:react-dom '--external:react-dom/*' --external:scheduler --external:jsdom --outfile=dist/seam-bench-run.mjs && node dist/seam-bench-run.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "esbuild": "0.28.1",
     "jsdom": "^26.1.0",
     "typescript": "6.0.3",
     "vitest": "4.1.6"

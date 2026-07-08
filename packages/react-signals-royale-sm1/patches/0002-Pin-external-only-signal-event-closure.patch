@@ -1,0 +1,35 @@
+From 8a2dd11d0f6a068826034d4c49acf0d9c38bf427 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:45:49 -0400
+Subject: [PATCH 2/2] Pin external-only signal event closure
+
+---
+ .../src/__tests__/ReactFiberSignalRuntime-test.js  | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js b/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js
+index 272c391439..7e1c7c168b 100644
+--- a/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js
++++ b/packages/react-reconciler/src/__tests__/ReactFiberSignalRuntime-test.js
+@@ -157,4 +157,18 @@ describe('ReactFiberSignalRuntime', () => {
+     expect(ends).toContain(false);
+     expect(ends[ends.length - 1]).toBe(true);
+   });
++
++  it('closes a scheduling event even when an external write creates no React work', async () => {
++    let eventEnds = 0;
++    React.unstable_subscribeToSignalRuntime({
++      onEventEnd() {
++        eventEnds++;
++      },
++    });
++    React.startTransition(() => {
++      expect(React.unstable_getSignalWriteLane()).toBeLessThan(0);
++    });
++    await waitForAll([]);
++    expect(eventEnds).toBe(1);
++  });
+ });
+-- 
+2.50.1 (Apple Git-155)
+

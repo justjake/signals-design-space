@@ -1,6 +1,11 @@
-import { describe, expect, test } from 'vitest';
-import { setExpect, SkipTest, testSuite, type ReactiveFramework } from 'reactive-framework-test-suite';
-import adapter from '../royale/harness-adapter.ts';
+import { describe, expect, test } from "vitest";
+import {
+  setExpect,
+  SkipTest,
+  testSuite,
+  type ReactiveFramework,
+} from "reactive-framework-test-suite";
+import adapter from "../royale/harness-adapter.ts";
 
 const framework: ReactiveFramework = {
   name: adapter.name,

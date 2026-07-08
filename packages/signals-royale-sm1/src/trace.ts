@@ -23,7 +23,7 @@ export class Trace {
 
   constructor(capacity = 1024) {
     if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new Error('Trace capacity must be a positive integer.');
+      throw new Error("Trace capacity must be a positive integer.");
     }
     this.capacity = capacity;
     this.ring = new Array(capacity);
@@ -43,7 +43,7 @@ export class Trace {
     this.ring[index] = event;
     this.byId.set(event.id, event);
     this.size++;
-    if (target !== undefined && event.kind === 'component delivery') {
+    if (target !== undefined && event.kind === "component delivery") {
       this.latestDelivery.set(target, event.id);
     }
   }

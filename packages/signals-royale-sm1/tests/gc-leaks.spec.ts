@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   atom,
   attachHost,
@@ -10,11 +10,11 @@ import {
   type RootToken,
   type SignalHost,
   type SignalHostListener,
-} from '../src/index.ts';
+} from "../src/index.ts";
 
 async function collect(reference: WeakRef<object>): Promise<boolean> {
   const gc = (globalThis as { gc?: () => void }).gc;
-  if (gc === undefined) throw new Error('This test requires --expose-gc.');
+  if (gc === undefined) throw new Error("This test requires --expose-gc.");
   for (let attempt = 0; attempt < 80; attempt++) {
     gc();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -62,8 +62,8 @@ class FakeHost implements SignalHost {
   }
 }
 
-describe('leak audit', () => {
-  it('collects dropped computed and effect handles', async () => {
+describe("leak audit", () => {
+  it("collects dropped computed and effect handles", async () => {
     const source = atom(1);
     expect(await collect(droppedComputed(source))).toBe(true);
 
@@ -74,7 +74,7 @@ describe('leak audit', () => {
     expect(runs).toBe(1);
   });
 
-  it('reclaims all per-episode state at quiescence', () => {
+  it("reclaims all per-episode state at quiescence", () => {
     resetForTest();
     const host = new FakeHost();
     const detach = attachHost(host);

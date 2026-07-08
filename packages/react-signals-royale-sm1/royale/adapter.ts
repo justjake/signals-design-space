@@ -1,6 +1,6 @@
-import * as React from 'react';
-import { act } from 'react';
-import { createRoot } from 'react-dom/client';
+import * as React from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import {
   atom,
   batch,
@@ -29,7 +29,7 @@ import {
   useValue,
   type Atom,
   type Computed,
-} from '../src/index.ts';
+} from "../src/index.ts";
 
 export interface RoyaleHandle {
   errors: unknown[];
@@ -81,16 +81,16 @@ export interface RoyaleAdapter {
   useCommitted(target: unknown): unknown;
   startTransitionWrite(scope: () => void): void;
   trace(): RoyaleTraceView;
-  onDomMutation(callback: (phase: 'start' | 'stop', container: Element) => void): () => void;
+  onDomMutation(callback: (phase: "start" | "stop", container: Element) => void): () => void;
 }
 
 type Cell<T = unknown> = Atom<T> | Computed<T>;
 
 const adapter: RoyaleAdapter = {
-  slug: 'sm1',
+  slug: "sm1",
   React,
   ReactDOMClient: { createRoot },
-  act: act as RoyaleAdapter['act'],
+  act: act as RoyaleAdapter["act"],
   flushSync,
   register,
   resetForTest,

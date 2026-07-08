@@ -1,6 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src", "tests", "royale", "vitest.config.ts"],
+  "include": [
+    "src",
+    "tests",
+    "royale/adapter.ts",
+    "royale/daishi-adapter.tsx",
+    "royale/seam-bench-adapter.ts",
+    "vitest.config.ts"
+  ],
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",

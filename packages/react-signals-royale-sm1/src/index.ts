@@ -1,5 +1,5 @@
-import * as React from 'react';
-import { flushSync } from 'react-dom';
+import * as React from "react";
+import { flushSync } from "react-dom";
 import {
   Atom,
   Computed,
@@ -29,7 +29,7 @@ import {
   type RootToken,
   type SignalHost,
   type SignalHostListener,
-} from 'signals-royale-sm1';
+} from "signals-royale-sm1";
 
 type RuntimeListener = {
   onRenderStart?(container: RootToken, lanes: number): void;
@@ -52,7 +52,7 @@ type ForkReact = typeof React & {
 export type Registration = { errors: unknown[]; dispose(): void };
 
 const Fork = React as ForkReact;
-const mutationListeners = new Set<(phase: 'start' | 'stop', container: Element) => void>();
+const mutationListeners = new Set<(phase: "start" | "stop", container: Element) => void>();
 const runtimeErrors: unknown[] = [];
 const renderContext: { container: RootToken; lanes: number } = { container: {}, lanes: 0 };
 let registrationCount = 0;
@@ -75,7 +75,7 @@ const signalHost: SignalHost = {
   },
   subscribe(listener: SignalHostListener) {
     const subscribe = Fork.unstable_subscribeToSignalRuntime;
-    if (subscribe === undefined) throw new Error('The React signal protocol is not installed.');
+    if (subscribe === undefined) throw new Error("The React signal protocol is not installed.");
     return subscribe({
       onRenderStart(container, lanes) {
         listener.onRenderStart(container, lanes);
@@ -93,10 +93,10 @@ const signalHost: SignalHost = {
         listener.onEventEnd();
       },
       onBeforeMutation(container) {
-        for (const callback of mutationListeners) callback('start', container);
+        for (const callback of mutationListeners) callback("start", container);
       },
       onAfterMutation(container) {
-        for (const callback of mutationListeners) callback('stop', container);
+        for (const callback of mutationListeners) callback("stop", container);
       },
     });
   },
@@ -110,7 +110,7 @@ export function register(): Registration {
     Fork.unstable_getSignalRenderLanes === undefined ||
     Fork.unstable_runInSignalLane === undefined
   ) {
-    throw new Error('react-signals-royale-sm1 requires its patched React build.');
+    throw new Error("react-signals-royale-sm1 requires its patched React build.");
   }
   registrationCount++;
   if (detachEngineHost === null) detachEngineHost = attachHost(signalHost);
@@ -131,7 +131,7 @@ export function register(): Registration {
 
 function requireRegistration(): void {
   if (detachEngineHost === null) {
-    throw new Error('Call register() before rendering signal hooks.');
+    throw new Error("Call register() before rendering signal hooks.");
   }
 }
 
@@ -140,7 +140,7 @@ export function useValue<T>(target: Atom<T> | Computed<T>): T {
   const [, renderAgain] = React.useReducer((value: number) => value + 1, 0);
   const cause = React.useRef<number | undefined>(undefined);
   const root = Fork.unstable_getSignalRenderRoot?.();
-  if (root == null) throw new Error('useValue must run during a React render.');
+  if (root == null) throw new Error("useValue must run during a React render.");
   const snapshot = collectReactRead(target, cause.current);
   React.useLayoutEffect(() => {
     const observer: ReactObserver = {
@@ -178,7 +178,7 @@ export function useIsPending<T>(target: Atom<T> | Computed<T>): boolean {
   requireRegistration();
   const [, renderAgain] = React.useReducer((value: number) => value + 1, 0);
   const root = Fork.unstable_getSignalRenderRoot?.();
-  if (root == null) throw new Error('useIsPending must run during a React render.');
+  if (root == null) throw new Error("useIsPending must run during a React render.");
   React.useLayoutEffect(() => {
     const observer: ReactObserver = { root, notify: () => renderAgain() };
     return subscribePending(target, observer);
@@ -192,7 +192,7 @@ export function startTransitionWrite(scope: () => void): void {
 }
 
 export function onDomMutation(
-  callback: (phase: 'start' | 'stop', container: Element) => void,
+  callback: (phase: "start" | "stop", container: Element) => void,
 ): () => void {
   mutationListeners.add(callback);
   return () => mutationListeners.delete(callback);

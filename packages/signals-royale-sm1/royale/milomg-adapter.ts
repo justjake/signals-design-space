@@ -1,4 +1,4 @@
-import { atom, batch, computed, effect, effectScope } from '../src/index.ts';
+import { atom, batch, computed, effect, effectScope } from "../src/index.ts";
 
 export interface ReactiveFramework<S = unknown> {
   name: string;
@@ -17,17 +17,19 @@ type Cell = ReturnType<typeof atom<unknown>> | ReturnType<typeof computed<unknow
 let disposeBuild: (() => void) | null = null;
 
 const adapter: ReactiveFramework<Cell> = {
-  name: 'Royale SM1',
+  name: "Royale SM1",
   createSignal: (initialValue) => atom(initialValue),
   readSignal: (signal) => signal.state,
   writeSignal(signal, value) {
-    if (!('set' in signal)) throw new Error('Cannot write a computed.');
+    if (!("set" in signal)) throw new Error("Cannot write a computed.");
     signal.set(value);
   },
   createComputed: (fn) => computed(fn),
   readComputed: (cell) => cell.state,
   effect(fn) {
-    effect(fn);
+    effect(() => {
+      fn();
+    });
   },
   withBatch: batch,
   withBuild<T>(fn: () => T): T {
