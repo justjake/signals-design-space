@@ -36,8 +36,14 @@ type Protocol = {
   runInLane<T>(lane: number, fn: () => T): T;
 };
 
-type Pass = { lanes: number; values: Map<object, unknown> };
+type Pass = {
+  lanes: number;
+  values: Map<object, unknown>;
+  traceStart?: number;
+  traceEnd?: number;
+};
 const passes = new WeakMap<object, Pass>();
+const scheduledCauses = new WeakMap<object, number>();
 const pendingRoots = new Map<number, Set<object>>();
 const committedBatches = new Set<number>();
 const mutationListeners = new Set<
@@ -66,13 +72,28 @@ function findProtocol(): Protocol {
 
 function onProtocolEvent(event: ProtocolEvent): void {
   if (event.type === "pass") {
-    traceEvent(`render pass ${event.phase}`, undefined, event.lanes);
     if (event.phase === "start") {
+      const traceStart = traceEvent(
+        "render pass start",
+        scheduledCauses.get(event.container),
+        event.lanes,
+      );
+      scheduledCauses.delete(event.container);
       passes.set(event.container, {
         lanes: event.lanes ?? 0,
         values: new Map(),
+        traceStart,
       });
-    } else if (event.phase === "discard") {
+    } else {
+      const pass = passes.get(event.container);
+      const traceEnd = traceEvent(
+        `render pass ${event.phase}`,
+        pass?.traceStart,
+        event.lanes,
+      );
+      if (pass !== undefined) pass.traceEnd = traceEnd;
+    }
+    if (event.phase === "discard") {
       passes.delete(event.container);
     }
     return;
@@ -87,8 +108,8 @@ function onProtocolEvent(event: ProtocolEvent): void {
     }
     return;
   }
-  traceEvent("root commit", undefined, event.lanes);
   const pass = passes.get(event.container);
+  traceEvent("root commit", pass?.traceEnd, event.lanes);
   if (pass !== undefined) {
     for (const [cell] of pass.values) {
       for (const batchId of liveBatchIds()) {
@@ -180,7 +201,8 @@ export function useValue<T>(cell: Cell<T>): T {
   React.useLayoutEffect(() => {
     const deliver = (batchId: number, cause?: number) => {
       const target = container.current;
-      traceEvent("component delivery", cause, batchId, cell);
+      const delivery = traceEvent("component delivery", cause, batchId, cell);
+      if (delivery !== undefined) scheduledCauses.set(target, delivery);
       if (batchId === 0) {
         render();
       } else {
