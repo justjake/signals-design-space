@@ -191,9 +191,18 @@ component's root** — never pending state. Rationale: effects perform side
 effects (network, imperative DOM, logging), and side effects must track
 what the user actually sees; a pending transition may still be discarded.
 
-It re-fires when a durable change moves any value it read: a root
-committing UI that includes a batch, a batch retiring, an async action
-settling. Cleanup-then-run ordering and `deps` behave like `useEffect`.
+It re-fires (cleanup, then run) when a durable accepted change touched a
+value it read: a root committing UI that includes a batch, a batch
+retiring, an async action settling. The contract is **at-least-once** —
+re-fire decisions are made by change clocks, never by comparing values, so
+a round trip that lands back on an equal value (write A→B, then B→A,
+across separate updates) may re-fire the effect even though everything it
+reads compares equal to its last run. Two things do not change: writes
+inside one update still coalesce into one re-fire, and write acceptance
+still honors the atom's equality (writing an equal value is not an
+accepted change and triggers nothing). Keep effect bodies idempotent —
+the discipline React's own Strict Mode teaches. Cleanup-then-run ordering
+and `deps` behave like `useEffect`.
 
 ### `startSignalTransition(fn)`
 
