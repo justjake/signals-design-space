@@ -1,2 +1,5 @@
 # build output only; sources are committed
 dist/
+# battery run artifacts (screenshots, traces, html report)
+battery/test-results/
+battery/playwright-report/

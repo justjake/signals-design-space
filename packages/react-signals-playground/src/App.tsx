@@ -25,6 +25,7 @@ import {
 	useSignal,
 	useSignalEffect,
 } from '#concurrent-signals-shim';
+import { maybeWrapThenable, recordFetch, registerAppHandles, TEST_MODE, TestPanel } from './testkit';
 
 // ---- module-level store -----------------------------------------------------------
 // Created at module init, before main.tsx calls register(): every engine
@@ -95,6 +96,12 @@ interface RouteResource {
 	arrivedInMs: number;
 	readonly startedAt: number;
 	readonly promise: Promise<void>;
+	/**
+	 * What a pending read throws. Normally the promise itself; in the
+	 * battery's foreign-thenable mode a non-Promise thenable wrapping it —
+	 * created once here so re-renders re-throw the same reference.
+	 */
+	readonly thrown: PromiseLike<void>;
 	settle(): void;
 }
 
@@ -113,14 +120,17 @@ function createRouteResource(epoch: number, route: RouteName, latency: NavLatenc
 		arrivedInMs: 0,
 		startedAt: performance.now(),
 		promise,
+		thrown: maybeWrapThenable(promise),
 		settle() {
 			if (resource.status === 'ready') return;
 			resource.status = 'ready';
 			resource.arrivedInMs = Math.round(performance.now() - resource.startedAt);
+			recordFetch(epoch, route, 'settle');
 			resolvePromise();
 		},
 	};
 	resources.set(epoch, resource);
+	recordFetch(epoch, route, 'create');
 	if (latency === 'hold') {
 		heldResources.push(resource);
 		heldCount.update((n) => n + 1);
@@ -147,7 +157,7 @@ function readRouteData(epoch: number): RouteResource {
 	if (resource === undefined) {
 		throw new Error(`react-signals-playground: no data resource for navigation #${epoch}`);
 	}
-	if (resource.status === 'pending') throw resource.promise;
+	if (resource.status === 'pending') throw resource.thrown;
 	return resource;
 }
 
@@ -317,6 +327,31 @@ const consistency = createComputed(
 );
 
 const tornCommits = createAtom(0, 'tornCommits');
+
+// The battery's label registry: every shared atom the tests read or write
+// from outside any render (window.__store) is registered once, here.
+registerAppHandles({
+	count,
+	doubled,
+	parity,
+	clockMs,
+	targetRoute,
+	targetEpoch,
+	currentRoute,
+	routeEpoch,
+	navPending,
+	navLatency,
+	heldCount,
+	rowCount,
+	tableSeed,
+	filterText,
+	selectedRow,
+	markEvens,
+	cpuRounds,
+	visibleCount,
+	consistency,
+	tornCommits,
+});
 
 // ---- error strip ----------------------------------------------------------------------
 
@@ -1010,6 +1045,7 @@ export function App(): React.ReactElement {
 			<BrowserChrome />
 			<TimelineStrip />
 			<ErrorStrip />
+			{TEST_MODE ? <TestPanel /> : null}
 		</main>
 	);
 }

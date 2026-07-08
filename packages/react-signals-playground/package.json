@@ -12,19 +12,21 @@
 		"dev": "vite",
 		"build": "vite build",
 		"preview": "vite preview",
-		"check": "tsc --noEmit -p tsconfig.json",
-		"typecheck": "tsc --noEmit -p tsconfig.json"
+		"check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p battery/tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p battery/tsconfig.json",
+		"battery": "playwright test -c battery"
 	},
 	"dependencies": {
 		"concurrent-solid-react": "workspace:*",
 		"cosignals": "workspace:*",
-		"cosignals-react": "workspace:*",
 		"cosignals-alt-a": "workspace:*",
 		"cosignals-alt-b": "workspace:*",
+		"cosignals-react": "workspace:*",
 		"react": "*",
 		"react-dom": "*"
 	},
 	"devDependencies": {
+		"@playwright/test": "1.61.1",
 		"@types/node": "24.13.2",
 		"@types/react": "^19.1.8",
 		"@types/react-dom": "^19.1.6",

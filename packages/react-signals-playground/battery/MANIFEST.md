@@ -81,17 +81,17 @@ firing order (EF4).
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| META-IDENT | impl-name tile matches entry; exactly one active tab | — | all pass | testids impl-name, tabbar | pending |
-| META-HOLDSTYLE | page's declared holdStyle matches battery entry table | ?test=1 | all pass | `__store.holdStyle` | pending |
-| META-ISOLATION | only the selected implementation's shim chunk is requested (session pin: chunk isolation) | all 4 pages, request log | all pass | request URL capture | pending |
-| META-REGISTER | clean boot: register() succeeded, root rendered, zero pageerrors/console errors (session pin: registration exclusivity) | — | all pass | error budget | pending |
-| META-CLOCK | 100ms clock ticks at rest; renders-committed advances | — | all pass | clock tile | pending |
+| META-IDENT | impl-name tile matches entry; exactly one active tab | — | all pass | testids impl-name, tabbar | implemented |
+| META-HOLDSTYLE | page's declared holdStyle matches battery entry table | ?test=1 | all pass | `__store.holdStyle` | implemented |
+| META-ISOLATION | only the selected implementation's shim chunk is requested (session pin: chunk isolation) | all 4 pages, request log | all pass | request URL capture | implemented |
+| META-REGISTER | clean boot: register() succeeded, root rendered, zero pageerrors/console errors (session pin: registration exclusivity) | — | all pass | error budget | implemented |
+| META-CLOCK | 100ms clock ticks at rest; renders-committed advances | — | all pass | clock tile | implemented |
 
 ## B. Reads and tearing — RCC §3.1 (16 rows)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-RT1.scope-read | inside a transition scope, a read after a write sees the scope's own draft; sources: alt-a#15, alt-b#18/19 | scope read via `__store.holdTransition` | pass · pass · pass · variant:hidden (bare accessor in scope does not see own staged write — recorded) | `__store` scope-read capture | pending |
+| RCC-RT1.scope-read | inside a transition scope, a read after a write sees the scope's own draft; sources: alt-a#15, alt-b#18/19 | scope read via `__store.transitionScopeProbe` | pass · pass · pass · variant:hidden (bare accessor in scope does not see own staged write — recorded) | `__store` scope-read capture | pending |
 | RCC-RT1.frozen-view | a paused-and-resumed render answers reads identically across the pause | fork-only | — | — | doc: needs yield-edge introspection ([fork tests 7,8]); browser-indirect via RCC-RT5.lattice latch |
 | RCC-RT2.yield-gap | writes landing while a pass is paused are not observed by that pass | fork-only | — | — | doc: [fork tests 9,10]; browser-indirect via DAISHI-3/DAISHI-6 transient checks |
 | RCC-RT3.hold | urgent +1 commits alone while a held transition's count+10 stays invisible; release folds both; sources: R3/R4, alt-a#4, alt-b#2 | hold=gate | pass · pass · pass · skip:gate-freeze | write-hold harness, count trace | pending |
