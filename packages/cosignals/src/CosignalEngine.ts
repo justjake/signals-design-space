@@ -355,67 +355,46 @@ export const enum LinkField {
 }
 
 /**
- * Field offsets within a WATCHER record — one subscribed component
- * instance, stored as a kernel arena record (allocated by the node
- * allocator: same free list, same GEN tenancy stamp, same side-column
+ * Field offsets within an OBSERVER record — the one record family behind
+ * both observer roles: a WATCHER (one subscribed component instance —
+ * `deliver`-action consumers) and a committed SUBSCRIPTION (one committed
+ * observer, the production useSignalEffect mechanism — `run`-action
+ * consumers). Both roles are stored as kernel arena records by the node
+ * allocator (same free list, same GEN tenancy stamp, same side-column
  * scrub — {@link scrubNodeColumnsOnFree} covers every family the node
- * allocator serves). A watcher record
- * carries no kernel dependency links, so the kernel walks never reach
- * it; the engine interprets slots 0-4 and 6, while slots 1/5/7 keep
- * their allocator meanings (free-list thread / GEN / NODE_INDEX). The
- * mutable watcher state lives here and in the side columns (values:
- * last rendered value; clocks: lastValidatedAt; extras: name, root, and
- * the rendered-world snapshot); the Watcher handle object holds only
- * the record id and the monotone watcher id (delivery order).
+ * allocator serves). Observer records carry no kernel dependency links,
+ * so the kernel walks never reach them; slots 1/5/7 keep their allocator
+ * meanings (free-list thread / GEN / NODE_INDEX) and the engine interprets
+ * slots 0/2-4/6 — BY ROLE for 2-4/6 (the FLAGS kind bit is the role):
+ * a watcher binds one watched node (NODE/NODE_GEN/NODE_IX) plus its
+ * delivery dedup word; a subscription threads its dep-snapshot chain
+ * (DEP_HEAD/DEP_TAIL — world-arena link records in the committed arena of
+ * its root, each link's clock slot carrying that dep's lastValidatedAt
+ * stamp). Side columns, also by role — values: watcher last rendered
+ * value; clocks: watcher lastValidatedAt; fns: subscription refire (the
+ * dormant-callback pattern); extras: the one ObserverExtras object (both
+ * roles; each role's fields idle at their defaults on the other).
  */
-const enum WatcherField {
-	/** Kind + observer-state bits (NodeFlag.K_WATCHER, NodeFlag.OBSERVER_LIVE). */
+const enum ObserverField {
+	/** Kind + observer-state bits (NodeFlag.K_WATCHER or K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE). */
 	FLAGS = 0,
-	/** Allocator-owned: the node free list threads here while the record is freed (0 while live — watcher records hold no dependency links). */
+	/** Allocator-owned: the node free list threads here while the record is freed (0 while live — observer records hold no dependency links). */
 	FREE_NEXT = 1,
-	/** The watched node record id (the component reads this node). */
+	/** Watcher: the watched node record id (the component reads this node). */
 	NODE = 2,
-	/** The watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch. */
+	/** Subscription: first dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the observer record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot). */
+	DEP_HEAD = 2,
+	/** Watcher: the watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch. */
 	NODE_GEN = 3,
-	/** Per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway. */
+	/** Subscription: last dependency link of the current snapshot (append cursor; 0 = empty). */
+	DEP_TAIL = 3,
+	/** Watcher: per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway. */
 	DEDUP_BITS = 4,
 	/** Allocator-owned tenancy generation (shared meaning with NodeField.GEN): bumped when the record frees. */
 	GEN = 5,
-	/** The watched record's NODE_INDEX, cached at mount. Slot-tied like every node index (a record slot keeps its index across tenants), so the cache never goes stale — the NODE_GEN stamp is what decides whether the watched TENANCY is still alive. */
+	/** Watcher: the watched record's NODE_INDEX, cached at mount. Slot-tied like every node index (a record slot keeps its index across tenants), so the cache never goes stale — the NODE_GEN stamp is what decides whether the watched TENANCY is still alive. */
 	NODE_IX = 6,
-	/** Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); watcher records consume ordinals but no dense column stores rows for them. */
-	NODE_INDEX = 7,
-}
-
-/**
- * Field offsets within a SUBSCRIPTION record — one committed observer
- * (the production useSignalEffect mechanism), stored as a kernel arena
- * record by the node allocator exactly like watcher records (see
- * WatcherField). Its dependency snapshot is a chain of world-arena
- * link records in the committed arena of the subscription's root
- * (DEP_HEAD/DEP_TAIL below thread it), each carrying the observer's
- * lastValidatedAt stamp in the arena's per-record clock column. The
- * side columns carry: fns — the adapter-registered refire callback
- * (the dormant-callback pattern); extras — the subscription's cold
- * record object (name, root, the dep-node array in read order, the
- * retained observation set, the test-configured body, the last
- * captured value, and the run/cleanup counters — the counters are
- * tombstone diagnostics the suites may read after removal, so the
- * handle keeps the object reference while the column slot scrubs at
- * free). The values slots stay empty on purpose.
- */
-const enum SubscriptionField {
-	/** Kind + observer-state bits (NodeFlag.K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE). */
-	FLAGS = 0,
-	/** Allocator-owned: the node free list threads here while the record is freed (0 while live). */
-	FREE_NEXT = 1,
-	/** First dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the subscription record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot). */
-	DEP_HEAD = 2,
-	/** Last dependency link of the current snapshot (append cursor; 0 = empty). */
-	DEP_TAIL = 3,
-	/** Allocator-owned tenancy generation (shared meaning with NodeField.GEN). */
-	GEN = 5,
-	/** Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); subscription records consume ordinals but no dense column stores rows for them. */
+	/** Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); observer records consume ordinals but no dense column stores rows for them. */
 	NODE_INDEX = 7,
 }
 
@@ -498,19 +477,15 @@ export const enum NodeFlag {
 	 */
 	MACHINERY_OWNED = 0b00010000000000000,
 	/**
-	 * Kind: watcher record (one subscribed component instance — see
-	 * WatcherField). Engine-interpreted: watcher records carry no kernel
-	 * dependency links, so no kernel walk ever reads this bit; it makes
-	 * the record self-describing for the free path, the debug hydrators,
-	 * and the audits. Deliberately outside KIND_MASK — the kernel's
-	 * kind dispatch never sees observer records.
+	 * The observer ROLE bits (see ObserverField): K_WATCHER — one
+	 * subscribed component instance; K_SUBSCRIPTION — one committed
+	 * observer. Engine-interpreted: observer records carry no kernel
+	 * dependency links, so no kernel walk ever reads them; they make the
+	 * record self-describing (the role-gated liveness shift, the free
+	 * path, the debug hydrators, the audits). Deliberately outside
+	 * KIND_MASK — the kernel's kind dispatch never sees observer records.
 	 */
 	K_WATCHER = 0b00100000000000000,
-	/**
-	 * Kind: subscription record (one committed observer — see
-	 * SubscriptionField). Engine-interpreted exactly like K_WATCHER;
-	 * outside KIND_MASK for the same reason.
-	 */
 	K_SUBSCRIPTION = 0b01000000000000000,
 	/**
 	 * Observer records only (K_WATCHER / K_SUBSCRIPTION): the observer
@@ -999,8 +974,8 @@ interface Kernel {
 	newComputed(getter: (ctx: unknown) => unknown, target: object): NodeId;
 	newEffect(fn: () => (() => void) | void): NodeId;
 	newScope(fn: () => void): NodeId;
-	/** Allocate an OBSERVER record (K_WATCHER / K_SUBSCRIPTION — the engine's
-	 * watcher and subscription records; see WatcherField). Node-allocator
+	/** Allocate an OBSERVER record (K_WATCHER / K_SUBSCRIPTION — see
+	 * ObserverField). Node-allocator
 	 * records with no kernel links and no reclamation registration: the
 	 * engine owns their lifetime and frees them through
 	 * {@link Kernel.disposeObserver}. */
@@ -3044,7 +3019,7 @@ function boxedRead(c: NodeId, flags: NodeFlags): unknown {
  * the kernel's linkInsert/unlink through
  * `retainLifecycle`/`releaseLifecycle`) and watchers (subscribed UI
  * components: one ref per live watcher, fed by the concurrent machinery's
- * observation index through `__lifecycleRetain`/`__lifecycleRelease`). The
+ * observation index through the same pair). The
  * effect runs on the union's 0→1 transition and the cleanup on its 1→0;
  * both run through a microtask queue so observe/unobserve flaps within one
  * tick coalesce to nothing regardless of which consumer kind produced them
@@ -3236,36 +3211,21 @@ function shiftLifecycleCount(id: NodeId, delta: -1 | 1): void {
 }
 
 /**
- * The kernel's arm of the observed-lifecycle union — hoisted function
- * declarations because the kernel calls them from linkInsert/unlink. Each
- * call moves the union refcount by one link's worth: retainLifecycle fires
- * for every new non-machinery link to a lifecycle-flagged dep (the union's
- * 0→1 edge schedules the user's flap-damped effect), releaseLifecycle for
- * every such link removed (the union count hitting zero schedules the
- * flap-damped cleanup).
+ * The one retain/release pair feeding the observed-lifecycle union — both
+ * consumer kinds move the same refcount by one consumer's worth. Hoisted
+ * function declarations because the kernel calls them from linkInsert/
+ * unlink: one call per non-machinery kernel link to a lifecycle-flagged
+ * dep gained or removed. The observation index calls the same pair when a
+ * live watcher's closure gains or drops an atom (a Map-miss no-op for
+ * atoms without the effect option). The union's 0→1 edge schedules the
+ * user's flap-damped effect; 1→0 the flap-damped cleanup. Observation
+ * transitions are not TraceEvents and never enter the trace stream.
  */
 function retainLifecycle(id: NodeId): void {
 	shiftLifecycleCount(id, 1);
 }
 
 function releaseLifecycle(id: NodeId): void {
-	shiftLifecycleCount(id, -1);
-}
-
-/**
- * Watcher retain/release — the second consumer kind feeding the
- * observation union (the first is the kernel's per-link arm above). Called
- * by the observation index when a watcher over an atom's node flips live; a
- * no-op for atoms carrying no observed-lifecycle effect. Direct callbacks
- * only — observation transitions are not TraceEvents and never enter the
- * trace stream. @internal
- */
-function __lifecycleRetain(id: NodeId): void {
-	shiftLifecycleCount(id, 1);
-}
-
-/** @internal */
-function __lifecycleRelease(id: NodeId): void {
 	shiftLifecycleCount(id, -1);
 }
 
@@ -3425,12 +3385,14 @@ function __lifecycleRelease(id: NodeId): void {
 export type Value = unknown;
 export type RootId = string;
 export type RenderPassId = number;
+/** An observer's monotone role id (see Observer.id): mount/registration
+ * order within the role — never a kernel record id (observer RECORDS
+ * recycle; these ids never do). The role aliases below key the role
+ * stores. */
+type ObserverId = number;
 type WatcherId = number;
-/** A committed `run`-action subscription's id: the committed-observers
- * section's monotone mount counter (registration order — the boundary
- * scan's iteration order, the reference model's map order) — never a kernel
- * record id (subscription RECORDS recycle; this id never does). Leniently
- * branded (IdBrand above) so the spaces cannot cross. */
+/** Leniently branded (IdBrand above) so the subscription space cannot
+ * cross the kernel id spaces. */
 type SubscriptionId = number & IdBrand<'subscription'>;
 /** A point on the one global sequence line (log-entry seqs, pins, retirement
  * stamps, write clocks, the committed-advance counter). */
@@ -4588,10 +4550,9 @@ function root(id: RootId): RootState {
 // composition): the hot readers probe `obsRefs[ix] > 0` per observed run,
 // and indexInternals's gap-fill and the record-free scrub maintain rows in
 // the same loop as the other dense columns — while every closure-membership
-// TRANSITION routes through the functions here. The kernel retain seams
-// (`__lifecycleRetain`/`__lifecycleRelease` in the observed-lifecycle
-// section, the forced discovery read) are consumed here, beside their one
-// consumer.
+// TRANSITION routes through the functions here. The lifecycle retain pair
+// (`retainLifecycle`/`releaseLifecycle` in the observed-lifecycle section,
+// the forced discovery read) is consumed here, beside its one consumer.
 
 /** Observed-consumer refcount per nodeIndex: +1 per live watcher on the
  * node, +1 per observed computed currently holding it in obsDeps. */
@@ -4644,7 +4605,7 @@ function shiftObservedCount(node: AnyInternals, delta: 1 | -1): void {
  */
 function enterObservation(node: AnyInternals): void {
 	if (node.kind === 'atom') {
-		__lifecycleRetain(node.id);
+		retainLifecycle(node.id);
 		return;
 	}
 	try {
@@ -4665,7 +4626,7 @@ function enterObservation(node: AnyInternals): void {
  * samples taken only at tracked re-derivations.) */
 function exitObservation(node: AnyInternals): void {
 	if (node.kind === 'atom') {
-		__lifecycleRelease(node.id);
+		releaseLifecycle(node.id);
 		return;
 	}
 	const held = obsDeps[node.ix];
@@ -4674,19 +4635,11 @@ function exitObservation(node: AnyInternals): void {
 	for (const dep of held) shiftObservedCount(dep, -1);
 }
 
-/**
- * An observed computed's fn just ran (fully, or up to a throw): re-point
- * its retains at the strong deps THIS evaluation recorded. Retain-new
- * before release-old; deps present in both snapshots never shift, and
- * an A→B→A flip within one tick nets out in the kernel's microtask
- * flush. Skipped if observation left mid-evaluation (the exit already
- * released the old snapshot; installing a new one would leak).
- */
-function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
-	if (obsRefs[node.ix]! === 0) return;
-	const prev = obsDeps[node.ix];
-	const next = new Set(list);
-	obsDeps[node.ix] = next;
+/** The one retain re-point loop: retain-new before release-old, so deps
+ * present in both snapshots never shift, and an A→B→A flip within one tick
+ * nets out in the kernel's microtask flush. Consumes `prev` destructively
+ * (the caller has already replaced its reference). */
+function repointRetains(prev: Set<AnyInternals> | undefined, next: Set<AnyInternals>): void {
 	for (const dep of next) {
 		if (prev === undefined || !prev.delete(dep)) shiftObservedCount(dep, 1);
 	}
@@ -4696,29 +4649,34 @@ function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
 }
 
 /**
+ * An observed computed's fn just ran (fully, or up to a throw): re-point
+ * its retains at the strong deps THIS evaluation recorded. Skipped if
+ * observation left mid-evaluation (the exit already released the old
+ * snapshot; installing a new one would leak).
+ */
+function syncObservedDeps(node: AnyInternals, list: AnyInternals[]): void {
+	if (obsRefs[node.ix]! === 0) return;
+	const prev = obsDeps[node.ix];
+	const next = new Set(list);
+	obsDeps[node.ix] = next;
+	repointRetains(prev, next);
+}
+
+/**
  * A committed subscription's run just installed a new dep snapshot:
- * re-point its observation retains (effect dep snapshots count
- * toward the observation union exactly like watcher closures: one retain
- * per snapshot node through the observation index's shiftObservedCount; an
- * atom retains its
- * kernel lifecycle, an observed computed retains its current strong deps
- * transitively). Retain-new before release-old; same-tick flaps coalesce
- * in the kernel's microtask flush. (The snapshot's routing coverage
- * needs no counts of its own: the capture's committed evaluations
- * populate the root's arena, whose marks the re-checks validate
- * through.)
+ * re-point its observation retains — effect dep snapshots count toward
+ * the observation union exactly like watcher closures (an atom retains
+ * its kernel lifecycle, an observed computed its current strong deps,
+ * transitively). (The snapshot's routing coverage needs no counts of its
+ * own: the capture's committed evaluations populate the root's arena,
+ * whose marks the re-checks validate through.)
  */
 function syncSubscriptionObservation(e: Subscription): void {
 	const prev = e.obsDeps;
 	const next = new Set<AnyInternals>();
 	for (let i = 0; i < e.deps.length; i++) next.add(e.deps[i]!.node);
 	e.obsDeps = next;
-	for (const dep of next) {
-		if (prev === undefined || !prev.delete(dep)) shiftObservedCount(dep, 1);
-	}
-	if (prev !== undefined) {
-		for (const dep of prev) shiftObservedCount(dep, -1);
-	}
+	repointRetains(prev, next);
 }
 
 // ---- the write log + the episode lifecycle --------------------------------------------
@@ -7596,19 +7554,17 @@ type NotifyState = { n: number; flushing: boolean };
 
 // Queued-notification columns (reused across operations; no per-notify objects).
 const notifyKinds: number[] = [];
-const notifyWs: (Watcher | undefined)[] = [];
+const notifyObservers: (Observer | undefined)[] = [];
 const notifyBatches: (Batch | undefined)[] = [];
 const notifySlots: BatchSlot[] = [];
-const notifySubs: (Subscription | undefined)[] = [];
 const notifyState: NotifyState = { n: 0, flushing: false };
 
-function queueNotify(kind: NotifyKind, w: Watcher | undefined, t: Batch | undefined, slot: BatchSlot, sub?: Subscription): void {
+function queueNotify(kind: NotifyKind, obs: Observer | undefined, t: Batch | undefined, slot: BatchSlot): void {
 	const i = notifyState.n++;
 	notifyKinds[i] = kind;
-	notifyWs[i] = w;
+	notifyObservers[i] = obs;
 	notifyBatches[i] = t;
 	notifySlots[i] = slot;
-	notifySubs[i] = sub;
 }
 
 /** Invokes queued listeners at the end of the public operation. A nested
@@ -7622,28 +7578,26 @@ function flushNotify(): void {
 	try {
 		for (let i = 0; i < notifyState.n; i++) {
 			const kind = notifyKinds[i]!;
-			const w = notifyWs[i];
+			const obs = notifyObservers[i];
 			const t = notifyBatches[i];
-			const s = notifySubs[i];
-			notifyWs[i] = undefined; // release object refs eagerly
+			notifyObservers[i] = undefined; // release object refs eagerly
 			notifyBatches[i] = undefined;
-			notifySubs[i] = undefined;
 			if (kind === NotifyKind.DELIVERY) {
 				const l = onDelivery;
-				if (l !== undefined) l(w!, t!, notifySlots[i]!);
+				if (l !== undefined) l(obs!, t!, notifySlots[i]!);
 			} else if (kind === NotifyKind.MOUNT_CORRECTIVE) {
 				const l = onMountCorrective;
-				if (l !== undefined) l(w!, t!, notifySlots[i]!);
+				if (l !== undefined) l(obs!, t!, notifySlots[i]!);
 			} else if (kind === NotifyKind.CORRECTION) {
 				const l = onCorrection;
-				if (l !== undefined) l(w!);
-			} else if (s !== undefined && s.live) {
+				if (l !== undefined) l(obs!);
+			} else if (obs !== undefined && obs.live) {
 				// Subscription refire (adapter-registered): the value gate
 				// already passed at the boundary scan; the adapter owns the
 				// body run (cleanup + fire + re-capture) and any React-phase
 				// deferral. Removal flips `live`, so nothing runs after
 				// teardown.
-				const r = s.refire;
+				const r = obs.refire;
 				if (r !== undefined) r();
 			}
 		}
@@ -7781,22 +7735,28 @@ function correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause:
 	return true;
 }
 
-/** Value-gated watcher reconciliation for a quiet fold: committed truth
- * moved for every root, and no slot/walk state exists to scope candidates,
- * so every live watcher re-checks directly — the same compare-and-correct
- * block as drainCommittedObservers. (Committed subscriptions re-check via
+/** The one drain consult body every watcher-reconciling drain shares
+ * (durable drain, settlement cone, quiet fold): resolve the watcher's node
+ * (loud skip on tenancy mismatch), evaluate it in `world`, settle the
+ * watched node's committed clock — the drain is an observer consult, and
+ * the correction gate must read settled state — then compare-and-correct
+ * ({@link correctWatcher}). Callers hoist `a`/`world` per root. */
+function reconcileWatcher(w: Watcher, a: WorldArena | undefined, world: World, cause: 'retirement' | 'per-root-commit' | 'quiet'): void {
+	const wInternals = resolveWatcherInternals(w);
+	if (wInternals === undefined) return; // loud skip: record tenancy moved
+	const now = evaluate(wInternals, world);
+	if (a !== undefined) settleObserverClock(a, wInternals);
+	correctWatcher(w, wInternals, now, cause);
+}
+
+/** Watcher reconciliation for a quiet fold: committed truth moved for
+ * every root, and no slot/walk state exists to scope candidates, so every
+ * live watcher re-checks directly. (Committed subscriptions re-check via
  * revalidateCommittedSubscriptions at the same boundary.) */
 function quietDrain(): void {
 	for (const w of watchers.values()) {
 		if (!w.live) continue;
-		const wInternals = resolveWatcherInternals(w);
-		if (wInternals === undefined) continue; // loud skip: record tenancy moved
-		const now = evaluate(wInternals, { kind: 'committed', root: w.root });
-		// The drain is an observer consult: settle the watched node's
-		// committed clock before the correction gate reads it.
-		const a = rootToArena.get(w.root);
-		if (a !== undefined) settleObserverClock(a, wInternals);
-		correctWatcher(w, wInternals, now, 'quiet');
+		reconcileWatcher(w, rootToArena.get(w.root), { kind: 'committed', root: w.root }, 'quiet');
 	}
 }
 
@@ -7843,16 +7803,7 @@ function drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root
 		}
 	}
 	if (ws.length > 1) ws.sort((a, b) => a.id - b.id);
-	for (let i = 0; i < ws.length; i++) {
-		const w = ws[i]!;
-		const wInternals = resolveWatcherInternals(w);
-		if (wInternals === undefined) continue; // loud skip: record tenancy moved
-		const now = evaluate(wInternals, world);
-		// The drain is an observer consult: settle the watched node's
-		// committed clock before the correction gate reads it.
-		if (a !== undefined) settleObserverClock(a, wInternals);
-		correctWatcher(w, wInternals, now, cause);
-	}
+	for (let i = 0; i < ws.length; i++) reconcileWatcher(ws[i]!, a, world, cause);
 	ws.length = 0;
 }
 
@@ -7971,23 +7922,17 @@ function drainSettlements(): void {
 				// kernel's own attachSettleListener listener invalidates kernel-cached
 				// suspensions at settlement, and boxedRead self-heals at reads.)
 			}
-			// Cone drain: value-gated committed re-checks of the touched
-			// roots' live watchers (the durable-drain compare; the marks
-			// fanned above drive the arena refolds), deferred for roots
-			// with an open render frame (their close flushes).
+			// Cone drain: committed re-checks of the touched roots' live
+			// watchers (the shared drain consult; the marks fanned above
+			// drive the arena refolds), deferred for roots with an open
+			// render frame (their close flushes).
 			for (const rootId of touchedRoots) {
 				if (rootToOpenRender.has(rootId)) continue;
 				const ra = rootToArena.get(rootId);
+				const world: World = { kind: 'committed', root: rootId };
 				for (const w of watchers.values()) {
 					if (!w.live || w.root !== rootId) continue;
-					const wInternals = resolveWatcherInternals(w);
-					if (wInternals === undefined) continue; // loud skip: record tenancy moved
-					const now = evaluate(wInternals, { kind: 'committed', root: rootId });
-					// The settlement drain is an observer consult: settle the
-					// watched node's committed clock before the correction
-					// gate reads it.
-					if (ra !== undefined) settleObserverClock(ra, wInternals);
-					correctWatcher(w, wInternals, now, 'retirement');
+					reconcileWatcher(w, ra, world, 'retirement');
 				}
 			}
 			// Boundary subscription scan + the flush the loop owns.
@@ -8034,27 +7979,24 @@ function getPendingSettleCount(): number {
 }
 
 // ---- observer records --------------------------------------------------------------
-// Watchers (and, in the section below this one, subscriptions) are the
-// engine's OBSERVER records: per-consumer state stored as kernel
-// node-allocator records plus side-column slots, exactly like signals and
-// computeds. A watcher is one subscribed component instance — the record
-// carries its watched-node binding, its delivery dedup word, and its
-// liveness bit in Int32 fields (WatcherField); its last rendered value in
-// the values column; its lastValidatedAt stamp in the clock column; and its
-// cold oddments (name, root, the rendered-world snapshot) in the extras
-// column. The handle class below is a lean reference: its own fields are
-// the two ids, and every other property is an accessor over the record —
-// so watcher state lives in arena/column storage while every consumer
-// (the render lifecycle, the delivery walks, the bindings, the tests)
-// keeps the property surface it always had. The render LIFECYCLE — mount,
-// reveal, re-render, removal, commit — lives in the render-integration
-// section below; this section owns only the record and its storage
-// discipline.
+// The engine's one OBSERVER record family: per-consumer state stored as
+// kernel node-allocator records plus side-column slots, exactly like
+// signals and computeds, with the ROLE carried as record data (the FLAGS
+// kind bit — see ObserverField for the whole layout, roles and columns
+// included). The handle class below is a lean reference: its own fields
+// are the two ids plus one cached extras reference, and every other
+// property is an accessor over the record — so observer state lives in
+// arena/column storage while every consumer (the render lifecycle, the
+// delivery walks, the boundary re-checks, the bindings, the tests) keeps
+// the property surface it always had. The role LIFECYCLES live in their
+// own sections — render integration below for watchers; the committed-
+// observer lifecycle for subscriptions; this section owns the record, its
+// storage discipline, and the subscription dep-chain builders.
 
 /** The watcher's rendered-world snapshot: what the mounting render saw
  * (the render's slot sets copied by integer assignment). Stored flattened
- * in the watcher record's extras object; replaced wholesale at mount and at
- * every committed re-render. */
+ * in the observer record's extras object; replaced wholesale at mount and
+ * at every committed re-render. */
 type WatcherSnapshot = {
 	renderPassId: RenderPassId;
 	pin: Seq;
@@ -8063,69 +8005,112 @@ type WatcherSnapshot = {
 	rootCommitGen: CommitGen;
 };
 
-/** The extras-column object of a watcher record: the cold oddments —
- * name, owning root, and the flattened
- * rendered-world snapshot. One object per watcher, created at mount; the
- * snapshot setter rewrites the five snapshot fields in place (monomorphic,
- * allocation-free at commit). */
-type WatcherExtras = {
+/** Shared default for the extras object's dep snapshot: replaced wholesale
+ * by every capture close, never mutated in place — so all observers can
+ * share one empty array until their first capture (watchers keep it for
+ * the record's life). */
+const NO_DEPS: { node: AnyInternals; value: Value }[] = [];
+
+/** The extras-column object of an observer record — the cold oddments of
+ * BOTH roles in one shape (one hidden class, so every extras access site
+ * stays monomorphic across roles; the other role's fields idle at their
+ * defaults). Held by the extras column (the storage roster — the slot
+ * scrubs at record free) AND cached on the handle: the run/cleanup
+ * counters stay readable after removal — the suites read a removed
+ * subscription's counters as tombstone diagnostics. */
+type ObserverExtras = {
 	name: string;
 	root: RootId;
+	// — watcher role: the flattened rendered-world snapshot (see
+	// WatcherSnapshot; the snapshot setter rewrites the five fields in
+	// place — monomorphic, allocation-free at commit).
 	renderPassId: RenderPassId;
 	pin: Seq;
 	maskBits: BatchSlotSet;
 	includedBits: BatchSlotSet;
 	rootCommitGen: CommitGen;
+	// — subscription role:
+	/** Dep snapshot: the routed reads of the last run, in read order. */
+	deps: { node: AnyInternals; value: Value }[];
+	/** Snapshot nodes currently holding observation retains (re-pointed per
+	 * run — see the observation index's shiftObservedCount). Node OBJECTS,
+	 * not ids: a retained node's record can free and re-tenant while the
+	 * stale reference lingers, and shiftObservedCount's identity guard is
+	 * what keeps the eventual release from touching the new tenant. */
+	obsDeps: Set<AnyInternals> | undefined;
+	/** Test-configured body (re-run inline through the capture frame). */
+	body: (() => void) | undefined;
+	/** Last captured value (the last dep read). */
+	lastValue: Value;
+	runs: number;
+	cleanups: number;
 };
 
 /**
- * One subscribed component instance, as a handle over its arena record.
- * The two id fields are the only own state:
+ * One observer, as a handle over its arena record — both roles, one class:
  *
- *  - `id` is the monotone watcher id (mount order). Deliveries and drains
- *    fire in id order — the reference model's map order — so the id is
- *    causal delivery metadata and never recycles (record ids do).
- *  - `rec` is the watcher's kernel arena record. Every mutable property
+ *  - WATCHER role (kind K_WATCHER): one subscribed component instance. It
+ *    binds one watched node and receives value-blind deliveries and urgent
+ *    corrections; created by the render lifecycle's mount (mountWatcher),
+ *    freed by its drop (unmount, discard, removal).
+ *  - SUBSCRIPTION role (kind K_SUBSCRIPTION): one committed observer — a
+ *    registration saying WHO is notified and IN WHICH WORLD its reads
+ *    resolve. `deps` is the (node, value) snapshot `captureRun` recorded
+ *    under the committed world of its root; the boundary re-check is gated
+ *    over it (see revalidateCommittedSubscriptions). `refire`
+ *    (adapter-registered) rides the operation-boundary notification queue
+ *    and lives in the fns column (the dormant-callback pattern);
+ *    test-configured subscriptions store a `body` and re-run it inline
+ *    through the same capture frame, so the model-comparison suites
+ *    exercise the real mechanism.
+ *
+ * Own fields are the two ids plus the cached extras reference:
+ *
+ *  - `id` is the role's monotone id (mount/registration order — the firing
+ *    order of deliveries, drains, and boundary scans, i.e. the reference
+ *    model's map order; never recycles — record ids do).
+ *  - `rec` is the observer's kernel arena record. Every mutable property
  *    below is an accessor over the record's fields and side-column slots,
- *    so the watcher's state lives in the arena and dies with the record
- *    (the free scrubs every column slot, by construction).
+ *    so observer state lives in the arena and dies with the record (the
+ *    free scrubs every column slot, by construction).
  *
- * Lifetime: created by the render lifecycle's mount (the render-integration
- * section's mountWatcher), freed by its drop (unmount, discard, removal) through
- * {@link Kernel.disposeObserver} — after the drop, the handle's accessors
- * read a dead (scrubbed, possibly re-tenanted) record and their answers are
- * unspecified; every engine path resolves watchers through the live stores
- * (the id map, the per-node index) before touching one, and the liveness
- * setter is edge-filtered so a dead handle's `live = false` is a no-op.
+ * Lifetime: freed through {@link Kernel.disposeObserver} — after the drop,
+ * the record-backed accessors read a dead (scrubbed, possibly re-tenanted)
+ * record and their answers are unspecified (the cached extras keep the
+ * tombstone fields readable); every engine path resolves observers through
+ * the live stores (the role id maps, the per-node watcher index) before
+ * touching one, and the liveness setter is edge-filtered so a dead
+ * handle's `live = false` is a no-op.
  */
-export class Watcher {
-	readonly id: WatcherId;
-	/** The watcher's arena record (kind K_WATCHER — see WatcherField). @internal */
+export class Observer {
+	readonly id: ObserverId;
+	/** The observer's arena record (kind K_WATCHER / K_SUBSCRIPTION — see
+	 * ObserverField). @internal */
 	readonly rec: NodeId;
+	/** The extras object, cached (see ObserverExtras). @internal */
+	private readonly x: ObserverExtras;
 
-	constructor(id: WatcherId, name: string, root: RootId, node: NodeId, nodeIx: NodeIndex, nodeRecordGen: Generation, value: Value, snapshot: WatcherSnapshot) {
+	constructor(id: ObserverId, kind: NodeFlags, name: string, root: RootId) {
 		this.id = id;
-		const rec = E.newObserver(NodeFlag.K_WATCHER);
+		const rec = E.newObserver(kind);
 		this.rec = rec;
-		const memory = E.buffer();
-		memory[rec + WatcherField.NODE] = node;
-		memory[rec + WatcherField.NODE_GEN] = nodeRecordGen;
-		memory[rec + WatcherField.NODE_IX] = nodeIx;
-		values[rec >> ArenaShape.ID_TO_VALUE_SHIFT] = value;
-		extras[rec >> ArenaShape.ID_TO_EXTRAS_SHIFT] = {
+		const x: ObserverExtras = {
 			name,
 			root,
-			renderPassId: snapshot.renderPassId,
-			pin: snapshot.pin,
-			maskBits: snapshot.maskBits,
-			includedBits: snapshot.includedBits,
-			rootCommitGen: snapshot.rootCommitGen,
-		} satisfies WatcherExtras;
-	}
-
-	/** The watcher's extras object (cold oddments; see WatcherExtras). */
-	private get x(): WatcherExtras {
-		return extras[this.rec >> ArenaShape.ID_TO_EXTRAS_SHIFT] as WatcherExtras;
+			renderPassId: 0,
+			pin: 0,
+			maskBits: 0,
+			includedBits: 0,
+			rootCommitGen: 0,
+			deps: NO_DEPS,
+			obsDeps: undefined,
+			body: undefined,
+			lastValue: undefined,
+			runs: 0,
+			cleanups: 0,
+		};
+		extras[rec >> ArenaShape.ID_TO_EXTRAS_SHIFT] = x;
+		this.x = x;
 	}
 
 	/** Diagnostic label (mutable: the bindings rename a watcher after mount —
@@ -8137,21 +8122,24 @@ export class Watcher {
 		this.x.name = v;
 	}
 
-	/** Owning root (the delivery suppression and drain scoping read it). */
+	/** Owning root (delivery suppression, drain scoping, and the boundary
+	 * scan's root filter read it). */
 	get root(): RootId {
 		return this.x.root;
 	}
 
+	// ------------------------------------------------------ watcher role
+
 	/** The watched node record id (the component reads this node). */
 	get node(): NodeId {
-		return E.buffer()[this.rec + WatcherField.NODE]!;
+		return E.buffer()[this.rec + ObserverField.NODE]!;
 	}
 
 	/** The watched record's NODE_INDEX, cached at mount (slot-tied, so it
 	 * never goes stale; `nodeRecordGen` decides whether the watched TENANCY
 	 * is still alive). @internal */
 	get nodeIx(): NodeIndex {
-		return E.buffer()[this.rec + WatcherField.NODE_IX]!;
+		return E.buffer()[this.rec + ObserverField.NODE_IX]!;
 	}
 
 	/** The watched record's tenancy generation (kernel GEN) at mount. Bare
@@ -8160,17 +8148,17 @@ export class Watcher {
 	 * and skips loudly on mismatch — a dormant watcher whose node died must
 	 * never bind the record's next tenant. */
 	get nodeRecordGen(): Generation {
-		return E.buffer()[this.rec + WatcherField.NODE_GEN]!;
+		return E.buffer()[this.rec + ObserverField.NODE_GEN]!;
 	}
 
 	/** Per-(watcher, slot) delivery dedup bits, one int word: a second write
 	 * in the same slot delivers again only if no scheduled-but-unstarted
 	 * render will fold it anyway. */
 	get dedupBits(): BatchSlotSet {
-		return E.buffer()[this.rec + WatcherField.DEDUP_BITS]!;
+		return E.buffer()[this.rec + ObserverField.DEDUP_BITS]!;
 	}
 	set dedupBits(bits: BatchSlotSet) {
-		E.buffer()[this.rec + WatcherField.DEDUP_BITS] = bits;
+		E.buffer()[this.rec + ObserverField.DEDUP_BITS] = bits;
 	}
 
 	/** What the committed screen shows for this watcher — the rendered-value
@@ -8195,7 +8183,8 @@ export class Watcher {
 	 * a re-staled commit resets it to 0, which forces the next drain's
 	 * correction (a folded shadow's clock is never 0). Corrections outside
 	 * the committing render's own window gate on this stamp alone: clock
-	 * mismatch means re-fire, no value comparison. */
+	 * mismatch means re-fire, no value comparison. (A subscription's
+	 * counterpart stamps ride its dep-chain links — see ObserverField.) */
 	get lastValidatedAt(): Clock {
 		return E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT]!;
 	}
@@ -8218,139 +8207,7 @@ export class Watcher {
 		x.rootCommitGen = s.rootCommitGen;
 	}
 
-	/**
-	 * Subscribed-for-delivery bit (NodeFlag.OBSERVER_LIVE on the record).
-	 * The setter is the watcher half of the observation union
-	 * (AtomOptions.effect): a live watcher holds one observed-consumer ref
-	 * on its node, and the observation index carries that ref transitively —
-	 * a watcher over an atom node retains that atom's lifecycle directly; a
-	 * watcher over an engine computed retains every atom the computed's
-	 * current evaluation (transitively) reads. Every liveness site routes
-	 * through here — the commit layout loop and adoptRevealedMount reveals
-	 * (engine side), and the reveal resubscribe / StrictMode orphan sweep /
-	 * debounce-finalized unsubscribe (the React-bindings side, which flips
-	 * this property directly) — so kernel subscribers and watchers count
-	 * into one refcount, and same-tick flips coalesce in the kernel's
-	 * microtask flush. Edge-filtered: re-asserting the current state is a
-	 * no-op (which also makes a dead handle's `live = false` safe — a freed
-	 * record's flags word is 0).
-	 */
-	get live(): boolean {
-		return (E.buffer()[this.rec + WatcherField.FLAGS]! & NodeFlag.OBSERVER_LIVE) !== 0;
-	}
-	set live(value: boolean) {
-		const memory = E.buffer();
-		const flags = memory[this.rec + WatcherField.FLAGS]!;
-		if (((flags & NodeFlag.OBSERVER_LIVE) !== 0) === value) {
-			return;
-		}
-		memory[this.rec + WatcherField.FLAGS] = value ? flags | NodeFlag.OBSERVER_LIVE : flags & ~NodeFlag.OBSERVER_LIVE;
-		observerShift(this, value ? 1 : -1);
-	}
-}
-
-/** Free a watcher's arena record (the render lifecycle's drop tail —
- * unmount, discard, removal). The free defers to the next operation
- * boundary (queued notifications may still hold the handle; its own id
- * fields stay readable), where {@link scrubNodeColumnsOnFree} clears every
- * slot the record owned. */
-function freeWatcherRecord(w: Watcher): void {
-	E.disposeObserver(w.rec);
-}
-
-// ---- committed observers (subscriptions) -------------------------------------------
-// The one core `run`-action consumer record — committed observers, the
-// production useSignalEffect mechanism — and its whole lifecycle:
-// registration, the capture frame that snapshots deps under the committed
-// world, removal, the test-side replay surface, and the boundary
-// revalidation. `deliver`-action consumers (component re-renders) are the
-// Watcher records above; only the firing machinery is shared. Core
-// `effect()`s hold no Subscription: they are real kernel effects, flushed
-// by the eager kernel apply (their trace seam, logCoreEffectRun, lives with
-// the engine surface's trace sites).
-
-/** The extras-column object of a subscription record: the observer's cold
- * record state. Held BOTH by the extras column (the storage roster — the
- * slot scrubs at record free) and by the handle (one cached reference, so
- * the run/cleanup counters stay readable after removal — the suites read a
- * removed subscription's counters as tombstone diagnostics). */
-type SubscriptionExtras = {
-	name: string;
-	root: RootId;
-	/** Dep snapshot: the routed reads of the last run, in read order. */
-	deps: { node: AnyInternals; value: Value }[];
-	/** Snapshot nodes currently holding observation retains
-	 * (re-pointed per run exactly like watcher obsDeps; see the observation
-	 * index's shiftObservedCount).
-	 * Node OBJECTS, not ids: a retained node's record can free and re-tenant
-	 * while the stale reference lingers, and shiftObservedCount's identity
-	 * guard is what keeps the eventual release from touching the new
-	 * tenant. */
-	obsDeps: Set<AnyInternals> | undefined;
-	/** Test-configured body (re-run inline through the capture frame). */
-	body: (() => void) | undefined;
-	/** Last captured value (the last dep read). */
-	lastValue: Value;
-	runs: number;
-	cleanups: number;
-};
-
-/**
- * One committed observer, as a handle over its arena record. A subscription
- * is a registration saying WHO is notified and IN WHICH WORLD its reads
- * resolve; `deps` is the (node, value) snapshot `captureRun` recorded under
- * the committed world of the subscription's root; re-checks are gated over
- * it and fire at the boundary operations (per-root commit, retirement,
- * settlement, quiet fold; one re-check per boundary operation, at the
- * boundary value, never while the subscription's own root has an open
- * render frame — deferred flips flush at that frame's close). `refire`
- * (adapter-registered) rides the operation-boundary notification queue and
- * lives in the fns column (the dormant-callback pattern); test-configured
- * subscriptions store a `body` and re-run it inline through the same
- * capture frame, so the model-comparison suites exercise the real
- * mechanism.
- *
- * Storage: own fields are the monotone subscription id (registration
- * order — the boundary scan's iteration order, i.e. the reference model's
- * map order; never recycles) and the kernel record id (kind
- * K_SUBSCRIPTION — see SubscriptionField). The record carries the liveness
- * bit and the dep-chain cursors; the cold state lives in the extras object
- * (cached on the handle — see SubscriptionExtras for why).
- */
-export class Subscription {
-	readonly id: SubscriptionId;
-	/** The subscription's arena record (kind K_SUBSCRIPTION). @internal */
-	readonly rec: NodeId;
-	/** The extras object, cached (see SubscriptionExtras). @internal */
-	private readonly x: SubscriptionExtras;
-
-	constructor(id: SubscriptionId, name: string, root: RootId, refire: (() => void) | undefined) {
-		this.id = id;
-		const rec = E.newObserver(NodeFlag.K_SUBSCRIPTION | NodeFlag.OBSERVER_LIVE);
-		this.rec = rec;
-		fns[rec >> ArenaShape.ID_TO_FN_SHIFT] = refire;
-		const x: SubscriptionExtras = {
-			name,
-			root,
-			deps: [],
-			obsDeps: undefined,
-			body: undefined,
-			lastValue: undefined,
-			runs: 0,
-			cleanups: 0,
-		};
-		extras[rec >> ArenaShape.ID_TO_EXTRAS_SHIFT] = x;
-		this.x = x;
-	}
-
-	get name(): string {
-		return this.x.name;
-	}
-
-	/** Owning root. */
-	get root(): RootId {
-		return this.x.root;
-	}
+	// ------------------------------------------------- subscription role
 
 	/** Dep snapshot: the routed reads of the last run, in read order. */
 	get deps(): { node: AnyInternals; value: Value }[] {
@@ -8397,27 +8254,87 @@ export class Subscription {
 		this.x.cleanups = n;
 	}
 
-	/** Subscribed bit (NodeFlag.OBSERVER_LIVE): flips at removal so queued
-	 * refires no-op — nothing runs after teardown. Unlike a watcher's, this
-	 * setter shifts no observation (subscription retains ride the dep
-	 * snapshot's obsDeps re-point instead). A freed record's flags word is
-	 * 0, so a dead handle reads not-live. */
-	get live(): boolean {
-		return (E.buffer()[this.rec + SubscriptionField.FLAGS]! & NodeFlag.OBSERVER_LIVE) !== 0;
-	}
-	set live(value: boolean) {
-		const memory = E.buffer();
-		const flags = memory[this.rec + SubscriptionField.FLAGS]!;
-		memory[this.rec + SubscriptionField.FLAGS] = value ? flags | NodeFlag.OBSERVER_LIVE : flags & ~NodeFlag.OBSERVER_LIVE;
-	}
-
 	get obsDeps(): Set<AnyInternals> | undefined {
 		return this.x.obsDeps;
 	}
 	set obsDeps(v: Set<AnyInternals> | undefined) {
 		this.x.obsDeps = v;
 	}
+
+	// ------------------------------------------------------- both roles
+
+	/**
+	 * Subscribed-for-delivery bit (NodeFlag.OBSERVER_LIVE on the record).
+	 * For a watcher this is the layout-effect subscription bit, and the
+	 * setter is the watcher half of the observation union
+	 * (AtomOptions.effect): a live watcher holds one observed-consumer ref
+	 * on its node, and the observation index carries that ref transitively —
+	 * a watcher over an atom node retains that atom's lifecycle directly; a
+	 * watcher over an engine computed retains every atom the computed's
+	 * current evaluation (transitively) reads. Every liveness site routes
+	 * through here — the commit layout loop and adoptRevealedMount reveals
+	 * (engine side), and the reveal resubscribe / StrictMode orphan sweep /
+	 * debounce-finalized unsubscribe (the React-bindings side, which flips
+	 * this property directly) — so kernel subscribers and watchers count
+	 * into one refcount, and same-tick flips coalesce in the kernel's
+	 * microtask flush. For a subscription the bit means "not yet removed" —
+	 * it clears with the record at removal, queued refires check it and
+	 * no-op, and no observation shifts (subscription retains ride the dep
+	 * snapshot's obsDeps re-point instead — the role test below is record
+	 * data, not a second setter). Edge-filtered: re-asserting the current
+	 * state is a no-op (which also makes a dead handle's `live = false`
+	 * safe — a freed record's flags word is 0).
+	 */
+	get live(): boolean {
+		return (E.buffer()[this.rec + ObserverField.FLAGS]! & NodeFlag.OBSERVER_LIVE) !== 0;
+	}
+	set live(value: boolean) {
+		const memory = E.buffer();
+		const flags = memory[this.rec + ObserverField.FLAGS]!;
+		if (((flags & NodeFlag.OBSERVER_LIVE) !== 0) === value) {
+			return;
+		}
+		memory[this.rec + ObserverField.FLAGS] = value ? flags | NodeFlag.OBSERVER_LIVE : flags & ~NodeFlag.OBSERVER_LIVE;
+		if ((flags & NodeFlag.K_WATCHER) !== 0) observerShift(this, value ? 1 : -1);
+	}
 }
+
+/** The observer roles, as public type names: role is record data (the
+ * FLAGS kind bit), so both names serve the one handle class — kept because
+ * each role's consumers (the shim's watcher lifecycle, the adapter's
+ * effect registration, the suites) speak in role terms. */
+export type Watcher = Observer;
+export type Subscription = Observer;
+
+/** Create a watcher-role observer: bind the watched node (id + tenancy
+ * stamp + cached index — see ObserverField), seed the rendered-value
+ * register and the rendered-world snapshot. */
+function newWatcher(id: ObserverId, name: string, root: RootId, node: AnyInternals, value: Value, snapshot: WatcherSnapshot): Watcher {
+	const w = new Observer(id, NodeFlag.K_WATCHER, name, root);
+	const memory = E.buffer();
+	memory[w.rec + ObserverField.NODE] = node.id;
+	memory[w.rec + ObserverField.NODE_GEN] = getKernelGeneration(node.id);
+	memory[w.rec + ObserverField.NODE_IX] = node.ix;
+	values[w.rec >> ArenaShape.ID_TO_VALUE_SHIFT] = value;
+	w.snapshot = snapshot;
+	return w;
+}
+
+/** Create a subscription-role observer: born live (constructed only by
+ * registration), refire parked in the fns column. */
+function newSubscription(id: ObserverId, name: string, root: RootId, refire: (() => void) | undefined): Subscription {
+	const sub = new Observer(id, NodeFlag.K_SUBSCRIPTION | NodeFlag.OBSERVER_LIVE, name, root);
+	fns[sub.rec >> ArenaShape.ID_TO_FN_SHIFT] = refire;
+	return sub;
+}
+
+// ---- committed observers (subscriptions) -------------------------------------------
+// The subscription role's whole lifecycle: registration, the capture frame
+// that snapshots deps under the committed world, removal, the test-side
+// replay surface, and the boundary revalidation. Core `effect()`s hold no
+// subscription record: they are real kernel effects, flushed by the eager
+// kernel apply (their trace seam, logCoreEffectRun, lives with the engine
+// surface's trace sites).
 
 /** The core capture frame `captureRun` opens: while set (and no evaluation
  * world is on stack) routed reads resolve committed-for-root and append to
@@ -8447,14 +8364,14 @@ function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
  * {@link scrubWorldLinkColumnsOnFree} clears each link's clock slot on free. */
 function freeObserverDepChain(a: WorldArena, sub: Subscription): void {
 	const memory = E.buffer();
-	let l = memory[sub.rec + SubscriptionField.DEP_HEAD]!;
+	let l = memory[sub.rec + ObserverField.DEP_HEAD]!;
 	while (l !== 0) {
 		const next = a.memory[l + ArenaLinkField.NEXT_DEP]!;
 		arenaFreeLink(a, l);
 		l = next;
 	}
-	memory[sub.rec + SubscriptionField.DEP_HEAD] = 0;
-	memory[sub.rec + SubscriptionField.DEP_TAIL] = 0;
+	memory[sub.rec + ObserverField.DEP_HEAD] = 0;
+	memory[sub.rec + ObserverField.DEP_TAIL] = 0;
 }
 
 /**
@@ -8494,8 +8411,8 @@ function buildObserverDepChain(a: WorldArena, sub: Subscription, deps: { node: A
 		tail = l;
 	}
 	const memory = E.buffer();
-	memory[sub.rec + SubscriptionField.DEP_HEAD] = head;
-	memory[sub.rec + SubscriptionField.DEP_TAIL] = tail;
+	memory[sub.rec + ObserverField.DEP_HEAD] = head;
+	memory[sub.rec + ObserverField.DEP_TAIL] = tail;
 }
 
 // ---- the committed-observer lifecycle ----
@@ -8526,7 +8443,7 @@ function mountCommittedObserver(rootId: RootId, name: string, refire?: () => voi
 	if (evalDepth > 0 || inFoldCallback) {
 		throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame');
 	}
-	const sub = new Subscription(nextSubscriptionId++ as SubscriptionId, name, rootId, refire);
+	const sub = newSubscription(nextSubscriptionId++, name, rootId, refire);
 	root(rootId);
 	idToSubscription.set(sub.id, sub);
 	committedSubCount += 1;
@@ -8643,7 +8560,7 @@ function replayReactEffect(id: SubscriptionId): void {
  * operation boundary — the adapter owns the body run). */
 function runCommittedSubscription(sub: Subscription): void {
 	if (sub.refire !== undefined) {
-		queueNotify(NotifyKind.SUBSCRIPTION_REFIRE, undefined, undefined, 0, sub);
+		queueNotify(NotifyKind.SUBSCRIPTION_REFIRE, sub, undefined, 0);
 		return;
 	}
 	sub.cleanups++;
@@ -8706,7 +8623,7 @@ function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void 
 		const deps = sub.deps;
 		// The chain and the dep array are parallel by construction (both
 		// written by the same capture close, one entry per read).
-		let l = a === undefined ? 0 : memory[sub.rec + SubscriptionField.DEP_HEAD]!;
+		let l = a === undefined ? 0 : memory[sub.rec + ObserverField.DEP_HEAD]!;
 		for (let i = 0; i < deps.length && (a === undefined || l !== 0); i++) {
 			const d = deps[i]!;
 			const stamp = a === undefined ? 0 : a.clocks[l >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
@@ -8965,7 +8882,7 @@ function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: stri
 	const p = getRenderPassById(renderPassId);
 	if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
 	const value = evaluate(node, { kind: 'render', render: p });
-	const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, getKernelGeneration(node.id), value, {
+	const watcher = newWatcher(nextWatcher++, name, p.root, node, value, {
 		renderPassId: p.id, pin: p.pin,
 		maskBits: p.maskBits, includedBits: p.includedBits,
 		rootCommitGen: root(p.root).commitGen,
@@ -9065,7 +8982,7 @@ function dropWatcher(wid: WatcherId): void {
 	// next boundary sweep, so queued notifications holding the handle
 	// still read their own fields; the sweep's generated scrub then clears
 	// every column slot the record owned).
-	freeWatcherRecord(w);
+	E.disposeObserver(w.rec);
 }
 
 /**
@@ -10453,10 +10370,9 @@ function composeEngine(options?: EngineResetOptions): void {
 	notifyState.n = 0;
 	notifyState.flushing = false;
 	notifyKinds.length = 0;
-	notifyWs.length = 0;
+	notifyObservers.length = 0;
 	notifyBatches.length = 0;
 	notifySlots.length = 0;
-	notifySubs.length = 0;
 	walkWatchers.length = 0;
 	drainWatcherBuf.length = 0;
 	// section 14 — settlement
