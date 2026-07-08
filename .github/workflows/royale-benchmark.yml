@@ -31,10 +31,7 @@ jobs:
 
       - name: Init benchmark submodules + apply royale registrations
         run: |
-          git submodule update --init \
-            packages/dalien-signals \
-            milomg-reactivity-benchmark \
-            upstream-alien-signals
+          git submodule update --init milomg-reactivity-benchmark
           git -C milomg-reactivity-benchmark apply --binary \
             "$GITHUB_WORKSPACE/royale/ci/milomg-royale.patch"
 
@@ -43,18 +40,6 @@ jobs:
           node-version: 24
 
       - run: npm install -g pnpm@10
-
-      - name: Build upstream alien-signals (esm/ is a local build artifact)
-        working-directory: upstream-alien-signals
-        run: |
-          npm install
-          npm run build
-
-      - name: Build dalien-signals (bundled by frameworksList even when not run)
-        working-directory: packages/dalien-signals
-        run: |
-          pnpm install --ignore-workspace
-          node build.js
 
       - name: Build benchmark runner
         working-directory: milomg-reactivity-benchmark
