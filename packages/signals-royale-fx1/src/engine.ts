@@ -351,6 +351,9 @@ export class Derived<T> {
   subs: Set<Sub> | null = null;
   live = 0;
   trackIndex = 0;
+  /** writeSeq when this (cold) node last verified its sources; a repeat read
+   * with no writes in between skips the poll entirely. */
+  pollSeq: WriteSeq = -1;
   /** Slot at the most recent commit that delivered this derived to any root. */
   committedSlot: { v: unknown } | null = null;
   /** Canonical async context (created on first `use`). */
@@ -768,6 +771,7 @@ function repull(ctx: EvalCtx): void {
 function announceSettlement(d: Derived<any>, episode: Episode | null): void {
   const cause = trace !== null ? trace.emit("settle", traceCause, d.label, d) : 0;
   const prevCause = setTraceCause(cause);
+  writeSeq++; // a derived changed without a base write: cold readers re-poll
   pendingEpoch++;
   notifyDownstream(d, episode);
   flushAll();
@@ -791,14 +795,22 @@ function updateCanonical(d: Derived<any>): void {
     return;
   }
   // Hot nodes trust CLEAN (marks arrive on writes). Cold nodes receive no
-  // marks, so every read verifies by polling source versions.
+  // marks, so reads verify by polling source versions — but only when
+  // anything at all changed since the last verification (every canonical
+  // change advances writeSeq; settlements advance it explicitly). The stamp
+  // is captured before the check: a write issued from inside an evaluation
+  // moves writeSeq past it and forces the next read to re-poll.
   if (d.live > 0 && d.state === CLEAN) return;
+  if (d.pollSeq === writeSeq) return;
+  const seq = writeSeq;
   if (!sourcesChanged(d)) {
     d.state = CLEAN;
+    d.pollSeq = seq;
     return;
   }
   d.settleRerun = false; // inputs changed: fetch generations reset
   evaluateCanonical(d);
+  d.pollSeq = seq;
 }
 
 /** Poll: did any source actually change value since we last evaluated? */
@@ -1557,6 +1569,7 @@ export function retireEpisode(ep: Episode): void {
 export function abortEpisode(ep: Episode): void {
   if (ep.state !== "open") return;
   ep.state = "aborted";
+  writeSeq++; // dropped drafts flip pending probes and world folds
   if (trace !== null) trace.emit("batch-abort", ep.openTrace, `episode ${ep.seq}`);
   unregisterEpisode(ep);
   for (const cell of ep.cells) {
@@ -1606,6 +1619,7 @@ function adoptWorldContexts(ep: Episode): void {
         d.ctx = ctx;
         d.state = DIRTY;
         d.settleRerun = true; // keep the world's slots: no refetch after commit
+        writeSeq++; // adopted evaluation state: cold readers re-poll
       } else {
         ctx.key = newKey;
         map.set(newKey, ctx);
@@ -2137,6 +2151,7 @@ export function refresh(node: Node): void {
   }
   node.state = DIRTY;
   node.settleRerun = true; // inputs unchanged; slot reset above forces fetches
+  writeSeq++; // fetch state changed without a base write
   pendingEpoch++;
   if (trace !== null) trace.emit("refresh", traceCause, node.label, node);
   // Start the refetch now — refresh means "fetch", not "fetch when read".
