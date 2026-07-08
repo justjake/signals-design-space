@@ -201,7 +201,7 @@ export type RegistryListener = {
 	onRenderPassStart?(container: unknown, includedTokens: readonly BatchToken[]): void;
 	onRenderPassYield?(container: unknown): void;
 	onRenderPassResume?(container: unknown): void;
-	onRenderPassEnd?(container: unknown): void;
+	onRenderPassEnd?(container: unknown, committed: boolean): void; // disposition is free (commit-driven end vs implicit/discard end); mainline cosignals consumes it, the alts ignore the arg
 	onRootCommitted?(container: unknown, committedTokens: readonly BatchToken[]): void;
 	onBatchRetired?(token: BatchToken, committed: boolean): void;
 	onBeforeMutation?(container: unknown): void;
@@ -211,8 +211,12 @@ export type RegistryListener = {
 export class ReactBatchRegistry {
 	/** Locates ReactSharedInternals.E via React's client-internals export,
 	 * asserts forkProtocolVersion === 1 (throws on stock React or drift),
-	 * throws if taps.consumer is already installed. */
-	constructor(react: typeof import('react'));
+	 * throws if taps.consumer is already installed. `createToken` lets a
+	 * consumer own token creation (called synchronously inside
+	 * getCurrentWriteBatch at identity creation, same timing as the old
+	 * fork allocator); default is the internal (serial<<1)|deferred counter.
+	 * Returned tokens must keep bit 0 = deferred and never be 0. */
+	constructor(react: typeof import('react'), opts?: { createToken?: (deferred: boolean) => BatchToken });
 	subscribe(l: RegistryListener): () => void; // error-guarded emit: per-listener try/catch, collected + reported, never rethrown into React
 	getCurrentWriteBatch(): BatchToken; // classify via taps.getCurrentWriteLane(), then create-or-reuse identity; emits onBatchOpened synchronously on create
 	getRenderContext(): { container: unknown } | null;
@@ -232,6 +236,30 @@ consume the behavior). Port `ReactFiberBatchRegistry.js` logic **surgically,
 not rewritten**: the shipping code is proven by 657 lines of tests and two
 past seam bugs lived exactly in these edges. Size target ~600 lines including
 npm-standalone docs.
+
+## Informative: mainline `cosignals` joins later — do not preclude it
+
+`packages/cosignals` + `packages/cosignals-react` (the flagship engine, a third
+consumer) speak the same protocol v2 today (`cosignals-react/src/shim.ts:245-257`)
+and map onto this design with the two package seams already reflected in the
+API above — zero extra fork lines. Do NOT port mainline in this work; just keep
+these seams intact:
+
+- **`createToken`**: mainline's allocator opens an ENGINE batch and returns the
+  engine's own BatchId as the protocol token (shim.ts:245-247 — one id space,
+  "no mapping tables anywhere" is a design rule there). The hook preserves
+  that; the alts use the default counter.
+- **`onRenderPassEnd(container, committed)`**: mainline consumes the
+  disposition (shim.ts:387-399 — a discarded pass kills render-owned mounts);
+  the package knows it for free and must keep the internal order mainline
+  assumes: pass-end → per-root commit report → retirements (shim.ts:403-405).
+  This supersedes PLAN §1.6's "pass-end disposition: not reconstructed" row.
+- Mainline deliberately calls `runInBatch(BATCH_NONE=0, fn)` for urgent bumps
+  (shim.ts:498) — token 0 takes the urgent fallback and always executes
+  (already specified above).
+- Mainline declares `unstable_discardAllWip` in its fork types but never calls
+  it (its test helpers use the ENGINE's own discardAllWip) — the fork-side
+  deletion stands.
 
 ## The work: one hardening commit, then one branch, merged when green
 
