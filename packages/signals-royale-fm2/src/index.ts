@@ -19,7 +19,7 @@ import {
 	type AtomOptions,
 	type ComputedOptions,
 	type UseFn,
-} from './core';
+} from './core.ts';
 
 export {
 	AtomNode,
@@ -56,7 +56,7 @@ export {
 	type UseFn,
 	type Equals,
 	type ExternalListener,
-} from './core';
+} from './core.ts';
 
 export {
 	startTrace,
@@ -66,7 +66,7 @@ export {
 	type Tracer,
 	type TraceEvent,
 	type TraceEventId,
-} from './tracer';
+} from './tracer.ts';
 
 /** A writable reactive cell. */
 export type Atom<T> = AtomNode<T>;
@@ -124,12 +124,12 @@ export function committed<T>(x: Readable<T>, view?: CommittedView | null): T {
 }
 
 /** True while newer data loads (or drafts sit) behind the visible value. */
-export function isPending(x: Readable<unknown>): boolean {
+export function isPending<T>(x: Readable<T>): boolean {
 	return isPendingOf(x);
 }
 
 /** Force a refetch with unchanged inputs; the stale value keeps serving. */
-export function refresh(x: Readable<unknown>): void {
+export function refresh<T>(x: Readable<T>): void {
 	if (x instanceof ComputedNode) x.refresh();
 }
 
@@ -147,9 +147,15 @@ export function update<T>(a: Atom<T>, fn: (prev: T) => T): void {
 // SSR
 // ---------------------------------------------------------------------------
 
+/** The structural surface SSR needs from an atom (any value type). */
+export interface SerializableAtom {
+	read(): unknown;
+	install(value: unknown): void;
+}
+
 /** Serialize atom values under app-supplied keys. */
 export function serializeAtomState(
-	atoms: Record<string, Atom<unknown>>,
+	atoms: Record<string, SerializableAtom>,
 	replacer?: (key: string, value: unknown) => unknown,
 ): string {
 	const out: Record<string, unknown> = {};
@@ -160,7 +166,7 @@ export function serializeAtomState(
 /** Install serialized values into matching atoms (install, not write). */
 export function initializeAtomState(
 	json: string,
-	atoms: Record<string, Atom<unknown>>,
+	atoms: Record<string, SerializableAtom>,
 	reviver?: (key: string, value: unknown) => unknown,
 ): void {
 	const data = JSON.parse(json, reviver) as Record<string, unknown>;

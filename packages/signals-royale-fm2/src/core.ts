@@ -14,7 +14,7 @@
  * readers who opt into a world.
  */
 
-import { emitTrace, emitAndRun, withCause, currentCauseId } from './tracer';
+import { emitTrace, emitAndRun, withCause, currentCauseId } from './tracer.ts';
 
 declare const queueMicrotask: (fn: () => void) => void;
 declare const console: { error(...args: unknown[]): void };
@@ -39,20 +39,22 @@ const defaultEquals: Equals<unknown> = (a, b) => Object.is(a, b);
 // Graph protocol
 // ---------------------------------------------------------------------------
 
-const enum Flags {
-	None = 0,
+/** Node state bits (plain const object: the source runs under strip-types). */
+type Flags = number;
+const Flags = {
+	None: 0,
 	/** A dependency definitely changed; recompute without validating. */
-	Dirty = 1 << 0,
+	Dirty: 1 << 0,
 	/** A transitive dependency may have changed; validate before recompute. */
-	Check = 1 << 1,
+	Check: 1 << 1,
 	/** Node participates in push notification (has live subscribers). */
-	Live = 1 << 2,
+	Live: 1 << 2,
 	/** Effect is queued for the next flush. */
-	Queued = 1 << 3,
-	Disposed = 1 << 4,
+	Queued: 1 << 3,
+	Disposed: 1 << 4,
 	/** Currently evaluating (cycle guard). */
-	Running = 1 << 5,
-}
+	Running: 1 << 5,
+} as const;
 
 interface Consumer {
 	deps: Producer[];
@@ -1088,7 +1090,7 @@ export function latestOf<T>(x: AtomNode<T> | ComputedNode<T>): T {
  * Cheap pending probe: true while newer data loads (or drafts sit) behind
  * the value canonical readers see. Never refetches, never suspends.
  */
-export function isPendingOf(x: AtomNode<unknown> | ComputedNode<unknown>): boolean {
+export function isPendingOf<T>(x: AtomNode<T> | ComputedNode<T>): boolean {
 	if (x instanceof AtomNode) return x.hasOpenDrafts();
 	return x.pendingIn(currentWorld);
 }
@@ -1243,10 +1245,16 @@ export class LifetimeState<T> {
 	private active = false;
 	private cleanup: void | (() => void) = undefined;
 
+	private atom: AtomNode<T>;
+	private fx: (ctx: { get(): T; set(v: T): void }) => void | (() => void);
+
 	constructor(
-		private atom: AtomNode<T>,
-		private fx: (ctx: { get(): T; set(v: T): void }) => void | (() => void),
-	) {}
+		atom: AtomNode<T>,
+		fx: (ctx: { get(): T; set(v: T): void }) => void | (() => void),
+	) {
+		this.atom = atom;
+		this.fx = fx;
+	}
 
 	retain(): void {
 		this.count++;
@@ -1309,10 +1317,12 @@ export class ExternalSub implements Consumer {
 	depValues: unknown[] = [];
 	flags = Flags.Live;
 
-	constructor(
-		private target: Producer,
-		private listener: ExternalListener,
-	) {
+	private target: Producer;
+	private listener: ExternalListener;
+
+	constructor(target: Producer, listener: ExternalListener) {
+		this.target = target;
+		this.listener = listener;
 		this.deps = [target];
 		this.depVersions = [target.version];
 	}
