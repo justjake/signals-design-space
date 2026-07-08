@@ -556,8 +556,45 @@ export class ReactFork implements ForkLike {
 		return (this.R.unstable_getCurrentWriteBatch() & 1) === 1;
 	}
 
+	/** The transition-scope object whose batch we last minted, for the
+	 * read-your-own-draft probe (ambient-W0 semantics). */
+	private lastScopeT: unknown = null;
+	private lastScopeToken = 0;
+
+	private currentTransitionScope(): unknown {
+		const internals = (
+			this.R as unknown as {
+				__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: { T?: unknown };
+			}
+		).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+		return internals?.T ?? null;
+	}
+
 	getCurrentWriteBatch(): number {
-		return this.R.unstable_getCurrentWriteBatch();
+		const token = this.R.unstable_getCurrentWriteBatch();
+		// Remember (T → token) so ambient reads later in the SAME synchronous
+		// transition scope resolve that batch's world (read-your-own-draft).
+		if ((token & 1) === 1) {
+			const t = this.currentTransitionScope();
+			if (t !== null) {
+				this.lastScopeT = t;
+				this.lastScopeToken = token;
+			}
+		}
+		return token;
+	}
+
+	/** Ambient-W0 semantics (SPEC-RESOLUTIONS §ambient-W0): the deferred
+	 * batch whose write scope is executing NOW, or 0. Identity-keyed on the
+	 * reconciler's current-transition slot: minted at the scope's first
+	 * write; reads before any write correctly see W0 (no draft exists). A
+	 * different transition or plain handler has a different (or null) T. */
+	getAmbientReadToken(): number {
+		if (this.lastScopeToken === 0) {
+			return 0;
+		}
+		const t = this.currentTransitionScope();
+		return t !== null && t === this.lastScopeT ? this.lastScopeToken : 0;
 	}
 
 	getRenderContext(): { container: Container } | undefined {
@@ -767,6 +804,23 @@ export function useSignal<T>(signal: SignalLike & { state: T }): T {
  * upstream value churn; first load and errors read false. */
 export function useIsPending(signal: SignalLike): boolean {
 	return useSignal(pendingComputedOf(signal));
+}
+
+/** §ambient-W0 companion hook: subscribe like useSignal but read the
+ * COMMITTED world (global committed view — the hook does not know its root;
+ * per-root refinement is the kernel-side effects' job via withRootCommitted).
+ * Never suspends: pending unwraps to box.latest (undefined while the
+ * committed world never had a value), errors rethrow. */
+export function useCommitted<T>(signal: SignalLike & { state: T }): T | undefined {
+	useSignalRaw(signal); // subscription: re-render on broadcasts
+	const raw = __debug.readInWorld(signal, { kind: 'committed' });
+	if (isErrorBox(raw)) {
+		throw raw.error;
+	}
+	if (isSuspendedBox(raw)) {
+		return raw.latest as T | undefined;
+	}
+	return raw as T;
 }
 
 /** §7 latest as a hook: subscribe like useSignal but NEVER suspend — pending

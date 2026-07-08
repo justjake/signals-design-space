@@ -68,6 +68,47 @@ Owner/coordinator-supplied resolutions that override or refine
    `Computed<boolean>` over box shape; boolean equality suppresses upstream
    value churn.
 
+## §ambient-W0 — ambient read semantics (owner-approved, alt-a/alt-b ONLY)
+
+**Recorded divergence**: mainline cosignal keeps NEWEST-ambient; the alt
+family switches ambient reads to W0. Deliberate, per owner decision — never
+leak one family's expectation into the other (shared/ported tests must be
+parameterized per family: alt = drafts-hidden, cosignal = NEWEST).
+
+1. **Ambient top-level/handler `.state` = W0** (committed + applied urgent).
+   Pending DEFERRED batches are INVISIBLE outside their own context until
+   commit. Rationale: an urgent handler deriving from `.state` must never
+   leak a speculative draft into committed state (the onClick scenario:
+   transition `set(1)`; urgent `set(state*2)` computes `0*2` and supersedes
+   the transition — pinned in RTL, both gate modes; abort leaves no
+   contamination — pinned in overlay + oracle `readOwnDraft`/ambient ops).
+2. **Read-your-own-draft**: inside a deferred batch's own write scope
+   (`ForkDouble.inBatch`, a React transition scope) or its render pass,
+   ambient reads resolve that batch's world. Urgent scopes and `batch()`
+   read-own-writes unchanged (their writes are APPLIED — W0 includes them;
+   conformance-critical). The gate decides LOGGED vs DIRECT, not visibility —
+   asserted in both gate modes. ReactFork probe: `(T === lastMintT)` identity
+   on the reconciler's current-transition slot, token recorded at the scope's
+   first minting write; reads before any write correctly see W0.
+3. **`latest(x)` is THE explicit Wn read (drafts included)** — supersedes the
+   earlier deviation where in-render world choice was the only distinction.
+   Per-context table (reconciled with alt-a on the top-level outcome):
+   - plain top level / handlers / engine effects: **Wn including unapplied
+     drafts** (matches alt-a's spec'd outcome);
+   - inside a computed/overlay eval: that eval's world (memo-certificate
+     integrity — sampling Wn would poison per-world memos);
+   - inside a render pass: the pass's world Wp (replay purity; a committed
+     pass never tears an in-flight sample — reasoning documented, our call);
+   - inside withRootCommitted: the root's committed view.
+4. **`committed(x)` / `useCommitted`**: explicit committed-world read over the
+   existing withRootCommitted/committed-view machinery (root-refined when a
+   root scope is active; global otherwise — the hook is global, since hooks
+   do not know their root). Box handling mirrors `.state` + two-level rule.
+5. **Perf**: ambient reads under live deferred batches now take the kernel
+   fast path (W0 IS the kernel state) instead of overlay resolution — G-8
+   ambient-read ratio drops to ~1.0x (see report); the Wn cost is paid only
+   by explicit `latest()` and render-pass reads.
+
 ## Open API questions
 
 - **`suspend: 'always'` option**: should a computed (or hook call site) be able

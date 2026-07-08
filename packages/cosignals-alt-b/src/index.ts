@@ -12,6 +12,7 @@ export {
 	configure,
 	attachFork,
 	detachFork,
+	committed,
 	createWatcher,
 	isErrorBox,
 	isPending,

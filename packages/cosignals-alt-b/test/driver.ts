@@ -39,6 +39,7 @@ export type Op =
 	| { t: 'refreshAsync'; node: number } // §7 refresh: new epoch → fresh thenable
 	| { t: 'refreshNode'; node: number } // §7 refresh on a non-async computed (no-op value-wise)
 	| { t: 'latestRead'; node: number } // §7 latest: top-level, never suspends
+	| { t: 'readOwnDraft'; node: number; batch: number } // .state inside inBatch scope = writer world
 	| { t: 'watcher'; node: number }
 	| { t: 'open'; deferred: boolean }
 	| { t: 'write'; w: WriteSpec } // w.batch === -1 → DIRECT (quiescent only)
@@ -371,6 +372,35 @@ function applyOp(s: RunState, op: Op): boolean {
 			checkBroadcasts(s, [0, ...liveDeferredTokens(s)]);
 			return true;
 		}
+		case 'readOwnDraft': {
+			// Read-your-own-draft (SPEC-RESOLUTIONS §ambient-W0 rule 2): inside
+			// a deferred batch's own write scope, ambient reads resolve that
+			// batch's world.
+			if (
+				passExecuting(s)
+				|| op.node >= s.handles.length
+				|| op.batch >= s.batches.length
+				|| s.batches[op.batch].retired
+			) {
+				return false;
+			}
+			const token = s.batches[op.batch].token;
+			let engineV = 0;
+			s.fork.inBatch(token, () => {
+				engineV = nodeValue(s, op.node);
+			});
+			const oracleV =
+				(token & 1) === 1
+					? s.oracle.value(op.node, { kind: 'writer', token })
+					: s.oracle.value(op.node, { kind: 'w0' }); // urgent scope ≡ W0 (applied)
+			if (!Object.is(engineV, oracleV)) {
+				throw new Error(
+					`readOwnDraft of node ${op.node} in batch ${op.batch}: engine ${engineV}, oracle ${oracleV}`,
+				);
+			}
+			checkBroadcasts(s, []);
+			return true;
+		}
 		case 'latestRead': {
 			if (op.node >= s.handles.length || passExecuting(s)) {
 				return false;
@@ -561,11 +591,15 @@ function applyOp(s: RunState, op: Op): boolean {
 			let oracleV: number;
 			switch (op.ctx) {
 				case 'newest': {
+					// AMBIENT-W0 semantics: a top-level .state read sees W0 —
+					// pending deferred drafts are invisible (SPEC-RESOLUTIONS
+					// §ambient-W0). The op keeps its historical name; latestRead
+					// is the Wn observable.
 					if (passExecuting(s)) {
 						return false;
 					}
 					engineV = nodeValue(s, op.node);
-					oracleV = s.oracle.value(op.node, { kind: 'newest' });
+					oracleV = s.oracle.value(op.node, { kind: 'w0' });
 					break;
 				}
 				case 'committed': {
@@ -940,8 +974,16 @@ export function genScript(seed: number, steps: number): Op[] {
 				script.push({ t: 'group', writes });
 			}
 		} else if (r < 0.72) {
-			if (rnd() < 0.12) {
+			const readKind = rnd();
+			if (readKind < 0.12) {
 				script.push({ t: 'latestRead', node: pick(nodes.length) });
+			} else if (readKind < 0.24 && liveBatchIndices().length !== 0) {
+				const live = liveBatchIndices();
+				script.push({
+					t: 'readOwnDraft',
+					node: pick(nodes.length),
+					batch: live[pick(live.length)],
+				});
 			} else {
 				const ctxs = ['newest', 'committed', 'render', 'writer'] as const;
 				const ctx = ctxs[pick(4)];

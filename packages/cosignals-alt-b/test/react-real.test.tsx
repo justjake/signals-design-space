@@ -19,6 +19,7 @@ import {
 	registerAltBReact,
 	useAtom,
 	useComputed,
+	useCommitted,
 	useIsPending,
 	useLatest,
 	useSignal,
@@ -26,7 +27,7 @@ import {
 	useSignalTransition,
 	type AltBReactHandle,
 } from '../src/react';
-import { latest, refresh } from '../src/index';
+import { committed, latest, refresh } from '../src/index';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -581,6 +582,178 @@ describe('Solid-2.0 async API set against real React (§2/§7, solid2-async-mode
 			});
 		});
 		expect(staged).toBe('9'); // in-flight value visible to latest()
+	});
+});
+
+describe('ambient-W0 semantics against real React (SPEC-RESOLUTIONS §ambient-W0)', () => {
+	async function onClickScenario(strict: boolean) {
+		configure({ strictLanes: strict });
+		try {
+			const a = new Atom({ state: 0 });
+			const gate = deferred<void>();
+			let settled = false;
+			void gate.promise.then(() => {
+				settled = true;
+			});
+			const wantSuspend = new Atom({ state: false });
+			function App() {
+				const v = useSignal(a);
+				const suspend = useSignal(wantSuspend);
+				if (suspend && !settled) {
+					throw gate.promise; // holds the transition open
+				}
+				return <span>v:{v}</span>;
+			}
+			const c = await mount(
+				<React.Suspense fallback={<i>wait</i>}>
+					<App />
+				</React.Suspense>,
+			);
+			expect(c.textContent).toBe('v:0');
+			// The transition writes a draft and suspends (held).
+			await act(async () => {
+				React.startTransition(() => {
+					a.set(1);
+					wantSuspend.set(true);
+				});
+			});
+			expect(c.textContent).toBe('v:0');
+			// URGENT onClick derives from an ambient read: .state = W0 = 0 —
+			// the pending transition's draft is INVISIBLE (no speculation
+			// leak). set(0 * 2) = set(0).
+			let sawInHandler = -1;
+			await act(async () => {
+				sawInHandler = a.state;
+				a.set(a.state * 2);
+			});
+			expect(sawInHandler).toBe(0);
+			expect(c.textContent).toBe('v:0');
+			// Settle: the transition's set(1) folds BEFORE the urgent set(0)
+			// (seq order) — the urgent write supersedes the transition.
+			await act(async () => {
+				gate.resolve();
+				await gate.promise;
+			});
+			expect(a.state).toBe(0);
+			expect(c.textContent).toBe('v:0');
+		} finally {
+			configure({ strictLanes: false });
+		}
+	}
+
+	it('onClick: urgent set(state*2) over a pending transition uses W0 and supersedes it (loose)', async () => {
+		await onClickScenario(false);
+	});
+
+	it('onClick: urgent set(state*2) over a pending transition uses W0 and supersedes it (strictLanes)', async () => {
+		await onClickScenario(true);
+	});
+
+	async function crossContext(strict: boolean) {
+		configure({ strictLanes: strict });
+		try {
+			const a = new Atom({ state: 0 });
+			const gate = deferred<void>();
+			let settled = false;
+			void gate.promise.then(() => {
+				settled = true;
+			});
+			const wantSuspend = new Atom({ state: false });
+			function App() {
+				const v = useSignal(a);
+				const suspend = useSignal(wantSuspend);
+				if (suspend && !settled) {
+					throw gate.promise;
+				}
+				return <span>v:{v}</span>;
+			}
+			const c = await mount(
+				<React.Suspense fallback={<i>wait</i>}>
+					<App />
+				</React.Suspense>,
+			);
+			// WRITE-THEN-READ inside the transition scope: read-your-own-draft.
+			let inScope = -1;
+			let inScopeLatest: number | undefined;
+			await act(async () => {
+				React.startTransition(() => {
+					a.set(5);
+					inScope = a.state; // own draft: 5
+					inScopeLatest = latest(a);
+					wantSuspend.set(true); // hold the transition open
+				});
+			});
+			expect(inScope).toBe(5);
+			expect(inScopeLatest).toBe(5);
+			// OUTSIDE the scope, before commit: the draft is invisible to
+			// ambient reads; latest()/committed() name the other worlds.
+			expect(a.state).toBe(0);
+			expect(latest(a)).toBe(5);
+			expect(committed(a)).toBe(0);
+			expect(c.textContent).toBe('v:0');
+			await act(async () => {
+				gate.resolve();
+				await gate.promise;
+			});
+			expect(a.state).toBe(5); // committed: now in W0
+			expect(c.textContent).toBe('v:5');
+		} finally {
+			configure({ strictLanes: false });
+		}
+	}
+
+	it('cross-context write-then-read-before-commit (loose)', async () => {
+		await crossContext(false);
+	});
+
+	it('cross-context write-then-read-before-commit (strictLanes)', async () => {
+		await crossContext(true);
+	});
+
+	it('useCommitted tracks the committed world; useLatest the in-flight one', async () => {
+		const a = new Atom({ state: 0 });
+		const gate = deferred<void>();
+		let settled = false;
+		void gate.promise.then(() => {
+			settled = true;
+		});
+		const wantSuspend = new Atom({ state: false });
+		function App() {
+			const v = useSignal(a);
+			const suspend = useSignal(wantSuspend);
+			const com = useCommitted(a);
+			const lat = useLatest(a);
+			if (suspend && !settled) {
+				throw gate.promise;
+			}
+			return (
+				<span>
+					v:{v};c:{com};l:{lat}
+				</span>
+			);
+		}
+		const c = await mount(
+			<React.Suspense fallback={<i>wait</i>}>
+				<App />
+			</React.Suspense>,
+		);
+		expect(c.textContent).toBe('v:0;c:0;l:0');
+		await act(async () => {
+			React.startTransition(() => {
+				a.set(4);
+				wantSuspend.set(true);
+			});
+		});
+		// Held: the committed frame shows committed values everywhere (the
+		// useLatest render read follows the committed pass world — replay
+		// purity; the Wn observable is top-level latest()).
+		expect(c.textContent).toBe('v:0;c:0;l:0');
+		expect(latest(a)).toBe(4);
+		await act(async () => {
+			gate.resolve();
+			await gate.promise;
+		});
+		expect(c.textContent).toBe('v:4;c:4;l:4');
 	});
 });
 

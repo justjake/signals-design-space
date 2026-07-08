@@ -50,6 +50,13 @@ export type ForkLike = {
 	 * first write of a fresh transition under lazy minting.
 	 */
 	hasOpenWork(): boolean;
+	/**
+	 * AMBIENT-W0 SEMANTICS (SPEC-RESOLUTIONS §ambient-W0): the deferred batch
+	 * token whose WRITE SCOPE is executing synchronously right now, or 0.
+	 * Ambient engine reads consult this for read-your-own-draft; outside any
+	 * scope, ambient reads resolve W0 (drafts invisible until commit).
+	 */
+	getAmbientReadToken?(): number;
 	/** startTransition + token capture (throughput helpers, §13.6). */
 	startTransition(scope: () => void): number;
 };
@@ -208,6 +215,13 @@ export class ForkDouble {
 		} finally {
 			this.contextStack.pop();
 		}
+	}
+
+	/** Ambient-W0 semantics: the innermost open write scope's token (0 = none). */
+	getAmbientReadToken(): number {
+		return this.contextStack.length !== 0
+			? this.contextStack[this.contextStack.length - 1]
+			: 0;
 	}
 
 	/** Convenience: open a deferred batch, run scope inside it (a

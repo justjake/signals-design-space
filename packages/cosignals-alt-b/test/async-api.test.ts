@@ -128,10 +128,12 @@ describe('isPending (§7): flip-only reactive pending probe', () => {
 		const probe = pendingComputedOf(view);
 		const token = fork.openBatch(true);
 		fork.inBatch(token, () => cond.set(1)); // odd ONLY in this world
-		// W0 (committed+applied): plain arm — not pending. NEWEST and the
-		// writer's world include the unapplied flip — pending there.
+		// Ambient-W0 semantics: the top-level probe read sees W0 — the plain
+		// arm, not pending. The writer's world (and the explicit Wn read)
+		// include the unapplied flip — pending there.
+		expect(probe.state).toBe(false); // ambient = W0: draft invisible
 		expect(__debug.readInWorld(probe, { kind: 'w0' })).toBe(false);
-		expect(probe.state).toBe(true); // top level = NEWEST: the flip is visible
+		expect(__debug.readInWorld(probe, { kind: 'newest' })).toBe(true);
 		expect(__debug.readInWorld(probe, { kind: 'writer', token })).toBe(true);
 		fork.retireBatch(token, true);
 		__debug.verify();

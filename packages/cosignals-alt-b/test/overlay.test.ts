@@ -11,6 +11,7 @@ import {
 	__resetEngineForTests,
 	attachFork,
 	createWatcher,
+	latest,
 } from '../src/index';
 
 let fork: ForkDouble;
@@ -63,8 +64,11 @@ describe('visibility truth table (§10.2)', () => {
 		fork.resumePass();
 		expect(a.state).toBe(1); // hidden from this pass, like React's queues
 		fork.endRenderPass();
-		expect(a.state).toBe(2);
+		// Ambient-W0: the pending draft stays invisible; latest() is the Wn read.
+		expect(a.state).toBe(0);
+		expect(latest(a)).toBe(2);
 		fork.retireBatch(k, true);
+		expect(a.state).toBe(2);
 	});
 
 	it('COMMITTED excludes applied-but-pending entries; NEWEST sees everything', () => {
@@ -73,7 +77,8 @@ describe('visibility truth table (§10.2)', () => {
 		const k = fork.openBatch(true);
 		fork.inBatch(u, () => a.set(1)); // urgent: applied, unretired
 		fork.inBatch(k, () => a.set(2)); // deferred: unapplied
-		expect(a.state).toBe(2); // newest
+		expect(a.state).toBe(1); // ambient = W0: urgent applied, draft hidden
+		expect(latest(a)).toBe(2); // Wn: everything
 		expect(__debug.committed(() => a.state)).toBe(0); // neither retired
 		expect(__debug.kernelValue(a)).toBe(1); // W0 = applied only
 		fork.retireBatch(u, true);
@@ -207,7 +212,9 @@ describe('post-eval re-check (§10.4)', () => {
 		// Newest is the world-sensitive read the post-eval re-check protects:
 		// the canonical re-evaluation linked c→a (marking c via repair), and the
 		// newest world must fold a's pending 7 — not serve the W0 cache (0).
-		expect(c.state).toBe(7);
+		// Ambient is W0 now, so the Wn observable is latest().
+		expect(c.state).toBe(0); // ambient W0: a's draft invisible
+		expect(latest(c)).toBe(7); // Wn folds a's pending 7
 		fork.retireBatch(u, true);
 		fork.retireBatch(k, true);
 		expect(c.state).toBe(7);
@@ -245,14 +252,66 @@ describe('sweep retention and truncation (§9.6)', () => {
 		const keep = fork.openBatch(true);
 		fork.inBatch(k, () => a.set(100));
 		fork.inBatch(keep, () => a.set(5));
-		expect(a.state).toBe(5); // newest: both, last-seq wins
+		expect(latest(a)).toBe(5); // Wn: both drafts, last-seq wins
+		expect(a.state).toBe(0); // ambient W0: drafts hidden
 		__debug.truncateToken(k); // optimistic rollback of k only
-		expect(a.state).toBe(5);
+		expect(latest(a)).toBe(5);
 		expect(__debug.readInWorld(a, { kind: 'writer', token: k })).toBe(0); // k's write is gone
 		fork.retireBatch(keep, true);
 		fork.retireBatch(k, true);
 		expect(a.state).toBe(5);
 		expect(c.state).toBe(6);
+		__debug.verify();
+	});
+});
+
+describe('ambient-W0 semantics (SPEC-RESOLUTIONS §ambient-W0)', () => {
+	it('speculation leak: an urgent write derived from .state during a pending transition uses W0; abort leaves no contamination', () => {
+		const a = new Atom({ state: 0 });
+		const b = new Atom({ state: 0 });
+		const k = fork.openBatch(true);
+		fork.inBatch(k, () => a.set(1)); // the pending transition's draft
+		// Urgent handler derives from an ambient read: sees W0 (0), NOT the
+		// draft — speculation cannot leak into committed state.
+		const u = fork.openBatch(false);
+		fork.inBatch(u, () => {
+			b.set(a.state * 2); // a.state = 0 here (urgent scope ≡ W0)
+		});
+		fork.retireBatch(u, true);
+		expect(b.state).toBe(0);
+		expect(latest(a)).toBe(1); // the draft exists — but only Wn shows it
+		// Abort the transition by truncation: nothing to un-propagate — the
+		// draft never reached any ambient-visible state.
+		__debug.truncateToken(k);
+		fork.retireBatch(k, false);
+		expect(a.state).toBe(0);
+		expect(b.state).toBe(0);
+		expect(latest(a)).toBe(0);
+		__debug.verify();
+	});
+
+	it('read-your-own-draft: inside a deferred batch scope, ambient reads resolve that batch world', () => {
+		const a = new Atom({ state: 0 });
+		const c = new Computed({ fn: () => a.state * 10 });
+		expect(c.state).toBe(0);
+		const k = fork.openBatch(true);
+		fork.inBatch(k, () => {
+			a.set(3);
+			expect(a.state).toBe(3); // own draft visible in-scope
+			expect(c.state).toBe(30); // derived through the draft world
+		});
+		expect(a.state).toBe(0); // outside the scope: W0, draft hidden
+		expect(c.state).toBe(0);
+		// Urgent scopes read W0 (their writes are applied, not drafts).
+		const u = fork.openBatch(false);
+		fork.inBatch(u, () => {
+			expect(a.state).toBe(0);
+			a.set(7);
+			expect(a.state).toBe(7); // applied immediately: W0 includes it
+		});
+		fork.retireBatch(u, true);
+		fork.retireBatch(k, true);
+		expect(a.state).toBe(7); // seq order: k's set(3) then u's set(7) — last wins
 		__debug.verify();
 	});
 });

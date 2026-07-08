@@ -1695,7 +1695,23 @@ function worldOfCtx(ctx: Ctx): World {
 		}
 		return WORLD_COMMITTED;
 	}
-	return WORLD_NEWEST;
+	// AMBIENT (SPEC-RESOLUTIONS §ambient-W0, owner-approved semantics change;
+	// mainline cosignal keeps NEWEST-ambient): top-level/handler reads see W0
+	// — committed + applied urgent; pending DEFERRED drafts are invisible
+	// outside their own context until commit. Inside a deferred batch's own
+	// synchronous write scope, reads see that batch's world (read-your-own-
+	// draft). The explicit Wn read (drafts included) is latest().
+	if (fork !== undefined && fork.getAmbientReadToken !== undefined) {
+		const t = fork.getAmbientReadToken();
+		if ((t & 1) === 1) {
+			const w = writerWorld(t);
+			if (w.slot >= 0) {
+				return w; // the scope's own draft world
+			}
+			// scope open but no writes logged yet: writer ≡ W0
+		}
+	}
+	return WORLD_W0;
 }
 
 // ---- M3: world memos and certificates (spec §10.5) ---------------------------------
@@ -2884,7 +2900,11 @@ function readAtomPublic(a: number): unknown {
 	if ((M[a + C.FLAGS] & C.LOGGED) === 0) {
 		return kernelAtomValue(a); // the fast path
 	}
-	return foldTape(a, worldOfCtx(ctxNow()));
+	{
+		const world = worldOfCtx(ctxNow());
+		// Ambient-W0: the kernel value IS the W0 fold (applied entries only).
+		return world.kind === WK.W0 ? kernelAtomValue(a) : foldTape(a, world);
+	}
 }
 
 function readAtomCold(a: number): unknown {
@@ -2915,7 +2935,10 @@ function readAtomCold(a: number): unknown {
 	if (activeSub !== 0 && ctxNow() !== Ctx.RENDER) {
 		link(a, activeSub, cycle);
 	}
-	return foldTape(a, worldOfCtx(ctxNow()));
+	{
+		const world = worldOfCtx(ctxNow());
+		return world.kind === WK.W0 ? kernelAtomValue(a) : foldTape(a, world);
+	}
 }
 
 function readComputedPublic(c: number): unknown {
@@ -2932,7 +2955,14 @@ function readComputedPublic(c: number): unknown {
 	}
 	const ctx = ctxNow();
 	const track = ctx !== Ctx.RENDER;
-	return resolveComputed(c, worldOfCtx(ctx), track);
+	const world = worldOfCtx(ctx);
+	if (world.kind === WK.W0) {
+		// Ambient-W0 fast path: the kernel state IS W0 (committed + applied
+		// urgent) — no overlay resolution for ambient reads under live
+		// deferred batches (the big fast-path win of the semantics change).
+		return kernelComputedRead(c, track);
+	}
+	return resolveComputed(c, world, track);
 }
 
 function readComputedCold(c: number): unknown {
@@ -3383,6 +3413,7 @@ function processFinalizeRetries(): void {
 			}
 		},
 		onThenableSettled,
+		ctxNow: () => ctxNow(),
 		/** §7 refresh: write-like invalidation of ONE computed — forces its fn
 		 * to re-run (ctx.use re-registers fresh thenables) without touching
 		 * upstream. Shaped like the settlement write: worlds re-derive, and
@@ -4094,12 +4125,46 @@ export function refresh(signal: SignalLike): void {
  * For the async node itself, pending unwraps to box.latest (the last value
  * that settled in the reading world); uninitialized reads as undefined. */
 export function latest<T>(signal: SignalLike & { state: T }): T | undefined {
-	const raw = readById(signal.id);
+	// Under ambient-W0 semantics latest() is THE explicit Wn read — drafts
+	// included (see the per-context table in SPEC-RESOLUTIONS §ambient-W0):
+	// - plain top level / handlers / engine effects: Wn INCLUDING unapplied
+	//   deferred drafts (this is where latest() and .state now diverge);
+	// - inside a computed/overlay eval: that eval's world (certificates);
+	// - inside a render pass: the pass's world Wp (replay purity);
+	// - inside withRootCommitted: the root's committed view.
+	// Everywhere it unwraps pending to box.latest and never suspends.
+	const raw =
+		inEvalFrame() || E.ctxNow() !== Ctx.NEWEST
+			? readById(signal.id)
+			: enter(() => E.readInWorld(signal.id, { kind: 'newest' }));
 	if (isErrorBox(raw)) {
 		throw raw.error;
 	}
 	if (isSuspendedBox(raw)) {
 		return raw.latest as T | undefined;
+	}
+	return raw as T;
+}
+
+/** §ambient-W0 companion: read the COMMITTED world explicitly (per-root view
+ * inside withRootCommitted, global otherwise). Box handling mirrors .state
+ * with the two-level rule: errors throw; refresh-pending serves latest;
+ * never-settled throws the thenable. */
+export function committed<T>(signal: SignalLike & { state: T }): T {
+	// Inside withRootCommitted the ambient ctx is already the (root-refined)
+	// committed view — the plain read IS the per-root committed read.
+	const raw =
+		E.ctxNow() === Ctx.COMMITTED
+			? readById(signal.id)
+			: enter(() => E.readInWorld(signal.id, { kind: 'committed' }));
+	if (isErrorBox(raw)) {
+		throw raw.error;
+	}
+	if (isSuspendedBox(raw)) {
+		if (raw.latest !== undefined) {
+			return raw.latest as T;
+		}
+		throw raw.thenable;
 	}
 	return raw as T;
 }

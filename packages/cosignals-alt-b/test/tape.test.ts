@@ -13,6 +13,7 @@ import {
 	batch,
 	configure,
 	createWatcher,
+	latest,
 } from '../src/index';
 
 let fork: ForkDouble;
@@ -117,13 +118,15 @@ describe('always-log inside LOGGED mode: the flushSync-exclusion case (§9.1)', 
 		// flushSync-like render including only U: the world where the urgent
 		// write happened but the earlier batch has not.
 		expect(passRead([u], () => a.state)).toBe(6);
-		// Newest sees everything: 5 * 2 = 10.
-		expect(a.state).toBe(10);
+		// Ambient (SPEC-RESOLUTIONS §ambient-W0): the deferred draft is
+		// INVISIBLE — top-level reads see W0 (6). latest() is THE Wn read.
+		expect(a.state).toBe(6);
+		expect(latest(a)).toBe(10); // Wn incl. drafts: 5 * 2
 		// Committed sees neither.
 		expect(__debug.committed(() => a.state)).toBe(3);
 		fork.retireBatch(u, true);
 		fork.retireBatch(d, true);
-		expect(a.state).toBe(10);
+		expect(a.state).toBe(10); // both retired: W0 folds everything
 	});
 
 	it('one-computed-downstream variant: tape creation marks the cone for urgent writes too (§9.3)', () => {
@@ -320,9 +323,12 @@ describe('coalescing (§9.3)', () => {
 		fork.resumePass();
 		expect(a.state).toBe(1); // RENDER context: the pass's pinned world
 		fork.endRenderPass();
-		expect(a.state).toBe(2); // newest
+		// Ambient-W0: the still-pending draft is invisible; latest() sees it.
+		expect(a.state).toBe(0);
+		expect(latest(a)).toBe(2);
 		expect(pin).toBeLessThan(__debug.seqCounter());
 		fork.retireBatch(k, true);
+		expect(a.state).toBe(2); // committed: now in W0
 	});
 
 	it('a coalesced write still notifies watchers', () => {
