@@ -104,20 +104,20 @@ firing order (EF4).
 | RCC-RT5.lattice | N=20 lattice readers agree in every committed frame across a burst of transition increments | lattice, per-commit latch | all pass | tear lattice + latch | implemented |
 | RCC-RT5.cross-hook | app consistency verdict never flips TORN through the standard drive (hold, urgent interleave, release, filter) | hold=nav | all pass | armTornWatch, torn tally | implemented |
 | RCC-RT5.double-read | one component reading the same atom through two hooks never sees them disagree (source: R5) | during increments burst | all pass | probe component, latch | implemented |
-| RCC-RT6.mount-mid-nav-hold | probe mounted during a held navigation paints committed values, self-consistent, converges after release (sources: R6/R11, alt-a#5, battery 9/10) | hold=nav, mount-probe toggle | all pass | mount probe log | pending |
-| RCC-RT6.mount-mid-count-hold | probe mounted while count+10 is pending shows committed count, never the draft; joins the transition's commit at release | hold=gate / sliced (solid) | all pass | mount probe log | pending |
-| RCC-RT6.daishi-mount | 20 readers mounted via transition while an outside-React interval increments urgently: no torn commit, final agreement | auto-increment 50ms, hold=sliced | all pass | lattice latch, auto-inc | pending (shares DAISHI-2/4) |
-| RCC-RT5/6.alt-b-mount-world | alt-b ruling (its suite #3): a component mounting inside a transition's commit reads the pending world in that same commit — same-commit agreement is what RT5/RT6 demand; which world the joint commit shows may differ | hold=sliced | all pass (agreement asserted, world recorded) | mount probe log | pending |
+| RCC-RT6.mount-mid-nav-hold | probe mounted during a held navigation paints committed values, self-consistent, converges after release (sources: R6/R11, alt-a#5, battery 9/10) | hold=nav, mount-probe toggle | all pass | mount probe log | implemented |
+| RCC-RT6.mount-mid-count-hold | probe mounted while count+10 is pending shows committed count, never the draft; joins the transition's commit at release | hold=gate / sliced (solid) | all pass | mount probe log | implemented |
+| RCC-RT6.daishi-mount | 20 readers mounted via transition while an outside-React interval increments urgently: no torn commit, final agreement | auto-increment 50ms, hold=sliced | pass · pass · pass · FINDING (shares DAISHI-2/4) | lattice latch, auto-inc | implemented (shares DAISHI-2/4) |
+| RCC-RT5/6.alt-b-mount-world | alt-b ruling (its suite #3): a component mounting inside a transition's commit reads the pending world in that same commit — same-commit agreement is what RT5/RT6 demand; which world the joint commit shows may differ | hold=sliced | all pass (agreement asserted, world recorded) | mount probe log | implemented |
 | RCC-RT2.late-write | a write landing after a transition started (while pending) does not appear in the transition's committed frame unless rebased in order (sources: daishi-6 arithmetic, UM1) | hold=gate | all pass | count trace | implemented |
 
 ## C. Updates mid-render — RCC §3.2 (4 rows)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-UM1.rebase | +10 transition and +1 urgent dispatched in one task: urgent commits alone first, final = 11, committed sequence never shows 10 (sources: R-lab rebase, daishi-6) | same-task dispatch | all pass | count text trace | pending |
-| RCC-UM2.render-write | a render-phase write to a shared atom is rejected (error boundary catches; committed state unmoved) (source: R7) | test-mode probe under error boundary | pass · pass · pass · FINDING (not rejected — recorded) | render-write probe, error boundary | pending |
+| RCC-UM1.rebase | +10 transition and +1 urgent dispatched in one task: urgent commits alone first, final = 11, committed sequence never shows 10 (sources: R-lab rebase, daishi-6) | same-task dispatch | all pass | count text trace | implemented |
+| RCC-UM2.render-write | a render-phase write to a shared atom is rejected (error boundary catches; committed state unmoved) (source: R7) | test-mode probe under error boundary | pass · pass · pass · FINDING (not rejected — recorded) | render-write probe, error boundary | implemented |
 | RCC-UM3 | tolerance: React's same-component setState-in-render pattern is not extended to library state; battery never exercises a render-phase library write channel | — | — | — | doc: tolerance |
-| RCC-UM4.replay | interrupted/replayed renders are idempotent: interruption burst produces exact arithmetic, no duplicate resource creations per epoch | during DAISHI-5 + SU1 | all pass | fetch counters | pending (asserted inside DAISHI-5 / RCC-SU1) |
+| RCC-UM4.replay | interrupted/replayed renders are idempotent: interruption burst produces exact arithmetic, no duplicate resource creations per epoch | during DAISHI-5 + SU1 | all pass | fetch counters | implemented (asserted inside DAISHI-5 / RCC-SU1) |
 
 StrictMode double-invocation (UM4's other half, R9/alt-a#18/alt-b#25) is
 development-only behavior; this battery drives production builds, so those
@@ -128,21 +128,21 @@ StrictMode row that can't double-invoke.
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-CR1.no-lost-writes | interleaved urgent auto-increments and a transition write all land: final value is the exact sum | auto-inc 10 ticks + transition +10 | all pass | count trace, auto-inc | pending |
+| RCC-CR1.no-lost-writes | interleaved urgent auto-increments and a transition write all land: final value is the exact sum | auto-inc 10 ticks + transition +10 | all pass | count trace, auto-inc | implemented |
 | RCC-CR2/4/5 | exactly-once retirement, no advance under an open frame, intra-commit order | fork-only | — | — | doc: [fork tests 16,17,26,28]; browser-indirect via CR1/EF1 rows |
-| RCC-CR3.store-only | a transition writing only an unobserved atom persists its data (no subscribers anywhere) | transitionWrite storeOnly | all pass | `__store.read` after settle | pending |
-| RCC-CR3.superseded-nav | a held navigation superseded by a second one: data of both epochs persisted, first timeline record marked superseded, committed view = newest epoch | hold=nav ×2 | all pass | timeline records, fetch log | pending |
+| RCC-CR3.store-only | a transition writing only an unobserved atom persists its data (no subscribers anywhere) | transitionWrite storeOnly | all pass | `__store.read` after settle | implemented |
+| RCC-CR3.superseded-nav | a held navigation superseded by a second one: data of both epochs persisted, first timeline record marked superseded, committed view = newest epoch | hold=nav ×2 | all pass | timeline records, fetch log | implemented |
 | RCC-WP6.no-rollback | tolerance: abandonment discards rendering never data; battery asserts persistence (CR3 rows) and never asserts a revert | — | — | — | doc: tolerance backing CR3 rows |
 
 ## E. Suspense — RCC §3.4 (7 rows)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-SU1.stable-promise | held navigation with urgent interleaving: resource created exactly once per epoch — re-renders re-throw the same instance, no refetch livelock (source: battery 15) | hold=nav, urgent writes during hold | all pass | fetch counters | pending |
-| RCC-SU3.nav-keyed | two in-flight navigations keep distinct per-epoch resources; committed view lands on the newest epoch's data, never a mix (source: alt-a#7 / alt-b#6 shape, app-level) | hold=nav ×2, release both | all pass | fetch log, data-epoch testid | pending |
-| RCC-SU3.interleaved-gates | two independent held transitions (count gate + marker gate) settle independently: releasing B commits marker while count stays pending (sources: alt-a#7, alt-b#6) | hold=gate ×2 | all pass | dual write-hold harness | pending |
-| RCC-SU5.settle-replay | release settles → exactly the suspended consumers re-evaluate and commit; settled data then reads synchronously (no fallback flash on later renders) | hold=nav | all pass | fallback watch, fetch counters | pending |
-| RCC-SU5.cold-boot | initial page load never suspends (epoch-0 resource settled before render): no fallback at boot | — | all pass | fallback watch | pending |
+| RCC-SU1.stable-promise | held navigation with urgent interleaving: resource created exactly once per epoch — re-renders re-throw the same instance, no refetch livelock (source: battery 15) | hold=nav, urgent writes during hold | all pass | fetch counters | implemented |
+| RCC-SU3.nav-keyed | two in-flight navigations keep distinct per-epoch resources; committed view lands on the newest epoch's data, never a mix (source: alt-a#7 / alt-b#6 shape, app-level) | hold=nav ×2, release both | all pass | fetch log, data-epoch testid | implemented |
+| RCC-SU3.interleaved-gates | two held transitions never alias — host fact discovered 2026-07-08 (all four impls, both release orders): component-level suspended transitions on one root entangle, so releasing one gate commits NOTHING until the other resolves; the joint commit then lands both write sets whole, never mixed. Per-node keyed independence (sources: alt-a#7, alt-b#6) is engine-resource-level behavior — the package suites referee it | hold=gate ×2, both orders probed | all pass (joint-commit shape) | dual write-hold harness | implemented |
+| RCC-SU5.settle-replay | release settles → exactly the suspended consumers re-evaluate and commit; settled data then reads synchronously (no fallback flash on later renders) | hold=nav | all pass | fallback watch, fetch counters | implemented |
+| RCC-SU5.cold-boot | initial page load never suspends (epoch-0 resource settled before render): no fallback at boot | — | all pass | fallback watch | implemented |
 | RCC-SU2 | library-provided promise caching for the batteries-included path | — | — | — | doc: the app caches promises itself (caller-cached form, SU2's second half); library-side caching is package-suite territory (battery case 15) |
 | RCC-SU4/WP2 | tolerance: a consumer discarded with speculative work MAY re-issue requests; fetch-counter assertions in SU1/UM4 rows exclude discarded-consumer re-runs | — | — | — | doc: tolerance constraining SU1 |
 
@@ -150,18 +150,18 @@ StrictMode row that can't double-invoke.
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-AT1.sync-writes-join | two atoms written in one transition scope stay pending together and commit together — no frame shows one without the other (sources: R12 sync half, alt-b#1, solid#3) | hold=gate; sliced for solid | all pass | dual-atom probe, latch | pending |
-| RCC-AT2.post-await-urgent | async action: sync prefix stays pending (held); post-await bare write commits urgently while the prefix is still pending (WP4's positive half) (source: R12) | hold=gate action harness | all pass | async-action harness testids | pending |
-| RCC-AT3.rejoin | a re-wrapped (startSignalTransition) continuation after the await rejoins the same pending action batch — commits at the action's settlement, not independently | hold=gate action harness | all pass (rejoin commits at the action-gate release — pinned 2026-07-08) | async-action harness | pending |
-| RCC-AT4.parked-retirement | the action's batch retires only at settlement: prefix invisible until release even after post-await writes committed | asserted within AT2 | all pass | async-action harness | pending (within AT2) |
+| RCC-AT1.sync-writes-join | two atoms written in one transition scope stay pending together and commit together — no frame shows one without the other (sources: R12 sync half, alt-b#1, solid#3) | hold=gate; sliced for solid | all pass | dual-atom probe, latch | implemented |
+| RCC-AT2.post-await-urgent | async action: sync prefix stays pending (held); post-await bare write commits urgently while the prefix is still pending (WP4's positive half) (source: R12) | hold=gate action harness | all pass | async-action harness testids | implemented |
+| RCC-AT3.rejoin | a re-wrapped (startSignalTransition) continuation after the await rejoins the same pending action batch — commits at the action's settlement, not independently | hold=gate action harness | all pass (rejoin commits at the action-gate release — pinned 2026-07-08) | async-action harness | implemented |
+| RCC-AT4.parked-retirement | the action's batch retires only at settlement: prefix invisible until release even after post-await writes committed | asserted within AT2 | all pass | async-action harness | implemented (within RCC-AT2) |
 
 ## G. Effects — RCC §3.6 (5 rows)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-EF1.committed-only | route effect probe never logs a pending route during a held navigation; logs it exactly after settle (sources: battery 16, alt-a#10, solid#14) | hold=nav | all pass | effect log | pending |
-| RCC-EF1.count-hold | count effect probe never logs the pending +10 during a count hold | hold=gate / sliced (solid) | all pass | effect log | pending |
-| RCC-EF2.coalesce | several writes in one handler produce one effect re-run at the final value | 3 writes, 1 handler | all pass | effect log | pending |
+| RCC-EF1.committed-only | route effect probe never logs a pending route during a held navigation; logs it exactly after settle (sources: battery 16, alt-a#10, solid#14) | hold=nav | all pass | effect log | implemented |
+| RCC-EF1.count-hold | count effect probe never logs the pending +10 during a count hold | hold=gate / sliced (solid) | all pass | effect log | implemented |
+| RCC-EF2.coalesce | several writes in one handler produce one effect re-run at the final value | 3 writes, 1 handler | all pass | effect log | implemented |
 | RCC-EF3 | library-level `effect()` observes newest | — | — | — | doc: core `effect()` is not on the common shim surface; package suites cover (battery case 16) |
 | RCC-EF4 | tolerance: sibling effect firing order is implementation-defined; effect-log assertions compare multisets per boundary, never sequences across effects | — | — | — | doc: tolerance constraining effect-log assertions |
 
@@ -169,33 +169,33 @@ StrictMode row that can't double-invoke.
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-SP1.interruptibility | daishi level-3 port: 20 readers × 20ms sync work; 5 transition increments; average click-to-return < 300ms while total naive render ≈ 400ms+ | lattice work 20ms | all pass | lattice knob, in-page timestamps | pending (=DAISHI-5) |
+| RCC-SP1.interruptibility | daishi level-3 port: 20 readers × 20ms sync work; 5 transition increments; average click-to-return < 300ms while total naive render ≈ 400ms+ | lattice work 20ms | all pass | lattice knob, in-page timestamps | implemented (=DAISHI-5) |
 | RCC-SP2 | default vs discrete preemption of a yielded pass | fork-only | — | — | doc: [fork tests 10,22]; browser-indirect: clock keeps committing during sliced transitions (SP1 rows) |
-| RCC-SP3.flushsync-hold | flushSync during a held count transition: its frame excludes the pending +10 (all-old), pending intact after, folds at release (sources: R13, battery 2, alt-a#8, alt-b#22/23, solid#9) | hold=gate | all pass | flushSync button, count trace | pending |
-| RCC-SP3.flushsync-quiet | flushSync with nothing pending commits synchronously and agrees with useState mirrors (the §9.1 parity form) | quiet | all pass | flushSync button, mirror probe | pending |
-| RCC-SP4.lane-join | delivery/mount work rides the causing batch's lane — mount probe joins the pending batch's commit | asserted within RT6 rows | all pass | mount probe log | pending (within RT6) |
-| RCC-SP5.over-notify | renders stay bounded and value-correct under an over-notifying burst: lattice reader render counts ≤ commits + slack; every committed value correct (sources: R14, battery 4/5, alt-b#14 shape) | increments burst | all pass | data-render-count attrs | pending |
+| RCC-SP3.flushsync-hold | flushSync during a held count transition: its frame excludes the pending +10 (all-old), pending intact after, folds at release (sources: R13, battery 2, alt-a#8, alt-b#22/23, solid#9) | hold=gate | all pass | flushSync button, count trace | implemented |
+| RCC-SP3.flushsync-quiet | flushSync with nothing pending commits synchronously and agrees with useState mirrors (the §9.1 parity form) | quiet | all pass | flushSync button, mirror probe | implemented |
+| RCC-SP4.lane-join | delivery/mount work rides the causing batch's lane — mount probe joins the pending batch's commit | asserted within RT6 rows | all pass | mount probe log | implemented (within RCC-RT6 rows) |
+| RCC-SP5.over-notify | renders stay bounded and value-correct under an over-notifying burst: lattice reader render counts ≤ commits + slack; every committed value correct (sources: R14, battery 4/5, alt-b#14 shape) | increments burst | all pass | data-render-count attrs | implemented |
 
 ## I. Sync pricing — RCC §3.8 (2 rows)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-PR1.quiet | a pure-urgent session never shows pending state: pending tile stays 'no', no fallback ever, writes commit immediately | urgent-only drive | all pass | pending tile watch | pending |
-| RCC-PR2.quiet-then-defer | urgent +5, then held transition +10: committed shows 5 through the hold (quiet writes are already permanent), 15 after release | hold=gate / sliced (solid) | all pass | count trace | pending |
+| RCC-PR1.quiet | a pure-urgent session never shows pending state: pending tile stays 'no', no fallback ever, writes commit immediately | urgent-only drive | all pass | pending tile watch | implemented |
+| RCC-PR2.quiet-then-defer | urgent +5, then held transition +10: committed shows 5 through the hold (quiet writes are already permanent), 15 after release | hold=gate / sliced (solid) | all pass | count trace | implemented |
 
 ## J. Observation lifecycle — RCC §3.9 (2 rows)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
 | RCC-OL1 | first/last-observer union liveness | — | — | — | doc: needs `AtomOptions.effect`-style lifecycle API, not on the common surface; package suites cover (hooks.spec observation-union block, alt-b#25) |
-| RCC-OL2.unmounted-silence | after the mount probe unmounts, its render/effect counters freeze while writes keep landing (source: R8) | mount, write, unmount, write | all pass | render counters | pending |
+| RCC-OL2.unmounted-silence | after the mount probe unmounts, its render/effect counters freeze while writes keep landing (source: R8) | mount, write, unmount, write | all pass | render counters | implemented |
 
 ## K. WON'T-PROMISE — RCC §4 (2 runnable + 4 doc rows; WP2/WP6 doc'd above)
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-WP1.two-roots | a second root over the same atoms converges after writes; per-root self-consistency asserted, cross-root simultaneity deliberately NOT asserted (sources: R10, battery 11, solid#10, alt-b#24) | test-mode second root | all pass | second-root harness | pending |
-| RCC-WP4.post-await-ambient | a bare post-await write is ambient/urgent — same fact as RCC-AT2, asserted from the tolerance side: battery never expects it to stay in the transition | within AT2 | all pass | async-action harness | pending (within AT2) |
+| RCC-WP1.two-roots | a second root over the same atoms converges after writes; per-root self-consistency asserted, cross-root simultaneity deliberately NOT asserted (sources: R10, battery 11, solid#10, alt-b#24) | test-mode second root | all pass | second-root harness | implemented |
+| RCC-WP4.post-await-ambient | a bare post-await write is ambient/urgent — same fact as RCC-AT2, asserted from the tolerance side: battery never expects it to stay in the transition | within AT2 | all pass | async-action harness | implemented (within RCC-AT2) |
 | RCC-WP3 | deps-keyed derived handles may be recreated; caches die with them | — | — | — | doc: tolerance (useComputed deps rows are package-suite territory) |
 | RCC-WP5 | no mid-render write splicing promised | — | — | — | doc: tolerance backing RT2/UM1 rows |
 
@@ -211,16 +211,16 @@ stronger than the original on purpose, noted here for comparability.
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| DAISHI-1 | no tearing finally on update (transition): 5 transition increments over the mounted lattice → all readers settle at exactly 5 | transition increments | all pass | lattice | pending |
-| DAISHI-2 | no tearing finally on mount (transition): auto-increment running, lattice mounted via transition → readers agree at settle | auto-inc 50ms | all pass | lattice, auto-inc | pending |
-| DAISHI-3 | no tearing temporarily on update: per-commit latch stays clean through the increment burst | transition increments | all pass | lattice latch | pending |
-| DAISHI-4 | no tearing temporarily on mount: latch stays clean while mounting under auto-increment | auto-inc 50ms | all pass | lattice latch | pending |
-| DAISHI-5 | can interrupt render: avg click-to-return < 300ms with 20ms×20 reader work | lattice work 20ms | all pass | in-page timestamps | pending |
-| DAISHI-6 | can branch state (wip): settle at 1; two pending transition +1s; while pending readers still show 1; urgent double → 2 everywhere; settle → 6 | transition +1 button, double button | all pass | lattice, count trace | pending |
-| DAISHI-7 | useDeferredValue: no tearing finally on update (urgent increments, deferred readers) | deferred lattice | all pass | deferred lattice | pending |
-| DAISHI-8 | useDeferredValue: no tearing finally on mount | deferred lattice, auto-inc | all pass | deferred lattice | pending |
-| DAISHI-9 | useDeferredValue: no tearing temporarily on update | deferred lattice | all pass | deferred latch | pending |
-| DAISHI-10 | useDeferredValue: no tearing temporarily on mount | deferred lattice, auto-inc | all pass | deferred latch | pending |
+| DAISHI-1 | no tearing finally on update (transition): 5 transition increments over the mounted lattice → all readers settle at exactly 5 | transition increments | all pass | lattice | implemented |
+| DAISHI-2 | no tearing finally on mount (transition): auto-increment running, lattice mounted via transition → readers agree at settle | auto-inc 50ms | pass · pass · pass · **FINDING (torn mount frame: readers resolve slice-time worlds — 2,3,4,5,6 in one painted commit; caught by BOTH latches 2026-07-08)** | lattice, auto-inc, dual latch | implemented |
+| DAISHI-3 | no tearing temporarily on update: per-commit latch stays clean through the increment burst | transition increments | all pass | lattice latch | implemented |
+| DAISHI-4 | no tearing temporarily on mount: latch stays clean while mounting under auto-increment | auto-inc 50ms | pass · pass · pass · **FINDING (shares DAISHI-2 torn-mount finding)** | lattice latch | implemented |
+| DAISHI-5 | can interrupt render: avg click-to-return < 300ms with 20ms×20 reader work | lattice work 20ms | all pass | in-page timestamps | implemented |
+| DAISHI-6 | can branch state (wip): settle at 1; two pending transition +1s; while pending readers still show 1; urgent double → 2 everywhere; settle → 6 | transition +1 button, double button | all pass | lattice, count trace | implemented |
+| DAISHI-7 | useDeferredValue: no tearing finally on update (urgent increments, deferred readers) | deferred lattice | all pass | deferred lattice | implemented |
+| DAISHI-8 | useDeferredValue: no tearing finally on mount | deferred lattice, auto-inc | pass · pass · pass · **FINDING (torn mount frames, same slice-time drift as DAISHI-2)** | deferred lattice | implemented |
+| DAISHI-9 | useDeferredValue: no tearing temporarily on update | deferred lattice | all pass | deferred latch | implemented |
+| DAISHI-10 | useDeferredValue: no tearing temporarily on mount | deferred lattice, auto-inc | pass · pass · pass · **FINDING (shares DAISHI-8)** | deferred latch | implemented |
 
 ## M. Session-finding regression pins (7 rows)
 
@@ -271,8 +271,9 @@ stronger than the original on purpose, noted here for comparability.
 ## Status ledger
 
 - implemented: rows marked `implemented` have a green scenario in `specs/`
-  citing the row id in its title. Everything runnable starts `pending` and
-  flips as tranches land.
+  citing the row id in its title (FINDING rows: red-as-expected via
+  test.fail). Everything runnable starts `pending` and flips as tranches
+  land. ALL 64 runnable rows are implemented as of tranche 4.
 - doc rows (13): RCC-RT1.frozen-view, RCC-RT2.yield-gap, RCC-UM3,
   RCC-CR2/4/5, RCC-WP6.no-rollback, RCC-SU2, RCC-SU4/WP2, RCC-EF3, RCC-EF4,
   RCC-SP2, RCC-OL1, RCC-WP3, RCC-WP5 — each names its referee.

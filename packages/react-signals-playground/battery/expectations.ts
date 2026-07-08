@@ -48,6 +48,12 @@ const TABLE: Record<string, PerImpl> = {
 		'alt-b': { kind: 'variant', variant: 'drafts-hidden' },
 		'solid-react': { kind: 'variant', variant: 'drafts-hidden (discovered, unruled)' },
 	},
+	'RCC-EF1.count-hold': {
+		// Its tracked effects are held while a transition is live and flush at
+		// the transition's commit (documented engine design): urgent-commit
+		// flips reach effects late, at the boundary, with the boundary value.
+		'solid-react': { kind: 'variant', variant: 'effects-held-during-transition' },
+	},
 	'RCC-UM2.render-write': {
 		'solid-react': {
 			kind: 'finding',
@@ -68,6 +74,18 @@ const TABLE: Record<string, PerImpl> = {
 	},
 	// FIND-THENABLE.gate: the solid-react freeze did not reproduce on
 	// retest (2026-07-08); the row now pins the working hold on all four.
+	'DAISHI-2': {
+		'solid-react': {
+			kind: 'finding',
+			note: 'mount-under-urgent-fire commits a torn frame: readers resolve their slice-time worlds (2,3,4,5,6 in one painted commit; passive-visible, pinned 2026-07-08)',
+		},
+	},
+	'DAISHI-8': {
+		'solid-react': {
+			kind: 'finding',
+			note: 'useDeferredValue mount-under-urgent-fire commits torn frames — same slice-time world drift as DAISHI-2 (pinned 2026-07-08)',
+		},
+	},
 };
 
 export function expectationFor(rowId: string, entry: BatteryEntry): Expectation {

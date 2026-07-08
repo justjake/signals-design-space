@@ -102,6 +102,8 @@ export interface TestStore {
 	write(label: string, value: unknown): void;
 	/** set() inside startSignalTransition. */
 	transitionWrite(label: string, value: unknown): void;
+	/** Several set()s inside ONE startSignalTransition scope (AT1's batch shape). */
+	transitionWriteMany(writes: Record<string, unknown>): void;
 	/** Pure-updater increment, urgent or transition-wrapped. */
 	increment(label: string, mode: 'urgent' | 'transition'): void;
 	/** Write inside a transition scope, reading back in-scope and ambient (RT1/RT4 probe). */
@@ -143,7 +145,20 @@ export interface TestStore {
 
 	readonly effectLog: readonly EffectLogEntry[];
 	readonly fetchLog: readonly FetchLogEntry[];
-	readonly lattice: { checks: number; torn: LatticeVerdict[] };
+	/**
+	 * Two tear latches with different strictness:
+	 * - `torn` (layout effect): sees the committed DOM before paint — the
+	 *   strict RCC-RT5 instrument; catches frames a same-task corrective
+	 *   pass would repair before the user sees them.
+	 * - `tornPassive` (passive effect): daishi's original mechanism — the
+	 *   frame survived to the passive flush, so a user could see it.
+	 */
+	readonly lattice: {
+		checks: number;
+		torn: LatticeVerdict[];
+		passiveChecks: number;
+		tornPassive: LatticeVerdict[];
+	};
 	readonly pairTorn: readonly PairVerdict[];
 	readonly mirrorFrames: readonly MirrorFrame[];
 	readonly mountProbeLog: readonly MountProbeEntry[];
@@ -191,7 +206,12 @@ export function registerAppHandles(handles: Record<string, ReadableSignal<unknow
 
 const effectLog: EffectLogEntry[] = [];
 const fetchLog: FetchLogEntry[] = [];
-const lattice: { checks: number; torn: LatticeVerdict[] } = { checks: 0, torn: [] };
+const lattice: {
+	checks: number;
+	torn: LatticeVerdict[];
+	passiveChecks: number;
+	tornPassive: LatticeVerdict[];
+} = { checks: 0, torn: [], passiveChecks: 0, tornPassive: [] };
 const pairTorn: PairVerdict[] = [];
 const mirrorFrames: MirrorFrame[] = [];
 const mountProbeLog: MountProbeEntry[] = [];
@@ -268,6 +288,8 @@ registerSignals({
 	actionSync,
 	actionPost,
 	actionRejoin,
+	latticeMode,
+	renderWriteVictim,
 });
 
 // ---- hold gates -----------------------------------------------------------------------------
@@ -427,22 +449,37 @@ function Lattice(): React.ReactElement | null {
 	const main = useSignal(atomOf('count') as ReadableSignal<number>);
 	const containerRef = React.useRef<HTMLDivElement | null>(null);
 
-	// The per-commit equality latch. A layout effect runs synchronously in
-	// exactly the commit it belongs to, so the DOM it reads is this frame —
-	// and discarded speculative passes never run it (the latch-via-effects
-	// rule). Deferred readers lag by design (useDeferredValue), so the latch
-	// only compares reader-vs-reader within one mode, mirroring daishi's
-	// same-hook-everywhere grids.
-	React.useLayoutEffect(() => {
+	// The per-commit equality latches — effects only, so discarded
+	// speculative passes never count as torn. Deferred readers lag by design
+	// (useDeferredValue), so latches only compare reader-vs-reader within
+	// one mode, mirroring daishi's same-hook-everywhere grids.
+	const readLatticeDom = React.useCallback((): string[] | null => {
 		const container = containerRef.current;
-		if (container === null || mode === 'off') return;
+		if (container === null) return null;
 		const values = [...container.querySelectorAll('[data-lat]')].map(
 			(el) => el.getAttribute('data-lat') ?? '',
 		);
-		const all = mode === 'plain' ? [...values, String(main)] : values;
+		return mode === 'plain' ? [...values, String(main)] : values;
+	}, [mode, main]);
+	// Strict latch: layout effect — the committed DOM before paint.
+	React.useLayoutEffect(() => {
+		if (mode === 'off') return;
+		const all = readLatticeDom();
+		if (all === null) return;
 		lattice.checks += 1;
 		if (all.length > 1 && !all.every((v) => v === all[0])) {
 			lattice.torn.push({ t: performance.now(), values: all });
+		}
+	});
+	// daishi-faithful latch: passive effect — the frame survived to the
+	// passive flush (daishi's useCheckTearing ran here).
+	React.useEffect(() => {
+		if (mode === 'off') return;
+		const all = readLatticeDom();
+		if (all === null) return;
+		lattice.passiveChecks += 1;
+		if (all.length > 1 && !all.every((v) => v === all[0])) {
+			lattice.tornPassive.push({ t: performance.now(), values: all });
 		}
 	});
 
@@ -629,6 +666,11 @@ function installStore(): void {
 		write: (label, value) => atomOf(label).set(value),
 		transitionWrite: (label, value) => {
 			startSignalTransition(() => atomOf(label).set(value));
+		},
+		transitionWriteMany: (writes) => {
+			startSignalTransition(() => {
+				for (const [label, value] of Object.entries(writes)) atomOf(label).set(value);
+			});
 		},
 		increment: (label, mode) => {
 			const bump = (): void => atomOf(label).update((n) => (n as number) + 1);

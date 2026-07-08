@@ -64,9 +64,9 @@ Everything in the "testkit" sections exists only when the page URL carries
 ## window.__store (`?test=1` only)
 
 Typed as `TestStore` in `src/testkit.tsx`; the battery imports the type.
-Key surfaces: `read`/`write`/`transitionWrite`/`increment` by label,
-`transitionScopeProbe`, `holdTransition`/`releaseHold` (+`B` pair),
-`beginAsyncAction`/`settleAsyncAction`/`releaseAsyncAction`,
+Key surfaces: `read`/`write`/`transitionWrite`/`transitionWriteMany`/
+`increment` by label, `transitionScopeProbe`, `holdTransition`/`releaseHold`
+(+`B` pair), `beginAsyncAction`/`settleAsyncAction`/`releaseAsyncAction`,
 `setForeignThenable`, `setLatticeWork`, `startAutoIncrement`/`stopAutoIncrement`,
 `mountSecondRoot`/`unmountSecondRoot`, `armUseProbe`/`settleUseProbe`, and the
 logs: `effectLog`, `fetchLog`, `lattice`, `pairTorn`, `mirrorFrames`,
@@ -77,7 +77,8 @@ Registered signal labels: the App atoms (`count`, `doubled`, `parity`,
 `navPending`, `navLatency`, `heldCount`, `rowCount`, `tableSeed`,
 `filterText`, `selectedRow`, `markEvens`, `cpuRounds`, `visibleCount`,
 `consistency`, `tornCommits`) plus the testkit atoms (`storeOnly`, `pairA`,
-`pairB`, `mirrorSig`, `actionSync`, `actionPost`, `actionRejoin`).
+`pairB`, `mirrorSig`, `actionSync`, `actionPost`, `actionRejoin`,
+`latticeMode`, `renderWriteVictim`).
 
 ## Rules the instrumentation keeps
 
