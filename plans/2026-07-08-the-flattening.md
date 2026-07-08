@@ -1,10 +1,10 @@
 # The flattening — one arena-based engine
 
-Informal design, revision 2 (owner rulings applied; the overlay/certificate
-approach from revision 1 is dead — the owner rejected it and the first
-codex round found 9 blockers in it independently). One codex-sol-max review
-round against THIS revision, then build. The referee is tests + benchmarks +
-the React verifier, not this document.
+Informal design, revision 3 — FINAL, build from this. Revision 1's
+overlay/certificate approach was rejected by the owner (and drew 9 codex
+blockers independently). Revision 2 drew 13 codex findings, all accepted
+and folded in below; the review round is spent. The referee is tests +
+benchmarks + the React verifier, not this document.
 
 Vocabulary: an **arena** is a pre-allocated buffer we allocate from
 internally (alt-b calls these "planes"; we do not).
@@ -46,48 +46,108 @@ FinalizationRegistry machinery; the tracer surface; every test suite.
    short-lived; data-oriented layout pays for long-lived contiguous state
    (a node + its links), not for eden-lifetime records.
 5. **Layout enums are generated from a schema file** (alt-b's
-   `tools/schema.ts` approach) — one source of truth for arena geometry.
+   `tools/schema.ts` approach) — one source of truth for arena geometry,
+   and the generator also emits per-column reset/scrub metadata (values,
+   fns, extras, clocks), so free/reset correctness is generated, not
+   hand-maintained. Growth uses alt-b's discipline everywhere: hot code
+   closes over immutable buffers, per-operation slack is reserved,
+   allocators flag growth, and closures rebuild at operation boundaries —
+   the current WorldArena mid-operation-growth-with-reload style is
+   retired at the merge.
 6. **`ctx.use` ports as-is; SSR serialize/initialize is in scope** (port
    the design from alt-b's react.ts §13.8 shape).
 
 ## The two new mechanisms
 
-### UpdatedAt clocks replace value snapshots
+### UpdatedAt clocks: a fast negative guard, not a replacement
 
-Every node record carries `UpdatedAt: LogicalClock` — bumped **only when a
-write or recompute is accepted** (survives the equality check). Per-world
-records carry their own clock for world-visible changes. A dependency link
-stores the producer's clock at the consumer's last evaluation; an observer
-(subscription, watcher) stores the clock at its last delivery.
+Clocks let observers skip work when nothing moved; they cannot replace
+dirty-state, value baselines, or delivery metadata. The codex round proved
+each of those claims wrong in revision 2; the corrected mechanism:
 
-- Staleness anywhere = one integer compare per link. Subscription
-  revalidation stops evaluating in the committed world and comparing
-  values; it compares clocks and evaluates only on mismatch.
-- The equality gate is load-bearing: equal-value writes are dropped at the
-  acceptance decision today (custom `isEqual` included), so they must not
-  bump the clock — otherwise observers re-fire on no-op updates and the
-  value-gated re-fire contract breaks.
-- Clock width: u32 with wrap-aware compare, or an f64 side column — the
-  schema decides; the write bench prices it. The constant-store constraint
-  on the signal flag word stands: the clock is its own field/column, never
-  folded into FLAGS.
+- **Dirty-state stays.** Lazy computeds do not bump clocks until someone
+  evaluates them. An observer may skip only when the producer is CLEAN and
+  its clock matches; if dirty/pending, evaluate first, then compare.
+- **Observers keep value baselines.** `isEqual(previous, current)` may be
+  asymmetric, and an A-write-B-write-A sequence moves the clock while the
+  value-gated contract forbids a re-fire. A subscription dependency is
+  `{lastValue, lastValidatedAt}`: clock mismatch means evaluate and compare
+  against `lastValue`; equal means bump `lastValidatedAt` only. Watchers
+  keep `lastRenderedValue`, and baselines advance only after a committed
+  render, an urgent correction, or a completed recapture — never on mere
+  notification enqueue.
+- **Write receipts and value clocks are different fields.** The normative
+  bump table:
+
+  | Event | Behavior |
+  |---|---|
+  | Standalone/quiet accepted write | bump the durable clock once, after its sole equality gate |
+  | Retained logged write | always allocate a write sequence; delivery stays value-blind |
+  | Eager newest application | bump the newest clock only if newest's result changed |
+  | Committed-member write, root commit, retirement | dirty affected roots only; bump each root's clock after that root refolds to a changed result |
+  | Render world | pin-frozen; post-pin writes never move its clock |
+  | Computed evaluation | re-track dependencies every evaluation; bump only if the tagged outcome changed |
+
+- **Per-root committed clocks, never one global clock**: root A's
+  subscriptions must not observe root B's commits (multi-root skew).
+- **Clocks are over tagged outcomes** (value / thrown / suspended): a
+  throw-to-return transition with an identity-equal payload is a change,
+  matching the kernel's existing box semantics.
+- **Clock representation**: process-monotone f64, or an
+  `(episodeGeneration, counter)` pair compared as a pair — never a bare
+  wrapping u32 (observers legally survive arbitrarily long episodes). The
+  constant-store constraint on the signal flag word stands: clocks live in
+  their own field/column, never in FLAGS.
+- **Corrective delivery and mount fixups keep their causal metadata** —
+  per-write sequence/batch/slot, per-batch touched-node membership, watcher
+  pins/masks/included slots/commit generations. Clocks replace none of it;
+  they only gate value re-comparison.
 
 ### Episode lifecycle replaces compaction
 
-An **episode** runs from the first departure from quiescence (a batch
-opens, a render starts) to full quiescence (every world merged or
-discarded). During an episode, logs and per-world state only grow — cheap
-appends, no fix-ups, no per-entry release, no compaction walks. At
-quiescence the episode's storage is thrown away wholesale: JS-heap log
-entries and world objects become garbage in one drop (they lived and died
-in the GC's young generation), and episode arenas reset by bump-pointer.
+An **episode** runs from the first pending durable work (a batch opens, an
+action parks, a render starts — never inferred from writes or call depth)
+to full quiescence (every batch retired, every world closed, queues
+drained). What is episode-lifetime and what is not:
 
-Consequences, priced: memory during a long-held transition grows with the
-episode and is reclaimed all at once at its end (React episodes are short;
-the react-seam bench and wide-mask line price the growth). The whole
-compaction subsystem dies — per-entry release, uncompacted-atom tracking,
-the log-empty reclamation guard row (the guard becomes "episode active",
-cleared at the quiescence drop, which is also its retry trigger).
+- **Episode-lifetime**: write/action records (JS heap, append-only),
+  render-attempt worlds, batch bookkeeping. Dropped wholesale at the
+  quiescence boundary, after operation/notification/settlement queues
+  drain.
+- **NOT episode-lifetime**: committed-root routing structure (a mounted
+  watcher's dependency cone is current routing state — it persists across
+  quiescence exactly as today's committed arenas do), observer records and
+  their baselines, dependency edges anywhere (edges purge and re-link on
+  every re-track; append-only applies to write records ONLY).
+- **Durable handoff before the drop**: the long-lived node value is
+  canonical newest/durable state; each touched atom's episode tape carries
+  an immutable episode-start base plus its entries; worlds replay from the
+  tape base. Once everything retires and closes, canonical newest IS the
+  durable result and the tape vanishes. This repeals one pinned contract
+  explicitly: compaction's per-entry custom-equality re-invocation at
+  retirement dies with compaction (the acceptance-decision equality
+  semantics are untouched); the equality-count pin in
+  equality-semantics.spec.ts is rewritten to the new mechanism, not
+  silently broken.
+- **Bounded memory under held-open episodes** (a parked action can hold an
+  episode open indefinitely): logs live in fixed-size sealed chunks; a
+  chunk whose entries are all retired and below every live render pin
+  folds into base and drops WHOLE. Appends stay cheap; there is no
+  per-entry fix-up; the bench prices the fold. A hard entry budget with
+  documented backpressure is the fallback if chunk folding measures badly.
+- **Reclamation**: the episode guard is per-record membership
+  (`episode.holds` — the episode-owned map itself), not a global flag; the
+  teardown order is: readers unreachable, episode references detached, the
+  owner dropped and membership cleared, THEN the wholesale retry sweep at
+  the next boundary. The old log-empty guard row becomes this membership
+  row, with the drop as its retry trigger.
+- **Boundary revalidation table** (unchanged semantics, restated): per-root
+  commit revalidates that root; retirement/settlement revalidates all
+  roots even if the retiring batch wrote nothing; a quiet accepted fold
+  revalidates all roots; same-root open frames defer refires to
+  commit/discard; effect writes classify by pending durable work (a quiet
+  eager effect-write cascade stays quiet; any live batch means ambient
+  classification) — the effect-write-classify contract is unchanged.
 
 ## Layout sketch (the schema's starting point)
 
@@ -132,17 +192,8 @@ transfer (schema generation, bump/reset discipline, free-list defrag —
 already ported), and cosignals' current tests as the contract. SSR lands
 inside the campaign as its final piece.
 
-## For the codex round (one round, then build)
+## Review disposition
 
-Attack: the UpdatedAt clock's interaction with custom equality, functional
-updates, and world-fold acceptance (is bump-on-accepted-change sufficient
-at every write path: quiet fold, batch write, world replay, effect writes?);
-episode lifecycle vs reclamation guards (a node whose only retention was
-"episode active" must reclaim at the quiescence drop — is the retry filing
-sound?); episode memory growth under adversarial held-open transitions with
-high write rates; per-world clock vs committed clock relationships during
-multi-root skew (a subscription on root A must not see root B's commits
-move its clocks); anything in the current test contract (corrective
-deliveries, mount-window fixups, effect-write classification, quiet mode)
-that clocks + episodes cannot express; and any underspecification a builder
-would improvise.
+The single codex round (13 findings: 8 blockers, 5 design gaps) is spent;
+every finding was accepted and is folded into the two mechanism sections
+above. Build from this revision.
