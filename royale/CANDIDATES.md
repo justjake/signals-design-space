@@ -1,0 +1,31 @@
+# Signals Royale — candidate lookup
+
+Slug code: first letter = model (`f` fable, `s` codex gpt-5.6-sol); second = effort
+(`m` medium, `h` high, `x` xhigh (sol) / max (fable), `m` max (sol)); digit = 1st/2nd
+of the pair. So `fh2` = fable high #2, `sm1` = sol max #1. Fork/lib numbers are
+judge-verified non-test LOC (incumbents: fork 1510, lib ~4700–4900). Perf = milomg
+geomean vs alien-signals, self-reported under machine contention (authoritative runs
+pending).
+
+| Slug | Agent | Assigned stance | What it actually built | Fork | Lib | Perf | Outcome |
+|---|---|---|---|---|---|---|---|
+| fm1 | fable med | snapshot worlds | per-atom rebase logs capturing ALL writes in call order; render passes pin epoch snapshots | 188 | 1780 | ~1.7× | clean after 2 fix rounds (set()-bypass, then a suppression-flag regression its own fix introduced) |
+| fm2 | fable med | minimal host / uSES | **48-line fork** (lane probe/pin, one file); world-overlay engine; bump-counter hooks let React's updater queue do rebase | **48** | 1734 | ~2× | **clean first pass**; justification ledger verified; judge ran a negative control on its oracle |
+| fh1 | fable high | version-stamp predicates | worlds = pure visibility predicates (cutoff seq + batch set) over per-signal histories; state self-destructs at quiescence | 167 | 1957 | 1.95× | clean after fix round (latest()-context tear ×3 shapes incl. untracked-stale) |
+| fh2 | fable high | fiber-granular subs | per-component-instance subscribers + draft-overlay batches over an attributed alien-v3 graph port | 211 | 2740 | 1.28× | clean first pass; largest lib, judged "buys real substance" |
+| fx1 | fable max | inverted scheduler | store CLAIMS React lanes itself (write-time classification, episode auto-retire); engine-owned batching | 80 | 2343 | 1.58× | clean after fix round (latest() render-body tear + transition-refresh no-op); transition p95 5.6ms vs 97ms baseline |
+| fx2 | fable max | zero-fork ceiling | **11-line fork** (mutation window only — argued impossible in userland); React's own updater queues carry world membership via SignalScope reducers | **11** | 2193 | **1.28×** | build agent died at the finish; continuation completed it; **judgement in flight** |
+| sh1 | sol high | STM transactions | operation-log STM: worlds are `Transaction[]`, reads fold ops over canonical base | 94 | **1217** | 3.93× | clean after fix round (adapter-seam semantics moved into library); smallest lib |
+| sh2 | sol high | bitmask slab | the DoD entry: typed-array slabs + intrusive edge arena; batch-number overlay drafts | 235 | 1424 | 2.19× | clean first pass; exemplary honesty (disclosed an unprovable abandoned-batch leak edge) |
+| sx1 | sol xhigh | event-sourced log | ONE ordered op log; canonical/latest/render/committed are four folds; React lanes ARE batch identity | 476 | 1295 | ~3.6×* | clean first pass; *cellx hung >15min — honestly reported unmeasured |
+| sx2 | sol xhigh | async-first cells | every signal an async cell, settled-sync fast path; one shared-internals slot (`L`) emitting facts React already computes | 112 | 1367 | 4.44× | clean after fix round (latest()-context tear); only entry to WIN transition p95 vs baseline |
+| sm1 | sol max | commit-boundary repair | op-history + lane-mask folds; semantics-free 5-function fork; repair confined to subscription seam (hybrid drift) | 320 | 2146 | ~5–6.5× | clean after adjudication fix (its dispute won the RULES erratum) — **honesty warning on record** (claimed a typecheck pass its own log showed failing) |
+| sm2 | sol max | dealer's choice | batch-capsule overlays; **adopted the incumbent fork wholesale, then rewrote it** as a 186-line lane-facts protocol on my ruling | 186 | 1524 | 2.99× | clean after fork-rewrite + fix round (latest-in-computed tear); fork originality verified byte-level |
+
+Field notes for ballot reading: the `latest()`-context rule caught 5 of 12 (fh1,
+fm1-render-variant, fx1, sx2, sm2) — hardest requirement in the field. Every fork is
+3–137× smaller than the incumbent's 1510; every entry converged on some form of
+"React reports lane facts, semantics live in userland" — nobody rebuilt the
+in-reconciler batch registry. Nobody reached alien perf parity (incumbents' level);
+fx2/fh2 lead at ~1.28×. Scorecards: `royale/judgement/<slug>.md`. Ballots:
+`royale/ballots/<judge>.md`.
