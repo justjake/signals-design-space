@@ -4,8 +4,12 @@ import { currentContainer, getRuntime, register } from "./protocol";
 
 export type Readable<T> = Atom<T> | Computed<T>;
 
+function increment(value: number): number {
+  return value + 1;
+}
+
 function useSubscription<T>(node: Readable<T>, runtime: Runtime): void {
-  const [, bump] = React.useReducer((value: number) => value + 1, 0);
+  const [, bump] = React.useReducer(increment, 0);
   const version = node.version;
   React.useLayoutEffect(() => {
     let mounted = true;
@@ -21,7 +25,7 @@ function useSubscription<T>(node: Readable<T>, runtime: Runtime): void {
       mounted = false;
       unsubscribe();
     };
-  }, [node, runtime, version]);
+  }, [node, runtime]);
 }
 
 export function useValue<T>(node: Readable<T>): T {
@@ -53,7 +57,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 export function useIsPending<T>(node: Readable<T>): boolean {
   register();
   const runtime = getRuntime();
-  const [, bump] = React.useReducer((value: number) => value + 1, 0);
+  const [, bump] = React.useReducer(increment, 0);
   React.useLayoutEffect(() => {
     const deliver = () => runtime.runInBatch(0, bump);
     const unsubscribeNode = runtime.subscribe(node, deliver);
@@ -70,7 +74,7 @@ export function useCommitted<T>(node: Readable<T>): T {
   register();
   const runtime = getRuntime();
   const container = currentContainer();
-  const [, bump] = React.useReducer((value: number) => value + 1, 0);
+  const [, bump] = React.useReducer(increment, 0);
   React.useLayoutEffect(() => {
     const unsubscribeNode = runtime.subscribe(node, (batchId) =>
       runtime.runInBatch(batchId ?? 0, bump),

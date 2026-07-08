@@ -2,7 +2,7 @@ import { createRuntime, type Atom, type Computed } from "../src/index";
 
 type Cell = Atom<unknown> | Computed<unknown>;
 const runtime = createRuntime();
-let disposeBuild: (() => void) | undefined;
+const builds: (() => void)[] = [];
 
 export default {
   name: "Royale SM2",
@@ -29,13 +29,13 @@ export default {
   },
   withBuild<T>(fn: () => T): T {
     let result!: T;
-    disposeBuild = runtime.effectScope(() => {
+    builds.push(runtime.effectScope(() => {
       result = fn();
-    });
+    }));
     return result;
   },
   cleanup(): void {
-    disposeBuild?.();
-    disposeBuild = undefined;
+    for (const dispose of builds) dispose();
+    builds.length = 0;
   },
 };
