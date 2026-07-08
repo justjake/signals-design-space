@@ -7,35 +7,86 @@ citations are to files I read, LoC figures are counted from `git diff --numstat`
 line ranges unless marked *est.* The product being sized is **one fork serving both
 alt-a and alt-b** — not either single-consumer fork the four reports priced.
 
-## Executive verdict (ten lines)
+## Executive summary
 
-1. The honest floor for the two-engine fork is **≈ 900–950 added source LoC as-documented
-   (≈ 650–700 doc-trimmed), only ≈ 200 in upstream-owned files, zero public React exports** —
-   not fable-alt-a's 500/210, not fable-alt-b's 1,230, not codex's 380–535: each of those is a
-   single-consumer number under a different doc/transport policy, and the gaps are policy, not fact.
-2. The registry stays fork-side whole (fable-alt-b is right): backfill, re-pend lock-ins, and
-   async-action parking are verified load-bearing for both engines (ReactFiberBatchRegistry.js:242-255,
-   :335-350, :434-441) and CONSTRAINTS-pinned; fable-alt-a's F2 registry-in-bridge dies on 2× duplication.
-3. The transport dies (both codex reports are right): `__CLIENT_INTERNALS…` is already exported
-   (ReactClient.js:119), so the 334-line isomorphic channel + 71 export lines collapse to one
-   private host object (~45–70 LoC) — the single biggest cut fable-alt-b missed (−~405).
-4. Yield/resume events stay: alt-a consumes them (engine.ts:2901-2909) with only a one-way heal
-   (engine.ts:1557-1564); both alt-b reports' D3 deletion is wrong for the shared fork.
-5. The mutation window stays per CONSTRAINTS, as direct consumer callbacks (~25 LoC, not ~59).
-6. The allocator stays as a `consumer.allocate(deferred)` field (it is alt-b's open edge and
-   live-set recorder, react.ts:488-494); only the registration machinery, fallback counter, and
-   error 606 die (−~50). Full inversion (fable T1/R2, codex-alt-a) is superseded.
-7. `runInBatch` + the RootScheduler lane pin are the keystone (unanimous, CONSTRAINTS §2); both
-   engines verified deferred-only callers (alt-a engine.ts:2165, alt-b engine.ts:2569) — only the
-   live-urgent branch dies (~4).
-8. Step zero is real and verified: the alt-a bridge's probe mints urgent batches on ambient reads
-   (bridge.ts:156-159 violating engine.ts:1578-1580 "a read must never mint"); fix = read
-   `internals.T`, the mint-free pattern alt-b already ships (react.ts:592-598).
-9. Tests: prune the 3,502-line fork suite to ~1,500–2,000 (keep registry/runInBatch/mutation/
-   yield-pairing families); **commit the untracked 228-line ReactDOMUseUrgentActStall-test.js now**.
-10. Rejected with prices: gate unification (−3.9× idle writes), runInBatch removal (lockstep dies),
-    bridge-synthesized pass-end (alt-b quiescence delays + cross-root close hazard), Context carrier
-    (100–180 LoC floor remains, write-path profile inverts alt-b's DIRECT goal), zero-fork (both necrologies stand).
+**The question.** We maintain a fork of React whose only job is to let an external signals
+engine cooperate with concurrent rendering: know which state updates belong to which batch,
+learn when batches commit or are abandoned, and ask React to re-render a specific pending
+batch. The fork currently adds ~5,000 lines over upstream React (~1,500 product code,
+~3,500 tests). Two candidate signal engines exist (alt-a and alt-b). Four independent
+reports each estimated how small the fork could get if it served only one engine, and their
+answers ranged from ~210 to ~1,230 lines. This document reconciles them and prices a single
+fork that serves **both** engines.
+
+**The answer: about 900–950 added lines of product code** (roughly 650–700 if documentation
+comments are trimmed to normal density). Two properties of that number matter more than its
+size:
+
+- Only ~200 of those lines sit in files React itself owns, down from ~412 today. That
+  figure is the real maintenance cost of the fork — it is what conflicts every time we
+  rebase onto a new React release. Everything else lives in new files that rebase cleanly.
+- React's public API is untouched: zero new exports. The protocol becomes a private object
+  hung on React's existing internal channel (the `__CLIENT_INTERNALS…` export), which React
+  already uses to share state between its own packages and which alt-b already reads today.
+
+The spread across the four reports was mostly counting policy — doc comments or not, one
+engine or two, public API or private hook — not factual disagreement. Five genuinely
+disputed calls were settled by reading the code; the body sections below carry the
+file-and-line evidence.
+
+**What stays.**
+
+- **The batch registry stays in the fork, nearly whole** (~530 of its 564 lines). It tracks
+  batch identity and merging, per-root commits, and async actions held open across awaits.
+  Moving it into the signals library sounds appealing but would mean maintaining that subtle
+  logic twice — once per engine — and any drift between the copies causes user-visible bugs:
+  in-progress transition state flashing on screen before React commits it, a component
+  tearing against the page's own already-committed DOM, or an async action's writes becoming
+  visible mid-action.
+- **Render pause/resume notifications stay.** alt-a genuinely uses them to repair its
+  bookkeeping when React suspends in the middle of a render. The two reports that proposed
+  deleting them were only considering alt-b, which doesn't need them.
+- **The mutation window stays** (owner ruling), slimmed from ~59 lines to ~25 by calling the
+  consumer directly instead of going through generic event machinery.
+- **The batch-ID allocator stays** as a plain field the consumer fills in — alt-b relies on
+  it to notice each new batch the moment React creates one — but its registration ceremony,
+  fallback counter, and dedicated error code go (~50 lines).
+- **`runInBatch` and the scheduler's lane pin are untouchable** (all four reports agree):
+  they are the only way the engine can make React re-render a specific pending batch in
+  lockstep with the engine's own state, and nothing outside the fork can replicate them.
+
+**What goes.**
+
+- **The generic communication layer: ~405 lines, the single biggest cut** — and the one the
+  most conservative report missed. A 334-line general-purpose event channel plus ~71 lines
+  of new public exports collapse into the one private object described above (~45–70 lines).
+  One prerequisite: the channel's error isolation dies with it, and alt-b's own event
+  dispatcher currently has no error guard — it needs ~4 lines added *before* the channel is
+  deleted, or a listener throwing could propagate into React's commit phase.
+- ~35 lines of registry mechanisms that neither engine actually consumes, plus assorted
+  dead branches.
+- Tests prune from ~3,500 lines to ~1,500–2,000, keeping the families that guard every
+  retained behavior.
+
+**Do these first, before any fork work.**
+
+1. Fix a confirmed bug in alt-a's React bridge: when it checks "is React rendering a
+   transition right now?", the check itself accidentally creates a new urgent batch — a
+   read with a write's side effects, which the engine's own rules forbid. alt-b already has
+   the side-effect-free probe (reading React's internal transition marker directly); alt-a
+   should copy it. Costs zero fork lines.
+2. Commit the untracked 228-line regression test (`ReactDOMUseUrgentActStall-test.js`). It
+   proves a confusing "urgent stall" seen during development is upstream React behavior,
+   not a fork bug — and it currently exists only on disk, one `git clean` away from gone.
+   (A backup copy now lives in this directory.)
+
+**Rejected ideas, each with its price.** Unifying the two engines' write-logging gates
+(makes writes while React is idle ~3.9× slower); deleting `runInBatch` (lockstep re-render
+dies); letting the bridge synthesize its own "render pass ended" signal instead of the fork
+reporting it (delays alt-b's cleanup and can mis-fire when multiple roots interleave);
+carrying the protocol through React Context (the floor stays ~100–180 lines and it slows
+the write path); and "no fork at all" (both engines' earlier post-mortems on why that fails
+still stand).
 
 ---
 
