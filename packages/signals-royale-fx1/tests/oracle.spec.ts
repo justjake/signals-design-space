@@ -8,6 +8,13 @@
  * ops, and the world's own open batches. Computeds rederive from scratch on
  * every question. Render passes pin the canonical value at pass start.
  *
+ * Two context rules ride along on every schedule (the judgement classes):
+ * - latest() from a simulated render body resolves that pass's own world
+ *   (never newest intent — that is the render-tear class).
+ * - refresh() — canonical or issued inside a batch — is value-neutral for
+ *   synchronous computeds in EVERY world, through marks, world evaluations,
+ *   retirement carries, and aborts.
+ *
  * Failures print the seed and a shrunk schedule; every bug found gets pinned
  * as a named regression in engine-regressions.spec.ts.
  */
@@ -31,6 +38,7 @@ import {
   isPending,
   peekSlot,
   read,
+  refresh,
   type Episode,
 } from "../src/index";
 
@@ -140,6 +148,7 @@ type Step =
   | { op: "beginPass"; root: number; batches: number[] }
   | { op: "commitPass"; root: number }
   | { op: "readPass"; root: number; target: number }
+  | { op: "refresh"; target: number; inBatch: number | null }
   | { op: "engineBatchWrites"; writes: Array<{ target: number; value: number }> }
   | { op: "checkAll" };
 
@@ -206,6 +215,13 @@ function generate(rng: () => number, steps: number): Step[] {
       const root = [...liveRoots.keys()][int(liveRoots.size)]!;
       liveRoots.delete(root);
       out.push({ op: "commitPass", root });
+    } else if (r < 0.85 && nodes > 0) {
+      out.push({
+        op: "refresh",
+        target: anyNode(),
+        inBatch:
+          openBatches.length > 0 && rng() < 0.55 ? openBatches[int(openBatches.length)]! : null,
+      });
     } else if (r < 0.88) {
       const writes = [];
       const n = 1 + int(3);
@@ -234,11 +250,18 @@ function runSchedule(steps: Step[]): void {
   const rootBatches = new Map<number, number[]>();
   const effectSeen = new Map<number, { value: number }>(); // computed idx -> last effect capture
   let ambient: object | null = null;
+  /** Non-null while a readPass step simulates a render body on that root. */
+  let renderingRoot: number | null = null;
 
   setHost({
     currentBatchToken: () => ambient,
     isRendering: () => false,
     deliver: () => {},
+    currentPassFrame: () => {
+      if (renderingRoot === null) return null;
+      const key = rootKeys.get(renderingRoot);
+      return key === undefined ? null : frameForRoot(key);
+    },
   });
 
   const node = (i: number): Cell<number> | Derived<number> => engineNodes[i]!;
@@ -384,6 +407,17 @@ function runSchedule(steps: Step[]): void {
         if (frame === null) break;
         const slot = peekSlot(node(step.target), frame);
         expect(slot, `pass read root ${step.root} node ${step.target}`).toBe(snap.get(step.target));
+        // The same read issued from inside the pass's render body: latest()
+        // must resolve the executing pass's own world, never newest intent.
+        renderingRoot = step.root;
+        try {
+          expect(
+            latest(node(step.target)),
+            `latest in render body, root ${step.root} node ${step.target}`,
+          ).toBe(snap.get(step.target));
+        } finally {
+          renderingRoot = null;
+        }
         break;
       }
       case "commitPass": {
@@ -403,6 +437,22 @@ function runSchedule(steps: Step[]): void {
         }
         rootBatches.delete(step.root);
         passSnapshots.delete(step.root);
+        break;
+      }
+      case "refresh": {
+        if (step.target >= engineNodes.length) break;
+        // Value-neutral by contract for synchronous computeds (and a no-op on
+        // atoms): the model does not change. Every later check — canonical,
+        // latest, pass reads, effect captures — pins that the refetch
+        // machinery (marks, world evaluations, retirement carries, aborts)
+        // never alters what any world shows.
+        if (step.inBatch !== null && model.open.has(step.inBatch)) {
+          ambient = tokens.get(step.inBatch)!;
+          refresh(node(step.target));
+          ambient = null;
+        } else {
+          refresh(node(step.target));
+        }
         break;
       }
       case "engineBatchWrites": {

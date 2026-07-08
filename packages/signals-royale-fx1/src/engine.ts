@@ -91,6 +91,13 @@ export interface EngineHost {
    * commits with that episode's batch and never beside it.
    */
   deliver(sub: Sub, episode: Episode | null): void;
+  /**
+   * The frame of the host render pass executing right now, or null outside
+   * render. A UI render body is a read context just like an engine
+   * evaluation: context-bound reads (`latest`) resolve that pass's world
+   * through this hook, because reading ahead of your own render is a tear.
+   */
+  currentPassFrame?(): Frame | null;
 }
 
 let host: EngineHost | null = null;
@@ -151,8 +158,7 @@ export function openEpisodesSnapshot(): readonly Episode[] {
 export function episodeAffects(ep: Episode, node: Node): boolean {
   if (ep.state !== "open") return false;
   if (node instanceof Cell) return ep.cells.has(node);
-  if (ep.refreshMarks !== null && ep.refreshMarks.has(node)) return true;
-  return new Frame([ep], -1).touches(node);
+  return new Frame([ep], -1).touches(node); // covers cell ops and refresh marks
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,6 +1553,25 @@ export function retireEpisode(ep: Episode): void {
   if (ep.state !== "open") return;
   const cause = trace !== null ? trace.emit("batch-retire", ep.openTrace, `episode ${ep.seq}`) : 0;
   const prevCause = setTraceCause(cause);
+  // A refresh this episode owns was consumed if its world evaluated the node
+  // (the world context holds the new fetch generation, adopted below). An
+  // unconsumed one still owes a refetch: it becomes canonical at retirement.
+  let unconsumedRefreshes: Array<Derived<any>> | null = null;
+  if (ep.refreshMarks !== null) {
+    const seqToken = String(ep.seq);
+    for (const d of ep.refreshMarks.keys()) {
+      let consumed = false;
+      if (d.worldCtx !== null) {
+        for (const key of d.worldCtx.keys()) {
+          if (key.split(",").includes(seqToken)) {
+            consumed = true;
+            break;
+          }
+        }
+      }
+      if (!consumed) (unconsumedRefreshes ??= []).push(d);
+    }
+  }
   ep.state = "retired";
   unregisterEpisode(ep);
   for (const cell of ep.cells) {
@@ -1560,6 +1585,9 @@ export function retireEpisode(ep: Episode): void {
     if (!cell.equals(cell.value, next)) setCanonical(cell, next, ep);
   }
   adoptWorldContexts(ep);
+  if (unconsumedRefreshes !== null) {
+    for (const d of unconsumedRefreshes) canonicalRefresh(d);
+  }
   pendingEpoch++;
   flushAll();
   setTraceCause(prevCause);
@@ -1671,7 +1699,10 @@ export class Frame {
     this.ctxKey = this.episodes.map((e) => e.seq).join(",");
   }
 
-  /** Does this world change anything this derived (transitively) reads? */
+  /** Does this world change anything this derived (transitively) reads?
+   * True for cell ops and for refresh marks: a refresh owned by an episode
+   * must evaluate in that episode's world (the world run owns the new fetch
+   * generation), even though no input changed. */
   touches(d: Derived<any>): boolean {
     if (this.episodes.length === 0) return false;
     let memo = (this.touch ??= new Map());
@@ -1679,18 +1710,26 @@ export class Frame {
     if (hit !== undefined) return hit;
     memo.set(d, false); // cycle guard; real cycles throw at evaluation
     let result = false;
-    for (const s of d.sources) {
-      if (s instanceof Cell) {
-        for (const ep of this.episodes) {
-          if (ep.cells.has(s)) {
-            result = true;
-            break;
-          }
-        }
-      } else if (this.touches(s)) {
+    for (const ep of this.episodes) {
+      if (ep.refreshMarks !== null && ep.refreshMarks.has(d)) {
         result = true;
+        break;
       }
-      if (result) break;
+    }
+    if (!result) {
+      for (const s of d.sources) {
+        if (s instanceof Cell) {
+          for (const ep of this.episodes) {
+            if (ep.cells.has(s)) {
+              result = true;
+              break;
+            }
+          }
+        } else if (this.touches(s)) {
+          result = true;
+        }
+        if (result) break;
+      }
     }
     memo.set(d, result);
     return result;
@@ -2054,15 +2093,19 @@ export function peekSlot(node: Node, frame: Frame | null): unknown {
 
 /**
  * `latest(x)`: newest intent — every open episode folded over the live base.
- * Inside a render pass or computed evaluation it resolves that context's own
- * world instead (reading ahead of your own world would be a tear). Never
- * suspends: a pending evaluation serves its last settled value.
+ * Inside a read context it resolves that context's own world instead
+ * (reading ahead of your own world would be a tear). Read contexts are
+ * engine evaluations (computeds, frame reads) and host render bodies — the
+ * host names its executing pass through `currentPassFrame`. Never suspends:
+ * a pending evaluation serves its last settled value.
  */
 export function latest<T>(node: Cell<T> | Derived<T>): T {
   if (activeFrame !== null || activeEvalRun !== null) {
     return node.get(); // context-bound read: same world, same policy
   }
-  const slot = peekSlot(node, latestFrame());
+  const passFrame =
+    host !== null && host.currentPassFrame !== undefined ? host.currentPassFrame() : null;
+  const slot = peekSlot(node, passFrame ?? latestFrame());
   if (slot instanceof Failure) throw slot.error;
   if (slot instanceof Pending) {
     const ctx = slot.ctx;
@@ -2145,7 +2188,15 @@ export function refresh(node: Node): void {
     flushAll();
     return;
   }
-  // Canonical refetch: reset fetch slots, keep the settled value serving.
+  canonicalRefresh(node);
+}
+
+/** The canonical half of `refresh()`: reset fetch slots and refetch now, with
+ * the settled value serving meanwhile. Also runs at episode retirement for a
+ * transition-owned refresh whose world never evaluated the node (nothing
+ * rendered it there, so the new fetch generation has not started yet). */
+function canonicalRefresh(node: Derived<any>): void {
+  // Reset fetch slots, keep the settled value serving.
   if (node.ctx !== null) {
     node.ctx.slots = [];
   }

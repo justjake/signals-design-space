@@ -139,6 +139,13 @@ export function register(): RuntimeHandle {
       return bridge !== null && bridge.isRendering !== null && bridge.isRendering();
     },
     deliver: (sub, episode) => deliver(sub as HostSub, episode),
+    currentPassFrame() {
+      // Only a render body counts: between time slices (event handlers) and
+      // in commit effects there is no executing pass, so context-bound reads
+      // fall back to newest intent.
+      if (!this.isRendering()) return null;
+      return currentRenderFrame().frame;
+    },
   };
   setHost(host);
 

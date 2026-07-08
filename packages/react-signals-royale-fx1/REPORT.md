@@ -30,8 +30,8 @@ write-then-revert batches net to nothing.
 | Typecheck (react) | `pnpm typecheck` in `packages/react-signals-royale-fx1` | PASS (0 errors) |
 | Engine conformance | `npx vitest run tests/conformance.spec.ts` | PASS — **179/179** (`Tests  179 passed (179)`) |
 | Randomized oracle | `npx vitest run tests/oracle.spec.ts` (default `ORACLE_SEEDS=300` × 90 steps; env-tunable; failures print seed + shrunk schedule) | PASS; deep sweep `ORACLE_SEEDS=1200` also PASS; 2 real bugs found and pinned in `tests/engine-regressions.spec.ts` |
-| Engine suite total | `npx vitest run` in engine package | PASS — **195/195** (conformance + oracle + regressions + async + gc-leaks) |
-| Real-React gate (own suite) | `npx vitest run` in react package | PASS — **26/26** across scenarios.spec.tsx (1-10), scenarios2.spec.tsx (11,12,15-18), hooks.spec.tsx, gc-leaks.spec.tsx |
+| Engine suite total | `npx vitest run` in engine package | PASS — **198/198** (conformance + oracle + regressions incl. 3 judgement pins + async + gc-leaks) |
+| Real-React gate (own suite) | `npx vitest run` in react package | PASS — **29/29** across scenarios.spec.tsx (1-10), scenarios2.spec.tsx (11,12,15-18), hooks.spec.tsx, judgement.spec.tsx, gc-leaks.spec.tsx |
 | Shared battery (verify-kit) | `pnpm test` in `royale/verify-kit/battery` | PASS — **25/25** (all 18 scenarios) |
 | Fork protocol tests | `cd vendor/react && yarn test --no-watchman ReactDOMSignalScheduler` | PASS — **8/8** |
 | Upstream adjacent suites | `yarn test --no-watchman ReactAsyncActions ReactBatching ReactFlushSync ReactIncrementalScheduling ReactIncrementalUpdates ReactInterleavedUpdates ReactSchedulerIntegration ReactTransition ReactUpdatePriority ReactDefaultTransitionIndicator` | PASS — `Tests: 1 skipped, 121 passed, 122 total` (the skip is upstream's own gate) |
@@ -43,8 +43,8 @@ Representative outputs:
 
 ```
 Tests  179 passed (179)      # conformance
-Tests  195 passed (195)      # engine package total
-Tests  26 passed (26)        # react package total
+Tests  198 passed (198)      # engine package total
+Tests  29 passed (29)        # react package total
 Tests  25 passed (25)        # shared battery
 Tests: 8 passed, 8 total     # ReactDOMSignalScheduler (fork)
 Tests: 1 skipped, 121 passed, 122 total  # upstream adjacent
@@ -63,7 +63,7 @@ node royale/verify-kit/count-loc.mjs \
 ```
 
 - **Fork: 80** (`ReactFiberSignalScheduler.js` 44 new, `ReactFiberWorkLoop.js` +23, `ReactFiberRootScheduler.js` +13). Incumbent: 1510.
-- **Library: 2307** (engine ~1698 + engine index 117 + tracer 86; react runtime 200 + hooks 184 + index 22; final count after the Round 2 tuning). Incumbents: alt-a 4689, alt-b 4909.
+- **Library: 2343** (engine 1730 + engine index 117 + tracer 86; react runtime 204 + hooks 184 + index 22; final count after the judgement fixes — the delta is itemized in "Judgement fixes"). Incumbents: alt-a 4689, alt-b 4909.
 
 Raw `git diff --numstat e71a6393e6..HEAD -- packages/ ':!packages/*/src/__tests__*'` agrees: 80.
 
@@ -105,8 +105,8 @@ Signals.
 | Per-root committed views | done |
 | flushSync excludes deferred work | done |
 | Quiescence reclamation (`debugFootprint` all zeros; leak suites) | done |
-| Read family: read/latest/committed/isPending/refresh | done (isPending on deriveds is topology-based: may over-report briefly, never evaluates/refetches — by design) |
-| Async: evaluate-to-pending, parallel registration, stable thenable identity, forwarded pending, stable error boxes, settlement-as-write owned by its world | done |
+| Read family: read/latest/committed/isPending/refresh | **fixed defect** (judgement round): `latest()` called from a React render body fell through to the all-open-episodes fold — an urgent render beside a held transition read the draft, a tear. Fixed: the host names its executing pass (`EngineHost.currentPassFrame`) and `latest()` resolves that pass's own world; regression tests engine+React, verified failing pre-fix. isPending on deriveds stays topology-based: may over-report briefly, never evaluates/refetches — by design |
+| Async: evaluate-to-pending, parallel registration, stable thenable identity, forwarded pending, stable error boxes, settlement-as-write owned by its world | **fixed defect** (judgement round): `refresh()` inside a transition with unchanged inputs was silently swallowed — the world fold's canonical-share fast path never consulted the episode's refresh marks, so no refetch started during the transition, at retirement, or later. Fixed: refresh marks make the world touch the node (`Frame.touches`), so the transition's render evaluates it and owns the new fetch generation; a mark no world consumed is carried out canonically at retirement. Regression tests engine+React, verified failing pre-fix |
 | Two-level suspend-vs-stale at React boundaries | done |
 | React hooks: useValue, useComputed, useAtom, useSignalEffect, useIsPending, useCommitted, useTransitionWrite/startTransitionWrite | done |
 | Loud registration failure on stock React; write-during-render throws; multi-root; unmounted subscribers silent | done |
@@ -288,3 +288,92 @@ suites (createSignals, repeatedObservers, molBench, 25-1000x5) are at parity
 or ahead. The geometric mean over all suites is 1.58x alien — same class,
 not parity, bought alongside the world/episode machinery alien does not
 carry.
+
+## Judgement fixes
+
+The judge's feature-honesty audit found two required-feature defects, both
+previously claimed done and covered by no test. Both are fixed; the judge's
+probe files run green against the fixed sources unmodified.
+
+### Defect 1 — `latest()` render-body tear
+
+Inside an urgent render body during a live held transition, `latest(a)`
+returned the transition draft while the render's own world showed canonical.
+`latest()` was context-bound only through `activeFrame`/`activeEvalRun`,
+which engine evaluations set but a React render body never does, so a direct
+render-body call fell through to the all-open-episodes fold.
+
+- Fix: a render body is a read context too. `EngineHost` gains
+  `currentPassFrame()` — the React runtime answers with the executing pass's
+  frame (gated on the fork's `isRendering`, so event handlers between time
+  slices and commit effects still resolve newest intent) — and `latest()`
+  resolves that world when no engine evaluation is active.
+- Tests (all verified failing pre-fix): engine pin `judgement: latest()
+  inside a host render body...` (engine-regressions.spec.ts); React
+  regression asserting `latest(a) === useValue(a)` in EVERY pass body —
+  urgent bodies see canonical, the transition's own pass sees its draft
+  (tests/judgement.spec.tsx).
+
+### Defect 2 — transition `refresh()` no-op
+
+`refresh(x)` issued inside a transition with unchanged inputs was silently
+swallowed: the transition render took `frameDerivedRead`'s canonical-share
+fast path, which never consulted the episode's `refreshMarks` — no refetch
+during the transition, at retirement, or on any later read.
+
+- Fix: refresh marks are part of what a world changes. `Frame.touches()`
+  answers true for a marked derived (and transitively downstream), so the
+  transition's render evaluates it in-world — the world evaluation resets
+  the fetch slots and owns the new fetch generation; settlement lands with
+  that episode's commit and retirement adopts it (no post-commit refetch).
+  A mark whose world never evaluated the node (nothing rendered it there)
+  still owes a refetch: retirement carries it out canonically
+  (`canonicalRefresh`, the same path plain `refresh()` uses).
+- Tests (all verified failing pre-fix): engine pins for the world-owned
+  refetch + stale-serving + commit-adoption and for the retirement carry;
+  React regressions for the exact probe shape — fetch generation advances,
+  stale serves with no fallback flash, the refreshed value lands with the
+  transition's commit, and leftover un-adopted offers are zombies that
+  change nothing (tests/judgement.spec.tsx).
+
+### Oracle taught both classes
+
+Every generated schedule now also: calls `latest()` from simulated render
+bodies (the fake host implements `currentPassFrame`; every pass read asserts
+`latest` equals that pass's model world), and issues `refresh()` at random —
+canonical and inside open batches — asserting value-neutrality for
+synchronous computeds in every world, through marks, world evaluations,
+retirement carries, and aborts. Honesty note: the sync model cannot observe
+fetch generations, so the async generation behavior is pinned by the named
+regressions above; the render-body class is fully model-checked — the
+upgraded oracle catches the pre-fix tear at seed 2 (`latest in render body:
+expected 87 to be 86`).
+
+### Fresh gate outputs (after the fixes)
+
+```
+$ pnpm typecheck            # both packages: exit 0, no output
+$ npx vitest run            # engine package
+ Tests  198 passed (198)    # conformance 179 + oracle + 5 regressions + 9 async + 4 gc-leaks
+$ ORACLE_SEEDS=1200 npx vitest run tests/oracle.spec.ts
+ Tests  1 passed (1)        # deep sweep, latest-in-render + refresh classes on
+$ npx vitest run            # react package
+ Tests  29 passed (29)      # scenarios + hooks + judgement (3 new) + gc-leaks
+$ npx vitest run            # royale/verify-kit/battery
+ Tests  25 passed (25)
+$ npx vitest run            # judge probes, sources unmodified
+ Tests  8 passed (8)
+```
+
+### LOC delta
+
+Canonical counter (`royale/verify/count-loc.mjs --fork vendor/react --base
+e71a6393e6 --head royale/fx1-react --lib packages/signals-royale-fx1 --lib
+packages/react-signals-royale-fx1`):
+
+- Fork: **80** — unchanged; the fork needed no changes for either fix
+  (patch series untouched).
+- Library: **2343** (was 2307, **+36**): engine.ts 1730 (+32:
+  `currentPassFrame` in the host protocol + `latest()`, mark-aware
+  `Frame.touches`, retirement carry, `canonicalRefresh` extraction),
+  runtime.ts 204 (+4: the host's `currentPassFrame` implementation).
