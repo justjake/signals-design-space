@@ -58,7 +58,7 @@ git -C vendor/react diff --numstat e71a6393e6..HEAD -- packages ':!packages/*/sr
   | awk '{a+=$1+$2} END {print a}'
 ```
 
-Library metric: **1,261** nonblank, non-comment lines after Prettier `--print-width 100` normalization across both `src/` directories. The count streamed each normalized source file through an `awk` state machine that excludes blank lines, line comments, and block-comment-only lines.
+Current library metric: **1,367** nonblank, non-comment lines after Prettier `--print-width 100` normalization across both `src/` directories. This is the shared counter's post-fix result; the Round 2 section retains its then-current 1,330-line measurement.
 
 ## Feature coverage
 
@@ -75,7 +75,7 @@ Library metric: **1,261** nonblank, non-comment lines after Prettier `--print-wi
 - Per-root committed views and one batch spanning two roots: done and tested.
 - `flushSync` exclusion: done and tested.
 - Quiescent episode reclamation and store-only transition retirement: done and tested.
-- Canonical, latest, committed, isPending, and refresh read family: done.
+- Canonical, latest, committed, isPending, and refresh read family: done after the judgement fix. `latest()` previously used the render world only during `useValue`'s own read, so direct render-body calls and canonical computed evaluations could read a held draft. It now resolves the whole render pass's world and the computed evaluation's canonical or selected-batch world; ambient `latest()` still folds all live intent.
 - Pending/error graph state and parallel `useThenable` registration: done.
 - Stable Suspense thenables, first-load suspension, stale refresh, and transition-owned settlement: done for the tested direct-use resource shape.
 - React subscribing read with commit subscription and late-subscribe lane fixup: done.
@@ -296,11 +296,64 @@ The fork pays a modest subscription/mount tax but delivers the property it exist
 - Added the isolated React benchmark and milomg adapter; regenerated the four fork patches. No React fork production source changed in Round 2, so fork LOC remains 112.
 - Shared battery: no disputed tests. Benchmark tooling notes: the full milomg sanity failure is isolated to `x-reactivity`, and esbuild required the Node platform flag as documented above.
 
-<oai-mem-citation>
-<citation_entries>
-MEMORY.md:240-248|note=[used benchmark contention guidance to reject overloaded attempts before retaining paired medians]
-</citation_entries>
-<rollout_ids>
-019f261b-bb8a-72e1-9e2f-790108c371ee
-</rollout_ids>
-</oai-mem-citation>
+## Judgement fix round
+
+The read-family claim had one real gap. `latest()` knew an active world while `useValue` executed `cell.get()`, but direct calls elsewhere in the same render body fell back to ambient all-draft intent. Context-free computed evaluation had the same problem: a nested `latest()` also folded every live draft instead of using the computed's canonical evaluation world.
+
+Two regressions were added before the implementation changed and both failed against the old code:
+
+```text
+latest inside a computed resolves the evaluation world
+expected 10 to be 0
+
+latest in an urgent render body resolves the render world
+expected '1:1' to be '1:0'
+```
+
+The binding now installs a current-world provider backed by React's render context, so any `latest()` in a render body uses that pass's lanes. Computed evaluation pins a shared allocation-free canonical world when no selected world is already active; selected transition evaluation keeps its existing world, and ambient calls retain the full-draft fold. The oracle now creates computeds whose functions call `latest()` and checks them in canonical, live selected-batch, and ambient worlds. That extension also exposed stale materialized world values after later writes, so urgent and draft writes now clear only the world caches already registered with live batches; the settled canonical cache and stable pending thenables are unchanged.
+
+### Fresh fix-round gates
+
+| Gate | Exact command | Result | Headline |
+|---|---|---|---|
+| Engine typecheck | `pnpm typecheck` in `packages/signals-royale-sx2` | PASS | strict `tsc --noEmit`, zero errors |
+| React typecheck | `pnpm typecheck` in `packages/react-signals-royale-sx2` | PASS | strict `tsc --noEmit`, zero errors |
+| Complete engine suite | `pnpm test` in `packages/signals-royale-sx2` | PASS | 4 files, 194/194 |
+| Deep randomized oracle | `ORACLE_SEEDS=1200 pnpm exec vitest run tests/oracle.spec.ts --reporter=verbose` | PASS | 1,200 seeds × 90 steps; nested `latest()` computeds checked in canonical and selected worlds |
+| Entrant real-React gate | `pnpm test` in `packages/react-signals-royale-sx2` | PASS | 2 files, 14/14 |
+| Shared battery | `pnpm typecheck && pnpm test` in `royale/verify-kit/battery` | PASS | adapter still points to sx2; typecheck clean, 25/25 |
+
+Fresh terminal output:
+
+```text
+> signals-royale-sx2@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+> react-signals-royale-sx2@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+```
+
+```text
+Test Files  4 passed (4)
+Tests       194 passed (194)
+Duration    825ms
+
+ORACLE_SEEDS=1200:
+✓ randomized replay oracle (300 seeds x 90 steps by default) 2255ms
+Test Files  1 passed (1)
+Tests       1 passed (1)
+Duration    2.39s
+```
+
+```text
+Test Files  2 passed (2)
+Tests       14 passed (14)
+Duration    561ms
+
+Shared battery:
+Test Files  1 passed (1)
+Tests       25 passed (25)
+Duration    634ms
+```
+
+The fresh shared LOC recount is **112 fork LOC** and **1,367 library LOC** (`1,083` engine + `284` binding). No React fork file changed: `vendor/react` remains clean at `d9034d1ca3`, so the existing four patches still reproduce the fork and did not require regeneration. There are no fix-round disputes.
