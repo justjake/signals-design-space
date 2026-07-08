@@ -28,6 +28,9 @@ export const UNSET: unique symbol = Symbol('unset');
 export type SourceNode = Atom<unknown> | Computed<unknown>;
 export type LiveConsumer = Computed<unknown> | EffectNode | Watcher;
 
+/** Shared wave callback (no per-write closure). */
+const notifySub = (sub: LiveConsumer): void => sub.markStale();
+
 let epoch: Epoch = 1;
 export function currentEpoch(): Epoch {
 	return epoch;
@@ -36,17 +39,26 @@ export function bumpEpoch(): void {
 	epoch++;
 }
 
-/** The consumer currently evaluating; reads report themselves to it. */
+/** The consumer currently evaluating; reads report themselves to it.
+ * Re-evaluations usually read the same dependencies in the same order, so
+ * the frame first walks the consumer's existing arrays in place (updating
+ * the seen column, allocating nothing); the first divergence switches to
+ * collecting a fresh set. */
 interface TrackingFrame {
+	id: number;
 	consumer: LiveConsumer;
-	deps: SourceNode[];
-	seen: unknown[]; // parallel to deps: atom value / computed version at read
-	set: Set<SourceNode>;
+	count: number;
+	diverged: boolean;
+	newDeps: SourceNode[] | null;
+	newSeen: unknown[] | null;
 }
 let activeFrame: TrackingFrame | null = null;
+/** Frame ids stamp sources for O(1) per-frame dedupe without a Set. */
+let nextFrameId = 1;
 
 let batchDepth = 0;
 const sinkQueue: (EffectNode | Watcher)[] = [];
+let sinkCursor = 0;
 let flushing = false;
 
 /** Tracer hook: installed by tracer.ts; one branch per emit site when detached. */
@@ -79,29 +91,64 @@ export function traceEvent(
  * read time, so a consumer that writes its own dependency mid-run notices). */
 function recordRead(source: SourceNode, seenNow: unknown): void {
 	const frame = activeFrame;
-	if (frame === null || frame.set.has(source)) return;
-	frame.set.add(source);
-	frame.deps.push(source);
-	frame.seen.push(seenNow);
+	if (frame === null || source.frameSeen === frame.id) return;
+	source.frameSeen = frame.id;
+	if (!frame.diverged) {
+		const deps = frame.consumer.deps;
+		const i = frame.count;
+		if (i < deps.length && deps[i] === source) {
+			frame.consumer.seen[i] = seenNow;
+			frame.count = i + 1;
+			return;
+		}
+		frame.diverged = true;
+		frame.newDeps = deps.slice(0, i);
+		frame.newSeen = frame.consumer.seen.slice(0, i);
+	}
+	frame.newDeps!.push(source);
+	frame.newSeen!.push(seenNow);
 }
 
 /** Run `fn` for `consumer`, collecting its dependency set, then swap links. */
 function trackedRun<R>(consumer: LiveConsumer, live: boolean, fn: () => R): R {
-	const frame: TrackingFrame = { consumer, deps: [], seen: [], set: new Set() };
+	const frame: TrackingFrame = {
+		id: nextFrameId++,
+		consumer,
+		count: 0,
+		diverged: false,
+		newDeps: null,
+		newSeen: null,
+	};
 	const prev = activeFrame;
 	activeFrame = frame;
 	try {
 		return fn();
 	} finally {
 		activeFrame = prev;
-		if (live) {
-			for (const old of consumer.deps) {
-				if (!frame.set.has(old)) unlink(old, consumer);
+		const deps = consumer.deps;
+		if (!frame.diverged) {
+			// Same dependencies in the same order (possibly a shorter prefix):
+			// seen[] was refreshed in place; drop and unlink only the tail.
+			if (frame.count !== deps.length) {
+				if (live) {
+					for (let i = frame.count; i < deps.length; i++) unlink(deps[i], consumer);
+				}
+				deps.length = frame.count;
+				consumer.seen.length = frame.count;
 			}
-			for (const d of frame.deps) link(d, consumer);
+		} else {
+			const newDeps = frame.newDeps!;
+			if (live) {
+				// A retained dependency carries this frame's stamp; stale stamps
+				// mark the edges to drop.
+				for (const old of deps) {
+					if (old.frameSeen !== frame.id) unlink(old, consumer);
+				}
+				for (const d of newDeps) link(d, consumer);
+			}
+			consumer.deps = newDeps;
+			consumer.seen = frame.newSeen!;
 		}
-		consumer.deps = frame.deps;
-		consumer.seen = frame.seen;
 	}
 }
 
@@ -152,6 +199,8 @@ export class Atom<T> {
 	/** Past canonical values kept while render-pass snapshots are pinned:
 	 * entries are [epochAtWrite, valueBeforeWrite], newest last. */
 	past: [Epoch, T][] | null = null;
+	/** Dependency-collection dedupe stamp (see recordRead). */
+	frameSeen = 0;
 
 	constructor(initial: T | (() => T), opts?: AtomOptions<T>) {
 		if (typeof initial === 'function') {
@@ -222,7 +271,7 @@ export class Atom<T> {
 			currentCause = emitTrace('write', currentCause, { label: this.label, value: v });
 		}
 		startBatch();
-		this.subs.forEach((sub) => sub.markStale());
+		this.subs.forEach(notifySub);
 		endBatch();
 	}
 
@@ -365,6 +414,9 @@ export class Computed<T> {
 	errorBox: ErrorBox | null = null;
 	version: NodeVersion = 0;
 	stale = true;
+	/** One-shot: poll dependencies once (set when the node becomes live —
+	 * stale waves were not delivered while dormant). */
+	needsPoll = false;
 	checkEpoch: Epoch = 0;
 	running = false;
 	deps: SourceNode[] = [];
@@ -376,6 +428,8 @@ export class Computed<T> {
 	/** Bumped by refresh(): forces re-evaluation with unchanged inputs. */
 	refreshVersion = 0;
 	seenRefresh = 0;
+	/** Dependency-collection dedupe stamp (see recordRead). */
+	frameSeen = 0;
 
 	constructor(
 		fn: (use: <U>(t: PromiseLike<U>) => U) => T,
@@ -393,7 +447,7 @@ export class Computed<T> {
 	markStale(): void {
 		if (this.stale) return;
 		this.stale = true;
-		this.subs.forEach((sub) => sub.markStale());
+		this.subs.forEach(notifySub);
 	}
 
 	/** Validate and (if needed) recompute; leaves the node validated at the
@@ -402,7 +456,17 @@ export class Computed<T> {
 		if (this.running) {
 			throw new Error('Cycle detected: computed read during its own evaluation.');
 		}
-		if (!this.stale && this.checkEpoch === epoch) return;
+		// Push-pull shortcut: a live node hears about every relevant canonical
+		// change through the stale wave, so a clean flag is authoritative; a
+		// dormant node must re-poll whenever the epoch moved.
+		if (
+			!this.stale &&
+			!this.needsPoll &&
+			(this.checkEpoch === epoch || (this.version !== 0 && this.live))
+		) {
+			return;
+		}
+		this.needsPoll = false;
 		if (this.version === 0 || this.refreshVersion !== this.seenRefresh) {
 			this.recompute();
 		} else if (depsChanged(this as Computed<unknown>)) {
@@ -521,10 +585,10 @@ export function link(source: SourceNode, sub: LiveConsumer): void {
 		if (source.subs.size === 1) source.subscribed();
 	} else if (source.subs.size === 1) {
 		// Becoming live: stale waves were not delivered while dormant, so the
-		// next validation must poll dependency values once. checkEpoch (not the
+		// next validation must poll dependency values once. needsPoll (not the
 		// stale flag) forces that poll — a raised stale flag would swallow the
 		// next write's wave before it reached downstream subscribers.
-		source.checkEpoch = 0;
+		source.needsPoll = true;
 		for (const d of source.deps) link(d, source);
 	}
 }
@@ -755,11 +819,11 @@ function flushSinks(): void {
 	let firstError: unknown = UNSET;
 	let iterations = 0;
 	try {
-		while (sinkQueue.length > 0) {
+		while (sinkCursor < sinkQueue.length) {
 			if (++iterations > 100_000) {
 				throw new Error('Effect flush did not settle after 100000 runs (livelock).');
 			}
-			const node = sinkQueue.shift()!;
+			const node = sinkQueue[sinkCursor++];
 			try {
 				node.flush();
 			} catch (e) {
@@ -767,6 +831,8 @@ function flushSinks(): void {
 			}
 		}
 	} finally {
+		sinkQueue.length = 0;
+		sinkCursor = 0;
 		flushing = false;
 	}
 	if (firstError !== UNSET) throw firstError;
