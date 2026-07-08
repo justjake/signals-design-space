@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRuntime, initializeAtomState, installState, serializeAtomState } from "../src/index";
+import {
+  createRuntime,
+  initializeAtomState,
+  installState,
+  serializeAtomState,
+  type BatchId,
+} from "../src/index";
 
 function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -125,6 +131,32 @@ describe("engine features", () => {
     resolve("new");
     await tick();
     expect(value.get()).toBe("new");
+  });
+
+  it("reads computed latest and per-root committed capsule values", () => {
+    const runtime = createRuntime();
+    let writing = 0;
+    let rendering: BatchId[] | null = null;
+    runtime.attachHost({
+      getCurrentWriteBatch: () => writing,
+      getRenderBatches: () => rendering,
+      getRenderContainer: () => null,
+      runInBatch: (_id, fn) => fn(),
+    });
+    const source = runtime.atom(1);
+    const doubled = runtime.computed(() => source.get() * 2);
+    expect(doubled.get()).toBe(2);
+    writing = runtime.allocateBatch(true);
+    source.set(2);
+    writing = 0;
+    expect(runtime.latest(doubled)).toBe(4);
+    rendering = [];
+    expect(runtime.latest(doubled)).toBe(2);
+    rendering = null;
+    const root = {};
+    runtime.rootCommitted(root, [1]);
+    expect(runtime.committed(doubled, root)).toBe(4);
+    expect(doubled.get()).toBe(2);
   });
 
   it("serializes keyed atoms and installs without running lazy initializers", () => {

@@ -343,6 +343,7 @@ export class Runtime {
   canonicalRevision = 0;
   private tracker: Tracker | null = null;
   private scope: Scope | null = null;
+  private evaluationBatches: readonly BatchId[] | undefined;
   private batchDepth = 0;
   private flushing = false;
   private readonly reactions: Reaction[] = [];
@@ -395,16 +396,19 @@ export class Runtime {
     return () => scope.dispose();
   }
 
-  evaluate<T>(tracker: Tracker, fn: () => T, scope?: Scope): T {
+  evaluate<T>(tracker: Tracker, fn: () => T, scope?: Scope, batches?: readonly BatchId[]): T {
     const previousTracker = this.tracker;
     const previousScope = this.scope;
+    const previousBatches = this.evaluationBatches;
     this.tracker = tracker;
     if (scope !== undefined) this.scope = scope;
+    if (batches !== undefined) this.evaluationBatches = batches;
     try {
       return fn();
     } finally {
       this.tracker = previousTracker;
       this.scope = previousScope;
+      this.evaluationBatches = previousBatches;
     }
   }
 
@@ -490,7 +494,7 @@ export class Runtime {
   }
 
   renderBatches(): readonly BatchId[] | null {
-    return this.host?.getRenderBatches() ?? null;
+    return this.evaluationBatches ?? this.host?.getRenderBatches() ?? null;
   }
 
   allocateBatch(deferred: boolean): BatchId {
@@ -507,14 +511,22 @@ export class Runtime {
   }
 
   readAtom<T>(atom: Atom<T>): T {
-    const batches = this.host?.getRenderBatches();
-    if (batches !== null && batches !== undefined) return this.valueFor(atom, batches);
+    const batches = this.renderBatches();
+    if (batches !== null) return this.valueFor(atom, batches);
     return atom.peek();
   }
 
   latest<T>(node: Atom<T> | Computed<T>): T {
-    if (node instanceof Computed) return node.latest();
     const batches = this.host?.getRenderBatches();
+    if (node instanceof Computed) {
+      if (batches !== null && batches !== undefined) {
+        return batches.length === 0 ? node.latest() : node.readWorld(batches);
+      }
+      if (this.liveBatches.size === 0) return node.latest();
+      const newest: BatchId[] = [];
+      for (const batch of this.liveBatches.values()) newest.push(batch.id);
+      return node.readWorld(newest);
+    }
     if (batches !== null && batches !== undefined) return this.valueFor(node, batches);
     let value = node.peek();
     for (const batch of this.liveBatches.values()) {
@@ -525,8 +537,14 @@ export class Runtime {
   }
 
   committed<T>(node: Atom<T> | Computed<T>, container?: object): T {
-    if (node instanceof Computed || container === undefined) return node.get();
+    if (container === undefined) return node.get();
     const batches = this.rootBatches.get(container);
+    if (node instanceof Computed) {
+      if (batches === undefined || batches.size === 0) return node.get();
+      const committed: BatchId[] = [];
+      for (const id of batches) committed.push(id);
+      return node.readWorld(committed);
+    }
     return batches === undefined ? node.peek() : this.valueFor(node, batches);
   }
 
@@ -802,7 +820,7 @@ export class Computed<T> extends Node<T> implements Tracker {
     return false;
   }
 
-  private readWorld(batches: readonly BatchId[]): T {
+  readWorld(batches: readonly BatchId[]): T {
     this.collecting.clear();
     this.pending = undefined;
     this.pendingObjects = undefined;
@@ -842,7 +860,7 @@ export class Computed<T> extends Node<T> implements Tracker {
     let value!: T;
     let error: unknown;
     try {
-      value = this.runtime.evaluate(this, () => this.compute(use));
+      value = this.runtime.evaluate(this, () => this.compute(use), undefined, batches);
     } catch (caught) {
       if (
         caught !== null &&
