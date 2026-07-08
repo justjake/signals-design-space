@@ -104,6 +104,8 @@ type Evaluation<T> = {
 };
 
 type EvaluationFrame = {
+  id: number;
+  captureAtoms: boolean;
   computed: Computed<any>;
   atoms: Atom<any>[];
   pending: AsyncRecord[];
@@ -120,10 +122,14 @@ export class Atom<T> {
   initializer: (() => T) | null;
   base!: T;
   version = 0;
+  frameMark = 0;
+  pendingState = false;
+  cause: number | undefined;
   applied: Operation<T>[] | null = null;
   pending: Operation<T>[] | null = null;
   readonly observers = new Set<CoreObserver>();
   readonly reactObservers = new Set<ReactObserver>();
+  readonly pendingObservers = new Set<ReactObserver>();
   observationCleanup: (() => void) | null = null;
 
   constructor(initial: T | (() => T), options: AtomOptions<T> = {}) {
@@ -157,6 +163,7 @@ export class Computed<T> {
   readonly equals: (a: T, b: T) => boolean;
   readonly label?: string;
   version = 0;
+  canonicalRevision = -1;
   dirty = true;
   forced = false;
   queued = false;
@@ -240,6 +247,7 @@ let detachHost: (() => void) | null = null;
 let sequence = 0;
 let worldRevision = 0;
 let nextPassId = 1;
+let nextFrameId = 1;
 let activePassCount = 0;
 let liveLanes = 0;
 let batchDepth = 0;
@@ -262,12 +270,12 @@ const worldComputeds = new Set<Computed<any>>();
 let passes = new WeakMap<RootToken, Pass>();
 let rootViews = new WeakMap<RootToken, number>();
 const lifetimeQueue = new Set<Atom<any>>();
-const pendingNotifications = new Set<Computed<any>>();
+const pendingNotifications = new Set<Atom<any> | Computed<any>>();
 const thenableRecords = new WeakMap<object, AsyncRecord>();
 let lifetimeScheduled = false;
 let pendingNotificationScheduled = false;
 
-const disposalRegistry = new FinalizationRegistry<() => void>((dispose) => dispose());
+const disposalRegistry = new FinalizationRegistry<ReactiveEffect>(disposeEffect);
 
 export function atom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<T> {
   return new Atom(initial, options);
@@ -375,7 +383,10 @@ function readAtomInWorld<T>(target: Atom<T>, world: World): T {
 
 function collectAtom(target: Atom<any>): void {
   const frame = activeFrame;
-  if (frame !== null && !frame.atoms.includes(target)) frame.atoms.push(target);
+  if (frame !== null && frame.captureAtoms && target.frameMark !== frame.id) {
+    target.frameMark = frame.id;
+    frame.atoms.push(target);
+  }
   const collector = activeCollector;
   if (collector !== null && !collector.atoms.includes(target)) collector.atoms.push(target);
 }
@@ -406,7 +417,13 @@ export function read<T>(target: Atom<T> | Computed<T>): T {
     world.pass === 0 && world.lanes === 0
       ? evaluateCanonical(target)
       : evaluateInWorld(target, world);
-  mergeEvaluation(evaluation as Evaluation<unknown>);
+  if (
+    evaluation.status !== 0 ||
+    activeCollector !== null ||
+    (activeFrame !== null && activeFrame.captureAtoms)
+  ) {
+    mergeEvaluation(target, evaluation as Evaluation<unknown>);
+  }
   trackSource(target, evaluation.value);
   if (activeFrame !== null && activeFrame.computed !== target) {
     return evaluation.value as T;
@@ -491,6 +508,7 @@ function writeAtom<T>(target: Atom<T>, update: boolean, input: T | ((previous: T
   if (deferred) {
     (target.pending ??= []).push(operation);
     batch?.operations.push(operation);
+    setPendingState(target, true, cause);
     deliverAtom(target, lane, cause);
   } else {
     (target.applied ??= []).push(operation);
@@ -509,23 +527,41 @@ export function update<T>(target: Atom<T>, fn: (previous: T) => T): void {
   target.update(fn);
 }
 
-function mergeEvaluation(evaluation: Evaluation<unknown>): void {
+function collectComputedAtoms(target: Computed<any>): void {
+  for (const source of target.sources) {
+    if (source.kind === 0) collectAtom(source);
+    else collectComputedAtoms(source);
+  }
+}
+
+function mergeEvaluation(target: Computed<any>, evaluation: Evaluation<unknown>): void {
   const frame = activeFrame;
-  if (frame !== null) {
-    for (const atom of evaluation.atoms) {
-      if (!frame.atoms.includes(atom)) frame.atoms.push(atom);
+  const collector = activeCollector;
+  const traverse =
+    evaluation.atoms.length === 0 && ((frame !== null && frame.captureAtoms) || collector !== null);
+  if (traverse) {
+    collectComputedAtoms(target);
+  } else {
+    if (frame !== null && frame.captureAtoms) {
+      for (const atom of evaluation.atoms) {
+        if (atom.frameMark !== frame.id) {
+          atom.frameMark = frame.id;
+          frame.atoms.push(atom);
+        }
+      }
     }
+    if (collector !== null) {
+      for (const atom of evaluation.atoms) {
+        if (!collector.atoms.includes(atom)) collector.atoms.push(atom);
+      }
+    }
+  }
+  if (frame !== null) {
     for (const pending of evaluation.pending) {
       if (!frame.pending.includes(pending)) frame.pending.push(pending);
     }
     if (frame.error === undefined && evaluation.error !== undefined) {
       frame.error = evaluation.error;
-    }
-  }
-  const collector = activeCollector;
-  if (collector !== null) {
-    for (const atom of evaluation.atoms) {
-      if (!collector.atoms.includes(atom)) collector.atoms.push(atom);
     }
   }
 }
@@ -676,14 +712,22 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
   }
   let frame: EvaluationFrame;
   if (canonical) {
-    frame = target.canonicalFrame ?? { computed: target, atoms: [], pending: [] };
+    frame = target.canonicalFrame ?? {
+      id: 0,
+      captureAtoms: false,
+      computed: target,
+      atoms: [],
+      pending: [],
+    };
     target.canonicalFrame = frame;
     frame.atoms.length = 0;
     frame.pending.length = 0;
     frame.error = undefined;
   } else {
-    frame = { computed: target, atoms: [], pending: [] };
+    frame = { id: 0, captureAtoms: true, computed: target, atoms: [], pending: [] };
   }
+  frame.id = nextFrameId++;
+  frame.captureAtoms = !canonical || activeCollector !== null;
   const previousFrame = activeFrame;
   const previousWorld = activeWorld;
   const previousObserver = activeObserver;
@@ -808,14 +852,25 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
     }
   }
   target.evaluation = evaluation;
+  target.canonicalRevision = worldRevision;
   return evaluation;
 }
 
 function evaluateCanonical<T>(target: Computed<T>): Evaluation<T> {
+  if (
+    !target.dirty &&
+    target.initialized &&
+    target.canonicalRevision === worldRevision &&
+    target.evaluation !== null
+  ) {
+    return target.evaluation;
+  }
   if (!target.dirty && target.initialized) {
     for (let i = 0; i < target.sources.length; i++) {
       const source = target.sources[i];
-      if (source.kind === 1) evaluateCanonical(source);
+      if (source.kind === 1 && (source.dirty || target.observers.size === 0)) {
+        evaluateCanonical(source);
+      }
       if (source.version !== target.sourceVersions[i]) {
         target.dirty = true;
         break;
@@ -826,7 +881,9 @@ function evaluateCanonical<T>(target: Computed<T>): Evaluation<T> {
     let changed = false;
     for (let i = 0; i < target.sources.length; i++) {
       const source = target.sources[i];
-      if (source.kind === 1) evaluateCanonical(source);
+      if (source.kind === 1 && (source.dirty || target.observers.size === 0)) {
+        evaluateCanonical(source);
+      }
       if (source.version === target.sourceVersions[i]) continue;
       if (source.kind === 0) {
         const value = readAtomInWorld(source, canonicalWorld);
@@ -841,7 +898,10 @@ function evaluateCanonical<T>(target: Computed<T>): Evaluation<T> {
     }
     if (!changed) target.dirty = false;
   }
-  if (!target.dirty && target.evaluation !== null) return target.evaluation;
+  if (!target.dirty && target.evaluation !== null) {
+    target.canonicalRevision = worldRevision;
+    return target.evaluation;
+  }
   canonicalWorld.pin = sequence;
   return runEvaluation(target, canonicalWorld, true);
 }
@@ -987,7 +1047,7 @@ function effectSourcesChanged(target: ReactiveEffect): boolean {
   canonicalWorld.pin = sequence;
   for (let i = 0; i < target.sources.length; i++) {
     const source = target.sources[i];
-    if (source.kind === 1) evaluateCanonical(source);
+    if (source.kind === 1 && source.dirty) evaluateCanonical(source);
     if (source.version === target.sourceVersions[i]) continue;
     if (source.kind === 0) {
       const value = readAtomInWorld(source, canonicalWorld);
@@ -1101,7 +1161,7 @@ function flushIfReady(): void {
   }
 }
 
-function setPendingState(target: Computed<any>, pending: boolean, cause: number): void {
+function setPendingState(target: Atom<any> | Computed<any>, pending: boolean, cause: number): void {
   if (target.pendingState === pending) return;
   target.pendingState = pending;
   target.cause = cause || target.cause;
@@ -1110,15 +1170,15 @@ function setPendingState(target: Computed<any>, pending: boolean, cause: number)
   pendingNotificationScheduled = true;
   queueMicrotask(() => {
     pendingNotificationScheduled = false;
-    for (const computed of pendingNotifications) {
-      for (const observer of computed.pendingObservers) {
+    for (const target of pendingNotifications) {
+      for (const observer of target.pendingObservers) {
         const delivery = traceEmit("component delivery", {
-          cause: computed.cause,
-          target: computed,
-          label: computed.label,
-          detail: computed.pendingState ? "pending" : "settled",
+          cause: target.cause,
+          target,
+          label: target.label,
+          detail: target.pendingState ? "pending" : "settled",
         });
-        observer.notify(delivery || computed.cause || 0);
+        observer.notify(delivery || target.cause || 0);
       }
     }
     pendingNotifications.clear();
@@ -1187,7 +1247,7 @@ export function effect(fn: () => void | (() => void)): () => void {
   const dispose = () => disposeEffect(target);
   target.handle = new WeakRef(dispose);
   runEffect(target);
-  disposalRegistry.register(dispose, () => disposeEffect(target));
+  if (target.scope === null) disposalRegistry.register(dispose, target);
   return dispose;
 }
 
@@ -1425,7 +1485,6 @@ export function subscribePending(
   target: Atom<any> | Computed<any>,
   observer: ReactObserver,
 ): () => void {
-  if (target.kind === 0) return () => {};
   target.pendingObservers.add(observer);
   return () => target.pendingObservers.delete(observer);
 }
@@ -1499,7 +1558,7 @@ export function committed<T>(target: Atom<T> | Computed<T>, container?: RootToke
 }
 
 export function isPending(target: Atom<any> | Computed<any>): boolean {
-  return target.kind === 1 && target.pendingState;
+  return target.pendingState;
 }
 
 export function refresh(target: Computed<any>): void {
@@ -1565,6 +1624,16 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
     detail: committedBatch ? "committed" : "external-only",
   });
   for (const atom of changed) {
+    let pending = false;
+    if (atom.pending !== null) {
+      for (const operation of atom.pending) {
+        if ((operation.batch as Batch).retiredAt === 0) {
+          pending = true;
+          break;
+        }
+      }
+    }
+    setPendingState(atom, pending, retirementCause || batch.cause);
     atom.version++;
     invalidateAtom(atom, retirementCause || batch.cause);
     traceEmit("component delivery", {
@@ -1710,6 +1779,7 @@ export function installState<T>(target: Atom<T>, value: T): void {
   target.initializer = null;
   target.applied = null;
   target.pending = null;
+  target.pendingState = false;
 }
 
 type AtomTable = ReadonlyArray<Atom<any>> | Record<string, Atom<any>>;
@@ -1772,6 +1842,7 @@ export function resetForTest(): void {
   for (const atom of touchedAtoms) {
     atom.applied = null;
     atom.pending = null;
+    atom.pendingState = false;
   }
   touchedAtoms.clear();
   worldComputeds.clear();
