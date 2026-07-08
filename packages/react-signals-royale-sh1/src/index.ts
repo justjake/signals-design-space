@@ -14,7 +14,9 @@ import {
   isPending,
   latest,
   openTransaction,
+  pendingTransaction,
   read,
+  rebaseDeferredOverUrgent,
   refresh,
   resetForTest as resetEngine,
   retireTransaction,
@@ -50,15 +52,27 @@ let openPasses = new WeakMap<FiberRoot, number>();
 let passCauses = new WeakMap<FiberRoot, TraceId>();
 const mutationListeners = new Set<(phase: "start" | "stop", container: Element) => void>();
 const deliveries = new WeakMap<object, TraceId>();
-const callbacks = new Set<(transaction?: Transaction) => void>();
+type Callback = (transaction?: Transaction) => void;
+let callbacks = new WeakMap<object, Set<Callback>>();
+const allCallbacks = new Set<Callback>();
+const computedCallbacks = new Set<Callback>();
 const stale = new WeakMap<object, unknown>();
 let version = 0;
 let unregister: (() => void) | undefined;
 let registrations = 0;
 
-subscribeReact((transaction) => {
+subscribeReact((transaction, target, canonical) => {
   version++;
-  for (const callback of [...callbacks]) callback(transaction);
+  if (canonical) return;
+  if (target === undefined) {
+    for (const callback of allCallbacks) callback(transaction);
+    return;
+  }
+  const direct = callbacks.get(target);
+  if (direct !== undefined) for (const callback of direct) callback(transaction);
+  if (target instanceof Atom) {
+    for (const callback of computedCallbacks) callback(transaction);
+  }
 });
 
 const runtime: Runtime = {
@@ -187,14 +201,23 @@ function useSubscription(cell: Cell<any>, urgent = false): void {
         requireProtocol().run(transaction.id, rerender);
       else rerender();
     };
-    callbacks.add(callback);
-    const unsubscribeNode = subscribeNode(cell, () => {});
-    if (renderedVersion !== version) callback();
+    let set = callbacks.get(cell);
+    if (set === undefined) callbacks.set(cell, (set = new Set()));
+    set.add(callback);
+    allCallbacks.add(callback);
+    if (cell instanceof Computed) computedCallbacks.add(callback);
+    const unsubscribeNode = subscribeNode(cell, callback);
+    const pending = pendingTransaction(cell);
+    if (pending !== undefined) callback(pending);
+    else if (renderedVersion !== version) callback();
     return () => {
-      callbacks.delete(callback);
+      set.delete(callback);
+      if (set.size === 0) callbacks.delete(cell);
+      allCallbacks.delete(callback);
+      computedCallbacks.delete(callback);
       unsubscribeNode();
     };
-  }, [cell, renderedVersion, urgent]);
+  }, [cell, urgent]);
 }
 
 export function useValue<T>(cell: Cell<T>): T {
@@ -286,7 +309,9 @@ export function resetForTest(): void {
   openPasses = new WeakMap();
   passCauses = new WeakMap();
   mutationListeners.clear();
-  callbacks.clear();
+  callbacks = new WeakMap();
+  allCallbacks.clear();
+  computedCallbacks.clear();
   version = 0;
   resetEngine();
 }
@@ -303,6 +328,7 @@ export {
   isPending,
   latest,
   read,
+  rebaseDeferredOverUrgent,
   refresh,
   rootWorld,
   serializeAtomState,

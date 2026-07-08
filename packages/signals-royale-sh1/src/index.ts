@@ -46,10 +46,21 @@ abstract class Computation<T> extends Node<T> {
   depValues: unknown[] = [];
   dirty = true;
   collecting: Node<unknown>[] | undefined;
+  collectingSet: Set<Node<unknown>> | undefined;
   staleDuringRun = false;
   track(node: Node<unknown>): void {
     const list = this.collecting;
-    if (list !== undefined && !list.includes(node)) list.push(node);
+    if (list === undefined) return;
+    const set = this.collectingSet;
+    if (set !== undefined) {
+      if (!set.has(node)) {
+        set.add(node);
+        list.push(node);
+      }
+    } else if (!list.includes(node)) {
+      list.push(node);
+      if (list.length === 8) this.collectingSet = new Set(list);
+    }
   }
   invalidate(cause?: TraceId): void {
     if (cause !== undefined) causes.set(this, cause);
@@ -57,13 +68,16 @@ abstract class Computation<T> extends Node<T> {
     this.dirty = true;
     for (const sub of this.subscribers) {
       if (sub instanceof Computation) sub.invalidate(cause);
-      else sub();
+      else if (!suppressReact) sub();
     }
   }
   protected replaceDeps(next: Node<unknown>[]): void {
-    for (const dep of this.deps) if (!next.includes(dep)) dep.delete(this);
+    const set = this.collectingSet;
+    for (const dep of this.deps) {
+      if (!(set?.has(dep) ?? next.includes(dep))) dep.delete(this);
+    }
     if (this instanceof Effect || this.subscribers.size !== 0) {
-      for (const dep of next) if (!this.deps.includes(dep)) dep.add(this);
+      for (const dep of next) dep.add(this);
     }
     this.deps = next;
     this.depValues = next.map((dep) => dep.get());
@@ -82,10 +96,13 @@ type Update<T> = { kind: "set"; value: T } | { kind: "update"; value: (prev: T) 
 
 export class Transaction {
   readonly writes = new Map<Atom<unknown>, Update<unknown>[]>();
+  readonly bases = new Map<Atom<unknown>, unknown>();
+  readonly rebases = new Map<Atom<unknown>, Update<unknown>[]>();
   readonly roots = new Set<object>();
   readonly containers = new Set<object>();
   closed = false;
   landed = false;
+  rebaseOnCanonical = false;
   revision = 0;
   constructor(readonly id: BatchId, readonly deferred: boolean, public cause?: TraceId) {}
 }
@@ -96,15 +113,26 @@ let currentWorld: readonly Transaction[] | undefined;
 const transactions: Transaction[] = [];
 const rootWorlds = new WeakMap<object, Transaction[]>();
 let suppressReact = false;
+let urgentRebaseDepth = 0;
 
 function fold<T>(atom: Atom<T>, txs: readonly Transaction[]): T {
   let value = atom.base;
   for (const tx of txs) {
     const writes = tx.writes.get(atom as Atom<unknown>) as Update<T>[] | undefined;
     if (writes === undefined) continue;
+    const rebases = tx.rebases.get(atom as Atom<unknown>) as Update<T>[] | undefined;
+    if (rebases !== undefined && !tx.rebaseOnCanonical) {
+      value = tx.bases.get(atom as Atom<unknown>) as T;
+    }
     for (const write of writes) {
       const next = write.kind === "set" ? write.value : write.value(value);
       if (!atom.equals(value, next)) value = next;
+    }
+    if (rebases !== undefined && !tx.rebaseOnCanonical) {
+      for (const write of rebases) {
+        const next = write.kind === "set" ? write.value : write.value(value);
+        if (!atom.equals(value, next)) value = next;
+      }
     }
   }
   return value;
@@ -261,6 +289,7 @@ export class Computed<T> extends Computation<T> {
       active = previous;
       pendingReads = previousPending;
       this.collecting = undefined;
+      this.collectingSet = undefined;
       this.evaluating = false;
     }
   }
@@ -330,7 +359,7 @@ export class Computed<T> extends Computation<T> {
 class Scope {
   readonly children = new Set<Effect>();
   dispose(): void {
-    for (const child of [...this.children]) child.dispose();
+    for (const child of this.children) child.dispose();
   }
 }
 
@@ -362,7 +391,7 @@ class Effect extends Computation<unknown> {
   }
   run(): void {
     if (this.disposed) return;
-    for (const child of [...this.children]) child.dispose();
+    for (const child of this.children) child.dispose();
     const oldCleanup = this.cleanup;
     this.cleanup = undefined;
     try {
@@ -387,13 +416,14 @@ class Effect extends Computation<unknown> {
       active = previousActive;
       activeOwner = previousOwner;
       this.collecting = undefined;
+      this.collectingSet = undefined;
     }
   }
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     pendingEffects.delete(this);
-    for (const child of [...this.children]) child.dispose();
+    for (const child of this.children) child.dispose();
     for (const dep of this.deps) dep.delete(this);
     this.deps.length = 0;
     this.depValues.length = 0;
@@ -437,7 +467,7 @@ export function causeOf(node: object): TraceId | undefined {
 function notify(node: Node<unknown>, cause?: TraceId): void {
   for (const subscriber of [...node.subscribers]) {
     if (subscriber instanceof Computation) subscriber.invalidate(cause);
-    else subscriber();
+    else if (!suppressReact) subscriber();
   }
 }
 
@@ -449,7 +479,10 @@ function write<T>(atom: Atom<T>, update: Update<T>): void {
     const next = update.kind === "set" ? update.value : update.value(before);
     if (atom.equals(before, next)) return;
     let writes = currentTransaction.writes.get(atom as Atom<unknown>);
-    if (writes === undefined) currentTransaction.writes.set(atom as Atom<unknown>, (writes = []));
+    if (writes === undefined) {
+      currentTransaction.bases.set(atom as Atom<unknown>, atom.base);
+      currentTransaction.writes.set(atom as Atom<unknown>, (writes = []));
+    }
     writes.push(update as Update<unknown>);
     currentTransaction.revision++;
     currentTransaction.cause = emit("write", currentTransaction.cause, {
@@ -457,13 +490,32 @@ function write<T>(atom: Atom<T>, update: Update<T>): void {
       target: atom,
     });
     causes.set(atom, currentTransaction.cause);
-    for (const listener of reactListeners) listener(currentTransaction);
+    for (const listener of reactListeners) listener(currentTransaction, atom);
     return;
   }
   const next = update.kind === "set" ? update.value : update.value(atom.base);
   if (atom.equals(atom.base, next)) return;
+  for (const transaction of transactions) {
+    if (
+      transaction.closed ||
+      transaction.roots.size === 0 ||
+      !transaction.writes.has(atom as Atom<unknown>)
+    ) {
+      continue;
+    }
+    let rebases = transaction.rebases.get(atom as Atom<unknown>);
+    if (rebases === undefined) transaction.rebases.set(atom as Atom<unknown>, (rebases = []));
+    rebases.push(update as Update<unknown>);
+    if (urgentRebaseDepth !== 0) transaction.rebaseOnCanonical = true;
+  }
   atom.base = next;
-  if (active?.collecting?.includes(atom as Node<unknown>)) active.staleDuringRun = true;
+  if (
+    active !== undefined &&
+    (active.collectingSet?.has(atom as Node<unknown>) ??
+      active.collecting?.includes(atom as Node<unknown>))
+  ) {
+    active.staleDuringRun = true;
+  }
   epoch++;
   const cause = emit("write", currentTransaction?.cause, {
     batch: currentTransaction?.id ?? 0,
@@ -471,7 +523,8 @@ function write<T>(atom: Atom<T>, update: Update<T>): void {
   });
   causes.set(atom, cause);
   notify(atom as Node<unknown>, cause);
-  if (!suppressReact) for (const listener of reactListeners) listener(currentTransaction);
+  if (!suppressReact)
+    for (const listener of reactListeners) listener(currentTransaction, atom, true);
   if (batchDepth === 0) flushEffects();
 }
 
@@ -547,6 +600,15 @@ export function untracked<T>(fn: () => T): T {
   }
 }
 
+export function rebaseDeferredOverUrgent<T>(fn: () => T): T {
+  urgentRebaseDepth++;
+  try {
+    return fn();
+  } finally {
+    urgentRebaseDepth--;
+  }
+}
+
 export function read<T>(node: Atom<T> | Computed<T>): T {
   return node.get();
 }
@@ -618,11 +680,30 @@ export function retireTransaction(
       batch(() => {
         for (const [rawAtom, writes] of transaction.writes) {
           const target = rawAtom as Atom<unknown>;
-          for (const update of writes) write(target, update);
+          if (transaction.landed) {
+            let value = transaction.rebaseOnCanonical
+              ? target.base
+              : transaction.bases.get(rawAtom);
+            for (const update of writes) {
+              value = update.kind === "set" ? update.value : update.value(value);
+            }
+            const rebases = transaction.rebases.get(rawAtom);
+            if (rebases !== undefined && !transaction.rebaseOnCanonical) {
+              for (const update of rebases) {
+                value = update.kind === "set" ? update.value : update.value(value);
+              }
+            }
+            write(target, { kind: "set", value });
+          } else {
+            for (const update of writes) write(target, update);
+          }
         }
       });
     } finally {
       suppressReact = previous;
+    }
+    for (const [target] of transaction.writes) {
+      for (const listener of reactListeners) listener(undefined, target);
     }
   } else {
     if (notifyReact) for (const listener of reactListeners) listener(undefined);
@@ -651,9 +732,11 @@ export function rootWorld(container: object): readonly Transaction[] {
   return rootWorlds.get(container) ?? [];
 }
 
-const reactListeners = new Set<(transaction: Transaction | undefined) => void>();
+const reactListeners = new Set<
+  (transaction: Transaction | undefined, target?: object, canonical?: boolean) => void
+>();
 export function subscribeReact(
-  listener: (transaction: Transaction | undefined) => void,
+  listener: (transaction: Transaction | undefined, target?: object, canonical?: boolean) => void,
 ): () => void {
   reactListeners.add(listener);
   return () => reactListeners.delete(listener);
@@ -721,6 +804,11 @@ export function committed<T>(node: Atom<T> | Computed<T>, _container?: object): 
 }
 
 export function isPending(node: Atom<any> | Computed<any>): boolean {
+  if (node instanceof Atom) {
+    for (const transaction of transactions) {
+      if (transaction.writes.has(node as Atom<unknown>)) return true;
+    }
+  }
   const previous = currentWorld;
   currentWorld = transactions;
   try {
@@ -734,12 +822,20 @@ export function isPending(node: Atom<any> | Computed<any>): boolean {
   }
 }
 
+export function pendingTransaction(node: Atom<any> | Computed<any>): Transaction | undefined {
+  if (!(node instanceof Atom)) return undefined;
+  for (let index = transactions.length - 1; index >= 0; index--) {
+    if (transactions[index].writes.has(node as Atom<unknown>)) return transactions[index];
+  }
+  return undefined;
+}
+
 export function refresh(node: Atom<any> | Computed<any>): void {
   if (node instanceof Computed) {
     node.invalidate();
     node.dirty = true;
     node.staleDuringRun = true;
-    for (const listener of reactListeners) listener(currentTransaction);
+    for (const listener of reactListeners) listener(currentTransaction, node);
   }
 }
 

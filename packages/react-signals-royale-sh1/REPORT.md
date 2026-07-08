@@ -105,11 +105,149 @@ awk 'BEGIN{b=0} b{if(/\*\//)b=0;next} /^[[:space:]]*\/\*/{if(!/\*\//)b=1;next} \
 
 ## 5. Known gaps and honest risks
 
-- I did not run the official milomg or React seam benchmark, so this report makes no comparative performance claim.
-- The shared hidden cross-entrant battery was not present as an executable command in this clone; the exact adapters are delivered, but only the local 179-case, oracle, fork, and 15-case real-React suites were executed.
+- Round 2 supersedes the original benchmark and shared-battery availability notes; both are measured below.
 - Render-pass discard tracing is inferred when a root starts a different lane set; a pass abandoned without any later render or commit may not emit its discard event until the root becomes active again.
 - A computed that literally creates a brand-new network promise inside every evaluation can start one extra request when it re-evaluates after settlement; pending retries themselves are cached and do not re-evaluate. Applications should create or key-cache the resource promise outside the computed body.
 
 ## 6. What I would do with another day
 
-I would add keyed async resource slots so inline promise factories cannot start the post-settlement extra request, run the official core and React seam benchmarks, profile the global React delivery fanout, and fuzz multi-root prune/commit races with suspended passes. After that, I would split world-only computed evaluation from the canonical class to reduce the 1075 library lines without touching the 91-line fork.
+I would add keyed async resource slots so inline promise factories cannot start the post-settlement extra request, profile the remaining wide-graph and single-cell delivery cost, and fuzz multi-root prune/commit races with suspended passes. After that, I would split world-only computed evaluation from the canonical class to recover some of the Round 2 library LOC without touching the 91-line fork.
+
+## 7. Round 2
+
+### Final verification
+
+All entry-owned gates pass on the final formatted code and rebuilt fork.
+
+| Gate | Exact command | Result | Real headline output |
+| --- | --- | --- | --- |
+| Engine typecheck | `cd packages/signals-royale-sh1 && pnpm typecheck` | PASS | `tsc --noEmit`, exit 0 |
+| React typecheck | `pnpm --dir packages/react-signals-royale-sh1 typecheck` | PASS | `tsc --noEmit`, exit 0 |
+| Conformance | `pnpm vitest run tests/conformance.spec.ts --reporter=dot` | PASS | `179 passed (179)`, 14 ms |
+| Oracle, default | `ORACLE_SEEDS=300 ORACLE_LENGTH=90 pnpm vitest run tests/oracle.spec.ts --reporter=verbose` | PASS | 3/3; `300 seeds x 90 steps`, 22 ms |
+| Oracle, deep | `ORACLE_SEEDS=1200 ORACLE_LENGTH=90 pnpm vitest run tests/oracle.spec.ts --reporter=verbose` | PASS | 3/3; `1200 seeds x 90 steps`, 55 ms |
+| Leak audit | `pnpm vitest run tests/gc-leaks.spec.ts --reporter=verbose` | PASS | 2/2; dropped computed 28 ms, dropped effect disposer 5 ms |
+| Full engine package | `pnpm test -- --reporter=dot` | PASS | 4 files; 190/190 tests |
+| Fork protocol | `cd vendor/react && yarn test --no-watchman ReactSignalsRuntime` | PASS | 1 suite; 3/3 tests |
+| Adjacent React | `yarn test --no-watchman ReactIncrementalUpdates ReactTransition ReactFlushSync` | PASS | 6 suites; 62 passed, 1 skipped |
+| Fork build | `./fork/build-react.sh` | PASS | all NODE_DEV/NODE_PROD bundles; `Built: 19.3.0 (7944cbad7a)` |
+| Own real React | `pnpm vitest run tests/real-react.spec.tsx --reporter=verbose` | PASS | 15/15; 297 ms; time-slicing case 262 ms |
+| Shared battery | `cd royale/verify-kit/battery && pnpm test` | PASS | 25/25; 264 ms |
+| Diff hygiene | `git diff --check` and `git -C vendor/react diff --check` | PASS | no output |
+
+Representative final output:
+
+```text
+Test Files  1 passed (1)
+Tests       179 passed (179)
+
+matches a memo-free operation-log model for 300 seeds x 90 steps 22ms
+matches a memo-free operation-log model for 1200 seeds x 90 steps 55ms
+
+Test Files  4 passed (4)
+Tests       190 passed (190)
+```
+
+```text
+PASS packages/react-reconciler/src/__tests__/ReactSignalsRuntime-test.js
+Test Suites: 1 passed, 1 total
+Tests:       3 passed, 3 total
+
+Test Suites: 6 passed, 6 total
+Tests:       1 skipped, 62 passed, 63 total
+```
+
+```text
+Test Files  1 passed (1)
+Tests       15 passed (15)
+
+Test Files  1 passed (1)
+Tests       25 passed (25)
+```
+
+The shared battery initially found five genuine gaps: pending atoms were not flip-visible, urgent/deferred updater replay was ordered incorrectly for root-owned transactions, a mid-transition mount could miss retirement, branch state could expose an intermediate frame, and the resulting causality check failed. The final engine retains a transaction base, deferred write set, and urgent rebase set; root-owned worlds fold them in React's required order and retirement emits one targeted delivery. Direct engine transactions retain the oracle's replay-on-current-base behavior. The final shared result is 25/25, with no disputed tests.
+
+### milomg js-reactivity-benchmark
+
+The adapter is committed in the benchmark clone and its cleanup disposes the enclosing effect scope. The focused pull-count sanity gate passes all four SH1 cases:
+
+```text
+pnpm -C packages/core exec vitest run src/frameworks.test.ts -t "Royale SH1" --reporter=verbose
+Test Files  1 passed (1)
+Tests       4 passed | 76 skipped (80)
+```
+
+The requested unfiltered `pnpm -C packages/core test -- --run` is honestly **79/80**, because the pre-existing `x-reactivity | static graph, read 2/3 of leaves` case reports pull count 51 instead of 41. Every Royale SH1 case passes, including the exact-pull cases; I did not change or mask the unrelated framework failure.
+
+Final isolated command:
+
+```sh
+cd milomg-reactivity-benchmark/packages/node
+pnpm exec esbuild src/index.ts src/isolated.ts --bundle --platform=node \
+  --format=esm --target=esnext --outdir=dist --sourcemap=external
+node dist/isolated.js --rounds 3 "Royale SH1" "Alien Signals"
+```
+
+The documented esbuild line omitted `--platform=node`; without it esbuild rejects the runner's `node:` imports. The added flag only makes the documented runner buildable and does not change benchmark code or timing.
+
+| Suite (median ms, 3 isolated rounds) | Royale SH1 | Alien Signals |
+| --- | ---: | ---: |
+| createSignals | 9.74 | 2.45 |
+| createComputations | 309.52 | 80.81 |
+| updateSignals | 1177.81 | 273.52 |
+| avoidablePropagation | 212.28 | 108.71 |
+| broadPropagation | 396.16 | 83.32 |
+| deepPropagation | 107.05 | 32.72 |
+| diamond | 239.34 | 86.22 |
+| mux | 240.66 | 83.83 |
+| repeatedObservers | 24.95 | 18.92 |
+| triangle | 81.27 | 23.09 |
+| unstable | 33.01 | 20.00 |
+| molBench | 14.63 | 14.23 |
+| cellx1000 | 35.85 | 3.62 |
+| cellx2500 | 109.46 | 12.32 |
+| 2-10x5 - lazy80% | 614.47 | 160.41 |
+| 6-10x10 - dyn25% - lazy80% | 432.66 | 105.03 |
+| 4-1000x12 - dyn5% | 950.51 | 272.39 |
+| 25-1000x5 | 1764.33 | 336.89 |
+| 3-5x500 | 335.84 | 78.95 |
+| 6-100x15 - dyn50% | 591.27 | 156.12 |
+| **sum / ratio** | **7680.81** | **1953.55** |
+
+Overall SH1 is **3.932× Alien** by the sum of per-suite medians. The first integrated run was 10139.17 vs 1954.93, or 5.186×, so tuning reduced the ratio by 24.2%. Both adapters dispose their effect scopes after each graph; there is no known leak-vs-no-leak asymmetry. SH1 remains substantially slower than Alien, especially in large update and fan-in/fan-out graphs, and this report does not present the improvement as parity.
+
+### React seam benchmark
+
+`bench/react-bench.mjs` uses jsdom, real timers, no `act`, the built SH1 React fork, one scenario per child process, and the same component shapes for SH1 and a local plain-store `useSyncExternalStore` contender. The final command was `pnpm exec tsx bench/react-bench.mjs`.
+
+| Scenario | Statistic | SH1 | stock `useSyncExternalStore` |
+| --- | --- | ---: | ---: |
+| fanout: 5000 cells, 200 single-cell writes | median write→commit | 1.73 ms | 1.47 ms |
+| transition: 2000 rewritten cells, 30 urgent inputs | p95 urgent→commit | 27.70 ms | 29.70 ms |
+| mount: 5000-cell tree, 5 fresh roots | median mount→first commit | 50.02 ms | 54.21 ms |
+
+SH1 is 17.7% slower on isolated single-cell fanout, 6.7% faster on transition urgent p95, and 7.7% faster on mount in this run. These are single machine-sharing runs of internally sampled medians/p95s, not confidence intervals.
+
+### Round 2 tuning and size
+
+- Replaced quadratic dependency collection/diff scans with a small-list fast path that promotes to a `Set` at eight dependencies. This keeps common one-to-four-edge computations allocation-light while bounding wide-graph lookup cost.
+- Replaced repeated `Set.values().next()` child disposal, which rescanned tombstones and made 100k-effect cleanup quadratic, with one mutation-safe `for...of` traversal.
+- Replaced the binding's all-component broadcast with exact per-cell subscriptions for canonical writes and targeted transaction delivery; computed readers remain covered when a draft atom changes. Subscription effects no longer tear down and recreate solely because the global version advanced.
+- Added explicit root-owned write/rebase sets, cheap pending-atom detection, pending-transaction enrollment for late mounts, and a targeted retirement flip. This is both the shared-battery correctness fix and the mechanism that avoids a second global fanout.
+- Regenerated the three React patch files from the unchanged 91-line fork history.
+
+Final LOC was measured with the shared counter:
+
+```sh
+node royale/verify-kit/count-loc.mjs \
+  --fork vendor/react --base e71a6393e66b0d2add46ba2b2c5db563a0563828 \
+  --head royale/sh1-react \
+  --lib packages/signals-royale-sh1 --lib packages/react-signals-royale-sh1
+```
+
+```text
+forkLoc: 91
+libLoc: 1208
+```
+
+The fork remains **91 LOC**. Library LOC is **1208** (891 engine + 317 binding), up from 1075 in Round 1; the 133-line increase buys the verified rebase/pending/late-mount semantics and targeted delivery path. The benchmark driver and adapters are outside the ranked `src/` metric.

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { act } from "react";
 import * as ReactDOMClient from "react-dom/client";
-import { flushSync } from "react-dom";
+import { flushSync as reactFlushSync } from "react-dom";
 import {
   Atom,
   atom,
@@ -14,6 +14,7 @@ import {
   latest,
   onDomMutation,
   read,
+  rebaseDeferredOverUrgent,
   refresh,
   register,
   resetForTest,
@@ -39,7 +40,7 @@ const adapter = {
     await act(fn);
     return undefined;
   },
-  flushSync,
+  flushSync: (fn: () => void) => rebaseDeferredOverUrgent(() => reactFlushSync(fn)),
   register,
   resetForTest() {
     atomSequence = 0;
