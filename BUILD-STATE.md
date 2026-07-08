@@ -401,6 +401,21 @@ must be able to continue from it alone.
       the hard entry budget with backpressure stays the documented fallback
       if the lead's A/B convicts it.
 
+## Done (continued 6)
+
+11. **Owner ride-along: MACHINERY_OWNED doc rewritten to teach the feature**
+    (coordinator-relayed feedback; schema-side so the generated region
+    carries it). tools/schema.ts NodeFlag.MACHINERY_OWNED doc now follows
+    the required shape: (1) the feature — the observed-lifecycle callback,
+    AtomOptions.effect, refcount fed from kernel dependency links; (2) the
+    websocket example; (3) the problem — engine bookkeeping reads (world
+    folds, subscription revalidation, test surface) create links from
+    engine-internal readers that would otherwise count as observation;
+    (4) the rule — set on engine-created reader records only, lifecycle
+    refcount sites skip machinery readers; (5) the permanence line (every
+    flag-word rewrite masks it through). `pnpm gen` re-emitted the layout
+    region; regen-diff + docs-gate + full suite green.
+
 ## In progress / exact next actions
 
 **Priority 5 — observers/watchers/subscriptions as arena records.** Nothing

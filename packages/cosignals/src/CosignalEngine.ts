@@ -320,16 +320,37 @@ export const enum NodeFlag {
 	 */
 	BOX_SUSPENDED = 0b01000000000000,
 	/**
-	 * Marks kernel records created by the engine's own machinery (world
-	 * folds, subscription captures) rather than by a user's handle. Its one
-	 * hot job: keep machinery reads from counting toward a user atom's
-	 * observed-lifecycle union — the "first subscriber attached / last one
-	 * detached" callback (linkInsert/unlink skip the retain/release when the
-	 * subscriber carries this bit; the machinery's observation index
-	 * contributes to the union on its own terms instead, so a machinery
-	 * computed's dep structure never pins an atom's remote subscription past
-	 * its last real consumer). Set via the markMachineryOwned op when a
-	 * computed gains concurrent-machinery content.
+	 * Serves the observed-lifecycle feature (AtomOptions.effect): an atom
+	 * can carry a callback that runs when its FIRST observer arrives and a
+	 * cleanup that runs when its LAST observer leaves — say, an atom whose
+	 * effect connects a websocket while anyone watches. The lifecycle is
+	 * driven by a refcount fed from kernel dependency links: each link into
+	 * a lifecycle-carrying atom retains, each unlink releases (the
+	 * {@link NodeField.LIFECYCLE}-gated sites in linkInsert/unlink).
+	 *
+	 * ## The problem this bit solves
+	 *
+	 * The engine itself reads user atoms as bookkeeping — world folds
+	 * evaluating render/committed values, subscription dependency
+	 * revalidation, the test surface — and those reads create kernel
+	 * dependency links whose READER is an engine-internal record. Unmarked,
+	 * they would count as observation: the websocket would connect because
+	 * a render pass folded a value, with no component watching at all.
+	 *
+	 * ## The rule
+	 *
+	 * The flag is set on engine-created reader records (the
+	 * markMachineryOwned op, applied when a computed gains
+	 * concurrent-machinery content) and NEVER on user-created nodes. The
+	 * lifecycle refcount sites skip links whose reader carries it:
+	 * machinery reads do not count as observation. The machinery reports
+	 * real consumers into the atom's observation union on its own terms
+	 * instead (the observation index), so lifecycle truth follows actual
+	 * watchers, never engine plumbing.
+	 *
+	 * The bit is permanent for the record's life, so every flag-word
+	 * rewrite preserves it (the eval-start rewrite, the unwatched reset,
+	 * the dirty promotions all mask it through).
 	 */
 	MACHINERY_OWNED = 0b10000000000000,
 	/** The kind bits together (exactly one is set on a live record). */
