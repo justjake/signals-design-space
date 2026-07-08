@@ -295,6 +295,9 @@ importers:
 
   packages/react-signals-playground:
     dependencies:
+      concurrent-solid-react:
+        specifier: workspace:*
+        version: link:../concurrent-solid-react
       cosignals:
         specifier: workspace:*
         version: link:../cosignals
@@ -332,6 +335,55 @@ importers:
       vite:
         specifier: 8.1.0
         version: 8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0)
+
+  packages/react-signals-royale-sx2:
+    dependencies:
+      react:
+        specifier: link:../../vendor/react/build/oss-experimental/react
+        version: link:../../vendor/react/build/oss-experimental/react
+      react-dom:
+        specifier: link:../../vendor/react/build/oss-experimental/react-dom
+        version: link:../../vendor/react/build/oss-experimental/react-dom
+      scheduler:
+        specifier: link:../../vendor/react/build/oss-experimental/scheduler
+        version: link:../../vendor/react/build/oss-experimental/scheduler
+      signals-royale-sx2:
+        specifier: link:../signals-royale-sx2
+        version: link:../signals-royale-sx2
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.8
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.1.6
+        version: 19.2.3(@types/react@19.2.17)
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
+      tsx:
+        specifier: ^4.20.6
+        version: 4.23.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.6
+        version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
+
+  packages/signals-royale-sx2:
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.2
+        version: 24.13.2
+      reactive-framework-test-suite:
+        specifier: 0.0.2
+        version: 0.0.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.6
+        version: 4.1.6(@types/node@24.13.2)(jsdom@26.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(tsx@4.23.0))
 
 packages:
 
