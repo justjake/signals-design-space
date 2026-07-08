@@ -150,3 +150,106 @@ Signals.
 - Wire the daishi tearing matrix and react-seam-bench contender into their
   runners in-repo (adapters are written and typechecked; the harnesses
   themselves were not runnable in this clone).
+
+## Round 2 — verification transcript
+
+All gates re-run fresh, in order, after the final tuning changes.
+
+### Typecheck
+
+```
+$ pnpm -C packages/signals-royale-fx1 typecheck        # tsc --noEmit
+(exit 0, no output)
+$ pnpm -C packages/react-signals-royale-fx1 typecheck  # tsc --noEmit
+(exit 0, no output)
+```
+
+### Conformance (179) + engine suite
+
+```
+$ npx vitest run   # packages/signals-royale-fx1
+ ✓ tests/conformance.spec.ts (179 tests)
+ ✓ tests/oracle.spec.ts (1 test)         # 300 seeds x 90 steps
+ ✓ tests/engine-regressions.spec.ts (2)
+ ✓ tests/async.spec.ts (9)
+ ✓ tests/gc-leaks.spec.ts (4)
+ Tests  195 passed (195)
+```
+
+### Oracle deep sweep (4× seeds)
+
+```
+$ ORACLE_SEEDS=1200 npx vitest run tests/oracle.spec.ts
+ ✓ oracle fuzz: 1200 seeds x 90 steps
+ Tests  1 passed (1)   Duration  1.86s
+```
+
+### Leak audits
+
+```
+$ npx vitest run tests/gc-leaks.spec.ts    # engine: 4 passed
+$ npx vitest run tests/gc-leaks.spec.tsx   # react: 2 passed
+```
+
+### Fork protocol suites + upstream adjacency (vendor/react)
+
+```
+$ yarn test --no-watchman ReactDOMSignalScheduler
+Tests:       8 passed, 8 total
+$ yarn test --no-watchman ReactAsyncActions ReactBatching ReactFlushSync \
+    ReactIncrementalScheduling ReactIncrementalUpdates ReactInterleavedUpdates \
+    ReactSchedulerIntegration ReactTransition ReactUpdatePriority \
+    ReactDefaultTransitionIndicator
+Tests:       1 skipped, 121 passed, 122 total
+$ yarn flow dom-node
+No errors! Flow passed for the dom-node renderer
+```
+
+Patch-series reproducibility: applied `patches/*.patch` onto a pristine
+worktree at the base commit with `git am`; build metric on the pristine tree
+is the same 80 lines.
+
+### Real-React gate
+
+```
+$ npx vitest run   # packages/react-signals-royale-fx1
+ ✓ tests/scenarios.spec.tsx (9)   # scenarios 1-10
+ ✓ tests/scenarios2.spec.tsx (10) # scenarios 11,12,15,16,17,18
+ ✓ tests/hooks.spec.tsx (5)
+ ✓ tests/gc-leaks.spec.tsx (2)
+ Tests  26 passed (26)
+```
+
+### Shared battery (royale/verify-kit)
+
+```
+$ npx vitest run   # royale/verify-kit/battery, ADAPTER -> royale/adapter.ts
+ Tests  25 passed (25)
+```
+
+### Tuning changes made in Round 2, and why
+
+- `truncateSources` early-returns on a stable dependency set (the three array
+  length writes were the hottest line in kairo profiles; a stable set has
+  nothing to trim).
+- Marks/verify hot path: `typeof`-guarded box checks, `isCell` discriminator
+  instead of `instanceof` in `edgeStamp`/`sourcesChanged`, inline completion
+  for plain synchronous evaluations.
+- Zero-allocation urgent writes (`set`/`update` pass the operation as two
+  arguments; queue objects only exist while an update queue exists).
+- Effects owned by a scope skip their own FinalizationRegistry entry (the
+  owner's registration already guarantees reclamation of dropped handles).
+- Commit reporting is O(changed) when no worlds are in play: per-root screen
+  snapshots and their pruning only run while episodes exist (this was an
+  O(subscribers) walk per urgent commit — the 5000-cell fanout paid 17 ms per
+  single-cell write before, 0.43 ms after).
+- Effect flush drains with a cursor and one catch frame per error instead of
+  `Array.shift` and one per effect.
+
+Net effect on kairo broadPropagation (local micro-harness, 500 iterations):
+536 ms → 110 ms; alien-signals on the same harness: 64 ms.
+
+### milomg js-reactivity-benchmark (isolated runner)
+
+Machine note: measured while up to six other entrants ran benchmarks on the
+same host; absolute numbers are noisy, the ratio column is the signal.
