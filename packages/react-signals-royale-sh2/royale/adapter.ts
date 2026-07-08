@@ -70,13 +70,13 @@ const adapter = {
   ): Cell<T> {
     return asyncComputed(fn, opts);
   },
-  read(x: unknown) {
+  read(x: unknown): any {
     return read(x as Cell);
   },
-  latest(x: unknown) {
+  latest(x: unknown): any {
     return latest(x as Cell);
   },
-  committed(x: unknown, container?: unknown) {
+  committed(x: unknown, container?: unknown): any {
     return committed(x as Cell, container as object | undefined);
   },
   isPending(x: unknown) {
@@ -94,7 +94,7 @@ const adapter = {
   initialize(json: string, atoms: unknown[]) {
     initializeAtomState(json, atoms as Cell[]);
   },
-  useValue(x: unknown) {
+  useValue(x: unknown): any {
     return useValue(x as Cell);
   },
   useComputed,
@@ -102,7 +102,7 @@ const adapter = {
   useIsPending(x: unknown) {
     return useIsPending(x as Cell);
   },
-  useCommitted(x: unknown) {
+  useCommitted(x: unknown): any {
     return useCommitted(x as Cell);
   },
   startTransitionWrite,

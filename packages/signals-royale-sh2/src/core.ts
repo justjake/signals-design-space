@@ -1,4 +1,4 @@
-import { causeFor, emit } from "./trace";
+import { causeFor, emit } from "./trace.ts";
 
 export type CellId = number;
 
@@ -27,6 +27,7 @@ const RUNNING = 2;
 const INITIALIZED = 4;
 const MAYBE_DIRTY = 8;
 const ACTIVE = 16;
+const PENDING = 32;
 
 let capacity = 256;
 let count = 0;
@@ -40,9 +41,32 @@ let generations = new Uint32Array(capacity);
 let settled = new Uint8Array(capacity);
 let nextGeneration = 1;
 let invalidationEpoch = 0;
-let observers: Uint32Array[] = [];
-let dependencies: Uint32Array[] = [];
-let dependencyVersions: Uint32Array[] = [];
+let observerHeads = new Int32Array(capacity);
+let observerTails = new Int32Array(capacity);
+let dependencyHeads = new Int32Array(capacity);
+let dependencyTails = new Int32Array(capacity);
+let trackingMarks = new Uint32Array(capacity);
+let batchMarks = new Uint32Array(capacity);
+let batchOldVersions = new Uint32Array(capacity);
+observerHeads.fill(-1);
+observerTails.fill(-1);
+dependencyHeads.fill(-1);
+dependencyTails.fill(-1);
+let edgeCapacity = 1024;
+let edgeCount = 0;
+let freeEdge = -1;
+let edgeSources = new Int32Array(edgeCapacity);
+let edgeObservers = new Int32Array(edgeCapacity);
+let edgeNextObserver = new Int32Array(edgeCapacity);
+let edgePreviousObserver = new Int32Array(edgeCapacity);
+let edgeNextDependency = new Int32Array(edgeCapacity);
+let edgeVersions = new Uint32Array(edgeCapacity);
+let trackingEpoch = 0;
+let activeTrackingEpoch = 0;
+let trackingRemaining = -1;
+let trackingHead = -1;
+let trackingTail = -1;
+let batchEpoch = 0;
 const values: unknown[] = [];
 const initializers: Array<(() => unknown) | undefined> = [];
 const calculations: Array<(() => unknown) | undefined> = [];
@@ -54,7 +78,7 @@ const labels: Array<string | undefined> = [];
 const keys: Array<string | undefined> = [];
 const lifetimeStarts: Array<AtomOptions<unknown>["effect"]> = [];
 const lifetimeStops: Array<(() => void) | undefined> = [];
-const children: CellId[][] = [];
+const children: Array<CellId[] | undefined> = [];
 const listeners: Array<Set<() => void> | undefined> = [];
 const observedCounts = new Uint32Array(256);
 let observed = observedCounts;
@@ -65,15 +89,29 @@ let writesForbidden = 0;
 let batchDepth = 0;
 let flushing = false;
 let pendingEffects: CellId[] = [];
+let drainingEffects: CellId[] = [];
+const invalidationWork: CellId[] = [];
+let listenerCount = 0;
+let automaticReclamation = true;
 let scope: CellId[] | undefined;
-let batchValues: Map<CellId, [unknown, number]> | undefined;
+const batchOldValues: unknown[] = [];
+const batchTouched: CellId[] = [];
 type DraftAction = unknown | ((previous: unknown) => unknown);
+interface ActionRecord {
+  sequence: number;
+  action: DraftAction;
+}
 interface Draft {
-  actions: Map<CellId, DraftAction[]>;
+  actions: Map<CellId, ActionRecord[]>;
+  bases: Map<CellId, unknown>;
   causes: Map<CellId, number>;
+  roots: Set<object>;
+  committedRoots: Set<object>;
   cause?: number;
 }
 const drafts = new Map<number, Draft>();
+const immediateActions = new Map<CellId, ActionRecord[]>();
+let actionSequence = 0;
 const scheduledDrafts = new Set<number>();
 let nextDraft = 1;
 let writeDraft = 0;
@@ -87,7 +125,6 @@ const finalizer = new FinalizationRegistry<{ id: CellId; generation: number }>((
 });
 
 function grow(): void {
-  const oldWords = capacity >>> 5;
   capacity <<= 1;
   const nextKinds = new Uint8Array(capacity);
   const nextFlags = new Uint8Array(capacity);
@@ -98,6 +135,17 @@ function grow(): void {
   const nextSettled = new Uint8Array(capacity);
   const nextObserved = new Uint32Array(capacity);
   const nextHasErrors = new Uint8Array(capacity);
+  const nextObserverHeads = new Int32Array(capacity);
+  const nextObserverTails = new Int32Array(capacity);
+  const nextDependencyHeads = new Int32Array(capacity);
+  const nextDependencyTails = new Int32Array(capacity);
+  const nextTrackingMarks = new Uint32Array(capacity);
+  const nextBatchMarks = new Uint32Array(capacity);
+  const nextBatchOldVersions = new Uint32Array(capacity);
+  nextObserverHeads.fill(-1);
+  nextObserverTails.fill(-1);
+  nextDependencyHeads.fill(-1);
+  nextDependencyTails.fill(-1);
   nextKinds.set(kinds);
   nextFlags.set(flags);
   nextVersions.set(versions);
@@ -107,6 +155,13 @@ function grow(): void {
   nextSettled.set(settled);
   nextObserved.set(observed);
   nextHasErrors.set(hasErrors);
+  nextObserverHeads.set(observerHeads);
+  nextObserverTails.set(observerTails);
+  nextDependencyHeads.set(dependencyHeads);
+  nextDependencyTails.set(dependencyTails);
+  nextTrackingMarks.set(trackingMarks);
+  nextBatchMarks.set(batchMarks);
+  nextBatchOldVersions.set(batchOldVersions);
   kinds = nextKinds;
   flags = nextFlags;
   versions = nextVersions;
@@ -116,18 +171,35 @@ function grow(): void {
   settled = nextSettled;
   observed = nextObserved;
   hasErrors = nextHasErrors;
-  const words = capacity >>> 5;
-  for (let i = 0; i < count; i++) {
-    const nextObservers = new Uint32Array(words);
-    const nextDependencies = new Uint32Array(words);
-    const nextDependencyVersions = new Uint32Array(capacity);
-    nextObservers.set(observers[i].subarray(0, oldWords));
-    nextDependencies.set(dependencies[i].subarray(0, oldWords));
-    nextDependencyVersions.set(dependencyVersions[i]);
-    observers[i] = nextObservers;
-    dependencies[i] = nextDependencies;
-    dependencyVersions[i] = nextDependencyVersions;
-  }
+  observerHeads = nextObserverHeads;
+  observerTails = nextObserverTails;
+  dependencyHeads = nextDependencyHeads;
+  dependencyTails = nextDependencyTails;
+  trackingMarks = nextTrackingMarks;
+  batchMarks = nextBatchMarks;
+  batchOldVersions = nextBatchOldVersions;
+}
+
+function growEdges(): void {
+  edgeCapacity <<= 1;
+  const nextSources = new Int32Array(edgeCapacity);
+  const nextObservers = new Int32Array(edgeCapacity);
+  const nextNextObserver = new Int32Array(edgeCapacity);
+  const nextPreviousObserver = new Int32Array(edgeCapacity);
+  const nextNextDependency = new Int32Array(edgeCapacity);
+  const nextVersions = new Uint32Array(edgeCapacity);
+  nextSources.set(edgeSources);
+  nextObservers.set(edgeObservers);
+  nextNextObserver.set(edgeNextObserver);
+  nextPreviousObserver.set(edgePreviousObserver);
+  nextNextDependency.set(edgeNextDependency);
+  nextVersions.set(edgeVersions);
+  edgeSources = nextSources;
+  edgeObservers = nextObservers;
+  edgeNextObserver = nextNextObserver;
+  edgePreviousObserver = nextPreviousObserver;
+  edgeNextDependency = nextNextDependency;
+  edgeVersions = nextVersions;
 }
 
 function createCell(kind: number): CellId {
@@ -137,23 +209,20 @@ function createCell(kind: number): CellId {
   liveCount++;
   kinds[id] = kind;
   flags[id] = kind === SIGNAL ? 0 : DIRTY;
-  observers[id] = new Uint32Array(capacity >>> 5);
-  dependencies[id] = new Uint32Array(capacity >>> 5);
-  dependencyVersions[id] = new Uint32Array(capacity);
-  children[id] = [];
   return id;
 }
 
 function releaseCell(id: CellId): void {
   if (kinds[id] === 0) return;
   clearDependencies(id, true);
-  for (const child of children[id]) disposeEffect(child, false);
+  for (const child of children[id] ?? []) disposeEffect(child, false);
   kinds[id] = 0;
   flags[id] = 0;
   values[id] = initializers[id] = calculations[id] = equalities[id] = undefined;
   cleanups[id] = labels[id] = keys[id] = lifetimeStarts[id] = lifetimeStops[id] = undefined;
   listeners[id]?.clear();
-  observers[id].fill(0);
+  observerHeads[id] = -1;
+  observerTails[id] = -1;
   liveCount--;
 }
 
@@ -177,115 +246,156 @@ function materialize(id: CellId): void {
 
 function valueInDrafts(id: CellId, batches: readonly number[]): unknown {
   let value = values[id];
+  let firstSequence = Infinity;
+  let base: unknown;
+  const ordered: ActionRecord[] = [];
   for (const batch of batches) {
-    const actions = drafts.get(batch)?.actions.get(id);
+    const draft = drafts.get(batch);
+    const actions = draft?.actions.get(id);
     if (actions === undefined) continue;
-    for (const action of actions) {
-      value =
-        typeof action === "function" ? (action as (previous: unknown) => unknown)(value) : action;
+    if (actions[0].sequence < firstSequence) {
+      firstSequence = actions[0].sequence;
+      base = draft!.bases.get(id);
     }
+    for (const action of actions) ordered.push(action);
+  }
+  if (firstSequence === Infinity) return value;
+  for (const action of immediateActions.get(id) ?? []) {
+    if (action.sequence > firstSequence) ordered.push(action);
+  }
+  ordered.sort((a, b) => a.sequence - b.sequence);
+  value = base;
+  for (const record of ordered) {
+    const action = record.action;
+    value =
+      typeof action === "function" ? (action as (previous: unknown) => unknown)(value) : action;
   }
   return value;
 }
 
 function notifyListeners(source: CellId): void {
+  if (listenerCount === 0) return;
   const work: CellId[] = [source];
   const epoch = ++invalidationEpoch;
   invalidationMarks[source] = epoch;
   for (let cursor = 0; cursor < work.length; cursor++) {
     deliveryVersions[work[cursor]]++;
     for (const listener of listeners[work[cursor]] ?? []) listener();
-    const mask = observers[work[cursor]];
-    for (let word = 0; word < mask.length; word++) {
-      let bits = mask[word];
-      while (bits !== 0) {
-        const bit = bits & -bits;
-        const id = (word << 5) + (31 - Math.clz32(bit));
-        if (invalidationMarks[id] !== epoch) {
-          invalidationMarks[id] = epoch;
-          work.push(id);
-        }
-        bits ^= bit;
+    let edge = observerHeads[work[cursor]];
+    while (edge !== -1) {
+      const next = edgeNextObserver[edge];
+      const id = edgeObservers[edge];
+      if (invalidationMarks[id] !== epoch) {
+        invalidationMarks[id] = epoch;
+        work.push(id);
       }
+      edge = next;
     }
   }
 }
 
 function addDependency(source: CellId): void {
   if (!tracking || activeObserver < 0 || source === activeObserver) return;
-  const word = activeObserver >>> 5;
-  const bit = 1 << (activeObserver & 31);
-  if ((observers[source][word] & bit) !== 0) return;
-  observers[source][word] |= bit;
-  dependencies[activeObserver][source >>> 5] |= 1 << (source & 31);
-  dependencyVersions[activeObserver][source] = versions[source];
-  if (++observed[source] === 1 && lifetimeStarts[source] !== undefined) {
-    queueMicrotask(() => {
-      if (observed[source] !== 0 && lifetimeStops[source] === undefined) {
-        lifetimeStops[source] =
-          lifetimeStarts[source]!({
-            get: () => read({ id: source }),
-            set: (value) => set({ id: source }, value),
-          }) ?? undefined;
+  if (trackingMarks[source] === activeTrackingEpoch) return;
+  trackingMarks[source] = activeTrackingEpoch;
+  let edge = trackingRemaining;
+  if (edge !== -1 && edgeSources[edge] === source) {
+    trackingRemaining = edgeNextDependency[edge];
+  } else {
+    let previous = -1;
+    while (edge !== -1 && edgeSources[edge] !== source) {
+      previous = edge;
+      edge = edgeNextDependency[edge];
+    }
+    if (edge !== -1) {
+      if (previous === -1) trackingRemaining = edgeNextDependency[edge];
+      else edgeNextDependency[previous] = edgeNextDependency[edge];
+    } else {
+      if (freeEdge !== -1) {
+        edge = freeEdge;
+        freeEdge = edgeNextDependency[edge];
+      } else {
+        if (edgeCount === edgeCapacity) growEdges();
+        edge = edgeCount++;
       }
-    });
+      const observerTail = observerTails[source];
+      edgeSources[edge] = source;
+      edgeObservers[edge] = activeObserver;
+      edgePreviousObserver[edge] = observerTail;
+      edgeNextObserver[edge] = -1;
+      if (observerTail === -1) observerHeads[source] = edge;
+      else edgeNextObserver[observerTail] = edge;
+      observerTails[source] = edge;
+      if (++observed[source] === 1 && lifetimeStarts[source] !== undefined) {
+        queueMicrotask(() => {
+          if (observed[source] !== 0 && lifetimeStops[source] === undefined) {
+            lifetimeStops[source] =
+              lifetimeStarts[source]!({
+                get: () => read({ id: source }),
+                set: (value) => set({ id: source }, value),
+              }) ?? undefined;
+          }
+        });
+      }
+    }
   }
+  edgeNextDependency[edge] = -1;
+  if (trackingTail === -1) trackingHead = edge;
+  else edgeNextDependency[trackingTail] = edge;
+  trackingTail = edge;
+  edgeVersions[edge] = versions[source];
 }
 
 function dependenciesChanged(id: CellId): boolean {
-  const mask = dependencies[id];
-  for (let word = 0; word < mask.length; word++) {
-    let bits = mask[word];
-    while (bits !== 0) {
-      const bit = bits & -bits;
-      const source = (word << 5) + (31 - Math.clz32(bit));
-      if ((flags[source] & (DIRTY | MAYBE_DIRTY)) !== 0 && kinds[source] === COMPUTED) {
-        evaluate(source);
-      }
-      if (dependencyVersions[id][source] !== versions[source]) return true;
-      bits ^= bit;
+  for (let edge = dependencyHeads[id]; edge !== -1; edge = edgeNextDependency[edge]) {
+    const source = edgeSources[edge];
+    if ((flags[source] & (DIRTY | MAYBE_DIRTY)) !== 0 && kinds[source] === COMPUTED) {
+      evaluate(source);
     }
+    if (edgeVersions[edge] !== versions[source]) return true;
   }
   return false;
 }
 
 function hasStaleDependency(id: CellId): boolean {
-  const mask = dependencies[id];
-  for (let word = 0; word < mask.length; word++) {
-    let bits = mask[word];
-    while (bits !== 0) {
-      const bit = bits & -bits;
-      const source = (word << 5) + (31 - Math.clz32(bit));
-      if (dependencyVersions[id][source] !== versions[source]) return true;
-      bits ^= bit;
-    }
+  for (let edge = dependencyHeads[id]; edge !== -1; edge = edgeNextDependency[edge]) {
+    if (edgeVersions[edge] !== versions[edgeSources[edge]]) return true;
   }
   return false;
 }
 
+function releaseEdge(edge: number, orphan: boolean): void {
+  const source = edgeSources[edge];
+  const previousObserver = edgePreviousObserver[edge];
+  const nextObserver = edgeNextObserver[edge];
+  if (previousObserver === -1) observerHeads[source] = nextObserver;
+  else edgeNextObserver[previousObserver] = nextObserver;
+  if (nextObserver !== -1) edgePreviousObserver[nextObserver] = previousObserver;
+  else observerTails[source] = previousObserver;
+  edgeNextDependency[edge] = freeEdge;
+  freeEdge = edge;
+  if (--observed[source] === 0 && kinds[source] === COMPUTED && orphan) {
+    flags[source] |= DIRTY;
+    clearDependencies(source, true);
+  }
+  if (observed[source] === 0 && lifetimeStarts[source] !== undefined) {
+    queueMicrotask(() => {
+      if (observed[source] === 0) {
+        lifetimeStops[source]?.();
+        lifetimeStops[source] = undefined;
+      }
+    });
+  }
+}
+
 function clearDependencies(id: CellId, orphan = false): void {
-  const mask = dependencies[id];
-  for (let word = 0; word < mask.length; word++) {
-    let bits = mask[word];
-    while (bits !== 0) {
-      const bit = bits & -bits;
-      const source = (word << 5) + (31 - Math.clz32(bit));
-      observers[source][id >>> 5] &= ~(1 << (id & 31));
-      if (--observed[source] === 0 && kinds[source] === COMPUTED && orphan) {
-        flags[source] |= DIRTY;
-        clearDependencies(source, true);
-      }
-      if (observed[source] === 0 && lifetimeStarts[source] !== undefined) {
-        queueMicrotask(() => {
-          if (observed[source] === 0) {
-            lifetimeStops[source]?.();
-            lifetimeStops[source] = undefined;
-          }
-        });
-      }
-      bits ^= bit;
-    }
-    mask[word] = 0;
+  let edge = dependencyHeads[id];
+  dependencyHeads[id] = -1;
+  dependencyTails[id] = -1;
+  while (edge !== -1) {
+    const nextDependency = edgeNextDependency[edge];
+    releaseEdge(edge, orphan);
+    edge = nextDependency;
   }
 }
 
@@ -304,10 +414,24 @@ function evaluate(id: CellId): unknown {
   }
   if ((flags[id] & RUNNING) !== 0) throw new Error("Reactive cycle");
   flags[id] = (flags[id] | RUNNING) & ~DIRTY;
-  clearDependencies(id);
   const previousObserver = activeObserver;
   const previousTracking = tracking;
+  const previousTrackingEpoch = activeTrackingEpoch;
+  const previousRemaining = trackingRemaining;
+  const previousHead = trackingHead;
+  const previousTail = trackingTail;
+  trackingRemaining = dependencyHeads[id];
+  trackingHead = -1;
+  trackingTail = -1;
+  dependencyHeads[id] = -1;
+  dependencyTails[id] = -1;
+  trackingEpoch = (trackingEpoch + 1) >>> 0;
+  if (trackingEpoch === 0) {
+    trackingMarks.fill(0);
+    trackingEpoch = 1;
+  }
   activeObserver = id;
+  activeTrackingEpoch = trackingEpoch;
   tracking = true;
   try {
     let next;
@@ -315,9 +439,11 @@ function evaluate(id: CellId): unknown {
       next = calculations[id]!();
       hasErrors[id] = 0;
       errors[id] = undefined;
+      flags[id] &= ~PENDING;
     } catch (error) {
       errors[id] = error;
       hasErrors[id] = 1;
+      if (error === null || typeof error !== "object" || !("then" in error)) flags[id] &= ~PENDING;
       versions[id]++;
       throw error;
     }
@@ -329,7 +455,19 @@ function evaluate(id: CellId): unknown {
     settled[id] = 1;
     return values[id];
   } finally {
+    let unused = trackingRemaining;
+    while (unused !== -1) {
+      const next = edgeNextDependency[unused];
+      releaseEdge(unused, false);
+      unused = next;
+    }
+    dependencyHeads[id] = trackingHead;
+    dependencyTails[id] = trackingTail;
+    trackingRemaining = previousRemaining;
+    trackingHead = previousHead;
+    trackingTail = previousTail;
     activeObserver = previousObserver;
+    activeTrackingEpoch = previousTrackingEpoch;
     tracking = previousTracking;
     flags[id] &= ~RUNNING;
     if (hasStaleDependency(id)) flags[id] |= MAYBE_DIRTY;
@@ -337,32 +475,31 @@ function evaluate(id: CellId): unknown {
 }
 
 function invalidate(source: CellId): void {
-  const work: CellId[] = [source];
+  const work = invalidationWork;
+  work[0] = source;
+  work.length = 1;
   const epoch = ++invalidationEpoch;
   invalidationMarks[source] = epoch;
   for (let cursor = 0; cursor < work.length; cursor++) {
-    const mask = observers[work[cursor]];
-    for (let word = 0; word < mask.length; word++) {
-      let bits = mask[word];
-      while (bits !== 0) {
-        const bit = bits & -bits;
-        const id = (word << 5) + (31 - Math.clz32(bit));
-        if (
-          (flags[id] & (DIRTY | MAYBE_DIRTY)) === 0 &&
-          (flags[id] & RUNNING) === 0 &&
-          ((flags[id] & ACTIVE) !== 0 || kinds[id] === COMPUTED)
-        ) {
-          flags[id] |= MAYBE_DIRTY;
-          if (kinds[id] === EFFECT) pendingEffects.push(id);
-        }
-        if (kinds[id] === COMPUTED && invalidationMarks[id] !== epoch) {
-          invalidationMarks[id] = epoch;
-          work.push(id);
-        }
-        bits ^= bit;
+    let edge = observerHeads[work[cursor]];
+    while (edge !== -1) {
+      const id = edgeObservers[edge];
+      if (
+        (flags[id] & (DIRTY | MAYBE_DIRTY)) === 0 &&
+        (flags[id] & RUNNING) === 0 &&
+        ((flags[id] & ACTIVE) !== 0 || kinds[id] === COMPUTED)
+      ) {
+        flags[id] |= MAYBE_DIRTY;
+        if (kinds[id] === EFFECT) pendingEffects.push(id);
       }
+      if (kinds[id] === COMPUTED && invalidationMarks[id] !== epoch) {
+        invalidationMarks[id] = epoch;
+        work.push(id);
+      }
+      edge = edgeNextObserver[edge];
     }
   }
+  work.length = 0;
   if (batchDepth === 0) flushEffects();
 }
 
@@ -381,7 +518,7 @@ function runEffect(id: CellId): void {
   tracking = false;
   try {
     cleanups[id]?.();
-    for (const child of children[id]) disposeEffect(child, false);
+    for (const child of children[id] ?? []) disposeEffect(child, false);
   } finally {
     tracking = previousTracking;
     cleanups[id] = undefined;
@@ -397,8 +534,8 @@ function disposeEffect(id: CellId, rethrow: boolean): void {
   if ((flags[id] & ACTIVE) === 0) return;
   flags[id] &= ~(ACTIVE | DIRTY | MAYBE_DIRTY);
   clearDependencies(id, true);
-  for (const child of children[id]) disposeEffect(child, rethrow);
-  children[id] = [];
+  for (const child of children[id] ?? []) disposeEffect(child, rethrow);
+  children[id] = undefined;
   const cleanup = cleanups[id];
   cleanups[id] = undefined;
   if (cleanup !== undefined) {
@@ -420,8 +557,10 @@ function flushEffects(): void {
   try {
     while (pendingEffects.length !== 0) {
       const effects = pendingEffects;
-      pendingEffects = [];
+      pendingEffects = drainingEffects;
+      drainingEffects = effects;
       for (let i = 0; i < effects.length; i++) runEffect(effects[i]);
+      effects.length = 0;
     }
   } finally {
     flushing = false;
@@ -440,8 +579,15 @@ export function atom<T>(initial: T | (() => T), options: AtomOptions<T> = {}): C
   labels[id] = options.label;
   keys[id] = options.key;
   const cell = { id };
-  finalizer.register(cell, { id, generation: generations[id] }, cell);
+  if (automaticReclamation) finalizer.register(cell, { id, generation: generations[id] }, cell);
   return cell;
+}
+
+export function atomId(initial: unknown): CellId {
+  const id = createCell(SIGNAL);
+  values[id] = initial;
+  flags[id] |= INITIALIZED;
+  return id;
 }
 
 export function computed<T>(calculate: () => T, options: ComputedOptions<T> = {}): Cell<T> {
@@ -450,12 +596,18 @@ export function computed<T>(calculate: () => T, options: ComputedOptions<T> = {}
   equalities[id] = options.equals as ((a: unknown, b: unknown) => boolean) | undefined;
   labels[id] = options.label;
   const cell = { id };
-  finalizer.register(cell, { id, generation: generations[id] }, cell);
+  if (automaticReclamation) finalizer.register(cell, { id, generation: generations[id] }, cell);
   return cell;
 }
 
-export function read<T>(cell: Cell<T>): T {
-  const id = cell.id;
+export function computedId(calculate: () => unknown): CellId {
+  const id = createCell(COMPUTED);
+  calculations[id] = calculate;
+  return id;
+}
+
+export function read<T>(cell: Cell<T> | CellId): T {
+  const id = typeof cell === "number" ? cell : cell.id;
   if (kinds[id] === SIGNAL) {
     materialize(id);
     if (renderDrafts.length !== 0) {
@@ -471,9 +623,9 @@ export function read<T>(cell: Cell<T>): T {
   return values[id] as T;
 }
 
-export function set<T>(cell: Cell<T>, value: T): void {
+export function set<T>(cell: Cell<T> | CellId, value: T): void {
   if (writesForbidden !== 0) throw new Error("Writes are forbidden in this context");
-  const id = cell.id;
+  const id = typeof cell === "number" ? cell : cell.id;
   if (kinds[id] !== SIGNAL) throw new Error("Only atoms are writable");
   if (inRenderWorld) throw new Error("Signals cannot be written during render");
   materialize(id);
@@ -484,17 +636,38 @@ export function set<T>(cell: Cell<T>, value: T): void {
     const equal = equalities[id] ?? Object.is;
     if (equal(current, value)) return;
     let actions = draft.actions.get(id);
-    if (actions === undefined) draft.actions.set(id, (actions = []));
-    actions.push(value);
+    if (actions === undefined) {
+      draft.actions.set(id, (actions = []));
+      draft.bases.set(id, values[id]);
+    }
+    actions.push({ sequence: ++actionSequence, action: value });
     draft.causes.set(id, emit("write", id, causeFor(writeDraft), `batch ${writeDraft}`));
     notifyListeners(id);
     return;
   }
+  let affectsDraft = false;
+  if (commitCause === undefined) {
+    for (const draft of drafts.values()) {
+      if (!draft.actions.has(id)) continue;
+      let actions = immediateActions.get(id);
+      if (actions === undefined) immediateActions.set(id, (actions = []));
+      actions.push({ sequence: ++actionSequence, action: value });
+      affectsDraft = true;
+      break;
+    }
+  }
   const equal = equalities[id] ?? Object.is;
-  if (equal(values[id], value)) return;
+  if (equal(values[id], value)) {
+    if (affectsDraft) notifyListeners(id);
+    return;
+  }
   if (batchDepth !== 0) {
-    batchValues ??= new Map();
-    if (!batchValues.has(id)) batchValues.set(id, [values[id], versions[id]]);
+    if (batchMarks[id] !== batchEpoch) {
+      batchMarks[id] = batchEpoch;
+      batchOldValues[id] = values[id];
+      batchOldVersions[id] = versions[id];
+      batchTouched.push(id);
+    }
   }
   values[id] = value;
   versions[id]++;
@@ -510,10 +683,29 @@ export function update<T>(cell: Cell<T>, reducer: (previous: T) => T): void {
     const draft = drafts.get(writeDraft);
     if (draft === undefined) throw new Error("The transition batch has retired");
     let actions = draft.actions.get(id);
-    if (actions === undefined) draft.actions.set(id, (actions = []));
-    actions.push(reducer as (previous: unknown) => unknown);
+    if (actions === undefined) {
+      draft.actions.set(id, (actions = []));
+      draft.bases.set(id, values[id]);
+    }
+    actions.push({ sequence: ++actionSequence, action: reducer as (previous: unknown) => unknown });
     draft.causes.set(id, emit("write", id, causeFor(writeDraft), `batch ${writeDraft}`));
     notifyListeners(id);
+    return;
+  }
+  let actions: ActionRecord[] | undefined;
+  for (const draft of drafts.values()) {
+    if (!draft.actions.has(cell.id)) continue;
+    actions = immediateActions.get(cell.id);
+    if (actions === undefined) immediateActions.set(cell.id, (actions = []));
+    actions.push({ sequence: ++actionSequence, action: reducer as (previous: unknown) => unknown });
+    break;
+  }
+  if (actions !== undefined) {
+    const value = reducer(read(cell));
+    const record = actions[actions.length - 1];
+    actions.pop();
+    set(cell, value);
+    actions[actions.length - 1] = record;
     return;
   }
   set(cell, reducer(read(cell)));
@@ -522,9 +714,10 @@ export function update<T>(cell: Cell<T>, reducer: (previous: T) => T): void {
 export function effect(calculate: () => void | (() => void)): () => void {
   const id = createCell(EFFECT);
   flags[id] |= ACTIVE;
+  children[id] = [];
   calculations[id] = calculate;
   scope?.push(id);
-  if (activeObserver >= 0 && kinds[activeObserver] === EFFECT) children[activeObserver].push(id);
+  if (activeObserver >= 0 && kinds[activeObserver] === EFFECT) children[activeObserver]!.push(id);
   batchDepth++;
   try {
     runEffect(id);
@@ -556,18 +749,26 @@ export function effectScope(run: () => void): () => void {
 }
 
 export function startBatch(): void {
-  if (batchDepth === 0) batchValues = new Map();
+  if (batchDepth === 0) {
+    batchEpoch = (batchEpoch + 1) >>> 0;
+    if (batchEpoch === 0) {
+      batchMarks.fill(0);
+      batchEpoch = 1;
+    }
+    batchTouched.length = 0;
+  }
   batchDepth++;
 }
 
 export function endBatch(): void {
   if (batchDepth === 0) throw new Error("No batch is open");
   if (--batchDepth === 0) {
-    for (const [id, [value, version]] of batchValues ?? []) {
+    for (const id of batchTouched) {
       const equal = equalities[id] ?? Object.is;
-      if (equal(values[id], value)) versions[id] = version;
+      if (equal(values[id], batchOldValues[id])) versions[id] = batchOldVersions[id];
+      batchOldValues[id] = undefined;
     }
-    batchValues = undefined;
+    batchTouched.length = 0;
     flushEffects();
   }
 }
@@ -596,6 +797,7 @@ export function subscribe(cell: Cell, listener: () => void): () => void {
   let subscriberSet = listeners[id];
   if (subscriberSet === undefined) listeners[id] = subscriberSet = new Set();
   subscriberSet.add(listener);
+  listenerCount++;
   if (++observed[id] === 1 && lifetimeStarts[id] !== undefined) {
     queueMicrotask(() => {
       if (observed[id] !== 0 && lifetimeStops[id] === undefined) {
@@ -609,6 +811,7 @@ export function subscribe(cell: Cell, listener: () => void): () => void {
   }
   return () => {
     if (!subscriberSet!.delete(listener)) return;
+    listenerCount--;
     if (--observed[id] === 0 && lifetimeStarts[id] !== undefined) {
       queueMicrotask(() => {
         if (observed[id] === 0) {
@@ -629,6 +832,10 @@ export function disposeCell(cell: Cell): void {
   releaseCell(cell.id);
 }
 
+export function setAutomaticReclamation(enabled: boolean): void {
+  automaticReclamation = enabled;
+}
+
 export function revision(cell: Cell): number {
   return deliveryVersions[cell.id];
 }
@@ -645,9 +852,9 @@ export function serializeAtomState(
   replacer?: (key: string, value: unknown) => unknown,
 ): string {
   const state: Record<string, unknown> = {};
-  for (const cell of atoms) {
-    const key = keys[cell.id];
-    if (key === undefined) throw new Error("Every serialized atom needs a key");
+  for (let i = 0; i < atoms.length; i++) {
+    const cell = atoms[i];
+    const key = keys[cell.id] ?? String(i);
     state[key] = read(cell);
   }
   return JSON.stringify(state, replacer);
@@ -659,16 +866,23 @@ export function initializeAtomState(
   reviver?: (key: string, value: unknown) => unknown,
 ): void {
   const state = JSON.parse(json, reviver) as Record<string, unknown>;
-  for (const cell of atoms) {
-    const key = keys[cell.id];
-    if (key !== undefined && Object.prototype.hasOwnProperty.call(state, key))
+  for (let i = 0; i < atoms.length; i++) {
+    const cell = atoms[i];
+    const key = keys[cell.id] ?? String(i);
+    if (Object.prototype.hasOwnProperty.call(state, key))
       installState(cell, state[key]);
   }
 }
 
 export function beginDraft(): number {
   const id = nextDraft++;
-  drafts.set(id, { actions: new Map(), causes: new Map() });
+  drafts.set(id, {
+    actions: new Map(),
+    bases: new Map(),
+    causes: new Map(),
+    roots: new Set(),
+    committedRoots: new Set(),
+  });
   emit("batch open", id);
   return id;
 }
@@ -683,8 +897,9 @@ export function withDraft<T>(id: number, run: () => T): T {
   }
 }
 
-export function markDraftScheduled(id: number): void {
+export function markDraftScheduled(id: number, container?: object): void {
   scheduledDrafts.add(id);
+  if (container !== undefined) drafts.get(id)?.roots.add(container);
 }
 
 export function commitIfUnscheduled(id: number): void {
@@ -718,10 +933,25 @@ export function commitDrafts(container: object, batches: number[]): void {
   for (const batch of batches) {
     const draft = drafts.get(batch);
     if (draft === undefined) continue;
+    draft.committedRoots.add(container);
+    let complete = true;
+    for (const root of draft.roots) {
+      if (!draft.committedRoots.has(root)) {
+        complete = false;
+        break;
+      }
+    }
+    if (!complete) continue;
     commitCause = emit("batch retire", batch, causeFor(batch));
     for (const [id, actions] of draft.actions) {
-      let value = values[id];
-      for (const action of actions) {
+      let value = draft.bases.get(id);
+      const ordered = actions.slice();
+      for (const action of immediateActions.get(id) ?? []) {
+        if (action.sequence > actions[0].sequence) ordered.push(action);
+      }
+      ordered.sort((a, b) => a.sequence - b.sequence);
+      for (const record of ordered) {
+        const action = record.action;
         value =
           typeof action === "function" ? (action as (previous: unknown) => unknown)(value) : action;
       }
@@ -732,6 +962,7 @@ export function commitDrafts(container: object, batches: number[]): void {
     scheduledDrafts.delete(batch);
     for (const id of draft.actions.keys()) notifyListeners(id);
   }
+  if (drafts.size === 0) immediateActions.clear();
 }
 
 export function latest<T>(cell: Cell<T>): T {
@@ -774,6 +1005,7 @@ export function committed<T>(cell: Cell<T>, container?: object): T {
 }
 
 export function isPending(cell: Cell): boolean {
+  if ((flags[cell.id] & PENDING) !== 0) return true;
   const error = errors[cell.id];
   if (hasErrors[cell.id] !== 0 && error !== null && typeof error === "object" && "then" in error)
     return true;
@@ -814,7 +1046,7 @@ export function renderIncludesDraft(): boolean {
 export function refresh(cell: Cell): void {
   const id = cell.id;
   if (kinds[id] !== COMPUTED) return;
-  flags[id] |= DIRTY;
+  flags[id] |= DIRTY | PENDING;
   invalidate(id);
   notifyListeners(id);
 }
@@ -825,7 +1057,7 @@ export function resolveComputed<T>(cell: Cell<T>, value: T): void {
   errors[id] = undefined;
   hasErrors[id] = 0;
   settled[id] = 1;
-  flags[id] &= ~(DIRTY | MAYBE_DIRTY);
+  flags[id] &= ~(DIRTY | MAYBE_DIRTY | PENDING);
   versions[id]++;
   emit("suspense settlement", id);
   notifyListeners(id);
@@ -844,9 +1076,32 @@ export function reset(): void {
   settled = new Uint8Array(capacity);
   invalidationEpoch = 0;
   observed = new Uint32Array(capacity);
-  observers = [];
-  dependencies = [];
-  dependencyVersions = [];
+  observerHeads = new Int32Array(capacity);
+  observerTails = new Int32Array(capacity);
+  dependencyHeads = new Int32Array(capacity);
+  dependencyTails = new Int32Array(capacity);
+  trackingMarks = new Uint32Array(capacity);
+  batchMarks = new Uint32Array(capacity);
+  batchOldVersions = new Uint32Array(capacity);
+  observerHeads.fill(-1);
+  observerTails.fill(-1);
+  dependencyHeads.fill(-1);
+  dependencyTails.fill(-1);
+  edgeCapacity = 1024;
+  edgeCount = 0;
+  freeEdge = -1;
+  edgeSources = new Int32Array(edgeCapacity);
+  edgeObservers = new Int32Array(edgeCapacity);
+  edgeNextObserver = new Int32Array(edgeCapacity);
+  edgePreviousObserver = new Int32Array(edgeCapacity);
+  edgeNextDependency = new Int32Array(edgeCapacity);
+  edgeVersions = new Uint32Array(edgeCapacity);
+  trackingEpoch = 0;
+  activeTrackingEpoch = 0;
+  trackingRemaining = -1;
+  trackingHead = -1;
+  trackingTail = -1;
+  batchEpoch = 0;
   values.length = initializers.length = calculations.length = equalities.length = 0;
   cleanups.length = labels.length = keys.length = lifetimeStarts.length = lifetimeStops.length = 0;
   errors.length = 0;
@@ -856,8 +1111,14 @@ export function reset(): void {
   tracking = true;
   writesForbidden = batchDepth = 0;
   pendingEffects = [];
-  batchValues = undefined;
+  drainingEffects = [];
+  invalidationWork.length = 0;
+  listenerCount = 0;
+  batchOldValues.length = 0;
+  batchTouched.length = 0;
   drafts.clear();
+  immediateActions.clear();
+  actionSequence = 0;
   scheduledDrafts.clear();
   nextDraft = 1;
   writeDraft = 0;

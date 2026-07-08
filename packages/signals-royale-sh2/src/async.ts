@@ -1,5 +1,5 @@
-import { computed, refresh, resolveComputed, type Cell, type ComputedOptions } from "./core";
-import { emit } from "./trace";
+import { computed, refresh, resolveComputed, type Cell, type ComputedOptions } from "./core.ts";
+import { emit } from "./trace.ts";
 
 interface PromiseRecord {
   status: 0 | 1 | 2;

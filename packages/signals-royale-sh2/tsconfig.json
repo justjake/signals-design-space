@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "lib": ["ESNext", "DOM"] },
+  "compilerOptions": { "allowImportingTsExtensions": true, "lib": ["ESNext", "DOM"] },
   "include": ["src", "tests", "royale", "vitest.config.ts"]
 }

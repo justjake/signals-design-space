@@ -1,3 +1,3 @@
-export * from "./core";
-export * from "./trace";
-export * from "./async";
+export * from "./core.ts";
+export * from "./trace.ts";
+export * from "./async.ts";

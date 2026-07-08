@@ -49,7 +49,7 @@ interface ForkReact extends Omit<typeof React, "startTransition"> {
 }
 
 interface SignalRuntime {
-  batchScheduled(batch: number): void;
+  batchScheduled(batch: number, container?: object): void;
   renderStart(container: object, batches: number[]): void;
   renderEnd(completed: boolean): void;
   commit(container: object, batches: number[]): void;
@@ -62,8 +62,8 @@ const registrationErrors: unknown[] = [];
 let registered = false;
 
 const runtime: SignalRuntime = {
-  batchScheduled(batch) {
-    markDraftScheduled(batch);
+  batchScheduled(batch, container) {
+    markDraftScheduled(batch, container);
   },
   renderStart(_container, batches) {
     enterRenderWorld(batches);

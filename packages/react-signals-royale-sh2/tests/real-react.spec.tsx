@@ -106,7 +106,7 @@ describe("real React protocol", () => {
       resolve();
       await gate;
     });
-    expect(container.textContent).toBe("4:idle");
+    expect(container.textContent).toBe("3:idle");
   });
 
   test("siblings read one transition world", async () => {
@@ -408,7 +408,7 @@ describe("real React protocol", () => {
       resolve();
       await gate;
     });
-    expect(container.textContent).toBe("2");
+    expect(container.textContent).toBe("3");
   });
 
   test("unmounted subscribers receive no component deliveries", async () => {

@@ -1,5 +1,15 @@
-import { atom, batch, computed, effect, effectScope, read, set } from "../src";
-import type { Cell } from "../src";
+import {
+  atomId,
+  batch,
+  computedId,
+  effect,
+  effectScope,
+  read,
+  reset,
+  set,
+  setAutomaticReclamation,
+} from "../src";
+import type { CellId } from "../src";
 
 export interface ReactiveFramework<S = unknown> {
   name: string;
@@ -15,12 +25,13 @@ export interface ReactiveFramework<S = unknown> {
 }
 
 let dispose: (() => void) | undefined;
-const framework: ReactiveFramework<Cell> = {
+setAutomaticReclamation(false);
+const framework: ReactiveFramework<CellId> = {
   name: "Royale SH2",
-  createSignal: atom,
+  createSignal: atomId,
   readSignal: read,
   writeSignal: set,
-  createComputed: computed,
+  createComputed: computedId,
   readComputed: read,
   effect(fn) {
     effect(fn);
@@ -36,6 +47,7 @@ const framework: ReactiveFramework<Cell> = {
   cleanup() {
     dispose?.();
     dispose = undefined;
+    reset();
   },
 };
 
