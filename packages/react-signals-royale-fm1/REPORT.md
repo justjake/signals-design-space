@@ -31,7 +31,7 @@ in a batch never propagate.
 | Oracle deep sweep | `FUZZ_SEEDS=1200 npx vitest run tests/oracle.spec.ts` | PASS |
 | Leak audit | `npx vitest run tests/gc-leaks.spec.ts` (forks pool, `--expose-gc`) | PASS (4 tests) |
 | Engine suite total | `npx vitest run` | **211 passed (211)** |
-| Real-React gate | `npx vitest run` in react package (fork build, jsdom, raw createRoot + act, no RTL) | **24 passed (24)** — scenarios 1-18 |
+| Real-React gate | `npx vitest run` in react package (fork build, jsdom, raw createRoot + act, no RTL) | **25 passed (25)** — scenarios 1-18 + adapter-load smoke |
 | Fork protocol suite | `cd vendor/react && yarn test --no-watchman ReactSignalSeam` | **6 passed, 6 total** |
 | Upstream adjacent suites | `yarn test --no-watchman ReactAsyncActions ReactBatching ReactFlushSync ReactIncrementalScheduling ReactIncrementalUpdates ReactInterleavedUpdates ReactSchedulerIntegration ReactTransition ReactUpdatePriority ReactDefaultTransitionIndicator` | **13 suites passed; 121 passed, 1 skipped** |
 | Shared battery (verify-kit) | `npx vitest run` in `royale/verify-kit/battery` | **25 passed (25)** (calibration reference alt-b: 24/25) |
