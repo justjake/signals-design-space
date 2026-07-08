@@ -113,6 +113,7 @@ export type Op =
 	| { t: 'closeEvent' }
 	| { t: 'truncate'; b: number }
 	| { t: 'watch'; n: number }
+	| { t: 'refresh'; n: number } // Solid-API refresh: slots cleared + invalidate (value-neutral for never-settling fuzz fetches)
 	| { t: 'unwatch'; wi: number }
 	| { t: 'passStart'; include: number[] } // indexes into batches (-1 = event batch)
 	| { t: 'passYield' }
@@ -394,6 +395,40 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 		return fork.getRenderContext() !== undefined;
 	}
 
+	function apiRefresh(idx: number): void {
+		const spec = specs[idx];
+		if (spec === undefined || spec.kind !== 'computed') {
+			return;
+		}
+		api.refresh(handles[idx] as { id: number } as never);
+	}
+
+	// latest() invariant under fuzz: when a node's NEWEST value is NOT
+	// pending, latest(x) must equal it; when pending, latest is the stale
+	// committed value or undefined — checked as "never a box, never throws".
+	function checkLatest(step: number, op: Op): RunResult {
+		for (let i = 0; i < specs.length; ++i) {
+			if (specs[i].kind !== 'computed') {
+				continue;
+			}
+			let l: unknown;
+			try {
+				l = api.latest(handles[i] as { id: number } as never);
+			} catch (err) {
+				return fail(step, op, `latest(${i}) threw: ${String(err)}`);
+			}
+			const newest = oracle.value(i, { k: 'newest' });
+			if (!isOraclePending(newest)) {
+				if (!Object.is(l, newest)) {
+					return fail(step, op, `latest(${i}) = ${String(l)}, newest = ${String(newest)}`);
+				}
+			} else if (isSuspendedBox(l)) {
+				return fail(step, op, `latest(${i}) returned a box`);
+			}
+		}
+		return {};
+	}
+
 	function eqCompare(_idx: number, engineV: unknown, oracleV: unknown): boolean {
 		if (isOraclePending(oracleV)) {
 			return isSuspendedBox(engineV); // status ⇔ status (sets checked via broadcasts)
@@ -670,6 +705,17 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 					r = compareBroadcasts(step, op, [b.token]);
 					break;
 				}
+				case 'refresh': {
+					if (passExecuting() || op.n >= specs.length) {
+						break;
+					}
+					// Value-neutral under fuzz (never-settling per-node fetches
+					// re-register identically → same pending source set), but it
+					// exercises invalidate/recompute/slot paths under the oracle's
+					// full compare + verify.
+					apiRefresh(op.n);
+					break;
+				}
 				case 'watch': {
 					if (passExecuting() || op.n >= specs.length) {
 						break;
@@ -758,6 +804,10 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 			const cmp = compareValues(step, op);
 			if (cmp.failure !== undefined) {
 				return cmp;
+			}
+			const lat = checkLatest(step, op);
+			if (lat.failure !== undefined) {
+				return lat;
 			}
 			engine.debug.verify();
 		} catch (err) {
@@ -885,10 +935,12 @@ export function generateSchedule(rng: () => number, specs: NodeSpec[], length: n
 			}
 		} else if (roll < 0.67) {
 			ops.push({ t: 'closeEvent' });
-		} else if (roll < 0.72) {
+		} else if (roll < 0.7) {
 			if (openBatches > 0) {
 				ops.push({ t: 'truncate', b: Math.floor(rng() * openBatches) });
 			}
+		} else if (roll < 0.72) {
+			ops.push({ t: 'refresh', n: Math.floor(rng() * (nNodes + 4)) });
 		} else if (roll < 0.8) {
 			if (watchers < 4 && (!passOpen || !passExecuting)) {
 				ops.push({ t: 'watch', n: Math.floor(rng() * nNodes) });

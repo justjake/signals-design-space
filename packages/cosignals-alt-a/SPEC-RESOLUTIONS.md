@@ -74,3 +74,43 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
    data layers make replacement a no-op.
 6. `ctx.use` outside a computed evaluation throws (it previously threw a
    raw SUSPEND sentinel through the caller).
+
+## Solid-2.0 async API set (owner brief, 2026-07-08; reference: research/solid2-async-model.md)
+
+7. **Two-level suspense rule** (research §2, adapted for React replay): the
+   React boundary (useSignal/readForRender AND top-level class reads) hands
+   the store-held thenable to React only when the pending box has NO latest
+   (never-settled first load → fallback). Refresh-pending serves the latest
+   settled value straight through — stale content stays, no fallback flash.
+   SuspendedBox gained `hasLatest`/`latest`, carried from the previous
+   committed value (or through chained pending boxes).
+   **UNINITIALIZED-clears-at-COMMIT decision**: Solid clears the bit when the
+   first real value commits at flush, not at promise resolution. Our
+   equivalent: `hasLatest` flips when the settlement WRITE lands the real
+   value in the canonical value slot (settlement = invalidate → propagate →
+   recompute = our commit) — resolution alone changes nothing until the
+   recompute commits the value. Boundary-level `_initialized`/`on`-reset
+   nuances (a FRESH boundary around a refreshing source showing fallback)
+   are React's own Suspense bookkeeping in our host — not reimplemented.
+8. **isPending(x)**: lazily-created cached computed per node over the raw
+   box shape (`engine.readComputedRaw` — tracked, unforwarded, never
+   refetches, honoring Solid's "probes don't refetch" rule). Boolean
+   equality cutoff gives flip-only propagation; per-world correct by
+   construction. NON-ADOPTION: Solid's first-load isPending rethrow (probe
+   participates in suspense) — in our host, first-load suspension comes from
+   useSignal itself; the probe is always a plain boolean.
+9. **refresh(x)**: clears the node's thenable slots (all world keys) and
+   invalidates through the normal write path; `latest` is preserved via the
+   pending box (refresh-pending state). The pendingJoins identity cache is
+   KEPT (same source set ⇒ same joined thenable; clearing it would
+   spuriously re-broadcast — oracle-caught). No-op on atoms/foreign nodes.
+   Refresh races supersede latest-wins (slot replacement + settlement
+   no-op guard). Cache-less callers pay one superseded fetch per settlement
+   wave (documented above, rule 5).
+10. **latest(x)** as WORLD SAMPLING (no new buffers): always samples the
+    NEWEST world (Wn — every write visible, our analog of Solid's staged
+    `_pendingValue`), in every read context (render included, deliberately
+    reading ahead of the pass pin — the loading-indicator pattern). The
+    async node itself → `box.latest` (stale committed value, never
+    suspends, never registers pending); upstream/sync-derived nodes → the
+    in-flight Wn value. Tracked callers subscribe to the sampled node.

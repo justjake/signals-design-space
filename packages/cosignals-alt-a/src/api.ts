@@ -14,7 +14,16 @@ import type { ComputedHandle, CosignalEngine, Equality, SignalHandle } from './e
 
 // ---- §11.3 sentinel boxes ---------------------------------------------------------
 export type ErrorBox = { kind: 'error'; error: unknown };
-export type SuspendedBox = { kind: 'suspended'; thenable: PromiseLike<unknown> };
+export type SuspendedBox = {
+	kind: 'suspended';
+	thenable: PromiseLike<unknown>;
+	/** Solid's STATUS_UNINITIALIZED analog, inverted: true once a real value
+	 * has ever committed for this node — refresh-pending boxes carry it so
+	 * boundaries can serve stale content instead of falling back. */
+	hasLatest: boolean;
+	/** The last committed value (meaningful iff hasLatest). */
+	latest: unknown;
+};
 
 const BOX = Symbol('cosignal.box');
 
@@ -37,8 +46,13 @@ function errorBox(error: unknown): ErrorBox {
 	return { [BOX]: true, kind: 'error', error } as Boxed & ErrorBox;
 }
 
-function suspendedBox(thenable: PromiseLike<unknown>): SuspendedBox {
-	return { [BOX]: true, kind: 'suspended', thenable } as Boxed & SuspendedBox;
+function suspendedBox(thenable: PromiseLike<unknown>, prev: unknown): SuspendedBox {
+	// Carry the latest settled value forward: from a real previous value, or
+	// through a chain of pending boxes (a refresh during a refresh).
+	const prevBox = isBox(prev);
+	const hasLatest = prev !== undefined && (!prevBox || (isSuspendedBox(prev) && prev.hasLatest));
+	const latest = prevBox ? (isSuspendedBox(prev) ? prev.latest : undefined) : prev;
+	return { [BOX]: true, kind: 'suspended', thenable, hasLatest, latest } as Boxed & SuspendedBox;
 }
 
 // ---- §12.3 thenable protocol -------------------------------------------------------
@@ -277,7 +291,7 @@ export function createAPI(engine: CosignalEngine) {
 					popFrame();
 					return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th)
 						? prevForBoxes
-						: suspendedBox(th);
+						: suspendedBox(th, prevForBoxes);
 				}
 				popFrame();
 				if (usedCanon) {
@@ -313,7 +327,7 @@ export function createAPI(engine: CosignalEngine) {
 						popFrame();
 						return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th)
 							? prevForBoxes
-							: suspendedBox(th);
+							: suspendedBox(th, prevForBoxes);
 					}
 					popFrame();
 					return next;
@@ -327,6 +341,7 @@ export function createAPI(engine: CosignalEngine) {
 					},
 				);
 				this.id = this.handle.id;
+				instancesByHandle.set(this.handle, this as Computed<unknown>);
 				return;
 			}
 			// Fused kernel wrapper: canonical evaluations carry the kernel's
@@ -341,6 +356,17 @@ export function createAPI(engine: CosignalEngine) {
 
 			this.handle = engine.computed<unknown>(evalFn, { isEqual: eq, label: options.label, kernelFn });
 			this.id = this.handle.id;
+			instancesByHandle.set(this.handle, this as Computed<unknown>);
+		}
+
+		/** refresh() support: drop every world's thenable slots so the next
+		 * evaluation re-registers fresh fetches. The pendingJoins cache is
+		 * deliberately KEPT — it is identity infrastructure (same pending
+		 * source set ⇒ same joined thenable, forever); clearing it would mint
+		 * a new join for an identical set, a pending→pending identity change
+		 * that would spuriously re-broadcast (caught by the oracle fuzz). */
+		clearUseSlots(): void {
+			this.useSlots = undefined;
 		}
 
 		/** One thenable identity per evaluation outcome: the single pending
@@ -460,10 +486,16 @@ export function createAPI(engine: CosignalEngine) {
 					throw v.error; // error state surfaces at read sites (§11.3)
 				}
 				// Pending: inside an evaluation, FORWARD (status propagates as
-				// graph state); at a boundary read, surface the STORE-HELD
-				// thenable (stable identity) for React use()/Suspense.
+				// graph state).
 				if (forwardPending(v.thenable)) {
 					return undefined as T;
+				}
+				// Top-level read — Solid's uninitialized-vs-has-value rule
+				// (research §2.1): throw the STORE-HELD thenable only when no
+				// value has ever committed; a refresh-pending read serves the
+				// latest settled value straight through (no suspension).
+				if ((v as SuspendedBox).hasLatest) {
+					return (v as SuspendedBox).latest as T;
 				}
 				throw v.thenable;
 			}
@@ -474,6 +506,94 @@ export function createAPI(engine: CosignalEngine) {
 		get boxed(): T | ErrorBox | SuspendedBox {
 			return readComputedById(this.id) as T | ErrorBox | SuspendedBox;
 		}
+	}
+
+	// ---- Solid-2.0 async API set (owner brief; research/solid2-async-model.md §7) ----
+
+	/** Computed instances by handle (refresh needs the slot owner). */
+	const instancesByHandle = new WeakMap<object, Computed<unknown>>();
+	/** Lazily-created cached isPending probe per node (§3 helper-node analog). */
+	const pendingProbes = new WeakMap<object, Computed<boolean>>();
+
+	function handleOfSource(x: { handle: SignalHandle } | SignalHandle): SignalHandle {
+		return 'handle' in x ? (x as { handle: SignalHandle }).handle : (x as SignalHandle);
+	}
+
+	/**
+	 * Reactive "is it showing stale/pending data?" — a lazily-created cached
+	 * computed per node over the BOX SHAPE (raw engine read: no unboxing, no
+	 * pending registration), so the boolean flips only on pending↔settled
+	 * transitions (equality cutoff) and is per-world correct by construction
+	 * (the probe evaluates in whatever world its reader resolves).
+	 * Divergence from Solid noted in SPEC-RESOLUTIONS: the probe never
+	 * rethrows on uninitialized first load (React boundaries get first-load
+	 * suspension from useSignal itself) and never triggers refetches (it
+	 * reads the cached box, §8 "probes don't refetch").
+	 */
+	function isPending(source: { handle: SignalHandle } | SignalHandle): boolean {
+		return pendingProbe(source).state;
+	}
+
+	/**
+	 * Force a refetch with unchanged inputs: clear the node's thenable slots
+	 * (ctx.use re-registers fresh fetches) and invalidate through the normal
+	 * write path. `latest` is PRESERVED — the new pending box carries the
+	 * last committed value, so boundaries show stale content (refresh-pending),
+	 * never a fallback. Latest-wins supersession applies to refresh races
+	 * (a superseded in-flight settlement no-ops). No-op on atoms and on
+	 * computeds this API did not create (Solid: refresh no-ops on plain
+	 * signals).
+	 */
+	/** The node's isPending probe computed (created if needed) — hooks
+	 * subscribe to it like any signal. */
+	function pendingProbe(source: { handle: SignalHandle } | SignalHandle): Computed<boolean> {
+		const h = handleOfSource(source);
+		let probe = pendingProbes.get(h);
+		if (probe === undefined) {
+			probe = new Computed<boolean>({
+				fn: () => isSuspendedBox(engine.readComputedRaw(h.id)),
+			});
+			pendingProbes.set(h, probe);
+		}
+		return probe;
+	}
+
+	function refresh(source: { handle: SignalHandle } | SignalHandle): void {
+		const h = handleOfSource(source);
+		const inst = instancesByHandle.get(h);
+		if (inst === undefined) {
+			return; // plain signal / foreign node: no-op
+		}
+		inst.clearUseSlots();
+		engine.policy.invalidate(h);
+	}
+
+	/**
+	 * Read current-or-stale without suspending and without registering
+	 * pending — Solid's `latest()` as WORLD SAMPLING (research §3):
+	 *
+	 *  - the async node itself → its last committed value (`box.latest`);
+	 *  - anything upstream of the async → the NEWEST world's value (Wn: every
+	 *    write visible — our analog of Solid's staged `_pendingValue`), so a
+	 *    loading indicator can show the in-flight input while the async
+	 *    output stays stale.
+	 *
+	 * World sampled per read context (documented): ALWAYS Wn — event
+	 * handlers, effects (committed contexts included) and renders all sample
+	 * the in-flight overlay; inside a render pass this deliberately reads
+	 * AHEAD of the pass's pinned world (that is the point of a loading
+	 * indicator). Tracked callers still subscribe to the node.
+	 */
+	function latest<T>(source: { handle: SignalHandle } | SignalHandle): T | undefined {
+		const h = handleOfSource(source);
+		const v = engine.latestValue(h.id);
+		if (isBox(v)) {
+			if (v.kind === 'error') {
+				throw v.error;
+			}
+			return ((v as SuspendedBox).hasLatest ? (v as SuspendedBox).latest : undefined) as T | undefined;
+		}
+		return v as T;
 	}
 
 	type Serializable = { handle: SignalHandle } | SignalHandle;
@@ -518,6 +638,10 @@ export function createAPI(engine: CosignalEngine) {
 		Atom,
 		ReducerAtom,
 		Computed,
+		isPending,
+		pendingProbe,
+		refresh,
+		latest,
 		effect: engine.effect,
 		effectScope: engine.effectScope,
 		batch: engine.batch,

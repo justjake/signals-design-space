@@ -178,9 +178,12 @@ describe('§12.3 ctx.use and suspense', () => {
 		expect(c.state).toBe(5); // no re-evaluation, no fetch
 		expect(created).toBe(settledCreations);
 		// A REAL input change: canonical slots were cleared at the settled
-		// completion, so the next evaluation fetches fresh (latest-wins).
+		// completion, so the next evaluation fetches fresh (latest-wins) —
+		// and the TWO-LEVEL RULE serves the stale value while it refetches
+		// (refresh-pending has a latest; no suspension).
 		dep.set(1);
-		expect(() => c.state).toThrow(); // pending again (fresh fetch)
+		expect(c.state).toBe(5); // stale content, straight through
+		expect(isSuspendedBox(c.boxed)).toBe(true); // ...while pending underneath
 		await tick();
 		await tick();
 		expect(c.state).toBe(6); // 5 + dep(1) — the NEW input's data
@@ -283,6 +286,128 @@ describe('§12.3 (adapted): pending as graph state', () => {
 		await tick();
 		await tick();
 		expect(c.state).toBe(3);
+	});
+});
+
+describe('Solid-2.0 async API set (isPending / refresh / latest)', () => {
+	it('isPending flips only on pending↔settled and never refetches', async () => {
+		const { api } = makeAPI();
+		const dep = new api.Atom({ state: 1 });
+		const resolvers: Array<(v: number) => void> = [];
+		let fetches = 0;
+		const remote = new api.Computed<number>({
+			fn: (ctx) => {
+				const d = dep.state as number;
+				++fetches;
+				return (ctx.use(new Promise<number>((r) => resolvers.push(r))) as number) + d;
+			},
+		});
+		const flips: boolean[] = [];
+		api.effect(() => {
+			flips.push(api.isPending(remote));
+		});
+		expect(flips).toEqual([true]); // first load: pending
+		const probeFetches = fetches;
+		api.isPending(remote); // probing again...
+		api.isPending(remote);
+		expect(fetches).toBe(probeFetches); // ...never refetches (§8 rule)
+		await tick();
+		resolvers[0](10);
+		await tick();
+		await tick();
+		expect(remote.state).toBe(11);
+		expect(flips).toEqual([true, false]); // flip-only: one edge per transition
+		dep.set(2); // refetch (input change)
+		expect(flips).toEqual([true, false, true]);
+		// Resolve the LIVE fetch (cache-less callers discard one superseded
+		// promise per settlement wave — latest-wins ignores stale resolvers).
+		resolvers[resolvers.length - 1](20);
+		await tick();
+		await tick();
+		expect(remote.state).toBe(22);
+		expect(flips).toEqual([true, false, true, false]);
+	});
+
+	it('latest asymmetry: upstream reads the in-flight (newest) value; the async node reads its stale committed value', async () => {
+		const { api } = makeAPI();
+		const fork = createForkDouble();
+		api.engine.attachFork(fork);
+		fork.registerRoot('root');
+		const x = new api.Atom({ state: 1 });
+		const doubled = new api.Computed({ fn: () => (x.state as number) * 2 });
+		const resolvers: Array<(v: number) => void> = [];
+		const asyncTen = new api.Computed<number>({
+			fn: (ctx) => {
+				const d = x.state as number;
+				return (ctx.use(new Promise<number>((r) => resolvers.push(r))) as number) * d;
+			},
+		});
+		asyncTen.boxed; // start first load
+		resolvers[0](10);
+		await tick();
+		await tick();
+		expect(asyncTen.state).toBe(10); // 10 * 1
+
+		// A pending deferred write to x: the in-flight (newest) world moves,
+		// the committed world does not, and the async node refetches.
+		const t = fork.openBatch('deferred');
+		t.run(() => x.set(2));
+		// upstream: latest() samples the NEWEST world (Wn) → the in-flight 2.
+		expect(api.latest(x)).toBe(2);
+		expect(x.state).toBe(2); // NEWEST ambient read agrees outside render
+		expect(api.engine.readCommitted(x.handle)).toBe(1);
+		// sync memo downstream of x: latest = in-flight derivation.
+		expect(api.latest(doubled)).toBe(4);
+		// the ASYNC node itself: refetching in the newest world → its latest()
+		// is the stale committed value, and it does not suspend or register.
+		expect(api.latest(asyncTen)).toBe(10);
+		t.retire();
+		// Force the canonical refetch (recompute is lazy), then settle ITS
+		// promise — earlier world-eval fetches are superseded (latest-wins).
+		asyncTen.boxed;
+		resolvers[resolvers.length - 1](30);
+		await tick();
+		await tick();
+		expect(asyncTen.state).toBe(60); // 30 * 2 after settlement commit
+	});
+
+	it('refresh() preserves latest, forces re-registration, and races latest-wins', async () => {
+		const { api } = makeAPI();
+		const resolvers: Array<(v: number) => void> = [];
+		let fetches = 0;
+		const remote = new api.Computed<number>({
+			fn: (ctx) => {
+				++fetches;
+				return ctx.use(new Promise<number>((r) => resolvers.push(r)));
+			},
+		});
+		remote.boxed;
+		resolvers[0](1);
+		await tick();
+		await tick();
+		expect(remote.state).toBe(1);
+		api.refresh(remote);
+		expect(remote.state).toBe(1); // refresh-pending serves latest (stale)
+		expect(api.isPending(remote)).toBe(true);
+		const raceLoser = resolvers[resolvers.length - 1];
+		api.refresh(remote); // refresh RACE: supersedes the in-flight fetch
+		remote.boxed; // force the re-registration
+		const raceWinner = resolvers[resolvers.length - 1];
+		raceLoser(2); // the SUPERSEDED fetch settles: latest-wins → ignored
+		await tick();
+		await tick();
+		expect(api.isPending(remote)).toBe(true); // still waiting on the winner
+		expect(remote.state).toBe(1);
+		expect(fetches).toBeGreaterThan(2);
+		raceWinner(3); // the winning fetch settles
+		await tick();
+		await tick();
+		expect(remote.state).toBe(3);
+		expect(api.isPending(remote)).toBe(false);
+		// refresh on an atom is a no-op (plain signals have no fetch to force).
+		const a = new api.Atom({ state: 5 });
+		api.refresh(a);
+		expect(a.state).toBe(5);
 	});
 });
 

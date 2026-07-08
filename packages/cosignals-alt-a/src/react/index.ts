@@ -3,6 +3,7 @@ export { attachReactBridge, assertForkPresent, type ReactBridgeHandle } from './
 export {
 	registerAltAReact,
 	useSignal,
+	useIsPending,
 	useAtom,
 	useReducerAtom,
 	useComputed,

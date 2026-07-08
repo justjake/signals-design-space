@@ -2816,6 +2816,28 @@ function createCosignalEngine(options) {
     // getter chain was ~28% of the effect-heavy kairo tick.
     readAtomById: readAtomPublic,
     readComputedById: readComputedPublic,
+    /** Raw box-shape read for the isPending probe: tracked like any read
+     * (canonical link inside kernel evals, world-resolved in overlay
+     * frames), but the caller receives the box unforwarded. */
+    readComputedRaw(id) {
+      if (canonicalEvalDepth > 0) {
+        return kernelComputedRead(id);
+      }
+      if (frameWorlds.length > 0) {
+        return overlayEvaluate(id, frameWorlds[frameWorlds.length - 1]);
+      }
+      return readComputedPublic(id);
+    },
+    /** Solid's latest(): sample the NEWEST world (Wn — every write
+     * visible, our staged-value analog) without pending registration;
+     * tracked callers still subscribe. */
+    latestValue(id) {
+      const v = worldValueOf(id, NEWEST_WORLD);
+      if (activeSub !== 0 && readCtx !== 2 /* CTX_RENDER */) {
+        link(id, activeSub, cycle);
+      }
+      return v;
+    },
     trackCommitted,
     committedEffect,
     subscribeWithFixup,
@@ -3221,8 +3243,11 @@ function isSuspendedBox(v) {
 function errorBox(error) {
   return { [BOX]: true, kind: "error", error };
 }
-function suspendedBox(thenable) {
-  return { [BOX]: true, kind: "suspended", thenable };
+function suspendedBox(thenable, prev) {
+  const prevBox = isBox(prev);
+  const hasLatest = prev !== void 0 && (!prevBox || isSuspendedBox(prev) && prev.hasLatest);
+  const latest = prevBox ? isSuspendedBox(prev) ? prev.latest : void 0 : prev;
+  return { [BOX]: true, kind: "suspended", thenable, hasLatest, latest };
 }
 function defaultBoxedEq(a, b) {
   const ab = isBox(a);
@@ -3368,7 +3393,7 @@ function createAPI(engine) {
         if (pendingCount !== 0) {
           const th = self.joinPending(frame.pending);
           popFrame();
-          return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th) ? prevForBoxes : suspendedBox(th);
+          return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th) ? prevForBoxes : suspendedBox(th, prevForBoxes);
         }
         popFrame();
         if (usedCanon) {
@@ -3392,7 +3417,7 @@ function createAPI(engine) {
           if (pendingCount !== 0) {
             const th = self.joinPending(frame.pending);
             popFrame();
-            return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th) ? prevForBoxes : suspendedBox(th);
+            return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th) ? prevForBoxes : suspendedBox(th, prevForBoxes);
           }
           popFrame();
           return next;
@@ -3406,6 +3431,7 @@ function createAPI(engine) {
           }
         );
         this.id = this.handle.id;
+        instancesByHandle.set(this.handle, this);
         return;
       }
       const kernelFn = (prev) => {
@@ -3417,6 +3443,16 @@ function createAPI(engine) {
       };
       this.handle = engine.computed(evalFn, { isEqual: eq, label: options.label, kernelFn });
       this.id = this.handle.id;
+      instancesByHandle.set(this.handle, this);
+    }
+    /** refresh() support: drop every world's thenable slots so the next
+     * evaluation re-registers fresh fetches. The pendingJoins cache is
+     * deliberately KEPT — it is identity infrastructure (same pending
+     * source set ⇒ same joined thenable, forever); clearing it would mint
+     * a new join for an identical set, a pending→pending identity change
+     * that would spuriously re-broadcast (caught by the oracle fuzz). */
+    clearUseSlots() {
+      this.useSlots = void 0;
     }
     /** One thenable identity per evaluation outcome: the single pending
      * source, or a node-cached join of the set (so retries re-see the same
@@ -3506,6 +3542,9 @@ function createAPI(engine) {
         if (forwardPending(v.thenable)) {
           return void 0;
         }
+        if (v.hasLatest) {
+          return v.latest;
+        }
         throw v.thenable;
       }
       return v;
@@ -3514,6 +3553,45 @@ function createAPI(engine) {
     get boxed() {
       return readComputedById(this.id);
     }
+  }
+  const instancesByHandle = /* @__PURE__ */ new WeakMap();
+  const pendingProbes = /* @__PURE__ */ new WeakMap();
+  function handleOfSource(x) {
+    return "handle" in x ? x.handle : x;
+  }
+  function isPending(source) {
+    return pendingProbe(source).state;
+  }
+  function pendingProbe(source) {
+    const h = handleOfSource(source);
+    let probe = pendingProbes.get(h);
+    if (probe === void 0) {
+      probe = new Computed2({
+        fn: () => isSuspendedBox(engine.readComputedRaw(h.id))
+      });
+      pendingProbes.set(h, probe);
+    }
+    return probe;
+  }
+  function refresh(source) {
+    const h = handleOfSource(source);
+    const inst = instancesByHandle.get(h);
+    if (inst === void 0) {
+      return;
+    }
+    inst.clearUseSlots();
+    engine.policy.invalidate(h);
+  }
+  function latest(source) {
+    const h = handleOfSource(source);
+    const v = engine.latestValue(h.id);
+    if (isBox(v)) {
+      if (v.kind === "error") {
+        throw v.error;
+      }
+      return v.hasLatest ? v.latest : void 0;
+    }
+    return v;
   }
   const handleOf = (x) => "handle" in x ? x.handle : x;
   function serializeAtomState(atoms, replacer) {
@@ -3541,6 +3619,10 @@ function createAPI(engine) {
     Atom: Atom2,
     ReducerAtom: ReducerAtom2,
     Computed: Computed2,
+    isPending,
+    pendingProbe,
+    refresh,
+    latest,
     effect: engine.effect,
     effectScope: engine.effectScope,
     batch: engine.batch,

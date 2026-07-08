@@ -20,6 +20,7 @@ import {
 	useAtom,
 	useComputed,
 	useReducerAtom,
+	useIsPending,
 	useSignal,
 	useSignalEffect,
 	type AltAReactHandle,
@@ -137,13 +138,25 @@ describe('real React: transitions', () => {
 		const gate = new api.Atom({ state: false });
 		let release!: () => void;
 		const blocker = new Promise<number>((r) => (release = () => r(0)));
+		// UNINITIALIZED in the transition's world: never evaluated before the
+		// transition flips the gate, so its pending box has no latest and the
+		// render genuinely suspends (two-level rule: only first loads suspend).
 		const blockOnGate = new api.Computed({
-			fn: (ctx) => (gate.state ? ctx.use(blocker) : 0),
+			fn: (ctx) => (gate.state ? ctx.use(blocker) : ctx.use(blocker)),
 		});
+		function Blocker(): React.ReactNode {
+			useSignal(blockOnGate);
+			return null;
+		}
 		function View(): React.ReactNode {
 			const v = useSignal(a);
-			useSignal(blockOnGate); // suspends the transition render while gate=true
-			return <span>{v}</span>;
+			const g = useSignal(gate);
+			return (
+				<>
+					<span>{v}</span>
+					{g ? <Blocker /> : null}
+				</>
+			);
 		}
 		const c = mount(
 			<React.Suspense fallback={<i>wait</i>}>
@@ -152,9 +165,9 @@ describe('real React: transitions', () => {
 		);
 		expect(c.textContent).toBe('1');
 
-		// The transition: functional update +1, plus the gate that suspends its
-		// render — so it stays PENDING (old UI stays up; no fallback for
-		// transition-initiated updates).
+		// The transition: functional update +1, plus mounting the
+		// first-load-pending Blocker — so it stays PENDING (old UI stays up;
+		// no fallback for transition-initiated updates).
 		await act(async () => {
 			startSignalTransition(() => {
 				a.update((x) => x + 1);
@@ -183,11 +196,20 @@ describe('real React: transitions', () => {
 		const gate = new api.Atom({ state: false });
 		let release!: () => void;
 		const blocker = new Promise<number>((r) => (release = () => r(0)));
-		const block = new api.Computed({ fn: (ctx) => (gate.state ? ctx.use(blocker) : 0) });
+		const block = new api.Computed({ fn: (ctx) => ctx.use(blocker) }); // uninitialized until released
 		function Reader({ tag }: { tag: string }): React.ReactNode {
 			const v = useSignal(sig);
+			const g = useSignal(gate);
+			return (
+				<>
+					<span>{`${tag}=${v};`}</span>
+					{g ? <BlockerChild /> : null}
+				</>
+			);
+		}
+		function BlockerChild(): React.ReactNode {
 			useSignal(block);
-			return <span>{`${tag}=${v};`}</span>;
+			return null;
 		}
 		let setShowLate!: (v: boolean) => void;
 		function App(): React.ReactNode {
@@ -402,15 +424,24 @@ describe('real React: multi-root and committed effects', () => {
 		const gate = new api.Atom({ state: false });
 		let release!: () => void;
 		const blocker = new Promise<number>((r) => (release = () => r(0)));
-		const block = new api.Computed({ fn: (ctx) => (gate.state ? ctx.use(blocker) : 0) });
+		const block = new api.Computed({ fn: (ctx) => ctx.use(blocker) }); // uninitialized until released
 		const effectSeen: string[] = [];
+		function BlockerChild(): React.ReactNode {
+			useSignal(block);
+			return null;
+		}
 		function View(): React.ReactNode {
 			const v = useSignal(sig);
-			useSignal(block);
+			const g = useSignal(gate);
 			useSignalEffect(() => {
 				effectSeen.push(sig.state as string);
 			}, []);
-			return <span>{v}</span>;
+			return (
+				<>
+					<span>{v}</span>
+					{g ? <BlockerChild /> : null}
+				</>
+			);
 		}
 		const c = mount(
 			<React.Suspense fallback={null}>
@@ -433,6 +464,107 @@ describe('real React: multi-root and committed effects', () => {
 		});
 		expect(c.textContent).toBe('pending');
 		expect(effectSeen).toContain('pending'); // after the commit, it fires
+	});
+});
+
+describe('real React: Solid-2.0 async API set', () => {
+	it('two-level rule: first load shows the fallback; refetch keeps stale content (no flash)', async () => {
+		const dep = new api.Atom({ state: 1 });
+		// Keyed data layer: one fetch per input, shared across worlds (the
+		// realistic pattern; makes settlement targeting deterministic).
+		const resolvers = new Map<number, (v: string) => void>();
+		const cache = new Map<number, Promise<string>>();
+		const fetchFor = (d: number): Promise<string> => {
+			let promise = cache.get(d);
+			if (promise === undefined) {
+				promise = new Promise<string>((r) => resolvers.set(d, r));
+				cache.set(d, promise);
+			}
+			return promise;
+		};
+		const remote = new api.Computed<string>({
+			fn: (ctx) => {
+				const d = dep.state as number;
+				return `${ctx.use(fetchFor(d))}#${d}`;
+			},
+		});
+		function View(): React.ReactNode {
+			return <span>{useSignal(remote)}</span>;
+		}
+		const c = mount(
+			<React.Suspense fallback={<i>loading</i>}>
+				<View />
+			</React.Suspense>,
+		);
+		expect(c.textContent).toBe('loading'); // FIRST load: no latest → fallback
+		await act(async () => {
+			resolvers.get(1)!('v1');
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('v1#1');
+		// Refetch via input change: latest is carried → NO fallback flash.
+		const frames: string[] = [];
+		await act(async () => {
+			dep.set(2);
+			frames.push(c.textContent ?? '');
+			await tick();
+		});
+		expect(frames.every((f) => f !== 'loading')).toBe(true); // stale stayed
+		await act(async () => {
+			resolvers.get(2)!('v2'); // the input-2 fetch (keyed, shared across worlds)
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('v2#2');
+	});
+
+	it('refresh(): refetch with unchanged inputs, stale content preserved; works inside transitions', async () => {
+		const resolvers: Array<(v: string) => void> = [];
+		let fetches = 0;
+		const remote = new api.Computed<string>({
+			fn: (ctx) => {
+				++fetches;
+				return ctx.use(new Promise<string>((r) => resolvers.push(r)));
+			},
+		});
+		const pendingLog: boolean[] = [];
+		function View(): React.ReactNode {
+			const v = useSignal(remote);
+			pendingLog.push(useIsPending(remote as never));
+			return <span>{v}</span>;
+		}
+		const c = mount(
+			<React.Suspense fallback={<i>loading</i>}>
+				<View />
+			</React.Suspense>,
+		);
+		await act(async () => {
+			resolvers[0]('fresh-1');
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('fresh-1');
+		const before = fetches;
+
+		// refresh inside a transition: the refetch settles and commits through
+		// the normal write path; content stays stale meanwhile.
+		await act(async () => {
+			startSignalTransition(() => {
+				api.refresh(remote);
+			});
+			await tick();
+		});
+		expect(c.textContent).toBe('fresh-1'); // stale content, no fallback
+		expect(fetches).toBeGreaterThan(before); // slots cleared → real refetch
+		await act(async () => {
+			resolvers[resolvers.length - 1]('fresh-2');
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('fresh-2');
+		expect(pendingLog).toContain(true); // isPending flipped during the refetch
+		expect(pendingLog[pendingLog.length - 1]).toBe(false); // ...and back
 	});
 });
 

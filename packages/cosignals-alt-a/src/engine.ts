@@ -3535,6 +3535,28 @@ export function createCosignalEngine(options?: EngineOptions) {
 		// getter chain was ~28% of the effect-heavy kairo tick.
 		readAtomById: readAtomPublic,
 		readComputedById: readComputedPublic,
+		/** Raw box-shape read for the isPending probe: tracked like any read
+		 * (canonical link inside kernel evals, world-resolved in overlay
+		 * frames), but the caller receives the box unforwarded. */
+		readComputedRaw(id: number): unknown {
+			if (canonicalEvalDepth > 0) {
+				return kernelComputedRead(id);
+			}
+			if (frameWorlds.length > 0) {
+				return overlayEvaluate(id, frameWorlds[frameWorlds.length - 1]);
+			}
+			return readComputedPublic(id);
+		},
+		/** Solid's latest(): sample the NEWEST world (Wn — every write
+		 * visible, our staged-value analog) without pending registration;
+		 * tracked callers still subscribe. */
+		latestValue(id: number): unknown {
+			const v = worldValueOf(id, NEWEST_WORLD);
+			if (activeSub !== 0 && readCtx !== C.CTX_RENDER) {
+				link(id, activeSub, cycle);
+			}
+			return v;
+		},
 		trackCommitted,
 		committedEffect,
 		subscribeWithFixup,

@@ -73,11 +73,19 @@ function handleOf(source: SignalSource<unknown>): SignalHandle {
  * thenables); raw engine handles hand back §11.3 boxes — unbox here so a
  * suspended computed suspends the component either way. */
 function readForRender<T>(source: SignalSource<T>): T {
+	// THE TWO-LEVEL SUSPENSE RULE (research §2, adapted): the thenable goes
+	// to React only when the pending box has NO latest (never-settled first
+	// load → fallback); refresh-pending serves the latest settled value
+	// straight through — stale content stays, no fallback flash. §4 class
+	// getters already implement this; raw engine handles unbox here.
 	const v = source.state;
 	if (isErrorBox(v)) {
 		throw v.error;
 	}
 	if (isSuspendedBox(v)) {
+		if (v.hasLatest) {
+			return v.latest as T;
+		}
 		throw v.thenable;
 	}
 	return v;
@@ -242,6 +250,19 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
 		() => engine.committedEffect(containerRef.current, fn),
 		deps === undefined ? undefined : [engine, ...deps],
 	);
+}
+
+// ---- useIsPending -------------------------------------------------------------------
+
+/** Reactive pending indicator: flips only on pending↔settled transitions of
+ * the source (the api.isPending probe subscribed like any signal). */
+export function useIsPending(source: SignalSource<unknown>): boolean {
+	const { api } = requireActive();
+	const probe = React.useMemo(
+		() => api.pendingProbe(handleOf(source as SignalSource<unknown>)),
+		[api, source],
+	);
+	return useSignal<boolean>(probe as unknown as SignalSource<boolean>);
 }
 
 // ---- transitions --------------------------------------------------------------------
