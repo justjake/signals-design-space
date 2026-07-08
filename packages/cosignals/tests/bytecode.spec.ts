@@ -84,10 +84,12 @@ const BUDGETS: Record<string, number> = {
 	// (was a 567-byte walk monolith)
 	arenaCheckDirtyLoop: 450, // 407: the general arena walk, out of line
 	arenaUpdateAndShallow: 110, // 74: refold + sibling Pending->Dirty upgrade
-	arenaFoldOutcome: 340, // 313: fold-outcome classification, out of line —
+	arenaFoldOutcome: 385, // 367: fold-outcome classification, out of line —
 	// includes the comparator arm (custom-equality computeds compare against
 	// the arena-local previous, in head order; the user-fn call itself is out
-	// of line in arenaIsValueEqualCold, so the hot default arm stays closure-free)
+	// of line in arenaIsValueEqualCold, so the hot default arm stays
+	// closure-free) plus the committed-clock bump on changed outcomes (both
+	// the suspension and value arms test-and-stamp) — under the inline limit
 	arenaSyncObservationAfterRefold: 90, // 65: out-of-line observation epilogue (observed nodes only)
 };
 

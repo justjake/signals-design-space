@@ -210,28 +210,70 @@ must be able to continue from it alone.
    WorldArena.ts path left ENGINE_MODULES (covered by the CosignalEngine.ts
    entry) and the trace-slot line scan.
 
+## Done (continued 3)
+
+8. **Worlds re-derived under the schema (priority 3)** — layoutVersion 2:
+   - tools/schema.ts restructured into two domains (`kernel`, `worldArena`),
+     each with families/flag enums/shape enum; the world domain adds the
+     per-instance column roster (nodeToShadow, vals, suspIdx, walk,
+     weakSubs, weakSubsTail, clocks) with grow/evict/release metadata. The
+     generated region now also emits ArenaField/ArenaLinkField/
+     ArenaLinkMode/ArenaFlag/ArenaGeom (module-local, same-file with the
+     hot walks) and three world column functions: growWorldArenaColumns
+     (the grown-together loop), scrubWorldShadowColumnsOnEvict (vals +
+     clocks), resetWorldArenaColumnsOnRelease (every column). The
+     hand-written Arena* enums are deleted; values identical.
+   - **Growth re-expression (the retired reload style)**: WorldArena
+     buffers are now RESIZABLE ArrayBuffers (maxByteLength =
+     ArenaGeom.MAX_BUFFER_BYTES = 2^28, virtual reservation) with
+     length-tracking views; arenaGrow resizes IN PLACE, so buffer identity
+     never changes and every cached view/local stays valid across growth
+     BY CONSTRUCTION — the hand-maintained "re-load a.memory after any
+     allocating call" discipline is gone. Rationale documented in the
+     WorldArena.buffer doc: per-arena closure rebuilds would allocate per
+     claim and go polymorphic; boundary-only growth would break the pinned
+     mid-op growth capability (arena-sa2/sd shrink arenaInitInts to force
+     it). PERF NOTE for the lead's A/B: length-tracking RAB-backed typed
+     arrays carry a small V8 bounds-check cost vs fixed arrays — if the
+     arena walks regress, the documented fallback is fixed views refreshed
+     per operation + per-access reads on alloc paths.
+   - **World clocks (bump table)**: per-record float64 clock column per
+     arena (shadow slot = the node's per-root committed clock — per-root by
+     construction since each root owns its arena; link slot reserved for
+     subscription lastValidatedAt, priority 5). Bumps draw from the
+     engine's ONE clockSource and are gated on `WorldArena.bumpsClocks`
+     (committed arenas only — render worlds are pin-frozen; the gate is set
+     per tenancy at claim). Bump sites: arenaUpdateShadow (changed atom
+     refold), arenaFoldOutcome (changed value outcome; fresh suspension),
+     arenaNoteThrow (thrown outcome — conservative unconditional bump:
+     spurious bump = one extra re-compare, missed bump = stale-skip bug).
+     Cold materialization (prevValid=false) counts as changed and bumps —
+     observers at lastValidatedAt=0 re-compare anyway. NOTHING reads world
+     clocks yet (readers land with subscriptions, priority 5).
+   - Bytecode re-pin: arenaFoldOutcome 340→385 (measured 367; the two
+     bump arms), justified in the table. All other budgets unchanged.
+   - Suites after this unit: cosignals 360 green, react 72/72, conformance
+     179/179 ×2, oracle 82 green.
+   - NOTE (flake watch): one bytecode-spec run showed a transient
+     "smoke exercises every budgeted function" failure (16 arena fns
+     reported uncovered) that vanished on re-run — suspect the
+     lastIndexOf('@@SMOKE-START') marker parse can land on a late
+     constant-pool dump under unlucky compile ordering. If it recurs,
+     harden the marker parse (e.g. match the line-anchored bare marker).
+
 ## In progress / exact next actions
 
-**Priority 3 — worlds re-derived (the real work; nothing designed yet).**
-1. Read the world-arena section in CosignalEngine.ts (search
-   "world arenas (carried") + World.ts fully, then alt-b
-   packages/cosignals-alt-b/src/engine.ts world/memo + growth sections
-   (note alt-b's certificate approach was REJECTED — only its arena
-   mechanics transfer, not certificates).
-2. Extend tools/schema.ts (layoutVersion 2) with the world-arena record
-   families (shadow + arena link, MODE/weak-list rules, clock fields per
-   the bump table: per-root committed clocks, render worlds pin-frozen,
-   LAST_SEEN/lastValidatedAt on links) and per-column scrub metadata for
-   the arena side columns (vals/suspIdx/walk/weakSubs/dirty...); run
-   `pnpm gen`; replace the carried hand-written Arena* enums with the
-   generated ones.
-3. Retire WorldArena's mid-operation-growth-with-reload (`arenaGrow` +
-   callers reload `a.memory` after every growable call) in favor of the
-   kernel's discipline: per-operation slack reserved at boundaries, hot
-   walks close over the buffer, growth flags + rebuilds at operation
-   boundaries.
-4. The V-urgent-committed-branch battery case + arena-s{a,a2,a3,b,c,d}
-   specs + arena-freelist + one-id-space are the contract.
+**Priority 4 — episodes (batches/log/handoff/drop).** Nothing started.
+The write/action records, batch bookkeeping, and render-attempt worlds
+become episode-lifetime JS-heap state dropped wholesale at quiescence;
+WriteLog compaction is replaced by the episode lifecycle (sealed chunks
+folding into base whole; durable handoff at quiescence; the ONE sanctioned
+semantic change is the equality-count pin rewrite in
+equality-semantics.spec.ts). Read WriteLog.ts + Batch.ts +
+concurrent.ts's log/batch sections + settlement.ts first; the plan's
+"Episode lifecycle replaces compaction" section is normative, including
+the boundary lists and the reclamation membership row
+(episode.holds).
 
 ## Environment notes for successors
 

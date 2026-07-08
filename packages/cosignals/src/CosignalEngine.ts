@@ -168,7 +168,7 @@ export type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see ArenaShape). */
 export type ValueIndex = number & IdBrand<'valueIndex'>;
 
-// #region GENERATED — layout v1 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
+// #region GENERATED — layout v2 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
 /**
  * Field offsets within a node arena record.
  * NodeId is an offset pointer to the first field of the record;
@@ -337,9 +337,9 @@ export const enum NodeFlag {
 }
 
 /**
- * Arena shape: the strides, shifts, and offsets that address a record's
- * fields and its side-column slots from its premultiplied id (see
- * NodeField for the const-enum rationale).
+ * Kernel arena shape: the strides, shifts, and offsets that address a
+ * record's fields and its side-column slots from its premultiplied id
+ * (see NodeField for the const-enum rationale).
  */
 export const enum ArenaShape {
 	/** Int32 fields per record; ids are premultiplied by this (id = record ordinal × STRIDE). */
@@ -398,8 +398,8 @@ function scrubLinkColumnsOnFree(id: LinkId, clocks: Float64Array): void {
 }
 
 /**
- * Reset every side column to its record-zero seed (generated from the
- * column roster; the test reset's column half). Grow-arrays truncate;
+ * Reset every kernel side column to its record-zero seed (generated from
+ * the column roster; the test reset's column half). Grow-arrays truncate;
  * record buffers zero-fill in place (the arena keeps its capacity).
  */
 function resetSideColumnsForTest(clocks: Float64Array): void {
@@ -409,6 +409,197 @@ function resetSideColumnsForTest(clocks: Float64Array): void {
 	fns.length = 1;
 	fns[0] = undefined;
 	clocks.fill(0);
+}
+
+/**
+ * World-arena shadow-record fields (engine-owned layout — not the
+ * kernel's NodeField/LinkField, whose offsets 5-7 mean different things;
+ * stride 8; shadow and link records share the pool). Module-local on
+ * purpose: every hot arena walk is same-file, and the test-side checker
+ * reads the layout through arenaCheckerLayout() (data passing), never
+ * through exported enums. The shared field/bit names deliberately keep
+ * the kernel's numbering (the arena walks re-state the kernel's
+ * propagate/checkDirty family and read best side by side), but nothing
+ * couples the two layouts.
+ */
+const enum ArenaField {
+	/** State machine + kind bits (see ArenaFlag). */
+	FLAGS = 0,
+	/** First dependency link; doubles as the dead-shadow free-list next pointer. */
+	DEPS = 1,
+	/** Last confirmed dependency link (the re-track cursor during a refold). */
+	DEPS_TAIL = 2,
+	/** First STRONG subscriber link (the weak list lives in the weakSubs side column). */
+	SUBS = 3,
+	/** Last strong subscriber link. */
+	SUBS_TAIL = 4,
+	/** The nodeIndex this record shadows (dense column key; identity is the kernel record id). */
+	NODE = 5,
+	/** Id-tenancy stamp: the node's kernel-record GEN observed at recording — dead-GEN shadows never serve. */
+	NODE_GEN = 6,
+	/** Fanout read-clock dedup stamp (a marked cone nothing re-validated is not re-walked). */
+	MARK = 7,
+}
+
+/**
+ * World-arena link-record fields (link records share ArenaField's pool
+ * and stride; offsets overlay the shadow-record fields).
+ */
+const enum ArenaLinkField {
+	/** Evaluation-cycle stamp: intra-refold duplicate-read dedup. */
+	VERSION = 0,
+	/** Producer shadow record id. */
+	DEP = 1,
+	/** Consumer shadow record id. */
+	SUB = 2,
+	/** Previous link in the producer's mode-matching subscriber list. */
+	PREV_SUB = 3,
+	/** Next link in the producer's mode-matching subscriber list. */
+	NEXT_SUB = 4,
+	/** Previous link in the consumer's dependency list. */
+	PREV_DEP = 5,
+	/** Next link in the consumer's dependency list. */
+	NEXT_DEP = 6,
+	/** ArenaLinkMode bits (strong/weak — see the weak-link rules at the arena walks). */
+	MODE = 7,
+	/**
+	 * The free list threads through the VERSION field (FREE_NEXT aliases
+	 * it), the same discipline as the kernel's LinkField.FREE_NEXT: a freed
+	 * link must keep every field a walk still reads intact. arenaCheckDirty
+	 * reads NEXT_DEP (and arenaShallowPropagate NEXT_SUB) off links a
+	 * mid-walk purge freed, so those must keep naming former neighbors,
+	 * never the free list. VERSION is genuinely dead on freed links: it is
+	 * only written at link creation/reuse (arenaLink/arenaLinkInsert) and
+	 * only read off live links (the subs-tail dedup probe); every
+	 * allocation path rewrites it before any read. Pinned by
+	 * tests/arena-freelist.spec.ts.
+	 */
+	FREE_NEXT = 0,
+}
+
+/** MODE field bits. */
+const enum ArenaLinkMode {
+	/** 1 = weak (untracked-read) link — never delivers; lives on the segregated weak subs list. */
+	WEAK = 0b1,
+}
+
+/**
+ * Shadow flag bits (engine-owned; the shared names keep the kernel
+ * NodeFlag numbering for side-by-side reading — see the ArenaField doc).
+ */
+const enum ArenaFlag {
+	/** Can produce new values (evaluated at least once for computeds). */
+	MUTABLE = 0b000000000000001,
+	/** Currently refolding (re-entrancy guard; a read under it is a dependency cycle). */
+	RECURSED_CHECK = 0b000000000000100,
+	/** A re-entrant mark reached this shadow during its own refold. */
+	RECURSED = 0b000000000001000,
+	/** Definitely stale (listed on the arena dirty list — the DIRTY ⇒ listed contract). */
+	DIRTY = 0b000000000010000,
+	/** Possibly stale — verify by pulling before refolding. */
+	PENDING = 0b000000000100000,
+	/** Kind: atom shadow. */
+	K_SIGNAL = 0b000000010000000,
+	/** Kind: computed shadow. */
+	K_COMPUTED = 0b000000100000000,
+	/** Value column holds an exceptional payload (thrown error, or sentinel). */
+	HAS_BOX = 0b000100000000000,
+	/** Refines HAS_BOX: payload is the thenable's stable SuspendedRead. */
+	BOX_SUSPENDED = 0b001000000000000,
+	/** The value column holds a folded value (cold shadow when unset). */
+	VALID = 0b010000000000000,
+	/**
+	 * Refines HAS_BOX: the payload was thrown by the fn (render-path
+	 * suspension or plain error) — serves rethrow the cached payload,
+	 * boxedRead-style. Clear means a returned sentinel (background
+	 * suspensions fold to the sentinel value), which serves as a value.
+	 * Arena-local bit with no kernel NodeFlag counterpart (the kernel
+	 * encodes the split differently).
+	 */
+	BOX_THROWN = 0b100000000000000,
+}
+
+/**
+ * World-arena geometry. Same-file const enum members (not module
+ * consts): the reads sit inside the hot arena walks and must inline as
+ * literals.
+ */
+const enum ArenaGeom {
+	/** Int32 fields per record; ids are premultiplied by this (id = record ordinal × STRIDE). */
+	STRIDE = 8,
+	/** record id >> ID_TO_COLUMN_SHIFT = the record's slot in every per-record side column (one slot per record). */
+	ID_TO_COLUMN_SHIFT = 3,
+	/**
+	 * Int32 stamp ceiling: `readClock` and `cycle` are JS numbers, but
+	 * their stamps store into Int32Array fields (ArenaField.MARK,
+	 * ArenaLinkField.VERSION) which truncate past 2^31-1 — a wrapped store
+	 * could collide with a live stamp and false-positive the dedup (a
+	 * skipped propagation or a dropped link: the dangerous direction). The
+	 * bump helpers (arenaBumpReadClock, arenaBumpCycle) renumber before any
+	 * store can wrap: stamps reset to 0 (= stale), the clock restarts, and
+	 * the next walk re-marks — at most one conservative re-walk per record
+	 * per 2^31 events, amortized zero. (Margin under 2^31-1 is cosmetic
+	 * headroom; bumps route through the helpers, so the clocks never reach
+	 * the ceiling.)
+	 */
+	CLOCK_LIMIT = 2147418112,
+	/**
+	 * 2^28 — the growable-buffer reservation ceiling per arena (8M records
+	 * at 32 bytes each). Arena growth never replaces the buffer: each
+	 * arena ArrayBuffer is created resizable with this maxByteLength and
+	 * grows in place, so buffer identity is stable for the life of the
+	 * shell and every cached view stays valid across growth (the
+	 * reservation is virtual address space; pages commit on use).
+	 */
+	MAX_BUFFER_BYTES = 268435456,
+}
+
+/**
+ * Grow the world arena's grown-together per-record columns to cover one
+ * column index (generated from the column roster — a new column cannot
+ * miss the growth loop). Called by the shadow allocator; the clock buffer
+ * grows with the arena buffer instead (arenaGrow).
+ */
+function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {
+	while (a.vals.length <= columnIndex) {
+		a.vals.push(undefined);
+		a.suspIdx.push(0);
+		a.walk.push(0);
+		a.weakSubs.push(0);
+		a.weakSubsTail.push(0);
+	}
+}
+
+/**
+ * Scrub an evicted shadow record's per-record column slots (generated
+ * from the column roster): a re-keyed or purged record's next tenant must
+ * never observe the dead tenancy's value or clock stamp. List-coupled
+ * columns (suspIdx, the weak heads) clear through their list operations
+ * instead; walk stamps are inert by generation monotonicity.
+ */
+function scrubWorldShadowColumnsOnEvict(a: WorldArena, sh: number): void {
+	const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
+	a.vals[vi] = undefined;
+	a.clocks[vi] = 0;
+}
+
+/**
+ * Reset every world-arena side column at release (generated from the
+ * column roster; the release scrub's column half). Keeps each column's
+ * CAPACITY across pool tenancies (a priced cold-render saving: truncating
+ * to 0 forced re-pushing every element on every claim — ~2k pushes per
+ * cold render); fill() scrubs the same residue truncation would have
+ * dropped, so value refs release and stale ids read as "none" while the
+ * packed length persists. The clock buffer zero-fills its written prefix.
+ */
+function resetWorldArenaColumnsOnRelease(a: WorldArena): void {
+	a.nodeToShadow.fill(0);
+	a.vals.fill(undefined);
+	a.suspIdx.fill(0);
+	a.walk.fill(0);
+	a.weakSubs.fill(0);
+	a.weakSubsTail.fill(0);
+	a.clocks.fill(0, 0, a.next >> ArenaGeom.ID_TO_COLUMN_SHIFT);
 }
 // #endregion GENERATED layout
 
@@ -3390,94 +3581,10 @@ export function getKernelNodeIndex(id: NodeId): NodeIndex {
 // getKernelStrongDeps and collectKernelClosure), and offsets 5-7 here mean
 // shadow-specific things the kernel's fields don't.
 
-/** World-arena node-record fields (engine-owned layout — not the kernel's
- * NodeField/LinkField, whose offsets 5-7 mean different things; stride 8;
- * node-shadow and link records share the pool). */
-const enum ArenaField {
-	FLAGS = 0,
-	DEPS = 1,
-	DEPS_TAIL = 2,
-	SUBS = 3,
-	SUBS_TAIL = 4,
-	NODE = 5, // the nodeIndex this shadows (dense column key; identity is the kernel record id)
-	NODE_GEN = 6, // id-tenancy stamp: the node's kernel-record GEN observed at recording
-	MARK = 7, // fanout read-clock dedup stamp
-}
-
-/** World-arena link-record fields (link records share ArenaField's pool
- * and stride; offsets overlay the node-record fields). */
-const enum ArenaLinkField {
-	VERSION = 0,
-	DEP = 1,
-	SUB = 2,
-	PREV_SUB = 3,
-	NEXT_SUB = 4,
-	PREV_DEP = 5,
-	NEXT_DEP = 6,
-	MODE = 7, // ArenaLinkMode bits (strong/weak — see the weak-link rules below)
-	/** The free list threads through the VERSION field (FREE_NEXT aliases it),
-	 * the same discipline as the kernel's LinkField.FREE_NEXT: a freed link
-	 * must keep every field a walk still reads intact. arenaCheckDirty reads
-	 * NEXT_DEP (and arenaShallowPropagate NEXT_SUB) off links a mid-walk
-	 * purge freed, so those must keep naming former neighbors, never the
-	 * free list. VERSION is genuinely dead on freed links: it is only
-	 * written at link creation/reuse (arenaLink/arenaLinkInsert) and only
-	 * read off live links (the subs-tail dedup probe); every allocation path
-	 * rewrites it before any read. Pinned by tests/arena-freelist.spec.ts. */
-	FREE_NEXT = 0,
-}
-
-/** MODE field bits. */
-const enum ArenaLinkMode {
-	WEAK = 0b1, // bit 0: 1 = weak (untracked-read) link — never delivers
-}
-
-/** Shadow flag bits (engine-owned; the shared names keep the kernel
- * NodeFlag numbering for side-by-side reading — see header note). */
-const enum ArenaFlag {
-	MUTABLE        = 0b000000000000001,
-	RECURSED_CHECK = 0b000000000000100,
-	RECURSED       = 0b000000000001000,
-	DIRTY          = 0b000000000010000,
-	PENDING        = 0b000000000100000,
-	K_SIGNAL       = 0b000000010000000,
-	K_COMPUTED     = 0b000000100000000,
-	/** The value column holds a folded value (cold shadow when unset). */
-	VALID          = 0b010000000000000,
-	/** Value column holds an exceptional payload (thrown error, or sentinel). */
-	HAS_BOX        = 0b000100000000000,
-	/** Refines HAS_BOX: payload is the thenable's stable SuspendedRead. */
-	BOX_SUSPENDED  = 0b001000000000000,
-	/** Refines HAS_BOX: the payload was thrown by the fn (render-path
-	 * suspension or plain error) — serves rethrow the cached payload,
-	 * boxedRead-style. Clear means a returned sentinel (background
-	 * suspensions fold to the sentinel value), which serves as a value.
-	 * Arena-local bit with no kernel NodeFlag counterpart (the kernel
-	 * encodes the split differently). */
-	BOX_THROWN     = 0b100000000000000,
-}
-
-/** Arena geometry. Same-file const enum members (not module consts): the
- * reads sit inside the hot arena walks and must inline as literals. */
-const enum ArenaGeom {
-	/** Int32 fields per record; record ids are premultiplied by this. */
-	STRIDE = 8,
-	/** record id >> ID_TO_COLUMN_SHIFT = value/susp column index */
-	ID_TO_COLUMN_SHIFT = 3,
-	/**
-	 * Int32 stamp ceiling: `readClock` and `cycle` are
-	 * JS numbers, but their stamps store into Int32Array fields (`ArenaField.MARK`,
-	 * `ArenaLinkField.VERSION`) which truncate past 2^31-1 — a wrapped store could collide
-	 * with a live stamp and false-positive the dedup (a skipped propagation or a
-	 * dropped link: the dangerous direction). The bump helpers (arenaBumpReadClock,
-	 * arenaBumpCycle) renumber before any store can wrap: stamps reset to 0
-	 * (= stale), the clock restarts, and the next walk re-marks — at most one
-	 * conservative re-walk per record per 2^31 events, amortized zero. (Margin
-	 * under 2^31-1 is cosmetic headroom; bumps route through the helpers, so
-	 * the clocks never reach the ceiling.)
-	 */
-	CLOCK_LIMIT = 0x7fff0000,
-}
+// (ArenaField/ArenaLinkField/ArenaLinkMode/ArenaFlag/ArenaGeom — the world
+// arenas' layout — are generated from tools/schema.ts into the marked
+// region above, same-file with these walks so the members inline as
+// literals under every toolchain.)
 
 /** Bounds the arena pool: releaseArena keeps at most this many scrubbed shells (further releases drop the shell). */
 const ARENA_POOL_CAP = 8;
@@ -3500,7 +3607,34 @@ export class WorldArena {
 	alive = true;
 	/** Pool claim generation (bumped at claim and release). */
 	claimGen = 0;
-	memory: Int32Array;
+	/**
+	 * The arena buffer's backing store: a RESIZABLE ArrayBuffer (created with
+	 * maxByteLength = ArenaGeom.MAX_BUFFER_BYTES) that grows IN PLACE — the
+	 * buffer object's identity never changes for the life of the shell, so
+	 * every view and every cached local stays valid across growth by
+	 * construction. This is what retired the old growth style (replace the
+	 * Int32Array, then re-load `a.memory` at every allocating call site — a
+	 * hand-maintained discipline where one forgotten re-load was silent
+	 * corruption): the pooled per-world arenas can't afford the kernel's
+	 * closure-rebuild answer (a fresh closure set per claim would allocate
+	 * per render and go polymorphic), and boundary-only growth would break
+	 * the pinned mid-operation growth capability (folds legitimately allocate
+	 * unbounded cones mid-operation; arena-sa2/sd force it).
+	 */
+	readonly buffer: ArrayBuffer;
+	/** Length-tracking Int32 view over {@link buffer} (a resize is visible
+	 * through every existing view immediately). */
+	readonly memory: Int32Array;
+	/** The clock column's backing store (resizable, one float64 per record;
+	 * resized in step with {@link buffer} by arenaGrow). */
+	readonly clockBuffer: ArrayBuffer;
+	/** Length-tracking float64 view over {@link clockBuffer}: the per-world
+	 * updated-at clock column (see the schema's world column roster). */
+	readonly clocks: Float64Array;
+	/** Whether refolds stamp the clock column: committed arenas only —
+	 * render-world values are pin-frozen, so a render arena's clocks never
+	 * move (the bump-gate; set per tenancy at claim). */
+	bumpsClocks: boolean;
 	vals: Value[] = [];
 	/** Per-record suspended-list slot + 1 (0 = not suspended) — the field is
 	 * the set bit and stores the dense index (swap-remove compaction). */
@@ -3544,11 +3678,21 @@ export class WorldArena {
 	/** Per-arena evaluation cycle (link VERSION stamps). */
 	cycle = 0;
 
-	constructor(kind: 'render' | 'committed', world: World, root: RootId, buf: Int32Array) {
+	constructor(kind: 'render' | 'committed', world: World, root: RootId, initInts: ArenaInitInts) {
 		this.kind = kind;
 		this.world = world;
 		this.root = root;
-		this.memory = buf;
+		this.bumpsClocks = kind === 'committed';
+		// One growable reservation per shell (records) plus one for the clock
+		// column (one float64 per record: byte count = the int count, rounded
+		// up to the float64 alignment). An initInts above the standard
+		// ceiling raises the reservation with it.
+		const maxBytes = Math.max(initInts * 4, ArenaGeom.MAX_BUFFER_BYTES);
+		const clockBytes = (initInts + 7) & ~7;
+		this.buffer = new ArrayBuffer(initInts * 4, { maxByteLength: maxBytes });
+		this.memory = new Int32Array(this.buffer);
+		this.clockBuffer = new ArrayBuffer(clockBytes, { maxByteLength: Math.max(clockBytes, maxBytes >> 2) });
+		this.clocks = new Float64Array(this.clockBuffer);
 	}
 }
 
@@ -3601,13 +3745,18 @@ function arenaBumpCycle(a: WorldArena): number {
 	return ++a.cycle;
 }
 
+/** Grow the arena to cover `need` ints — an IN-PLACE resize of the growable
+ * backing store (new pages arrive zeroed, preserving the fresh-record
+ * invariant), so growth is transparent to every live view and cached local:
+ * no buffer replacement, no re-load discipline at allocating call sites (see
+ * {@link WorldArena.buffer}). The clock column resizes in step (one float64
+ * per record: byte count = the int count, at float64 alignment). */
 function arenaGrow(a: WorldArena, need: number): void {
 	let len = a.memory.length;
 	while (len < need) len *= 2;
 	if (len !== a.memory.length) {
-		const bigger = new Int32Array(len);
-		bigger.set(a.memory);
-		a.memory = bigger; // growth-mid-op: every allocating call site re-loads a.memory
+		a.buffer.resize(len * 4);
+		a.clockBuffer.resize((len + 7) & ~7);
 	}
 }
 
@@ -3628,8 +3777,8 @@ function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: numb
 	}
 	const memory = a.memory;
 	// Fresh-record invariant (a priced cold-render saving): memory[a.next..] is all zero —
-	// a fresh Int32Array is zeroed, arenaGrow's replacement buffer is zeroed past
-	// the copied prefix, and releaseArena scrubs the dead tenancy's whole
+	// a fresh buffer is zeroed, arenaGrow's resize delivers zeroed pages past
+	// the old length, and releaseArena scrubs the dead tenancy's whole
 	// written prefix [0, next) before the buffer pools. So the list heads
 	// (DEPS/DEPS_TAIL/SUBS/SUBS_TAIL) and MARK are already 0 here, and the
 	// bump allocator never re-issues a record id mid-tenancy — only the
@@ -3638,14 +3787,7 @@ function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: numb
 	memory[id + ArenaField.FLAGS] = flags;
 	memory[id + ArenaField.NODE] = ix;
 	memory[id + ArenaField.NODE_GEN] = gen;
-	const v = id >> ArenaGeom.ID_TO_COLUMN_SHIFT;
-	while (a.vals.length <= v) {
-		a.vals.push(undefined);
-		a.suspIdx.push(0);
-		a.walk.push(0);
-		a.weakSubs.push(0);
-		a.weakSubsTail.push(0);
-	}
+	growWorldArenaColumns(a, id >> ArenaGeom.ID_TO_COLUMN_SHIFT); // generated: the grown-together columns
 	while (a.nodeToShadow.length <= ix) a.nodeToShadow.push(0); // stay packed, never holey
 	a.nodeToShadow[ix] = id;
 	return id;
@@ -3761,7 +3903,7 @@ function arenaLinkInsert(a: WorldArena, dep: number, sub: number, version: numbe
 		if (!weak) arenaSetLinkWeak(a, wTail, false); // upgrade weak→strong
 		return;
 	}
-	const newLink = arenaAllocLink(a); // may grow the arena: re-load memory after
+	const newLink = arenaAllocLink(a); // may grow the arena (in-place resize: views stay valid)
 	const memory = a.memory;
 	memory[sub + ArenaField.DEPS_TAIL] = newLink;
 	memory[newLink + ArenaLinkField.VERSION] = version;
@@ -4042,11 +4184,12 @@ export function createWorldArena(core: EngineCore): void {
 	function claimArena(kind: 'render' | 'committed', world: World, root: RootId): WorldArena {
 		let a = arenaPool.pop();
 		if (a === undefined) {
-			a = new WorldArena(kind, world, root, new Int32Array(arenaInitInts));
+			a = new WorldArena(kind, world, root, arenaInitInts);
 		} else {
 			a.kind = kind;
 			a.world = world;
 			a.root = root;
+			a.bumpsClocks = kind === 'committed'; // per-tenancy: the pool mixes kinds
 		}
 		a.alive = true;
 		a.claimGen++;
@@ -4072,12 +4215,7 @@ export function createWorldArena(core: EngineCore): void {
 		// released (no pooled-arena leak), nodeToShadow reads 0 (= none), suspIdx
 		// reads 0 (= not suspended) — while the packed length persists, so
 		// the next tenancy's growth loops are no-ops up to this watermark.
-		a.nodeToShadow.fill(0);
-		a.vals.fill(undefined);
-		a.suspIdx.fill(0);
-		a.walk.fill(0);
-		a.weakSubs.fill(0);
-		a.weakSubsTail.fill(0);
+		resetWorldArenaColumnsOnRelease(a); // generated: every declared column resets, by construction
 		a.dirty.length = 0;
 		a.suspended.length = 0;
 		// Scrub the written record prefix so pooled buffers re-claim all-zero
@@ -4164,7 +4302,7 @@ export function createWorldArena(core: EngineCore): void {
 			}
 		}
 		if ((a.memory[sh + ArenaField.FLAGS]! & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh);
-		a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] = undefined;
+		scrubWorldShadowColumnsOnEvict(a, sh); // generated: value + clock slots clear together
 	}
 
 	/** Arena dep recording (arena fn-reader hook): first-occurrence mode
@@ -4238,6 +4376,10 @@ export function createWorldArena(core: EngineCore): void {
 		const flags = memory[sh + ArenaField.FLAGS]!;
 		const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 		arenaBumpReadClock(a);
+		// A thrown outcome moves the committed clock conservatively (a bump
+		// with an unchanged payload only costs an observer one re-compare;
+		// a missed bump would be a stale-skip bug — the dangerous direction).
+		if (a.bumpsClocks) a.clocks[vi] = ++clockSource;
 		if (err instanceof SuspendedRead) {
 			a.vals[vi] = err;
 			memory[sh + ArenaField.FLAGS] = (flags & ~(ArenaFlag.DIRTY | ArenaFlag.PENDING)) | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN;
@@ -4343,7 +4485,13 @@ export function createWorldArena(core: EngineCore): void {
 		// comparator gates propagation only. Reference preservation for
 		// custom-equality computeds lives in arenaFoldOutcome.
 		a.vals[vi] = next;
-		return !(prevValid && arenaIsValueEqual(prev, next));
+		if (prevValid && arenaIsValueEqual(prev, next)) {
+			return false;
+		}
+		// A changed fold outcome moves the shadow's per-root committed clock
+		// (committed arenas only — render-world values are pin-frozen).
+		if (a.bumpsClocks) a.clocks[vi] = ++clockSource;
+		return true;
 	}
 
 	/** Arena computed refold: the fn runs with the arena readers and the
@@ -4437,14 +4585,24 @@ export function createWorldArena(core: EngineCore): void {
 			a.vals[vi] = value;
 			a.memory[sh + ArenaField.FLAGS] = (flags & ~ArenaFlag.BOX_THROWN) | ArenaFlag.VALID | ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED;
 			arenaSuspend(a, sh);
-			return !same;
+			if (same) {
+				return false;
+			}
+			if (a.bumpsClocks) a.clocks[vi] = ++clockSource; // a fresh suspension is a changed tagged outcome
+			return true;
 		}
 		const prevValid = (flags & ArenaFlag.VALID) !== 0 && (flags & ArenaFlag.HAS_BOX) === 0;
 		const changed = !(prevValid && (eq === undefined
 			? Object.is(a.vals[vi], value)
 			: arenaIsValueEqualCold(eq, a.vals[vi], value)));
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) arenaUnsuspend(a, sh);
-		if (changed) a.vals[vi] = value;
+		if (changed) {
+			a.vals[vi] = value;
+			// The clock is over tagged outcomes: a box→value transition bumps
+			// even when the payloads are identity-equal (prevValid demands a
+			// plain previous value, so that transition always lands here).
+			if (a.bumpsClocks) a.clocks[vi] = ++clockSource;
+		}
 		a.memory[sh + ArenaField.FLAGS] = (a.memory[sh + ArenaField.FLAGS]! & ~(ArenaFlag.HAS_BOX | ArenaFlag.BOX_SUSPENDED | ArenaFlag.BOX_THROWN)) | ArenaFlag.VALID;
 		return changed;
 	}
@@ -4474,8 +4632,8 @@ export function createWorldArena(core: EngineCore): void {
 	};
 
 	/** Kernel `checkDirty` transliteration (arenaUpdateShadow can run getters —
-	 * allocations, arena growth — so a.memory re-loads after every update call).
-	 * Entry wrapper: owns the scratch-stack base restore around the
+	 * allocations, arena growth — growth resizes in place, so views and
+	 * cached locals stay valid throughout). Entry wrapper: owns the scratch-stack base restore around the
 	 * out-of-line walk so each piece stays under V8's 460-bytecode inline
 	 * budget (the arena counterpart of the kernel checkDirty split). */
 	function arenaCheckDirty(a: WorldArena, startLink: number, startSub: number): boolean {
