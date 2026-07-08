@@ -68,7 +68,6 @@ export const FLAG_BITS: Record<string, number> = {
 	HAS_CHILD_EFFECT: 64,
 	LOGGED: 128,
 	IMMEDIATE: 256,
-	LIVE: 512,
 	K_ATOM: 1024,
 	K_COMPUTED: 2048,
 	K_EFFECT: 4096,

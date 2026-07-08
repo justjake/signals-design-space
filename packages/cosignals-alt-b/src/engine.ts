@@ -80,7 +80,6 @@ const enum C {
 	HAS_CHILD_EFFECT = 64, // dep list contains child effects/scopes (slow-path cleanup)
 	LOGGED = 128, // atoms only: LOG_HEAD !== 0 — the read gate
 	IMMEDIATE = 256, // watchers only: notify via the broadcast list, not the effect queue
-	LIVE = 512, // transitively watched by some effect/watcher (liveness split)
 	K_ATOM = 1024, // kind: writable atom
 	K_COMPUTED = 2048, // kind: computed
 	K_EFFECT = 4096, // kind: effect
@@ -232,6 +231,11 @@ let newestStamp: number[] = [0];
 // live deferred batch must not change this cone's evaluation counts.
 let unappliedCount: number[] = [0];
 let unappliedStamp: number[] = [0];
+// §8.6 liveness as a per-node LIVE-SUBSCRIBER REFCOUNT (Preact pattern),
+// kept OUT of the kernel-rewritten flags word (dispose zeroes flags; a bit
+// there dies with them). live(n) := liveCount > 0 || born-live kind
+// (effect/scope/watcher). Cascades run ONLY on 0-crossings.
+let liveCount: number[] = [0];
 
 let propStack = new Int32Array(4096);
 let propSp = 0;
@@ -477,6 +481,9 @@ function allocNode(flags: number): number {
 	while (unappliedStamp.length <= r) {
 		unappliedStamp.push(0);
 	}
+	while (liveCount.length <= r) {
+		liveCount.push(0);
+	}
 	return id;
 }
 
@@ -507,6 +514,7 @@ function freeNode(id: number): void {
 	newestStamp[id >> 3] = 0;
 	unappliedCount[id >> 3] = 0;
 	unappliedStamp[id >> 3] = 0;
+	liveCount[id >> 3] = 0;
 	if (finalizeSkipped.size !== 0) {
 		finalizeSkipped.delete(id);
 	}
@@ -645,11 +653,10 @@ function linkInsert(dep: number, sub: number, version: number, prevDep: number, 
 	} else {
 		M[dep + C.SUBS] = newLink;
 	}
-	// Liveness (§8.6): when a LIVE consumer attaches to a non-LIVE producer,
-	// the bit flows down the producer's own dependency list. Runs only when
-	// the liveness boundary actually moves.
-	if ((M[sub + C.FLAGS] & C.LIVE) !== 0 && (M[dep + C.FLAGS] & C.LIVE) === 0) {
-		setLiveDown(dep);
+	// Liveness (§8.6): a new edge from a live consumer retains the producer;
+	// the cascade below runs only on the producer's own 0→1 crossing.
+	if (isLiveNode(sub)) {
+		liveRetain(dep);
 	}
 	// Mark repair (§8.7.3): if the overlay is live and the new producer is
 	// marked (or is a LOGGED atom), stamp the consumer's cone with the current
@@ -675,27 +682,33 @@ function linkInsert(dep: number, sub: number, version: number, prevDep: number, 
 	}
 }
 
-/** §8.6 — flow the LIVE bit down a producer's dependency list (iterative,
- * persistent scratch with saved base — this runs on every liveness-boundary
- * move, e.g. each branch flip of a watched dynamic computed). */
-function setLiveDown(start: number): void {
+/** §8.6 — liveness refcount. Born-live kinds (effects, scopes, watchers)
+ * never cross; everything else is live iff some live subscriber holds it. */
+function isLiveNode(n: number): boolean {
+	return (
+		liveCount[n >> 3] > 0
+		|| (M[n + C.FLAGS] & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0
+	);
+}
+
+/** A live subscriber attached to `start`: increment, cascade on 0→1. */
+function liveRetain(start: number): void {
 	const stackBase = propSp;
 	let n = start;
 	do {
-		if ((M[n + C.FLAGS] & (C.LIVE | C.KIND_MASK)) !== 0 && (M[n + C.FLAGS] & C.LIVE) === 0) {
-			M[n + C.FLAGS] |= C.LIVE;
+		if (
+			++liveCount[n >> 3] === 1
+			&& (M[n + C.FLAGS] & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) === 0
+		) {
 			onLiveChanged(n);
 			let l = M[n + C.DEPS];
 			while (l !== 0) {
-				const dep = M[l + C.DEP];
-				if ((M[dep + C.FLAGS] & C.LIVE) === 0) {
-					if (propSp === propStack.length) {
-						const bigger = new Int32Array(propStack.length * 2);
-						bigger.set(propStack);
-						propStack = bigger;
-					}
-					propStack[propSp++] = dep;
+				if (propSp === propStack.length) {
+					const bigger = new Int32Array(propStack.length * 2);
+					bigger.set(propStack);
+					propStack = bigger;
 				}
+				propStack[propSp++] = M[l + C.DEP];
 				l = M[l + C.NEXT_DEP];
 			}
 		}
@@ -704,40 +717,25 @@ function setLiveDown(start: number): void {
 	propSp = stackBase;
 }
 
-/** §8.6 — clear LIVE when the last LIVE subscriber detaches, flowing down. */
-function maybeClearLive(start: number): void {
+/** A live subscriber detached from `start`: decrement, cascade on 1→0. */
+function liveRelease(start: number): void {
 	const stackBase = propSp;
 	let n = start;
 	do {
-		const flags = M[n + C.FLAGS];
 		if (
-			(flags & C.LIVE) !== 0
-			&& (flags & C.KIND_MASK) !== 0
-			// Effects/scopes/watchers are born LIVE and stay LIVE.
-			&& (flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) === 0
+			--liveCount[n >> 3] === 0
+			&& (M[n + C.FLAGS] & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) === 0
 		) {
-			let l = M[n + C.SUBS];
-			let anyLive = false;
+			onLiveChanged(n);
+			let l = M[n + C.DEPS];
 			while (l !== 0) {
-				if ((M[M[l + C.SUB] + C.FLAGS] & C.LIVE) !== 0) {
-					anyLive = true;
-					break;
+				if (propSp === propStack.length) {
+					const bigger = new Int32Array(propStack.length * 2);
+					bigger.set(propStack);
+					propStack = bigger;
 				}
-				l = M[l + C.NEXT_SUB];
-			}
-			if (!anyLive) {
-				M[n + C.FLAGS] = flags & ~C.LIVE;
-				onLiveChanged(n);
-				let d = M[n + C.DEPS];
-				while (d !== 0) {
-					if (propSp === propStack.length) {
-						const bigger = new Int32Array(propStack.length * 2);
-						bigger.set(propStack);
-						propStack = bigger;
-					}
-					propStack[propSp++] = M[d + C.DEP];
-					d = M[d + C.NEXT_DEP];
-				}
+				propStack[propSp++] = M[l + C.DEP];
+				l = M[l + C.NEXT_DEP];
 			}
 		}
 		n = propSp > stackBase ? propStack[--propSp] : 0;
@@ -786,7 +784,7 @@ function markCone(node: number, ticket: number, unapplied = false): void {
 	propSp = stackBase;
 }
 
-function unlink(id: number, sub = M[id + C.SUB]): number {
+function unlink(id: number, sub = M[id + C.SUB], subLive = isLiveNode(sub)): number {
 	const dep = M[id + C.DEP];
 	const prevDep = M[id + C.PREV_DEP];
 	const nextDep = M[id + C.NEXT_DEP];
@@ -808,15 +806,14 @@ function unlink(id: number, sub = M[id + C.SUB]): number {
 		M[dep + C.SUBS_TAIL] = prevSub;
 	}
 	freeLink(id);
+	// Liveness (§8.6): release BEFORE unwatched can restructure dep's lists.
+	if (subLive) {
+		liveRelease(dep);
+	}
 	if (prevSub !== 0) {
 		M[prevSub + C.NEXT_SUB] = nextSub;
 	} else if ((M[dep + C.SUBS] = nextSub) === 0) {
 		unwatched(dep);
-	}
-	// Liveness (§8.6): this unlink may have removed the producer's last LIVE
-	// subscriber; maybeClearLive early-outs when it did not.
-	if ((M[dep + C.FLAGS] & C.LIVE) !== 0) {
-		maybeClearLive(dep);
 	}
 	return nextDep;
 }
@@ -1120,7 +1117,7 @@ function updateComputed(c: number): boolean {
 	}
 	M[c + C.DEPS_TAIL] = 0;
 	const stamp = M[c + C.OVERLAY_STAMP];
-	M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK | (M[c + C.FLAGS] & C.LIVE);
+	M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
 	M[c + C.OVERLAY_STAMP] = stamp;
 	const prevSub = activeSub;
 	activeSub = c;
@@ -1160,7 +1157,7 @@ function run(e: number): void {
 		}
 		M[e + C.DEPS_TAIL] = 0;
 		const stamp = M[e + C.OVERLAY_STAMP];
-		M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK | (M[e + C.FLAGS] & C.LIVE);
+		M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK;
 		M[e + C.OVERLAY_STAMP] = stamp;
 		const prevSub = activeSub;
 		activeSub = e;
@@ -1177,7 +1174,7 @@ function run(e: number): void {
 			purgeDeps(e);
 		}
 	} else if (M[e + C.DEPS] !== 0) {
-		M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & (C.HAS_CHILD_EFFECT | C.LIVE));
+		M[e + C.FLAGS] = C.K_EFFECT | C.WATCHING | (flags & C.HAS_CHILD_EFFECT);
 	}
 }
 
@@ -1210,8 +1207,13 @@ function dispose(e: number): void {
 	if (flags & C.K_WATCHER) {
 		liveWatcherIds.delete(e);
 	}
+	// Capture liveness from the still-valid flags: zeroing them first (the
+	// donor's re-entrancy defense) would otherwise make every disposing
+	// effect/watcher look dead and leak its deps' refcounts.
+	const wasLive =
+		liveCount[e >> 3] > 0 || (flags & (C.K_EFFECT | C.K_SCOPE | C.K_WATCHER)) !== 0;
 	M[e + C.FLAGS] = 0;
-	disposeAllDepsInReverse(e);
+	disposeAllDepsInReverse(e, wasLive);
 	const sub = M[e + C.SUBS];
 	if (sub !== 0) {
 		unlink(sub);
@@ -1222,11 +1224,11 @@ function dispose(e: number): void {
 	pendingFree.push(e);
 }
 
-function disposeAllDepsInReverse(sub: number): void {
+function disposeAllDepsInReverse(sub: number, subLive = isLiveNode(sub)): void {
 	let cur = M[sub + C.DEPS_TAIL];
 	while (cur !== 0) {
 		const prev = M[cur + C.PREV_DEP];
-		unlink(cur, sub);
+		unlink(cur, sub, subLive);
 		cur = prev;
 	}
 }
@@ -1494,7 +1496,7 @@ function kernelComputedRead(c: number, track: boolean): unknown {
 
 function firstEvalComputed(c: number): void {
 	const stamp = M[c + C.OVERLAY_STAMP];
-	M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK | (M[c + C.FLAGS] & C.LIVE);
+	M[c + C.FLAGS] = C.K_COMPUTED | C.MUTABLE | C.RECURSED_CHECK;
 	M[c + C.OVERLAY_STAMP] = stamp;
 	const prevSub = activeSub;
 	activeSub = c;
@@ -2997,6 +2999,29 @@ function verifyIntegrity(): void {
 			throw new Error(`verify: SUBS_TAIL of ${id} incoherent`);
 		}
 	}
+	// Liveness refcount invariant (§8.6): every node's count equals the
+	// number of its subscriber links whose consumer is live.
+	for (const id of nodeIds) {
+		if ((M[id + C.FLAGS] & C.KIND_MASK) === 0) {
+			continue;
+		}
+		if (liveCount[id >> 3] < 0) {
+			throw new Error(`verify: node ${id} liveCount underflow`);
+		}
+		let expectedLive = 0;
+		let ll = M[id + C.SUBS];
+		while (ll !== 0) {
+			if (isLiveNode(M[ll + C.SUB])) {
+				++expectedLive;
+			}
+			ll = M[ll + C.NEXT_SUB];
+		}
+		if (liveCount[id >> 3] !== expectedLive) {
+			throw new Error(
+				`verify: node ${id} liveCount ${liveCount[id >> 3]} != live subscribers ${expectedLive}`,
+			);
+		}
+	}
 	// Tapes: LOGGED flag ⇔ LOG_HEAD, chain seq monotone, counts consistent.
 	const perSlot = new Int32Array(32);
 	let logged = 0;
@@ -3082,7 +3107,7 @@ function verifyIntegrity(): void {
 // ---- factory-internal cores for the module-level API --------------------------
 
 function makeEffect(fn: () => void | (() => void)): { id: number; gen: number } {
-	const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK | C.LIVE);
+	const e = allocNode(C.K_EFFECT | C.WATCHING | C.RECURSED_CHECK);
 	fns[e >> 3] = fn;
 	const prevSub = activeSub;
 	activeSub = e;
@@ -3104,7 +3129,7 @@ function makeEffect(fn: () => void | (() => void)): { id: number; gen: number } 
 }
 
 function makeScope(fn: () => void): { id: number; gen: number } {
-	const e = allocNode(C.K_SCOPE | C.MUTABLE | C.LIVE);
+	const e = allocNode(C.K_SCOPE | C.MUTABLE);
 	const prevSub = activeSub;
 	activeSub = e;
 	if (prevSub !== 0) {
@@ -3124,7 +3149,7 @@ function makeScope(fn: () => void): { id: number; gen: number } {
 /** §13.1 watcher core: kind K_WATCHER, WATCHING|IMMEDIATE|LIVE, subscription-
  * time world seeding (see createWatcher docs). */
 function makeWatcher(watched: number, cb: (token: number) => void): { id: number; gen: number } {
-	const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE | C.LIVE);
+	const w = allocNode(C.K_WATCHER | C.WATCHING | C.IMMEDIATE);
 	const lastBroadcast = new Map<number, unknown>();
 	lastBroadcast.set(0, resolveNode(watched, WORLD_W0));
 	if (fork !== undefined) {
@@ -3293,8 +3318,8 @@ function processFinalizeRetries(): void {
 		},
 		onThenableSettled,
 		observeWanted: (node: number) =>
-			(M[node + C.FLAGS] & C.KIND_MASK) !== 0 && (M[node + C.FLAGS] & C.LIVE) !== 0,
-		isLive: (id: number) => (M[id + C.FLAGS] & C.LIVE) !== 0,
+			(M[node + C.FLAGS] & C.KIND_MASK) !== 0 && isLiveNode(node),
+		isLive: isLiveNode,
 		liveMemos: () => {
 			let n = 0;
 			for (let rec = 8; rec < wNext; rec += 8) {
@@ -3529,6 +3554,7 @@ export function __resetEngineForTests(options?: {
 	newestStamp = [0];
 	unappliedCount = [0];
 	unappliedStamp = [0];
+	liveCount = [0];
 	propStack = new Int32Array(4096);
 	propSp = 0;
 	checkStack = new Int32Array(4096);

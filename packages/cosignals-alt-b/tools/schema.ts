@@ -180,7 +180,8 @@ export const schema: Schema = defineSchema({
 		{ name: 'HAS_CHILD_EFFECT', bit: 64, doc: 'dep list contains child effects/scopes (slow-path cleanup)' },
 		{ name: 'LOGGED', bit: 128, doc: 'atoms only: LOG_HEAD !== 0 — the read gate' },
 		{ name: 'IMMEDIATE', bit: 256, doc: 'watchers only: notify via the broadcast list, not the effect queue' },
-		{ name: 'LIVE', bit: 512, doc: 'transitively watched by some effect/watcher (liveness split)' },
+		// bit 512 free: LIVE became a per-node refcount side column (liveCount),
+		// kept out of the kernel-rewritten flags word (§8.6 refcount conversion).
 		{ name: 'K_ATOM', bit: 1024, doc: 'kind: writable atom' },
 		{ name: 'K_COMPUTED', bit: 2048, doc: 'kind: computed' },
 		{ name: 'K_EFFECT', bit: 4096, doc: 'kind: effect' },
