@@ -1,7 +1,7 @@
 From 7944cbad7a58e59e1afa1621f610a1e6d16f3572 Mon Sep 17 00:00:00 2001
 From: Jake Teton-Landis <just.1.jake@gmail.com>
 Date: Wed, 8 Jul 2026 13:39:34 -0400
-Subject: [PATCH 3/3] Make signals protocol closure-safe
+Subject: [PATCH 3/4] Make signals protocol closure-safe
 
 ---
  packages/react/src/ReactClient.js             | 48 ++-----------------

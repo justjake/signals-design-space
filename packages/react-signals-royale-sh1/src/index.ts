@@ -12,17 +12,18 @@ import {
   emit,
   initializeAtomState,
   isPending,
-  latest,
+  latest as engineLatest,
   openTransaction,
   pendingTransaction,
   read,
-  rebaseDeferredOverUrgent,
   refresh,
   resetForTest as resetEngine,
   retireTransaction,
   rootWorld,
   runInTransaction,
   serializeAtomState,
+  setFlushSync,
+  setRenderProbe,
   setRootWorld,
   subscribeNode,
   subscribeReact,
@@ -44,6 +45,7 @@ type FiberRoot = { containerInfo: object };
 type RenderWorld = { render: readonly Transaction[]; committed: readonly Transaction[] };
 
 const protocol = (React as unknown as { unstable_Signals?: Protocol }).unstable_Signals;
+setRenderProbe(() => protocol !== undefined && protocol.world() !== null);
 const transactions = new Map<number, Transaction>();
 const lanes = new Map<number, number>();
 let rootLanes = new WeakMap<FiberRoot, Map<number, Transaction>>();
@@ -150,6 +152,9 @@ const runtime: Runtime = {
     emit(`dom-mutation-${phase}`, passCauses.get(root), { root });
     for (const listener of mutationListeners) listener(phase, root.containerInfo as Element);
   },
+  flush(start) {
+    setFlushSync(start);
+  },
 };
 
 type Runtime = {
@@ -158,6 +163,7 @@ type Runtime = {
   render(root: FiberRoot, lanes: number): RenderWorld;
   commit(root: FiberRoot, lanes: number, remaining: number): void;
   mutation(root: FiberRoot, start: boolean): void;
+  flush(start: boolean): void;
 };
 
 function requireProtocol(): Protocol {
@@ -237,6 +243,11 @@ export function useValue<T>(cell: Cell<T>): T {
     }
     throw error;
   }
+}
+
+export function latest<T>(cell: Cell<T>): T {
+  const world = protocol?.world();
+  return world == null ? engineLatest(cell) : withWorld(world.render, () => engineLatest(cell));
 }
 
 export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
@@ -326,9 +337,7 @@ export {
   effect,
   initializeAtomState,
   isPending,
-  latest,
   read,
-  rebaseDeferredOverUrgent,
   refresh,
   rootWorld,
   serializeAtomState,

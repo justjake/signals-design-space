@@ -114,6 +114,7 @@ const transactions: Transaction[] = [];
 const rootWorlds = new WeakMap<object, Transaction[]>();
 let suppressReact = false;
 let urgentRebaseDepth = 0;
+let renderProbe: (() => boolean) | undefined;
 
 function fold<T>(atom: Atom<T>, txs: readonly Transaction[]): T {
   let value = atom.base;
@@ -472,6 +473,7 @@ function notify(node: Node<unknown>, cause?: TraceId): void {
 }
 
 function write<T>(atom: Atom<T>, update: Update<T>): void {
+  if (renderProbe?.()) throw new Error("Signals cannot be written during render");
   if (initializing !== 0) throw new Error("A lazy initializer cannot write");
   atom.materialize();
   if (currentTransaction?.deferred) {
@@ -600,13 +602,12 @@ export function untracked<T>(fn: () => T): T {
   }
 }
 
-export function rebaseDeferredOverUrgent<T>(fn: () => T): T {
-  urgentRebaseDepth++;
-  try {
-    return fn();
-  } finally {
-    urgentRebaseDepth--;
-  }
+export function setRenderProbe(probe: () => boolean): void {
+  renderProbe = probe;
+}
+
+export function setFlushSync(active: boolean): void {
+  urgentRebaseDepth += active ? 1 : -1;
 }
 
 export function read<T>(node: Atom<T> | Computed<T>): T {
@@ -614,7 +615,7 @@ export function read<T>(node: Atom<T> | Computed<T>): T {
 }
 
 export function latest<T>(node: Atom<T> | Computed<T>): T {
-  if (currentWorld !== undefined) {
+  if (currentWorld !== undefined || active !== undefined) {
     try {
       return node.get();
     } catch (error) {
@@ -923,6 +924,7 @@ export function resetForTest(): void {
   flushing = false;
   epoch = 0;
   transactionSequence = 0;
+  urgentRebaseDepth = 0;
   traceSequence = 0;
   for (const tracer of [...tracers]) tracer.stop();
 }

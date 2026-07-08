@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import * as React from "react";
+import { flushSync as rawFlushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import adapter from "../royale/adapter";
 
@@ -114,7 +115,7 @@ describe("real React protocol", () => {
     );
     expect(container.textContent).toBe("1:ready:true");
     await adapter.act(() =>
-      adapter.flushSync(() => adapter.update(count, (value) => (value as number) + 1)),
+      rawFlushSync(() => adapter.update(count, (value) => (value as number) + 1)),
     );
     expect(container.textContent).toBe("2:ready:true");
     await adapter.act(async () => {
@@ -191,6 +192,49 @@ describe("real React protocol", () => {
       await pending;
     });
     expect(container.textContent).toBe("old:2:loadedlate:2:loaded");
+  });
+
+  test("latest inside a render and nested computed resolves that render's world", async () => {
+    let resolve!: () => void;
+    let settled = false;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const value = adapter.atom(0);
+    const hold = adapter.atom(false);
+    function Suspender() {
+      const pendingValue = adapter.useValue(hold);
+      if (pendingValue && !settled) throw pending;
+      return null;
+    }
+    function Probe() {
+      const direct = adapter.latest(value);
+      const nested = adapter.useComputed(() => adapter.latest(value), [value]);
+      return <span>{`${direct}:${nested}`}</span>;
+    }
+    function App({ probe }: { probe: boolean }) {
+      return (
+        <React.Suspense fallback={null}>
+          <Suspender />
+          {probe ? <Probe /> : null}
+        </React.Suspense>
+      );
+    }
+    await adapter.act(() => root.render(<App probe={false} />));
+    await adapter.act(() =>
+      adapter.startTransitionWrite(() => {
+        adapter.set(value, 1);
+        adapter.set(hold, true);
+      }),
+    );
+    await adapter.act(() => root.render(<App probe={true} />));
+    expect(container.textContent).toBe("0:0");
+    await adapter.act(async () => {
+      settled = true;
+      resolve();
+      await pending;
+    });
+    expect(container.textContent).toBe("1:1");
   });
 
   test("branch arithmetic is urgent 2 now and rebased 6 after retirement", async () => {
@@ -448,7 +492,7 @@ describe("real React protocol", () => {
   test("writes during render fail loudly", async () => {
     const value = adapter.atom(0);
     function Bad() {
-      adapter.set(value, 1);
+      value.set(1);
       return null;
     }
     await expect(adapter.act(() => root.render(<Bad />))).rejects.toThrow("during render");

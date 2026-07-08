@@ -1,7 +1,7 @@
 import * as React from "react";
 import { act } from "react";
 import * as ReactDOMClient from "react-dom/client";
-import { flushSync as reactFlushSync } from "react-dom";
+import { flushSync } from "react-dom";
 import {
   Atom,
   atom,
@@ -14,7 +14,6 @@ import {
   latest,
   onDomMutation,
   read,
-  rebaseDeferredOverUrgent,
   refresh,
   register,
   resetForTest,
@@ -30,7 +29,6 @@ import {
 } from "../src/index";
 
 let atomSequence = 0;
-const protocol = (React as unknown as { unstable_Signals: { world(): unknown } }).unstable_Signals;
 
 const adapter = {
   slug: "sh1",
@@ -40,7 +38,7 @@ const adapter = {
     await act(fn);
     return undefined;
   },
-  flushSync: (fn: () => void) => rebaseDeferredOverUrgent(() => reactFlushSync(fn)),
+  flushSync,
   register,
   resetForTest() {
     atomSequence = 0;
@@ -62,11 +60,9 @@ const adapter = {
     });
   },
   set(cell: unknown, value: unknown) {
-    if (protocol.world() !== null) throw new Error("Signals cannot be written during render");
     (cell as Atom<unknown>).set(value);
   },
   update(cell: unknown, fn: (prev: unknown) => unknown) {
-    if (protocol.world() !== null) throw new Error("Signals cannot be written during render");
     (cell as Atom<unknown>).update(fn);
   },
   computed<T>(

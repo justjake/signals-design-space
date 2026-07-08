@@ -251,3 +251,53 @@ libLoc: 1208
 ```
 
 The fork remains **91 LOC**. Library LOC is **1208** (891 engine + 317 binding), up from 1075 in Round 1; the 133-line increase buys the verified rebase/pending/late-mount semantics and targeted delivery path. The benchmark driver and adapters are outside the ranked `src/` metric.
+
+### Judgement fixes
+
+The three flagged behaviors now live in the shipped engine/bindings and the verification adapter is pure wiring:
+
+- `Atom.set()` and `Atom.update()` consult a render-state probe installed by the React bindings and throw `Signals cannot be written during render`. The regression invokes `value.set(1)` directly inside a component; `royale/adapter.ts` no longer checks `protocol.world()` in `set` or `update`.
+- Plain `flushSync` imported from `react-dom` now brackets the registered signal runtime through a three-line fork hook. The binding converts that hook into the engine's urgent-rebase scope. The regression imports `flushSync` directly from `react-dom`; the adapter now exports the same function unchanged and contains no ordering composition.
+- Engine `latest()` now preserves an active computation's world instead of reading ambient newest intent. Binding `latest()` enters the fork-provided render world when called during render. New regressions cover canonical versus transactional computed evaluation and an urgent render mounted while a newer transition world is suspended; direct-render and nested-computed reads show `0:0`, then the transition shows `1:1`.
+
+Fresh final outputs after a pristine four-patch rebuild:
+
+| Gate | Exact command | Result | Fresh headline |
+| --- | --- | --- | --- |
+| Engine typecheck | `cd packages/signals-royale-sh1 && pnpm typecheck` | PASS | `tsc --noEmit`, exit 0 |
+| React typecheck | `cd packages/react-signals-royale-sh1 && pnpm typecheck` | PASS | `tsc --noEmit`, exit 0 |
+| Engine suite | `cd packages/signals-royale-sh1 && pnpm test -- --reporter=dot` | PASS | 4 files; **191/191** tests, including 179/179 conformance |
+| Pristine patch build | `cd packages/react-signals-royale-sh1 && ./build.sh` | PASS | 4 patches applied; all NODE_DEV/NODE_PROD bundles; `Built: 19.3.0 (f30beef0bf)` |
+| Real React | `pnpm vitest run tests/real-react.spec.tsx --reporter=verbose` | PASS | **16/16**, 297 ms; contextual `latest` 2 ms; direct render-write rejection 2 ms |
+| Shared battery | `cd royale/verify-kit/battery && pnpm test` | PASS | **25/25**, 263 ms |
+| Affected fork suites | `yarn test --no-watchman ReactSignalsRuntime ReactFlushSync ReactFlushSyncNoAggregateError` | PASS | 3 suites; **12/12** tests |
+| Diff hygiene | `git diff --check` in the superproject and React fork | PASS | no output |
+
+```text
+✓ tests/features.spec.ts (7 tests)
+✓ tests/oracle.spec.ts (3 tests)
+✓ tests/gc-leaks.spec.ts (2 tests)
+✓ tests/conformance.spec.ts (179 tests)
+Test Files  4 passed (4)
+Tests       191 passed (191)
+```
+
+```text
+✓ latest inside a render and nested computed resolves that render's world
+✓ suspended transition stays hidden, urgent work commits, then functional updates rebase
+✓ writes during render fail loudly
+Test Files  1 passed (1)
+Tests       16 passed (16)
+
+Test Files  1 passed (1)
+Tests       25 passed (25)
+```
+
+The regenerated patch series now contains four patches; the added fork patch is `0004-Expose-flushSync-scopes-to-signal-runtimes.patch`. The shared LOC counter reports:
+
+```text
+forkLoc: 94
+libLoc: 1217
+```
+
+That is **+3 fork LOC** and **+9 library LOC** versus the verified Round 2 entry. Current per-source totals are 892 engine LOC and 325 binding LOC. These figures supersede the earlier 91/1208 Round 2 count.

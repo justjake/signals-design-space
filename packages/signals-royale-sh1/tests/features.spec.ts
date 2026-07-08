@@ -7,10 +7,14 @@ import {
   initializeAtomState,
   isPending,
   latest,
+  openTransaction,
   read,
+  retireTransaction,
+  runInTransaction,
   serializeAtomState,
   subscribeNode,
   trace,
+  withWorld,
 } from "../src/index";
 
 describe("engine features", () => {
@@ -97,6 +101,16 @@ describe("engine features", () => {
     await Promise.all([a, b]);
     await Promise.resolve();
     expect(read(value)).toBe(5);
+  });
+
+  test("latest inside a computed resolves the computed world", () => {
+    const source = atom(0);
+    const transaction = openTransaction();
+    runInTransaction(transaction, () => source.set(1));
+    const derived = computed(() => latest(source));
+    expect(read(derived)).toBe(0);
+    expect(withWorld([transaction], () => read(derived))).toBe(1);
+    retireTransaction(transaction, false);
   });
 
   test("tracing has causal parents and bounded overflow accounting", () => {

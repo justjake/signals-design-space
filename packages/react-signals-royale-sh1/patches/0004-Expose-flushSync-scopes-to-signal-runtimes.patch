@@ -1,0 +1,33 @@
+From 4d62ec33f3769d3ce7123a6b4ea2046704516812 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 14:50:36 -0400
+Subject: [PATCH 4/4] Expose flushSync scopes to signal runtimes
+
+---
+ packages/react-dom/src/shared/ReactDOMFlushSync.js | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/packages/react-dom/src/shared/ReactDOMFlushSync.js b/packages/react-dom/src/shared/ReactDOMFlushSync.js
+index a09ba546a8..1f59f94bdb 100644
+--- a/packages/react-dom/src/shared/ReactDOMFlushSync.js
++++ b/packages/react-dom/src/shared/ReactDOMFlushSync.js
+@@ -20,6 +20,8 @@ function flushSyncImpl<R>(fn: (() => R) | void): R | void {
+   const previousTransition = ReactSharedInternals.T;
+   const previousUpdatePriority =
+     ReactDOMSharedInternals.p; /* ReactDOMCurrentUpdatePriority */
++  const signalRuntime = ReactSharedInternals.X;
++  if (signalRuntime !== null) signalRuntime.flush(true);
+ 
+   try {
+     ReactSharedInternals.T = null;
+@@ -31,6 +33,7 @@ function flushSyncImpl<R>(fn: (() => R) | void): R | void {
+       return undefined;
+     }
+   } finally {
++    if (signalRuntime !== null) signalRuntime.flush(false);
+     ReactSharedInternals.T = previousTransition;
+     ReactDOMSharedInternals.p /* ReactDOMCurrentUpdatePriority */ =
+       previousUpdatePriority;
+-- 
+2.50.1 (Apple Git-155)
+
