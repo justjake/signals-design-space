@@ -8898,6 +8898,17 @@ function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: stri
 	return watcher;
 }
 
+/** Strike a watcher from every render's mounted list — the one layout-
+ * effect unlisting loop (deferrals, reveal adoption, and removal all owe
+ * it: a struck watcher must not be revived by a later commit's layout
+ * loop). */
+function unlistMounted(watcherId: WatcherId): void {
+	for (const p of idToRenderPass.values()) {
+		const i = p.mounted.indexOf(watcherId);
+		if (i >= 0) p.mounted.splice(i, 1);
+	}
+}
+
 /**
  * Reveal-shaped mounts (React's Offscreen/Activity: a hidden tree is
  * prepared and committed without attaching its effects): the mounting
@@ -8905,10 +8916,7 @@ function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: stri
  * defer to a later, adopting commit — the reveal.
  */
 function deferMountEffects(watcherId: WatcherId): void {
-	for (const p of idToRenderPass.values()) {
-		const i = p.mounted.indexOf(watcherId);
-		if (i >= 0) p.mounted.splice(i, 1);
-	}
+	unlistMounted(watcherId);
 }
 
 function adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
@@ -8916,10 +8924,7 @@ function adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): v
 	if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open');
 	const w = getOrThrow(watchers, watcherId, 'watcher');
 	if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root');
-	for (const p of idToRenderPass.values()) {
-		const i = p.mounted.indexOf(watcherId);
-		if (i >= 0) p.mounted.splice(i, 1);
-	}
+	unlistMounted(watcherId);
 	adopter.mounted.push(watcherId);
 }
 
@@ -8948,10 +8953,7 @@ function renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
  * inside releases the observation-union retain.
  */
 function removeWatcher(watcherId: WatcherId): void {
-	for (const p of idToRenderPass.values()) {
-		const i = p.mounted.indexOf(watcherId);
-		if (i >= 0) p.mounted.splice(i, 1);
-	}
+	unlistMounted(watcherId);
 	dropWatcher(watcherId);
 }
 
@@ -9614,8 +9616,6 @@ function __TEST__arenaStats(): { committed: number; renders: number; pooled: num
 	return { committed: rootToArena.size, renders, pooled: arenaPool.length, suspended: suspendedCount, pendingSettlements: getPendingSettleCount(), dirty };
 }
 
-
-// ------------------------------------------------------ the write path
 
 // ------------------------------------------------------ the write path
 

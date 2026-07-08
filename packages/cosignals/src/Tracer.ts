@@ -924,9 +924,11 @@ export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Trac
 
 // ---- human formatting ---------------------------------------------------------------
 
-function formatValue(v: unknown): string {
+/** One value formatter, two faces: subjects render unquoted (they are
+ * labels); data values quote strings that would not scan as one word. */
+function formatValue(v: unknown, subject = false): string {
 	if (v === REF_DROPPED) return '«dropped»';
-	if (typeof v === 'string') return /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v);
+	if (typeof v === 'string') return subject || /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v);
 	return String(v);
 }
 
@@ -938,14 +940,10 @@ function formatValue(v: unknown): string {
 export function formatTraceRecord(e: TraceRecord): string {
 	const entries = Object.entries(e.data);
 	// the first field is the subject, rendered inside the parens
-	const head = entries.length > 0 ? formatSubject(entries[0]![1]) : '';
+	const head = entries.length > 0 ? formatValue(entries[0]![1], true) : '';
 	const rest = entries.slice(1).map(([k, v]) => `${k}=${formatValue(v)}`).join(' ');
 	const cause = e.cause === undefined ? '' : ` <- #${e.cause}`;
 	return `#${e.id} +${e.dt}µs ${e.kind}(${head})${rest.length > 0 ? ` ${rest}` : ''}${cause}`;
-}
-
-function formatSubject(v: unknown): string {
-	return typeof v === 'string' ? v : String(v);
 }
 
 /** The whole capture (or any decoded slice), one line per event. */
