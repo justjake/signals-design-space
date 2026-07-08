@@ -91,7 +91,7 @@ The adapter sanity command was `(cd milomg-reactivity-benchmark && pnpm -C packa
 
 The summed-median ratio is **2.990× Alien Signals**. SM2's adapter disposes every build scope, including all three warmups before `cleanup()`. The bundled Alien adapter stores only its most recent scope disposer, so the reference side has a leak-vs-no-leak cleanup asymmetry; the table is reported unchanged rather than silently modifying the reference implementation.
 
-### Round 2 React benchmark
+### Round 2 React benchmark (pre-fork-rewrite historical result)
 
 Command: `(cd packages/react-signals-royale-sm2 && node bench/react-bench.mjs)`. Every scenario/contender pair ran in a fresh child process against this entry's built React artifacts, with real timers and no `act`.
 
@@ -172,7 +172,7 @@ Test Files  1 passed (1)
 Tests       25 passed (25)
 ```
 
-The regenerated `patches/` directory contains one 564-line mail patch, including the excluded Jest suite; applying it to the pristine base produced the successful build above. The tournament LOC command reports `forkLoc: 186` and `libLoc: 1524`. Fork LOC is 186 insertions and zero deletions: 65 in `ReactFiberWorkLoop`, 59 in the new public protocol module, 35 in shared-internals state, 12 in `ReactClient`, and 15 across the three client entrypoints. The library split is 1089 normalized source lines in the engine and 435 in the React binding. This replaces the 1510-line fork with 186 lines, a reduction of 1324 lines; the binding-side lane/root bookkeeping accounts for the library increase from 1467 to 1524 lines. The Round 2 performance tables above were not rerun for this ruling and remain explicitly pre-rewrite measurements.
+The regenerated `patches/` directory contains one 564-line mail patch, including the excluded Jest suite; applying it to the pristine base produced the successful build above. The tournament LOC command reports `forkLoc: 186` and `libLoc: 1524`. Fork LOC is 186 insertions and zero deletions: 65 in `ReactFiberWorkLoop`, 59 in the new public protocol module, 35 in shared-internals state, 12 in `ReactClient`, and 15 across the three client entrypoints. The library split is 1089 normalized source lines in the engine and 435 in the React binding. This replaces the 1510-line fork with 186 lines, a reduction of 1324 lines; the binding-side lane/root bookkeeping accounts for the library increase from 1467 to 1524 lines. The Round 2 performance tables above remain historical; the fix-round React table below is the first post-rewrite run.
 
 ## 3. LOC self-count
 
@@ -204,7 +204,7 @@ Authoritative output: `forkLoc: 186`, `libLoc: 1524`. The library split is 1089 
 - Done — per-root committed atom and computed views across split root commits.
 - Done — `flushSync` excludes pending deferred work.
 - Done — batch capsules, world dependencies, and root membership are reclaimed at retirement.
-- Done — canonical read, contextual/newest `latest`, per-root `committed`, flip-only `isPending`, and stale-preserving `refresh`.
+- Done after fix round — canonical read, per-root `committed`, flip-only `isPending`, and stale-preserving `refresh`; `latest` previously bypassed `evaluationBatches` and could read a newer draft from inside a computed, but now resolves the computed or render context's exact world through `renderBatches()`.
 - Done — pending/error graph state, parallel async registration, downstream forwarding, and stable thenable identity.
 - Done — first-load suspension, stale urgent refreshes, deferred suspension, and settlement propagation.
 - Done — subscribing read hook with commit claim and post-subscribe correction.
@@ -228,3 +228,74 @@ Authoritative output: `forkLoc: 186`, `libLoc: 1524`. The library split is 1089 
 ## 6. What I would do with another day
 
 I would add a generated multi-root interruption oracle around the new lane/root retirement bookkeeping, including completed-but-delayed commits and discarded suspended passes. Next I would profile the large propagation cases, focusing on watcher delivery and dependency reconciliation without weakening lazy pull counts. I would expand the engine oracle to generate nonlinear reducers and async settlement races. Finally, I would rerun the isolated React benchmarks under a quieter machine allocation and tune subscription mount cost from profiles rather than timing variance.
+
+## Fix round
+
+The confirmed gap was real. With canonical `source = 1`, one deferred world at `50`, and a newer deferred world at `99`, `Runtime.latest()` consulted only the host render context. A computed evaluating the canonical world therefore observed `99` instead of `1`, and the computed evaluating the selected deferred world observed `99` instead of `50`.
+
+Both regression tests were added before the implementation change and failed against the old code with the judge's exact values:
+
+```text
+keeps latest reads in a canonical computed evaluation
+expected 99 to be 1
+
+keeps latest reads in a selected deferred-world computed evaluation
+expected 99 to be 50
+
+Tests  2 failed | 8 skipped (10)
+```
+
+The implementation fix is one world-selection change in `Runtime.latest()`: it now calls `this.renderBatches()` instead of reading `this.host?.getRenderBatches()` directly. That preserves top-level newest-intent behavior while honoring `evaluationBatches` during computed evaluation. The same focused run is now green:
+
+```text
+✓ keeps latest reads in a canonical computed evaluation
+✓ keeps latest reads in a selected deferred-world computed evaluation
+Tests  2 passed | 8 skipped (10)
+```
+
+The randomized oracle now builds a computed whose body calls `runtime.latest(atom)` for every source. Every generated check evaluates it once with the canonical empty world and, when present, once with the generated selected batch set. This widens the existing 4-atom/additive schedule specifically along the missing contextual-`latest` axis while retaining seed and shrunk-schedule diagnostics.
+
+Fresh verification from commit `8aa9cb1`:
+
+| Gate | Exact command | Result |
+|---|---|---|
+| Core typecheck | `(cd packages/signals-royale-sm2 && pnpm typecheck)` | Pass |
+| React typecheck | `(cd packages/react-signals-royale-sm2 && pnpm typecheck)` | Pass |
+| Full engine suite | `(cd packages/signals-royale-sm2 && pnpm test)` | Pass, 4 files / 194 tests |
+| Deep oracle | `(cd packages/signals-royale-sm2 && ORACLE_SEEDS=1200 pnpm exec vitest run tests/oracle.spec.ts --reporter=verbose)` | Pass, 1200 seeds × 90 steps plus 2 regressions |
+| Own Real-React gate | `(cd packages/react-signals-royale-sm2 && pnpm test)` | Pass, 5 files / 17 tests |
+| Shared battery | `(cd royale/verify-kit/battery && pnpm typecheck && pnpm test)` | Pass, 25/25 |
+
+```text
+Full engine suite
+Test Files  4 passed (4)
+Tests       194 passed (194)
+
+Deep oracle
+matches a memo-free world-fold model for 1200 seeds x 90 steps
+Tests       3 passed (3)
+
+Own Real-React gate
+Test Files  5 passed (5)
+Tests       17 passed (17)
+
+Shared battery
+Test Files  1 passed (1)
+Tests       25 passed (25)
+```
+
+### Post-rewrite React benchmark
+
+Command: `(cd packages/react-signals-royale-sm2 && node bench/react-bench.mjs)`. This run used the rewritten fork build, not the superseded incumbent-derived fork.
+
+```csv
+scenario,contender,stat,ms
+fanout,royale-sm2,median_write_to_commit,3.01
+fanout,uses-store,median_write_to_commit,2.16
+transition,royale-sm2,urgent_p95,7.67
+transition,uses-store,urgent_p95,5.99
+mount,royale-sm2,median_mount,95.01
+mount,uses-store,median_mount,60.12
+```
+
+The React fork did not change in this fix round: `vendor/react` remains clean at `5a968f65b4`, so the existing single patch was not regenerated. The authoritative counts remain `forkLoc: 186` and `libLoc: 1524`; the source fix replaces one call and adds no normalized library LOC.
