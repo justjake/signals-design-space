@@ -432,3 +432,13 @@ export interface RoyaleAdapter {
 6. What you'd do with another day.
 
 Good luck. Build something the incumbents will want to steal from.
+
+## Erratum (2026-07-08, adjudicated during judgement)
+
+The functional-update replay example in "Required features" and the scenario-list
+form are mutually unsatisfiable by any single fixed replay order (credit: entry sm1
+demonstrated this). The BINDING semantics, pre-ruled at battery calibration and
+verified against the incumbents, are React updater-queue parity: every update to an
+atom folds in original dispatch order; urgent updates apply canonically at once;
+retirement replays the full interleaved queue in dispatch order. The battery's
+scenario tests encode this form and take precedence over the prose example.
