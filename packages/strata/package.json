@@ -1,0 +1,24 @@
+{
+	"name": "strata-signals",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./trace": "./src/trace.ts",
+		"./royale/harness-adapter": "./royale/harness-adapter.ts",
+		"./royale/milomg-adapter": "./royale/milomg-adapter.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"reactive-framework-test-suite": "0.0.2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

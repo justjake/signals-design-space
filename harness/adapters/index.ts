@@ -23,6 +23,7 @@ export const adapterNames = [
 	'cosignals-concurrent',
 	'cosignals-alt-a',
 	'cosignals-alt-b',
+	'strata',
 ] as const;
 
 export type AdapterName = (typeof adapterNames)[number];
@@ -44,6 +45,7 @@ const loaders: Record<AdapterName, () => Promise<{ default: FrameworkAdapter }>>
 	'cosignals-concurrent': () => import('./cosignals-concurrent'),
 	'cosignals-alt-a': () => import('./cosignals-alt-a'),
 	'cosignals-alt-b': () => import('./cosignals-alt-b'),
+	strata: () => import('./strata'),
 };
 
 export function isAdapterName(name: string): name is AdapterName {

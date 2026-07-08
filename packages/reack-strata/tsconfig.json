@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"jsx": "react-jsx",
+		"lib": ["ESNext", "DOM"],
+		"paths": {
+			"strata-signals": ["../strata/src/index.ts"]
+		},
+		"types": ["node", "react", "react-dom"]
+	},
+	"include": ["src", "tests", "royale", "types", "vitest.config.ts"]
+}

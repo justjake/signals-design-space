@@ -1,0 +1,547 @@
+From d98680c08217b8388f0cb95721b8fa8bbb8090b7 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 15:16:53 -0400
+Subject: [PATCH] Add the Strata concurrent runtime bridge
+
+---
+ .../src/__tests__/ReactStrata-test.js         | 172 ++++++++++++++++++
+ .../src/ReactFiberWorkLoop.js                 |  79 +++++++-
+ packages/react/index.development.js           |   1 +
+ .../react/index.experimental.development.js   |   1 +
+ packages/react/index.experimental.js          |   1 +
+ packages/react/index.fb.js                    |   1 +
+ packages/react/index.js                       |   1 +
+ packages/react/index.stable.development.js    |   1 +
+ packages/react/index.stable.js                |   1 +
+ packages/react/src/ReactClient.js             |   2 +
+ .../react/src/ReactSharedInternalsClient.js   |  22 +++
+ packages/react/src/ReactStrata.js             |  47 +++++
+ 12 files changed, 328 insertions(+), 1 deletion(-)
+ create mode 100644 packages/react-dom/src/__tests__/ReactStrata-test.js
+ create mode 100644 packages/react/src/ReactStrata.js
+
+diff --git a/packages/react-dom/src/__tests__/ReactStrata-test.js b/packages/react-dom/src/__tests__/ReactStrata-test.js
+new file mode 100644
+index 0000000000..b4f57bd758
+--- /dev/null
++++ b/packages/react-dom/src/__tests__/ReactStrata-test.js
+@@ -0,0 +1,172 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @emails react-core
++ */
++
++'use strict';
++
++let React;
++let ReactDOMClient;
++let act;
++
++describe('React Strata bridge', () => {
++  beforeEach(() => {
++    jest.resetModules();
++    React = require('react');
++    ReactDOMClient = require('react-dom/client');
++    ({act} = require('internal-test-utils'));
++  });
++
++  it('reports render passes, root commits, and the exact mutation window', async () => {
++    const container = document.createElement('div');
++    const events = [];
++    let renderPass;
++    let currentPass;
++    const passes = new Map();
++    const runtime = {
++      begin(root, target, lanes) {
++        const pass = {target, lanes};
++        passes.set(root, pass);
++        currentPass = pass;
++        events.push(['begin', target, lanes]);
++      },
++      abort(root) {
++        passes.delete(root);
++        currentPass = undefined;
++      },
++      pause() {
++        currentPass = undefined;
++      },
++      end(root, committed, lanes, remaining) {
++        const pass = passes.get(root);
++        passes.delete(root);
++        events.push(['end', pass, committed, lanes, remaining]);
++      },
++      current() {
++        return currentPass;
++      },
++      reset() {
++        passes.clear();
++        currentPass = undefined;
++      },
++      mutation(active, target) {
++        events.push([
++          active ? 'mutation-start' : 'mutation-stop',
++          target,
++          container.textContent,
++        ]);
++      },
++    };
++    const unregister = React.unstable_strata.register(runtime);
++    function App() {
++      renderPass = React.unstable_strata.current();
++      return <span>ready</span>;
++    }
++
++    const root = ReactDOMClient.createRoot(container);
++    await act(() => root.render(<App />));
++    expect(renderPass.target).toBe(container);
++    expect(events[0][0]).toBe('begin');
++    expect(events[1]).toEqual(['mutation-start', container, '']);
++    expect(events[2]).toEqual(['mutation-stop', container, 'ready']);
++    expect(events[3][0]).toBe('end');
++    expect(events[3][1]).toBe(renderPass);
++    expect(events[3][2]).toBe(true);
++    expect(events[3][4]).toBe(0);
++
++    await act(() => root.unmount());
++    unregister();
++  });
++
++  it('pins signal notifications to their write lane and can escape a transition urgently', async () => {
++    const container = document.createElement('div');
++    const passes = [];
++    let currentPass;
++    const runtime = {
++      begin(_root, _target, lanes) {
++        passes.push(lanes);
++        currentPass = {};
++      },
++      abort() {},
++      pause() {
++        currentPass = undefined;
++      },
++      end() {},
++      current() {
++        return currentPass;
++      },
++      reset() {},
++      mutation() {},
++    };
++    const unregister = React.unstable_strata.register(runtime);
++    let setValue;
++    function App() {
++      const [value, set] = React.useState(0);
++      setValue = set;
++      return <span>{value}</span>;
++    }
++
++    const root = ReactDOMClient.createRoot(container);
++    await act(() => root.render(<App />));
++    let transitionLane;
++    await act(() => {
++      React.startTransition(() => {
++        React.unstable_strata.write((lane, deferred) => {
++          transitionLane = lane;
++          expect(deferred).toBe(true);
++          setValue(1);
++        });
++      });
++    });
++    expect(passes.some(lanes => (lanes & transitionLane) !== 0)).toBe(true);
++
++    const passCount = passes.length;
++    await act(() => {
++      React.startTransition(() => {
++        React.unstable_strata.urgent(() => setValue(2));
++      });
++    });
++    expect(container.textContent).toBe('2');
++    expect(
++      passes.slice(passCount).some(lanes => (lanes & transitionLane) === 0),
++    ).toBe(true);
++
++    await act(() => root.unmount());
++    unregister();
++  });
++
++  it('rejects writes during render', async () => {
++    const container = document.createElement('div');
++    const runtime = {
++      begin() {},
++      abort() {},
++      pause() {},
++      end() {},
++      current() {},
++      reset() {},
++      mutation() {},
++    };
++    const unregister = React.unstable_strata.register(runtime);
++    let error;
++    function Bad() {
++      try {
++        React.unstable_strata.write(() => {});
++      } catch (thrown) {
++        error = thrown;
++      }
++      return null;
++    }
++
++    const root = ReactDOMClient.createRoot(container);
++    await act(() => root.render(<Bad />));
++    expect(error.message).toContain(
++      'cannot be written while React is rendering',
++    );
++    await act(() => root.unmount());
++    unregister();
++  });
++});
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index 3de2ab6b16..1206e858c9 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -400,9 +400,66 @@ import {
+   stopCompletedGestures,
+ } from './ReactFiberGestureScheduler';
+ import {claimQueuedTransitionTypes} from './ReactFiberTransitionTypes';
+-
+ const PossiblyWeakMap = typeof WeakMap === 'function' ? WeakMap : Map;
+ 
++let signalUpdateLane: Lane = NoLane;
++let activeSignalRoot: FiberRoot | null = null;
++
++function runWithSignalLane(lane: Lane, fn: () => mixed): mixed {
++  const previous = signalUpdateLane;
++  signalUpdateLane = lane;
++  try {
++    return fn();
++  } finally {
++    signalUpdateLane = previous;
++  }
++}
++
++function prepareSignalPass(root: FiberRoot, lanes: Lanes): void {
++  const runtime = ReactSharedInternals.R;
++  if (runtime === null) return;
++  if (activeSignalRoot !== null) {
++    runtime.abort(activeSignalRoot, activeSignalRoot.pendingLanes);
++  }
++  runtime.begin(root, root.containerInfo, lanes, root.pendingLanes);
++  activeSignalRoot = root;
++}
++
++(ReactSharedInternals: any).P = {
++  write(fn: (Lane, boolean) => mixed): mixed {
++    if ((executionContext & RenderContext) !== NoContext) {
++      throw new Error('Signals cannot be written while React is rendering.');
++    }
++    const transition = requestCurrentTransition();
++    const lane =
++      signalUpdateLane !== NoLane
++        ? signalUpdateLane
++        : transition !== null
++          ? requestTransitionLane(transition)
++          : eventPriorityToLane(resolveUpdatePriority());
++    return runWithSignalLane(lane, () =>
++      fn(lane, includesTransitionLane(lane)),
++    );
++  },
++  run(lane: Lane, fn: () => mixed): mixed {
++    return runWithSignalLane(lane, fn);
++  },
++  urgent(fn: () => mixed): mixed {
++    return runWithSignalLane(eventPriorityToLane(resolveUpdatePriority()), fn);
++  },
++  current(): mixed {
++    const runtime = ReactSharedInternals.R;
++    return (executionContext & RenderContext) !== NoContext && runtime !== null
++      ? runtime.current()
++      : null;
++  },
++  reset(): void {
++    const runtime = ReactSharedInternals.R;
++    if (runtime !== null) runtime.reset();
++    activeSignalRoot = null;
++  },
++};
++
+ type ExecutionContext = number;
+ 
+ export const NoContext = /*             */ 0b000;
+@@ -810,6 +867,8 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+     return pickArbitraryLane(workInProgressRootRenderLanes);
+   }
+ 
++  if (signalUpdateLane !== NoLane) return signalUpdateLane;
++
+   const transition = requestCurrentTransition();
+   if (transition !== null) {
+     if (enableGestureTransition) {
+@@ -1930,6 +1989,7 @@ function finalizeRender(lanes: Lanes, finalizationTime: number): void {
+ }
+ 
+ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
++  prepareSignalPass(root, lanes);
+   if (enableProfilerTimer && enableComponentPerformanceTrack) {
+     // The order of tracks within a group are determined by the earliest start time.
+     // Are tracks should show up in priority order and we should ideally always show
+@@ -2665,6 +2725,10 @@ function renderRootSync(
+   } else {
+     // Normal case. We completed the whole tree.
+ 
++    const runtime = ReactSharedInternals.R;
++    if (runtime !== null) runtime.pause(root);
++    if (activeSignalRoot === root) activeSignalRoot = null;
++
+     // Set this to null to indicate there's no in-progress render.
+     workInProgressRoot = null;
+     workInProgressRootRenderLanes = NoLanes;
+@@ -2945,6 +3009,10 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+     return RootInProgress;
+   } else {
+     // Completed the tree.
++
++    const runtime = ReactSharedInternals.R;
++    if (runtime !== null) runtime.pause(root);
++    if (activeSignalRoot === root) activeSignalRoot = null;
+     if (enableSchedulingProfiler) {
+       markRenderStopped();
+     }
+@@ -3852,6 +3920,9 @@ function flushMutationEffects(): void {
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
++    const signalRuntime = ReactSharedInternals.R;
++    if (signalRuntime !== null)
++      signalRuntime.mutation(true, root.containerInfo);
+     try {
+       // The next phase is the mutation phase, where we mutate the host tree.
+       commitMutationEffects(root, finishedWork, lanes);
+@@ -3863,6 +3934,8 @@ function flushMutationEffects(): void {
+       }
+       resetAfterCommit(root.containerInfo);
+     } finally {
++      if (signalRuntime !== null)
++        signalRuntime.mutation(false, root.containerInfo);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+@@ -3875,6 +3948,10 @@ function flushMutationEffects(): void {
+   // componentWillUnmount, but before the layout phase, so that the finished
+   // work is current during componentDidMount/Update.
+   root.current = finishedWork;
++  const signalRuntime = ReactSharedInternals.R;
++  if (signalRuntime !== null) {
++    signalRuntime.end(root, true, lanes, pendingEffectsRemainingLanes);
++  }
+   pendingEffectsStatus = PENDING_LAYOUT_PHASE;
+ }
+ 
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index a2ec285743..7eaee08b54 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -50,6 +50,7 @@ export {
+   unstable_TracingMarker,
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 211f1c5dfb..619ceb72e0 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -37,6 +37,7 @@ export {
+   unstable_startGestureTransition,
+   unstable_addTransitionType,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 0330dde744..8369f25075 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -38,6 +38,7 @@ export {
+   unstable_startGestureTransition,
+   unstable_addTransitionType,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.fb.js b/packages/react/index.fb.js
+index 10e2ca4b90..ee939711e3 100644
+--- a/packages/react/index.fb.js
++++ b/packages/react/index.fb.js
+@@ -43,6 +43,7 @@ export {
+   unstable_TracingMarker,
+   unstable_addTransitionType,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   use,
+   useActionState,
+   useCallback,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 804853b331..3416ba3f9d 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -52,6 +52,7 @@ export {
+   unstable_addTransitionType,
+   unstable_getCacheForType,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 29df69ff3f..e35981b84f 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -30,6 +30,7 @@ export {
+   cache,
+   cacheSignal,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   startTransition,
+   useId,
+   useCallback,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 76edd14e05..7454ccef0e 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -30,6 +30,7 @@ export {
+   cache,
+   cacheSignal,
+   unstable_useCacheRefresh,
++  unstable_strata,
+   startTransition,
+   useId,
+   useCallback,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index b505dc49fc..00d03ae97b 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -64,6 +64,7 @@ import {addTransitionType} from './ReactTransitionType';
+ import {act} from './ReactAct';
+ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
++import {strata} from './ReactStrata';
+ 
+ const Children = {
+   map,
+@@ -110,6 +111,7 @@ export {
+   ReactVersion as version,
+   ReactSharedInternals as __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE,
+   ReactCompilerRuntime as __COMPILER_RUNTIME,
++  strata as unstable_strata,
+   // Concurrent Mode
+   useTransition,
+   startTransition,
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index cb957a5dfd..921abf251a 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -21,12 +21,32 @@ type onStartGestureTransitionFinish = (
+   ?GestureOptions,
+ ) => () => void;
+ 
++type StrataRuntime = {
++  begin: (mixed, mixed, number, number) => void,
++  abort: (mixed, number) => void,
++  pause: mixed => void,
++  end: (mixed, boolean, number, number) => void,
++  current: () => mixed,
++  reset: () => void,
++  mutation: (boolean, mixed) => void,
++};
++
++type StrataProvider = {
++  write: ((number, boolean) => mixed) => mixed,
++  run: (number, () => mixed) => mixed,
++  urgent: (() => mixed) => mixed,
++  current: () => mixed,
++  reset: () => void,
++};
++
+ export type SharedStateClient = {
+   H: null | Dispatcher, // ReactCurrentDispatcher for Hooks
+   A: null | AsyncDispatcher, // ReactCurrentCache for Cache
+   T: null | Transition, // ReactCurrentBatchConfig for Transitions
+   S: null | onStartTransitionFinish,
+   G: null | onStartGestureTransitionFinish,
++  R: null | StrataRuntime,
++  P: null | StrataProvider,
+ 
+   // DEV-only
+ 
+@@ -62,6 +82,8 @@ const ReactSharedInternals: SharedStateClient = ({
+   A: null,
+   T: null,
+   S: null,
++  R: null,
++  P: null,
+ }: any);
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+diff --git a/packages/react/src/ReactStrata.js b/packages/react/src/ReactStrata.js
+new file mode 100644
+index 0000000000..e9c835c35a
+--- /dev/null
++++ b/packages/react/src/ReactStrata.js
+@@ -0,0 +1,47 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++import ReactSharedInternals from './ReactSharedInternalsClient';
++
++function provider(): any {
++  const value = ReactSharedInternals.P;
++  if (value === null) {
++    throw new Error('This React renderer does not support Strata signals.');
++  }
++  return value;
++}
++
++export const strata = {
++  register(runtime: any): () => void {
++    if (ReactSharedInternals.R !== null && ReactSharedInternals.R !== runtime) {
++      throw new Error('A Strata runtime is already registered.');
++    }
++    ReactSharedInternals.R = runtime;
++    return () => {
++      if (ReactSharedInternals.R === runtime) {
++        if (ReactSharedInternals.P !== null) ReactSharedInternals.P.reset();
++        ReactSharedInternals.R = null;
++      }
++    };
++  },
++  write(fn: mixed): mixed {
++    return provider().write(fn);
++  },
++  run(lane: number, fn: () => mixed): mixed {
++    return provider().run(lane, fn);
++  },
++  urgent(fn: () => mixed): mixed {
++    return provider().urgent(fn);
++  },
++  current(): mixed {
++    return ReactSharedInternals.P === null
++      ? null
++      : ReactSharedInternals.P.current();
++  },
++};
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,33 @@
+{
+	"name": "reack-strata",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./royale/adapter": "./royale/adapter.ts",
+		"./royale/daishi-adapter": "./royale/daishi-adapter.tsx",
+		"./royale/seam-bench-adapter": "./royale/seam-bench-adapter.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"build:react": "./build.sh"
+	},
+	"dependencies": {
+		"strata-signals": "workspace:*",
+		"react": "link:./react-build/react",
+		"react-dom": "link:./react-build/react-dom",
+		"scheduler": "link:./react-build/scheduler"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"jsdom": "^26.1.0",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}
