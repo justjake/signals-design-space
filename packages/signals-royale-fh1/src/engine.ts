@@ -140,7 +140,7 @@ export class Batch {
 		const prevCause = setCause(retireEv);
 		startBatch();
 		try {
-			for (const a of this.atoms) foldDrafts(a, this);
+			for (const a of this.atoms) retireAtomBatch(a, this.id);
 		} finally {
 			this.atoms.clear();
 			liveBatches.delete(this.id);
@@ -158,9 +158,8 @@ export class Batch {
 		const prevCause = setCause(ev);
 		try {
 			for (const a of this.atoms) {
-				if (a.drafts !== null) {
-					a.drafts = a.drafts.filter((d) => d.batch !== this.id);
-					if (a.drafts.length === 0) a.drafts = null;
+				if (a.log !== null) {
+					a.log = a.log.filter((r) => r.batch !== this.id);
 				}
 				pokeHooks(a, this.id, ev);
 			}
@@ -186,7 +185,9 @@ function maybeQuiesce(): void {
 	if (episodeActive()) return;
 	for (const a of logged) {
 		a.hist = null;
-		a.drafts = null;
+		a.log = null;
+		a.episodeBase = undefined;
+		a.episodeBaseSeq = 0;
 	}
 	logged.clear();
 	for (const s of draftEdgeSources) s.draftSubs = null;
@@ -195,13 +196,18 @@ function maybeQuiesce(): void {
 
 // ---- history records --------------------------------------------------------
 
-/** One draft write: an updater replayed against whatever base its batch lands
- * on. Plain `set(v)` is the constant updater, so rebasing is uniform. */
-interface DraftRec {
+/** One logged write: an updater replayed in sequence order, exactly like a
+ * React updater queue. Plain `set(v)` is the constant updater, so rebasing is
+ * uniform. Urgent records (batch 0) are already applied to the canonical
+ * value; they are logged only while the atom holds deferred drafts, because a
+ * retiring batch must refold the WHOLE interleaved sequence — a transition
+ * `+2` under an urgent `*2` lands as (base+2)*2, never canonical+2. */
+interface LogRec {
 	batch: BatchId;
 	seq: WriteSeq;
 	apply: (base: unknown) => unknown;
-	/** Canonical seq this draft folded at (0 while pending). A world whose
+	/** Canonical seq this record folded at (0 while a draft is pending; urgent
+	 * records use 0 too — their effect is already canonical). A world whose
 	 * cutoff is at or past this already sees the fold in canonical history. */
 	folded: WriteSeq;
 }
@@ -390,7 +396,12 @@ export class Atom<T> {
 	inited: boolean;
 	init: (() => T) | null;
 	hist: HistRec[] | null = null;
-	drafts: DraftRec[] | null = null;
+	/** Interleaved updater log; non-null exactly while deferred drafts target
+	 * this atom (and until quiescence reclaims it). */
+	log: LogRec[] | null = null;
+	/** Canonical value and seq when the log opened: the replay base. */
+	episodeBase: unknown = undefined;
+	episodeBaseSeq: WriteSeq = 0;
 	obs: Observer[] = [];
 	obSlots: number[] = [];
 	hookSubs: Set<HookPoke> | null = null;
@@ -469,21 +480,34 @@ function writeAtom(a: AnyAtom, fn: ((prev: unknown) => unknown) | null, v: unkno
 	if (writeGuard !== null) writeGuard();
 	const b = writeBatch();
 	materialize(a);
+	const apply = fn === null ? () => v : fn;
 	if (b === null) {
-		// Urgent: apply in place, equal writes drop.
 		const next = fn === null ? v : fn(a.v);
-		if (a.eq(a.v, next)) return;
+		if (a.log !== null) {
+			// Drafts are pending: log the urgent updater so a retiring batch can
+			// replay the whole interleaved sequence on the episode base.
+			a.log.push({ batch: URGENT, seq: ++writeSeq, apply, folded: 0 });
+			if (a.eq(a.v, next)) {
+				// Canonical value unchanged, but batch-bearing worlds now fold
+				// differently: revalidate and re-poke them.
+				const ev = tracing ? emit('write', a.label, { batch: URGENT }) : 0;
+				pokeHooks(a, URGENT, ev);
+				return;
+			}
+		} else if (a.eq(a.v, next)) {
+			// Urgent with no episode in flight: equal writes drop entirely.
+			return;
+		}
 		applyCanonical(a, next, URGENT);
 		flushEffects();
 	} else {
 		// Deferred: park a draft; canonical readers and effects see nothing yet.
-		const rec: DraftRec = {
-			batch: b.id,
-			seq: ++writeSeq,
-			apply: fn === null ? () => v : fn,
-			folded: 0,
-		};
-		(a.drafts ??= []).push(rec);
+		if (a.log === null) {
+			a.log = [];
+			a.episodeBase = a.v;
+			a.episodeBaseSeq = writeSeq;
+		}
+		a.log.push({ batch: b.id, seq: ++writeSeq, apply, folded: 0 });
 		b.atoms.add(a);
 		logged.add(a);
 		const ev = tracing ? emit('write', a.label, { batch: b.id, draft: true }) : 0;
@@ -508,48 +532,72 @@ function applyCanonical(a: AnyAtom, next: unknown, stamp: BatchId): void {
 	}
 }
 
-/** Replay one batch's drafts on an atom onto canonical state. The records are
- * kept (marked with their fold seq) so a world latched before the fold still
- * resolves them; quiescence reclaims them. */
-function foldDrafts(a: AnyAtom, b: Batch): void {
-	if (a.drafts === null) return;
-	let changed = false;
-	let v = a.v;
-	for (const d of a.drafts) {
-		if (d.batch !== b.id || d.folded !== 0) continue;
-		v = d.apply(v);
-		changed = true;
-		d.folded = writeSeq + 1;
+/** Retire one batch's records on an atom: mark them folded, then refold the
+ * canonical value from the episode base over every canonical-class record in
+ * sequence order — React updater-queue replay, so an urgent updater that
+ * landed after a draft re-executes on top of the rebased value. Records are
+ * kept (marked) so a world latched before the fold still resolves; quiescence
+ * reclaims them. */
+function retireAtomBatch(a: AnyAtom, bid: BatchId): void {
+	const log = a.log;
+	if (log === null) return;
+	let any = false;
+	for (const r of log) {
+		if (r.batch === bid && r.folded === 0) {
+			r.folded = writeSeq + 1;
+			any = true;
+		}
 	}
-	if (changed && !a.eq(a.v, v)) {
-		applyCanonical(a, v, b.id);
-	} else if (changed) {
+	if (!any) return;
+	let v = a.episodeBase;
+	for (const r of log) {
+		if (r.batch === URGENT || r.folded !== 0) v = r.apply(v);
+	}
+	if (!a.eq(a.v, v)) {
+		applyCanonical(a, v, bid);
+	} else {
 		// Value unchanged: still re-poke so speculative readers re-converge.
 		pokeHooks(a, URGENT, 0);
 	}
 }
 
-/** Newest intent: canonical value with every live batch's drafts replayed. */
+/** Newest intent: the full log (drafts included) replayed on the episode base. */
 function latestAtom(a: AnyAtom): unknown {
 	materialize(a);
-	let v = a.v;
-	if (a.drafts !== null) {
-		for (const d of a.drafts) if (d.folded === 0) v = d.apply(v);
-	}
+	if (a.log === null) return a.v;
+	let v = a.episodeBase;
+	for (const r of a.log) v = r.apply(v);
 	return v;
 }
 
 /** Fold an atom under a world's visibility predicate. */
 function foldAtom(a: AnyAtom, w: World): unknown {
 	materialize(a);
-	let v = a.v;
-	if (a.hist !== null && a.hist.length > 0 && a.hist[a.hist.length - 1].seq > w.cutoff) {
-		v = valueAt(a.hist, w.cutoff);
-	}
-	if (a.drafts !== null) {
-		for (const d of a.drafts) {
-			if (d.folded !== 0 && d.folded <= w.cutoff) continue;
-			if (w.batches.indexOf(d.batch) >= 0) v = d.apply(v);
+	let v: unknown;
+	const log = a.log;
+	if (log === null || w.batches.length === 0) {
+		// Pure cutoff predicate: a point on the canonical timeline.
+		v = a.v;
+		if (a.hist !== null && a.hist.length > 0 && a.hist[a.hist.length - 1].seq > w.cutoff) {
+			v = valueAt(a.hist, w.cutoff);
+		}
+	} else if (w.cutoff < a.episodeBaseSeq) {
+		// The pass latched before this atom's log opened: canonical value at the
+		// cutoff plus the listed batches' drafts on top.
+		v = a.hist !== null ? valueAt(a.hist, w.cutoff) : a.episodeBase;
+		for (const r of log) {
+			if (r.batch !== URGENT && w.batches.indexOf(r.batch) >= 0) v = r.apply(v);
+		}
+	} else {
+		// Interleaved replay from the episode base: urgent records up to the
+		// cutoff, plus records of the listed batches (and folds the cutoff saw).
+		v = a.episodeBase;
+		for (const r of log) {
+			const visible =
+				r.batch === URGENT
+					? r.seq <= w.cutoff
+					: (r.folded !== 0 && r.folded <= w.cutoff) || w.batches.indexOf(r.batch) >= 0;
+			if (visible) v = r.apply(v);
 		}
 	}
 	if (activeWorldEntry !== null) recordWorldDep(a, v);
@@ -675,6 +723,8 @@ export class Computed<T> {
 	 * keyed-use entries. Created on first `refresh`. */
 	epoch: Atom<number> | null = null;
 	epochSeen = 0;
+	/** In-flight refetches started by `refresh` and not yet settled. */
+	refreshPending = 0;
 	wc: WorldEntry[] | null = null;
 	computing = false;
 	pokedAt = 0;
@@ -734,14 +784,15 @@ function updateIfNecessary(c: AnyComputed): void {
 		// the next read re-validates against the post-write source values.
 		c.state = writeSeq === before ? CLEAN : CHECK;
 	} else {
-		if (c.checked === writeSeq && c.ver !== 0) return;
-		if (c.ver !== 0 && !pendSettled(c) && !sourcesChanged(c)) {
+		if (c.state !== DIRTY && c.checked === writeSeq && c.ver !== 0) return;
+		if (c.state !== DIRTY && c.ver !== 0 && !pendSettled(c) && !sourcesChanged(c)) {
 			c.checked = writeSeq;
 			return;
 		}
 		const before = writeSeq;
 		recompute(c);
 		c.checked = writeSeq === before ? writeSeq : 0;
+		c.state = CHECK;
 	}
 }
 
@@ -1377,12 +1428,13 @@ export function committed(x: Source, container?: unknown): unknown {
  * a parked evaluation (canonical or in any live world). Never refetches. */
 export function isPending(x: Source): boolean {
 	if (x.k === 0) {
-		if (x.drafts !== null) {
-			for (const d of x.drafts) if (d.folded === 0) return true;
+		if (x.log !== null) {
+			for (const r of x.log) if (r.batch !== URGENT && r.folded === 0) return true;
 		}
 		return false;
 	}
-	if (x.pend !== null) return true;
+	if (x.pend !== null && x.settled !== UNSET) return true;
+	if (x.refreshPending > 0) return true;
 	if (x.wc !== null) {
 		for (const e of x.wc) if (e.pend !== null) return true;
 	}
@@ -1392,7 +1444,8 @@ export function isPending(x: Source): boolean {
 
 /** Force refetch with unchanged inputs. The stale value keeps serving via
  * `latest`; a refresh issued inside a transition belongs to that transition
- * and its settlement commits with it. */
+ * and its settlement commits with it. The refetch starts eagerly, so
+ * `isPending` flips the moment refresh is called. */
 export function refresh(x: Source): void {
 	if (x.k === 0) return;
 	const c = x;
@@ -1403,15 +1456,41 @@ export function refresh(x: Source): void {
 	c.epoch!.update((n) => n + 1);
 	if (firstRefresh) {
 		// No evaluation has read the epoch input yet, so invalidate by hand.
+		// Re-running the canonical evaluation is value-stable (its world still
+		// resolves the old epoch), and it makes the evaluation track the epoch
+		// input from now on — retirement folds then invalidate it normally.
 		if (c.wc !== null) for (const e of c.wc) e.validAt = -1;
-		if (b === null) {
-			c.state = DIRTY;
-			c.checked = 0;
-			startBatch();
-			markObs(c, CHECK);
-			endBatch();
-		}
+		c.state = DIRTY;
+		c.checked = 0;
+		startBatch();
+		markObs(c, CHECK);
+		endBatch();
 		pokeHooks(c, b?.id ?? URGENT, ev);
+	}
+	// Start the refetch now, in the world the refresh belongs to.
+	let box: PendingValue | null = null;
+	if (b === null) {
+		try {
+			untracked(() => c.get());
+		} catch (e) {
+			if (e instanceof PendingValue) box = e;
+		}
+	} else {
+		const w = new World([b.id]);
+		try {
+			readInWorld(c, w);
+		} catch (e) {
+			if (e instanceof PendingValue) box = e;
+		} finally {
+			w.release();
+		}
+	}
+	if (box !== null) {
+		c.refreshPending++;
+		const done = () => {
+			c.refreshPending--;
+		};
+		box.thenable.then(done, done);
 	}
 }
 
