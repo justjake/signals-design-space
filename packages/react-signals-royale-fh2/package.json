@@ -14,14 +14,15 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"signals-royale-fh2": "link:../signals-royale-fh2",
 		"react": "link:../../vendor/react/build/oss-experimental/react",
 		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
-		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler"
+		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
+		"signals-royale-fh2": "link:../signals-royale-fh2"
 	},
 	"devDependencies": {
 		"@types/react": "^19.1.8",
 		"@types/react-dom": "^19.1.6",
+		"esbuild": "0.25.6",
 		"jsdom": "^26.1.0",
 		"typescript": "6.0.3",
 		"vitest": "4.1.6"
