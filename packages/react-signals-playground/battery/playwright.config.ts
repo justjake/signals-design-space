@@ -42,10 +42,21 @@ export default defineConfig<{ entry: BatteryEntry }>({
 		screenshot: 'only-on-failure',
 		trace: 'retain-on-failure',
 	},
-	projects: ENTRIES.map((entry) => ({
-		name: entry.label,
-		use: { entry },
-	})),
+	projects: [
+		...ENTRIES.map((entry) => ({
+			name: entry.label,
+			use: { entry },
+			testIgnore: '**/k1-host-control.spec.ts',
+		})),
+		{
+			// The vanilla-React host-baseline group: drives the /control/ page
+			// (useState + startTransition + Suspense on the same patched React
+			// build, no signals engine), so behavior shared by all four
+			// implementations can be attributed to React or to the engines.
+			name: 'react-control',
+			testMatch: '**/k1-host-control.spec.ts',
+		},
+	],
 	webServer: {
 		// Fresh build every run: the battery verifies source, never a stale dist.
 		command: `pnpm build && pnpm preview --port ${PREVIEW_PORT} --strictPort`,

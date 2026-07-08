@@ -9,7 +9,7 @@ exercised. Test titles cite row ids, so a report line reads `RCC-RT3.hold
 
 ## Scenario count
 
-- **77 rows total**: 64 runnable scenario rows + 13 documentation rows
+- **79 rows total**: 66 runnable scenario rows + 13 documentation rows
   (fork-only clauses, tolerances that constrain other rows, out-of-scope
   surfaces — each says why and where the clause IS covered).
 - Contract coverage: all 37 requirement clauses of `spec/react-compliance-contract.md`
@@ -29,6 +29,12 @@ exercised. Test titles cite row ids, so a report line reads `RCC-RT3.hold
 | alt-a | `cosignals-alt-a` | suspense | **drafts-hidden** (ambient-W0, SPEC-RESOLUTIONS divergence) |
 | alt-b | `cosignals-alt-b` | suspense | **drafts-hidden** (ambient-W0, pinned in both gate modes) |
 | solid-react | `concurrent-solid-react` | defer-write | **drafts-hidden** (discovered — see below) |
+
+A fifth Playwright project, **react-control**, drives the `/control/` page:
+vanilla React (useState + startTransition + Suspense) on the same patched
+build, no signals engine. It exists to attribute behavior: anything all four
+implementations show identically is checked against the control before any
+engine is blamed. Control rows live in section O.
 
 **solid-react RT4 ruling, as discovered (2026-07-08):** its own suite and
 README never exercise or state the outside-render-read case. Source analysis
@@ -140,7 +146,7 @@ StrictMode row that can't double-invoke.
 | --- | --- | --- | --- | --- | --- |
 | RCC-SU1.stable-promise | held navigation with urgent interleaving: resource created exactly once per epoch — re-renders re-throw the same instance, no refetch livelock (source: battery 15) | hold=nav, urgent writes during hold | all pass | fetch counters | implemented |
 | RCC-SU3.nav-keyed | two in-flight navigations keep distinct per-epoch resources; committed view lands on the newest epoch's data, never a mix (source: alt-a#7 / alt-b#6 shape, app-level) | hold=nav ×2, release both | all pass | fetch log, data-epoch testid | implemented |
-| RCC-SU3.interleaved-gates | two held transitions never alias — host fact discovered 2026-07-08 (all four impls, both release orders): component-level suspended transitions on one root entangle, so releasing one gate commits NOTHING until the other resolves; the joint commit then lands both write sets whole, never mixed. Per-node keyed independence (sources: alt-a#7, alt-b#6) is engine-resource-level behavior — the package suites referee it | hold=gate ×2, both orders probed | all pass (joint-commit shape) | dual write-hold harness | implemented |
+| RCC-SU3.interleaved-gates | two held transitions never alias — host fact PROVEN 2026-07-08 (CTRL-ENTANGLE reproduces it in vanilla React): component-level suspended transitions on one root entangle, so releasing one gate commits NOTHING until the other resolves; the joint commit then lands both write sets whole, never mixed. Per-node keyed independence (sources: alt-a#7, alt-b#6) is engine-resource-level behavior — the package suites referee it | hold=gate ×2, both orders probed | all pass (joint-commit shape) | dual write-hold harness | implemented |
 | RCC-SU5.settle-replay | release settles → exactly the suspended consumers re-evaluate and commit; settled data then reads synchronously (no fallback flash on later renders) | hold=nav | all pass | fallback watch, fetch counters | implemented |
 | RCC-SU5.cold-boot | initial page load never suspends (epoch-0 resource settled before render): no fallback at boot | — | all pass | fallback watch | implemented |
 | RCC-SU2 | library-provided promise caching for the batteries-included path | — | — | — | doc: the app caches promises itself (caller-cached form, SU2's second half); library-side caching is package-suite territory (battery case 15) |
@@ -266,6 +272,16 @@ stronger than the original on purpose, noted here for comparability.
   package-specific (`useSignalTransition`, `configure`/`__debug`,
   `useIsPending`, `useLatest`/`useCommitted`, lazy init, `AtomOptions.effect`).
 
+## O. Host-control baselines (react-control project, 2 rows)
+
+Rows here run on the vanilla-React `/control/` page only (project
+react-control); implementation rows cite them for attribution.
+
+| id | scenario | parameters | expected | instrumentation | status |
+| --- | --- | --- | --- | --- | --- |
+| CTRL-ENTANGLE.B-first | two suspended transitions (own useState values, own held promises, separate tasks): releasing the second-started gate commits nothing; releasing both lands both write sets whole — vanilla React reproduces RCC-SU3.interleaved-gates exactly | release order B then A | pass (react-control) | control page window.__control | implemented |
+| CTRL-ENTANGLE.A-first | same schedule, opposite release order — the entanglement is order-independent | release order A then B | pass (react-control) | control page window.__control | implemented |
+
 ---
 
 ## Status ledger
@@ -273,7 +289,8 @@ stronger than the original on purpose, noted here for comparability.
 - implemented: rows marked `implemented` have a green scenario in `specs/`
   citing the row id in its title (FINDING rows: red-as-expected via
   test.fail). Everything runnable starts `pending` and flips as tranches
-  land. ALL 64 runnable rows are implemented as of tranche 4.
+  land. ALL 66 runnable rows are implemented (64 as of tranche 4; the two
+  host-control rows in tranche 6).
 - doc rows (13): RCC-RT1.frozen-view, RCC-RT2.yield-gap, RCC-UM3,
   RCC-CR2/4/5, RCC-WP6.no-rollback, RCC-SU2, RCC-SU4/WP2, RCC-EF3, RCC-EF4,
   RCC-SP2, RCC-OL1, RCC-WP3, RCC-WP5 — each names its referee.

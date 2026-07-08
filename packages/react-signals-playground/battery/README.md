@@ -20,6 +20,10 @@ pnpm battery -g RCC-RT4           # one manifest row family
 - The browser is the **bundled Chromium** pinned by the exact
   `@playwright/test` version in `package.json` — never `channel: 'chrome'` —
   so local runs and CI drive the identical engine.
+- Five projects: one per implementation plus **react-control**, which runs
+  only `k1-host-control.spec.ts` against the vanilla-React `/control/` page
+  (same patched React build, no signals engine). Behavior shared by all four
+  implementations is attributed against the control before blaming an engine.
 - The web server is `vite build && vite preview` on port 4599: every run
   verifies a fresh production build, never a checked-in `dist/`. Locally a
   server already on that port is reused (rebuild yourself after app edits);

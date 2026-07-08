@@ -33,7 +33,7 @@ function redirectDirEntries(dirs: readonly string[]): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-	plugins: [react(), redirectDirEntries(['/alt-a', '/alt-b', '/solid-react'])],
+	plugins: [react(), redirectDirEntries(['/alt-a', '/alt-b', '/solid-react', '/control'])],
 	// MPA: /, /alt-a/, /alt-b/, /solid-react/ are separate html entries.
 	// Disabling the SPA fallback makes an unmapped path 404 instead of
 	// silently serving the cosignals page under the wrong URL.
@@ -65,6 +65,8 @@ export default defineConfig(({ mode }) => ({
 				'alt-a': entry('alt-a/index.html'),
 				'alt-b': entry('alt-b/index.html'),
 				'solid-react': entry('solid-react/index.html'),
+				// The vanilla-React control page (the battery's host-baseline group).
+				control: entry('control/index.html'),
 			},
 		},
 	},

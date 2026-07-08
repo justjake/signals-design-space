@@ -40,7 +40,7 @@ The preferred holding mechanism is Suspense: the destination throws its resource
 
 ## The verification battery
 
-`battery/` is a Playwright battery that drives this app in bundled Chromium against all four implementations and asserts the React compliance contract's browser-observable clauses, ported source-suite scenarios (including all 10 daishi-benchmark levels), and pinned findings. See `battery/README.md` to run it, `battery/MANIFEST.md` for the scenario contract, and `battery/TESTIDS.md` for the instrumentation contract (`?test=1` enables `src/testkit.tsx`).
+`battery/` is a Playwright battery that drives this app in bundled Chromium against all four implementations and asserts the React compliance contract's browser-observable clauses, ported source-suite scenarios (including all 10 daishi-benchmark levels), and pinned findings. A fifth entry, `/control/`, is a vanilla-React page (no signals engine) the battery uses as the host baseline: when all four implementations behave identically, the same schedule runs there to attribute the behavior to React or to the engines. See `battery/README.md` to run it, `battery/MANIFEST.md` for the scenario contract, and `battery/TESTIDS.md` for the instrumentation contract (`?test=1` enables `src/testkit.tsx`).
 
 ## Adding implementation #5
 
