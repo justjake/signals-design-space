@@ -168,7 +168,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 }
 
 /** Subscribe to `isPending(x)`: true while newer data loads behind stale. */
-export function useIsPending(x: Cell<unknown> | Derived<unknown>): boolean {
+export function useIsPending<T>(x: Cell<T> | Derived<T>): boolean {
   const node = x as AnyNode;
   const [, bump] = React.useReducer(bumpReducer, 0);
   const subRef = React.useRef<HostSub | null>(null);
