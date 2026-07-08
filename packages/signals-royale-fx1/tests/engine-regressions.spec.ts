@@ -2,7 +2,7 @@
  * Named regressions pinned from oracle fuzz catches. Each test is the shrunk
  * schedule of a real bug, kept as a direct engine test.
  */
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test } from "vitest";
 import {
   atom,
   computed,
@@ -15,7 +15,7 @@ import {
   frameForRoot,
   peekSlot,
   read,
-} from '../src/index';
+} from "../src/index";
 
 let ambient: object | null = null;
 
@@ -33,7 +33,7 @@ afterEach(() => {
   resetEngine();
 });
 
-test('oracle seed 1: a pass pinned before a cell grew an update queue keeps its pinned base', () => {
+test("oracle seed 1: a pass pinned before a cell grew an update queue keeps its pinned base", () => {
   fakeHost();
   resetEngine();
   const a = atom(17);
@@ -52,7 +52,7 @@ test('oracle seed 1: a pass pinned before a cell grew an update queue keeps its 
   expect(read(a)).toBe(338);
 });
 
-test('oracle seed 10: retirement must not collapse a queue out from under a live pass that includes the episode', () => {
+test("oracle seed 10: retirement must not collapse a queue out from under a live pass that includes the episode", () => {
   fakeHost();
   resetEngine();
   const a = atom(20);
@@ -67,8 +67,8 @@ test('oracle seed 10: retirement must not collapse a queue out from under a live
   const ep = episodeFor(token);
   a.set(618);
   ambient = null;
-  const rootHeld = { root: 'held' };
-  const rootFast = { root: 'fast' };
+  const rootHeld = { root: "held" };
+  const rootFast = { root: "fast" };
   beginPass(rootHeld, [ep]);
   beginPass(rootFast, [ep]);
   commitPass(rootFast, [ep]); // retires the episode (no deliveries recorded)

@@ -3,14 +3,14 @@
  * engine through the shared FrameworkAdapter shape. Wiring follows
  * harness/conformance/conformance.spec.ts.
  */
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from "vitest";
 import {
   testSuite,
   SkipTest,
   setExpect,
   type ReactiveFramework,
-} from 'reactive-framework-test-suite';
-import adapter from '../royale/harness-adapter';
+} from "reactive-framework-test-suite";
+import adapter from "../royale/harness-adapter";
 
 const framework: ReactiveFramework = {
   name: adapter.name,

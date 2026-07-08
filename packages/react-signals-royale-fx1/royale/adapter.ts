@@ -1,10 +1,10 @@
 /**
  * RoyaleAdapter — the shared cross-entrant battery surface.
  */
-import * as React from 'react';
-import * as ReactDOMClient from 'react-dom/client';
-import { flushSync } from 'react-dom';
-import { act } from 'react';
+import * as React from "react";
+import * as ReactDOMClient from "react-dom/client";
+import { flushSync } from "react-dom";
+import { act } from "react";
 import {
   atom,
   computed,
@@ -23,20 +23,9 @@ import {
   type Atom,
   type Computed,
   type Use,
-} from 'signals-royale-fx1';
-import {
-  register,
-  resetForTest,
-  startTransitionWrite,
-  onDomMutation,
-} from '../src/runtime';
-import {
-  useValue,
-  useComputed,
-  useSignalEffect,
-  useIsPending,
-  useCommitted,
-} from '../src/hooks';
+} from "signals-royale-fx1";
+import { register, resetForTest, startTransitionWrite, onDomMutation } from "../src/runtime";
+import { useValue, useComputed, useSignalEffect, useIsPending, useCommitted } from "../src/hooks";
 
 export interface RoyaleHandle {
   errors: unknown[];
@@ -49,7 +38,7 @@ export interface RoyaleTraceView {
 }
 
 const adapter = {
-  slug: 'fx1',
+  slug: "fx1",
   React,
   ReactDOMClient: ReactDOMClient as unknown as {
     createRoot(el: Element): { render(node: unknown): void; unmount(): void };

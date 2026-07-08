@@ -11,7 +11,7 @@
  * single null check. Ring mode keeps memory bounded: overflow evicts the
  * oldest events and counts them (never silently).
  */
-import { setTraceSink, type TraceEventId, type TraceSink } from './engine';
+import { setTraceSink, type TraceEventId, type TraceSink } from "./engine";
 
 export interface TraceEvent {
   id: TraceEventId;
@@ -80,7 +80,7 @@ export class Tracer implements TraceSink {
       if (cur.cause === 0) break;
       const parent = this.get(cur.cause);
       if (parent === undefined) {
-        out.push({ id: cur.cause, kind: '(evicted)', cause: 0 });
+        out.push({ id: cur.cause, kind: "(evicted)", cause: 0 });
         break;
       }
       cur = parent;
@@ -89,8 +89,8 @@ export class Tracer implements TraceSink {
   }
 
   format(e: TraceEvent): string {
-    const causeText = e.cause !== 0 ? ` ← #${e.cause}` : '';
-    const detail = e.detail !== undefined ? ` ${e.detail}` : '';
+    const causeText = e.cause !== 0 ? ` ← #${e.cause}` : "";
+    const detail = e.detail !== undefined ? ` ${e.detail}` : "";
     return `#${e.id} ${e.kind}${detail}${causeText}`;
   }
 
@@ -105,7 +105,7 @@ export class Tracer implements TraceSink {
    */
   whyLastDelivery(node: object): string[] {
     const hit = this.findLast(
-      (e) => e.node === node && (e.kind === 'render' || e.kind === 'deliver'),
+      (e) => e.node === node && (e.kind === "render" || e.kind === "deliver"),
     );
     if (hit === undefined) return [`no delivery recorded for this node`];
     return this.formatChain(hit.id);

@@ -12,7 +12,7 @@
  * batch, never beside it. React's only jobs are to honor the pin and to
  * report pass starts, per-root commits, and the DOM mutation window.
  */
-import * as React from 'react';
+import * as React from "react";
 import {
   beginPass,
   commitPass,
@@ -27,7 +27,7 @@ import {
   type EngineHost,
   type Frame,
   type Sub,
-} from 'signals-royale-fx1';
+} from "signals-royale-fx1";
 
 /** React lane bitmask (the fork hands these out; the runtime never decodes them). */
 export type LaneBits = number;
@@ -56,12 +56,10 @@ interface ReactSharedInternalsLike {
 }
 
 function sharedInternals(): ReactSharedInternalsLike {
-  const key = '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE';
+  const key = "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE";
   const internals = (React as unknown as Record<string, unknown>)[key];
   if (internals === undefined) {
-    throw new Error(
-      'react-signals-royale-fx1: unsupported React build (missing client internals)',
-    );
+    throw new Error("react-signals-royale-fx1: unsupported React build (missing client internals)");
   }
   return internals as ReactSharedInternalsLike;
 }
@@ -79,7 +77,7 @@ export interface HostSub extends Sub {
   bump(): void;
 }
 
-type MutationListener = (phase: 'start' | 'stop', container: Element) => void;
+type MutationListener = (phase: "start" | "stop", container: Element) => void;
 const mutationListeners = new Set<MutationListener>();
 
 /**
@@ -89,17 +87,16 @@ const mutationListeners = new Set<MutationListener>();
 export function register(): RuntimeHandle {
   if (registered !== null) return registered;
   const found = (globalThis as Record<string, unknown>).__SIGNALS_ROYALE_FX1__ as
-    | SignalSchedulerBridge
-    | undefined;
+    SignalSchedulerBridge | undefined;
   if (
     found === undefined ||
-    typeof found.claimTransitionLane !== 'function' ||
-    typeof found.getWorkInProgress !== 'function'
+    typeof found.claimTransitionLane !== "function" ||
+    typeof found.getWorkInProgress !== "function"
   ) {
     throw new Error(
-      'react-signals-royale-fx1: this React build does not carry the fx1 signal-scheduler ' +
-        'protocol (globalThis.__SIGNALS_ROYALE_FX1__). Build react/react-dom from the ' +
-        'packaged patch series (see build.sh) and link against those artifacts.',
+      "react-signals-royale-fx1: this React build does not carry the fx1 signal-scheduler " +
+        "protocol (globalThis.__SIGNALS_ROYALE_FX1__). Build react/react-dom from the " +
+        "packaged patch series (see build.sh) and link against those artifacts.",
     );
   }
   bridge = found;
@@ -124,7 +121,7 @@ export function register(): RuntimeHandle {
     const container = root.containerInfo;
     for (const listener of mutationListeners) {
       try {
-        listener(start ? 'start' : 'stop', container);
+        listener(start ? "start" : "stop", container);
       } catch (e) {
         errors.push(e);
       }
@@ -194,7 +191,7 @@ function episodesInLanes(lanes: LaneBits): Episode[] {
 export function deliver(sub: HostSub, episode: Episode | null): void {
   if (trace !== null) {
     sub.causeId = trace.emit(
-      'deliver',
+      "deliver",
       episode !== null ? episode.openTrace : traceCause,
       labelOf(sub.node),
       sub.node,

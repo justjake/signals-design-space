@@ -8,7 +8,7 @@
  * arrive as reducer bumps dispatched by the runtime under the right lane, so
  * the component re-renders in exactly the batch that owns the change.
  */
-import * as React from 'react';
+import * as React from "react";
 import {
   Cell,
   Derived,
@@ -31,14 +31,14 @@ import {
   type AtomOptions,
   type Equality,
   type Use,
-} from 'signals-royale-fx1';
+} from "signals-royale-fx1";
 import {
   currentEpisode,
   currentRenderFrame,
   deliver,
   startTransitionWrite,
   type HostSub,
-} from './runtime';
+} from "./runtime";
 
 type AnyNode = Cell<unknown> | Derived<unknown>;
 
@@ -88,7 +88,12 @@ export function useValue<T>(x: Cell<T> | Derived<T>): T {
   const stateRef = React.useRef<HookSubState | null>(null);
   if (stateRef.current === null || stateRef.current.sub.node !== node) {
     // Node identity changed (or first render): a fresh subscription identity.
-    stateRef.current = { sub: makeSub(node, bump, false), dispose: null, renderedSlot: undefined, renderedCells: null };
+    stateRef.current = {
+      sub: makeSub(node, bump, false),
+      dispose: null,
+      renderedSlot: undefined,
+      renderedCells: null,
+    };
   }
   const state = stateRef.current;
   state.sub.bump = bump;
@@ -98,7 +103,7 @@ export function useValue<T>(x: Cell<T> | Derived<T>): T {
   const { slot, cells } = renderRead(node, frame);
   state.renderedSlot = slot;
   state.renderedCells = cells;
-  if (trace !== null) trace.emit('render', state.sub.causeId, node.label, node);
+  if (trace !== null) trace.emit("render", state.sub.causeId, node.label, node);
 
   // Claim the subscription at commit; fix up anything missed in between.
   React.useEffect(() => {
@@ -221,11 +226,14 @@ export function useCommitted<T>(x: Cell<T> | Derived<T>): T {
  */
 export function useTransitionWrite(): [boolean, (scope: () => void) => void] {
   const [reactPending, reactStart] = React.useTransition();
-  const start = React.useCallback((scope: () => void) => {
-    reactStart(() => {
-      startTransitionWrite(scope);
-    });
-  }, [reactStart]);
+  const start = React.useCallback(
+    (scope: () => void) => {
+      reactStart(() => {
+        startTransitionWrite(scope);
+      });
+    },
+    [reactStart],
+  );
   return [reactPending, start];
 }
 

@@ -2,7 +2,7 @@
  * Leak audit (--expose-gc): dropped handles reclaim; a quiescent engine holds
  * no per-episode state.
  */
-import { expect, test } from 'vitest';
+import { expect, test } from "vitest";
 import {
   atom,
   computed,
@@ -17,7 +17,7 @@ import {
   subscribe,
   SUB_NEVER,
   type Sub,
-} from '../src/index';
+} from "../src/index";
 
 declare const gc: () => void;
 
@@ -51,7 +51,7 @@ function makeDroppedComputed(a: ReturnType<typeof atom<number>>): WeakRef<object
   return new WeakRef(c);
 }
 
-test('a dropped computed is collectable: cold nodes are never referenced by their sources', async () => {
+test("a dropped computed is collectable: cold nodes are never referenced by their sources", async () => {
   resetEngine();
   const a = atom(1);
   const ref = makeDroppedComputed(a);
@@ -61,13 +61,13 @@ test('a dropped computed is collectable: cold nodes are never referenced by thei
   expect(read(a)).toBe(5);
 });
 
-test('a dropped effect disposer reclaims the effect through the FinalizationRegistry', async () => {
+test("a dropped effect disposer reclaims the effect through the FinalizationRegistry", async () => {
   resetEngine();
   const log: string[] = [];
   const a = atom(0, {
     onObserved: () => {
-      log.push('observe');
-      return () => log.push('unobserve');
+      log.push("observe");
+      return () => log.push("unobserve");
     },
   });
   (() => {
@@ -77,13 +77,13 @@ test('a dropped effect disposer reclaims the effect through the FinalizationRegi
     });
   })();
   await new Promise((res) => setTimeout(res, 1));
-  expect(log).toEqual(['observe']);
-  await gcUntil(() => log.includes('unobserve'), 50);
-  expect(log).toEqual(['observe', 'unobserve']); // the engine disposed it
+  expect(log).toEqual(["observe"]);
+  await gcUntil(() => log.includes("unobserve"), 50);
+  expect(log).toEqual(["observe", "unobserve"]); // the engine disposed it
   a.set(1); // and no stale effect runs against the freed node
 });
 
-test('quiescence: retired episodes and closed passes leave no engine state', async () => {
+test("quiescence: retired episodes and closed passes leave no engine state", async () => {
   resetEngine();
   let ambient: object | null = null;
   setHost({
@@ -126,7 +126,7 @@ test('quiescence: retired episodes and closed passes leave no engine state', asy
   setHost(null);
 });
 
-test('unsubscribed nodes drop their committed-view entries at quiescence', async () => {
+test("unsubscribed nodes drop their committed-view entries at quiescence", async () => {
   resetEngine();
   let ambient: object | null = null;
   setHost({
@@ -144,7 +144,7 @@ test('unsubscribed nodes drop their committed-view entries at quiescence', async
     probe: false,
     causeId: 0,
   };
-  const { registerSubRoot, unregisterSubRoot } = await import('../src/index');
+  const { registerSubRoot, unregisterSubRoot } = await import("../src/index");
   const dispose = subscribe(sub);
   registerSubRoot(sub);
   // Screens are only snapshotted while worlds are in play: run one episode.

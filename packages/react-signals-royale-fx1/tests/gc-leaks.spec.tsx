@@ -4,11 +4,11 @@
  * component-owned atoms are collectable after unmount, and a quiescent
  * runtime holds no per-episode state.
  */
-import * as React from 'react';
-import { afterEach, beforeEach, expect, test } from 'vitest';
-import { atom, debugFootprint, type Atom } from 'signals-royale-fx1';
-import { useValue, useAtom, startTransitionWrite } from '../src/index';
-import { makeHarness, act, type Harness } from './helpers';
+import * as React from "react";
+import { afterEach, beforeEach, expect, test } from "vitest";
+import { atom, debugFootprint, type Atom } from "signals-royale-fx1";
+import { useValue, useAtom, startTransitionWrite } from "../src/index";
+import { makeHarness, act, type Harness } from "./helpers";
 
 declare const gc: () => void;
 
@@ -29,12 +29,16 @@ afterEach(async () => {
   await h.cleanup();
 });
 
-test('mount/unmount cycles return subscriptions to baseline; quiescence holds nothing', async () => {
+test("mount/unmount cycles return subscriptions to baseline; quiescence holds nothing", async () => {
   const cells = Array.from({ length: 24 }, (_, i) => atom(i));
   function App() {
-    return <div>{cells.map((c, i) => (
-      <span key={i}>{useValue(c)}</span>
-    ))}</div>;
+    return (
+      <div>
+        {cells.map((c, i) => (
+          <span key={i}>{useValue(c)}</span>
+        ))}
+      </div>
+    );
   }
   const { root } = await h.mount(<App />);
   expect(debugFootprint().subs).toBe(24);
@@ -57,15 +61,15 @@ test('mount/unmount cycles return subscriptions to baseline; quiescence holds no
   expect(footprint.cellsWithHistory).toBe(0);
 });
 
-test('a component-owned atom is collectable after unmount', async () => {
+test("a component-owned atom is collectable after unmount", async () => {
   const captured: Array<WeakRef<object>> = [];
   function Owner() {
     const local = useAtom(() => ({ big: new Array(1024).fill(1) }));
     if (captured.length === 0) captured.push(new WeakRef(local));
-    return <span>{useValue(local) !== undefined ? 'y' : 'n'}</span>;
+    return <span>{useValue(local) !== undefined ? "y" : "n"}</span>;
   }
   const { root, container } = await h.mount(<Owner />);
-  expect(h.text(container)).toBe('y');
+  expect(h.text(container)).toBe("y");
   expect(captured[0]!.deref()).toBeDefined();
   await act(async () => {
     root.render(null);

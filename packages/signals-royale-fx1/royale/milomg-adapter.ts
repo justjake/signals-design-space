@@ -10,7 +10,7 @@ import {
   endBatch,
   type Atom,
   type Computed,
-} from 'signals-royale-fx1';
+} from "signals-royale-fx1";
 
 export interface ReactiveFramework<S = unknown> {
   name: string;
@@ -30,7 +30,7 @@ type Cell = Atom<unknown> | Computed<unknown>;
 let scopeDispose: (() => void) | null = null;
 
 export const royaleFx1Framework: ReactiveFramework<Cell> = {
-  name: 'Royale FX1',
+  name: "Royale FX1",
   createSignal: (initialValue) => atom(initialValue),
   readSignal: (s) => (s as Atom<unknown>).get(),
   writeSignal: (s, value) => {

@@ -2,7 +2,7 @@
  * Engine-level async semantics: parallel registration, stable identity,
  * settlement-as-write, error boxes, stale serving, refresh races.
  */
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test } from "vitest";
 import {
   atom,
   computed,
@@ -16,7 +16,7 @@ import {
   Pending,
   Failure,
   setHost,
-} from '../src/index';
+} from "../src/index";
 
 afterEach(() => {
   setHost(null);
@@ -35,7 +35,7 @@ function deferred<T>() {
 
 const tick = () => new Promise((res) => setTimeout(res, 0));
 
-test('all async reads register before the evaluation parks: parallel fetches', () => {
+test("all async reads register before the evaluation parks: parallel fetches", () => {
   const d1 = deferred<number>();
   const d2 = deferred<number>();
   let fetches = 0;
@@ -50,7 +50,7 @@ test('all async reads register before the evaluation parks: parallel fetches', (
   expect(fetches).toBe(1); // one run registered both thenables
 });
 
-test('pending identity is stable across re-reads; settlement completes the value', async () => {
+test("pending identity is stable across re-reads; settlement completes the value", async () => {
   const d1 = deferred<number>();
   const c = computed((use) => use(d1.promise) * 2);
   const first = peekSlot(c, null);
@@ -61,7 +61,7 @@ test('pending identity is stable across re-reads; settlement completes the value
   expect(read(c)).toBe(42);
 });
 
-test('downstream evaluations forward pending; both settle together', async () => {
+test("downstream evaluations forward pending; both settle together", async () => {
   const d1 = deferred<number>();
   const inner = computed((use) => use(d1.promise));
   const outer = computed(() => (inner.get() as number) + 1);
@@ -72,7 +72,7 @@ test('downstream evaluations forward pending; both settle together', async () =>
   expect(read(outer)).toBe(2);
 });
 
-test('settlement behaves as a write: live effects re-run with the new value', async () => {
+test("settlement behaves as a write: live effects re-run with the new value", async () => {
   const d1 = deferred<string>();
   const c = computed((use) => use(d1.promise));
   const seen: unknown[] = [];
@@ -80,19 +80,19 @@ test('settlement behaves as a write: live effects re-run with the new value', as
     try {
       seen.push(read(c)); // tracked; throws the representative while pending
     } catch {
-      seen.push('pending');
+      seen.push("pending");
     }
   });
-  expect(seen).toEqual(['pending']);
-  d1.resolve('data');
+  expect(seen).toEqual(["pending"]);
+  d1.resolve("data");
   await tick();
-  expect(seen).toEqual(['pending', 'data']);
+  expect(seen).toEqual(["pending", "data"]);
 });
 
-test('errors become reference-stable boxes rethrown at read sites', async () => {
+test("errors become reference-stable boxes rethrown at read sites", async () => {
   const d1 = deferred<number>();
   const c = computed((use) => use(d1.promise));
-  const boom = new Error('boom');
+  const boom = new Error("boom");
   void peekSlot(c, null);
   d1.reject(boom);
   await tick();
@@ -118,7 +118,7 @@ test('errors become reference-stable boxes rethrown at read sites', async () => 
   }
 });
 
-test('refresh serves stale, flags pending, and the latest refetch wins races', async () => {
+test("refresh serves stale, flags pending, and the latest refetch wins races", async () => {
   // One request per epoch; the epoch lives outside the graph and bumps with
   // each refresh, so a refresh with unchanged inputs still fetches fresh.
   let epoch = 0;
@@ -132,27 +132,27 @@ test('refresh serves stale, flags pending, and the latest refetch wins races', a
     return use(g.promise);
   });
   void peekSlot(c, null);
-  gates.get(0)!.resolve('v1');
+  gates.get(0)!.resolve("v1");
   await tick();
-  expect(read(c)).toBe('v1');
+  expect(read(c)).toBe("v1");
   expect(isPending(c)).toBe(false);
   epoch = 1;
   refresh(c); // starts request 1 eagerly
   // Consumers keep reading the settled value while the refetch runs.
-  expect(read(c)).toBe('v1');
-  expect(latest(c)).toBe('v1');
+  expect(read(c)).toBe("v1");
+  expect(latest(c)).toBe("v1");
   expect(isPending(c)).toBe(true);
   epoch = 2;
   refresh(c); // race: a second refetch before the first settles
-  gates.get(1)!.resolve('stale-answer');
-  gates.get(2)!.resolve('fresh-answer');
+  gates.get(1)!.resolve("stale-answer");
+  gates.get(2)!.resolve("fresh-answer");
   await tick();
   await tick();
-  expect(read(c)).toBe('fresh-answer'); // latest-wins
+  expect(read(c)).toBe("fresh-answer"); // latest-wins
   expect(isPending(c)).toBe(false);
 });
 
-test('input changes reset fetch generations; settle re-runs keep them', async () => {
+test("input changes reset fetch generations; settle re-runs keep them", async () => {
   const param = atom(1);
   const requests: number[] = [];
   const c = computed((use) => {
@@ -174,7 +174,7 @@ test('input changes reset fetch generations; settle re-runs keep them', async ()
   expect(requests.length).toBeGreaterThan(before);
 });
 
-test('canonical read of never-settled pending throws the representative promise', () => {
+test("canonical read of never-settled pending throws the representative promise", () => {
   const d1 = deferred<number>();
   const c = computed((use) => use(d1.promise));
   let thrown: unknown;
@@ -183,18 +183,18 @@ test('canonical read of never-settled pending throws the representative promise'
   } catch (e) {
     thrown = e;
   }
-  expect(typeof (thrown as PromiseLike<unknown>)?.then).toBe('function');
+  expect(typeof (thrown as PromiseLike<unknown>)?.then).toBe("function");
   const box = peekSlot(c, null);
   expect(box).toBeInstanceOf(Pending);
   expect((box as Pending).promise).toBe(thrown);
 });
 
-test('a rejected read wins only when nothing is still pending', async () => {
+test("a rejected read wins only when nothing is still pending", async () => {
   const bad = deferred<number>();
   const slow = deferred<number>();
   const c = computed((use) => use(bad.promise) + use(slow.promise));
   void peekSlot(c, null);
-  bad.reject(new Error('bad'));
+  bad.reject(new Error("bad"));
   await tick();
   // slow is still pending: a retry may resolve differently, stay pending.
   expect(peekSlot(c, null)).toBeInstanceOf(Pending);

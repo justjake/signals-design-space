@@ -149,7 +149,7 @@ export function openEpisodesSnapshot(): readonly Episode[] {
 
 /** Would this episode's ops change what `node` shows? (Corrective joins.) */
 export function episodeAffects(ep: Episode, node: Node): boolean {
-  if (ep.state !== 'open') return false;
+  if (ep.state !== "open") return false;
   if (node instanceof Cell) return ep.cells.has(node);
   if (ep.refreshMarks !== null && ep.refreshMarks.has(node)) return true;
   return new Frame([ep], -1).touches(node);
@@ -166,7 +166,7 @@ function loud(message: string): Error {
 /** Thrown when an evaluation reads itself (directly or through a chain). */
 export class CycleError extends Error {
   constructor(label: string | undefined) {
-    super(`signals-royale-fx1: dependency cycle at ${label ?? 'computed'}`);
+    super(`signals-royale-fx1: dependency cycle at ${label ?? "computed"}`);
   }
 }
 
@@ -225,7 +225,7 @@ export interface Sub {
   /** Trace id of the delivery that caused the sub's latest render. */
   causeId: TraceEventId;
 }
-export const SUB_NEVER: unique symbol = Symbol('never-rendered');
+export const SUB_NEVER: unique symbol = Symbol("never-rendered");
 
 /** Subs whose last render was speculative; scanned on episode writes so
  * speculative-only dependencies still get notified. */
@@ -276,7 +276,7 @@ export class Cell<T> {
     this.equals = opts?.equals ?? (is as Equality<T>);
     this.label = opts?.label;
     this.onObserved = opts?.onObserved ?? null;
-    if (typeof initial === 'function') {
+    if (typeof initial === "function") {
       this.init = initial as () => T;
     } else {
       this.init = null;
@@ -299,7 +299,7 @@ export class Cell<T> {
       initializing = prevInit;
       activeObserver = prevObs;
     }
-    if (trace !== null) trace.emit('initialize', traceCause, this.label, this);
+    if (trace !== null) trace.emit("initialize", traceCause, this.label, this);
   }
 
   get(): T {
@@ -379,7 +379,7 @@ export class Derived<T> {
 
 /** Raw slot → public value policy shared by canonical and frame reads. */
 function unwrap(slot: unknown): unknown {
-  if (slot === null || typeof slot !== 'object') return slot;
+  if (slot === null || typeof slot !== "object") return slot;
   if (slot instanceof Failure) throw slot.error;
   if (slot instanceof Pending) {
     // Inside another evaluation: forward pending and keep that evaluation
@@ -540,14 +540,14 @@ function scheduleObservedFlip(cell: Cell<any>): void {
     cell.observedActive = shouldBeActive;
     if (shouldBeActive) {
       cell.materialize();
-      if (trace !== null) trace.emit('observe', traceCause, cell.label, cell);
+      if (trace !== null) trace.emit("observe", traceCause, cell.label, cell);
       const cleanup = cell.onObserved!({
         get: () => untracked(() => cell.get()),
         set: (v) => cell.set(v),
       });
-      cell.observedCleanup = typeof cleanup === 'function' ? cleanup : null;
+      cell.observedCleanup = typeof cleanup === "function" ? cleanup : null;
     } else {
-      if (trace !== null) trace.emit('unobserve', traceCause, cell.label, cell);
+      if (trace !== null) trace.emit("unobserve", traceCause, cell.label, cell);
       const cleanup = cell.observedCleanup;
       cell.observedCleanup = null;
       if (cleanup !== null) cleanup();
@@ -662,7 +662,7 @@ function materializeCtx(run: EvalRun): EvalCtx {
     deps: null,
     refreshSeen: run.frame === null ? 0 : refreshMarksFor(run.node, run.frame),
   };
-  if (run.key === '') {
+  if (run.key === "") {
     run.node.ctx = ctx;
   } else {
     (run.node.worldCtx ??= new Map()).set(run.key, ctx);
@@ -674,7 +674,7 @@ function materializeCtx(run: EvalRun): EvalCtx {
 /** `use()` as passed to every computed function. */
 const useFn: Use = <U>(t: PromiseLike<U>): U => {
   const run = activeEvalRun;
-  if (run === null) throw loud('use() may only be called during a computed evaluation');
+  if (run === null) throw loud("use() may only be called during a computed evaluation");
   const ctx = (run.ctx ??= materializeCtx(run));
   const i = run.slotIndex++;
   let slot = ctx.slots[i];
@@ -735,8 +735,8 @@ function slotSettled(ctx: EvalCtx): void {
 
 function repull(ctx: EvalCtx): void {
   const d = ctx.node;
-  const prevSlot = ctx.key === '' ? d.slot : undefined;
-  if (ctx.key === '') {
+  const prevSlot = ctx.key === "" ? d.slot : undefined;
+  if (ctx.key === "") {
     if (d.ctx !== ctx) return; // superseded (refresh/retire rekeyed)
     d.state = DIRTY;
     d.settleRerun = true;
@@ -755,7 +755,10 @@ function repull(ctx: EvalCtx): void {
     const frame = transientFrame(ctx.episodes);
     const slot = frameDerivedRead(d, frame);
     if (!(slot instanceof Pending)) {
-      announceSettlement(d, ctx.episodes.length === 0 ? null : ctx.episodes[ctx.episodes.length - 1]!);
+      announceSettlement(
+        d,
+        ctx.episodes.length === 0 ? null : ctx.episodes[ctx.episodes.length - 1]!,
+      );
     }
   }
 }
@@ -763,7 +766,7 @@ function repull(ctx: EvalCtx): void {
 /** Settlement behaves as a write: invalidate downstream, notify subscribers
  * under the owning episode so the new data commits with that batch. */
 function announceSettlement(d: Derived<any>, episode: Episode | null): void {
-  const cause = trace !== null ? trace.emit('settle', traceCause, d.label, d) : 0;
+  const cause = trace !== null ? trace.emit("settle", traceCause, d.label, d) : 0;
   const prevCause = setTraceCause(cause);
   pendingEpoch++;
   notifyDownstream(d, episode);
@@ -836,7 +839,7 @@ function evaluateCanonical(d: Derived<any>): void {
   if (ctx !== null && !keepSlots) ctx.slots = [];
   const run: EvalRun = {
     node: d,
-    key: '',
+    key: "",
     frame: null,
     ctx,
     pending: false,
@@ -867,7 +870,7 @@ function evaluateCanonical(d: Derived<any>): void {
   } else {
     commitSlot(d, finishRun(run, result, threw, error));
   }
-  if (trace !== null) trace.emit('evaluate', traceCause, d.label, d);
+  if (trace !== null) trace.emit("evaluate", traceCause, d.label, d);
 }
 
 /** Turn a finished run into a slot (value, Pending, or Failure) and keep the
@@ -926,10 +929,10 @@ function commitSlot(d: Derived<any>, slot: unknown): boolean {
     changed = true;
   } else if (
     (slot !== null &&
-      typeof slot === 'object' &&
+      typeof slot === "object" &&
       (slot instanceof Pending || slot instanceof Failure)) ||
     (prev !== null &&
-      typeof prev === 'object' &&
+      typeof prev === "object" &&
       (prev instanceof Pending || prev instanceof Failure))
   ) {
     changed = true; // boxes compare by identity, and identity already differed
@@ -1031,10 +1034,10 @@ export class EffectNode {
     activeFrame = null; // effects observe canonical state only
     this.trackIndex = 0;
     const prevCause = traceCause;
-    if (trace !== null) traceCause = trace.emit('effect', traceCause, this.label, this);
+    if (trace !== null) traceCause = trace.emit("effect", traceCause, this.label, this);
     try {
       const ret = this.fn();
-      if (typeof ret === 'function') this.cleanup = ret;
+      if (typeof ret === "function") this.cleanup = ret;
     } finally {
       truncateSources(this, this.trackIndex);
       activeObserver = prevObserver;
@@ -1068,13 +1071,13 @@ export class EffectNode {
 
 /** Where dispose-time cleanup errors go (teardown itself never throws). */
 let disposeErrorReporter: (error: unknown) => void = (error) => {
-  console.error('signals-royale-fx1: error in effect cleanup during dispose', error);
+  console.error("signals-royale-fx1: error in effect cleanup during dispose", error);
 };
 export function setDisposeErrorReporter(fn: (error: unknown) => void): void {
   disposeErrorReporter = fn;
 }
 function reportDisposeError(error: unknown): void {
-  if (trace !== null) trace.emit('dispose-error', traceCause, String(error));
+  if (trace !== null) trace.emit("dispose-error", traceCause, String(error));
   disposeErrorReporter(error);
 }
 
@@ -1115,7 +1118,7 @@ function flushEffects(): void {
     // One catch frame per error, not per effect: a throwing effect drops us
     // out of the inner loop, we record, and the outer loop resumes draining.
     while (cursor < effectQueue.length) {
-      if (iterations > FLUSH_LIMIT) throw loud('effect flush did not settle (cycle?)');
+      if (iterations > FLUSH_LIMIT) throw loud("effect flush did not settle (cycle?)");
       try {
         while (cursor < effectQueue.length) {
           if (++iterations > FLUSH_LIMIT) break; // cycle guard: escape to the outer check
@@ -1151,11 +1154,11 @@ function applyOp<T>(op: Op<T>, prev: T): T {
 }
 
 function writeCell<T>(cell: Cell<T>, fn: ((prev: T) => T) | null, value: T | undefined): void {
-  if (initializing) throw loud('atom initializers must not write');
+  if (initializing) throw loud("atom initializers must not write");
   if (host !== null) {
     if (host.isRendering()) {
       throw loud(
-        `write to ${cell.label ?? 'atom'} during render — move it to an event handler or effect`,
+        `write to ${cell.label ?? "atom"} during render — move it to an event handler or effect`,
       );
     }
     const token = host.currentBatchToken();
@@ -1199,17 +1202,16 @@ function foldQueue<T>(cell: Cell<T>, episodes: Episode[] | null, pinSeq: WriteSe
   const pend = cell.pend!;
   // A pass pinned before the queue formed starts from its own pinned base
   // (the queue's ops all postdate it; episode ops replay against it).
-  let value =
-    pinSeq >= 0 && pend.baseSeq > pinSeq ? baseValueAt(cell, pinSeq) : pend.base;
+  let value = pinSeq >= 0 && pend.baseSeq > pinSeq ? baseValueAt(cell, pinSeq) : pend.base;
   for (const op of pend.ops) {
     const ep = op.ep;
     // A world that explicitly contains the op's episode sees it regardless of
     // its retirement state — a pass that rendered the episode keeps seeing it
     // through its own commit even though retirement restamps the op.
     const visible =
-      ep !== null && episodes !== null && ep.state !== 'aborted' && episodes.includes(ep)
+      ep !== null && episodes !== null && ep.state !== "aborted" && episodes.includes(ep)
         ? true
-        : ep === null || ep.state === 'retired'
+        : ep === null || ep.state === "retired"
           ? pinSeq < 0 || op.seq <= pinSeq
           : false;
     if (visible) value = applyOp(op, value);
@@ -1229,7 +1231,7 @@ function setCanonical<T>(cell: Cell<T>, next: T, episode: Episode | null): void 
   cell.version++;
   if (trace !== null) {
     const cause = trace.emit(
-      episode === null ? 'write' : 'retire-fold',
+      episode === null ? "write" : "retire-fold",
       episode !== null ? episode.openTrace : traceCause,
       cell.label,
       cell,
@@ -1254,7 +1256,7 @@ function recordEpisodeOp<T>(cell: Cell<T>, op: Op<T>, ep: Episode): void {
   ep.version++;
   pendingEpoch++;
   if (trace !== null) {
-    setTraceCause(trace.emit('write', ep.openTrace, cell.label, cell));
+    setTraceCause(trace.emit("write", ep.openTrace, cell.label, cell));
   }
   ep.armAutoRetire();
   notifyDownstream(cell as Cell<any>, ep);
@@ -1274,8 +1276,8 @@ function collapseQueue(cell: Cell<any>): void {
   }
   for (const op of pend.ops) {
     if (op.ep === null) continue;
-    if (op.ep.state === 'open') return;
-    if (op.ep.state === 'retired' && frameHolds(op.ep)) return;
+    if (op.ep.state === "open") return;
+    if (op.ep.state === "retired" && frameHolds(op.ep)) return;
   }
   cell.pend = null;
   cellsWithQueues.delete(cell);
@@ -1384,7 +1386,7 @@ function flushDeliveries(): void {
     pendingDeliveries.clear();
     for (const [sub, episodes] of batch) {
       for (const episode of episodes) {
-        if (episode !== null && episode.state !== 'open') continue;
+        if (episode !== null && episode.state !== "open") continue;
         if (!sub.probe && sameAsSnapshot(sub, episode)) continue;
         // Probes and unrooted subscribers take the delivery but never gate
         // the episode's retirement — no commit of theirs will ever name it.
@@ -1429,7 +1431,7 @@ export function startBatch(): void {
 }
 
 export function endBatch(): void {
-  if (batchDepth === 0) throw loud('endBatch without startBatch');
+  if (batchDepth === 0) throw loud("endBatch without startBatch");
   batchDepth--;
   if (batchDepth === 0) flushAll();
 }
@@ -1447,14 +1449,14 @@ export function batch<T>(fn: () => T): T {
 // Episodes — engine-owned update batches
 // ---------------------------------------------------------------------------
 
-export type EpisodeState = 'open' | 'retired' | 'aborted';
+export type EpisodeState = "open" | "retired" | "aborted";
 
 export class Episode {
   seq: EpisodeSeq;
   token: object;
   /** Bumps on every op and settlement owned by this episode (world cache keys). */
   version = 0;
-  state: EpisodeState = 'open';
+  state: EpisodeState = "open";
   /** Cells this episode has ops for (the ops live on the cells). */
   cells = new Set<Cell<any>>();
   /** Roots that received deliveries and have not committed this episode yet. */
@@ -1483,7 +1485,7 @@ export class Episode {
   }
 
   subGone(sub: Sub): void {
-    if (this.state !== 'open') return;
+    if (this.state !== "open") return;
     if (sub.rootKey === null) return;
     const set = this.roots.get(sub.rootKey);
     if (set === undefined || !set.delete(sub)) return;
@@ -1492,7 +1494,7 @@ export class Episode {
       // Defer: a StrictMode-style unsubscribe/resubscribe flap within one
       // commit must not retire the batch out from under the resubscriber.
       queueMicrotask(() => {
-        if (this.state === 'open' && this.roots.size === 0) retireEpisode(this);
+        if (this.state === "open" && this.roots.size === 0) retireEpisode(this);
       });
     }
   }
@@ -1508,7 +1510,7 @@ export class Episode {
     this.autoRetireArmed = true;
     queueMicrotask(() => {
       this.autoRetireArmed = false;
-      if (this.state === 'open' && !this.everDelivered && this.roots.size === 0) {
+      if (this.state === "open" && !this.everDelivered && this.roots.size === 0) {
         retireEpisode(this);
       }
     });
@@ -1522,7 +1524,7 @@ export function episodeFor(token: object): Episode {
     ep = new Episode(token);
     episodesByToken.set(token, ep);
     openEpisodes.push(ep);
-    if (trace !== null) ep.openTrace = trace.emit('batch-open', traceCause, `episode ${ep.seq}`);
+    if (trace !== null) ep.openTrace = trace.emit("batch-open", traceCause, `episode ${ep.seq}`);
   }
   return ep;
 }
@@ -1530,10 +1532,10 @@ export function episodeFor(token: object): Episode {
 /** Fold the episode's ops onto the base (its functional updates re-execute
  * against today's base — the rebase), then drop every trace of it. */
 export function retireEpisode(ep: Episode): void {
-  if (ep.state !== 'open') return;
-  const cause = trace !== null ? trace.emit('batch-retire', ep.openTrace, `episode ${ep.seq}`) : 0;
+  if (ep.state !== "open") return;
+  const cause = trace !== null ? trace.emit("batch-retire", ep.openTrace, `episode ${ep.seq}`) : 0;
   const prevCause = setTraceCause(cause);
-  ep.state = 'retired';
+  ep.state = "retired";
   unregisterEpisode(ep);
   for (const cell of ep.cells) {
     const pend = cell.pend;
@@ -1553,9 +1555,9 @@ export function retireEpisode(ep: Episode): void {
 
 /** Drop an abandoned episode: ops vanish, anyone who saw them re-renders. */
 export function abortEpisode(ep: Episode): void {
-  if (ep.state !== 'open') return;
-  ep.state = 'aborted';
-  if (trace !== null) trace.emit('batch-abort', ep.openTrace, `episode ${ep.seq}`);
+  if (ep.state !== "open") return;
+  ep.state = "aborted";
+  if (trace !== null) trace.emit("batch-abort", ep.openTrace, `episode ${ep.seq}`);
   unregisterEpisode(ep);
   for (const cell of ep.cells) {
     const pend = cell.pend;
@@ -1592,15 +1594,15 @@ function adoptWorldContexts(ep: Episode): void {
     const map = d.worldCtx;
     if (map === null) continue;
     for (const [key, ctx] of [...map]) {
-      const seqs = key.split(',');
+      const seqs = key.split(",");
       const i = seqs.indexOf(seqToken);
       if (i < 0) continue;
       map.delete(key);
       seqs.splice(i, 1);
-      const newKey = seqs.join(',');
+      const newKey = seqs.join(",");
       ctx.episodes = ctx.episodes.filter((e) => e !== ep);
-      if (newKey === '') {
-        ctx.key = '';
+      if (newKey === "") {
+        ctx.key = "";
         d.ctx = ctx;
         d.state = DIRTY;
         d.settleRerun = true; // keep the world's slots: no refetch after commit
@@ -1622,7 +1624,7 @@ function dropWorldContexts(ep: Episode): void {
     const map = d.worldCtx;
     if (map === null) continue;
     for (const key of [...map.keys()]) {
-      if (key.split(',').includes(seqToken)) map.delete(key);
+      if (key.split(",").includes(seqToken)) map.delete(key);
     }
     if (map.size === 0) {
       d.worldCtx = null;
@@ -1652,7 +1654,7 @@ export class Frame {
   constructor(episodes: Episode[], pinSeq: WriteSeq) {
     this.episodes = [...episodes].sort((a, b) => a.seq - b.seq);
     this.pinSeq = pinSeq;
-    this.ctxKey = this.episodes.map((e) => e.seq).join(',');
+    this.ctxKey = this.episodes.map((e) => e.seq).join(",");
   }
 
   /** Does this world change anything this derived (transitively) reads? */
@@ -1746,7 +1748,7 @@ function frameDerivedRead(d: Derived<any>, frame: Frame): unknown {
 function evaluateInFrame(d: Derived<any>, frame: Frame): unknown {
   if (d.evaluating) throw new CycleError(d.label);
   const key = frame.ctxKey;
-  let ctx = key === '' ? d.ctx : (d.worldCtx?.get(key) ?? null);
+  let ctx = key === "" ? d.ctx : (d.worldCtx?.get(key) ?? null);
   const run: EvalRun = {
     node: d,
     key,
@@ -1842,7 +1844,7 @@ export function latestFrame(): Frame {
 /** Transient frame over the live base for a specific episode set. */
 function transientFrame(episodes: Episode[]): Frame {
   return new Frame(
-    episodes.filter((e) => e.state === 'open'),
+    episodes.filter((e) => e.state === "open"),
     -1,
   );
 }
@@ -1896,20 +1898,20 @@ export function unregisterSubRoot(sub: Sub): void {
 export function beginPass(rootKey: object, episodes: Episode[]): Frame {
   const prior = passFrames.get(rootKey);
   if (prior !== undefined && trace !== null) {
-    trace.emit('pass-discard', traceCause, undefined);
+    trace.emit("pass-discard", traceCause, undefined);
   }
   if (prior !== undefined) passFrames.delete(rootKey);
   const committed = committedByRoot.get(rootKey);
   const all =
     committed !== undefined && committed.length > 0 ? [...committed, ...episodes] : episodes;
   const frame = new Frame(
-    all.filter((e) => e.state === 'open'),
+    all.filter((e) => e.state === "open"),
     writeSeq,
   );
   passFrames.set(rootKey, frame);
   if (trace !== null) {
-    const detail = frame.episodes.map((e) => `episode ${e.seq}`).join('+');
-    frame.passTrace = trace.emit('pass-start', traceCause, detail || 'urgent');
+    const detail = frame.episodes.map((e) => `episode ${e.seq}`).join("+");
+    frame.passTrace = trace.emit("pass-start", traceCause, detail || "urgent");
   }
   return frame;
 }
@@ -1927,7 +1929,7 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
   const frame = passFrames.get(rootKey) ?? transientFrame(episodes);
   passFrames.delete(rootKey);
   const commitCause =
-    trace !== null ? trace.emit('commit', frame.passTrace ?? traceCause, undefined) : 0;
+    trace !== null ? trace.emit("commit", frame.passTrace ?? traceCause, undefined) : 0;
   const prevCause = setTraceCause(commitCause);
 
   // Snapshot what this root's screen now shows. Only worlds can make a
@@ -1935,8 +1937,7 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
   // already answers from canonical, so the walk is skipped entirely — an
   // urgent commit costs O(changed), not O(subscribed).
   const subs = subsByRoot.get(rootKey);
-  const worldsInPlay =
-    frame.episodes.length > 0 || openEpisodes.length > 0 || rootViews.size > 0;
+  const worldsInPlay = frame.episodes.length > 0 || openEpisodes.length > 0 || rootViews.size > 0;
   if (worldsInPlay && subs !== undefined && subs.size > 0) {
     let view = rootViews.get(rootKey);
     if (view === undefined) {
@@ -1962,13 +1963,13 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
   // Book-keeping for the committed episodes.
   const committed = committedByRoot.get(rootKey) ?? [];
   for (const ep of episodes) {
-    if (ep.state !== 'open') continue;
+    if (ep.state !== "open") continue;
     if (!committed.includes(ep)) committed.push(ep);
     ep.roots.delete(rootKey);
     if (ep.roots.size === 0) retireEpisode(ep);
   }
   committed.sort((a, b) => a.seq - b.seq);
-  const stillOpen = committed.filter((e) => e.state === 'open');
+  const stillOpen = committed.filter((e) => e.state === "open");
   if (stillOpen.length > 0) committedByRoot.set(rootKey, stillOpen);
   else committedByRoot.delete(rootKey);
 
@@ -2125,7 +2126,7 @@ export function refresh(node: Node): void {
     // Make sure the episode's world notices even if it has no cell ops yet.
     ep.version++;
     pendingEpoch++;
-    if (trace !== null) trace.emit('refresh', ep.openTrace, node.label, node);
+    if (trace !== null) trace.emit("refresh", ep.openTrace, node.label, node);
     notifyDownstream(node, ep);
     flushAll();
     return;
@@ -2137,7 +2138,7 @@ export function refresh(node: Node): void {
   node.state = DIRTY;
   node.settleRerun = true; // inputs unchanged; slot reset above forces fetches
   pendingEpoch++;
-  if (trace !== null) trace.emit('refresh', traceCause, node.label, node);
+  if (trace !== null) trace.emit("refresh", traceCause, node.label, node);
   // Start the refetch now — refresh means "fetch", not "fetch when read".
   // The evaluation parks and the settled value keeps serving meanwhile.
   untracked(() => {

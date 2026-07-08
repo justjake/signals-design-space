@@ -1,15 +1,7 @@
 /**
  * FrameworkAdapter for the shared conformance/benchmark harness.
  */
-import {
-  atom,
-  computed,
-  effect,
-  effectScope,
-  startBatch,
-  endBatch,
-  untracked,
-} from '../src/index';
+import { atom, computed, effect, effectScope, startBatch, endBatch, untracked } from "../src/index";
 
 export interface AdapterSignal<T> {
   read(): T;
@@ -30,11 +22,11 @@ export interface FrameworkAdapter {
 }
 
 const adapter: FrameworkAdapter = {
-  name: 'signals-royale-fx1',
+  name: "signals-royale-fx1",
   signal<T>(initialValue: T): AdapterSignal<T> {
     // A function-valued initial here is a value, not a lazy initializer.
     const a =
-      typeof initialValue === 'function' ? atom<T>(() => initialValue) : atom<T>(initialValue);
+      typeof initialValue === "function" ? atom<T>(() => initialValue) : atom<T>(initialValue);
     return {
       read: () => a.get(),
       write: (value: T) => a.set(value),

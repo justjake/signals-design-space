@@ -2,10 +2,10 @@
  * Shared harness for the real-React suites: registration, per-test engine
  * reset, root management, act plumbing.
  */
-import * as React from 'react';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { register, resetForTest, type RuntimeHandle } from '../src/runtime';
+import * as React from "react";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { register, resetForTest, type RuntimeHandle } from "../src/runtime";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,7 +29,7 @@ export function makeHarness(): Harness {
     roots,
     containers,
     newRoot() {
-      const container = document.createElement('div');
+      const container = document.createElement("div");
       document.body.appendChild(container);
       const root = createRoot(container);
       roots.push(root);
@@ -44,7 +44,7 @@ export function makeHarness(): Harness {
       return made;
     },
     text(container) {
-      return (container.textContent ?? '').replace(/\s+/g, '');
+      return (container.textContent ?? "").replace(/\s+/g, "");
     },
     async cleanup() {
       await act(async () => {

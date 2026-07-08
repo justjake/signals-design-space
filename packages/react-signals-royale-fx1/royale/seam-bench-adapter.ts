@@ -2,10 +2,10 @@
  * Contender adapter for react-seam-bench: cells as engine atoms, reads via
  * the subscribing hook, transitions via the engine's own batch scope.
  */
-import type { ComponentType, ReactNode } from 'react';
-import { atom, batch, type Atom } from 'signals-royale-fx1';
-import { register, startTransitionWrite } from '../src/runtime';
-import { useValue } from '../src/hooks';
+import type { ComponentType, ReactNode } from "react";
+import { atom, batch, type Atom } from "signals-royale-fx1";
+import { register, startTransitionWrite } from "../src/runtime";
+import { useValue } from "../src/hooks";
 
 export interface CellStore {
   useCell(i: number): number;
@@ -24,7 +24,7 @@ export interface Contender {
 register();
 
 const contender: Contender = {
-  name: 'royale-fx1',
+  name: "royale-fx1",
   createCells(n: number): CellStore {
     let cells: Array<Atom<number>> | null = Array.from({ length: n }, () => atom(0));
     return {

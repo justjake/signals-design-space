@@ -10,12 +10,24 @@
  *   contenders unmount their roots; the baseline store and the engine atoms
  *   are then unreachable (no registries hold them).
  */
-import { JSDOM } from 'jsdom';
+import { JSDOM } from "jsdom";
 
-const dom = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true });
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
 const g = globalThis as Record<string, unknown>;
-for (const key of ['window', 'document', 'navigator', 'MutationObserver', 'Element', 'HTMLElement', 'HTMLIFrameElement'] as const) {
-  Object.defineProperty(g, key, { value: dom.window[key as 'document'], configurable: true, writable: true });
+for (const key of [
+  "window",
+  "document",
+  "navigator",
+  "MutationObserver",
+  "Element",
+  "HTMLElement",
+  "HTMLIFrameElement",
+] as const) {
+  Object.defineProperty(g, key, {
+    value: dom.window[key as "document"],
+    configurable: true,
+    writable: true,
+  });
 }
 
 const [, , scenario, contenderName] = process.argv;
@@ -42,9 +54,9 @@ function nextMutation(el: Element): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  const React = await import('react');
-  const { createRoot } = await import('react-dom/client');
-  const { flushSync } = await import('react-dom');
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
 
   interface Store {
     useCell(i: number): number;
@@ -53,10 +65,10 @@ async function main(): Promise<void> {
   }
 
   let makeStore: (n: number) => Store;
-  if (contenderName === 'royale-fx1') {
-    const { atom } = await import('signals-royale-fx1');
-    const { register, startTransitionWrite } = await import('../src/runtime');
-    const { useValue } = await import('../src/hooks');
+  if (contenderName === "royale-fx1") {
+    const { atom } = await import("signals-royale-fx1");
+    const { register, startTransitionWrite } = await import("../src/runtime");
+    const { useValue } = await import("../src/hooks");
     register();
     makeStore = (n) => {
       const cells = Array.from({ length: n }, () => atom(0));
@@ -103,11 +115,11 @@ async function main(): Promise<void> {
     };
   }
 
-  const container = dom.window.document.createElement('div');
+  const container = dom.window.document.createElement("div");
   dom.window.document.body.appendChild(container);
 
   function CellView({ store, i }: { store: Store; i: number }) {
-    return React.createElement('span', null, String(store.useCell(i)));
+    return React.createElement("span", null, String(store.useCell(i)));
   }
   /** A cell with a small render cost, so bulk re-renders span whole frames
    * and scheduling differences become visible. */
@@ -117,20 +129,19 @@ async function main(): Promise<void> {
     while (performance.now() < end) {
       // burn
     }
-    return React.createElement('span', null, String(v));
+    return React.createElement("span", null, String(v));
   }
   const BurnGrid = React.memo(function BurnGrid({ store, n }: { store: Store; n: number }) {
     // Memoized: the urgent input above never re-renders the grid; only store
     // deliveries do.
     const kids = [];
-    for (let i = 0; i < n; i++)
-      kids.push(React.createElement(BurnCellView, { store, i, key: i }));
-    return React.createElement('div', null, kids);
+    for (let i = 0; i < n; i++) kids.push(React.createElement(BurnCellView, { store, i, key: i }));
+    return React.createElement("div", null, kids);
   });
   function Grid({ store, n }: { store: Store; n: number }) {
     const kids = [];
     for (let i = 0; i < n; i++) kids.push(React.createElement(CellView, { store, i, key: i }));
-    return React.createElement('div', null, kids);
+    return React.createElement("div", null, kids);
   }
 
   async function mountGrid(store: Store, n: number) {
@@ -142,7 +153,7 @@ async function main(): Promise<void> {
     return root;
   }
 
-  if (scenario === 'fanout') {
+  if (scenario === "fanout") {
     const N = 5000;
     const store = makeStore(N);
     const root = await mountGrid(store, N);
@@ -156,16 +167,16 @@ async function main(): Promise<void> {
     }
     console.log(`fanout,${contenderName},median-write-to-commit,${median(times).toFixed(3)}`);
     root.unmount();
-  } else if (scenario === 'transition') {
+  } else if (scenario === "transition") {
     const N = 2000;
     const store = makeStore(N);
     function App() {
       const [typed, setTyped] = React.useState(0);
       (g as { __setTyped?: (n: number) => void }).__setTyped = setTyped;
       return React.createElement(
-        'div',
+        "div",
         null,
-        React.createElement('b', { id: 'typed' }, String(typed)),
+        React.createElement("b", { id: "typed" }, String(typed)),
         React.createElement(BurnGrid, { store, n: N }),
       );
     }
@@ -174,7 +185,7 @@ async function main(): Promise<void> {
     root.render(React.createElement(App));
     await settled;
     await tick(10);
-    const input = container.querySelector('b')!;
+    const input = container.querySelector("b")!;
     const updates: Array<[number, number]> = [];
     for (let i = 0; i < N; i++) updates.push([i, i + 1]);
     // Latency counts from each update's INTENDED cadence time: a store whose
@@ -194,18 +205,18 @@ async function main(): Promise<void> {
       });
       urgentTimes.push((await done) - intended);
     }
-    console.error('# samples: ' + urgentTimes.map((t) => t.toFixed(1)).join(' '));
+    console.error("# samples: " + urgentTimes.map((t) => t.toFixed(1)).join(" "));
     console.log(`transition,${contenderName},p95-urgent-to-commit,${p95(urgentTimes).toFixed(3)}`);
     const deadline = Date.now() + 30000;
     while (!container.textContent!.includes(String(N)) && Date.now() < deadline) await tick(10);
     console.error(`# transition completed for ${contenderName}`);
     root.unmount();
-  } else if (scenario === 'mount') {
+  } else if (scenario === "mount") {
     const N = 5000;
     const times: number[] = [];
     for (let r = 0; r < 5; r++) {
       const store = makeStore(N);
-      const freshContainer = dom.window.document.createElement('div');
+      const freshContainer = dom.window.document.createElement("div");
       dom.window.document.body.appendChild(freshContainer);
       const root = createRoot(freshContainer);
       const settled = nextMutation(freshContainer);
