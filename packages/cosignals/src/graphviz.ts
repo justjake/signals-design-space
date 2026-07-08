@@ -2,7 +2,7 @@
  * `cosignals/graphviz` — the DOT renderers of the diagnostics story. Both
  * functions emit DOT source (render with `dot -Tsvg`). Layering is strict:
  * `cosignals/trace` records without importing any visualizer, and this entry
- * imports ONLY TYPES from the trace and engine modules — its runtime module
+ * imports only types from the trace and engine modules — its runtime module
  * graph is exactly {graphviz.ts}; either diagnostics entry loads without
  * the other.
  *
@@ -25,7 +25,7 @@
  */
 
 import type { CosignalEngine } from './concurrent.js';
-import type { TraceRecord, TraceKind } from './trace.js';
+import type { TraceRecord, TraceKind } from './Tracer.js';
 
 /** Escape + quote a string as a DOT-source string literal. */
 function quoteDotString(s: string): string {

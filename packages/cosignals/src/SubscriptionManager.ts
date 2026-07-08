@@ -1,11 +1,11 @@
 /**
- * SUBSCRIPTIONS — the ONE core `run`-action consumer record (committed
+ * Subscriptions — the one core `run`-action consumer record (committed
  * observers, the production useSignalEffect mechanism) and its
  * lifecycle: registration, the capture frame that snapshots deps under the
  * committed world, removal, the test-side replay surface, and the
  * boundary revalidation. `deliver`-action consumers (component re-renders)
  * remain `Watcher` structurally and stay with the engine. Core `effect()`s
- * hold no Subscription: they are REAL kernel effects, flushed by the eager
+ * hold no Subscription: they are real kernel effects, flushed by the eager
  * kernel apply (their trace seam, `logCoreEffectRun`, stays with the
  * engine's trace sites).
  *
@@ -22,10 +22,10 @@ import { SuspendedRead } from './index.js';
 import { ScheduleError } from './errors.js';
 import type { AnyInternals, SubscriptionId, RootId, Value } from './concurrent.js';
 import type { EngineCore, World } from './World.js';
-import type { ObservationIndex } from './observation.js';
+import type { ObservationIndex } from './ObservationIndex.js';
 
 /**
- * The ONE core `run`-action subscription record: the production
+ * The one core `run`-action subscription record: the production
  * `useSignalEffect` mechanism, shared with the test suites (one record type,
  * one firing machinery). A subscription is a
  * registration saying WHO is notified and IN WHICH WORLD its reads resolve;
@@ -40,10 +40,10 @@ import type { ObservationIndex } from './observation.js';
  * close). `refire` (adapter-registered) rides the operation-boundary
  * notification queue; test-configured subscriptions (tests/helpers.ts's
  * mountEngineReactEffect/-Pick) store a `body` and re-run it inline through
- * the SAME capture frame, so the model-comparison suites exercise the real
+ * the same capture frame, so the model-comparison suites exercise the real
  * mechanism.
  *
- * Core `effect()`s hold no Subscription: they are REAL kernel effects,
+ * Core `effect()`s hold no Subscription: they are real kernel effects,
  * flushed by the eager kernel apply (see logCoreEffectRun).
  */
 export type Subscription = {
@@ -91,14 +91,14 @@ export type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; valu
  *    so the resident and settlement pre-checks stay plain field reads;
  *    `captureFrame`, written only through `setCaptureFrame` so read routing
  *    re-syncs with every assignment).
- *  - `observation`: the observation index (observation.ts) — the
+ *  - `observation`: the observation index (ObservationIndex.ts) — the
  *    subscription snapshot re-pointer and the refcount shift that releases
  *    a removed snapshot's retains. */
 export type SubscriptionManagerDeps = {
 	core: Pick<
 		EngineCore,
 		| 'evaluate'
-		| 'changedValue'
+		| 'isValueChanged'
 		| 'root'
 		| 'rootToOpenRender'
 		| 'notify'
@@ -129,7 +129,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	// path calls binds once; mutable core state (trace, captureFrame, the
 	// guards, the live count) stays plain field reads off the aliased record.
 	const core = deps.core;
-	const { evaluate, changedValue, root, setCaptureFrame } = core;
+	const { evaluate, isValueChanged, root, setCaptureFrame } = core;
 	const rootToOpenRender = core.rootToOpenRender;
 	const { queueNotify, flushNotify } = core.notify;
 	const { syncSubscriptionObservation, shiftObservedCount } = deps.observation;
@@ -170,7 +170,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	 * Runs a subscription body under the core capture frame: the effective
 	 * world becomes committed-for-root, every routed read (raw atom reads
 	 * through the routed-read resolution, engine computed reads through
-	 * `captureRead`) appends to the dep snapshot, and reads INSIDE a
+	 * `captureRead`) appends to the dep snapshot, and reads inside a
 	 * computed's own evaluation stay the computed's (the evaluation world on
 	 * stack outranks the frame). A mid-body
 	 * throw installs the partial snapshot: the deps read before the throw are
@@ -192,7 +192,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 			setCaptureFrame(undefined);
 			sub.deps = frame.deps;
 			sub.lastValue = frame.deps.length === 0 ? undefined : frame.deps[frame.deps.length - 1]!.value;
-			// Observation re-point AFTER the frame closes, so discovery
+			// Observation re-point after the frame closes, so discovery
 			// evaluations run on a clean frame stack (same rule as
 			// syncObservedDeps).
 			syncSubscriptionObservation(sub);
@@ -200,7 +200,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	}
 
 	/** A routed read inside an open capture frame (node form: test-configured
-	 * bodies land here; raw kernel atom AND computed reads route through the
+	 * bodies land here; raw kernel atom and computed reads route through the
 	 * routed-read seams instead, which push the same dep-snapshot entries). */
 	function captureRead(node: AnyInternals): Value {
 		const frame = core.captureFrame;
@@ -248,7 +248,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	}
 
 	/** The inline re-fire (test-configured `body` subscriptions): cleanup +
-	 * body re-run through the REAL capture
+	 * body re-run through the real capture
 	 * frame + records (adapter-registered subscriptions instead queue their
 	 * refire to the operation boundary — the adapter owns the body run). */
 	function runCommittedSubscription(sub: Subscription): void {
@@ -261,7 +261,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 		if (tr !== undefined) tr.reactEffectCleanup(sub.name, sub.root);
 		if (sub.body !== undefined) captureRun(sub.id, sub.body);
 		sub.runs++;
-		// The dep-values array is the ONE per-record payload a site allocates,
+		// The dep-values array is the one per-record payload a site allocates,
 		// and only under the guard: the model-comparison suites compare it
 		// entry by entry, so the record must carry the real snapshot.
 		if (tr !== undefined) tr.reactEffectRun(sub.name, sub.root, sub.lastValue, sub.deps.map((d) => d.value));
@@ -271,7 +271,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 	 * The boundary re-check: once per boundary
 	 * OPERATION — per-root commit, retirement, settlement, quiet fold —
 	 * value-gated over each subscription's dep snapshot, at the boundary
-	 * value (multiple member writes coalesce), and NEVER while the
+	 * value (multiple member writes coalesce), and never while the
 	 * subscription's own root has an open render frame (the deferred
 	 * flip flushes at that frame's close — commit or discard). A retirement
 	 * re-checks every root (a write-free retirement still flushes pending
@@ -297,7 +297,7 @@ export function createSubscriptionManager(deps: SubscriptionManagerDeps): Subscr
 					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (pinned in tests/concurrent-battery.spec.ts)
 					throw err;
 				}
-				if (changedValue(d.node, d.value, now)) {
+				if (isValueChanged(d.node, d.value, now)) {
 					changed = true;
 					break;
 				}

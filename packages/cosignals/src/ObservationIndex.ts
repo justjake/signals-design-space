@@ -7,8 +7,8 @@
  * shiftLifecycleCount is a Map-miss no-op for atoms without the option, and these shifts fire
  * only at closure-membership EDGES (never per evaluation), so routing every
  * closure atom through it costs nothing measurable and needs no second
- * has-lifecycle registry here. obsDeps snapshots follow the CURRENT edge set
- * — each fn re-run of an observed computed (newest kernel runs AND arena
+ * has-lifecycle registry here. obsDeps snapshots follow the current edge set
+ * — each fn re-run of an observed computed (newest kernel runs and arena
  * world refolds carry the capture) re-points its retains (dep flips move
  * them; the kernel's microtask flush coalesces same-tick flaps) — and the
  * observation index deliberately survives quiescence: the closure is a
@@ -27,9 +27,9 @@
  */
 
 import { untracked, __lifecycleRelease, __lifecycleRetain } from './index.js';
-import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
+import { E, noteReclaimRetry, reclaimSkippedN } from './Kernel.js';
 import type { AnyInternals, Subscription } from './concurrent.js';
-import type { ConcurrentEngineHost } from './engine.js';
+import type { ConcurrentEngineHost } from './ConcurrentEngine.js';
 
 /** Dense per-node column key (NodeField.NODE_INDEX — see concurrent.ts). */
 type NodeIndex = number;
@@ -39,7 +39,7 @@ export type ObservationIndexDeps = {
 	 * guard's authority — a stale internals object whose record re-tenanted must
 	 * never shift the new tenant's count) and the kernel strong-dep walk
 	 * (tracked-only by construction — enterObservation's discovery source). */
-	host: Pick<ConcurrentEngineHost, 'nodeIndexToInternals' | 'kernelStrongDepsOf'>;
+	host: Pick<ConcurrentEngineHost, 'nodeIndexToInternals' | 'getKernelStrongDeps'>;
 };
 
 export type ObservationIndex = {
@@ -62,13 +62,13 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	// Composition-time locals (the codegen doctrine): the dense node column is
 	// aliased by identity; the kernel walk binds once.
 	const nodeIndexToInternals = deps.host.nodeIndexToInternals;
-	const { kernelStrongDepsOf } = deps.host;
+	const { getKernelStrongDeps } = deps.host;
 	const obsRefs: number[] = [0];
 	const obsDeps: (Set<AnyInternals> | undefined)[] = [undefined];
 
 	/** Shift a node's observed-consumer refcount; enter/exit fire on the
 	 * 0↔1 edges only, so shared consumers (two watchers on one derived node,
-	 * two observed dependents of one dep) hold ONE closure membership.
+	 * two observed dependents of one dep) hold one closure membership.
 	 * IDENTITY-GUARDED: shifts take the node OBJECT and no-op when the dense
 	 * row no longer holds it — a stale reference (an obsDeps entry naming a
 	 * freed node whose record — and nodeIndex — a new tenant inherited) must
@@ -84,7 +84,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 		else if (refs === 0 && delta === -1) {
 			exitObservation(node);
 			// Reclamation retry trigger — the obsRefs guard row's clearing
-			// site is THE release-to-zero edge itself, wherever it fires
+			// site is the release-to-zero edge itself, wherever it fires
 			// (dependency recapture, subscription teardown, watcher release).
 			if (reclaimSkippedN !== 0) noteReclaimRetry(node.id);
 		}
@@ -101,7 +101,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 	 * can fire inside an open kernel evaluation frame (a getter epilogue's
 	 * dep sync), and the discovery is not a READ by that frame — a link
 	 * would corrupt its dep list. A getter that throws keeps its
-	 * throw-on-demand behavior; the deps it read before throwing ARE
+	 * throw-on-demand behavior; the deps it read before throwing are
 	 * retained (the kernel keeps the partial link prefix).
 	 */
 	function enterObservation(node: AnyInternals): void {
@@ -114,7 +114,7 @@ export function createObservationIndex(deps: ObservationIndexDeps): ObservationI
 		} catch {
 			// partial dep prefix retained below
 		}
-		syncObservedDeps(node, kernelStrongDepsOf(node));
+		syncObservedDeps(node, getKernelStrongDeps(node));
 	}
 
 	/** The last observed consumer left: release the whole retained closure.

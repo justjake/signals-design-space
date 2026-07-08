@@ -26,7 +26,7 @@ import { generateSchedule } from '../../cosignals-oracle/src/schedule.js';
 import { mountEngineReactEffect } from './helpers.js';
 import { dependencyGraphToDot, traceToDot } from '../src/graphviz.js';
 import { engine, __resetEngineForTest, type CosignalEngine } from '../src/concurrent.js';
-import { attachTracer, REF_DROPPED, Tracer } from '../src/trace.js';
+import { attachTracer, REF_DROPPED, Tracer } from '../src/Tracer.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,10 +36,10 @@ const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
  * them, so an extraction can never silently exit the zero-cost contract. */
 const ENGINE_MODULES = [
 	'src/concurrent.ts',
-	'src/engine.ts',
+	'src/ConcurrentEngine.ts',
 	'src/errors.ts',
-	'src/deliver.ts',
-	'src/observation.ts',
+	'src/NotificationQueue.ts',
+	'src/ObservationIndex.ts',
 	'src/WriteLog.ts',
 	'src/Batch.ts',
 	'src/World.ts',
@@ -47,7 +47,7 @@ const ENGINE_MODULES = [
 	'src/settlement.ts',
 	'src/SubscriptionManager.ts',
 	'src/RenderPass.ts',
-	'src/graph.ts',
+	'src/Kernel.ts',
 	'src/suspense.ts',
 	'src/lifecycle.ts',
 ];
@@ -90,7 +90,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 	it('the engine modules never import the trace or graphviz entries (lazy-loadability)', () => {
 		for (const rel of ENGINE_MODULES) {
 			const engineSrc = src(rel);
-			expect(engineSrc, rel).not.toMatch(/from '\.\/trace\.js'|from '\.\/graphviz\.js'/);
+			expect(engineSrc, rel).not.toMatch(/from '\.\/Tracer\.js'|from '\.\/graphviz\.js'/);
 		}
 	});
 
@@ -112,7 +112,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		}
 		// The engine-surface accessor pair is the only surface over the core field.
 		expect(src('src/concurrent.ts')).toMatch(/return core\.trace;/);
-		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/deliver.ts', 'src/RenderPass.ts', 'src/engine.ts']) {
+		for (const rel of ['src/World.ts', 'src/WorldArena.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/NotificationQueue.ts', 'src/RenderPass.ts', 'src/ConcurrentEngine.ts']) {
 			const lines2 = src(rel).split('\n');
 			for (const line of lines2) {
 				if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;
@@ -139,7 +139,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 	});
 
 	it('the trace and graphviz entries are runtime-import-free (type-only imports)', () => {
-		for (const rel of ['src/trace.ts', 'src/graphviz.ts']) {
+		for (const rel of ['src/Tracer.ts', 'src/graphviz.ts']) {
 			const s = src(rel);
 			expect(s, `${rel} must only use "import type"`).not.toMatch(/(^|\n)\s*import (?!type )/);
 		}
@@ -147,7 +147,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 
 	it('package.json exposes ./trace and ./graphviz beside the ONE library entry', () => {
 		const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as { exports: Record<string, string> };
-		expect(pkg.exports['./trace']).toBe('./src/trace.ts');
+		expect(pkg.exports['./trace']).toBe('./src/Tracer.ts');
 		expect(pkg.exports['./graphviz']).toBe('./src/graphviz.ts');
 		expect(pkg.exports['.']).toBe('./src/index.ts');
 		expect(pkg.exports['./concurrent']).toBeUndefined(); // One Core: no second entry

@@ -1,5 +1,5 @@
 /**
- * SIGNAL RECLAMATION probes (plans/2026-07-07-signal-reclamation.md §5).
+ * Signal-reclamation probes.
  *
  * Two layers:
  *  - REAL-GC plateau probes (P-L1a/b, P-L2, P-DEPS-gc): bounded gc()+timer
@@ -7,14 +7,12 @@
  *    under --expose-gc (vitest.config.ts forks every worker with it).
  *  - DETERMINISTIC probes through the `__simulateReclaimForTest` seam (real
  *    GC cannot schedule a stale finalizer deterministically): one P-RETRY per
- *    guard row of the plan's §4 table, P-DEPS, P-CLEANUP (throwing AND
+ *    reclamation guard row, P-DEPS, P-CLEANUP (throwing and
  *    reentrant), P-ABA, P-EPOCH.
  *
- * RED-FIRST: at the S5 base (96ab192) FinalizationRegistry appears nowhere in
- * cosignals — every probe below that asserts a record frees after handle death
- * fails there by construction (the base-run evidence lives in the stage
- * report; the public-API-only variant of P-L1a was executed against a
- * git-archive copy of the base and showed unbounded id growth).
+ * Without FinalizationRegistry-driven reclamation every probe below that
+ * asserts a record frees after handle death fails by construction — a build
+ * with reclamation removed shows unbounded id growth on these shapes.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -25,7 +23,7 @@ import {
 	effect,
 } from '../src/index.js';
 import { engine, __resetEngineForTest, type AtomInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
-import { E, engineEpoch, __reclaimStatsForTest, __simulateReclaimForTest } from '../src/graph.js';
+import { E, engineEpoch, __reclaimStatsForTest, __simulateReclaimForTest } from '../src/Kernel.js';
 
 const hasGC = typeof globalThis.gc === 'function';
 const gcNow = (): void => (globalThis.gc as () => void)();
@@ -74,7 +72,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 	return { promise, resolve };
 }
 
-// ---- P-RETRY: one probe per guard row of the §4 table ---------------------------
+// ---- P-RETRY: one probe per reclamation guard row --------------------------------
 
 describe('P-RETRY: every guard skips the reclaim and its clearing site retries it', () => {
 	it('kernel SUBS row (computed): skip while watched; unwatched() at the last-subscriber unlink retries and frees', () => {
@@ -192,7 +190,7 @@ describe('P-RETRY: every guard skips the reclaim and its clearing site retries i
 		const at = new Atom(5);
 		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const sub = b.mountCommittedObserver('R', 'obs');
-		b.captureRun(sub.id, () => { void b.captureRead(an); }); // snapshot retains `an` (RCC-OL1)
+		b.captureRun(sub.id, () => { void b.captureRead(an); }); // snapshot retains `an` (retains live while the subscription lives)
 		const id = idOf(at);
 		const gen = genOf(id);
 		__simulateReclaimForTest(id);

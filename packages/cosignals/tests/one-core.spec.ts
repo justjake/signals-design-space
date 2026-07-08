@@ -7,7 +7,7 @@
  *    module initialization, but with no driver attached and no batch ever
  *    opened, heavy create/write/read/effect traffic creates zero log
  *    entries, zero batches, zero world evaluations (the engine's
- *    referee-surface probes, `__coreProbes`; events are packed trace records
+ *    activity probes, `__coreProbes`; events are packed trace records
  *    behind per-site tracer guards — no tracer, no event machinery at all).
  *    Sync-only apps pay one predictable boolean check per public read/write
  *    and nothing else.

@@ -25,7 +25,7 @@ import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type 
 // ---- activation -------------------------------------------------------------------
 
 export type CosignalReactHandle = {
-	/** THE engine surface (the same module-level object `cosignals` exports as
+	/** The engine surface (the same module-level object `cosignals` exports as
 	 * `engine`; the field keeps the bindings' historical name). */
 	bridge: CosignalEngine;
 	shim: Shim;
@@ -69,7 +69,7 @@ export function requireShim(): Shim {
 }
 
 // ---- signal sources ---------------------------------------------------------------------
-// (Kernel `Computed` handles ARE the supported derived
+// (Kernel `Computed` handles are the supported derived
 // type. `useComputed` returns a real `Computed`; standalone `Computed`
 // instances route to the render's world through the core's computed-read
 // seam and subscribe through `useSignal` exactly like atoms.)
@@ -84,7 +84,7 @@ function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
 
 // ---- useSignal --------------------------------------------------------------------------
 
-type SignalRec = {
+type SignalRecord = {
 	node: AnyInternals;
 	watcherId: number | undefined;
 	target: WatcherTarget;
@@ -93,9 +93,9 @@ type SignalRec = {
 	lastValue: unknown;
 };
 
-type SignalRefState = { current: SignalRec | null; retired: SignalRec[] };
+type SignalRefState = { current: SignalRecord | null; retired: SignalRecord[] };
 
-function makeRec(node: AnyInternals, bump: () => void): SignalRec {
+function createSignalRecord(node: AnyInternals, bump: () => void): SignalRecord {
 	return {
 		node,
 		watcherId: undefined,
@@ -142,7 +142,7 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 		state.retired.push(state.current);
 		state.current = null;
 	}
-	if (state.current === null) state.current = makeRec(node, () => force());
+	if (state.current === null) state.current = createSignalRecord(node, () => force());
 	const rec = state.current;
 
 	const rendering = shim.renderingRoot();
@@ -196,7 +196,7 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 			rec.pendingUnsub = true;
 			queueMicrotask(() => {
 				// The disposed guard is the cross-reset guard: tests dispose the
-				// shim before resetting the ONE engine, and a microtask crossing
+				// shim before resetting the one engine, and a microtask crossing
 				// that boundary would tear down a watcher id inside a fresh
 				// composition it never belonged to. A disposed shim's pending
 				// unsubscribes died with its targets.
@@ -368,7 +368,7 @@ export function startSignalTransition(fn: () => unknown): void {
 		// handed out at the batch's creation — and the shim's classifier
 		// routes every write executed here into that batch.
 		const batchId = React.unstable_getCurrentWriteBatch();
-		// Upgrade the batch to action semantics NOW (parked — kept pending —
+		// Upgrade the batch to action semantics immediately (parked — kept pending —
 		// until the action settles), before fn writes anything: the parked
 		// batch holds the pending window open for the action's whole life,
 		// even for an action that only writes after its first await. With no

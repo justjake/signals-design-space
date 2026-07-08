@@ -1,10 +1,10 @@
 /**
- * The referee's packed-trace decoder. Since W5 ("tracer packed data is the
- * only form of events") the engine creates NO event objects: every
+ * The test-side packed-trace decoder. The engine creates no event objects:
+ * every
  * instrumentation site writes a fixed-size record into the attached tracer,
- * and everything that used to read the retained TraceEvent log — the twin
- * driver's lockstep comparison, the oracle adapter, specs — attaches a
- * LOSSLESS SESSION tracer at bridge birth and decodes records back into
+ * and every event consumer — the lockstep
+ * driver's comparison, the reference-model adapter, specs — attaches a
+ * lossless session tracer at bridge birth and decodes records back into
  * `TraceEvent` objects (the decoded shape, still declared in
  * src/concurrent.ts because the package entry re-exports it) on demand here.
  *
@@ -13,30 +13,32 @@
  * root-commit's generation) and minus trace-only kinds (batch open/settle,
  * render start/yield/resume/end, evals, mount-fixup dispositions, deferred
  * releases, clock-sync, truncation): the decoded stream contains exactly the
- * TraceEvent vocabulary, in create order, with the FIELD ORDER the reference
- * model's own event literals use — the twin and the oracle differ compare
+ * TraceEvent vocabulary, in create order, with the field order the reference
+ * model's own event literals use — the lockstep differ compares
  * streams by JSON, so key order is load-bearing.
  *
  * Ref-ring sizing is load-bearing too: correction from/to values, effect
  * values, and react-effect dep snapshots live in the tracer's ref ring, and
- * lockstep re-reads the WHOLE session's stream after every op — an
+ * lockstep re-reads the whole session's stream after every op — an
  * overwritten ref would decode as REF_DROPPED and fail the comparison
  * loudly. `attachRefereeStream` therefore attaches with a large ref
  * capacity (2^16) instead of the diagnostic default (256).
  */
 import type { TraceEvent, CosignalEngine, Value } from '../src/concurrent.js';
-import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/trace.js';
-import { engineEpoch } from '../src/graph.js';
+import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/Tracer.js';
+import { engineEpoch } from '../src/Kernel.js';
 import type { ModelEvent } from '../../cosignals-oracle/src/model.js';
 
 // ---- TraceEvent ≡ ModelEvent pin -------------------------------------------
 // The decoded-engine-event union and the reference model's event union are
-// maintained BY HAND in two deliberately-independent packages (importing
-// would weaken the oracle as a referee) and the lockstep differ compares
-// them by JSON — so drift used to surface only as a fuzz diff. This converts
+// maintained by hand in two deliberately-independent packages (importing
+// would let engine drift rewrite the reference shape) and the lockstep
+// differ compares
+// them by JSON — without this pin, drift surfaces only as a fuzz diff. The
+// pin converts
 // it into a typecheck failure, and it lives beside the decoder because the
-// decoder is now the ONLY producer of the engine-side shape. Non-distributive
-// form on purpose: the WHOLE union must assign in both directions.
+// decoder is the only producer of the engine-side shape. Non-distributive
+// form on purpose: the whole union must assign in both directions.
 type _EventStreamPin = [
 	[TraceEvent] extends [ModelEvent] ? true : never,
 	[ModelEvent] extends [TraceEvent] ? true : never,
@@ -65,7 +67,7 @@ export function decodeTraceEvent(e: TraceRecord): TraceEvent | undefined {
 			return { type: 'core-effect-run', effect: d['effect'] as string, value: d['value'] };
 		case 'react-effect-run':
 			// `values` decodes only from recordings that captured it (ARG1≠0);
-			// the referee stream always does — [] appears only for pre-capture
+			// the comparison stream always does — [] appears only for pre-capture
 			// recordings or refCapacity 0, neither of which lockstep uses.
 			return { type: 'react-effect-run', effect: d['effect'] as string, root: d['root'] as string, value: d['value'], values: (d['values'] ?? []) as Value[] };
 		case 'react-effect-cleanup':
@@ -94,7 +96,7 @@ export function decodeTraceEvent(e: TraceRecord): TraceEvent | undefined {
 			return { type: 'epoch-reset', epoch: d['epoch'] as number };
 		// trace-only kinds: no TraceEvent counterpart ('batch-disposition' is
 		// the bindings-created committed/abandoned report — the model has no
-		// twin because neither side's retirement consumes the flag)
+		// lockstep pair because neither side's retirement consumes the flag)
 		case 'batch-open':
 		case 'batch-settle':
 		case 'batch-disposition':
@@ -112,7 +114,7 @@ export function decodeTraceEvent(e: TraceRecord): TraceEvent | undefined {
 }
 
 /** Every TraceEvent decodable from `tr`, oldest first (a one-shot decode;
- * specs driving their own tracer use this — referees use RefereeStream). */
+ * specs driving their own tracer use this — comparisons use RefereeStream). */
 export function decodedTraceEvents(tr: Tracer): TraceEvent[] {
 	const out: TraceEvent[] = [];
 	for (const te of tr.events()) {
@@ -123,7 +125,7 @@ export function decodedTraceEvents(tr: Tracer): TraceEvent[] {
 }
 
 /**
- * The referee's view of one bridge's event stream: a lossless session tracer
+ * The comparison view of one bridge's event stream: a lossless session tracer
  * plus an incrementally-maintained decode of its TraceEvent-mapped records
  * (session records are immutable and ids are dense, so decoding forward from
  * a cursor is sound and each record decodes exactly once). Presents the
@@ -170,7 +172,7 @@ export class RefereeStream {
 const streams = new WeakMap<CosignalEngine, { epoch: number; stream: RefereeStream }>();
 
 /**
- * Attach the referee's lossless session tracer to a fresh bridge and return
+ * Attach the comparison's lossless session tracer to a fresh bridge and return
  * its decoded stream (registered per bridge so shared drivers can find it —
  * `refereeStreamOf`). Attach before the bridge's first operation: session
  * completeness is what makes the decoded stream comparable from event 0.

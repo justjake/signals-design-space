@@ -1,25 +1,25 @@
 /**
- * RENDER PASSES and WATCHERS — the render lifecycle of the concurrent
- * engine. A RENDER PASS is one render of one root: its PIN is the timeline
+ * Render passes and watchers — the render lifecycle of the concurrent
+ * engine. A render pass is one render of one root: its pin is the timeline
  * position frozen at render start (the render folds nothing written after
- * it, so a paused-and-resumed render never drifts) and its MASK is the set
- * of live batches the render is rendering. A WATCHER is one subscribed
+ * it, so a paused-and-resumed render never drifts) and its mask is the set
+ * of live batches the render is rendering. A watcher is one subscribed
  * component instance (the full vocabulary — write log, batch, slot, world,
  * arena — is defined at the top of concurrent.ts). This module owns:
  *
  *  - the `RenderPass` record and its whole lifecycle: start (pin + mask +
- *    arena claim), yield/resume, and END — the commit fan whose order is
+ *    arena claim), yield/resume, and end — the commit fan whose order is
  *    load-bearing (baseline capture → retire-at-commit folds → per-root
  *    lock-in with its drains → layout subscribe + mount fixups → the
  *    re-staled populator loop → deferred releases → arena drop → quiet
  *    recompute → subscription revalidation);
  *  - the `Watcher` record: mount/defer/reveal/re-render/removal, the
- *    rendered-world snapshot, and THE watcher→node resolution
+ *    rendered-world snapshot, and the one watcher→node resolution
  *    (`resolveWatcherInternals`, generation-checked — a dormant watcher whose
  *    node record died must never bind the record's next tenant);
- *  - per-root commit lock-in (`commitBatches`) — THE single owner of a
+ *  - per-root commit lock-in (`commitBatches`) — the single owner of a
  *    root's committed-state transition;
- *  - MOUNT FIXUP — the commit-edge reconciliation for freshly mounted
+ *  - mount fixup — the commit-edge reconciliation for freshly mounted
  *    components — with its dependency-closure walks (arena legs through the
  *    core record; the kernel leg walks the kernel's own exported layout).
  *
@@ -29,18 +29,18 @@
  * reaches every other mechanism through the shared engine core record's
  * late-bound slots at call time (World evaluation, arena claim/decay/fanout,
  * the deliver walks' drains and corrections, Batch retirement). The
- * pass/watcher REGISTRIES (`idToRenderPass`, `watchers`, `nodeToWatchers`,
+ * pass/watcher registries (`idToRenderPass`, `watchers`, `nodeToWatchers`,
  * `rootToOpenRender`) are core-carried shared containers: this module owns
  * every transition; the resident registry's gap-fill, the record-free scrub,
  * and the quiescence sweep read them in place.
  */
 
-import { InvariantViolation, ScheduleError, mustGet } from './errors.js';
+import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
-import { E, noteReclaimRetry, reclaimSkippedN } from './graph.js';
-import { kernelGenOf, kernelNodeIndexOf, type WorldArena } from './WorldArena.js';
+import { E, noteReclaimRetry, reclaimSkippedN } from './Kernel.js';
+import { getKernelGeneration, getKernelNodeIndex, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
-import type { ObservationIndex } from './observation.js';
+import type { ObservationIndex } from './ObservationIndex.js';
 import type { EngineCore } from './World.js';
 import type { AnyInternals, CommitGen, NodeId, NodeIndex, RenderPassId, RootId, Seq, Value, WatcherId } from './concurrent.js';
 
@@ -68,7 +68,7 @@ export type RenderPass = {
 	/** Watchers whose layout effects (subscribe + fixup) fire at this render's
 	 * commit: its own mounts plus adopted reveals. Disjoint from `rendered`. */
 	mounted: WatcherId[];
-	/** Existing live watchers re-rendered by this render — re-renders ONLY
+	/** Existing live watchers re-rendered by this render — re-renders only
 	 * (disjoint from `mounted`; where render-end means the union it writes the
 	 * union explicitly). */
 	rendered: Set<WatcherId>;
@@ -137,11 +137,11 @@ export class Watcher {
 	 * index (shiftObservedCount) carries that ref transitively — a watcher over an
 	 * atom node retains that atom's lifecycle directly; a watcher over an
 	 * engine computed retains every atom the computed's current evaluation
-	 * (transitively) reads. EVERY liveness site routes through here — the
+	 * (transitively) reads. Every liveness site routes through here — the
 	 * commit layout loop and adoptRevealedMount reveals (engine side), and the
 	 * reveal resubscribe / StrictMode orphan sweep / debounce-finalized
 	 * unsubscribe (the React-bindings side, which flips this field directly)
-	 * — so kernel subscribers and watchers count into ONE refcount, and
+	 * — so kernel subscribers and watchers count into one refcount, and
 	 * same-tick flips coalesce in the kernel's microtask flush.
 	 * Edge-filtered: re-asserting the current state is a no-op.
 	 */
@@ -161,7 +161,7 @@ export class Watcher {
  * engine's composition site), as a named slice of the observation index's
  * record type. */
 export type RenderPassManagerDeps = {
-	/** The observation index (observation.ts): its refcount shift — the
+	/** The observation index (ObservationIndex.ts): its refcount shift — the
 	 * watcher liveness seam feeds it, generation-checked. */
 	observation: Pick<ObservationIndex, 'shiftObservedCount'>;
 };
@@ -202,27 +202,27 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 
 	/** Stale-watcher loud skips (the dormant-watcher aliasing pin): every
 	 * watcher→node
-	 * resolution that MISSED — the watcher's record tenancy moved (freed,
+	 * resolution that missed — the watcher's record tenancy moved (freed,
 	 * possibly reused) — and was skipped instead of silently binding the
 	 * record's current tenant. Diagnostics/test surface. */
 	let staleWatcherSkips = 0;
 
 	/**
-	 * THE watcher→node resolution: the dense-row probe (by the watcher's
+	 * The watcher→node resolution: the dense-row probe (by the watcher's
 	 * mount-cached NODE_INDEX — record id and index are slot-tied, so the
 	 * row is exactly what an id-keyed probe would have found) plus the
 	 * generation check against the watcher's mount-time stamp. Every
 	 * consumer site (commit activation, mount fixup, drains, deliveries'
 	 * correction loops, observation flips) resolves through here; a miss
 	 * means the watcher's node record died (a scrubbed row) — and its slot
-	 * may already host a NEW tenant (the dormant-watcher aliasing case,
+	 * may already host a new tenant (the dormant-watcher aliasing case,
 	 * which the GEN check catches) — so the site must skip, loudly, never
 	 * bind. Tenancy generations only grow, so a stale stamp never
 	 * re-validates.
 	 */
 	function resolveWatcherInternals(w: Watcher): AnyInternals | undefined {
 		const node = w.nodeIx < nodeIndexToInternals.length ? nodeIndexToInternals[w.nodeIx] : undefined;
-		if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) {
+		if (node === undefined || getKernelGeneration(w.node) !== w.nodeRecordGen) {
 			staleWatcherSkips++;
 			return undefined;
 		}
@@ -259,7 +259,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		const maskBatches = new Set<BatchId>();
 		let maskBits = 0;
 		for (const id of includeBatches) {
-			const t = batch.batchById(id);
+			const t = batch.getBatchById(id);
 			if (t.state !== 'live') throw new ScheduleError('mask captures live batches only — a retired batch is already permanent history');
 			maskBatches.add(id);
 			// A live batch with no slot never wrote; if it writes later, those
@@ -289,14 +289,14 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		return render;
 	}
 
-	function renderPassById(id: RenderPassId): RenderPass {
-		return mustGet(idToRenderPass, id, 'render pass');
+	function getRenderPassById(id: RenderPassId): RenderPass {
+		return getOrThrow(idToRenderPass, id, 'render pass');
 	}
 
 	/** Yield/resume edges: while yielded, code that runs in the gap (event
 	 * handlers, other renders) is "not in render" for this render. */
 	function renderYield(id: RenderPassId): void {
-		const p = renderPassById(id);
+		const p = getRenderPassById(id);
 		if (p.state !== 'open') throw new ScheduleError('yield requires an open (running) render');
 		p.state = 'yielded';
 		const tr = core.trace;
@@ -307,7 +307,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	}
 
 	function renderResume(id: RenderPassId): void {
-		const p = renderPassById(id);
+		const p = getRenderPassById(id);
 		if (p.state !== 'yielded') throw new ScheduleError('resume requires a yielded render');
 		p.state = 'open';
 		const tr = core.trace;
@@ -319,10 +319,10 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 
 	/** Mount a new watcher inside an open render; it renders in the render's world. */
 	function mountWatcher(renderPassId: RenderPassId, node: AnyInternals, name: string): Watcher {
-		const p = renderPassById(renderPassId);
+		const p = getRenderPassById(renderPassId);
 		if (p.state === 'ended') throw new ScheduleError('mount requires an open render');
 		const value = core.evaluate(node, { kind: 'render', render: p });
-		const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, kernelGenOf(node.id), shiftWatcherObservation, value, {
+		const watcher = new Watcher(nextWatcher++, name, p.root, node.id, node.ix, getKernelGeneration(node.id), shiftWatcherObservation, value, {
 			renderPassId: p.id, pin: p.pin,
 			maskBits: p.maskBits, includedBits: p.includedBits,
 			rootCommitGen: core.root(p.root).commitGen,
@@ -352,9 +352,9 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	}
 
 	function adoptRevealedMount(renderPassId: RenderPassId, watcherId: WatcherId): void {
-		const adopter = renderPassById(renderPassId);
+		const adopter = getRenderPassById(renderPassId);
 		if (adopter.state === 'ended') throw new ScheduleError('adopting render must be open');
-		const w = mustGet(watchers, watcherId, 'watcher');
+		const w = getOrThrow(watchers, watcherId, 'watcher');
 		if (w.root !== adopter.root) throw new ScheduleError('reveal stays on the watcher root');
 		for (const p of idToRenderPass.values()) {
 			const i = p.mounted.indexOf(watcherId);
@@ -366,7 +366,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	/** An existing live watcher re-rendered by a render: dedup bits re-arm at
 	 * render (the queued work the bits stood for has now started). */
 	function renderWatcher(renderPassId: RenderPassId, watcherId: WatcherId): void {
-		const p = renderPassById(renderPassId);
+		const p = getRenderPassById(renderPassId);
 		if (p.state === 'ended') throw new ScheduleError('render requires an open render');
 		const w = watchers.get(watcherId);
 		if (w === undefined || !w.live) throw new ScheduleError('render targets a live watcher');
@@ -420,10 +420,10 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	}
 
 	/**
-	 * Per-root commit lock-in — THE single owner of a root's committed-state
+	 * Per-root commit lock-in — the single owner of a root's committed-state
 	 * transition. For each named batch that is still live and not yet a
-	 * committed member of this root, one unit moves TOGETHER: the committed-
-	 * batch set, its bit-mask twin (`committedBits` — what the committed-world
+	 * committed member of this root, one unit moves together: the committed-
+	 * batch set, the same set as a bit mask (`committedBits` — what the committed-world
 	 * visibility check reads), the root's commit generation, the committed-
 	 * advance clock, this root's arena fan-out of the batch's touched atoms,
 	 * and the durable watcher drain. Already-committed, retired/reclaimed, and
@@ -443,15 +443,15 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			// Boundary rule: a per-root commit is a boundary operation. When this
 			// call moved committed truth, re-check the root's committed
 			// subscriptions at the boundary value (renderEnd's sweep gets the same
-			// re-check from renderEnd's own boundary; here the call IS the
+			// re-check from renderEnd's own boundary; here the call is the
 			// boundary). A no-op call re-checks nothing — the report's common
 			// case re-names batches the sweep already locked in.
 			if (changed) core.revalidateCommittedSubscriptions(rootId);
-			core.endOp();
+			core.endOperation();
 		} finally {
 			core.opDepth--;
 		}
-		core.arenaOpEpilogue();
+		core.runOperationEpilogue();
 		return changed;
 	}
 
@@ -468,7 +468,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			root.commitGen++;
 			core.advanceCommitted(); // committed-advance: every per-root commit bumps it
 			// Committed-truth flip site: per-root lock-in — inside the per-batch
-			// loop (commits lock in SETS of batches), immediately after the
+			// loop (commits lock in sets of batches), immediately after the
 			// membership/gen/committedAdvance mutation and before this batch's drain, fan
 			// THAT batch's touched atoms into THIS root's arena.
 			{
@@ -476,7 +476,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 				if (ra !== undefined) core.fanAtomsToArena(ra, t.atomsTouched, false);
 			}
 			if (tr !== undefined) tr.perRootCommit(rootId, t.id, root.commitGen);
-			// Durable drain, gated exactly as before: an advanced slot or
+			// Durable drain, gated the same way at every flip site: an advanced slot or
 			// member-slot write drift (or restaled leftovers) means the root's
 			// committed truth moved — candidates come from the arena's dirty
 			// list, which the lock-in fanout just fed.
@@ -496,7 +496,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	 * host performs the corresponding React work, so observers see states in
 	 * the order the screen does. Discard: render-owned mounts die (the tree
 	 * they rendered into never existed). Deferred slot releases re-evaluate
-	 * at EVERY render end, commit and discard alike (the mask retaining a slot
+	 * at every render end, commit and discard alike (the mask retaining a slot
 	 * may just have closed).
 	 */
 	function renderEnd(id: RenderPassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
@@ -506,15 +506,15 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		} finally {
 			core.opDepth--;
 		}
-		core.arenaOpEpilogue();
+		core.runOperationEpilogue();
 	}
 
 	function renderEndInner(id: RenderPassId, kind: 'commit' | 'discard', opts?: { retireAtCommit?: BatchId[] }): void {
-		const render = renderPassById(id);
+		const render = getRenderPassById(id);
 		if (render.state === 'ended') throw new ScheduleError('render already ended');
 		if (kind === 'commit') {
 			for (const tid of opts?.retireAtCommit ?? []) {
-				const t = batch.batchById(tid); // throws on unknown ids before any mutation
+				const t = batch.getBatchById(tid); // throws on unknown ids before any mutation
 				if (!render.maskBatches.has(tid)) {
 					// A retirement folded inside a commit must belong to a batch
 					// this commit rendered: folding a foreign batch's log entries here
@@ -528,22 +528,22 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 				}
 			}
 		}
-		// Resolve mask batch records BEFORE any retirement can reclaim them:
+		// Resolve mask batch records before any retirement can reclaim them:
 		// the mount fixup's fast-path clock check quantifies over the
-		// committing render's mask BATCHES as they exist at commit time (see
-		// mountFixup for why batches, not captured slots).
+		// committing render's mask batches as they exist at commit time (see
+		// runMountFixup for why batches, not captured slots).
 		const maskBatchRecords: Batch[] = [];
 		if (kind === 'commit') {
-			for (const tid of render.maskBatches) maskBatchRecords.push(batch.batchById(tid));
+			for (const tid of render.maskBatches) maskBatchRecords.push(batch.getBatchById(tid));
 		}
 		render.state = 'ended';
 		render.endKind = kind;
 		rootToOpenRender.delete(render.root);
 		// One load covers this operation's record sites: the disposition
-		// record here fires BEFORE the end's consequences (retirement folds,
+		// record here fires before the end's consequences (retirement folds,
 		// per-root commits, drains, fixups) so consequences can cite it as
 		// cause; the renderCommitted/renderDiscarded checkpoint markers below
-		// fire AFTER them (the reference model's stream position).
+		// fire after them (the reference model's stream position).
 		const tr = core.trace;
 		if (tr !== undefined) tr.renderEnd(render, kind);
 		if (kind === 'discard') {
@@ -556,13 +556,13 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			// boundaries that occurred while this root's frame was open (the discard
 			// itself advances nothing; committed truth may already have moved).
 			core.revalidateCommittedSubscriptions(render.root);
-			core.endOp();
+			core.endOperation();
 			return;
 		}
 		// (1) Baseline capture at the commit's committed-side entry.
 		const baseline = { committedAdvance: core.getCommittedAdvance(), rootCommitGen: core.root(render.root).commitGen };
 		// The committing tree's content: re-rendered watchers take this render's
-		// world values NOW — a watcher's last rendered value updates only at
+		// world values now — a watcher's last rendered value updates only at
 		// committed renders, and it is the comparator later drains reconcile
 		// against.
 		for (const wid of render.rendered) {
@@ -580,27 +580,27 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		// (lock-in) of every still-live mask batch: this root now shows those
 		// batches' writes, so its committed world must include them. The
 		// lock-in — including step (3), each newly committed batch's durable
-		// drain — is commitBatchesInner, THE single owner of the transition;
+		// drain — is commitBatchesInner, the single owner of the transition;
 		// the bindings' root-commit report handler is its other caller.
-		for (const tid of opts?.retireAtCommit ?? []) batch.retireInternal(batch.batchById(tid));
+		for (const tid of opts?.retireAtCommit ?? []) batch.retireInner(batch.getBatchById(tid));
 		commitBatchesInner(render.root, render.maskBatches);
 		// (4) layout: subscribe, then mount fixup (matching React's layout-
 		// effect phase: after commit, before paint).
 		for (const wid of render.mounted) {
 			const w = watchers.get(wid);
 			if (w === undefined) continue;
-			// THE dormant-watcher aliasing pin: the watcher was mounted in this
-			// render, but its node's record may have died (and been REUSED)
+			// The dormant-watcher aliasing pin: the watcher was mounted in this
+			// render, but its node's record may have died (and been reused)
 			// before this commit — the generation stamp decides. A stale
 			// watcher never activates: binding it here would subscribe it to
 			// the record's new tenant.
 			const wInternals = resolveWatcherInternals(w);
 			if (wInternals === undefined) continue; // loud skip (counted)
 			w.live = true;
-			mountFixup(w, wInternals, render, baseline, maskBatchRecords);
+			runMountFixup(w, wInternals, render, baseline, maskBatchRecords);
 		}
-		// The populator domain — the EXPLICIT union of this render's
-		// re-renders and its OWN mounts (`rendered` and `mounted` are
+		// The populator domain — the explicit union of this render's
+		// re-renders and its own mounts (`rendered` and `mounted` are
 		// disjoint). Adopted reveals stay out: their snapshot rides the
 		// original hidden render (`snapshot.renderPassId !== render.id` — the same
 		// same-render conjunct the mount fixup's fast path tests), and their
@@ -613,14 +613,14 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		}
 		// Re-staled detection: a re-rendered watcher whose committed value
 		// moved past its pin is stale again the moment its commit reset
-		// lastRenderedValue; the NEXT durable drain reconciles it (the
+		// lastRenderedValue; the next durable drain reconciles it (the
 		// reference model's full scan does the same, one drain later than
-		// the flip). This loop is DECLARED LOAD-BEARING FOR ROUTING:
+		// the flip). This loop is load-bearing for routing, deliberately:
 		// its committed evaluations populate the root's arena with the
 		// full committed dep cone (strong + weak) of every watcher this render
 		// re-rendered or mounted, before renderEnd returns — i.e., before any
 		// post-commit write needs routing. (For a freshly mounted watcher the
-		// value check is provably a no-op — mountFixup just reconciled it —
+		// value check is provably a no-op — runMountFixup just reconciled it —
 		// but the evaluation is its cone's one populator: the fixup's
 		// fast-out path never evaluates, and mountFix folds are arena-free.)
 		for (const wid of populated) {
@@ -629,7 +629,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			const wInternals = resolveWatcherInternals(w);
 			if (wInternals === undefined) continue; // loud skip (live ⇒ alive in practice; belt for binding-side flips)
 			const committedNow = core.evaluate(wInternals, { kind: 'committed', root: render.root });
-			if (core.changedValue(wInternals, w.lastRenderedValue, committedNow)) markRestaled(w);
+			if (core.isValueChanged(wInternals, w.lastRenderedValue, committedNow)) markRestaled(w);
 		}
 		// The population dev assert: after a commit of render P, every
 		// live watcher P re-rendered or mounted has a shadow for its node in
@@ -646,7 +646,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			}
 		}
 		if (tr !== undefined) tr.renderCommitted(render);
-		// ctx.previous fields hold the last COMMITTED value — a pending
+		// ctx.previous fields hold the last committed value — a pending
 		// render's value must never leak into the hint, because a pending
 		// transition may still be discarded — so update them from every
 		// watcher this commit re-rendered or mounted: the explicit union of
@@ -656,7 +656,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			const w = watchers.get(wid);
 			if (w === undefined || w.lastRenderedValue instanceof SuspendedRead) continue;
 			const node = w.nodeIx < nodeIndexToInternals.length ? nodeIndexToInternals[w.nodeIx] : undefined;
-			if (node === undefined || kernelGenOf(w.node) !== w.nodeRecordGen) continue; // stale: no hint to update (gen-checked exactly as resolveWatcherInternals; uncounted — not a resolution consumers observe)
+			if (node === undefined || getKernelGeneration(w.node) !== w.nodeRecordGen) continue; // stale: no hint to update (gen-checked exactly as resolveWatcherInternals; uncounted — not a resolution consumers observe)
 			if (node.kind === 'computed') node.prevCommitted = w.lastRenderedValue;
 		}
 		{
@@ -666,13 +666,13 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		reevaluateDeferredReleases();
 		reclaimAfterRenderEnd(render);
 		core.recomputeQuiet(); // render closed (and its pin unblocked compaction): quiet may re-arm
-		// Boundary rule: ONE committed-subscription re-check per commit
+		// Boundary rule: one committed-subscription re-check per commit
 		// operation, at the boundary value — a render locking in two batches
 		// re-checks once, not per batch.
 		// Retirements folded into this commit moved committed truth for every
 		// root, so the scan widens (each root still open-frame-deferred).
 		core.revalidateCommittedSubscriptions((opts?.retireAtCommit ?? []).length > 0 ? undefined : render.root);
-		core.endOp();
+		core.endOperation();
 	}
 
 	/**
@@ -684,7 +684,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	function reclaimAfterRenderEnd(p: RenderPass): void {
 		idToRenderPass.delete(p.id);
 		// Drop the render arena (commit and discard drop identically;
-		// this site deliberately runs AFTER mount fixup and the re-staled
+		// this site deliberately runs after mount fixup and the re-staled
 		// loop, so both saw the arena; touching it later throws).
 		if (p.arena !== undefined) {
 			core.releaseArena(p.arena);
@@ -700,7 +700,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	function reevaluateDeferredReleases(): void {
 		for (const s of slots) {
 			if (!s.releasePending) continue;
-			if (!batch.slotRetainedByOpenMask(s.id)) batch.releaseSlot(s);
+			if (!batch.isSlotRetainedByOpenMask(s.id)) batch.releaseSlot(s);
 		}
 		// A render ending releases its pin, which can unblock pin-gated compaction.
 		core.compactAll();
@@ -727,7 +727,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 
 	/** Every slot in `bits` has its last write at or before `pin` (the
 	 * fast-out's clock conjunct, quantified over a snapshot's slot bits). */
-	function slotClocksQuiet(bits: BatchSlotSet, pin: Seq): boolean {
+	function areSlotClocksQuiet(bits: BatchSlotSet, pin: Seq): boolean {
 		for (let s = 0; bits !== 0; s++, bits >>>= 1) {
 			if ((bits & 1) === 1 && slots[s]!.writeClock > pin) return false;
 		}
@@ -747,24 +747,24 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	 *     missing it;
 	 *  2. urgent correction: whatever committed or retired during the mount
 	 *     window is fixed before paint. The four-condition test decides
-	 *     FIRST: when every condition passes, nothing committed or retired
+	 *     first: when every condition passes, nothing committed or retired
 	 *     in the window and any remaining drift is exactly the live-batch
 	 *     writes step 1 already scheduled catch-ups for
-	 *     (tests/concurrent-scars.spec.ts pins why those must NOT be
+	 *     (tests/concurrent-scars.spec.ts pins why those must not be
 	 *     corrected urgently) — so nothing
 	 *     else runs, no evaluation, no comparison. Only when a condition
 	 *     fails is the node re-evaluated in the fast-forwarded mount-fix
 	 *     world and a real difference corrected urgently.
 	 * One subtle rule, asserted by the lockstep tests: the clock condition
-	 * quantifies over the committing render's member BATCHES at commit time
+	 * quantifies over the committing render's member batches at commit time
 	 * (not just the slot set captured at render start — a batch whose first
 	 * write landed mid-render interned its slot after the capture, so the
 	 * slot-quantified form would miss its writes).
 	 */
-	function mountFixup(w: Watcher, node: AnyInternals, committingRender: RenderPass, baseline: { committedAdvance: Seq; rootCommitGen: CommitGen }, maskBatchRecords: Batch[]): void {
+	function runMountFixup(w: Watcher, node: AnyInternals, committingRender: RenderPass, baseline: { committedAdvance: Seq; rootCommitGen: CommitGen }, maskBatchRecords: Batch[]): void {
 		const closure = dependencyClosureOf(w.node, committingRender);
 		const tr = core.trace; // one load covers the corrective records + the disposition record
-		// Catch-up half — per-batch catch-up loop: every LIVE written batch
+		// Catch-up half — per-batch catch-up loop: every live written batch
 		// that touched the node. A premise of the condition test's soundness,
 		// not an optimization: a live committed member can write after the pin
 		// without tripping any condition (its slot is outside the render
@@ -772,7 +772,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		let correctives = 0;
 		for (const b of idToBatch.values()) {
 			if (b.state !== 'live' || b.slot === undefined) continue;
-			if (!batchTouches(b, closure)) continue;
+			if (!isBatchTouchingClosure(b, closure)) continue;
 			const slot = slots[b.slot]!;
 			// Fully included (slot ∈ included bits ∧ no post-pin write): skip — never by value.
 			if (((w.snapshot.includedBits >>> slot.id) & 1) === 1 && slot.writeClock <= w.snapshot.pin) continue;
@@ -789,7 +789,7 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		// the slot-quantified form, because the slot set was captured at render
 		// start, before that slot existed.
 		const clocksQuiet =
-			slotClocksQuiet(w.snapshot.maskBits, w.snapshot.pin) &&
+			areSlotClocksQuiet(w.snapshot.maskBits, w.snapshot.pin) &&
 			maskBatchRecords.every((t) => t.lastWriteSeq === 0 || t.lastWriteSeq <= w.snapshot.pin);
 		const fastOut =
 			w.snapshot.renderPassId === committingRender.id &&
@@ -797,27 +797,27 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			baseline.rootCommitGen === w.snapshot.rootCommitGen &&
 			clocksQuiet;
 		if (fastOut) {
-			if (tr !== undefined) tr.mountFixup(w, 'fast-out', correctives);
+			if (tr !== undefined) tr.runMountFixup(w, 'fast-out', correctives);
 			return; // nothing committed or retired in the window: no evaluation, no comparison
 		}
 		const vFx = core.evaluate(node, {
 			kind: 'mountFix', maskBits: w.snapshot.maskBits, pin: w.snapshot.pin, root: w.root,
 		});
 		if (core.correctWatcher(w, node, vFx, 'mount')) {
-			if (tr !== undefined) tr.mountFixup(w, 'corrected', correctives);
+			if (tr !== undefined) tr.runMountFixup(w, 'corrected', correctives);
 			return;
 		}
-		if (tr !== undefined) tr.mountFixup(w, 'compare-clean', correctives);
+		if (tr !== undefined) tr.runMountFixup(w, 'compare-clean', correctives);
 	}
 
 	/** Transitive dependency closure feeding a node — three
 	 * reverse (deps-direction) walks over kernel ∪ the mounting render's arena
-	 * ∪ the root's committed arena. The kernel leg walks the KERNEL's own
+	 * ∪ the root's committed arena. The kernel leg walks the kernel's own
 	 * dep links (tracked-only by construction, evaluation-lagged
 	 * exactly like every other recorded structure), mapping visited kernel
 	 * records back to engine internals; unregistered intermediates
 	 * are traversed but contribute nothing (only engine-written atoms can
-	 * appear in batch touch sets). STRONG links only (weak deps never
+	 * appear in batch touch sets). Strong links only (weak deps never
 	 * joined the closure — they can't deliver, so correctives never target
 	 * their batches). The render arena is alive here by ordering (fixup
 	 * runs before reclaimAfterRenderEnd). The corrective population this
@@ -830,26 +830,26 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 	function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 		const closure = new Set<NodeId>([nodeId]);
 		// Public/diagnostic entry: the id is not provably a node record id,
-		// so the row resolution carries the identity check the Map's
-		// key-presence used to provide (see concurrent.ts residentInternalsOf).
-		const ix = kernelNodeIndexOf(nodeId);
+		// so the row resolution carries its own identity check (see
+		// concurrent.ts getResidentInternals).
+		const ix = getKernelNodeIndex(nodeId);
 		const node = ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined;
 		if (node === undefined || node.id !== nodeId) return closure; // unregistered/dead id: nothing routes
 		const pa = render?.arena;
-		if (pa !== undefined) core.closureOverArena(pa, node, closure);
+		if (pa !== undefined) core.collectArenaClosure(pa, node, closure);
 		if (render !== undefined) {
 			const ca = core.rootToArena.get(render.root);
-			if (ca !== undefined) core.closureOverArena(ca, node, closure);
+			if (ca !== undefined) core.collectArenaClosure(ca, node, closure);
 		}
-		closureOverKernel(node.id, closure, new Set());
+		collectKernelClosure(node.id, closure, new Set());
 		return closure;
 	}
 
 	/** The kernel leg of the fixup closure: reverse walk over the
 	 * kernel's dep links off the raw arena view (the kernel's own exported
-	 * layout enums). One id space: a visited record's id IS the NodeId —
+	 * layout enums). One id space: a visited record's id is the NodeId —
 	 * registered deps join the closure directly. */
-	function closureOverKernel(kernelId: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
+	function collectKernelClosure(kernelId: NodeId, closure: Set<NodeId>, seen: Set<NodeId>): void {
 		if (seen.has(kernelId)) return;
 		seen.add(kernelId);
 		const memory = E.buffer();
@@ -857,16 +857,16 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 		while (l !== 0) {
 			const depKernelId = memory[l + LinkField.DEP]!;
 			// Dep ids come off live kernel links, so a defined dense row by
-			// the dep's live NODE_INDEX ⇔ the dep has engine content (the old
-			// Map.has, by the registry lockstep).
+			// the dep's live NODE_INDEX ⇔ the dep has engine content (the
+			// registry lockstep).
 			const depIx = memory[depKernelId + NodeField.NODE_INDEX]!;
 			if (depIx < nodeIndexToInternals.length && nodeIndexToInternals[depIx] !== undefined) closure.add(depKernelId);
-			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) closureOverKernel(depKernelId, closure, seen);
+			if ((memory[depKernelId + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) !== 0) collectKernelClosure(depKernelId, closure, seen);
 			l = memory[l + LinkField.NEXT_DEP]!;
 		}
 	}
 
-	function batchTouches(t: Batch, closure: Set<NodeId>): boolean {
+	function isBatchTouchingClosure(t: Batch, closure: Set<NodeId>): boolean {
 		const atoms = t.atomsTouched;
 		for (let i = 0; i < atoms.length; i++) {
 			if (closure.has(atoms[i]!.id)) return true;

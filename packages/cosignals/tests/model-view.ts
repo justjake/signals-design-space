@@ -1,5 +1,5 @@
 /**
- * The referee's MODEL VIEW of the engine: a test-side adapter that presents a
+ * The model view of the engine: a test-side adapter that presents a
  * `CosignalEngine` in the reference model's shape, so the oracle's
  * `checkInvariants` / `snapshotModel` run against the engine without the
  * production class carrying mirror members. Everything the checkers read is
@@ -12,7 +12,7 @@
  * model's WriteLogEntry-shaped fold over that full history, replaying the oracle's
  * exported `visible` rule (imported — the one WriteLogEntry-shaped statement of
  * log-entry visibility, not a copy); the engine keeps only the packed forms
- * (`visibleAt`, `foldAtom`).
+ * (`isVisibleAt`, `foldAtom`).
  *
  * Slot sets: the engine's ONLY slot-set representation is the 31-bit integer
  * word (`RenderPass.maskBits`/`includedBits`, `RootState.committedBits`,
@@ -36,7 +36,7 @@ import type {
 	World,
 } from '../src/concurrent.js';
 
-/** The full-history mirror a twin driver owns and feeds. */
+/** The full-history mirror a lockstep driver owns and feeds. */
 export class RefereeMirror {
 	private origins = new Map<AtomInternals, Value>();
 	private archives = new Map<AtomInternals, WriteLogEntry[]>();
@@ -51,7 +51,7 @@ export class RefereeMirror {
 		this.origins.set(atom, value);
 	}
 
-	/** The quiescence episode reset sets origin to base (the model's episode reset twin). */
+	/** The quiescence episode reset sets origin to base (matching the model's episode reset). */
 	originsFromBase(engine: CosignalEngine): void {
 		for (const n of engine.idToInternals.values()) {
 			if (n.kind === 'atom') this.origins.set(n, n.base);

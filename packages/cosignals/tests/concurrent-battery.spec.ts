@@ -1,5 +1,5 @@
 // TWIN RUN — this spec runs against the reference model (`cosignals-oracle`)
-// AND the CONCURRENT engine at once: ./helpers.js here is the twin driver (model
+// and the concurrent engine at once: ./helpers.js here is the lockstep driver (model
 // + engine fan-out; every read is parity-asserted; selfCheck compares
 // events/snapshots and runs the invariant battery on BOTH sides). Kept in
 // lockstep with the reference model's own tests/battery.spec.ts.
@@ -745,7 +745,7 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 		const pk = openRender(m, 'A', [k]);
 		const events = m.events.length;
 		const v1 = m.renderValue(c, pk);
-		const v2 = m.renderValue(c, pk); // the replayed twin
+		const v2 = m.renderValue(c, pk); // the replayed counterpart
 		expect(v1).toBe(6);
 		expect(v2).toBe(6);
 		expect(m.events.length).toBe(events); // evaluation emits nothing and mutates nothing observable

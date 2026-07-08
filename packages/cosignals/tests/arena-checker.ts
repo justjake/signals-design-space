@@ -2,15 +2,14 @@
  * THE ARMED DIVERGENCE CHECKER + STRUCTURAL VALIDATOR (W3: referee
  * machinery, moved out of the shipped bridge class — the engine keeps only
  * the narrow `__checkerInternals` window and the fold-truth frame
- * discipline). Armed by the test harness — the twin driver, the fuzz-corpus
+ * discipline). Armed by the test harness — the lockstep driver, the fuzz-corpus
  * adapter, and the arena suites — via `armArenaCheck`; production installs
  * nothing and pays one undefined test per operation epilogue.
  *
- * THE CHECK, S-B form (the routing/serving authority flipped, so the
- * comparison target changed — §4.8): for every live arena, serve every
- * shadow FROM THE ARENA (its own walks — the arena side runs FIRST, pinning
+ * The check: for every live arena, serve every
+ * shadow from the arena (its own walks — the arena side runs first, pinning
  * the discipline that a stale shadow must not be refreshed by the reference
- * side) and compare against FOLD-TRUTH — a naive, cache-free re-derivation
+ * side) and compare against fold-truth — a naive, cache-free re-derivation
  * of the same node in the same world (atoms fold their write logs; computed fns
  * re-run over naive readers; memoized per check pass, since fold-truth
  * depends only on write log/membership state the serves never mutate). ANY
@@ -28,7 +27,7 @@ import {
 	type World,
 } from '../src/concurrent.js';
 import { SuspendedRead } from '../src/index.js';
-import { engineEpoch } from '../src/graph.js';
+import { engineEpoch } from '../src/Kernel.js';
 
 /** One memoized naive outcome (thrown outcomes memoize and rethrow,
  * identity-stable — same payload object every consult within a check). */
@@ -124,16 +123,16 @@ function runCheck(st: CheckerState): void {
 							throw new InvariantViolation(`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena threw ${String(aThrew)} but fold-truth threw ${String(mThrew)}`);
 						}
 					} else {
-						// §4.5.3 (S-C): a custom-equality computed's arena slot keeps
-						// the PREVIOUS reference on comparator-equal refolds — correct
-						// exactly when the retained value is equal BY THE NODE'S OWN
-						// COMPARATOR to the naive re-fold (the kernel slot keeps old
+						// A custom-equality computed's arena slot keeps
+						// the previous reference on comparator-equal refolds — correct
+						// exactly when the retained value is equal by the node's own
+						// comparator to the naive re-fold (the kernel slot keeps old
 						// references under the same policy). Default nodes compare by
-						// identity, bit for bit, as before.
+						// identity, bit for bit.
 						const ceq = node.kind === 'computed' && node.isEqual !== undefined
 							&& !(aVal instanceof SuspendedRead) && !(mVal instanceof SuspendedRead)
 							? node.isEqual : undefined; // sentinels compare by identity (16d), never through user comparators
-						const same = ceq === undefined ? Object.is(aVal!, mVal!) : v.inCallback(() => ceq(aVal!, mVal!));
+						const same = ceq === undefined ? Object.is(aVal!, mVal!) : v.runInFoldCallback(() => ceq(aVal!, mVal!));
 						if (!same) {
 							throw new InvariantViolation(
 								`arena divergence: ${node.name} in ${a.kind} world of ${a.root}: arena-served ${String(aVal!)} ≠ fold-truth ${String(mVal!)}`,
@@ -170,12 +169,12 @@ function naiveValue(st: CheckerState, node: AnyInternals, world: World, memo: Ma
 		return hit.v;
 	}
 	if (st.naiveStack.has(node)) {
-		throw st.views.cycleError(node.name);
+		throw st.views.createCycleError(node.name);
 	}
 	st.naiveStack.add(node);
 	const reader: Reader = (dep) => naiveValue(st, dep, world, memo);
 	try {
-		const v = st.views.foldTruthFrame(world, () => node.fn(reader, reader));
+		const v = st.views.runInFoldTruthFrame(world, () => node.fn(reader, reader));
 		memo.set(node, { threw: false, v });
 		return v;
 	} catch (err) {
@@ -187,7 +186,7 @@ function naiveValue(st: CheckerState, node: AnyInternals, world: World, memo: Ma
 }
 
 /**
- * Structural validator (§4.9.1, promoted from the spike): link-list
+ * Structural validator: link-list
  * symmetry, suspended-list density/index integrity, dirty-list coverage,
  * GEN tenancy, cycle caps. Throws on corruption. Reads the arena's raw
  * Int32 words through the layout view (the engine's field offsets and flag
@@ -202,8 +201,8 @@ function validateArena(v: ArenaCheckerInternals, a: WorldArena): void {
 		const sh = a.nodeToShadow[nid] ?? 0;
 		if (sh === 0) continue;
 		if (memory[sh + ArenaField.NODE] !== nid) throw new InvariantViolation(`arena ${a.root}: shadow ${sh} NODE column diverged`);
-		// A dead-GEN shadow is legal COLD residue (§4.5.3): the invariant is
-		// that it never SERVES — enforced at shadowFor (re-tenant on consult),
+		// A dead-GEN shadow is legal cold residue: the invariant is
+		// that it never serves — enforced at resolveShadow (re-tenant on consult),
 		// which every serve/link path routes through. No assert here.
 		const flags = memory[sh + ArenaField.FLAGS]!;
 		if ((flags & ArenaFlag.BOX_SUSPENDED) !== 0) {

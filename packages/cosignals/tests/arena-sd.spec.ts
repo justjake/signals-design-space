@@ -1,10 +1,9 @@
 /**
- * NF2 P2.S-D pins (§4.8 S-D: arena pooling hardened + wrap tests) — the
- * S-C remainder. Pinned here:
+ * Arena pooling and clock-wrap pins:
  *
- *  1. Pool shell reuse round-trip: release SCRUBS totally (columns zeroed,
- *     written prefix zeroed, lists dropped) while CAPACITY persists (the B1
- *     cold-render shave); claimGen is monotone with claim/release parity
+ *  1. Pool shell reuse round-trip: release scrubs totally (columns zeroed,
+ *     written prefix zeroed, lists dropped) while capacity persists (a
+ *     priced cold-render saving); claimGen is monotone with claim/release parity
  *     (odd = live tenancy, even = at rest); a re-claimed shell serves
  *     current truth, never dead-tenancy residue.
  *  2. The pool cap (8): releases beyond the cap drop the shell.
@@ -25,7 +24,7 @@
  *     stamps within a frame are post-renumber-consistent; the nested-frame
  *     fail-open argument lives at arenaRenumberLinkVersions' doc).
  *
- * Every bridge runs with the S-A divergence check ARMED: arena-served ≡
+ * Every bridge runs with the divergence check armed: arena-served ≡
  * fold-truth after every public operation, plus the structural validator.
  */
 import { describe, expect, it } from 'vitest';
@@ -205,13 +204,11 @@ describe('S-D pool shell reuse (§4.8)', () => {
 });
 
 describe('S-D stale-loading wart verification (the pre-S-B note)', () => {
-	// The wart, as noted pre-S-B: "a ctx.use sentinel cached in a committed
-	// MEMO is refreshed only by committed-truth motion" — settlement creates no
-	// log entry, so an unwatched suspension could serve stale loading to a
-	// re-watcher until some unrelated write moved committed truth. The memo
-	// arms are DELETED (S-C) and the settlement tap re-marks arenas directly
-	// (S-A §4.5.4), so the wart should have died with the memos. These pins
-	// are the regression: re-watch BEFORE any other state motion sees DATA.
+	// Settlement creates no log entry, so with no direct arena re-marking an
+	// unwatched suspension could serve stale loading to a re-watcher until
+	// some unrelated write moved committed truth. The settlement tap re-marks
+	// arenas directly, so no such staleness window exists. These pins
+	// are the regression: re-watch before any other state motion sees data.
 	it('unwatched suspending derived + settle + re-watch before any state motion → data, never stale loading', async () => {
 		const b = bridge();
 		const gate = deferred<string>();

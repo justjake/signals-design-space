@@ -107,7 +107,7 @@ effect(() => {
 base.set(1);
 base.set(2);
 
-// ---- concurrent engine: arenaLink, arenaCheckDirty, shadowFor, arenaPropagateBoth, foldAtom.
+// ---- concurrent engine: arenaLink, arenaCheckDirty, resolveShadow, arenaPropagateBoth, foldAtom.
 // THE one engine with the S-A divergence check armed: every op epilogue
 // serves every arena shadow through the arena's own walks
 // (arenaServe → arenaCheckDirty). Always-concurrent: no registration step.

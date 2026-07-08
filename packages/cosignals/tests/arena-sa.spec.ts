@@ -1,13 +1,13 @@
 /**
- * NF2 P2.S-A pins (plans/2026-07-06-effects-unification-and-nf2.md §4.9.3,
- * incl. the S-A step-0 quartet): the settlement octet, mixed-mode link
- * modes, the fp-100/seq-50 lock-in walk, root-churn retention +
+ * Arena-serving pins under the armed divergence check: the settlement
+ * octet, mixed-mode link
+ * modes, the wide lock-in walk (100 nodes / 50 writes), root-churn retention +
  * rematerialization, grown-then-shrunk mark decay, and GEN id-tenancy.
- * Every bridge here runs with the S-A divergence check ARMED — each public
+ * Every bridge here runs with the divergence check armed — each public
  * operation's epilogue serves every live arena's shadows from the arena's
- * own walks and compares against the memo-served values; any mismatch (or
- * structural-validator breach) throws. RCC-SU5 is the settlement pins'
- * contract cite: "settlement re-evaluates the consumers that suspended."
+ * own walks and compares against the reference folds; any mismatch (or
+ * structural-validator breach) throws. The settlement pins' contract:
+ * settlement re-evaluates the consumers that suspended.
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
@@ -149,7 +149,7 @@ describe('S-A settlement octet (§4.5.4 + step-0 shapes; RCC-SU5)', () => {
 		g1.resolve('FIRST'); // at-rest settlement → drain iteration 1 heals c1
 		await tick();
 		// Iteration 1's flushNotify ran the W1 correction, whose callback
-		// settled m2 → queued → iteration 2 healed c2 and flushed W2's
+		// settled thenable → queued → iteration 2 healed c2 and flushed W2's
 		// correction — all inside ONE drain, no subsequent operation.
 		expect(w1.lastRenderedValue).toBe('FIRST');
 		expect(w2.lastRenderedValue).toBe('CHAIN');

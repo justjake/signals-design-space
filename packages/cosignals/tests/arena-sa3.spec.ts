@@ -1,10 +1,11 @@
 /**
- * NF2 P2.S-A pins, part 3: cold-base visibility in the arena walk (the
- * pre-existing S-A bug documented at B2, 41fe7d6). §4.3 decay-by-eviction
+ * Arena-serving pins, part 3: cold-base visibility in the arena walk (the
+ * cold-dep case the checkDirty walk must treat as dirt). Decay-by-eviction
  * drops an unconsumed mark on an unwatched shadow to COLD (MUTABLE kept,
- * VALID cleared, value column evicted) — and arenaCheckDirty's dirt arms
- * matched only MUTABLE|DIRTY / MUTABLE|PENDING, so a cold base was
- * INVISIBLE to a validation walk entered from above. Every suite that
+ * VALID cleared, value column evicted) — and a walk whose dirt arms
+ * matched only MUTABLE|DIRTY / MUTABLE|PENDING would leave a cold base
+ * invisible to a validation walk entered from above (arenaCheckDirty's
+ * cold-base arm exists exactly for this). Every suite that
  * creates atoms before readers is masked by node-id order: the armed
  * epilogue (arena-checker.ts) serves in ascending node id, so a bottom-first
  * cone self-heals base-up (serve of the cold base refolds it and
@@ -87,7 +88,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		expect(w.lastRenderedValue).toBe(2); // cone folded + validated at the mount commit
 		w.live = false; // unmount the only consumer (mid-episode: arena persists)
 		// Committed write: the retirement fanout marks base DIRTY and the cone
-		// PENDING; no live consumer refolds; §4.3 boundary decay then evicts
+		// PENDING; no live consumer refolds; boundary decay then evicts
 		// base to COLD (MUTABLE kept, VALID cleared, value column dropped).
 		// The armed epilogue serves in node-id order — TOP first: its
 		// arenaCheckDirty walk must treat the cold base as dirt, or it clears the
@@ -124,7 +125,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 		gate.resolve('D');
 		await tick();
 		// The retire advances committed truth (committedAdvance + k's fingerprint move, so
-		// the memo side re-derives 'D:1'), fans k DIRTY, and §4.3 decay drops
+		// the reference fold re-derives 'D:1'), fans k DIRTY, and decay drops
 		// BOTH unconsumed marks — the leaf COMPUTED and the k atom — to cold.
 		// The epilogue then serves TOP first: its walk descends mid (PENDING),
 		// must see the cold leaf as dirt (and the cold atom k after it), or it

@@ -1,13 +1,13 @@
 /**
- * The batch MECHANISM and its LIFECYCLE: batch identity (`Batch` records
+ * The batch mechanism and its lifecycle: batch identity (`Batch` records
  * keyed by `BatchId`), the 31-entry recycling slot table (`BatchSlotMeta`),
  * slot interning / release / the loud release-anyway backstop, the
  * committed-bits rebuild, the live-batch bookkeeping, the ambient default
- * batch, AND retirement — the batch's terminal transition, whose fan
+ * batch, and retirement — the batch's terminal transition, whose fan
  * (compaction, arena fan-out, durable drains, per-root membership clears,
  * slot release) reaches the other mechanisms through the shared engine core
- * record's late-bound slots. A BATCH is the group of writes belonging to
- * one UI update; a SLOT is the batch's position in the 31-entry table while
+ * record's late-bound slots. A batch is the group of writes belonging to
+ * one UI update; a slot is the batch's position in the 31-entry table while
  * it is live-and-written, so "which batches affect X" fits one 31-bit
  * integer word (a `BatchSlotSet`) — the vocabulary is defined in full at the
  * top of concurrent.ts.
@@ -26,16 +26,16 @@
  */
 
 import { ScheduleError } from './errors.js';
-import { probes, type ConcurrentEngineHost } from './engine.js';
-import type { IdBrand } from './graph.js';
+import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
+import type { IdBrand } from './Kernel.js';
 import type { AtomInternals, RootState, Seq, TraceHooks } from './concurrent.js';
 import type { EngineCore } from './World.js';
 
 // Leniently branded batch scalars (the kernel's one-symbol IdBrand —
-// graph.ts, ported from dalien-signals src/system.ts:525-535): plain
+// Kernel.ts, ported from dalien-signals src/system.ts:525-535): plain
 // numbers assign in cast-free (`1 << slot` builds a BatchSlotSet with no
-// ceremony), but the brands are mutually exclusive — in particular a SLOT
-// ORDINAL handed where a slot-set BIT MASK belongs (or vice versa) is a
+// ceremony), but the brands are mutually exclusive — in particular a slot
+// ordinal handed where a slot-set bit mask belongs (or vice versa) is a
 // compile error, the exact swap that would otherwise type-check at every
 // `1 << slot.id` site.
 
@@ -43,10 +43,10 @@ export type BatchId = number & IdBrand<'batch'>;
 /** The reserved "no batch context" BatchId. Never allocated (batch ids start
  * at 1): `driver.currentBatch() === BATCH_NONE` means the write executes in
  * no host batch context, so it has no batch to join.
- * The React fork names the same sentinel on its side (protocol v2 shares ONE
+ * The React fork names the same sentinel on its side (protocol v2 shares one
  * id space between the engine and React, so the sentinel must too). */
 export const BATCH_NONE: BatchId = 0;
-/** A slot ORDINAL (0–30): the batch's position in the recycling table. */
+/** A slot ordinal (0–30): the batch's position in the recycling table. */
 export type BatchSlot = number & IdBrand<'batchSlot'>;
 /** A 31-bit slot set: bit i = slot i (mask/included/committed/dedup words). */
 export type BatchSlotSet = number & IdBrand<'batchSlotSet'>;
@@ -57,7 +57,7 @@ export type Batch = {
 	parked: boolean;
 	/** The React-side classification told to the driver's batch-id allocator
 	 * at creation (true = transition-like: renders don't block paint and the
-	 * batch commits later). A DRIVER-owned annotation stored on the shared
+	 * batch commits later). A driver-owned annotation stored on the shared
 	 * record so the driver needs no side table — the engine itself never
 	 * branches on it (scheduling stays React's). False for engine-created
 	 * batches (ambient, tests) that no allocator classified. */
@@ -68,7 +68,7 @@ export type Batch = {
 	/** Sequence of this batch's last log entry (0 = none). The mount fixup's
 	 * fast-path clock check reads this per committing-render member batch,
 	 * because a batch whose first write landed mid-render has no slot in the
-	 * render's captured slot sets (see mountFixup). */
+	 * render's captured slot sets (see runMountFixup). */
 	lastWriteSeq: Seq;
 	/** Atoms this batch appended to (may hold benign duplicates; deduped at retirement). */
 	atomsTouched: AtomInternals[];
@@ -79,7 +79,7 @@ export type Batch = {
 };
 
 /** One entry of the 31-slot recycling table a written batch occupies (see
- * the SLOT/INTERN/TENANT definitions in concurrent.ts's header). */
+ * the slot/intern/tenant definitions in concurrent.ts's header). */
 export type BatchSlotMeta = {
 	id: BatchSlot;
 	tenant: BatchId | undefined;
@@ -98,11 +98,11 @@ export type BatchSlotMeta = {
 
 const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and slot sets fit one int bit mask.
 
-/** BatchId source — MONOTONIC for the PROCESS's whole life, never reused
+/** BatchId source — monotonic for the process's whole life, never reused
  * and never rewound (ids start at 1; BATCH_NONE = 0 is never allocated).
  * With protocol v2 these ids are stored verbatim in React's batch registry,
  * so monotonicity is what keeps a stale fork-side id from ever colliding
- * with a later batch. MODULE-LEVEL deliberately: the counter SURVIVES
+ * with a later batch. Module-level deliberately: the counter survives
  * `__resetEngineForTest` (which re-runs the factory below) — a host lane
  * table can legally hold an id across an engine reset, and monotonicity
  * guarantees a stale id can never collide with a post-reset batch. */
@@ -136,7 +136,7 @@ export type BatchManager = {
 	slots: BatchSlotMeta[];
 	getLiveBatchCount(): number;
 	openBatch(opts?: { action?: boolean; ambient?: boolean; deferred?: boolean }): Batch;
-	batchById(id: BatchId): Batch;
+	getBatchById(id: BatchId): Batch;
 	liveBatches(): Batch[];
 	internSlot(batch: Batch): BatchSlotMeta;
 	releaseSlot(slot: BatchSlotMeta): void;
@@ -147,13 +147,13 @@ export type BatchManager = {
 	setAmbientBatch(id: BatchId): void;
 	/** True iff any open render's mask names the slot (retirement's deferred
 	 * release + the render-close re-evaluation share the one predicate). */
-	slotRetainedByOpenMask(slot: BatchSlot): boolean;
+	isSlotRetainedByOpenMask(slot: BatchSlot): boolean;
 	/** Retirement (public operation) + the settlement edge of an async action. */
 	retire(batchId: BatchId): void;
 	settleAction(batchId: BatchId): void;
 	/** The retirement fold itself (render-commit's retire-at-commit calls it
 	 * inside the commit's own operation frame). */
-	retireInternal(batch: Batch): void;
+	retireInner(batch: Batch): void;
 	/** Mid-episode batch reclamation re-check (render close lapses mask retention). */
 	maybeReclaimBatch(t: Batch): void;
 	/** The compaction→batch edge: a compacted log entry stops pinning its
@@ -189,13 +189,13 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	 * with protocol v2 the driver's batch-id allocator opens the batch and
 	 * hands its id straight to React, one shared number space, no map.)
 	 *
-	 * ALLOCATION-ONLY envelope (the driver's allocator calls this from
+	 * Allocation-only envelope (the driver's allocator calls this from
 	 * React's batch-creation site, which can sit mid-render, mid-commit, or
 	 * inside protocol listeners — i.e. at opDepth > 0): bookkeeping only —
 	 * counter, registry map, quiet recompute, probes/trace records. No
 	 * operation epilogue, no drains, no kernel mutation, no user code.
 	 *
-	 * With devChecks armed, opening a batch with NO driver attached
+	 * With devChecks armed, opening a batch with no driver attached
 	 * throws — the documented host contract is "hosts that open batches
 	 * must retire them", and a devChecks harness must attach its driver
 	 * before opening engine batches. */
@@ -226,7 +226,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	}
 
 	/** Look up a batch id or throw the schedule error every resolver shares. */
-	function batchById(id: BatchId): Batch {
+	function getBatchById(id: BatchId): Batch {
 		const t = idToBatch.get(id);
 		if (t === undefined) throw new ScheduleError(`unknown batch ${id}`);
 		return t;
@@ -253,8 +253,8 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 				throw new ScheduleError('slot table full of live tenants — unreachable under the 31-live-batch guard');
 			}
 			candidates.sort((a, b) => {
-				const ra = batchById(a.tenant!).retiredSeq ?? 0;
-				const rb = batchById(b.tenant!).retiredSeq ?? 0;
+				const ra = getBatchById(a.tenant!).retiredSeq ?? 0;
+				const rb = getBatchById(b.tenant!).retiredSeq ?? 0;
 				return ra - rb;
 			});
 			const victim = candidates[0]!;
@@ -271,7 +271,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		// Claim housekeeping over the shared root/watcher stores, in claim
 		// order. A committed-but-slotless batch (late first write — e.g. a
 		// member write landing after a root committed the batch) interns here —
-		// its root's membership bits gain the slot NOW so the committed world's
+		// its root's membership bits gain the slot immediately so the committed world's
 		// membership clause sees the coming log entries.
 		for (const r of roots.values()) {
 			if (r.committedBatches.has(batch.id)) r.committedBits |= 1 << free.id;
@@ -288,7 +288,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	}
 
 	function releaseSlot(slot: BatchSlotMeta): void {
-		const tenant = slot.tenant === undefined ? undefined : batchById(slot.tenant);
+		const tenant = slot.tenant === undefined ? undefined : getBatchById(slot.tenant);
 		if (tenant !== undefined) {
 			tenant.slot = undefined; // identity release; log entries keep their denormalized slot
 			const tr = core.trace;
@@ -308,14 +308,14 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		r.committedBits = bits;
 	}
 
-	function slotRetainedByOpenMask(slot: BatchSlot): boolean {
+	function isSlotRetainedByOpenMask(slot: BatchSlot): boolean {
 		for (const p of rootToOpenRender.values()) {
 			if ((p.maskBits >>> slot) & 1) return true;
 		}
 		return false;
 	}
 
-	function batchMaskedByOpenRender(id: BatchId): boolean {
+	function isBatchMaskedByOpenRender(id: BatchId): boolean {
 		for (const p of rootToOpenRender.values()) {
 			if (p.maskBatches.has(id)) return true;
 		}
@@ -335,7 +335,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		if (t.slot !== undefined) return; // identity still held (deferred release keeps tenant)
 		if (t.liveLogEntries > 0) return;
 		if (t.id === ambientBatch) return;
-		if (batchMaskedByOpenRender(t.id)) return;
+		if (isBatchMaskedByOpenRender(t.id)) return;
 		idToBatch.delete(t.id);
 		invalidateBatchCache(t.id); // the write path's last-batch cache must not outlive the record
 	}
@@ -355,25 +355,25 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	/** Retirement fires exactly once per batch; parked async actions retire
 	 * only at settlement (their pending state must stay pending until then). */
 	function retire(batchId: BatchId): void {
-		const t = batchById(batchId);
+		const t = getBatchById(batchId);
 		if (t.state === 'retired') throw new ScheduleError('retirement fires exactly once per batch');
 		if (t.parked) throw new ScheduleError('parked action batches retire only at settlement');
 		core.opDepth++; // public-operation frame (see the engine's write dispatch)
 		try {
-			retireInternal(t);
+			retireInner(t);
 			// Boundary rule: retirement is a guaranteed flush point for every root
 			// (a write-free retirement still flushes pending member-write flips).
 			core.revalidateCommittedSubscriptions(undefined);
-			core.endOp();
+			core.endOperation();
 		} finally {
 			core.opDepth--;
 		}
-		core.arenaOpEpilogue();
+		core.runOperationEpilogue();
 	}
 
 	/** The async action's promise settled; the protocol host then retires the batch. */
 	function settleAction(batchId: BatchId): void {
-		const t = batchById(batchId);
+		const t = getBatchById(batchId);
 		if (!t.action) throw new ScheduleError('settle targets an action batch');
 		if (!t.parked || t.state !== 'live') throw new ScheduleError('action already settled');
 		core.opDepth++; // public-operation frame (see the engine's write dispatch)
@@ -381,13 +381,13 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			t.parked = false;
 			const tr = core.trace;
 			if (tr !== undefined) tr.batchSettle(t);
-			retireInternal(t);
+			retireInner(t);
 			core.revalidateCommittedSubscriptions(undefined); // boundary rule: settlement is a guaranteed flush point
-			core.endOp();
+			core.endOperation();
 		} finally {
 			core.opDepth--;
 		}
-		core.arenaOpEpilogue();
+		core.runOperationEpilogue();
 	}
 
 	/**
@@ -402,7 +402,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	 * committed/abandoned report diagnostically at its source; see
 	 * TraceHooks.batchDisposition).
 	 */
-	function retireInternal(batch: Batch): void {
+	function retireInner(batch: Batch): void {
 		if (batch.state === 'live') {
 			liveBatchCount--;
 		}
@@ -438,16 +438,16 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		// Fold/compaction (see WriteLog.ts compactAll for the two-clause predicate).
 		core.compactAll();
 		// Committed-truth flip site: retirement — after stamps +
-		// committedAdvance + compaction, BEFORE the drain loop (the ordering
+		// committedAdvance + compaction, before the drain loop (the ordering
 		// joint every flip site shares: mutate → fan → drain), fan the
-		// retiring batch's touched atoms into EVERY committed arena.
+		// retiring batch's touched atoms into every committed arena.
 		if (touchedAny) core.fanAtomsToCommittedArenas(batch.atomsTouched);
 		{
 			const tr = core.trace;
 			if (tr !== undefined) tr.retired(batch.id, retiredSeq);
 		}
-		// Durable drains, per root, gated exactly as before (flipped slot or
-		// member-write drift or restaled leftovers): candidates come from
+		// Durable drains, per root, gated on a flipped slot, member-write
+		// drift, or restaled leftovers: candidates come from
 		// each root arena's dirty list — the site-(a) fanout above marked
 		// them, and list entries persist until a drain-then-decay boundary
 		// consumes them (never a consumable write-time queue).
@@ -464,13 +464,13 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			for (const a of core.rootToArena.values()) core.arenaDecay(a);
 		}
 		// Clear per-root rows (the retired clause subsumes membership now),
-		// THEN release the slot unless an open render mask names it.
+		// then release the slot unless an open render mask names it.
 		for (const r of roots.values()) {
 			if (r.committedBatches.delete(batch.id)) rebuildCommittedBits(r);
 		}
 		if (batch.slot !== undefined) {
 			const slot = slots[batch.slot]!;
-			if (slotRetainedByOpenMask(slot.id)) {
+			if (isSlotRetainedByOpenMask(slot.id)) {
 				slot.releasePending = true; // re-evaluated at every render end
 				const tr = core.trace;
 				if (tr !== undefined) tr.slotReleaseDeferred(slot.id, batch.id);
@@ -480,7 +480,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		}
 		if (ambientBatch === batch.id) ambientBatch = undefined;
 		maybeReclaimBatch(batch);
-		core.recomputeQuiet(); // the LAST retirement (with every write log compacted) re-arms quiet
+		core.recomputeQuiet(); // the last retirement (with every write log compacted) re-arms quiet
 	}
 
 	return {
@@ -488,7 +488,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		slots,
 		getLiveBatchCount: () => liveBatchCount,
 		openBatch,
-		batchById,
+		getBatchById,
 		liveBatches,
 		internSlot,
 		releaseSlot,
@@ -497,10 +497,10 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 		setAmbientBatch: (id) => {
 			ambientBatch = id;
 		},
-		slotRetainedByOpenMask,
+		isSlotRetainedByOpenMask,
 		retire,
 		settleAction,
-		retireInternal,
+		retireInner,
 		maybeReclaimBatch,
 		releaseLogEntry,
 	};

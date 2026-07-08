@@ -1,6 +1,6 @@
 /**
- * THE COMPOSITION ROOT of the concurrent engine. Every mechanism module in
- * this package is a FACTORY in the kernel's own style (graph.ts
+ * The composition root of the concurrent engine. Every mechanism module in
+ * this package is a factory in the kernel's own style (Kernel.ts
  * `createKernel`): it closes over its state and returns/assigns its
  * operation table. `createConcurrentEngine` is the one place they compose:
  * it builds the shared engine core record (World.ts `EngineCore`) with the
@@ -23,21 +23,21 @@
  *   7. the subscription manager (its boundary revalidation joins the core
  *      table).
  *
- * The QUIET derivation lives here: quiet ⇔ zero live batches AND zero open
- * renders AND every write log compacted — recomputed only at pipeline
+ * The quiet derivation lives here: quiet ⇔ zero live batches and zero open
+ * renders and every write log compacted — recomputed only at pipeline
  * transitions (batch open/retire, render start/end, driver attach). The
  * flags themselves stay module lets in concurrent.ts (the write path's hot
  * reads); this module owns the rule.
  *
- * concurrent.ts calls this factory ONCE at module initialization (THE one
+ * concurrent.ts calls this factory once at module initialization (the one
  * composition call — always-concurrent) and aliases the hot table entries
  * as module bindings (callers keep one-load call shapes);
  * `__resetEngineForTest` re-runs it — every mechanism factory re-runs at a
- * reset, while GROWTH re-runs only the kernel's graph factory.
+ * reset, while kernel growth (the closure rebuild) re-runs only createKernel.
  */
 
-import { createNotificationQueue, createDeliverWalks, type NotificationQueue } from './deliver.js';
-import { createObservationIndex, type ObservationIndex } from './observation.js';
+import { createNotificationQueue, createDeliveryWalks, type NotificationQueue } from './NotificationQueue.js';
+import { createObservationIndex, type ObservationIndex } from './ObservationIndex.js';
 import { createCompaction, type CompactionTable, type WriteLogEntry } from './WriteLog.js';
 import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
@@ -48,12 +48,12 @@ import { createRenderPassManager, type RenderPass, type RenderPassManager, type 
 import type { Atom, Computed } from './index.js';
 import type { AnyInternals, AtomInternals, ComputedInternals, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
 
-/** Write-kind tags: the packed log entry column AND the write surface's kind
+/** Write-kind tags: the packed log entry column and the write surface's kind
  * argument (`write`/`bareWrite`) — 0 = set, 1 = update, the same codes
  * index.ts's public write dispatch carries end to end (its public
  * `WriteKind` type alias names the same 0/1 encoding by construction;
  * 0/1 literals are assignable, so cross-module callers never need this
- * type's name). Const enum, exported TYPE-ONLY in effect: the write
+ * type's name). Const enum, exported type-only in effect: the write
  * path's hot comparisons (concurrent.ts, World.ts applyOp) use the shared
  * bare 0/1 codes with a naming comment — cross-module const enum access
  * does not survive per-file transforms. */
@@ -80,7 +80,7 @@ export const probes = { logEntries: 0, batches: 0, worldEvals: 0, bridges: 0 };
  * the sequence clocks, the quiet flag, the write path's last-batch cache,
  * and the driver/devChecks slots. */
 export type ConcurrentEngineHost = {
-	/** THE node registry: nodes by nodeIndex (dense; bare record ids resolve
+	/** The node registry: nodes by nodeIndex (dense; bare record ids resolve
 	 * through the record's live NODE_INDEX — see concurrent.ts). */
 	nodeIndexToInternals: (AnyInternals | undefined)[];
 	nodeToWatchers: (Watcher[] | undefined)[];
@@ -93,8 +93,8 @@ export type ConcurrentEngineHost = {
 	/** Handle resolution (content allocation on first participation). */
 	internalsForAtom(atom: Atom<unknown>): AtomInternals;
 	internalsForComputed(c: Computed<unknown>): ComputedInternals;
-	kernelStrongDepsOf(node: ComputedInternals): AnyInternals[];
-	kernelReadOf(dep: AnyInternals): Value;
+	getKernelStrongDeps(node: ComputedInternals): AnyInternals[];
+	readKernelValue(dep: AnyInternals): Value;
 	/** The optional compaction observer slot (the engine's public `onCompact`). */
 	getOnCompact(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined;
 	/** The driver slot's presence + the devChecks switch (openBatch's
@@ -134,7 +134,7 @@ export type ConcurrentEngine = {
 };
 
 export function createConcurrentEngine(host: ConcurrentEngineHost, options?: EngineResetOptions): ConcurrentEngine {
-	probes.bridges++; // engine-activity counter: counts COMPOSITIONS (module init + resets; tests/one-core.spec.ts)
+	probes.bridges++; // engine-activity counter: counts compositions (module init + resets; tests/one-core.spec.ts)
 	// Stable resident containers, aliased once (identity-shared).
 	const nodeIndexToInternals = host.nodeIndexToInternals;
 	const rootToOpenRender = host.rootToOpenRender;
@@ -153,8 +153,8 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	});
 	const obs = createObservationIndex({ host });
 	/**
-	 * The ARMED quiet state derivation — quiet ⇔ zero live batches AND zero
-	 * open renders AND every write log compacted — recomputed only at state
+	 * The armed quiet-state derivation — quiet ⇔ zero live batches and zero
+	 * open renders and every write log compacted — recomputed only at state
 	 * transitions (batch open/retire, render start/end, driver attach); the
 	 * booleans the write path branches on stay module lets (host.setQuiet
 	 * maintains both `quiet` and `standaloneQuiet`). There is no registered
@@ -168,7 +168,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 			&& compaction.uncompactedAtoms.size === 0,
 		);
 	}
-	// ---- ONE shared core record. It is created with the resident-state
+	// ---- One shared core record. It is created with the resident-state
 	// edges filled and every operation slot stubbed; createWorld /
 	// createWorldArena / createSettlement (and the later factories) assign
 	// their tables onto it (cycles resolve by reading the late-bound slots
@@ -215,16 +215,16 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// core's now-assigned World slots; the batch edge is the batch manager's).
 	const compaction = createCompaction({ core, host, batch: batchOps });
 	core.compactAll = compaction.compactAll;
-	// ---- the walk orchestration (deliver.ts) + render lifecycle
+	// ---- the walk orchestration (NotificationQueue.ts) + render lifecycle
 	// (RenderPass.ts) — each assigns its late-bound core slots.
-	createDeliverWalks(core);
+	createDeliveryWalks(core);
 	const render = createRenderPassManager(core, { observation: obs });
 	// Kernel-frame tracked reader: captures `core` directly (see the
 	// ConcurrentEngine declaration comment).
 	const kernelTrackedReader: Reader = (dep) => {
 		const oc = core.obsCapture;
 		if (oc !== undefined) oc.push(dep);
-		return host.kernelReadOf(dep);
+		return host.readKernelValue(dep);
 	};
 	// ---- the subscription manager (its boundary revalidation joins the
 	// core table — the orchestration and the settlement drain reach it as

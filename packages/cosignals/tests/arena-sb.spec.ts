@@ -1,25 +1,26 @@
 /**
- * NF2 P2.S-B pins — the routing-authority transfer (plans/2026-07-06 §4.8
- * S-B). Deliveries and drains route from the per-world ARENAS; K1 is gone.
+ * Routing-authority pins. Deliveries and drains route from the per-world
+ * arenas — the arenas are the only routing structure; no separate
+ * episode-union edge store exists.
  * Two pin families:
  *
- *  - S-NF2-D1 (§4.4.5, three interleavings): the DEAD-ARENA retREAT,
+ *  - The dead-arena retreat (three interleavings),
  *    pinned with its documented degraded-but-value-correct outcomes. A
  *    discarded render takes the only arena holding a branch's links with it;
- *    a write in the gap reaches NO live arena and delivers NOTHING (HEAD's
- *    episode-union K1 would have scheduled the watcher in the writer's
+ *    a write in the gap reaches no live arena and delivers nothing (an
+ *    episode-union edge store would have scheduled the watcher in the writer's
  *    lane). The repair arrives at the next committed-truth motion via the
  *    drain — value-correct, lane-degraded. Any future silent worsening (or
  *    fix) diffs loudly here.
- *  - Routing coverage pins: M1's population schedule (§4.4.2 — the
- *    renderEnd re-staled loop populates the committed arena BEFORE any
+ *  - Routing coverage pins: the population schedule (the
+ *    renderEnd re-staled loop populates the committed arena before any
  *    post-commit write needs routing) and the untracked-fan member
- *    (§4.4.1 — weak links never carry deliveries THROUGH the new walk;
+ *    (weak links never carry deliveries through the delivery walk;
  *    drains still reach through them).
  *
- * Every bridge runs with the divergence check ARMED (arena-served ≡
+ * Every bridge runs with the divergence check armed (arena-served ≡
  * fold-truth after every public operation) — these schedules must stay
- * clean under the S-B checker while exhibiting the pinned lane outcomes.
+ * clean under the checker while exhibiting the pinned lane outcomes.
  */
 import { describe, expect, it } from 'vitest';
 import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
@@ -90,10 +91,10 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		b.renderEnd(pT.id, 'discard'); // the arena — and the only a→c link — dies; T stays pending
 		b.write(U.id, a, 0, 20); // THE GAP WRITE
 		// Documented degraded outcome: no live arena holds a→c, so the walk
-		// collects nothing — no delivery AND no suppression (HEAD's K1 union
-		// logged 'suppressed' here; the dedup bit was armed by the first
-		// write). The watcher's committed view did not change (RCC-SP5's
-		// MUST half is met): no correction either.
+		// collects nothing — no delivery and no suppression (an episode-union
+		// edge store would have logged 'suppressed' here; the dedup bit was armed
+		// by the first write). The watcher's committed view did not change,
+		// so no correction either.
 		expect(deliveriesTo(b, 'W', U.id).length).toBe(1);
 		expect(suppressionsTo(b, 'W', U.id).length).toBe(0);
 		expect(correctionsTo(b, 'W').length).toBe(0);
@@ -129,8 +130,8 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 		expect(w.lastRenderedValue).toBe(2); // committed view unchanged
 
 		// T settles+retires: site-(a) fanout marks flag, the drain refolds c
-		// committed (flag=1 → a-branch at base a=1) and RE-TRACKS the
-		// committed links to {flag,a} — the §4.4.4(ii) discriminant repair.
+		// committed (flag=1 → a-branch at base a=1) and re-tracks the
+		// committed links to {flag,a} — the refold repairs the routing structure.
 		b.settleAction(T.id);
 		expect(w.lastRenderedValue).toBe(1);
 		expect(correctionsTo(b, 'W')[0]).toMatchObject({ from: 2, to: 1, cause: 'retirement' });

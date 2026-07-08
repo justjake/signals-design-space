@@ -10,7 +10,7 @@
  * ordinary classified arms — the ambient default batch while anything is
  * pending, the quiet fold at rest.
  *
- * The corpus referees the same semantics continuously through the model's
+ * The corpus checks the same semantics continuously through the model's
  * writing-core-effect vocabulary (schedule.ts 'coreEffectWrite'); this file
  * is the hand pin.
  */

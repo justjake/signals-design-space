@@ -6,7 +6,7 @@
  * only when the last consumer of EVERY kind detaches. The microtask flap
  * coalescing spans the union.
  *
- * ENGINE-DIRECT (no twin driver): the reference model deliberately models no
+ * Engine-direct (no lockstep driver): the reference model deliberately models no
  * observe lifecycle, and these transitions are direct callbacks — never
  * TraceEvents — so the lockstep comparison surfaces cannot see them (the
  * last test pins that). Watcher liveness is driven the way the shim drives

@@ -28,7 +28,7 @@ const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
 // flush hot paths of the kernel and the world-arena walks of the
 // concurrency engine — including the freelist alloc/free pair.
 const BUDGETS: Record<string, number> = {
-	// graph kernel (src/graph.ts createKernel internals)
+	// graph kernel (src/Kernel.ts createKernel internals)
 	link: 180, // 154: re-track fast path
 	linkInsert: 380, // 346: out-of-line insertion tail (+ the per-link lifecycle retain)
 	unlink: 350, // 308: carries the per-link lifecycle release (one dep FLAGS
@@ -70,8 +70,8 @@ const BUDGETS: Record<string, number> = {
 	arenaShallowPropagate: 160, // 127
 	arenaPurgeDeps: 170, // 137
 	arenaAllocLink: 90, // 71
-	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (the kernel freeLink's twin)
-	shadowFor: 210, // 163
+	arenaFreeLink: 50, // 37: threads a.linkFree through VERSION (the arena counterpart of the kernel freeLink)
+	resolveShadow: 210, // 163
 	foldAtom: 190, // 142
 	arenaUpdateShadow: 230, // 173 (the readClock bump routed through arenaBumpReadClock)
 	arenaBumpReadClock: 60, // 35: Int32 wrap guard on the consumption bump path
@@ -83,7 +83,7 @@ const BUDGETS: Record<string, number> = {
 	arenaFoldOutcome: 340, // 313: fold-outcome classification, out of line —
 	// includes the comparator arm (custom-equality computeds compare against
 	// the arena-local previous, in head order; the user-fn call itself is out
-	// of line in arenaEqCold, so the hot default arm stays closure-free)
+	// of line in arenaIsValueEqualCold, so the hot default arm stays closure-free)
 	arenaSyncObservationAfterRefold: 90, // 65: out-of-line observation epilogue (observed nodes only)
 };
 

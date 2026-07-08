@@ -1,5 +1,5 @@
 // TWIN RUN — this spec runs against the reference model (`cosignals-oracle`)
-// AND the CONCURRENT engine at once: ./helpers.js here is the twin driver (model
+// and the concurrent engine at once: ./helpers.js here is the lockstep driver (model
 // + engine fan-out; every read is parity-asserted; selfCheck compares
 // events/snapshots and runs the invariant battery on BOTH sides). Kept in
 // lockstep with the reference model's own tests/flags.spec.ts.

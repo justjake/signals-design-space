@@ -1,10 +1,10 @@
 /**
- * World-arena twin of the kernel link free-list discipline (dalien port
+ * World-arena counterpart of the kernel link free-list discipline (dalien-signals port
  * study row 2, second instance): concurrent.ts world arenas must thread
  * `a.linkFree` through a genuinely spare link field (VERSION — freed links
  * never serve a version), never through NEXT_DEP, because arenaCheckDirty
  * reads NEXT_DEP off links that a mid-walk purge (arenaPurgeDeps epilogues,
- * arenaUnlink's unwatched-computed cascade, shadowFor's dead-tenancy purge) has
+ * arenaUnlink's unwatched-computed cascade, resolveShadow's dead-tenancy purge) has
  * already freed — those stale pointers must keep naming former neighbors,
  * never the free list.
  *

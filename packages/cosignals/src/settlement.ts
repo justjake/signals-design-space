@@ -1,13 +1,13 @@
 /**
- * SETTLEMENT — the resource-settlement tap, its queue, the drain loop, and
- * the compound-operation epilogue. A SETTLEMENT is a
+ * Settlement — the resource-settlement tap, its queue, the drain loop, and
+ * the compound-operation epilogue. A settlement is a
  * suspended thenable resolving: the kernel's per-thenable shared listener
  * calls the tap, the tap queues the thenable's stable sentinel, and the
  * drain invalidates every arena shadow boxed on it, reconciles the touched
  * roots' committed observers, and re-checks committed subscriptions — the
- * settlement boundary. The operation epilogue (`arenaOpEpilogue`) is
+ * settlement boundary. The operation epilogue (`runOperationEpilogue`) is
  * what every public operation owes on exit: drain queued settlements to
- * empty (the fixed point), then the armed divergence check; `endOp` is the
+ * empty (the fixed point), then the armed divergence check; `endOperation` is the
  * compound-operation tail (trace opEnd mark + the queued-notification
  * flush).
  *
@@ -19,7 +19,7 @@
  */
 
 import { SuspendedRead } from './index.js';
-import { engineEpoch, reclaimRetryAllSkipped } from './graph.js';
+import { engineEpoch, reclaimRetryAllSkipped } from './Kernel.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore } from './World.js';
 import type { RootId } from './concurrent.js';
@@ -39,7 +39,7 @@ export function createSettlement(core: EngineCore): void {
 	/** Drain termination: the settlement drain adopts the engine's flush
 	 * bound discipline — an iteration cap with a diagnostic on breach; a
 	 * chain of callbacks that synchronously settles ever-new thenables is
-	 * USER feedback, the effect-loop equivalent. */
+	 * user feedback, the effect-loop equivalent. */
 	let settleCap = 10_000;
 
 	/** Test seam: shrink the settlement-drain iteration cap. @internal */
@@ -49,10 +49,10 @@ export function createSettlement(core: EngineCore): void {
 
 	/**
 	 * The settle tap (the push half of settlement): called by the kernel's per-thenable
-	 * shared listener after the status write. Create-on-tap is the FIRST act —
+	 * shared listener after the status write. Create-on-tap is the first act —
 	 * the kernel's own lazy-create expression — so a synchronous custom
 	 * thenable (whose callbacks fire before `unwrapThenable`'s throw creates
-	 * `t.suspendSentinel`) still yields ONE sentinel identity shared with the later throw.
+	 * `t.suspendSentinel`) still yields one sentinel identity shared with the later throw.
 	 */
 	function settleTap(t: PromiseLike<unknown>): void {
 		const c = core; // one context load; field accesses below keep the one-load shape
@@ -66,12 +66,12 @@ export function createSettlement(core: EngineCore): void {
 			// Mid-operation: the enclosing operation's epilogue (or the drain's
 			// own next iteration) consumes it. Read-context settlement: an
 			// epilogue-less read frame — standalone committedValue/
-			// renderValue — has no epilogue, so ALSO schedule ONE coalesced
-			// microtask drain, the kernel's own attachSettle discipline
+			// renderValue — has no epilogue, so also schedule one coalesced
+			// microtask drain, the kernel's own attachSettleListener discipline
 			// (queueMicrotask); it no-ops when an epilogue got there first.
 			if (!settleDrainScheduled) {
 				settleDrainScheduled = true;
-				// ENGINE-EPOCH GUARD (cross-reset microtask discipline): a
+				// Engine-epoch guard (cross-reset microtask discipline): a
 				// drain scheduled by a dead test must not run this (dead)
 				// composition's queue into the next test's time.
 				const epoch = engineEpoch;
@@ -79,28 +79,28 @@ export function createSettlement(core: EngineCore): void {
 					settleDrainScheduled = false;
 					if (epoch !== engineEpoch) return;
 					if (pendingSettle.length !== 0 && core.opDepth === 0 && core.evalDepth === 0 && !settleDraining && !notifyState.flushing) {
-						settlementDrain();
+						drainSettlements();
 					}
 				});
 			}
 			return;
 		}
-		// At rest (the kernel's batchDepth === 0 arm): drain NOW — a
-		// background-only suspended watcher or effect refires FROM the
+		// At rest (the kernel's batchDepth === 0 arm): drain immediately — a
+		// background-only suspended watcher or effect refires from the
 		// settlement event itself; no unrelated operation is ever needed.
-		settlementDrain();
+		drainSettlements();
 	}
 
 	/**
-	 * The settlement drain — ONE queue-owning loop, the only consumer of the
-	 * pending-settlement queue, identical at every drain site, and it OWNS
-	 * the notification flush: `flushNotify` is INSIDE the loop,
+	 * The settlement drain — one queue-owning loop, the only consumer of the
+	 * pending-settlement queue, identical at every drain site, and it owns
+	 * the notification flush: `flushNotify` runs inside the loop,
 	 * so a refire callback that synchronously settles another thenable lands
-	 * its sentinel in the queue and gets the NEXT iteration. The drain IS the
+	 * its sentinel in the queue and gets the next iteration. The drain is the
 	 * settlement boundary; it never returns with a queued settlement
 	 * unscanned or unflushed.
 	 */
-	function settlementDrain(): void {
+	function drainSettlements(): void {
 		const c = core; // one context load; field accesses below keep the one-load shape
 		if (settleDraining) return;
 		settleDraining = true;
@@ -121,17 +121,17 @@ export function createSettlement(core: EngineCore): void {
 					const suspendSentinel = taken[i]!;
 					c.eachArena((a) => {
 						// Scan the suspended list (dense — O(current suspensions))
-						// for shadows whose box payload IS this sentinel —
+						// for shadows whose box payload is this sentinel —
 						// the arena half (marks + propagation + the read-clock
 						// bump) lives with the layout enums: WorldArena.ts
-						// arenaInvalidateSettled. The marks ARE the invalidation
+						// arenaInvalidateSettled. The marks are the invalidation
 						// (arenas serve world reads); committed roots
 						// also join the cone drain below. Open-render arenas keep
 						// their marks for the frame's close.
 						if (c.arenaInvalidateSettled(a, suspendSentinel) && a.kind === 'committed') touchedRoots.add(a.root);
 					});
 					// (Newest suspensions need no eviction here: the
-					// kernel's own attachSettle listener invalidates kernel-cached
+					// kernel's own attachSettleListener listener invalidates kernel-cached
 					// suspensions at settlement, and boxedRead self-heals at reads.)
 				}
 				// Cone drain: value-gated committed re-checks of the touched
@@ -147,7 +147,7 @@ export function createSettlement(core: EngineCore): void {
 						c.correctWatcher(w, wInternals, c.evaluate(wInternals, { kind: 'committed', root: rootId }), 'retirement');
 					}
 				}
-				// Boundary subscription scan + the flush the loop OWNS.
+				// Boundary subscription scan + the flush the loop owns.
 				// (Core effect()s need nothing here: settlements move world
 				// visibility, never newest values, so the kernel is untouched.)
 				if (c.committedSubCount !== 0) c.revalidateCommittedSubscriptions(undefined);
@@ -164,15 +164,15 @@ export function createSettlement(core: EngineCore): void {
 	}
 
 	/** Public-operation epilogue: drain queued settlements to empty
-	 * (the fixed point), then the divergence check when armed. BOTH halves
-	 * are top-level-boundary work: a NESTED operation (an effect's writes
+	 * (the fixed point), then the divergence check when armed. Both halves
+	 * are top-level-boundary work: a nested operation (an effect's writes
 	 * during a fused apply run whole write/fold operations inside the outer
 	 * one) must not drain or check mid-outer — the outer epilogue owes both
 	 * once its own mutations complete. */
-	function arenaOpEpilogue(): void {
+	function runOperationEpilogue(): void {
 		const c = core; // one context load; the depth/hook reads stay one-load
 		if (c.opDepth !== 0) return; // nested operation: the outer epilogue owns the boundary
-		if (pendingSettle.length !== 0 && !settleDraining) settlementDrain();
+		if (pendingSettle.length !== 0 && !settleDraining) drainSettlements();
 		if (c.epilogueCheck !== undefined) c.epilogueCheck();
 	}
 
@@ -180,7 +180,7 @@ export function createSettlement(core: EngineCore): void {
 	 * trace's opEnd mark (scopes causality), then the queued-notification
 	 * flush. One copy — an exit that forgets either desyncs trace causality
 	 * or strands queued notifies, so every exit calls this instead. */
-	function endOp(): void {
+	function endOperation(): void {
 		const tr = core.trace;
 		if (tr !== undefined) tr.opEnd();
 		notify.flushNotify();
@@ -193,8 +193,8 @@ export function createSettlement(core: EngineCore): void {
 
 	// ---- the operation table (late-bound onto the shared core record) ----
 	core.settleTap = settleTap;
-	core.arenaOpEpilogue = arenaOpEpilogue;
-	core.endOp = endOp;
+	core.runOperationEpilogue = runOperationEpilogue;
+	core.endOperation = endOperation;
 	core.setSettleCap = setSettleCap;
 	core.getPendingSettleCount = getPendingSettleCount;
 }

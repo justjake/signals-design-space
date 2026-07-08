@@ -45,7 +45,7 @@ const b = typeof mod.registerReactBridge === 'function'
 // `b.write(...)` in both arms.
 const tracer = b.events !== undefined
 	? undefined
-	: (await import(`${ROOT}/packages/cosignals/src/trace.ts`)).attachTracer(b, { mode: 'session' });
+	: (await import(`${ROOT}/packages/cosignals/src/Tracer.ts`)).attachTracer(b, { mode: 'session' });
 const deliveryMark = tracer === undefined
 	? () => b.events.length
 	: () => tracer.stats().recorded;

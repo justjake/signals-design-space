@@ -16,7 +16,7 @@
  * the plain path pays nothing.
  *
  * Id-keyed and handle-free (so a record whose public handle was
- * garbage-collected can still be reclaimed — see graph.ts's reclamation
+ * garbage-collected can still be reclaimed — see Kernel.ts's reclamation
  * section):
  *  - The dormant owner: the user's callback is stored in the atom's own
  *    record `fns` column slot at construction (index.ts — atoms never use
@@ -40,9 +40,9 @@
  *    exactly as long as the record lives.
  */
 
-import { ArenaShape, E, NodeField, NodeFlag, engineEpoch, fns, noteReclaimRetry, reclaimSkippedN, untracked } from './graph.js';
+import { ArenaShape, E, NodeField, NodeFlag, engineEpoch, fns, noteReclaimRetry, reclaimSkippedN, untracked } from './Kernel.js';
 import { __lifecycleWrite, type AtomCtx } from './index.js';
-import type { NodeId } from './graph.js';
+import type { NodeId } from './Kernel.js';
 
 export type LifecycleState = {
 	/** The atom's record id (the map key, carried for the dormancy delete). */
@@ -60,7 +60,7 @@ export type LifecycleState = {
 	scheduled: boolean;
 };
 
-/** ACTIVE lifecycle records by id (watched, or with a pending shift) — see
+/** Active lifecycle records by id (watched, or with a pending shift) — see
  * the module header for the dormant/active/rehydration story. */
 export const lifecycleStates = new Map<NodeId, LifecycleState>();
 let lifecycleQueue: LifecycleState[] = [];
@@ -81,7 +81,7 @@ function scheduleLifecycleFlush(): void {
 		return;
 	}
 	lifecycleFlushScheduled = true;
-	// ENGINE-EPOCH GUARD (cross-reset microtask discipline): a flush
+	// Engine-epoch guard (cross-reset microtask discipline): a flush
 	// scheduled by a dead test must not run user effects into the next
 	// test's engine.
 	const epoch = engineEpoch;
@@ -116,12 +116,12 @@ function scheduleLifecycleFlush(): void {
 }
 
 /** The dormancy transition: cleanup ran (or the flap netted out), nothing
- * pending — the ACTIVE record deletes; the dormant owner (the fns-slot
+ * pending — the active record deletes; the dormant owner (the fns-slot
  * callback) is all that remains. */
 function maybeDropDormant(state: LifecycleState): void {
 	if (state.refs <= 0 && !state.isMounted && !state.scheduled) {
 		lifecycleStates.delete(state.id);
-		// Reclamation retry trigger — the lifecycle-ACTIVE guard row's
+		// Reclamation retry trigger — the lifecycle-active guard row's
 		// clearing site is exactly this deletion (cleanup ran, no pending
 		// shift). Size-0 bail first.
 		if (reclaimSkippedN !== 0) noteReclaimRetry(state.id);

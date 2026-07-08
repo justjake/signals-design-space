@@ -11,7 +11,7 @@
  *
  *  - the WRITE half, called from the kernel's two cold catch sites:
  *    `storeThrown` (store the payload, return the outcome bits, attach the
- *    settle listener on transition) and `attachSettle` (stale-guarded
+ *    settle listener on transition) and `attachSettleListener` (stale-guarded
  *    settlement-invalidate: when the pending thenable settles, the computed
  *    is marked stale exactly the way a dependency write would);
  *  - the READ half: `boxedRead`, the kernel's cold read tail — errors
@@ -19,7 +19,7 @@
  *    thenable's stable `SuspendedRead` sentinel (declared here);
  *  - the EVALUATION CONTEXT's members: `ctxPrevious` and `ctxUse`, the
  *    hoisted functions behind the one `ctx` object the kernel passes every
- *    computed getter (graph.ts POLICY_CTX), with the thenable protocol
+ *    computed getter (Kernel.ts POLICY_CTX), with the thenable protocol
  *    (`unwrapThenable`, mirroring React's trackUsedThenable), the per-node
  *    keyed request cache (`__ctxUse`, shared with the engine's ctx-shaped
  *    world fns in concurrent.ts), and the key serialization;
@@ -32,8 +32,8 @@
  * or suspends never calls into this module.
  */
 
-import { E, NodeField, NodeFlag, ArenaShape, batchDepth, activeSub, engineEpoch, flush, maybeBoundary, values } from './graph.js';
-import type { NodeFlags, NodeId, ValueIndex } from './graph.js';
+import { E, NodeField, NodeFlag, ArenaShape, batchDepth, activeSub, engineEpoch, flush, maybeBoundary, values } from './Kernel.js';
+import type { NodeFlags, NodeId, ValueIndex } from './Kernel.js';
 
 /**
  * Thrown when a read observes a pending suspension: by `ctx.use` inside a
@@ -93,7 +93,7 @@ export function ctxPrevious(): unknown {
  * instrument `status`/`value`/`reason` onto the thenable itself, once.
  * Settled thenables synchronously return their value / throw their reason;
  * pending ones throw the thenable's stable SuspendedRead (a lazy expando on
- * the thenable, so every read site and every re-evaluation observes ONE
+ * the thenable, so every read site and every re-evaluation observes one
  * "still pending" identity per thenable).
  */
 function unwrapThenable(t: InstrumentedThenable): unknown {
@@ -138,8 +138,8 @@ function unwrapThenable(t: InstrumentedThenable): unknown {
  * listener — the pair `unwrapThenable` installs exactly once per thenable —
  * calls it after the status write, so world-only suspensions (arena-cached
  * sentinels the kernel never cached) are notified AT the settlement event
- * itself. ONE closure per engine composition; distinct-thenable dedup IS
- * the instrument-once discipline. The kernel-cached path (`attachSettle` →
+ * itself. One closure per engine composition; distinct-thenable dedup is
+ * the instrument-once discipline. The kernel-cached path (`attachSettleListener` →
  * stale-guarded `invalidateComputed`) is untouched and keeps handling
  * KERNEL suspensions precisely.
  */
@@ -180,14 +180,14 @@ function serializeUseKey(key: unknown): string {
 }
 
 /**
- * THE ctx.use REQUEST-CACHE COLUMN — id-keyed engine state. The owning
+ * The ctx.use request-cache column — id-keyed engine state. The owning
  * `Computed` INSTANCE is stored nowhere kernel-side, so nothing here pins
  * the handle and a dropped handle's record can still reclaim. Keyed by
  * NODE INDEX (the recycled dense key): the record-free scrub clears the
  * freed record's entry (`__clearUseCacheForIndex`), so a slot's next
  * tenant can never be served the previous tenant's requests. A Map (not a
  * dense array) deliberately — ctx.use is a cold path and the map's delete
- * IS the scrub.
+ * is the scrub.
  */
 const useCaches = new Map<number, Map<string, PromiseLike<unknown>>>();
 
@@ -289,7 +289,7 @@ export function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: No
 		const t = e.thenable as InstrumentedThenable;
 		values[v] = t;
 		if ((oldExc & NodeFlag.BOX_SUSPENDED) === 0 || oldValue !== t) {
-			attachSettle(c, t);
+			attachSettleListener(c, t);
 		}
 		return NodeFlag.HAS_BOX | NodeFlag.BOX_SUSPENDED;
 	}
@@ -301,10 +301,10 @@ export function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: No
  * Settlement-invalidate: when the pending thenable of a suspended computed
  * settles, mark the computed stale and propagate so watchers re-run and
  * readers recompute. Stale-guarded — the node must still cache THIS thenable
- * as a suspension (suspended bit set AND the slot holds `t`) — so
+ * as a suspension (suspended bit set and the slot holds `t`) — so
  * out-of-order settlement of superseded work is inert.
  */
-function attachSettle(c: NodeId, t: InstrumentedThenable): void {
+function attachSettleListener(c: NodeId, t: InstrumentedThenable): void {
 	// ENGINE-EPOCH GUARD (cross-reset microtask discipline): the listener
 	// captures the epoch at attach; a settlement delivered after
 	// `__resetEngineForTest` must not touch the scrubbed arena (the record

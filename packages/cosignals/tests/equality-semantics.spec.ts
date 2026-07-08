@@ -34,7 +34,7 @@
  *
  * The oracle aligns at its six sites in the same change (quietWrite, write
  * drop, eager-advance, foldAtom, shadowFoldAtom, compactAtom) and the fuzz
- * corpus gains a custom-equals topology member, so lockstep referees these
+ * corpus gains a custom-equals topology member, so lockstep checks these
  * semantics continuously; this file is the hand-pinned matrix.
  */
 import { describe, expect, it } from 'vitest';

@@ -1,10 +1,11 @@
 /**
- * NF2 P2.S-A pins, part 2 (§4.9.3): mixed-mode strong/weak link modes
- * (§4.4.1), the fp-100/seq-50 lock-in walk under the no-fp rule (§4.2),
- * root-churn retention + rematerialization (§4.5.8), grown-then-shrunk
- * mark decay (§4.3), GEN id-tenancy (§4.5.3), and mid-op arena growth
- * (§4.5.9 — tiny initial arena). All bridges run with the S-A divergence
- * check armed (arena-served ≡ memo-served after every public operation).
+ * Arena-serving pins, part 2: mixed-mode strong/weak link modes,
+ * the wide lock-in walk under the no-fingerprint rule (marked shadows
+ * refold unconditionally), root-churn retention + rematerialization,
+ * grown-then-shrunk
+ * mark decay, GEN id-tenancy, and mid-op arena growth
+ * (tiny initial arena). All bridges run with the divergence
+ * check armed (arena-served ≡ reference folds after every public operation).
  */
 import { describe, expect, it } from 'vitest';
 import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
@@ -128,7 +129,7 @@ describe('S-A reclamation + rematerialization (§4.5.8)', () => {
 		w1.live = false;
 		b.quiesce();
 		expect(b.__arenaStats().committed).toBe(0);
-		const w2 = mount(b, 'R', c, 'W2'); // remount: the §4.4.2 populators rebuild links at THIS commit
+		const w2 = mount(b, 'R', c, 'W2'); // remount: the commit populator loop rebuilds links at this commit
 		expect(b.__arenaStats().committed).toBe(1);
 		expect(b.__arenaLinkMode('R', a, c)).toBe('strong');
 		commitWrite(b, a, 9); // handler write AFTER the rebuild: delivery + drain route

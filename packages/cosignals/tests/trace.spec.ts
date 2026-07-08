@@ -3,7 +3,7 @@
  * fires with correct payloads on a representative schedule (a staged
  * narrative over one traced bridge, then a fuzz sweep proving the capture's
  * integrity — losslessness, total decode/format, terminating causality, and
- * the referee decoder's coverage of the packed stream, which is the engine's
+ * the test-side decoder's coverage of the packed stream, which is the engine's
  * ONLY event output). Causality (CAUSE edges + queries) and the stable human
  * format are asserted here too.
  */
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignals-oracle/src/schedule.js';
 import { engine, __resetEngineForTest, type TraceEvent, type CosignalEngine } from '../src/concurrent.js';
-import { attachTracer, formatTrace, formatTraceRecord, Tracer, type TraceRecord, type TraceKind } from '../src/trace.js';
+import { attachTracer, formatTrace, formatTraceRecord, Tracer, type TraceRecord, type TraceKind } from '../src/Tracer.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 import { attachRefereeStream, decodeTraceEvent, decodedTraceEvents } from './trace-events.js';
 
@@ -43,7 +43,7 @@ function last(tr: Tracer, kind: TraceKind): TraceRecord {
 	return found[found.length - 1]!;
 }
 
-/** The referee's view of the same records (the deleted object log's shape). */
+/** The decoded TraceEvent view of the same records (the reference model's event shape). */
 function tevents<T extends TraceEvent['type']>(tr: Tracer, type: T): Extract<TraceEvent, { type: T }>[] {
 	return decodedTraceEvents(tr).filter((e): e is Extract<TraceEvent, { type: T }> => e.type === type);
 }
@@ -155,7 +155,7 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 		expect(rc.data).toEqual({ root: 'A', batch: t2.id, commitGen: 1 });
 		expect(rc.cause).toBe(all(tr, 'render-end')[2]!.id);
 		const re = all(tr, 'react-effect-run')[0]!;
-		expect(re.data).toEqual({ effect: 'RE', root: 'A', value: 7, values: [7] }); // values = the dep snapshot (referee-compared)
+		expect(re.data).toEqual({ effect: 'RE', root: 'A', value: 7, values: [7] }); // values = the dep snapshot (model-compared)
 		expect(re.cause).toBe(rc.id);
 		expect(tr.whyEffectRan('RE').map((e) => e.kind)).toEqual(['react-effect-run', 'root-commit', 'render-end']);
 	});
@@ -336,10 +336,10 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 	});
 });
 
-// ---- fuzz sweep: capture integrity + referee-decode coverage ------------------
+// ---- fuzz sweep: capture integrity + decoded-stream coverage ------------------
 // The packed stream is the engine's ONLY event output (the old cross-check
 // against a parallel object stream died with that stream — decoded-stream
-// correctness is now refereed where it matters, against the ORACLE, by
+// correctness is checked where it matters, against the reference model, by
 // concurrent-fuzz.spec's lockstep differ). What this sweep still owns:
 // losslessness, total decode/format over every kind a real schedule
 // produces, terminating causality, and the structural pairing between
@@ -357,13 +357,13 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 			const decoded = tr.events();
 			expect(decoded.length).toBe(tr.stats().recorded);
 
-			// the referee decoder maps every TraceEvent-vocabulary record and
+			// the test-side decoder maps every TraceEvent-vocabulary record and
 			// nothing else (kind-for-kind agreement with a manual partition)
 			const bridgeEvents = decodedTraceEvents(tr);
 			const mapped = decoded.filter((e) => decodeTraceEvent(e) !== undefined);
 			expect(bridgeEvents.length, `seed ${seed}: referee coverage`).toBe(mapped.length);
 			// every render end has exactly one disposition record BEFORE its
-			// consequences and exactly one referee marker after them
+			// consequences and exactly one checkpoint marker after them
 			const renderEnds = decoded.filter((e) => e.kind === 'render-end');
 			const markers = decoded.filter((e) => e.kind === 'render-committed' || e.kind === 'render-discarded');
 			expect(renderEnds.length, `seed ${seed}: render-end records`).toBe(markers.length);
@@ -433,7 +433,7 @@ describe('fixed memory under a tracer: the engine retains nothing on the tracer�
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);
 		b.retire(t.id);
-		expect(stream.eventsOfType('write')).toHaveLength(1); // full stream decodable for the referee
+		expect(stream.eventsOfType('write')).toHaveLength(1); // full stream decodable for the comparison
 		expect(stream.eventsOfType('retired')).toHaveLength(1);
 		expect(stream.tracer.verifyComplete().complete).toBe(true); // nothing dropped — provably
 		expect(stream.tracer.stats().recorded).toBeGreaterThan(0);

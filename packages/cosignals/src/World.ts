@@ -1,13 +1,13 @@
 /**
- * WORLDS — evaluation, folds, and read routing. A WORLD is one
+ * Worlds — evaluation, folds, and read routing. A world is one
  * self-consistent assignment of values to every atom, produced by replaying
  * exactly the log entries that world may see, in timeline order (the full
  * vocabulary — write log, batch, render pass, arena — is defined at the top
  * of concurrent.ts). This module owns:
  *
- *  - the `World` type and `visibleAt`, THE two-clause visibility rule;
- *  - `foldAtom` / `applyOp` / `eqAtom` — the fold family (one op-application
- *    rule, one equality rule) and the fold-purity bracket (`inCallback`);
+ *  - the `World` type and `isVisibleAt`, the two-clause visibility rule;
+ *  - `foldAtom` / `applyOp` / `isAtomValueEqual` — the fold family (one op-application
+ *    rule, one equality rule) and the fold-purity bracket (`runInFoldCallback`);
  *  - `evaluate` — world evaluation (arena-served render/committed worlds,
  *    kernel-served newest, memo-free fold-throughs for mountFix worlds) with
  *    per-world cycle detection;
@@ -15,35 +15,35 @@
  *    world on stack → open capture frame → the driver's ambient provider),
  *    the routed read bodies (`routedAtomRead` / `routedComputedRead` — the
  *    public `.state` getters call them directly when `routingActive` is
- *    set), and the one-flag arming (`syncReadRouting` maintains graph.ts's
+ *    set), and the one-flag arming (`syncReadRouting` maintains Kernel.ts's
  *    `routingActive` boolean at every world/capture/provider transition —
- *    the merged replacement for the old nullable host hooks).
+ *    one flag covers every routing source).
  *
- * THE SHARED ENGINE CORE RECORD (`EngineCore`) is declared here: the one
+ * The shared engine core record (`EngineCore`) is declared here: the one
  * deps/table record the strongly-connected mechanisms — World, WorldArena,
  * settlement (and the subscription manager's boundary revalidation) — are wired
  * through. `createEngineCore` builds it at the composition site with the
  * resident-state edges filled and every factory slot stubbed; each factory
  * then assigns its operation table onto the record, and every cross-module
- * call reads its slot AT CALL TIME (late binding — never an import-time
+ * call reads its slot at call time (late binding — never an import-time
  * reference), which is what closes the evaluate → arenaServe → foldAtom and
  * settlement → arenas → worlds → corrections cycles. Shared mutable scalars
  * (the evaluation-frame state, the routing state, the operation depth) live
- * as FIELDS on the record: hot functions load the record once into a local
+ * as fields on the record: hot functions load the record once into a local
  * and keep the one-property-load access shape the class fields had.
  */
 
 import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js';
-import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './graph.js';
+import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './Kernel.js';
 import { ScheduleError } from './errors.js';
-import { probes, type ConcurrentEngineHost } from './engine.js';
+import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
 import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
 import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
-import type { ObservationIndex } from './observation.js';
+import type { ObservationIndex } from './ObservationIndex.js';
 import type { CaptureFrame, SubscriptionManager } from './SubscriptionManager.js';
 import type { CompactionTable } from './WriteLog.js';
-import type { NotificationQueue, NotifyState } from './deliver.js';
+import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
 type EvalGen = number;
@@ -65,7 +65,7 @@ export const NEWEST: World = { kind: 'newest' };
 export const NOT_ROUTED: { readonly notRouted: true } = { notRouted: true };
 
 /**
- * THE SHARED ENGINE CORE RECORD — deps and table in one (see the module
+ * The shared engine core record — deps and table in one (see the module
  * header). Three sections:
  *  - resident-provided deps: stable containers aliased by identity plus thin
  *    arrows over resident orchestration, filled by `createEngineCore`;
@@ -78,16 +78,16 @@ export const NOT_ROUTED: { readonly notRouted: true } = { notRouted: true };
  */
 export type EngineCore = {
 	// ---- resident-provided deps (filled at creation) ----
-	/** THE node registry: nodes by nodeIndex (identity alias of the engine's
+	/** The node registry: nodes by nodeIndex (identity alias of the engine's
 	 * dense column; bare ids resolve via the record's live NODE_INDEX). */
 	nodeIndexToInternals: (AnyInternals | undefined)[];
 	/** Watchers by nodeIndex (identity alias — the routing walks' collection rows). */
 	nodeToWatchers: (Watcher[] | undefined)[];
 	/** Per-node visited/collection stamps (identity alias — see concurrent.ts). */
 	lastWalk: number[];
-	/** Observed-consumer refcount column (identity alias of observation.ts's). */
+	/** Observed-consumer refcount column (identity alias of ObservationIndex.ts's). */
 	obsRefs: number[];
-	/** The observation index's dep-snapshot re-pointer (observation.ts). */
+	/** The observation index's dep-snapshot re-pointer (ObservationIndex.ts). */
 	syncObservedDeps: ObservationIndex['syncObservedDeps'];
 	/** Watchers by id (identity alias). */
 	watchers: Map<WatcherId, Watcher>;
@@ -96,9 +96,9 @@ export type EngineCore = {
 	idToRenderPass: Map<RenderPassId, RenderPass>;
 	/** The one open render per root (identity alias). */
 	rootToOpenRender: Map<RootId, RenderPass>;
-	/** Root records by id (identity alias; arenaOf PROBES it — creation stays `root`). */
+	/** Root records by id (identity alias; getArena only probes it — creation goes through `root`). */
 	roots: Map<RootId, RootState>;
-	/** The notification queue mechanism (deliver.ts table + its live scalars). */
+	/** The notification queue mechanism (NotificationQueue.ts table + its live scalars). */
 	notify: NotificationQueue;
 	notifyState: NotifyState;
 	/** Root record lookup-or-create (the engine host's — resident: the
@@ -108,7 +108,7 @@ export type EngineCore = {
 	/** Public-handle resolution (the engine host's — content allocation: a
 	 * handle with
 	 * no engine content gets its node record on first participation; base
-	 * seeds from kernel-current, which IS its full committed history by the
+	 * seeds from kernel-current, which is its full committed history by the
 	 * quiet invariant). */
 	internalsForAtom: ConcurrentEngineHost['internalsForAtom'];
 	internalsForComputed: ConcurrentEngineHost['internalsForComputed'];
@@ -137,7 +137,7 @@ export type EngineCore = {
 	compactAll: CompactionTable['compactAll'];
 
 	// ---- shared mutable state ----
-	/** The trace recorder slot — the engine's ONLY instrumentation output
+	/** The trace recorder slot — the engine's only instrumentation output
 	 * (one nullable slot; the `engine` surface exposes accessor delegates
 	 * over it for `cosignals/trace`). */
 	trace: TraceHooks | undefined;
@@ -165,7 +165,7 @@ export type EngineCore = {
 	 * background evaluations of ctx-shaped computeds fold pending
 	 * suspensions to sentinel values. (World) */
 	suspendDepth: number;
-	/** THE SERVE-OVERRIDE SLOT — the one override the routed-read path tests
+	/** The serve-override slot — the one override the routed-read path tests
 	 * (setters bracket save/restore, so the
 	 * innermost override wins). Occupants: a WorldArena (arena-refold
 	 * routing — raw-handle reads inside arena fn runs serve from that arena)
@@ -178,7 +178,7 @@ export type EngineCore = {
 	/** The armed divergence-check hook: the test-side structural checker lives
 	 * in tests/arena-checker.ts and installs itself here through
 	 * `__checkerInternals().armEpilogueCheck`. Fired at every public
-	 * operation's epilogue after the settlement fixed point; ANY mismatch it
+	 * operation's epilogue after the settlement fixed point; any mismatch it
 	 * finds throws — a test failure. Production never installs one,
 	 * so the epilogue pays one undefined test. (settlement consumes it.) */
 	epilogueCheck: (() => void) | undefined;
@@ -218,20 +218,20 @@ export type EngineCore = {
 	evaluate(node: AnyInternals, world: World): Value;
 	foldAtom(atom: AtomInternals, world: World): Value;
 	applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value;
-	eqAtom(atom: AtomInternals, a: Value, b: Value): boolean;
-	changedValue(node: AnyInternals, prev: Value, next: Value): boolean;
-	inCallback<T>(fn: () => T): T;
-	cycleError(name: string): ScheduleError;
+	isAtomValueEqual(atom: AtomInternals, a: Value, b: Value): boolean;
+	isValueChanged(node: AnyInternals, prev: Value, next: Value): boolean;
+	runInFoldCallback<T>(fn: () => T): T;
+	createCycleError(name: string): ScheduleError;
 	setWorld(w: World | undefined): void;
 	syncReadRouting(): void;
 	setWorldProvider(provider: (() => World | undefined) | undefined): void;
-	/** Assigns the capture frame AND re-syncs the read-routing arming (the
+	/** Assigns the capture frame and re-syncs the read-routing arming (the
 	 * two-step every captureRun edge performs — the subscription manager's
 	 * one writer). */
 	setCaptureFrame(f: CaptureFrame | undefined): void;
 	routedRead(atom: AtomInternals, world: World): Value;
 	/** The public `.state` routed-read bodies (index.ts calls the module
-	 * trampolines in engine.ts, which read these slots): NOT_ROUTED declines
+	 * trampolines in ConcurrentEngine.ts, which read these slots): NOT_ROUTED declines
 	 * to the plain kernel path. */
 	routedAtomRead(atom: Atom<unknown>): unknown;
 	routedComputedRead(c: Computed<unknown>): unknown;
@@ -239,20 +239,20 @@ export type EngineCore = {
 	// ---- late-bound: WorldArena ----
 	claimArena(kind: 'render' | 'committed', world: World, root: RootId): WorldArena;
 	releaseArena(a: WorldArena): void;
-	arenaOf(world: World): WorldArena | undefined;
+	getArena(world: World): WorldArena | undefined;
 	eachArena(fn: (a: WorldArena) => void): void;
 	arenaServe(a: WorldArena, node: AnyInternals): Value;
 	fanAtomsToArena(a: WorldArena, atoms: AtomInternals[], fromSettlement: boolean): void;
 	fanAtomsToCommittedArenas(atoms: AtomInternals[]): void;
-	oneAtomBuf(atom: AtomInternals): AtomInternals[];
+	getSingleAtomBuffer(atom: AtomInternals): AtomInternals[];
 	arenaDecay(a: WorldArena): void;
 	purgeNodeFromArenas(ix: NodeIndex): void;
 	arenaInvalidateSettled(a: WorldArena, suspendSentinel: SuspendedRead): boolean;
 	walkArenaStrong(a: WorldArena, from: NodeIndex, kGen: number, gen: number, found: Watcher[]): void;
 	collectWatchersAt(nid: NodeIndex, found: Watcher[]): void;
 	arenaCollectDrainCandidates(a: WorldArena, gen: number, rootId: RootId, ws: Watcher[]): void;
-	closureOverArena(a: WorldArena, node: AnyInternals, closure: Set<NodeId>): void;
-	foldTruthFrame<T>(world: World, fn: () => T): T;
+	collectArenaClosure(a: WorldArena, node: AnyInternals, closure: Set<NodeId>): void;
+	runInFoldTruthFrame<T>(world: World, fn: () => T): T;
 	dependencyEdges(): Map<NodeId, Set<NodeId>>;
 	__arenaLinkMode(rootId: RootId, dep: AnyInternals, sub: AnyInternals): 'strong' | 'weak' | undefined;
 	__arenaLinkIdForTest(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number;
@@ -260,8 +260,8 @@ export type EngineCore = {
 
 	// ---- late-bound: settlement ----
 	settleTap(t: PromiseLike<unknown>): void;
-	arenaOpEpilogue(): void;
-	endOp(): void;
+	runOperationEpilogue(): void;
+	endOperation(): void;
 	setSettleCap(n: number): void;
 	getPendingSettleCount(): number;
 
@@ -269,14 +269,14 @@ export type EngineCore = {
 	revalidateCommittedSubscriptions: SubscriptionManager['revalidateCommittedSubscriptions'];
 
 	// ---- late-bound: deliver (the walk orchestration) ----
-	/** The ONE urgent pre-paint watcher correction (deliver.ts). */
+	/** The one urgent pre-paint watcher correction (NotificationQueue.ts). */
 	correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean;
 	quietDrain(): void;
 	drainCommittedObservers(rootId: RootId, cause: 'retirement' | 'per-root-commit'): void;
 	deliveryWalk(from: AtomInternals, batch: Batch, slot: BatchSlotMeta, seq: Seq): void;
 
 	// ---- late-bound: RenderPass ----
-	/** THE watcher→node resolution (RenderPass.ts — generation-checked). */
+	/** The watcher→node resolution (RenderPass.ts — generation-checked). */
 	resolveWatcherInternals(w: Watcher): AnyInternals | undefined;
 	/** The minimum live render pin (compaction's pin clause floor). */
 	getMinLivePin(): Seq;
@@ -349,10 +349,10 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		evaluate: LATE,
 		foldAtom: LATE,
 		applyOp: LATE,
-		eqAtom: LATE,
-		changedValue: LATE,
-		inCallback: LATE,
-		cycleError: LATE,
+		isAtomValueEqual: LATE,
+		isValueChanged: LATE,
+		runInFoldCallback: LATE,
+		createCycleError: LATE,
 		setWorld: LATE,
 		syncReadRouting: LATE,
 		setWorldProvider: LATE,
@@ -363,28 +363,28 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		// late-bound: WorldArena
 		claimArena: LATE,
 		releaseArena: LATE,
-		arenaOf: LATE,
+		getArena: LATE,
 		eachArena: LATE,
 		arenaServe: LATE,
 		fanAtomsToArena: LATE,
 		fanAtomsToCommittedArenas: LATE,
-		oneAtomBuf: LATE,
+		getSingleAtomBuffer: LATE,
 		arenaDecay: LATE,
 		purgeNodeFromArenas: LATE,
 		arenaInvalidateSettled: LATE,
 		walkArenaStrong: LATE,
 		collectWatchersAt: LATE,
 		arenaCollectDrainCandidates: LATE,
-		closureOverArena: LATE,
-		foldTruthFrame: LATE,
+		collectArenaClosure: LATE,
+		runInFoldTruthFrame: LATE,
 		dependencyEdges: LATE,
 		__arenaLinkMode: LATE,
 		__arenaLinkIdForTest: LATE,
 		__arenaLinkNextDepForTest: LATE,
 		// late-bound: settlement
 		settleTap: LATE,
-		arenaOpEpilogue: LATE,
-		endOp: LATE,
+		runOperationEpilogue: LATE,
+		endOperation: LATE,
 		setSettleCap: LATE,
 		getPendingSettleCount: LATE,
 		// late-bound: the subscription manager
@@ -417,18 +417,18 @@ export function createWorld(core: EngineCore): void {
 
 	/**
 	 * The bindings' ambient-world provider: consulted per routed read when no
-	 * evaluation world is on stack, and answers from the LIVE call context —
+	 * evaluation world is on stack, and answers from the live call context —
 	 * the render world of the render actually running on the current stack, the
 	 * committed world of an effect fire — or undefined for "route newest".
 	 * A callback (not a start-to-end flag) deliberately: a render that has
-	 * COMPLETED but not yet committed is not "in render" (the protocol's
+	 * completed but not yet committed is not "in render" (the protocol's
 	 * render context is null there), so outside-render reads in that window
 	 * must resolve newest, and interleaved multi-root renders must each see
 	 * their own render.
 	 */
 	let worldProvider: (() => World | undefined) | undefined;
 
-	/** Capture frame that answered the LAST resolveRoutedWorld call (scratch,
+	/** Capture frame that answered the last resolveRoutedWorld call (scratch,
 	 * consumed immediately by the two routed read bodies — a slot instead of a
 	 * tuple return so routed reads allocate nothing on the provider path). */
 	let routedCap: CaptureFrame | undefined;
@@ -445,9 +445,9 @@ export function createWorld(core: EngineCore): void {
 		syncReadRouting();
 	}
 
-	/** Arms/disarms READ ROUTING (graph.ts's one `routingActive` boolean —
+	/** Arms/disarms read routing (Kernel.ts's one `routingActive` boolean —
 	 * the public `.state` getters' inline check): armed while an evaluation
-	 * world is on stack OR an open capture frame OR a driver's ambient
+	 * world is on stack, an open capture frame exists, or a driver's ambient
 	 * provider could answer — so a driver-less quiet engine costs reads
 	 * exactly one boolean check. */
 	function syncReadRouting(): void {
@@ -463,9 +463,9 @@ export function createWorld(core: EngineCore): void {
 	}
 
 	/**
-	 * THE read-routing resolution order, one copy: fold-purity throw, then
+	 * The read-routing resolution order, one copy: fold-purity throw, then
 	 * the evaluation world
-	 * on stack (reads inside a computed's evaluation are the COMPUTED's
+	 * on stack (reads inside a computed's evaluation are the computed's
 	 * dependencies — the capture frame never sees them), then the open
 	 * capture frame (committed-for-root; the
 	 * frame lands in `routedCap` for the caller's dep capture), then the
@@ -491,9 +491,9 @@ export function createWorld(core: EngineCore): void {
 	}
 
 	/**
-	 * THE routed public atom read: route a `.state` read to the effective
+	 * The routed public atom read: route a `.state` read to the effective
 	 * world; a handle with no engine content gets its node allocated here
-	 * (world participation IS content — the read is about to give it arena
+	 * (world participation is content — the read is about to give it arena
 	 * presence). Returns NOT_ROUTED to take the plain kernel path.
 	 * @internal (reached only through index.ts's `Atom.state`)
 	 */
@@ -510,10 +510,11 @@ export function createWorld(core: EngineCore): void {
 	}
 
 	/**
-	 * The routed public computed read (the twin of routedAtomRead): route a
+	 * The routed public computed read (the computed counterpart of
+	 * routedAtomRead): route a
 	 * `Computed.state` read to the effective world, allocating engine
 	 * content on first sight. Newest resolution declines (NOT_ROUTED): the
-	 * plain kernel path IS newest serving, seam-free. Reads inside an open
+	 * plain kernel path is newest serving, seam-free. Reads inside an open
 	 * capture frame resolve committed-for-root and append to the dep
 	 * snapshot, exactly like routed atom reads.
 	 * @internal (reached only through index.ts's `Computed.state`)
@@ -540,7 +541,7 @@ export function createWorld(core: EngineCore): void {
 	/** Runs an updater/reducer/equals under the fold-purity guard: signal
 	 * reads and writes inside these callbacks throw, because they are
 	 * replayed per world and must stay pure. */
-	function inCallback<T>(fn: () => T): T {
+	function runInFoldCallback<T>(fn: () => T): T {
 		const prev = core.inFoldCallback;
 		core.inFoldCallback = true;
 		try {
@@ -563,12 +564,12 @@ export function createWorld(core: EngineCore): void {
 		const retired = log.retired;
 		const slots = log.slots;
 		for (let i = log.start; i < n; i++) {
-			if (!visibleAt(i, world, seqs, retired, slots)) continue;
+			if (!isVisibleAt(i, world, seqs, retired, slots)) continue;
 			const next = applyOp(atom, log.kinds[i]!, log.payloads[i], value);
 			// Equality order: isEqual(current, incoming) — per replayed entry
 			// (the fold re-invokes per entry by design; "once" is scoped to the
 			// write path's acceptance decision).
-			if (!eqAtom(atom, value, next)) value = next;
+			if (!isAtomValueEqual(atom, value, next)) value = next;
 		}
 		return value;
 	}
@@ -582,18 +583,18 @@ export function createWorld(core: EngineCore): void {
 	 *    history the render started from — and (2) log entries from included
 	 *    batches up to the pin, so a paused-and-resumed render never sees a
 	 *    write that landed after it started;
-	 *  - committed-for-root: retired log entries (committed truth at NOW) plus
+	 *  - committed-for-root: retired log entries (committed truth as of now) plus
 	 *    log entries from batches this root has committed but that are still
 	 *    live elsewhere (membership);
-	 *  - mountFix: the mount-fixup world (see mountFixup) — the render's own
-	 *    inclusions at its pin, plus committed truth at NOW.
-	 * (The WriteLogEntry-shaped twin of this rule is the reference model's
-	 * exported `visible` — cosignals-oracle model.ts; tests/model-view.ts
+	 *  - mountFix: the mount-fixup world (see runMountFixup) — the render's own
+	 *    inclusions at its pin, plus committed truth as of now.
+	 * (The reference model exports the same rule in WriteLogEntry-object
+	 * form — `visible` in cosignals-oracle model.ts; tests/model-view.ts
 	 * imports it rather than keeping a copy. It must mirror these clauses.)
-	 * Single-caller but THE visibility rule: kept as a named function
+	 * Single-caller but the one visibility rule: kept as a named function
 	 * deliberately (readability exception, documented here).
 	 */
-	function visibleAt(i: number, world: World, seqs: Seq[], retired: Seq[], slots: BatchSlot[]): boolean {
+	function isVisibleAt(i: number, world: World, seqs: Seq[], retired: Seq[], slots: BatchSlot[]): boolean {
 		switch (world.kind) {
 			case 'newest':
 				return true;
@@ -608,7 +609,7 @@ export function createWorld(core: EngineCore): void {
 				// Membership consult materializes the root record (reference-model
 				// parity: the model's committedSlotsNow() creates it on first consult).
 				// Hot arm reads the aliased map directly — `root()` is
-				// lookup-or-create, so a hit IS what root() would return; only
+				// lookup-or-create, so a hit is what root() would return; only
 				// the first consult takes the materializing miss arrow (a fresh
 				// record carries committedBits 0 either way, so the answer is
 				// value-identical — the arrow is kept for materialization parity).
@@ -616,7 +617,7 @@ export function createWorld(core: EngineCore): void {
 			}
 			case 'mountFix': {
 				if (((world.maskBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= world.pin) return true;
-				if (retired[i]! !== 0) return true; // committed truth at NOW
+				if (retired[i]! !== 0) return true; // committed truth as of now
 				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> slots[i]!) & 1) === 1; // hot get + materializing miss arrow (see the committed arm)
 			}
 		}
@@ -624,7 +625,7 @@ export function createWorld(core: EngineCore): void {
 
 	/** Apply one op over `prev`, straight off the scalar (kind, payload) pair
 	 * (a SET's payload is the value; an UPDATE's is the updater). Replayed
-	 * updaters run under BOTH fold guards: the engine's (routed reads throw)
+	 * updaters run under both fold guards: the engine's (routed reads throw)
 	 * and the kernel's POISON table (raw public reads/writes throw exactly as
 	 * in the standalone path). ReducerAtom dispatches arrive here too: the
 	 * closure carries the reducer and the captured action. (`WriteKind` is
@@ -633,9 +634,9 @@ export function createWorld(core: EngineCore): void {
 	 * the WriteLog.ts pattern.) */
 	function applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value {
 		if (kind === 0 /* WriteKind.SET */) return payload;
-		return inCallback(() => {
+		return runInFoldCallback(() => {
 			// The kernel's fold-purity POISON table guards the replay exactly
-			// like the plain-path update() (graph.ts's fold-guard pair).
+			// like the plain-path update() (Kernel.ts's fold-guard pair).
 			const saved = foldGuardSwap();
 			try {
 				return (payload as (p: Value) => Value)(prev);
@@ -645,46 +646,46 @@ export function createWorld(core: EngineCore): void {
 		});
 	}
 
-	/** How this atom compares two values — THE equality rule, one copy for
+	/** How this atom compares two values — the one equality rule, one copy for
 	 * every site that asks (fold replay, the write path's drop check and
 	 * eager kernel apply, quiet-mode folds, write log compaction): Object.is when
 	 * the atom carries the default, otherwise the atom's custom comparator
 	 * under the fold-purity guard (equality callbacks replay per world, so
 	 * signal reads/writes inside them throw — the updater contract). */
-	function eqAtom(atom: AtomInternals, a: Value, b: Value): boolean {
-		return atom.eqIsDefault ? Object.is(a, b) : inCallback(() => atom.equals(a, b));
+	function isAtomValueEqual(atom: AtomInternals, a: Value, b: Value): boolean {
+		return atom.eqIsDefault ? Object.is(a, b) : runInFoldCallback(() => atom.equals(a, b));
 	}
 
 	/** The value-change gate for compare-and-correct sites,
 	 * honoring a custom-equality computed's policy comparator — mountFix
-	 * fold-throughs (and evicted-then-refolded arena slots) create FRESH
-	 * references for comparator-equal values, which are NOT changes for a
+	 * fold-throughs (and evicted-then-refolded arena slots) create fresh
+	 * references for comparator-equal values, which are not changes for a
 	 * custom-equality node (the kernel wrapper and the arena slot both keep
 	 * old references under the same policy). Exceptional payloads never
 	 * cross the gate (sentinels compare by identity — pinned in
 	 * tests/concurrent-battery.spec.ts).
 	 * Default-equality nodes compare by identity. */
-	function changedValue(node: AnyInternals, prev: Value, next: Value): boolean {
+	function isValueChanged(node: AnyInternals, prev: Value, next: Value): boolean {
 		if (
 			node.kind === 'computed' && node.isEqual !== undefined
 			&& !(prev instanceof SuspendedRead) && !(next instanceof SuspendedRead)
 		) {
 			const eq = node.isEqual;
-			return !inCallback(() => eq(prev, next));
+			return !runInFoldCallback(() => eq(prev, next));
 		}
 		return !Object.is(prev, next);
 	}
 
-	/** The engine's ONE cross-world cycle error (every construction site
+	/** The engine's one cross-world cycle error (every construction site
 	 * builds it here so the surface message can never fork). */
-	function cycleError(name: string): ScheduleError {
+	function createCycleError(name: string): ScheduleError {
 		return new ScheduleError(`cyclic evaluation of ${name} within one world — a computed may not depend on itself`);
 	}
 
 	/**
 	 * Raw-handle reads: an engine atom read reached the operation table
 	 * while a world evaluation frame was open (newest/mountFix — arena
-	 * fn runs route through `serveOverride` inside atomValue and link at `arenaServe`).
+	 * fn runs route through `serveOverride` inside readAtomValue and link at `arenaServe`).
 	 * The open frame's sink gates the observation capture: the pre-dedup
 	 * capture rides the tracked read path.
 	 * @internal (called from the concurrent table wrapper)
@@ -694,46 +695,46 @@ export function createWorld(core: EngineCore): void {
 			const oc = core.obsCapture;
 			if (oc !== undefined) oc.push(atom);
 		}
-		return atomValue(atom, world);
+		return readAtomValue(atom, world);
 	}
 
 	/** Atom value in a world: kernel for newest, the world's arena for
 	 * render/committed, a plain fold for mountFix and unmaterialized roots.
 	 * (The newest read is the direct kernel read `E.readAtom` — world routing
 	 * can never intercept it.) */
-	function atomValue(atom: AtomInternals, world: World): Value {
+	function readAtomValue(atom: AtomInternals, world: World): Value {
 		const c = core; // one context load; field accesses below keep the one-load shape
-		const route = c.serveOverride; // ONE override test on the routed-read path
+		const route = c.serveOverride; // one override test on the routed-read path
 		if (route !== undefined) {
 			if (route !== FOLD_TRUTH) return c.arenaServe(route, atom); // arena-refold routing override
 			return foldAtom(atom, world); // fold-truth reads (armed checker)
 		}
 		if (world.kind === 'newest') {
 			// The kernel holds the newest fold by the eager-apply invariant.
-			// (`atom.id` IS the record id — never through the handle slot,
+			// (`atom.id` is the record id — never through the handle slot,
 			// which reclamation keeps weak for resolved nodes.)
 			return E.readAtom(atom.id);
 		}
 		if (world.kind === 'render' || world.kind === 'committed') {
-			const a = c.arenaOf(world);
+			const a = c.getArena(world);
 			if (a !== undefined) return c.arenaServe(a, atom);
-			// Unmaterialized root (no record): fold plain — mirrors the old
-			// memo-table rule (never CREATE the root record on a read).
+			// Unmaterialized root (no record): fold plain — a read never
+			// creates the root record or its arena.
 		}
 		return foldAtom(atom, world);
 	}
 
 	/**
 	 * Evaluation of a node in a world. Render/committed worlds are
-	 * ARENA-SERVED: values, invalidation, and routing structure
+	 * arena-served: values, invalidation, and routing structure
 	 * live in the world's arena, and `arenaServe` refolds through the arena's
 	 * own walks when marks or cold bases demand it — the cold in-arena fn
-	 * run is what RECORDS the strong and weak links the routing coverage
+	 * run is what records the strong and weak links the routing coverage
 	 * argument stands on (the cold-render bench gate prices it).
 	 * An unmaterialized root has no arena and folds plain. Newest-world
 	 * atoms read straight off the kernel arena; newest-world computeds are
-	 * KERNEL-SERVED (one computed representation — `kernelComputed` below
-	 * carries the rule: stale until a TRACKED dependency changes; untracked
+	 * kernel-served (one computed representation — `readKernelComputed` below
+	 * carries the rule: stale until a tracked dependency changes; untracked
 	 * reads are samples taken at re-derivations). mountFix worlds are
 	 * one-shot fold-throughs. Reads inside fold callbacks throw
 	 * (updaters/reducers must be pure); per-world cycles throw instead of
@@ -743,21 +744,21 @@ export function createWorld(core: EngineCore): void {
 		const c = core; // one context load; field accesses below keep the one-load shape
 		probes.worldEvals++; // engine-activity counter (tests/one-core.spec.ts's zero-cost check)
 		if (c.inFoldCallback) throw new ScheduleError('signal read inside an updater/reducer fold — updaters and reducers must be pure; read what you need before dispatching');
-		const route = c.serveOverride; // no-override fast-out is the ONE hot test; FOLD_TRUTH falls through (fold-truth computeds re-run checker-side, never here)
+		const route = c.serveOverride; // no-override fast-out is the one hot test; FOLD_TRUTH falls through (fold-truth computeds re-run checker-side, never here)
 		if (route !== undefined && route !== FOLD_TRUTH) return c.arenaServe(route, node); // arena-refold routing override
 		if (world.kind === 'render' || world.kind === 'committed') {
-			const a = c.arenaOf(world);
+			const a = c.getArena(world);
 			if (a !== undefined) return c.arenaServe(a, node);
 		}
-		if (node.kind === 'atom') return atomValue(node, world);
-		if (world.kind === 'newest') return kernelComputed(node);
+		if (node.kind === 'atom') return readAtomValue(node, world);
+		if (world.kind === 'newest') return readKernelComputed(node);
 		// Fold-through evaluation (mountFix worlds + unmaterialized-root
 		// committed folds): memo-free recursion in the frame's world.
 		// Per-world cycle detection via the mark column: marks carry the
 		// current top-level evaluation generation.
 		const marks = evalMark;
 		if (marks[node.ix] === evalGen && c.evalDepth > 0) {
-			throw cycleError(node.name);
+			throw createCycleError(node.name);
 		}
 		if (c.evalDepth === 0) evalGen++;
 		marks[node.ix] = evalGen;
@@ -793,24 +794,24 @@ export function createWorld(core: EngineCore): void {
 	/**
 	 * Newest computed serving — the kernel's `computedRead`. The
 	 * untracked-sampling rule: the kernel re-derives only when a
-	 * TRACKED dependency changed — kernel links exist for tracked reads
+	 * tracked dependency changed — kernel links exist for tracked reads
 	 * only — so untracked reads are point-in-time samples taken at those
 	 * re-derivations, and a write reaching a computed only through
 	 * untracked reads changes no newest answer. Read-site translations
 	 * preserve the engine surface: kernel CycleErrors (fresh or cached)
 	 * become the engine's cycle error; a PENDING suspension of a
-	 * ctx-shaped (handle-resolved) computed folds to its stable sentinel
-	 * VALUE for
+	 * ctx-shaped (handle-resolved) computed folds to its stable sentinel,
+	 * served as a value, for
 	 * background reads and rethrows for hook-initiated ones; settled
 	 * suspensions self-heal inside the kernel's boxedRead before this frame
 	 * ever sees them (read-after-await determinism).
 	 */
-	function kernelComputed(node: ComputedInternals): Value {
+	function readKernelComputed(node: ComputedInternals): Value {
 		try {
 			return E.computedRead(node.id);
 		} catch (err) {
 			if (err instanceof CycleError) {
-				throw cycleError(node.name);
+				throw createCycleError(node.name);
 			}
 			if (err instanceof SuspendedRead && core.suspendDepth === 0 && node.ctxShaped) {
 				return err; // adopted ctx fn, background read: the sentinel serves as a value
@@ -830,7 +831,7 @@ export function createWorld(core: EngineCore): void {
 	};
 
 	/**
-	 * The persistent untracked reader: CAPTURE-free, not INPUT-free — the
+	 * The persistent untracked reader: capture-free, not input-free — the
 	 * dep still folds in the frame's world (fold-throughs re-derive
 	 * everything, so untracked deps stay fresh in these one-shot worlds),
 	 * but it never joins the observation capture (the observation union is
@@ -852,10 +853,10 @@ export function createWorld(core: EngineCore): void {
 	core.evaluate = evaluate;
 	core.foldAtom = foldAtom;
 	core.applyOp = applyOp;
-	core.eqAtom = eqAtom;
-	core.changedValue = changedValue;
-	core.inCallback = inCallback;
-	core.cycleError = cycleError;
+	core.isAtomValueEqual = isAtomValueEqual;
+	core.isValueChanged = isValueChanged;
+	core.runInFoldCallback = runInFoldCallback;
+	core.createCycleError = createCycleError;
 	core.setWorld = setWorld;
 	core.syncReadRouting = syncReadRouting;
 	core.setWorldProvider = setWorldProvider;

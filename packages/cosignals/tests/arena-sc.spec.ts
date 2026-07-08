@@ -1,29 +1,28 @@
 /**
- * NF2 P2.S-C ENTRY GATES (plans/2026-07-06 §4.7/§4.8 — written and proved
- * green against S-B BEFORE any S-C deletion lands):
+ * Observation and id-tenancy pins:
  *
- *  - M6 world-path retain re-point (§4.7, fable M6 / codex 9): observation
- *    capture fires on EVERY tracked dependency read BEFORE any link
- *    reuse/dedup — including WORLD evaluations through the arena walks
+ *  - World-path retain re-point: observation
+ *    capture fires on every tracked dependency read before any link
+ *    reuse/dedup — including world evaluations through the arena walks
  *    (arenaUpdateComputed's capture). An observed computed whose committed-world
  *    deps are {A} while its newest deps are {B} (world-divergent flag),
- *    re-evaluated on the COMMITTED path through a drain, must re-point the
+ *    re-evaluated on the committed path through a drain, must re-point the
  *    observation retains: A gains/holds its retain and B's releases. A
- *    verbatim spike-`wLink` transplant (capture after the reuse cursor's
- *    early return) captures an empty set on unchanged deps and releases
- *    retains while the watcher lives (RCC-OL1 violation) — this pin goes
+ *    capture placed after the reuse cursor's
+ *    early return captures an empty set on unchanged deps and releases
+ *    retains while the watcher lives — this pin goes
  *    red on that shape.
  *
- *  - fable N-1 dispose-reuse-read id tenancy (§4.5.3): kernel node records
- *    are free-listed and REUSED; at S-C the computed identity re-keys onto
+ *  - Dispose-reuse-read id tenancy: kernel node records
+ *    are free-listed and reused; computed identity rides
  *    kernel ids, so a live committed arena outliving a disposed computed
  *    would serve the dead node's value or run the dead node's fn under the
  *    reused id. The GEN discipline (shadow stamps validated against the
  *    node's current generation; a dead-GEN shadow never serves — evict,
- *    refold cold under the new tenant) is what makes the re-key sound.
- *    Against S-B the reuse is forced through the id-tenancy seam (overlay
- *    ids are never freed pre-S-C); the schedule asserts the dead tenancy's
- *    CACHED VALUE never serves and the refold runs the CURRENT fn cold.
+ *    refold cold under the new tenant) is what makes the reuse sound.
+ *    The schedule forces the reuse through the id-tenancy seam
+ *    (__bumpNodeGenForTest); it asserts the dead tenancy's
+ *    cached value never serves and the refold runs the current fn cold.
  */
 import { describe, expect, it } from 'vitest';
 import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
@@ -125,9 +124,8 @@ describe('S-C entry gate 2 — N-1 dispose-reuse-read id tenancy (§4.5.3)', () 
 		expect(b.committedValue(c, 'R')).toBe(10);
 		const evalsBefore = evals;
 
-		// Dispose-reuse analog (§4.5.3: pre-S-C overlay ids never free, so the
-		// seam forces the generation move the kernel free list will perform;
-		// at S-C the same pin is driven by real kernel id reuse).
+		// Dispose-reuse analog: the seam forces the generation move the kernel
+		// free list performs at real id reuse.
 		b.__bumpNodeGenForTest(c.id);
 
 		// Read WITHOUT any committed-truth motion: the shadow still holds the
@@ -198,9 +196,9 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 	it('comparator-order pin: a deliberately NON-SYMMETRIC comparator runs in HEAD\'s isEqual(prev, next) order at every arena compare site', () => {
 		const b = bridge();
 		const x = b.atom('x', 2);
-		// isEqual(prev, next) = next <= prev: with prev=2, next=1 this is EQUAL
-		// at HEAD (no change); the FLIPPED order would report a change and
-		// regress the world to 1 (§4.5.3, codex checklist 6).
+		// isEqual(prev, next) = next <= prev: with prev=2, next=1 this is equal
+		// (no change); the flipped order would report a change and
+		// regress the world to 1.
 		const orders: string[] = [];
 		const cMono = b.computed('cMono', (read) => read(x), (p, n) => {
 			orders.push(`eq(${String(p)},${String(n)})`);
@@ -208,13 +206,13 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 		});
 		mount(b, 'R', cMono, 'W');
 		expect(b.committedValue(cMono, 'R')).toBe(2);
-		commitWrite(b, x, 1); // next=1 vs prev=2: EQUAL under HEAD order → the world KEEPS 2
+		commitWrite(b, x, 1); // next=1 vs prev=2: equal under isEqual(prev, next) order → the world keeps 2
 		expect(b.committedValue(cMono, 'R')).toBe(2);
 		expect(orders).toContain('eq(2,1)'); // the arena compare ran (prev, next) — never (next, prev)
 		expect(orders).not.toContain('eq(1,2)');
 		commitWrite(b, x, 5); // next=5 vs prev=2: changed → the world moves
 		expect(b.committedValue(cMono, 'R')).toBe(5);
-		expect(b.newestValue(cMono)).toBe(5); // kernel wrapper agrees (same HEAD order)
+		expect(b.newestValue(cMono)).toBe(5); // kernel wrapper agrees (same argument order)
 	});
 
 	it('codex 6\'s reference-preservation shape in THREE arenas at once: each arena keeps ITS OWN previous reference on an equal refold — never the kernel\'s', () => {

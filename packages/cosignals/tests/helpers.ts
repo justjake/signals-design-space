@@ -5,7 +5,7 @@
  * decisions must agree, every value read is asserted equal on both sides,
  * and the full event stream + counters are compared after every mutation.
  * The test bodies' own `expect`s therefore assert the reference model's
- * required outcomes while the twin asserts engine ≡ model at every step.
+ * required outcomes while the lockstep harness asserts engine ≡ model at every step.
  * `selfCheck` additionally runs the reference model's invariant battery on
  * BOTH sides (the engine through its model view — tests/model-view.ts) plus
  * one engine-only check ("K0 parity"): the kernel's newest value must equal
@@ -43,7 +43,7 @@ import {
 	type World as EWorld,
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
-import { engineEpoch } from '../src/graph.js';
+import { engineEpoch } from '../src/Kernel.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';
@@ -72,11 +72,11 @@ function isDeliveryish(e: ModelEvent): boolean {
 }
 
 /** Delivery-DECISION counts, pooled across the family's three modes per
- * (watcher, batch, slot): "fewer decisions, never more" (plan §4.8 S-B).
- * Current-structure routing shifts modes WITHIN the family — a mount join
+ * (watcher, batch, slot): "fewer decisions, never more".
+ * Current-structure routing shifts modes within the family — a mount join
  * the accumulated model schedules as a corrective (arming its dedup, so
  * its later write logs 'suppressed') may not exist in any live arena; the
- * engine's write-time walk is then the FIRST notification and logs
+ * engine's write-time walk is then the first notification and logs
  * 'delivery'. One notification either way. */
 function deliveryCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>();
@@ -97,11 +97,11 @@ function capture(fn: () => unknown): Thrown {
 	}
 }
 
-// ---- referee effect constructors (test-side compositions over the REAL
+// ---- effect constructors (test-side compositions over the real
 // mechanism: mountCommittedObserver + a `body` + captureRun; the body path is
 // the engine's inline-run + event-creation machinery lockstep compares) ----------
 
-/** Referee configuration — a single-node body (the engine twin of the
+/** Effect configuration — a single-node body (the engine counterpart of the
  * model's mountReactEffect). */
 export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: EInternals, name: string): ESubscription {
 	const e = b.mountCommittedObserver(rootId, name);
@@ -120,7 +120,7 @@ export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, se
 }
 
 /** The record `mountEngineCoreEffect` returns — the model CoreEffect's
- * engine twin (specs read `runs`/`lastValue`; the referee reads the stream). */
+ * engine counterpart (specs read `runs`/`lastValue`; the stream comparison reads the trace). */
 export type EngineCoreEffect = {
 	name: string;
 	runs: number;
@@ -140,7 +140,7 @@ const coreEffectMounts = new Map<number, number>();
  * propagation over its subscriber links re-runs it at exactly the writes
  * that advance the newest fold (the eager kernel apply). The mount run
  * baselines silently; later runs value-gate on `Object.is` and report
- * through the bridge's `logCoreEffectRun` referee seam.
+ * through the bridge's `logCoreEffectRun` trace seam.
  *
  * Names take a per-mount ordinal suffix (`#k`): sibling core-effect firing
  * order under one operation is implementation-defined (owner ruling
@@ -183,8 +183,8 @@ export class TwinDriver {
 	 * armed — the switch must be engine-inert, and the whole lockstep suite
 	 * running with it on proves the flag itself perturbs nothing. A minimal
 	 * driver attaches (R-5: devChecks harnesses that open batches must
-	 * attach first); its batch context is always BATCH_NONE — the twin
-	 * passes explicit batch ids through the referee write surface. */
+	 * attach first); its batch context is always BATCH_NONE — the harness
+	 * passes explicit batch ids through the engine write surface. */
 	readonly engine: CosignalEngine = (() => {
 		drainLeftoverEpisode();
 		__resetEngineForTest({ devChecks: true });
@@ -192,7 +192,7 @@ export class TwinDriver {
 		return engine;
 	})();
 	/** BatchIds are MONOTONIC ACROSS RESETS (the engine counter survives
-	 * `__resetEngineForTest`); the model's restart at 1 — so the twin
+	 * `__resetEngineForTest`); the model's restart at 1 — so the harness
 	 * rebases: engine id = model id + base, and engine events normalize by
 	 * subtracting it before comparison. */
 	private readonly batchIdBase = __peekNextBatchIdForTest() - 1;
@@ -200,7 +200,7 @@ export class TwinDriver {
 	 * engine reset, decoded to TraceEvents on demand (the engine creates no
 	 * event objects — tests/trace-events.ts). */
 	readonly engineEvents = attachRefereeStream(this.engine);
-	/** Full-history mirror (archives via onCompact + origins) — the referee
+	/** Full-history mirror (archives via onCompact + origins) — the model comparison
 	 * retains it OUTSIDE the engine; see tests/model-view.ts. */
 	readonly mirror = new RefereeMirror();
 	/** The engine presented in the model's shape for the oracle's checkers. */
@@ -225,7 +225,7 @@ export class TwinDriver {
 		// folds it out (retaining in-engine would grow without bound under a
 		// workload that never quiesces).
 		this.mirror.attach(this.engine);
-		// NF2 S-A dual bookkeeping: after every twin op, the engine serves
+		// Dual bookkeeping: after every lockstep op, the engine serves
 		// every live arena's shadows FROM THE ARENA and compares against the
 		// memo-served values (plus the structural validator). ANY divergence
 		// throws — the stage's STOP condition.
@@ -358,7 +358,7 @@ export class TwinDriver {
 	 */
 	joinAtom(name: string, handle: Atom<unknown>): AtomNode {
 		const eInternals = this.engine.internalsForAtom(handle);
-		eInternals.name = name; // referee naming: streams compare by name
+		eInternals.name = name; // comparison naming: streams compare by name
 		const mNode = this.model.atom(name, eInternals.base);
 		expect(Object.is(mNode.base, eInternals.base), 'twin joinAtom: seeded base diverged').toBe(true);
 		this.nodeMap.set(mNode, eInternals); // ids live in different spaces — the mapping is the resolution
@@ -604,7 +604,7 @@ function drainLeftoverEpisode(): void {
 	}
 }
 
-/** A fresh twin (always-concurrent: construction IS activation — the
+/** A fresh lockstep harness (always-concurrent: construction is activation — the
  * engine resets and re-attaches its minimal driver; the model is live from
  * construction). */
 export function concurrent(): TwinDriver {
@@ -631,7 +631,7 @@ export function openRender(m: TwinDriver, root: string, batches: Batch[]): Rende
 	return m.renderStart(root, batches.map((t) => t.id));
 }
 
-/** Full twin verification (events, snapshots, invariants both sides, K0 parity). */
+/** Full lockstep verification (events, snapshots, invariants both sides, kernel-value parity). */
 export function selfCheck(m: TwinDriver): void {
 	m.verify();
 }
@@ -644,10 +644,10 @@ export function update(fn: (p: unknown) => unknown): { kind: 'update'; fn: (p: u
 	return { kind: 'update', fn };
 }
 
-/** The referee boundary's op conversion: specs and the model speak op
+/** The comparison boundary's op conversion: specs and the model speak op
  * literals (`set`/`update` above — the reference model's vocabulary); the
  * ENGINE's write surface takes the scalar (kind, payload) pair (0 = set,
- * 1 = update), so the twin converts exactly here, at the engine dispatch. */
+ * 1 = update), so the harness converts exactly here, at the engine dispatch. */
 export function opScalars(op: Op): [0 | 1, unknown] {
 	return op.kind === 'set' ? [0, op.value] : [1, op.fn];
 }

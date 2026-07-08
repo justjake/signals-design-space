@@ -4,13 +4,13 @@
  * watcher, every ATOM its current evaluation reads holds one retain on the
  * observation union (AtomOptions.effect), released with the last watcher.
  * The retains follow the CURRENT strong (tracked) edge set, not the
- * episode-accumulated K1 log: each fn re-run of an observed computed
+ * episode-accumulated edge log: each fn re-run of an observed computed
  * re-points them (dep flips move a retain from the abandoned branch to the
  * taken one), same-tick flip-flaps coalesce in the kernel's microtask
- * flush, and the observation index survives quiescence's K1 bulk-reset (the
+ * flush, and the observation index survives quiescence's bulk reset (the
  * closure belongs to live watchers, not to the episode). A getter that
  * throws retains the deps it read up to the throw — those reads recorded
- * K1 edges, so deliveries still reach the node's watchers through them.
+ * arena links, so deliveries still reach the node's watchers through them.
  *
  * Every test here (except the kernel-chain contrast leg, which pins the
  * pre-existing K0 behavior the overlay now matches) FAILS without the
@@ -133,7 +133,7 @@ describe('transitive observation through derived nodes', () => {
 		await tick();
 		expect(log).toEqual(['observe']);
 		const epochBefore = b.epoch;
-		b.quiesce(); // episode reset: K1 edges drop, refresh re-records the cone
+		b.quiesce(); // episode reset: per-episode state drops, refresh re-records the cone
 		expect(b.epoch).toBe(epochBefore + 1); // the reset really ran
 		await tick();
 		expect(log).toEqual(['observe']); // retains survived the reset — not even a coalesced flap
@@ -178,7 +178,7 @@ describe('transitive observation through derived nodes', () => {
 		expect(() => b.newestValue(oc)).toThrow('boom'); // re-evaluation dies after reading b
 		await tick();
 		expect(logA).toEqual(['observe', 'unobserve']); // unread past the throw → released
-		expect(logB).toEqual(['observe']); // read before the throw → still retained (its K1 edge delivers)
+		expect(logB).toEqual(['observe']); // read before the throw → still retained (its arena link delivers)
 		w.live = false;
 		await tick();
 		expect(logB).toEqual(['observe', 'unobserve']);

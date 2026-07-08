@@ -10,7 +10,7 @@
  * write path stays the quiet one.
  *
  * The oracle mirrors the same derivation and fold, so the lockstep corpus
- * referees quiet semantics directly ('quiet-write' is a compared event);
+ * checks quiet semantics directly against the model ('quiet-write' is a compared event);
  * this file pins the arming/disarming schedules by hand.
  */
 import { describe, expect, it } from 'vitest';

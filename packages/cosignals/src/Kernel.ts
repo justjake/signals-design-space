@@ -1,5 +1,5 @@
 /**
- * cosignals — the kernel (graph.ts): the dependency tracker. It stores every
+ * cosignals — the kernel (Kernel.ts): the dependency tracker. It stores every
  * signal, computed, effect, and dependency edge as a fixed-size integer
  * record in shared arrays, and runs the reactive algorithm — writes push
  * staleness marks down the graph, reads lazily pull recomputation — as index

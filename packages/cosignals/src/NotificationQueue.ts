@@ -1,5 +1,5 @@
 /**
- * DELIVERY — the notification queue AND the walk orchestration that decides
+ * Delivery — the notification queue and the walk orchestration that decides
  * who gets notified. Two layers, two factories:
  *
  *  - `createNotificationQueue`: the queue mechanism — listener callbacks
@@ -13,11 +13,11 @@
  *    through the `getCore` dep here (the queue is built before the core
  *    record exists, so the record arrives through a getter, read at flush
  *    time).
- *  - `createDeliverWalks`: the ORCHESTRATION over the shared engine core
+ *  - `createDeliveryWalks`: the ORCHESTRATION over the shared engine core
  *    record — the value-blind per-write delivery walk (which calls
  *    WorldArena's strong-link walks through the core's late-bound slots),
  *    the durable drain at committed-truth flips, the quiet-fold drain, and
- *    `correctWatcher`, THE one urgent pre-paint correction every
+ *    `correctWatcher`, the one urgent pre-paint correction every
  *    compare-and-correct site shares.
  *
  * Both are factories in the kernel's own style (index.ts `createKernel`):
@@ -28,7 +28,7 @@
  * instead of calls.
  */
 
-import { kernelGenOf } from './WorldArena.js';
+import { getKernelGeneration } from './WorldArena.js';
 import type { Batch, BatchSlot, BatchSlotMeta } from './Batch.js';
 import type { AnyInternals, AtomInternals, RootId, Seq, Subscription, Value, Watcher } from './concurrent.js';
 import type { EngineCore, World } from './World.js';
@@ -139,7 +139,7 @@ export function createNotificationQueue(deps: NotificationQueueDeps): Notificati
  * layout enums; the watcher resolution lives in RenderPass.ts; all are read
  * off the core record at call time).
  */
-export function createDeliverWalks(core: EngineCore): void {
+export function createDeliveryWalks(core: EngineCore): void {
 	// Stable resident containers, aliased once (identity-shared).
 	const notify = core.notify;
 	const watchers = core.watchers;
@@ -173,7 +173,7 @@ export function createDeliverWalks(core: EngineCore): void {
 		const gen = ++c.walkGen;
 		const found = walkWatchers;
 		found.length = 0;
-		const kGen = kernelGenOf(from.id); // one read per walk: seeds validate tenancy against it
+		const kGen = getKernelGeneration(from.id); // one read per walk: seeds validate tenancy against it
 		c.lastWalk[from.ix] = gen;
 		c.collectWatchersAt(from.ix, found);
 		for (const a of c.rootToArena.values()) c.walkArenaStrong(a, from.ix, kGen, gen, found);
@@ -200,7 +200,7 @@ export function createDeliverWalks(core: EngineCore): void {
 			if (core.onDelivery !== undefined) notify.queueNotify(0, w, batch, slot.id);
 			return;
 		}
-		// Bit set: suppress iff NO started-and-uncommitted render on the
+		// Bit set: suppress iff no started-and-uncommitted render on the
 		// watcher's root includes this slot (render mask) with pin < the
 		// write's sequence — such a render froze BEFORE this write, so it would
 		// fold without it and a fresh delivery is still required.
@@ -214,9 +214,9 @@ export function createDeliverWalks(core: EngineCore): void {
 		}
 	}
 
-	/** The ONE urgent pre-paint watcher correction (compare → record → resets →
-	 * notify). A correction must move `lastRenderedValue` AND re-arm the dedup
-	 * bits AND queue the kind-2 notify together — all four correction sites
+	/** The one urgent pre-paint watcher correction (compare → record → resets →
+	 * notify). A correction must move `lastRenderedValue`, re-arm the dedup
+	 * bits, and queue the kind-2 notify together — all four correction sites
 	 * (settlement drain, quiet drain, durable drain, mount fixup) share this
 	 * body so the triple can never drift. Records by cause: drains record
 	 * reconcile-correction; mounts record mount-correction (decoded as
@@ -225,7 +225,7 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * model's mirrored quiet corrections are silent too, so the streams stay
 	 * comparable. Returns true iff a correction fired. */
 	function correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause: 'retirement' | 'per-root-commit' | 'quiet' | 'mount'): boolean {
-		if (!core.changedValue(wInternals, w.lastRenderedValue, now)) return false;
+		if (!core.isValueChanged(wInternals, w.lastRenderedValue, now)) return false;
 		if (cause !== 'quiet') {
 			const tr = core.trace;
 			if (tr !== undefined) {
@@ -258,12 +258,12 @@ export function createDeliverWalks(core: EngineCore): void {
 	 * Durable drain at a committed-truth flip (a retirement or per-root
 	 * commit): the candidate set is the root arena's DIRTY LIST —
 	 * the fanout sites' marks, whose cones the marks' PENDING propagation
-	 * already covers — expanded over ALL arena links, strong AND weak
+	 * already covers — expanded over all arena links, strong and weak
 	 * (drains expand over both; a weak hop's strong dependents
 	 * expand past it too, since the walk keeps going), collecting live
 	 * same-root watchers on visited nodes, unioned with the `restaled` set.
 	 * Reconcile-check each candidate (last rendered value vs
-	 * committed-for-root NOW; urgent pre-paint correction on real
+	 * committed-for-root now; urgent pre-paint correction on real
 	 * difference — comparing values is legal here because both sides are
 	 * committed truth, whereas live-write delivery must stay value-blind).
 	 * Candidates fire in id order (the reference model's map order). List
@@ -281,7 +281,7 @@ export function createDeliverWalks(core: EngineCore): void {
 		const ws = drainWatcherBuf;
 		ws.length = 0;
 		// Candidate collection: the root arena's dirty list seeds a
-		// walk over ALL arena links — weak included (the walk itself lives in
+		// walk over all arena links — weak included (the walk itself lives in
 		// WorldArena.ts, same-file with the layout enums).
 		const a = c.rootToArena.get(rootId);
 		if (a !== undefined && a.dirty.length !== 0) {

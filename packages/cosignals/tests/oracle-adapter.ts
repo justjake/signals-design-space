@@ -27,7 +27,7 @@ import {
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
 import { __eachInternalsForTest, __internalsByIdForTest } from '../src/concurrent.js';
-import { engineEpoch } from '../src/graph.js';
+import { engineEpoch } from '../src/Kernel.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
 	comparableEvents,
@@ -54,8 +54,8 @@ export function buildEngineTopology(b: CosignalEngine) {
 	const cChain = b.computed('cChain', (read) => (read(cFlip) as number) + 10);
 	const cMix = b.computed('cMix', (read, untracked) => (read(bb) as number) + (untracked(a) as number));
 	// Appended AFTER the core eight (the op-index slices stay stable):
-	// q = the custom-equals member (R-2), out1/out2 = the disjoint
-	// effect-output subset writing core effects target (R-3).
+	// q = the custom-equals member, out1/out2 = the disjoint
+	// effect-output subset writing core effects target.
 	const q = b.atom('q', 0, Q_EQUALS);
 	const out1 = b.atom('out1', 0);
 	const out2 = b.atom('out2', 0);
@@ -335,13 +335,13 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __s
 const DELIVERYISH = new Set<ModelEvent['type']>(['delivery', 'suppressed', 'mount-corrective']);
 
 /**
- * Sibling core-effect firing order is implementation-defined (owner ruling,
- * 2026-07-06, panel item W9): the engine's core effects are real kernel
+ * Sibling core-effect firing order is implementation-defined (owner
+ * ruling): the engine's core effects are real kernel
  * `effect()`s flushed in the kernel's propagation order over its
  * subscriber-link lists (a link-creation *and relink* history), while the
  * model flushes its coreEffects map in mount order. The contractual
- * guarantees are each effect's observed VALUES and the operation each run
- * fires at (RCC-EF4) — so within one step, maximal contiguous blocks of
+ * guarantees are each effect's observed values and the operation each run
+ * fires at — so within one step, maximal contiguous blocks of
  * `core-effect-run` events are canonicalized by sorting on (effect, value)
  * on BOTH streams before the exact comparison. Effect names carry a
  * per-mount ordinal (helpers.ts mountEngineCoreEffect / the model's
@@ -410,12 +410,12 @@ function canonicalizeCoreEffectBlocks(events: ModelEvent[]): ModelEvent[] {
 }
 
 /** Delivery-DECISION counts, pooled across the family's three modes per
- * (watcher, batch, slot). The bound is "fewer decisions, never more"
- * (plan §4.8 S-B): current-structure routing legitimately shifts modes
- * WITHIN the family — a mount join the accumulated model schedules as a
+ * (watcher, batch, slot). The bound is "fewer decisions, never more":
+ * current-structure routing legitimately shifts modes
+ * within the family — a mount join the accumulated model schedules as a
  * corrective (arming its dedup, so its write logs 'suppressed') may not
  * exist in any live arena, in which case the engine's write-time walk is
- * the FIRST notification and logs 'delivery'. One notification either way;
+ * the first notification and logs 'delivery'. One notification either way;
  * pooling keys the invariant on the decision, not its mode. */
 function deliveryKeyCounts(events: ModelEvent[]): Map<string, number> {
 	const out = new Map<string, number>();
@@ -481,13 +481,13 @@ export function diffAgainstModelTolerant(
 	return undefined;
 }
 
-// ---- the m3-scoped delivery-precedes-correction fuzz invariant ---------------
+// ---- the scoped delivery-precedes-correction fuzz invariant ------------------
 //
-// Plan §4.4.6/§4.9.3: a reconcile-correction caused by member-slot writes
-// NEWER than the watcher's last render must have been PRECEDED by a
+// A reconcile-correction caused by member-slot writes
+// newer than the watcher's last render must have been preceded by a
 // notification (delivery / suppression / mount-corrective) since that
-// render — otherwise S-B's routing silently stopped notifying. Scoped per
-// m3 to the class it can police, excluding its counterexamples:
+// render — otherwise arena routing silently stopped notifying. Scoped
+// to the class it can police, excluding its counterexamples:
 //   - quiet-mode corrections (a quiet fold's corrections create no
 //     'reconcile-correction' event — the fold's own 'quiet-write' event is
 //     its whole stream — so DPC never sees them; and quiet requires zero
@@ -495,12 +495,12 @@ export function diffAgainstModelTolerant(
 //   - mount-window repairs ('mount-urgent-correction' is a different type);
 //   - older-write visibility flips (the causing batch's lastWriteSeq must
 //     POSTDATE the watcher's window for the assert to arm);
-//   - the S-NF2-D1 family (any discard, parked batch, or second boundary
-//     inside the window disarms the assert — dead-arena lane degradation
-//     is legal and pinned separately in arena-sb.spec.ts);
-//   - §4.4.1's designed no-notification class (untracked-only reach):
+//   - the dead-arena retreat family (any discard, parked batch, or second
+//     boundary inside the window disarms the assert — dead-arena lane
+//     degradation is legal and pinned separately in arena-sb.spec.ts);
+//   - the designed no-notification class (untracked-only reach):
 //     watchers on the topology's untracked consumer (cMix) are excluded —
-//     weak links never notify, BY DESIGN, so their corrections arrive bare.
+//     weak links never notify, by design, so their corrections arrive bare.
 // Windows reset at render/mount/commit/discard/quiesce boundaries (renders
 // re-arm dedup; commits re-baseline lastRenderedValue) and after each
 // correction (which also resets the engine's dedup bits).
@@ -577,7 +577,7 @@ class DeliveryPrecedesCorrection {
 		} else if (singleBoundary) {
 			for (const mk of this.marks.values()) mk.boundaries++;
 		}
-		// A live parked batch anywhere in the window disarms (D1 exclusion).
+		// A live parked batch anywhere in the window disarms (dead-arena-retreat exclusion).
 		let parked = false;
 		for (const batch of b.idToBatch.values()) {
 			if (batch.parked) {

@@ -11,6 +11,15 @@
  *    README must be self-contained, so section-sign references (§N) and
  *    references to the repo's internal planning documents ("plans/2026-")
  *    may not appear there.
+ *  - SELF-CONTAINED SOURCE COMMENTS: shipped source comments explain
+ *    themselves in place. Section-sign references (§N) and internal
+ *    document paths (plans/, research/) may not appear anywhere in a
+ *    source file, and research-stage shorthand (NF2, RCC, CR5, OL1/OL2,
+ *    S5R, RT6, EF2, W9, SPK-*, S-A…S-D) may not appear in comment text.
+ *    The stage-code list is deliberately the low-collision subset: short
+ *    codes that alias plausible identifiers or test-family names (D1…D7 —
+ *    index.ts's own deviation enumeration — K1, B2, P1, m2, R-2, T1…) are
+ *    not machine-checked; prose review owns those.
  *
  * Scope: every packages/cosignals/src/*.ts, every
  * packages/cosignals-react/src/*.ts, and both packages' README.md files.
@@ -40,10 +49,66 @@ const README_INTERNAL_REFS: RegExp[] = [
 	/plans\/2026-/, // the repo's planning-document paths
 ];
 
+/** Source-wide patterns: internal-document references never belong in a
+ * shipped source file (comments or otherwise; `§` cannot occur in code). */
+const SRC_INTERNAL_REFS: RegExp[] = [
+	/§\d?/, // section-sign references into internal documents
+	/\bplans\//, // the repo's planning-document paths
+	/\bresearch\//, // the repo's research-notes paths
+];
+
+/** Comment-text-only patterns: research-stage shorthand (the low-collision
+ * subset — see the module header for what is deliberately not checked). */
+const COMMENT_STAGE_CODES: RegExp[] = [
+	/\b(?:NF2|RCC|CR5|OL[12]|S5R|RT6|EF2|W9)\b/,
+	/\bSPK-?[A-Za-z0-9]+\b/,
+	/\bS-[ABCD]\b/,
+];
+
 function sourceFiles(dir: string): string[] {
 	return readdirSync(dir)
 		.filter((f) => f.endsWith('.ts'))
 		.map((f) => join(dir, f));
+}
+
+/** The comment text of a TS source, line-aligned with the original (code
+ * stripped, so identifier hits can never trip a comment-only pattern; string
+ * contents are not parsed — a `//` inside a string over-approximates, which
+ * only errs toward strictness). */
+function commentTextByLine(text: string): string[] {
+	const out: string[] = [];
+	let inBlock = false;
+	for (const line of text.split('\n')) {
+		let kept = '';
+		let rest = line;
+		while (rest.length > 0) {
+			if (inBlock) {
+				const end = rest.indexOf('*/');
+				if (end === -1) {
+					kept += rest;
+					rest = '';
+				} else {
+					kept += rest.slice(0, end);
+					rest = rest.slice(end + 2);
+					inBlock = false;
+				}
+			} else {
+				const lineStart = rest.indexOf('//');
+				const blockStart = rest.indexOf('/*');
+				if (lineStart !== -1 && (blockStart === -1 || lineStart < blockStart)) {
+					kept += rest.slice(lineStart + 2);
+					rest = '';
+				} else if (blockStart !== -1) {
+					rest = rest.slice(blockStart + 2);
+					inBlock = true;
+				} else {
+					rest = '';
+				}
+			}
+		}
+		out.push(kept);
+	}
+	return out;
 }
 
 /** The cosignals-react allowance: drop React's own `unstable_*` protocol
@@ -79,6 +144,34 @@ describe('docs gate: banned vocabulary in shipped sources', () => {
 			const text = stripUnstableNames(readFileSync(file, 'utf8'));
 			const hits = offendingLines(text, BANNED_WORDS);
 			expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
+		}
+	});
+});
+
+describe('docs gate: source comments are self-contained', () => {
+	const srcDirs = [join(pkgDir, 'src'), join(reactPkgDir, 'src')];
+
+	it('no internal-document references anywhere in shipped sources (§N, plans/, research/)', () => {
+		for (const dir of srcDirs) {
+			for (const file of sourceFiles(dir)) {
+				const hits = offendingLines(readFileSync(file, 'utf8'), SRC_INTERNAL_REFS);
+				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
+			}
+		}
+	});
+
+	it('no research-stage shorthand in source comment text', () => {
+		for (const dir of srcDirs) {
+			for (const file of sourceFiles(dir)) {
+				const comments = commentTextByLine(readFileSync(file, 'utf8'));
+				const hits: string[] = [];
+				for (let i = 0; i < comments.length; i++) {
+					for (const p of COMMENT_STAGE_CODES) {
+						if (p.test(comments[i]!)) hits.push(`line ${i + 1} [${String(p)}]: ${comments[i]!.trim()}`);
+					}
+				}
+				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
+			}
 		}
 	});
 });

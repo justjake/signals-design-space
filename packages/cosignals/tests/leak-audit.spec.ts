@@ -11,11 +11,11 @@
  *  - kernel link free-list threading discipline: tests/freelist.spec.ts
  *  - arena link free-list row-2 discipline:      tests/arena-freelist.spec.ts
  *  - pool cap 8 / release scrub / grown-capacity reuse: tests/arena-sd.spec.ts
- *  - dispose→reuse id tenancy (§4.5.3):          tests/arena-sc.spec.ts
+ *  - dispose→reuse id tenancy:                   tests/arena-sc.spec.ts
  *  - watcher dual-store rule (T7):               tests/graph-consumers.spec.ts
  *    + cosignals-react/tests/graph-consumers.spec.tsx (the shim-side fix)
- *  - never-quiescent soak that motivated mid-episode batch/render reclamation
- *    and the event-creating gate: research/experiments/cosignals-gates.md SPK-K1
+ *  - mid-episode batch/render reclamation exists because a never-quiescent
+ *    process (batches always in flight) must still reclaim retired records
  *  - KNOWN-HOLE-BY-RULING (not probed, not fixed): root records are immortal
  *    (RUL-6 — no root-teardown event exists; concurrent.ts arenaQuiesceSweep).
  */
@@ -32,7 +32,7 @@ import {
 	effectScope,
 } from '../src/index.js';
 import { engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type ComputedInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
-import { E } from '../src/graph.js';
+import { E } from '../src/Kernel.js';
 import { __useCacheForTest } from '../src/suspense.js';
 import { armArenaCheck } from './arena-checker.js';
 

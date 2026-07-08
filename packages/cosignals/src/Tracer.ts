@@ -19,8 +19,8 @@
  *    queryable after the fact.
  *
  * ## Loading and cost
- * This module imports the engine as TYPES ONLY — its runtime module graph is
- * exactly {trace.ts}, and `./concurrent.ts` never imports it back, so neither
+ * This module imports the engine as types only — its runtime module graph is
+ * exactly {Tracer.ts}, and `./concurrent.ts` never imports it back, so neither
  * entry pulls the other into a bundle. Until `attachTracer(engine)` runs,
  * the engine's only tracing artifact is its `trace` slot, `undefined`
  * forever, checked once per emit site (tests/trace-off.spec.ts asserts the
@@ -73,8 +73,8 @@
  *  batch-retire         {batch, retiredSeq}                  the batch retired: its writes became permanent history visible to every world
  *  batch-disposition    {batch, committed}                   the React bindings' report, recorded at its source (the protocol handler):
  *                       React committed (true) or abandoned (false) the batch. Diagnostic only — retirement behavior is identical
- *                       either way. The engine never creates this kind. (Recordings from older engines carried the flag as a bit on
- *                       batch-settle / batch-retire records instead; that bit is ignored at decode.)
+ *                       either way. The engine never creates this kind. (A batch-settle / batch-retire record may also carry the
+ *                       flag as a KIND-field bit; the decoder ignores it there.)
  *  slot-claim           {slot, batch}                        a batch's first write claimed a slot
  *  slot-release         {slot, batch}
  *  slot-release-deferred{slot, batch}                        release waited: an open render's mask still names the slot
@@ -91,8 +91,8 @@
  *  mount-fixup          {watcher, root, disposition, correctives}  how the mount-window check resolved:
  *                       fast-out (provably nothing moved; drift, if any, is exactly the live-batch writes
  *                       already covered by scheduled correctives) | compare-clean (values agree) |
- *                       corrected (urgent fix applied). Recordings from older engines may decode a fourth
- *                       disposition, 'fast-out-covered', from a since-deleted audit path.
+ *                       corrected (urgent fix applied). The decoder also accepts a fourth disposition,
+ *                       'fast-out-covered', which no engine emit site produces.
  *  mount-correction     {watcher, from, to}                  the urgent pre-paint fix: committed truth moved while the mounting render was in flight
  *  reconcile-correction {watcher, root, from, to, cause}     a retirement or root commit moved committed truth; this watcher's on-screen value had to follow
  *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
@@ -220,17 +220,15 @@ const enum WorldPack {
 const MAX_I32 = 0x7fffffff;
 
 /** Kind codes (record form). Public decoded events carry the NAME, not the
- * code. Codes are append-only (existing recordings decode forever): 28-30
- * joined when the packed stream became the engine's ONLY event output —
- * kinds a since-deleted object-event channel used to carry alone;
- * 31 joined when the committed/abandoned report moved to its source (the
- * React bindings' protocol handler) and left the retirement chain. */
+ * code. Codes are append-only — existing recordings decode forever, and the
+ * decoder accepts every listed code, including any the current engine never
+ * emits. */
 const K = {
 	write: 1, writeDropped: 2, batchOpen: 3, batchSettle: 4, batchRetire: 5,
 	slotClaim: 6, slotRelease: 7, slotReleaseDeferred: 8, slotBackstop: 9,
 	renderStart: 10, renderYield: 11, renderResume: 12, renderEnd: 13,
 	rootCommit: 14, delivery: 15, suppressed: 16, evalDone: 17,
-	mountCorrective: 18, mountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
+	mountCorrective: 18, runMountFixup: 19, mountCorrection: 20, reconcileCorrection: 21,
 	coreEffectRun: 22, reactEffectRun: 23, epochReset: 24,
 	clockSync: 25, truncation: 26, quietWrite: 27,
 	reactEffectCleanup: 28, renderCommitted: 29, renderDiscarded: 30,
@@ -258,9 +256,8 @@ const CAUSE_SETTING = new Set<TraceKindCode>([
 ]);
 
 const OP_NAMES = ['set', 'update'] as const;
-/** Index 1 ('fast-out-covered') is decode-only: the engine can no longer
- * emit it (the post-mount audit that produced it was deleted), but old
- * recordings still decode. */
+/** Index 1 ('fast-out-covered') is decode-only: no engine emit site
+ * produces it; recordings that contain it still decode. */
 const DISPOSITION_NAMES = ['fast-out', 'fast-out-covered', 'compare-clean', 'corrected'] as const;
 
 /** Decoded payload placeholder for a ref-ring value that was overwritten (or capture disabled). */
@@ -317,7 +314,7 @@ export type TraceStats = {
 /** Floor for the pow2-rounded capacities (ring, session chunk, ref ring). */
 const POW2_CAPACITY_FLOOR = 8;
 
-function pow2AtLeast(n: number, min: number): number {
+function roundUpToPowerOfTwo(n: number, min: number): number {
 	let c = min;
 	while (c < n) c *= 2;
 	return c;
@@ -364,12 +361,12 @@ export class Tracer implements TraceHooks {
 		this.bridge = bridge;
 		this.mode = opts?.mode ?? 'ring';
 		this.cap = this.mode === 'ring'
-			? pow2AtLeast(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
-			: pow2AtLeast(opts?.chunkSize ?? 1 << 14, POW2_CAPACITY_FLOOR);
+			? roundUpToPowerOfTwo(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
+			: roundUpToPowerOfTwo(opts?.chunkSize ?? 1 << 14, POW2_CAPACITY_FLOOR);
 		this.capMask = this.cap - 1;
 		this.capLog = Math.log2(this.cap);
 		this.maxBytes = opts?.maxBytes ?? 128 * 1024 * 1024;
-		this.refCap = opts?.refCapacity === undefined ? 256 : pow2AtLeast(Math.max(opts.refCapacity, 0), opts.refCapacity === 0 ? 0 : POW2_CAPACITY_FLOOR);
+		this.refCap = opts?.refCapacity === undefined ? 256 : roundUpToPowerOfTwo(Math.max(opts.refCapacity, 0), opts.refCapacity === 0 ? 0 : POW2_CAPACITY_FLOOR);
 		this.refs = new Array<unknown>(this.refCap);
 		this.now = opts?.now ?? defaultNow;
 		this.lastUs = this.now();
@@ -565,7 +562,7 @@ export class Tracer implements TraceHooks {
 		this.rec(K.slotBackstop, slot, batch, 0, 0, 0);
 	}
 
-	/** Post-consequence checkpoint markers (unlike `renderEnd`, which fires BEFORE
+	/** Post-consequence checkpoint markers (unlike `renderEnd`, which fires before
 	 * the end's consequences so they can cite it as cause): these record after
 	 * every retirement fold / lock-in / drain / fixup of the render end landed —
 	 * the stream position the reference model emits its render events at. */
@@ -648,8 +645,8 @@ export class Tracer implements TraceHooks {
 		this.rec(K.slotReleaseDeferred, slot, batch, 0, 0, 0);
 	}
 
-	mountFixup(w: Watcher, disposition: 'fast-out' | 'compare-clean' | 'corrected', correctives: number): void {
-		this.rec(K.mountFixup, this.label(w.name), this.label(w.root), DISPOSITION_NAMES.indexOf(disposition), correctives, 0);
+	runMountFixup(w: Watcher, disposition: 'fast-out' | 'compare-clean' | 'corrected', correctives: number): void {
+		this.rec(K.runMountFixup, this.label(w.name), this.label(w.root), DISPOSITION_NAMES.indexOf(disposition), correctives, 0);
 	}
 
 	opEnd(): void {
@@ -765,7 +762,7 @@ export class Tracer implements TraceHooks {
 			case K.mountCorrective:
 				data = { watcher: this.labelOf(subject), batch: world, slot: a0 };
 				break;
-			case K.mountFixup:
+			case K.runMountFixup:
 				data = { watcher: this.labelOf(subject), root: this.labelOf(world), disposition: DISPOSITION_NAMES[a0], correctives: a1 };
 				break;
 			case K.mountCorrection:

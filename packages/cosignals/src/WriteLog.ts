@@ -20,8 +20,8 @@
  * its one-branch membership add and the quiet derivation its size check.
  */
 
-import { probes, type ConcurrentEngineHost } from './engine.js';
-import { noteReclaimRetry, reclaimSkippedN } from './graph.js';
+import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
+import { noteReclaimRetry, reclaimSkippedN } from './Kernel.js';
 import type { BatchManager, BatchId, BatchSlot } from './Batch.js';
 import type { EngineCore } from './World.js';
 import type { AtomInternals, Seq, Value, WriteKind } from './concurrent.js';
@@ -145,7 +145,7 @@ export type CompactionDeps = {
 	 * pin (compaction's pin clause floor — a LATE-BOUND core slot, read at
 	 * call time), one-op application under the fold-purity guards, and the
 	 * atom's one equality rule. */
-	core: Pick<EngineCore, 'getMinLivePin' | 'applyOp' | 'eqAtom'>;
+	core: Pick<EngineCore, 'getMinLivePin' | 'applyOp' | 'isAtomValueEqual'>;
 	/** The engine host's slice: the optional compaction observer (the
 	 * engine's public `onCompact` slot). */
 	host: Pick<ConcurrentEngineHost, 'getOnCompact'>;
@@ -164,12 +164,12 @@ export type CompactionTable = {
 
 export function createCompaction(deps: CompactionDeps): CompactionTable {
 	// Composition-time locals (the codegen doctrine): the per-entry fold
-	// calls bind once (applyOp/eqAtom are assigned before this factory runs,
-	// as is the batch table); `getMinLivePin` is a LATE-BOUND core slot
+	// calls bind once (applyOp/isAtomValueEqual are assigned before this factory runs,
+	// as is the batch table); `getMinLivePin` is a late-bound core slot
 	// (assigned by the render-pass factory, which composes after this one),
 	// so it stays a call-time read off the aliased core record.
 	const core = deps.core;
-	const { applyOp, eqAtom } = core;
+	const { applyOp, isAtomValueEqual } = core;
 	const { getOnCompact } = deps.host;
 	const { releaseLogEntry } = deps.batch;
 	const uncompactedAtoms = new Set<AtomInternals>();
@@ -177,7 +177,7 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 	/**
 	 * Compaction consumes a sequence-order prefix of the write log: entry e
 	 * compacts iff every entry with seq ≤ e.seq is retired (folding out of
-	 * order would change replay results) AND e.retiredSeq ≤ min(live pins)
+	 * order would change replay results) and e.retiredSeq ≤ min(live pins)
 	 * (a render pinned earlier still folds from base, so base must not move
 	 * past it). Compacted entries fold into base and are reclaimed (kept in
 	 * observed by the optional `onCompact` hook).
@@ -217,7 +217,7 @@ export function createCompaction(deps: CompactionDeps): CompactionTable {
 			const next = applyOp(atom, log.kinds[i]!, log.payloads[i], atom.base);
 			// Equality order: isEqual(current, incoming) — per compacted entry
 			// (compaction re-invokes per entry by design).
-			if (!eqAtom(atom, atom.base, next)) atom.base = next;
+			if (!isAtomValueEqual(atom, atom.base, next)) atom.base = next;
 			atom.baseSeq = log.seqs[i]!;
 			if (onCompact !== undefined) onCompact(atom, log.entryAt(i));
 			// A compacted log entry stops pinning its batch record.

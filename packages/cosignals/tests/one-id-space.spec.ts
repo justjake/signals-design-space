@@ -16,7 +16,7 @@
  *      every nodeIndex-keyed row, so a new tenant at the same index never
  *      sees the old tenant's rows (watcher rows, observation refs, walk
  *      stamps, per-arena shadow lookups).
- *  P3  the kernel-GEN referee seam: __bumpNodeGenForTest re-expressed as a
+ *  P3  the kernel-GEN test seam: __bumpNodeGenForTest re-expressed as a
  *      LIVE record's tenancy bump in kernel memory — arena shadows re-tenant
  *      cold and watcher stamps go stale, exactly as a real free+reuse.
  *
@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import { Atom, Computed } from '../src/index.js';
 import { attachDriver, BATCH_NONE, engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type CosignalEngine, type Watcher } from '../src/concurrent.js';
-import { kernelGenOf, kernelNodeIndexOf } from '../src/WorldArena.js';
+import { getKernelGeneration, getKernelNodeIndex } from '../src/WorldArena.js';
 import { armArenaCheck } from './arena-checker.js';
 
 function bridge(): CosignalEngine {
@@ -59,9 +59,9 @@ function commitWrite(b: CosignalEngine, node: AtomInternals, value: unknown): vo
 const cols = (b: CosignalEngine) => b.__columnsForTest();
 
 /** A node record's nodeIndex, read live from kernel memory (field 7). */
-const ixOf = kernelNodeIndexOf;
+const ixOf = getKernelNodeIndex;
 /** A node record's tenancy generation, read live from kernel memory. */
-const genOf = kernelGenOf;
+const genOf = getKernelGeneration;
 
 describe('P1 — dormant-watcher aliasing across record reuse', () => {
 	it('a watcher mounted in an uncommitted render on a later-disposed computed skips loudly at its commit instead of binding the record\'s new tenant', () => {

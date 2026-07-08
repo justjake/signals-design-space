@@ -16,7 +16,7 @@ export class InvariantViolation extends Error {}
 
 /** Look up an id or throw the schedule error every resolver shares (the
  * node/batch/render/watcher registries all speak it). */
-export function mustGet<K, V>(map: Map<K, V>, id: K, what: string): V {
+export function getOrThrow<K, V>(map: Map<K, V>, id: K, what: string): V {
 	const v = map.get(id);
 	if (v === undefined) throw new ScheduleError(`unknown ${what} ${id}`);
 	return v;

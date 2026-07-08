@@ -1,5 +1,5 @@
 // TWIN RUN — this spec runs against the reference model (`cosignals-oracle`)
-// AND the CONCURRENT engine at once: ./helpers.js here is the twin driver (model
+// and the concurrent engine at once: ./helpers.js here is the lockstep driver (model
 // + engine fan-out; every read is parity-asserted; selfCheck compares
 // events/snapshots and runs the invariant battery on BOTH sides). Kept in
 // lockstep with the reference model's own tests/scars.spec.ts.
@@ -93,9 +93,9 @@ describe('pinned scars (model-expressible)', () => {
 		handle.set(1); // REAL kernel write through the public atom API — the node-less arm
 		const m = new TwinDriver(); // reset the engine; the handle's kernel record survives? NO —
 		// the reset scrubs the kernel too, so the standalone history must
-		// happen AFTER the twin exists to be observable. Re-run it here:
+		// happen after the harness exists to be observable. Re-run it here:
 		const handle2 = new Atom<unknown>(0);
-		handle2.set(1); // node-less arm again, now inside the twin's episode
+		handle2.set(1); // node-less arm again, now inside the harness's episode
 		const a = m.joinAtom('a', handle2); // joins with its kernel-current value
 		expect(a.base).toBe(1); // standalone history is committed-only base state
 		expect(a.log).toHaveLength(0); // ...with no log entries
