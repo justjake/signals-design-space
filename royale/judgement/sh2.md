@@ -1,0 +1,36 @@
+# Judgement scorecard: sh2
+
+**Verdict: clean** · fork LOC 235 · lib LOC 1424
+
+## Gates (claimed vs observed)
+
+| Gate | Claimed | Observed (run by judge) |
+| --- | --- | --- |
+| Engine typecheck (`packages/signals-royale-sh2`, `pnpm typecheck`) | PASS | PASS, tsc exit 0 |
+| React pkg typecheck (`packages/react-signals-royale-sh2`, `pnpm typecheck`) | PASS | PASS, tsc exit 0 |
+| Conformance (`vitest run tests/conformance.spec.ts`) | 179/179 | PASS — `Tests 179 passed (179)`, 226ms |
+| Oracle default (`vitest run tests/oracle.spec.ts`) | PASS 300x90 | PASS — `randomized world-fold oracle (300 seeds x 90 steps) 865ms` |
+| Oracle deep (`ORACLE_SEEDS=1200 ...`) | PASS 1200x90 | PASS — `(1200 seeds x 90 steps) 3249ms` |
+| Leak audit (`vitest run tests/gc-leaks.spec.ts`) | PASS 2/2 | PASS — 2/2 (`dropped atom handles release their slab slots`, `a committed transition leaves no per-episode state`) |
+| Full engine suite (`pnpm test`) | 191/191 | PASS — `Test Files 5 passed (5)`, `Tests 191 passed (191)` |
+| Fork protocol + adjacent (`yarn test --no-watchman ReactFiberSignalRuntime ReactFlushSync ReactTransition`) | 5 suites, 47 pass 1 skip | PASS — `Test Suites: 5 passed`, `1 skipped, 47 passed, 48 total`, 0.898s |
+| Real-React gate (react pkg `pnpm test`) | 18/18 | PASS — `Tests 18 passed (18)` (includes real time-slicing test with act disabled) |
+| Fork build (`./fork/build-react.sh`) | PASS | PASS — `Built: 19.3.0 (2e0029da3b)`, NODE_DEV+NODE_PROD react/react-dom/scheduler |
+| Shared battery typecheck (`royale/verify-kit/battery`, `pnpm typecheck`) | PASS | PASS, tsc exit 0 |
+| Shared battery (`pnpm test`) | 25/25 | PASS — `Tests 25 passed (25)` |
+| Fork LOC | 235 | 235 (raw numstat cmd AND canonical count-loc.mjs agree) |
+| Lib LOC | 1424 | 1424 (core.ts 1073, async.ts 71, trace.ts 67, index.ts 3, react index.ts 210) |
+| milomg adapter sanity (`vitest run -t "Royale SH2"`) | 4 pass / 76 skip | PASS — `4 passed | 76 skipped (80)` |
+| milomg benchmark medians / react-seam numbers | 2.189x slower vs alien-signals (self-reported loss) | Not re-run (heavy, not pass/fail); adapter commit audited clean |
+
+## Shared battery
+
+25/25 PASS observed. Tamper check CLEAN: battery.spec.tsx, royale-types.ts, vitest.config.ts, global.d.ts, tsconfig.json all byte-identical to canonical /Users/jitl/src/alien-signals-opt/royale/verify/battery. package.json differs only in the per-entrant link (cosignals-alt-b -> react-signals-royale-sh2). ADAPTER.ts is a one-line re-export of the entry's own royale/adapter.ts, which is pure wiring — every adapter method maps 1:1 to a real library export (computed -> asyncComputed, effect -> onObserved rename); no mocking, no constant stubs, no global monkey-patching.
+
+## Red flags
+
+none of substance. Notes: (1) milomg adapter runs a disclosed benchmark-only tier — numeric cell IDs, setAutomaticReclamation(false), full reset() in cleanup — so the benchmark measures the slab without FinalizationRegistry/handle overhead; REPORT discloses this explicitly and SH2 still loses 2.19x, so no gaming benefit; benchmark checkout has exactly one clean commit adding the adapter, no harness edits. (2) Disclosed residual leak: a permanently-abandoned scheduled batch overlay has no prune edge — honestly reported, not covered (or contradicted) by any gate. (3) The 'unfiltered milomg suite has one unrelated x-reactivity failure' claim was not re-verified (not a required gate). Isolation audit clean: zero imports of cosignals/alt-a/alt-b/concurrent-solid-react/dalien anywhere in entry src/tests/bench; engine has zero runtime dependencies; no verbatim incumbent code found. Fork and entry working trees committed; fork diff has no long-line cramming (0 added lines >130 chars) and no production-imports-from-tests.
+
+## Notes
+
+STANCE: 'static bitmask slab — flat typed arrays, bitset invalidation sweeps, worlds as mask overlays'. Delivered recognizably that family with justified deviations: flat SoA typed-array slab (module-global Uint8/Uint32/Int32 arrays) plus an intrusive typed edge slab; invalidation is an epoch-marked reused work-array sweep with per-edge version pruning rather than pure bitsets; speculative worlds are globally sequence-ordered per-slot action overlays rather than mask overlays — a real design (replayable rebase by total order) not incumbent convergence. Distinct from cosignals' class/arena architecture. FEATURE HONESTY SPOT AUDIT: (a) lifetime effects GENUINE — untampered battery scenario 14 asserts one observation across two React subscribers, engine effects counting toward the union, and same-tick dispose/recreate flaps netting to nothing; entrant adds a StrictMode coalescing test (starts=1, stops=1) and an effect-through-computed engine test; all pass. (b) latest() context rule WEAK — core.ts:968 has an explicit inRenderWorld branch (latest==render-world read) and the oracle checks latest() against the all-worlds fold plus read() inside entered render worlds every step, but no test calls latest() from inside a computed/render; the battery only exercises latest() at top level. Implemented, under-tested. (c) mutation window GENUINE — real-react.spec.tsx:170 keeps a MutationObserver attached across mount + a signal-driven text update, blinded only via onDomMutation start/stop, and asserts exactly 1 record which is the third-party <i> (zero React-caused records); battery's equivalent (spec :831) also passes. CODE QUALITY: high; dense but organized SoA core with named flag constants, defensive fork hooks, oracle failures print a minimal replayable schedule. REPORT is notably honest (declined to claim full correctness in round 1, discloses benchmark losses and the abandoned-batch risk). IDEAS WORTH STEALING: (1) ReactSharedInternals.P 'live-batch pin' — fork exposes runInSignalBatch so a late-mounted subscriber's correction re-enters the ORIGINAL transition's lane; useValue's post-subscribe fixup uses it for mount-mid-transition pinning at tiny fork cost. (2) Globally sequenced draft actions: urgent + speculative writes fold in one total order, giving rebase semantics without world snapshots, and the randomized oracle models that exact fold — spec-as-test. (3) Per-root Int32Array(31) lane->batch tables plus a global pin table cleared at commit: multi-root transition attribution in ~30 fork lines. (4) The mutation window emits an empty start/stop pair even on commits with no mutation effects, so observers always see a well-formed window. Total fork surface of 235 LOC for the full protocol (renderStart/resume/end, commit, mutation window, lane claiming) is the entry's headline strength; the milomg perf (2.19x slower than alien-signals) is its honest weakness.
