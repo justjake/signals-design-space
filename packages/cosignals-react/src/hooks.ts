@@ -18,8 +18,8 @@
  */
 
 import * as React from 'react';
-import { Atom, BATCH_NONE, Computed, ReducerAtom, engine } from 'cosignals';
-import type { AnyInternals, CosignalEngine, RootId } from 'cosignals';
+import { BATCH_NONE, isAtom, isComputed } from 'cosignals';
+import type { AnyInternals, Atom, Computed, Cosignals, CosignalEngine, ReducerAtom, RootId } from 'cosignals';
 import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type BoundCtx, type WatcherTarget } from './shim.js';
 
 // ---- activation -------------------------------------------------------------------
@@ -43,15 +43,24 @@ export type CosignalReactHandle = {
  * React-side registrations only — the engine's driver slot is cleared only
  * by the test-only engine reset (`__TEST__resetEngine`), so tests reset
  * the engine between registrations.
+ *
+ * `instance` binds a specific createCosignals() instance instead of the default
+ * browser instance — the synchronous-SSR path. renderToString is synchronous
+ * and single-threaded, so register(instance) → renderToString → dispose is
+ * race-free within one request; every hook (and every handle created with the
+ * instance) then routes through that request's isolated graph. This is a GLOBAL
+ * registration (one active shim at a time), so it is NOT safe for streaming or
+ * concurrent SSR that keeps several instances live at once — a second concurrent
+ * register() throws rather than corrupting; see the README's SSR section.
  */
-export function registerCosignalReact(): CosignalReactHandle {
+export function registerCosignalReact(instance?: Cosignals): CosignalReactHandle {
 	if (getActiveShim() !== undefined) {
 		throw new Error('cosignals-react: already registered (dispose the previous registration first).');
 	}
-	const shim = new Shim();
+	const shim = new Shim(instance);
 	setActiveShim(shim);
 	return {
-		bridge: engine,
+		bridge: shim.bridge,
 		shim,
 		dispose: () => {
 			shim.dispose();
@@ -77,8 +86,14 @@ export function requireShim(): Shim {
 export type SignalSource<T> = Atom<T> | ReducerAtom<T, unknown> | Computed<T>;
 
 function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
-	if (signal instanceof Atom) return shim.internalsForAtom(signal as Atom<unknown>);
-	if (signal instanceof Computed) return shim.bridge.internalsForComputed(signal as Computed<unknown>);
+	// Brand-based, not `instanceof`: createCosignals() mints per-instance
+	// Atom/Computed classes, so `instanceof Atom` from the default instance
+	// rejects a per-request handle. isAtom/isComputed recognize a handle from ANY
+	// instance; the bridge's internalsForAtom/internalsForComputed then assert the
+	// handle belongs to THIS shim's bound engine, throwing a clear cross-instance
+	// error rather than silently resolving its id against the wrong arena.
+	if (isAtom(signal)) return shim.internalsForAtom(signal as Atom<unknown>);
+	if (isComputed(signal)) return shim.bridge.internalsForComputed(signal as Computed<unknown>);
 	throw new Error('cosignals-react: useSignal accepts Atom/ReducerAtom/Computed handles (useComputed results are Computed handles).');
 }
 
@@ -249,7 +264,10 @@ export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unkno
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	const handle = React.useMemo(
 		() => {
-			const c = new Computed<T>(fn, { label: `useComputed#${nextComputedSerial++}` });
+			// shim.Computed is the BOUND instance's class, so the handle belongs to
+			// the engine this shim routes through (matters for SSR per-request
+			// instances; identical to the default class in the browser).
+			const c = new shim.Computed<T>(fn, { label: `useComputed#${nextComputedSerial++}` });
 			shim.bridge.internalsForComputed(c as Computed<unknown>); // allocate engine content + wrap for world evaluation
 			return c;
 		},
@@ -279,7 +297,9 @@ let warnedReducerSwap = false;
  * change reducers).
  */
 export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initial: S): [S, (action: A) => void] {
-	const [record] = React.useState(() => ({ atom: new ReducerAtom<S, A>(reducer, initial), reducer }));
+	const shim = requireShim();
+	// shim.ReducerAtom is the bound instance's class (see useComputed).
+	const [record] = React.useState(() => ({ atom: new shim.ReducerAtom<S, A>(reducer, initial), reducer }));
 	if (record.reducer !== reducer && !warnedReducerSwap) {
 		warnedReducerSwap = true;
 		// eslint-disable-next-line no-console
@@ -293,22 +313,30 @@ export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initia
 // ---- useSignalEffect ----------------------------------------------------------------------
 
 /**
- * An effect whose signal reads resolve in the committed world of the
- * component's root — never pending state. Effects perform side effects
- * (network, imperative DOM, logging), and side effects must track what the
- * user actually sees: a pending transition may still be discarded, and a
- * side effect cannot be un-run. The effect re-fires (cleanup, then run)
- * when a durable accepted change touched a value it read during its last
- * run — the root committing UI that includes a batch, a batch retiring, an
- * async action settling. Re-fires are AT-LEAST-ONCE: writes that put a
- * value back where the effect last saw it usually coalesce away at the
- * next boundary, but an equal-value round trip whose intermediate state
- * the engine observed elsewhere may re-fire the effect with unchanged
- * inputs — write idempotent effect bodies, exactly as you would for
- * React's own Strict Mode re-runs. Equality-gated write ACCEPTANCE is
- * unaffected: a write that changes nothing is still not a change. `deps`
- * changes re-run it through React's own useEffect machinery, exactly like
- * useEffect.
+ * One effect with two ways to be requested to run — a change to `deps` in a
+ * committed React render, or a durable change reaching a signal it read during
+ * its last run — that converge on a single cleanup/body lifecycle. Its signal
+ * reads resolve in the committed world of the component's root, never pending
+ * state: side effects (network, imperative DOM, logging) must track what the
+ * user actually sees, and a pending transition may still be discarded.
+ *
+ * Observable behavior:
+ * - The body runs once after mount.
+ * - A `deps`-only change runs it once (through React's own useEffect).
+ * - A signal-only change runs it once WITHOUT scheduling a React render.
+ * - When the same cause reaches the effect through both a committed render and
+ *   signal propagation, it runs ONCE — with the committed React closure and
+ *   committed signal values, never an old closure against new signal state.
+ * - Cleanup runs once before each actual rerun and once at unmount.
+ * - A signal write from the body queues any resulting rerun until the current
+ *   run finishes; it does not re-render the component from inside the body.
+ *
+ * Re-fires are AT-LEAST-ONCE: writes that put a value back where the effect
+ * last saw it usually coalesce away at the next boundary, but an equal-value
+ * round trip whose intermediate state the engine observed elsewhere may re-fire
+ * the effect with unchanged inputs — write idempotent effect bodies, exactly as
+ * you would for React's own Strict Mode re-runs. Equality-gated write ACCEPTANCE
+ * is unaffected: a write that changes nothing is still not a change.
  */
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
 	const shim = requireShim();

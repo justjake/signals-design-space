@@ -249,6 +249,11 @@ export type ReactEffect = {
 	lastValue: Value;
 	runs: number;
 	cleanups: number;
+	/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * A WRITING terminal (bug-2 shape): its body writes a sibling's dependency.
+	 * Force-REPLAY (StrictMode double-invoke) of a writer is scoped out of the
+	 * referee — see replayReactEffect. */
+	writes?: boolean;
 };
 
 /** A core effect() observer: it sees the newest world (every write applied).
@@ -451,6 +456,39 @@ export class CosignalModel {
 
 	/** Ambient default batch: the home of bare (context-free) writes. */
 	ambientBatch: BatchId | undefined;
+
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * The committed SignalEffect terminal's boundary-deferred drain — the
+	 * engine's quietBoundaryOwed / quietBoundaryActive / drainQuietBoundary
+	 * twin (now-fixed semantics, wave 1). A quiet write marks committed truth,
+	 * but the terminal re-check (and the watcher reconcile it rides with) must
+	 * run at the OUTERMOST operation boundary — never inside a core-effect
+	 * flush (coreFlushDepth > 0) or a running terminal body (activeReactEffect
+	 * set). A naive inline re-run there would nest terminals ("runs do not
+	 * nest", bug 2) or run a terminal inside the kernel effect frame where its
+	 * routed reads record no dependency links (bug 1). The drain is owed and
+	 * run now if we are at a true boundary, else the enclosing outermost quiet
+	 * write drains it; the active-loop re-drains when a body write re-owes it,
+	 * so a sibling terminal newly dirtied by that write runs at THIS boundary.
+	 */
+	private quietBoundaryOwed = false;
+	private quietBoundaryActive = false;
+	/** >0 while a core-effect flush is on stack (the kernel effect frame twin):
+	 * a core body's nested quiet write owes the drain instead of running it. */
+	private coreFlushDepth = 0;
+	/** The terminal whose body is currently running (the engine's
+	 * activeSignalEffect twin): a body's nested quiet write owes the drain. */
+	private activeReactEffect: ReactEffect | undefined;
+	/**
+	 * Monotonic per-episode ordinal for the converged-terminal band's
+	 * react-effect mounts. Terminals mounted at REST (quiet — no seq/event/epoch
+	 * advance between two mounts) would otherwise share an `E${events}.${seq}.${epoch}`
+	 * name; this ordinal disambiguates them, exactly as coreEffectMounts does
+	 * for core effects. Ticked in lockstep with the engine adapter's twin
+	 * (per terminal-band mount op, same order); never reset, so a multi-episode
+	 * schedule keeps names unique across quiescence. */
+	terminalReactMounts = 0;
 
 	private nextNode = 1;
 	private nextBatchId = 1;
@@ -828,14 +866,28 @@ export class CosignalModel {
 		node.archive.push({ op, batch: 0, slot: -1, seq: node.baseSeq, retiredSeq: node.baseSeq });
 		this.log({ type: 'quiet-write', node: node.name, seq: node.baseSeq });
 		// Core effects observe the newest world, which the fold just advanced;
-		// same union-reachability flush as the write path's.
+		// same union-reachability flush as the write path's. A writing core
+		// body's nested quiet write owes the drain (coreFlushDepth > 0) rather
+		// than running it inside that flush.
 		this.refreshEdgesAllWorlds();
 		this.flushCoreEffects(this.reachableFrom(node.id));
-		// Counter-gated watcher reconciliation against committed truth (which
-		// the fold moved for every root) [sanctioned co-evolution: correct on
-		// accepted-change-counter movement since the watcher's last
-		// validation, never on values]. Silent by exact mirroring: the
-		// engine's quiet corrections create no event.
+		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding
+		// #8] The committed-world boundary drain (watcher reconcile + terminal
+		// re-check) is owed. Run it now iff we are at a true operation boundary;
+		// inside a core-effect flush or a terminal body it is a no-op, and the
+		// enclosing outermost quiet write drains it once that frame closes.
+		this.quietBoundaryOwed = true;
+		this.drainQuietBoundary();
+	}
+
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * Counter-gated watcher reconciliation against committed truth (which a
+	 * quiet fold moved for every root) [correct on accepted-change-counter
+	 * movement since the watcher's last validation, never on values]. Silent by
+	 * exact mirroring: the engine's quiet corrections create no event.
+	 */
+	private reconcileWatchersToCommitted(): void {
 		for (const w of this.watchers.values()) {
 			if (!w.live) continue;
 			const rec = this.refreshCommitted(w.root, this.nodeById(w.node));
@@ -845,9 +897,37 @@ export class CosignalModel {
 				w.dedup.clear(); // dedup bits re-arm at the watcher's render
 			}
 		}
-		// EF2 boundary: a quiet fold moves committed truth for every root
-		// (quiet ⇔ no open renders, so no frame can defer the re-check).
-		this.revalidateReactEffects();
+	}
+
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * The owed quiet-pipeline boundary drain (the engine's drainQuietBoundary
+	 * twin). Runs iff we are at a true operation boundary — outside every
+	 * core-effect flush (coreFlushDepth 0) and terminal body (activeReactEffect
+	 * undefined), where the terminal runner's committed reads record real
+	 * dependency links. Inside such a frame it is a no-op; the outermost quiet
+	 * write drains once the frame closes. The loop re-drains when a terminal
+	 * body writes and re-owes it, so a sibling terminal newly dirtied by that
+	 * write runs at THIS boundary rather than being dropped or nested.
+	 */
+	private drainQuietBoundary(): void {
+		if (!this.quietBoundaryOwed || this.quietBoundaryActive || this.coreFlushDepth !== 0 || this.activeReactEffect !== undefined) return;
+		this.quietBoundaryActive = true;
+		try {
+			let guard = 0;
+			while (this.quietBoundaryOwed) {
+				if (++guard > 10000) {
+					throw new InvariantViolation('quiet terminal drain exceeded 10000 iterations — a terminal body is synchronously re-triggering itself');
+				}
+				this.quietBoundaryOwed = false;
+				this.reconcileWatchersToCommitted();
+				// EF2 boundary: a quiet fold moves committed truth for every root
+				// (quiet ⇔ no open renders, so no frame can defer the re-check).
+				this.revalidateReactEffects();
+			}
+		} finally {
+			this.quietBoundaryActive = false;
+		}
 	}
 
 	/**
@@ -973,24 +1053,34 @@ export class CosignalModel {
 	 * [owner ruling 2026-07-06] and the lockstep differ compares same-step
 	 * runs as a multiset on (effect, value). */
 	private flushCoreEffects(reached?: Set<NodeId>): void {
-		for (const e of this.coreEffects.values()) {
-			if (reached !== undefined && !reached.has(e.node)) continue;
-			const value = this.newestValue(this.nodeById(e.node));
-			if (!Object.is(value, e.lastValue)) {
-				e.lastValue = value;
-				e.runs++;
-				this.log({ type: 'core-effect-run', effect: e.name, value });
-				// R-3: a writing core effect's write CLASSIFIES NORMALLY — it
-				// takes the ordinary context-free arm (the ambient batch while
-				// anything is pending, the quiet fold otherwise), exactly like
-				// the engine's effect writes during the eager kernel apply.
-				// Payload = min(runs, 3): the equality cutoff bounds effective
-				// writes per trigger. Acyclic by construction: no core effect
-				// reads an effect-output atom, so the nested flush reaches none.
-				if (e.writeTo !== undefined) {
-					this.bareWrite(e.writeTo, { kind: 'set', value: Math.min(e.runs, 3) });
+		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding
+		// #8] Mark the kernel-effect-frame twin: a writing core body's nested
+		// quiet write owes the terminal drain rather than running it here (bug
+		// 1 — a terminal must not run inside the core-effect flush).
+		this.coreFlushDepth++;
+		try {
+			for (const e of this.coreEffects.values()) {
+				if (reached !== undefined && !reached.has(e.node)) continue;
+				const value = this.newestValue(this.nodeById(e.node));
+				if (!Object.is(value, e.lastValue)) {
+					e.lastValue = value;
+					e.runs++;
+					this.log({ type: 'core-effect-run', effect: e.name, value });
+					// R-3: a writing core effect's write CLASSIFIES NORMALLY — it
+					// takes the ordinary context-free arm (the ambient batch while
+					// anything is pending, the quiet fold otherwise), exactly like
+					// the engine's effect writes during the eager kernel apply.
+					// Payload = min(runs, 3): the equality cutoff bounds effective
+					// writes per trigger. A writer targeting an effect-output atom
+					// (out1/out2) is acyclic; one targeting `sig` (the converged
+					// terminal's dep) drives bug 1's re-check at the drain below.
+					if (e.writeTo !== undefined) {
+						this.bareWrite(e.writeTo, { kind: 'set', value: Math.min(e.runs, 3) });
+					}
 				}
 			}
+		} finally {
+			this.coreFlushDepth--;
 		}
 	}
 
@@ -1128,6 +1218,31 @@ export class CosignalModel {
 		return this.mountCommittedObserver(rootId, name, (read) => void (read(sel) ? read(a) : read(b)));
 	}
 
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * Mount a committed terminal whose BODY WRITES — it reads `readNode` and
+	 * writes `writeAtom` a bounded payload (min(read, 3)). This is bug 2's
+	 * shape: a terminal body writing a SIBLING terminal's dependency. The
+	 * write must schedule the sibling's run at the boundary, never nest — the
+	 * activeReactEffect guard defers it, and the drain loop runs the sibling
+	 * once this body closes. The payload is bounded so the chain terminates
+	 * (the writer never reads `writeAtom`, so it cannot re-trigger itself).
+	 */
+	mountReactEffectWrite(rootId: RootId, readNode: AnyNode, writeAtom: AtomNode, name: string): ReactEffect {
+		// The MOUNT run captures the dep but does NOT write (a silent baseline,
+		// like the core effect's first run) — so a mount can never leak an owed
+		// drain past its op. The body writes only on RE-FIRES, which is the
+		// bug-2 path: a re-fire's write schedules the sibling at the boundary.
+		let ran = false;
+		const e = this.mountCommittedObserver(rootId, name, (read) => {
+			const v = read(readNode);
+			if (!ran) { ran = true; return; }
+			this.bareWrite(writeAtom, { kind: 'set', value: Math.min(v as number, 3) });
+		});
+		e.writes = true;
+		return e;
+	}
+
 	/** The registration surface the constructors above configure. The initial
 	 * run captures the first dep snapshot (runs stays 0 — the mount run is
 	 * React's own effect invocation, not a re-fire). */
@@ -1158,6 +1273,17 @@ export class CosignalModel {
 	 * render frame (React double-invokes effects post-commit, never mid-render). */
 	replayReactEffect(id: EffectId): void {
 		const e = this.mustGet(this.reactEffects, id, 'react effect');
+		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding
+		// #8] A WRITING terminal under StrictMode force-replay is scoped OUT of
+		// the referee (symmetric on both sides — the engine adapter skips the
+		// same op). The engine's replay is a TEST surface (replaySignalEffect +
+		// the readSignalEffectDep test read); combined with committed-arena
+		// materialization it pollutes the run's trace-only `values` snapshot
+		// with arena reads, while this naive model traces only real deps. It is
+		// TRACE-ONLY — the terminal's dependency links stay clean (no spurious
+		// re-fire), and the bug-2 body-write semantics are refereed on the
+		// normal re-fire path (writeTap), not replay. See the final report.
+		if (e.writes) throw new ScheduleError('writing terminals are not force-replayable in the referee (test-surface replay pollutes the trace-only values snapshot; scoped out)');
 		for (const p of this.idToRenderPass.values()) {
 			if (p.state !== 'ended' && p.root === e.root) {
 				throw new ScheduleError('replay requires the effect root to have no open render frame');
@@ -1181,9 +1307,16 @@ export class CosignalModel {
 			deps.push({ node: n, value: rec.v, lastSeen: rec.counter });
 			return rec.v;
 		};
+		// [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding
+		// #8] Mark the running terminal (the engine's activeSignalEffect twin):
+		// a body write's nested quiet fold owes the boundary drain rather than
+		// running a sibling terminal inline ("runs do not nest", bug 2).
+		const savedActive = this.activeReactEffect;
+		this.activeReactEffect = e;
 		try {
 			e.body(read);
 		} finally {
+			this.activeReactEffect = savedActive;
 			// A mid-body throw keeps the partial snapshot (the deps read before
 			// the throw are real dependencies — same rule as the engine frame).
 			e.deps = deps;
@@ -1657,6 +1790,18 @@ export class CosignalModel {
 
 	quiescent(): boolean {
 		return this.liveBatches().length === 0 && this.livePins().length === 0;
+	}
+
+	/**
+	 * [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+	 * The engine's `quiet` predicate (its quiet-fold precondition: no live
+	 * batches, no live pins/open renders, no pending write log). Exposed so the
+	 * terminal-trigger band writes `tap` only on the quiet path — the write
+	 * path where the converged terminal's boundary drain lives (bugs 1 & 2) —
+	 * with legality decided identically on both sides of the lockstep harness.
+	 */
+	isQuiet(): boolean {
+		return this.quietNow();
 	}
 
 	/**

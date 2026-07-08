@@ -70,9 +70,9 @@ const BUDGETS: Record<string, number> = {
 	flush: 170, // 139
 	// the world-arena walks (the engine's world-arena sections)
 	arenaLink: 230, // 179
-	arenaLinkInsert: 380, // 302
-	arenaUnlink: 340, // 276
-	arenaPropagate: 460, // 453: segregated-list interleave — each descended sub
+	arenaLinkInsert: 380, // 358: the SignalEffect K_EFFECT append rides here, gated on signalEffectCount
+	arenaUnlink: 340, // 332: at 340 — a signalEffectCount prefix would cross it, so the K_EFFECT arm stays a bare flags read (see CosignalEngine.ts)
+	arenaPropagate: 460, // 459 — ONE byte under V8's 460 inline cliff; do not add to this walk without moving code out of line
 	// contributes its weak head as a parked continuation (one shared grow
 	// block; the cycle-cap thrower moved out of line) — at the inline limit,
 	// exactly like checkDirtyLoop; watch it
@@ -100,7 +100,7 @@ const BUDGETS: Record<string, number> = {
 	// closure-free). Committed clocks settle at observer consults
 	// (settleObserverClock), so no clock stamping lives here
 	arenaSyncObservationAfterRefold: 90, // 65: out-of-line observation epilogue (observed nodes only)
-	arenaUpdateComputed: 440, // 408: the refold wrapper (observed-capture open +
+	arenaUpdateComputed: 440, // 434: the refold wrapper (observed-capture open +
 	// paired world-eval trace hooks around a dynamic user-fn call). The
 	// engine fusion's slot collapse brought it under the inline limit —
 	// every frame save/restore now reads module lets directly where it read

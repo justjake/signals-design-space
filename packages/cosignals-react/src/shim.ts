@@ -83,10 +83,12 @@
  */
 
 import * as React from 'react';
-import { Atom, BATCH_NONE, SuspendedRead, attachDriver, engine, type ComputedCtx } from 'cosignals';
+import { BATCH_NONE, Computed, ReducerAtom, SuspendedRead, attachDriver, engine, type ComputedCtx } from 'cosignals';
 import type {
 	AnyInternals,
+	Atom,
 	AtomInternals,
+	Cosignals,
 	CosignalEngine,
 	EngineDriver,
 	RenderPass,
@@ -164,9 +166,17 @@ export function getActiveShim(): Shim | undefined {
 // ---- the shim --------------------------------------------------------------------
 
 export class Shim {
-	/** The default browser engine surface; the field
-	 * keeps the bindings' historical name to spare every call site). */
+	/** The engine surface this shim is bound to — the default browser instance,
+	 * or the per-request instance passed to registerCosignalReact() for
+	 * synchronous SSR. The field keeps the bindings' historical name to spare
+	 * every call site. */
 	readonly bridge: CosignalEngine;
+	/** The bound instance's public Computed/ReducerAtom classes (the default
+	 * instance's when none was passed). The creating hooks (useComputed,
+	 * useReducerAtom) create handles from THESE so a per-instance-bound shim never
+	 * produces a handle owned by a different engine than it routes through. */
+	readonly Computed: typeof Computed;
+	readonly ReducerAtom: typeof ReducerAtom;
 	/** Development-time checks (the engine's EngineResetOptions.devChecks,
 	 * snapshotted at registration): armed, protocol-edge states the
 	 * integration contract makes unreachable throw, and the post-await
@@ -189,9 +199,11 @@ export class Shim {
 	claimed = new Set<number>();
 	/** SignalEffect id -> its hook-owned stable cleanup/body runner. */
 	private effectRunners = new Map<number, () => void>();
-	constructor() {
-		this.bridge = engine;
-		this.devChecks = engine.devChecks;
+	constructor(instance?: Cosignals) {
+		this.bridge = instance?.engine ?? engine;
+		this.Computed = (instance?.Computed ?? Computed) as typeof Computed;
+		this.ReducerAtom = (instance?.ReducerAtom ?? ReducerAtom) as typeof ReducerAtom;
+		this.devChecks = this.bridge.devChecks;
 		assertForkPresent();
 		// THE DRIVER RECORD — the engine's one attachment surface (see the
 		// module header). Installed before any React-side registration, so a
@@ -235,7 +247,7 @@ export class Shim {
 			// while the engine composition those ids point into still exists.
 			protocolReset: () => React.unstable_resetBatchRegistryForTest(),
 		};
-		attachDriver(driver);
+		(instance?.attachDriver ?? attachDriver)(driver);
 		// Protocol v2: the shim is the batch-id allocator. React calls this at
 		// every batch's creation (which can sit mid-render, mid-commit, or
 		// inside protocol listeners — the engine's openBatch is allocation-only

@@ -195,11 +195,22 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		// read-time stamps must stay coherent across every doubling.
 		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		mount(b, 'R', sum, 'W');
+		const shell = b.__TEST__arena('R')!;
+		const beforeCapture = shell.memory.length; // buffer capacity once sum has shadowed its 24 deps
 		const e = b.mountSignalEffect('R', 'E');
 		e.body = () => {
 			for (const at of atoms) void b.readSignalEffectDep(at);
 		};
 		b.captureSignalEffectRun(e.id, e.body);
+		// The capture close appends one arena link per dep, threaded through the
+		// terminal's subscription record. With 24 deps landing on an arena that
+		// already sits near its grown capacity, that loop MUST double the buffer
+		// MID-CAPTURE — the exact shape where a stale cached view of the arena
+		// would keep writing into the orphaned (pre-doubling) buffer. Pinning
+		// real growth here is what makes "stamps survive growth" a claim and not
+		// a tautology: without it the deps/re-fire checks below could all pass on
+		// an arena that never actually grew.
+		expect(shell.memory.length).toBeGreaterThan(beforeCapture);
 		expect(e.deps.length).toBe(24);
 		expect(e.runs).toBe(0); // runs counts RE-fires (the mount capture is run zero)
 		// Validation walks the wide dependency chain: a write to a LATE

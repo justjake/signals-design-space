@@ -4,6 +4,8 @@ export {
 	Atom,
 	ReducerAtom,
 	Computed,
+	isAtom,
+	isComputed,
 	effect,
 	effectScope,
 	batch,

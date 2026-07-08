@@ -119,6 +119,28 @@ export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, se
 	return e;
 }
 
+/** [SANCTIONED CO-EVOLUTION: converged-terminal referee, review finding #8]
+ * A committed terminal whose BODY WRITES (the engine counterpart of the
+ * model's mountReactEffectWrite): it reads `readNode` committed and writes a
+ * bounded payload (min(read, 3)) to `writeAtom` through the PUBLIC atom path.
+ * That write lands while the terminal is active (activeSignalEffect set), so
+ * it must schedule the sibling terminal at the boundary, never nest — bug 2's
+ * exact shape, refereed against the model's deferred drain. */
+export function mountEngineReactEffectWrite(b: CosignalEngine, rootId: string, readNode: EInternals, writeAtom: EAtomInternals, name: string): ESignalEffect {
+	const e = b.mountSignalEffect(rootId, name);
+	// Silent baseline on the mount run (mirrors the model's mountReactEffectWrite
+	// and the core effect): capture the dep, write only on re-fires (the bug-2
+	// path) — so a mount never leaks an owed boundary drain.
+	let ran = false;
+	e.body = () => {
+		const v = b.readSignalEffectDep(readNode) as number;
+		if (!ran) { ran = true; return; }
+		(writeAtom.handle as Atom<number>).set(Math.min(v, 3));
+	};
+	b.captureSignalEffectRun(e.id, e.body);
+	return e;
+}
+
 /** The record `mountEngineCoreEffect` returns — the model CoreEffect's
  * engine counterpart (specs read `runs`/`lastValue`; the stream comparison reads the trace). */
 export type EngineCoreEffect = {
