@@ -191,7 +191,7 @@ declare const IdOf: unique symbol;
 /** The lenient brand carrier: intersect with `number` and a payload naming
  * the id space. Optional key ⇒ plain numbers assign in (no casts anywhere);
  * one shared key ⇒ distinct payloads are mutually exclusive. */
-export type IdBrand<P extends string> = { [IdOf]?: P };
+type IdBrand<P extends string> = { [IdOf]?: P };
 
 /** Premultiplied node record id: the Int32 arena index of the record's field 0
  * (id = record ordinal × ArenaShape.STRIDE). 0 = "none" (record 0 is burned). */
@@ -211,10 +211,10 @@ type RecordId = NodeId | LinkId;
  * holey where index-keyed ones stay packed). Branded: a NodeIndex is not a
  * NodeId, and mixing them is the package's most plausible silent-corruption
  * class. */
-export type NodeIndex = number & IdBrand<'nodeIndex'>;
+type NodeIndex = number & IdBrand<'nodeIndex'>;
 /** An updated-at clock stamp: a process-monotone float64 drawn from
  * {@link clockSource} (see the UpdatedAt clocks section). 0 = "never". */
-export type Clock = number & IdBrand<'clock'>;
+type Clock = number & IdBrand<'clock'>;
 /** A node's FLAGS field value: a bitwise OR of NodeFlag members. */
 type NodeFlags = number;
 /** The global evaluation cycle counter, stamped into link VERSION fields on re-track. */
@@ -928,7 +928,7 @@ export let batchDepth = 0; // (read cross-module by the policy write path; assig
 let notifyIndex = 0;
 let queuedLength = 0;
 export let activeSub: NodeId = 0; // (readers outside this module never assign — ESM enforces it)
-export let enterDepth = 0; // live kernel frames that captured memory; 0 = op boundary (exported read-only: the test reset's idle precondition)
+let enterDepth = 0; // live kernel frames that captured memory; 0 = op boundary (the test reset's idle precondition)
 
 /**
  * Read routing, armed: true while the concurrent machinery has a routing
@@ -988,7 +988,7 @@ let checkSp = 0;
  * (`E.readAtom(id)`, `E.write(id, v)`, …), which is re-linked to a fresh
  * table only at growth boundaries (see {@link createKernel}).
  */
-export interface Kernel {
+interface Kernel {
 	records: RecordCount;
 	buffer(): Int32Array;
 	/** The clock column (one float64 slot per record; see the UpdatedAt clocks
@@ -2664,7 +2664,7 @@ export function requestCapacity(units: RecordCount): void {
  * recursion guard because this tail never re-enters the public methods
  * itself.
  */
-export function writeNewest(id: NodeId, value: unknown): void {
+function writeNewest(id: NodeId, value: unknown): void {
 	maybeBoundary();
 	if (E.write(id, value) && batchDepth === 0) {
 		flush();
@@ -2749,7 +2749,7 @@ type InstrumentedThenable = PromiseLike<unknown> & {
  * (which reads as undefined). Leaked-ctx calls outside a computed evaluation
  * fall under `previous`'s license to be arbitrarily stale or undefined.
  */
-export function ctxPrevious(): unknown {
+function ctxPrevious(): unknown {
 	const c = activeSub;
 	if (c === 0) {
 		return undefined;
@@ -2926,7 +2926,7 @@ export { ctxUseKeyed as __TEST__ctxUse };
  * is React's own uncached-promise story; callers needing cross-death dedup
  * cache the promise in their data layer and use the one-arg form.
  */
-export function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | undefined): unknown {
+function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown>) | undefined): unknown {
 	const c = activeSub;
 	if (c === 0 || (E.buffer()[c + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) === 0) {
 		throw new Error('cosignals: ctx.use may only be called during a computed evaluation.');
@@ -2945,7 +2945,7 @@ export function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown
  * thenable), so re-suspending on the same pending thenable stays
  * listener-stable.
  */
-export function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
+function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: NodeFlags): NodeFlags {
 	const v: ValueIndex = c >> ArenaShape.ID_TO_VALUE_SHIFT;
 	if (e instanceof SuspendedRead) {
 		const t = e.thenable as InstrumentedThenable;
@@ -3017,7 +3017,7 @@ function attachSettleListener(c: NodeId, t: InstrumentedThenable): void {
  * that was pending at creation, which throws — settlement cannot occur inside
  * this synchronous frame.
  */
-export function boxedRead(c: NodeId, flags: NodeFlags): unknown {
+function boxedRead(c: NodeId, flags: NodeFlags): unknown {
 	const v: ValueIndex = c >> ArenaShape.ID_TO_VALUE_SHIFT;
 	if ((flags & NodeFlag.BOX_SUSPENDED) === 0) {
 		throw values[v];
@@ -3383,66 +3383,24 @@ function __lifecycleRelease(id: NodeId): void {
  *   never rewritten: the global counter climbs monotonically for the
  *   process's life (exact to 2^53 — see the bound note at `quiesce`).
  *
- * ## What lives here (full stories at the implementation sites)
+ * ## Load-bearing rules the sections share (full stories at their sites)
  *
- * - log entries: every write appends {op, slot, seq, retiredSeq} to the
- *   written atom's write log.
- * - kernel riding: every recorded write also applies to the kernel eagerly
- *   with stepwise equality (each step keeps the previous reference when
- *   the atom's equals function says nothing changed) — engine atoms are
- *   kernel-backed `Atom` handles, and the newest world is read straight
- *   off the kernel. The engine-vs-reference-model diff verifies kernel
- *   value ≡ fold(base, log entries) at every step of the test corpus.
- * - arena routing: write-time delivery reachability runs from the written
- *   atom over every live arena's strong links (weak links are tested and
- *   skipped — untracked reads never notify); kernel subscribers are served
- *   by the eager kernel apply. Deliveries stay value-blind and may be
- *   fewer than the model's union-conservative set (never more): a cone
- *   reachable only through structure no live arena holds degrades to a
- *   drain correction instead of a live delivery.
- * - worlds as pure folds with the two-clause visibility rule (see
- *   {@link isVisible}), the committed-for-root world, and the fast-forwarded
- *   mount-fixup world (see {@link runMountFixup}).
- * - per-write value-blind synchronous delivery in the writer's stack with
- *   render-aware suppression, per-(watcher, slot) dedup, and dedup clear
- *   at slot re-intern.
- * - the slot lifecycle: a retiring tenant stamps its log entries before
- *   its slot releases; a re-claimed slot gets a fresh claim sequence, and
- *   a render's pin/seq checks always postdate the claim; release is
- *   deferred while any open render mask names the slot and re-evaluated at
- *   every render end; disposal keeps conservative touched bits until no
- *   live pin can still need them; a loud release-anyway backstop prevents
- *   deadlock.
- * - retirement ordering stamp → fold valve → drain → clear-rows → release →
- *   episode close (the fold valve and the quiescence handoff live in
- *   the write-log section), and per-root commit lock-in
- *   (a root that committed UI from a still-live batch must keep agreeing
- *   with its own screen).
- * - **mount fixup** (see {@link runMountFixup}): the commit-edge
- *   reconciliation for a freshly mounted component — decided conditions
- *   first. A component can mount while other updates are in flight, and
- *   its subscription only activates at commit, so writes could slip by
- *   unobserved between its render and its commit; fixup joins it to the
- *   pending batches it missed (from write metadata alone), then a
- *   four-condition test decides whether anything committed or retired in
- *   the window — only a failing condition triggers the fast-forwarded
- *   re-evaluation and urgent pre-paint correction. One subtle rule: the
- *   write-clock condition quantifies over the committing render's member
- *   batches at commit time (a batch whose first write landed mid-render
- *   is invisible to the earlier-captured slot set).
- * - subscriptions (see the Subscription type): the one `run`-action
- *   consumer record — committed subscriptions, the production
- *   useSignalEffect mechanism. (Core `effect()`s are not engine records:
- *   they are real kernel effects, flushed by the eager kernel apply — see
- *   {@link logCoreEffectRun}.) Committed subscriptions hold a dep snapshot
- *   captured by `captureRun` under committed-for-root and re-check
- *   value-gated at the boundary operations (per-root commit, retirement,
- *   settlement, quiet fold): once per boundary operation, at the boundary
- *   value, never while the subscription's own root has an open render
- *   frame; cleanup guaranteed at removal. Their dep snapshots also join
- *   the observation union (one retain per snapshot node through the
- *   observation index's shiftObservedCount).
- * - episodes / quiescence (epoch reset), as defined above.
+ * - Kernel riding: every recorded write also applies to the kernel eagerly
+ *   with stepwise equality — the newest world reads straight off the
+ *   kernel, and the model-comparison diff verifies kernel value ≡
+ *   fold(base, log entries) at every step of the test corpus.
+ * - Deliveries are value-blind, synchronous in the writer's stack, and may
+ *   be FEWER than the reference model's union-conservative set (never
+ *   more): a cone no live arena holds degrades to a drain correction.
+ * - Retirement's internal order is stamp → fold valve → fan → drain →
+ *   clear-rows → release → episode close; per-root commit lock-in keeps a
+ *   root agreeing with its own screen.
+ * - Mount fixup (see {@link runMountFixup}) closes the mount window at the
+ *   commit edge: catch-up correctives from write metadata alone, then a
+ *   four-condition test before any evaluation.
+ * - Committed subscriptions re-check once per boundary operation, at the
+ *   boundary value, never while their root has an open render frame; core
+ *   `effect()`s are real kernel effects, never engine records.
  *
  * The engine surface consumes the external-runtime protocol's event shapes
  * (batch open/retire, render begin/yield/resume/end with per-root commits,
@@ -3467,13 +3425,13 @@ function __lifecycleRelease(id: NodeId): void {
 export type Value = unknown;
 export type RootId = string;
 export type RenderPassId = number;
-export type WatcherId = number;
+type WatcherId = number;
 /** A committed `run`-action subscription's id: the committed-observers
  * section's monotone mount counter (registration order — the boundary
  * scan's iteration order, the reference model's map order) — never a kernel
  * record id (subscription RECORDS recycle; this id never does). Leniently
  * branded (IdBrand above) so the spaces cannot cross. */
-export type SubscriptionId = number & IdBrand<'subscription'>;
+type SubscriptionId = number & IdBrand<'subscription'>;
 /** A point on the one global sequence line (log-entry seqs, pins, retirement
  * stamps, write clocks, the committed-advance counter). */
 export type Seq = number;
@@ -3543,7 +3501,7 @@ export class AtomInternals {
 }
 
 export type Reader = (node: AnyInternals) => Value;
-export type ComputedFn = (read: Reader, untracked: Reader) => Value;
+type ComputedFn = (read: Reader, untracked: Reader) => Value;
 
 /**
  * The engine's computed node record — one computed representation. Every
@@ -3604,7 +3562,7 @@ export class ComputedInternals {
 export type AnyInternals = AtomInternals | ComputedInternals;
 
 
-export type RootState = {
+type RootState = {
 	id: RootId;
 	/** Per-root lock-in rows: batches this root has committed but that are
 	 * still live elsewhere (cleared at retirement, when the retired clause
@@ -3646,7 +3604,7 @@ export const enum WriteKind {
  * section), and the snapshot reader is `__TEST__coreProbes()` in the public-
  * dispatch section.
  */
-export const probes = { logEntries: 0, batches: 0, worldEvals: 0, compositions: 0 };
+const probes = { logEntries: 0, batches: 0, worldEvals: 0, compositions: 0 };
 
 /** The decoded shape of the engine's observable events (same shapes as the
  * reference model's events, so the two can be compared entry by entry). The
@@ -3915,7 +3873,7 @@ export function __engineWriteNode(node: AtomInternals, kind: WriteKind, payload:
 /** An arena buffer capacity, counted in Int32 slots (stride-8 records: one
  * node shadow or one dependency link per record; positive — the growth
  * doubling starts from it). */
-export type ArenaInitInts = number;
+type ArenaInitInts = number;
 
 /** Engine tuning — accepted by `__TEST__resetEngine`; a never-reset
  * production process runs the defaults. */
@@ -4355,7 +4313,7 @@ function computed(name: string, fn: ComputedFn, equals?: Equals): ComputedIntern
  * suspension to its stable sentinel VALUE (hook-initiated ones rethrow —
  * `suspendDepth`).
  */
-export function internalsForComputed(c: Computed<unknown>): ComputedInternals {
+function internalsForComputed(c: Computed<unknown>): ComputedInternals {
 	const hit = c._internals;
 	if (hit !== undefined) return hit;
 	const name = c.label ?? `computed#${c._id}`;
@@ -4822,7 +4780,7 @@ export type WriteLogEntry = {
  * released); the batch id is carried for retirement stamping, invariants,
  * and event logs.
  */
-export type WriteRecord = {
+type WriteRecord = {
 	kind: WriteKind;
 	payload: unknown;
 	batch: BatchId;
@@ -5115,7 +5073,7 @@ export type Batch = {
 
 /** One entry of the 31-slot recycling table a written batch occupies (see
  * the slot/intern/tenant definitions in the batch section's header). */
-export type BatchSlotMeta = {
+type BatchSlotMeta = {
 	id: BatchSlot;
 	tenant: BatchId | undefined;
 	/** Claim sequence — a point on the shared timeline created at every
@@ -5475,7 +5433,7 @@ export type World =
 	| { kind: 'mountFix'; maskBits: BatchSlotSet; pin: Seq; root: RootId };
 
 /** The one newest-world singleton (hot paths never allocate world objects). */
-export const NEWEST: World = { kind: 'newest' };
+const NEWEST: World = { kind: 'newest' };
 
 /** Declined-read sentinel: a routed read returns it to mean "no routing
  * context answered — take the plain kernel path". Package-internal (the
@@ -6012,7 +5970,7 @@ const ARENA_POOL_CAP = 8;
  * ArenaGeom.INIT_BUFFER_BYTES record store, as the composition site's
  * arenaInitInts default (EngineResetOptions.arenaInitInts overrides it;
  * the arena suites shrink it to force real mid-operation growth). */
-export const WORLD_ARENA_INIT_INTS: ArenaInitInts = ArenaGeom.INIT_BUFFER_BYTES >> 2;
+const WORLD_ARENA_INIT_INTS: ArenaInitInts = ArenaGeom.INIT_BUFFER_BYTES >> 2;
 const EMPTY_I32 = new Int32Array(0);
 
 /**
@@ -6126,7 +6084,7 @@ export class WorldArena {
  * whether this arena's suspended list holds the node's shadow. Same-file
  * with the layout enums; cold — one probe per arena per finalizer
  * fire/retry. */
-export function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
+function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
 	const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
 	return sh !== 0 && (a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0;
 }
@@ -6137,7 +6095,7 @@ export function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
  * whether this arena currently holds a shadow record for the node index.
  * Cold — the reclamation guard's open-render row, the render lifecycle's
  * population dev assert, and diagnostics. */
-export function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
+function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
 	return (ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0) !== 0;
 }
 
@@ -6147,7 +6105,7 @@ export function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
  * already-marked cone whose PENDING flags persist, and any intervening
  * consumption bumps the clock away from 0. Link records are skipped by the
  * nodeToShadow round-trip guard (their slot 7 is MODE, not MARK). */
-export function arenaRenumberMarks(a: WorldArena): void {
+function arenaRenumberMarks(a: WorldArena): void {
 	for (let sh = ArenaGeom.STRIDE; sh < a.next; sh += ArenaGeom.STRIDE) {
 		if ((a.memory[sh + ArenaField.NODE] ?? 0) !== 0 && a.nodeToShadow[a.memory[sh + ArenaField.NODE]!] === sh) a.memory[sh + ArenaField.MARK] = 0;
 	}
@@ -6550,14 +6508,14 @@ function arenaIsValidLink(a: WorldArena, checkLink: number, sub: number): boolea
  * under check). Production never sets it; it exists so the routed-read hot
  * path tests one override slot instead of two.
  */
-export const FOLD_TRUTH = Symbol('cosignals.foldTruth');
+const FOLD_TRUTH = Symbol('cosignals.foldTruth');
 
 /** The arena record layout as plain numbers, restricted to the fields the
  * test-side structural validator reads (`ArenaCheckerInternals.layout`
  * documents the data-passing decision). Built beside the enums, so the
  * view is in sync by construction; a fresh object per call, exactly as the
  * in-class construction allocated. */
-export function arenaCheckerLayout(): {
+function arenaCheckerLayout(): {
 	readonly ArenaGeom: { readonly ID_TO_COLUMN_SHIFT: number; readonly CLOCK_LIMIT: number };
 	readonly ArenaField: { readonly NODE: number; readonly MARK: number; readonly FLAGS: number; readonly DEPS: number; readonly SUBS: number };
 	readonly ArenaLinkField: { readonly DEP: number; readonly SUB: number; readonly PREV_DEP: number; readonly NEXT_DEP: number; readonly NEXT_SUB: number; readonly MODE: number };
@@ -7634,7 +7592,7 @@ const enum NotifyKind {
 }
 
 /** The two live queue scalars (shared record — see the module header). */
-export type NotifyState = { n: number; flushing: boolean };
+type NotifyState = { n: number; flushing: boolean };
 
 // Queued-notification columns (reused across operations; no per-notify objects).
 const notifyKinds: number[] = [];
@@ -8097,7 +8055,7 @@ function getPendingSettleCount(): number {
  * (the render's slot sets copied by integer assignment). Stored flattened
  * in the watcher record's extras object; replaced wholesale at mount and at
  * every committed re-render. */
-export type WatcherSnapshot = {
+type WatcherSnapshot = {
 	renderPassId: RenderPassId;
 	pin: Seq;
 	maskBits: BatchSlotSet;
@@ -8472,14 +8430,14 @@ export class Subscription {
  * dep's lastValidatedAt seed; read-time, not frame-close-time, because an
  * effect body may WRITE mid-run and the boundary re-check must still see
  * that write as newer than the snapshot). */
-export type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value; stamp: Clock }[] };
+type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value; stamp: Clock }[] };
 
 /** A node's per-root committed clock by nodeIndex (0 = never consulted).
  * Exported for the watcher correction gate and the commit populator's stamp
  * rule (the layout enums are same-file here; the consumers live with the
  * delivery walks and the render lifecycle). Reads the clock WITHOUT
  * settling: callers run after a consult site already settled it. */
-export function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
+function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
 	const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
 	return sh === 0 ? 0 : a.clocks[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
 }
@@ -8843,7 +8801,7 @@ function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void 
  * render lifecycle.
  */
 
-export type RenderPassState = 'open' | 'yielded' | 'ended';
+type RenderPassState = 'open' | 'yielded' | 'ended';
 
 export type RenderPass = {
 	id: RenderPassId;
@@ -9659,7 +9617,7 @@ function arenaQuiesceSweep(): void {
  * Production code never calls this and installs no hook. Reads the current
  * composition at call time (reset-safe: re-arm after a reset). @internal
  */
-export function __TEST__checkerInternals(): ArenaCheckerInternals {
+function __TEST__checkerInternals(): ArenaCheckerInternals {
 	return {
 		// The layout view is built by arenaCheckerLayout beside the enums
 		// (same-file const enum discipline): in sync by construction.
@@ -9694,12 +9652,12 @@ export function __TEST__checkerInternals(): ArenaCheckerInternals {
  * pool/wrap pins read shell state (claimGen, buffer identity,
  * column capacities) and force the clocks toward the Int32 ceiling.
  * @internal */
-export function __TEST__arena(rootId: RootId): WorldArena | undefined {
+function __TEST__arena(rootId: RootId): WorldArena | undefined {
 	return rootToArena.get(rootId);
 }
 
 /** Test seam: pooled arena shells (the pool reuse/cap pins). @internal */
-export function __TEST__arenaPool(): WorldArena[] {
+function __TEST__arenaPool(): WorldArena[] {
 	return arenaPool;
 }
 
@@ -9722,12 +9680,12 @@ export function __TEST__columns(): {
  * so the bump writes the live record's GEN field in kernel memory: arena
  * shadows re-tenant cold at their next consult and watcher stamps go
  * stale, exactly as a real free+reuse would move them. @internal */
-export function __TEST__bumpNodeGen(id: NodeId): void {
+function __TEST__bumpNodeGen(id: NodeId): void {
 	E.buffer()[id + NodeField.GEN]++;
 }
 
 /** Arena stats (tests/bench). @internal */
-export function __TEST__arenaStats(): { committed: number; renders: number; pooled: number; suspended: number; pendingSettlements: number; dirty: number } {
+function __TEST__arenaStats(): { committed: number; renders: number; pooled: number; suspended: number; pendingSettlements: number; dirty: number } {
 	let renders = 0;
 	let dirty = 0;
 	for (const p of rootToOpenRender.values()) {

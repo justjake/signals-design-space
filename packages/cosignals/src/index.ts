@@ -62,8 +62,8 @@
  *   level (not in the closure) precisely so a rebuilt kernel resumes where
  *   the old one stopped.
  * - **Fold**: applying a user's updater or reducer function to a value to
- *   produce the next value. The name comes from the concurrent engine
- *   (`./concurrent.ts`, part of this same entry), which reconstructs
+ *   produce the next value. The name comes from the concurrent machinery
+ *   (the engine module's later sections), which reconstructs
  *   alternative views of the state ("worlds", see the README) by
  *   re-applying — folding — recorded write operations over a base value;
  *   that only works if updaters and reducers are pure. They therefore run
@@ -125,9 +125,9 @@
  * queue, scratch stacks) lives at module level for exactly this reason.
  *
  * There is exactly one build of this library, and one engine — the
- * concurrent-worlds machinery (`./concurrent.ts`, re-exported at the bottom
- * of this file: `attachDriver`, the `engine` surface, the engine types)
- * composes at module initialization (always-concurrent: no installation
+ * concurrent-worlds machinery (the engine module's later sections,
+ * re-exported at the bottom of this file: `attachDriver`, the `engine`
+ * surface, the engine types) composes at module initialization (always-concurrent: no installation
  * step exists). The public read/write methods dispatch into its paths
  * directly: writes test one module boolean (`standaloneQuiet` — quiet and
  * driver-less) and take the plain kernel path on the fast arm; reads test
@@ -291,7 +291,8 @@ export { NodeField, LinkField } from './CosignalEngine.js';
 
 // ---- the engine dispatch ----------------------------------------------------------
 // One engine, always-concurrent: the concurrent-worlds machinery
-// (`./concurrent.ts`, re-exported at the bottom of this file) composes at
+// (the engine module's later sections, re-exported at the bottom of this
+// file) composes at
 // module initialization, and the public methods below call its paths
 // directly — no nullable hooks, no arming, no registration step. The costs
 // on the plain paths are exactly two module-boolean checks: writes test
@@ -395,7 +396,7 @@ var forbidWritesInComputeds = false;
  * doesn't pay. The engine flips it through the setter below on the cold
  * quiet-derivation path (driver attach, batch open/close, log drain).
  *
- * `var`, deliberately: the engine composes during concurrent.ts's MODULE
+ * `var`, deliberately: the engine composes during CosignalEngine.ts's MODULE
  * BODY, and when a consumer enters the cycle through this module that body
  * runs before ours — the initial derivation arrives via the setter while a
  * `let` here would still be uninitialized. var's hoisted slot accepts the
@@ -406,7 +407,7 @@ var forbidWritesInComputeds = false;
 // eslint-disable-next-line no-var
 var standaloneQuiet = true;
 
-/** @internal Engine seam: the quiet derivation (concurrent.ts) lands its
+/** @internal Engine seam: the engine's quiet derivation lands its
  * `quiet && no driver` result here. Cold — never on a per-write path.
  * Store only on change: a slot that is never re-stored stays constant-
  * trackable, so a process that never attaches a driver keeps a foldable
@@ -806,16 +807,17 @@ export function configure(options: ConfigureOptions): void {
 }
 
 // ---- the concurrent-worlds engine ---------------------------------------------------
-// One public entry: the batch/world machinery lives in ./concurrent.ts and is
-// re-exported here — `attachDriver()`, the `engine` surface, the engine
-// surface types (Seq, BatchSlotSet, WriteLogEntry, TraceEvent, …). The engine
-// composes at module initialization (always-concurrent); a process that never
-// attaches a driver and never opens a batch keeps the plain read/write fast
-// paths forever. CURATED (no `export *`): the engine's internals — the packed
-// WriteLog class, node/watcher class VALUES, module seams — stay importable
-// only from './concurrent.js' inside this package; consumers get the driver
-// seam, the engine surface, its error classes, the test seams the sibling
-// packages' suites drive, and the engine-surface TYPES.
+// One public entry: the batch/world machinery lives in the engine module's
+// later sections and is re-exported here — `attachDriver()`, the `engine`
+// surface, the engine surface types (Seq, BatchSlotSet, WriteLogEntry,
+// TraceEvent, …). The engine composes at module initialization
+// (always-concurrent); a process that never attaches a driver and never
+// opens a batch keeps the plain read/write fast paths forever. CURATED (no
+// `export *`): engine internals — node/watcher class VALUES, module seams —
+// stay importable only from './CosignalEngine.js' inside this package;
+// consumers get the driver seam, the engine surface, its error classes,
+// the test seams the sibling packages' suites drive, and the engine-
+// surface TYPES.
 export { ScheduleError, InvariantViolation } from './errors.js';
 export {
 	attachDriver,

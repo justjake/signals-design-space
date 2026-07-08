@@ -4,7 +4,7 @@
  *
  * This file NEVER imports react-dom, on purpose: the external-runtime
  * provider registers when a renderer module loads, so here
- * unstable_getCurrentWriteBatch() returns the real BATCH_NONE (0, "no
+ * getExternalRuntimeCurrentWriteBatch() returns the real BATCH_NONE (0, "no
  * renderer provider registered") — the exact state the integration contract
  * makes unreachable in an app. That lets these tests drive every guarded
  * site genuinely, with no mocking:

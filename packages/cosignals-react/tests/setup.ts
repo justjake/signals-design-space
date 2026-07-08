@@ -7,9 +7,9 @@
  */
 import * as React from 'react';
 
-if (typeof React.unstable_subscribeToExternalRuntime !== 'function') {
+if (typeof React.subscribeToExternalRuntime !== 'function') {
 	throw new Error(
-		'cosignals-react tests: expected the linked fork (React.unstable_subscribeToExternalRuntime is missing — stock React?) — run pnpm fork:build.',
+		'cosignals-react tests: expected the linked fork (React.subscribeToExternalRuntime is missing — stock React?) — run pnpm fork:build.',
 	);
 }
 

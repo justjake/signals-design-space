@@ -59,16 +59,22 @@ to schedule updates into a specific batch. Concretely the build exposes:
 
 - render events (start with the included batches, yield, resume,
   end with committed/discarded disposition), per-root commit events, and
-  batch retirement events;
-- a batch-identity registration (the bindings supply the id for every
-  React batch at its creation, so both sides speak one shared id space),
-  a write-context API (which batch is the code currently executing on
-  behalf of?), and `unstable_runInBatch` (schedule a state update so it
-  renders and commits with a specific batch).
+  batch retirement events — all through one subscription entry point,
+  `subscribeToExternalRuntime`;
+- a batch-identity registration (`registerExternalRuntimeBatchIdAllocator`
+  — the bindings supply the id for every React batch at its creation, so
+  both sides speak one shared id space), a write-context API
+  (`getExternalRuntimeCurrentWriteBatch` — which batch is the code
+  currently executing on behalf of?), and `externalRuntimeRunInBatch`
+  (schedule a state update so it renders and commits with a specific
+  batch).
 
+The protocol entry points carry their final names (no `unstable_` prefix).
 `registerCosignalReact()` feature-detects the protocol at startup: on a
 stock React (where these entry points simply don't exist) it throws
-immediately with a descriptive error rather than tearing silently later.
+immediately with a descriptive error rather than tearing silently later,
+and on an outdated protocol build (the retired `unstable_`-prefixed entry
+points) it throws a targeted "rebuild the fork" error.
 
 ## Setup
 
@@ -244,7 +250,7 @@ transition or async-action batch, or the ambient default batch when no
 context exists. Functional updates and reducer actions are recorded
 whole — not pre-folded — so each world replays them against its own view.
 Corrective re-renders and deliveries are scheduled with
-`unstable_runInBatch`, so they render and commit in the lanes of the
+`externalRuntimeRunInBatch`, so they render and commit in the lanes of the
 batch that caused them.
 
 ## Testing

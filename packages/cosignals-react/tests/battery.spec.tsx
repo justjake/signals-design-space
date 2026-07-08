@@ -652,7 +652,7 @@ describe('context-free writes (BATCH_NONE is unreachable once a renderer provide
 	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the BATCH_NONE state is unreachable', async () => {
 		// Unreachability, proven on the happy path: once a renderer provider
 		// exists (the shim's handshake asserts one),
-		// unstable_getCurrentWriteBatch() creates a real batch id for EVERY
+		// getExternalRuntimeCurrentWriteBatch() creates a real batch id for EVERY
 		// write — even from a bare timer-style call stack — with a guaranteed
 		// close edge (the id is the engine BatchId the shim's allocator handed
 		// out at creation). So the classifier's BATCH_NONE protocol-violation

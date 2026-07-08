@@ -20,7 +20,7 @@
  *
  * ## Loading and cost
  * This module imports the engine as types only — its runtime module graph is
- * exactly {Tracer.ts}, and `./concurrent.ts` never imports it back, so neither
+ * exactly {Tracer.ts}, and the engine module never imports it back, so neither
  * entry pulls the other into a bundle. Until `attachTracer(engine)` runs,
  * the engine's only tracing artifact is its `trace` slot, `undefined`
  * forever, checked once per emit site (tests/trace-off.spec.ts asserts the

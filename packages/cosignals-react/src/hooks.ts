@@ -127,7 +127,7 @@ function createSignalRecord(node: AnyInternals, bump: () => void): SignalRecord 
  * at the commit edge) closes the window: for every still-live batch that
  * touched relevant state but was not part of this component's render, a
  * corrective re-render is scheduled into that batch's own lane via the
- * protocol's unstable_runInBatch — the component joins the pending update
+ * protocol's externalRuntimeRunInBatch — the component joins the pending update
  * instead of revealing it early or missing it — and one comparison against
  * committed-state-as-of-now catches anything that committed or retired
  * during the window, fixed urgently before paint.
@@ -369,16 +369,16 @@ export function startSignalTransition(fn: () => unknown): void {
 	// none inside the transition scope too. The dev check throws HERE, before
 	// React.startTransition, because startTransition reports a sync throw
 	// from its scope as an uncaught error instead of propagating it.
-	if (shim.devChecks && React.unstable_getCurrentWriteBatch() === BATCH_NONE) {
+	if (shim.devChecks && React.getExternalRuntimeCurrentWriteBatch() === BATCH_NONE) {
 		throw new Error('cosignals: no transition batch context — the renderer did not provide an external-runtime write batch.');
 	}
 	React.startTransition((): void => {
 		// The action's batch context is React's own transition scope: inside
-		// this callback unstable_getCurrentWriteBatch() returns the
+		// this callback getExternalRuntimeCurrentWriteBatch() returns the
 		// transition batch's id — the engine BatchId the shim's allocator
 		// handed out at the batch's creation — and the shim's classifier
 		// routes every write executed here into that batch.
-		const batchId = React.unstable_getCurrentWriteBatch();
+		const batchId = React.getExternalRuntimeCurrentWriteBatch();
 		// Upgrade the batch to action semantics immediately (parked — kept pending —
 		// until the action settles), before fn writes anything: the parked
 		// batch holds the pending window open for the action's whole life,

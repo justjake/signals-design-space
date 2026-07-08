@@ -38,7 +38,7 @@
  *        whole operations, because worlds replay log entries, and the engine
  *        dispatches them internally after this one foreign call). The shim
  *        answers from the protocol's write-context API
- *        (unstable_getCurrentWriteBatch — the engine BatchId itself,
+ *        (getExternalRuntimeCurrentWriteBatch — the engine BatchId itself,
  *        allocator-opened at the batch's creation); a write during render
  *        throws here; see `currentBatch` for the BATCH_NONE edge.
  *      - worldFor() — the ambient world for routed reads. Raw `.state` reads
@@ -48,11 +48,11 @@
  *      - onDelivery / onMountCorrective / onCorrection — the consumption
  *        listeners: the engine invokes them at each operation's end, and the
  *        shim turns deliveries and mount correctives into setStates via
- *        unstable_runInBatch, so each corrective re-render is scheduled in
+ *        externalRuntimeRunInBatch, so each corrective re-render is scheduled in
  *        the lane of the batch that caused it and the whole update renders
  *        and commits together. Deliveries are value-blind: the engine
  *        decides who must re-render, the shim only schedules. Batches with
- *        no live protocol counterpart take unstable_runInBatch's
+ *        no live protocol counterpart take externalRuntimeRunInBatch's
  *        discrete-urgent fallback. The protocol permits scheduling updates
  *        from its yield and commit callbacks, so listening at those points
  *        is legal (writes during render are not, and throw).
@@ -63,7 +63,7 @@
  *    does not create unless a test retains it or a tracer attaches.
  *  - batch identity (protocol v2) — one id space, no translation: the shim
  *    registers a BATCH-ID ALLOCATOR on the protocol
- *    (unstable_registerBatchIdAllocator). At every React batch's creation
+ *    (registerExternalRuntimeBatchIdAllocator). At every React batch's creation
  *    the fork calls it with the batch's deferred classification; the
  *    allocator opens an engine batch (recording `deferred` on it) and
  *    returns the engine BatchId, which React stores as THE batch's identity
@@ -105,14 +105,20 @@ import type {
  * Failing fast is deliberate: without the protocol the bindings could only
  * fall back to a single current value, which is exactly the tearing this
  * package exists to prevent — one descriptive startup error beats silently
- * wrong frames later.
+ * wrong frames later. Evergreen: builds carrying only the retired
+ * unstable_-prefixed entry points are OUTDATED protocol builds and throw a
+ * targeted error (rebuild the fork) — there is no compat branch.
  */
 export function assertForkPresent(): void {
-	if (typeof React.unstable_subscribeToExternalRuntime !== 'function') {
+	if (typeof React.subscribeToExternalRuntime === 'function') return;
+	if (typeof (React as { unstable_subscribeToExternalRuntime?: unknown }).unstable_subscribeToExternalRuntime === 'function') {
 		throw new Error(
-			'cosignals-react: this React build has no external-runtime support — cosignals-react requires a React build with external-runtime support (stock React has none).',
+			'cosignals-react: this React build implements an OUTDATED external-runtime protocol (unstable_-prefixed entry points). Rebuild the React fork — the protocol entry points are final (subscribeToExternalRuntime and friends) and these bindings support only the final names.',
 		);
 	}
+	throw new Error(
+		'cosignals-react: this React build has no external-runtime support — cosignals-react requires a React build with external-runtime support (stock React has none).',
+	);
 }
 
 // ---- shim types ------------------------------------------------------------------
@@ -250,7 +256,7 @@ export class Shim {
 			// Test-only: the engine reset invokes this first, before scrubbing
 			// engine state, so React's batch registry drops its slot tenancy
 			// while the engine composition those ids point into still exists.
-			protocolReset: () => React.unstable_resetBatchRegistryForTest(),
+			protocolReset: () => React.externalRuntimeResetBatchRegistryForTest(),
 		};
 		attachDriver(driver);
 		// Protocol v2: the shim is the batch-id allocator. React calls this at
@@ -259,10 +265,10 @@ export class Shim {
 		// bookkeeping and legal at all three); the engine batch opens with the
 		// fork's deferred classification recorded, and the returned engine
 		// BatchId is the identity both sides speak from then on.
-		this.unregisterAllocator = React.unstable_registerBatchIdAllocator(
+		this.unregisterAllocator = React.registerExternalRuntimeBatchIdAllocator(
 			(deferred: boolean) => this.engine.openBatch({ deferred }).id,
 		);
-		this.unsubscribe = React.unstable_subscribeToExternalRuntime({
+		this.unsubscribe = React.subscribeToExternalRuntime({
 			onRenderPassStart: (container, includedBatches) =>
 				this.guard(() => this.handleRenderStart(container, includedBatches)),
 			onRenderPassYield: (container) => this.guard(() => this.handleYield(container)),
@@ -350,7 +356,7 @@ export class Shim {
 
 	/** The root whose render is currently rendering, if any. The protocol resolves the render context from the current call stack, so this is only meaningful synchronously during a render. */
 	renderingRoot(): RootRec | undefined {
-		const ctx = React.unstable_getRenderContext();
+		const ctx = React.getExternalRuntimeRenderContext();
 		if (ctx === null) return undefined;
 		return this.rootsByContainer.get(ctx.container);
 	}
@@ -532,16 +538,16 @@ export class Shim {
 
 	/**
 	 * Schedules a re-render (a setState bump) in the batch's own lane via
-	 * unstable_runInBatch — the engine BatchId is the protocol id, so it
+	 * externalRuntimeRunInBatch — the engine BatchId is the protocol id, so it
 	 * passes straight through. Batches React no longer (or never) holds —
 	 * an already-retired batch, an engine-created batch such as the ambient
-	 * one, or BATCH_NONE for no batch at all — take unstable_runInBatch's
+	 * one, or BATCH_NONE for no batch at all — take externalRuntimeRunInBatch's
 	 * documented discrete-urgent fallback.
 	 */
 	private bumpInBatch(watcherId: number, batchId: BatchId | undefined): void {
 		const target = this.targets.get(watcherId);
 		if (target === undefined || !target.live) return;
-		React.unstable_runInBatch(batchId ?? BATCH_NONE, () => target.bump());
+		React.externalRuntimeRunInBatch(batchId ?? BATCH_NONE, () => target.bump());
 	}
 
 	// ---- the write context ----------------------------------------------------
@@ -557,13 +563,13 @@ export class Shim {
 	 * re-checks their snapshots at the next boundary (retirement, settlement,
 	 * per-root commit), never mid-write. */
 	currentBatch(): BatchId {
-		if (React.unstable_getRenderContext() !== null) {
+		if (React.getExternalRuntimeRenderContext() !== null) {
 			throw new Error('cosignals: signal write during render — write from an event handler or effect instead');
 		}
 		// The protocol id is the engine BatchId: the fork created the batch
 		// through this shim's allocator (which opened the engine batch) the
 		// first time any write asked for this batch, this call included.
-		const batchId = React.unstable_getCurrentWriteBatch();
+		const batchId = React.getExternalRuntimeCurrentWriteBatch();
 		// BATCH_NONE is UNREACHABLE in practice: it means "no renderer
 		// provider registered" (ReactExternalRuntime returns it only then),
 		// and a renderer registers its provider at module load — after that,

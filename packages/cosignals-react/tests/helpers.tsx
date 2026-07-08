@@ -50,7 +50,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// events for a dead composition. The scrub emits no retirement events.
 	// (The reset repeats it through the previous driver's protocolReset;
 	// the explicit call also covers a first run with no driver attached.)
-	React.unstable_resetBatchRegistryForTest();
+	React.externalRuntimeResetBatchRegistryForTest();
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
 	// production posture (defined fall-throughs, no warning allocation).
@@ -102,7 +102,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 			// callbacks self-invalidate. (The engine driver slot stays
 			// attached until the next test's reset clears it; the disposed
 			// shim's driver is inert.)
-			React.unstable_resetBatchRegistryForTest();
+			React.externalRuntimeResetBatchRegistryForTest();
 			if (errors.length > 0) {
 				throw new Error(`shim recorded errors: ${errors.map((e) => String(e)).join(' | ')}`);
 			}

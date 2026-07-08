@@ -4,12 +4,12 @@
  * stay correct under concurrent rendering (stock React never reveals when
  * it starts, pauses, commits, or discards a render pass). The patched build
  * ships no type declarations of its own; @types/react covers the stock
- * surface, and this file augments the unstable_* protocol entries these
+ * surface, and this file augments the protocol entries these
  * bindings consume.
  *
  * Batch identity (v2): batches cross this surface as positive integer batch
  * ids, allocated by the external store itself when it registers a batch-id
- * allocator (unstable_registerBatchIdAllocator) — React calls the allocator
+ * allocator (registerExternalRuntimeBatchIdAllocator) — React calls the allocator
  * once per batch, at the batch's creation, and stores the returned id as
  * the batch's identity for its whole life. Store ids and React ids are ONE
  * number space: no translation tables on either side. 0 is the reserved
@@ -43,7 +43,7 @@ declare module 'react' {
 	}
 
 	/** Subscribes an external store to the protocol events; returns the unsubscribe function. */
-	export function unstable_subscribeToExternalRuntime(listener: ExternalRuntimeListener): () => void;
+	export function subscribeToExternalRuntime(listener: ExternalRuntimeListener): () => void;
 	/**
 	 * Registers the external store's batch-id allocator; returns the
 	 * unregister function. React calls the allocator exactly once per batch,
@@ -58,15 +58,15 @@ declare module 'react' {
 	 * run nothing else. Throws if an allocator is already registered (ids are
 	 * one number space; exactly one store can own allocation).
 	 */
-	export function unstable_registerBatchIdAllocator(allocateBatchId: (deferred: boolean) => number): () => void;
+	export function registerExternalRuntimeBatchIdAllocator(allocateBatchId: (deferred: boolean) => number): () => void;
 	/** The write-context API: the id of the batch the current code is executing on behalf of, stable for that batch's whole life (created through the registered allocator on first ask). 0 = no batch (no renderer provider registered — unreachable once a renderer has loaded). */
-	export function unstable_getCurrentWriteBatch(): number;
+	export function getExternalRuntimeCurrentWriteBatch(): number;
 	/** The root container currently rendering on this call stack, or null outside render. */
-	export function unstable_getRenderContext(): null | { container: unknown };
+	export function getExternalRuntimeRenderContext(): null | { container: unknown };
 	/** Runs fn so the state updates it schedules join the batch, rendering and committing with it; a retired, unknown, or 0 batch id takes a discrete-urgent fallback instead. Throws if called during render (React error 605) — update attribution during a render pass belongs to the pass itself. */
-	export function unstable_runInBatch<R>(batchId: number, fn: () => R): R;
+	export function externalRuntimeRunInBatch<R>(batchId: number, fn: () => R): R;
 	/** Synchronously abandons every in-progress render pass on every root. */
-	export function unstable_discardAllWip(): void;
+	export function externalRuntimeDiscardAllWip(): void;
 	/**
 	 * TEST-ONLY. Clears the batch registry's full slot tenancy — batch ids,
 	 * deferred flags, pending-root sets, committed-root sets, parked async
@@ -77,7 +77,7 @@ declare module 'react' {
 	 * late additionally no-ops via its captured batch id). Never call this in
 	 * production: live batches lose their retirement edge.
 	 */
-	export function unstable_resetBatchRegistryForTest(): void;
+	export function externalRuntimeResetBatchRegistryForTest(): void;
 }
 
 export {};
