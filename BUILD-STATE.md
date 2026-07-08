@@ -260,6 +260,53 @@ must be able to continue from it alone.
      dump of the marker string, cutting the parse window. The marker match
      is now line-anchored (/^@@SMOKE-START$/m); documented in the spec.
 
+## Done (continued 4)
+
+9. **Growth verdict fix (lead A/B convicted the resizable-ArrayBuffer
+   choice; leg 3 first item)** — replaced with dalien-signals' proven
+   fixed-full-reservation pattern:
+   - Each WorldArena shell allocates its WHOLE reservation once at
+     construction: `new Int32Array(ArenaGeom.MAX_BUFFER_BYTES >> 2)` (2^26
+     bytes = 64MiB = 2M stride-8 records) + a Float64Array clock column at
+     one slot per record (16MiB). Zero-fill demand paging makes the
+     reservation address-space-cheap; resident memory tracks touched
+     records only. Buffer identity stable by construction; views are plain
+     fixed-length typed arrays (full V8 element access); NO growth
+     machinery exists — arenaGrow is deleted, and the bump allocators throw
+     `arenaExhausted()` if a single world view ever exceeds the reservation
+     (mirrors the kernel's exhaustion throw).
+   - ARENA_POOL_CAP (8) documented as the pool's named address-space bound.
+   - `arenaInitInts` is INERT (kept for reset-API stability): documented in
+     EngineResetOptions + the ArenaInitInts type + the EngineCore field;
+     the arena-sa2/sd `arenaInitInts: 16` pins re-commented — they once
+     forced mid-op growth, they now pin the same flows against the
+     fixed-reservation contract. This is the coordinator's option (b),
+     chosen because with fixed buffers there is no committed-capacity
+     accounting anything reads — a watermark row would be dead state.
+   - **Interleaved gate (medians of 3, spka-sa-gates via harness/ for tsx;
+     COSIGNAL_ROOT both ways)**: cold-render main 398.75 vs worktree 402.29
+     ns (+0.9%); wide-mask main 168.96 vs worktree 169.13 µs (+0.1%).
+     Confirmation round after re-apply: 410 vs 410.6 (+0.15%) and 169.2 vs
+     157.1 (-7%, worktree faster). GATE PASSED (±5%). Checksums identical
+     both sides.
+   - **Bare-write +9% investigation (separate item)**: reproducible, not
+     noise — interleaved spkw-direct SHAPE=bare medians: main 5.87 vs
+     worktree 6.28 ns/write (+7%). NOT arena-related (the bare path never
+     constructs a WorldArena). Attribution probe (write()'s durable-clock
+     bump commented out): recovers only ~0.11ns of the ~0.41ns delta — the
+     normative bump-table store is a MINOR contributor; the remaining
+     ~0.3ns is a fused-module effect on the standalone write chain (write()
+     grew ~25 bytecodes with the bump; plausibly inlining-budget
+     displacement across Atom.set → writeAtom → E.write). Deeper
+     attribution (--trace-turbo-inlining) left to the lead; the bump-table
+     row is normative, so removing the bump is not builder-discretionary.
+   - CAUTION for successors: a `git checkout <file>` used to revert a
+     temporary probe ALSO reverted the leg's uncommitted edits to that file
+     (the schema-gen regen-diff caught the mismatch immediately). Probes on
+     uncommitted work must be reverted by re-editing, never by checkout.
+   - Suites after re-apply: cosignals 360 green (incl. regen-diff), react
+     72/72, conformance 179/179, oracle 82 green.
+
 ## In progress / exact next actions
 
 **Priority 4 — episodes (batches/log/handoff/drop).** Nothing started.

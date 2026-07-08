@@ -116,14 +116,14 @@ export type KernelColumn = {
  * shadow/link record ordinal (id >> ID_TO_COLUMN_SHIFT); the one
  * `keyedBy: 'nodeIndex'` column (nodeToShadow) indexes by the kernel's
  * dense node ordinal. `storage: 'growArray'` columns grow together in the
- * shadow allocator; `storage: 'clockBuffer'` is the growable float64
- * buffer resized in step with the arena's own buffer.
+ * shadow allocator; `storage: 'recordBuffer'` is a typed buffer fixed at
+ * the arena's full record reservation (one slot per record).
  */
 export type WorldColumn = {
 	/** field name on the WorldArena class */
 	name: string;
 	keyedBy: 'record' | 'nodeIndex';
-	storage: 'growArray' | 'clockBuffer';
+	storage: 'growArray' | 'recordBuffer';
 	emptyValue: 'undefined' | '0';
 	/** grows in the shadow allocator's grown-together loop */
 	grownWithShadow: boolean;
@@ -217,8 +217,8 @@ export function defineSchema(s: Schema): Schema {
 		if (c.doc.length === 0) {
 			throw new Error(`schema: world column ${c.name} undocumented`);
 		}
-		if (c.storage === 'clockBuffer' && (c.grownWithShadow || c.keyedBy !== 'record')) {
-			throw new Error(`schema: world column ${c.name}: clock buffers grow with the arena buffer and key by record`);
+		if (c.storage === 'recordBuffer' && (c.grownWithShadow || c.keyedBy !== 'record')) {
+			throw new Error(`schema: world column ${c.name}: record buffers are fixed at the reservation and key by record`);
 		}
 	}
 	if (!s.worldArena.columns.some((c) => c.grownWithShadow)) {
@@ -630,13 +630,17 @@ export const schema: Schema = defineSchema({
 					],
 				},
 				{
-					name: 'MAX_BUFFER_BYTES', value: 268435456, doc: [
-						'2^28 — the growable-buffer reservation ceiling per arena (8M records',
-						'at 32 bytes each). Arena growth never replaces the buffer: each',
-						'arena ArrayBuffer is created resizable with this maxByteLength and',
-						'grows in place, so buffer identity is stable for the life of the',
-						'shell and every cached view stays valid across growth (the',
-						'reservation is virtual address space; pages commit on use).',
+					name: 'MAX_BUFFER_BYTES', value: 67108864, doc: [
+						'2^26 — the fixed per-arena record reservation (64MiB of Int32:',
+						'2M stride-8 records, plus a float64 clock slot per record beside',
+						'it). Each arena shell allocates the whole reservation ONCE and',
+						'never grows: fresh zeroed pages are zero-fill demand-paged, so the',
+						'reservation costs address space while resident memory tracks only',
+						'the records actually touched (the dalien-signals record-store',
+						'pattern). Buffer identity is therefore stable by construction, the',
+						'views are plain fixed-length typed arrays (full V8 element-access',
+						'optimization), and no growth machinery exists to get wrong. A view',
+						'that outgrows the reservation throws (arenaExhausted).',
 					],
 				},
 			],
@@ -728,13 +732,13 @@ export const schema: Schema = defineSchema({
 			{
 				name: 'clocks',
 				keyedBy: 'record',
-				storage: 'clockBuffer',
+				storage: 'recordBuffer',
 				emptyValue: '0',
 				grownWithShadow: false,
 				scrubOnEvict: true,
 				doc: [
 					'The per-world updated-at clock column, one float64 slot per record,',
-					'in a growable buffer resized in step with the arena buffer. A shadow',
+					'fixed at the arena record reservation. A shadow',
 					"record's slot is the node's per-root committed clock: a process-",
 					'monotone stamp (drawn from the engine\'s one clockSource) moved when',
 					'the shadow\'s folded outcome changes in a COMMITTED arena — root A\'s',
@@ -898,8 +902,8 @@ export function generateLayoutBlock(s: Schema): string {
 	out.push(...docBlock([
 		'Grow the world arena\'s grown-together per-record columns to cover one',
 		'column index (generated from the column roster — a new column cannot',
-		'miss the growth loop). Called by the shadow allocator; the clock buffer',
-		'grows with the arena buffer instead (arenaGrow).',
+		'miss the growth loop). Called by the shadow allocator; record-buffer',
+		'columns are fixed at the full reservation and never grow.',
 	], 0));
 	out.push('function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {');
 	out.push(`\twhile (a.${grown[0].name}.length <= columnIndex) {`);
@@ -935,7 +939,7 @@ export function generateLayoutBlock(s: Schema): string {
 	], 0));
 	out.push('function resetWorldArenaColumnsOnRelease(a: WorldArena): void {');
 	for (const c of w.columns) {
-		if (c.storage === 'clockBuffer') {
+		if (c.storage === 'recordBuffer') {
 			out.push(`\ta.${c.name}.fill(${c.emptyValue}, 0, a.next >> ${w.shapeEnum.name}.ID_TO_COLUMN_SHIFT);`);
 		} else {
 			out.push(`\ta.${c.name}.fill(${c.emptyValue});`);

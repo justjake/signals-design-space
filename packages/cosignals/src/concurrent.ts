@@ -699,17 +699,22 @@ function recordFreeImpl(recordId: NodeId, nodeIndex: number): void {
 // above for the registry and the resident walks.)
 
 /** An arena buffer capacity, counted in Int32 slots (stride-8 records: one
- * node shadow or one dependency link per record). */
+ * node shadow or one dependency link per record). Inert since the
+ * fixed-reservation contract (see EngineResetOptions.arenaInitInts). */
 export type ArenaInitInts = number;
 
 /** Engine tuning — accepted by `__resetEngineForTest`; a never-reset
  * production process runs the defaults. */
 export type EngineResetOptions = {
 	/**
-	 * Every claimed world arena's buffer starts at this capacity and grows
-	 * in place when its records outgrow it (default 8192 ints). Shrinking it
-	 * makes even small graphs exercise mid-operation growth, which is how the
-	 * arena suites pin every growth path.
+	 * INERT (kept for reset-API stability): under the fixed-reservation
+	 * contract every arena allocates its whole record reservation at
+	 * construction (zero-fill demand-paged, so untouched records cost no
+	 * resident memory) and never grows — there is no initial capacity to
+	 * set and no growth to force. The option once sized a growable buffer;
+	 * the arena suites that shrank it to force mid-operation growth now pin
+	 * the same scenarios against the fixed-reservation contract (growth
+	 * cannot corrupt what never moves).
 	 */
 	arenaInitInts?: ArenaInitInts;
 	/**

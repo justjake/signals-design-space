@@ -159,7 +159,7 @@ describe('S-A mark decay (§4.3) + growth (§4.5.9) + GEN tenancy (§4.5.3)', ()
 	});
 
 	it('stride-sized initial arena: every growth path exercises mid-walk (structural validator green throughout)', () => {
-		const b = bridge({ arenaInitInts: 16 }); // two records: every later alloc grows mid-operation
+		const b = bridge({ arenaInitInts: 16 }); // inert knob (fixed-reservation contract): the scenario once forced mid-op growth; it now pins the same flows against the fixed buffer
 		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
 		const c = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w = mount(b, 'R', c, 'W');

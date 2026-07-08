@@ -124,6 +124,7 @@ export type EngineCore = {
 	getCommittedAdvance: ConcurrentEngineHost['getCommittedAdvance'];
 	advanceCommitted: ConcurrentEngineHost['advanceCommitted'];
 	/** Initial arena buffer size in ints (EngineResetOptions knob). */
+	/** Inert under the fixed-reservation contract (see EngineResetOptions). */
 	arenaInitInts: ArenaInitInts;
 
 	// ---- composition-assigned tables (assigned by the composition site right

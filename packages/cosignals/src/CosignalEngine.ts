@@ -94,7 +94,7 @@ import type { AtomCtx, ComputedCtx, UseKey } from './index.js';
 // factory signs itself against the engine core record and the machinery's
 // entity types while those still live in their pre-merge modules.
 import type { EngineCore, World } from './World.js';
-import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, Equals, Reader, RootId, Value, Watcher } from './concurrent.js';
+import type { AnyInternals, AtomInternals, ComputedInternals, Equals, Reader, RootId, Value, Watcher } from './concurrent.js';
 
 /**
  * The one evaluation context, passed by the kernel to every computed getter
@@ -544,21 +544,25 @@ const enum ArenaGeom {
 	 */
 	CLOCK_LIMIT = 2147418112,
 	/**
-	 * 2^28 — the growable-buffer reservation ceiling per arena (8M records
-	 * at 32 bytes each). Arena growth never replaces the buffer: each
-	 * arena ArrayBuffer is created resizable with this maxByteLength and
-	 * grows in place, so buffer identity is stable for the life of the
-	 * shell and every cached view stays valid across growth (the
-	 * reservation is virtual address space; pages commit on use).
+	 * 2^26 — the fixed per-arena record reservation (64MiB of Int32:
+	 * 2M stride-8 records, plus a float64 clock slot per record beside
+	 * it). Each arena shell allocates the whole reservation ONCE and
+	 * never grows: fresh zeroed pages are zero-fill demand-paged, so the
+	 * reservation costs address space while resident memory tracks only
+	 * the records actually touched (the dalien-signals record-store
+	 * pattern). Buffer identity is therefore stable by construction, the
+	 * views are plain fixed-length typed arrays (full V8 element-access
+	 * optimization), and no growth machinery exists to get wrong. A view
+	 * that outgrows the reservation throws (arenaExhausted).
 	 */
-	MAX_BUFFER_BYTES = 268435456,
+	MAX_BUFFER_BYTES = 67108864,
 }
 
 /**
  * Grow the world arena's grown-together per-record columns to cover one
  * column index (generated from the column roster — a new column cannot
- * miss the growth loop). Called by the shadow allocator; the clock buffer
- * grows with the arena buffer instead (arenaGrow).
+ * miss the growth loop). Called by the shadow allocator; record-buffer
+ * columns are fixed at the full reservation and never grow.
  */
 function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {
 	while (a.vals.length <= columnIndex) {
@@ -3586,7 +3590,12 @@ export function getKernelNodeIndex(id: NodeId): NodeIndex {
 // region above, same-file with these walks so the members inline as
 // literals under every toolchain.)
 
-/** Bounds the arena pool: releaseArena keeps at most this many scrubbed shells (further releases drop the shell). */
+/** Bounds the arena pool: releaseArena keeps at most this many scrubbed
+ * shells (further releases drop the shell). Also the pool's address-space
+ * bound: each shell holds its full fixed reservation (ArenaGeom.
+ * MAX_BUFFER_BYTES + the clock column), so the parked pool reserves at most
+ * ARENA_POOL_CAP × that — address space, not resident memory (only touched
+ * pages commit). */
 const ARENA_POOL_CAP = 8;
 const EMPTY_I32 = new Int32Array(0);
 
@@ -3608,28 +3617,26 @@ export class WorldArena {
 	/** Pool claim generation (bumped at claim and release). */
 	claimGen = 0;
 	/**
-	 * The arena buffer's backing store: a RESIZABLE ArrayBuffer (created with
-	 * maxByteLength = ArenaGeom.MAX_BUFFER_BYTES) that grows IN PLACE — the
-	 * buffer object's identity never changes for the life of the shell, so
-	 * every view and every cached local stays valid across growth by
-	 * construction. This is what retired the old growth style (replace the
-	 * Int32Array, then re-load `a.memory` at every allocating call site — a
-	 * hand-maintained discipline where one forgotten re-load was silent
-	 * corruption): the pooled per-world arenas can't afford the kernel's
-	 * closure-rebuild answer (a fresh closure set per claim would allocate
-	 * per render and go polymorphic), and boundary-only growth would break
-	 * the pinned mid-operation growth capability (folds legitimately allocate
-	 * unbounded cones mid-operation; arena-sa2/sd force it).
+	 * The arena's records, allocated ONCE at the full reservation
+	 * (ArenaGeom.MAX_BUFFER_BYTES of Int32 records) and never grown: a fresh
+	 * zeroed allocation this size is nearly free — the pages are zero-fill
+	 * demand-paged, so the reservation costs address space and resident
+	 * memory only for the records actually touched (the pattern proven in
+	 * dalien-signals, which reserves 64MB record stores the same way).
+	 * Buffer identity is stable for the life of the shell and the view is a
+	 * plain fixed-length Int32Array (full V8 element-access optimization) —
+	 * there is no growth machinery because there is no growth. The
+	 * alternatives both lost: the old replace-then-re-load-`a.memory` style
+	 * was a hand-maintained discipline where one forgotten re-load was
+	 * silent corruption, and resizable-ArrayBuffer views (tried at the
+	 * schema re-derivation) put a length-tracking bounds check on every hot
+	 * arena walk access — measured +56% on cold renders and +18-31% on wide
+	 * fanout masks, reverted.
 	 */
-	readonly buffer: ArrayBuffer;
-	/** Length-tracking Int32 view over {@link buffer} (a resize is visible
-	 * through every existing view immediately). */
 	readonly memory: Int32Array;
-	/** The clock column's backing store (resizable, one float64 per record;
-	 * resized in step with {@link buffer} by arenaGrow). */
-	readonly clockBuffer: ArrayBuffer;
-	/** Length-tracking float64 view over {@link clockBuffer}: the per-world
-	 * updated-at clock column (see the schema's world column roster). */
+	/** The per-world updated-at clock column: one float64 slot per record,
+	 * fixed at the same record reservation as {@link memory} (see the
+	 * schema's world column roster). */
 	readonly clocks: Float64Array;
 	/** Whether refolds stamp the clock column: committed arenas only —
 	 * render-world values are pin-frozen, so a render arena's clocks never
@@ -3678,21 +3685,15 @@ export class WorldArena {
 	/** Per-arena evaluation cycle (link VERSION stamps). */
 	cycle = 0;
 
-	constructor(kind: 'render' | 'committed', world: World, root: RootId, initInts: ArenaInitInts) {
+	constructor(kind: 'render' | 'committed', world: World, root: RootId) {
 		this.kind = kind;
 		this.world = world;
 		this.root = root;
 		this.bumpsClocks = kind === 'committed';
-		// One growable reservation per shell (records) plus one for the clock
-		// column (one float64 per record: byte count = the int count, rounded
-		// up to the float64 alignment). An initInts above the standard
-		// ceiling raises the reservation with it.
-		const maxBytes = Math.max(initInts * 4, ArenaGeom.MAX_BUFFER_BYTES);
-		const clockBytes = (initInts + 7) & ~7;
-		this.buffer = new ArrayBuffer(initInts * 4, { maxByteLength: maxBytes });
-		this.memory = new Int32Array(this.buffer);
-		this.clockBuffer = new ArrayBuffer(clockBytes, { maxByteLength: Math.max(clockBytes, maxBytes >> 2) });
-		this.clocks = new Float64Array(this.clockBuffer);
+		// The full reservation, once per shell (see the memory field's doc):
+		// the record store plus one float64 clock slot per record.
+		this.memory = new Int32Array(ArenaGeom.MAX_BUFFER_BYTES >> 2);
+		this.clocks = new Float64Array(ArenaGeom.MAX_BUFFER_BYTES >> 5);
 	}
 }
 
@@ -3745,19 +3746,12 @@ function arenaBumpCycle(a: WorldArena): number {
 	return ++a.cycle;
 }
 
-/** Grow the arena to cover `need` ints — an IN-PLACE resize of the growable
- * backing store (new pages arrive zeroed, preserving the fresh-record
- * invariant), so growth is transparent to every live view and cached local:
- * no buffer replacement, no re-load discipline at allocating call sites (see
- * {@link WorldArena.buffer}). The clock column resizes in step (one float64
- * per record: byte count = the int count, at float64 alignment). */
-function arenaGrow(a: WorldArena, need: number): void {
-	let len = a.memory.length;
-	while (len < need) len *= 2;
-	if (len !== a.memory.length) {
-		a.buffer.resize(len * 4);
-		a.clockBuffer.resize((len + 7) & ~7);
-	}
+/** The arena reservation's exhaustion throw, out of line (cold by
+ * definition: a single world view outgrew the fixed per-arena record
+ * reservation — see {@link WorldArena.memory}; there is no growth to fall
+ * back on, by design). */
+function arenaExhausted(): never {
+	throw new Error('cosignals: world arena reservation exhausted — a single world view exceeds the per-arena record reservation (ArenaGeom.MAX_BUFFER_BYTES).');
 }
 
 function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: number): ShadowId {
@@ -3772,13 +3766,13 @@ function arenaAllocShadow(a: WorldArena, ix: NodeIndex, flags: number, gen: numb
 		a.memory[id + ArenaField.DEPS] = 0;
 	} else {
 		id = a.next;
-		arenaGrow(a, id + ArenaGeom.STRIDE);
+		if (id >= a.memory.length) arenaExhausted();
 		a.next = id + ArenaGeom.STRIDE;
 	}
 	const memory = a.memory;
 	// Fresh-record invariant (a priced cold-render saving): memory[a.next..] is all zero —
-	// a fresh buffer is zeroed, arenaGrow's resize delivers zeroed pages past
-	// the old length, and releaseArena scrubs the dead tenancy's whole
+	// the reservation is allocated zeroed (demand-paged), and releaseArena
+	// scrubs the dead tenancy's whole
 	// written prefix [0, next) before the buffer pools. So the list heads
 	// (DEPS/DEPS_TAIL/SUBS/SUBS_TAIL) and MARK are already 0 here, and the
 	// bump allocator never re-issues a record id mid-tenancy — only the
@@ -3799,7 +3793,7 @@ function arenaAllocLink(a: WorldArena): number {
 		a.linkFree = a.memory[id + ArenaLinkField.FREE_NEXT]!;
 	} else {
 		id = a.next;
-		arenaGrow(a, id + ArenaGeom.STRIDE);
+		if (id >= a.memory.length) arenaExhausted();
 		a.next = id + ArenaGeom.STRIDE;
 	}
 	a.links++;
@@ -3903,7 +3897,7 @@ function arenaLinkInsert(a: WorldArena, dep: number, sub: number, version: numbe
 		if (!weak) arenaSetLinkWeak(a, wTail, false); // upgrade weak→strong
 		return;
 	}
-	const newLink = arenaAllocLink(a); // may grow the arena (in-place resize: views stay valid)
+	const newLink = arenaAllocLink(a);
 	const memory = a.memory;
 	memory[sub + ArenaField.DEPS_TAIL] = newLink;
 	memory[newLink + ArenaLinkField.VERSION] = version;
@@ -4170,8 +4164,9 @@ export function createWorldArena(core: EngineCore): void {
 	const rootToArena = core.rootToArena;
 	/** Pooled released arena shells (buffers reused; claimGen bumped per tenancy). */
 	const arenaPool = core.arenaPool;
-	/** Initial arena size in ints (EngineResetOptions knob; tests shrink it to force mid-op growth). */
-	const arenaInitInts: ArenaInitInts = core.arenaInitInts;
+	// (core.arenaInitInts is inert under the fixed-reservation contract —
+	// see EngineResetOptions.arenaInitInts; arenas allocate their full
+	// reservation at construction, and there is no growth to seed.)
 
 	/** Open arena evaluation frame (piggybacked on the world evaluation or
 	 * an arena-only refold): links record into arenaFrame at arenaFrameCycle.
@@ -4184,7 +4179,7 @@ export function createWorldArena(core: EngineCore): void {
 	function claimArena(kind: 'render' | 'committed', world: World, root: RootId): WorldArena {
 		let a = arenaPool.pop();
 		if (a === undefined) {
-			a = new WorldArena(kind, world, root, arenaInitInts);
+			a = new WorldArena(kind, world, root);
 		} else {
 			a.kind = kind;
 			a.world = world;
@@ -4632,8 +4627,8 @@ export function createWorldArena(core: EngineCore): void {
 	};
 
 	/** Kernel `checkDirty` transliteration (arenaUpdateShadow can run getters —
-	 * allocations, arena growth — growth resizes in place, so views and
-	 * cached locals stay valid throughout). Entry wrapper: owns the scratch-stack base restore around the
+	 * allocations included; the fixed-reservation buffers never move, so
+	 * views and cached locals stay valid throughout). Entry wrapper: owns the scratch-stack base restore around the
 	 * out-of-line walk so each piece stays under V8's 460-bytecode inline
 	 * budget (the arena counterpart of the kernel checkDirty split). */
 	function arenaCheckDirty(a: WorldArena, startLink: number, startSub: number): boolean {

@@ -115,7 +115,7 @@ export const COLUMNS: readonly ColumnInfo[] = [
 	{ name: "walk", domain: 'worldArena', storage: "growArray", scrub: "release" },
 	{ name: "weakSubs", domain: 'worldArena', storage: "growArray", scrub: "release" },
 	{ name: "weakSubsTail", domain: 'worldArena', storage: "growArray", scrub: "release" },
-	{ name: "clocks", domain: 'worldArena', storage: "clockBuffer", scrub: "evict+release" },
+	{ name: "clocks", domain: 'worldArena', storage: "recordBuffer", scrub: "evict+release" },
 ];
 
 /** Decode a FLAGS word into the set flag names of one registry. */

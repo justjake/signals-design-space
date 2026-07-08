@@ -163,7 +163,7 @@ describe('S-D pool shell reuse (§4.8)', () => {
 	});
 
 	it('growth across pooled tenancies: a grown buffer re-claims at capacity and keeps growing mid-op', () => {
-		const b = bridge({ arenaInitInts: 16 }); // two records: every alloc beyond the burn grows mid-operation
+		const b = bridge({ arenaInitInts: 16 }); // inert knob (fixed-reservation contract): the scenario once forced mid-op growth; it now pins the same flows against the fixed buffer
 		const atoms = Array.from({ length: 12 }, (_, i) => b.atom(`a${i}`, i));
 		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w1 = mount(b, 'R', sum, 'W1');
