@@ -197,7 +197,7 @@ import type { ObservationIndex } from './ObservationIndex.js';
 import { TAPE_CHUNK_ENTRIES, WriteLog, type WriteLogEntry } from './WriteLog.js';
 import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchManager } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
-import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
+import { WorldArena, arenaCheckerLayout, arenaHasShadow, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
 import type { Subscription } from './CosignalEngine.js';
 import { Watcher, type RenderPass, type RenderPassManager } from './CosignalEngine.js';
 
@@ -1448,7 +1448,7 @@ function reclaimGuardsImpl(id: NodeId, ix: NodeIndex): boolean {
 	if (node !== undefined && node.kind === 'atom' && episodeHolds.has(node)) return true;
 	for (const p of rootToOpenRender.values()) {
 		const a = p.arena;
-		if (a !== undefined && ix < a.nodeToShadow.length && a.nodeToShadow[ix] !== 0) return true;
+		if (a !== undefined && arenaHasShadow(a, ix)) return true;
 	}
 	let suspended = false;
 	eachArena((a) => {

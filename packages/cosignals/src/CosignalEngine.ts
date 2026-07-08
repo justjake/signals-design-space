@@ -3956,12 +3956,13 @@ export function arenaHoldsSuspended(a: WorldArena, ix: NodeIndex): boolean {
 	return sh !== 0 && (a.suspIdx[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT] ?? 0) !== 0;
 }
 
-/** Membership probe (one of the named world-state queries the render
- * lifecycle is confined to — owner ruling: orchestration reads world state
- * through the narrow function set, never arena storage directly): whether
- * this arena currently holds a shadow record for the node index. Cold —
- * dev-assert and diagnostic duty. */
-function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
+/** Membership probe (one of the named world-state queries orchestration
+ * and the reclamation guards are confined to — owner ruling: world state
+ * is read through the narrow function set, never arena storage directly):
+ * whether this arena currently holds a shadow record for the node index.
+ * Cold — the reclamation guard's open-render row, the render lifecycle's
+ * population dev assert, and diagnostics. */
+export function arenaHasShadow(a: WorldArena, ix: NodeIndex): boolean {
 	return (ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0) !== 0;
 }
 
@@ -5691,7 +5692,7 @@ export class Watcher {
  * boundary (queued notifications may still hold the handle; its own id
  * fields stay readable), where the generated column scrub clears every
  * slot the record owned. */
-export function freeWatcherRecord(w: Watcher): void {
+function freeWatcherRecord(w: Watcher): void {
 	E.disposeObserver(w.rec);
 }
 

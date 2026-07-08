@@ -796,23 +796,71 @@ seam extraction + object implementation + dual gate.
       from tallies), oracle 82/1skip, react 72/72, conformance 179×2,
       typecheck ×3 clean.
 
+19. **Priority 7 verification + priority 8 inventory (leg 6, partial by
+    design)**:
+    - **Guard table VERIFIED row by row** (reclaimNode's table + the
+      registered hook reclaimGuardsImpl in concurrent.ts): kernel subs ✓;
+      lifecycle active (id-keyed map) ✓ retry at the lifecycle-active
+      clearing site; watcher-index membership ✓ retry at dropWatcher's
+      unlink; observation retains (obsRefs) ✓ retry in ObservationIndex's
+      0-crossing; episode membership (episodeHolds.has — the leg-4
+      re-expression) ✓ retries at the close's wholesale sweep
+      (reclaimRetryAllSkipped) AND WriteLog's per-atom edge trigger when a
+      chunk fold empties a tape; open-render arena membership ✓ retry via
+      releaseArena's wholesale sweep; suspended-list membership
+      (arenaHoldsSuspended) ✓ retry at arenaUnsuspend + release. Teardown
+      order matches the plan row (readers unreachable → episode refs
+      detached → owner dropped + membership cleared → wholesale sweep).
+    - **Cleanups**: reclaimGuardsImpl's open-render row now uses the
+      exported arenaHasShadow probe (was the one remaining direct
+      `a.nodeToShadow` read outside the engine — the guard's world-state
+      reads are now fully narrow, matching its suspended row);
+      freeWatcherRecord unexported (same-file-only since the fold-in).
+      No other dead machinery found: __setReclaimGuardHook /
+      __setRecordFreeHook stay (the hook reads machinery-module state —
+      they die when that state reaches the engine or the seam leg
+      formalizes the contract).
+    - **The reclamation section MOVE to file end is DEFERRED** (the unit's
+      other half): the owner is live-editing this worktree (editor
+      reformat sweeps mid-leg — see item 18's hazard note), which makes a
+      ~600-line text move needlessly racy right now, and the move is
+      reading-order cosmetics that priority 10's docs-gate final pass owns
+      equally well. No semantics wait on it.
+    - **Priority 8 inventory (suite migration)** — current test-side
+      import/seam map (NO spec imports a dead module path; tsc + the green
+      suites prove it):
+      - machinery-module imports from tests: ONLY
+        `__peekNextBatchIdForTest` (Batch.js) in tests/helpers.ts +
+        tests/oracle-adapter.ts — moves if/when Batch.ts folds.
+      - implementation-coupled specs to watch at the storage-seam leg:
+        arena-checker.ts + arena-sa/sa2/sa3/sb/sc/sd (arenaCheckerLayout +
+        __checkerInternals + bridge __arenaForTest/__arenaPoolForTest/
+        __arenaStats/__arenaLinkIdForTest/__arenaLinkNextDepForTest/
+        __bumpNodeGenForTest), leak-audit.spec.ts (shell.memory.length,
+        pool internals), bytecode.spec.ts (budgets NAME arena functions —
+        re-pin at the seam leg + priority 10), trace-off.spec.ts
+        (ENGINE_MODULES file list).
+      - everything else imports index.ts (public), concurrent.ts (engine
+        surface + test seams), CosignalEngine.ts (E/enums/checker seams),
+        Tracer/graphviz/debug — all live paths, no churn needed.
+
 ## In progress / exact next actions
 
 **Priority 5 (observers) is COMPLETE** (items 12-15 above; commits b22b174,
 853bc66, 65a3f42, ebd5244) **plus the lead-verdict fix round (item 16)**.
 **Growth restoration (leg 6 unit 1, item 17) and render integration
-(leg 6 unit 2, item 18) are COMPLETE.** Successor order:
+(leg 6 unit 2, item 18) are COMPLETE; priority 7 is verified with its
+section move deferred (item 19).** Successor order:
 
-1. **Priority 7 — reclamation re-expression review**: the guard table is
-   already mostly re-expressed across legs 4-5; the unit is verification
-   + moving the reclamation section to its documented place at the END of
-   the fused file + deleting any dead machinery.
-2. **Priority 8 — suite migration**: re-point internals-coupled specs off
-   dead module paths / old seams; document each (see the leg-6 inventory
-   below — most specs already import only live paths).
+1. **Priority 7 remainder**: move the reclamation section to the END of
+   the fused file (deferred this leg — see item 19; coordinate with the
+   owner's live editing, or fold it into priority 10's final pass).
+2. **Priority 8 — suite migration**: per item 19's inventory there is
+   nothing to re-point today; the implementation-coupled specs listed
+   there move WITH the storage-seam leg. Do not churn passing tests.
 3. **Priorities 9-10**: SSR serialize/initialize (alt-b react.ts §13.8
    shape) LAST; bytecode re-pin (unique names + collision assertion) +
-   docs-gate final pass.
+   docs-gate final pass (+ the deferred section move).
 4. **Owner ruling 3's storage A/B** (its own leg): seam extraction at the
    narrow function set, the plain-object implementation, the dual gate.
 
@@ -849,6 +897,22 @@ writing. Full-suite tallies may drift by their test count while untracked.
 
 ## Run log
 
+- Run 6 (fourth builder, leg 6 — growth restoration + render integration +
+  priority-7 verification): commits bd656e0 (cherry-pick, owner ruling 3),
+  3d83cc3 (growth restoration, layout v5, gate passed), 1cf8a12 (render
+  integration — RenderPass.ts dies into the engine), plus the priority-7
+  cleanup/inventory commit (see items 17-19). Suites at run end: cosignals
+  31 files / 366 passed / 1 skipped, oracle 82/1skip, cosignals-react
+  72/72 (real fork), conformance FRAMEWORK=cosignals 179/179 +
+  cosignals-concurrent 179/179 (this worktree's harness), typecheck clean
+  ×3 (cosignals, cosignals-react, cosignals-oracle). Growth gate:
+  cold-render -5.5% (WT faster) / wide-mask +0.1% over 8 interleaved
+  rounds / storm +1.0%; checksums identical. NOT run: daishi verifier
+  (final-gate material), perf benches beyond the sanctioned growth gate
+  (lead owns A/B). WORKTREE HAZARD: the owner live-edits here (editor
+  reformat sweeps hit tracked files mid-leg — never commit reflow noise;
+  rebuild from HEAD instead, see item 18). Next action: the successor list
+  under "In progress / exact next actions".
 - Run 1 (first builder): commits 526f8ca (cherry-pick), b144141 (schema +
   skeleton + clocks), 0e97bee (kernel cutover), 0e741c3 (world-arena move).
   Tree at run end: flattening @ 0e741c3, only pnpm-lock.yaml uncommitted,
