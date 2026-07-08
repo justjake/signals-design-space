@@ -52,6 +52,34 @@ describe('case 1 — world-divergent dependency (the killer; family)', () => {
 		selfCheck(m);
 	});
 
+	it('V-urgent-committed-branch: an urgent write to the branch a pending transition abandoned still notifies and moves committed', () => {
+		// Owner-raised scenario: c = flag ? a : b with committed flag=0 (the
+		// b branch). A transition flips flag, and its render re-tracks the
+		// TRANSITION world's dependency set to the a branch. An urgent write
+		// to b then lands while the transition render is still open. The
+		// committed world's dependency set still contains b, so the watcher
+		// must be notified urgently and the committed value must move — a
+		// single always-current edge set would miss this update.
+		const { m, flag, b, c, w } = setup();
+		const k = m.openBatch('deferred');
+		m.write(k.id, flag, set(1)); // transition: flag flips → k-world takes the a branch
+		const pk = openRender(m, 'A', [k]); // the transition render re-tracks k's dep set
+		expect(m.renderValue(c, pk)).toBe(0); // a-path in k's world (a = 0)
+		m.renderYield(pk.id); // transition paused, still pending
+		const u = m.openBatch('urgent');
+		m.write(u.id, b, set(7)); // urgent write to the branch k abandoned
+		// The committed dep set still routes b → c → W: the urgent delivery
+		// happens even though k's world no longer depends on b.
+		expect(m.eventsOfType('delivery').filter((e) => e.watcher === 'W' && e.batch === u.id)).toHaveLength(1);
+		m.renderResume(pk.id);
+		expect(m.renderValue(c, pk)).toBe(0); // pinned transition world unmoved by u
+		m.renderEnd(pk.id, 'discard');
+		commitAndRetire(m, 'A', u);
+		expect(m.committedValue(c, 'A')).toBe(7); // committed took the urgent update via b
+		expect(w.lastRenderedValue).toBe(7);
+		selfCheck(m);
+	});
+
 	it('V2: write to the committed-only dep b in k over-notifies but never mis-values', () => {
 		const { m, flag, a, b, c } = setup();
 		const k = m.openBatch('deferred');
