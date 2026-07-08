@@ -196,7 +196,10 @@ function maybeQuiesce(): void {
 		a.episodeBaseSeq = 0;
 	}
 	logged.clear();
-	for (const s of draftEdgeSources) s.draftSubs = null;
+	for (const s of draftEdgeSources) {
+		if (s.draftSubs !== null) pokeTargets -= s.draftSubs.size;
+		s.draftSubs = null;
+	}
 	draftEdgeSources.clear();
 }
 
@@ -633,6 +636,13 @@ function linkBack(src: Source, sub: Observer, i: number): void {
 	}
 }
 
+/** While a re-evaluation is in flight, sources that momentarily lose their
+ * last observer wait here: most are re-read (and re-linked) by the same
+ * evaluation, so tearing their own subtrees down eagerly would cascade a
+ * deactivate/activate wave down every chain on every recompute. */
+const deferredStack: Source[] = [];
+let deferredDepth = 0;
+
 function unlinkBack(src: Source, sub: Observer, i: number): void {
 	const slot = sub.srcSlots[i];
 	if (slot < 0) return;
@@ -645,11 +655,20 @@ function unlinkBack(src: Source, sub: Observer, i: number): void {
 		lastObs.srcSlots[lastSlot] = slot;
 	}
 	if (src.obs.length === 0) {
-		if (src.k === 1) {
-			if (src.hookSubs === null || src.hookSubs.size === 0) deactivate(src);
+		if (deferredDepth > 0) {
+			deferredStack.push(src);
 		} else {
-			observedMaybeChanged(src);
+			settleUnobserved(src);
 		}
+	}
+}
+
+function settleUnobserved(src: Source): void {
+	if (src.obs.length !== 0) return;
+	if (src.k === 1) {
+		if (src.hookSubs === null || src.hookSubs.size === 0) deactivate(src);
+	} else {
+		observedMaybeChanged(src);
 	}
 }
 
@@ -684,15 +703,41 @@ function clearSources(sub: Observer): void {
 /** Record `src` as a dependency of the currently evaluating observer. For an
  * atom the token is its value (a write that reverts inside a batch compares
  * equal and never propagates); for a computed it is the version counter its
- * equality cutoff maintains. */
+ * equality cutoff maintains.
+ *
+ * Re-evaluations match the previous dependency list positionally: when the
+ * i-th read is the same source as last time — the overwhelmingly common case
+ * — the existing edge is reused untouched. Only an actual divergence unlinks
+ * the stale tail and rebuilds from there. */
 function trackRead(src: Source): void {
 	const sub = activeSub;
 	if (sub === null) return;
-	const i = sub.srcs.length;
-	sub.srcs.push(src);
+	const i = sub.trackCursor;
+	const srcs = sub.srcs;
+	if (i < srcs.length) {
+		if (srcs[i] === src) {
+			sub.srcVers[i] = src.k === 0 ? src.v : src.ver;
+			sub.trackCursor = i + 1;
+			return;
+		}
+		trimSourcesFrom(sub, i);
+	}
+	sub.trackCursor = i + 1;
+	srcs.push(src);
 	sub.srcVers.push(src.k === 0 ? src.v : src.ver);
 	sub.srcSlots.push(-1);
 	if (sub.k === 2 || isLive(sub)) linkBack(src, sub, i);
+}
+
+/** Unlink and drop dependency records from position `from` on. */
+function trimSourcesFrom(sub: Observer, from: number): void {
+	const srcs = sub.srcs;
+	for (let j = from; j < srcs.length; j++) {
+		if (sub.srcSlots[j] >= 0) unlinkBack(srcs[j], sub, j);
+	}
+	srcs.length = from;
+	sub.srcVers.length = from;
+	sub.srcSlots.length = from;
 }
 
 // ---- canonical computed algorithm ----------------------------------------------
@@ -715,6 +760,7 @@ export class Computed<T> {
 	srcs: Source[] = [];
 	srcVers: unknown[] = [];
 	srcSlots: number[] = [];
+	trackCursor = 0;
 	obs: Observer[] = [];
 	obSlots: number[] = [];
 	hookSubs: Set<HookPoke> | null = null;
@@ -725,6 +771,8 @@ export class Computed<T> {
 	settled: T | Unset = UNSET;
 	/** Keyed `use` cache, scoped to this node's lifetime and refresh epoch. */
 	useCache: Map<number, Map<unknown, UseEntry>> | null = null;
+	/** Cached canonical `use` argument (world evaluations build their own). */
+	useFn: Use | null = null;
 	/** Hidden refresh input: bumping it re-runs the evaluation with cleared
 	 * keyed-use entries. Created on first `refresh`. */
 	epoch: Atom<number> | null = null;
@@ -811,7 +859,9 @@ function pendSettled(c: AnyComputed): boolean {
 function recompute(c: AnyComputed): void {
 	const prevSub = activeSub;
 	const prevOwner = activeOwner;
-	clearSources(c);
+	const deferredMark = deferredStack.length;
+	deferredDepth++;
+	c.trackCursor = 0;
 	c.computing = true;
 	activeSub = c;
 	activeOwner = null;
@@ -828,7 +878,8 @@ function recompute(c: AnyComputed): void {
 				c.epochSeen = epochVal;
 			}
 		}
-		const v = c.fn(makeUse(c, null, epochVal));
+		activeUseEpoch = epochVal;
+		const v = c.fn((c.useFn ??= makeUse(c, null)));
 		c.err = UNSET;
 		c.pend = null;
 		if (!hadValue || c.v === UNSET || !c.eq(c.v, v)) {
@@ -853,6 +904,12 @@ function recompute(c: AnyComputed): void {
 		c.computing = false;
 		activeSub = prevSub;
 		activeOwner = prevOwner;
+		if (c.trackCursor < c.srcs.length) trimSourcesFrom(c, c.trackCursor);
+		deferredDepth--;
+		for (let i = deferredStack.length - 1; i >= deferredMark; i--) {
+			settleUnobserved(deferredStack[i]);
+		}
+		deferredStack.length = deferredMark;
 	}
 }
 
@@ -871,6 +928,7 @@ export class Effect {
 	srcs: Source[] = [];
 	srcVers: unknown[] = [];
 	srcSlots: number[] = [];
+	trackCursor = 0;
 	/** Effects and scopes created during this effect's run; disposed on re-run. */
 	kids: (Effect | EffectScope)[] | null = null;
 	disposed = false;
@@ -890,7 +948,9 @@ export class Effect {
 		const cleanup = this.cleanup;
 		this.cleanup = null;
 		if (cleanup !== null) runCleanup(cleanup);
-		clearSources(this);
+		const deferredMark = deferredStack.length;
+		deferredDepth++;
+		this.trackCursor = 0;
 		this.state = CLEAN;
 		const prevSub = activeSub;
 		const prevOwner = activeOwner;
@@ -905,6 +965,12 @@ export class Effect {
 			activeSub = prevSub;
 			activeOwner = prevOwner;
 			if (prevCause !== -1) setCause(prevCause);
+			if (this.trackCursor < this.srcs.length) trimSourcesFrom(this, this.trackCursor);
+			deferredDepth--;
+			for (let i = deferredStack.length - 1; i >= deferredMark; i--) {
+				settleUnobserved(deferredStack[i]);
+			}
+			deferredStack.length = deferredMark;
 		}
 	}
 
@@ -1085,11 +1151,15 @@ export function untracked<T>(fn: () => T): T {
 export type HookPoke = (stamp: BatchId, ev: EventId) => void;
 
 let pokeEpoch = 0;
+/** Total host subscriptions + draft edges; zero means pokes have no possible
+ * receiver and the graph walk is skipped entirely. */
+let pokeTargets = 0;
 
 /** Walk observer edges plus this-episode draft edges from `origin`, delivering
  * one poke per subscribed node. Draft edges exist because a world evaluation
  * may depend on signals its canonical evaluation does not. */
 function pokeHooks(origin: Source, stamp: BatchId, causeEv: EventId): void {
+	if (pokeTargets === 0) return;
 	const epoch = ++pokeEpoch;
 	const prevCause = causeEv !== 0 ? setCause(causeEv) : -1;
 	const stack: Source[] = [origin];
@@ -1123,14 +1193,16 @@ export function subscribeHook(xx: Node, cb: HookPoke): () => void {
 	const x = xx as Source;
 	const wasLive = x.k === 1 && isLive(x);
 	(x.hookSubs ??= new Set()).add(cb);
+	pokeTargets++;
 	if (x.k === 1) {
 		if (!wasLive && x.obs.length === 0) activate(x);
 	} else {
 		observedMaybeChanged(x);
 	}
 	return () => {
-		if (x.hookSubs === null) return;
+		if (x.hookSubs === null || !x.hookSubs.has(cb)) return;
 		x.hookSubs.delete(cb);
+		pokeTargets--;
 		if (x.hookSubs.size === 0) {
 			if (x.k === 1) {
 				if (x.obs.length === 0) deactivate(x);
@@ -1189,8 +1261,12 @@ export function settleObservationsNow(): void {
 
 // ---- use(): async reads inside computed evaluations ---------------------------
 
-function makeUse(c: AnyComputed, entry: WorldEntry | null, epochVal: number): Use {
+/** Epoch scope for the keyed `use` cache of the evaluation in flight. */
+let activeUseEpoch = 0;
+
+function makeUse(c: AnyComputed, entry: WorldEntry | null): Use {
 	return (<U>(a: PromiseLike<U> | unknown, factory?: () => PromiseLike<U> | U): U => {
+		const epochVal = activeUseEpoch;
 		let t: PromiseLike<unknown>;
 		if (factory !== undefined) {
 			// Keyed form: the cache entry lives as long as the node (scoped by
@@ -1244,7 +1320,11 @@ function recordWorldDep(src: Source, token: unknown): void {
 	entry.depVals.push(token);
 	const consumer = activeWorldConsumer;
 	if (consumer !== null && consumer !== src) {
-		(src.draftSubs ??= new Set()).add(consumer);
+		const subs = (src.draftSubs ??= new Set());
+		if (!subs.has(consumer)) {
+			subs.add(consumer);
+			pokeTargets++;
+		}
 		draftEdgeSources.add(src);
 	}
 }
@@ -1323,8 +1403,8 @@ function evaluateWorldEntry(c: AnyComputed, w: World, entry: WorldEntry): void {
 	activeSub = null;
 	activeWorldConsumer = c;
 	try {
-		const epochVal = c.epoch !== null ? (foldAtom(c.epoch as AnyAtom, w) as number) : 0;
-		entry.v = c.fn(makeUse(c, entry, epochVal));
+		activeUseEpoch = c.epoch !== null ? (foldAtom(c.epoch as AnyAtom, w) as number) : 0;
+		entry.v = c.fn(makeUse(c, entry));
 	} catch (e) {
 		if (e instanceof PendingValue) entry.pend = e;
 		else entry.err = e;
@@ -1582,6 +1662,9 @@ export function __resetEngine(): void {
 	stampProvider = () => null;
 	writeGuard = null;
 	committedCutoffProvider = () => writeSeq;
+	pokeTargets = 0;
+	deferredStack.length = 0;
+	deferredDepth = 0;
 }
 
 // ---- host helpers ---------------------------------------------------------------
