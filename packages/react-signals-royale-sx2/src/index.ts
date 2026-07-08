@@ -7,6 +7,7 @@ import {
   effect,
   isPending,
   liveBatchIds,
+  liveBatchMask,
   observeCell,
   recordCommitted,
   retireBatch,
@@ -183,13 +184,7 @@ export function useValue<T>(cell: Cell<T>): T {
     throw new Error("useValue must run during a React render");
   const container = React.useRef(context.container);
   container.current = context.container;
-  let deferred = false;
-  for (const batchId of liveBatchIds()) {
-    if ((context.lanes & batchId) !== 0) {
-      deferred = true;
-      break;
-    }
-  }
+  const deferred = (context.lanes & liveBatchMask()) !== 0;
   const value = withWorld({ lanes: context.lanes, deferred }, () => cell.get());
   let pass = passes.get(context.container);
   if (pass === undefined) {
@@ -217,10 +212,11 @@ export function useValue<T>(cell: Cell<T>): T {
     };
     const stopView = subscribeView(cell, deliver);
     const stopObservation = observeCell(cell);
-    for (const batchId of liveBatchIds(
-      cell instanceof Atom ? cell : undefined,
-    )) {
+    let batches = liveBatchMask(cell instanceof Atom ? cell : undefined);
+    while (batches !== 0) {
+      const batchId = batches & -batches;
       deliver(batchId);
+      batches ^= batchId;
     }
     return () => {
       stopView();

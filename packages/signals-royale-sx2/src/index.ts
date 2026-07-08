@@ -1073,6 +1073,16 @@ export function liveBatchIds(cell?: {
   return ids;
 }
 
+export function liveBatchMask(cell?: {
+  hasDraft(batchId?: BatchId): boolean;
+}): number {
+  let lanes = 0;
+  for (const [batchId] of liveBatches) {
+    if (cell === undefined || cell.hasDraft(batchId)) lanes |= batchId;
+  }
+  return lanes;
+}
+
 export function batchCause(batchId: BatchId): number | undefined {
   return liveBatches.get(batchId)?.lastCause;
 }
