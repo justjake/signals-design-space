@@ -2,24 +2,28 @@
  * Worlds: speculative overlays that make React transitions invisible to
  * canonical readers until they commit.
  *
- * A DRAFT is the engine-side record of one transition batch: an ordered log
- * of write intents (set values and update functions) against base cells. A
- * WORLD is "canonical state plus an ordered set of drafts" — exactly what
- * one React render pass is allowed to see. Resolving a value in a world
- * replays the drafts' intents over the current canonical value, so an
- * urgent write that lands mid-transition automatically REBASES the pending
- * drafts: update functions re-execute against the new base (signal at 1,
- * transition applies x*2, urgent applies x+1 and shows 2 — the transition
- * lands at 4, never 2).
+ * A DRAFT is the engine-side record of one transition batch: write intents
+ * (set values and update functions) against base cells. A WORLD is
+ * "canonical state plus an ordered set of drafts" — exactly what one React
+ * render pass is allowed to see.
  *
- * The React bindings never tell the engine "which world is rendering";
- * instead each render pass carries its own draft-id set through React state
- * (React's own update queues implement the world algebra), and the bindings
- * resolve reads against that set. When every root has committed a draft,
- * the bindings retire it here: retiring FOLDS the intents into canonical
- * state through the ordinary write path (effects and equality included) and
- * from then on the draft resolves as a no-op, so renders holding stale
- * world sets still resolve to the same values.
+ * Replay follows React's updater-queue rules. Every intent — urgent or
+ * drafted — gets a global sequence number at dispatch. While any draft
+ * touches a cell, the cell keeps a REBASE LOG: its base value plus all
+ * intents in dispatch order. Views then differ only in which intents they
+ * include:
+ *
+ * - canonical = base + urgent intents (drafts skipped, later urgents still
+ *   apply — so a counter at 1 with a pending transition "+2" shows 2 after
+ *   an urgent "*2");
+ * - a world   = base + urgent intents + its drafts' intents, all in
+ *   dispatch order (the transition lands at (1+2)*2 = 6, never a reorder).
+ *
+ * Retiring a draft folds the full replay into canonical state through the
+ * ordinary write path (effects, equality, propagation) and marks the draft
+ * retired, so render passes still holding its id resolve identical values.
+ * When the last draft touching a cell dies, the log is dropped — a
+ * quiescent engine holds no per-episode state anywhere.
  */
 
 import {
@@ -42,8 +46,6 @@ import {
 } from './graph.ts';
 import {
   type Envelope,
-  type Episode,
-  type ErrorBox,
   envelopeOf,
   makeEpisode,
   setOnSettlementEpoch,
@@ -54,24 +56,41 @@ export type DraftId = number;
 export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded';
 /** Bumps whenever any draft's ops or state change; world memos key on it. */
 export type WorldEpoch = number;
+/** Global dispatch order across urgent and drafted intents. */
+export type OpSeq = number;
 
-export interface DraftOp {
-  cell: CellNode<unknown>;
-  kind: 'set' | 'update';
+export type OpKind = 'set' | 'update';
+
+export interface Intent {
+  seq: OpSeq;
+  kind: OpKind;
   payload: unknown;
+  /** The draft that issued this intent; null for urgent intents. */
+  draft: Draft | null;
+}
+
+export interface RebaseLog {
+  /** Canonical value when the first draft intent arrived. */
+  base: unknown;
+  intents: Intent[];
 }
 
 export interface Draft {
   id: DraftId;
   state: DraftState;
-  ops: DraftOp[];
+  /** Cells this draft wrote (for fold, poke, and log teardown). */
+  cells: Set<CellNode<unknown>>;
   openEvent: TraceEventId;
   retireEvent: TraceEventId;
+  lastWriteEvent: TraceEventId;
 }
 
 let nextDraftId: DraftId = 1;
+let nextSeq: OpSeq = 1;
 /** Open and sealed drafts, in creation order (Map preserves insertion). */
 const liveDrafts = new Map<DraftId, Draft>();
+/** Cells with at least one live draft intent. */
+const rebaseLogs = new Map<CellNode<unknown>, RebaseLog>();
 let worldEpoch: WorldEpoch = 1;
 /** Nodes holding world memos, for sweeping at quiescence. */
 const memoNodes = new Set<ReactiveNode>();
@@ -90,10 +109,6 @@ export function liveDraftCount(): number {
   return liveDrafts.size;
 }
 
-export function allLiveDraftIds(): DraftId[] {
-  return [...liveDrafts.keys()];
-}
-
 export function getDraft(id: DraftId): Draft | undefined {
   return liveDrafts.get(id);
 }
@@ -102,9 +117,10 @@ export function openDraft(): Draft {
   const draft: Draft = {
     id: nextDraftId++,
     state: 'open',
-    ops: [],
+    cells: new Set(),
     openEvent: hooks.trace !== null ? hooks.trace('draft-open', null, NO_EVENT) : NO_EVENT,
     retireEvent: NO_EVENT,
+    lastWriteEvent: NO_EVENT,
   };
   liveDrafts.set(draft.id, draft);
   worldEpoch++;
@@ -115,17 +131,69 @@ export function sealDraft(draft: Draft): void {
   if (draft.state === 'open') draft.state = 'sealed';
 }
 
-export function appendOp(draft: Draft, op: DraftOp): void {
+function logFor(cell: CellNode<unknown>): RebaseLog {
+  let log = rebaseLogs.get(cell);
+  if (log === undefined) {
+    // Capture the base BEFORE any speculative intent; materializes lazy
+    // cells (replay needs the base for the equality/update contract).
+    log = { base: untracked(() => peekCell(cell)), intents: [] };
+    rebaseLogs.set(cell, log);
+  }
+  return log;
+}
+
+/** Record a drafted write intent. Speculative subscribers (isPending probes,
+ * latest() viewers) get poked; canonical values do not move. */
+export function appendDraftIntent(
+  draft: Draft,
+  cell: CellNode<unknown>,
+  kind: OpKind,
+  payload: unknown,
+): void {
   if (draft.state !== 'open') {
     throw new Error('cannot write into a batch that already ended');
   }
-  draft.ops.push(op);
+  logFor(cell).intents.push({ seq: nextSeq++, kind, payload, draft });
+  draft.cells.add(cell);
   worldEpoch++;
-  if (hooks.trace !== null) hooks.trace('write', op.cell, draft.openEvent, { draft: draft.id });
+  if (hooks.trace !== null) {
+    draft.lastWriteEvent = hooks.trace('write', cell, draft.openEvent, { draft: draft.id });
+  }
+  pokeLeafObservers(cell);
 }
 
-/** Fold a draft's intents into canonical state through the normal write
- * path, then let stale world sets resolve it as a no-op. */
+/** Record an urgent intent on a cell that currently has a rebase log, so
+ * pending worlds replay it in dispatch order. The canonical write itself is
+ * performed by the caller. */
+export function appendUrgentIntent(cell: CellNode<unknown>, kind: OpKind, payload: unknown): boolean {
+  const log = rebaseLogs.get(cell);
+  if (log === undefined) return false;
+  log.intents.push({ seq: nextSeq++, kind, payload, draft: null });
+  worldEpoch++;
+  return true;
+}
+
+/** Replay a cell's log for a world (or for canonical state, when `world` is
+ * null): urgent and retired intents always apply; drafted intents apply
+ * only when the world includes their draft. */
+function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
+  const log = rebaseLogs.get(cell);
+  if (log === undefined) return untracked(() => peekCell(cell));
+  let value = log.base;
+  for (const intent of log.intents) {
+    const d = intent.draft;
+    const included =
+      d === null ||
+      d.state === 'retired' ||
+      (world !== null && world.drafts.includes(d));
+    if (!included) continue;
+    value = intent.kind === 'set' ? intent.payload : (intent.payload as (p: unknown) => unknown)(value);
+  }
+  return value;
+}
+
+/** Fold a draft into canonical state through the normal write path, then
+ * let stale world sets resolve it as a no-op. */
 export function retireDraft(id: DraftId): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
@@ -133,22 +201,28 @@ export function retireDraft(id: DraftId): void {
   draft.state = 'retired';
   worldEpoch++;
   const evt =
-    hooks.trace !== null ? hooks.trace('draft-retire', null, draft.openEvent) : NO_EVENT;
+    hooks.trace !== null
+      ? hooks.trace(
+          'draft-retire',
+          null,
+          draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent,
+        )
+      : NO_EVENT;
   draft.retireEvent = evt;
   const prevCause = setCurrentCause(evt);
   startBatch();
   try {
-    for (const op of draft.ops) {
-      const next =
-        op.kind === 'set'
-          ? op.payload
-          : (op.payload as (prev: unknown) => unknown)(peekCell(op.cell));
-      writeCell(op.cell, next);
+    for (const cell of draft.cells) {
+      // The draft is marked retired, so the full committed replay includes
+      // its intents interleaved with urgent ones in dispatch order.
+      writeCell(cell, replayLog(cell, null));
+      pokeLeafObservers(cell);
     }
   } finally {
     endBatch();
     setCurrentCause(prevCause);
   }
+  releaseLogs(draft);
   maybeQuiesce();
 }
 
@@ -160,21 +234,49 @@ export function discardDraft(id: DraftId): void {
   draft.state = 'discarded';
   worldEpoch++;
   if (hooks.trace !== null) hooks.trace('draft-discard', null, draft.openEvent);
-  const seen = new Set<CellNode<unknown>>();
-  for (const op of draft.ops) {
-    if (!seen.has(op.cell)) {
-      seen.add(op.cell);
-      pokeLeafObservers(op.cell);
-    }
-  }
+  for (const cell of draft.cells) pokeLeafObservers(cell);
+  releaseLogs(draft);
   maybeQuiesce();
+}
+
+/** Drop rebase logs on cells no longer touched by any live draft. */
+function releaseLogs(dead: Draft): void {
+  for (const cell of dead.cells) {
+    let stillDrafted = false;
+    const log = rebaseLogs.get(cell);
+    if (log === undefined) continue;
+    for (const intent of log.intents) {
+      if (intent.draft !== null && intent.draft.state !== 'retired' && intent.draft.state !== 'discarded') {
+        stillDrafted = true;
+        break;
+      }
+    }
+    if (!stillDrafted) rebaseLogs.delete(cell);
+  }
 }
 
 /** Quiescence: with no live drafts, every per-episode structure empties. */
 function maybeQuiesce(): void {
   if (liveDrafts.size > 0) return;
+  rebaseLogs.clear();
   for (const node of memoNodes) node.worldMemos = null;
   memoNodes.clear();
+}
+
+/** True while some live draft holds intents against this cell. */
+export function cellHasDraftIntents(cell: CellNode<unknown>): boolean {
+  const log = rebaseLogs.get(cell);
+  if (log === undefined) return false;
+  for (const intent of log.intents) {
+    const d = intent.draft;
+    if (d !== null && d.state !== 'retired' && d.state !== 'discarded') return true;
+  }
+  return false;
+}
+
+/** Test/reset seam: discard every live draft and clear per-episode state. */
+export function discardAllDrafts(): void {
+  for (const id of [...liveDrafts.keys()]) discardDraft(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +374,11 @@ function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
   return node.worldMemos?.get(sig) as WorldMemo | undefined;
 }
 
+/** Passive view of a world memo's envelope (no evaluation, no validation). */
+export function peekWorldMemo(node: ReactiveNode, sig: string): Envelope | undefined {
+  return memoFor(node, sig)?.env;
+}
+
 function storeMemo(node: ReactiveNode, sig: string, memo: WorldMemo): void {
   if (node.worldMemos === null) {
     node.worldMemos = new Map();
@@ -319,30 +426,23 @@ export function resolveEnvelope(node: ReactiveNode, world: World): Envelope {
   ) {
     return memo.env;
   }
-  const fresh =
+  const fresh: Envelope =
     node.kind === 'cell'
-      ? replayCell(node as CellNode<unknown>, world)
+      ? { kind: 'value', value: replayLog(node as CellNode<unknown>, world) }
       : draftEvaluate(node as DerivedNode<unknown>, world, memo?.env);
   const env = reconcileEnvelopes(node, memo?.env, fresh);
   storeMemo(node, world.sig, { writeEpoch: currentWriteEpoch(), worldEpoch, env });
   return env;
 }
 
-function replayCell(cell: CellNode<unknown>, world: World): Envelope {
-  let value = untracked(() => peekCell(cell));
-  for (const draft of world.drafts) {
-    for (const op of draft.ops) {
-      if (op.cell !== cell) continue;
-      value = op.kind === 'set' ? op.payload : (op.payload as (p: unknown) => unknown)(value);
-    }
-  }
-  return { kind: 'value', value };
-}
-
 /** Guards against a computed reading itself within one world. */
 const draftEvalStack = new Map<ReactiveNode, Set<string>>();
 
-function draftEvaluate(node: DerivedNode<unknown>, world: World, prev: Envelope | undefined): Envelope {
+function draftEvaluate(
+  node: DerivedNode<unknown>,
+  world: World,
+  prev: Envelope | undefined,
+): Envelope {
   let sigs = draftEvalStack.get(node);
   if (sigs?.has(world.sig)) {
     throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`);

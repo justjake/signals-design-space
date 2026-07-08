@@ -51,9 +51,12 @@ import {
   type DraftId,
   type World,
   CANONICAL_WORLD,
-  appendOp,
+  appendDraftIntent,
+  appendUrgentIntent,
+  cellHasDraftIntents,
   classifyWrite,
   committedWorldOf,
+  discardAllDrafts,
   discardDraft,
   getCurrentPark,
   getCurrentWorld,
@@ -61,6 +64,7 @@ import {
   latestWorld,
   liveDraftCount,
   openDraft,
+  peekWorldMemo,
   resolveEnvelope,
   retireDraft,
   runInDraft,
@@ -68,7 +72,6 @@ import {
   setAmbientClassifier,
   setCommittedWorld,
   unwrapForEval,
-  withWorld,
   worldOf,
 } from './worlds.ts';
 import { installLifetimeHook, flushLifetimeTransitions } from './lifetime.ts';
@@ -196,29 +199,53 @@ export function committed<T>(x: Readable<T>, container?: object): T {
   return env.value as T;
 }
 
-/** Cheap flip-only probe: true while newer data loads behind stale. Never
- * refetches, never suspends. */
+/** Cheap flip-only probe: true while newer data exists behind what is on
+ * screen — a pending transition draft on this atom, or an async refetch
+ * loading behind a stale value. Passive by contract: never evaluates,
+ * never refetches, never suspends. */
 export function isPending(x: AnyReadable): boolean {
-  const node = nodeOf(x);
-  if (node.kind !== 'derived') return false;
-  const world = getCurrentWorld() ?? currentRenderWorld ?? CANONICAL_WORLD;
-  return resolveEnvelope(node, world).kind === 'pending';
+  return isPendingPassive(nodeOf(x), getCurrentWorld() ?? currentRenderWorld);
 }
 
+function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
+  if (node.kind === 'cell') return cellHasDraftIntents(node as CellNode<unknown>);
+  if (node.kind !== 'derived') return false;
+  const st = asyncStateOf(node as DerivedNode<unknown>);
+  if (st !== null && st.kind === 'pending') return true;
+  if (world !== null && world.drafts.length > 0) {
+    const memo = peekWorldMemo(node, world.sig);
+    if (memo !== undefined && memo.kind === 'pending') return true;
+  }
+  // A drafted input means this computed has newer data pending too.
+  for (let l = node.deps; l !== undefined; l = l.nextDep) {
+    if (l.dep.kind === 'cell' && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
+  }
+  return false;
+}
+
+const bumpNonce = (n: unknown): unknown => (n as number) + 1;
+
 /** Force a refetch with unchanged inputs; the stale value keeps serving.
- * A refresh inside a transition belongs to that transition. */
+ * An urgent refresh starts the refetch immediately (before subscribers are
+ * notified, so pending probes flip in the same wave); a refresh inside a
+ * transition belongs to that transition — its world refetches when that
+ * world next evaluates, and the result commits with it. */
 export function refresh(x: AnyReadable): void {
   const node = nodeOf(x);
   if (node.kind !== 'derived') {
     throw new TypeError('refresh(x) expects a computed; signals have nothing to refetch');
   }
-  const nonce = ensureRefreshNonce(node as DerivedNode<unknown>);
+  const nonce = ensureRefreshNonce(node as DerivedNode<unknown>) as CellNode<unknown>;
   const draft = classifyWrite();
   if (draft !== null) {
-    appendOp(draft, { cell: nonce as CellNode<unknown>, kind: 'update', payload: (n: unknown) => (n as number) + 1 });
+    appendDraftIntent(draft, nonce, 'update', bumpNonce);
   } else {
     guardRenderWrite();
-    writeCell(nonce, graphUntracked(() => peekCell(nonce)) + 1);
+    appendUrgentIntent(nonce, 'update', bumpNonce);
+    graphBatch(() => {
+      writeCell(nonce, (graphUntracked(() => peekCell(nonce)) as number) + 1);
+      graphUntracked(() => ensureFresh(node as DerivedNode<unknown>));
+    });
   }
 }
 
@@ -236,22 +263,27 @@ function guardRenderWrite(): void {
 }
 
 function writeSignal<T>(x: Signal<T>, value: T): void {
+  guardRenderWrite();
+  const cell = x.node as CellNode<unknown>;
   const draft = classifyWrite();
   if (draft !== null) {
-    appendOp(draft, { cell: x.node as CellNode<unknown>, kind: 'set', payload: value });
+    appendDraftIntent(draft, cell, 'set', value);
     return;
   }
-  guardRenderWrite();
+  // Urgent: canonical moves now; pending worlds replay it in dispatch order.
+  appendUrgentIntent(cell, 'set', value);
   writeCell(x.node, value);
 }
 
 function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
+  guardRenderWrite();
+  const cell = x.node as CellNode<unknown>;
   const draft = classifyWrite();
   if (draft !== null) {
-    appendOp(draft, { cell: x.node as CellNode<unknown>, kind: 'update', payload: fn });
+    appendDraftIntent(draft, cell, 'update', fn);
     return;
   }
-  guardRenderWrite();
+  appendUrgentIntent(cell, 'update', fn);
   writeCell(x.node, fn(graphUntracked(() => peekCell(x.node))));
 }
 
@@ -388,12 +420,26 @@ export const reactIntegration = {
   causeOf(x: AnyReadable): number {
     return nodeOf(x).causeEvent;
   },
-  draftEvents(id: DraftId): { open: number; retire: number } {
+  draftEvents(id: DraftId): { open: number; lastWrite: number } {
     const d = getDraft(id);
-    return { open: d?.openEvent ?? NO_EVENT, retire: d?.retireEvent ?? NO_EVENT };
+    return { open: d?.openEvent ?? NO_EVENT, lastWrite: d?.lastWriteEvent ?? NO_EVENT };
   },
   flushLifetimeTransitions,
+  isPendingIn(x: AnyReadable, ids: readonly DraftId[] | null): boolean {
+    return isPendingPassive(nodeOf(x), ids === null ? null : worldOf(ids));
+  },
 };
+
+/** Reset seam for tests: discard live drafts, settle lifetime flaps, drop
+ * ambient classification, detach any tracer. Existing atoms stay valid. */
+export function resetEngineForTest(): void {
+  discardAllDrafts();
+  flushLifetimeTransitions();
+  setAmbientClassifier(null);
+  setRenderWriteGuard(null);
+  currentRenderWorld = null;
+  getActiveTracer()?.stop();
+}
 
 export type { Envelope, World, DraftId, Draft, UseFn, EqualsFn };
 export { CANONICAL_WORLD };
