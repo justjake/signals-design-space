@@ -246,14 +246,17 @@ abstract class Observer implements Subscriber {
   }
 }
 
-function track(source: Source): void {
+function track(source: Source, refresh = false): void {
   const observer = active;
   if (!tracking || observer === undefined) return;
   const index = observer.nextDeps.length;
   let sources = observer.nextSources;
   if (sources === undefined) {
     for (const link of observer.nextDeps) {
-      if (link.source === source) return;
+      if (link.source === source) {
+        if (refresh) link.version = source.version;
+        return;
+      }
     }
     if (index === 8) {
       sources = new Set();
@@ -261,6 +264,12 @@ function track(source: Source): void {
       for (const link of observer.nextDeps) sources.add(link.source);
     }
   } else if (sources.has(source)) {
+    for (const link of observer.nextDeps) {
+      if (link.source === source) {
+        if (refresh) link.version = source.version;
+        break;
+      }
+    }
     return;
   }
   let link: Link | undefined = observer.deps[index];
@@ -634,12 +643,21 @@ export class Computed<T> extends Observer implements Source {
     this.failure = failure;
     if (failure === undefined) this.value = next;
     if (changed) this.version++;
+    if (this.observesSources) {
+      for (const link of this.deps) {
+        if (link.version !== link.source.version) {
+          this.dirty = true;
+          break;
+        }
+      }
+    }
   }
 
   get(): T {
     if (activeWorld?.deferred) return this.getWorld(activeWorld.lanes);
+    if (!this.hasValue) track(this);
     this.ensure();
-    track(this);
+    track(this, true);
     if (this.pending && !this.hasValue) throw this.pendingThenable;
     if (this.failure !== undefined) throw this.failure;
     return this.value;
@@ -716,7 +734,7 @@ export class Computed<T> extends Observer implements Source {
       this.pendingThenable = undefined;
       this.dirty = false;
       this.forced = false;
-      this.hasValue = true;
+    this.hasValue = true;
       if (record.status === "fulfilled") {
         this.value = record.value as T;
         this.failure = undefined;
