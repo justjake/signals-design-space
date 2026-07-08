@@ -11,6 +11,22 @@ type Source = {
   remove(subscriber: Subscriber): void;
 };
 type Link = { source: Source; version: number };
+type DraftOperation<T> = { apply(previous: T): T; cause?: number };
+
+export interface RenderWorld {
+  lanes: number;
+  deferred: boolean;
+}
+
+export interface TraceEvent {
+  id: number;
+  kind: string;
+  cause?: number;
+  batch?: BatchId;
+}
+
+type ViewSubscriber = (batch: BatchId, cause?: number) => void;
+type LiveBatch = { atoms: Set<Atom<unknown>>; openCause?: number };
 
 let active: Observer | undefined;
 let tracking = true;
@@ -22,6 +38,95 @@ let activeScope: Set<ReactiveEffect> | undefined;
 let batchAtoms:
   | Map<Atom<unknown>, { value: unknown; version: number }>
   | undefined;
+let activeWorld: RenderWorld | undefined;
+let writeBatch: BatchId = 0;
+const liveBatches = new Map<BatchId, LiveBatch>();
+const viewSubscribers = new Set<ViewSubscriber>();
+let nextTraceId = 1;
+const tracers = new Set<Tracer>();
+
+function emitTrace(
+  kind: string,
+  cause?: number,
+  batchId?: BatchId,
+  target?: object,
+): number | undefined {
+  if (tracers.size === 0) return undefined;
+  const event = { id: nextTraceId++, kind, cause, batch: batchId };
+  for (const tracer of tracers) tracer.push(event, target);
+  return event.id;
+}
+
+function notifyViews(batchId: BatchId, cause?: number): void {
+  for (const subscriber of viewSubscribers) subscriber(batchId, cause);
+}
+
+class Tracer {
+  private readonly limit: number;
+  private readonly log: TraceEvent[] = [];
+  private readonly deliveries = new WeakMap<object, number>();
+  overflow = 0;
+
+  constructor(limit: number) {
+    this.limit = limit;
+  }
+
+  push(event: TraceEvent, target?: object): void {
+    if (this.log.length === this.limit) {
+      this.log.shift();
+      this.overflow++;
+    }
+    this.log.push(event);
+    if (target !== undefined && event.kind === "component delivery") {
+      this.deliveries.set(target, event.id);
+    }
+  }
+
+  events(): TraceEvent[] {
+    return this.log.slice();
+  }
+
+  whyLastDelivery(target: object): string[] {
+    let id: number | undefined = this.deliveries.get(target);
+    const chain: string[] = [];
+    while (id !== undefined) {
+      let found: TraceEvent | undefined;
+      for (let index = this.log.length - 1; index >= 0; index--) {
+        if (this.log[index].id === id) {
+          found = this.log[index];
+          break;
+        }
+      }
+      if (found === undefined) break;
+      chain.push(
+        `${found.kind}${
+          found.batch === undefined ? "" : ` [batch ${found.batch}]`
+        }`,
+      );
+      id = found.cause;
+    }
+    return chain;
+  }
+
+  stop(): void {
+    tracers.delete(this);
+  }
+}
+
+export function trace(options: { limit?: number } = {}): Tracer {
+  const tracer = new Tracer(options.limit ?? 1024);
+  tracers.add(tracer);
+  return tracer;
+}
+
+export function traceEvent(
+  kind: string,
+  cause?: number,
+  batchId?: BatchId,
+  target?: object,
+): number | undefined {
+  return emitTrace(kind, cause, batchId, target);
+}
 
 abstract class Observer implements Subscriber {
   deps: Link[] = [];
@@ -124,6 +229,7 @@ export class Atom<T> implements Source {
   private initialized = false;
   private readonly equals: Equality<T>;
   private readonly subscribers = new Set<Subscriber>();
+  private readonly drafts = new Map<BatchId, DraftOperation<T>[]>();
   private readonly observe?: (context: {
     get(): T;
     set(value: T): void;
@@ -152,12 +258,19 @@ export class Atom<T> implements Source {
   get(): T {
     this.ensure();
     track(this);
+    if (activeWorld !== undefined) return this.valueFor(activeWorld.lanes);
+    if (writeBatch !== 0) return this.valueFor(writeBatch);
     return this.value;
   }
 
   set(value: T): void {
     this.ensure();
+    if (writeBatch !== 0) {
+      this.writeDraft(() => value);
+      return;
+    }
     if (this.equals(this.value, value)) return;
+    const cause = emitTrace("write", undefined, 0);
     let original = batchAtoms?.get(this as Atom<unknown>);
     if (batchAtoms !== undefined && original === undefined) {
       original = { value: this.value, version: this.version };
@@ -170,17 +283,78 @@ export class Atom<T> implements Source {
         : this.equals(original.value as T, value)
         ? original.version
         : original.version + 1;
-    for (const subscriber of this.subscribers) subscriber.notify();
+    for (const subscriber of this.subscribers) subscriber.notify(cause);
+    notifyViews(0, cause);
     flushEffects();
   }
 
   update(fn: (previous: T) => T): void {
+    if (writeBatch !== 0) {
+      this.ensure();
+      this.writeDraft(fn);
+      return;
+    }
     this.set(fn(untracked(() => this.get())));
   }
 
   install(value: T): void {
     this.initialized = true;
     this.value = value;
+  }
+
+  hasDraft(batchId?: BatchId): boolean {
+    return batchId === undefined
+      ? this.drafts.size !== 0
+      : this.drafts.has(batchId);
+  }
+
+  latest(): T {
+    this.ensure();
+    let value = this.value;
+    for (const [batchId] of liveBatches) value = this.apply(batchId, value);
+    return value;
+  }
+
+  retire(batchId: BatchId, commit: boolean): void {
+    const operations = this.drafts.get(batchId);
+    if (operations === undefined) return;
+    this.drafts.delete(batchId);
+    if (!commit) return;
+    let value = this.value;
+    for (const operation of operations) value = operation.apply(value);
+    this.set(value);
+  }
+
+  private valueFor(lanes: number): T {
+    let value = this.value;
+    for (const [batchId] of liveBatches) {
+      if ((batchId & lanes) !== 0) value = this.apply(batchId, value);
+    }
+    return value;
+  }
+
+  private apply(batchId: BatchId, initial: T): T {
+    const operations = this.drafts.get(batchId);
+    if (operations === undefined) return initial;
+    let value = initial;
+    for (const operation of operations) value = operation.apply(value);
+    return value;
+  }
+
+  private writeDraft(apply: (previous: T) => T): void {
+    const previous = this.valueFor(writeBatch);
+    const value = apply(previous);
+    if (this.equals(previous, value)) return;
+    let operations = this.drafts.get(writeBatch);
+    if (operations === undefined) {
+      operations = [];
+      this.drafts.set(writeBatch, operations);
+    }
+    const cause = emitTrace("write", undefined, writeBatch);
+    operations.push({ apply, cause });
+    const live = liveBatches.get(writeBatch);
+    live?.atoms.add(this as Atom<unknown>);
+    notifyViews(writeBatch, cause);
   }
 
   add(subscriber: Subscriber): void {
@@ -276,6 +450,7 @@ export class Computed<T> extends Observer implements Source {
   }
 
   get(): T {
+    if (activeWorld !== undefined) return untracked(this.fn);
     this.ensure();
     track(this);
     if (this.failure !== undefined) throw this.failure;
@@ -300,6 +475,12 @@ export class Computed<T> extends Observer implements Source {
     if (!this.subscribers.delete(subscriber) || this.subscribers.size !== 0)
       return;
     for (const link of this.deps) link.source.remove(this);
+  }
+
+  refresh(): void {
+    this.dirty = true;
+    for (const subscriber of this.subscribers) subscriber.notify();
+    notifyViews(writeBatch);
   }
 }
 
@@ -442,12 +623,112 @@ export function read<T>(cell: Atom<T> | Computed<T>): T {
   return cell.get();
 }
 
+export function latest<T>(cell: Atom<T> | Computed<T>): T {
+  if (activeWorld !== undefined) return cell.get();
+  return cell instanceof Atom ? cell.latest() : cell.get();
+}
+
 export function set<T>(cell: Atom<T>, value: T): void {
   cell.set(value);
 }
 
 export function update<T>(cell: Atom<T>, fn: (previous: T) => T): void {
   cell.update(fn);
+}
+
+const committedRoots = new WeakMap<object, Map<object, unknown>>();
+const lastCommitted = new WeakMap<object, unknown>();
+
+export function committed<T>(
+  cell: Atom<T> | Computed<T>,
+  container?: object,
+): T {
+  if (container !== undefined) {
+    const value = committedRoots.get(container)?.get(cell);
+    if (value !== undefined || committedRoots.get(container)?.has(cell)) {
+      return value as T;
+    }
+  } else if (lastCommitted.has(cell)) {
+    return lastCommitted.get(cell) as T;
+  }
+  return untracked(() => cell.get());
+}
+
+export function recordCommitted(
+  container: object,
+  values: Map<object, unknown>,
+): void {
+  committedRoots.set(container, values);
+  for (const [cell, value] of values) lastCommitted.set(cell, value);
+}
+
+export function isPending(cell: Atom<unknown> | Computed<unknown>): boolean {
+  return cell instanceof Atom && cell.hasDraft();
+}
+
+export function refresh(cell: Atom<unknown> | Computed<unknown>): void {
+  if (cell instanceof Computed) cell.refresh();
+  else notifyViews(writeBatch);
+}
+
+export function withWorld<T>(world: RenderWorld, fn: () => T): T {
+  const previous = activeWorld;
+  activeWorld = world;
+  try {
+    return fn();
+  } finally {
+    activeWorld = previous;
+  }
+}
+
+export function withWriteBatch<T>(batchId: BatchId, fn: () => T): T {
+  if (batchId !== 0 && !liveBatches.has(batchId)) {
+    liveBatches.set(batchId, {
+      atoms: new Set(),
+      openCause: emitTrace("batch open", undefined, batchId),
+    });
+  }
+  const previous = writeBatch;
+  writeBatch = batchId;
+  try {
+    return fn();
+  } finally {
+    writeBatch = previous;
+  }
+}
+
+export function liveBatchIds(cell?: Atom<unknown>): BatchId[] {
+  const ids: BatchId[] = [];
+  for (const [batchId] of liveBatches) {
+    if (cell === undefined || cell.hasDraft(batchId)) ids.push(batchId);
+  }
+  return ids;
+}
+
+export function retireBatch(batchId: BatchId, commit: boolean): void {
+  const live = liveBatches.get(batchId);
+  if (live === undefined) return;
+  liveBatches.delete(batchId);
+  const cause = emitTrace(
+    commit ? "batch retire" : "batch discard",
+    live.openCause,
+    batchId,
+  );
+  batch(() => {
+    for (const cell of live.atoms) cell.retire(batchId, commit);
+  });
+  notifyViews(batchId, cause);
+}
+
+export function subscribeView(subscriber: ViewSubscriber): () => void {
+  viewSubscribers.add(subscriber);
+  return () => viewSubscribers.delete(subscriber);
+}
+
+export function resetForTest(): void {
+  for (const [batchId] of liveBatches) retireBatch(batchId, false);
+  viewSubscribers.clear();
+  tracers.clear();
 }
 
 export function installState<T>(cell: Atom<T>, value: T): void {

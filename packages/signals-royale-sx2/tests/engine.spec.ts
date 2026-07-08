@@ -1,5 +1,14 @@
 import { expect, test, vi } from "vitest";
-import { atom, batch, computed, effect } from "../src/index";
+import {
+  atom,
+  batch,
+  computed,
+  effect,
+  latest,
+  retireBatch,
+  withWorld,
+  withWriteBatch,
+} from "../src/index";
 
 test("computed dependencies trim and equality cuts off effects", () => {
   const chooseLeft = atom(true);
@@ -64,4 +73,23 @@ test("lifetime effects coalesce observation flaps", async () => {
   disposeAgain();
   await Promise.resolve();
   expect(starts).toEqual(["start", "stop"]);
+});
+
+test("a deferred reducer replays over an urgent write", () => {
+  const value = atom(1);
+  withWriteBatch(8, () => value.update((previous) => previous * 2));
+  expect(value.get()).toBe(1);
+  expect(latest(value)).toBe(2);
+  value.update((previous) => previous + 1);
+  expect(value.get()).toBe(2);
+  expect(withWorld({ lanes: 8, deferred: true }, () => value.get())).toBe(4);
+  retireBatch(8, true);
+  expect(value.get()).toBe(4);
+});
+
+test("discard removes a draft without touching canonical state", () => {
+  const value = atom(1);
+  withWriteBatch(16, () => value.set(9));
+  retireBatch(16, false);
+  expect(value.get()).toBe(1);
 });
