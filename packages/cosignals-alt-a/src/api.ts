@@ -114,14 +114,29 @@ export type AtomCtx<T> = {
 };
 
 export type AtomOptions<T> = {
-	state: T;
+	/**
+	 * Initial state, or a LAZY INITIALIZER (React useState convention: a
+	 * function-valued state is treated as the initializer). The initializer
+	 * is evaluated ONCE, lazily, at first materialization (first read,
+	 * write, or subscription — never at construction), UNTRACKED, and must
+	 * be pure w.r.t. the graph (writes inside it throw). First read during
+	 * render is safe — that is the feature's point:
+	 *
+	 *     const visible = new Atom({
+	 *         state: () => document.visibilityState === 'visible',
+	 *     });
+	 *
+	 * To STORE a function as state, wrap it: `state: () => fn`.
+	 */
+	state: T | (() => T);
 	effect?: (ctx: AtomCtx<T>) => (() => void) | void;
 	isEqual?: Equality<T>;
 	label?: string;
 };
 
 export type ReducerAtomOptions<S, A> = {
-	state: S;
+	/** Initial state, or a lazy initializer (same contract as AtomOptions.state). */
+	state: S | (() => S);
 	reducer: (state: S, action: A) => S;
 	isEqual?: Equality<S>;
 	label?: string;
@@ -145,10 +160,23 @@ export function createAPI(engine: CosignalEngine) {
 	const readComputedById = engine.readComputedById;
 
 	class Atom<T> {
-		readonly handle;
-		private readonly id: number;
+		private _handle: ReturnType<typeof engine.atom<T>> | undefined;
+		private id = 0; // 0 = unmaterialized (engine node ids are never 0)
+		private _init: (() => T) | undefined;
+		private _opts: AtomOptions<T> | undefined;
 		constructor(options: AtomOptions<T>) {
-			this.handle = engine.atom<T>(options.state, {
+			if (typeof options.state === 'function') {
+				// LAZY INITIALIZER (React useState convention; see
+				// AtomOptions.state): the engine node is minted at first
+				// materialization — the initializer runs there, once.
+				this._init = options.state as () => T;
+				this._opts = options;
+			} else {
+				this.mint(options.state, options);
+			}
+		}
+		private mint(initial: T, options: AtomOptions<T>): ReturnType<typeof engine.atom<T>> {
+			const h = engine.atom<T>(initial, {
 				isEqual: options.isEqual,
 				label: options.label,
 				observeEffect:
@@ -161,10 +189,39 @@ export function createAPI(engine: CosignalEngine) {
 							})
 						: undefined,
 			});
-			this.id = this.handle.id;
+			this._handle = h;
+			this.id = h.id;
+			// Cleared only on SUCCESS: a throwing initializer leaves the atom
+			// unmaterialized (the next access retries — React semantics).
+			this._init = undefined;
+			this._opts = undefined;
+			return h;
+		}
+		get handle(): ReturnType<typeof engine.atom<T>> {
+			// Materialization: fin-token minting, observe-lifecycle wiring and
+			// everything else happen HERE for lazy atoms (mint-time =
+			// materialization time). The initializer result is CANONICAL/BASE
+			// state regardless of the reading context's world.
+			return this._handle ?? this.mint(engine.policy.runInitializer(this._init!), this._opts!);
+		}
+		/** Introspection (tests/oracle): has the engine node been minted? */
+		get materialized(): boolean {
+			return this._handle !== undefined;
+		}
+		/** §13.8 SSR install: counts as materialization, the initializer is
+		 * SKIPPED — install transplants committed state, it is not a write
+		 * (deliberate asymmetry with set(), which RUNS the initializer for
+		 * the equality-drop contract; SPEC-RESOLUTIONS). */
+		installState(v: T): void {
+			if (this._handle === undefined && this._init !== undefined) {
+				this.mint(v, this._opts!);
+				return;
+			}
+			this.handle.set(v);
 		}
 		get state(): T {
-			return readAtomById(this.id) as T;
+			const id = this.id;
+			return readAtomById(id !== 0 ? id : this.handle.id) as T;
 		}
 		set(next: T): void {
 			this.handle.set(next);
@@ -175,20 +232,49 @@ export function createAPI(engine: CosignalEngine) {
 	}
 
 	class ReducerAtom<S, A> {
-		readonly handle;
-		private readonly id: number;
+		private _handle: ReturnType<typeof engine.reducerAtom<S, A>> | undefined;
+		private id = 0; // 0 = unmaterialized
+		private _init: (() => S) | undefined;
+		private _opts: ReducerAtomOptions<S, A> | undefined;
 		constructor(options: ReducerAtomOptions<S, A>) {
-			this.handle = engine.reducerAtom<S, A>(options.state, options.reducer, {
+			if (typeof options.state === 'function') {
+				this._init = options.state as () => S;
+				this._opts = options;
+			} else {
+				this.mint(options.state, options);
+			}
+		}
+		private mint(initial: S, options: ReducerAtomOptions<S, A>): ReturnType<typeof engine.reducerAtom<S, A>> {
+			const h = engine.reducerAtom<S, A>(initial, options.reducer, {
 				isEqual: options.isEqual,
 				label: options.label,
 			});
-			this.id = this.handle.id;
+			this._handle = h;
+			this.id = h.id;
+			this._init = undefined;
+			this._opts = undefined;
+			return h;
+		}
+		get handle(): ReturnType<typeof engine.reducerAtom<S, A>> {
+			return this._handle ?? this.mint(engine.policy.runInitializer(this._init!), this._opts!);
+		}
+		get materialized(): boolean {
+			return this._handle !== undefined;
+		}
+		/** §13.8 SSR install — same contract as Atom.installState. */
+		installState(v: S): void {
+			if (this._handle === undefined && this._init !== undefined) {
+				this.mint(v, this._opts!);
+				return;
+			}
+			(this.handle as unknown as { set(v: S): void }).set(v);
 		}
 		get state(): S {
-			return readAtomById(this.id) as S;
+			const id = this.id;
+			return readAtomById(id !== 0 ? id : this.handle.id) as S;
 		}
 		dispatch(action: A): void {
-			this.handle.dispatch(action);
+			this.handle.dispatch(action); // materializes: the reducer folds over the initializer result
 		}
 	}
 
@@ -231,6 +317,17 @@ export function createAPI(engine: CosignalEngine) {
 	function popFrame(): void {
 		--frameSp;
 	}
+
+	// Ultimate SOURCE SETS of join thenables (module-level: joins from one
+	// node forward through others). A thenable absent from the map is its
+	// own single source (a raw ctx.use fetch). Joins key on the FLATTENED
+	// set: a world whose immediate parts are {join(a,b), a} must produce
+	// the SAME thenable as one whose parts are {join(a,b)} — the wait set
+	// is {a,b} either way (oracle-caught: fuzz seed 281 — a forwarded part
+	// arriving both directly and inside a sibling's join made two worlds'
+	// identical wait sets look different, a spurious pending→pending
+	// broadcast).
+	const joinSources = new WeakMap<PromiseLike<unknown>, PromiseLike<unknown>[]>();
 
 	/** Forward a pending dep into the active evaluation, if one is open.
 	 * Returns true when forwarded (the reader continues with undefined). */
@@ -395,21 +492,49 @@ export function createAPI(engine: CosignalEngine) {
 		 * source, or a node-cached join of the set (so retries re-see the same
 		 * object even with parallel fetches). */
 		private joinPending(parts: PromiseLike<unknown>[]): PromiseLike<unknown> {
-			if (parts.length === 1) {
-				return parts[0];
+			// FLATTEN to the ultimate source set (see joinSources).
+			let flat: PromiseLike<unknown>[];
+			if (parts.length === 1 && joinSources.get(parts[0]) === undefined) {
+				return parts[0]; // raw singleton: pass through (hot path)
+			}
+			flat = [];
+			for (const p of parts) {
+				const src = joinSources.get(p);
+				if (src === undefined) {
+					if (!flat.includes(p)) {
+						flat.push(p);
+					}
+				} else {
+					for (const u of src) {
+						if (!flat.includes(u)) {
+							flat.push(u);
+						}
+					}
+				}
+			}
+			if (flat.length === 1) {
+				return flat[0];
+			}
+			// Pass-through: an immediate part already waiting on EXACTLY this
+			// set is the join (keeps forwarded identity stable across worlds).
+			for (const p of parts) {
+				const src = joinSources.get(p);
+				if (src !== undefined && src.length === flat.length && flat.every((t) => src.includes(t))) {
+					return p;
+				}
 			}
 			const joins = (this.pendingJoins ??= []);
 			for (const cached of joins) {
 				if (
-					cached.parts.length === parts.length
-					&& parts.every((t) => cached.parts.includes(t)) // set equality
+					cached.parts.length === flat.length
+					&& flat.every((t) => cached.parts.includes(t)) // set equality
 				) {
 					return cached.joined;
 				}
 			}
-			const snapshot = parts.slice();
-			const joined = Promise.all(snapshot).then(() => undefined) as PromiseLike<unknown>;
-			joins.push({ parts: snapshot, joined });
+			const joined = Promise.all(flat).then(() => undefined) as PromiseLike<unknown>;
+			joinSources.set(joined, flat);
+			joins.push({ parts: flat, joined });
 			return joined;
 		}
 
@@ -686,6 +811,13 @@ export function createAPI(engine: CosignalEngine) {
 				continue;
 			}
 			const v = reviver !== undefined ? reviver(key, raw) : raw;
+			// Lazy class atoms install WITHOUT running the initializer (the
+			// server's committed value replaces it — install ≠ write).
+			const installable = target as { installState?: (x: unknown) => void };
+			if (typeof installable.installState === 'function') {
+				installable.installState(v);
+				continue;
+			}
 			const settable = ('handle' in target ? target.handle : target) as { set(x: unknown): void };
 			settable.set(v);
 		}

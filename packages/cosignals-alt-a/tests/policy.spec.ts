@@ -521,3 +521,212 @@ describe('§12.5 forbidWritesInComputeds', () => {
 		t.retire();
 	});
 });
+
+describe('lazy state initializer (owner feature; SPEC-RESOLUTIONS entry 13)', () => {
+	it('is not called at construction; runs ONCE at first read; subsequent reads reuse it', () => {
+		const { api } = makeAPI();
+		let calls = 0;
+		const a = new api.Atom<number>({
+			state: () => {
+				++calls;
+				return 41;
+			},
+		});
+		expect(calls).toBe(0);
+		expect(a.materialized).toBe(false);
+		expect(a.state).toBe(41); // first materialization
+		expect(calls).toBe(1);
+		expect(a.materialized).toBe(true);
+		expect(a.state).toBe(41);
+		a.set(42);
+		expect(a.state).toBe(42);
+		expect(calls).toBe(1); // once, ever
+	});
+
+	it('React useState convention: storing a function value requires () => fn', () => {
+		const { api } = makeAPI();
+		const fn = (x: number): number => x * 2;
+		const a = new api.Atom<(x: number) => number>({ state: () => fn });
+		expect(a.state).toBe(fn); // the initializer RESULT is the stored fn
+	});
+
+	it('evaluation is UNTRACKED: initializer reads create no dependency links', () => {
+		const { api } = makeAPI();
+		const dep = new api.Atom({ state: 1 });
+		let calls = 0;
+		const lazy = new api.Atom<number>({
+			state: () => {
+				++calls;
+				return (dep.state as number) * 10;
+			},
+		});
+		let evals = 0;
+		// First materialization happens INSIDE a tracked computed evaluation:
+		// the initializer's dep read must not leak into the computed's deps.
+		const c = new api.Computed<number>({
+			fn: () => {
+				++evals;
+				return (lazy.state as number) + 1;
+			},
+		});
+		expect(c.state).toBe(11); // init: 1*10, computed: +1
+		expect(calls).toBe(1);
+		const n = evals;
+		dep.set(2); // must NOT reach c: neither via lazy nor via a leaked link
+		expect(c.state).toBe(11);
+		expect(evals).toBe(n);
+	});
+
+	it('writes inside the initializer are rejected (pure w.r.t. the graph)', () => {
+		const { api } = makeAPI();
+		const other = new api.Atom({ state: 0 });
+		const a = new api.Atom<number>({
+			state: () => {
+				other.set(9);
+				return 0;
+			},
+		});
+		expect(() => a.state).toThrow(/initializer/);
+		expect(other.state).toBe(0); // nothing leaked
+		// The throwing initializer left the atom unmaterialized (retry).
+		expect(a.materialized).toBe(false);
+	});
+
+	it('first read during RENDER is legal (pure computation, not a write)', () => {
+		const { api, engine } = makeAPI();
+		const fork = createForkDouble();
+		engine.attachFork(fork);
+		fork.registerRoot('root');
+		let calls = 0;
+		const a = new api.Atom<number>({
+			state: () => {
+				++calls;
+				return 7;
+			},
+		});
+		const pass = fork.startPass('root');
+		expect(a.state).toBe(7); // materializes inside the render pass
+		pass.end();
+		expect(calls).toBe(1);
+		fork.closeEvent();
+		engine.debug.verify();
+	});
+
+	it('DECISION: set() before first read RUNS the initializer (predictable equality-drop contract)', () => {
+		const { api } = makeAPI();
+		let calls = 0;
+		const a = new api.Atom<number>({
+			state: () => {
+				++calls;
+				return 5;
+			},
+		});
+		const seen: number[] = [];
+		a.set(5); // materializes: init 5, then SET 5 — equality-dropped
+		expect(calls).toBe(1);
+		api.effect(() => {
+			seen.push(a.state as number);
+		});
+		expect(seen).toEqual([5]);
+		a.set(5); // still equal to the initializer-derived value: dropped
+		expect(seen).toEqual([5]);
+		a.set(6);
+		expect(seen).toEqual([5, 6]);
+		expect(calls).toBe(1);
+	});
+
+	it('update(fn) materializes: the fn folds over the initializer result', () => {
+		const { api } = makeAPI();
+		const a = new api.Atom<number>({ state: () => 10 });
+		a.update((x) => x + 5);
+		expect(a.state).toBe(15);
+	});
+
+	it('per-world: first materialization from a DRAFT scope yields canonical/base state, not draft-scoped', () => {
+		const { api, engine } = makeAPI();
+		const fork = createForkDouble();
+		engine.attachFork(fork);
+		fork.registerRoot('root');
+		const primer = new api.Atom({ state: 0 });
+		const t = fork.openBatch('deferred');
+		t.run(() => primer.set(1)); // LOGGED mode + a live draft world
+		const lazy = new api.Atom<number>({ state: () => 33 });
+		let inScope = -1;
+		t.run(() => {
+			inScope = lazy.state as number; // FIRST materialization, draft context
+		});
+		expect(inScope).toBe(33);
+		// The initializer result is BASE state: identical in every world.
+		expect(lazy.state).toBe(33); // ambient (W0)
+		expect(engine.debug.readWorld(lazy.handle, { kind: 'newest' })).toBe(33);
+		expect(engine.debug.readWorld(lazy.handle, { kind: 'writer', token: t.token })).toBe(33);
+		expect(engine.readCommitted(lazy.handle)).toBe(33);
+		t.retire();
+		fork.closeEvent();
+		engine.debug.verify();
+	});
+
+	it('SSR initializeAtomState counts as materialization: the initializer is SKIPPED', () => {
+		const { api: server } = makeAPI();
+		const sA = new server.Atom({ state: 123 });
+		const json = server.serializeAtomState({ a: sA });
+
+		const { api: client } = makeAPI();
+		let calls = 0;
+		const cA = new client.Atom<number>({
+			state: () => {
+				++calls;
+				return -1;
+			},
+		});
+		client.initializeAtomState(json, { a: cA });
+		expect(calls).toBe(0); // install ≠ write: the initializer never ran
+		expect(cA.materialized).toBe(true);
+		expect(cA.state).toBe(123);
+		// A later install on the materialized atom is a plain set().
+		client.initializeAtomState(json, { a: cA });
+		expect(cA.state).toBe(123);
+		expect(calls).toBe(0);
+	});
+
+	it('observed lifecycle: the initializer runs BEFORE the first (debounced) observe-effect fire', async () => {
+		const { api } = makeAPI();
+		const order: string[] = [];
+		const a = new api.Atom<number>({
+			state: () => {
+				order.push('init');
+				return 1;
+			},
+			effect: () => {
+				order.push('observe');
+				return () => order.push('unobserve');
+			},
+		});
+		expect(order).toEqual([]);
+		const dispose = api.effect(() => {
+			void a.state;
+		});
+		expect(order).toEqual(['init']); // materialized synchronously at the read
+		await tick(); // §12.4 observe-effects are microtask-debounced
+		expect(order).toEqual(['init', 'observe']);
+		dispose();
+		await tick();
+		expect(order).toEqual(['init', 'observe', 'unobserve']);
+	});
+
+	it('ReducerAtom: lazy initializer; dispatch materializes and folds over it', () => {
+		const { api } = makeAPI();
+		let calls = 0;
+		const r = new api.ReducerAtom<number, number>({
+			state: () => {
+				++calls;
+				return 100;
+			},
+			reducer: (s, action) => s + action,
+		});
+		expect(calls).toBe(0);
+		r.dispatch(5);
+		expect(calls).toBe(1);
+		expect(r.state).toBe(105);
+	});
+});

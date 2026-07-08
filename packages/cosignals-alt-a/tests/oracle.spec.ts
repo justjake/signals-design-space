@@ -177,6 +177,42 @@ describe('§17.2 oracle: pinned danger cases', () => {
 	}
 });
 
+describe('§17.2 oracle: pinned danger cases (own universes)', () => {
+	it('join-of-join identity: same flattened wait set across worlds (fuzz seed 281, shrunk)', () => {
+		// A forwarded pending part arriving both DIRECTLY and inside a
+		// sibling's join must not make two worlds' identical wait sets look
+		// different — joins key on the FLATTENED ultimate source set. Here
+		// node6 = asyncgate over pending node4 (its thenable is the join
+		// {never4, never6}); node7 = sum(6, 5). In W0 node5 is settled, so
+		// node7 waits on {J6}; in the writer world node5 forwards never4, so
+		// node7's immediate parts are {J6, never4} — the SAME flattened set.
+		const universe: NodeSpec[] = [
+			{ kind: 'atom', initial: 4 },
+			{ kind: 'reducer', initial: 1 },
+			{ kind: 'atom', initial: 6 },
+			{ kind: 'atom', initial: 6 },
+			{ kind: 'computed', type: 'asyncgate', srcs: [1] },
+			{ kind: 'computed', type: 'branch', srcs: [3, 4, 2] },
+			{ kind: 'computed', type: 'asyncgate', srcs: [4] },
+			{ kind: 'computed', type: 'sum', srcs: [6, 5] },
+		];
+		const ops: Op[] = [
+			{ t: 'openDeferred' },
+			{ t: 'watch', n: 7 },
+			{ t: 'openDeferred' },
+			{ t: 'group', writes: [
+				{ batch: -1, atom: 0, op: 'update', v: 0 },
+				{ batch: 1, atom: 0, op: 'update', v: 0 },
+				{ batch: 1, atom: 3, op: 'set', v: 3 },
+			] },
+			{ t: 'retire', b: 1, committed: true },
+			{ t: 'retire', b: 0, committed: true },
+		];
+		const r = runSchedule(universe, ops, 'seed-281');
+		expect(r.failure, r.failure).toBeUndefined();
+	});
+});
+
 describe('§17.2 oracle: seeded randomized fuzz', () => {
 	const SEEDS = Number(process.env.ORACLE_SEEDS ?? 300);
 	const LENGTH = Number(process.env.ORACLE_LENGTH ?? 90);

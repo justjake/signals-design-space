@@ -727,6 +727,31 @@ describe('real React: ambient W0 visibility (alt-family rule)', () => {
 	});
 });
 
+describe('real React: lazy state initializer', () => {
+	it('useAtom({ state: () => ... }): the initializer runs once, at the first render read', async () => {
+		let calls = 0;
+		let rendered!: { set(v: number): void };
+		function View(): React.ReactNode {
+			const local = useAtom<number>({
+				state: () => {
+					++calls;
+					return 40;
+				},
+			});
+			rendered = local as unknown as { set(v: number): void };
+			return <span>{useSignal(local as unknown as { state: number; handle: never })}</span>;
+		}
+		const c = await mount(<View />);
+		expect(c.textContent).toBe('40');
+		expect(calls).toBe(1); // once — re-renders reuse the materialized node
+		await act(async () => {
+			rendered.set(41);
+		});
+		expect(c.textContent).toBe('41');
+		expect(calls).toBe(1);
+	});
+});
+
 describe('real React: StrictMode', () => {
 	it('double-rendering nets to one live subscription and stays correct', async () => {
 		const sig = new api.Atom({ state: 1 });

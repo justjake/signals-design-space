@@ -181,7 +181,14 @@ export function useAtom<T>(options: AtomOptions<T>): InstanceType<CosignalAPI['A
 	const [atom] = React.useState(() => new api.Atom<T>(options));
 	React.useEffect(
 		() => () => {
-			queueMicrotask(() => engine.reclaim(atom.handle)); // after StrictMode settles
+			queueMicrotask(() => {
+				// A never-materialized lazy atom has no engine node: reclaiming
+				// would RUN the initializer just to mint-and-free. Skip it.
+				if ((atom as { materialized?: boolean }).materialized === false) {
+					return;
+				}
+				engine.reclaim(atom.handle); // after StrictMode settles
+			});
 		},
 		[engine, atom],
 	);

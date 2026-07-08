@@ -2445,6 +2445,9 @@ export function createCosignalEngine(options?: EngineOptions) {
 	}
 
 	function writeOp(a: number, op: number, payload: unknown): void {
+		if (initDepth !== 0) {
+			throw new Error('cosignal: writes inside a lazy state initializer are not allowed (initializers must be pure)');
+		}
 		if (readCtx === C.CTX_RENDER && passExecuting !== 0 && !healStaleRenderCtx()) {
 			throw new Error('cosignal: writes during render are not allowed (§10.8)');
 		}
@@ -3264,6 +3267,10 @@ export function createCosignalEngine(options?: EngineOptions) {
 		}
 	}
 
+	// Lazy state initializers (policy feature) run inside this guard: pure
+	// w.r.t. the graph — writes rejected, reads untracked.
+	let initDepth = 0;
+
 	function untracked<T>(fn: () => T): T {
 		const prevSub = activeSub;
 		activeSub = 0;
@@ -3705,6 +3712,19 @@ export function createCosignalEngine(options?: EngineOptions) {
 			},
 			isLive(h: SignalHandle): boolean {
 				return isLiveNode(h.id);
+			},
+			/** Lazy state initializer evaluation (policy feature): UNTRACKED
+			 * (no dep links, certs rolled back — safe inside any evaluation
+			 * or render context) and PURE w.r.t. the graph (writes throw;
+			 * always-on — the guard is one predictable-false compare on the
+			 * write path). */
+			runInitializer<T>(fn: () => T): T {
+				++initDepth;
+				try {
+					return untracked(fn);
+				} finally {
+					--initDepth;
+				}
 			},
 		},
 		debug: {

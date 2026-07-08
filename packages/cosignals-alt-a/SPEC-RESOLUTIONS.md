@@ -114,7 +114,12 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
    invalidates through the normal write path; `latest` is preserved via the
    pending box (refresh-pending state). The pendingJoins identity cache is
    KEPT (same source set ⇒ same joined thenable; clearing it would
-   spuriously re-broadcast — oracle-caught). No-op on atoms/foreign nodes.
+   spuriously re-broadcast — oracle-caught). Joins key on the FLATTENED
+   ultimate source set (join members that are themselves joins expand;
+   module-level source-set registry): a world whose immediate parts are
+   {join(a,b), a} must produce the SAME thenable as one whose parts are
+   {join(a,b)} — identical wait sets, one identity (oracle-caught: fuzz
+   seed 281, pinned). No-op on atoms/foreign nodes.
    Refresh races supersede latest-wins (slot replacement + settlement
    no-op guard). Cache-less callers pay one superseded fetch per settlement
    wave (documented above, rule 5). UNDER RULE 7(a), a refresh read inside
@@ -163,6 +168,44 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
     occur — this suite's mount helper does. (Forensics:
     research/urgent-use-repro/ + the regression test at vendor/react/
     packages/react-dom/src/__tests__/ReactDOMUseUrgentActStall-test.js.)
+
+13. **Lazy state initializer** (owner feature, both alts): `new Atom({
+    state: () => T })` — a FUNCTION-VALUED state is a lazy initializer
+    (React useState convention; storing a function value requires
+    `state: () => fn`). Same for ReducerAtom and useAtom. Semantics:
+    - Evaluated ONCE, lazily, at first MATERIALIZATION (first read, write,
+      or subscription — never at construction). A THROWING initializer
+      leaves the atom unmaterialized (next access retries).
+    - Evaluation is UNTRACKED (activeSub suppressed, certificates rolled
+      back) and PURE w.r.t. the graph: writes inside it throw — ALWAYS-ON
+      (no debug/release build split exists; the guard is one
+      predictable-false compare on the write path).
+    - RENDER-SAFE: a first read during render may evaluate it (pure
+      computation, not a write) — the feature's point, e.g.
+      `state: () => document.visibilityState === 'visible'`.
+    - DECISION (write-before-first-read): `set(v)` on an unmaterialized
+      atom RUNS the initializer first, then applies the write through the
+      normal equality-drop contract (predictable equality semantics);
+      `update(fn)`/`dispatch(a)` obviously materialize (they fold over the
+      initializer result).
+    - PER-WORLD: first materialization from ANY context (draft scope,
+      render pass, eval frame) yields CANONICAL/BASE state — identical in
+      every world, never draft-scoped.
+    - SSR: `initializeAtomState` COUNTS AS MATERIALIZATION with the
+      initializer SKIPPED (install transplants the server's committed
+      value — install ≠ write; deliberate asymmetry with set()). Classes
+      expose `installState(v)`; a later install on a materialized atom is
+      a plain set().
+    - Finalization registration unchanged: fin tokens mint with the engine
+      node — for lazy atoms, mint-time IS materialization time. useAtom's
+      unmount reclaim skips never-materialized atoms.
+    - Observed lifecycle: the initializer runs at materialization,
+      strictly BEFORE the first (microtask-debounced) observe-effect fire.
+    - Implementation is PURE POLICY (api.ts defers engine-node minting);
+      the engine only contributes `policy.runInitializer` (untracked +
+      write-rejection guard). Oracle: generator emits lazy atoms/reducers
+      (~30%) via the API classes; compares skip still-unmaterialized nodes
+      so materialization timing stays fuzz-diverse.
 
 ---
 

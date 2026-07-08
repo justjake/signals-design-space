@@ -41,8 +41,8 @@ export function mulberry32(seed: number): () => number {
 
 // ---- node universe ---------------------------------------------------------------
 export type AtomSpec =
-	| { kind: 'atom'; initial: number; eqMod?: number }
-	| { kind: 'reducer'; initial: number };
+	| { kind: 'atom'; initial: number; eqMod?: number; lazy?: boolean }
+	| { kind: 'reducer'; initial: number; lazy?: boolean };
 
 export type ComputedSpec = {
 	kind: 'computed';
@@ -341,18 +341,69 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 	const classReaders: Array<() => number> = [];
 	const reducerHandles = new Map<number, { dispatch(a: number): void }>();
 	const atomHandles = new Map<number, { set(v: number): void; update(f: (x: number) => number): void }>();
+	// LAZY-INIT atoms (owner feature): built through the API classes with a
+	// pure `() => initial` initializer; the MODEL needs no laziness concept
+	// (values agree by purity) — the fuzz value is materialization timing:
+	// first touch lands at a random op under whatever batches/passes are
+	// live. Compares SKIP still-unmaterialized nodes (reading would
+	// materialize instantly and erase the timing diversity).
+	const lazyInstances = new Map<number, { materialized: boolean }>();
+	function isMaterialized(i: number): boolean {
+		const inst = lazyInstances.get(i);
+		return inst === undefined || inst.materialized;
+	}
 	function buildNode(i: number): void {
 		const s = specs[i];
 		if (s.kind === 'atom') {
-			const h = engine.atom<number>(s.initial, s.eqMod !== undefined ? { isEqual: modEq(s.eqMod) } : undefined);
-			handles.push(h);
-			classReaders[handles.length - 1] = () => h.state as number;
-			atomHandles.set(i, h);
+			if (s.lazy === true) {
+				const inst = new api.Atom<number>({
+					state: () => s.initial,
+					isEqual: s.eqMod !== undefined ? modEq(s.eqMod) : undefined,
+				});
+				lazyInstances.set(i, inst as unknown as { materialized: boolean });
+				// Handle delegate: materializes on first id/state access.
+				handles.push({
+					get id(): number {
+						return inst.handle.id;
+					},
+					get state(): number {
+						return inst.state as number;
+					},
+				} as unknown as SignalHandle);
+				classReaders[handles.length - 1] = () => inst.state as number;
+				atomHandles.set(i, {
+					set: (v: number) => inst.set(v),
+					update: (f: (x: number) => number) => inst.update(f),
+				});
+			} else {
+				const h = engine.atom<number>(s.initial, s.eqMod !== undefined ? { isEqual: modEq(s.eqMod) } : undefined);
+				handles.push(h);
+				classReaders[handles.length - 1] = () => h.state as number;
+				atomHandles.set(i, h);
+			}
 		} else if (s.kind === 'reducer') {
-			const h = engine.reducerAtom<number, number>(s.initial, REDUCER);
-			handles.push(h);
-			classReaders[handles.length - 1] = () => h.state as number;
-			reducerHandles.set(i, h);
+			if (s.lazy === true) {
+				const inst = new api.ReducerAtom<number, number>({
+					state: () => s.initial,
+					reducer: REDUCER,
+				});
+				lazyInstances.set(i, inst as unknown as { materialized: boolean });
+				handles.push({
+					get id(): number {
+						return inst.handle.id;
+					},
+					get state(): number {
+						return inst.state as number;
+					},
+				} as unknown as SignalHandle);
+				classReaders[handles.length - 1] = () => inst.state as number;
+				reducerHandles.set(i, { dispatch: (a: number) => inst.dispatch(a) });
+			} else {
+				const h = engine.reducerAtom<number, number>(s.initial, REDUCER);
+				handles.push(h);
+				classReaders[handles.length - 1] = () => h.state as number;
+				reducerHandles.set(i, h);
+			}
 		} else {
 			const spec = s;
 			const readIdx = (idx: number): number => classReaders[idx]();
@@ -411,6 +462,9 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 			if (specs[i].kind !== 'computed') {
 				continue;
 			}
+			if (!isMaterialized(i)) {
+				continue;
+			}
 			let l: unknown;
 			try {
 				l = api.latest(handles[i] as { id: number } as never);
@@ -443,6 +497,9 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 	function compareValues(step: number, op: Op): RunResult {
 		// W0 + writer worlds + committed always; newest/pass per context.
 		for (let i = 0; i < specs.length; ++i) {
+			if (!isMaterialized(i)) {
+				continue; // unmaterialized lazy node: reading would materialize
+			}
 			const h = handles[i];
 			const w0e = engine.debug.readWorld(h, { kind: 'w0' });
 			const w0o = oracle.value(i, { k: 'w0' });
@@ -861,9 +918,9 @@ export function generateUniverse(rng: () => number): NodeSpec[] {
 	for (let i = 0; i < nAtoms; ++i) {
 		const roll = rng();
 		if (roll < 0.25) {
-			specs.push({ kind: 'reducer', initial: Math.floor(rng() * 10) });
+			specs.push({ kind: 'reducer', initial: Math.floor(rng() * 10), lazy: rng() < 0.3 ? true : undefined });
 		} else {
-			specs.push({ kind: 'atom', initial: Math.floor(rng() * 10) });
+			specs.push({ kind: 'atom', initial: Math.floor(rng() * 10), lazy: rng() < 0.3 ? true : undefined });
 		}
 	}
 	const nComputeds = 2 + Math.floor(rng() * 3); // 2–4
@@ -957,7 +1014,7 @@ export function generateSchedule(rng: () => number, specs: NodeSpec[], length: n
 						? { kind: 'computed', type: 'branch', srcs: [pick(), pick(), pick()] }
 						: rng() < 0.5
 							? { kind: 'computed', type: 'sum', srcs: [pick(), pick()] }
-							: { kind: 'atom', initial: Math.floor(rng() * 10) },
+							: { kind: 'atom', initial: Math.floor(rng() * 10), lazy: rng() < 0.3 ? true : undefined },
 				});
 			}
 		} else if (roll < 0.62) {
