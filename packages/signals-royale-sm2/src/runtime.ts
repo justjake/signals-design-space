@@ -532,7 +532,7 @@ export class Runtime {
   }
 
   latest<T>(node: Atom<T> | Computed<T>): T {
-    const batches = this.host?.getRenderBatches();
+    const batches = this.renderBatches();
     if (node instanceof Computed) {
       if (batches !== null && batches !== undefined) {
         return batches.length === 0 ? node.latest() : node.readWorld(batches);

@@ -159,6 +159,46 @@ describe("engine features", () => {
     expect(doubled.get()).toBe(2);
   });
 
+  it("keeps latest reads in a canonical computed evaluation", () => {
+    const runtime = createRuntime();
+    let writing = 0;
+    runtime.attachHost({
+      getCurrentWriteBatch: () => writing,
+      getRenderBatches: () => null,
+      getRenderContainer: () => null,
+      runInBatch: (_id, fn) => fn(),
+    });
+    const source = runtime.atom(1);
+    const observed = runtime.computed(() => runtime.latest(source));
+    writing = runtime.allocateBatch(true);
+    source.set(99);
+    writing = 0;
+
+    expect(observed.readWorld([])).toBe(1);
+  });
+
+  it("keeps latest reads in a selected deferred-world computed evaluation", () => {
+    const runtime = createRuntime();
+    let writing = 0;
+    runtime.attachHost({
+      getCurrentWriteBatch: () => writing,
+      getRenderBatches: () => null,
+      getRenderContainer: () => null,
+      runInBatch: (_id, fn) => fn(),
+    });
+    const source = runtime.atom(1);
+    const observed = runtime.computed(() => runtime.latest(source));
+    const selected = runtime.allocateBatch(true);
+    writing = selected;
+    source.set(50);
+    const newer = runtime.allocateBatch(true);
+    writing = newer;
+    source.set(99);
+    writing = 0;
+
+    expect(observed.readWorld([selected])).toBe(50);
+  });
+
   it("serializes keyed atoms and installs without running lazy initializers", () => {
     const runtime = createRuntime();
     const sourceA = runtime.atom(4, { key: "a" });

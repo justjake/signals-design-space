@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRuntime, type BatchId, type HostProtocol } from "../src/index";
+import { createRuntime, type Atom, type BatchId, type HostProtocol } from "../src/index";
 
 function random(seed: number): () => number {
   let state = seed | 0;
@@ -34,11 +34,16 @@ describe("reducer-capsule oracle", () => {
         runInBatch: (_id, fn) => fn(),
       };
       runtime.attachHost(host);
-      const atoms = new Array(4);
+      const atoms = new Array<Atom<number>>(4);
       for (let i = 0; i < atoms.length; ++i) atoms[i] = runtime.atom(canonical[i]);
       const total = runtime.computed(() => {
         let value = 0;
         for (const atom of atoms) value += atom.get();
+        return value;
+      });
+      const contextualLatestTotal = runtime.computed(() => {
+        let value = 0;
+        for (const atom of atoms) value += runtime.latest(atom);
         return value;
       });
       const history: string[] = [];
@@ -69,6 +74,13 @@ describe("reducer-capsule oracle", () => {
           throw new Error(
             `seed=${seed} ${label}: total expected ${expectedTotal}, got ${actualTotal}\n` +
               `shrunk schedule:\n${history.join("\n")}`,
+          );
+        }
+        const actualLatestTotal = contextualLatestTotal.readWorld(rendering ?? []);
+        if (actualLatestTotal !== expectedTotal) {
+          throw new Error(
+            `seed=${seed} ${label}: contextual latest expected ${expectedTotal}, ` +
+              `got ${actualLatestTotal}\nshrunk schedule:\n${history.join("\n")}`,
           );
         }
       };
