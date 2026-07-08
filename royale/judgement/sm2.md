@@ -1,6 +1,6 @@
 # Judgement scorecard: sm2
 
-**Verdict: issues** · fork LOC 186 · lib LOC 1524
+**Verdict: clean (after fix round; originally issues)** · re-judged fork LOC 186 · re-judged lib LOC 1524 · fork LOC 186 · lib LOC 1524
 
 ## Gates (claimed vs observed)
 
@@ -36,3 +36,20 @@
 ## Notes
 
 FORK ORIGINALITY (the ordered rewrite): clean. Intersecting every added non-blank line of the new branch against the adopted incumbent series yields only boilerplate (license header, import lines, closing braces). The mechanism is genuinely different: incumbent = 1510-line batch-token registry (token allocator, pass frames, per-root commit lock-in, discardAllWip); sm2 rewrite = 186-line lane-facts listener — engine batch id IS the React lane bit, and React only reports facts it already computes (getWriteLane via requestCurrentTransition/requestTransitionLane, render context, render/commit/mutation edges with remainingLanes, one pinnedLane slot in shared internals). Binding constraints verified: the fork jest suite proves the exact mutation bracket (commit-start → mutation-start → mutation-stop → layout → commit-stop) and the entrant + battery MutationObserver tests prove zero React records userland; the layout-pinned corrective render provably stays on its owning transition lane (renderLanes both passes contain the lane; remainingLanes clears only after the correction commits), and capsule retirement is gated on every invalidated root's remainingLanes excluding the lane. Engine was adapted, not rewritten — all engine gates and the battery re-run green on the new protocol. Feature-honesty spot audit: lifetime effects GENUINE (engine test asserts union across computed-chain + effect subscribers with same-tick flap coalescing netting to one observation; React test asserts StrictMode nets one and unmount cleans up); mutation window GENUINE; latest() context rule WEAK (render-pass half genuine, computed-evaluation half fails — see red flags). Ideas worth stealing: (1) batch-id ≡ lane-bit eliminates the entire React-side registry, the single biggest fork-size lever in the field; (2) runWithSignalLane(0, fn) clearing ReactSharedInternals.T so urgent corrections (isPending flips) escape a surrounding transition — 3 lines for what incumbents do with lane-independence machinery; (3) retirement derived from remainingLanes facts plus a microtask probe in getCurrentWriteBatch that retires never-rendered batches (writes nobody observed) — no retirement tables at all. Code quality: excellent — 1132-line engine reads cleanly (class Node/Atom/Computed, reducer capsules with per-world dependency maps), hooks are ~117 lines, house style followed (named BatchId type, no golf). Ranking view: passes every gate I ran, smallest fork mechanism I have seen described, one confirmed required-feature gap (latest-in-computed tear) that adjudication should weigh against its "Done" claim.
+
+
+## Re-judgement after fix round
+
+**Verdict: clean** · fork LOC 186 · lib LOC 1524
+
+### Fixes verified
+
+Both fixes verified. (1) latest() tear: one-line fix at src/runtime.ts:535 (this.renderBatches() honors evaluationBatches during computed evaluation); two regression tests match the judge's exact probes and fail pre-fix with 'expected 99 to be 1' / 'expected 99 to be 50' (reproduced in scratch copy against 8aa9cb1~1), green post-fix; oracle widened with a latest()-calling computed checked under canonical [] and every generated selected batch set. (2) REPORT: §4 latest row corrected to 'Done after fix round' stating defect and fix; react-bench table re-run post-rewrite with fresh honest numbers. Suites: engine 194/194, deep oracle ORACLE_SEEDS=1200 pass (env consumed), react gate 17/17, typecheck clean both packages.
+
+### Battery
+
+25/25 pass; battery.spec.tsx byte-identical to royale/verify/battery (cmp); only ADAPTER.ts shim + package.json link differ (sanctioned wiring); battery typecheck clean
+
+### Notes
+
+Workspace quiet (no sm2 codex process; last commit 7 min prior). Fork unchanged: numstat 186 non-test insertions / 0 deletions (+220-line __tests__ file, excluded by rule); patches/0001 byte-identical to format-patch of royale/sm2-react-rewrite HEAD 5a968f65b4; vendor/react clean; forkLoc 186 reproduced via canonical count-loc.mjs. Disclosed non-blocking gaps remain (core 2.990x vs Alien; react-bench behind plain store on all three scenarios, honestly reported).
