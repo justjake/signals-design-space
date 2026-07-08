@@ -198,6 +198,7 @@ export function traceEvent(
 abstract class Observer implements Subscriber {
   deps: Link[] = [];
   nextDeps: Link[] = [];
+  nextSources?: Set<Source>;
   dirty = true;
   abstract get observesSources(): boolean;
   abstract notify(cause?: number): void;
@@ -214,6 +215,7 @@ abstract class Observer implements Subscriber {
     const previous = active;
     const previousTracking = tracking;
     this.nextDeps.length = 0;
+    this.nextSources?.clear();
     active = this;
     tracking = true;
     try {
@@ -222,11 +224,13 @@ abstract class Observer implements Subscriber {
       active = previous;
       tracking = previousTracking;
       for (const old of this.deps) {
-        let retained = false;
-        for (const current of this.nextDeps) {
-          if (current.source === old.source) {
-            retained = true;
-            break;
+        let retained = this.nextSources?.has(old.source) ?? false;
+        if (this.nextSources === undefined) {
+          for (const current of this.nextDeps) {
+            if (current.source === old.source) {
+              retained = true;
+              break;
+            }
           }
         }
         if (!retained && this.observesSources) old.source.remove(this);
@@ -245,19 +249,34 @@ abstract class Observer implements Subscriber {
 function track(source: Source): void {
   const observer = active;
   if (!tracking || observer === undefined) return;
-  for (const link of observer.nextDeps) {
-    if (link.source === source) return;
+  const index = observer.nextDeps.length;
+  let sources = observer.nextSources;
+  if (sources === undefined) {
+    for (const link of observer.nextDeps) {
+      if (link.source === source) return;
+    }
+    if (index === 8) {
+      sources = new Set();
+      observer.nextSources = sources;
+      for (const link of observer.nextDeps) sources.add(link.source);
+    }
+  } else if (sources.has(source)) {
+    return;
   }
-  let link: Link | undefined;
-  for (const old of observer.deps) {
-    if (old.source === source) {
-      link = old;
-      break;
+  let link: Link | undefined = observer.deps[index];
+  if (link?.source !== source) {
+    link = undefined;
+    for (const old of observer.deps) {
+      if (old.source === source) {
+        link = old;
+        break;
+      }
     }
   }
   if (link === undefined) link = { source, version: source.version };
   else link.version = source.version;
   observer.nextDeps.push(link);
+  sources?.add(source);
   if (observer.observesSources) source.add(observer);
 }
 
