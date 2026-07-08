@@ -11,6 +11,7 @@ import {
   observeCell,
   recordCommitted,
   retireBatch,
+  setWorldProvider,
   subscribePending,
   subscribeView,
   traceEvent,
@@ -164,6 +165,14 @@ export function register(): RegistrationHandle {
     protocol = findProtocol();
     currentErrors = [];
     unsubscribeProtocol = protocol.subscribe(onProtocolEvent);
+    setWorldProvider(() => {
+      const context = protocol?.getRenderContext();
+      if (context == null) return undefined;
+      return {
+        lanes: context.lanes,
+        deferred: (context.lanes & liveBatchMask()) !== 0,
+      };
+    });
   }
   const errors = currentErrors;
   return {
@@ -172,6 +181,7 @@ export function register(): RegistrationHandle {
       unsubscribeProtocol?.();
       unsubscribeProtocol = undefined;
       protocol = undefined;
+      setWorldProvider(undefined);
     },
   };
 }

@@ -137,6 +137,44 @@ test("flushSync excludes a live transition draft", async () => {
   expect(view.textContent).toBe("1");
 });
 
+test("latest in an urgent render body resolves the render world", async () => {
+  const value = atom(0);
+  const blocker = atom(0);
+  const gate = deferred<void>();
+  let updateUrgent!: React.Dispatch<React.SetStateAction<number>>;
+  function App() {
+    const [urgent, setUrgent] = React.useState(0);
+    updateUrgent = setUrgent;
+    const blocked = useValue(blocker);
+    const current = latest(value);
+    if (blocked === 1 && !gate.settled) throw gate.promise;
+    return (
+      <span>
+        {urgent}:{current}
+      </span>
+    );
+  }
+  const view = await mount(
+    <React.Suspense fallback={null}>
+      <App />
+    </React.Suspense>,
+  );
+  await act(async () => {
+    startTransitionWrite(() => {
+      write(value, 1);
+      write(blocker, 1);
+    });
+  });
+  expect(view.textContent).toBe("0:0");
+
+  await act(async () => updateUrgent(1));
+  expect(view.textContent).toBe("1:0");
+
+  gate.settled = true;
+  await act(async () => gate.resolve());
+  expect(view.textContent).toBe("1:1");
+});
+
 test("mutation events exclude React mutations but retain third-party ones", async () => {
   const value = atom(0);
   function App() {

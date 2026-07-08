@@ -1,12 +1,14 @@
 import { expect, test } from "vitest";
 import {
   atom,
+  computed,
   latest,
   liveBatchIds,
   resetForTest,
   retireBatch,
   withWorld,
   withWriteBatch,
+  type Computed,
 } from "../src/index";
 
 type Operation = { kind: "add" | "multiply" | "set"; value: number };
@@ -28,6 +30,10 @@ function run(seed: number): void {
     return random >>> 0;
   };
   const cells = [atom(0), atom(1), atom(2), atom(3)];
+  const derived: Computed<number>[] = [];
+  for (let index = 0; index < cells.length; index++) {
+    derived.push(computed(() => latest(cells[index]) * 10 + index));
+  }
   const canonical = [0, 1, 2, 3];
   const drafts = new Map<number, Map<number, Operation[]>>();
   const histories = new Map<number, ScheduledOperation[]>();
@@ -64,8 +70,9 @@ function run(seed: number): void {
           batch: 0,
         };
         histories.get(index)?.push(operation);
-        canonical[index] =
-          histories.has(index) ? fold(index, 0) : apply(canonical[index], operation);
+        canonical[index] = histories.has(index)
+          ? fold(index, 0)
+          : apply(canonical[index], operation);
         schedule.push(`urgent a${index} += ${amount}`);
         cells[index].update((value) => value + amount);
       } else if (choice <= 4) {
@@ -147,6 +154,15 @@ function run(seed: number): void {
       expect(
         withWorld({ lanes: batchId, deferred: true }, () => cells[index].get()),
       ).toBe(fold(index, batchId));
+      expect(derived[index].get()).toBe(canonical[index] * 10 + index);
+      if (drafts.has(batchId)) {
+        expect(
+          withWorld({ lanes: batchId, deferred: true }, () =>
+            derived[index].get(),
+          ),
+        ).toBe(fold(index, batchId) * 10 + index);
+      }
+      expect(latest(derived[index])).toBe(fold(index) * 10 + index);
     } catch (error) {
       throw new Error(
         `oracle seed ${seed}, shrunk schedule (${

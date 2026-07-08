@@ -55,7 +55,9 @@ let activeScope: Set<ReactiveEffect> | undefined;
 let batchAtoms:
   | Map<Atom<unknown>, { value: unknown; version: number }>
   | undefined;
+const canonicalWorld: RenderWorld = { lanes: 0, deferred: false };
 let activeWorld: RenderWorld | undefined;
+let worldProvider: (() => RenderWorld | undefined) | undefined;
 let writeBatch: BatchId = 0;
 let retiring = false;
 const liveBatches = new Map<BatchId, LiveBatch>();
@@ -386,6 +388,7 @@ export class Atom<T> implements Source {
       this.history.push({ batch: 0, apply, cause });
     }
     if (this.equals(this.value, value)) return;
+    invalidateWorldValues();
     cause ??= emitTrace("write", undefined, 0);
     let original = batchAtoms?.get(this as Atom<unknown>);
     if (batchAtoms !== undefined && original === undefined) {
@@ -485,6 +488,7 @@ export class Atom<T> implements Source {
     const previous = this.valueFor(writeBatch);
     const value = apply(previous);
     if (this.equals(previous, value)) return;
+    invalidateWorldValues();
     const wasPending = this.drafts.size !== 0;
     let history = this.history;
     if (history === undefined) {
@@ -609,13 +613,16 @@ export class Computed<T> extends Observer implements Source {
     let failure: unknown;
     this.captured.length = 0;
     const previousOwner = asyncOwner;
+    const previousWorld = activeWorld;
     asyncOwner = this as unknown as Computed<unknown>;
+    if (previousWorld === undefined) activeWorld = canonicalWorld;
     try {
       next = this.evaluate(this.fn);
     } catch (error) {
       failure = error;
     } finally {
       asyncOwner = previousOwner;
+      activeWorld = previousWorld;
       this.evaluating = false;
       this.dirty = false;
     }
@@ -734,7 +741,7 @@ export class Computed<T> extends Observer implements Source {
       this.pendingThenable = undefined;
       this.dirty = false;
       this.forced = false;
-    this.hasValue = true;
+      this.hasValue = true;
       if (record.status === "fulfilled") {
         this.value = record.value as T;
         this.failure = undefined;
@@ -802,6 +809,10 @@ export class Computed<T> extends Observer implements Source {
       for (const subscriber of this.subscribers) subscriber.notify();
     }
     this.notifyPending();
+  }
+
+  invalidateWorldValues(): void {
+    this.worldValues.clear();
   }
 
   private notifyPending(): void {
@@ -1022,6 +1033,15 @@ export function read<T>(cell: Atom<T> | Computed<T>): T {
 
 export function latest<T>(cell: Atom<T> | Computed<T>): T {
   if (activeWorld !== undefined) return cell.get();
+  const world = worldProvider?.();
+  if (world !== undefined) {
+    activeWorld = world;
+    try {
+      return cell.get();
+    } finally {
+      activeWorld = undefined;
+    }
+  }
   if (cell instanceof Atom) return cell.latest();
   let lanes = 0;
   for (const [batchId] of liveBatches) lanes |= batchId;
@@ -1083,6 +1103,12 @@ export function withWorld<T>(world: RenderWorld, fn: () => T): T {
   }
 }
 
+export function setWorldProvider(
+  provider: (() => RenderWorld | undefined) | undefined,
+): void {
+  worldProvider = provider;
+}
+
 export function withWriteBatch<T>(batchId: BatchId, fn: () => T): T {
   if (batchId !== 0 && !liveBatches.has(batchId)) {
     liveBatches.set(batchId, {
@@ -1122,6 +1148,12 @@ export function liveBatchMask(cell?: {
 
 export function batchCause(batchId: BatchId): number | undefined {
   return liveBatches.get(batchId)?.lastCause;
+}
+
+function invalidateWorldValues(): void {
+  for (const [, live] of liveBatches) {
+    for (const cell of live.computeds) cell.invalidateWorldValues();
+  }
 }
 
 export function retireBatch(batchId: BatchId, commit: boolean): void {

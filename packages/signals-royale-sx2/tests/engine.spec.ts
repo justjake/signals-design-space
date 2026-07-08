@@ -120,6 +120,17 @@ test("latest derives the newest world without changing canonical cache", () => {
   retireBatch(8, false);
 });
 
+test("latest inside a computed resolves the evaluation world", () => {
+  const source = atom(0);
+  const derived = computed(() => latest(source) * 10);
+  withWriteBatch(8, () => source.set(1));
+
+  expect(derived.get()).toBe(0);
+  expect(withWorld({ lanes: 8, deferred: true }, () => derived.get())).toBe(10);
+  expect(latest(derived)).toBe(10);
+  retireBatch(8, false);
+});
+
 test("discard removes a draft without touching canonical state", () => {
   const value = atom(1);
   withWriteBatch(16, () => value.set(9));
