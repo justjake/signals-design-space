@@ -67,7 +67,8 @@ export interface Subscriber {
 
 interface RootState {
 	snapshot: Snapshot | null;
-	committedView: Map<Atom<unknown>, unknown>;
+	/** Canonical epoch at this root's last commit (its committed view). */
+	commitEpoch: number;
 	commitCount: number;
 }
 
@@ -91,7 +92,7 @@ let disposeDraftListener: (() => void) | null = null;
 function rootState(container: unknown): RootState {
 	let state = roots.get(container);
 	if (state === undefined) {
-		state = { snapshot: null, committedView: new Map(), commitCount: 0 };
+		state = { snapshot: null, commitEpoch: currentEpoch(), commitCount: 0 };
 		roots.set(container, state);
 	}
 	return state;
@@ -127,7 +128,7 @@ export function register(): { errors: unknown[]; dispose(): void } {
 			);
 		}
 	});
-	setCommittedViewLookup((container) => roots.get(container)?.committedView ?? null);
+	setCommittedViewLookup((container) => roots.get(container)?.commitEpoch ?? null);
 	registered = {
 		errors,
 		dispose() {
@@ -252,22 +253,27 @@ function schedulePendingProbes(): void {
 
 function onPassStart(container: unknown, lanes: Lanes): void {
 	const state = rootState(container);
-	state.snapshot?.release();
+	const previous = state.snapshot;
 	state.snapshot = null;
-	if (lanes === 0) return;
-	const batches: Batch[] = [];
-	for (const [lane, set] of laneBatches) {
-		if ((lane & lanes) !== 0) {
-			for (const b of set) {
-				if (b.status === 'open') batches.push(b);
+	if (lanes !== 0) {
+		const batches: Batch[] = [];
+		for (const [lane, set] of laneBatches) {
+			if ((lane & lanes) !== 0) {
+				for (const b of set) {
+					if (b.status === 'open') batches.push(b);
+				}
 			}
 		}
+		batches.sort((a, b) => a.id - b.id);
+		const snapshot = new Snapshot(batches, batches.length > 0);
+		// Pin before releasing the pass this one replaces: a transient
+		// zero-pin moment would drop the canonical history other roots'
+		// committed views still read through.
+		snapshot.pin();
+		state.snapshot = snapshot;
+		traceEvent('pass-start', { lanes, batches: batches.map((b) => b.id) }, undefined);
 	}
-	batches.sort((a, b) => a.id - b.id);
-	const snapshot = new Snapshot(batches, batches.length > 0);
-	snapshot.pin();
-	state.snapshot = snapshot;
-	traceEvent('pass-start', { lanes, batches: batches.map((b) => b.id) }, undefined);
+	previous?.release();
 }
 
 type Lanes = number;
@@ -280,22 +286,20 @@ function onPassCommit(container: unknown, lanes: Lanes, remainingLanes: Lanes): 
 	const prevCause = setCurrentCause(cause);
 	try {
 		// Retire the batches these lanes carried (fold intents canonically).
+		// The fold runs under the batch's own lane pin: subscribers on OTHER
+		// roots woken by the canonical change re-render inside the batch's
+		// pending pass there — a corrective render lands inside the owning
+		// batch's commit, never beside it.
 		for (const [lane, batchSet] of laneBatches) {
 			if ((lane & lanes) === 0) continue;
-			for (const b of batchSet) commitBatch(b);
+			seam.unstable_runWithPinnedLane(lane, () => {
+				for (const b of batchSet) commitBatch(b);
+			});
 			if ((lane & remainingLanes) === 0) laneBatches.delete(lane);
 		}
-		// Advance this root's committed view for every atom its components
-		// subscribe to (directly or through computeds).
-		const view = state.committedView;
-		for (const [atom, subs] of atomSubs) {
-			for (const sub of subs) {
-				if (sub.container === container) {
-					view.set(atom, atom.peek());
-					break;
-				}
-			}
-		}
+		// Advance this root's committed view: everything canonical up to this
+		// moment (including the folds above) is now on this root's screen.
+		state.commitEpoch = currentEpoch();
 		state.commitCount++;
 		commitListeners.forEach((l) => l(container));
 		schedulePendingProbes();
@@ -363,7 +367,7 @@ export function subscribe(sub: Subscriber): () => void {
  * subscriber joins those batches' commits instead of tearing beside them. */
 export function joinOpenBatches(node: Readable<unknown>, force: () => void): void {
 	for (const batch of listOpenBatches()) {
-		if (batch.ops.size === 0) continue;
+		if (batch.touched.size === 0) continue;
 		if (!batchTouches(batch, node)) continue;
 		const lane = batchLane.get(batch as Batch);
 		if (lane === undefined) continue;
@@ -372,7 +376,7 @@ export function joinOpenBatches(node: Readable<unknown>, force: () => void): voi
 }
 
 function batchTouches(batch: Batch, node: Readable<unknown>): boolean {
-	if (node instanceof Atom) return batch.ops.has(node as Atom<unknown>);
+	if (node instanceof Atom) return batch.touched.has(node as Atom<unknown>);
 	// Probe the computed's recorded dependency graph.
 	const seen = new Set<object>();
 	const stack: Readable<unknown>[] = [node];
@@ -381,7 +385,7 @@ function batchTouches(batch: Batch, node: Readable<unknown>): boolean {
 		if (seen.has(cursor)) continue;
 		seen.add(cursor);
 		if (cursor instanceof Atom) {
-			if (batch.ops.has(cursor as Atom<unknown>)) return true;
+			if (batch.touched.has(cursor as Atom<unknown>)) return true;
 		} else {
 			for (const d of (cursor as Computed<unknown>).deps) stack.push(d as Readable<unknown>);
 		}

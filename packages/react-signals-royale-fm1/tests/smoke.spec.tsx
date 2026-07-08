@@ -44,7 +44,7 @@ describe('smoke', () => {
 		expect(container.textContent).toBe('draft');
 	});
 
-	test('urgent during transition: (1 update x2 in transition, +1 urgent) = 2 then 4', async () => {
+	test('urgent during transition: transition +1 then urgent x2 = 2 now, (1+1)*2 = 4 after', async () => {
 		const a = atom(1, { label: 'counter' });
 		function View() {
 			return <span>{useValue(a)}</span>;
@@ -52,12 +52,12 @@ describe('smoke', () => {
 		const { container } = await harness.mount(<View />);
 		await act(async () => {
 			startTransitionWrite(() => {
-				update(a, (x) => x * 2);
+				update(a, (x) => x + 1);
 			});
-			update(a, (x) => x + 1);
+			update(a, (x) => x * 2);
 		});
-		// Both the urgent commit (2) and the rebased transition (4) have
-		// flushed inside act; the final screen shows the rebase.
+		// The urgent doubling committed alone (1*2 = 2); retirement replayed
+		// the full write log in call order: (1+1)*2 = 4.
 		expect(container.textContent).toBe('4');
 	});
 });

@@ -114,14 +114,27 @@ function genSchedule(rand: () => number, nSteps: number): Schedule {
 // --- The naive model ------------------------------------------------------
 
 type Intent = { kind: 'set'; value: number } | { kind: 'fn'; mult: number; add: number };
+interface ModelEntry {
+	op: Intent;
+	owner: number | null; // batch index; null = urgent
+}
+interface ModelLog {
+	base: number;
+	entries: ModelEntry[];
+}
 interface ModelBatch {
 	status: 'open' | 'committed' | 'discarded';
-	ops: Map<number, Intent[]>;
+	touched: Set<number>;
+}
+
+function applyOp(v: number, op: Intent): number {
+	return op.kind === 'set' ? op.value : v * op.mult + op.add;
 }
 
 class Model {
 	values: number[] = [];
 	batches: ModelBatch[] = [];
+	logs = new Map<number, ModelLog>();
 	defs: CompDef[];
 
 	constructor(defs: CompDef[]) {
@@ -141,67 +154,119 @@ class Model {
 		return a > 0 ? b : c;
 	}
 
-	foldBatch(batch: ModelBatch, base: number[]): number[] {
-		const out = base.slice();
-		for (const [ai, intents] of batch.ops) {
-			for (const it of intents) {
-				out[ai] = it.kind === 'set' ? it.value : out[ai] * it.mult + it.add;
-			}
+	log(atom: number): ModelLog {
+		let log = this.logs.get(atom);
+		if (log === undefined) {
+			log = { base: this.values[atom], entries: [] };
+			this.logs.set(atom, log);
+		}
+		return log;
+	}
+
+	replay(atom: number, visible: (owner: number | null) => boolean): number {
+		const log = this.logs.get(atom);
+		if (log === undefined) return this.values[atom];
+		let v = log.base;
+		for (const e of log.entries) {
+			if (visible(e.owner)) v = applyOp(v, e.op);
+		}
+		return v;
+	}
+
+	prune(atom: number): void {
+		const log = this.logs.get(atom);
+		if (log === undefined) return;
+		const hasOpen = log.entries.some(
+			(e) => e.owner !== null && this.batches[e.owner].status === 'open',
+		);
+		if (!hasOpen) this.logs.delete(atom);
+	}
+
+	urgent(atom: number, op: Intent): void {
+		if (this.logs.has(atom)) this.log(atom).entries.push({ op, owner: null });
+		this.values[atom] = applyOp(this.values[atom], op);
+	}
+
+	/** Atom valuation a world sees: canonical unless an included open batch
+	 * touches the atom, in which case the full call-order replay of urgents,
+	 * retired batches, and the included open batches. */
+	worldValues(included: (owner: number) => boolean): number[] {
+		const out = this.values.slice();
+		for (const [atom, log] of this.logs) {
+			const touchedByIncluded = log.entries.some(
+				(e) =>
+					e.owner !== null &&
+					this.batches[e.owner].status === 'open' &&
+					included(e.owner),
+			);
+			if (!touchedByIncluded) continue;
+			out[atom] = this.replay(
+				atom,
+				(owner) =>
+					owner === null ||
+					this.batches[owner].status === 'committed' ||
+					(this.batches[owner].status === 'open' && included(owner)),
+			);
 		}
 		return out;
 	}
 
 	latestValues(): number[] {
-		let v = this.values;
-		for (const b of this.batches) {
-			if (b.status === 'open' && b.ops.size > 0) v = this.foldBatch(b, v);
-		}
-		return v;
+		return this.worldValues(() => true);
 	}
 
 	apply(step: Step): void {
 		switch (step.op) {
 			case 'set':
-				this.values[step.atom] = step.value;
+				this.urgent(step.atom, { kind: 'set', value: step.value });
 				break;
 			case 'update':
-				this.values[step.atom] = this.values[step.atom] * step.mult + step.add;
+				this.urgent(step.atom, { kind: 'fn', mult: step.mult, add: step.add });
 				break;
 			case 'open':
-				this.batches.push({ status: 'open', ops: new Map() });
+				this.batches.push({ status: 'open', touched: new Set() });
 				break;
 			case 'bset':
 			case 'bupdate': {
 				const b = this.batches[step.batch];
 				if (b === undefined) break;
-				if (b.status !== 'open') {
-					// A write scoped to a retired batch lands urgently (never drops).
-					this.values[step.atom] =
-						step.op === 'bset'
-							? step.value
-							: this.values[step.atom] * step.mult + step.add;
-					break;
-				}
-				let list = b.ops.get(step.atom);
-				if (list === undefined) b.ops.set(step.atom, (list = []));
-				list.push(
+				const op: Intent =
 					step.op === 'bset'
 						? { kind: 'set', value: step.value }
-						: { kind: 'fn', mult: step.mult, add: step.add },
-				);
+						: { kind: 'fn', mult: step.mult, add: step.add };
+				if (b.status !== 'open') {
+					// A write scoped to a retired batch lands urgently (never drops).
+					this.urgent(step.atom, op);
+					break;
+				}
+				b.touched.add(step.atom);
+				this.log(step.atom).entries.push({ op, owner: step.batch });
 				break;
 			}
 			case 'commit': {
 				const b = this.batches[step.batch];
 				if (b === undefined || b.status !== 'open') break;
 				b.status = 'committed';
-				this.values = this.foldBatch(b, this.values);
+				for (const atom of b.touched) {
+					this.values[atom] = this.replay(
+						atom,
+						(owner) => owner === null || this.batches[owner].status === 'committed',
+					);
+					this.prune(atom);
+				}
 				break;
 			}
 			case 'discard': {
 				const b = this.batches[step.batch];
 				if (b === undefined || b.status !== 'open') break;
 				b.status = 'discarded';
+				for (const atom of b.touched) {
+					const log = this.logs.get(atom);
+					if (log !== undefined) {
+						log.entries = log.entries.filter((e) => e.owner !== step.batch);
+					}
+					this.prune(atom);
+				}
 				break;
 			}
 		}
@@ -279,14 +344,14 @@ function runSchedule(schedule: Schedule): string | null {
 					return `step ${s}: latest node ${i}: got ${got}, want ${want}`;
 				}
 			}
-			// A snapshot over each single open batch folds exactly that batch.
+			// A snapshot over each single open batch replays urgents + that batch.
 			for (let bi = 0; bi < batches.length; bi++) {
 				if (batches[bi].status !== 'open') continue;
 				const snap = new Snapshot([batches[bi]], true);
-				const folded = model.foldBatch(model.batches[bi], model.values);
+				const world = model.worldValues((owner) => owner === bi);
 				for (let i = 0; i < nodes.length; i++) {
 					const got = withSnapshot(snap, () => (nodes[i] as Computed<number>).get());
-					const want = model.derive(i, folded);
+					const want = model.derive(i, world);
 					if (!Object.is(got, want)) {
 						return `step ${s}: snapshot[batch ${bi}] node ${i}: got ${got}, want ${want}`;
 					}

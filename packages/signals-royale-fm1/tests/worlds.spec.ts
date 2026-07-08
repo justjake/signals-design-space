@@ -38,14 +38,27 @@ describe('classified writes and rebase', () => {
 		expect(a.peek()).toBe(5);
 	});
 
-	test('functional updates replay: (1 +1 urgent) x2 transition = 4', () => {
+	test('functional updates replay in call order (updater-queue arithmetic)', () => {
+		// Transition applies +1 first, urgent doubles second: the urgent commit
+		// shows 1*2 = 2 alone; retirement replays the full log in call order,
+		// (1+1)*2 = 4 — replay, never reorder.
 		const a = atom(1);
 		const b = openBatch();
-		withAmbientBatch(b, () => update(a, (x) => x * 2));
-		// Urgent write lands alone, immediately.
-		update(a, (x) => x + 1);
+		withAmbientBatch(b, () => update(a, (x) => x + 1));
+		update(a, (x) => x * 2);
 		expect(a.peek()).toBe(2);
-		// The transition retires rebased on the urgent base.
+		commitBatch(b);
+		expect(a.peek()).toBe(4);
+	});
+
+	test('functional updates replay: urgent-first call order too', () => {
+		// Urgent +1 lands first (showing 2), the transition's x2 was called
+		// second and replays after it: (1+1)*2 = 4.
+		const a = atom(1);
+		update(a, (x) => x + 1);
+		const b = openBatch();
+		withAmbientBatch(b, () => update(a, (x) => x * 2));
+		expect(a.peek()).toBe(2);
 		commitBatch(b);
 		expect(a.peek()).toBe(4);
 	});

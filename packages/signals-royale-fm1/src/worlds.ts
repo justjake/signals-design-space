@@ -50,29 +50,90 @@ let nextBatchId: BatchId = 1;
 export class Batch {
 	id: BatchId = nextBatchId++;
 	status: BatchStatus = 'open';
-	/** Intents per atom, in write order. */
-	ops = new Map<Atom<unknown>, WriteIntent[]>();
+	/** Atoms this batch wrote (the intents live in per-atom rebase logs). */
+	touched = new Set<Atom<unknown>>();
 	/** Trace event that opened the batch (causal parent for its writes). */
 	traceId: number | undefined;
 
 	record(atom: Atom<unknown>, op: WriteIntent): void {
-		let list = this.ops.get(atom);
-		if (list === undefined) {
-			list = [];
-			this.ops.set(atom, list);
-		}
-		list.push(op);
+		this.touched.add(atom);
+		logEntry(atom, op, this);
 		notifyDraftListeners(atom, this);
 	}
+}
 
-	/** Replay this batch's intents for `atom` onto `base`. */
-	fold(atom: Atom<unknown>, base: unknown): unknown {
-		const list = this.ops.get(atom);
-		if (list === undefined) return base;
-		let v = base;
-		for (const op of list) v = op.kind === 'set' ? op.value : op.fn(v);
-		return v;
+/**
+ * Per-atom rebase log: React updater-queue arithmetic. While any transition
+ * batch holds intents for an atom, EVERY write to it — urgent or transition
+ * — appends here in call order. A world's value for the atom replays the log
+ * from the episode's base, keeping the entries whose owner that world can
+ * see (urgent entries plus its own batches). Retirement replays urgent +
+ * retired-batch entries and installs the result canonically, so a transition
+ * that added 2 under an urgent doubling lands as (base+2)*2 — replay, never
+ * reorder.
+ */
+interface RebaseEntry {
+	op: WriteIntent;
+	/** null = urgent (canonically applied when recorded). */
+	owner: Batch | null;
+	/** Epoch when recorded; snapshots exclude urgent entries newer than
+	 * their pin. */
+	epoch: Epoch;
+}
+interface RebaseLog {
+	base: unknown;
+	baseEpoch: Epoch;
+	entries: RebaseEntry[];
+}
+const rebaseLogs = new Map<Atom<unknown>, RebaseLog>();
+
+function logEntry(atom: Atom<unknown>, op: WriteIntent, owner: Batch | null): void {
+	let log = rebaseLogs.get(atom);
+	if (log === undefined) {
+		log = { base: atom.peek(), baseEpoch: currentEpoch(), entries: [] };
+		rebaseLogs.set(atom, log);
 	}
+	log.entries.push({ op, owner, epoch: currentEpoch() });
+}
+
+/** Replay the log for the world that sees `batches` (plus urgent entries at
+ * or before `atEpoch`). */
+function replayLog(
+	log: RebaseLog,
+	batches: readonly Batch[] | 'committed',
+	atEpoch: Epoch,
+): unknown {
+	let v = log.base;
+	for (const e of log.entries) {
+		let visible: boolean;
+		if (e.owner === null) {
+			visible = e.epoch <= atEpoch;
+		} else if (batches === 'committed') {
+			visible = e.owner.status === 'committed';
+		} else {
+			// A world sees retired batches (already canonical) plus its own
+			// open batches, in one call-order replay.
+			visible =
+				e.owner.status === 'committed' ||
+				(e.owner.status === 'open' && batches.includes(e.owner));
+		}
+		if (!visible) continue;
+		v = e.op.kind === 'set' ? e.op.value : e.op.fn(v);
+	}
+	return v;
+}
+
+/** Drop a log once no open batch still owns entries in it. */
+function pruneLog(atom: Atom<unknown>): void {
+	const log = rebaseLogs.get(atom);
+	if (log === undefined) return;
+	if (log.entries.some((e) => e.owner !== null && e.owner.status === 'open')) return;
+	rebaseLogs.delete(atom);
+}
+
+/** True when a rebase episode is live for this atom. */
+export function hasRebaseLog(atom: Atom<unknown>): boolean {
+	return rebaseLogs.has(atom);
 }
 
 const openBatches: Batch[] = [];
@@ -106,8 +167,12 @@ export function commitBatch(b: Batch): void {
 	);
 	startBatch();
 	try {
-		for (const atom of b.ops.keys()) {
-			atom.set(b.fold(atom, atom.peek()));
+		for (const atom of b.touched) {
+			const log = rebaseLogs.get(atom);
+			if (log !== undefined) {
+				atom.set(replayLog(log, 'committed', currentEpoch()));
+			}
+			pruneLog(atom);
 		}
 	} finally {
 		endBatch();
@@ -122,7 +187,14 @@ export function discardBatch(b: Batch): void {
 	b.status = 'discarded';
 	dropOpen(b);
 	if (emitTrace !== null) emitTrace('batch-discard', b.traceId, { batch: b.id });
-	for (const atom of b.ops.keys()) notifyDraftListeners(atom, b);
+	for (const atom of b.touched) {
+		const log = rebaseLogs.get(atom);
+		if (log !== undefined) {
+			log.entries = log.entries.filter((e) => e.owner !== b);
+		}
+		pruneLog(atom);
+		notifyDraftListeners(atom, b);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +223,9 @@ export function write<T>(atom: Atom<T>, v: T): void {
 	if (ambientBatch !== null && ambientBatch.status === 'open') {
 		ambientBatch.record(atom as Atom<unknown>, { kind: 'set', value: v });
 	} else {
+		if (rebaseLogs.has(atom as Atom<unknown>)) {
+			logEntry(atom as Atom<unknown>, { kind: 'set', value: v }, null);
+		}
 		atom.set(v);
 	}
 }
@@ -161,6 +236,9 @@ export function update<T>(atom: Atom<T>, fn: (prev: T) => T): void {
 	if (ambientBatch !== null && ambientBatch.status === 'open') {
 		ambientBatch.record(atom as Atom<unknown>, { kind: 'fn', fn: fn as (p: unknown) => unknown });
 	} else {
+		if (rebaseLogs.has(atom as Atom<unknown>)) {
+			logEntry(atom as Atom<unknown>, { kind: 'fn', fn: fn as (p: unknown) => unknown }, null);
+		}
 		atom.set(fn(atom.peek()));
 	}
 }
@@ -222,7 +300,7 @@ export class Snapshot implements ReadRedirect {
 
 	hasDrafts(): boolean {
 		for (const b of this.batches) {
-			if (b.status === 'open' && b.ops.size > 0) return true;
+			if (b.status === 'open' && b.touched.size > 0) return true;
 		}
 		return false;
 	}
@@ -230,9 +308,21 @@ export class Snapshot implements ReadRedirect {
 	readAtom<T>(a: Atom<T>): T {
 		const cached = this.atomCache.get(a as Atom<unknown>);
 		if (cached !== undefined || this.atomCache.has(a as Atom<unknown>)) return cached as T;
-		let v: unknown = a.valueAt(this.epoch);
-		for (const b of this.batches) {
-			if (b.status === 'open') v = b.fold(a as Atom<unknown>, v);
+		let v: unknown;
+		const log = rebaseLogs.get(a as Atom<unknown>);
+		let sawDraft = false;
+		if (log !== undefined) {
+			for (const b of this.batches) {
+				if (b.status === 'open' && b.touched.has(a as Atom<unknown>)) {
+					sawDraft = true;
+					break;
+				}
+			}
+		}
+		if (log !== undefined && sawDraft) {
+			v = replayLog(log, this.batches, this.epoch);
+		} else {
+			v = a.valueAt(this.epoch);
 		}
 		this.atomCache.set(a as Atom<unknown>, v);
 		return v as T;
@@ -359,9 +449,12 @@ function currentRedirect(): Snapshot | null {
 	return readRedirect instanceof Snapshot ? readRedirect : null;
 }
 
-/** Per-root committed views: bindings record what each root last committed;
- * without a container this is the canonical committed value. */
-export type CommittedViewLookup = (container: unknown) => Map<Atom<unknown>, unknown> | null;
+/** Per-root committed views: bindings record the canonical epoch each root
+ * last committed at; a root's view of an atom is the canonical value as of
+ * that epoch (exact while any render pass pins history — a root can only lag
+ * canonical while another root's pass is in flight — and identical to
+ * canonical at quiescence). */
+export type CommittedViewLookup = (container: unknown) => Epoch | null;
 let committedViewLookup: CommittedViewLookup = () => null;
 export function setCommittedViewLookup(fn: CommittedViewLookup): void {
 	committedViewLookup = fn;
@@ -369,9 +462,9 @@ export function setCommittedViewLookup(fn: CommittedViewLookup): void {
 
 export function committed<T>(x: Readable<T>, container?: unknown): T | undefined {
 	if (container !== undefined) {
-		const view = committedViewLookup(container);
-		if (view !== null && x instanceof Atom && view.has(x as Atom<unknown>)) {
-			return view.get(x as Atom<unknown>) as T;
+		const epochAt = committedViewLookup(container);
+		if (epochAt !== null && x instanceof Atom) {
+			return x.valueAt(epochAt);
 		}
 	}
 	if (x instanceof Atom) return x.peek();
@@ -410,7 +503,7 @@ export function isPending<T>(x: Readable<T>): boolean {
 
 function anyOpenBatchTouches(a: Atom<unknown>): boolean {
 	for (const b of openBatches) {
-		if (b.status === 'open' && b.ops.has(a)) return true;
+		if (b.status === 'open' && b.touched.has(a)) return true;
 	}
 	return false;
 }

@@ -120,7 +120,10 @@ describe('2. transition pending state', () => {
 });
 
 describe('3. urgent during live transition', () => {
-	test('urgent commits alone; transition rebases on top', async () => {
+	test('urgent commits alone; the transition lands as a call-order replay', async () => {
+		// Updater-queue arithmetic: transition applies +1 (called first),
+		// urgent doubles (called second). The urgent commit shows 1*2 = 2
+		// alone; retirement replays the whole log in call order: (1+1)*2 = 4.
 		const a = atom(1, { label: 'a' });
 		const committedValues: string[] = [];
 		function View() {
@@ -129,12 +132,10 @@ describe('3. urgent during live transition', () => {
 		const { container } = await harness.mount(<View />);
 		await act(async () => {
 			startTransitionWrite(() => {
-				update(a, (x) => x * 2);
-			});
-			// The urgent write commits alone, immediately (flushSync makes the
-			// immediacy observable in the test).
-			flushSync(() => {
 				update(a, (x) => x + 1);
+			});
+			flushSync(() => {
+				update(a, (x) => x * 2);
 			});
 			committedValues.push(container.textContent!);
 		});
@@ -168,8 +169,7 @@ describe('4. sibling readers never tear', () => {
 			);
 		await act(async () => {
 			startTransitionWrite(() => set(a, 10));
-			set(a, 5);
-			flushSync(() => {});
+			flushSync(() => set(a, 5));
 			snap();
 			await tick();
 			snap();
@@ -178,7 +178,9 @@ describe('4. sibling readers never tear', () => {
 		for (const commit of seen) {
 			expect(new Set(commit).size).toBe(1);
 		}
-		expect(container.querySelector('span')!.textContent).toBe('10');
+		// Call-order replay: the urgent set(5) was written after the
+		// transition's set(10), so it wins the final canonical value.
+		expect(container.querySelector('span')!.textContent).toBe('5');
 	});
 });
 
@@ -221,21 +223,27 @@ describe('5. mount mid-transition', () => {
 });
 
 describe('6. flushSync excludes pending deferred work', () => {
-	test('flushSync flushes urgent only', async () => {
-		const a = atom(0, { label: 'a' });
+	test('flushSync flushes urgent only; the pending transition stays excluded', async () => {
+		const a = atom(0, { label: 'a' }); // transition-written
+		const b = atom(0, { label: 'b' }); // urgent-written via flushSync
 		function View() {
-			return <span>{useValue(a)}</span>;
+			return (
+				<span>
+					{useValue(a)}:{useValue(b)}
+				</span>
+			);
 		}
 		const { container } = await harness.mount(<View />);
 		await act(async () => {
 			startTransitionWrite(() => set(a, 100));
 			flushSync(() => {
-				set(a, 1);
+				set(b, 1);
 			});
-			expect(container.textContent).toBe('1');
+			// The sync commit carried only the urgent write.
+			expect(container.textContent).toBe('0:1');
 			await tick();
 		});
-		expect(container.textContent).toBe('100');
+		expect(container.textContent).toBe('100:1');
 	});
 });
 

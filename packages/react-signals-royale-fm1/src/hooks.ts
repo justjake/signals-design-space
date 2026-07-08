@@ -35,6 +35,14 @@ export function useValue<T>(node: Readable<T>): T {
 	const value = readInRenderWorld(node);
 	const rendered = React.useRef<T>(value);
 	rendered.current = value;
+	// The last value this component actually COMMITTED: a speculative render
+	// that never commits (a parked transition pass) must not satisfy the
+	// watcher's redundancy check, or the canonical change it previewed would
+	// never be delivered urgently.
+	const committedValue = React.useRef<T>(value);
+	React.useEffect(() => {
+		committedValue.current = rendered.current;
+	});
 
 	React.useEffect(() => {
 		const sub: Subscriber = {
@@ -47,12 +55,12 @@ export function useValue<T>(node: Readable<T>): T {
 		// The engine watcher delivers canonical changes; skip the wake-up when
 		// this component already rendered the new value.
 		const watcher = new Watcher(node as Readable<unknown>, () => {
-			if (!Object.is(safePeek(node), rendered.current)) force();
+			if (!Object.is(safePeek(node), committedValue.current)) force();
 		});
 		// Post-subscribe fixup: the canonical value may have moved between
 		// render and this commit; and open transitions this node participates
 		// in need this new subscriber to join their eventual commit.
-		if (!Object.is(safePeek(node), rendered.current)) force();
+		if (!Object.is(safePeek(node), committedValue.current)) force();
 		joinOpenBatches(node as Readable<unknown>, force);
 		return () => {
 			unsubscribe();
