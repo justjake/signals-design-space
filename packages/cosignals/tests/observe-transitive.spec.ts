@@ -14,7 +14,7 @@
  *
  * Every test here (except the kernel-chain contrast leg, which pins the
  * pre-existing K0 behavior the overlay now matches) FAILS without the
- * observation index in src/concurrent.ts.
+ * observation index in src/CosignalEngine.ts.
  */
 import { describe, expect, it } from 'vitest';
 import { engine, __TEST__resetEngine, Atom, Computed, effect, type CosignalEngine } from '../src/index.js';

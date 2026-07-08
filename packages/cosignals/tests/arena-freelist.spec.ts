@@ -1,6 +1,6 @@
 /**
  * World-arena counterpart of the kernel link free-list discipline (dalien-signals port
- * study row 2, second instance): concurrent.ts world arenas must thread
+ * study row 2, second instance): CosignalEngine.ts world arenas must thread
  * `a.linkFree` through a genuinely spare link field (VERSION — freed links
  * never serve a version), never through NEXT_DEP, because arenaCheckDirty
  * reads NEXT_DEP off links that a mid-walk purge (arenaPurgeDeps epilogues,

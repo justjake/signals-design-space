@@ -17,7 +17,7 @@
  *  - mid-episode batch/render reclamation exists because a never-quiescent
  *    process (batches always in flight) must still reclaim retired records
  *  - KNOWN-HOLE-BY-RULING (not probed, not fixed): root records are immortal
- *    (RUL-6 — no root-teardown event exists; concurrent.ts arenaQuiesceSweep).
+ *    (RUL-6 — no root-teardown event exists; CosignalEngine.ts arenaQuiesceSweep).
  */
 import { describe, expect, it } from 'vitest';
 import {
