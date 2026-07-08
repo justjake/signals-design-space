@@ -1825,12 +1825,23 @@ export function registerSubRoot(sub: Sub): void {
   set.add(sub);
 }
 
+let rootViewPruneQueued = false;
+
 export function unregisterSubRoot(sub: Sub): void {
   if (sub.rootKey === null) return;
   const set = subsByRoot.get(sub.rootKey);
   if (set !== undefined) {
     set.delete(sub);
     if (set.size === 0) subsByRoot.delete(sub.rootKey);
+  }
+  // Commit reporting precedes unmount cleanup, so the commit that removed
+  // this subscriber could not prune its snapshots; sweep once we settle.
+  if (!rootViewPruneQueued) {
+    rootViewPruneQueued = true;
+    queueMicrotask(() => {
+      rootViewPruneQueued = false;
+      pruneRootViews();
+    });
   }
 }
 
