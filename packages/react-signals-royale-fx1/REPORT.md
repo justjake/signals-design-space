@@ -63,7 +63,7 @@ node royale/verify-kit/count-loc.mjs \
 ```
 
 - **Fork: 80** (`ReactFiberSignalScheduler.js` 44 new, `ReactFiberWorkLoop.js` +23, `ReactFiberRootScheduler.js` +13). Incumbent: 1510.
-- **Library: 2297** (engine 1688 + engine index 117 + tracer 86; react runtime 200 + hooks 184 + index 22). Incumbents: alt-a 4689, alt-b 4909.
+- **Library: 2307** (engine ~1698 + engine index 117 + tracer 86; react runtime 200 + hooks 184 + index 22; final count after the Round 2 tuning). Incumbents: alt-a 4689, alt-b 4909.
 
 Raw `git diff --numstat e71a6393e6..HEAD -- packages/ ':!packages/*/src/__tests__*'` agrees: 80.
 
@@ -253,3 +253,38 @@ Net effect on kairo broadPropagation (local micro-harness, 500 iterations):
 
 Machine note: measured while up to six other entrants ran benchmarks on the
 same host; absolute numbers are noisy, the ratio column is the signal.
+| suite | Royale FX1 (ms) | Alien Signals (ms) | ratio |
+|---|---|---|---|
+| createSignals | 0.96 | 1.01 | 0.95x |
+| createComputations | 236.22 | 33.87 | 6.97x |
+| updateSignals | 353.54 | 279.47 | 1.27x |
+| avoidablePropagation | 153.90 | 96.45 | 1.60x |
+| broadPropagation | 145.29 | 81.47 | 1.78x |
+| deepPropagation | 49.40 | 31.60 | 1.56x |
+| diamond | 112.52 | 80.55 | 1.40x |
+| mux | 136.31 | 79.20 | 1.72x |
+| repeatedObservers | 15.93 | 18.21 | 0.87x |
+| triangle | 33.79 | 23.58 | 1.43x |
+| unstable | 25.60 | 18.72 | 1.37x |
+| molBench | 14.74 | 14.98 | 0.98x |
+| cellx1000 | 17.14 | 3.98 | 4.31x |
+| cellx2500 | 64.24 | 10.49 | 6.12x |
+| 2-10x5 - lazy80% | 218.56 | 144.75 | 1.51x |
+| 6-10x10 - dyn25% - lazy80% | 118.84 | 101.52 | 1.17x |
+| 4-1000x12 - dyn5% | 281.59 | 267.04 | 1.05x |
+| 25-1000x5 | 288.25 | 357.84 | 0.81x |
+| 3-5x500 | 121.18 | 77.93 | 1.55x |
+| 6-100x15 - dyn50% | 175.34 | 166.03 | 1.06x |
+
+Geometric-mean ratio vs Alien Signals: 1.58x
+
+Run shape: `node --expose-gc dist/index.js "<name>"` per framework,
+sequential (one framework per process, matching the isolated runner's
+one-per-process rule), current bundle, zero `console.assert` failures for
+both frameworks. Reading the table: creation-dominated suites
+(createComputations, cellx) are the engine's honest gap — effect/computed
+construction costs ~7x alien's; propagation suites sit at 1.3–1.8x; several
+suites (createSignals, repeatedObservers, molBench, 25-1000x5) are at parity
+or ahead. The geometric mean over all suites is 1.58x alien — same class,
+not parity, bought alongside the world/episode machinery alien does not
+carry.
