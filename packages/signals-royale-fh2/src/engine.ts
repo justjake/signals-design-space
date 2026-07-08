@@ -116,8 +116,6 @@ interface AtomRec {
 	obsCleanup: (() => void) | void | undefined;
 	obsActive: boolean;
 	obsScheduled: boolean;
-	/** Subscription refcounts per root view (drives pre-image capture). */
-	subRoots: Map<RootView, number> | undefined;
 }
 
 interface ComputedRec {
@@ -340,25 +338,6 @@ export function retireBatch(b: Batch): void {
 	b.open = false;
 	openBatchesByKey.delete(b.key);
 	const retireEvent = tracing() ? emit('batch-retire', { batch: b.id }) : 0;
-	// Promote the exact-[b] world's async entries before folding: the fold
-	// makes canonical equal that world, so its settled fetches carry over
-	// (no refetch after commit).
-	const solo = worldCaches.get(String(b.id));
-	if (solo !== undefined) {
-		for (const [rec, entry] of solo.entries) {
-			entry.world = null;
-			if (entry.refresh) {
-				if (rec.refreshing === entry || rec.refreshing === undefined) {
-					adoptRefreshEntry(rec, entry);
-				}
-			} else {
-				killEntry(rec.canonicalEntry);
-				rec.canonicalEntry = entry;
-			}
-		}
-		solo.entries.clear();
-	}
-	pruneWorldsWith(b);
 	withCause(retireEvent, () => {
 		startBatch();
 		try {
@@ -375,8 +354,34 @@ export function retireBatch(b: Batch): void {
 				compactQueue(rec);
 				applyCanonicalWrite(rec, next);
 			}
+			// Promote the exact-[b] world's async entries after folding (so
+			// re-evaluations see post-retirement inputs): the fold makes
+			// canonical equal that world, so its settled fetches carry over —
+			// no refetch after commit.
+			const promoted = new Set<ComputedRec>();
+			const solo = worldCaches.get(String(b.id));
+			if (solo !== undefined) {
+				for (const [rec, entry] of solo.entries) {
+					entry.world = null;
+					promoted.add(rec);
+					if (entry.refresh) {
+						if (rec.refreshing === entry || rec.refreshing === undefined) {
+							adoptRefreshEntry(rec, entry);
+						}
+					} else {
+						killEntry(rec.canonicalEntry);
+						rec.canonicalEntry = entry;
+					}
+				}
+				solo.entries.clear();
+			}
+			pruneWorldsWith(b);
+			// Batch-attributed refreshes whose node never evaluated in the
+			// batch's world still owe a canonical refetch.
 			for (const rec of b.refreshes) {
-				refreshCanonical(rec);
+				if (!promoted.has(rec)) {
+					refreshCanonical(rec);
+				}
 			}
 		} finally {
 			endBatch();
@@ -635,7 +640,6 @@ export function atom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<
 		obsCleanup: undefined,
 		obsActive: false,
 		obsScheduled: false,
-		subRoots: undefined,
 	};
 	atomRecs.set(node, rec);
 	return rec as unknown as Atom<T>;
@@ -835,7 +839,6 @@ function onSlotSettled(slot: Slot): void {
 		}
 		const rec = entry.rec;
 		const ev = tracing() ? emit('settle', { tid: rec.id, label: rec.label, ok: slot.status === 1 }) : 0;
-		bumpPending();
 		const rr = entry.resolveRetry;
 		entry.retry = null;
 		entry.resolveRetry = null;
@@ -852,10 +855,20 @@ function onSlotSettled(slot: Slot): void {
 				withCause(ev, () => invalidateComputed(rec.node));
 			}
 		} else {
+			// A draft-world settlement is a draft-world change: bump the
+			// owning batches so world fingerprints (and host snapshot caches
+			// keyed on them) invalidate, then wake the world's readers.
 			const wc = entry.world;
+			for (const b of wc.batches) {
+				b.version++;
+			}
+			wc.fingerprint = '';
 			wc.values.clear();
 			withCause(ev, () => draftDeliverIn(wc, rec));
 		}
+		// Pending-ness flips only after the invalidation lands, so probes
+		// re-checking on this notification see the settled state.
+		bumpPending();
 	}
 }
 
@@ -941,7 +954,6 @@ function applyCanonicalWrite(rec: AtomRec, value: unknown): void {
 		}
 		return;
 	}
-	capturePreImages(rec);
 	graphEpoch++;
 	if (tracing()) {
 		const w = emit('write', { tid: rec.id, label: rec.label, batch: 0 });
@@ -1053,8 +1065,8 @@ function adoptRefreshEntry(rec: ComputedRec, entry: AsyncEntry): void {
 	killEntry(rec.canonicalEntry);
 	rec.canonicalEntry = entry;
 	graphEpoch++;
-	bumpPending();
 	invalidateComputed(rec.node);
+	bumpPending();
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,7 +1089,6 @@ interface SubscriptionRec {
 	effect: EffectNode;
 	target: Rec;
 	onDeliver: (d: Delivery) => void;
-	root: RootView | null;
 	disposed: boolean;
 	lastDeliverEvent: number;
 	label: string | undefined;
@@ -1109,7 +1120,7 @@ function deliver(sub: SubscriptionRec, batch: Batch | null): void {
 export function subscribe(
 	x: Readable<unknown>,
 	onDeliver: (d: Delivery) => void,
-	opts?: { root?: unknown; label?: string },
+	opts?: { label?: string },
 ): SubscriptionHandle {
 	const rec = recOf(x);
 	if (rec.t === 0) {
@@ -1119,7 +1130,6 @@ export function subscribe(
 		effect: undefined as unknown as EffectNode,
 		target: rec,
 		onDeliver,
-		root: opts?.root !== undefined ? rootViewFor(opts.root) : null,
 		disposed: false,
 		lastDeliverEvent: 0,
 		label: opts?.label,
@@ -1144,18 +1154,12 @@ export function subscribe(
 		setActiveSub(prevSub);
 	}
 	subByEffect.set(sub.effect, sub);
-	if (sub.root !== null) {
-		sub.root.subCount++;
-	}
 	return {
 		dispose() {
 			if (sub.disposed) {
 				return;
 			}
 			sub.disposed = true;
-			if (sub.root !== null && --sub.root.subCount === 0 && sub.root !== globalView) {
-				rootViews.delete(sub.root.key);
-			}
 			disposeEffect(sub.effect);
 		},
 		lastDeliveryEvent: () => sub.lastDeliverEvent,
@@ -1271,81 +1275,47 @@ function settleObservation(rec: AtomRec): void {
 
 // ---------------------------------------------------------------------------
 // Per-root committed views: what is on screen, per root.
+//
+// A view is written by the host from committed renders only: React runs a
+// subscriber's effects exactly when that subscriber's render reached the
+// screen, so `reportCommittedValue` from an effect records ground truth —
+// a suspended or discarded render never reports. Everything is weakly
+// keyed: a dead root (or a dropped handle) takes its view entries with it.
 // ---------------------------------------------------------------------------
 
 interface RootView {
-	key: unknown;
-	/** Pre-images: the value each atom showed at this root's last commit,
-	 * captured at the first post-commit canonical change. */
-	map: Map<AtomRec, { value: unknown; epoch: Epoch }>;
-	subCount: number;
+	map: WeakMap<Rec, unknown>;
 }
 
-const rootViews = new Map<unknown, RootView>();
-/** Container-less committed(): cleared at every root's commit. */
-const globalView: RootView = { key: undefined, map: new Map(), subCount: 0 };
+const rootViews = new WeakMap<object, RootView>();
+/** Container-less committed(): the most recent committed render anywhere. */
+const globalView: RootView = { map: new WeakMap() };
 
-function rootViewFor(key: unknown): RootView {
+function rootViewFor(key: object): RootView {
 	let v = rootViews.get(key);
 	if (v === undefined) {
-		v = { key, map: new Map(), subCount: 0 };
+		v = { map: new WeakMap() };
 		rootViews.set(key, v);
 	}
 	return v;
 }
 
-export function registerRoot(key: unknown): void {
-	rootViewFor(key);
-}
-
-export function unregisterRoot(key: unknown): void {
-	rootViews.delete(key);
-}
-
-function capturePreImages(rec: AtomRec): void {
-	if (rootViews.size === 0 || rec.node.subs === undefined) {
-		return; // nothing is on any screen
+/** Records that a committed render of root `key` put `value` on screen for
+ * `x`. Call from a committed-render effect, never from render itself. */
+export function reportCommittedValue(key: object | undefined, x: Readable<unknown>, value: unknown): void {
+	const rec = recOf(x);
+	globalView.map.set(rec, value);
+	if (key !== undefined) {
+		rootViewFor(key).map.set(rec, value);
 	}
-	const pre = rec.node.value;
-	if (!globalView.map.has(rec)) {
-		globalView.map.set(rec, { value: pre, epoch: graphEpoch });
-	}
-	for (const view of rootViews.values()) {
-		if (!view.map.has(rec)) {
-			view.map.set(rec, { value: pre, epoch: graphEpoch });
-		}
-	}
-}
-
-/**
- * A root committed: entries captured before the committing pass began are
- * now on screen canonically, so they clear. Entries captured mid-pass (a
- * write racing the render) survive until the corrective commit.
- */
-export function rootCommitted(key: unknown, passStartEpoch?: Epoch): void {
-	const clear = (view: RootView) => {
-		if (passStartEpoch === undefined) {
-			view.map.clear();
-			return;
-		}
-		for (const [rec, e] of view.map) {
-			if (e.epoch <= passStartEpoch) {
-				view.map.delete(rec);
-			}
-		}
-	};
-	const v = rootViews.get(key);
-	if (v !== undefined) {
-		clear(v);
-	}
-	clear(globalView);
-	maybeQuiesce();
 }
 
 function committedAtomValue(rec: AtomRec, view: RootView): unknown {
 	materialize(rec);
-	const e = view.map.get(rec);
-	return e !== undefined ? e.value : canonicalAtomValue(rec.node);
+	if (view.map.has(rec)) {
+		return view.map.get(rec);
+	}
+	return canonicalAtomValue(rec.node);
 }
 
 function committedComputedValue(rec: ComputedRec, view: RootView): unknown {
@@ -1455,7 +1425,10 @@ export function latest<T>(x: Readable<T>): T {
  * most recent commit anywhere. Never subscribes. */
 export function committed<T>(x: Readable<T>, container?: unknown): T {
 	const rec = recOf(x);
-	const view = container !== undefined ? (rootViews.get(container) ?? globalView) : globalView;
+	const view =
+		container !== undefined && typeof container === 'object' && container !== null
+			? (rootViews.get(container) ?? globalView)
+			: globalView;
 	const v = rec.t === 0 ? committedAtomValue(rec, view) : committedComputedValue(rec, view);
 	if (isPendingValue(v) && rec.t === 1 && rec.hasSettled) {
 		return rec.lastSettled as T;
@@ -1529,6 +1502,61 @@ export function isPending(x: Readable<unknown>): boolean {
 		}
 	}
 	return false;
+}
+
+/** A memoization stamp for a world: identical stamps guarantee identical
+ * world reads (hosts cache snapshot values against it). */
+export function worldStamp(batches: Batch[]): string {
+	let s = String(graphEpoch);
+	for (const b of batches) {
+		s += ':' + b.id + '.' + b.version;
+	}
+	return s;
+}
+
+/** Open batches whose retirement will change this value: draft writes or
+ * refreshes on the node itself or (for computeds) its dependency closure.
+ * The host uses this to join a late subscriber to live batches. */
+export function pendingBatchesFor(x: Readable<unknown>): Batch[] {
+	const out = new Set<Batch>();
+	const rec = recOf(x);
+	const roots = new Set<ReactiveNode>();
+	const stack: ReactiveNode[] = [rec.node];
+	while (stack.length > 0) {
+		const node = stack.pop()!;
+		if (roots.has(node)) {
+			continue;
+		}
+		roots.add(node);
+		if (node.kind === NodeKind.Atom) {
+			const depRec = atomRecs.get(node as AtomNode);
+			if (depRec !== undefined) {
+				for (const b of openBatchesByKey.values()) {
+					if (b.touched.has(depRec)) {
+						out.add(b);
+					}
+				}
+			}
+		} else if (node.kind === NodeKind.Computed) {
+			const depRec = computedRecs.get(node as ComputedNode);
+			if (depRec !== undefined) {
+				for (const b of openBatchesByKey.values()) {
+					if (b.refreshes.has(depRec)) {
+						out.add(b);
+					}
+				}
+			}
+			for (let l = node.deps; l !== undefined; l = l.nextDep) {
+				stack.push(l.dep);
+			}
+		}
+	}
+	return [...out];
+}
+
+/** Stable diagnostic id of a handle (trace queries key on it). */
+export function debugId(x: Readable<unknown>): number {
+	return recOf(x).id;
 }
 
 /** The thenable a suspending host boundary should await for a pending
@@ -1675,23 +1703,16 @@ export function quiescent(): boolean {
 	return openBatchesByKey.size === 0 && worldCaches.size === 0 && graphQuiescent();
 }
 
-/** Test seam: sizes of every episodic structure (leak audits). */
+/** Test seam: sizes of every episodic structure (leak audits). Committed
+ * views are weakly keyed end to end, so they have no countable size. */
 export function __internals(): {
 	openBatches: number;
 	worldCaches: number;
-	rootViews: number;
-	viewEntries: number;
 	pendingListeners: number;
 } {
-	let viewEntries = globalView.map.size;
-	for (const v of rootViews.values()) {
-		viewEntries += v.map.size;
-	}
 	return {
 		openBatches: openBatchesByKey.size,
 		worldCaches: worldCaches.size,
-		rootViews: rootViews.size,
-		viewEntries,
 		pendingListeners: pendingListeners.size,
 	};
 }
@@ -1700,8 +1721,7 @@ export function __internals(): {
 export function __resetEngine(): void {
 	openBatchesByKey.clear();
 	worldCaches.clear();
-	rootViews.clear();
-	globalView.map.clear();
+	globalView.map = new WeakMap();
 	pendingListeners.clear();
 	subscriberErrors.length = 0;
 	host.classify = null;

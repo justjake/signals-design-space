@@ -17,15 +17,13 @@ import {
 	quiescent,
 	read,
 	readInWorld,
-	registerRoot,
 	retireBatch,
-	rootCommitted,
 	set,
 	setInBatch,
 	subscribe,
+	reportCommittedValue,
 	update,
 	updateInBatch,
-	currentGraphEpoch,
 } from '../src/index';
 
 beforeEach(() => {
@@ -179,37 +177,34 @@ describe('read family', () => {
 		expect(read(a)).toBe(22);
 	});
 
-	test('committed views: per-root pre-images clear at that root commit', () => {
+	test('committed views: per-root reports diverge until each root re-reports', () => {
 		const a = atom(0);
-		registerRoot('r1');
-		registerRoot('r2');
-		const s1 = subscribe(a, () => {}, { root: 'r1' });
-		const s2 = subscribe(a, () => {}, { root: 'r2' });
+		const r1 = {};
+		const r2 = {};
+		reportCommittedValue(r1, a, 0); // both screens showed 0 at their commits
+		reportCommittedValue(r2, a, 0);
 		set(a, 1);
 		expect(read(a)).toBe(1);
-		expect(committed(a, 'r1')).toBe(0); // r1 has not committed the change
-		expect(committed(a, 'r2')).toBe(0);
-		rootCommitted('r1', currentGraphEpoch());
-		expect(committed(a, 'r1')).toBe(1);
-		expect(committed(a, 'r2')).toBe(0);
-		rootCommitted('r2', currentGraphEpoch());
-		expect(committed(a, 'r2')).toBe(1);
-		s1.dispose();
-		s2.dispose();
+		expect(committed(a, r1)).toBe(0); // r1 has not committed the change
+		expect(committed(a, r2)).toBe(0);
+		reportCommittedValue(r1, a, 1); // r1's next committed render shows 1
+		expect(committed(a, r1)).toBe(1);
+		expect(committed(a, r2)).toBe(0);
+		reportCommittedValue(r2, a, 1);
+		expect(committed(a, r2)).toBe(1);
 	});
 
-	test('committed computed folds the view pre-images', () => {
+	test('committed computed evaluates over the view values', () => {
 		const a = atom(2);
-		registerRoot('r1');
-		const sub = subscribe(a, () => {}, { root: 'r1' });
+		const r1 = {};
+		reportCommittedValue(r1, a, 2);
 		const c = computed(() => read(a) * 10);
 		expect(read(c)).toBe(20);
 		set(a, 5);
 		expect(read(c)).toBe(50);
-		expect(committed(c, 'r1')).toBe(20);
-		rootCommitted('r1', currentGraphEpoch());
-		expect(committed(c, 'r1')).toBe(50);
-		sub.dispose();
+		expect(committed(c, r1)).toBe(20); // folds the on-screen base, not canonical
+		reportCommittedValue(r1, a, 5);
+		expect(committed(c, r1)).toBe(50);
 	});
 
 	test('isPending flips for atoms written in open batches, and downstream', () => {

@@ -1,0 +1,29 @@
+{
+	"name": "react-signals-royale-fh2",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "React bindings for signals-royale-fh2: fiber-granular subscriptions over the external-signals React seam. Each subscribed component is its own precisely-scheduled subscriber — transition drafts render in their own lane, urgent writes commit alone, and corrective re-renders join the owning batch's commit.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"signals-royale-fh2": "link:../signals-royale-fh2",
+		"react": "link:../../vendor/react/build/oss-experimental/react",
+		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler"
+	},
+	"devDependencies": {
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"jsdom": "^26.1.0",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}
