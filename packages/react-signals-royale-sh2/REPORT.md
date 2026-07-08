@@ -2,12 +2,13 @@
 
 ## 1. Design summary
 
-SH2 stores every reactive node in a numbered slab and represents dependency edges as bit masks.
-Invalidation sweeps words, marks nodes as possibly dirty, and lets dependency-version checks prune
-unchanged computed branches before downstream work runs. A transition is a small overlay containing
-per-slot reducer actions; reads fold the render pass's batch mask over the canonical slab, so
-functional actions naturally rebase over urgent writes. The React fork attaches one external batch
-number to a transition lane and reports render, commit, and mutation edges through one runtime slot.
+SH2 stores every reactive node in a numbered typed-array slab and every dependency in a reusable
+intrusive edge slab. Invalidation sweeps a reused work array, marks nodes as possibly dirty, and lets
+dependency-version checks prune unchanged computed branches before downstream work runs. A
+transition is a small overlay containing globally ordered per-slot actions; reads fold the render
+pass's batches over the canonical slab, so urgent actions replay in scheduling order. The React fork
+attaches external batch numbers to transition lanes per root and reports render, commit, and mutation
+edges through one runtime slot.
 Late subscribers schedule their correction through the original live lane rather than a new
 transition. Canonical state remains allocation-light, while overlays and render caches exist only
 during concurrent episodes. FinalizationRegistry reclaims dropped slab handles, with deterministic
@@ -45,10 +46,8 @@ Tests:       1 skipped, 47 passed, 48 total
 
 ## 3. LOC self-count
 
-- React fork: **205** changed production lines.
-  Command: `git -C vendor/react diff --numstat e71a6393e6..HEAD -- packages ':!packages/*/src/__tests__*' | awk '{a+=$1+$2} END {print a}'`
-- Library and bindings: **1169** nonblank source lines after Prettier 100-column normalization.
-  Command: `awk 'NF {n++} END {print n}' packages/signals-royale-sh2/src/*.ts packages/react-signals-royale-sh2/src/*.ts`
+- React fork: **235** production LOC by the shared Round 2 counter.
+- Library and bindings: **1424** production LOC by the shared Round 2 counter.
 
 ## 4. Feature coverage
 
@@ -72,7 +71,7 @@ Tests:       1 skipped, 47 passed, 48 total
 ## 5. Known gaps and honest risks
 
 - A scheduled external batch whose React work is permanently abandoned before any root commits has
-  no explicit prune edge in the 205-line fork. Ordinary render restarts preserve the batch correctly,
+  no explicit prune edge in the 235-line fork. Ordinary render restarts preserve the batch correctly,
   unobserved batches retire in a microtask, and committed batches reclaim, but the permanent-abandon
   case can retain an overlay. This means the full rollback and quiescence contract is not proven.
 - `committed(cell, root)` snapshots atoms per root. A computed passed to `committed` currently falls
@@ -83,17 +82,14 @@ Tests:       1 skipped, 47 passed, 48 total
   implementation may re-evaluate it after settlement.
 - Parallel async registration works when the computation reaches each `use` call before consuming
   unresolved values. A property access on the first unresolved placeholder can prevent later reads.
-- Canonical effects advance when the first root commits a shared batch, not after an explicit
-  all-roots retirement edge.
-- No milomg or React seam benchmark was run, so the entry makes no performance ranking claim.
 
 Because the abandoned-batch and fully general async cases remain partial, this report does **not**
 claim the tournament's complete correctness gate even though every command listed as PASS is green.
 
 ## 6. What I would do with another day
 
-I would add a tiny root/pending-lane registry to the fork so it can emit an exactly-once committed or
-pruned retirement edge, then move canonical promotion and effects to that edge. Next I would retain
+I would add an explicit abandoned-work callback so the per-root lane registry can emit a pruned
+retirement edge when React permanently drops work. Next I would retain
 the completed render cache per root for exact committed computed reads. Finally I would formalize
 async computations as resumable keyed resource nodes rather than accepting arbitrary synchronous
 promise expressions, then run the milomg and React seam matrices and optimize the slab sweeps from
