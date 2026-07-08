@@ -1,3 +1,5 @@
+import { causeFor, emit } from './trace';
+
 export type CellId = number;
 
 export interface AtomOptions<T> {
@@ -28,10 +30,14 @@ const ACTIVE = 16;
 
 let capacity = 256;
 let count = 0;
+let liveCount = 0;
 let kinds = new Uint8Array(capacity);
 let flags = new Uint8Array(capacity);
 let versions = new Uint32Array(capacity);
 let invalidationMarks = new Uint32Array(capacity);
+let deliveryVersions = new Uint32Array(capacity);
+let generations = new Uint32Array(capacity);
+let nextGeneration = 1;
 let invalidationEpoch = 0;
 let observers: Uint32Array[] = [];
 let dependencies: Uint32Array[] = [];
@@ -41,11 +47,14 @@ const initializers: Array<(() => unknown) | undefined> = [];
 const calculations: Array<(() => unknown) | undefined> = [];
 const equalities: Array<((a: unknown, b: unknown) => boolean) | undefined> = [];
 const cleanups: Array<(() => void) | undefined> = [];
+const errors: unknown[] = [];
+let hasErrors = new Uint8Array(256);
 const labels: Array<string | undefined> = [];
 const keys: Array<string | undefined> = [];
 const lifetimeStarts: Array<AtomOptions<unknown>['effect']> = [];
 const lifetimeStops: Array<(() => void) | undefined> = [];
 const children: CellId[][] = [];
+const listeners: Array<Set<() => void> | undefined> = [];
 const observedCounts = new Uint32Array(256);
 let observed = observedCounts;
 
@@ -57,6 +66,18 @@ let flushing = false;
 let pendingEffects: CellId[] = [];
 let scope: CellId[] | undefined;
 let batchValues: Map<CellId, [unknown, number]> | undefined;
+type DraftAction = unknown | ((previous: unknown) => unknown);
+interface Draft { actions: Map<CellId, DraftAction[]>; cause?: number }
+const drafts = new Map<number, Draft>();
+let nextDraft = 1;
+let writeDraft = 0;
+let renderDrafts: number[] = [];
+let inRenderWorld = false;
+let renderCache = new Map<CellId, unknown>();
+let rootViews = new WeakMap<object, Map<CellId, unknown>>();
+const finalizer = new FinalizationRegistry<{ id: CellId; generation: number }>(held => {
+  if (generations[held.id] === held.generation) releaseCell(held.id);
+});
 
 function grow(): void {
   const oldWords = capacity >>> 5;
@@ -65,17 +86,26 @@ function grow(): void {
   const nextFlags = new Uint8Array(capacity);
   const nextVersions = new Uint32Array(capacity);
   const nextInvalidationMarks = new Uint32Array(capacity);
+  const nextDeliveryVersions = new Uint32Array(capacity);
+  const nextGenerations = new Uint32Array(capacity);
   const nextObserved = new Uint32Array(capacity);
+  const nextHasErrors = new Uint8Array(capacity);
   nextKinds.set(kinds);
   nextFlags.set(flags);
   nextVersions.set(versions);
   nextInvalidationMarks.set(invalidationMarks);
+  nextDeliveryVersions.set(deliveryVersions);
+  nextGenerations.set(generations);
   nextObserved.set(observed);
+  nextHasErrors.set(hasErrors);
   kinds = nextKinds;
   flags = nextFlags;
   versions = nextVersions;
   invalidationMarks = nextInvalidationMarks;
+  deliveryVersions = nextDeliveryVersions;
+  generations = nextGenerations;
   observed = nextObserved;
+  hasErrors = nextHasErrors;
   const words = capacity >>> 5;
   for (let i = 0; i < count; i++) {
     const nextObservers = new Uint32Array(words);
@@ -93,6 +123,8 @@ function grow(): void {
 function createCell(kind: number): CellId {
   if (count === capacity) grow();
   const id = count++;
+  generations[id] = nextGeneration++;
+  liveCount++;
   kinds[id] = kind;
   flags[id] = kind === SIGNAL ? 0 : DIRTY;
   observers[id] = new Uint32Array(capacity >>> 5);
@@ -100,6 +132,19 @@ function createCell(kind: number): CellId {
   dependencyVersions[id] = new Uint32Array(capacity);
   children[id] = [];
   return id;
+}
+
+function releaseCell(id: CellId): void {
+  if (kinds[id] === 0) return;
+  clearDependencies(id);
+  for (const child of children[id]) disposeEffect(child, false);
+  kinds[id] = 0;
+  flags[id] = 0;
+  values[id] = initializers[id] = calculations[id] = equalities[id] = undefined;
+  cleanups[id] = labels[id] = keys[id] = lifetimeStarts[id] = lifetimeStops[id] = undefined;
+  listeners[id]?.clear();
+  observers[id].fill(0);
+  liveCount--;
 }
 
 function materialize(id: CellId): void {
@@ -117,6 +162,41 @@ function materialize(id: CellId): void {
       tracking = previousTracking;
     }
     initializers[id] = undefined;
+  }
+}
+
+function valueInDrafts(id: CellId, batches: readonly number[]): unknown {
+  let value = values[id];
+  for (const batch of batches) {
+    const actions = drafts.get(batch)?.actions.get(id);
+    if (actions === undefined) continue;
+    for (const action of actions) {
+      value = typeof action === 'function' ? (action as (previous: unknown) => unknown)(value) : action;
+    }
+  }
+  return value;
+}
+
+function notifyListeners(source: CellId): void {
+  const work: CellId[] = [source];
+  const epoch = ++invalidationEpoch;
+  invalidationMarks[source] = epoch;
+  for (let cursor = 0; cursor < work.length; cursor++) {
+    deliveryVersions[work[cursor]]++;
+    for (const listener of listeners[work[cursor]] ?? []) listener();
+    const mask = observers[work[cursor]];
+    for (let word = 0; word < mask.length; word++) {
+      let bits = mask[word];
+      while (bits !== 0) {
+        const bit = bits & -bits;
+        const id = (word << 5) + (31 - Math.clz32(bit));
+        if (invalidationMarks[id] !== epoch) {
+          invalidationMarks[id] = epoch;
+          work.push(id);
+        }
+        bits ^= bit;
+      }
+    }
   }
 }
 
@@ -197,11 +277,15 @@ function evaluate(id: CellId): unknown {
   if ((flags[id] & MAYBE_DIRTY) !== 0 && (flags[id] & DIRTY) === 0) {
     if (!dependenciesChanged(id)) {
       flags[id] &= ~MAYBE_DIRTY;
+      if (hasErrors[id] !== 0) throw errors[id];
       return values[id];
     }
     flags[id] = (flags[id] | DIRTY) & ~MAYBE_DIRTY;
   }
-  if ((flags[id] & DIRTY) === 0) return values[id];
+  if ((flags[id] & DIRTY) === 0) {
+    if (hasErrors[id] !== 0) throw errors[id];
+    return values[id];
+  }
   if ((flags[id] & RUNNING) !== 0) throw new Error('Reactive cycle');
   flags[id] = (flags[id] | RUNNING) & ~DIRTY;
   clearDependencies(id);
@@ -210,7 +294,17 @@ function evaluate(id: CellId): unknown {
   activeObserver = id;
   tracking = true;
   try {
-    const next = calculations[id]!();
+    let next;
+    try {
+      next = calculations[id]!();
+      hasErrors[id] = 0;
+      errors[id] = undefined;
+    } catch (error) {
+      errors[id] = error;
+      hasErrors[id] = 1;
+      versions[id]++;
+      throw error;
+    }
     const equal = equalities[id] ?? Object.is;
     if (!equal(values[id], next) || (versions[id] === 0 && kinds[id] === COMPUTED)) {
       values[id] = next;
@@ -265,6 +359,7 @@ function runEffect(id: CellId): void {
     flags[id] = (flags[id] | DIRTY) & ~MAYBE_DIRTY;
   }
   if ((flags[id] & DIRTY) === 0) return;
+  emit('effect run', id, causeFor(id), labels[id]);
   const previousTracking = tracking;
   tracking = false;
   try {
@@ -321,7 +416,9 @@ export function atom<T>(initial: T | (() => T), options: AtomOptions<T> = {}): C
   lifetimeStarts[id] = options.effect as AtomOptions<unknown>['effect'];
   labels[id] = options.label;
   keys[id] = options.key;
-  return { id };
+  const cell = { id };
+  finalizer.register(cell, { id, generation: generations[id] }, cell);
+  return cell;
 }
 
 export function computed<T>(calculate: () => T, options: ComputedOptions<T> = {}): Cell<T> {
@@ -329,13 +426,24 @@ export function computed<T>(calculate: () => T, options: ComputedOptions<T> = {}
   calculations[id] = calculate;
   equalities[id] = options.equals as ((a: unknown, b: unknown) => boolean) | undefined;
   labels[id] = options.label;
-  return { id };
+  const cell = { id };
+  finalizer.register(cell, { id, generation: generations[id] }, cell);
+  return cell;
 }
 
 export function read<T>(cell: Cell<T>): T {
   const id = cell.id;
-  if (kinds[id] === SIGNAL) materialize(id);
-  else evaluate(id);
+  if (kinds[id] === SIGNAL) {
+    materialize(id);
+    if (renderDrafts.length !== 0) {
+      addDependency(id);
+      return valueInDrafts(id, renderDrafts) as T;
+    }
+  } else if (renderDrafts.length !== 0) {
+    if (!renderCache.has(id)) renderCache.set(id, calculations[id]!());
+    addDependency(id);
+    return renderCache.get(id) as T;
+  } else evaluate(id);
   addDependency(id);
   return values[id] as T;
 }
@@ -344,7 +452,21 @@ export function set<T>(cell: Cell<T>, value: T): void {
   if (writesForbidden !== 0) throw new Error('Writes are forbidden in this context');
   const id = cell.id;
   if (kinds[id] !== SIGNAL) throw new Error('Only atoms are writable');
+  if (renderDrafts.length !== 0) throw new Error('Signals cannot be written during render');
   materialize(id);
+  if (writeDraft !== 0) {
+    const draft = drafts.get(writeDraft);
+    if (draft === undefined) throw new Error('The transition batch has retired');
+    const current = valueInDrafts(id, [writeDraft]);
+    const equal = equalities[id] ?? Object.is;
+    if (equal(current, value)) return;
+    let actions = draft.actions.get(id);
+    if (actions === undefined) draft.actions.set(id, actions = []);
+    actions.push(value);
+    emit('write', id, causeFor(writeDraft), `batch ${writeDraft}`);
+    notifyListeners(id);
+    return;
+  }
   const equal = equalities[id] ?? Object.is;
   if (equal(values[id], value)) return;
   if (batchDepth !== 0) {
@@ -353,10 +475,24 @@ export function set<T>(cell: Cell<T>, value: T): void {
   }
   values[id] = value;
   versions[id]++;
+  emit('write', id, undefined, labels[id]);
   invalidate(id);
+  notifyListeners(id);
 }
 
 export function update<T>(cell: Cell<T>, reducer: (previous: T) => T): void {
+  if (writeDraft !== 0) {
+    const id = cell.id;
+    materialize(id);
+    const draft = drafts.get(writeDraft);
+    if (draft === undefined) throw new Error('The transition batch has retired');
+    let actions = draft.actions.get(id);
+    if (actions === undefined) draft.actions.set(id, actions = []);
+    actions.push(reducer as (previous: unknown) => unknown);
+    emit('write', id, causeFor(writeDraft), `batch ${writeDraft}`);
+    notifyListeners(id);
+    return;
+  }
   set(cell, reducer(read(cell)));
 }
 
@@ -431,11 +567,40 @@ export function untracked<T>(run: () => T): T {
 }
 
 export function subscribe(cell: Cell, listener: () => void): () => void {
-  const stop = effect(() => {
-    read(cell);
-    listener();
-  });
-  return stop;
+  const id = cell.id;
+  let subscriberSet = listeners[id];
+  if (subscriberSet === undefined) listeners[id] = subscriberSet = new Set();
+  subscriberSet.add(listener);
+  if (++observed[id] === 1 && lifetimeStarts[id] !== undefined) {
+    queueMicrotask(() => {
+      if (observed[id] !== 0 && lifetimeStops[id] === undefined) {
+        lifetimeStops[id] = lifetimeStarts[id]!({
+          get: () => read({ id }),
+          set: value => set({ id }, value),
+        }) ?? undefined;
+      }
+    });
+  }
+  return () => {
+    if (!subscriberSet!.delete(listener)) return;
+    if (--observed[id] === 0 && lifetimeStarts[id] !== undefined) {
+      queueMicrotask(() => {
+        if (observed[id] === 0) {
+          lifetimeStops[id]?.();
+          lifetimeStops[id] = undefined;
+        }
+      });
+    }
+  };
+}
+
+export function disposeCell(cell: Cell): void {
+  finalizer.unregister(cell);
+  releaseCell(cell.id);
+}
+
+export function revision(cell: Cell): number {
+  return deliveryVersions[cell.id];
 }
 
 export function installState<T>(cell: Cell<T>, value: T): void {
@@ -463,13 +628,100 @@ export function initializeAtomState(json: string, atoms: Cell[], reviver?: (key:
   }
 }
 
+export function beginDraft(): number {
+  const id = nextDraft++;
+  drafts.set(id, { actions: new Map() });
+  emit('batch open', id);
+  return id;
+}
+
+export function withDraft<T>(id: number, run: () => T): T {
+  const previous = writeDraft;
+  writeDraft = id;
+  try { return run(); } finally { writeDraft = previous; }
+}
+
+export function enterRenderWorld(batches: number[]): void {
+  inRenderWorld = true;
+  renderDrafts = batches;
+  renderCache = new Map();
+  emit('render pass start', undefined, batches.length === 0 ? undefined : causeFor(batches[0]));
+}
+
+export function leaveRenderWorld(): void {
+  emit('render pass end');
+  renderDrafts = [];
+  inRenderWorld = false;
+  renderCache.clear();
+}
+
+export function commitDrafts(container: object, batches: number[]): void {
+  const view = new Map<CellId, unknown>();
+  for (let id = 0; id < count; id++) {
+    if (kinds[id] === SIGNAL) {
+      materialize(id);
+      view.set(id, valueInDrafts(id, batches));
+    }
+  }
+  rootViews.set(container, view);
+  emit('root commit', undefined, batches.length === 0 ? undefined : causeFor(batches[0]));
+  for (const batch of batches) {
+    const draft = drafts.get(batch);
+    if (draft === undefined) continue;
+    for (const [id, actions] of draft.actions) {
+      let value = values[id];
+      for (const action of actions) {
+        value = typeof action === 'function' ? (action as (previous: unknown) => unknown)(value) : action;
+      }
+      set({ id }, value);
+    }
+    drafts.delete(batch);
+    emit('batch retire', batch, causeFor(batch));
+    for (const id of draft.actions.keys()) notifyListeners(id);
+  }
+}
+
+export function latest<T>(cell: Cell<T>): T {
+  if (inRenderWorld) return read(cell);
+  if (kinds[cell.id] !== SIGNAL) return read(cell);
+  materialize(cell.id);
+  return valueInDrafts(cell.id, [...drafts.keys()]) as T;
+}
+
+export function committed<T>(cell: Cell<T>, container?: object): T {
+  if (container !== undefined) {
+    const value = rootViews.get(container)?.get(cell.id);
+    if (value !== undefined || rootViews.get(container)?.has(cell.id)) return value as T;
+  }
+  return read(cell);
+}
+
+export function isPending(cell: Cell): boolean {
+  for (const [id, draft] of drafts) {
+    if (inRenderWorld && renderDrafts.includes(id)) continue;
+    if (draft.actions.has(cell.id) || kinds[cell.id] === COMPUTED && draft.actions.size !== 0) return true;
+  }
+  return false;
+}
+
+export function refresh(cell: Cell): void {
+  const id = cell.id;
+  if (kinds[id] !== COMPUTED) return;
+  flags[id] |= DIRTY;
+  invalidate(id);
+  notifyListeners(id);
+}
+
 export function reset(): void {
   capacity = 256;
   count = 0;
+  liveCount = 0;
   kinds = new Uint8Array(capacity);
   flags = new Uint8Array(capacity);
   versions = new Uint32Array(capacity);
   invalidationMarks = new Uint32Array(capacity);
+  deliveryVersions = new Uint32Array(capacity);
+  generations = new Uint32Array(capacity);
   invalidationEpoch = 0;
   observed = new Uint32Array(capacity);
   observers = [];
@@ -477,13 +729,23 @@ export function reset(): void {
   dependencyVersions = [];
   values.length = initializers.length = calculations.length = equalities.length = 0;
   cleanups.length = labels.length = keys.length = lifetimeStarts.length = lifetimeStops.length = 0;
+  errors.length = 0;
+  hasErrors = new Uint8Array(capacity);
+  listeners.length = children.length = 0;
   activeObserver = -1;
   tracking = true;
   writesForbidden = batchDepth = 0;
   pendingEffects = [];
   batchValues = undefined;
+  drafts.clear();
+  nextDraft = 1;
+  writeDraft = 0;
+  renderDrafts = [];
+  inRenderWorld = false;
+  renderCache.clear();
+  rootViews = new WeakMap();
 }
 
 export function debugStats(): { cells: number; pendingEffects: number } {
-  return { cells: count, pendingEffects: pendingEffects.length };
+  return { cells: liveCount, pendingEffects: pendingEffects.length };
 }
