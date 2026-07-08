@@ -27,7 +27,7 @@ import {
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
 import { __eachInternalsForTest, __internalsByIdForTest } from '../src/concurrent.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
 	comparableEvents,

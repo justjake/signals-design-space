@@ -15,7 +15,7 @@
  *    world on stack → open capture frame → the driver's ambient provider),
  *    the routed read bodies (`routedAtomRead` / `routedComputedRead` — the
  *    public `.state` getters call them directly when `routingActive` is
- *    set), and the one-flag arming (`syncReadRouting` maintains Kernel.ts's
+ *    set), and the one-flag arming (`syncReadRouting` maintains CosignalEngine.ts's
  *    `routingActive` boolean at every world/capture/provider transition —
  *    one flag covers every routing source).
  *
@@ -34,7 +34,7 @@
  */
 
 import { CycleError, SuspendedRead, type Atom, type Computed } from './index.js';
-import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './Kernel.js';
+import { E, foldGuardRestore, foldGuardSwap, __setRoutingActive } from './CosignalEngine.js';
 import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
 import { FOLD_TRUTH, type WorldArena } from './WorldArena.js';
@@ -445,7 +445,7 @@ export function createWorld(core: EngineCore): void {
 		syncReadRouting();
 	}
 
-	/** Arms/disarms read routing (Kernel.ts's one `routingActive` boolean —
+	/** Arms/disarms read routing (CosignalEngine.ts's one `routingActive` boolean —
 	 * the public `.state` getters' inline check): armed while an evaluation
 	 * world is on stack, an open capture frame exists, or a driver's ambient
 	 * provider could answer — so a driver-less quiet engine costs reads
@@ -636,7 +636,7 @@ export function createWorld(core: EngineCore): void {
 		if (kind === 0 /* WriteKind.SET */) return payload;
 		return runInFoldCallback(() => {
 			// The kernel's fold-purity POISON table guards the replay exactly
-			// like the plain-path update() (Kernel.ts's fold-guard pair).
+			// like the plain-path update() (CosignalEngine.ts's fold-guard pair).
 			const saved = foldGuardSwap();
 			try {
 				return (payload as (p: Value) => Value)(prev);

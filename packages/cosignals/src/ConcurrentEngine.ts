@@ -1,6 +1,6 @@
 /**
  * The composition root of the concurrent engine. Every mechanism module in
- * this package is a factory in the kernel's own style (Kernel.ts
+ * this package is a factory in the kernel's own style (CosignalEngine.ts
  * `createKernel`): it closes over its state and returns/assigns its
  * operation table. `createConcurrentEngine` is the one place they compose:
  * it builds the shared engine core record (World.ts `EngineCore`) with the

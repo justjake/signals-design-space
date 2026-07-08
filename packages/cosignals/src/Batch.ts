@@ -27,12 +27,12 @@
 
 import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
-import type { IdBrand } from './Kernel.js';
+import type { IdBrand } from './CosignalEngine.js';
 import type { AtomInternals, RootState, Seq, TraceHooks } from './concurrent.js';
 import type { EngineCore } from './World.js';
 
 // Leniently branded batch scalars (the kernel's one-symbol IdBrand —
-// Kernel.ts, ported from dalien-signals src/system.ts:525-535): plain
+// CosignalEngine.ts, ported from dalien-signals src/system.ts:525-535): plain
 // numbers assign in cast-free (`1 << slot` builds a BatchSlotSet with no
 // ceremony), but the brands are mutually exclusive — in particular a slot
 // ordinal handed where a slot-set bit mask belongs (or vice versa) is a

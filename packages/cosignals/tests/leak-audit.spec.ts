@@ -32,8 +32,8 @@ import {
 	effectScope,
 } from '../src/index.js';
 import { engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type ComputedInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
-import { E } from '../src/Kernel.js';
-import { __useCacheForTest } from '../src/suspense.js';
+import { E } from '../src/CosignalEngine.js';
+import { __useCacheForTest } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));

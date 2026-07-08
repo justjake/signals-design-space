@@ -26,7 +26,7 @@
  */
 import type { TraceEvent, CosignalEngine, Value } from '../src/concurrent.js';
 import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/Tracer.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 import type { ModelEvent } from '../../cosignals-oracle/src/model.js';
 
 // ---- TraceEvent ≡ ModelEvent pin -------------------------------------------

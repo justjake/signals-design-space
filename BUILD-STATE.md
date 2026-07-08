@@ -64,35 +64,39 @@ must be able to continue from it alone.
      producer.
    - Nothing READS clocks yet: readers arrive with worlds/subscriptions.
 
-## In progress / exact next actions
+## Done (continued)
 
-**Cutover (next step)**: make CosignalEngine.ts the one kernel.
-1. Re-point every `from './Kernel.js'` import to `'./CosignalEngine.js'`:
-   concurrent.ts, World.ts, WorldArena.ts, RenderPass.ts, Batch.ts,
-   WriteLog.ts, settlement.ts, ObservationIndex.ts, index.ts (also its
-   `export ... from './Kernel.js'` lines), suspense.ts + lifecycle.ts
-   consumers (concurrent.ts imports `./suspense.js` seams; ObservationIndex
-   imports lifecycle seams via index).
-2. index.ts: re-export SuspendedRead/__ctxUse from './CosignalEngine.js';
-   import __resetLifecycleForTest etc. from it; add ONE new composition
-   line: `__setLifecycleWritePath(__lifecycleWrite)` (the engine's new
-   late-bound seam replacing lifecycle.ts's runtime import of index).
-3. Delete src/Kernel.ts, src/suspense.ts, src/lifecycle.ts.
-4. tests/trace-off.spec.ts ENGINE_MODULES: replace the three deleted paths
-   with 'src/CosignalEngine.ts' (document as a re-point, semantics
-   preserved: the zero-cost source scans now cover the fused module).
-5. Any test importing '../src/Kernel.js' or suspense/lifecycle directly:
-   re-point (grep first: `grep -rn "src/Kernel\|src/suspense\|src/lifecycle"
-   tests ../cosignals-react ../react-seam-bench ../../harness`); document
-   each in this file.
-6. Run full suite; expect green (same algorithm; clocks are write-only so
-   far). Bytecode budgets: the kernel function names are unchanged and the
-   spec bundles src/index.ts, so budgets should still resolve; clock bumps
-   add ~10-20 bytecodes to write/updateComputed — budgets have slack
-   (write 130 vs 96 measured; updateComputed 420 vs 362). If a budget
-   trips, raise it in tests/bytecode.spec.ts with a comment (re-pin for the
-   new shapes is sanctioned at campaign end).
-7. Commit ("flattening: cutover — CosignalEngine.ts is the kernel").
+6. **Cutover** — CosignalEngine.ts is the one kernel. All `./Kernel.js`,
+   `./suspense.js`, `./lifecycle.js` imports re-pointed to
+   `'./CosignalEngine.js'` (src: concurrent, World, WorldArena, RenderPass,
+   Batch, WriteLog, settlement, ObservationIndex, index; tests:
+   trace-events, reclaim.spec, oracle-adapter, helpers, leak-audit.spec,
+   arena-checker, freelist.spec); prose references to the three dead files
+   rewritten to section language; Kernel.ts/suspense.ts/lifecycle.ts
+   DELETED. index.ts gained the one composition line
+   `__setLifecycleWritePath(__lifecycleWrite)`.
+   Documented test re-points (semantics preserved):
+   - tests/trace-off.spec.ts ENGINE_MODULES: the three dead paths →
+     'src/CosignalEngine.ts' (same zero-cost source scans, now over the
+     fused module).
+   - tests/bytecode.spec.ts: two budgets re-pinned with justification —
+     updateComputed 420→445 (measured 432; the durable-clock bump on both
+     return arms), freeLink 40→50 (measured 42; the generated clock-slot
+     scrub call). Both still under the 460 inline limit. All other budgets
+     unchanged and passing (function names survived the move).
+
+## Suites run against the fused engine (post-cutover)
+
+- cosignals: 31 files, 360 passed, 1 skipped — GREEN (includes docs-gate,
+  leak-audit, reclaim probes, bytecode budgets, concurrent battery with the
+  V-urgent-committed-branch pin, fuzz, scars, equality-semantics).
+- cosignals-oracle: 82 passed — GREEN.
+- harness conformance: FRAMEWORK=cosignals 179/179, cosignals-concurrent
+  179/179 (also alien-v3 baseline 179/179) — GREEN.
+- cosignals-react (react 72 against the real fork): 72/72 — GREEN.
+- NOT run: daishi concurrent verifier (separate playwright/jest harness,
+  needs its own npm install; final-gate material), perf benches (lead owns
+  A/B).
 
 ## Unstarted (campaign priority order)
 
@@ -186,18 +190,39 @@ must be able to continue from it alone.
   subscriptions land (the plan's readers); bump sites match the bump table
   rows that exist at kernel level today.
 
-## Suite state (honest)
+## In progress / exact next actions
 
-- Baseline before any change: full cosignals suite green (fresh worktree,
-  pnpm install needed first — remember `mise trust` in fresh worktrees).
-- After commit A (schema + skeleton + CycleError move): typecheck green;
-  docs-gate + schema-gen green; full suite run pending at the time of
-  writing (old composition untouched — expected green).
+**Priority 3 — worlds re-derived.** Nothing started. First actions:
+1. Read packages/cosignals/src/WorldArena.ts + World.ts fully (the current
+   per-world record design being re-derived), then alt-b
+   packages/cosignals-alt-b/src/engine.ts sections "M3: world memos and
+   certificates" and the growth/bump-reset discipline (its line-map is in
+   the section dividers; note alt-b's certificate approach was REJECTED —
+   only its arena mechanics transfer, not certificates).
+2. Design the world-record family/-ies in tools/schema.ts (layoutVersion 2):
+   per-world dependency records with clock fields per the bump table
+   (per-root committed clocks; render worlds pin-frozen), pooled arenas,
+   bump-reset, growth by closure rebuild (retire WorldArena's
+   mid-operation-growth-with-reload).
+3. Land the world machinery as new sections in CosignalEngine.ts between
+   the clocks section and the evaluation-policy section; keep
+   World.ts/WorldArena.ts alive until the new machinery passes the arena
+   suites, then re-point + delete (same coexistence-then-cutover pattern
+   as the kernel).
+4. The V-urgent-committed-branch battery case + arena-s{a,a2,a3,b,c,d}
+   specs are the contract.
 
 ## Environment notes for successors
 
-- Fresh worktree needs `mise trust` then `pnpm install` (lockfile churn, if
-  any, stays UNCOMMITTED per mission).
+- Fresh worktree needs `mise trust`, then `pnpm install` (lockfile churn
+  stays UNCOMMITTED per mission), then submodules for the full gate:
+  `git submodule update --init vendor/react upstream-alien-signals`;
+  upstream-alien-signals needs its prebuilt esm/cjs/types copied from the
+  main checkout (`cp -R /Users/jitl/src/alien-signals-opt/upstream-alien-signals/{esm,cjs,types} upstream-alien-signals/`)
+  followed by `pnpm install --force`; the react fork builds with
+  `./fork/build-react.sh` (run it ONCE, from a clean vendor/react/build —
+  a concurrent second run nests the mv and corrupts the layout; fix is
+  `rm -rf vendor/react/build` + rebuild).
 - Commit with explicit paths only; never push. NEVER touch
   packages/dalien-signals, packages/cosignals-alt-a, packages/cosignals-alt-b,
   milomg-reactivity-benchmark, pnpm-lock.yaml, spec/, harness/results,

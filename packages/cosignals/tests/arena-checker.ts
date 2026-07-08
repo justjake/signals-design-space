@@ -27,7 +27,7 @@ import {
 	type World,
 } from '../src/concurrent.js';
 import { SuspendedRead } from '../src/index.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 
 /** One memoized naive outcome (thrown outcomes memoize and rethrow,
  * identity-stable — same payload object every consult within a check). */

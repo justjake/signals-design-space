@@ -27,7 +27,7 @@
  */
 
 import { untracked, __lifecycleRelease, __lifecycleRetain } from './index.js';
-import { E, noteReclaimRetry, reclaimSkippedN } from './Kernel.js';
+import { E, noteReclaimRetry, reclaimSkippedN } from './CosignalEngine.js';
 import type { AnyInternals, Subscription } from './concurrent.js';
 import type { ConcurrentEngineHost } from './ConcurrentEngine.js';
 

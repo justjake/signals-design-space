@@ -44,14 +44,18 @@ const BUDGETS: Record<string, number> = {
 	shallowPropagate: 130, // 106
 	isValidLink: 60, // 47
 	update: 90, // 74
-	updateComputed: 420, // 362
+	updateComputed: 445, // 432: the durable-clock bump on changed outcomes
+	// (both return arms test-and-stamp; the flattening's bump table) — still
+	// under the inline limit
 	updateSignal: 80, // 62
 	notify: 210, // 178
 	run: 390, // 333
 	purgeDeps: 80, // 66
 	unlinkChildEffects: 100, // 82
 	allocLink: 120, // 102
-	freeLink: 40, // 27: threads the free list through spare field 7
+	freeLink: 50, // 42: threads the free list through spare field 7 + the
+	// generated clock-slot scrub (a reused link must not carry the old
+	// tenant's lastValidatedAt stamp)
 	// public read/write paths
 	readAtom: 120, // 98
 	write: 130, // 96

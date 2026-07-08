@@ -37,7 +37,7 @@
 
 import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { SuspendedRead, LinkField, NodeField, NodeFlag } from './index.js';
-import { E, noteReclaimRetry, reclaimSkippedN } from './Kernel.js';
+import { E, noteReclaimRetry, reclaimSkippedN } from './CosignalEngine.js';
 import { getKernelGeneration, getKernelNodeIndex, type WorldArena } from './WorldArena.js';
 import type { Batch, BatchId, BatchSlot, BatchSlotSet } from './Batch.js';
 import type { ObservationIndex } from './ObservationIndex.js';

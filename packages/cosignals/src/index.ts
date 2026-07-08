@@ -3,17 +3,19 @@
  * surface, and the re-export point for the concurrent engine (which composes
  * at module initialization — see "One core, one entry" below).
  *
- * Reading order for the package: this header (vocabulary), then Kernel.ts
- * (the kernel), then concurrent.ts (the engine and its vocabulary), then the
- * mechanism modules it composes — WriteLog.ts, Batch.ts, World.ts,
- * WorldArena.ts, RenderPass.ts, SubscriptionManager.ts, NotificationQueue.ts, ObservationIndex.ts,
- * settlement.ts, ConcurrentEngine.ts (the composition root) — with suspense.ts and
- * lifecycle.ts beside the policy layer, and errors.ts/Tracer.ts/graphviz.ts
- * self-contained.
+ * Reading order for the package: this header (vocabulary), then
+ * CosignalEngine.ts (the engine module — storage layout, the kernel
+ * algorithm, clocks, the evaluation policy, the observed lifecycle, and
+ * reclamation, in that order), then concurrent.ts (the concurrent-worlds
+ * machinery and its vocabulary), then the mechanism modules it composes —
+ * WriteLog.ts, Batch.ts, World.ts, WorldArena.ts, RenderPass.ts,
+ * SubscriptionManager.ts, NotificationQueue.ts, ObservationIndex.ts,
+ * settlement.ts, ConcurrentEngine.ts (the composition root) — with
+ * errors.ts/Tracer.ts/graphviz.ts self-contained.
  *
  * ## Vocabulary (in reading order; used throughout this package)
  *
- * **The kernel** is the dependency-tracking engine (Kernel.ts). It stores every signal, computed, effect, and dependency edge as a
+ * **The kernel** is the dependency-tracking engine (CosignalEngine.ts). It stores every signal, computed, effect, and dependency edge as a
  * fixed-size integer record in shared arrays, and runs the reactive
  * algorithm — writes push staleness marks down the graph, reads lazily pull
  * recomputation — as index arithmetic over those records. The kernel knows
@@ -23,7 +25,7 @@
  * **The policy layer** is everything user-facing in this file — the
  * Atom / ReducerAtom / Computed classes, effect(), configure(), plus the
  * re-exported batch()/untracked() (kernel-state mechanisms living with
- * their counters in Kernel.ts). "Policy" always means a user-visible behavior
+ * their counters in CosignalEngine.ts). "Policy" always means a user-visible behavior
  * decided outside the kernel: custom equality, what thrown errors and
  * pending async reads do, the purity rules. The split exists so the kernel's
  * hot paths stay small monomorphic integer code while every rule that could
@@ -45,7 +47,7 @@
  *   the ArenaShape const enum).
  *
  * Mechanics the whole package relies on (implementation and full stories in
- * Kernel.ts):
+ * CosignalEngine.ts):
  * - **Operation boundary**: a moment when no evaluation, effect run, or graph
  *   walk is anywhere on the call stack (`enterDepth === 0`). Deferred work —
  *   growing the arena, freeing disposed records — runs only at boundaries,
@@ -72,7 +74,7 @@
  *
  * With that vocabulary, the package's kernel-side layers and their homes:
  *
- *   1. Sentinels (SuspendedRead — suspense.ts; CycleError — below). A
+ *   1. Sentinels (SuspendedRead — the engine's evaluation-policy section; CycleError — errors.ts). A
  *      computed's function can fail
  *      to produce a value: it can throw, or it can read async data that
  *      isn't ready yet (`ctx.use` on a pending promise — a **suspension**).
@@ -91,9 +93,9 @@
  *      receives (`ctx.previous`, `ctx.use`; the ComputedCtx type below). Its
  *      members are getters that resolve "which computed is evaluating right
  *      now" from kernel state, so passing it costs zero per-recompute setup
- *      (the object lives in Kernel.ts beside its capture site; the member
- *      functions and the whole suspension machinery live in suspense.ts).
- *   3. The kernel (Kernel.ts) — alien-signals v3.2.1's push-pull algorithm, re-expressed
+ *      (the object lives in CosignalEngine.ts beside its capture site; the member
+ *      functions and the whole suspension machinery live in its evaluation-policy section).
+ *   3. The kernel (CosignalEngine.ts) — alien-signals v3.2.1's push-pull algorithm, re-expressed
  *      over arena records instead of linked JavaScript objects. Upstream's
  *      walk structure and flag transitions are preserved (plus a
  *      link/linkInsert hot/slow split, see linkInsert); buffers are closure
@@ -106,10 +108,10 @@
  *      below (D1–D7).
  *   4. The policy layer (this file) — the classes and functions named above;
  *      custom equality by wrapper-returns-old-reference; errors/suspensions
- *      as sentinel boxes (suspense.ts); the observed lifecycle
+ *      as sentinel boxes (the engine's evaluation-policy section); the observed lifecycle
  *      (AtomOptions.effect — the "first subscriber attached / last one
  *      detached" callback, counted over the union of kernel subscribers and
- *      engine watchers, lifecycle.ts) with microtask flap damping; the
+ *      engine watchers — the engine's observed-lifecycle section) with microtask flap damping; the
  *      fold-purity and writes-in-computeds disciplines.
  *
  * ## One core, one entry
@@ -135,7 +137,7 @@
  * that never attach a driver and never open a batch keep both fast arms
  * forever: zero log entries, batches, or worlds are ever created
  * (tests/one-core.spec.ts asserts this behaviorally with engine probes).
- * The only other swapped table is POISON (fold purity — Kernel.ts, swapped
+ * The only other swapped table is POISON (fold purity — CosignalEngine.ts, swapped
  * through runFold below) — reachable exclusively by erroring code.
  *
  * ## Deviations
@@ -177,7 +179,7 @@
  *   D4. A computed's aux value slot — `values[(id >> 2) + 1]`, the "signal
  *       pending value or effect cleanup" column, unused for computeds —
  *       deliberately stays empty. Policy state that could ride it (the
- *       owning instance for ctx.use) is id-keyed in suspense.ts instead,
+ *       owning instance for ctx.use) is id-keyed in the evaluation-policy section instead,
  *       so the kernel never pins a public handle — a dropped handle's
  *       record must stay reclaimable.
  *   D5. The kernel op table gains cold policy ops the policy layer needs:
@@ -195,25 +197,24 @@
  * operation boundaries only) and reclamation (deferred free of disposed
  * effect/scope records, plus FinalizationRegistry-driven recovery of
  * atom/computed records whose handles were garbage-collected — the guard
- * table, retry triggers, and two-phase free path live in Kernel.ts's
+ * table, retry triggers, and two-phase free path live in CosignalEngine.ts's
  * reclamation section) — is
  * kernel-wide behavior on every path, documented at its
- * implementation sites in Kernel.ts.
+ * implementation sites in CosignalEngine.ts.
  */
 
-import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom } from './Kernel.js';
-import { __resetLifecycleForTest } from './lifecycle.js';
+import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom, __resetLifecycleForTest, __setLifecycleWritePath } from './CosignalEngine.js';
 import { NOT_ROUTED } from './World.js';
 import { writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
 import type { AtomInternals, ComputedInternals } from './concurrent.js';
-import type { NodeId, ValueIndex } from './Kernel.js';
+import type { NodeId, ValueIndex } from './CosignalEngine.js';
 
 // ---- sentinels ----------------------------------------------------------------
 
 // SuspendedRead — the stable "this value is still loading" sentinel thrown
-// by reads that observe a pending suspension — lives in suspense.ts with the
+// by reads that observe a pending suspension — lives in the engine with the
 // rest of the suspension machinery; re-exported here (public surface).
-export { SuspendedRead } from './suspense.js';
+export { SuspendedRead } from './CosignalEngine.js';
 
 // CycleError — thrown when a computed is read while its own evaluation frame
 // is open (that read is a dependency cycle; cosignals fails loudly instead
@@ -270,21 +271,21 @@ export type ComputedCtx<T> = {
 };
 
 // (The one evaluation-context object the kernel passes every computed getter
-// — POLICY_CTX — lives in Kernel.ts beside its capture site (createKernel
+// — POLICY_CTX — lives in CosignalEngine.ts beside its capture site (createKernel
 // captures it at factory run, so it must be initialized before the kernel
-// builds); its members delegate to suspense.ts's ctxPrevious/ctxUse.)
+// builds); its members delegate to the engine's ctxPrevious/ctxUse.)
 
-// ---- the kernel (Kernel.ts) --------------------------------------------------
+// ---- the kernel (CosignalEngine.ts) --------------------------------------------------
 // The whole dependency-tracking engine — the record layout const enums
 // (NodeField/LinkField/NodeFlag, re-exported below for independent walkers;
 // ArenaShape addresses the side columns), allocation, the link/propagate/
 // checkDirty walk families, update/notify/run/dispose, the flush queue,
 // growth by closure rebuild, the `values`/`fns` side columns, the walk
-// scratch stacks, and the fold-purity POISON table — lives in Kernel.ts. The
+// scratch stacks, and the fold-purity POISON table — lives in CosignalEngine.ts. The
 // policy layer below reads the current operation table through the one
 // mutable slot `E` (re-linked only at growth boundaries) and the shared
 // side columns/scalars through their imported bindings.
-export { NodeField, LinkField, NodeFlag } from './Kernel.js';
+export { NodeField, LinkField, NodeFlag } from './CosignalEngine.js';
 
 
 
@@ -335,7 +336,7 @@ export function __plainAtomWrite(atom: Atom<unknown>, kind: WriteKind, payload: 
 
 /**
  * Handle-free write path for lifecycle contexts (id-keyed — the lifecycle
- * record deliberately holds no handle reference; see lifecycle.ts). Runs
+ * record deliberately holds no handle reference; see the observed-lifecycle section). Runs
  * the same policy assert as the public methods, then the engine dispatch
  * over the id-resolved node; an atom with no engine content takes the
  * plain kernel path (its comparator lives on the unreachable handle, so
@@ -357,6 +358,11 @@ export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown):
 	writeAtom(id, undefined, next);
 }
 
+// Composition: the engine's lifecycle contexts write through the policy path
+// above (late-bound — the engine never imports this module at runtime; see
+// the seam's doc in CosignalEngine.ts). Runs once at module initialization.
+__setLifecycleWritePath(__lifecycleWrite);
+
 /** Test-only policy scrub (`__resetEngineForTest`'s index.ts half):
  * configure() state returns to defaults; the lifecycle map, queue, and its
  * scheduled flush drop (the flush microtask is engine-epoch guarded).
@@ -367,7 +373,7 @@ export function __resetPolicyForTest(): void {
 }
 
 // (maybeBoundary / boundaryWork / flush — the operation-boundary machinery
-// and the effect flush loop — live in Kernel.ts with the queue and growth
+// and the effect flush loop — live in CosignalEngine.ts with the queue and growth
 // state they drain; the policy layer imports maybeBoundary/flush directly.)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -418,21 +424,21 @@ export function __setStandaloneQuiet(v: boolean): void {
 	}
 }
 
-// (throwFold / the POISON table's operations live in Kernel.ts with the
-// table; runFold below swaps through Kernel.ts's fold-guard pair.)
+// (throwFold / the POISON table's operations live in CosignalEngine.ts with the
+// table; runFold below swaps through CosignalEngine.ts's fold-guard pair.)
 
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
 // The observed-lifecycle option — the per-atom state map, the union
-// refcount, and the flap-damped microtask flush — lives in lifecycle.ts
+// refcount, and the flap-damped microtask flush — lives in the engine's observed-lifecycle section
 // (its header carries the full story). The Atom constructor below marks
 // each lifecycle-carrying atom's record; the kernel arm feeds
 // the refcount from linkInsert/unlink; the watcher arm enters
 // through these re-exported seams (called by the
 // concurrent engine's observation index).
-export { __lifecycleRetain, __lifecycleRelease } from './lifecycle.js';
+export { __lifecycleRetain, __lifecycleRelease } from './CosignalEngine.js';
 
 // ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
-// (writeAtom lives in Kernel.ts: every binding it touches per call — values,
+// (writeAtom lives in CosignalEngine.ts: every binding it touches per call — values,
 // maybeBoundary, E, batchDepth, flush — is graph state, and a hot read of a
 // CYCLIC module's imported binding pays a per-access cell + initialization
 // check that a same-module read doesn't. Imported above with the rest.)
@@ -442,7 +448,7 @@ export { __lifecycleRetain, __lifecycleRelease } from './lifecycle.js';
  * reducers must be pure — the concurrent engine stores and replays them per
  * world — so signal reads and writes inside them always throw.
  * Mechanism: the operation table is swapped to the POISON table for the
- * duration (Kernel.ts's fold-guard pair), so every read/write/creation the fold attempts throws at the
+ * duration (CosignalEngine.ts's fold-guard pair), so every read/write/creation the fold attempts throws at the
  * dispatch site — and the hot read/write paths carry zero fold instructions.
  * Folds are synchronous and never open kernel frames of their own; open
  * outer frames hold the real table's buffers as closure constants and are
@@ -457,14 +463,14 @@ function runFold<T>(fn: () => T): T {
 	}
 }
 
-// ---- the computed evaluation policy (suspense.ts) --------------------------------
+// ---- the computed evaluation policy (the engine's suspense section) ----------------
 // The suspension/exception machinery — the thenable protocol, the ctx.use
 // request cache, the kernel's storeThrown/boxedRead cold hooks, and the
-// settle tap — lives in suspense.ts (its header carries the full story).
+// settle tap — lives in the engine (its section header carries the full story).
 // __ctxUse is re-exported for the test suites (the arena and leak-audit
 // specs drive the request cache directly); the engine itself imports it
-// from './suspense.js'.
-export { __ctxUse } from './suspense.js';
+// from './CosignalEngine.js'.
+export { __ctxUse } from './CosignalEngine.js';
 
 
 
@@ -553,12 +559,12 @@ export class Atom<T> {
 		const effect = options?.effect;
 		if (effect !== undefined) {
 			E.markLifecycle(id);
-			// THE DORMANT OWNER (see lifecycle.ts): the user's callback
+			// THE DORMANT OWNER (see the engine's observed-lifecycle section): the user's callback
 			// lives in the atom's own record `fns` slot — atoms never use
 			// that column, it is engine memory addressed by id, and the
 			// record-free path clears it like every column. The ACTIVE
 			// lifecycle record (ctx, cleanup, refcount) is created id-keyed
-			// at the first watched transition (lifecycle.ts REHYDRATION) and
+			// at the first watched transition (the observed-lifecycle REHYDRATION) and
 			// deleted at dormancy — the engine never stores a handle
 			// reference of its own (the ctx routes set/update BY ID through
 			// the engine write path).
@@ -686,7 +692,7 @@ export class Computed<T> {
 		// the cheap GC-death shape.
 		const id = E.newComputed(fn as (ctx: unknown) => unknown, this);
 		this._id = id;
-		// (ctx.use owner resolution is id-keyed — suspense.ts resolves the
+		// (ctx.use owner resolution is id-keyed — the engine resolves the
 		// evaluating record straight from `activeSub`, and the per-key
 		// request cache is a nodeIndex-keyed column scrubbed at record free.
 		// The aux slot stays empty for computeds: nothing kernel-side pins
@@ -771,9 +777,9 @@ export function effectScope(fn: () => void): () => void {
 // batch()/startBatch()/endBatch() (synchronous effect coalescing over the
 // kernel's batchDepth counter — unrelated to the concurrent engine's Batch
 // records) and untracked() (clears the tracking frame) are kernel-state
-// mechanisms and live in Kernel.ts with the counters they move; re-exported
+// mechanisms and live in CosignalEngine.ts with the counters they move; re-exported
 // here — they are public surface.
-export { batch, startBatch, endBatch, untracked } from './Kernel.js';
+export { batch, startBatch, endBatch, untracked } from './CosignalEngine.js';
 
 export type ConfigureOptions = {
 	/**
@@ -803,7 +809,7 @@ export function configure(options: ConfigureOptions): void {
 		if (!Number.isFinite(n) || n < MIN_INITIAL_RECORDS) {
 			throw new Error(`cosignals: configure({ initialRecords }) must be a number >= ${MIN_INITIAL_RECORDS}.`);
 		}
-		requestCapacity(Math.ceil(n)); // Kernel.ts: unit→record scaling + growth scheduling
+		requestCapacity(Math.ceil(n)); // CosignalEngine.ts: unit→record scaling + growth scheduling
 	}
 }
 

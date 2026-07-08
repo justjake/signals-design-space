@@ -23,7 +23,7 @@ import {
 	effect,
 } from '../src/index.js';
 import { engine, __resetEngineForTest, type AtomInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
-import { E, engineEpoch, __reclaimStatsForTest, __simulateReclaimForTest } from '../src/Kernel.js';
+import { E, engineEpoch, __reclaimStatsForTest, __simulateReclaimForTest } from '../src/CosignalEngine.js';
 
 const hasGC = typeof globalThis.gc === 'function';
 const gcNow = (): void => (globalThis.gc as () => void)();

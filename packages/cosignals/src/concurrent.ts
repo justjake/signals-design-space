@@ -1,6 +1,6 @@
 /**
  * cosignals — the concurrent-worlds engine riding the kernel. The kernel is
- * the dependency tracker (Kernel.ts; index.ts's header defines its terms):
+ * the dependency tracker (CosignalEngine.ts; index.ts's header defines its terms):
  * it stores every signal, computed, effect, and dependency edge as
  * fixed-size integer records in shared arrays — and it holds exactly one
  * current value per atom. React's concurrent rendering needs several views
@@ -70,7 +70,7 @@
  *   re-check every observer the change could reach against committed state
  *   and correct the stale ones.
  * - The engine keeps two dependency graphs. One is the kernel's own graph
- *   (the packed records in Kernel.ts), which only knows newest values. The
+ *   (the packed records in CosignalEngine.ts), which only knows newest values. The
  *   other is the per-world **world arenas**: one packed record arena per
  *   render world and per committed-for-root world, holding a **shadow**
  *   (value + flags) per consumed node and the strong and weak-flagged
@@ -177,9 +177,9 @@
  */
 
 import { Atom, Computed, CycleError, SuspendedRead, untracked, __plainAtomWrite, __resetPolicyForTest, __setStandaloneQuiet, type ComputedCtx } from './index.js';
-import { ArenaShape, E, LinkField, NodeField, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch, type IdBrand, type NodeId, type NodeIndex } from './Kernel.js';
-import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleTap } from './suspense.js';
-import { __setReclaimGuardHook, __setRecordFreeHook } from './Kernel.js';
+import { ArenaShape, E, LinkField, NodeField, fns, maybeBoundary, writeNewest, __resetKernelForTest, engineEpoch, type IdBrand, type NodeId, type NodeIndex } from './CosignalEngine.js';
+import { __clearUseCacheForIndex, __ctxUse, __resetSuspenseForTest, __setSettleTap } from './CosignalEngine.js';
+import { __setReclaimGuardHook, __setRecordFreeHook } from './CosignalEngine.js';
 import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { createConcurrentEngine, probes, type ConcurrentEngine, type WriteKind } from './ConcurrentEngine.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
@@ -204,14 +204,14 @@ export type Value = unknown;
  * its own — so this is the kernel's (leniently branded) NodeId, re-exported.
  * Never dense over nodes — node and link records share the kernel's one
  * allocator — so dense per-node columns key by NodeIndex instead. */
-export type { NodeId } from './Kernel.js';
+export type { NodeId } from './CosignalEngine.js';
 /** Dense per-node column key: the record's NodeField.NODE_INDEX, assigned by
  * the kernel allocator and recycled with the record slot (a reused record
  * inherits its slot's index — the record-free scrub is what makes that
  * sound). A packing detail, never an identity — the kernel's (leniently
  * branded) NodeIndex, re-exported: a NodeIndex is not a NodeId, and the
  * brands make mixing them a compile error. */
-export type { NodeIndex } from './Kernel.js';
+export type { NodeIndex } from './CosignalEngine.js';
 // Batch identity, slots, and slot sets live in Batch.ts (the batch
 // mechanism module); re-exported here — they are engine surface.
 export { BATCH_NONE } from './Batch.js';
@@ -221,7 +221,7 @@ export type RenderPassId = number;
 export type WatcherId = number;
 /** A committed `run`-action subscription's id: the SubscriptionManager's own
  * mount counter — not a kernel record id of any kind (kernel effect records
- * travel as NodeId). Leniently branded (Kernel.ts IdBrand) so the spaces
+ * travel as NodeId). Leniently branded (CosignalEngine.ts IdBrand) so the spaces
  * cannot cross. */
 export type SubscriptionId = number & IdBrand<'subscription'>;
 /** A point on the one global sequence line (log-entry seqs, pins, retirement
@@ -1388,7 +1388,7 @@ function __onRecordFree(recordId: NodeId, ix: NodeIndex): void {
 		obsDeps[ix] = undefined;
 		nodeToWatchers[ix] = undefined;
 	}
-	__clearUseCacheForIndex(ix); // the id-keyed ctx.use request cache (suspense.ts column)
+	__clearUseCacheForIndex(ix); // the id-keyed ctx.use request cache (the engine's evaluation-policy section)
 	purgeNodeFromArenas(ix);
 }
 
@@ -2203,7 +2203,7 @@ function assertIdleForReset(): void {
  *  2. the driver's protocol reset first (protocol v2's hook): the host's
  *     lane registry drops its full slot tenancy before the engine the ids
  *     point into disappears; then the driver slot clears.
- *  3. the kernel scrub (Kernel.ts __resetKernelForTest): watermark-bounded
+ *  3. the kernel scrub (CosignalEngine.ts __resetKernelForTest): watermark-bounded
  *     memory scrub — never a reallocation — allocator heads, counters,
  *     queued/pendingFree, VALUES/FNS side columns, walk scratch,
  *     desiredRecords; bumps the engine epoch (all cross-reset microtasks —

@@ -43,7 +43,7 @@ import {
 	type World as EWorld,
 } from '../src/concurrent.js';
 import { __peekNextBatchIdForTest } from '../src/Batch.js';
-import { engineEpoch } from '../src/Kernel.js';
+import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
 import { modelView, RefereeMirror } from './model-view.js';

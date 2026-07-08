@@ -19,7 +19,7 @@
  */
 
 import { SuspendedRead } from './index.js';
-import { engineEpoch, reclaimRetryAllSkipped } from './Kernel.js';
+import { engineEpoch, reclaimRetryAllSkipped } from './CosignalEngine.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore } from './World.js';
 import type { RootId } from './concurrent.js';

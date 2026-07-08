@@ -21,7 +21,7 @@
  */
 
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
-import { noteReclaimRetry, reclaimSkippedN } from './Kernel.js';
+import { noteReclaimRetry, reclaimSkippedN } from './CosignalEngine.js';
 import type { BatchManager, BatchId, BatchSlot } from './Batch.js';
 import type { EngineCore } from './World.js';
 import type { AtomInternals, Seq, Value, WriteKind } from './concurrent.js';

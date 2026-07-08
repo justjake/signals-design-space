@@ -16,7 +16,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, effect } from '../src/index';
-import { E, maybeBoundary, __reclaimStatsForTest } from '../src/Kernel.js';
+import { E, maybeBoundary, __reclaimStatsForTest } from '../src/CosignalEngine.js';
 
 describe('kernel link free list threads through a spare field', () => {
 	test('#203 shape with a primed free list: the mid-walk-freed link must not lead into the free list', () => {

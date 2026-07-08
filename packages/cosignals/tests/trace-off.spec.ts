@@ -47,9 +47,9 @@ const ENGINE_MODULES = [
 	'src/settlement.ts',
 	'src/SubscriptionManager.ts',
 	'src/RenderPass.ts',
-	'src/Kernel.ts',
-	'src/suspense.ts',
-	'src/lifecycle.ts',
+	// The fused engine module (the flattening): carries the former Kernel.ts,
+	// suspense.ts, and lifecycle.ts — the same zero-cost scans cover it.
+	'src/CosignalEngine.ts',
 ];
 
 function src(rel: string): string {

@@ -28,7 +28,7 @@
  */
 
 import { NodeField, SuspendedRead } from './index.js';
-import { E, noteReclaimRetry, reclaimRetryAllSkipped, reclaimSkippedN, type IdBrand } from './Kernel.js';
+import { E, noteReclaimRetry, reclaimRetryAllSkipped, reclaimSkippedN, type IdBrand } from './CosignalEngine.js';
 import { InvariantViolation } from './errors.js';
 import type { EngineCore, World } from './World.js';
 import type { AnyInternals, AtomInternals, ComputedInternals, ArenaInitInts, Equals, NodeId, NodeIndex, Reader, RootId, Value, Watcher } from './concurrent.js';
@@ -42,7 +42,7 @@ type WalkGen = number;
  * arena's own buffer (this module's third id space — not a kernel NodeId,
  * not a NodeIndex; the arena walks consult kernel memory mid-walk, which is
  * exactly where mixing would silently corrupt). Leniently branded on the
- * kernel's one-symbol IdBrand (Kernel.ts): plain numbers — every
+ * kernel's one-symbol IdBrand (CosignalEngine.ts): plain numbers — every
  * `a.memory[...]` read — assign in cast-free; cross-brand assignment
  * errors. 0 = none (record 0 burned). Arena link record ids share the pool
  * and stay plain numbers (the shared-allocator escape hatch, exactly like
@@ -413,7 +413,7 @@ function arenaSetLinkWeak(a: WorldArena, id: number, weak: boolean): void {
 }
 
 /**
- * Kernel correspondence, an obligation (the arena half of Kernel.ts's
+ * Kernel correspondence, an obligation (the arena half of CosignalEngine.ts's
  * "## Lineage" note): these `arena`-prefixed walks re-state
  * the kernel's push-pull algorithms over the arena layout — two
  * expressions of one algorithm, maintained together. A semantic
