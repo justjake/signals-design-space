@@ -16,6 +16,7 @@ import {
   EffectNode,
   EffectScope,
   createEffect,
+  hasOwner,
   untracked,
   type AtomOptions,
   type Equality,
@@ -136,7 +137,12 @@ const reclaimer = new FinalizationRegistry<{ dispose(): void }>((node) => node.d
  * returned disposer stops it; a dropped disposer is reclaimed automatically.
  */
 export function effect(fn: () => void | (() => void), label?: string): () => void {
+  // Effects created inside an owner (an effect scope or another effect) are
+  // torn down by that owner; only ownerless effects need their own
+  // FinalizationRegistry backing for the dropped-disposer case.
+  const owned = hasOwner();
   const node = createEffect(fn, label);
+  if (owned) return () => node.dispose();
   const dispose = () => {
     reclaimer.unregister(dispose);
     node.dispose();

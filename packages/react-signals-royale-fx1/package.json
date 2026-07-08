@@ -23,6 +23,7 @@
 		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
 		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
 		"typescript": "6.0.3",
-		"vitest": "4.1.6"
+		"vitest": "4.1.6",
+		"tsx": "4.23.0"
 	}
 }

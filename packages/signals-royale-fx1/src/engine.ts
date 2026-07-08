@@ -235,6 +235,8 @@ const probeSubs = new Set<Sub>();
 let subCount = 0;
 
 export class Cell<T> {
+  /** Monomorphic discriminator (hot paths avoid instanceof). */
+  readonly isCell = true;
   value!: T;
   /** Bumps when the canonical value changes (graph polling). */
   version: NodeVersion = 1;
@@ -308,11 +310,11 @@ export class Cell<T> {
   }
 
   set(value: T): void {
-    writeCell(this, { fn: null, value });
+    writeCell(this, null, value);
   }
 
   update(fn: (prev: T) => T): void {
-    writeCell(this, { fn, value: undefined });
+    writeCell(this, fn, undefined);
   }
 
   peek(): T {
@@ -329,6 +331,7 @@ export interface AtomOptions<T> {
 export type Use = <U>(t: PromiseLike<U>) => U;
 
 export class Derived<T> {
+  readonly isCell = false;
   fn: (use: Use) => T;
   equals: Equality<T>;
   label: string | undefined;
@@ -376,6 +379,7 @@ export class Derived<T> {
 
 /** Raw slot → public value policy shared by canonical and frame reads. */
 function unwrap(slot: unknown): unknown {
+  if (slot === null || typeof slot !== 'object') return slot;
   if (slot instanceof Failure) throw slot.error;
   if (slot instanceof Pending) {
     // Inside another evaluation: forward pending and keep that evaluation
@@ -437,12 +441,14 @@ const COLD_EDGE = -1;
  * (their equality cut already decides what counts as change).
  */
 function edgeStamp(source: Node): unknown {
-  return source instanceof Cell ? source.value : source.version;
+  return source.isCell ? (source as Cell<any>).value : (source as Derived<any>).version;
 }
 
 /** Remove observer's source edges from index `from` onward. */
 function truncateSources(observer: Observer, from: number): void {
-  const { sources, sourceSlots, sourceStamps } = observer;
+  const sources = observer.sources;
+  if (from >= sources.length) return; // stable dependency set: nothing to trim
+  const sourceSlots = observer.sourceSlots;
   for (let i = sources.length - 1; i >= from; i--) {
     if (sourceSlots[i] !== COLD_EDGE) {
       unlinkObserverEntry(sources[i]!, sourceSlots[i]!);
@@ -451,7 +457,7 @@ function truncateSources(observer: Observer, from: number): void {
   }
   sources.length = from;
   sourceSlots.length = from;
-  sourceStamps.length = from;
+  observer.sourceStamps.length = from;
 }
 
 /** Swap-pop entry `slot` out of source.obs, fixing the moved entry's backlink. */
@@ -795,20 +801,22 @@ function updateCanonical(d: Derived<any>): void {
 /** Poll: did any source actually change value since we last evaluated? */
 function sourcesChanged(d: Derived<any> | EffectNode): boolean {
   const sources = d.sources;
+  const stamps = d.sourceStamps;
   for (let i = 0; i < sources.length; i++) {
     const s = sources[i]!;
-    if (s instanceof Derived) {
-      if (s.evaluating) throw new CycleError(s.label);
+    if (s.isCell) {
+      if (!s.equals((s as Cell<any>).value, stamps[i])) return true;
+    } else {
+      const der = s as Derived<any>;
+      if (der.evaluating) throw new CycleError(der.label);
       try {
-        updateCanonical(s);
+        updateCanonical(der);
       } catch {
         // A source that fails to evaluate counts as changed; our own
         // evaluation will surface the failure at its read site.
         return true;
       }
-      if (s.version !== d.sourceStamps[i]) return true;
-    } else if (!s.equals(s.value, d.sourceStamps[i])) {
-      return true;
+      if (der.version !== stamps[i]) return true;
     }
   }
   return false;
@@ -853,7 +861,12 @@ function evaluateCanonical(d: Derived<any>): void {
   activeObserver = prevObserver;
   activeEvalRun = prevRun;
   activeFrame = prevFrame;
-  commitSlot(d, finishRun(run, result, threw, error));
+  if (!threw && !run.pending && run.rejection === null && run.ctx === null) {
+    // The common case: a plain synchronous value.
+    commitSlot(d, result);
+  } else {
+    commitSlot(d, finishRun(run, result, threw, error));
+  }
   if (trace !== null) trace.emit('evaluate', traceCause, d.label, d);
 }
 
@@ -907,14 +920,19 @@ function commitSlot(d: Derived<any>, slot: unknown): boolean {
   d.state = CLEAN;
   const prev = d.slot;
   let changed: boolean;
-  if (d.version === 0) changed = true;
-  else if (
-    slot instanceof Pending ||
-    slot instanceof Failure ||
-    prev instanceof Pending ||
-    prev instanceof Failure
+  if (prev === slot) {
+    changed = d.version === 0; // identical value still counts as a first fill
+  } else if (d.version === 0) {
+    changed = true;
+  } else if (
+    (slot !== null &&
+      typeof slot === 'object' &&
+      (slot instanceof Pending || slot instanceof Failure)) ||
+    (prev !== null &&
+      typeof prev === 'object' &&
+      (prev instanceof Pending || prev instanceof Failure))
   ) {
-    changed = prev !== slot;
+    changed = true; // boxes compare by identity, and identity already differed
   } else {
     changed = !d.equals(prev, slot);
   }
@@ -1012,8 +1030,8 @@ export class EffectNode {
     currentOwner = this;
     activeFrame = null; // effects observe canonical state only
     this.trackIndex = 0;
-    const cause = trace !== null ? trace.emit('effect', traceCause, this.label, this) : 0;
-    const prevCause = setTraceCause(cause);
+    const prevCause = traceCause;
+    if (trace !== null) traceCause = trace.emit('effect', traceCause, this.label, this);
     try {
       const ret = this.fn();
       if (typeof ret === 'function') this.cleanup = ret;
@@ -1022,7 +1040,7 @@ export class EffectNode {
       activeObserver = prevObserver;
       currentOwner = prevOwner;
       activeFrame = prevFrame;
-      setTraceCause(prevCause);
+      traceCause = prevCause;
     }
   }
 
@@ -1063,6 +1081,10 @@ function reportDisposeError(error: unknown): void {
 /** Create an effect: runs immediately (even inside a batch), re-runs when its
  * canonical dependencies change, returns a disposer. Dropped disposers are
  * reclaimed by the engine's FinalizationRegistry (see `effect` in index.ts). */
+export function hasOwner(): boolean {
+  return currentOwner !== null;
+}
+
 export function createEffect(fn: () => void | (() => void), label?: string): EffectNode {
   const node = new EffectNode(fn, label);
   if (currentOwner !== null) {
@@ -1088,10 +1110,11 @@ function flushEffects(): void {
   let firstError: unknown;
   let hasError = false;
   let iterations = 0;
+  let cursor = 0;
   try {
-    while (effectQueue.length > 0) {
+    while (cursor < effectQueue.length) {
       if (++iterations > FLUSH_LIMIT) throw loud('effect flush did not settle (cycle?)');
-      const node = effectQueue.shift()!;
+      const node = effectQueue[cursor++]!;
       node.scheduled = false;
       try {
         node.maybeRun();
@@ -1101,7 +1124,13 @@ function flushEffects(): void {
           firstError = e;
         }
       }
+      // Keep the queue array small: compact once the drained prefix dominates.
+      if (cursor > 1024 && cursor * 2 > effectQueue.length) {
+        effectQueue.splice(0, cursor);
+        cursor = 0;
+      }
     }
+    effectQueue.length = 0;
   } finally {
     flushing = false;
   }
@@ -1116,34 +1145,42 @@ function applyOp<T>(op: Op<T>, prev: T): T {
   return op.fn !== null ? op.fn(prev) : (op.value as T);
 }
 
-function writeCell<T>(cell: Cell<T>, op: Op<T>): void {
+function writeCell<T>(cell: Cell<T>, fn: ((prev: T) => T) | null, value: T | undefined): void {
   if (initializing) throw loud('atom initializers must not write');
-  if (host !== null && host.isRendering()) {
-    throw loud(
-      `write to ${cell.label ?? 'atom'} during render — move it to an event handler or effect`,
-    );
+  if (host !== null) {
+    if (host.isRendering()) {
+      throw loud(
+        `write to ${cell.label ?? 'atom'} during render — move it to an event handler or effect`,
+      );
+    }
+    const token = host.currentBatchToken();
+    if (token !== null) {
+      cell.materialize();
+      recordEpisodeOp(cell, { fn, value }, episodeFor(token));
+      return;
+    }
   }
-  const token = host !== null ? host.currentBatchToken() : null;
   cell.materialize();
-  const prevCause = traceCause;
-  if (token !== null) {
-    recordEpisodeOp(cell, op, episodeFor(token));
-  } else if (cell.pend === null) {
-    // Fast path: no update queue on this cell.
-    const next = applyOp(op, cell.value);
+  if (cell.pend === null) {
+    // Fast path: no update queue on this cell, no trace bookkeeping beyond
+    // what setCanonical does.
+    const next = fn !== null ? fn(cell.value) : (value as T);
     if (!cell.equals(cell.value, next)) {
+      const prevCause = traceCause;
       setCanonical(cell, next, null);
       flushAll();
+      traceCause = prevCause;
     }
-  } else {
-    // Queue in scheduling order; canonical refolds over urgent+retired ops.
-    cell.pend.ops.push({ fn: op.fn, value: op.value, ep: null, seq: writeSeq + 1 });
-    const next = foldQueue(cell, null, -1);
-    if (!cell.equals(cell.value, next)) setCanonical(cell, next, null);
-    else notifyDownstream(cell as Cell<any>, null); // queue shape changed: drafts refold
-    pendingEpoch++;
-    flushAll();
+    return;
   }
+  // Queue in scheduling order; canonical refolds over urgent+retired ops.
+  const prevCause = traceCause;
+  cell.pend.ops.push({ fn, value, ep: null, seq: writeSeq + 1 });
+  const next = foldQueue(cell, null, -1);
+  if (!cell.equals(cell.value, next)) setCanonical(cell, next, null);
+  else notifyDownstream(cell as Cell<any>, null); // queue shape changed: drafts refold
+  pendingEpoch++;
+  flushAll();
   traceCause = prevCause;
 }
 
@@ -1327,13 +1364,13 @@ function enqueueDelivery(sub: Sub, episode: Episode | null): void {
  * batch is open; endBatch flushes once. */
 function flushAll(): void {
   if (batchDepth > 0) return;
-  flushEffects();
-  flushDeliveries();
-  flushProbes();
+  if (effectQueue.length > 0) flushEffects();
+  if (pendingDeliveries.size > 0) flushDeliveries();
+  if (probeSubs.size > 0) flushProbes();
 }
 
 function flushDeliveries(): void {
-  if (host === null || pendingDeliveries.size === 0) {
+  if (host === null) {
     pendingDeliveries.clear();
     return;
   }
@@ -1888,9 +1925,14 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
     trace !== null ? trace.emit('commit', frame.passTrace ?? traceCause, undefined) : 0;
   const prevCause = setTraceCause(commitCause);
 
-  // Snapshot what this root's screen now shows.
+  // Snapshot what this root's screen now shows. Only worlds can make a
+  // screen disagree with canonical: with no episodes anywhere, committed()
+  // already answers from canonical, so the walk is skipped entirely — an
+  // urgent commit costs O(changed), not O(subscribed).
   const subs = subsByRoot.get(rootKey);
-  if (subs !== undefined && subs.size > 0) {
+  const worldsInPlay =
+    frame.episodes.length > 0 || openEpisodes.length > 0 || rootViews.size > 0;
+  if (worldsInPlay && subs !== undefined && subs.size > 0) {
     let view = rootViews.get(rootKey);
     if (view === undefined) {
       view = new Map();
@@ -1947,20 +1989,16 @@ function pruneHistory(): void {
 /** Committed snapshots that match canonical truth carry no information —
  * drop them so a quiescent engine holds nothing per-root. */
 function pruneRootViews(): void {
-  if (openEpisodes.length > 0) return;
+  if (openEpisodes.length > 0 || rootViews.size === 0) return;
   for (const [rootKey, view] of rootViews) {
     const subs = subsByRoot.get(rootKey);
+    let liveNodes: Set<Node> | null = null;
+    if (subs !== undefined) {
+      liveNodes = new Set();
+      for (const sub of subs) liveNodes.add(sub.node);
+    }
     for (const [node, slot] of view) {
-      let liveHere = false;
-      if (subs !== undefined) {
-        for (const sub of subs) {
-          if (sub.node === node) {
-            liveHere = true;
-            break;
-          }
-        }
-      }
-      if (liveHere) continue; // this root still renders it: keep its screen
+      if (liveNodes !== null && liveNodes.has(node)) continue; // still on screen here
       const canonical = node instanceof Cell ? node.value : node.slot;
       if (Object.is(canonical, slot)) view.delete(node);
     }

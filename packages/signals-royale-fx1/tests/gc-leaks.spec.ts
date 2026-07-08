@@ -128,8 +128,9 @@ test('quiescence: retired episodes and closed passes leave no engine state', asy
 
 test('unsubscribed nodes drop their committed-view entries at quiescence', async () => {
   resetEngine();
+  let ambient: object | null = null;
   setHost({
-    currentBatchToken: () => null,
+    currentBatchToken: () => ambient,
     isRendering: () => false,
     deliver: () => {},
   });
@@ -146,13 +147,18 @@ test('unsubscribed nodes drop their committed-view entries at quiescence', async
   const { registerSubRoot, unregisterSubRoot } = await import('../src/index');
   const dispose = subscribe(sub);
   registerSubRoot(sub);
-  beginPass(rootKey, []);
-  commitPass(rootKey, []);
+  // Screens are only snapshotted while worlds are in play: run one episode.
+  const token = {};
+  ambient = token;
+  const ep = episodeFor(token);
+  a.set(1);
+  ambient = null;
+  beginPass(rootKey, [ep]);
+  commitPass(rootKey, [ep]);
   expect(debugFootprint().rootViewEntries).toBeGreaterThan(0); // screen tracked
   dispose();
   unregisterSubRoot(sub);
-  beginPass(rootKey, []);
-  commitPass(rootKey, []);
+  await new Promise((res) => setTimeout(res, 1)); // the unsubscribe prune sweeps
   expect(debugFootprint().rootViewEntries).toBe(0); // no subscriber, no copy
   expect(debugFootprint().subs).toBe(0);
   setHost(null);
