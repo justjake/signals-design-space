@@ -156,11 +156,163 @@ find packages/signals-royale-sm1/src packages/react-signals-royale-sm1/src -type
 
 I would replace repeated linear operation/dependency membership scans with episode-local indexes while preserving the single-history model, then profile the Kairo `mux`, deep, and broad cases until the core gap closes. I would also define and test lane continuity across async React actions, run the external Daishi and tournament-wide batteries, and try to remove source surface from async evaluation and tracing without moving signal policy into the fork.
 
+## Round 2 — verify, integrate, tune
+
+### Outcome
+
+All RULES.md gates pass after tuning. The shared battery passes 22/25; its remaining three failures are one updater-order dispute repeated by scenarios 3, 13, and 15, documented below rather than coded around. The React fork is unchanged at `8a2dd11d0f`; its patches were regenerated and its build, protocol suite, and adjacent upstream suites pass. Official Round 2 LOC is 320 fork lines and 2,158 library lines.
+
+### Fresh gate reruns
+
+| Gate | Exact command | Result |
+| --- | --- | --- |
+| Engine typecheck | `pnpm typecheck` in `packages/signals-royale-sm1` | PASS — no diagnostics |
+| React typecheck | `pnpm typecheck` in `packages/react-signals-royale-sm1` | PASS — no diagnostics |
+| Conformance | `pnpm vitest run tests/conformance.spec.ts --reporter=verbose` | PASS — 179/179 |
+| Oracle default | `pnpm vitest run tests/oracle.spec.ts --reporter=verbose` | PASS — 2/2, 300×90 |
+| Oracle deep sweep | `ORACLE_SEEDS=1200 pnpm vitest run tests/oracle.spec.ts --reporter=verbose` | PASS — 2/2, 1200×90 |
+| Leak audit | `pnpm vitest run tests/gc-leaks.spec.ts --reporter=verbose` | PASS — 2/2 |
+| Fork protocol | `yarn test --no-watchman ReactFiberSignalRuntime` in `vendor/react` | PASS — 4/4 |
+| Adjacent React | <code>yarn test --no-watchman 'ReactAsyncActions&#124;ReactFlushSync&#124;ReactIncrementalScheduling&#124;ReactIncrementalUpdates&#124;ReactInterleavedUpdates&#124;ReactSchedulerIntegration&#124;ReactTransition&#124;ReactUpdatePriority&#124;ReactDefaultTransitionIndicator'</code> | PASS — 117 passed, 1 skipped |
+| Real React | `pnpm vitest run tests/real-react.spec.tsx --reporter=verbose` | PASS — 17/17 |
+| Fork build | `./build.sh` in `packages/react-signals-royale-sm1` | PASS — React 19.3.0 at `8a2dd11d0f` |
+
+Real terminal output:
+
+```text
+> signals-royale-sm1@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+> react-signals-royale-sm1@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json
+
+Test Files  1 passed (1)
+Tests  179 passed (179)
+
+✓ matches the naive fold for 300 seeds x 90 steps
+Test Files  1 passed (1)
+Tests  2 passed (2)
+
+✓ matches the naive fold for 1200 seeds x 90 steps
+Test Files  1 passed (1)
+Tests  2 passed (2)
+
+✓ collects dropped computed and effect handles
+✓ reclaims all per-episode state at quiescence
+Test Files  1 passed (1)
+Tests  2 passed (2)
+
+Test Suites: 1 passed, 1 total
+Tests:       4 passed, 4 total
+
+Test Suites: 12 passed, 12 total
+Tests:       1 skipped, 117 passed, 118 total
+
+Test Files  1 passed (1)
+Tests  17 passed (17)
+
+Built: 19.3.0 (8a2dd11d0f)
+```
+
+### Milomg integration and final measurement
+
+The benchmark is committed in its submodule at `cde40f9`. The all-framework sanity command reached 79/80; SM1 passed all four adapter checks including pull counts, while the unrelated checked-in `x-reactivity` adapter produced 51 pulls where the harness expects 41. The entrant-only sanity rerun passed 4/4:
+
+```text
+Test Files  1 passed (1)
+Tests  4 passed | 76 skipped (80)
+```
+
+The Round 2 esbuild command failed as written because `isolated.ts` imports `node:child_process`, `node:url`, and `node:path`; adding `--platform=node` built both entries successfully. Final command:
+
+```sh
+pnpm exec esbuild src/index.ts src/isolated.ts --bundle --platform=node --format=esm --target=esnext --outdir=dist --sourcemap=external
+node dist/isolated.js --rounds 3 "Royale SM1" "Alien Signals"
+```
+
+Final three-round medians, milliseconds:
+
+| Test | SM1 | Alien | SM1/Alien |
+| --- | ---: | ---: | ---: |
+| createSignals | 19.17 | 2.52 | 7.61× |
+| createComputations | 986.51 | 58.65 | 16.82× |
+| updateSignals | 2517.85 | 274.72 | 9.17× |
+| avoidablePropagation | 374.37 | 108.11 | 3.46× |
+| broadPropagation | 997.93 | 83.42 | 11.96× |
+| deepPropagation | 320.54 | 32.50 | 9.86× |
+| diamond | 520.93 | 85.67 | 6.08× |
+| mux | 342.06 | 81.40 | 4.20× |
+| repeatedObservers | 67.18 | 18.61 | 3.61× |
+| triangle | 157.37 | 23.91 | 6.58× |
+| unstable | 107.44 | 20.24 | 5.31× |
+| molBench | 18.59 | 13.74 | 1.35× |
+| cellx1000 | 47.65 | 3.64 | 13.09× |
+| cellx2500 | 112.82 | 12.21 | 9.24× |
+| 2-10x5 - lazy80% | 1264.78 | 157.47 | 8.03× |
+| 6-10x10 - dyn25% - lazy80% | 599.91 | 104.71 | 5.73× |
+| 4-1000x12 - dyn5% | 1541.16 | 280.74 | 5.49× |
+| 25-1000x5 | 1763.82 | 343.41 | 5.14× |
+| 3-5x500 | 470.68 | 78.91 | 5.96× |
+| 6-100x15 - dyn50% | 595.22 | 172.98 | 3.44× |
+
+Summed median time is 12,825.98 ms for SM1 versus 1,957.56 ms for Alien: **6.55× overall**. The geometric mean of the 20 per-test ratios is 6.19×. Leak flag: no known asymmetry—both adapters deterministically dispose their effect scopes; SM1's forced-GC handle audit and zero-state quiescence audit pass, while the external milomg runner itself does not inspect retained heap.
+
+### React benchmark
+
+`bench/react-bench.mjs` bundles the real SM1 bindings, uses the fork build with jsdom and real timers, never calls `act`, and launches one child per scenario/contender. Its stdout is only `scenario,contender,stat,ms` CSV. Three independent runs produced:
+
+| Scenario/stat | SM1 runs | SM1 median | useSyncExternalStore runs | Baseline median | Ratio |
+| --- | --- | ---: | --- | ---: | ---: |
+| fanout / median write→commit | 2.23, 1.73, 2.72 | 2.23 | 1.94, 1.82, 2.13 | 1.94 | 1.15× |
+| transition / p95 urgent commit | 10.49, 3.13, 17.95 | 10.49 | 2.99, 3.01, 4.84 | 3.01 | 3.49× |
+| mount / median first commit | 73.55, 78.19, 165.67 | 78.19 | 61.47, 59.18, 187.33 | 61.47 | 1.27× |
+
+The shared machine produced visible third-run outliers, so the table retains every sample. In this shape the plain store usually finishes its blocking bulk render before most urgent samples begin, so its urgent p95 beats SM1's interruptible render; I am not claiming a transition win that the measured statistic does not show.
+
+### Performance changes
+
+- Replaced linear `frame.atoms.includes` deduplication with an evaluation-frame mark on atoms.
+- Avoided registering scoped effects with `FinalizationRegistry`; their scope already owns deterministic cleanup, eliminating a closure and registry entry per benchmark effect.
+- Stopped recursively pulling clean sources in live graphs; dirty propagation already proves their versions, removing quadratic deep-chain work.
+- Captured flattened transitive atom sets only for React/world reads and skipped sync evaluation merging when no async or collector state exists.
+- Added a canonical revision stamp so shared lazy DAG nodes proven clean in the current revision are not revalidated repeatedly.
+- Added atom pending subscriptions so `useIsPending(atom)` flips urgently while a deferred draft is held.
+
+The first untuned full SM1 benchmark child exceeded eight minutes and 3.3 GB RSS before emitting a row. After tuning, all three full SM1 rounds completed; representative Kairo `mux` fell from 1,886.53 ms in Round 1 to a 342.06 ms final median. No React-fork code was added.
+
+### Shared battery and adjudication
+
+The shim in `royale/verify-kit/battery/ADAPTER.ts` points directly to SM1's adapter. Battery typecheck passes. Final battery output:
+
+```text
+Test Files  1 failed (1)
+Tests  3 failed | 22 passed (25)
+```
+
+Scenario 2's atom-pending failure was valid and is fixed. Scenarios 3, 13, and 15 are one disputed arithmetic expectation:
+
+- RULES.md's binding example starts at 1, schedules deferred `D(x)=2x`, then urgent `U(x)=x+1`, and requires final 4. That result is `D(U(1))`; scheduling order `U(D(1))` is 3.
+- Battery scenario 3 starts at 1, schedules deferred `D(x)=x+1`, then urgent `U(x)=2x`, and requires final 4. That result is `U(D(1))`; the RULES ordering `D(U(1))` is 3.
+- Battery scenario 13 repeats the conflict with deferred `+2` and urgent `×2`, expecting 6 where the RULES ordering produces 4. Scenario 15 fails on the same arithmetic assertion before judging the trace.
+
+No fixed updater ordering can satisfy both examples; doing so would require choosing order from the updater functions' results. Per ROUND2.md's instruction not to code around a disputed test, SM1 keeps the explicit RULES example and its overlay semantics. There are no other battery failures or disputes.
+
+### Round 2 LOC and deliverables
+
+```text
+forkLoc: 320
+libLoc: 2158
+```
+
+`count-loc.mjs` reports 1,762 lines for `runtime.ts`, 129 for `trace.ts`, 40 for the engine barrel, and 227 for React bindings. The patch replay series was regenerated from `e71a6393e66b0d2add46ba2b2c5db563a0563828..8a2dd11d0f` and `./build.sh` rebuilt React successfully.
+
 <oai-mem-citation>
 <citation_entries>
+MEMORY.md:33-39|note=[benchmark boundary and hot path guidance]
 MEMORY.md:494-505|note=[react view separation and fork mechanism guidance]
 </citation_entries>
 <rollout_ids>
+019f37b3-e5f8-7c61-978e-5182e41b632b
 019f11f4-ef9b-7222-864f-682bc53808bb
 019f11f8-d0ee-7583-8e01-f467e7bb6a85
 </rollout_ids>
