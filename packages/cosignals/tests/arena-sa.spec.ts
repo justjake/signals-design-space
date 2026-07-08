@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { engine, __resetEngineForTest, InvariantViolation, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, InvariantViolation, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 

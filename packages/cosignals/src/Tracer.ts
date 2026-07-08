@@ -156,7 +156,7 @@ import type {
 	Value,
 	Watcher,
 	World,
-} from './concurrent.js';
+} from './CosignalEngine.js';
 
 // ---- record layout ---------------------------------------------------------------
 // Same-file const enums: esbuild-based toolchains inline the members as

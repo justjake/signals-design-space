@@ -41,8 +41,8 @@ import {
 	type RenderPass as ERenderPass,
 	type Subscription as ESubscription,
 	type World as EWorld,
-} from '../src/concurrent.js';
-import { __peekNextBatchIdForTest } from '../src/Batch.js';
+} from '../src/CosignalEngine.js';
+import { __peekNextBatchIdForTest } from '../src/CosignalEngine.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';

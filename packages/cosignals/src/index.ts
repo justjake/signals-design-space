@@ -4,15 +4,13 @@
  * at module initialization — see "One core, one entry" below).
  *
  * Reading order for the package: this header (vocabulary), then
- * CosignalEngine.ts (the engine module — storage layout, the kernel
- * algorithm, clocks, the evaluation policy, the observed lifecycle, world
- * arenas, observer records, committed observers, render integration, and
- * reclamation, in that order), then concurrent.ts (the concurrent-worlds
- * machinery and its vocabulary), then the mechanism modules it composes —
- * WriteLog.ts, Batch.ts, World.ts,
- * NotificationQueue.ts, ObservationIndex.ts,
- * settlement.ts, ConcurrentEngine.ts (the composition root) — with
- * errors.ts/Tracer.ts/graphviz.ts self-contained.
+ * CosignalEngine.ts — the one engine module, whose header lists its twenty
+ * sections in reading order: storage layout, the kernel algorithm, clocks,
+ * the evaluation policy, the observed lifecycle, then the concurrent-worlds
+ * machinery (its vocabulary, write logs, batches, worlds, arenas, delivery,
+ * settlement, observers, render integration, the public dispatch, and the
+ * composition), and reclamation last — with errors.ts/Tracer.ts/graphviz.ts
+ * self-contained.
  *
  * ## Vocabulary (in reading order; used throughout this package)
  *
@@ -204,11 +202,8 @@
  * implementation sites in CosignalEngine.ts.
  */
 
-import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, untracked, values, writeAtom, __resetLifecycleForTest, __setLifecycleWritePath } from './CosignalEngine.js';
-import { NOT_ROUTED } from './World.js';
-import { writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __routedAtomRead, __routedComputedRead } from './concurrent.js';
-import type { AtomInternals, ComputedInternals } from './concurrent.js';
-import type { NodeId, ValueIndex } from './CosignalEngine.js';
+import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, NOT_ROUTED, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, routedAtomRead, routedComputedRead, untracked, values, writeAtom, writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __resetLifecycleForTest } from './CosignalEngine.js';
+import type { AtomInternals, ComputedInternals, NodeId, ValueIndex } from './CosignalEngine.js';
 
 // ---- sentinels ----------------------------------------------------------------
 
@@ -359,10 +354,8 @@ export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown):
 	writeAtom(id, undefined, next);
 }
 
-// Composition: the engine's lifecycle contexts write through the policy path
-// above (late-bound — the engine never imports this module at runtime; see
-// the seam's doc in CosignalEngine.ts). Runs once at module initialization.
-__setLifecycleWritePath(__lifecycleWrite);
+// (The engine's lifecycle contexts write through __lifecycleWrite above by a
+// direct cyclic-module import — CosignalEngine.ts's dispatchLifecycleWrite.)
 
 /** Test-only policy scrub (`__resetEngineForTest`'s index.ts half):
  * configure() state returns to defaults; the lifecycle map, queue, and its
@@ -596,7 +589,7 @@ export class Atom<T> {
 	 */
 	get state(): T {
 		if (routingActive && activeSub === 0) {
-			const v = __routedAtomRead(this as Atom<unknown>);
+			const v = routedAtomRead(this as Atom<unknown>);
 			if (v !== NOT_ROUTED) {
 				return v as T;
 			}
@@ -730,7 +723,7 @@ export class Computed<T> {
 	 */
 	get state(): T {
 		if (routingActive && activeSub === 0) {
-			const v = __routedComputedRead(this as Computed<unknown>);
+			const v = routedComputedRead(this as Computed<unknown>);
 			if (v !== NOT_ROUTED) {
 				return v as T;
 			}
@@ -825,11 +818,10 @@ export function configure(options: ConfigureOptions): void {
 // only from './concurrent.js' inside this package; consumers get the driver
 // seam, the engine surface, its error classes, the test seams the sibling
 // packages' suites drive, and the engine-surface TYPES.
+export { ScheduleError, InvariantViolation } from './errors.js';
 export {
 	attachDriver,
 	engine,
-	ScheduleError,
-	InvariantViolation,
 	// The reserved "no batch context" BatchId (0). The React bindings and the
 	// patched React build name the same sentinel — protocol v2 shares one
 	// batch-id space, so the sentinel is shared too.
@@ -840,7 +832,7 @@ export {
 	__coreProbes,
 	__internalsByIdForTest,
 	__eachInternalsForTest,
-} from './concurrent.js';
+} from './CosignalEngine.js';
 export type {
 	// the driver seam + the engine surface's type + reset options
 	EngineDriver,
@@ -883,4 +875,4 @@ export type {
 	Epoch,
 	CommitGen,
 	BatchSlotSet,
-} from './concurrent.js';
+} from './CosignalEngine.js';

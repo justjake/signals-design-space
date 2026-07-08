@@ -24,7 +24,7 @@
  *  - solid edge = dependency; dashed = watcher's node; dotted = effect dep.
  */
 
-import type { CosignalEngine } from './concurrent.js';
+import type { CosignalEngine } from './CosignalEngine.js';
 import type { TraceRecord, TraceKind } from './Tracer.js';
 
 /** Escape + quote a string as a DOT-source string literal. */

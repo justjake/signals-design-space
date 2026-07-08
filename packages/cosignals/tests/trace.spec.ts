@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignals-oracle/src/schedule.js';
-import { engine, __resetEngineForTest, type TraceEvent, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type TraceEvent, type CosignalEngine } from '../src/CosignalEngine.js';
 import { attachTracer, formatTrace, formatTraceRecord, Tracer, type TraceRecord, type TraceKind } from '../src/Tracer.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 import { attachRefereeStream, decodeTraceEvent, decodedTraceEvents } from './trace-events.js';

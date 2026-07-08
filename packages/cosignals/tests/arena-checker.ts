@@ -24,7 +24,7 @@ import {
 	type WorldArena,
 	type Value,
 	type World,
-} from '../src/concurrent.js';
+} from '../src/CosignalEngine.js';
 import { SuspendedRead } from '../src/index.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 

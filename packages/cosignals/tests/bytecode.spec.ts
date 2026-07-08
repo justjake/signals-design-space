@@ -100,19 +100,20 @@ const BUDGETS: Record<string, number> = {
 	// closure-free). Committed clocks settle at observer consults
 	// (settleObserverClock), so no clock stamping lives here
 	arenaSyncObservationAfterRefold: 90, // 65: out-of-line observation epilogue (observed nodes only)
+	arenaUpdateComputed: 440, // 408: the refold wrapper (observed-capture open +
+	// paired world-eval trace hooks around a dynamic user-fn call). The
+	// engine fusion's slot collapse brought it under the inline limit —
+	// every frame save/restore now reads module lets directly where it read
+	// shared-record properties (479 bytes) before; re-pinned tight so a
+	// regression past the 460 inline cliff is a deliberate act.
 };
 
 // Functions over the V8 inline budget, pinned at current size. A function
 // that outgrows the inline limit gets pinned here (deliberately, justified
 // in the PR); a pin that drops back under it moves into BUDGETS.
 const OVER_LIMIT_PINS: Record<string, number> = {
-	arenaUpdateComputed: 530, // 479: the refold wrapper carries the
-	// observed-capture open (obsRefs probe) and the paired world-eval trace
-	// hooks — over the 460 inline limit, deliberately: the wrapper brackets
-	// a dynamic user-fn call, so inlining the wrapper is not load-bearing
-	// (the walk arms — arenaCheckDirty/-Loop, arenaUpdateShadow,
-	// arenaUpdateAndShallow — all stay inside the budget); the observation
-	// sync epilogue is already out of line (arenaSyncObservationAfterRefold).
+	// (empty since the engine fusion: arenaUpdateComputed dropped under the
+	// inline limit and moved into BUDGETS.)
 };
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

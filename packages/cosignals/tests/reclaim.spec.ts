@@ -22,7 +22,7 @@ import {
 	SuspendedRead,
 	effect,
 } from '../src/index.js';
-import { engine, __resetEngineForTest, type AtomInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AtomInternals, type CosignalEngine, type EngineResetOptions } from '../src/CosignalEngine.js';
 import { E, engineEpoch, __reclaimStatsForTest, __simulateReclaimForTest } from '../src/CosignalEngine.js';
 
 const hasGC = typeof globalThis.gc === 'function';

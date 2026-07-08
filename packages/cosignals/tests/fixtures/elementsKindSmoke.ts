@@ -10,7 +10,7 @@
  * in this bundled module otherwise).
  */
 import { Atom, Computed, effect } from '../../src/index';
-import { engine, __columnsForTest, type AtomInternals, type CosignalEngine, type Watcher } from '../../src/concurrent';
+import { engine, __columnsForTest, type AtomInternals, type CosignalEngine, type Watcher } from '../../src/CosignalEngine';
 
 const hasHoley = new Function('a', 'return %HasHoleyElements(a);') as (a: unknown) => boolean;
 const isSmi = new Function('a', 'return %HasSmiElements(a);') as (a: unknown) => boolean;

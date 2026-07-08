@@ -31,7 +31,7 @@ import {
 	effect,
 	effectScope,
 } from '../src/index.js';
-import { engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type ComputedInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type ComputedInternals, type CosignalEngine, type EngineResetOptions } from '../src/CosignalEngine.js';
 import { E } from '../src/CosignalEngine.js';
 import { __useCacheForTest } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';

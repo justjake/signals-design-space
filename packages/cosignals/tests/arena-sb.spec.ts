@@ -23,7 +23,7 @@
  * clean under the checker while exhibiting the pinned lane outcomes.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 

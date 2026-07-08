@@ -24,9 +24,9 @@ import {
 	__resetEngineForTest,
 	type AtomInternals,
 	type CosignalEngine,
-} from '../src/concurrent.js';
-import { __peekNextBatchIdForTest } from '../src/Batch.js';
-import { __eachInternalsForTest, __internalsByIdForTest } from '../src/concurrent.js';
+} from '../src/CosignalEngine.js';
+import { __peekNextBatchIdForTest } from '../src/CosignalEngine.js';
+import { __eachInternalsForTest, __internalsByIdForTest } from '../src/CosignalEngine.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import {

@@ -8,7 +8,7 @@
  * check armed (arena-served ≡ reference folds after every public operation).
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine, type EngineResetOptions } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
 function bridge(options?: EngineResetOptions): CosignalEngine {

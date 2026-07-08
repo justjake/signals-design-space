@@ -34,7 +34,7 @@ import type {
 	BatchSlotSet,
 	Value,
 	World,
-} from '../src/concurrent.js';
+} from '../src/CosignalEngine.js';
 
 /** The full-history mirror a lockstep driver owns and feeds. */
 export class RefereeMirror {

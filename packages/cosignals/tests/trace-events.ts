@@ -24,7 +24,7 @@
  * loudly. `attachRefereeStream` therefore attaches with a large ref
  * capacity (2^16) instead of the diagnostic default (256).
  */
-import type { TraceEvent, CosignalEngine, Value } from '../src/concurrent.js';
+import type { TraceEvent, CosignalEngine, Value } from '../src/CosignalEngine.js';
 import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/Tracer.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import type { ModelEvent } from '../../cosignals-oracle/src/model.js';

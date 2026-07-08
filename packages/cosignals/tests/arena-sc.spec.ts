@@ -25,7 +25,7 @@
  *    cached value never serves and the refold runs the current fn cold.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import { Atom, Computed, effect } from '../src/index.js';
 
