@@ -36,6 +36,7 @@ import {
 	untracked,
 	worldHooks,
 	writeAtom,
+	writeAtomChanged,
 } from './graph';
 import { emit, tracing, withCause } from './tracer';
 
@@ -774,7 +775,7 @@ const useFn: Use = (<U,>(a: unknown, factory?: () => PromiseLike<U>): U => {
 		if (ctx.readonly) {
 			// committed() probes never start fetches; an unknown read is
 			// simply pending in that view.
-			ctx.pendingSlots.push(DUMMY_SLOT);
+			(ctx.pendingSlots ??= []).push(DUMMY_SLOT);
 			return POISON;
 		}
 		const thenable = factory !== undefined ? factory() : (a as PromiseLike<unknown>);
@@ -799,7 +800,7 @@ const useFn: Use = (<U,>(a: unknown, factory?: () => PromiseLike<U>): U => {
 	if (slot.status === 2) {
 		throw slot.errorBox;
 	}
-	ctx.pendingSlots.push(slot);
+	(ctx.pendingSlots ??= []).push(slot);
 	return POISON;
 }) as Use;
 
@@ -824,17 +825,22 @@ function attachSlot(slot: Slot): void {
 
 interface EvalFrame {
 	entry: AsyncEntry;
-	pendingSlots: Slot[];
-	pendingInner: ComputedRec[];
+	/** Both lists stay null until an async read actually parks: a synchronous
+	 * evaluation (the common case) never allocates them. */
+	pendingSlots: Slot[] | null;
+	pendingInner: ComputedRec[] | null;
 	stamp: number;
 	readonly: boolean;
 }
+
+const NO_INNER: ComputedRec[] = [];
 
 function runEvaluation(rec: ComputedRec, entry: AsyncEntry, readonly: boolean): unknown {
 	const stamp = evalStampCounter++;
 	entry.evalStamp = stamp;
 	const prev = activeEval;
-	activeEval = { entry, pendingSlots: [], pendingInner: [], stamp, readonly };
+	const frame: EvalFrame = { entry, pendingSlots: null, pendingInner: null, stamp, readonly };
+	activeEval = frame;
 	let result: unknown;
 	let threw = false;
 	let error: unknown;
@@ -844,10 +850,9 @@ function runEvaluation(rec: ComputedRec, entry: AsyncEntry, readonly: boolean): 
 		threw = true;
 		error = e;
 	}
-	const frame = activeEval;
 	activeEval = prev;
-	entry.pendingInner = frame.pendingInner;
-	if (frame.pendingSlots.length > 0 || frame.pendingInner.length > 0) {
+	entry.pendingInner = frame.pendingInner !== null ? frame.pendingInner : NO_INNER;
+	if (frame.pendingSlots !== null || frame.pendingInner !== null) {
 		// A pending evaluation is pending regardless of what the poisoned
 		// tail of the body did; errors thrown past a pending read are moot.
 		return pendingBoxFor(rec);
@@ -926,6 +931,10 @@ export function set<T>(a: Atom<T>, value: T): void {
 	const b = host.classify !== null ? host.classify() : null;
 	if (b !== null) {
 		draftWrite(b, rec, { b, set: value });
+	} else if (rec.queue === null) {
+		// No draft worlds fold this atom: a plain set needs no replayable
+		// operation record and exactly one equality judgement.
+		applyCanonicalWrite(rec, value);
 	} else {
 		urgentWrite(rec, { b: null, set: value });
 	}
@@ -1017,9 +1026,9 @@ function applyCanonicalWrite(rec: AtomRec, value: unknown): void {
 	graphEpoch++;
 	if (tracing()) {
 		const w = emit('write', { tid: rec.id, label: rec.label, batch: 0 });
-		withCause(w, () => writeAtom(node, value));
+		withCause(w, () => writeAtomChanged(node, value));
 	} else {
-		writeAtom(node, value);
+		writeAtomChanged(node, value);
 	}
 }
 
@@ -1401,7 +1410,7 @@ function resolveRead(rec: Rec, v: unknown): unknown {
 	if (v !== null && typeof v === 'object') {
 		if (activeEval !== null && isPendingValue(v)) {
 			// Forward pending: the enclosing evaluation parks on this node too.
-			activeEval.pendingInner.push((v as InternalPendingBox)._rec);
+			(activeEval.pendingInner ??= []).push((v as InternalPendingBox)._rec);
 			return POISON;
 		}
 		if (v instanceof AsyncError) {

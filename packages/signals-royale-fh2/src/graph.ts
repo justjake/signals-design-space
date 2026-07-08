@@ -610,14 +610,20 @@ export function invalidateComputed(c: ComputedNode): void {
  * effects when no batch is open. */
 export function writeAtom(s: AtomNode, value: unknown): void {
 	if (!s.equals(s.staged, value)) {
-		s.staged = value;
-		s.flags = Flags.Mutable | Flags.Dirty;
-		const subs = s.subs;
-		if (subs !== undefined) {
-			propagate(subs, runDepth > 0);
-			if (!batchDepth) {
-				flush();
-			}
+		writeAtomChanged(s, value);
+	}
+}
+
+/** The write body for callers that already judged inequality against
+ * `staged` (the engine's canonical write path): stage, dirty, propagate. */
+export function writeAtomChanged(s: AtomNode, value: unknown): void {
+	s.staged = value;
+	s.flags = Flags.Mutable | Flags.Dirty;
+	const subs = s.subs;
+	if (subs !== undefined) {
+		propagate(subs, runDepth > 0);
+		if (!batchDepth) {
+			flush();
 		}
 	}
 }
