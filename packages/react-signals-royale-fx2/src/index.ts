@@ -14,7 +14,7 @@ export {
   onDomMutation,
   type ReactSignalsHandle,
 } from './host.ts';
-export { SignalScope, wrapCreateRoot, WorldContext, ContainerContext } from './scope.tsx';
+export { SignalScope, wrapCreateRoot, WorldContext, ContainerContext } from './scope.ts';
 export {
   useValue,
   useComputed,

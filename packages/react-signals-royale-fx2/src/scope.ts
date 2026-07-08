@@ -46,10 +46,10 @@ export function SignalScope(props: SignalScopeProps): React.ReactElement {
     engine.traceNode('root-commit', null, 0, { world });
     confirmCommit(record, world);
   }, [record, world]);
-  return (
-    <ContainerContext.Provider value={container}>
-      <WorldContext.Provider value={world}>{props.children}</WorldContext.Provider>
-    </ContainerContext.Provider>
+  return React.createElement(
+    ContainerContext.Provider,
+    { value: container },
+    React.createElement(WorldContext.Provider, { value: world }, props.children),
   );
 }
 
@@ -70,7 +70,9 @@ export function wrapCreateRoot(
     const root = createRoot(el, opts);
     return {
       render(node: unknown) {
-        root.render(<SignalScope container={el}>{node as React.ReactNode}</SignalScope>);
+        root.render(
+          React.createElement(SignalScope, { container: el }, node as React.ReactNode),
+        );
       },
       unmount() {
         root.unmount();

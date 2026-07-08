@@ -27,11 +27,14 @@ export type WriteEpoch = number;
 export type NodeVersion = number;
 export type TraceEventId = number;
 
-export const enum Flags {
-  Clean = 0,
-  Check = 1,
-  Dirty = 2,
-}
+/** Node staleness. Kept as erasable-syntax consts (a const object, not a
+ * const enum) so the TS source runs directly under node's type stripping. */
+export type Flags = 0 | 1 | 2;
+export const Flags = {
+  Clean: 0,
+  Check: 1,
+  Dirty: 2,
+} as const satisfies Record<string, Flags>;
 
 export interface Link {
   dep: ReactiveNode;
@@ -462,28 +465,36 @@ export function batch<T>(fn: () => T): T {
 }
 
 let flushing = false;
+/** Drain cursor into watcherQueue (index, not shift: the queue can be large
+ * and repeated shifts would make wide flushes quadratic). */
+let queueHead = 0;
 
 /** Run queued effects until settled, then deliver leaf notifications. A
  * throwing effect aborts the flush; the effects it preempted are skipped
  * (cleared), not left armed for unrelated writes to trigger later. */
 export function flush(): void {
   if (flushing) return;
+  if (watcherQueue.length === 0 && markedLeaves.length === 0) return;
   flushing = true;
   try {
     let guard = 0;
-    while (watcherQueue.length > 0) {
+    while (queueHead < watcherQueue.length) {
       if (++guard > 100000) throw new Error('effect flush did not settle (cycle?)');
-      const w = watcherQueue.shift()!;
+      const w = watcherQueue[queueHead++];
       w.scheduled = false;
       if (w.disposed || w.flags === Flags.Clean) continue;
       runWatcher(w);
     }
+    watcherQueue.length = 0;
+    queueHead = 0;
   } catch (e) {
-    for (const w of watcherQueue) {
+    for (let i = queueHead; i < watcherQueue.length; i++) {
+      const w = watcherQueue[i];
       w.scheduled = false;
       w.flags = Flags.Clean;
     }
     watcherQueue.length = 0;
+    queueHead = 0;
     throw e;
   } finally {
     flushing = false;

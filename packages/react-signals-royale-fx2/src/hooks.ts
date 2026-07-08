@@ -22,7 +22,7 @@ import {
   type SignalOptions,
 } from 'signals-royale-fx2';
 import { captureRenderDispatcher } from './host.ts';
-import { ContainerContext, WorldContext } from './scope.tsx';
+import { ContainerContext, WorldContext } from './scope.ts';
 
 type AnyReadable = Signal<any> | Computed<any>;
 type Readable<T> = Signal<T> | Computed<T>;
