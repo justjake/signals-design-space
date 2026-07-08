@@ -30,6 +30,7 @@ import {
 	isThenable,
 	releasePin,
 	retainPin,
+	setCanonicalSetHook,
 	setCurrentCause,
 	setReadRedirect,
 	startBatch,
@@ -136,6 +137,29 @@ export function hasRebaseLog(atom: Atom<unknown>): boolean {
 	return rebaseLogs.has(atom);
 }
 
+/**
+ * Every canonical set during a live rebase episode appends to the log —
+ * including direct engine-API `atom.set()` calls that never went through
+ * `write`/`update`. Without this, retirement would replay the transition's
+ * intents over the episode's stale base and silently undo the direct set.
+ * `alreadyLogged` suppresses the hook when the entry exists (functional
+ * updates log the function, not its result) or when the set IS a replay
+ * (retirement folds).
+ */
+let alreadyLogged = false;
+setCanonicalSetHook((atom, v) => {
+	if (alreadyLogged || !rebaseLogs.has(atom)) return;
+	logEntry(atom, { kind: 'set', value: v }, null);
+});
+function setWithoutLogging(atom: Atom<unknown>, v: unknown): void {
+	alreadyLogged = true;
+	try {
+		atom.set(v);
+	} finally {
+		alreadyLogged = false;
+	}
+}
+
 const openBatches: Batch[] = [];
 
 export function openBatch(): Batch {
@@ -170,7 +194,7 @@ export function commitBatch(b: Batch): void {
 		for (const atom of b.touched) {
 			const log = rebaseLogs.get(atom);
 			if (log !== undefined) {
-				atom.set(replayLog(log, 'committed', currentEpoch()));
+				setWithoutLogging(atom, replayLog(log, 'committed', currentEpoch()));
 			}
 			pruneLog(atom);
 		}
@@ -223,10 +247,7 @@ export function write<T>(atom: Atom<T>, v: T): void {
 	if (ambientBatch !== null && ambientBatch.status === 'open') {
 		ambientBatch.record(atom as Atom<unknown>, { kind: 'set', value: v });
 	} else {
-		if (rebaseLogs.has(atom as Atom<unknown>)) {
-			logEntry(atom as Atom<unknown>, { kind: 'set', value: v }, null);
-		}
-		atom.set(v);
+		atom.set(v); // the canonical-set hook appends to a live rebase log
 	}
 }
 
@@ -239,7 +260,7 @@ export function update<T>(atom: Atom<T>, fn: (prev: T) => T): void {
 		if (rebaseLogs.has(atom as Atom<unknown>)) {
 			logEntry(atom as Atom<unknown>, { kind: 'fn', fn: fn as (p: unknown) => unknown }, null);
 		}
-		atom.set(fn(atom.peek()));
+		setWithoutLogging(atom as Atom<unknown>, fn(atom.peek()));
 	}
 }
 

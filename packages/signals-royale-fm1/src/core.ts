@@ -258,6 +258,9 @@ export class Atom<T> {
 		}
 		if (writeGuard !== null) writeGuard(this as Atom<unknown>);
 		this.materialize();
+		// Before the equality cutoff: a live rebase log records every write in
+		// call order, even one that leaves canonical state unchanged right now.
+		if (canonicalSetHook !== null) canonicalSetHook(this as Atom<unknown>, v);
 		const prev = this.value as T;
 		if (this.equals(prev, v)) return;
 		if (pinnedSnapshots > 0) {
@@ -330,6 +333,13 @@ export function setExternalObserverCount(fn: typeof externalObservers): void {
 let writeGuard: ((a: Atom<unknown>) => void) | null = null;
 export function setWriteGuard(fn: typeof writeGuard): void {
 	writeGuard = fn;
+}
+
+/** worlds.ts installs this so every canonical set — a direct engine-API
+ * `atom.set()` included — appends to a live rebase log in call order. */
+let canonicalSetHook: ((a: Atom<unknown>, v: unknown) => void) | null = null;
+export function setCanonicalSetHook(fn: typeof canonicalSetHook): void {
+	canonicalSetHook = fn;
 }
 
 /** Environment-independent microtask scheduling (no DOM lib assumed). */

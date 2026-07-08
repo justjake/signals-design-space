@@ -59,15 +59,17 @@ Tests:       1 skipped, 121 passed, 122 total
 
 ## 3. LOC self-count
 
-`node royale/verify-kit/count-loc.mjs --fork vendor/react --base e71a6393e6...
+`node royale/verify/count-loc.mjs --fork vendor/react --base e71a6393e6...
 --head royale/fm1-react --lib packages/signals-royale-fm1 --lib
-packages/react-signals-royale-fm1`:
+packages/react-signals-royale-fm1`, re-measured after the judgement fixes
+(section 9). Correction: the Round 2 report shipped a stale 1725 measured
+before the final perf commit; the judged Round 2 HEAD measured 1777.
 
 - **Fork: 188** (incumbent: 1510). ReactSignalSeam.js 113 + WorkLoop 69 +
   react-dom/client 6.
-- **Library: 1725** (incumbents: alt-a ~4689, alt-b ~4909). Engine 1238
-  (core 603, worlds 381, index 101, tracer 78, async 75) + bindings 487
-  (runtime 298, hooks 124, index 40, trace 25).
+- **Library: 1775** (incumbents: alt-a ~4689, alt-b ~4909). Engine 1302
+  (core 656, worlds 392, index 101, tracer 78, async 75) + bindings 473
+  (runtime 291, hooks 117, index 40, trace 25).
 
 Cross-check: `git -C vendor/react diff --numstat e71a6393e6..HEAD --
 packages/ ':!packages/*/src/__tests__*'` sums to 188.
@@ -187,19 +189,86 @@ apples rows are fanout (+12%) and mount (+10%).
 - **Batch discard** happens on explicit engine discard or test reset; React
   has no silent transition-drop path I hook (async-action abort rollback is
   untested).
-- **Direct `atom.set()`** (engine API) during a live rebase episode
-  bypasses the call-order log (classified writes via `set`/`update`/`write`
-  are logged). The React bindings only issue classified writes.
+- ~~Direct `atom.set()` during a live rebase episode bypasses the
+  call-order log~~ — fixed in the judgement round (section 9, item 2).
 - Benchmarks ran while three other entrants' suites ran on the same
   machine; treat absolute times as noisy.
 
 ## 8. With another day
 
-- Trim `runtime.ts` subscriber bookkeeping (atomSubs/nodeSubs collapse to
-  one map keyed by node) and fold `trace.ts` into hooks — ~60 lines.
+- Fold `trace.ts` into hooks — ~25 lines. (The subscriber-bookkeeping trim
+  landed in the judgement round: nodeSubs is the one map now.)
 - Fanout/mount overhead: skip Snapshot allocation for draft-free passes
   entirely (read canonical direct), pool the per-pass memo maps.
 - An async-action abort test (does React ever drop a transition lane
   without committing?) and a real-browser mutation-window demo.
 - A `latest()` overload that returns the park promise instead of undefined
   for never-settled values.
+
+## 9. Judgement fixes
+
+Three items from the independent judgement, addressed at this HEAD:
+
+1. **LOC self-count corrected** (section 3 rewritten). The Round 2 report
+   claimed 1725, measured before the final perf commit; the judged HEAD
+   measured 1777 (core 651, runtime 302). Re-measured with the canonical
+   counter after the fixes below: **fork 188, library 1775**. The `set()`
+   fix added ~25 engine lines; deleting dead runtime bookkeeping won them
+   back — `atomSubs`, `Subscriber.kind`/`.container`, and `commitCount`
+   were written and cleared but never read anywhere.
+
+2. **Direct engine `atom.set()` during a live episode** (the Round 2 known
+   gap, now a fixed and tested path). A plain `atom.set()` while a
+   transition held rebase-log intents on the same atom bypassed the
+   call-order log: canonical folded, but retirement replayed the episode's
+   stale base and silently undid the urgent write. Fix: core exposes a
+   canonical-set hook; worlds installs it so every canonical set appends to
+   a live log before the equality cutoff — exactly like classified writes
+   ("every write — urgent included — appends in call order"). Retirement
+   folds and functional updates install through a non-logging path (the
+   fold IS the replay; updates log the function, not its result). New
+   tests, each verified to fail with the hook disabled:
+   - Engine: transition drafts A, plain `a.set(2)` folds canonically at
+     once, the transition's x2 (recorded after the set) replays over the
+     post-set base — (1+1)*2 = 4; a bypassed set would land 18.
+   - Engine: a plain set issued after a transition's fn wins retirement
+     (useState parity, the classified set-vs-set rule); bypassed it would
+     be silently undone (2, not 10).
+   - Real React (gate scenario 19): startTransition holds x2, plain
+     `a.set(10)` lands urgently — canonical and DOM read 10 through
+     retirement.
+
+3. **Weak-coverage edges** (tests added; one real gap surfaced and fixed):
+   - Gate scenario 20 — mixed subscribers: an engine `effect()` and a React
+     component on one atom. The lifetime effect observes exactly once
+     across the union, deliveries reach both legs, the observation stays
+     open while either leg lives and closes when the last leaves.
+   - Gate scenario 21 — `latest()` in a render body. Writing the test
+     exposed a tear: the engine's ambient `latest()` builds its ephemeral
+     snapshot over ALL open batches — the ambient newest, not the render
+     pass's world. The bindings now export a render-pass-aware `latest()`
+     (resolves the pass's pinned snapshot via `withSnapshot`; ambient
+     behavior unchanged outside render). The test pins that `latest()`
+     agrees with `useValue` in every render pass while a stray engine-level
+     draft holds a newer value, and that ambient `latest()` still sees that
+     newest draft.
+
+Fresh outputs (verbatim):
+
+```
+== typecheck (engine + react packages)
+npx tsc --noEmit -p tsconfig.json      (both clean, exit 0)
+== engine suite (conformance 179 + worlds + oracle 300 + gc)
+ Test Files  4 passed (4)
+      Tests  213 passed (213)
+== deep fuzz (FUZZ_SEEDS=1200, reran because Atom.set changed)
+      Tests  1 passed (1)
+== real-React gate (scenarios 1-18 + adapter smoke + judgement 19-21)
+ Test Files  5 passed (5)
+      Tests  28 passed (28)
+== shared battery (royale/verify-kit/battery)
+ Test Files  1 passed (1)
+      Tests  25 passed (25)
+== LOC (canonical counter, final)
+"forkLoc": 188, "libLoc": 1775
+```

@@ -20,6 +20,7 @@ import {
 	Snapshot,
 	commitBatch,
 	currentEpoch,
+	latest as engineLatest,
 	listOpenBatches,
 	onDraftWrite,
 	openBatch,
@@ -29,6 +30,7 @@ import {
 	setCurrentCause,
 	update as engineUpdate,
 	withAmbientBatch,
+	withSnapshot,
 	write as engineWrite,
 	type Readable,
 } from 'signals-royale-fm1';
@@ -57,28 +59,22 @@ const reactInternals = (
 /** A component (or hook instance) subscribed to a node. */
 export interface Subscriber {
 	node: Readable<unknown>;
-	container: unknown;
 	/** Schedule an urgent re-render. */
 	force: () => void;
-	/** The node version/value delivered by the last committed render; used to
-	 * skip redundant corrective renders. */
-	kind: 'value' | 'pending' | 'committed';
 }
 
 interface RootState {
 	snapshot: Snapshot | null;
 	/** Canonical epoch at this root's last commit (its committed view). */
 	commitEpoch: number;
-	commitCount: number;
 }
 
 const laneBatches = new Map<Lane, Set<Batch>>();
 const batchLane = new Map<Batch, Lane>();
 const transitionBatches = new WeakMap<object, Batch>();
 const roots = new Map<unknown, RootState>();
-/** Subscribers per atom (direct) — computed subscribers are reached through
- * the engine's live links. */
-const atomSubs = new Map<Atom<unknown>, Set<Subscriber>>();
+/** Subscribers per node — a draft write reaches computed subscribers through
+ * the engine's live links (forEachAffectedSubscriber). */
 const nodeSubs = new Map<Readable<unknown>, Set<Subscriber>>();
 const mutationListeners = new Set<(phase: 'start' | 'stop', container: Element) => void>();
 const commitListeners = new Set<(container: unknown) => void>();
@@ -92,7 +88,7 @@ let disposeDraftListener: (() => void) | null = null;
 function rootState(container: unknown): RootState {
 	let state = roots.get(container);
 	if (state === undefined) {
-		state = { snapshot: null, commitEpoch: currentEpoch(), commitCount: 0 };
+		state = { snapshot: null, commitEpoch: currentEpoch() };
 		roots.set(container, state);
 	}
 	return state;
@@ -147,7 +143,6 @@ export function resetForTest(): void {
 	batchLane.clear();
 	for (const state of roots.values()) state.snapshot?.release();
 	roots.clear();
-	atomSubs.clear();
 	nodeSubs.clear();
 	pendingProbes.clear();
 	commitListeners.clear();
@@ -305,7 +300,6 @@ function onPassCommit(container: unknown, lanes: Lanes, remainingLanes: Lanes): 
 		// Advance this root's committed view: everything canonical up to this
 		// moment (including the folds above) is now on this root's screen.
 		state.commitEpoch = currentEpoch();
-		state.commitCount++;
 		commitListeners.forEach((l) => l(container));
 		schedulePendingProbes();
 	} finally {
@@ -332,6 +326,15 @@ export function currentRenderContainer(): unknown {
 	return seam.unstable_currentRenderInfo()?.container ?? null;
 }
 
+/** `latest` from inside a component render body resolves the render pass's
+ * own world — reading ahead of the pass (the ambient newest drafts) would be
+ * a tear. Outside a render pass this is the engine's ambient `latest`. */
+export function latest<T>(node: Readable<T>): T | undefined {
+	const snapshot = currentRenderSnapshot();
+	if (snapshot === null) return engineLatest(node);
+	return withSnapshot(snapshot, () => engineLatest(node));
+}
+
 /** Read `node` in the current render pass's world. */
 export function readInRenderWorld<T>(node: Readable<T>): T {
 	const snapshot = currentRenderSnapshot();
@@ -349,21 +352,9 @@ export function subscribe(sub: Subscriber): () => void {
 	let set = nodeSubs.get(sub.node);
 	if (set === undefined) nodeSubs.set(sub.node, (set = new Set()));
 	set.add(sub);
-	if (sub.node instanceof Atom) {
-		let aset = atomSubs.get(sub.node as Atom<unknown>);
-		if (aset === undefined) atomSubs.set(sub.node as Atom<unknown>, (aset = new Set()));
-		aset.add(sub);
-	}
 	return () => {
 		set.delete(sub);
 		if (set.size === 0) nodeSubs.delete(sub.node);
-		if (sub.node instanceof Atom) {
-			const aset = atomSubs.get(sub.node as Atom<unknown>);
-			if (aset !== undefined) {
-				aset.delete(sub);
-				if (aset.size === 0) atomSubs.delete(sub.node as Atom<unknown>);
-			}
-		}
 	};
 }
 

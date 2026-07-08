@@ -30,8 +30,6 @@ import {
  * subscription at commit. */
 export function useValue<T>(node: Readable<T>): T {
 	const [, force] = React.useReducer((c: number) => c + 1, 0);
-	const container = React.useRef<unknown>(null);
-	if (container.current === null) container.current = currentRenderContainer();
 	const value = readInRenderWorld(node);
 	const rendered = React.useRef<T>(value);
 	rendered.current = value;
@@ -45,12 +43,7 @@ export function useValue<T>(node: Readable<T>): T {
 	});
 
 	React.useEffect(() => {
-		const sub: Subscriber = {
-			node: node as Readable<unknown>,
-			container: container.current,
-			force,
-			kind: 'value',
-		};
+		const sub: Subscriber = { node: node as Readable<unknown>, force };
 		const unsubscribe = subscribe(sub);
 		// The engine watcher delivers canonical changes; skip the wake-up when
 		// this component already rendered the new value.

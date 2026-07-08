@@ -16,6 +16,7 @@ export {
 	startTransitionWrite,
 	onDomMutation,
 	currentWriteBatch,
+	latest, // render-pass aware: in a render body it resolves the pass's world
 	readInRenderWorld,
 } from './runtime.ts';
 
@@ -38,7 +39,6 @@ export {
 	effectScope,
 	batch,
 	untracked,
-	latest,
 	committed,
 	isPending,
 	refresh,

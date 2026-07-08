@@ -74,6 +74,38 @@ describe('classified writes and rebase', () => {
 		expect(a.peek()).toBe(1);
 	});
 
+	test('direct engine set() during a live episode appends to the log', () => {
+		// The bypass probe: a transition holds intents on `a`, then a plain
+		// engine-API a.set() — no classification wrapper — lands urgently. The
+		// set must append to the live rebase log in call order; a bypassed set
+		// would be silently undone at retirement (replaying the stale base
+		// here would give 9*2 = 18, losing the 2).
+		const a = atom(1);
+		const b = openBatch();
+		withAmbientBatch(b, () => write(a, 9)); // episode live on `a`
+		a.set(2); // plain engine set, urgent: 1+1
+		expect(a.peek()).toBe(2); // canonical folds the set immediately
+		withAmbientBatch(b, () => update(a, (x) => x * 2));
+		commitBatch(b);
+		// Call-order replay: set 9 -> urgent set 2 -> x2. The transition's
+		// doubling replays over the post-set base: (1+1)*2 = 4.
+		expect(a.peek()).toBe(4);
+	});
+
+	test('direct engine set() issued after a transition fn wins retirement', () => {
+		// useState parity (the classified set-vs-set rule): the urgent set was
+		// called last, so it is the last replayed entry. A bypassed set would
+		// leave 2 here (x2 replayed over the stale base 1) — the urgent write
+		// silently undone.
+		const a = atom(1);
+		const b = openBatch();
+		withAmbientBatch(b, () => update(a, (x) => x * 2));
+		a.set(10);
+		expect(a.peek()).toBe(10);
+		commitBatch(b);
+		expect(a.peek()).toBe(10);
+	});
+
 	test('effects observe canonical state only, never drafts', () => {
 		const a = atom(0);
 		const log: number[] = [];
