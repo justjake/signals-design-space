@@ -68,14 +68,22 @@ each of those claims wrong in revision 2; the corrected mechanism:
 - **Dirty-state stays.** Lazy computeds do not bump clocks until someone
   evaluates them. An observer may skip only when the producer is CLEAN and
   its clock matches; if dirty/pending, evaluate first, then compare.
-- **Observers keep value baselines.** `isEqual(previous, current)` may be
-  asymmetric, and an A-write-B-write-A sequence moves the clock while the
-  value-gated contract forbids a re-fire. A subscription dependency is
-  `{lastValue, lastValidatedAt}`: clock mismatch means evaluate and compare
-  against `lastValue`; equal means bump `lastValidatedAt` only. Watchers
-  keep `lastRenderedValue`, and baselines advance only after a committed
-  render, an urgent correction, or a completed recapture — never on mere
-  notification enqueue.
+- **Observer re-fires are AT-LEAST-ONCE (owner ruling, post-review).** The
+  earlier value-baseline design (keep `lastValue` per dependency and gate
+  re-fires on `isEqual(previous, current)`) is repealed: observers store
+  only `lastValidatedAt`. Clock mismatch on a clean producer means re-fire
+  — a net-no-change sequence (A→B→A is two accepted changes, two bumps)
+  re-fires spuriously, and that is accepted semantics. Custom `isEqual`
+  still gates WRITE ACCEPTANCE and per-root refold bumps (the clock only
+  moves on changed results), so the spurious class is exactly multi-write
+  flip-flops. The `lastValidatedAt` advance rule is unchanged: only after a
+  committed render, an urgent correction, or a completed recapture — never
+  on notification enqueue. The reference model co-evolves to the same rule
+  (per-node accepted-change counters — a sanctioned oracle edit), and the
+  value-gated re-fire pins are rewritten to at-least-once pins explicitly.
+  `useSignalEffect`'s documented contract becomes: re-fires when a durable
+  accepted change touched a value it read; equal-value round trips may
+  re-fire.
 - **Write receipts and value clocks are different fields.** The normative
   bump table:
 
