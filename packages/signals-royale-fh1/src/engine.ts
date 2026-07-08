@@ -44,6 +44,9 @@ type Unset = typeof UNSET;
 
 export type AnyAtom = Atom<unknown>;
 export type AnyComputed = Computed<unknown>;
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/** Public parameter type: any atom or computed, whatever its value type. */
+export type Node<T = any> = Atom<T> | Computed<T>;
 type Source = AnyAtom | AnyComputed;
 type Observer = AnyComputed | Effect;
 
@@ -859,7 +862,7 @@ export class Effect {
 	/** Creation order; notifications fire in this order regardless of how
 	 * observer lists were re-packed by earlier unlinks. */
 	serial = nextEffectSerial++;
-	fn: () => void | (() => void);
+	fn: () => unknown;
 	cleanup: (() => void) | null = null;
 	state: NodeState = DIRTY;
 	srcs: Source[] = [];
@@ -871,7 +874,7 @@ export class Effect {
 	queued = false;
 	label: string | undefined;
 
-	constructor(fn: () => void | (() => void), label?: string) {
+	constructor(fn: () => unknown, label?: string) {
 		this.fn = fn;
 		this.label = label;
 		if (activeOwner !== null) (activeOwner.kids ??= []).push(this);
@@ -894,7 +897,7 @@ export class Effect {
 		const prevCause = ev !== 0 ? setCause(ev) : -1;
 		try {
 			const ret = this.fn();
-			if (typeof ret === 'function') this.cleanup = ret;
+			if (typeof ret === 'function') this.cleanup = ret as () => void;
 		} finally {
 			activeSub = prevSub;
 			activeOwner = prevOwner;
@@ -979,7 +982,7 @@ function runCleanup(cleanup: () => void): void {
 	}
 }
 
-export function effect(fn: () => void | (() => void), label?: string): () => void {
+export function effect(fn: () => unknown, label?: string): () => void {
 	const e = new Effect(fn, label);
 	return () => e.dispose();
 }
@@ -1111,7 +1114,8 @@ function pokeHooks(origin: Source, stamp: BatchId, causeEv: EventId): void {
 
 /** Subscribe a host callback to change pokes on an atom or computed. Counts as
  * an observation for the observed lifecycle and keeps computed chains live. */
-export function subscribeHook(x: Source, cb: HookPoke): () => void {
+export function subscribeHook(xx: Node, cb: HookPoke): () => void {
+	const x = xx as Source;
 	const wasLive = x.k === 1 && isLive(x);
 	(x.hookSubs ??= new Set()).add(cb);
 	if (x.k === 1) {
@@ -1345,7 +1349,8 @@ function releaseWorldEntry(c: AnyComputed, w: World): void {
 }
 
 /** Read any node under an explicit world (host render passes). */
-export function readInWorld(x: Source, w: World): unknown {
+export function readInWorld(xx: Node, w: World): unknown {
+	const x = xx as Source;
 	if (x.k === 0) return foldAtom(x, w);
 	return readComputedInWorld(x, w);
 }
@@ -1358,7 +1363,7 @@ export function makeWorld(batches: BatchId[]): World {
 
 /** Canonical read: committed state plus applied urgent writes; drafts hidden.
  * A pending async computed throws its stable PendingValue box. */
-export function read(x: Source): unknown {
+export function read<T>(x: Node<T>): T {
 	return x.get();
 }
 
@@ -1366,7 +1371,11 @@ export function read(x: Source): unknown {
  * evaluation is pending the last settled value is served. Inside a computed
  * evaluation or a render pass it resolves that context's own world — reading
  * ahead of your own world would be a tear. */
-export function latest(x: Source): unknown {
+export function latest<T>(x: Node<T>): T;
+export function latest(x: Node): unknown {
+	return latestImpl(x as Source);
+}
+function latestImpl(x: Source): unknown {
 	if (activeWorld !== null) {
 		try {
 			return readInWorld(x, activeWorld);
@@ -1405,7 +1414,9 @@ export function setCommittedCutoffProvider(fn: ((container?: unknown) => WriteSe
 /** What is on screen: the canonical timeline cut at the container's last
  * commit (or the newest commit anywhere when no container is given). Never
  * subscribes. */
-export function committed(x: Source, container?: unknown): unknown {
+export function committed<T>(x: Node<T>, container?: unknown): T;
+export function committed(xx: Node, container?: unknown): unknown {
+	const x = xx as Source;
 	const cutoff = committedCutoffProvider(container);
 	if (cutoff >= writeSeq && liveBatches.size === 0 && x.k === 0) {
 		materialize(x);
@@ -1426,7 +1437,8 @@ export function committed(x: Source, container?: unknown): unknown {
 /** Cheap flip-only probe: is newer data loading behind the value being shown?
  * True while an atom holds unfolded transition drafts or an async computed has
  * a parked evaluation (canonical or in any live world). Never refetches. */
-export function isPending(x: Source): boolean {
+export function isPending(xx: Node): boolean {
+	const x = xx as Source;
 	if (x.k === 0) {
 		if (x.log !== null) {
 			for (const r of x.log) if (r.batch !== URGENT && r.folded === 0) return true;
@@ -1446,7 +1458,8 @@ export function isPending(x: Source): boolean {
  * `latest`; a refresh issued inside a transition belongs to that transition
  * and its settlement commits with it. The refetch starts eagerly, so
  * `isPending` flips the moment refresh is called. */
-export function refresh(x: Source): void {
+export function refresh(xx: Node): void {
+	const x = xx as Source;
 	if (x.k === 0) return;
 	const c = x;
 	const firstRefresh = c.epoch === null;
@@ -1557,4 +1570,26 @@ export function __resetEngine(): void {
 	stampProvider = () => null;
 	writeGuard = null;
 	committedCutoffProvider = () => writeSeq;
+}
+
+// ---- host helpers ---------------------------------------------------------------
+
+/** Whether an async computed has ever settled (hosts use this to decide
+ * stale-serve vs suspend at their own boundaries). */
+export function hasSettled(xx: Node): boolean {
+	const x = xx as Source;
+	return x.k === 1 && x.settled !== UNSET;
+}
+
+/** The last settled value of an async computed. Only meaningful when
+ * `hasSettled(x)` is true. */
+export function lastSettled(xx: Node): unknown {
+	const x = xx as Source;
+	return x.k === 1 && x.settled !== UNSET ? x.settled : undefined;
+}
+
+/** Trace id of the newest delivery event for a node's host subscriptions. */
+export function lastDeliveryEvent(xx: Node): EventId {
+	const x = xx as Source;
+	return x.lastDeliveryEv;
 }

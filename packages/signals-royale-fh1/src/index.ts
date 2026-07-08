@@ -38,6 +38,9 @@ export {
 	setStampProvider,
 	setWriteGuard,
 	setCommittedCutoffProvider,
+	hasSettled,
+	lastSettled,
+	lastDeliveryEvent,
 	__resetEngine,
 } from './engine';
 export type {
