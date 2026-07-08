@@ -109,6 +109,44 @@ parameterized per family: alt = drafts-hidden, cosignal = NEWEST).
    ambient-read ratio drops to ~1.0x (see report); the Wn cost is paid only
    by explicit `latest()` and render-pass reads.
 
+## §lazy-init — lazy state initializers (owner-approved feature, both alts)
+
+`new Atom({ state: () => T })` / `new ReducerAtom({ state: () => S, ... })` /
+`useAtom({ state: () => T })`:
+
+1. **React useState convention**: function-valued `state` IS the initializer —
+   evaluated ONCE, lazily, at first materialization (never at construction).
+   Storing a function as state requires the wrap: `state: () => fn`
+   (documented on `AtomOptions.state` with the `documentVisible` recipe — an
+   SSR-safe environment probe whose module-scope construction never touches
+   `document`).
+2. **Untracked + graph-pure**: the initializer runs with tracking suppressed
+   (its reads link nothing — pinned: a computed that materializes the atom
+   does not inherit the initializer's deps) and writes inside it are rejected
+   in debug. A throwing initializer re-runs on the next read (React retry
+   semantics); a cyclic initializer (reads its own atom) throws a clear error.
+3. **Render-context safe**: first read during a render pass materializes —
+   it is a pure slot fill (both value slots), not a write: no propagation, no
+   watchers, no §10.8 violation. Nothing can have observed the atom before
+   materialization, so filling the slot is invisible by construction.
+4. **Write-before-first-read (decision: RUN the initializer)** — the write
+   path's equality compare (`pendingAtomValue`) materializes first, so
+   `set(initValue)` on an untouched lazy atom is correctly dropped by the
+   equality contract, and `update(fn)`/`dispatch(a)` receive the initializer
+   result. Both gate modes pinned (the gate decides LOGGED vs DIRECT; both
+   compare through the same accessor).
+5. **Tape/base-snapshot**: `createTape`'s base snapshot reads through
+   `pendingAtomValue`, so a DRAFT-world first touch bases the tape on the
+   initializer result — canonical base state, never draft-scoped (pinned:
+   W0/committed read the init value while the writer world shows the draft).
+6. **SSR**: `installState` IS the materialization — the initializer is
+   skipped (slot fill + `lazyInit` cleared; sound because an unmaterialized
+   atom has no observers).
+7. **Mechanism**: a unique symbol sentinel occupies both value slots; the two
+   base accessors (`kernelAtomValue`, `pendingAtomValue`) test one identity
+   compare on the hot path — every other path (worlds, folds, peeks, watcher
+   seeding) routes through them. The initializer lives in the meta column.
+
 ## Open API questions
 
 - **`suspend: 'always'` option**: should a computed (or hook call site) be able

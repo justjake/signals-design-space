@@ -161,6 +161,49 @@ let evalPending: PromiseLike<unknown> | undefined;
 
 /** Is a computed evaluation frame active (canonical or overlay)? Pending dep
  * reads forward inside frames; top-level consumers get the throw/suspend. */
+/** §lazy-init: the not-yet-materialized marker occupying a lazy atom's value
+ * slots. A unique module singleton: one identity compare on the atom-value
+ * base accessors is the entire hot-path cost. */
+const LAZY_UNMATERIALIZED: unique symbol = Symbol('cosignals-alt-b.lazy');
+
+let initDepth = 0;
+
+/** Run a lazy atom's initializer ONCE: untracked (no dep links), graph-pure
+ * (writes rejected in debug), render-safe (a pure slot fill — no write path,
+ * no propagation, no watchers; nothing can have observed the atom yet). Both
+ * value slots fill with the result, so it is the CANONICAL base state — a
+ * draft-world first touch (createTape's base snapshot reads through here)
+ * bases the tape on the initializer result, never on draft-scoped state. */
+function materializeAtom(a: number): unknown {
+	const m = metaCol[a >> 3];
+	const init = m?.lazyInit;
+	if (init === undefined) {
+		const v = values[a >> 2];
+		if (v === LAZY_UNMATERIALIZED) {
+			// Only reachable when the initializer reads its own atom.
+			throw new Error('cosignals-alt-b: cyclic lazy initializer (reads its own atom)');
+		}
+		return v; // already materialized (or SSR install landed first)
+	}
+	m!.lazyInit = undefined; // once-only (cleared BEFORE running: cycle guard above)
+	const prevSub = activeSub;
+	activeSub = 0; // untracked: the initializer's own reads link nothing
+	++initDepth;
+	let v: unknown;
+	try {
+		v = init();
+	} catch (err) {
+		m!.lazyInit = init; // a throwing initializer re-runs on the next read (React retry semantics)
+		throw err;
+	} finally {
+		--initDepth;
+		activeSub = prevSub;
+	}
+	values[a >> 2] = v;
+	values[(a >> 2) + 1] = v;
+	return v;
+}
+
 function inEvalFrame(): boolean {
 	return ovDepth !== 0 || (activeSub !== 0 && (E.nodeFlags(activeSub) & 2048) !== 0); // C.K_COMPUTED
 }
@@ -197,6 +240,9 @@ type NodeMeta = {
 	refreshEpoch?: number;
 	/** fn declares a ctx parameter (arity > 0): build the ComputedCtx. */
 	wantsCtx?: boolean;
+	/** Lazy state initializer (§lazy-init): pending until first
+	 * materialization; cleared once run (or skipped by SSR install). */
+	lazyInit?: () => unknown;
 	// atom observed-lifecycle (§12.4):
 	observeEffect?: (ctx: AtomCtx<unknown>) => (() => void) | void;
 	observeMounted?: boolean;
@@ -1492,7 +1538,8 @@ function isEqualPolicy(node: number, x: unknown, y: unknown): boolean {
  * cutoff (batch { set(5); set(0) } must recompute NOTHING — conformance
  * #123/#132/#147). */
 function pendingAtomValue(a: number): unknown {
-	return values[(a >> 2) + 1];
+	const v = values[(a >> 2) + 1];
+	return v === LAZY_UNMATERIALIZED ? materializeAtom(a) : v;
 }
 
 /** Canonical atom value (promotes a pending kernel write), no tracking. */
@@ -1505,7 +1552,8 @@ function kernelAtomValue(a: number): unknown {
 			}
 		}
 	}
-	return values[a >> 2];
+	const v = values[a >> 2];
+	return v === LAZY_UNMATERIALIZED ? materializeAtom(a) : v;
 }
 
 /** Donor kernel write: set pending value, mark DIRTY, propagate. */
@@ -2045,7 +2093,11 @@ function stampThenable(t: PromiseLike<unknown>, waiter: number): ThenableState {
 function onThenableSettled(t: PromiseLike<unknown>, st: ThenableState): void {
 	// §12.3: settlement of a thenable while the overlay is live bumps the epoch
 	// (nothing else would invalidate a writer's-world memo holding the box).
-	if (loggedAtomCount !== 0) {
+	// Gate on LIVE SLOTS too, not just logged atoms: broadcast decisions mint
+	// world memos in slotted write-less worlds (a pass-interned batch with no
+	// entries), and a stale memo would keep serving the pending box after the
+	// settled value landed (found by the §17.2 oracle, seed 368).
+	if (loggedAtomCount !== 0 || liveSlotMask !== 0) {
 		++overlayEpoch;
 		++worldStamp;
 	}
@@ -2175,6 +2227,11 @@ function broadcastEqual(node: number, a: unknown, b: unknown): boolean {
 function atomWrite(a: number, op: number, payload: unknown): void {
 	if (currentCtx === Ctx.RENDER && forkRenderingNow()) {
 		throw new Error('cosignals-alt-b: writes during render are forbidden (§10.8)');
+	}
+	if (initDepth !== 0 && debugChecks) {
+		throw new Error(
+			'cosignals-alt-b: writes inside a lazy state initializer are forbidden (§lazy-init: initializers are graph-pure)',
+		);
 	}
 	if (
 		forbidWritesInComputeds
@@ -3399,6 +3456,16 @@ function processFinalizeRetries(): void {
 		kernelAtomValue,
 		kernelSet: (id: number, value: unknown) => {
 			// SSR install: an ordinary kernel SET before hydration (§13.8).
+			const m = metaCol[id >> 3];
+			if (m?.lazyInit !== undefined) {
+				// §lazy-init: install IS the materialization — the initializer
+				// is skipped. Nothing can have observed the atom (any read
+				// would have materialized it): a direct slot fill is sound.
+				m.lazyInit = undefined;
+				values[id >> 2] = value;
+				values[(id >> 2) + 1] = value;
+				return;
+			}
 			const cur = pendingAtomValue(id);
 			if (!isEqualPolicy(id, cur, value)) {
 				if (loggedAtomCount !== 0) {
@@ -3429,7 +3496,7 @@ function processFinalizeRetries(): void {
 			if (m !== undefined) {
 				m.refreshEpoch = (m.refreshEpoch ?? 0) + 1;
 			}
-			if (loggedAtomCount !== 0) {
+			if (loggedAtomCount !== 0 || liveSlotMask !== 0) {
 				++overlayEpoch;
 				++worldStamp;
 			}
@@ -3865,7 +3932,23 @@ export function configure(options: {
 // ---- policy classes (§4, §12) ----------------------------------------------------------
 
 export type AtomOptions<T> = {
-	state: T;
+	/**
+	 * Initial state, or a LAZY INITIALIZER (§lazy-init, React useState
+	 * convention): a function-valued `state` is evaluated ONCE, untracked, at
+	 * first materialization (first read/write/watch — not at construction).
+	 * To store a function AS state, wrap it: `state: () => fn`.
+	 *
+	 * Recipe — SSR-safe environment probe:
+	 * ```ts
+	 * const documentVisible = new Atom({
+	 *   state: () => document.visibilityState === 'visible',
+	 * });
+	 * // Module-scope construction never touches `document`; the first client
+	 * // read materializes it. On the server, installState(documentVisible,
+	 * // true) installs the hydrated value and the initializer never runs.
+	 * ```
+	 */
+	state: T | (() => T);
 	/** Observed-lifecycle hook (§12.4): runs when the atom becomes observed
 	 * (transitively LIVE); the returned cleanup runs when it no longer is.
 	 * Delivery is debounced to a microtask. */
@@ -3880,16 +3963,24 @@ export class Atom<T> {
 		boundary();
 		const id = E.allocNode(C.K_ATOM | C.MUTABLE);
 		this.id = id;
-		values[id >> 2] = options.state;
-		values[(id >> 2) + 1] = options.state;
+		const lazy = typeof options.state === 'function';
+		if (lazy) {
+			values[id >> 2] = LAZY_UNMATERIALIZED;
+			values[(id >> 2) + 1] = LAZY_UNMATERIALIZED;
+		} else {
+			values[id >> 2] = options.state;
+			values[(id >> 2) + 1] = options.state;
+		}
 		if (
-			options.isEqual !== undefined
+			lazy
+			|| options.isEqual !== undefined
 			|| options.label !== undefined
 			|| options.effect !== undefined
 		) {
 			metaCol[id >> 3] = {
 				isEqual: options.isEqual as ((a: unknown, b: unknown) => boolean) | undefined,
 				label: options.label,
+				lazyInit: lazy ? (options.state as () => unknown) : undefined,
 				observeEffect: options.effect as
 					| ((ctx: AtomCtx<unknown>) => (() => void) | void)
 					| undefined,
@@ -3912,7 +4003,9 @@ export class Atom<T> {
 }
 
 export type ReducerAtomOptions<S, A> = {
-	state: S;
+	/** Initial state, or a lazy initializer (function-valued; §lazy-init —
+	 * wrap function states as `() => fn`). */
+	state: S | (() => S);
 	reducer: (state: S, action: A) => S;
 	isEqual?: (a: S, b: S) => boolean;
 	label?: string;
@@ -3924,12 +4017,19 @@ export class ReducerAtom<S, A> {
 		boundary();
 		const id = E.allocNode(C.K_ATOM | C.MUTABLE);
 		this.id = id;
-		values[id >> 2] = options.state;
-		values[(id >> 2) + 1] = options.state;
+		const lazy = typeof options.state === 'function';
+		if (lazy) {
+			values[id >> 2] = LAZY_UNMATERIALIZED;
+			values[(id >> 2) + 1] = LAZY_UNMATERIALIZED;
+		} else {
+			values[id >> 2] = options.state;
+			values[(id >> 2) + 1] = options.state;
+		}
 		metaCol[id >> 3] = {
 			isEqual: options.isEqual as ((a: unknown, b: unknown) => boolean) | undefined,
 			reducer: options.reducer as (s: unknown, a: unknown) => unknown,
 			label: options.label,
+			lazyInit: lazy ? (options.state as () => unknown) : undefined,
 		};
 		E.registerHandle(this, id);
 	}

@@ -28,8 +28,8 @@ export type WriteSpec = {
 };
 
 export type Op =
-	| { t: 'atom'; v: number }
-	| { t: 'reducer'; v: number }
+	| { t: 'atom'; v: number; lazy?: boolean } // lazy: state is a () => v initializer
+	| { t: 'reducer'; v: number; lazy?: boolean }
 	| { t: 'sum'; deps: number[] }
 	| { t: 'branch'; cond: number; ifTrue: number; ifFalse: number }
 	| { t: 'chain'; dep: number }
@@ -203,7 +203,11 @@ function applyOp(s: RunState, op: Op): boolean {
 		case 'atom': {
 			s.defs.push({ type: 'atom', initial: op.v });
 			o.addNode({ type: 'atom', initial: op.v });
-			s.handles.push(new Atom({ state: op.v }));
+			// §lazy-init: a lazy atom is semantically IDENTICAL once
+			// materialized — the oracle needs no notion of it; the fuzz value
+			// is that every world/tape/broadcast path exercises first-touch
+			// materialization at arbitrary schedule points.
+			s.handles.push(new Atom<number>({ state: op.lazy === true ? () => op.v : op.v }));
 			s.taints.push(false);
 			return true;
 		}
@@ -211,7 +215,10 @@ function applyOp(s: RunState, op: Op): boolean {
 			s.defs.push({ type: 'reducer', initial: op.v });
 			o.addNode({ type: 'reducer', initial: op.v });
 			s.handles.push(
-				new ReducerAtom<number, number>({ state: op.v, reducer: (st, a) => st + a }),
+				new ReducerAtom<number, number>({
+					state: op.lazy === true ? () => op.v : op.v,
+					reducer: (st, a) => st + a,
+				}),
 			);
 			s.taints.push(false);
 			return true;
@@ -865,11 +872,12 @@ export function genScript(seed: number, steps: number): Op[] {
 		const r = rnd();
 		if (nodes.length === 0 || r < 0.06) {
 			const v = pick(10);
+			const lazy = rnd() < 0.3; // §lazy-init coverage
 			if (rnd() < 0.75) {
-				script.push({ t: 'atom', v });
+				script.push(lazy ? { t: 'atom', v, lazy } : { t: 'atom', v });
 				nodes.push('atom');
 			} else {
-				script.push({ t: 'reducer', v });
+				script.push(lazy ? { t: 'reducer', v, lazy } : { t: 'reducer', v });
 				nodes.push('reducer');
 			}
 			taint.push(false);

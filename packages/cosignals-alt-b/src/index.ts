@@ -14,6 +14,8 @@ export {
 	detachFork,
 	committed,
 	createWatcher,
+	disposeSignal,
+	installState,
 	isErrorBox,
 	isPending,
 	isSuspendedBox,

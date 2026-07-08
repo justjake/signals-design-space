@@ -755,6 +755,29 @@ describe('ambient-W0 semantics against real React (SPEC-RESOLUTIONS §ambient-W0
 		});
 		expect(c.textContent).toBe('v:4;c:4;l:4');
 	});
+
+	it('useAtom lazy initializer (§lazy-init): evaluated at first render read, once per atom instance', async () => {
+		let runs = 0;
+		let setOwned!: (n: number) => void;
+		function App() {
+			const a = useAtom<number>({
+				state: () => {
+					++runs;
+					return 7;
+				},
+			});
+			setOwned = (n: number) => a.set(n);
+			return <span>n:{useSignal(a)}</span>;
+		}
+		const c = await mount(<App />);
+		expect(c.textContent).toBe('n:7');
+		expect(runs).toBe(1); // once per materialized atom instance
+		await act(async () => {
+			setOwned(8);
+		});
+		expect(c.textContent).toBe('n:8');
+		expect(runs).toBe(1);
+	});
 });
 
 describe('the write-gate contract family against real React timing (§9.1/§17.6)', () => {
