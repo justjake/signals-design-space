@@ -1,3 +1,5 @@
+/// <reference path="./react-protocol.d.ts" />
+
 import * as React from "react";
 import { flushSync as flushReactSync } from "react-dom";
 import {
@@ -31,6 +33,7 @@ type Value<T> = Atom<T> | Computed<T>;
 type LaneToken = BatchToken & { lane: number; roots: Set<object>; retireTicket: number };
 
 const tokens = new Map<number, LaneToken>();
+const noBatches = new Set<BatchToken>();
 const mutationListeners = new Set<(phase: "start" | "stop", container: Element) => void>();
 let unregister: (() => void) | undefined;
 let registered = false;
@@ -54,7 +57,8 @@ function tokenFor(lane: number): LaneToken | undefined {
   return token;
 }
 
-function batchesIn(lanes: number): Set<BatchToken> {
+function batchesIn(lanes: number): ReadonlySet<BatchToken> {
+  if (tokens.size === 0) return noBatches;
   const found = new Set<BatchToken>();
   for (const token of tokens.values())
     if (React.unstable_lanesInclude(lanes, token.lane)) found.add(token);
@@ -65,9 +69,13 @@ function currentBatch(): LaneToken | undefined {
   return tokenFor(React.unstable_getCurrentUpdateLane());
 }
 
-function readForRender<T>(value: Value<T>): { value: T; root?: object; batches: Set<BatchToken> } {
+function readForRender<T>(value: Value<T>): {
+  value: T;
+  root?: object;
+  batches: ReadonlySet<BatchToken>;
+} {
   const context = React.unstable_getRenderContext();
-  if (context === null) return { value: read(value), batches: new Set() };
+  if (context === null) return { value: read(value), batches: noBatches };
   const batches = batchesIn(context.renderLanes);
   return {
     value: withWorld(batches, context.container, () => read(value)),
@@ -90,7 +98,10 @@ export function register(): { errors: unknown[]; dispose(): void } {
   unregister = React.unstable_subscribeToExternalRuntime({
     onRenderPassStart(container, lanes) {
       traceEvent("render-pass-start");
-      for (const token of batchesIn(lanes)) (token as LaneToken).roots.add(container);
+      for (const token of batchesIn(lanes)) {
+        token.rendered = true;
+        (token as LaneToken).roots.add(container);
+      }
     },
     onRenderPassEnd() {
       traceEvent("render-pass-end");
@@ -178,10 +189,15 @@ export function useValue<T>(value: Value<T>): T {
   valueRef.current = value;
   React.useLayoutEffect(() => {
     let live = true;
-    const stop = subscribe(value as Atom<unknown> | Computed<unknown>, (cause) => {
-      traceEvent("component-delivery", cause, value);
-      if (live) force();
-    });
+    const stop = subscribe(
+      value as Atom<unknown> | Computed<unknown>,
+      (cause) => {
+        traceEvent("component-delivery", cause, value);
+        if (live) force();
+      },
+      rendered.batches,
+      true,
+    );
     if (
       rendered.root !== undefined &&
       !Object.is(rendered.value, committed(value, rendered.root))

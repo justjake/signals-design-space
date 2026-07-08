@@ -6,6 +6,7 @@ export interface BatchToken {
   deferred: boolean;
   live: boolean;
   committed: boolean;
+  rendered?: boolean;
   cause?: number;
 }
 
@@ -16,6 +17,7 @@ type Operation<T = unknown> = {
   atom: Atom<T>;
   batch: BatchToken | undefined;
   reduce: (value: T) => T;
+  afterDraft?: boolean;
   cause?: number;
 };
 
@@ -28,54 +30,71 @@ interface Source {
   id?: NodeId;
   version: number;
   subs: Set<Observer>;
+  valueListeners?: Set<SubscriptionRecord>;
+  pendingListeners?: Set<SubscriptionRecord>;
   read(): unknown;
+  watch(on: boolean): void;
 }
 
 interface Observer {
   stale: boolean;
   deps: Map<Source, number>;
   queued: boolean;
-  onStale(): void;
+  onStale(confirmed?: boolean): void;
 }
 
 let nextNode: NodeId = 1;
 let nextOperation = 1;
 let active: Observer | undefined;
 let collecting: Map<Source, number> | undefined;
+let collectingNew: Source[] | undefined;
 let world: World | undefined;
 let batchDepth = 0;
-let batchSnapshots: Map<Atom<unknown>, { value: unknown; version: number }> | undefined;
+let batchTarget: Atom<unknown> | undefined;
+let batchValue: unknown;
+let batchVersion = 0;
+const batchSnapshots = new Map<Atom<unknown>, { value: unknown; version: number }>();
 let flushing = false;
 let initializer: Atom<unknown> | undefined;
-const effects = new Set<Effect>();
+const effects: Effect[] = [];
 const allEffects = new Set<Effect>();
 const operations: Operation[] = [];
-const atoms = new Map<NodeId, WeakRef<Atom<unknown>>>();
 const rootBatches = new WeakMap<object, Set<BatchToken>>();
 const tokenRoots = new Map<BatchToken, Set<Set<BatchToken>>>();
-const listeners = new Set<(node: Source, cause?: number) => void>();
-const pendingListeners = new Set<(node: Source) => void>();
+let listenerCount = 0;
+let subscriptionGeneration = 0;
 const effectFinalizer = new FinalizationRegistry<Effect>((current) => current.dispose());
 class SubscriptionRecord {
-  readonly listener = (source: Source, cause?: number): void => {
-    if (source === this.target) this.notify.deref()?.(cause);
-  };
-  private notify: WeakRef<(cause?: number) => void>;
+  live = true;
+  private notify?: WeakRef<(cause?: number) => void>;
+  private managedNotify?: (cause?: number) => void;
 
   constructor(
     readonly kind: "value" | "pending",
     readonly target: Source,
+    readonly generation: number,
+    readonly createdAt: number,
+    readonly seenBatches: ReadonlySet<BatchToken> | undefined,
     notify: (cause?: number) => void,
+    managed: boolean,
   ) {
-    this.notify = new WeakRef(notify);
+    if (managed) this.managedNotify = notify;
+    else this.notify = new WeakRef(notify);
+  }
+
+  deliver(cause?: number): void {
+    (this.managedNotify ?? this.notify?.deref())?.(cause);
   }
 }
 const cleanupFinalizer = new FinalizationRegistry<SubscriptionRecord>(cleanupSubscription);
 
 function cleanupSubscription(record: SubscriptionRecord): void {
-  if (record.kind === "value") listeners.delete(record.listener);
-  else pendingListeners.delete(record.listener);
-  if (record.target instanceof Atom) record.target.watch(false);
+  if (!record.live) return;
+  record.live = false;
+  if (record.kind === "value") record.target.valueListeners?.delete(record);
+  else record.target.pendingListeners?.delete(record);
+  if (record.generation === subscriptionGeneration) listenerCount--;
+  record.target.watch(false);
 }
 type TraceRecorder = { ring: TraceEvent[]; capacity: number; overflow: number };
 const traceRecorders = new Set<TraceRecorder>();
@@ -111,46 +130,65 @@ function recordEvent(event: TraceEvent): void {
 }
 
 function track(source: Source): void {
-  if (active !== undefined && collecting !== undefined) collecting.set(source, source.version);
+  if (active !== undefined && collecting !== undefined) {
+    if (!collecting.has(source)) collectingNew!.push(source);
+    collecting.set(source, source.version);
+  }
 }
 
-function replaceDeps(observer: Observer, next: Map<Source, number>): void {
-  const wired = !(observer instanceof Computed) || observer.subs.size !== 0;
-  for (const source of observer.deps.keys()) {
-    if (wired && !next.has(source)) removeSubscriber(source, observer);
+function finishDeps(observer: Observer, added: Source[]): void {
+  const wired = !(observer instanceof Computed) || observer.isObserved();
+  for (const [source, version] of observer.deps) {
+    if (version < 0) {
+      if (wired) removeSubscriber(source, observer);
+      observer.deps.delete(source);
+    }
   }
-  for (const source of next.keys()) {
-    if (wired && !observer.deps.has(source)) addSubscriber(source, observer);
-  }
-  observer.deps = next;
+  if (wired) for (const source of added) addSubscriber(source, observer);
+  added.length = 0;
 }
 
 function addSubscriber(source: Source, observer: Observer): void {
   const first = source.subs.size === 0;
   source.subs.add(observer);
   if (first && source instanceof Atom) source.observed(true);
-  if (first && source instanceof Computed) source.activate();
+  if (first && source instanceof Computed) source.internalObserved(true);
 }
 
 function removeSubscriber(source: Source, observer: Observer): void {
   source.subs.delete(observer);
   if (source.subs.size === 0 && source instanceof Atom) source.observed(false);
-  if (source.subs.size === 0 && source instanceof Computed) source.deactivate();
+  if (source.subs.size === 0 && source instanceof Computed) source.internalObserved(false);
 }
 
 function invalidate(source: Source, cause?: number, deliver = true): void {
-  for (const observer of source.subs) observer.onStale();
-  if (deliver) for (const listener of listeners) listener(source, cause);
-  for (const listener of pendingListeners) listener(source);
+  const confirmed = source instanceof Atom;
+  for (const observer of source.subs) observer.onStale(confirmed);
+  if (deliver && source.valueListeners !== undefined)
+    for (const listener of source.valueListeners) listener.deliver(cause);
+  if (source.pendingListeners !== undefined)
+    for (const listener of source.pendingListeners) listener.deliver();
   if (traceRecorders.size !== 0)
     recordEvent({ id: nextOperation++, kind: "delivery", cause, node: source.id });
-  if (batchDepth === 0) flushEffects();
+  if (batchDepth === 0 && effects.length !== 0) flushEffects();
 }
 
 function needsRun(observer: Observer): boolean {
-  for (const [source, version] of observer.deps) {
-    untracked(() => source.read());
-    if (source.version !== version) return true;
+  const previousActive = active;
+  const previousCollecting = collecting;
+  const previousCollectingNew = collectingNew;
+  active = undefined;
+  collecting = undefined;
+  collectingNew = undefined;
+  try {
+    for (const [source, version] of observer.deps) {
+      source.read();
+      if (source.version !== version) return true;
+    }
+  } finally {
+    active = previousActive;
+    collecting = previousCollecting;
+    collectingNew = previousCollectingNew;
   }
   return false;
 }
@@ -158,25 +196,29 @@ function needsRun(observer: Observer): boolean {
 function flushEffects(): void {
   if (flushing) return;
   flushing = true;
-  let turns = 0;
+  let index = 0;
+  let passEnd = effects.length;
+  let turns = 1;
   try {
-    while (effects.size !== 0) {
-      if (++turns > 1000) {
-        effects.clear();
-        throw new Error("Reactive cycle did not converge");
-      }
-      const pending = [...effects];
-      effects.clear();
-      for (const effect of pending) {
-        effect.queued = false;
-        if (!effect.disposed && effect.stale) {
-          const changed = needsRun(effect);
-          if (!effect.disposed && changed) effect.run();
-          else effect.stale = false;
+    while (index < effects.length) {
+      if (index === passEnd) {
+        if (++turns > 1000) {
+          effects.length = 0;
+          throw new Error("Reactive cycle did not converge");
         }
+        passEnd = effects.length;
+      }
+      const effect = effects[index++];
+      effect.queued = false;
+      if (!effect.disposed && effect.stale) {
+        const changed = effect.confirmed || needsRun(effect);
+        effect.confirmed = false;
+        if (!effect.disposed && changed) effect.run();
+        else effect.stale = false;
       }
     }
   } finally {
+    effects.length = 0;
     flushing = false;
   }
 }
@@ -194,12 +236,22 @@ function applies(op: Operation, mode: "canonical" | "latest" | "committed"): boo
 
 function fold<T>(atom: Atom<T>, mode: "canonical" | "latest" | "committed"): T {
   let value = atom.materialize();
+  if (operations.length === 0) return value;
   for (const op of operations) {
-    if (op.atom === atom && op.batch?.deferred !== true && applies(op, mode))
+    if (
+      op.atom === atom &&
+      op.batch?.deferred !== true &&
+      op.afterDraft !== true &&
+      applies(op, mode)
+    )
       value = (op as Operation<T>).reduce(value);
   }
   for (const op of operations) {
     if (op.atom === atom && op.batch?.deferred === true && applies(op, mode))
+      value = (op as Operation<T>).reduce(value);
+  }
+  for (const op of operations) {
+    if (op.atom === atom && op.afterDraft === true && applies(op, mode))
       value = (op as Operation<T>).reduce(value);
   }
   return value;
@@ -211,9 +263,13 @@ export interface AtomOptions<T> {
   effect?: (ctx: { get(): T; set(value: T): void }) => Cleanup;
 }
 
+const defaultAtomOptions: AtomOptions<never> = {};
+
 export class Atom<T> implements Source {
   readonly id = nextNode++;
   readonly subs = new Set<Observer>();
+  valueListeners?: Set<SubscriptionRecord>;
+  pendingListeners?: Set<SubscriptionRecord>;
   version = 0;
   private ready = false;
   private value!: T;
@@ -221,11 +277,13 @@ export class Atom<T> implements Source {
   private observationTicket = 0;
   private externalObservers = 0;
 
+  readonly options: AtomOptions<T>;
+
   constructor(
     private initial: T | (() => T),
-    readonly options: AtomOptions<T> = {},
+    options?: AtomOptions<T>,
   ) {
-    atoms.set(this.id, new WeakRef(this as Atom<unknown>));
+    this.options = options ?? (defaultAtomOptions as AtomOptions<T>);
   }
 
   materialize(): T {
@@ -246,6 +304,10 @@ export class Atom<T> implements Source {
   install(value: T): void {
     this.value = value;
     this.ready = true;
+  }
+
+  setCheckpoint(value: T): void {
+    this.value = value;
   }
 
   checkpoint(reduce: (value: T) => T): void {
@@ -274,7 +336,7 @@ export class Atom<T> implements Source {
   }
 
   set(value: T, token?: BatchToken): void {
-    write(this, () => value, token);
+    write(this, undefined, token, value, true);
   }
 
   update(fn: (value: T) => T, token?: BatchToken): void {
@@ -309,6 +371,8 @@ export interface ComputedOptions<T> {
   label?: string;
 }
 
+const defaultComputedOptions: ComputedOptions<never> = {};
+
 class Pending {
   constructor(readonly promises: PromiseLike<unknown>[]) {}
 }
@@ -341,6 +405,18 @@ function useThenable<T>(promise: PromiseLike<T>): T {
   return record.value as T;
 }
 
+let pendingPromises: PromiseLike<unknown>[] | undefined;
+
+function captureThenable<T>(promise: PromiseLike<T>): T {
+  try {
+    return useThenable(promise);
+  } catch (error) {
+    if (!(error instanceof Pending)) throw error;
+    (pendingPromises ??= []).push(...error.promises);
+    return undefined as T;
+  }
+}
+
 const promiseComputeds = new WeakMap<object, Set<Computed<unknown>>>();
 
 function settlePromise(promise: PromiseLike<unknown>): void {
@@ -354,7 +430,10 @@ function settlePromise(promise: PromiseLike<unknown>): void {
 export class Computed<T> implements Source, Observer {
   readonly id = nextNode++;
   readonly subs = new Set<Observer>();
+  valueListeners?: Set<SubscriptionRecord>;
+  pendingListeners?: Set<SubscriptionRecord>;
   deps = new Map<Source, number>();
+  private newDeps: Source[] = [];
   version = 0;
   stale = true;
   queued = false;
@@ -368,11 +447,16 @@ export class Computed<T> implements Source, Observer {
   private contextual = false;
   private pendingOwner?: BatchToken;
   private refreshOwner?: BatchToken;
+  private externalObservers = 0;
+
+  private options: ComputedOptions<T>;
 
   constructor(
     private fn: (use: <U>(promise: PromiseLike<U>) => U) => T,
-    private options: ComputedOptions<T> = {},
-  ) {}
+    options?: ComputedOptions<T>,
+  ) {
+    this.options = options ?? (defaultComputedOptions as ComputedOptions<T>);
+  }
 
   activate(): void {
     for (const source of this.deps.keys()) addSubscriber(source, this);
@@ -382,12 +466,33 @@ export class Computed<T> implements Source, Observer {
     for (const source of this.deps.keys()) removeSubscriber(source, this);
   }
 
+  isObserved(): boolean {
+    return this.subs.size + this.externalObservers !== 0;
+  }
+
+  internalObserved(on: boolean): void {
+    if (this.externalObservers !== 0) return;
+    if (on) this.activate();
+    else this.deactivate();
+  }
+
+  watch(on: boolean): void {
+    const observed = this.subs.size + this.externalObservers !== 0;
+    this.externalObservers += on ? 1 : -1;
+    const nextObserved = this.subs.size + this.externalObservers !== 0;
+    if (!observed && nextObserved) this.activate();
+    else if (observed && !nextObserved) this.deactivate();
+  }
+
   onStale(): void {
     if (this.evaluating) this.changedWhileEvaluating = true;
-    if (this.stale && this.subs.size === 0) return;
+    if (this.stale && this.subs.size + this.externalObservers === 0) return;
     this.stale = true;
     for (const observer of this.subs) observer.onStale();
-    for (const listener of listeners) listener(this);
+    if (this.valueListeners !== undefined)
+      for (const listener of this.valueListeners) listener.deliver();
+    if (this.pendingListeners !== undefined)
+      for (const listener of this.pendingListeners) listener.deliver();
   }
 
   changedDuringRun(): void {
@@ -416,31 +521,30 @@ export class Computed<T> implements Source, Observer {
     this.contextual = false;
     const previousActive = active;
     const previousCollecting = collecting;
-    const next = new Map<Source, number>();
+    const previousCollectingNew = collectingNew;
+    const previousPendingPromises = pendingPromises;
+    for (const [source, version] of this.deps) this.deps.set(source, -version - 1);
     active = this;
-    collecting = next;
+    collecting = this.deps;
+    collectingNew = this.newDeps;
+    pendingPromises = undefined;
     let result!: T;
     let failure: unknown;
-    const pending: PromiseLike<unknown>[] = [];
+    let pending: PromiseLike<unknown>[] | undefined;
     try {
-      result = this.fn(<U>(promise: PromiseLike<U>): U => {
-        try {
-          return useThenable(promise);
-        } catch (error) {
-          if (!(error instanceof Pending)) throw error;
-          pending.push(...error.promises);
-          return undefined as U;
-        }
-      });
+      result = this.fn(captureThenable);
     } catch (error) {
       failure = error;
     } finally {
+      pending = pendingPromises;
+      pendingPromises = previousPendingPromises;
       active = previousActive;
       collecting = previousCollecting;
+      collectingNew = previousCollectingNew;
       this.evaluating = false;
     }
-    if (pending.length !== 0) failure = new Pending(pending);
-    replaceDeps(this, next);
+    if (pending !== undefined) failure = new Pending(pending);
+    finishDeps(this, this.newDeps);
     this.volatile = this.changedWhileEvaluating;
     this.stale = this.volatile;
     this.pending = failure instanceof Pending ? failure : undefined;
@@ -467,24 +571,38 @@ export class Computed<T> implements Source, Observer {
 
   read(): T {
     if (
-      (this.stale || this.subs.size === 0) &&
+      (this.stale || this.subs.size + this.externalObservers === 0) &&
       this.hasValue &&
       !this.volatile &&
       !this.contextual &&
       world === undefined
     ) {
       let changed = false;
-      for (const [source, version] of this.deps) {
-        untracked(() => source.read());
-        if (source.version !== version) {
-          changed = true;
-          break;
+      const previousActive = active;
+      const previousCollecting = collecting;
+      const previousCollectingNew = collectingNew;
+      active = undefined;
+      collecting = undefined;
+      collectingNew = undefined;
+      try {
+        for (const [source, version] of this.deps) {
+          source.read();
+          if (source.version !== version) {
+            changed = true;
+            break;
+          }
         }
+      } finally {
+        active = previousActive;
+        collecting = previousCollecting;
+        collectingNew = previousCollectingNew;
       }
       this.stale = changed;
     }
     let deferredWorld = false;
-    for (const token of world?.batches ?? []) if (token.deferred) deferredWorld = true;
+    if (world !== undefined) {
+      for (const token of world.batches) if (token.deferred) deferredWorld = true;
+    }
     if (this.stale || deferredWorld) this.evaluate();
     track(this);
     if (this.pending !== undefined) {
@@ -514,8 +632,10 @@ export class Computed<T> implements Source, Observer {
 
 class Effect implements Observer {
   deps = new Map<Source, number>();
+  private newDeps: Source[] = [];
   stale = true;
   queued = false;
+  confirmed = false;
   disposed = false;
   private cleanup?: () => void;
   readonly children: Effect[] = [];
@@ -524,12 +644,13 @@ class Effect implements Observer {
     allEffects.add(this);
   }
 
-  onStale(): void {
+  onStale(confirmed = false): void {
     if (this.disposed) return;
     this.stale = true;
+    this.confirmed ||= confirmed;
     if (!this.queued) {
       this.queued = true;
-      effects.add(this);
+      effects.push(this);
     }
   }
 
@@ -549,10 +670,12 @@ class Effect implements Observer {
     }
     const previousActive = active;
     const previousCollecting = collecting;
+    const previousCollectingNew = collectingNew;
     const previousEffect = runningEffect;
-    const next = new Map<Source, number>();
+    for (const [source, version] of this.deps) this.deps.set(source, -version - 1);
     active = this;
-    collecting = next;
+    collecting = this.deps;
+    collectingNew = this.newDeps;
     runningEffect = this;
     this.stale = false;
     try {
@@ -560,8 +683,9 @@ class Effect implements Observer {
     } finally {
       active = previousActive;
       collecting = previousCollecting;
+      collectingNew = previousCollectingNew;
       runningEffect = previousEffect;
-      replaceDeps(this, next);
+      finishDeps(this, this.newDeps);
     }
   }
 
@@ -571,7 +695,7 @@ class Effect implements Observer {
     allEffects.delete(this);
     for (const child of this.children) child.dispose();
     this.children.length = 0;
-    effects.delete(this);
+    this.queued = false;
     for (const source of this.deps.keys()) removeSubscriber(source, this);
     this.deps.clear();
     const cleanup = this.cleanup;
@@ -623,17 +747,35 @@ export function effectScope(fn: () => void): () => void {
 }
 
 export function startBatch(): void {
-  if (batchDepth === 0) batchSnapshots = new Map();
+  if (batchDepth === 0) {
+    batchTarget = undefined;
+    batchSnapshots.clear();
+  }
   batchDepth++;
 }
 
 export function endBatch(): void {
   if (--batchDepth === 0) {
-    for (const [target, snapshot] of batchSnapshots!) {
-      if ((target.options.equals ?? Object.is)(target.read(), snapshot.value))
-        target.version = snapshot.version;
+    if (batchTarget !== undefined) {
+      if ((batchTarget.options.equals ?? Object.is)(batchTarget.read(), batchValue)) {
+        batchTarget.version = batchVersion;
+        for (const observer of batchTarget.subs) {
+          if (observer instanceof Effect && observer.confirmed && !needsRun(observer))
+            observer.confirmed = false;
+        }
+      }
     }
-    batchSnapshots = undefined;
+    for (const [target, snapshot] of batchSnapshots) {
+      if ((target.options.equals ?? Object.is)(target.read(), snapshot.value)) {
+        target.version = snapshot.version;
+        for (const observer of target.subs) {
+          if (observer instanceof Effect && observer.confirmed && !needsRun(observer))
+            observer.confirmed = false;
+        }
+      }
+    }
+    batchTarget = undefined;
+    batchSnapshots.clear();
     flushEffects();
   }
 }
@@ -662,32 +804,62 @@ export function untracked<T>(fn: () => T): T {
 
 let currentBatch: (() => BatchToken | undefined) | undefined;
 
-function write<T>(target: Atom<T>, reduce: (value: T) => T, token = currentBatch?.()): void {
+function write<T>(
+  target: Atom<T>,
+  reduce: ((value: T) => T) | undefined,
+  token = currentBatch?.(),
+  value?: T,
+  direct = false,
+): void {
   if (initializer !== undefined) throw new Error("A lazy initializer must not write signals");
   if (hostRuntime?.isRendering?.() === true)
     throw new Error("Signals must not be written while React is rendering");
   const before = fold(target, token?.deferred === true ? "latest" : "canonical");
-  if (active instanceof Computed && collecting?.has(target)) active.changedDuringRun();
-  if (batchSnapshots !== undefined && !batchSnapshots.has(target as Atom<unknown>)) {
-    batchSnapshots.set(target as Atom<unknown>, { value: before, version: target.version });
+  const trackedVersion = collecting?.get(target);
+  if (active instanceof Computed && trackedVersion !== undefined && trackedVersion >= 0)
+    active.changedDuringRun();
+  if (batchDepth !== 0 && target !== batchTarget && !batchSnapshots.has(target as Atom<unknown>)) {
+    if (batchTarget === undefined) {
+      batchTarget = target as Atom<unknown>;
+      batchValue = before;
+      batchVersion = target.version;
+    } else {
+      batchSnapshots.set(target as Atom<unknown>, { value: before, version: target.version });
+    }
   }
-  const after = reduce(before);
+  const after = direct ? (value as T) : reduce!(before);
   let hasDraft = false;
+  let renderedDraft = false;
   for (const op of operations) {
     if (op.atom === target && op.batch?.deferred === true && !op.batch.committed) {
       hasDraft = true;
-      break;
+      renderedDraft ||= op.batch.rendered === true;
     }
   }
   if (!hasDraft && (target.options.equals ?? Object.is)(before, after)) return;
   const id = nextOperation++;
   const parent = token?.cause;
-  recordEvent({ id, kind: "write", cause: parent, node: target.id, batch: token?.id });
+  if (traceRecorders.size !== 0)
+    recordEvent({ id, kind: "write", cause: parent, node: target.id, batch: token?.id });
   if (token !== undefined) token.cause = id;
   if (token?.deferred === true) {
-    operations.push({ id, atom: target, batch: token, reduce } as Operation);
+    operations.push({
+      id,
+      atom: target,
+      batch: token,
+      reduce: direct ? () => value as T : reduce!,
+    } as Operation);
+  } else if (renderedDraft) {
+    operations.push({
+      id,
+      atom: target,
+      batch: undefined,
+      reduce: direct ? () => value as T : reduce!,
+      afterDraft: true,
+    } as Operation);
+    target.version++;
   } else {
-    target.checkpoint(() => after);
+    target.setCheckpoint(after);
     target.version++;
   }
   invalidate(target, id);
@@ -730,23 +902,43 @@ export function refresh<T>(target: Atom<T> | Computed<T>): void {
 export function subscribe<T>(
   target: Atom<T> | Computed<T>,
   notify: (cause?: number) => void,
+  seenBatches?: ReadonlySet<BatchToken>,
+  managed = false,
 ): () => void {
-  const record = new SubscriptionRecord("value", target, notify);
-  listeners.add(record.listener);
-  if (target instanceof Atom) target.watch(true);
+  const record = new SubscriptionRecord(
+    "value",
+    target,
+    subscriptionGeneration,
+    nextOperation,
+    seenBatches,
+    notify,
+    managed,
+  );
+  (target.valueListeners ??= new Set()).add(record);
+  listenerCount++;
+  target.watch(true);
   const dispose = () => {
     void notify;
     cleanupFinalizer.unregister(dispose);
     cleanupSubscription(record);
   };
-  cleanupFinalizer.register(dispose, record, dispose);
+  if (!managed) cleanupFinalizer.register(dispose, record, dispose);
   return dispose;
 }
 
 export function subscribePending<T>(target: Atom<T> | Computed<T>, notify: () => void): () => void {
-  const record = new SubscriptionRecord("pending", target, notify);
-  pendingListeners.add(record.listener);
-  if (target instanceof Atom) target.watch(true);
+  const record = new SubscriptionRecord(
+    "pending",
+    target,
+    subscriptionGeneration,
+    nextOperation,
+    undefined,
+    notify,
+    false,
+  );
+  (target.pendingListeners ??= new Set()).add(record);
+  listenerCount++;
+  target.watch(true);
   const dispose = () => {
     void notify;
     cleanupFinalizer.unregister(dispose);
@@ -810,11 +1002,11 @@ export function retireBatch(token: BatchToken, didCommit: boolean): void {
   traceEvent("batch-retire", token.cause, undefined, token);
   token.live = false;
   token.committed = didCommit;
-  const touched = new Set<Atom<unknown>>();
+  const touched = new Map<Atom<unknown>, number>();
   for (let index = 0; index < operations.length; ) {
     const op = operations[index];
     if (op.batch === token) {
-      touched.add(op.atom);
+      if (!touched.has(op.atom)) touched.set(op.atom, op.id);
       if (didCommit) op.atom.checkpoint(op.reduce);
       operations.splice(index, 1);
     } else {
@@ -823,10 +1015,36 @@ export function retireBatch(token: BatchToken, didCommit: boolean): void {
   }
   for (const set of tokenRoots.get(token) ?? []) set.delete(token);
   tokenRoots.delete(token);
+  for (const [target] of touched) {
+    let draftRemains = false;
+    for (const op of operations) {
+      if (op.atom === target && op.batch?.deferred && !op.batch.committed) {
+        draftRemains = true;
+        break;
+      }
+    }
+    if (!draftRemains) {
+      for (let index = 0; index < operations.length; ) {
+        const op = operations[index];
+        if (op.atom === target && op.afterDraft) {
+          target.checkpoint(op.reduce);
+          operations.splice(index, 1);
+        } else {
+          index++;
+        }
+      }
+    }
+  }
   if (token.deferred) {
-    for (const target of touched) {
+    for (const [target, draftStart] of touched) {
       target.version++;
       invalidate(target, token.cause, !didCommit);
+      if (didCommit && target.valueListeners !== undefined) {
+        for (const listener of target.valueListeners) {
+          if (listener.createdAt > draftStart && listener.seenBatches?.has(token) !== true)
+            listener.deliver(token.cause);
+        }
+      }
     }
   }
 }
@@ -836,9 +1054,9 @@ export function serializeAtomState(
   replacer?: (key: string, value: unknown) => unknown,
 ): string {
   const values: Record<string, unknown> = {};
-  for (const target of targets) {
-    const key = target.options.label;
-    if (key === undefined) throw new Error("serializeAtomState requires a label on every atom");
+  for (let index = 0; index < targets.length; index++) {
+    const target = targets[index];
+    const key = target.options.label ?? String(index);
     values[key] = target.read();
   }
   return JSON.stringify(values, replacer);
@@ -850,10 +1068,10 @@ export function initializeAtomState(
   reviver?: (key: string, value: unknown) => unknown,
 ): void {
   const values = JSON.parse(json, reviver) as Record<string, unknown>;
-  for (const target of targets) {
-    const key = target.options.label;
-    if (key !== undefined && Object.prototype.hasOwnProperty.call(values, key))
-      target.install(values[key]);
+  for (let index = 0; index < targets.length; index++) {
+    const target = targets[index];
+    const key = target.options.label ?? String(index);
+    if (Object.prototype.hasOwnProperty.call(values, key)) target.install(values[key]);
   }
 }
 
@@ -881,9 +1099,14 @@ export function trace(capacity = 1024): Trace {
         : [{ id: 0, kind: `overflow:${recorder.overflow}` }, ...recorder.ring],
     whyLastDelivery(target) {
       const node = target instanceof Atom || target instanceof Computed ? target.id : undefined;
-      const found = recorder.ring.findLast(
-        (event) => event.node === node && event.kind.includes("delivery"),
-      );
+      let found: TraceEvent | undefined;
+      for (let index = recorder.ring.length - 1; index >= 0; index--) {
+        const event = recorder.ring[index];
+        if (event.node === node && event.kind.includes("delivery")) {
+          found = event;
+          break;
+        }
+      }
       if (found === undefined) return [];
       const chain: string[] = [];
       let current: TraceEvent | undefined = found;
@@ -902,25 +1125,26 @@ export function trace(capacity = 1024): Trace {
 
 export function reset(): void {
   for (const current of [...allEffects]) current.dispose();
-  effects.clear();
+  effects.length = 0;
   allEffects.clear();
   operations.length = 0;
-  atoms.clear();
   traceRecorders.clear();
-  pendingListeners.clear();
+  listenerCount = 0;
+  subscriptionGeneration++;
   nextNode = 1;
   nextOperation = 1;
   active = undefined;
   collecting = undefined;
+  collectingNew = undefined;
   world = undefined;
   batchDepth = 0;
-  batchSnapshots = undefined;
+  batchTarget = undefined;
+  batchSnapshots.clear();
   hostRuntime = undefined;
   currentBatch = undefined;
 }
 
 export const __debug = {
   operations,
-  atoms,
-  listenerCount: () => listeners.size + pendingListeners.size,
+  listenerCount: () => listenerCount,
 };
