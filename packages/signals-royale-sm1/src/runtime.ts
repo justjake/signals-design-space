@@ -155,10 +155,16 @@ export class Computed<T> {
   readonly label?: string;
   version = 0;
   dirty = true;
+  forced = false;
   queued = false;
   evaluating = false;
   initialized = false;
   settled = false;
+  worldSettled = false;
+  worldValue: T | undefined;
+  pendingState = false;
+  pendingLanes = 0;
+  urgentPending = false;
   status: 0 | 1 | 2 = 0;
   value: T | undefined;
   thenable?: PromiseLike<unknown>;
@@ -171,6 +177,7 @@ export class Computed<T> {
   readonly nextSourceValues: unknown[] = [];
   readonly observers = new Set<CoreObserver>();
   readonly reactObservers = new Set<ReactObserver>();
+  readonly pendingObservers = new Set<ReactObserver>();
   evaluation: Evaluation<T> | null = null;
   worldCache: Map<PassId, Evaluation<T>> | null = null;
   latestRevision = -1;
@@ -249,8 +256,10 @@ const touchedAtoms = new Set<Atom<any>>();
 let passes = new WeakMap<RootToken, Pass>();
 let rootViews = new WeakMap<RootToken, number>();
 const lifetimeQueue = new Set<Atom<any>>();
+const pendingNotifications = new Set<Computed<any>>();
 const thenableRecords = new WeakMap<object, AsyncRecord>();
 let lifetimeScheduled = false;
+let pendingNotificationScheduled = false;
 
 const disposalRegistry = new FinalizationRegistry<() => void>((dispose) => dispose());
 
@@ -577,15 +586,40 @@ function settleAsync(record: AsyncRecord, status: 1 | 2, value: unknown): void {
         last.value = status === 1 ? value : target.value;
         last.error = status === 2 ? record.error : undefined;
         last.thenable = undefined;
+        if (status === 1) {
+          target.worldSettled = true;
+          target.worldValue = value;
+        }
       } else {
         target.lastWorldEvaluation = null;
       }
+    }
+    let stillPending = false;
+    if (last !== null) {
+      for (const pending of last.pending) {
+        if (pending.status === 0) {
+          stillPending = true;
+          break;
+        }
+      }
+    }
+    if (!stillPending) {
+      if (lanes === 0) target.urgentPending = false;
+      else target.pendingLanes &= ~lanes;
+      setPendingState(
+        target,
+        target.urgentPending || target.pendingLanes !== 0,
+        settlement,
+      );
     }
     if (target.latestEvaluation?.pending.includes(record)) {
       target.latestRevision = -1;
     }
     if (lanes === 0) {
-      if (!resolvedDirect) markComputedDirty(target, settlement);
+      if (!resolvedDirect) {
+        target.forced = true;
+        markComputedDirty(target, settlement);
+      }
       deliverComputed(target, 0, settlement);
     } else {
       let remaining = lanes;
@@ -672,10 +706,24 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
       thenable = Promise.all(thenables);
     }
   }
+  const hadSettled = canonical
+    ? target.settled
+    : target.worldSettled || target.settled;
   const evaluation: Evaluation<T> = {
     status,
-    settled: target.settled,
-    value: status === 0 ? value : target.settled ? target.value : undefined,
+    settled: hadSettled,
+    value:
+      status === 0
+        ? value
+        : canonical
+          ? target.settled
+            ? target.value
+            : undefined
+          : target.worldSettled
+            ? target.worldValue
+            : target.settled
+              ? target.value
+              : undefined,
     thenable,
     error,
     atoms: frame.atoms,
@@ -683,13 +731,33 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
     direct,
   };
 
-  if (!canonical) return evaluation;
+  if (!canonical) {
+    if (status === 0) {
+      target.worldSettled = true;
+      target.worldValue = value;
+    }
+    const ownerLanes = world.lanes & liveLanes;
+    if (status === 1 && hadSettled) {
+      if (ownerLanes === 0) target.urgentPending = true;
+      else target.pendingLanes |= ownerLanes;
+    } else if (status === 0) {
+      if (ownerLanes === 0) target.urgentPending = false;
+      else target.pendingLanes &= ~ownerLanes;
+    }
+    setPendingState(
+      target,
+      target.urgentPending || target.pendingLanes !== 0,
+      target.cause ?? 0,
+    );
+    return evaluation;
+  }
   const oldStatus = target.status;
   const oldValue = target.value;
   const oldSettled = target.settled;
   reconcileSources(target, target.nextSources);
   target.initialized = true;
   target.dirty = false;
+  target.forced = false;
   target.status = status;
   target.thenable = thenable;
   target.error = error;
@@ -698,6 +766,12 @@ function runEvaluation<T>(target: Computed<T>, world: World, canonical: boolean)
     target.settled = true;
     evaluation.settled = true;
   }
+  target.urgentPending = status === 1 && target.settled;
+  setPendingState(
+    target,
+    target.urgentPending || target.pendingLanes !== 0,
+    target.cause ?? 0,
+  );
   if (
     oldStatus !== status ||
     oldSettled !== target.settled ||
@@ -730,7 +804,7 @@ function evaluateCanonical<T>(target: Computed<T>): Evaluation<T> {
       }
     }
   }
-  if (target.dirty && target.initialized) {
+  if (target.dirty && target.initialized && !target.forced) {
     let changed = false;
     for (let i = 0; i < target.sources.length; i++) {
       const source = target.sources[i];
@@ -761,16 +835,17 @@ function evaluateInWorld<T>(target: Computed<T>, world: World): Evaluation<T> {
   } else if (world.pass === -2 && target.latestRevision === worldRevision) {
     return target.latestEvaluation as Evaluation<T>;
   }
+  const visibleLanes = world.lanes & liveLanes;
   if (
     target.lastWorldEvaluation !== null &&
     target.lastWorldPin === world.pin &&
-    target.lastWorldLanes === world.lanes
+    target.lastWorldLanes === visibleLanes
   ) {
     return target.lastWorldEvaluation;
   }
   const evaluation = runEvaluation(target, world, false);
   target.lastWorldPin = world.pin;
-  target.lastWorldLanes = world.lanes;
+  target.lastWorldLanes = visibleLanes;
   target.lastWorldEvaluation = evaluation;
   if (world.pass > 0) {
     (target.worldCache ??= new Map()).set(world.pass, evaluation);
@@ -982,6 +1057,30 @@ function flushIfReady(): void {
   }
 }
 
+function setPendingState(target: Computed<any>, pending: boolean, cause: number): void {
+  if (target.pendingState === pending) return;
+  target.pendingState = pending;
+  target.cause = cause || target.cause;
+  pendingNotifications.add(target);
+  if (pendingNotificationScheduled) return;
+  pendingNotificationScheduled = true;
+  queueMicrotask(() => {
+    pendingNotificationScheduled = false;
+    for (const computed of pendingNotifications) {
+      for (const observer of computed.pendingObservers) {
+        const delivery = traceEmit('component delivery', {
+          cause: computed.cause,
+          target: computed,
+          label: computed.label,
+          detail: computed.pendingState ? 'pending' : 'settled',
+        });
+        observer.notify(delivery || computed.cause || 0);
+      }
+    }
+    pendingNotifications.clear();
+  });
+}
+
 function deliverAtom(target: Atom<any>, lane: Lane, cause: number): void {
   const batch = lane === 0 ? undefined : batches.get(lane);
   for (const observer of target.reactObservers) {
@@ -1033,11 +1132,8 @@ export function effect(fn: () => void | (() => void)): () => void {
   if (activeEffect !== null) activeEffect.children.push(target);
   if (activeScope !== null) activeScope.effects.push(target);
   runEffect(target);
-  const dispose = () => {
-    disposalRegistry.unregister(dispose);
-    disposeEffect(target);
-  };
-  disposalRegistry.register(dispose, () => disposeEffect(target), dispose);
+  const dispose = () => disposeEffect(target);
+  disposalRegistry.register(dispose, () => disposeEffect(target));
   return dispose;
 }
 
@@ -1113,6 +1209,7 @@ export type ReactRead<T> = {
   atoms: Atom<any>[];
   computeds: Computed<any>[];
   versions: number[];
+  atomValues: unknown[];
   lanes: number;
   cause?: number;
 };
@@ -1124,7 +1221,12 @@ export function collectReactRead<T>(target: Atom<T> | Computed<T>, cause?: numbe
   try {
     const value = withTraceCause(cause, () => read(target));
     const versions: number[] = [];
-    for (const atom of collector.atoms) versions.push(atom.version);
+    const atomValues: unknown[] = [];
+    const world = currentWorld();
+    for (const atom of collector.atoms) {
+      versions.push(atom.version);
+      atomValues.push(readAtomInWorld(atom, world));
+    }
     traceEmit('component re-render', {
       cause,
       target,
@@ -1136,7 +1238,8 @@ export function collectReactRead<T>(target: Atom<T> | Computed<T>, cause?: numbe
       atoms: collector.atoms,
       computeds: collector.computeds,
       versions,
-      lanes: currentWorld().lanes,
+      atomValues,
+      lanes: world.lanes,
       cause,
     };
   } finally {
@@ -1144,7 +1247,7 @@ export function collectReactRead<T>(target: Atom<T> | Computed<T>, cause?: numbe
   }
 }
 
-export function subscribeReact(snapshot: ReactRead<unknown>, observer: ReactObserver): () => void {
+export function subscribeReact<T>(snapshot: ReactRead<T>, observer: ReactObserver): () => void {
   for (const atom of snapshot.atoms) {
     const wasUnobserved = atomObserverCount(atom) === 0;
     atom.reactObservers.add(observer);
@@ -1154,7 +1257,12 @@ export function subscribeReact(snapshot: ReactRead<unknown>, observer: ReactObse
 
   let staleCause = 0;
   for (let i = 0; i < snapshot.atoms.length; i++) {
-    if (snapshot.atoms[i].version !== snapshot.versions[i]) {
+    const atom = snapshot.atoms[i];
+    canonicalWorld.pin = sequence;
+    if (
+      atom.version !== snapshot.versions[i] &&
+      !atom.equals(snapshot.atomValues[i], readAtomInWorld(atom, canonicalWorld))
+    ) {
       staleCause = traceEmit('component delivery', {
         target: snapshot.target,
         detail: 'post-subscribe canonical repair',
@@ -1194,6 +1302,15 @@ export function subscribeReact(snapshot: ReactRead<unknown>, observer: ReactObse
     }
     for (const computed of snapshot.computeds) computed.reactObservers.delete(observer);
   };
+}
+
+export function subscribePending(
+  target: Atom<any> | Computed<any>,
+  observer: ReactObserver,
+): () => void {
+  if (target.kind === 0) return () => {};
+  target.pendingObservers.add(observer);
+  return () => target.pendingObservers.delete(observer);
 }
 
 function readInWorldWithoutTracking<T>(target: Atom<T> | Computed<T>, world: World): T | undefined {
@@ -1242,17 +1359,7 @@ export function committed<T>(target: Atom<T> | Computed<T>, container?: RootToke
 }
 
 export function isPending(target: Atom<any> | Computed<any>): boolean {
-  if (target.kind === 0 || !target.settled) return false;
-  const context = host?.renderContext();
-  if (context !== null && context !== undefined) {
-    const pass = passes.get(context.container);
-    const evaluation = pass === undefined ? undefined : target.worldCache?.get(pass.id);
-    if (evaluation !== undefined) return evaluation.status === 1;
-  }
-  if (target.latestRevision === worldRevision && target.latestEvaluation !== null) {
-    return target.latestEvaluation.status === 1;
-  }
-  return target.status === 1;
+  return target.kind === 1 && target.pendingState;
 }
 
 export function refresh(target: Computed<any>): void {
@@ -1268,6 +1375,7 @@ export function refresh(target: Computed<any>): void {
   target.worldCache?.clear();
   target.lastWorldEvaluation = null;
   if (lane === 0) {
+    target.forced = true;
     markComputedDirty(target, cause);
     deliverComputed(target, 0, cause);
   } else {
@@ -1317,6 +1425,13 @@ function retireBatch(batch: Batch, committedBatch: boolean, cause?: number): voi
   for (const atom of changed) {
     atom.version++;
     invalidateAtom(atom, retirementCause || batch.cause);
+    traceEmit('component delivery', {
+      cause: retirementCause || batch.cause,
+      target: atom,
+      batch: batch.lane,
+      label: atom.label,
+      detail: 'committed lane',
+    });
   }
   flushIfReady();
   sweepIfQuiescent();
@@ -1467,10 +1582,12 @@ export function resetForTest(): void {
   episodeBatches.length = 0;
   dirtyComputeds.length = 0;
   pendingEffects.length = 0;
+  pendingNotifications.clear();
   dirtyIndex = 0;
   effectIndex = 0;
   batchDepth = 0;
   flushing = false;
+  pendingNotificationScheduled = false;
   activeWorld = null;
   activeObserver = null;
   activeFrame = null;

@@ -22,6 +22,7 @@ export {
   set,
   startBatch,
   startTrace,
+  subscribePending,
   subscribeReact,
   untracked,
   update,
