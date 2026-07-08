@@ -563,9 +563,9 @@ export class ReactFork implements ForkLike {
 	}
 
 	isCurrentWriteDeferred(): boolean {
-		// Mint-free classification (§6.4 documents this as pure): the first
-		// unstable_getCurrentWriteBatch call in an event CREATES the batch
-		// identity, so a probe must read the current-transition slot instead.
+		// Side-effect-free classification (§6.4 documents this as pure): the
+		// first unstable_getCurrentWriteBatch call in an event CREATES the
+		// batch identity, so a probe must read the current-transition slot.
 		// Mirrors the classifier's own transition arm (non-gesture scope ⇒
 		// a write issued now is deferred).
 		const t = this.currentTransitionScope() as { gesture?: unknown } | null;

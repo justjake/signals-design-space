@@ -103,7 +103,7 @@ describe('fork listener error isolation', () => {
 			});
 		});
 		expect(c.textContent).toBe('1');
-		expect(seen).toHaveLength(1); // the recorder heard the mint despite the throw
+		expect(seen).toHaveLength(1); // the recorder heard the event despite the throw
 		expect(handle.fork.listenerErrors).toHaveLength(1);
 		expect(String(handle.fork.listenerErrors[0])).toContain('listener boom');
 		handle.fork.listenerErrors.length = 0;

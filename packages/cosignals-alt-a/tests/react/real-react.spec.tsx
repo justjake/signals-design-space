@@ -113,8 +113,8 @@ describe('real React: bridge probe is read-only', () => {
 	// Regression pin for the step-0 bridge bug (PLAN-edge-export step 0a):
 	// isCurrentWriteDeferred was implemented as unstable_getCurrentWriteBatch()
 	// & 1, and that call CREATES a batch identity — so every ambient read
-	// taken while a deferred batch was live minted a spurious urgent batch,
-	// under the engine guard that documents "a read must never mint".
+	// taken while a deferred batch was live created a spurious urgent batch,
+	// under the engine guard that documents reads never create batches.
 	it('ambient reads while a deferred batch is live create no batch identity', async () => {
 		handle.dispose();
 		let allocations = 0;
@@ -146,10 +146,10 @@ describe('real React: bridge probe is read-only', () => {
 				b.set(11);
 			});
 			// The transition batch is live and unflushed; these ambient reads
-			// hit the probe. Before the fix, each read minted one urgent batch.
+			// hit the probe. Before the fix, each read created one urgent batch.
 			expect(a.state).toBe(1);
 			expect(b.state).toBe(10); // ambient-W0: the draft stays hidden
-			expect(allocations).toBe(1); // exactly the transition's own mint
+			expect(allocations).toBe(1); // exactly the transition's own batch
 		});
 		expect(c.textContent).toBe('1:11');
 		expect(allocations).toBe(1);

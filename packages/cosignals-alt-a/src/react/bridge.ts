@@ -14,12 +14,13 @@
  *    classification; we mint the spec §6.2 encoding `(serial<<1)|deferred`,
  *    so the engine's slot interning works unchanged. No mapping tables.
  *  (shared internals `T` slot)               → isCurrentWriteDeferred: the
- *    engine calls this probe on ambient reads under its "a read must never
- *    mint" guard, so it must not touch unstable_getCurrentWriteBatch — the
- *    first such call in an event CREATES the batch identity. Reading the
- *    reconciler's current-transition slot classifies with no side effects
- *    (non-null, non-gesture scope ⇒ a write issued now is deferred),
- *    mirroring the classifier's own transition arm.
+ *    engine calls this probe on ambient reads under its guard that a read
+ *    must never create a batch identity, so it must not touch
+ *    unstable_getCurrentWriteBatch — the first such call in an event
+ *    CREATES the batch. Reading the reconciler's current-transition slot
+ *    classifies with no side effects (non-null, non-gesture scope ⇒ a
+ *    write issued now is deferred), mirroring the classifier's own
+ *    transition arm.
  *  (none)                                    → onRootRegistered: the real
  *    fork has no root-registration edge; the bridge synthesizes activation
  *    at attach time. Sound for variant A: attach precedes any React work,
@@ -174,8 +175,8 @@ export function attachReactBridge(engine: CosignalEngine, react: unknown = React
 			return () => unsubscribeReact?.();
 		},
 		isCurrentWriteDeferred(): boolean {
-			// Mint-free probe (see the header's `T`-slot mapping row): reads
-			// must never create a batch identity, and the first
+			// Side-effect-free probe (see the header's `T`-slot mapping row):
+			// reads must never create a batch identity, and the first
 			// unstable_getCurrentWriteBatch call in an event does exactly that.
 			const t = currentTransitionScope(R);
 			return t !== null && t !== undefined && !t.gesture;
