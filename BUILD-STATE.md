@@ -416,6 +416,87 @@ must be able to continue from it alone.
     flag-word rewrite masks it through). `pnpm gen` re-emitted the layout
     region; regen-diff + docs-gate + full suite green.
 
+## Owner ruling (mid-leg-5, plan amended as c6c03d3 — cherry-picked bfdc85c)
+
+Observer re-fire semantics are AT-LEAST-ONCE. {lastValue, lastValidatedAt}
+baselines repealed — observers store ONLY lastValidatedAt (the reserved
+link clock slots). Revalidation: producer clean + clock match = skip; clock
+mismatch = RE-FIRE, no value comparison at the re-fire decision. Net-no-
+change multi-boundary sequences re-fire spuriously by accepted design.
+Custom isEqual still gates write acceptance + per-root refold clock bumps
+(bump table unchanged — clocks only move on changed results; leg-5
+consequence: arenaNoteThrow's conservative unconditional bump must become
+outcome-gated, or every marked still-suspended refold re-fires observers).
+Watcher corrective gates: clock-decided; lastRenderedValue dies UNLESS a
+non-refire-gating contract requires a retained value (report survivors).
+Consequences owned by leg 5: value-gated re-fire pins → at-least-once pins
+(documented per rewrite); boundary coalescing (many writes, one boundary,
+one re-fire) UNCHANGED; SANCTIONED oracle co-evolution (per-node accepted-
+change counters, minimal + documented); cosignals-react useSignalEffect doc
+update.
+
+Leg-5 exactness design (argued in full; the corpora are the referee):
+- Engine per-(root, node) committed clock ≡ model per-(root, node)
+  accepted-change counter over a committed fold cache {outcome, counter}.
+- The model's cache refreshes ONLY inside observer-machinery committed
+  evaluations (drain full scan, quiet scan, sub re-check, commit populator,
+  capture) — these mirror the engine's arena refold consults one-to-one at
+  value-changing events: between boundaries committed folds are fixed, so
+  test reads refold nothing on either side; marks make every value-changing
+  boundary a candidate/scan on both sides; refresh-set differences at
+  UNCHANGED values are invisible (no counter movement).
+- The model never skips (always evaluates; its evaluation is pure); the
+  engine's clean+match skip is invisible because clean ⇔ no pending marks ⇔
+  fold unchanged since the stamp.
+- Watcher commit stamp rule (both sides): at commit, populator evaluates
+  committed-now (refresh/refold); stamp := (render value ≡ committed-now,
+  by the node's comparator) ? clock-now : 0 (0 forces the next drain's
+  correction — the restaled carry). The populator value compare is KEPT: it
+  is a cross-world (render vs committed) commit-integrity check, not an
+  observer re-fire gate on producer changes (per-root clocks cannot express
+  cross-world equivalence; killing it means correct-every-watcher-every-
+  commit, which breaks the react contract).
+- Mount fixup: four-condition fast-out already clock/generation-decided;
+  its post-evaluation compare (mountFix world vs the rendered register) is
+  KEPT for the same cross-world reason. Scars' catch-up-vs-urgent split
+  untouched.
+
+## Owner ruling 2 (mid-leg-5, plan amended as 7a5ff4f — cherry-picked b28602c)
+
+ALL arenas must support resizing — exhaustion is never fatal. Kernel
+already complies (closure-rebuild growth, untouched). Leg 3's fixed-
+reservation-with-arenaExhausted-throw is REVERSED in its growth half:
+restore grow-by-copy (doubling) for world-arena buffers + columns, mid-
+operation capable through the shell indirection (a.memory reassigned; the
+reload-after-allocation discipline confined to the allocation sites and
+ENUMERATED in the schema/generated region — generated-or-listed, never
+folklore). KEEP: plain fixed-length views (length-tracking resizable-
+buffer views stay banned — the +56% conviction), the generous initial
+reservation (growth stays rare), ARENA_POOL_CAP, generated column
+coherence (growWorldArenaColumns back to real duty; extras/clock slots
+ride the roster automatically). SEQUENCING: observers unit finishes FIRST;
+growth restoration is the unit immediately after (same leg if budget
+allows, else FIRST successor item). Growth-unit gate: cold-render +
+wide-mask at parity with leg-start numbers (interleaved medians-of-3 — an
+explicit exception to the no-perf-bench rule for that unit only), plus a
+real mid-operation doubling test (arena-sa2/sd pins return to honest
+growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
+
+## Done (continued 7) — leg 5
+
+12. **Schema v3 (commit A)**: extras general per-record object column
+    (growArray, 1 slot, scrubOnFree node, ID_TO_EXTRAS_SHIFT); WatcherField
+    + SubscriptionField families (observer records = kernel node-allocator
+    records; slots 1/5/7 keep allocator meanings); NodeFlag K_WATCHER /
+    K_SUBSCRIPTION / OBSERVER_LIVE (outside KIND_MASK — kernel dispatch
+    never sees observer records); ALLOCATOR_FAMILIES introduced — kernel
+    scrub/grow functions now emit per ALLOCATOR (names unchanged), plus
+    generated growNodeSideColumns (allocNode's grown-together loop — the
+    hand-written while-push pair replaced) and generated
+    scrubWorldLinkColumnsOnFree (arenaFreeLink calls it; world links' clock
+    slots = subscription dep lastValidatedAt, no longer "reserved").
+    allocNode is unbudgeted; arenaFreeLink stayed within its 50 budget.
+
 ## In progress / exact next actions
 
 **Priority 5 — observers/watchers/subscriptions as arena records.** Nothing

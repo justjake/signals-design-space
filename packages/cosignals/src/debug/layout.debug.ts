@@ -3,7 +3,7 @@
 // hydrators, and the side-column rosters. Imports nothing from the engine;
 // none of it ships on a hot path.
 
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 export type FieldInfo = {
 	name: string;
@@ -15,6 +15,8 @@ export type FieldInfo = {
 export const STRIDES: Record<string, number> = {
 	node: 8,
 	link: 8,
+	watcher: 8,
+	subscription: 8,
 	arenaShadow: 8,
 	arenaLink: 8,
 };
@@ -39,6 +41,25 @@ export const FIELDS_BY_RECORD: Record<string, readonly FieldInfo[]> = {
 		{ name: "PREV_DEP", slot: 5, kind: "LinkId", doc: "Previous link in the consumer's dependency list." },
 		{ name: "NEXT_DEP", slot: 6, kind: "LinkId", doc: "Next link in the consumer's dependency list." },
 		{ name: "FREE_NEXT", slot: 7, kind: "LinkId", doc: "The free list threads through the spare field so a freed link keeps every real field intact: the walks deliberately read stale nextDep/nextSub off links unlinked earlier in the same walk (conformance case 203 exercises this; tests/freelist.spec.ts pins it with a primed free list), and those stale pointers must name former neighbors — never the free list." },
+	],
+	watcher: [
+		{ name: "FLAGS", slot: 0, kind: "flags", doc: "Kind + observer-state bits (NodeFlag.K_WATCHER, NodeFlag.OBSERVER_LIVE)." },
+		{ name: "FREE_NEXT", slot: 1, kind: "NodeId", doc: "Allocator-owned: the node free list threads here while the record is freed (0 while live — watcher records hold no dependency links)." },
+		{ name: "NODE", slot: 2, kind: "NodeId", doc: "The watched node record id (the component reads this node)." },
+		{ name: "NODE_GEN", slot: 3, kind: "u31", doc: "The watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch." },
+		{ name: "DEDUP_BITS", slot: 4, kind: "packed", doc: "Per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway." },
+		{ name: "GEN", slot: 5, kind: "u31", doc: "Allocator-owned tenancy generation (shared meaning with NodeField.GEN): bumped when the record frees." },
+		{ name: "NODE_INDEX", slot: 7, kind: "ordinal", doc: "Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); watcher records consume ordinals but no dense column stores rows for them." },
+	],
+	subscription: [
+		{ name: "FLAGS", slot: 0, kind: "flags", doc: "Kind + observer-state bits (NodeFlag.K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE)." },
+		{ name: "FREE_NEXT", slot: 1, kind: "NodeId", doc: "Allocator-owned: the node free list threads here while the record is freed (0 while live)." },
+		{ name: "DEP_HEAD", slot: 2, kind: "ArenaLinkId", doc: "First dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the subscription record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot)." },
+		{ name: "DEP_TAIL", slot: 3, kind: "ArenaLinkId", doc: "Last dependency link of the current snapshot (append cursor; 0 = empty)." },
+		{ name: "RUNS", slot: 4, kind: "u31", doc: "Run counter (the model-comparison suites read it; bumped per re-fire)." },
+		{ name: "GEN", slot: 5, kind: "u31", doc: "Allocator-owned tenancy generation (shared meaning with NodeField.GEN)." },
+		{ name: "CLEANUPS", slot: 6, kind: "u31", doc: "Cleanup counter (bumped before every re-fire and at removal; the model-comparison suites read it)." },
+		{ name: "NODE_INDEX", slot: 7, kind: "ordinal", doc: "Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); subscription records consume ordinals but no dense column stores rows for them." },
 	],
 	arenaShadow: [
 		{ name: "FLAGS", slot: 0, kind: "flags", doc: "State machine + kind bits (see ArenaFlag)." },
@@ -79,6 +100,9 @@ export const FLAG_BITS: Record<string, Record<string, number>> = {
 		HAS_BOX: 2048,
 		BOX_SUSPENDED: 4096,
 		MACHINERY_OWNED: 8192,
+		K_WATCHER: 16384,
+		K_SUBSCRIPTION: 32768,
+		OBSERVER_LIVE: 65536,
 	},
 	ArenaLinkMode: {
 		WEAK: 1,
@@ -108,6 +132,7 @@ export type ColumnInfo = {
 export const COLUMNS: readonly ColumnInfo[] = [
 	{ name: "values", domain: 'kernel', storage: "growArray", scrub: "free:node" },
 	{ name: "fns", domain: 'kernel', storage: "growArray", scrub: "free:node" },
+	{ name: "extras", domain: 'kernel', storage: "growArray", scrub: "free:node" },
 	{ name: "clocks", domain: 'kernel', storage: "recordBuffer", scrub: "free:node+link" },
 	{ name: "nodeToShadow", domain: 'worldArena', storage: "growArray", scrub: "release" },
 	{ name: "vals", domain: 'worldArena', storage: "growArray", scrub: "evict+release" },
@@ -146,6 +171,26 @@ export function hydrateLink(memory: Int32Array, id: number): Record<string, unkn
 	for (const f of FIELDS_BY_RECORD.link) {
 		out[f.name] = memory[id + f.slot];
 	}
+	return out;
+}
+
+/** Decode one watcher record into a plain object. */
+export function hydrateWatcher(memory: Int32Array, id: number): Record<string, unknown> {
+	const out: Record<string, unknown> = { id };
+	for (const f of FIELDS_BY_RECORD.watcher) {
+		out[f.name] = memory[id + f.slot];
+	}
+	out.flagNames = decodeFlags("NodeFlag", memory[id + 0]);
+	return out;
+}
+
+/** Decode one subscription record into a plain object. */
+export function hydrateSubscription(memory: Int32Array, id: number): Record<string, unknown> {
+	const out: Record<string, unknown> = { id };
+	for (const f of FIELDS_BY_RECORD.subscription) {
+		out[f.name] = memory[id + f.slot];
+	}
+	out.flagNames = decodeFlags("NodeFlag", memory[id + 0]);
 	return out;
 }
 

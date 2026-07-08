@@ -105,9 +105,25 @@ export type KernelColumn = {
 	slots: { doc: string; offsetConst?: string }[];
 	/** the value a scrubbed/reset slot returns to */
 	emptyValue: 'undefined' | '0';
-	/** which record families' frees scrub this column's slots */
+	/** which record families' frees scrub this column's slots (families that
+	 * share an allocator share a scrub function — see ALLOCATOR_FAMILIES) */
 	scrubOnFree: ('node' | 'link')[];
+	/** grows in the node allocator's grown-together loop (growArray only) */
+	grownWithNode?: boolean;
 	doc: string[];
+};
+
+/**
+ * The kernel's two allocation paths. Every kernel record family is backed by
+ * one of them: the node allocator serves node records AND the engine's
+ * observer records (watchers, subscriptions — same free list, same
+ * GEN/NODE_INDEX discipline, same column scrub), the link allocator serves
+ * link records. Scrub/grow functions are emitted per ALLOCATOR, not per
+ * family, so a family added to an allocator can never miss its columns.
+ */
+export const ALLOCATOR_FAMILIES: Record<'node' | 'link', string[]> = {
+	node: ['node', 'watcher', 'subscription'],
+	link: ['link'],
 };
 
 /**
@@ -129,6 +145,11 @@ export type WorldColumn = {
 	grownWithShadow: boolean;
 	/** scrubbed when a shadow record's tenancy dies (evict/purge) */
 	scrubOnEvict: boolean;
+	/** scrubbed when a link record frees (observer-state columns: only
+	 * observer dependency links ever write them, but the free-path scrub is
+	 * unconditional so a reused link record can never carry a dead tenancy's
+	 * stamp regardless of which path freed it) */
+	scrubOnLinkFree?: boolean;
 	doc: string[];
 };
 
@@ -230,7 +251,7 @@ export function defineSchema(s: Schema): Schema {
 // ---- the schema ------------------------------------------------------------------
 
 export const schema: Schema = defineSchema({
-	layoutVersion: 2,
+	layoutVersion: 3,
 	kernel: {
 		name: 'kernel',
 		stride: 8,
@@ -338,6 +359,60 @@ export const schema: Schema = defineSchema({
 					},
 				],
 			},
+			{
+				enumName: 'WatcherField',
+				name: 'watcher',
+				doc: [
+					'Field offsets within a WATCHER record — one subscribed component',
+					'instance, stored as a kernel arena record (allocated by the node',
+					'allocator: same free list, same GEN tenancy stamp, same side-column',
+					'scrub — see ALLOCATOR_FAMILIES in tools/schema.ts). A watcher record',
+					'carries no kernel dependency links, so the kernel walks never reach',
+					'it; the engine interprets slots 0-4 and 6, while slots 1/5/7 keep',
+					'their allocator meanings (free-list thread / GEN / NODE_INDEX). The',
+					'mutable watcher state lives here and in the side columns (values:',
+					'last rendered value; clocks: lastValidatedAt; extras: name, root, and',
+					'the rendered-world snapshot); the Watcher handle object holds only',
+					'the record id and the monotone watcher id (delivery order).',
+				],
+				fields: [
+					{ name: 'FLAGS', slot: 0, kind: 'flags', doc: ['Kind + observer-state bits (NodeFlag.K_WATCHER, NodeFlag.OBSERVER_LIVE).'] },
+					{ name: 'FREE_NEXT', slot: 1, kind: 'NodeId', doc: ['Allocator-owned: the node free list threads here while the record is freed (0 while live — watcher records hold no dependency links).'] },
+					{ name: 'NODE', slot: 2, kind: 'NodeId', doc: ['The watched node record id (the component reads this node).'] },
+					{ name: 'NODE_GEN', slot: 3, kind: 'u31', doc: ["The watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch."] },
+					{ name: 'DEDUP_BITS', slot: 4, kind: 'packed', doc: ['Per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway.'] },
+					{ name: 'GEN', slot: 5, kind: 'u31', doc: ['Allocator-owned tenancy generation (shared meaning with NodeField.GEN): bumped when the record frees.'] },
+					{ name: 'NODE_INDEX', slot: 7, kind: 'ordinal', doc: ['Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); watcher records consume ordinals but no dense column stores rows for them.'] },
+				],
+			},
+			{
+				enumName: 'SubscriptionField',
+				name: 'subscription',
+				doc: [
+					'Field offsets within a SUBSCRIPTION record — one committed observer',
+					'(the production useSignalEffect mechanism), stored as a kernel arena',
+					'record by the node allocator exactly like watcher records (see',
+					'WatcherField). Its dependency snapshot is a chain of world-arena',
+					'link records in the committed arena of the subscription\'s root',
+					'(DEP_HEAD/DEP_TAIL below thread it), each carrying the observer\'s',
+					'lastValidatedAt stamp in the arena\'s per-record clock column; the',
+					'dep node objects ride the extras column in read order. The side',
+					'columns carry: values — the last captured value (the last dep read);',
+					'fns — the adapter-registered refire callback; extras — name, root,',
+					'the dep-node array, the retained observation set, and the',
+					'test-configured body.',
+				],
+				fields: [
+					{ name: 'FLAGS', slot: 0, kind: 'flags', doc: ['Kind + observer-state bits (NodeFlag.K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE).'] },
+					{ name: 'FREE_NEXT', slot: 1, kind: 'NodeId', doc: ['Allocator-owned: the node free list threads here while the record is freed (0 while live).'] },
+					{ name: 'DEP_HEAD', slot: 2, kind: 'ArenaLinkId', doc: ["First dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the subscription record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot)."] },
+					{ name: 'DEP_TAIL', slot: 3, kind: 'ArenaLinkId', doc: ['Last dependency link of the current snapshot (append cursor; 0 = empty).'] },
+					{ name: 'RUNS', slot: 4, kind: 'u31', doc: ['Run counter (the model-comparison suites read it; bumped per re-fire).'] },
+					{ name: 'GEN', slot: 5, kind: 'u31', doc: ['Allocator-owned tenancy generation (shared meaning with NodeField.GEN).'] },
+					{ name: 'CLEANUPS', slot: 6, kind: 'u31', doc: ['Cleanup counter (bumped before every re-fire and at removal; the model-comparison suites read it).'] },
+					{ name: 'NODE_INDEX', slot: 7, kind: 'ordinal', doc: ['Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); subscription records consume ordinals but no dense column stores rows for them.'] },
+				],
+			},
 		],
 		flagEnums: [
 			{
@@ -412,9 +487,37 @@ export const schema: Schema = defineSchema({
 							'the dirty promotions all mask it through).',
 						],
 					},
+					{
+						name: 'K_WATCHER', bit: 0b0100000000000000, doc: [
+							'Kind: watcher record (one subscribed component instance — see',
+							'WatcherField). Engine-interpreted: watcher records carry no kernel',
+							'dependency links, so no kernel walk ever reads this bit; it makes',
+							'the record self-describing for the free path, the debug hydrators,',
+							'and the audits. Deliberately outside KIND_MASK — the kernel\'s',
+							'kind dispatch never sees observer records.',
+						],
+					},
+					{
+						name: 'K_SUBSCRIPTION', bit: 0b1000000000000000, doc: [
+							'Kind: subscription record (one committed observer — see',
+							'SubscriptionField). Engine-interpreted exactly like K_WATCHER;',
+							'outside KIND_MASK for the same reason.',
+						],
+					},
+					{
+						name: 'OBSERVER_LIVE', bit: 0b10000000000000000, doc: [
+							'Observer records only (K_WATCHER / K_SUBSCRIPTION): the observer',
+							'is subscribed for delivery. For a watcher this is the layout-',
+							'effect subscription bit — a live watcher holds one observed-',
+							'consumer ref on its node, released when the bit clears; for a',
+							'subscription it means "not yet removed" — queued refires no-op',
+							'once it clears. Observer records never enter kernel walks, so no',
+							'kernel flag rewrite can touch it.',
+						],
+					},
 				],
 				kindBits: ['K_SIGNAL', 'K_COMPUTED', 'K_EFFECT', 'K_SCOPE'],
-				kindMaskDoc: 'The kind bits together (exactly one is set on a live record).',
+				kindMaskDoc: 'The kind bits together (exactly one is set on a live record). Observer kinds (K_WATCHER/K_SUBSCRIPTION) stay outside: the kernel\'s kind dispatch never sees observer records.',
 			},
 		],
 		shapeEnum: {
@@ -461,17 +564,18 @@ export const schema: Schema = defineSchema({
 				slotsPerRecord: 2,
 				shiftConst: 'ID_TO_VALUE_SHIFT',
 				slots: [
-					{ doc: 'current/computed value' },
-					{ doc: "signal pending value or effect cleanup fn (computeds: empty on purpose)", offsetConst: 'AUX_VALUE_OFFSET' },
+					{ doc: 'current/computed value — observer records: a watcher\'s last rendered value / a subscription\'s last captured value' },
+					{ doc: "signal pending value or effect cleanup fn (computeds and observer records: empty on purpose)", offsetConst: 'AUX_VALUE_OFFSET' },
 				],
 				emptyValue: 'undefined',
 				scrubOnFree: ['node'],
+				grownWithNode: true,
 				doc: [
 					'JavaScript values cannot live in an Int32Array, so each record owns two',
 					'slots here: values[id >> ID_TO_VALUE_SHIFT] is the current/computed',
 					'value; the slot above it (+ AUX_VALUE_OFFSET) is a signal\'s pending',
-					"value or an effect's cleanup fn. Plain array grown by the allocators",
-					'(stays packed; plain-array growth has no rebuild problem).',
+					"value or an effect's cleanup fn. Plain array grown by the node",
+					'allocator (stays packed; plain-array growth has no rebuild problem).',
 				],
 			},
 			{
@@ -480,14 +584,38 @@ export const schema: Schema = defineSchema({
 				slotsPerRecord: 1,
 				shiftConst: 'ID_TO_FN_SHIFT',
 				slots: [
-					{ doc: "computed getter / effect fn / an atom's dormant lifecycle callback" },
+					{ doc: "computed getter / effect fn / an atom's dormant lifecycle callback / a subscription's refire callback" },
 				],
 				emptyValue: 'undefined',
 				scrubOnFree: ['node'],
+				grownWithNode: true,
 				doc: [
 					"One function slot per record: a computed's getter (or its equality",
-					"wrapper), an effect's body, or an atom's dormant observed-lifecycle",
-					'callback. Plain array grown by the allocators.',
+					"wrapper), an effect's body, an atom's dormant observed-lifecycle",
+					"callback, or a subscription's adapter-registered refire callback",
+					'(the dormant-callback pattern: a cold callback earns a column slot,',
+					'never an own object field). Plain array grown by the node allocator.',
+				],
+			},
+			{
+				name: 'extras',
+				storage: 'growArray',
+				slotsPerRecord: 1,
+				shiftConst: 'ID_TO_EXTRAS_SHIFT',
+				slots: [
+					{ doc: 'general per-record object: cold oddments that don\'t earn a dedicated column (observer records: name/root/snapshot or name/root/deps/observation-retains/body)' },
+				],
+				emptyValue: 'undefined',
+				scrubOnFree: ['node'],
+				grownWithNode: true,
+				doc: [
+					'The general per-record object side column: one slot holding a plain',
+					'JS object of cold oddments that don\'t earn a dedicated column. A',
+					'watcher record\'s slot holds { name, root, snapshot fields }; a',
+					'subscription record\'s holds { name, root, deps, obsDeps, body }.',
+					'Plain array grown by the node allocator; scrubbed on free like every',
+					'node-allocator column, so a reused record can never serve a dead',
+					'tenancy\'s oddments.',
 				],
 			},
 			{
@@ -496,17 +624,22 @@ export const schema: Schema = defineSchema({
 				slotsPerRecord: 1,
 				shiftConst: 'ID_TO_CLOCK_SHIFT',
 				slots: [
-					{ doc: 'node: updatedAt (tagged-outcome clock) / link: the observer\'s lastValidatedAt' },
+					{ doc: 'signal/computed: updatedAt (tagged-outcome clock) / watcher, subscription: the observer\'s lastValidatedAt / link: reserved (scrubbed on free)' },
 				],
 				emptyValue: '0',
 				scrubOnFree: ['node', 'link'],
 				doc: [
 					'The updated-at clock column, one float64 slot per record (see the',
 					'"UpdatedAt clocks" section in the engine source for the full story).',
-					"A node record's slot is its durable clock: a process-monotone stamp",
-					'moved when the node\'s tagged outcome (value / thrown / suspended)',
-					"changes. A link record's slot is observer state: the last producer",
-					'clock the owning subscriber validated against. Zero means "never".',
+					"A signal or computed record's slot is its durable clock: a process-",
+					'monotone stamp moved when the node\'s tagged outcome (value / thrown',
+					"/ suspended) changes. An observer record's slot (watcher /",
+					'subscription) is the observer\'s lastValidatedAt: the last per-root',
+					'committed clock it validated against (a watcher stamps it at',
+					'committed renders and urgent corrections; a subscription\'s per-dep',
+					'stamps live on its world-arena dependency links instead, so its',
+					'record slot is unused). Kernel LINK slots are reserved (unused;',
+					'scrubbed on free). Zero means "never".',
 					'A Float64Array created and carried by the kernel factory exactly like',
 					'the arena (hot code closes over it; growth rebuilds), because a plain',
 					'array would need a growth check in the link allocator\'s hot path.',
@@ -757,6 +890,7 @@ export const schema: Schema = defineSchema({
 				emptyValue: '0',
 				grownWithShadow: false,
 				scrubOnEvict: true,
+				scrubOnLinkFree: true,
 				doc: [
 					'The per-world updated-at clock column, one float64 slot per record,',
 					'fixed at the arena record reservation. A shadow',
@@ -765,9 +899,13 @@ export const schema: Schema = defineSchema({
 					'the shadow\'s folded outcome changes in a COMMITTED arena — root A\'s',
 					'clocks never move on root B\'s commits because each root owns its',
 					'arena, and render arenas never bump (render-world values are',
-					'pin-frozen; the WorldArena.bumpsClocks gate). A link record\'s slot is',
-					'reserved for observer state (the last producer clock a subscription',
-					'validated against). Zero means "never".',
+					'pin-frozen; the WorldArena.bumpsClocks gate). A link record\'s slot',
+					'is observer state: on a subscription\'s dependency link it is that',
+					'dep\'s lastValidatedAt — the producer clock the subscription last',
+					'validated against (stamped at capture; re-checks skip a clean',
+					'producer whose clock still matches). Ordinary evaluation links',
+					'never write it; the link free path scrubs it unconditionally.',
+					'Zero means "never".',
 				],
 			},
 		],
@@ -858,23 +996,28 @@ export function generateLayoutBlock(s: Schema): string {
 	}
 	emitDomainEnums(out, k, kernelShifts);
 
-	// Kernel column scrub/reset functions: free/reset correctness is
-	// generated, not hand-maintained.
+	// Kernel column scrub/grow/reset functions: free/reset correctness is
+	// generated, not hand-maintained. Scrub and grow are emitted per
+	// ALLOCATOR (node/link — see ALLOCATOR_FAMILIES), so every record family
+	// an allocator serves shares its column coverage by construction.
 	const bufferParams = k.columns.filter((c) => c.storage === 'recordBuffer').map((c) => `${c.name}: Float64Array`);
-	for (const fam of k.families) {
-		const participating = k.columns.filter((c) => c.scrubOnFree.includes(fam.name as 'node' | 'link'));
-		const fname = `scrub${fam.name[0].toUpperCase()}${fam.name.slice(1)}ColumnsOnFree`;
-		const params = ['id: ' + (fam.name === 'node' ? 'NodeId' : 'LinkId')];
+	for (const alloc of ['node', 'link'] as const) {
+		const served = ALLOCATOR_FAMILIES[alloc].join('/');
+		const participating = k.columns.filter((c) => c.scrubOnFree.includes(alloc));
+		const fname = `scrub${alloc[0].toUpperCase()}${alloc.slice(1)}ColumnsOnFree`;
+		const params = ['id: ' + (alloc === 'node' ? 'NodeId' : 'LinkId')];
 		for (const c of participating) {
 			if (c.storage === 'recordBuffer') {
 				params.push(`${c.name}: Float64Array`);
 			}
 		}
 		out.push(...docBlock([
-			`Scrub a freed ${fam.name} record's side-column slots (generated from the`,
-			'column roster): the slot\'s next tenant must never observe the old',
-			"tenant's values, closures, or clock stamps. recordBuffer columns are",
-			'closure-owned, so the caller passes its buffer.',
+			`Scrub a freed record's side-column slots on the ${alloc} allocator's`,
+			`free path (generated from the column roster; covers every family the`,
+			`allocator serves: ${served} records). The slot's next tenant must`,
+			"never observe the old tenant's values, closures, or clock stamps.",
+			'recordBuffer columns are closure-owned, so the caller passes its',
+			'buffer.',
 		], 0));
 		out.push(`function ${fname}(${params.join(', ')}): void {`);
 		for (const c of participating) {
@@ -887,6 +1030,31 @@ export function generateLayoutBlock(s: Schema): string {
 			} else {
 				out.push(`\t${c.name}[id >> ${k.shapeEnum.name}.${c.shiftConst}] = ${c.emptyValue}; // ${c.slots[0].doc}`);
 			}
+		}
+		out.push('}');
+		out.push('');
+	}
+	// The node allocator's grown-together loop: every grownWithNode column
+	// grows to cover a fresh record id here, so a new column cannot miss the
+	// allocator's growth (the world arenas' growWorldArenaColumns twin).
+	{
+		const grownNode = k.columns.filter((c) => c.grownWithNode === true);
+		out.push(...docBlock([
+			'Grow the kernel\'s grown-together side columns to cover one record id',
+			'(generated from the column roster — a new column cannot miss the',
+			'growth loop). Called by the node allocator for every family it serves',
+			`(${ALLOCATOR_FAMILIES.node.join('/')} records); record-buffer columns are`,
+			'factory-carried and grow by kernel rebuild instead.',
+		], 0));
+		out.push('function growNodeSideColumns(id: RecordId): void {');
+		for (const c of grownNode) {
+			const lastOffset = c.slots[c.slots.length - 1]!.offsetConst;
+			const top = c.slotsPerRecord > 1
+				? `(id >> ${k.shapeEnum.name}.${c.shiftConst}) + ${lastOffset !== undefined ? `${k.shapeEnum.name}.${lastOffset}` : String(c.slotsPerRecord - 1)}`
+				: `id >> ${k.shapeEnum.name}.${c.shiftConst}`;
+			out.push(`\twhile (${c.name}.length <= ${top}) {`);
+			out.push(`\t\t${c.name}.push(${c.emptyValue});`);
+			out.push('\t}');
 		}
 		out.push('}');
 		out.push('');
@@ -946,6 +1114,20 @@ export function generateLayoutBlock(s: Schema): string {
 	out.push(`\tconst vi = sh >> ${w.shapeEnum.name}.ID_TO_COLUMN_SHIFT;`);
 	for (const c of evicted) {
 		out.push(`\ta.${c.name}[vi] = ${c.emptyValue};`);
+	}
+	out.push('}');
+	out.push('');
+	const linkScrubbed = w.columns.filter((c) => c.scrubOnLinkFree === true);
+	out.push(...docBlock([
+		'Scrub a freed world-arena link record\'s observer-state column slots',
+		'(generated from the column roster): only subscription dependency links',
+		'ever write these, but the free-path scrub is unconditional so a reused',
+		'link record can never carry a dead tenancy\'s stamp regardless of which',
+		'path freed it (the kernel freeLink\'s clock-scrub twin).',
+	], 0));
+	out.push('function scrubWorldLinkColumnsOnFree(a: WorldArena, id: number): void {');
+	for (const c of linkScrubbed) {
+		out.push(`\ta.${c.name}[id >> ${w.shapeEnum.name}.ID_TO_COLUMN_SHIFT] = ${c.emptyValue};`);
 	}
 	out.push('}');
 	out.push('');
@@ -1054,6 +1236,8 @@ export function generateDebugTwin(s: Schema): string {
 	out.push('');
 	const flagRegistryFor: Record<string, string> = {
 		node: 'NodeFlag',
+		watcher: 'NodeFlag',
+		subscription: 'NodeFlag',
 		arenaShadow: 'ArenaFlag',
 	};
 	for (const d of domains) {

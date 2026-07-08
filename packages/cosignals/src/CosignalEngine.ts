@@ -168,7 +168,7 @@ export type RecordCount = number;
 /** Index into the `values` side column (two slots per record; see ArenaShape). */
 export type ValueIndex = number & IdBrand<'valueIndex'>;
 
-// #region GENERATED — layout v2 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
+// #region GENERATED — layout v3 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
 /**
  * Field offsets within a node arena record.
  * NodeId is an offset pointer to the first field of the record;
@@ -276,32 +276,95 @@ export const enum LinkField {
 }
 
 /**
+ * Field offsets within a WATCHER record — one subscribed component
+ * instance, stored as a kernel arena record (allocated by the node
+ * allocator: same free list, same GEN tenancy stamp, same side-column
+ * scrub — see ALLOCATOR_FAMILIES in tools/schema.ts). A watcher record
+ * carries no kernel dependency links, so the kernel walks never reach
+ * it; the engine interprets slots 0-4 and 6, while slots 1/5/7 keep
+ * their allocator meanings (free-list thread / GEN / NODE_INDEX). The
+ * mutable watcher state lives here and in the side columns (values:
+ * last rendered value; clocks: lastValidatedAt; extras: name, root, and
+ * the rendered-world snapshot); the Watcher handle object holds only
+ * the record id and the monotone watcher id (delivery order).
+ */
+export const enum WatcherField {
+	/** Kind + observer-state bits (NodeFlag.K_WATCHER, NodeFlag.OBSERVER_LIVE). */
+	FLAGS = 0,
+	/** Allocator-owned: the node free list threads here while the record is freed (0 while live — watcher records hold no dependency links). */
+	FREE_NEXT = 1,
+	/** The watched node record id (the component reads this node). */
+	NODE = 2,
+	/** The watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch. */
+	NODE_GEN = 3,
+	/** Per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway. */
+	DEDUP_BITS = 4,
+	/** Allocator-owned tenancy generation (shared meaning with NodeField.GEN): bumped when the record frees. */
+	GEN = 5,
+	/** Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); watcher records consume ordinals but no dense column stores rows for them. */
+	NODE_INDEX = 7,
+}
+
+/**
+ * Field offsets within a SUBSCRIPTION record — one committed observer
+ * (the production useSignalEffect mechanism), stored as a kernel arena
+ * record by the node allocator exactly like watcher records (see
+ * WatcherField). Its dependency snapshot is a chain of world-arena
+ * link records in the committed arena of the subscription's root
+ * (DEP_HEAD/DEP_TAIL below thread it), each carrying the observer's
+ * lastValidatedAt stamp in the arena's per-record clock column; the
+ * dep node objects ride the extras column in read order. The side
+ * columns carry: values — the last captured value (the last dep read);
+ * fns — the adapter-registered refire callback; extras — name, root,
+ * the dep-node array, the retained observation set, and the
+ * test-configured body.
+ */
+export const enum SubscriptionField {
+	/** Kind + observer-state bits (NodeFlag.K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE). */
+	FLAGS = 0,
+	/** Allocator-owned: the node free list threads here while the record is freed (0 while live). */
+	FREE_NEXT = 1,
+	/** First dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the subscription record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot). */
+	DEP_HEAD = 2,
+	/** Last dependency link of the current snapshot (append cursor; 0 = empty). */
+	DEP_TAIL = 3,
+	/** Run counter (the model-comparison suites read it; bumped per re-fire). */
+	RUNS = 4,
+	/** Allocator-owned tenancy generation (shared meaning with NodeField.GEN). */
+	GEN = 5,
+	/** Cleanup counter (bumped before every re-fire and at removal; the model-comparison suites read it). */
+	CLEANUPS = 6,
+	/** Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); subscription records consume ordinals but no dense column stores rows for them. */
+	NODE_INDEX = 7,
+}
+
+/**
  * Bit values of a node's FLAGS field (upstream ReactiveFlags + HasChildEffect
  * + kind bits). A flags word is an OR of these (see `type NodeFlags`).
  */
 export const enum NodeFlag {
 	/** Can produce new values (signals, computeds). */
-	MUTABLE = 0b00000000000001,
+	MUTABLE = 0b00000000000000001,
 	/** Wants notification when possibly stale (effects, scopes). */
-	WATCHING = 0b00000000000010,
+	WATCHING = 0b00000000000000010,
 	/** Currently evaluating (re-entrancy guard). */
-	RECURSED_CHECK = 0b00000000000100,
+	RECURSED_CHECK = 0b00000000000000100,
 	/** A re-entrant write reached this node during its own run. */
-	RECURSED = 0b00000000001000,
+	RECURSED = 0b00000000000001000,
 	/** Definitely stale. */
-	DIRTY = 0b00000000010000,
+	DIRTY = 0b00000000000010000,
 	/** Possibly stale — verify by pulling before recomputing. */
-	PENDING = 0b00000000100000,
+	PENDING = 0b00000000000100000,
 	/** Dep list contains child effects/scopes (slow-path cleanup). */
-	HAS_CHILD_EFFECT = 0b00000001000000,
+	HAS_CHILD_EFFECT = 0b00000000001000000,
 	/** Kind: writable signal record (an Atom or ReducerAtom handle). */
-	K_SIGNAL = 0b00000010000000,
+	K_SIGNAL = 0b00000000010000000,
 	/** Kind: computed. */
-	K_COMPUTED = 0b00000100000000,
+	K_COMPUTED = 0b00000000100000000,
 	/** Kind: effect. */
-	K_EFFECT = 0b00001000000000,
+	K_EFFECT = 0b00000001000000000,
 	/** Kind: effect scope. */
-	K_SCOPE = 0b00010000000000,
+	K_SCOPE = 0b00000010000000000,
 	/**
 	 * The computed's cached value is an exceptional outcome — the value slot
 	 * holds the raw thrown value (HAS_BOX alone) or the pending thenable
@@ -313,12 +376,12 @@ export const enum NodeFlag {
 	 * site either ORs bits or is followed by a forced recompute (unwatched
 	 * sets DIRTY), so a stale clear can never serve a payload unwrapped.
 	 */
-	HAS_BOX = 0b00100000000000,
+	HAS_BOX = 0b00000100000000000,
 	/**
 	 * Refines HAS_BOX (never set without it): the payload is a pending
 	 * thenable, not a thrown error.
 	 */
-	BOX_SUSPENDED = 0b01000000000000,
+	BOX_SUSPENDED = 0b00001000000000000,
 	/**
 	 * Serves the observed-lifecycle feature (AtomOptions.effect): an atom
 	 * can carry a callback that runs when its FIRST observer arrives and a
@@ -352,9 +415,34 @@ export const enum NodeFlag {
 	 * rewrite preserves it (the eval-start rewrite, the unwatched reset,
 	 * the dirty promotions all mask it through).
 	 */
-	MACHINERY_OWNED = 0b10000000000000,
-	/** The kind bits together (exactly one is set on a live record). */
-	KIND_MASK = K_SIGNAL | K_COMPUTED | K_EFFECT | K_SCOPE, // 0b00011110000000
+	MACHINERY_OWNED = 0b00010000000000000,
+	/**
+	 * Kind: watcher record (one subscribed component instance — see
+	 * WatcherField). Engine-interpreted: watcher records carry no kernel
+	 * dependency links, so no kernel walk ever reads this bit; it makes
+	 * the record self-describing for the free path, the debug hydrators,
+	 * and the audits. Deliberately outside KIND_MASK — the kernel's
+	 * kind dispatch never sees observer records.
+	 */
+	K_WATCHER = 0b00100000000000000,
+	/**
+	 * Kind: subscription record (one committed observer — see
+	 * SubscriptionField). Engine-interpreted exactly like K_WATCHER;
+	 * outside KIND_MASK for the same reason.
+	 */
+	K_SUBSCRIPTION = 0b01000000000000000,
+	/**
+	 * Observer records only (K_WATCHER / K_SUBSCRIPTION): the observer
+	 * is subscribed for delivery. For a watcher this is the layout-
+	 * effect subscription bit — a live watcher holds one observed-
+	 * consumer ref on its node, released when the bit clears; for a
+	 * subscription it means "not yet removed" — queued refires no-op
+	 * once it clears. Observer records never enter kernel walks, so no
+	 * kernel flag rewrite can touch it.
+	 */
+	OBSERVER_LIVE = 0b10000000000000000,
+	/** The kind bits together (exactly one is set on a live record). Observer kinds (K_WATCHER/K_SUBSCRIPTION) stay outside: the kernel's kind dispatch never sees observer records. */
+	KIND_MASK = K_SIGNAL | K_COMPUTED | K_EFFECT | K_SCOPE, // 0b00000011110000000
 }
 
 /**
@@ -369,6 +457,8 @@ export const enum ArenaShape {
 	ID_TO_VALUE_SHIFT = 2,
 	/** id >> ID_TO_FN_SHIFT: premultiplied id → the record's base slot in the `fns` column (1 slot per record). */
 	ID_TO_FN_SHIFT = 3,
+	/** id >> ID_TO_EXTRAS_SHIFT: premultiplied id → the record's base slot in the `extras` column (1 slot per record). */
+	ID_TO_EXTRAS_SHIFT = 3,
 	/** id >> ID_TO_CLOCK_SHIFT: premultiplied id → the record's base slot in the `clocks` column (1 slot per record). */
 	ID_TO_CLOCK_SHIFT = 3,
 	/**
@@ -395,27 +485,51 @@ export const enum ArenaShape {
 }
 
 /**
- * Scrub a freed node record's side-column slots (generated from the
- * column roster): the slot's next tenant must never observe the old
- * tenant's values, closures, or clock stamps. recordBuffer columns are
- * closure-owned, so the caller passes its buffer.
+ * Scrub a freed record's side-column slots on the node allocator's
+ * free path (generated from the column roster; covers every family the
+ * allocator serves: node/watcher/subscription records). The slot's next tenant must
+ * never observe the old tenant's values, closures, or clock stamps.
+ * recordBuffer columns are closure-owned, so the caller passes its
+ * buffer.
  */
 function scrubNodeColumnsOnFree(id: NodeId, clocks: Float64Array): void {
 	const base: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
-	values[base] = undefined; // current/computed value
-	values[base + ArenaShape.AUX_VALUE_OFFSET] = undefined; // signal pending value or effect cleanup fn (computeds: empty on purpose)
-	fns[id >> ArenaShape.ID_TO_FN_SHIFT] = undefined; // computed getter / effect fn / an atom's dormant lifecycle callback
-	clocks[id >> ArenaShape.ID_TO_CLOCK_SHIFT] = 0; // node: updatedAt (tagged-outcome clock) / link: the observer's lastValidatedAt
+	values[base] = undefined; // current/computed value — observer records: a watcher's last rendered value / a subscription's last captured value
+	values[base + ArenaShape.AUX_VALUE_OFFSET] = undefined; // signal pending value or effect cleanup fn (computeds and observer records: empty on purpose)
+	fns[id >> ArenaShape.ID_TO_FN_SHIFT] = undefined; // computed getter / effect fn / an atom's dormant lifecycle callback / a subscription's refire callback
+	extras[id >> ArenaShape.ID_TO_EXTRAS_SHIFT] = undefined; // general per-record object: cold oddments that don't earn a dedicated column (observer records: name/root/snapshot or name/root/deps/observation-retains/body)
+	clocks[id >> ArenaShape.ID_TO_CLOCK_SHIFT] = 0; // signal/computed: updatedAt (tagged-outcome clock) / watcher, subscription: the observer's lastValidatedAt / link: reserved (scrubbed on free)
 }
 
 /**
- * Scrub a freed link record's side-column slots (generated from the
- * column roster): the slot's next tenant must never observe the old
- * tenant's values, closures, or clock stamps. recordBuffer columns are
- * closure-owned, so the caller passes its buffer.
+ * Scrub a freed record's side-column slots on the link allocator's
+ * free path (generated from the column roster; covers every family the
+ * allocator serves: link records). The slot's next tenant must
+ * never observe the old tenant's values, closures, or clock stamps.
+ * recordBuffer columns are closure-owned, so the caller passes its
+ * buffer.
  */
 function scrubLinkColumnsOnFree(id: LinkId, clocks: Float64Array): void {
-	clocks[id >> ArenaShape.ID_TO_CLOCK_SHIFT] = 0; // node: updatedAt (tagged-outcome clock) / link: the observer's lastValidatedAt
+	clocks[id >> ArenaShape.ID_TO_CLOCK_SHIFT] = 0; // signal/computed: updatedAt (tagged-outcome clock) / watcher, subscription: the observer's lastValidatedAt / link: reserved (scrubbed on free)
+}
+
+/**
+ * Grow the kernel's grown-together side columns to cover one record id
+ * (generated from the column roster — a new column cannot miss the
+ * growth loop). Called by the node allocator for every family it serves
+ * (node/watcher/subscription records); record-buffer columns are
+ * factory-carried and grow by kernel rebuild instead.
+ */
+function growNodeSideColumns(id: RecordId): void {
+	while (values.length <= (id >> ArenaShape.ID_TO_VALUE_SHIFT) + ArenaShape.AUX_VALUE_OFFSET) {
+		values.push(undefined);
+	}
+	while (fns.length <= id >> ArenaShape.ID_TO_FN_SHIFT) {
+		fns.push(undefined);
+	}
+	while (extras.length <= id >> ArenaShape.ID_TO_EXTRAS_SHIFT) {
+		extras.push(undefined);
+	}
 }
 
 /**
@@ -429,6 +543,8 @@ function resetSideColumnsForTest(clocks: Float64Array): void {
 	values[1] = undefined;
 	fns.length = 1;
 	fns[0] = undefined;
+	extras.length = 1;
+	extras[0] = undefined;
 	clocks.fill(0);
 }
 
@@ -609,6 +725,17 @@ function scrubWorldShadowColumnsOnEvict(a: WorldArena, sh: number): void {
 }
 
 /**
+ * Scrub a freed world-arena link record's observer-state column slots
+ * (generated from the column roster): only subscription dependency links
+ * ever write these, but the free-path scrub is unconditional so a reused
+ * link record can never carry a dead tenancy's stamp regardless of which
+ * path freed it (the kernel freeLink's clock-scrub twin).
+ */
+function scrubWorldLinkColumnsOnFree(a: WorldArena, id: number): void {
+	a.clocks[id >> ArenaGeom.ID_TO_COLUMN_SHIFT] = 0;
+}
+
+/**
  * Reset every world-arena side column at release (generated from the
  * column roster; the release scrub's column half). Keeps each column's
  * CAPACITY across pool tenancies (a priced cold-render saving: truncating
@@ -701,6 +828,11 @@ const pendingFree: NodeId[] = []; // disposed effect/scope records awaiting the 
 // scalar heads, not operations.
 export const values: unknown[] = [undefined, undefined];
 export const fns: (Function | undefined)[] = [undefined];
+/** The general per-record object side column (extras[id >> 3]): cold
+ * oddments that don't earn a dedicated column — see the generated column
+ * roster. Module-internal: its only readers are this module's observer
+ * record accessors. */
+const extras: unknown[] = [undefined];
 
 /** Seed capacity (entries) of the walk scratch stacks below (they double on demand). */
 const WALK_STACK_SEED = 4096;
@@ -900,13 +1032,7 @@ function createKernel(records: RecordCount, carry?: Int32Array, clockCarry?: Flo
 			memory[id + NodeField.NODE_INDEX] = nextNodeIndex++; // a never-yet-node slot gets a fresh index
 		}
 		memory[id + NodeField.FLAGS] = flags;
-		const v: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
-		while (vals.length <= v + ArenaShape.AUX_VALUE_OFFSET) {
-			vals.push(undefined);
-		}
-		while (fnTab.length <= id >> ArenaShape.ID_TO_FN_SHIFT) {
-			fnTab.push(undefined);
-		}
+		growNodeSideColumns(id); // generated: every grown-together column covers the record, by construction
 		return id;
 	}
 
@@ -3822,6 +3948,7 @@ function arenaAllocLink(a: WorldArena): number {
 }
 
 function arenaFreeLink(a: WorldArena, id: number): void {
+	scrubWorldLinkColumnsOnFree(a, id); // generated: a reused link must not carry a dead tenancy's observer stamp
 	a.memory[id + ArenaLinkField.FREE_NEXT] = a.linkFree;
 	a.linkFree = id;
 	a.links--;
