@@ -1,0 +1,22 @@
+{
+	"name": "royale-battery",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Shared cross-entrant Real-React gate battery for Signals Royale. See README.md: the orchestrator rewrites the link: targets below to point at the entry under test before installing.",
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"cosignals-alt-b": "link:../../../packages/cosignals-alt-b",
+		"jsdom": "^26.1.0",
+		"react": "link:../../../vendor/react/build/oss-experimental/react",
+		"react-dom": "link:../../../vendor/react/build/oss-experimental/react-dom",
+		"scheduler": "link:../../../vendor/react/build/oss-experimental/scheduler",
+		"typescript": "^5.8.0",
+		"vitest": "^4.0.0"
+	}
+}
