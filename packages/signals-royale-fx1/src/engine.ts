@@ -1112,22 +1112,27 @@ function flushEffects(): void {
   let iterations = 0;
   let cursor = 0;
   try {
+    // One catch frame per error, not per effect: a throwing effect drops us
+    // out of the inner loop, we record, and the outer loop resumes draining.
     while (cursor < effectQueue.length) {
-      if (++iterations > FLUSH_LIMIT) throw loud('effect flush did not settle (cycle?)');
-      const node = effectQueue[cursor++]!;
-      node.scheduled = false;
+      if (iterations > FLUSH_LIMIT) throw loud('effect flush did not settle (cycle?)');
       try {
-        node.maybeRun();
+        while (cursor < effectQueue.length) {
+          if (++iterations > FLUSH_LIMIT) break; // cycle guard: escape to the outer check
+          const node = effectQueue[cursor++]!;
+          node.scheduled = false;
+          node.maybeRun();
+          // Keep the queue array small once the drained prefix dominates.
+          if (cursor > 1024 && cursor * 2 > effectQueue.length) {
+            effectQueue.splice(0, cursor);
+            cursor = 0;
+          }
+        }
       } catch (e) {
         if (!hasError) {
           hasError = true;
           firstError = e;
         }
-      }
-      // Keep the queue array small: compact once the drained prefix dominates.
-      if (cursor > 1024 && cursor * 2 > effectQueue.length) {
-        effectQueue.splice(0, cursor);
-        cursor = 0;
       }
     }
     effectQueue.length = 0;
