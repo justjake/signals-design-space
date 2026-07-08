@@ -1,0 +1,4 @@
+Completed [alt-b-codex.md](/Users/jitl/src/alien-signals-opt/research/fork-simplification/alt-b-codex.md).
+
+Main conclusion: 380–460 non-test fork LoC for the recommended all-feature protocol, 100–180 for an experimental Context-carrier redesign, and zero-fork only by losing the exact mutation window and same-lane corrective scheduling. Only the report was edited; `git diff --check` passes.
+

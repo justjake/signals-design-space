@@ -1,0 +1,6 @@
+Completed [alt-a-codex.md](/Users/jitl/src/alien-signals-opt/research/fork-simplification/alt-a-codex.md).
+
+Headline finding: the 5,012-line fork can likely shrink to 430–535 production lines, or roughly 1,080–1,385 lines including focused fork tests, without sacrificing alt-a’s current protocol guarantees.
+
+The concept-convergence pass drove the main recommendation: replace the generic public runtime and bridge translations with one canonical private alt-a driver. All source citations and LoC accounting were verified. Tests were not run because only the report file could be written.
+
