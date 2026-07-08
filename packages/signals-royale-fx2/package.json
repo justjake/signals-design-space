@@ -1,0 +1,19 @@
+{
+  "name": "signals-royale-fx2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fuzz": "vitest run tests/oracle-fuzz.spec.ts"
+  },
+  "devDependencies": {
+    "reactive-framework-test-suite": "0.0.2",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}
