@@ -29,10 +29,12 @@ beforeEach(() => {
 	__resetEngine();
 });
 
+declare const setTimeout: (fn: () => void, ms?: number) => unknown;
+
 async function collect(): Promise<void> {
 	for (let i = 0; i < 5; i++) {
 		gc!();
-		await new Promise((r) => setTimeout(r, 0));
+		await new Promise<void>((r) => setTimeout(() => r(), 0));
 	}
 }
 
@@ -75,7 +77,7 @@ function makeSubscribedGarbage(): WeakRef<object> {
 async function makeAsyncGarbage(): Promise<WeakRef<object>> {
 	const c = computed((use) => use('k', () => Promise.resolve(7)));
 	read(c);
-	await new Promise((r) => setTimeout(r, 0));
+	await new Promise<void>((r) => setTimeout(() => r(), 0));
 	if (read(c) !== 7) {
 		throw new Error('sanity');
 	}
