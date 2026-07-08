@@ -122,13 +122,14 @@ describe('read family', () => {
 		expect(latest(a)).toBe(2); // outside: folds all open batches
 	});
 
-	test('committed view lags urgent writes until the root commits', () => {
+	test('committed view lags urgent writes until the root re-records', () => {
 		const a = atom(1);
 		const view = createCommittedView();
+		view.record(a, a.get()); // a subscriber committed 1 to this root's screen
 		a.set(2);
 		expect(a.get()).toBe(2);
 		expect(committed(a, view)).toBe(1); // screen still shows 1
-		view.commit();
+		view.record(a, a.get()); // the root committed the new value
 		expect(committed(a, view)).toBe(2);
 		view.dispose();
 	});
@@ -138,10 +139,11 @@ describe('read family', () => {
 		const c = computed(() => a.get() * 10);
 		expect(c.get()).toBe(20);
 		const view = createCommittedView();
+		view.record(a, a.get());
 		a.set(3);
 		expect(c.get()).toBe(30);
-		expect(committed(c, view)).toBe(20);
-		view.commit();
+		expect(committed(c, view)).toBe(20); // derives through the screen's atom value
+		view.record(a, a.get());
 		expect(committed(c, view)).toBe(30);
 		view.dispose();
 	});

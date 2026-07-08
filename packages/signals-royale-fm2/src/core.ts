@@ -476,8 +476,8 @@ export class AtomNode<T> implements Producer {
 	/** The atom's value as seen from `world` (null = canonical). */
 	valueIn(world: World | null): T {
 		if (currentCommittedRead !== null) {
-			const p = currentCommittedRead.pending;
-			if (p.has(this as AtomNode<unknown>)) return p.get(this as AtomNode<unknown>) as T;
+			const v = currentCommittedRead.values;
+			if (v.has(this as AtomNode<unknown>)) return v.get(this as AtomNode<unknown>) as T;
 		}
 		const canonical = this.materialize();
 		const queue = this.queue;
@@ -555,13 +555,6 @@ export class AtomNode<T> implements Producer {
 
 	/** Canonical moved from `prev` to `next`: stamp, trace, and notify. */
 	private applyCanonical(prev: T, next: T, retired: WorldBatch | null): void {
-		// Per-root committed views: the value on screen is `prev` until each
-		// root's next commit, so capture it before canonical moves.
-		for (const view of committedViews) {
-			if (!view.pending.has(this as AtomNode<unknown>)) {
-				view.pending.set(this as AtomNode<unknown>, prev);
-			}
-		}
 		this.canonical = next;
 		this.version++;
 		globalVersion++;
@@ -1455,16 +1448,20 @@ function worldPoke(node: Producer, batch: WorldBatch, seen: Set<Producer>): void
 // ---------------------------------------------------------------------------
 
 /**
- * "What is on screen" for one React root. Canonical writes capture their
- * pre-write value into every registered view; a root's commit clears its
- * view, at which point the screen agrees with canonical state again.
+ * "What is on screen" for one React root. Host bindings record the value a
+ * subscriber rendered whenever that render commits (suspended or discarded
+ * renders never record), so the view mirrors the screen exactly. Reads of
+ * unrecorded nodes fall back to canonical state.
  */
 export class CommittedView {
-	/** Atom -> the value the root's screen still shows. */
-	pending = new Map<object, unknown>();
+	/** Node -> the value this root's screen last committed for it. */
+	values = new Map<object, unknown>();
 
-	commit(): void {
-		this.pending.clear();
+	/** Record a committed render's value; true if the entry changed. */
+	record(node: object, value: unknown): boolean {
+		if (this.values.has(node) && Object.is(this.values.get(node), value)) return false;
+		this.values.set(node, value);
+		return true;
 	}
 
 	dispose(): void {
