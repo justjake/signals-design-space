@@ -211,12 +211,10 @@ export type RegistryListener = {
 export class ReactBatchRegistry {
 	/** Locates ReactSharedInternals.E via React's client-internals export,
 	 * asserts forkProtocolVersion === 1 (throws on stock React or drift),
-	 * throws if taps.consumer is already installed. `createToken` lets a
-	 * consumer own token creation (called synchronously inside
-	 * getCurrentWriteBatch at identity creation, same timing as the old
-	 * fork allocator); default is the internal (serial<<1)|deferred counter.
-	 * Returned tokens must keep bit 0 = deferred and never be 0. */
-	constructor(react: typeof import('react'), opts?: { createToken?: (deferred: boolean) => BatchToken });
+	 * throws if taps.consumer is already installed. The package owns token
+	 * creation — (serial<<1)|deferred, bit 0 = deferred, never 0; a consumer
+	 * that wants its own id space adapts on ITS side of onBatchOpened. */
+	constructor(react: typeof import('react'));
 	subscribe(l: RegistryListener): () => void; // error-guarded emit: per-listener try/catch, collected + reported, never rethrown into React
 	getCurrentWriteBatch(): BatchToken; // classify via taps.getCurrentWriteLane(), then create-or-reuse identity; emits onBatchOpened synchronously on create
 	getRenderContext(): { container: unknown } | null;
@@ -241,14 +239,17 @@ npm-standalone docs.
 
 `packages/cosignals` + `packages/cosignals-react` (the flagship engine, a third
 consumer) speak the same protocol v2 today (`cosignals-react/src/shim.ts:245-257`)
-and map onto this design with the two package seams already reflected in the
-API above — zero extra fork lines. Do NOT port mainline in this work; just keep
-these seams intact:
+and map onto this design — zero extra fork lines, one package seam kept. Do NOT
+port mainline in this work; just keep these intact:
 
-- **`createToken`**: mainline's allocator opens an ENGINE batch and returns the
-  engine's own BatchId as the protocol token (shim.ts:245-247 — one id space,
-  "no mapping tables anywhere" is a design rule there). The hook preserves
-  that; the alts use the default counter.
+- **Token creation stays the package's** (not configurable). Mainline's
+  allocator today opens an ENGINE batch and returns the engine's own BatchId
+  as the protocol token (shim.ts:245-247 — one id space, "no mapping tables
+  anywhere" is a design rule there). At port time mainline adapts on ITS side:
+  open the engine batch inside `onBatchOpened(token)`, adopting the package
+  token as the engine BatchId (same synchronous moment — the event fires
+  inside `getCurrentWriteBatch` at identity creation). The engine-side "accept
+  a supplied id at openBatch" change is mainline's, not this package's.
 - **`onRenderPassEnd(container, committed)`**: mainline consumes the
   disposition (shim.ts:387-399 — a discarded pass kills render-owned mounts);
   the package knows it for free and must keep the internal order mainline
