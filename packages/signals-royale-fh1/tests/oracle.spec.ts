@@ -9,6 +9,9 @@
  * - latest     = ops where batch is not discarded, in order;
  * - a world    = ops visible under (creation snapshot, listed batches);
  * - computeds  = rederived from scratch against the model's atom values;
+ *   some read an operand via latest(): inside an evaluation latest resolves
+ *   the evaluation's own context, so the expected value is the same fold —
+ *   checked both canonically and under draft-live worlds;
  * - effects    = must always have last observed the canonical value.
  *
  * Seeds are env-tunable: ROYALE_FUZZ_SEEDS (default 300), ~90 steps each.
@@ -54,7 +57,7 @@ type Op =
 	| { kind: 'update'; atom: number; delta: number; mul: boolean; batch: number }
 	| { kind: 'retire'; batch: number }
 	| { kind: 'discard'; batch: number }
-	| { kind: 'newComputed'; a: number; b: number }
+	| { kind: 'newComputed'; a: number; b: number; viaLatest: boolean }
 	| { kind: 'newEffect'; target: number } // over atom index
 	| { kind: 'disposeEffect'; effect: number }
 	| { kind: 'newWorld'; batches: number[] }
@@ -97,7 +100,12 @@ function generate(rand: () => number, steps: number): Op[] {
 		} else if (r < 0.65 && batches > 0) {
 			ops.push({ kind: 'discard', batch: pick(batches) });
 		} else if (r < 0.73) {
-			ops.push({ kind: 'newComputed', a: pick(atoms), b: pick(atoms + computeds) });
+			ops.push({
+				kind: 'newComputed',
+				a: pick(atoms),
+				b: pick(atoms + computeds),
+				viaLatest: rand() < 0.35,
+			});
 			computeds++;
 		} else if (r < 0.79) {
 			ops.push({ kind: 'newEffect', target: pick(atoms) });
@@ -327,7 +335,12 @@ function run(ops: Op[]): Failure | null {
 						bIdx < eAtoms.length ? ['a', bIdx] : ['c', bIdx - eAtoms.length];
 					const aNode = eAtoms[aIdx];
 					const bNode = bRef[0] === 'a' ? eAtoms[bRef[1]] : eComputeds[bRef[1]];
-					const c = computed(() => (aNode.get() as number) + (bNode.get() as number));
+					// latest() inside an evaluation resolves the evaluation's own
+					// world (canonical or listed-batch) and stays tracked, so the
+					// model needs no separate fold: it must equal a plain read.
+					const c = op.viaLatest
+						? computed(() => latest(aNode) + (bNode.get() as number))
+						: computed(() => (aNode.get() as number) + (bNode.get() as number));
 					eComputeds.push(c);
 					mComputeds.push({ a: aRef, b: bRef });
 					break;

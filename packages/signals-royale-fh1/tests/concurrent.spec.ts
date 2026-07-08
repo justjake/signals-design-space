@@ -328,6 +328,49 @@ describe('batch() coalescing is orthogonal to deferred batches', () => {
 	});
 });
 
+describe('latest() context rule: an evaluation resolves its own world', () => {
+	// Judgement-round regression: latest() inside a CANONICAL computed
+	// evaluation must resolve the canonical world (drafts hidden) and must
+	// register the dependency like any other tracked read.
+
+	test('canonical computed first-evaluated while a draft is live caches the canonical value, not the draft', () => {
+		const a = atom(1);
+		const c = computed(() => latest(a) * 10);
+		const b = createBatch();
+		b.run(() => a.set(2));
+		expect(read(a)).toBe(1);
+		expect(read(c)).toBe(10); // NOT 20: the draft is invisible to canon
+		b.discard();
+		expect(read(c)).toBe(10);
+	});
+
+	test('latest inside a canonical computed is tracked: urgent writes invalidate and watching effects re-fire', () => {
+		const a = atom(1);
+		const c = computed(() => latest(a));
+		const seen: number[] = [];
+		const dispose = effect(() => {
+			seen.push(c.get());
+		});
+		expect(seen).toEqual([1]);
+		a.set(2); // urgent write, full quiescence — no batches anywhere
+		expect(read(c)).toBe(2); // not permanently stale
+		expect(seen).toEqual([1, 2]); // the effect re-fired
+		dispose();
+	});
+
+	test('latest inside a world-scoped evaluation still resolves that world', () => {
+		const a = atom(1);
+		const c = computed(() => latest(a) + 100);
+		const b = createBatch();
+		b.run(() => a.set(2));
+		const w = makeWorld([b.id]);
+		expect(readInWorld(c, w)).toBe(102); // the world lists the batch
+		expect(read(c)).toBe(101); // canon still hides it
+		w.release();
+		b.discard();
+	});
+});
+
 describe('fuzz pins', () => {
 	test('seed 207: discarding a batch invalidates world caches that listed it', () => {
 		const a = atom(1);

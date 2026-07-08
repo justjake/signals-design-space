@@ -38,6 +38,7 @@ export {
 	setStampProvider,
 	setWriteGuard,
 	setCommittedCutoffProvider,
+	setRenderWorldProvider,
 	hasSettled,
 	lastSettled,
 	lastDeliveryEvent,

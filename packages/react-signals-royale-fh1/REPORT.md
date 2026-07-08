@@ -61,10 +61,14 @@ packages/signals-royale-fh1 --lib packages/react-signals-royale-fh1`:
 
 ```
 forkLoc: 167     (incumbent: 1510 — 9.0x smaller)
-libLoc:  1876    (alt-a 4689, alt-b 4909 — 2.5x smaller)
-  engine.ts 1246, tracer.ts 110, index.ts 69
-  hooks.ts 169, seam.ts 261, index.ts 21
+libLoc:  1957    (alt-a 4689, alt-b 4909 — 2.4x smaller)
+  engine.ts 1324, tracer.ts 110, index.ts 70
+  hooks.ts 169, seam.ts 263, index.ts 21
 ```
+
+(Re-measured after the judgement fixes. Earlier revisions of this report said
+1876 — a stale number: the Round-2 perf commit added 65 counted lines and the
+report was not re-counted. The judgement-round latest() fix adds 16 more.)
 
 Fork metric cross-check: `git -C vendor/react diff --numstat e71a6393e6..HEAD
 -- packages/ ':!packages/*/src/__tests__*' | awk '{a+=$1+$2} END {print a}'`
@@ -134,7 +138,11 @@ completing. Fanout beats the baseline; mount pays ~8% over stock.
 - Per-root committed views — done (cutoff predicates).
 - flushSync excludes deferred work — done.
 - Quiescence reclamation — done (leak audit asserts it).
-- Read family: read/latest/committed/isPending/refresh — done.
+- Read family: read/committed/isPending/refresh — done. latest() was
+  misreported as done here in earlier revisions: it violated the context
+  rule in canonical computed evaluations and in render bodies (fixed in the
+  judgement round — see "Judgement fixes" for what was wrong and what
+  changed).
 - Async: pending as graph state, stable thenable identity, stable error
   boxes, parallel fetches via caller-created thenables, keyed
   `use(key, factory)` for refreshable fetches — done.
@@ -210,3 +218,79 @@ cached `use` closure) — semantics-neutral, every suite re-run green;
 14x on deep-chain shapes, 90x-outlier kairo suites brought to ~1.2x.
 
 Nothing disputed; no battery test coded around.
+
+## Judgement fixes
+
+The judge confirmed one required-feature defect misreported as done, plus a
+stale LOC self-count. Both fixed on this branch; the fork is untouched.
+
+### The latest() context-rule violation (was: claimed done in §5)
+
+**What was wrong.** RULES: `latest()` inside a computed evaluation or render
+pass resolves THAT context's own world, and tracked callers still subscribe.
+The implementation only honored this when `activeWorld` was set (world-scoped
+computed evaluations, `inWorld` scopes, hook-mediated reads). Two contexts
+fell through to the free-context path ("fold ALL live draft batches,
+untracked"):
+
+- **Canonical computed evaluations** — a computed first-evaluated while a
+  transition draft was live cached a draft-derived value that canonical
+  readers then saw (probe: `read(c)` = 20 while `read(a)` = 1 with a draft
+  `a = 2` live). And because the read was untracked, the computed never
+  subscribed: after urgent writes and full quiescence it still served its
+  original value and watching effects never re-fired (permanent staleness).
+- **Render bodies** — a direct `latest()` call in a component body during an
+  urgent re-render returned the live draft (2) while `useValue` beside it
+  showed 1: a tear inside one pass.
+
+**What changed** (engine `latestImpl`, +16 counted lines):
+
+- A canonical evaluation (`activeSub` set, no active world) now resolves
+  `latest()` as a tracked canonical read — the context's world IS canon —
+  with the never-suspend fallback (a pending computed serves its last settled
+  value). The dependency registers like any other read, so urgent writes
+  invalidate the caller and effects re-fire.
+- A new host provider (`setRenderWorldProvider`, installed by the seam as
+  `currentRenderWorld`) lets a direct `latest()` call in a render body
+  resolve the executing pass's own world — the same world `useValue` reads
+  through, so the two can never disagree within a pass.
+- Free-context calls (event handlers, plain scripts) keep the documented
+  "newest intent: every live draft folded in" semantics.
+
+**Regression tests** — all three probe shapes, each verified to FAIL against
+the pre-fix engine before landing the fix:
+
+- engine `tests/concurrent.spec.ts` "latest() context rule": canonical
+  computed first-evaluated under a live draft caches 10, not 20; urgent
+  write after quiescence re-fires a watching effect (tracked); world-scoped
+  evaluation still resolves its listed batch.
+- react `tests/react-gate.spec.tsx` "2b": urgent re-render beside a held
+  transition — every render pass's body `latest(a)` must equal its
+  `useValue(a)`; failed pre-fix with latest = 2 against v:1.
+
+**Oracle taught the class**: generated computeds now read one operand via
+`latest()` (p = 0.35). Inside an evaluation latest must equal the context's
+own fold, so the memo-free model needs no new branch — the existing canonical
+and draft-live-world checks cover it. Against the pre-fix engine the taught
+oracle fails at seed 1 (`computed5: got 38 want 54`); with the fix, 1200
+seeds green.
+
+### Fresh gate outputs (after the fix)
+
+```
+pnpm typecheck (signals-royale-fh1)        clean
+pnpm typecheck (react-signals-royale-fh1)  clean
+ Tests  209 passed (209)                   # engine suite (was 206; +3 regressions)
+ ✓ oracle fuzz (1200 seeds x 90 steps) > engine matches the naive fold model 129ms
+ Tests  20 passed (20)                     # real-React gate (was 19; +1 regression)
+ Tests  25 passed (25)                     # shared battery (royale/verify-kit/battery)
+```
+
+### Corrected LOC self-count
+
+`count-loc.mjs` at this commit: **forkLoc 167** (unchanged — no fork edits),
+**libLoc 1957** (engine.ts 1324, tracer.ts 110, index.ts 70, hooks.ts 169,
+seam.ts 263, index.ts 21). The previous claim of 1876 was stale: the Round-2
+perf commit (+65 counted lines) landed before the report commit without a
+re-count (HEAD measured 1941 pre-fix); the latest() fix adds 16 more. Every
+LOC mention in this report now says 1957.

@@ -21,6 +21,7 @@ import {
 	World,
 	currentSeq,
 	setCommittedCutoffProvider,
+	setRenderWorldProvider,
 	setStampProvider,
 	setWriteGuard,
 	emit,
@@ -213,6 +214,8 @@ function installProviders(h: Host): void {
 		}
 		return currentSeq();
 	});
+	// A direct latest() call in a component body resolves the pass's own world.
+	setRenderWorldProvider(currentRenderWorld);
 }
 
 /** A batch whose transition never scheduled React work on any root would

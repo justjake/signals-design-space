@@ -1452,23 +1452,40 @@ export function read<T>(x: Node<T>): T {
 	return x.get();
 }
 
+/** Host-installed render-pass world: the world the currently executing render
+ * pass reads through, or null outside render. Lets a direct `latest()` call in
+ * a component body resolve the pass's own world instead of live drafts. */
+let renderWorldProvider: () => World | null = () => null;
+export function setRenderWorldProvider(fn: (() => World | null) | null): void {
+	renderWorldProvider = fn ?? (() => null);
+}
+
 /** Newest intent, including live transition drafts. Never suspends: while an
  * evaluation is pending the last settled value is served. Inside a computed
  * evaluation or a render pass it resolves that context's own world — reading
- * ahead of your own world would be a tear. */
+ * ahead of your own world would be a tear. In a canonical evaluation the
+ * context's world IS canon, and the read is tracked like any other so the
+ * caller re-runs when the value lands. */
 export function latest<T>(x: Node<T>): T;
 export function latest(x: Node): unknown {
 	return latestImpl(x as Source);
 }
 function latestImpl(x: Source): unknown {
-	if (activeWorld !== null) {
+	// World-scoped evaluation (hook read, inWorld scope, world computed).
+	if (activeWorld !== null) return latestInWorld(x, activeWorld);
+	// Canonical evaluation (computed or effect): tracked canonical read.
+	if (activeSub !== null) {
 		try {
-			return readInWorld(x, activeWorld);
+			return x.get();
 		} catch (e) {
 			if (e instanceof PendingValue && x.k === 1 && x.settled !== UNSET) return x.settled;
 			throw e;
 		}
 	}
+	// Render pass body outside any hook: the pass's own world.
+	const rw = renderWorldProvider();
+	if (rw !== null) return latestInWorld(x, rw);
+	// Free context: newest intent — every live draft folded in.
 	if (x.k === 0) return latestAtom(x);
 	if (liveBatches.size === 0) {
 		try {
@@ -1480,12 +1497,19 @@ function latestImpl(x: Source): unknown {
 	}
 	const w = new World([...liveBatches.keys()]);
 	try {
-		return readInWorld(x, w);
-	} catch (e) {
-		if (e instanceof PendingValue && x.settled !== UNSET) return x.settled;
-		throw e;
+		return latestInWorld(x, w);
 	} finally {
 		w.release();
+	}
+}
+
+/** Resolve under a world; a pending computed serves its last settled value. */
+function latestInWorld(x: Source, w: World): unknown {
+	try {
+		return readInWorld(x, w);
+	} catch (e) {
+		if (e instanceof PendingValue && x.k === 1 && x.settled !== UNSET) return x.settled;
+		throw e;
 	}
 }
 
@@ -1662,6 +1686,7 @@ export function __resetEngine(): void {
 	stampProvider = () => null;
 	writeGuard = null;
 	committedCutoffProvider = () => writeSeq;
+	renderWorldProvider = () => null;
 	pokeTargets = 0;
 	deferredStack.length = 0;
 	deferredDepth = 0;

@@ -114,6 +114,55 @@ describe('2 — transition invisible until commit; isPending meanwhile', () => {
 	});
 });
 
+describe('2b — latest() in a component body resolves the render pass world', () => {
+	// Judgement-round regression: a direct latest() call in a render body must
+	// agree with useValue in the same pass — an urgent re-render beside a held
+	// transition must not serve the live draft (that is a tear).
+	test('urgent re-render while a draft batch is live: body latest() agrees with useValue', async () => {
+		const a = atom(1);
+		const nudge = atom(0);
+		const hold = atom(false);
+		const gate = deferred<void>();
+		const pairs: Array<[number, number]> = [];
+		function App() {
+			const v = useValue(a);
+			const n = useValue(nudge);
+			pairs.push([v, latest(a)]);
+			return (
+				<span>
+					v:{v};n:{n};
+				</span>
+			);
+		}
+		function Suspender() {
+			if (useValue(hold) && !gate.settled) throw gate.promise;
+			return <i>ok;</i>;
+		}
+		const { container } = await mount(
+			<>
+				<App />
+				<React.Suspense fallback={<i>fb;</i>}>
+					<Suspender />
+				</React.Suspense>
+			</>,
+		);
+		await act(async () => {
+			startTransitionWrite(() => {
+				a.set(2);
+				hold.set(true);
+			});
+		});
+		await act(async () => nudge.set(1)); // urgent re-render; the draft batch is still live
+		expect(text(container)).toContain('v:1;n:1;'); // canonical on screen
+		for (const [v, l] of pairs) expect(l).toBe(v); // no pass ever tears
+		await act(async () => {
+			gate.resolve();
+			await gate.promise;
+		});
+		expect(text(container)).toContain('v:2;');
+	});
+});
+
 describe('3 + 13 — urgent commits alone; retirement replays the whole log', () => {
 	test('(1+1)*2 = 4 and the 1 → 2 → 6 branch discipline', async () => {
 		const a = atom(1);
