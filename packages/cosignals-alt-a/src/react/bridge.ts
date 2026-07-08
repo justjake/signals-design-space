@@ -19,12 +19,12 @@
  *    at attach time. Sound for variant A: attach precedes any React work,
  *    so flipping the monotonic write gate EARLIER than §9.1's edge only
  *    widens the always-log window (never narrows it).
- *  onRenderPassStart(container, included)    → same + a synthesized lineage.
- *    GAP: the real fork carries no render lineage (§6.3), so Suspense
- *    thenable caches key on a PER-CONTAINER lineage instead: retries on one
- *    root converge (same key), but two interleaved logical works on one
- *    root share thenable positions — the same sharing the canonical key-0
- *    cache already exhibits. Documented limitation.
+ *  onRenderPassStart(container, included)    → same (lineage constant 0).
+ *    The real fork carries no render lineage (§6.3) and none is needed: the
+ *    Solid-adapted async model keys thenable identity on node×world (pass
+ *    worlds key on their include MASK — stable across restarts and Suspense
+ *    retries of one logical work, distinct for interleaved works whose
+ *    batch sets differ).
  *  onRenderPassYield/Resume(container)       → identical.
  *  onRenderPassEnd(container, committed)     → onRenderPassEnd(container);
  *    the commit/discard bit is not needed by this engine's pass handling
@@ -104,9 +104,6 @@ export function attachReactBridge(engine: CosignalEngine, react: unknown = React
 	const errors: unknown[] = [];
 	let serial = 0;
 	let unsubscribeReact: (() => void) | undefined;
-	// One synthesized lineage per container (see the module header's gap note).
-	const lineages = new Map<unknown, number>();
-	let nextLineage = 1;
 	// The engine assumes one open pass at a time (§6.3). The real work loop
 	// guarantees it, but be defensive: close a stale pass before opening the
 	// next (the same defined fall-through cosignals' shim takes).
@@ -132,11 +129,12 @@ export function attachReactBridge(engine: CosignalEngine, react: unknown = React
 						}
 						passOpen = true;
 						openContainer = container;
-						let lineage = lineages.get(container);
-						if (lineage === undefined) {
-							lineages.set(container, (lineage = nextLineage++));
-						}
-						listener.onRenderPassStart?.(container, included, lineage);
+						// No lineage: the Solid-adapted async model keys thenable
+						// identity on node×world (pass include-mask), so render-
+						// attempt identity is not needed (the old synthesized
+						// per-container lineage — and its aliasing limitation —
+						// are deleted).
+						listener.onRenderPassStart?.(container, included, 0);
 					}),
 				onRenderPassYield: (container) => guard(() => listener.onRenderPassYield?.(container)),
 				onRenderPassResume: (container) => guard(() => listener.onRenderPassResume?.(container)),

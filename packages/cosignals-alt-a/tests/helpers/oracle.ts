@@ -25,6 +25,7 @@
  */
 
 import { createCosignalEngine, type BroadcastEvent, type CosignalEngine, type SignalHandle } from '../../src/engine';
+import { createAPI, isSuspendedBox } from '../../src/api';
 import { createForkDouble, type BatchScript, type ForkDouble } from '../../src/fork-double';
 
 // ---- deterministic PRNG ---------------------------------------------------------
@@ -45,10 +46,25 @@ export type AtomSpec =
 
 export type ComputedSpec = {
 	kind: 'computed';
-	type: 'branch' | 'sum' | 'chain';
+	// 'asyncgate': pending-as-graph-state (Solid-adapted §12.3) — odd source
+	// value ⇒ the node evaluates-to-pending (a never-settling fetch); even ⇒
+	// the value passes through. Downstream nodes FORWARD pending.
+	type: 'branch' | 'sum' | 'chain' | 'asyncgate';
 	srcs: number[]; // node indexes (atoms or lower-index computeds)
 	eqMod?: number;
 };
+
+/** Oracle pending values carry their SOURCE SET (mirroring the engine's
+ * set-keyed joined thenables): `pending:<sorted asyncgate node indexes>`.
+ * Engine SuspendedBox ⇔ oracle pending; broadcast equality keys on the set. */
+export const PENDING_PREFIX = 'oracle-pending:';
+export type OracleValue = number | string;
+export function pendingOf(sources: Iterable<number>): string {
+	return PENDING_PREFIX + [...sources].sort((a, b) => a - b).join(',');
+}
+export function isOraclePending(v: unknown): v is string {
+	return typeof v === 'string' && v.startsWith(PENDING_PREFIX);
+}
 
 export type NodeSpec = AtomSpec | ComputedSpec;
 
@@ -58,6 +74,10 @@ function modEq(m: number) {
 	return (x: number, y: number): boolean => ((x % m) + m) % m === ((y % m) + m) % m;
 }
 
+// The ONE evaluation body both sides share. The read fn returns numbers —
+// pending deps read as `undefined` (exactly what the engine's forwarding
+// substitutes), with pending-ness carried out of band on each side (the
+// engine's evaluation frame; the oracle's sawPending flag).
 export function evalComputedSpec(spec: ComputedSpec, read: (idx: number) => number): number {
 	switch (spec.type) {
 		case 'branch':
@@ -66,6 +86,8 @@ export function evalComputedSpec(spec: ComputedSpec, read: (idx: number) => numb
 			return read(spec.srcs[0]) + read(spec.srcs[1]);
 		case 'chain':
 			return read(spec.srcs[0]) + 1;
+		case 'asyncgate':
+			return read(spec.srcs[0]); // gating on oddness is applied by each side
 	}
 }
 
@@ -210,10 +232,32 @@ export class Oracle {
 		}
 	}
 
-	value(idx: number, world: OWorld): number {
+	value(idx: number, world: OWorld): OracleValue {
 		const spec = this.specs[idx];
 		if (spec.kind === 'computed') {
-			return evalComputedSpec(spec, (s) => this.value(s, world));
+			// Pending propagation derived from world values (§17.2 extended):
+			// evaluate with pending deps substituted by undefined (mirroring
+			// the engine's forwarding) and carry pending-ness out of band.
+			const sources = new Set<number>();
+			const read = (s: number): number => {
+				const v = this.value(s, world);
+				if (isOraclePending(v)) {
+					for (const part of v.slice(PENDING_PREFIX.length).split(',')) {
+						sources.add(Number(part));
+					}
+					return undefined as unknown as number;
+				}
+				return v as number;
+			};
+			if (spec.type === 'asyncgate') {
+				const src = read(spec.srcs[0]);
+				if (sources.size !== 0) {
+					return pendingOf(sources);
+				}
+				return src % 2 !== 0 ? pendingOf([idx]) : src;
+			}
+			const out = evalComputedSpec(spec, read);
+			return sources.size !== 0 ? pendingOf(sources) : out;
 		}
 		let acc = spec.initial as number;
 		const eq = this.eqOf(idx);
@@ -259,9 +303,12 @@ export class Oracle {
 				const v = this.value(w.node, world);
 				const baseline = w.lb.has(tok) ? w.lb.get(tok) : this.value(w.node, { k: 'w0' });
 				const eq = this.eqOf(w.node);
-				const same =
-					eq !== undefined
-						? eq(baseline as number, v)
+				// Pending status compares as status (the engine's box equality:
+				// same store-held thenable per node×world ⇒ equal).
+				const same = isOraclePending(v) || isOraclePending(baseline)
+					? v === baseline
+					: eq !== undefined
+						? eq(baseline as number, v as number)
 						: Object.is(baseline, v);
 				if (!same) {
 					w.lb.set(tok, v);
@@ -278,14 +325,19 @@ export type RunResult = { failure?: string };
 
 export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunResult {
 	const engine = createCosignalEngine({ initialRecords: 16, initialLogRecords: 2, initialMemoRecords: 2 });
+	const api = createAPI(engine);
 	const fork = createForkDouble();
 	engine.attachFork(fork);
 	fork.registerRoot('root');
 	specs = specs.slice(); // the runner may append mid-schedule nodes
 	const oracle = new Oracle(specs);
 
-	// Build the node universe in the engine.
+	// Build the node universe in the engine. Computeds build through the API
+	// classes so pending FORWARDS through class `.state` reads inside
+	// evaluations (the graph-status model); raw engine handles would hand
+	// §11.3 boxes straight into arithmetic.
 	const handles: SignalHandle[] = [];
+	const classReaders: Array<() => number> = [];
 	const reducerHandles = new Map<number, { dispatch(a: number): void }>();
 	const atomHandles = new Map<number, { set(v: number): void; update(f: (x: number) => number): void }>();
 	function buildNode(i: number): void {
@@ -293,18 +345,31 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 		if (s.kind === 'atom') {
 			const h = engine.atom<number>(s.initial, s.eqMod !== undefined ? { isEqual: modEq(s.eqMod) } : undefined);
 			handles.push(h);
+			classReaders[handles.length - 1] = () => h.state as number;
 			atomHandles.set(i, h);
 		} else if (s.kind === 'reducer') {
 			const h = engine.reducerAtom<number, number>(s.initial, REDUCER);
 			handles.push(h);
+			classReaders[handles.length - 1] = () => h.state as number;
 			reducerHandles.set(i, h);
 		} else {
 			const spec = s;
-			const h = engine.computed<number>(
-				() => evalComputedSpec(spec, (idx) => (handles[idx] as unknown as { state: number }).state),
-				spec.eqMod !== undefined ? { isEqual: modEq(spec.eqMod) } : undefined,
-			);
-			handles.push(h);
+			const readIdx = (idx: number): number => classReaders[idx]();
+			const never = new Promise<number>(() => undefined); // per-node fetch; never settles
+			const c = spec.type === 'asyncgate'
+				? new api.Computed<number>({
+					fn: (ctx) => {
+						const v = readIdx(spec.srcs[0]);
+						return v % 2 !== 0 ? ctx.use(never) : v;
+					},
+					isEqual: spec.eqMod !== undefined ? modEq(spec.eqMod) : undefined,
+				})
+				: new api.Computed<number>({
+					fn: () => evalComputedSpec(spec, readIdx),
+					isEqual: spec.eqMod !== undefined ? modEq(spec.eqMod) : undefined,
+				});
+			handles.push(c.handle as unknown as SignalHandle);
+			classReaders[handles.length - 1] = () => c.state;
 		}
 	}
 	for (let i = 0; i < specs.length; ++i) {
@@ -329,8 +394,11 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 		return fork.getRenderContext() !== undefined;
 	}
 
-	function eqCompare(idx: number, a: unknown, b: unknown): boolean {
-		return Object.is(a, b);
+	function eqCompare(_idx: number, engineV: unknown, oracleV: unknown): boolean {
+		if (isOraclePending(oracleV)) {
+			return isSuspendedBox(engineV); // status ⇔ status (sets checked via broadcasts)
+		}
+		return Object.is(engineV, oracleV);
 	}
 
 	function compareValues(step: number, op: Op): RunResult {
@@ -379,7 +447,7 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 		}));
 		const expected = oracle.expectedBroadcasts(relevantTokens);
 		const key = (x: { watcher: number; token: number; value: unknown }): string =>
-			`${x.watcher}|${x.token}|${String(x.value)}`;
+			`${x.watcher}|${x.token}|${isSuspendedBox(x.value) || isOraclePending(x.value) ? '<pending>' : String(x.value)}`;
 		const as = actual.map(key).sort();
 		const es = expected.map(key).sort();
 		if (as.join(';') !== es.join(';')) {
@@ -456,7 +524,7 @@ export function runSchedule(specs: NodeSpec[], ops: Op[], label: string): RunRes
 		if (engine.debug.isLogged(handles[w.atom])) {
 			return false;
 		}
-		const cur = oracle.value(w.atom, { k: 'w0' });
+		const cur = oracle.value(w.atom, { k: 'w0' }) as number; // atoms are never PENDING
 		const next =
 			w.op === 'set'
 				? w.v
@@ -722,12 +790,14 @@ export function generateUniverse(rng: () => number): NodeSpec[] {
 		const idx = specs.length;
 		const pick = (): number => Math.floor(rng() * idx);
 		const roll = rng();
-		if (roll < 0.45) {
+		if (roll < 0.4) {
 			specs.push({ kind: 'computed', type: 'branch', srcs: [pick(), pick(), pick()] });
-		} else if (roll < 0.8) {
+		} else if (roll < 0.7) {
 			specs.push({ kind: 'computed', type: 'sum', srcs: [pick(), pick()] });
-		} else {
+		} else if (roll < 0.85) {
 			specs.push({ kind: 'computed', type: 'chain', srcs: [pick()] });
+		} else {
+			specs.push({ kind: 'computed', type: 'asyncgate', srcs: [pick()] });
 		}
 	}
 	return specs;

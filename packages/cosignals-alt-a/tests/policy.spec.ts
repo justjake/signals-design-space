@@ -153,13 +153,13 @@ describe('§12.3 ctx.use and suspense', () => {
 		expect(() => c.state).toThrow('fetch failed');
 	});
 
-	it('positional identity: re-evaluations see the same thenable (canonical key)', async () => {
+	it('canonical thenable identity: retries reuse the store-held thenable; input changes refetch (latest-wins)', async () => {
 		const { api } = makeAPI();
 		const dep = new api.Atom({ state: 0 });
 		let created = 0;
 		const make = (): Promise<number> => {
 			++created;
-			return Promise.resolve(5);
+			return Promise.resolve(5 + (dep.handle.peek() as number));
 		};
 		const c = new api.Computed({
 			fn: (ctx) => {
@@ -167,17 +167,23 @@ describe('§12.3 ctx.use and suspense', () => {
 				return ctx.use(make());
 			},
 		});
-		c.boxed; // first eval creates + caches position 0
+		c.boxed; // first eval registers position 0 (pending)
+		const afterFirst = created;
+		c.boxed; // pending is GRAPH STATE: the box is cached — no re-evaluation
+		expect(created).toBe(afterFirst);
 		await tick();
 		await tick();
-		expect(c.state).toBe(5);
-		const n = created;
-		dep.set(1); // re-evaluation: position 0 must return the CACHED thenable
-		expect(c.state).toBe(5);
-		// A fresh thenable was constructed by the call expression, but the
-		// cached one answered — no refetch loop (creations only from the call
-		// sites themselves).
-		expect(created).toBe(n + 1); // one per evaluation, none extra
+		expect(c.state).toBe(5); // settled through invalidate → propagate
+		const settledCreations = created;
+		expect(c.state).toBe(5); // no re-evaluation, no fetch
+		expect(created).toBe(settledCreations);
+		// A REAL input change: canonical slots were cleared at the settled
+		// completion, so the next evaluation fetches fresh (latest-wins).
+		dep.set(1);
+		expect(() => c.state).toThrow(); // pending again (fresh fetch)
+		await tick();
+		await tick();
+		expect(c.state).toBe(6); // 5 + dep(1) — the NEW input's data
 	});
 
 	it('settlement bumps the overlay epoch so writer-world memos re-validate', async () => {
@@ -224,6 +230,59 @@ describe('§12.3 ctx.use and suspense', () => {
 		// would re-fetch; without it, position 0 held.
 		pass2.end();
 		t.retire();
+	});
+});
+
+describe('§12.3 (adapted): pending as graph state', () => {
+	it('downstream computeds FORWARD pending by default and settle by propagation', async () => {
+		const { api } = makeAPI();
+		let release!: (v: number) => void;
+		const data = new Promise<number>((r) => (release = r));
+		const source = new api.Computed({ fn: (ctx) => ctx.use(data) });
+		// A zero-arity (slim) downstream computed: reads the pending source
+		// through the ordinary class getter — no ctx, no use().
+		const doubled = new api.Computed({ fn: () => (source.state as number) * 2 });
+		// And a ctx-ful one above THAT (two forwarding hops).
+		const plusOne = new api.Computed({ fn: () => (doubled.state as number) + 1 });
+		expect(isSuspendedBox(doubled.boxed)).toBe(true); // forwarded, not thrown
+		expect(isSuspendedBox(plusOne.boxed)).toBe(true);
+		// The forwarded thenable is the SOURCE's store-held one (stable identity).
+		const b1 = doubled.boxed;
+		const b2 = doubled.boxed;
+		expect(b1).toBe(b2); // graph state: cached box, no re-evaluation churn
+		release(21);
+		await tick();
+		await tick();
+		expect(doubled.state).toBe(42); // settlement = a normal write, resumed by propagation
+		expect(plusOne.state).toBe(43);
+	});
+
+	it('parallel fetches: multiple ctx.use in one evaluation all register before pending surfaces', async () => {
+		const { api } = makeAPI();
+		let started = 0;
+		let releaseA!: (v: number) => void;
+		let releaseB!: (v: number) => void;
+		const make = (r: (f: (v: number) => void) => void): Promise<number> =>
+			new Promise<number>((res) => {
+				++started;
+				r(res);
+			});
+		const c = new api.Computed({
+			fn: (ctx) => {
+				const a = ctx.use(make((f) => (releaseA = f)));
+				const b = ctx.use(make((f) => (releaseB = f))); // must still run while a is pending
+				return (a as number) + (b as number);
+			},
+		});
+		expect(isSuspendedBox(c.boxed)).toBe(true);
+		expect(started).toBe(2); // BOTH fetches registered — no throw-created waterfall
+		releaseA(1);
+		await tick();
+		await tick();
+		releaseB(2);
+		await tick();
+		await tick();
+		expect(c.state).toBe(3);
 	});
 });
 

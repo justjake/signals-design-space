@@ -3583,14 +3583,27 @@ export function createCosignalEngine(options?: EngineOptions) {
 			canonicalValue(h: SignalHandle): unknown {
 				return values[h.id >> 2];
 			},
-			evalWorldKind(): 'canonical' | 'pass' | 'other' {
-				if (frameWorlds.length > 0) {
-					return frameWorlds[frameWorlds.length - 1].k === C.WK_PASS ? 'pass' : 'other';
+			/** The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
+			 * Canonical evaluations share one key; pass-world evaluations key on
+			 * the pass's INCLUDE MASK — the stable identity across restarts and
+			 * Suspense retries of one logical work (two interleaved works on one
+			 * root differ in batch sets, so they never alias; identical batch
+			 * sets ARE the same world, where sharing is correct). */
+			useCacheKey(): string {
+				if (frameWorlds.length === 0) {
+					return 'canon';
 				}
-				return 'canonical';
-			},
-			passLineage(): number {
-				return passLineage;
+				const w = frameWorlds[frameWorlds.length - 1];
+				switch (w.k) {
+					case C.WK_PASS:
+						return w.key >= 0 ? 'p' + w.mask : 'x';
+					case C.WK_WRITER:
+						return w.token !== 0 ? 'w' + w.token : 'x';
+					case C.WK_NEWEST:
+						return 'n';
+					default:
+						return 'x';
+				}
 			},
 			isLive(h: SignalHandle): boolean {
 				return isLiveNode(h.id);

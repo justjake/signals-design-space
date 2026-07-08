@@ -1221,8 +1221,19 @@ function createCosignalEngine(options) {
       mask: 0
     };
   }
+  function healStaleRenderCtx() {
+    if (fork !== void 0 && fork.getRenderContext() === void 0) {
+      passExecuting = 0;
+      readCtx = 1 /* CTX_NEWEST */;
+      return true;
+    }
+    return false;
+  }
   function ambientWorld() {
     if (readCtx === 2 /* CTX_RENDER */) {
+      if (healStaleRenderCtx()) {
+        return NEWEST_WORLD;
+      }
       return passWorld;
     }
     if (readCtx === 3 /* CTX_COMMITTED */) {
@@ -1908,7 +1919,7 @@ function createCosignalEngine(options) {
     return metas[a >> 3].reducer(cur, payload);
   }
   function writeOp(a, op, payload) {
-    if (readCtx === 2 /* CTX_RENDER */ && passExecuting !== 0) {
+    if (readCtx === 2 /* CTX_RENDER */ && passExecuting !== 0 && !healStaleRenderCtx()) {
       throw new Error("cosignal: writes during render are not allowed (\xA710.8)");
     }
     if (frameWorlds.length > 0 && frameWorlds[frameWorlds.length - 1].k === 2 /* WK_PASS */) {
@@ -1942,13 +1953,20 @@ function createCosignalEngine(options) {
         return;
       }
     }
-    let slot = internSlot(token);
+    let slot;
     let pseudo = false;
     let applied = !deferred;
-    if (slot < 0) {
+    if (token === 0) {
       pseudo = true;
       applied = true;
       slot = 0;
+    } else {
+      slot = internSlot(token);
+      if (slot < 0) {
+        pseudo = true;
+        applied = true;
+        slot = 0;
+      }
     }
     appendLog(a, op, payload, applied, slot, pseudo);
     if (tracer !== void 0) {
@@ -2301,7 +2319,7 @@ function createCosignalEngine(options) {
     };
   }
   function readAtomPublic(a) {
-    if (frameWorlds.length === 0 && (M[a + 0 /* FLAGS */] & (128 /* LOGGED */ | 16 /* DIRTY */)) === 0 && (canonicalEvalDepth > 0 || readCtx !== 2 /* CTX_RENDER */)) {
+    if (frameWorlds.length === 0 && (M[a + 0 /* FLAGS */] & (128 /* LOGGED */ | 16 /* DIRTY */)) === 0 && (canonicalEvalDepth > 0 || readCtx !== 2 /* CTX_RENDER */ || healStaleRenderCtx())) {
       if (activeSub !== 0) {
         link(a, activeSub, cycle);
       }
@@ -2801,6 +2819,21 @@ function createCosignalEngine(options) {
     trackCommitted,
     committedEffect,
     subscribeWithFixup,
+    /** The open pass's fixup-relevant identity: pin + included tokens
+     * (interned slots only — never-interned tokens carry no entries and
+     * cannot affect any re-resolution). undefined outside passes. */
+    renderInfo() {
+      if (passOpen === 0) {
+        return void 0;
+      }
+      const tokens = [];
+      for (let s2 = 0; s2 < 32; ++s2) {
+        if ((passIncludeMask >> s2 & 1) !== 0 && batchToken[s2] !== 0) {
+          tokens.push(batchToken[s2]);
+        }
+      }
+      return { pin: passPin, tokens, container: passContainer };
+    },
     /** §14.2 deterministic disposal of an atom/computed record (the same
      * path the FinalizationRegistry takes for collected handles). */
     reclaim(h) {
@@ -2831,14 +2864,27 @@ function createCosignalEngine(options) {
       canonicalValue(h) {
         return values[h.id >> 2];
       },
-      evalWorldKind() {
-        if (frameWorlds.length > 0) {
-          return frameWorlds[frameWorlds.length - 1].k === 2 /* WK_PASS */ ? "pass" : "other";
+      /** The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
+       * Canonical evaluations share one key; pass-world evaluations key on
+       * the pass's INCLUDE MASK — the stable identity across restarts and
+       * Suspense retries of one logical work (two interleaved works on one
+       * root differ in batch sets, so they never alias; identical batch
+       * sets ARE the same world, where sharing is correct). */
+      useCacheKey() {
+        if (frameWorlds.length === 0) {
+          return "canon";
         }
-        return "canonical";
-      },
-      passLineage() {
-        return passLineage;
+        const w = frameWorlds[frameWorlds.length - 1];
+        switch (w.k) {
+          case 2 /* WK_PASS */:
+            return w.key >= 0 ? "p" + w.mask : "x";
+          case 3 /* WK_WRITER */:
+            return w.token !== 0 ? "w" + w.token : "x";
+          case 1 /* WK_NEWEST */:
+            return "n";
+          default:
+            return "x";
+        }
       },
       isLive(h) {
         return isLiveNode(h.id);
@@ -3178,7 +3224,6 @@ function errorBox(error) {
 function suspendedBox(thenable) {
   return { [BOX]: true, kind: "suspended", thenable };
 }
-var SUSPEND = /* @__PURE__ */ Symbol("cosignal.suspend");
 function defaultBoxedEq(a, b) {
   const ab = isBox(a);
   const bb = isBox(b);
@@ -3240,16 +3285,49 @@ function createAPI(engine) {
       this.handle.dispatch(action);
     }
   }
+  const frameStack = [];
+  let frameSp = 0;
+  function pushFrame() {
+    let f = frameStack[frameSp];
+    if (f === void 0) {
+      frameStack[frameSp] = f = { pending: [], usedCanonSlots: false };
+    }
+    if (f.pending.length !== 0) {
+      f.pending.length = 0;
+    }
+    f.usedCanonSlots = false;
+    ++frameSp;
+    return f;
+  }
+  function popFrame() {
+    --frameSp;
+  }
+  function forwardPending(th) {
+    if (frameSp === 0) {
+      return false;
+    }
+    const f = frameStack[frameSp - 1];
+    if (!f.pending.includes(th)) {
+      f.pending.push(th);
+    }
+    return true;
+  }
   class Computed2 {
     handle;
     id;
-    // §12.3: ONE reused ctx object per computed ("reused ctx object in
-    // meta") — the previous per-evaluation ctx/closure allocations were
-    // 58% of the kairo-deep tick and most of its GC. Per-eval state lives
-    // in instance fields, reset at evaluation entry.
-    thenableCache;
+    // Thenable slots per node×world (the §12.3 adaptation): positions are
+    // stable for the node's life within one world key, so re-evaluations
+    // and Suspense retries re-see the SAME store-held thenable. Canonical
+    // slots clear after a settled completion (kernel re-evaluations are
+    // dirty-gated, so the next evaluation is a REAL input change → fresh
+    // fetch, Solid's latest-wins); world keys stay first-wins (overlay
+    // re-evaluation is conservative and must not thrash fetches).
+    useSlots;
     useIndex = 0;
-    suspended;
+    // Canonical joins per SOURCE SET: the same set of pending thenables
+    // always yields the same joined object (broadcast cutoffs and memo
+    // equality then key on the true wait-set, not join allocation order).
+    pendingJoins;
     ctxLazy;
     get ctx() {
       const self = this;
@@ -3275,76 +3353,113 @@ function createAPI(engine) {
       };
       const self = this;
       const fn = options.fn;
-      const evalFn = () => {
+      const evaluate = (prevForBoxes) => {
         self.useIndex = 0;
-        self.suspended = void 0;
-        try {
-          return fn(self.ctx);
-        } catch (e) {
-          const prevBox = engine.policy.canonicalValue(self.handle);
-          const susp = self.suspended;
-          if (e === SUSPEND && susp !== void 0) {
-            return isSuspendedBox(prevBox) && Object.is(prevBox.thenable, susp) ? prevBox : suspendedBox(susp);
-          }
-          return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
-        }
-      };
-      if (options.fn.length === 0 && userEq === void 0) {
-        const plainFn = options.fn;
-        const slimKernelFn = (prev) => {
-          try {
-            return plainFn();
-          } catch (e) {
-            return isErrorBox(prev) && Object.is(prev.error, e) ? prev : errorBox(e);
-          }
-        };
-        const slimEvalFn = () => {
-          try {
-            return plainFn();
-          } catch (e) {
-            const prevBox = engine.policy.canonicalValue(self.handle);
-            return isErrorBox(prevBox) && Object.is(prevBox.error, e) ? prevBox : errorBox(e);
-          }
-        };
-        this.handle = engine.computed(slimEvalFn, {
-          isEqual: eq,
-          label: options.label,
-          kernelFn: slimKernelFn
-        });
-        this.id = this.handle.id;
-        return;
-      }
-      const kernelFn = (prev) => {
-        self.useIndex = 0;
-        self.suspended = void 0;
+        const frame = pushFrame();
         let next;
         try {
           next = fn(self.ctx);
         } catch (e) {
-          const susp = self.suspended;
-          if (e === SUSPEND && susp !== void 0) {
-            return isSuspendedBox(prev) && Object.is(prev.thenable, susp) ? prev : suspendedBox(susp);
+          popFrame();
+          return isErrorBox(prevForBoxes) && Object.is(prevForBoxes.error, e) ? prevForBoxes : errorBox(e);
+        }
+        const pendingCount = frame.pending.length;
+        const usedCanon = frame.usedCanonSlots;
+        if (pendingCount !== 0) {
+          const th = self.joinPending(frame.pending);
+          popFrame();
+          return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th) ? prevForBoxes : suspendedBox(th);
+        }
+        popFrame();
+        if (usedCanon) {
+          self.useSlots?.delete("canon");
+        }
+        return next;
+      };
+      const evalFn = () => evaluate(engine.policy.canonicalValue(self.handle));
+      if (options.fn.length === 0 && userEq === void 0) {
+        const plainFn = options.fn;
+        const slimBody = (prevForBoxes) => {
+          const frame = pushFrame();
+          let next;
+          try {
+            next = plainFn();
+          } catch (e) {
+            popFrame();
+            return isErrorBox(prevForBoxes) && Object.is(prevForBoxes.error, e) ? prevForBoxes : errorBox(e);
           }
-          return isErrorBox(prev) && Object.is(prev.error, e) ? prev : errorBox(e);
+          const pendingCount = frame.pending.length;
+          if (pendingCount !== 0) {
+            const th = self.joinPending(frame.pending);
+            popFrame();
+            return isSuspendedBox(prevForBoxes) && Object.is(prevForBoxes.thenable, th) ? prevForBoxes : suspendedBox(th);
+          }
+          popFrame();
+          return next;
+        };
+        this.handle = engine.computed(
+          () => slimBody(engine.policy.canonicalValue(self.handle)),
+          {
+            isEqual: eq,
+            label: options.label,
+            kernelFn: (prev) => slimBody(prev)
+          }
+        );
+        this.id = this.handle.id;
+        return;
+      }
+      const kernelFn = (prev) => {
+        const next = evaluate(prev);
+        if (isBox(next)) {
+          return next;
         }
         return prev !== void 0 && eq(prev, next) ? prev : next;
       };
       this.handle = engine.computed(evalFn, { isEqual: eq, label: options.label, kernelFn });
       this.id = this.handle.id;
     }
+    /** One thenable identity per evaluation outcome: the single pending
+     * source, or a node-cached join of the set (so retries re-see the same
+     * object even with parallel fetches). */
+    joinPending(parts) {
+      if (parts.length === 1) {
+        return parts[0];
+      }
+      const joins = this.pendingJoins ??= [];
+      for (const cached of joins) {
+        if (cached.parts.length === parts.length && parts.every((t) => cached.parts.includes(t))) {
+          return cached.joined;
+        }
+      }
+      const snapshot = parts.slice();
+      const joined = Promise.all(snapshot).then(() => void 0);
+      joins.push({ parts: snapshot, joined });
+      return joined;
+    }
+    /** §12.3 (adapted): record-pending-and-return. Never throws mid-eval
+     * for pending — parallel ctx.use calls all register their fetches
+     * before pending surfaces on the node. */
     useThenable(thenable) {
-      const kind = engine.policy.evalWorldKind();
-      const key = kind === "pass" ? engine.policy.passLineage() : 0;
-      const cache = this.thenableCache ??= /* @__PURE__ */ new Map();
-      let slots = cache.get(key);
-      if (slots === void 0) {
-        cache.set(key, slots = []);
+      if (frameSp === 0) {
+        throw new Error("cosignal: ctx.use may only run inside a computed evaluation");
+      }
+      const frame = frameStack[frameSp - 1];
+      const key = engine.policy.useCacheKey();
+      const slots = this.useSlots ??= /* @__PURE__ */ new Map();
+      let arr = slots.get(key);
+      if (arr === void 0) {
+        slots.set(key, arr = []);
       }
       const i = this.useIndex++;
-      if (slots[i] === void 0) {
-        slots[i] = thenable;
+      if (key === "canon") {
+        frame.usedCanonSlots = true;
       }
-      const th = slots[i];
+      let th = arr[i];
+      if (th === void 0) {
+        arr[i] = th = thenable;
+      } else if (th.status === "pending" && !Object.is(th, thenable)) {
+        arr[i] = th = thenable;
+      }
       if (th.status === void 0) {
         th.status = "pending";
         th.then(
@@ -3366,13 +3481,17 @@ function createAPI(engine) {
       if (th.status === "rejected") {
         throw th.reason;
       }
-      this.suspended = th;
-      throw SUSPEND;
+      if (!frame.pending.includes(th)) {
+        frame.pending.push(th);
+      }
+      return void 0;
     }
     onSettle(th) {
       queueMicrotask(() => {
         const cached = engine.policy.canonicalValue(this.handle);
-        if (isSuspendedBox(cached) && Object.is(cached.thenable, th)) {
+        if (isSuspendedBox(cached) && (Object.is(cached.thenable, th) || this.pendingJoins?.some(
+          (j) => Object.is(j.joined, cached.thenable) && j.parts.some((p) => Object.is(p, th))
+        ) === true)) {
           engine.policy.invalidate(this.handle);
         }
         engine.policy.bumpOverlayEpoch();
@@ -3384,17 +3503,16 @@ function createAPI(engine) {
         if (v.kind === "error") {
           throw v.error;
         }
+        if (forwardPending(v.thenable)) {
+          return void 0;
+        }
         throw v.thenable;
       }
       return v;
     }
-    /** Non-throwing read: the value or its §11.3 box. */
+    /** Non-throwing read: the value or its §11.3 status box. */
     get boxed() {
       return readComputedById(this.id);
-    }
-    /** Drop a retired render lineage's thenable positions (§12.3). */
-    dropLineage(lineage) {
-      this.thenableCache?.delete(lineage);
     }
   }
   const handleOf = (x) => "handle" in x ? x.handle : x;
@@ -3437,6 +3555,7 @@ function createAPI(engine) {
 // src/index.ts
 var defaultEngine = createCosignalEngine();
 var defaultAPI = createAPI(defaultEngine);
+var defaultApi = defaultAPI;
 var Atom = defaultAPI.Atom;
 var ReducerAtom = defaultAPI.ReducerAtom;
 var Computed = defaultAPI.Computed;
@@ -3463,6 +3582,7 @@ export {
   createForkDouble,
   createServerEngine,
   createTracer,
+  defaultApi,
   defaultEngine,
   effect,
   effectScope,

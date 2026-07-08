@@ -34,3 +34,43 @@ sections of react-concurrent-signals-arena-alt-a.md where it is ambiguous or def
 - W0-no-op retirement shifting other worlds.
 - Snapshot-before-re-evaluate in chain re-validation.
 - Re-validation ordered BEFORE broadcast decisions.
+
+## Async model (owner design change, 2026-07-08): Solid-2.0-adapted graph-status suspense
+
+Deviations from spec §11.3/§12.3, adopted per the owner brief (reference:
+vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
+
+1. **Pending/error are graph state, not evaluation-attempt state.** The §11.3
+   boxes remain the value-space representation, but a computed hitting an
+   unresolved async dep now EVALUATES-TO-PENDING: no thrown thenables
+   mid-evaluation. `ctx.use` records the pending thenable on the active
+   evaluation frame and RETURNS (undefined stand-in), so multiple `ctx.use`
+   calls in one evaluation all register before pending surfaces — parallel
+   fetches, no throw-created waterfalls.
+2. **Thenable identity is node×world, not render-attempt.** §12.3's
+   lineage-keyed positional cache is DELETED (with the react bridge's
+   synthesized per-container lineage and its interleaved-works aliasing
+   limitation). Slots key on: `canon` for canonical evaluations, the pass
+   INCLUDE MASK for pass worlds (stable across restarts/retries of one
+   logical work; distinct for works with different batch sets — identical
+   batch sets are the same world, where sharing is correct), writer token
+   for writer worlds, `n` for newest.
+3. **Downstream forwards pending by default**: reading a pending computed
+   inside another evaluation records the store-held thenable on the reader's
+   frame and continues with undefined; the reader's own result becomes the
+   pending box. Errors keep §11.3 throw-through-read semantics (caught by
+   the wrapper into error state).
+4. **Settlement is a normal write**: resolution commits through
+   invalidate → propagate (+ the §10.5 epoch bump for world memos).
+   Resumption is propagation.
+5. **Latest-wins while pending; first-wins once settled.** A pending slot
+   occupant is REPLACED by a different incoming thenable (re-evaluations are
+   dirty/cert-gated, so a different thenable at a pending position means the
+   inputs moved — found by the interleaved-works RTL case: a canonical
+   evaluation after an input change must not stay stuck on the stale
+   in-flight fetch). Settled occupants stay until the canonical
+   settled-completion clear (fresh fetches on the next real input change).
+   Cache-less callers may pay one extra fetch per settlement wave; keyed
+   data layers make replacement a no-op.
+6. `ctx.use` outside a computed evaluation throws (it previously threw a
+   raw SUSPEND sentinel through the caller).

@@ -258,6 +258,77 @@ describe('real React: suspense via ctx.use', () => {
 	});
 });
 
+describe('real React: interleaved suspending works (impossible under the old lineage model)', () => {
+	it('two pending transitions on ONE root fetch DISTINCT data and commit independently', async () => {
+		// Under the deleted per-container-lineage cache, both works on this
+		// root shared thenable positions — the second work aliased the
+		// first's fetch. Node×world identity (pass include-mask keys) gives
+		// each work its own store-held thenables.
+		const which = new api.Atom({ state: 0 }); // 0 = neither, 1 = A, 2 = B
+		const resolvers = new Map<number, (v: string) => void>();
+		const fetches: number[] = [];
+		const cache = new Map<number, Promise<string>>(); // a realistic keyed data layer
+		const fetchFor = (p: number): Promise<string> => {
+			let promise = cache.get(p);
+			if (promise === undefined) {
+				fetches.push(p); // one real fetch per dataset
+				promise = new Promise<string>((r) => resolvers.set(p, r));
+				cache.set(p, promise);
+			}
+			return promise;
+		};
+		const remote = new api.Computed<string>({
+			fn: (ctx) => {
+				const p = which.state as number;
+				return p === 0 ? 'none' : ctx.use(fetchFor(p));
+			},
+		});
+		function View(): React.ReactNode {
+			return <span>{useSignal(remote)}</span>;
+		}
+		const c = mount(
+			<React.Suspense fallback={<i>wait</i>}>
+				<View />
+			</React.Suspense>,
+		);
+		expect(c.textContent).toBe('none');
+
+		// Work A: a transition selecting dataset 1 — suspends, stays pending.
+		await act(async () => {
+			startSignalTransition(() => {
+				which.set(1);
+			});
+		});
+		expect(c.textContent).toBe('none'); // held pending
+
+		// Work B: a SECOND, interleaved transition selecting dataset 2 —
+		// a distinct world (different batch set) → a DISTINCT fetch.
+		await act(async () => {
+			startSignalTransition(() => {
+				which.set(2);
+			});
+		});
+		expect(c.textContent).toBe('none');
+		expect(new Set(fetches)).toEqual(new Set([1, 2])); // no aliasing: both datasets fetched
+
+		// Resolve B first: the rebased final world (A then B in seq order →
+		// which = 2) can commit as soon as ITS data is ready.
+		await act(async () => {
+			resolvers.get(2)!('data-2');
+			await tick();
+			await tick();
+		});
+		// Resolve A too — every world settles; the committed result is the
+		// rebased newest world's data, never a mix.
+		await act(async () => {
+			resolvers.get(1)!('data-1');
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('data-2');
+	});
+});
+
 describe('real React: flushSync parity (the §9.1 case, in its honest form)', () => {
 	it('a signal and a useState mirror written in the same task never diverge across flushSync', async () => {
 		// The §9.1 claim is useState-IDENTITY, not a fixed lane composition:
