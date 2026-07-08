@@ -83,9 +83,14 @@ const adapter = {
 	): unknown {
 		return computed<T>(fn as (use: UseFn) => T, opts);
 	},
-	read: (x: unknown) => read(x as AnyReadable),
-	latest: (x: unknown) => latest(x as AnyReadable),
-	committed: (x: unknown, container?: unknown) =>
+	// The RoyaleAdapter contract types value reads as `any` so battery JSX can
+	// interpolate them as children.
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	read: (x: unknown): any => read(x as AnyReadable),
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	latest: (x: unknown): any => latest(x as AnyReadable),
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	committed: (x: unknown, container?: unknown): any =>
 		committed(x as AnyReadable, container === undefined ? null : getView(container)),
 	isPending: (x: unknown) => isPending(x as AnyReadable),
 	refresh: (x: unknown) => refresh(x as AnyReadable),
@@ -96,11 +101,13 @@ const adapter = {
 	untracked,
 	serialize: (atoms: unknown[]) => serializeAtomState(keyed(atoms)),
 	initialize: (json: string, atoms: unknown[]) => initializeAtomState(json, keyed(atoms)),
-	useValue: (x: unknown) => useValue(x as AnyReadable),
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	useValue: (x: unknown): any => useValue(x as AnyReadable),
 	useComputed,
 	useSignalEffect,
 	useIsPending: (x: unknown) => useIsPending(x as AnyReadable),
-	useCommitted: (x: unknown) => useCommitted(x as AnyReadable),
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	useCommitted: (x: unknown): any => useCommitted(x as AnyReadable),
 	startTransitionWrite,
 	trace: traceView,
 	onDomMutation,

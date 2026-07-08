@@ -60,7 +60,8 @@ export interface LaneBatch extends WorldBatch {
 }
 
 const laneBatches = new Map<Lanes, LaneBatch>();
-const views = new Map<unknown, CommittedView & { listeners?: Set<() => void> }>();
+/** Weak keys: an unmounted root's container must not be pinned by us. */
+let views = new WeakMap<object, CommittedView & { listeners?: Set<() => void> }>();
 const mutationSubs = new Set<(phase: 'start' | 'stop', container: Element) => void>();
 const registrationErrors: unknown[] = [];
 
@@ -75,14 +76,13 @@ const viewReclaimer =
 		: null;
 
 function viewFor(container: unknown): CommittedView & { listeners?: Set<() => void> } {
+	if (typeof container !== 'object' || container === null) return createCommittedView();
 	let view = views.get(container);
 	if (view === undefined) {
 		view = createCommittedView();
 		view.listeners = new Set();
 		views.set(container, view);
-		if (viewReclaimer !== null && typeof container === 'object' && container !== null) {
-			viewReclaimer.register(container, view);
-		}
+		viewReclaimer?.register(container, view);
 	}
 	return view;
 }
@@ -108,6 +108,7 @@ export function getCurrentRenderContainer(): unknown {
 }
 
 export function getView(container: unknown): CommittedView | null {
+	if (typeof container !== 'object' || container === null) return null;
 	return views.get(container) ?? null;
 }
 
@@ -275,8 +276,7 @@ export function resetForTest(): void {
 	engineReset();
 	flushLifetimeEffects();
 	laneBatches.clear();
-	for (const view of views.values()) view.dispose();
-	views.clear();
+	views = new WeakMap(); // engineReset already dropped the views themselves
 	mutationSubs.clear();
 	registrationErrors.length = 0;
 	renderDepth = 0;

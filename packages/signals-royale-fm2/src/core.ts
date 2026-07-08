@@ -1454,8 +1454,9 @@ function worldPoke(node: Producer, batch: WorldBatch, seen: Set<Producer>): void
  * unrecorded nodes fall back to canonical state.
  */
 export class CommittedView {
-	/** Node -> the value this root's screen last committed for it. */
-	values = new Map<object, unknown>();
+	/** Node -> the value this root's screen last committed for it. Weak keys:
+	 * a dropped atom must not be pinned by a root that once rendered it. */
+	values = new WeakMap<object, unknown>();
 
 	/** Record a committed render's value; true if the entry changed. */
 	record(node: object, value: unknown): boolean {
