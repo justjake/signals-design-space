@@ -93,7 +93,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 
 /** True while newer data exists behind the committed value of x: a pending
  * transition draft on it, or an async refetch behind stale. */
-export function useIsPending(x: Readable<unknown>): boolean {
+export function useIsPending(x: AnyReadable): boolean {
   captureRenderDispatcher();
   const ids = React.useContext(WorldContext);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
