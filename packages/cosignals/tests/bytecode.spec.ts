@@ -128,9 +128,15 @@ function measure(): Map<string, number> {
 	// Node-internal functions share names with ours (`write`, `run`); they
 	// compile during bootstrap, before the smoke's marker line — parse only
 	// after it. (Within the smoke, same-name collisions keep the max, which
-	// is conservative for the budget.)
-	const markerAt = out.lastIndexOf('@@SMOKE-START');
-	expect(markerAt, 'smoke marker missing from --print-bytecode output').toBeGreaterThanOrEqual(0);
+	// is conservative for the budget.) Match the marker as a WHOLE LINE: the
+	// smoke's own code carries the marker string in bytecode constant pools
+	// (dumped as `#@@SMOKE-START\n` with an escaped newline inside a pool
+	// line), and a late recompile of that code once made a bare substring
+	// search cut the parse window after the real marker — every budgeted
+	// function read as uncovered.
+	const markerLine = /^@@SMOKE-START$/m.exec(out);
+	expect(markerLine, 'smoke marker missing from --print-bytecode output').not.toBeNull();
+	const markerAt = markerLine!.index;
 	const sizes = new Map<string, number>();
 	let current: string | undefined;
 	for (const line of out.slice(markerAt).split('\n')) {

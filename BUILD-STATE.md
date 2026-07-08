@@ -254,12 +254,11 @@ must be able to continue from it alone.
      bump arms), justified in the table. All other budgets unchanged.
    - Suites after this unit: cosignals 360 green, react 72/72, conformance
      179/179 ×2, oracle 82 green.
-   - NOTE (flake watch): one bytecode-spec run showed a transient
-     "smoke exercises every budgeted function" failure (16 arena fns
-     reported uncovered) that vanished on re-run — suspect the
-     lastIndexOf('@@SMOKE-START') marker parse can land on a late
-     constant-pool dump under unlucky compile ordering. If it recurs,
-     harden the marker parse (e.g. match the line-anchored bare marker).
+   - Flake FIXED in the same unit: one bytecode-spec run transiently
+     reported every arena fn uncovered — the bare-substring
+     lastIndexOf('@@SMOKE-START') parse had landed on a late constant-pool
+     dump of the marker string, cutting the parse window. The marker match
+     is now line-anchored (/^@@SMOKE-START$/m); documented in the spec.
 
 ## In progress / exact next actions
 
