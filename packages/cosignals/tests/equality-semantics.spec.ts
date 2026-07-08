@@ -38,8 +38,8 @@
  *   FOLDS RE-INVOKE PER ENTRY BY DESIGN (documented, pinned below):
  *   replaying a log is one comparator call per visible entry, in kernel
  *   order — replay fidelity, not an acceptance decision. Two fold sites
- *   exist: world folds, and the bounded-memory sealed-chunk fold that keeps
- *   a held-open episode's log finite (WriteLog.ts foldSealedChunks).
+ *   exist: world folds, and the bounded-memory prefix fold that keeps
+ *   a held-open episode's log finite (WriteLog.ts foldRetiredPrefix).
  *
  *   THE EPISODE CLOSE RE-INVOKES NOTHING (the flattening's one sanctioned
  *   semantic change, replacing the repealed per-entry re-invocation at
@@ -199,26 +199,34 @@ describe('R-2 order: isEqual(current, incoming), everywhere', () => {
 		expect(node.base).toBe(2);
 	});
 
-	it('the bounded-memory sealed-chunk fold (held-open episode) replays per entry, kernel order; the close still re-invokes nothing', () => {
+	it('the bounded-memory prefix fold (held-open episode) replays per entry, kernel order; the close still re-invokes nothing', () => {
 		freshEngine();
 		const p = probeComparator();
 		const node = engine.atom('chunky', 0, p.eq);
 		const parked = engine.openBatch({ action: true }); // a parked action holds the episode open indefinitely
 		const t = engine.openBatch();
-		const CHUNK = 1024; // WriteLog.ts TAPE_CHUNK_ENTRIES
-		const N = CHUNK + 200; // one full (sealed) chunk + a partial tail
-		for (let i = 1; i <= N; i++) engine.write(t.id, node, 0, i);
+		const u = engine.openBatch();
+		const THRESHOLD = 1024; // WriteLog.ts FOLD_VALVE_THRESHOLD
+		const N = THRESHOLD + 200; // a threshold's worth in t + a 200-entry tail in u
+		for (let i = 1; i <= THRESHOLD; i++) engine.write(t.id, node, 0, i);
+		for (let i = THRESHOLD + 1; i <= N; i++) engine.write(u.id, node, 0, i);
 		p.reset();
-		// Retiring t stamps every entry, but the parked action keeps the
-		// episode open — the sealed-chunk valve folds the FULL chunk into base
-		// (per entry, kernel order: replay fidelity) and keeps the tail.
+		// Retiring t stamps its entries, but the parked action keeps the
+		// episode open — the valve folds the retired THRESHOLD-long prefix
+		// into base (per entry, kernel order: replay fidelity) and keeps u's
+		// still-unretired tail.
 		engine.retire(t.id);
-		expect(p.calls.length).toBe(CHUNK);
+		expect(p.calls.length).toBe(THRESHOLD);
 		expect(p.calls[0]).toEqual([0, 1]);
-		expect(p.calls[CHUNK - 1]).toEqual([CHUNK - 1, CHUNK]);
-		expect(node.base).toBe(CHUNK);
-		expect(node.log.length).toBe(N - CHUNK); // the partial tail stays for the episode drop
+		expect(p.calls[THRESHOLD - 1]).toEqual([THRESHOLD - 1, THRESHOLD]);
+		expect(node.base).toBe(THRESHOLD);
+		expect(node.log.length).toBe(N - THRESHOLD); // the tail stays for the episode drop
 		p.reset();
+		// Retiring u stamps the tail, but a 200-entry prefix is below the
+		// threshold: no fold — sub-threshold residue waits for the close.
+		engine.retire(u.id);
+		expect(p.calls).toEqual([]);
+		expect(node.log.length).toBe(N - THRESHOLD);
 		// Settlement retires the last batch: the episode closes; the tail
 		// drops whole with base adopting kernel newest by identity — zero
 		// comparator invocations.

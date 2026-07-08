@@ -1,9 +1,10 @@
 /**
- * The per-atom WRITE LOG (the episode tape) and the EPISODE LIFECYCLE. A
- * WRITE-LOG ENTRY records one write — {op, slot, seq}, with retiredSeq
- * stamped at the batch's retirement; entries live int-packed in fixed-size
- * chunks on the written atom's `WriteLog` (the full vocabulary is defined at
- * the top of concurrent.ts).
+ * The per-atom WRITE LOG and the EPISODE LIFECYCLE — the deliberately simple
+ * storage: each recorded write is one plain object in one per-atom array
+ * that only ever pushes, and every removal is wholesale (the episode close
+ * drops the array; the bounded-memory valve slices one prefix). No chunks,
+ * no pooling, no packed columns, no index math — one allocation per logged
+ * write, and the garbage collector reclaims dropped history.
  *
  * ## The episode lifecycle
  *
@@ -14,8 +15,8 @@
  * at that boundary, never maintained per entry:
  *
  *  - Each touched atom's write log carries the atom's episode-start `base`
- *    (immutable while the episode runs, except by the log's own sealed-chunk
- *    folds below) plus its entries; every world folds from that base.
+ *    (immutable while the episode runs, except by the log's own valve folds
+ *    below) plus its entries; every world folds from that base.
  *  - DURABLE HANDOFF at the close: with every batch retired and every render
  *    closed, each world's fold over the whole log equals the kernel's newest
  *    value (the eager-apply invariant, referee-verified), so the close
@@ -24,16 +25,18 @@
  *    records drop in the same sweep (write records reference batches by id,
  *    so the records outlive the entries by construction).
  *  - BOUNDED MEMORY under held-open episodes (a parked action can hold an
- *    episode open indefinitely): entries live in fixed-size chunks; every
- *    non-tail chunk is full (SEALED) by construction, and a sealed prefix
- *    chunk whose entries are all retired and below every live render pin
- *    folds into base and drops WHOLE — appends stay cheap, and no
- *    per-entry bookkeeping (batch pin counts, window rebases) exists.
+ *    episode open indefinitely while writes keep landing, so the array must
+ *    not grow unchecked): when a log's fully-retired-and-unpinned PREFIX
+ *    reaches FOLD_VALVE_THRESHOLD entries, the valve folds that prefix into
+ *    base and removes it with one splice. The valve is kept — not dropped —
+ *    because nothing else bounds a held-open episode's log; the threshold
+ *    keeps the fold rare, and each atom's foldable residue stays below one
+ *    threshold's worth of entries.
  *
  * `createEpisodeLifecycle` is a factory in the kernel's own style (index.ts
  * `createKernel`): it closes over `holds` (the episode's touched-atom
- * membership — atoms whose write log holds entries) and `sealedLogs` (the
- * fold valve's candidates) and returns its operation table; both sets are
+ * membership — atoms whose write log holds entries) and `foldCandidates`
+ * (the valve's candidates) and returns its operation table; both sets are
  * exposed by identity so the engine's write path keeps its one-branch
  * membership adds and the quiet derivation its size check. `holds` is also
  * a reclamation guard row: membership blocks record reclaim, and the
@@ -48,19 +51,12 @@ import type { EngineCore } from './World.js';
 import type { AtomInternals, Seq, Value, WriteKind } from './concurrent.js';
 
 /**
- * A log entry: one recorded write — {op, slot, seq} appended at the write,
- * retiredSeq stamped at the batch's retirement. Log entries denormalize their
- * slot at creation: slots are recycled identities, so visibility checks must read
- * the slot the write happened under, not the batch's current slot (which may
- * already be released); the batch id is carried for invariants and event
- * logs only. Log entries live int-packed in per-atom `WriteLog` chunks ({kind,
- * slot, seq, retiredSeq, batch} parallel number columns + one unknown[]
- * payload side column); this materialized object shape — including the
+ * A log entry's materialized face — the test/trace surface (`materialize()`,
+ * the trace `logEntry` hook, the `onLogEntryDrop` observer). The stored
+ * record keeps the scalar (kind, payload) pair the write path carries; the
  * object-shaped `op` (a write operation: set/update; a ReducerAtom dispatch
- * records as an update whose closure captures the reducer and the action) —
- * is the test/trace surface only (`WriteLog.materialize()`, trace `logEntry`
- * hook). The write path itself carries the (kind, payload) scalar pair end
- * to end and never builds it.
+ * records as an update whose closure captures the reducer and the action)
+ * is built only when one of those surfaces asks.
  */
 export type WriteLogEntry = {
 	op: { kind: 'set'; value: Value } | { kind: 'update'; fn: (prev: Value) => Value };
@@ -71,175 +67,89 @@ export type WriteLogEntry = {
 };
 
 /**
- * The chunk capacity — how many entries a write-log chunk holds before it
- * seals and appends continue into a fresh chunk. A power of two: the write
- * path detects the seal transition with one mask (`length &
- * (TAPE_CHUNK_ENTRIES - 1)`), which is exact because every non-tail chunk
- * is full by construction (chunks seal only by filling; folds remove whole
- * prefix chunks), so the live length is congruent to the tail's fill.
+ * One stored write record — a plain object per logged write. `kind`/`payload`
+ * are the scalar op pair (a SET's payload is the value; an UPDATE's is the
+ * updater); `retiredSeq` starts undefined and is stamped by the batch's
+ * retirement. The record denormalizes its slot at creation: slots are
+ * recycled identities, so visibility checks must read the slot the write
+ * happened under, not the batch's current slot (which may already be
+ * released); the batch id is carried for retirement stamping, invariants,
+ * and event logs.
  */
-export const TAPE_CHUNK_ENTRIES = 1024;
+export type WriteRecord = {
+	kind: WriteKind;
+	payload: unknown;
+	batch: BatchId;
+	slot: BatchSlot;
+	seq: Seq;
+	retiredSeq: Seq | undefined;
+};
 
 /**
- * One fixed-size chunk of int-packed log entry columns: recording a write is
- * a few integer stores, not an object allocation. Plain number arrays stay
- * SMI-packed (V8's fast small-integer array representation) and grow in
- * place up to the chunk capacity (a pooled shell arrives with its capacity
- * already grown); a dropped chunk releases its entries whole and its shell
- * returns to the chunk pool — no memmove, no rebase, no per-entry fix-up
- * ever runs. (`WriteKind` is concurrent.ts's const enum, imported
- * type-only: its hot comparison sites live there, and this module's one
- * kind branch — the materialized test/trace surface — compares the bare
- * 0/1 codes the two declarations share by construction.)
+ * The bounded-memory valve's trigger: how many foldable prefix entries a
+ * log accumulates before the valve folds that prefix into base (the same
+ * magnitude as the chunked design's chunk capacity, so the per-atom residue
+ * bound is unchanged). The write path files an atom with the valve's
+ * candidate set when its log reaches exactly this length — see the
+ * candidate-set invariant on `EpisodeLifecycle.foldCandidates`.
  */
-// Exported with the log: `WriteLog.chunks` is part of the log's inspectable
-// shape (tests and diagnostics read chunk counts and columns).
-export class TapeChunk {
-	/** Entries in this chunk (the tail chunk fills to TAPE_CHUNK_ENTRIES and seals). */
-	n = 0;
-	/** Entries not yet retirement-stamped (all-retired ⇔ 0) — the fold
-	 * valve's O(1) prefix clause. */
-	unretired = 0;
-	/** The chunk's newest retirement stamp — the fold valve's O(1) pin clause
-	 * (stamps are monotone, so plain assignment at each stamping maintains it). */
-	maxRetiredSeq: Seq = 0;
-	// The columns start empty and append-grow to at most the chunk capacity
-	// (packed the whole way: the writer only ever stores at index n). They
-	// are NOT preallocated at capacity — sparse logs are the common case
-	// (a wide commit touches many atoms a few writes each), and a 48KB
-	// preallocation per touched atom was measured at +86% on the wide-mask
-	// commit drain. Capacity retention across episodes comes from the shell
-	// pool instead — see acquireChunk.
-	kinds: WriteKind[] = [];
-	slots: BatchSlot[] = [];
-	seqs: Seq[] = [];
-	/** 0 = unretired (sequences start at 1). */
-	retired: Seq[] = [];
-	batches: BatchId[] = [];
-	payloads: unknown[] = [];
-}
+export const FOLD_VALVE_THRESHOLD = 1024;
 
-/** Pooled chunk shells the tape reuses across episodes (capped — see
- * CHUNK_POOL_CAP). A shell's columns keep whatever capacity they grew, at
- * most ~48KB (six 1024-slot columns), so the full pool holds under 1MB. */
-const CHUNK_POOL: TapeChunk[] = [];
-
-/** The chunk pool's shell cap: enough to cover several concurrently-tailed
- * atoms' worth of steady write-storm churn without growing the heap, small
- * enough that a burst's shells release back to the allocator. */
-const CHUNK_POOL_CAP = 16;
-
-/**
- * Take a chunk shell from the pool (or allocate one). The pool is a priced
- * decision, not tidiness: the episode close drops every chunk wholesale, so
- * under a write storm each episode used to re-allocate six columns per
- * chunk and re-grow them entry by entry — and a benchmark boundary's full
- * GC left those fresh backing stores on cold pages, which convicted the
- * storm line at +64-93% vs the pre-flattening log (whose flat arrays kept
- * their capacity across compactions implicitly). A pooled shell keeps its
- * columns' grown capacity and warmth across episodes: the storm's next
- * episode writes into warm, full-capacity columns, while a sparse log's
- * shell stays exactly as small as its history did (columns are never
- * preallocated — see the TapeChunk column note). Stale numeric residue past
- * `n` is never read, and the RELEASE scrubs the payload column so a parked
- * shell can never pin values (leaks are bugs).
- */
-function acquireChunk(): TapeChunk {
-	const ch = CHUNK_POOL.pop();
-	if (ch === undefined) return new TapeChunk();
-	ch.n = 0;
-	ch.unretired = 0;
-	ch.maxRetiredSeq = 0;
-	return ch;
-}
-
-/** Return a dropped chunk's shell to the pool (the episode close and the
- * fold valve — every whole-chunk drop site). Scrubs the payload column (the
- * one column holding object references); numeric residue is dead storage
- * the next tenancy overwrites behind its own `n`. */
-function releaseChunk(ch: TapeChunk): void {
-	ch.payloads.fill(undefined);
-	if (CHUNK_POOL.length < CHUNK_POOL_CAP) CHUNK_POOL.push(ch);
-}
-
-/** The materialized face of one chunk entry (test/trace surface — see
- * WriteLogEntry; the module-level helper so the episode drop and the class
- * share one builder). */
-function chunkEntryAt(ch: TapeChunk, i: number): WriteLogEntry {
-	const k = ch.kinds[i]!;
+/** Build the materialized face of one stored record (see WriteLogEntry).
+ * (`WriteKind` is concurrent.ts's const enum, imported type-only: this one
+ * kind branch compares the bare 0/1 codes the two declarations share by
+ * construction.) */
+function materializeRecord(e: WriteRecord): WriteLogEntry {
 	const op: WriteLogEntry['op'] =
-		k === 0 /* WriteKind.SET */
-			? { kind: 'set', value: ch.payloads[i] }
-			: { kind: 'update', fn: ch.payloads[i] as (prev: Value) => Value };
-	const r = ch.retired[i]!;
-	return { op, batch: ch.batches[i]!, slot: ch.slots[i]!, seq: ch.seqs[i]!, retiredSeq: r === 0 ? undefined : r };
+		e.kind === 0 /* WriteKind.SET */
+			? { kind: 'set', value: e.payload }
+			: { kind: 'update', fn: e.payload as (prev: Value) => Value };
+	return { op, batch: e.batch, slot: e.slot, seq: e.seq, retiredSeq: e.retiredSeq };
 }
 
 /**
- * The per-atom write log: the atom's episode tape. Chunked (see TapeChunk);
- * `chunks[0]` is the oldest live chunk and the only fold candidate — chunks
- * fold strictly in order, because folding out of order would change replay
- * results. Empty for the quiet population (chunks allocate on the first
- * logged write).
+ * The per-atom write log: one plain array of stored records, oldest first,
+ * always in sequence order (the log only ever appends, and the valve
+ * removes only whole prefixes). Empty for the quiet population.
  */
 export class WriteLog {
-	/** Live chunks, oldest first; every non-tail chunk is full (sealed). */
-	chunks: TapeChunk[] = [];
-	/** Total live entries across chunks (a plain field — the write path's
-	 * membership branches and the reclaim/quiet consumers read it directly). */
-	length = 0;
-	/** Live entries not yet retirement-stamped, whole-log (the write path's
-	 * retired-history drop arm reads it — see writeInBatchInner). */
+	/** Live entries, oldest first (sequence order). */
+	entries: WriteRecord[] = [];
+	/** Live entries not yet retirement-stamped (the write path's
+	 * retired-history drop arm reads it; Batch.ts decrements at stamping). */
 	unretired = 0;
-	/** The newest retirement stamp over LIVE entries, whole-log (the drop
-	 * arm's pin clause; recomputed when a fold removes a chunk that may have
-	 * carried the max). */
+	/** The newest retirement stamp over LIVE entries (stamps are monotone,
+	 * so plain assignment at each stamping maintains it; recomputed when a
+	 * valve fold removes a prefix that may have carried the max). */
 	maxRetiredSeq: Seq = 0;
+
+	/** Live entry count (the write path's membership branches and the
+	 * reclaim/quiet consumers read it). */
+	get length(): number {
+		return this.entries.length;
+	}
 
 	push(kind: WriteKind, slot: BatchSlot, seq: Seq, batch: BatchId, payload: unknown): void {
 		probes.logEntries++; // engine-activity counter (tests/one-core.spec.ts's zero-cost check)
-		const chunks = this.chunks;
-		let ch = chunks.length === 0 ? undefined : chunks[chunks.length - 1]!;
-		if (ch === undefined || ch.n === TAPE_CHUNK_ENTRIES) {
-			ch = acquireChunk();
-			chunks.push(ch);
-		}
-		const at = ch.n;
-		ch.kinds[at] = kind;
-		ch.slots[at] = slot;
-		ch.seqs[at] = seq;
-		ch.retired[at] = 0;
-		ch.batches[at] = batch;
-		ch.payloads[at] = payload;
-		ch.n = at + 1;
-		ch.unretired++;
-		this.length++;
+		this.entries.push({ kind, payload, batch, slot, seq, retiredSeq: undefined });
 		this.unretired++;
 	}
 
 	/** The just-appended entry, materialized (the trace `logEntry` hook's one
 	 * consumer — tracer-attached only). */
 	tailEntry(): WriteLogEntry {
-		const ch = this.chunks[this.chunks.length - 1]!;
-		return chunkEntryAt(ch, ch.n - 1);
+		return materializeRecord(this.entries[this.entries.length - 1]!);
 	}
 
 	materialize(): WriteLogEntry[] {
-		const out: WriteLogEntry[] = [];
-		for (const ch of this.chunks) {
-			for (let i = 0; i < ch.n; i++) out.push(chunkEntryAt(ch, i));
-		}
-		return out;
+		return this.entries.map(materializeRecord);
 	}
 
 	/** Drop every entry (the episode close's durable handoff — base has just
 	 * adopted the folded result, so the history is redundant). Object identity
 	 * is preserved: holders of the log keep a valid, empty log. */
 	reset(): void {
-		const chunks = this.chunks;
-		for (let i = 0; i < chunks.length; i++) releaseChunk(chunks[i]!);
-		this.chunks = [];
-		this.length = 0;
+		this.entries = [];
 		this.unretired = 0;
 		this.maxRetiredSeq = 0;
 	}
@@ -252,9 +162,9 @@ export type EpisodeLifecycleDeps = {
 	/** The shared engine core record's slices: the minimum live render pin
 	 * (the fold valve's pin clause floor — a LATE-BOUND core slot, read at
 	 * call time), one-op application under the fold-purity guards, the
-	 * atom's one equality rule (sealed-chunk folds replay stepwise, exactly
-	 * like a world fold), and the open-render table (the close's
-	 * every-world-closed clause). */
+	 * atom's one equality rule (valve folds replay stepwise, exactly like a
+	 * world fold), and the open-render table (the close's every-world-closed
+	 * clause). */
 	core: Pick<EngineCore, 'getMinLivePin' | 'applyOp' | 'isAtomValueEqual' | 'rootToOpenRender'>;
 	/** The engine host's slice: the untracked kernel newest read (the
 	 * handoff's adopted value), the optional drop observer (the engine's
@@ -273,12 +183,16 @@ export type EpisodeLifecycle = {
 	 * header). Doubles as the reclamation guard row: membership blocks
 	 * record reclaim; the episode drop is the retry trigger. */
 	holds: Set<AtomInternals>;
-	/** Atoms whose write log holds at least one sealed chunk — the fold
-	 * valve's candidates (shared identity; the write path adds at the seal
-	 * transition). Empty in every episode that stays under one chunk per
-	 * atom, which keeps the valve one size check at each boundary. */
-	sealedLogs: Set<AtomInternals>;
-	foldSealedChunks(): void;
+	/** The fold valve's candidates. Invariant: every atom whose log holds at
+	 * least FOLD_VALVE_THRESHOLD entries is a member — the write path files
+	 * an atom when its log reaches exactly the threshold (length grows by
+	 * one per push, so every crossing passes through equality), the valve
+	 * removes one only when its log is back under the threshold, and the
+	 * episode close clears the set with the logs. Empty in every episode
+	 * whose logs stay under the threshold, which keeps the valve one size
+	 * check at each boundary. */
+	foldCandidates: Set<AtomInternals>;
+	runFoldValve(): void;
 	maybeCloseEpisode(): void;
 };
 
@@ -295,59 +209,68 @@ export function createEpisodeLifecycle(deps: EpisodeLifecycleDeps): EpisodeLifec
 	const idToBatch = deps.batch.idToBatch;
 	const getLiveBatchCount = deps.batch.getLiveBatchCount;
 	const holds = new Set<AtomInternals>();
-	const sealedLogs = new Set<AtomInternals>();
+	const foldCandidates = new Set<AtomInternals>();
 
 	/**
 	 * The bounded-memory fold valve, run at retirement and render close (the
-	 * two transitions that can make a chunk foldable: stamps land, pins
-	 * lapse). A sealed prefix chunk folds into base and drops WHOLE when its
-	 * entries are all retired (the prefix clause — an unretired earlier
-	 * entry blocks everything after, because folding out of order would
-	 * change replay results) and its newest stamp is at or below every live
-	 * render pin (the pin clause — a render pinned earlier still folds from
-	 * base, so base must not move past it). The fold replays the chunk's
-	 * entries over base stepwise, exactly as a world fold would — replay
-	 * fidelity, not an acceptance decision (the write path's equality gates
-	 * already ran at each write).
+	 * two transitions that can make a prefix foldable: stamps land, pins
+	 * lapse). A size check unless a candidate exists; see foldRetiredPrefix
+	 * for the per-atom rule.
 	 */
-	function foldSealedChunks(): void {
-		if (sealedLogs.size === 0) return;
+	function runFoldValve(): void {
+		if (foldCandidates.size === 0) return;
 		const minPin = core.getMinLivePin();
-		for (const atom of sealedLogs) {
-			foldAtomSealedChunks(atom, minPin);
+		for (const atom of foldCandidates) {
+			foldRetiredPrefix(atom, minPin);
 		}
 	}
 
-	function foldAtomSealedChunks(atom: AtomInternals, minPin: Seq): void {
+	/**
+	 * Fold one atom's foldable prefix into base once it reaches the
+	 * threshold. The foldable prefix is the run of entries that are retired
+	 * (the prefix clause — an unretired entry blocks everything after it,
+	 * because folding out of order would change replay results) with stamps
+	 * at or below every live render pin (the pin clause — a render pinned
+	 * earlier still folds from base, so base must not move past it). The
+	 * fold replays the prefix over base stepwise, exactly as a world fold
+	 * would — replay fidelity, not an acceptance decision (the write path's
+	 * equality gates already ran at each write) — then removes it with one
+	 * splice. A candidate blocked below the threshold re-walks its foldable
+	 * prefix at each boundary until it folds; the walk is O(1) when the head
+	 * entry itself is blocked.
+	 */
+	function foldRetiredPrefix(atom: AtomInternals, minPin: Seq): void {
 		const log = atom.log;
-		const chunks = log.chunks;
-		const onDrop = getOnLogEntryDrop();
-		while (chunks.length !== 0) {
-			const ch = chunks[0]!;
-			if (ch.n !== TAPE_CHUNK_ENTRIES) break; // tail chunk: never folds mid-episode (the close drops it)
-			if (ch.unretired !== 0) break; // prefix clause
-			if (ch.maxRetiredSeq > minPin) break; // pin clause
-			for (let i = 0; i < ch.n; i++) {
-				const next = applyOp(atom, ch.kinds[i]!, ch.payloads[i], atom.base);
+		const entries = log.entries;
+		let n = 0;
+		while (n < entries.length) {
+			const r = entries[n]!.retiredSeq;
+			if (r === undefined || r > minPin) break;
+			n++;
+		}
+		if (n >= FOLD_VALVE_THRESHOLD) {
+			const onDrop = getOnLogEntryDrop();
+			for (let i = 0; i < n; i++) {
+				const e = entries[i]!;
+				const next = applyOp(atom, e.kind, e.payload, atom.base);
 				// Equality order: isEqual(current, incoming) — stepwise, per
 				// replayed entry, as in every fold.
 				if (!isAtomValueEqual(atom, atom.base, next)) atom.base = next;
-				atom.baseSeq = ch.seqs[i]!;
-				if (onDrop !== undefined) onDrop(atom, chunkEntryAt(ch, i));
+				atom.baseSeq = e.seq;
+				if (onDrop !== undefined) onDrop(atom, materializeRecord(e));
 			}
-			chunks.shift(); // the chunk drops WHOLE (its shell returns to the pool)
-			releaseChunk(ch);
-			log.length -= ch.n;
+			entries.splice(0, n); // the folded prefix drops in one splice
+			// The whole-log stamp max may have lived in the folded prefix:
+			// recompute over the survivors (the valve itself is the rare path).
+			let max: Seq = 0;
+			for (let i = 0; i < entries.length; i++) {
+				const r = entries[i]!.retiredSeq;
+				if (r !== undefined && r > max) max = r;
+			}
+			log.maxRetiredSeq = max;
 		}
-		// The whole-log stamp max may have lived in a dropped chunk: recompute
-		// over the survivors (few chunks; the valve itself is the rare path).
-		let max = 0;
-		for (let c = 0; c < chunks.length; c++) {
-			if (chunks[c]!.maxRetiredSeq > max) max = chunks[c]!.maxRetiredSeq;
-		}
-		log.maxRetiredSeq = max;
-		if (chunks.length === 0 || chunks[0]!.n !== TAPE_CHUNK_ENTRIES) sealedLogs.delete(atom);
-		if (log.length === 0) {
+		if (entries.length < FOLD_VALVE_THRESHOLD) foldCandidates.delete(atom);
+		if (entries.length === 0) {
 			holds.delete(atom);
 			// Reclamation retry trigger — the membership row clears at this
 			// mid-episode emptying (edge-triggered: filed on the transition, so
@@ -376,23 +299,20 @@ export function createEpisodeLifecycle(deps: EpisodeLifecycleDeps): EpisodeLifec
 			const onDrop = getOnLogEntryDrop();
 			for (const atom of holds) {
 				const log = atom.log;
-				const chunks = log.chunks;
+				const entries = log.entries;
 				if (onDrop !== undefined) {
-					for (const ch of chunks) {
-						for (let i = 0; i < ch.n; i++) onDrop(atom, chunkEntryAt(ch, i));
-					}
+					for (let i = 0; i < entries.length; i++) onDrop(atom, materializeRecord(entries[i]!));
 				}
 				// The durable handoff: with everything retired and no live pins,
 				// fold(base, all entries) ≡ kernel newest (the eager-apply
 				// invariant), so newest is adopted by identity — the one
 				// equality-bearing decision per write already ran at the write.
 				atom.base = readNewestUntracked(atom);
-				const tail = chunks[chunks.length - 1]!;
-				atom.baseSeq = tail.seqs[tail.n - 1]!;
+				atom.baseSeq = entries[entries.length - 1]!.seq;
 				log.reset();
 			}
 			holds.clear();
-			sealedLogs.clear();
+			foldCandidates.clear();
 		}
 		// Batch bookkeeping is episode-lifetime: retired records drop in one
 		// sweep (live records cannot exist here — the close's guard). The
@@ -408,5 +328,5 @@ export function createEpisodeLifecycle(deps: EpisodeLifecycleDeps): EpisodeLifec
 		reclaimRetryAllSkipped();
 	}
 
-	return { holds, sealedLogs, foldSealedChunks, maybeCloseEpisode };
+	return { holds, foldCandidates, runFoldValve, maybeCloseEpisode };
 }

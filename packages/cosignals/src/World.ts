@@ -5,7 +5,7 @@
  * vocabulary — write log, batch, render pass, arena — is defined at the top
  * of concurrent.ts). This module owns:
  *
- *  - the `World` type and `isVisibleAt`, the two-clause visibility rule;
+ *  - the `World` type and `isVisible`, the two-clause visibility rule;
  *  - `foldAtom` / `applyOp` / `isAtomValueEqual` — the fold family (one op-application
  *    rule, one equality rule) and the fold-purity bracket (`runInFoldCallback`);
  *  - `evaluate` — world evaluation (arena-served render/committed worlds,
@@ -43,7 +43,7 @@ import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from
 import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, SubscriptionId, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { ObservationIndex } from './ObservationIndex.js';
 import type { CaptureFrame, Subscription } from './CosignalEngine.js';
-import type { EpisodeLifecycle } from './WriteLog.js';
+import type { EpisodeLifecycle, WriteRecord } from './WriteLog.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 
 /** Top-level world-evaluation generation (per-world cycle detection marks). */
@@ -137,10 +137,10 @@ export type EngineCore = {
 	 * orchestration and the resident write path reach it here). */
 	batch: BatchManager;
 	/** The episode lifecycle's boundary pair (WriteLog.ts): the bounded-
-	 * memory fold valve over sealed write-log chunks (retirement's fold step
-	 * and the render-close pin release) and the quiescence close (durable
-	 * handoff + wholesale episode drop). */
-	foldSealedChunks: EpisodeLifecycle['foldSealedChunks'];
+	 * memory fold valve over retired write-log prefixes (retirement's fold
+	 * step and the render-close pin release) and the quiescence close
+	 * (durable handoff + wholesale episode drop). */
+	runFoldValve: EpisodeLifecycle['runFoldValve'];
 	maybeCloseEpisode: EpisodeLifecycle['maybeCloseEpisode'];
 
 	// ---- shared mutable state ----
@@ -307,8 +307,7 @@ export type EngineCore = {
 	// ---- late-bound: the render lifecycle ----
 	/** The watcher→node resolution (generation-checked). */
 	resolveWatcherInternals(w: Watcher): AnyInternals | undefined;
-	/** The minimum live render pin (the sealed-chunk fold valve's pin
-	 * clause floor). */
+	/** The minimum live render pin (the fold valve's pin clause floor). */
 	getMinLivePin(): Seq;
 };
 
@@ -351,7 +350,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		...deps,
 		// composition-assigned tables
 		batch: LATE,
-		foldSealedChunks: LATE,
+		runFoldValve: LATE,
 		maybeCloseEpisode: LATE,
 		// shared mutable state
 		trace: undefined,
@@ -594,33 +593,27 @@ export function createWorld(core: EngineCore): void {
 	/**
 	 * The fold — replay visible entries over base in sequence order with
 	 * stepwise equality (an equal step keeps the old reference). Runs over
-	 * the packed chunk columns (chunks are already in sequence order — the
-	 * log appends in order and folds only whole prefixes).
+	 * the log's entry array (already in sequence order — the log appends in
+	 * order and folds only whole prefixes).
 	 */
 	function foldAtom(atom: AtomInternals, world: World): Value {
-		const chunks = atom.log.chunks;
+		const entries = atom.log.entries;
 		let value = atom.base;
-		for (let c = 0; c < chunks.length; c++) {
-			const ch = chunks[c]!;
-			const n = ch.n;
-			const seqs = ch.seqs;
-			const retired = ch.retired;
-			const slots = ch.slots;
-			for (let i = 0; i < n; i++) {
-				if (!isVisibleAt(i, world, seqs, retired, slots)) continue;
-				const next = applyOp(atom, ch.kinds[i]!, ch.payloads[i], value);
-				// Equality order: isEqual(current, incoming) — per replayed entry
-				// (the fold re-invokes per entry by design; "once" is scoped to the
-				// write path's acceptance decision).
-				if (!isAtomValueEqual(atom, value, next)) value = next;
-			}
+		for (let i = 0; i < entries.length; i++) {
+			const e = entries[i]!;
+			if (!isVisible(e, world)) continue;
+			const next = applyOp(atom, e.kind, e.payload, value);
+			// Equality order: isEqual(current, incoming) — per replayed entry
+			// (the fold re-invokes per entry by design; "once" is scoped to the
+			// write path's acceptance decision).
+			if (!isAtomValueEqual(atom, value, next)) value = next;
 		}
 		return value;
 	}
 
 	/**
-	 * The visibility rule — which log entries each world's fold replays (over the
-	 * packed columns; no WriteLogEntry object). The clauses:
+	 * The visibility rule — which log entries each world's fold replays (over
+	 * the stored records; no WriteLogEntry materialization). The clauses:
 	 *  - newest: every log entry (the kernel applies writes eagerly, so this
 	 *    world is also readable straight off the kernel arena);
 	 *  - render: (1) log entries retired at-or-before the render's pin — permanent
@@ -638,18 +631,18 @@ export function createWorld(core: EngineCore): void {
 	 * Single-caller but the one visibility rule: kept as a named function
 	 * deliberately (readability exception, documented here).
 	 */
-	function isVisibleAt(i: number, world: World, seqs: Seq[], retired: Seq[], slots: BatchSlot[]): boolean {
+	function isVisible(e: WriteRecord, world: World): boolean {
 		switch (world.kind) {
 			case 'newest':
 				return true;
 			case 'render': {
 				const w = world.render;
-				const r = retired[i]!;
-				if (r !== 0 && r <= w.pin) return true; // clause 1: retired by my pin
-				return ((w.includedBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= w.pin; // clause 2
+				const r = e.retiredSeq;
+				if (r !== undefined && r <= w.pin) return true; // clause 1: retired by my pin
+				return ((w.includedBits >>> e.slot) & 1) === 1 && e.seq <= w.pin; // clause 2
 			}
 			case 'committed': {
-				if (retired[i]! !== 0) return true; // committed truth at now
+				if (e.retiredSeq !== undefined) return true; // committed truth at now
 				// Membership consult materializes the root record (reference-model
 				// parity: the model's committedSlotsNow() creates it on first consult).
 				// Hot arm reads the aliased map directly — `root()` is
@@ -657,12 +650,12 @@ export function createWorld(core: EngineCore): void {
 				// the first consult takes the materializing miss arrow (a fresh
 				// record carries committedBits 0 either way, so the answer is
 				// value-identical — the arrow is kept for materialization parity).
-				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> slots[i]!) & 1) === 1;
+				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> e.slot) & 1) === 1;
 			}
 			case 'mountFix': {
-				if (((world.maskBits >>> slots[i]!) & 1) === 1 && seqs[i]! <= world.pin) return true;
-				if (retired[i]! !== 0) return true; // committed truth as of now
-				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> slots[i]!) & 1) === 1; // hot get + materializing miss arrow (see the committed arm)
+				if (((world.maskBits >>> e.slot) & 1) === 1 && e.seq <= world.pin) return true;
+				if (e.retiredSeq !== undefined) return true; // committed truth as of now
+				return (((roots.get(world.root) ?? core.root(world.root)).committedBits >>> e.slot) & 1) === 1; // hot get + materializing miss arrow (see the committed arm)
 			}
 		}
 	}
@@ -692,7 +685,7 @@ export function createWorld(core: EngineCore): void {
 
 	/** How this atom compares two values — the one equality rule, one copy for
 	 * every site that asks (fold replay, the write path's drop check and
-	 * eager kernel apply, quiet-mode folds, sealed-chunk folds): Object.is when
+	 * eager kernel apply, quiet-mode folds, fold-valve folds): Object.is when
 	 * the atom carries the default, otherwise the atom's custom comparator
 	 * under the fold-purity guard (equality callbacks replay per world, so
 	 * signal reads/writes inside them throw — the updater contract). */

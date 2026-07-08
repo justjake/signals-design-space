@@ -4,7 +4,7 @@
  * slot interning / release / the loud release-anyway backstop, the
  * committed-bits rebuild, the live-batch bookkeeping, the ambient default
  * batch, and retirement — the batch's terminal transition, whose fan
- * (sealed-chunk folds, arena fan-out, durable drains, per-root membership
+ * (fold-valve folds, arena fan-out, durable drains, per-root membership
  * clears, slot release, the episode close) reaches the other mechanisms
  * through the shared engine core record's late-bound slots. A batch is the
  * group of writes belonging to one UI update; a slot is the batch's
@@ -352,7 +352,7 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 	/**
 	 * Retirement — the batch's writes become permanent history visible to
 	 * every world. The internal order matters: stamp log entries, fold what
-	 * the stamps made foldable (the sealed-chunk valve), retirement stamps +
+	 * the stamps made foldable (the fold valve), retirement stamps +
 	 * committed-advance, durable drains, clear per-root rows (the retired
 	 * clause now subsumes membership), release the slot (deferred if an open
 	 * render's render mask still names it), and close the episode when this
@@ -378,28 +378,18 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			const n = touchedAtoms[i]!;
 			if (n.retirementStamp === retiredSeq) continue; // duplicate touch entry
 			const log = n.log;
-			const chunks = log.chunks;
-			let hit = false;
-			for (let c = 0; c < chunks.length; c++) {
-				const ch = chunks[c]!;
-				const batches = ch.batches;
-				const retired = ch.retired;
-				let stamped = 0;
-				for (let j = 0; j < ch.n; j++) {
-					if (batches[j] === batch.id && retired[j] === 0) {
-						retired[j] = retiredSeq;
-						stamped++;
-					}
-				}
-				if (stamped !== 0) {
-					ch.unretired -= stamped;
-					ch.maxRetiredSeq = retiredSeq; // stamps are monotone: plain assignment maintains the max
-					log.unretired -= stamped;
-					hit = true;
+			const entries = log.entries;
+			let stamped = 0;
+			for (let j = 0; j < entries.length; j++) {
+				const e = entries[j]!;
+				if (e.batch === batch.id && e.retiredSeq === undefined) {
+					e.retiredSeq = retiredSeq;
+					stamped++;
 				}
 			}
-			if (hit) {
-				log.maxRetiredSeq = retiredSeq; // whole-log max, same monotonicity
+			if (stamped !== 0) {
+				log.unretired -= stamped;
+				log.maxRetiredSeq = retiredSeq; // stamps are monotone: plain assignment maintains the max
 				// Create the retirement stamp per touched atom (visibility of its
 				// history changed; fingerprints must reflect that).
 				n.retirementStamp = retiredSeq;
@@ -407,9 +397,9 @@ export function createBatchManager(core: EngineCore, deps: BatchManagerDeps): Ba
 			}
 		}
 		if (touchedAny) core.advanceCommitted();
-		// The bounded-memory fold valve (see WriteLog.ts foldSealedChunks for
-		// the two-clause predicate) — a size check unless a sealed chunk exists.
-		core.foldSealedChunks();
+		// The bounded-memory fold valve (see WriteLog.ts foldRetiredPrefix for
+		// the two-clause predicate) — a size check unless a candidate exists.
+		core.runFoldValve();
 		// Committed-truth flip site: retirement — after stamps +
 		// committedAdvance + the fold valve, before the drain loop (the
 		// ordering joint every flip site shares: mutate → fan → drain), fan

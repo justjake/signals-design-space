@@ -222,7 +222,7 @@ export class TwinDriver {
 		// The reference model's retention invariant (checkRetention in
 		// invariants.ts) shadow-folds over the full history; the engine
 		// retains none of it — the mirror archives each log entry as it drops
-		// from the write log (sealed-chunk folds, the episode close's drop;
+		// from the write log (fold-valve folds, the episode close's drop;
 		// retaining in-engine would grow without bound under a workload that
 		// never quiesces).
 		this.mirror.attach(this.engine);

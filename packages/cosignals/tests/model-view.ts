@@ -11,8 +11,8 @@
  * (creation, adoption, quiesce). The shadow fold reimplements the
  * model's WriteLogEntry-shaped fold over that full history, replaying the oracle's
  * exported `visible` rule (imported — the one WriteLogEntry-shaped statement of
- * log-entry visibility, not a copy); the engine keeps only the packed forms
- * (`isVisibleAt`, `foldAtom`).
+ * log-entry visibility, not a copy); the engine keeps only the stored-record
+ * forms (`isVisible`, `foldAtom`).
  *
  * Slot sets: the engine's ONLY slot-set representation is the 31-bit integer
  * word (`RenderPass.maskBits`/`includedBits`, `RootState.committedBits`,
@@ -42,7 +42,7 @@ export class RefereeMirror {
 	private archives = new Map<AtomInternals, WriteLogEntry[]>();
 
 	/** Install the drop feed on a bridge (call once, at driver setup): every
-	 * entry leaving a write log — sealed-chunk fold or episode drop —
+	 * entry leaving a write log — fold-valve fold or episode drop —
 	 * archives here. */
 	attach(engine: CosignalEngine): void {
 		engine.onLogEntryDrop = (atom, entry) => this.archiveOf(atom).push(entry);

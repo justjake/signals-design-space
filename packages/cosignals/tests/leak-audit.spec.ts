@@ -315,7 +315,7 @@ describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 		expect(b.idToBatch.size).toBe(0); // retired batches dropped at the episode closes — NO quiesce ran
 		expect(b.idToRenderPass.size).toBe(0); // ended renders reclaimed at render end
 		expect(an.log.length).toBe(0); // write logs dropped whole at the episode closes
-		expect(an.log.chunks.length).toBe(0); // no chunk survives the drop
+		expect(an.log.entries.length).toBe(0); // no entry survives the drop
 		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing created anywhere)
 		expect(b.__arenaStats().dirty).toBeLessThanOrEqual(4); // boundary decay keeps the dirty lists to live cones
 		expect(b.committedValue(c, 'R')).toBe(1400);

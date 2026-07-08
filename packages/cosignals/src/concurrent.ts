@@ -59,7 +59,7 @@
  *   visible to every world. Write records are episode-lifetime — they stay
  *   on the log until the episode closes (below), where the durable handoff
  *   drops them wholesale; only the bounded-memory valve (WriteLog.ts's
- *   sealed-chunk fold) ever folds entries into base mid-episode.
+ *   retired-prefix fold) ever folds entries into base mid-episode.
  *   `committedAdvance` is the committed-advance counter, bumped whenever
  *   committed truth moves (a per-root commit, or a retirement that changed
  *   history).
@@ -125,7 +125,7 @@
  *   reachable only through structure no live arena holds degrades to a
  *   drain correction instead of a live delivery.
  * - worlds as pure folds with the two-clause visibility rule (see
- *   {@link isVisibleAt}), the committed-for-root world, and the fast-forwarded
+ *   {@link isVisible}), the committed-for-root world, and the fast-forwarded
  *   mount-fixup world (see {@link runMountFixup}).
  * - per-write value-blind synchronous delivery in the writer's stack with
  *   render-aware suppression, per-(watcher, slot) dedup, and dedup clear
@@ -138,7 +138,7 @@
  *   live pin can still need them; a loud release-anyway backstop prevents
  *   deadlock.
  * - retirement ordering stamp → fold valve → drain → clear-rows → release →
- *   episode close (the sealed-chunk fold and the quiescence handoff live in
+ *   episode close (the fold valve and the quiescence handoff live in
  *   WriteLog.ts), and per-root commit lock-in
  *   (a root that committed UI from a still-live batch must keep agreeing
  *   with its own screen).
@@ -194,7 +194,7 @@ import { InvariantViolation, ScheduleError, getOrThrow } from './errors.js';
 import { createConcurrentEngine, probes, type ConcurrentEngine, type WriteKind } from './ConcurrentEngine.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 import type { ObservationIndex } from './ObservationIndex.js';
-import { TAPE_CHUNK_ENTRIES, WriteLog, type WriteLogEntry } from './WriteLog.js';
+import { FOLD_VALVE_THRESHOLD, WriteLog, type WriteLogEntry } from './WriteLog.js';
 import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchManager } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
 import { WorldArena, arenaCheckerLayout, arenaHasShadow, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
@@ -273,7 +273,7 @@ export class AtomInternals {
 	readonly ix: NodeIndex;
 	name: string;
 	/** The floor every world folds from: the atom's episode-start value
-	 * (advanced only by quiet folds, sealed-chunk folds, and the episode
+	 * (advanced only by quiet folds, fold-valve folds, and the episode
 	 * close's durable handoff). */
 	base: Value;
 	baseSeq: Seq = 0;
@@ -993,14 +993,14 @@ let syncObservedDeps: ObservationIndex['syncObservedDeps'];
 /** Watchers by nodeIndex (the routing walks' collection rows). */
 let nodeToWatchers: (Watcher[] | undefined)[];
 // The episode lifecycle (WriteLog.ts): touched-atom membership, the
-// sealed-chunk fold valve, and the quiescence close.
+// bounded-memory fold valve, and the quiescence close.
 /** Atoms whose write log holds entries — the episode's touched-atom
  * membership and the reclamation guard row (identity alias of
  * WriteLog.ts's set). */
 let episodeHolds: Set<AtomInternals>;
-/** Atoms whose write log holds a sealed chunk — the fold valve's candidates
- * (identity alias; the write path adds at the seal transition). */
-let sealedLogs: Set<AtomInternals>;
+/** The fold valve's candidates — atoms whose log reached the valve
+ * threshold (identity alias; the write path adds at the crossing). */
+let foldCandidates: Set<AtomInternals>;
 /** The one open (non-ended) render per root — React renders one tree per
  * root at a time; a same-root restart is a new render. */
 let rootToOpenRender: Map<RootId, RenderPass>;
@@ -1011,7 +1011,7 @@ let batchOps: BatchManager;
 let lastBatchId = 0;
 let lastBatchRef: Batch | undefined = undefined;
 /** Optional log-entry drop observer (test/diagnostics seam): called once
- * per log entry as it leaves the write log — at a sealed-chunk fold or the
+ * per log entry as it leaves the write log — at a fold-valve fold or the
  * episode drop. The reference model's
  * retention invariant needs the full history; its archive mirror lives
  * outside the engine (tests/model-view.ts), fed by this hook — keeping
@@ -1116,7 +1116,7 @@ function composeEngine(options?: EngineResetOptions): void {
 	obsDeps = eng.obs.deps;
 	syncObservedDeps = eng.obs.syncObservedDeps;
 	episodeHolds = eng.episode.holds;
-	sealedLogs = eng.episode.sealedLogs;
+	foldCandidates = eng.episode.foldCandidates;
 	batchOps = eng.batch;
 	idToBatch = eng.batch.idToBatch;
 	slots = eng.batch.slots;
@@ -1540,7 +1540,7 @@ export function root(id: RootId): RootState {
 
 // ---------------------------------------------------- worlds and folds
 // The whole fold/evaluation family — the fold-purity bracket (runInFoldCallback),
-// foldAtom, isVisibleAt (the one visibility rule), applyOp, isAtomValueEqual (the one
+// foldAtom, isVisible (the one visibility rule), applyOp, isAtomValueEqual (the one
 // equality rule), evaluate, readKernelComputed, the fold-through readers, and the
 // read-routing resolution — lives in World.ts; the hot entries are aliased
 // as module bindings (see composeEngine). The arena serving/lifecycle layer
@@ -1959,12 +1959,13 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 		batch.atomsTouched.push(node);
 	}
 	// Episode membership rows: the first entry joins the atom to the episode
-	// (holds — also its reclamation guard row); a fill to the chunk capacity
-	// seals a chunk and files the atom with the fold valve (the mask is
-	// exact because every non-tail chunk is full — see TAPE_CHUNK_ENTRIES).
+	// (holds — also its reclamation guard row); growth to the valve threshold
+	// files the atom with the fold valve (equality is exact because length
+	// grows by one per push, and the valve removes a candidate only while its
+	// log is back under the threshold — the invariant on foldCandidates).
 	const logLen = log.length;
 	if (logLen === 1) episodeHolds.add(node);
-	else if ((logLen & (TAPE_CHUNK_ENTRIES - 1)) === 0) sealedLogs.add(node);
+	else if (logLen === FOLD_VALVE_THRESHOLD) foldCandidates.add(node);
 	slot.writeClock = writeSeq;
 	if (roots.size !== 0) {
 		// A write into a committed-member slot moves committed truth immediately;

@@ -100,7 +100,7 @@ export type ConcurrentEngineHost = {
 	readNewestUntracked(atom: AtomInternals): Value;
 	/** The optional log-entry drop observer slot (the engine's public
 	 * `onLogEntryDrop` — fired per entry as it leaves a write log, at
-	 * sealed-chunk folds and the episode drop). */
+	 * fold-valve folds and the episode drop). */
 	getOnLogEntryDrop(): ((atom: AtomInternals, entry: WriteLogEntry) => void) | undefined;
 	/** The driver slot's presence + the devChecks switch (openBatch's
 	 * dev-time guard reads both). */
@@ -222,7 +222,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 	// core's now-assigned World slots; its close sweeps the batch manager's
 	// record registry).
 	const episode = createEpisodeLifecycle({ core, host, batch: batchOps });
-	core.foldSealedChunks = episode.foldSealedChunks;
+	core.runFoldValve = episode.runFoldValve;
 	core.maybeCloseEpisode = episode.maybeCloseEpisode;
 	// ---- the walk orchestration (NotificationQueue.ts) + render lifecycle
 	// (the engine module's render-integration section) — each assigns its

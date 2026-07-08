@@ -6871,9 +6871,9 @@ export function createRenderPassManager(core: EngineCore, deps: RenderPassManage
 			if (!s.releasePending) continue;
 			if (!batch.isSlotRetainedByOpenMask(s.id)) batch.releaseSlot(s);
 		}
-		// A render ending releases its pin, which can unlock sealed-chunk
+		// A render ending releases its pin, which can unlock retired-prefix
 		// folds (the bounded-memory valve's pin clause).
-		core.foldSealedChunks();
+		core.runFoldValve();
 	}
 
 	/**
