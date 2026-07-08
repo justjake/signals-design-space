@@ -38,7 +38,8 @@ function deferred<T>() {
 	return { promise, resolve, reject };
 }
 
-const tick = () => new Promise((r) => setTimeout(r, 0));
+declare const setTimeout: (fn: () => void, ms?: number) => unknown;
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe('pending as graph state', () => {
 	test('unresolved use evaluates to a stable pending box; settlement is a write', async () => {

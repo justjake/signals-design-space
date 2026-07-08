@@ -45,15 +45,18 @@ describe('draft batches and worlds', () => {
 		expect(quiescent()).toBe(true);
 	});
 
-	test('rebase arithmetic: urgent (1+1) commits alone, transition x2 lands as 4', () => {
+	test('rebase arithmetic (updater-queue replay): urgent double shows 2 now, 6 after retirement', () => {
+		// The RULES scenario-13 arithmetic: counter 1; transition +2; urgent x2
+		// commits alone as 2; retirement replays the queue in insertion order:
+		// (1+2)*2 = 6 — never 4 (reorder), never 3 (torn transition-only).
 		const a = atom(1);
 		const b = openBatch();
-		updateInBatch(b, a, (x) => x * 2);
-		update(a, (x) => x + 1); // urgent, mid-transition
-		expect(read(a)).toBe(2); // urgent committed alone
-		expect(readInWorld(a, [b])).toBe(4); // draft folds over the new base
+		updateInBatch(b, a, (x) => x + 2);
+		update(a, (x) => x * 2); // urgent, mid-transition
+		expect(read(a)).toBe(2); // urgent committed alone over base 1
+		expect(readInWorld(a, [b])).toBe(6); // full queue replay
 		retireBatch(b);
-		expect(read(a)).toBe(4); // never 2, never a torn 3
+		expect(read(a)).toBe(6);
 	});
 
 	test('computeds evaluate per world with world-specific dependency sets', () => {
@@ -124,12 +127,12 @@ describe('draft batches and worlds', () => {
 		const a = atom(5);
 		const b = openBatch();
 		setInBatch(b, a, 5); // equal to the batch world value: dropped
-		expect(b.ops.size).toBe(0);
+		expect(b.touched.size).toBe(0);
 		set(a, 7); // urgent
 		setInBatch(b, a, 7); // batch world folds canonical 7: dropped too
-		expect(b.ops.size).toBe(0);
+		expect(b.touched.size).toBe(0);
 		setInBatch(b, a, 8);
-		expect(b.ops.size).toBe(1);
+		expect(b.touched.size).toBe(1);
 		retireBatch(b);
 		expect(read(a)).toBe(8);
 	});

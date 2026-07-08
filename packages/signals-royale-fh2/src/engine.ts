@@ -6,12 +6,13 @@
  *
  * Layering: graph.ts owns canonical reactivity (dependency edges, equality
  * cutoff, effect scheduling). This module owns everything concurrent. A
- * draft write never touches canonical caches — it appends an operation to
- * its batch and wakes subscribers; readers fold batch operations over the
- * canonical base on demand. Batch retirement replays the operations as
- * ordinary canonical writes, which is what makes rebase arithmetic hold:
- * a transition's functional updates re-execute against the canonical value
- * at retirement time, urgent writes included.
+ * draft write never touches canonical caches — it joins the atom's update
+ * queue owned by its batch and wakes subscribers; readers replay the queue
+ * over the base on demand, skipping open batches outside their world.
+ * Retirement makes a batch's operations canonical in place and replays the
+ * whole queue — React's updater-queue rebase arithmetic, so functional
+ * updates re-execute in insertion order with later urgent updates
+ * re-applied on top.
  */
 import {
 	type AtomNode,
@@ -84,13 +85,30 @@ type BatchId = number;
 type Epoch = number;
 type RecId = number;
 
-type Op = { set: unknown; update?: undefined } | { update: (prev: unknown) => unknown; set?: undefined };
+/** One queued update. `b` is the owning draft batch, or null once the
+ * operation is canonical (urgent, or its batch retired). Replay re-executes
+ * `update` functions against whatever the running value is — exactly
+ * React's updater-queue rebase arithmetic. */
+interface Op {
+	b: Batch | null;
+	set?: unknown;
+	update?: (prev: unknown) => unknown;
+}
+
+function applyOp(v: unknown, op: Op): unknown {
+	return op.update !== undefined ? op.update(v) : op.set;
+}
 
 interface AtomRec {
 	t: 0;
 	id: RecId;
 	node: AtomNode;
 	label: string | undefined;
+	/** While draft operations are pending: the value before the first queued
+	 * operation (React's baseState) and the insertion-ordered queue. Both
+	 * are episodic — compacted away when the last draft retires. */
+	baseValue: unknown;
+	queue: Op[] | null;
 	/** Lazy initializer; cleared once run. */
 	init: (() => unknown) | undefined;
 	observed: ((ctx: { get(): unknown; set(v: unknown): void }) => void | (() => void)) | undefined;
@@ -233,7 +251,8 @@ export interface Batch {
 	id: BatchId;
 	/** Host key (a React lane); unique among open batches. */
 	key: unknown;
-	ops: Map<AtomRec, Op[]>;
+	/** Atoms with queued operations owned by this batch. */
+	touched: Set<AtomRec>;
 	refreshes: Set<ComputedRec>;
 	version: number;
 	open: boolean;
@@ -250,7 +269,7 @@ export function openBatch(key?: unknown): Batch {
 	const b: Batch = {
 		id,
 		key: key ?? id,
-		ops: new Map(),
+		touched: new Set(),
 		refreshes: new Set(),
 		version: 0,
 		open: true,
@@ -277,11 +296,42 @@ export function openBatches(): Batch[] {
 	return [...openBatchesByKey.values()];
 }
 
+/** Replays an atom's queue over its base, including exactly the canonical
+ * operations plus those owned by batches in `include`. */
+function replayQueue(rec: AtomRec, include: readonly Batch[] | null): unknown {
+	let v = rec.baseValue;
+	for (const op of rec.queue!) {
+		if (op.b === null || (include !== null && include.includes(op.b))) {
+			v = applyOp(v, op);
+		}
+	}
+	return v;
+}
+
+/** Folds every canonical (b === null) prefix op into the base; drops the
+ * queue entirely once no draft operations remain. */
+function compactQueue(rec: AtomRec): void {
+	const q = rec.queue!;
+	let i = 0;
+	while (i < q.length && q[i]!.b === null) {
+		rec.baseValue = applyOp(rec.baseValue, q[i]!);
+		i++;
+	}
+	if (i === q.length) {
+		rec.queue = null;
+		rec.baseValue = undefined;
+	} else if (i > 0) {
+		q.splice(0, i);
+	}
+}
+
 /**
- * Retires a batch: replays its operations as canonical writes (in creation
- * order), applies its refreshes, promotes its single-batch world's async
- * entries to canonical, and drops every world cache that folded it. Runs
- * inside one graph batch so effects flush once at the boundary.
+ * Retires a batch: its operations become canonical in their original
+ * insertion positions and the whole queue replays over the base — React's
+ * updater-queue rebase arithmetic (a transition's functional updates
+ * re-execute, with later urgent updates re-applied on top). Also applies
+ * the batch's refreshes, promotes its single-batch world's async entries to
+ * canonical, and drops every world cache that folded it.
  */
 export function retireBatch(b: Batch): void {
 	if (!b.open) {
@@ -293,8 +343,7 @@ export function retireBatch(b: Batch): void {
 	// Promote the exact-[b] world's async entries before folding: the fold
 	// makes canonical equal that world, so its settled fetches carry over
 	// (no refetch after commit).
-	const soloKey = String(b.id);
-	const solo = worldCaches.get(soloKey);
+	const solo = worldCaches.get(String(b.id));
 	if (solo !== undefined) {
 		for (const [rec, entry] of solo.entries) {
 			entry.world = null;
@@ -305,7 +354,6 @@ export function retireBatch(b: Batch): void {
 			} else {
 				killEntry(rec.canonicalEntry);
 				rec.canonicalEntry = entry;
-				rec.reuseEntry = entry;
 			}
 		}
 		solo.entries.clear();
@@ -314,10 +362,18 @@ export function retireBatch(b: Batch): void {
 	withCause(retireEvent, () => {
 		startBatch();
 		try {
-			for (const [rec, ops] of b.ops) {
-				for (const op of ops) {
-					applyCanonicalWrite(rec, op.update === undefined ? op.set : op.update(canonicalAtomValue(rec.node)));
+			for (const rec of b.touched) {
+				if (rec.queue === null) {
+					continue;
 				}
+				for (const op of rec.queue) {
+					if (op.b === b) {
+						op.b = null;
+					}
+				}
+				const next = replayQueue(rec, null);
+				compactQueue(rec);
+				applyCanonicalWrite(rec, next);
 			}
 			for (const rec of b.refreshes) {
 				refreshCanonical(rec);
@@ -326,7 +382,7 @@ export function retireBatch(b: Batch): void {
 			endBatch();
 		}
 	});
-	b.ops.clear();
+	b.touched.clear();
 	b.refreshes.clear();
 	b.deliveredTo.clear();
 	bumpPending();
@@ -334,9 +390,9 @@ export function retireBatch(b: Batch): void {
 }
 
 /**
- * Discards a batch without folding: its drafts are rolled back and every
- * subscriber that saw a delivery from it is re-notified so stale draft
- * renders get corrected.
+ * Discards a batch without folding: its operations leave the queues and
+ * every subscriber that saw a delivery from it is re-notified so stale
+ * draft renders get corrected.
  */
 export function discardBatch(b: Batch): void {
 	if (!b.open) {
@@ -346,8 +402,14 @@ export function discardBatch(b: Batch): void {
 	openBatchesByKey.delete(b.key);
 	const ev = tracing() ? emit('batch-discard', { batch: b.id }) : 0;
 	pruneWorldsWith(b);
+	for (const rec of b.touched) {
+		if (rec.queue !== null) {
+			rec.queue = rec.queue.filter((op) => op.b !== b);
+			compactQueue(rec);
+		}
+	}
 	const seen = [...b.deliveredTo];
-	b.ops.clear();
+	b.touched.clear();
 	b.refreshes.clear();
 	b.deliveredTo.clear();
 	withCause(ev, () => {
@@ -462,19 +524,14 @@ function recordRead(rec: Rec): void {
 	}
 }
 
-/** Folds a world's batch operations over an atom's canonical base. */
+/** An atom's value in a world: the queue replayed in insertion order,
+ * skipping operations owned by open batches outside the world. */
 function atomValueInWorld(rec: AtomRec, wc: WorldCache): unknown {
 	materialize(rec);
-	let v = canonicalAtomValue(rec.node);
-	for (const b of wc.batches) {
-		const ops = b.ops.get(rec);
-		if (ops !== undefined) {
-			for (const op of ops) {
-				v = op.update !== undefined ? op.update(v) : op.set;
-			}
-		}
+	if (rec.queue === null) {
+		return canonicalAtomValue(rec.node);
 	}
-	return v;
+	return replayQueue(rec, wc.batches);
 }
 
 function computedValueInWorld(rec: ComputedRec, wc: WorldCache): unknown {
@@ -571,6 +628,8 @@ export function atom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<
 		id: nextRecId++,
 		node,
 		label: options?.label,
+		baseValue: undefined,
+		queue: null,
 		init: lazy ? (initial as () => unknown) : undefined,
 		observed: options?.effect as AtomRec['observed'],
 		obsCleanup: undefined,
@@ -819,24 +878,25 @@ export function set<T>(a: Atom<T>, value: T): void {
 	materialize(rec);
 	const b = host.classify !== null ? host.classify() : null;
 	if (b !== null) {
-		draftWrite(b, rec, { set: value });
+		draftWrite(b, rec, { b, set: value });
 	} else {
-		applyCanonicalWrite(rec, value);
+		urgentWrite(rec, { b: null, set: value });
 	}
 }
 
 /** Functional update that replays: the function re-executes against each
- * world's base — a draft batch stores the function and re-applies it over
- * whatever the canonical value is when the batch retires. */
+ * world's base — updater-queue arithmetic, so an urgent update lands over
+ * the committed value now and re-applies over the transition's result when
+ * the transition retires. */
 export function update<T>(a: Atom<T>, fn: (prev: T) => T): void {
 	const rec = asAtomRec(a as Atom<unknown>);
 	guardWrite();
 	materialize(rec);
 	const b = host.classify !== null ? host.classify() : null;
 	if (b !== null) {
-		draftWrite(b, rec, { update: fn as (prev: unknown) => unknown });
+		draftWrite(b, rec, { b, update: fn as (prev: unknown) => unknown });
 	} else {
-		applyCanonicalWrite(rec, (fn as (prev: unknown) => unknown)(canonicalAtomValue(rec.node)));
+		urgentWrite(rec, { b: null, update: fn as (prev: unknown) => unknown });
 	}
 }
 
@@ -845,20 +905,37 @@ export function setInBatch<T>(b: Batch, a: Atom<T>, value: T): void {
 	const rec = asAtomRec(a as Atom<unknown>);
 	guardWrite();
 	materialize(rec);
-	draftWrite(b, rec, { set: value });
+	draftWrite(b, rec, { b, set: value });
 }
 
 export function updateInBatch<T>(b: Batch, a: Atom<T>, fn: (prev: T) => T): void {
 	const rec = asAtomRec(a as Atom<unknown>);
 	guardWrite();
 	materialize(rec);
-	draftWrite(b, rec, { update: fn as (prev: unknown) => unknown });
+	draftWrite(b, rec, { b, update: fn as (prev: unknown) => unknown });
+}
+
+/** An urgent operation: canonical immediately; if drafts are queued on the
+ * atom, the operation also joins the queue so retirement replays it in
+ * insertion order. Works against `staged` (the newest canonical intent) so
+ * a revert inside a graph batch still cuts off cleanly at the flush. */
+function urgentWrite(rec: AtomRec, op: Op): void {
+	const value = applyOp(rec.node.staged, op);
+	if (op.update === undefined && rec.node.equals(rec.node.staged, value)) {
+		if (tracing()) {
+			emit('write-dropped', { tid: rec.id, label: rec.label, batch: 0 });
+		}
+		return;
+	}
+	if (rec.queue !== null) {
+		rec.queue.push(op);
+	}
+	applyCanonicalWrite(rec, value);
 }
 
 function applyCanonicalWrite(rec: AtomRec, value: unknown): void {
 	const node = rec.node;
-	const current = node.staged;
-	if (node.equals(current, value)) {
+	if (node.equals(node.staged, value)) {
 		if (tracing()) {
 			emit('write-dropped', { tid: rec.id, label: rec.label, batch: 0 });
 		}
@@ -888,12 +965,12 @@ function draftWrite(b: Batch, rec: AtomRec, op: Op): void {
 			return;
 		}
 	}
-	let ops = b.ops.get(rec);
-	if (ops === undefined) {
-		ops = [];
-		b.ops.set(rec, ops);
+	if (rec.queue === null) {
+		rec.baseValue = rec.node.staged;
+		rec.queue = [];
 	}
-	ops.push(op);
+	rec.queue.push(op);
+	b.touched.add(rec);
 	b.version++;
 	bumpPending();
 	if (tracing()) {
@@ -1396,7 +1473,7 @@ export function isPending(x: Readable<unknown>): boolean {
 	const rec = recOf(x);
 	if (rec.t === 0) {
 		for (const b of openBatchesByKey.values()) {
-			if (b.ops.has(rec)) {
+			if (b.touched.has(rec)) {
 				return true;
 			}
 		}
@@ -1425,7 +1502,7 @@ export function isPending(x: Readable<unknown>): boolean {
 				const depRec = atomRecs.get(dep as AtomNode);
 				if (depRec !== undefined) {
 					for (const b of openBatchesByKey.values()) {
-						if (b.ops.has(depRec)) {
+						if (b.touched.has(depRec)) {
 							return true;
 						}
 					}
