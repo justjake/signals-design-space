@@ -22,22 +22,16 @@ let failed = false;
 try {
   for (const scenario of ["fanout", "transition", "mount"]) {
     for (const contender of ["sm2", "stock"]) {
-      const result = spawnSync(
-        process.execPath,
-        [runner, scenario, contender],
-        {
-          cwd: path.dirname(directory),
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "inherit"],
-          maxBuffer: 16 * 1024 * 1024,
-        },
-      );
+      const result = spawnSync(process.execPath, [runner, scenario, contender], {
+        cwd: path.dirname(directory),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+        maxBuffer: 16 * 1024 * 1024,
+      });
       process.stdout.write(result.stdout ?? "");
       if (result.status !== 0) {
         failed = true;
-        console.error(
-          `${scenario}/${contender} exited ${result.status ?? result.signal}`,
-        );
+        console.error(`${scenario}/${contender} exited ${result.status ?? result.signal}`);
       }
     }
   }

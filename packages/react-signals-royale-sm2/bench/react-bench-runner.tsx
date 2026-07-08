@@ -55,9 +55,7 @@ await scenario.run(contender, (milliseconds) => {
     scenarioName === "fanout"
       ? "median_write_to_commit"
       : scenarioName === "transition"
-      ? "urgent_p95"
-      : "median_mount";
-  console.log(
-    `${scenarioName},${contender.name},${stat},${milliseconds.toFixed(2)}`,
-  );
+        ? "urgent_p95"
+        : "median_mount";
+  console.log(`${scenarioName},${contender.name},${stat},${milliseconds.toFixed(2)}`);
 });

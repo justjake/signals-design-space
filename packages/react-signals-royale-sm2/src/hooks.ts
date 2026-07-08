@@ -1,10 +1,5 @@
 import * as React from "react";
-import {
-  Atom,
-  Computed,
-  type AtomOptions,
-  type Runtime,
-} from "signals-royale-sm2";
+import { Atom, Computed, type AtomOptions, type Runtime } from "signals-royale-sm2";
 import { currentContainer, getRuntime, register } from "./protocol";
 
 export type Readable<T> = Atom<T> | Computed<T>;
@@ -43,10 +38,7 @@ export function useValue<T>(node: Readable<T>): T {
   return value;
 }
 
-export function useComputed<T>(
-  fn: () => T,
-  dependencies: readonly unknown[],
-): T {
+export function useComputed<T>(fn: () => T, dependencies: readonly unknown[]): T {
   const runtime = getRuntime();
   const computed = React.useMemo(() => runtime.computed(fn), dependencies);
   return useValue(computed);
@@ -83,13 +75,11 @@ export function useCommitted<T>(node: Readable<T>): T {
     const unsubscribeNode = runtime.subscribe(node, (batchId) =>
       runtime.runInBatch(batchId ?? 0, bump),
     );
-    const unsubscribeRoot = runtime.subscribeRoot(
-      (committedContainer, batches) => {
-        if (committedContainer === container && batches.length !== 0) {
-          runtime.runInBatch(batches[0], bump);
-        }
-      },
-    );
+    const unsubscribeRoot = runtime.subscribeRoot((committedContainer, batches) => {
+      if (committedContainer === container && batches.length !== 0) {
+        runtime.runInBatch(batches[0], bump);
+      }
+    });
     return () => {
       unsubscribeNode();
       unsubscribeRoot();
@@ -103,18 +93,12 @@ export function startTransitionWrite(scope: () => void): void {
   React.startTransition(scope);
 }
 
-export function useAtom<T>(
-  initial: T | (() => T),
-  options?: AtomOptions<T>,
-): Atom<T> {
+export function useAtom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<T> {
   const runtime = getRuntime();
   const [value] = React.useState(() => runtime.atom(initial, options));
   return value;
 }
 
-export function useAtomValue<T>(
-  initial: T | (() => T),
-  options?: AtomOptions<T>,
-): T {
+export function useAtomValue<T>(initial: T | (() => T), options?: AtomOptions<T>): T {
   return useValue(useAtom(initial, options));
 }

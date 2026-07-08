@@ -63,10 +63,7 @@ const adapter = {
     return getRuntime().latest(value as Readable);
   },
   committed(value: unknown, container?: unknown): unknown {
-    return getRuntime().committed(
-      value as Readable,
-      container as object | undefined,
-    );
+    return getRuntime().committed(value as Readable, container as object | undefined);
   },
   isPending(value: unknown): boolean {
     return getRuntime().isPending(value as Readable);
