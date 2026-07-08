@@ -539,9 +539,19 @@ export class ReactFork implements ForkLike {
 		);
 	}
 
+	/** Errors thrown by protocol listeners, captured here — the fork's events
+	 * fire synchronously inside commitRoot and the scheduler microtask, so a
+	 * listener throw must never propagate into React (§6.7 listener-error
+	 * rule; same posture as alt-a's bridge guard). */
+	readonly listenerErrors: unknown[] = [];
+
 	private emit(fn: (l: ExternalRuntimeListener) => void): void {
 		for (const l of this.listeners) {
-			fn(l);
+			try {
+				fn(l);
+			} catch (err) {
+				this.listenerErrors.push(err);
+			}
 		}
 	}
 
@@ -553,7 +563,13 @@ export class ReactFork implements ForkLike {
 	}
 
 	isCurrentWriteDeferred(): boolean {
-		return (this.R.unstable_getCurrentWriteBatch() & 1) === 1;
+		// Mint-free classification (§6.4 documents this as pure): the first
+		// unstable_getCurrentWriteBatch call in an event CREATES the batch
+		// identity, so a probe must read the current-transition slot instead.
+		// Mirrors the classifier's own transition arm (non-gesture scope ⇒
+		// a write issued now is deferred).
+		const t = this.currentTransitionScope() as { gesture?: unknown } | null;
+		return t !== null && !t.gesture;
 	}
 
 	/** The transition-scope object whose batch we last minted, for the

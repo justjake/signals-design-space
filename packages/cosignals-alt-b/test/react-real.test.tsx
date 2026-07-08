@@ -75,6 +75,43 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
+describe('fork listener error isolation', () => {
+	// Regression pin for the step-0 emit guard (PLAN-edge-export step 0b):
+	// protocol events fire synchronously inside commitRoot and the scheduler
+	// microtask, so a throwing listener must be captured — never thrown into
+	// React — and later listeners must still receive the event.
+	it('a throwing listener does not break delivery or the write path', async () => {
+		const seen: number[] = [];
+		const unsubThrow = handle.fork.subscribeToExternalRuntime({
+			onBatchOpened: () => {
+				throw new Error('listener boom');
+			},
+		});
+		const unsubRecord = handle.fork.subscribeToExternalRuntime({
+			onBatchOpened: (token) => {
+				seen.push(token);
+			},
+		});
+		const a = new Atom({ state: 0 });
+		function View(): React.ReactNode {
+			return <span>{useSignal(a)}</span>;
+		}
+		const c = await mount(<View />);
+		await act(async () => {
+			React.startTransition(() => {
+				a.set(1);
+			});
+		});
+		expect(c.textContent).toBe('1');
+		expect(seen).toHaveLength(1); // the recorder heard the mint despite the throw
+		expect(handle.fork.listenerErrors).toHaveLength(1);
+		expect(String(handle.fork.listenerErrors[0])).toContain('listener boom');
+		handle.fork.listenerErrors.length = 0;
+		unsubThrow();
+		unsubRecord();
+	});
+});
+
 describe('transitions against real React', () => {
 	it('signal + React state move in lockstep inside one transition (§4.5)', async () => {
 		const a = new Atom({ state: 0 });
