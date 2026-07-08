@@ -86,6 +86,7 @@ export class Transaction {
   readonly containers = new Set<object>();
   closed = false;
   landed = false;
+  revision = 0;
   constructor(readonly id: BatchId, readonly deferred: boolean, public cause?: TraceId) {}
 }
 
@@ -107,6 +108,13 @@ function fold<T>(atom: Atom<T>, txs: readonly Transaction[]): T {
     }
   }
   return value;
+}
+
+function worldKey(): string {
+  if (currentWorld === undefined || currentWorld.length === 0) return "canonical";
+  let key = "";
+  for (const transaction of currentWorld) key += `${transaction.id}:${transaction.revision};`;
+  return key;
 }
 
 export class Atom<T> extends Node<T> {
@@ -181,6 +189,8 @@ export class Computed<T> extends Computation<T> {
   private seenEpoch = -1;
   private pendingParts: PromiseLike<unknown>[] = [];
   private pendingThenable?: PromiseLike<unknown>;
+  private pendingWorld?: string;
+  private pendingActive = false;
   constructor(
     readonly fn: (use: <U>(promise: PromiseLike<U>) => U) => T,
     options: ComputedOptions<T> = {},
@@ -189,6 +199,7 @@ export class Computed<T> extends Computation<T> {
   }
   get(): T {
     if (active !== undefined) active.track(this as Node<unknown>);
+    if (this.pendingActive && this.pendingWorld === worldKey()) throw this.pendingThenable;
     if (currentWorld !== undefined) {
       try {
         return this.evaluateWorld();
@@ -219,6 +230,10 @@ export class Computed<T> extends Computation<T> {
   }
   peek(): T | undefined {
     return this.ready ? this.value : undefined;
+  }
+  invalidate(cause?: TraceId): void {
+    this.pendingActive = false;
+    super.invalidate(cause);
   }
   private depsChanged(): boolean {
     for (let i = 0; i < this.deps.length; i++) {
@@ -273,12 +288,27 @@ export class Computed<T> extends Computation<T> {
           break;
         }
       }
-      if (same) return this.pendingThenable!;
+      if (same) {
+        this.pendingActive = true;
+        this.pendingWorld = worldKey();
+        return this.pendingThenable!;
+      }
     }
     this.pendingParts = parts;
     const promises: Promise<unknown>[] = [];
     for (const part of parts) promises.push(Promise.resolve(part));
     this.pendingThenable = Promise.all(promises);
+    this.pendingActive = true;
+    this.pendingWorld = worldKey();
+    const joined = this.pendingThenable;
+    joined.then(
+      () => {
+        if (this.pendingThenable === joined) this.pendingActive = false;
+      },
+      () => {
+        if (this.pendingThenable === joined) this.pendingActive = false;
+      },
+    );
     return this.pendingThenable;
   }
   refresh(): void {
@@ -421,6 +451,7 @@ function write<T>(atom: Atom<T>, update: Update<T>): void {
     let writes = currentTransaction.writes.get(atom as Atom<unknown>);
     if (writes === undefined) currentTransaction.writes.set(atom as Atom<unknown>, (writes = []));
     writes.push(update as Update<unknown>);
+    currentTransaction.revision++;
     currentTransaction.cause = emit("write", currentTransaction.cause, {
       batch: currentTransaction.id,
       target: atom,
@@ -705,6 +736,7 @@ export function isPending(node: Atom<any> | Computed<any>): boolean {
 
 export function refresh(node: Atom<any> | Computed<any>): void {
   if (node instanceof Computed) {
+    node.invalidate();
     node.dirty = true;
     node.staleDuringRun = true;
     for (const listener of reactListeners) listener(currentTransaction);

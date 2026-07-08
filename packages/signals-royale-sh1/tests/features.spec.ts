@@ -71,7 +71,11 @@ describe("engine features", () => {
     const b = new Promise<number>((resolve) => {
       resolveB = resolve;
     });
-    const value = computed((use) => use(a) + use(b));
+    let evaluations = 0;
+    const value = computed((use) => {
+      evaluations++;
+      return use(a) + use(b);
+    });
     expect(() => latest(value)).not.toThrow();
     expect(isPending(value)).toBe(true);
     let first: unknown;
@@ -87,6 +91,7 @@ describe("engine features", () => {
       second = error;
     }
     expect(first).toBe(second);
+    expect(evaluations).toBe(1);
     resolveA(2);
     resolveB(3);
     await Promise.all([a, b]);
