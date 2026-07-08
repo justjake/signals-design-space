@@ -12,8 +12,14 @@
  *  unstable_registerBatchIdAllocator(cb)     → token minting is OURS: React
  *    asks the bridge for an id at every batch's creation, with the deferred
  *    classification; we mint the spec §6.2 encoding `(serial<<1)|deferred`,
- *    so bit 0 keeps answering isCurrentWriteDeferred with no second call and
- *    the engine's slot interning works unchanged. No mapping tables.
+ *    so the engine's slot interning works unchanged. No mapping tables.
+ *  (shared internals `T` slot)               → isCurrentWriteDeferred: the
+ *    engine calls this probe on ambient reads under its "a read must never
+ *    mint" guard, so it must not touch unstable_getCurrentWriteBatch — the
+ *    first such call in an event CREATES the batch identity. Reading the
+ *    reconciler's current-transition slot classifies with no side effects
+ *    (non-null, non-gesture scope ⇒ a write issued now is deferred),
+ *    mirroring the classifier's own transition arm.
  *  (none)                                    → onRootRegistered: the real
  *    fork has no root-registration edge; the bridge synthesizes activation
  *    at attach time. Sound for variant A: attach precedes any React work,
@@ -70,6 +76,20 @@ type ForkReact = {
 	unstable_runInBatch(batchId: number, fn: () => void): unknown;
 	unstable_resetBatchRegistryForTest?: () => void;
 };
+
+/** The reconciler's current-transition scope object (its `gesture` field
+ * marks gesture transitions, which classify urgent), read through React's
+ * shared-internals export — the one write-classification fact observable
+ * without creating a batch identity. */
+function currentTransitionScope(react: unknown): { gesture?: unknown } | null | undefined {
+	return (
+		react as {
+			__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: {
+				T?: { gesture?: unknown } | null;
+			};
+		}
+	).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.T;
+}
 
 export function assertForkPresent(react: unknown = React): asserts react is ForkReact {
 	const r = react as Partial<ForkReact>;
@@ -154,8 +174,11 @@ export function attachReactBridge(engine: CosignalEngine, react: unknown = React
 			return () => unsubscribeReact?.();
 		},
 		isCurrentWriteDeferred(): boolean {
-			// Bit 0 of OUR minted token IS the classification (§6.2 encoding).
-			return (R.unstable_getCurrentWriteBatch() & 1) === 1;
+			// Mint-free probe (see the header's `T`-slot mapping row): reads
+			// must never create a batch identity, and the first
+			// unstable_getCurrentWriteBatch call in an event does exactly that.
+			const t = currentTransitionScope(R);
+			return t !== null && t !== undefined && !t.gesture;
 		},
 		getCurrentWriteBatch(): number {
 			return R.unstable_getCurrentWriteBatch();

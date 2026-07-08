@@ -109,6 +109,53 @@ describe('real React: basics', () => {
 	});
 });
 
+describe('real React: bridge probe is read-only', () => {
+	// Regression pin for the step-0 bridge bug (PLAN-edge-export step 0a):
+	// isCurrentWriteDeferred was implemented as unstable_getCurrentWriteBatch()
+	// & 1, and that call CREATES a batch identity — so every ambient read
+	// taken while a deferred batch was live minted a spurious urgent batch,
+	// under the engine guard that documents "a read must never mint".
+	it('ambient reads while a deferred batch is live create no batch identity', async () => {
+		handle.dispose();
+		let allocations = 0;
+		type AllocatorReact = {
+			unstable_registerBatchIdAllocator(allocate: (deferred: boolean) => number): () => void;
+		};
+		const counting = {
+			...React,
+			unstable_registerBatchIdAllocator: (allocate: (deferred: boolean) => number) =>
+				(React as unknown as AllocatorReact).unstable_registerBatchIdAllocator((deferred) => {
+					++allocations;
+					return allocate(deferred);
+				}),
+		};
+		handle = registerAltAReact(api, counting);
+		const a = new api.Atom({ state: 1 });
+		const b = new api.Atom({ state: 10 });
+		function View(): React.ReactNode {
+			return (
+				<span>
+					{useSignal(a)}:{useSignal(b)}
+				</span>
+			);
+		}
+		const c = await mount(<View />);
+		expect(allocations).toBe(0); // mounting writes nothing
+		await act(async () => {
+			React.startTransition(() => {
+				b.set(11);
+			});
+			// The transition batch is live and unflushed; these ambient reads
+			// hit the probe. Before the fix, each read minted one urgent batch.
+			expect(a.state).toBe(1);
+			expect(b.state).toBe(10); // ambient-W0: the draft stays hidden
+			expect(allocations).toBe(1); // exactly the transition's own mint
+		});
+		expect(c.textContent).toBe('1:11');
+		expect(allocations).toBe(1);
+	});
+});
+
 describe('real React: transitions', () => {
 	it('lockstep: signal writes and React state move in one commit', async () => {
 		const sig = new api.Atom({ state: 'a0' });
