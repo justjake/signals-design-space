@@ -189,10 +189,12 @@ describe('docs gate: test-seam naming (__TEST__ prefix)', () => {
 		return out;
 	}
 
-	it('no exported identifier uses the retired *ForTest suffix', () => {
+	it('no identifier anywhere uses the retired *ForTest suffix', () => {
+		// Scans every identifier, not just exports: internal helpers must not
+		// carry the retired convention either (test-only naming is __TEST__*).
 		for (const dir of srcDirs) {
 			for (const file of sourceFiles(dir)) {
-				const hits = exportedNames(readFileSync(file, 'utf8')).filter((n) => /^__\w+ForTest$/.test(n));
+				const hits = [...readFileSync(file, 'utf8').matchAll(/\b_{0,2}\w+ForTests?\b/g)].map((m) => m[0]);
 				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
 			}
 		}

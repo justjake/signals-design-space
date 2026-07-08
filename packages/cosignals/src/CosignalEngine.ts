@@ -410,7 +410,7 @@ function growNodeSideColumns(id: RecordId): void {
 
 /** Reset every kernel side column to its record-zero seed (the test reset's
  * column half): grow-arrays truncate; record buffers zero-fill in place. */
-function resetSideColumnsForTest(clocks: Float64Array): void {
+function resetSideColumns(clocks: Float64Array): void {
 	values.length = 2;
 	values[0] = undefined;
 	values[1] = undefined;
@@ -7403,7 +7403,7 @@ export function __TEST__resetEngine(options?: EngineResetOptions): void {
 	assertIdleForReset();
 	const d = driver;
 	if (d !== undefined && d.protocolReset !== undefined) d.protocolReset();
-	__resetKernelForTest(); // bumps the engine epoch; scrubs kernel state
+	resetKernelState(); // bumps the engine epoch; scrubs kernel state
 	__TEST__resetPolicy();
 	__TEST__resetSuspense();
 	probes.logEntries = 0;
@@ -7606,7 +7606,7 @@ const kernelTrackedReader: Reader = (dep) => {
 };
 
 /** Assignments follow section order. Deliberate survivors: the kernel arena
- * and counters ({@link __resetKernelForTest} scrubs those first), the batch-id
+ * and counters ({@link resetKernelState} scrubs those first), the batch-id
  * counter (monotonic, so stale host-held ids can't collide), the reclamation
  * queues (epoch-defused by that scrub), and the engine-activity probes. */
 function composeEngine(options?: EngineResetOptions): void {
@@ -8034,7 +8034,7 @@ function __assertKernelIdleForReset(): void {
 /** The kernel scrub (test-only): zero the used arena range, reset allocator
  * heads/counters, drop side columns to burned seeds — never a reallocation
  * (the op table's captured buffer stays valid). Bumps the reset epoch. @internal */
-function __resetKernelForTest(): void {
+function resetKernelState(): void {
 	__assertKernelIdleForReset();
 	engineEpoch++;
 	E.buffer().fill(0, 0, recNext); // watermark-bounded: only the used range holds records
@@ -8050,7 +8050,7 @@ function __resetKernelForTest(): void {
 	queued.length = 0;
 	pendingFree.length = 0;
 	// Side columns: stale values, closures, and clock stamps must not survive id reuse.
-	resetSideColumnsForTest(E.clocks());
+	resetSideColumns(E.clocks());
 	clockSource = 0;
 	// Walk scratch: a reset mid-diagnosis must not leave stale cursors.
 	propSp = 0;
