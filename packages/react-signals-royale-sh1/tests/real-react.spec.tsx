@@ -327,9 +327,14 @@ describe("real React protocol", () => {
 
   test("first-load Suspense converges once; refresh serves stale data without fallback", async () => {
     let resolve!: (value: string) => void;
-    let request = new Promise<string>((done) => {
-      resolve = done;
-    });
+    let fetches = 0;
+    const requestData = () => {
+      fetches++;
+      return new Promise<string>((done) => {
+        resolve = done;
+      });
+    };
+    let request = requestData();
     const data = adapter.computed((use) => use(request));
     function View() {
       const value = adapter.useValue(data);
@@ -347,14 +352,13 @@ describe("real React protocol", () => {
       ),
     );
     expect(container.textContent).toBe("fallback");
+    expect(fetches).toBe(1);
     await adapter.act(async () => {
       resolve("one");
       await request;
     });
     expect(container.textContent).toBe("one:false");
-    request = new Promise<string>((done) => {
-      resolve = done;
-    });
+    request = requestData();
     await adapter.act(() => adapter.refresh(data));
     expect(container.textContent).toBe("one:true");
     await adapter.act(async () => {
@@ -362,6 +366,7 @@ describe("real React protocol", () => {
       await request;
     });
     expect(container.textContent).toBe("two:false");
+    expect(fetches).toBe(2);
   });
 
   test("causality links component delivery to urgent and deferred writes", async () => {
@@ -417,6 +422,27 @@ describe("real React protocol", () => {
     expect(container.textContent).toBe("3");
     expect(initialized).toBe(1);
     expect(commits).toBe(1);
+  });
+
+  test("lazy initialization starts at the first render read and also precedes set-before-read", async () => {
+    let starts = 0;
+    const rendered = adapter.atom(() => {
+      starts++;
+      return 1;
+    });
+    const setFirst = adapter.atom(() => {
+      starts++;
+      return 2;
+    });
+    expect(starts).toBe(0);
+    adapter.set(setFirst, 3);
+    expect(starts).toBe(1);
+    function View() {
+      return <div>{adapter.useValue(rendered) as number}</div>;
+    }
+    await adapter.act(() => root.render(<View />));
+    expect(container.textContent).toBe("1");
+    expect(starts).toBe(2);
   });
 
   test("writes during render fail loudly", async () => {
