@@ -29,8 +29,10 @@ import {
 	captureReads,
 	createWatcher,
 	disposeSignal,
+	effect as engineEffect,
 	installState,
 	isSuspendedBox,
+	readById,
 	withRootCommitted,
 } from './engine';
 import type {
@@ -40,7 +42,7 @@ import type {
 	SignalLike,
 	WatcherHandle,
 } from './engine';
-import type { Container, ForkDouble } from './fork';
+import type { Container, ExternalRuntimeListener, ForkLike } from './fork';
 
 type RootView = {
 	/** entries retired at or below this are in the root's committed view */
@@ -53,7 +55,7 @@ export type SetStateRecord = { token: number; reason: 'watch' | 'fixup-own' | 'f
 
 export type ReactBindings = ReturnType<typeof createReactBindings>;
 
-export function createReactBindings(fork: ForkDouble) {
+export function createReactBindings(fork: ForkLike) {
 	const rootViews = new Map<Container, RootView>();
 	const rootEffects = new Map<Container, Set<EffectHook>>();
 	let currentPass: { container: Container; tokens: readonly number[]; pin: number } | undefined;
@@ -133,15 +135,11 @@ export function createReactBindings(fork: ForkDouble) {
 		/** Render phase (pure): read the pass's world Wp and remember it.
 		 * Suspends (throws the thenable) if the value is a SuspendedBox. */
 		renderRead(): T {
-			if (currentPass === undefined) {
-				throw new Error('SignalHook.renderRead: no render pass is open');
-			}
 			const value = this.signal.state; // engine resolves RENDER ctx
-			this.rendered = {
-				pin: currentPass.pin,
-				tokens: currentPass.tokens,
-				value,
-			};
+			this.rendered =
+				currentPass !== undefined
+					? { pin: currentPass.pin, tokens: currentPass.tokens, value }
+					: { pin: __debug.seqCounter(), tokens: [], value };
 			return value;
 		}
 
@@ -226,6 +224,10 @@ export function createReactBindings(fork: ForkDouble) {
 		private cleanup: (() => void) | undefined;
 		private tracked: Array<{ id: number; value: unknown }> = [];
 		private mounted = false;
+		/** Kernel-side tracker: loose-mode DIRECT writes commit with NO React
+		 * batch lifecycle (no onRootCommitted), so committed-value changes
+		 * must also arrive through the engine's own effect machinery. */
+		private tracker: (() => void) | undefined;
 		runs = 0;
 
 		constructor(
@@ -262,6 +264,15 @@ export function createReactBindings(fork: ForkDouble) {
 			if (typeof result === 'function') {
 				this.cleanup = result;
 			}
+			// Re-arm the kernel tracker over the (possibly changed) read set.
+			this.tracker?.();
+			const hook = this;
+			this.tracker = engineEffect(() => {
+				for (const t of hook.tracked) {
+					void readById(t.id); // tracked: the effect links these deps
+				}
+				scheduleRootEffectFlush(hook.container);
+			});
 		}
 
 		/** Engine pathway: after the owning root's commit, re-run iff the
@@ -282,6 +293,8 @@ export function createReactBindings(fork: ForkDouble) {
 		}
 
 		unmount(): void {
+			this.tracker?.();
+			this.tracker = undefined;
 			this.cleanup?.();
 			this.cleanup = undefined;
 			this.mounted = false;
@@ -393,4 +406,431 @@ export function initializeAtomState(
 		}
 		installState(atom, reviver !== undefined ? reviver(key, raw) : raw);
 	}
+}
+
+// ============================================================================
+// The REAL React bridge (§6 over the patched build's external-runtime
+// protocol v2) and the hook surface (§4/§13). The test double stays the unit
+// suites' fork; this adapter is the production one. Protocol deltas vs the
+// spec's §6.1, with the sound degradations taken (do NOT patch React):
+//
+// - No batch-open listener event: protocol v2 instead has the HOST allocate
+//   batch ids (unstable_registerBatchIdAllocator), called at every batch's
+//   creation with its deferred classification. That call IS the §6.2
+//   claim/mint edge: we mint `(serial << 1) | deferred` (the spec's token
+//   encoding), so bit 0 answers isCurrentWriteDeferred with no second call.
+// - No render lineage (§6.3). Degradation: a synthesized lineage, stable per
+//   container until a pass COMMITS there (so restarts and suspense retries
+//   of in-flight work share one lineage — the property the per-world
+//   thenable cache needs). LIMITATION: two distinct interleaved works on one
+//   root share a lineage until one commits; worst case the positional
+//   thenable cache over-shares identities across them.
+// - onRootCommitted(container, batches[], generation) replaces
+//   onBatchCommitted(container, token): fanned out per batch id.
+// - onRenderPassEnd carries `committed`; the engine's §6 listener ignores it
+//   (per-root committed truth arrives via onRootCommitted).
+// - The engine keeps ONE pass scalar set (§6.3 one-pass-at-a-time); if the
+//   protocol opens a pass while another container's is open (defensive —
+//   the host closes frames before restarting), the stale frame is ended
+//   first, matching the shim precedent in cosignals-react.
+// ============================================================================
+
+type ReactRuntime = {
+	unstable_registerBatchIdAllocator(fn: (deferred: boolean) => number): () => void;
+	unstable_subscribeToExternalRuntime(l: {
+		onRenderPassStart?: (container: unknown, includedBatches: readonly number[]) => void;
+		onRenderPassYield?: (container: unknown) => void;
+		onRenderPassResume?: (container: unknown) => void;
+		onRenderPassEnd?: (container: unknown, committed: boolean) => void;
+		onBatchRetired?: (batchId: number, committed: boolean) => void;
+		onRootCommitted?: (
+			container: unknown,
+			committedBatches: readonly number[],
+			generation: number,
+		) => void;
+		onBeforeMutation?: (container: unknown) => void;
+		onAfterMutation?: (container: unknown) => void;
+	}): () => void;
+	unstable_getCurrentWriteBatch(): number;
+	unstable_getRenderContext(): { container: unknown } | null;
+	unstable_runInBatch(batchId: number, fn: () => void): boolean;
+	unstable_resetBatchRegistryForTest?(): void;
+	startTransition(scope: () => void): void;
+};
+
+export class ReactFork implements ForkLike {
+	private listeners = new Set<ExternalRuntimeListener>();
+	private live = new Map<number, boolean>(); // token → deferred
+	private serial = 0;
+	private passContainer: Container | undefined = undefined;
+	private lineages = new Map<Container, number>();
+	private lineageSerial = 0;
+	private unsubs: Array<() => void> = [];
+	/** runInBatch outcomes, for entanglement assertions (test parity with the double). */
+	readonly entangleLog: Array<{ token: number; ran: boolean }> = [];
+
+	constructor(private readonly R: ReactRuntime) {
+		if (typeof R.unstable_subscribeToExternalRuntime !== 'function') {
+			// §6.7 version-skew rule: refuse stock React loudly; a silent
+			// degraded mode would reintroduce tearing with no error at the cause.
+			throw new Error(
+				'cosignals-alt-b/react: this React build does not implement the external-runtime protocol (stock React); concurrent bindings require the patched build',
+			);
+		}
+		this.unsubs.push(
+			R.unstable_registerBatchIdAllocator((deferred) => {
+				const token = (++this.serial << 1) | (deferred ? 1 : 0);
+				this.live.set(token, deferred);
+				this.emit((l) => l.onBatchOpened?.(token));
+				return token;
+			}),
+			R.unstable_subscribeToExternalRuntime({
+				onRenderPassStart: (container, included) => {
+					if (this.passContainer !== undefined) {
+						const prev = this.passContainer;
+						this.passContainer = undefined;
+						this.emit((l) => l.onRenderPassEnd?.(prev));
+					}
+					this.passContainer = container;
+					const tokens = included.filter((t) => this.live.has(t));
+					const lineage = this.lineageFor(container);
+					this.emit((l) => l.onRenderPassStart?.(container, tokens, lineage));
+				},
+				onRenderPassYield: (container) => {
+					if (this.passContainer === container) {
+						this.emit((l) => l.onRenderPassYield?.(container));
+					}
+				},
+				onRenderPassResume: (container) => {
+					if (this.passContainer === container) {
+						this.emit((l) => l.onRenderPassResume?.(container));
+					}
+				},
+				onRenderPassEnd: (container, committed) => {
+					if (this.passContainer !== container) {
+						return;
+					}
+					this.passContainer = undefined;
+					if (committed) {
+						this.lineages.delete(container); // the work is done; next work = new lineage
+					}
+					this.emit((l) => l.onRenderPassEnd?.(container));
+				},
+				onBatchRetired: (token, committed) => {
+					this.live.delete(token);
+					this.emit((l) => l.onBatchRetired?.(token, committed));
+				},
+				onRootCommitted: (container, committedBatches) => {
+					for (const token of committedBatches) {
+						this.emit((l) => l.onBatchCommitted?.(container, token));
+					}
+				},
+				onBeforeMutation: (container) => this.emit((l) => l.onBeforeMutation?.(container)),
+				onAfterMutation: (container) => this.emit((l) => l.onAfterMutation?.(container)),
+			}),
+		);
+	}
+
+	private lineageFor(container: Container): number {
+		let v = this.lineages.get(container);
+		if (v === undefined) {
+			v = ++this.lineageSerial;
+			this.lineages.set(container, v);
+		}
+		return v;
+	}
+
+	private emit(fn: (l: ExternalRuntimeListener) => void): void {
+		for (const l of this.listeners) {
+			fn(l);
+		}
+	}
+
+	subscribeToExternalRuntime(l: ExternalRuntimeListener): () => void {
+		this.listeners.add(l);
+		return () => {
+			this.listeners.delete(l);
+		};
+	}
+
+	isCurrentWriteDeferred(): boolean {
+		return (this.R.unstable_getCurrentWriteBatch() & 1) === 1;
+	}
+
+	getCurrentWriteBatch(): number {
+		return this.R.unstable_getCurrentWriteBatch();
+	}
+
+	getRenderContext(): { container: Container } | undefined {
+		return this.R.unstable_getRenderContext() ?? undefined;
+	}
+
+	runInBatch(token: number, fn: () => void): boolean {
+		let ran = false;
+		try {
+			ran = this.R.unstable_runInBatch(token, fn) !== false;
+		} catch {
+			ran = false; // e.g. called during render: fall back to urgent (§6.5)
+		}
+		this.entangleLog.push({ token, ran });
+		return ran;
+	}
+
+	liveTokens(): number[] {
+		return [...this.live.keys()];
+	}
+
+	isBatchLive(token: number): boolean {
+		return this.live.has(token);
+	}
+
+	isQuiescent(): boolean {
+		return this.live.size === 0 && this.passContainer === undefined;
+	}
+
+	hasOpenWork(): boolean {
+		if (this.live.size !== 0 || this.passContainer !== undefined) {
+			return true;
+		}
+		// An open transition scope whose batch is not minted yet (protocol v2
+		// mints lazily): the reconciler's current-transition slot is the only
+		// pre-mint witness. Reading it through the shared-internals export is
+		// the sound alternative to patching a pure classification API in.
+		const internals = (
+			this.R as unknown as {
+				__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: { T?: unknown };
+			}
+		).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+		if (internals !== undefined && internals.T !== null && internals.T !== undefined) {
+			return true;
+		}
+		return this.R.unstable_getRenderContext() !== null;
+	}
+
+	startTransition(scope: () => void): number {
+		let token = 0;
+		this.R.startTransition(() => {
+			scope();
+			token = this.R.unstable_getCurrentWriteBatch(); // mints the transition batch
+		});
+		return token;
+	}
+
+	dispose(): void {
+		for (const u of this.unsubs) {
+			u();
+		}
+		this.unsubs.length = 0;
+		this.listeners.clear();
+		this.live.clear();
+	}
+}
+
+// ---- activation + hooks (§4.5/§13) ---------------------------------------------
+
+import * as ReactNS from 'react';
+import { attachFork, detachFork } from './engine';
+import type { AtomOptions as AtomOpts, ReducerAtomOptions as ReducerOpts } from './engine';
+
+let activeFork: ReactFork | undefined;
+let activeBindings: ReactBindings | undefined;
+
+export type AltBReactHandle = {
+	fork: ReactFork;
+	bindings: ReactBindings;
+	dispose(): void;
+};
+
+/**
+ * Couples the module-singleton engine to the patched React build. Call after
+ * importing react-dom/client (the renderer registers the protocol provider
+ * at module init) and before rendering any root. Throws on stock React.
+ * There is no required provider component (§4.5).
+ */
+export function registerAltBReact(): AltBReactHandle {
+	if (activeFork !== undefined) {
+		throw new Error('cosignals-alt-b/react: already registered (dispose the previous handle first)');
+	}
+	const fork = new ReactFork(ReactNS as unknown as ReactRuntime);
+	attachFork(fork);
+	const bindings = createReactBindings(fork);
+	activeFork = fork;
+	activeBindings = bindings;
+	return {
+		fork,
+		bindings,
+		dispose() {
+			bindings.dispose();
+			fork.dispose();
+			detachFork();
+			if (activeFork === fork) {
+				activeFork = undefined;
+				activeBindings = undefined;
+			}
+		},
+	};
+}
+
+function requireBindings(): ReactBindings {
+	if (activeBindings === undefined) {
+		throw new Error('cosignals-alt-b/react: registerAltBReact() must run before using hooks');
+	}
+	return activeBindings;
+}
+
+type AnySignalHook = ReturnType<ReactBindings['mountSignal']>;
+
+/**
+ * §13.2 — subscribe this component to a signal; returns its value for the
+ * current render's world. Concurrent-safe: render reads resolve the pass's
+ * world; the layout-effect commit creates the watcher and runs the
+ * world-aware post-subscribe fixup (corrections entangled into pending
+ * batches' own lanes). Suspends while the value is a SuspendedBox.
+ */
+export function useSignal<T>(signal: SignalLike & { state: T }): T {
+	const b = requireBindings();
+	const [, bump] = ReactNS.useReducer((c: number) => (c + 1) | 0, 0);
+	const ref = ReactNS.useRef<{ hook: AnySignalHook; of: SignalLike } | null>(null);
+	if (ref.current === null || ref.current.of !== signal) {
+		ref.current?.hook.unmount();
+		ref.current = {
+			hook: b.mountSignal(signal, () => bump()) as AnySignalHook,
+			of: signal,
+		};
+	}
+	const value = ref.current.hook.renderRead() as T;
+	ReactNS.useLayoutEffect(() => {
+		// Every commit: idempotent watcher creation + the §13.2 fixup for
+		// writes that raced into the render→commit gap. StrictMode's
+		// simulated unmount disposes the watcher; this recreates it.
+		ref.current?.hook.commit();
+	});
+	ReactNS.useLayoutEffect(() => {
+		return () => {
+			ref.current?.hook.unmount();
+		};
+	}, []);
+	return value;
+}
+
+/** Holder pattern (§13.5): component-owned nodes survive StrictMode's
+ * simulated unmount by re-creating on the post-remount effect. */
+function useOwned<H extends SignalLike>(make: () => H): H {
+	const [holder, setHolder] = ReactNS.useState(() => ({ node: make(), disposed: false }));
+	ReactNS.useEffect(() => {
+		if (holder.disposed) {
+			setHolder({ node: make(), disposed: false });
+			return;
+		}
+		return () => {
+			holder.disposed = true;
+			disposeSignal(holder.node);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [holder]);
+	return holder.node;
+}
+
+/** §13.5 — component-owned atom; like useState but a signal. */
+export function useAtom<T>(options: AtomOpts<T>): Atom<T> {
+	const optionsRef = ReactNS.useRef(options);
+	return useOwned(() => new Atom(optionsRef.current));
+}
+
+/** §13.5 — component-owned reducer atom; like useReducer. */
+export function useReducerAtom<S, A>(options: ReducerOpts<S, A>): ReducerAtom<S, A> {
+	const optionsRef = ReactNS.useRef(options);
+	return useOwned(() => new ReducerAtom(optionsRef.current));
+}
+
+function depsEqual(a: readonly unknown[], b: readonly unknown[]): boolean {
+	if (a.length !== b.length) {
+		return false;
+	}
+	for (let i = 0; i < a.length; ++i) {
+		if (!Object.is(a[i], b[i])) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * §13.3 — like useMemo, but re-renders when a signal read inside `fn`
+ * changes. `fn` closes over props/state freely (that is what `deps` is for);
+ * signal reads are auto-tracked and NOT listed in deps. Node creation during
+ * render is engine-side allocation only; superseded nodes are disposed in an
+ * effect (a discarded render's node falls to FinalizationRegistry/reset).
+ */
+export function useComputed<T>(
+	fn: () => T,
+	deps: readonly unknown[],
+	options?: { isEqual?: (a: T, b: T) => boolean; label?: string },
+): T {
+	const ref = ReactNS.useRef<{ c: Computed<T>; deps: readonly unknown[]; retired: Computed<T>[] } | null>(null);
+	if (ref.current === null || !depsEqual(ref.current.deps, deps)) {
+		const retired = ref.current === null ? [] : [...ref.current.retired, ref.current.c];
+		ref.current = {
+			c: new Computed<T>({ fn: () => fn(), isEqual: options?.isEqual, label: options?.label }),
+			deps,
+			retired,
+		};
+	}
+	const holder = ref.current;
+	ReactNS.useEffect(() => {
+		if (holder.retired.length !== 0) {
+			for (const c of holder.retired) {
+				disposeSignal(c);
+			}
+			holder.retired.length = 0;
+		}
+	});
+	ReactNS.useEffect(() => {
+		return () => {
+			if (ref.current !== null) {
+				disposeSignal(ref.current.c);
+				ref.current = null;
+			}
+		};
+	}, []);
+	return useSignal(holder.c as SignalLike & { state: T });
+}
+
+/**
+ * §13.4 — like useEffect, but also re-runs when a tracked signal's committed
+ * value (per this component's root) changes. Cleanup supported.
+ */
+export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
+	const b = requireBindings();
+	// Capture the owning root during render (the only moment the protocol
+	// exposes it); fall back to a process-wide default for rootless renders.
+	const containerRef = ReactNS.useRef<unknown>('cosignals-alt-b:default-root');
+	const ctx = activeFork?.getRenderContext();
+	if (ctx !== undefined) {
+		containerRef.current = ctx.container;
+	}
+	const fnRef = ReactNS.useRef(fn);
+	fnRef.current = fn;
+	ReactNS.useEffect(() => {
+		const hook = b.signalEffect(containerRef.current, () => fnRef.current());
+		hook.commit();
+		return () => {
+			hook.unmount();
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, deps ?? []);
+}
+
+/**
+ * §13.6 — useTransition + engine batching: writes in `scope` classify into
+ * the transition's batch and broadcast once per watcher.
+ */
+export function useSignalTransition(): [boolean, (scope: () => void) => void] {
+	const [isPending, start] = ReactNS.useTransition();
+	const startScoped = ReactNS.useCallback((scope: () => void) => {
+		start(() => {
+			batch(scope);
+		});
+	}, [start]);
+	return [isPending, startScoped];
 }

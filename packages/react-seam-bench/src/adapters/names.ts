@@ -12,6 +12,7 @@ export const contenderNames = [
 	'alt-a-uses',
 	'alt-a-react',
 	'alt-b-uses',
+	'alt-b-react',
 ] as const;
 
 export type ContenderName = (typeof contenderNames)[number];

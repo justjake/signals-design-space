@@ -22,6 +22,11 @@
 		"@types/node": "24.13.2",
 		"typescript": "6.0.3",
 		"vitest": "4.1.6",
-		"reactive-framework-test-suite": "0.0.2"
+		"reactive-framework-test-suite": "0.0.2",
+		"react": "*",
+		"react-dom": "*",
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"jsdom": "^26.1.0"
 	}
 }

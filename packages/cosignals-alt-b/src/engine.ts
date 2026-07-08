@@ -28,7 +28,7 @@
  *   no slot at first evaluation.
  */
 
-import type { Container, ForkDouble } from './fork';
+import type { Container, ForkLike } from './fork';
 
 // ---- layout constants (generated from tools/schema.ts) --------------------------
 // #region GENERATED — layout v1 (from tools/schema.ts; run `pnpm gen`) — DO NOT EDIT
@@ -361,6 +361,24 @@ let rootCommittedMask = 0;
 // Read capture for useSignalEffect dependency tracking (bindings-only).
 let captureList: number[] | undefined;
 
+/** True iff render code is executing RIGHT NOW. The real fork parks
+ * suspended work with its pass frame open and emits NO yield event (a §6.3
+ * deviation of the build we ship against), so an open pass alone does not
+ * mean rendering: consult the fork's render context, but only when the
+ * event-driven scalar says RENDER (zero cost otherwise). */
+function forkRenderingNow(): boolean {
+	return fork === undefined || fork.getRenderContext() !== undefined;
+}
+
+/** The effective read context: RENDER downgraded to NEWEST inside the real
+ * fork's suspension gaps (open pass, not executing). */
+function ctxNow(): Ctx {
+	if (currentCtx === Ctx.RENDER && !forkRenderingNow()) {
+		return Ctx.NEWEST;
+	}
+	return currentCtx;
+}
+
 // Optional drain trace (debugging aid; see __debug.startTrace).
 let traceLog: string[] | undefined;
 
@@ -371,7 +389,7 @@ function trace(msg: string): void {
 }
 
 // Bridge / config.
-let fork: ForkDouble | undefined;
+let fork: ForkLike | undefined;
 let unsubscribeFork: (() => void) | undefined;
 let strictLanes = false;
 let forbidWritesInComputeds = false;
@@ -2089,7 +2107,7 @@ function broadcastEqual(node: number, a: unknown, b: unknown): boolean {
 // ---- the write path (§9.1 gate, §9.3 append, §9.4 applied, §9.8 notify) ----------
 
 function atomWrite(a: number, op: number, payload: unknown): void {
-	if (currentCtx === Ctx.RENDER) {
+	if (currentCtx === Ctx.RENDER && forkRenderingNow()) {
 		throw new Error('cosignals-alt-b: writes during render are forbidden (§10.8)');
 	}
 	if (
@@ -2100,6 +2118,17 @@ function atomWrite(a: number, op: number, payload: unknown): void {
 		throw new Error('cosignals-alt-b: writes inside computeds are forbidden (configure)');
 	}
 	if (writeMode === Mode.DIRECT) {
+		// §9.1 gate, per-write probe: protocol v2 mints batches lazily at the
+		// first getCurrentWriteBatch call — which only the LOGGED path makes —
+		// so a fresh transition's FIRST write has no preceding batch-open
+		// edge. When the fork reports open work (a live batch, an open pass,
+		// or an unminted transition scope), flip and log; a truly idle write
+		// pays one fork call and stays DIRECT (the loose contract).
+		if (fork !== undefined && fork.hasOpenWork()) {
+			writeMode = Mode.LOGGED;
+			atomWriteLogged(a, op, payload);
+			return;
+		}
 		// DIRECT: the proven kernel write, zero overlay instructions (§9.1).
 		const cur = pendingAtomValue(a);
 		const next = applyOp(a, op, payload, cur);
@@ -2131,8 +2160,10 @@ function atomWriteLogged(a: number, op: number, payload: unknown): void {
 	if (f === undefined) {
 		throw new Error('cosignals-alt-b: LOGGED mode without a fork attached');
 	}
-	const deferred = f.isCurrentWriteDeferred();
+	// Token bit 0 IS the deferred classification (§6.2 encoding) in both
+	// fork implementations — one protocol call per write, not two.
 	const token = f.getCurrentWriteBatch();
+	const deferred = (token & 1) === 1;
 	const slot = internSlot(token);
 	const applied = !deferred || slot < 0; // slot exhaustion degrades to urgent
 	if (tracer !== undefined) {
@@ -2813,14 +2844,14 @@ function readAtomPublic(a: number): unknown {
 			link(a, activeSub, cycle);
 			return v;
 		}
-		if (currentCtx !== Ctx.RENDER) {
+		if (ctxNow() !== Ctx.RENDER) {
 			link(a, activeSub, cycle);
 		}
 	}
 	if ((M[a + C.FLAGS] & C.LOGGED) === 0) {
 		return kernelAtomValue(a); // the fast path
 	}
-	return foldTape(a, worldOfCtx(currentCtx));
+	return foldTape(a, worldOfCtx(ctxNow()));
 }
 
 function readAtomCold(a: number): unknown {
@@ -2843,15 +2874,15 @@ function readAtomCold(a: number): unknown {
 	const flags = M[a + C.FLAGS];
 	if ((flags & C.LOGGED) === 0) {
 		const v = kernelAtomValue(a);
-		if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+		if (activeSub !== 0 && ctxNow() !== Ctx.RENDER) {
 			link(a, activeSub, cycle);
 		}
 		return v;
 	}
-	if (activeSub !== 0 && currentCtx !== Ctx.RENDER) {
+	if (activeSub !== 0 && ctxNow() !== Ctx.RENDER) {
 		link(a, activeSub, cycle);
 	}
-	return foldTape(a, worldOfCtx(currentCtx));
+	return foldTape(a, worldOfCtx(ctxNow()));
 }
 
 function readComputedPublic(c: number): unknown {
@@ -2866,8 +2897,9 @@ function readComputedPublic(c: number): unknown {
 	if (loggedAtomCount === 0 && currentCtx === Ctx.NEWEST) {
 		return kernelComputedRead(c, true);
 	}
-	const track = currentCtx !== Ctx.RENDER;
-	return resolveComputed(c, worldOfCtx(currentCtx), track);
+	const ctx = ctxNow();
+	const track = ctx !== Ctx.RENDER;
+	return resolveComputed(c, worldOfCtx(ctx), track);
 }
 
 function readComputedCold(c: number): unknown {
@@ -2892,8 +2924,9 @@ function readComputedCold(c: number): unknown {
 	if (loggedAtomCount === 0 && currentCtx === Ctx.NEWEST) {
 		return kernelComputedRead(c, true); // quiescent fast path (the read gate)
 	}
-	const track = currentCtx !== Ctx.RENDER; // render never mutates topology (§10.3)
-	return resolveComputed(c, worldOfCtx(currentCtx), track);
+	const ctx = ctxNow();
+	const track = ctx !== Ctx.RENDER; // render never mutates topology (§10.3)
+	return resolveComputed(c, worldOfCtx(ctx), track);
 }
 
 
@@ -3320,6 +3353,7 @@ function processFinalizeRetries(): void {
 		observeWanted: (node: number) =>
 			(M[node + C.FLAGS] & C.KIND_MASK) !== 0 && isLiveNode(node),
 		isLive: isLiveNode,
+		nodeFlags: (id: number) => M[id + C.FLAGS],
 		liveMemos: () => {
 			let n = 0;
 			for (let rec = 8; rec < wNext; rec += 8) {
@@ -3604,7 +3638,7 @@ export function __resetEngineForTests(options?: {
 }
 // ---- the bridge (§13 preamble, driven by the fork double) --------------------------
 
-export function attachFork(f: ForkDouble): void {
+export function attachFork(f: ForkLike): void {
 	if (fork !== undefined) {
 		throw new Error('cosignals-alt-b: a fork is already attached');
 	}
@@ -4023,6 +4057,17 @@ export function withRootCommitted<T>(pin: number, tokens: readonly number[], fn:
 		rootCommittedPin = prevPin;
 		rootCommittedMask = prevMask;
 	}
+}
+
+/** Tracked read by node id (bindings' effect-tracker bodies): dispatches on
+ * the node's kind through the ordinary read paths, so an enclosing engine
+ * effect links real dependencies. */
+export function readById(id: number): unknown {
+	return (M_kindIsAtom(id) ? hotReadAtom : hotReadComputed)(id);
+}
+
+function M_kindIsAtom(id: number): boolean {
+	return (E.nodeFlags(id) & 1024) !== 0; // C.K_ATOM
 }
 
 /** Record which signals fn reads (useSignalEffect dependency tracking). */

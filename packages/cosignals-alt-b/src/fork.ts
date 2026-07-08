@@ -27,6 +27,33 @@
 
 export type Container = unknown;
 
+/**
+ * The structural fork surface the engine and bindings consume (§6). Two
+ * implementations: ForkDouble (this file — the scriptable test double) and
+ * ReactFork (src/react.ts — the adapter over the actual patched React's
+ * external-runtime protocol).
+ */
+export type ForkLike = {
+	subscribeToExternalRuntime(l: ExternalRuntimeListener): () => void;
+	isCurrentWriteDeferred(): boolean;
+	getCurrentWriteBatch(): number;
+	getRenderContext(): { container: Container } | undefined;
+	runInBatch(token: number, fn: () => void): boolean;
+	liveTokens(): number[];
+	isBatchLive(token: number): boolean;
+	isQuiescent(): boolean;
+	/**
+	 * Is any React work open or pending RIGHT NOW — including a transition
+	 * scope whose batch has not been minted yet (protocol v2 mints lazily at
+	 * the first getCurrentWriteBatch call)? This is the §9.1 DIRECT→LOGGED
+	 * gate's per-write probe: the batch-open edge alone cannot precede the
+	 * first write of a fresh transition under lazy minting.
+	 */
+	hasOpenWork(): boolean;
+	/** startTransition + token capture (throughput helpers, §13.6). */
+	startTransition(scope: () => void): number;
+};
+
 export type ExternalRuntimeListener = {
 	onRenderPassStart?: (
 		container: Container,
@@ -305,6 +332,10 @@ export class ForkDouble {
 	/** Full React quiescence per §9.1: no live (unretired) batches, no open pass. */
 	isQuiescent(): boolean {
 		return this.pass === undefined && this.live.size === 0;
+	}
+
+	hasOpenWork(): boolean {
+		return !this.isQuiescent() || this.contextStack.length !== 0;
 	}
 
 	isBatchLive(token: number): boolean {
