@@ -77,11 +77,22 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
 
 ## Solid-2.0 async API set (owner brief, 2026-07-08; reference: research/solid2-async-model.md)
 
-7. **Two-level suspense rule** (research §2, adapted for React replay): the
-   React boundary (useSignal/readForRender AND top-level class reads) hands
-   the store-held thenable to React only when the pending box has NO latest
-   (never-settled first load → fallback). Refresh-pending serves the latest
-   settled value straight through — stale content stays, no fallback flash.
+7. **Two-level suspense rule — CONTEXT-SENSITIVE** (research §2, adapted;
+   owner amendment 2026-07-08): the React boundary (useSignal/readForRender
+   AND top-level class reads) decides per context:
+   (a) INSIDE A TRANSITION RENDER PASS (any included batch deferred): always
+   hand the store-held thenable to React.use(), even refresh-pending with a
+   latest — React holds old UI natively (no flash) and the transition waits
+   for settlement, keeping use(P) consumers and signals consumers suspended
+   on the SAME promise (no early stale commit, no tearing).
+   (b) URGENT/SYNC reads with a latest: serve latest straight through (+
+   isPending as the indicator opt-in) — stale content stays, no fallback
+   flash.
+   (c) Never-settled (no latest): suspend everywhere.
+   latest()/isPending() remain the per-site opt-outs; OPEN API QUESTION
+   (recorded, not implemented): a per-computed `suspend: 'always'` option
+   forcing rule (a) in urgent contexts too, for consumers that prefer
+   fallbacks over stale content.
    SuspendedBox gained `hasLatest`/`latest`, carried from the previous
    committed value (or through chained pending boxes).
    **UNINITIALIZED-clears-at-COMMIT decision**: Solid clears the bit when the
@@ -106,7 +117,12 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
    spuriously re-broadcast — oracle-caught). No-op on atoms/foreign nodes.
    Refresh races supersede latest-wins (slot replacement + settlement
    no-op guard). Cache-less callers pay one superseded fetch per settlement
-   wave (documented above, rule 5).
+   wave (documented above, rule 5). UNDER RULE 7(a), a refresh read inside
+   a transition render suspends on the thenable (latest is NOT served): the
+   transition holds until settlement, and a React-land use(P) consumer of
+   the same promise commits together with signals consumers (no tearing,
+   no early stale commit); urgent refetches keep serving latest (no
+   flash).
 10. **latest(x)** as WORLD SAMPLING (no new buffers): always samples the
     NEWEST world (Wn — every write visible, our analog of Solid's staged
     `_pendingValue`), in every read context (render included, deliberately
@@ -114,3 +130,31 @@ vendor/solid/packages/solid-signals/src/core/{async,core}.ts):
     async node itself → `box.latest` (stale committed value, never
     suspends, never registers pending); upstream/sync-derived nodes → the
     in-flight Wn value. Tracked callers subscribe to the sampled node.
+    Under rule 7(a) latest() is the per-site opt-out INSIDE transitions
+    too: a component that prefers stale-while-refreshing over holding the
+    transition reads latest() instead of the suspending accessor.
+
+11. **Thenable instrumentation is invisible to React**: ctx.use stamps
+    NON-STANDARD fields (`csStatus`/`csValue`/`csReason`) on tracked
+    thenables — never React's `status`/`value`/`reason` protocol fields.
+    React's use() treats any thenable carrying a string `status` as
+    externally instrumented and skips attaching its own protocol writers;
+    stamping the standard names on a USER promise shared with a React-land
+    use(P) consumer wedges that consumer permanently (observed against the
+    vendor build). What the REACT BOUNDARY throws is `SuspendedBox.gate` —
+    a per-box cached `thenable.then(noop, noop)` chain registered AFTER the
+    engine's settlement handler, so a retry render is always ordered after
+    the settlement invalidate has landed; identity-stable across retries;
+    always-resolving (rejections surface through the error-box path, never
+    as unhandled rejections).
+
+12. **VENDOR-BUILD GAP (documented degradation)**: the patched React
+    build's URGENT-lane retry never pings for use(P) suspensions — a plain
+    `React.use(promise)` with zero signals involvement stalls on the
+    Suspense fallback forever after an urgent-lane suspension. The
+    TRANSITION retry path works correctly, and the legacy thrown-thenable
+    path (what our boundary throws) works on both lanes. Consequence for
+    apps on this build: React-land use(P) consumers should first mount
+    with settled/pre-instrumented promises or suspend only inside
+    transitions; signals-side consumers are unaffected. Not worked around
+    in the bridge (would require patching React).

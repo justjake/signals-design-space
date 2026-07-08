@@ -519,20 +519,114 @@ describe('real React: Solid-2.0 async API set', () => {
 		expect(c.textContent).toBe('v2#2');
 	});
 
-	it('refresh(): refetch with unchanged inputs, stale content preserved; works inside transitions', async () => {
-		const resolvers: Array<(v: string) => void> = [];
+	it('refresh-in-transition: the transition HOLDS until settle; use(P) and signals consumers commit together (no tearing)', async () => {
+		// Data layer the test controls: the signals side (ctx.use) and the
+		// React side (use(P)) consume the SAME promise object.
+		//
+		// VENDOR-BUILD GAP (documented in SPEC-RESOLUTIONS): this patched
+		// React's URGENT-lane retry never pings for use(P) suspensions (a
+		// plain promise with zero signals involvement stalls on fallback
+		// forever); the TRANSITION retry path works, and the legacy
+		// thrown-thenable path (what our boundary throws) works on both.
+		// So the use(P) consumer's initial promise is pre-instrumented with
+		// React's protocol fields (renders synchronously, no urgent
+		// suspension) and the shared-P2 suspension happens inside the
+		// transition — exactly the no-tearing case under test.
+		const p1 = Promise.resolve('fresh-1') as Promise<string> & { status?: string; value?: string };
+		p1.status = 'fulfilled';
+		p1.value = 'fresh-1';
+		let currentPromise: Promise<string> = p1;
 		let fetches = 0;
 		const remote = new api.Computed<string>({
 			fn: (ctx) => {
 				++fetches;
-				return ctx.use(new Promise<string>((r) => resolvers.push(r)));
+				return ctx.use(currentPromise);
 			},
 		});
-		const pendingLog: boolean[] = [];
+		let setUseP!: (p: Promise<string>) => void;
+		const frames: string[] = [];
+		function SignalsConsumer(): React.ReactNode {
+			return <span>{useSignal(remote)}</span>;
+		}
+		function UseConsumer({ p }: { p: Promise<string> }): React.ReactNode {
+			return <span>{React.use(p)}</span>;
+		}
+		function App(): React.ReactNode {
+			const [p, set] = React.useState<Promise<string>>(p1);
+			setUseP = set;
+			return (
+				<React.Suspense fallback={<i>loading</i>}>
+					<SignalsConsumer />
+					|
+					<UseConsumer p={p} />
+					<FrameRecorder />
+				</React.Suspense>
+			);
+		}
+		function FrameRecorder(): React.ReactNode {
+			// Layout effects run once per commit: record every committed frame.
+			React.useLayoutEffect(() => {
+				frames.push(containers[containers.length - 1]?.textContent ?? '');
+			});
+			return null;
+		}
+		const c = mount(<App />);
+		await act(async () => {
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('fresh-1|fresh-1');
+
+		// The refetch, inside a transition: BOTH consumers suspend on P2 —
+		// rule (a): the signals read hands the thenable to React even though
+		// a latest exists, so React holds old UI and the transition waits.
+		let release!: (v: string) => void;
+		const p2 = new Promise<string>((r) => (release = r));
+		currentPromise = p2;
+		const before = fetches;
+		await act(async () => {
+			startSignalTransition(() => {
+				api.refresh(remote);
+				setUseP(p2);
+			});
+			await tick();
+		});
+		// The transition HELD: no commit with stale/mixed content happened.
+		expect(c.textContent).toBe('fresh-1|fresh-1');
+		expect(api.isPending(remote)).toBe(true); // the opt-in indicator
+		expect(fetches).toBeGreaterThan(before); // slots cleared → real refetch
+
+		await act(async () => {
+			release('fresh-2');
+			await tick();
+			await tick();
+		});
+		expect(c.textContent).toBe('fresh-2|fresh-2');
+		// NO TEARING: every committed frame showed both consumers in the same
+		// world — never one on fresh-2 while the other held fresh-1.
+		for (const f of frames) {
+			expect(['fresh-1|fresh-1', 'fresh-2|fresh-2']).toContain(f);
+		}
+		expect(api.isPending(remote)).toBe(false);
+	});
+
+	it('urgent refetch keeps the no-flash behavior (rule b): latest serves through', async () => {
+		const dep = new api.Atom({ state: 1 });
+		const resolvers = new Map<number, (v: string) => void>();
+		const cache = new Map<number, Promise<string>>();
+		const fetchFor = (d: number): Promise<string> => {
+			let promise = cache.get(d);
+			if (promise === undefined) {
+				promise = new Promise<string>((r) => resolvers.set(d, r));
+				cache.set(d, promise);
+			}
+			return promise;
+		};
+		const remote = new api.Computed<string>({
+			fn: (ctx) => ctx.use(fetchFor(dep.state as number)),
+		});
 		function View(): React.ReactNode {
-			const v = useSignal(remote);
-			pendingLog.push(useIsPending(remote as never));
-			return <span>{v}</span>;
+			return <span>{useSignal(remote)}</span>;
 		}
 		const c = mount(
 			<React.Suspense fallback={<i>loading</i>}>
@@ -540,31 +634,21 @@ describe('real React: Solid-2.0 async API set', () => {
 			</React.Suspense>,
 		);
 		await act(async () => {
-			resolvers[0]('fresh-1');
+			resolvers.get(1)!('one');
 			await tick();
 			await tick();
 		});
-		expect(c.textContent).toBe('fresh-1');
-		const before = fetches;
-
-		// refresh inside a transition: the refetch settles and commits through
-		// the normal write path; content stays stale meanwhile.
+		expect(c.textContent).toBe('one');
 		await act(async () => {
-			startSignalTransition(() => {
-				api.refresh(remote);
-			});
-			await tick();
+			dep.set(2); // URGENT input change → refetch
 		});
-		expect(c.textContent).toBe('fresh-1'); // stale content, no fallback
-		expect(fetches).toBeGreaterThan(before); // slots cleared → real refetch
+		expect(c.textContent).toBe('one'); // rule (b): latest served, no fallback
 		await act(async () => {
-			resolvers[resolvers.length - 1]('fresh-2');
+			resolvers.get(2)!('two');
 			await tick();
 			await tick();
 		});
-		expect(c.textContent).toBe('fresh-2');
-		expect(pendingLog).toContain(true); // isPending flipped during the refetch
-		expect(pendingLog[pendingLog.length - 1]).toBe(false); // ...and back
+		expect(c.textContent).toBe('two');
 	});
 });
 

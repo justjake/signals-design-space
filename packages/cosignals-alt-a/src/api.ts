@@ -23,6 +23,13 @@ export type SuspendedBox = {
 	hasLatest: boolean;
 	/** The last committed value (meaningful iff hasLatest). */
 	latest: unknown;
+	/** What the REACT BOUNDARY throws: a per-box cached gate chained AFTER
+	 * the engine's settlement handler, so React's retry render is always
+	 * ordered after the settlement invalidate has landed (throwing the raw
+	 * thenable races: React can retry between resolution and the invalidate
+	 * microtask, re-suspend on an already-resolved thenable, and never
+	 * retry again). Identity-stable across retries (cached on the box). */
+	gate: PromiseLike<unknown>;
 };
 
 const BOX = Symbol('cosignal.box');
@@ -52,14 +59,29 @@ function suspendedBox(thenable: PromiseLike<unknown>, prev: unknown): SuspendedB
 	const prevBox = isBox(prev);
 	const hasLatest = prev !== undefined && (!prevBox || (isSuspendedBox(prev) && prev.hasLatest));
 	const latest = prevBox ? (isSuspendedBox(prev) ? prev.latest : undefined) : prev;
-	return { [BOX]: true, kind: 'suspended', thenable, hasLatest, latest } as Boxed & SuspendedBox;
+	// The gate registers AFTER the engine's stamp handler (ctx.use stamped
+	// the thenable before any box holding it exists), so gate listeners —
+	// React's retry ping — run after the settlement microtask is queued;
+	// always-resolving so rejections surface through the error path, never
+	// as unhandled rejections.
+	const gate = thenable.then(
+		() => undefined,
+		() => undefined,
+	);
+	return { [BOX]: true, kind: 'suspended', thenable, hasLatest, latest, gate } as Boxed & SuspendedBox;
 }
 
 // ---- §12.3 thenable protocol -------------------------------------------------------
+// DELIBERATELY NON-STANDARD field names: React's use() treats a thenable
+// carrying a string `status` as externally instrumented and never attaches
+// its own protocol writers — stamping `status`/`value`/`reason` on the
+// USER's promise wedges any React-land use(P) consumer of the same promise
+// (observed: permanent fallback, no retry ping). Our tracking must be
+// invisible to React.
 type TrackedThenable<T> = PromiseLike<T> & {
-	status?: 'pending' | 'fulfilled' | 'rejected';
-	value?: T;
-	reason?: unknown;
+	csStatus?: 'pending' | 'fulfilled' | 'rejected';
+	csValue?: T;
+	csReason?: unknown;
 };
 
 // Module-level default equality for boxed computeds (no per-instance
@@ -416,7 +438,7 @@ export function createAPI(engine: CosignalEngine) {
 			let th = arr[i] as TrackedThenable<U> | undefined;
 			if (th === undefined) {
 				arr[i] = (th = thenable as TrackedThenable<U>) as TrackedThenable<unknown>;
-			} else if (th.status === 'pending' && !Object.is(th, thenable)) {
+			} else if (th.csStatus === 'pending' && !Object.is(th, thenable)) {
 				// LATEST-WINS while pending (the Solid rule): re-evaluations are
 				// dirty/cert-gated, so a different incoming thenable at a pending
 				// position means the inputs moved — the stale in-flight fetch
@@ -427,26 +449,26 @@ export function createAPI(engine: CosignalEngine) {
 				// no longer holds it.
 				arr[i] = (th = thenable as TrackedThenable<U>) as TrackedThenable<unknown>;
 			}
-			if (th.status === undefined) {
-				th.status = 'pending';
+			if (th.csStatus === undefined) {
+				th.csStatus = 'pending';
 				th.then(
 					(v) => {
-						th!.status = 'fulfilled';
-						th!.value = v;
+						th!.csStatus = 'fulfilled';
+						th!.csValue = v;
 						this.onSettle(th!);
 					},
 					(r) => {
-						th!.status = 'rejected';
-						th!.reason = r;
+						th!.csStatus = 'rejected';
+						th!.csReason = r;
 						this.onSettle(th!);
 					},
 				);
 			}
-			if (th.status === 'fulfilled') {
-				return th.value as U;
+			if (th.csStatus === 'fulfilled') {
+				return th.csValue as U;
 			}
-			if (th.status === 'rejected') {
-				throw th.reason;
+			if (th.csStatus === 'rejected') {
+				throw th.csReason;
 			}
 			if (!frame.pending.includes(th)) {
 				frame.pending.push(th);
@@ -490,14 +512,18 @@ export function createAPI(engine: CosignalEngine) {
 				if (forwardPending(v.thenable)) {
 					return undefined as T;
 				}
-				// Top-level read — Solid's uninitialized-vs-has-value rule
-				// (research §2.1): throw the STORE-HELD thenable only when no
-				// value has ever committed; a refresh-pending read serves the
-				// latest settled value straight through (no suspension).
-				if ((v as SuspendedBox).hasLatest) {
+				// Top-level read — the CONTEXT-SENSITIVE two-level rule (owner
+				// amendment): (a) inside a TRANSITION render pass, always hand
+				// the thenable to React — React holds old UI natively and the
+				// transition waits for settlement, keeping use(P) consumers and
+				// signals consumers on the SAME promise (no early stale commit,
+				// no tearing); (b) urgent/sync reads with a latest serve it
+				// straight through (no fallback flash); (c) never-settled
+				// suspends everywhere.
+				if ((v as SuspendedBox).hasLatest && !engine.policy.inTransitionRender()) {
 					return (v as SuspendedBox).latest as T;
 				}
-				throw v.thenable;
+				throw (v as SuspendedBox).gate;
 			}
 			return v as T;
 		}

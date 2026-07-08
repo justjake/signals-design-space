@@ -72,21 +72,26 @@ function handleOf(source: SignalSource<unknown>): SignalHandle {
 /** Read for render: §4 class getters already unbox (throw errors, suspend on
  * thenables); raw engine handles hand back §11.3 boxes — unbox here so a
  * suspended computed suspends the component either way. */
-function readForRender<T>(source: SignalSource<T>): T {
-	// THE TWO-LEVEL SUSPENSE RULE (research §2, adapted): the thenable goes
-	// to React only when the pending box has NO latest (never-settled first
-	// load → fallback); refresh-pending serves the latest settled value
-	// straight through — stale content stays, no fallback flash. §4 class
-	// getters already implement this; raw engine handles unbox here.
+function readForRender<T>(source: SignalSource<T>, isTransitionRender: () => boolean): T {
+	// THE CONTEXT-SENSITIVE TWO-LEVEL SUSPENSE RULE (owner amendment):
+	//  (a) transition render pass → ALWAYS hand the thenable to React.use():
+	//      React holds old UI natively (no flash) and the transition waits
+	//      for settlement — use(P) consumers and signals consumers suspend on
+	//      the same promise, so they commit together (no tearing, no early
+	//      stale commit);
+	//  (b) urgent/sync render with a latest → serve latest (+ isPending as
+	//      the indicator opt-in) — no fallback flash;
+	//  (c) never-settled → suspend everywhere.
+	// §4 class getters implement the same rule; raw engine handles unbox here.
 	const v = source.state;
 	if (isErrorBox(v)) {
 		throw v.error;
 	}
 	if (isSuspendedBox(v)) {
-		if (v.hasLatest) {
+		if (v.hasLatest && !isTransitionRender()) {
 			return v.latest as T;
 		}
-		throw v.thenable;
+		throw v.gate; // settlement-ordered, identity-stable (see SuspendedBox.gate)
 	}
 	return v;
 }
@@ -132,7 +137,7 @@ export function useSignal<T>(source: SignalSource<T>): T {
 	}
 	const rec = state.current;
 
-	const value = readForRender(source);
+	const value = readForRender(source, engine.policy.inTransitionRender);
 	// Remember the rendered world for the commit-edge fixup (§13.2).
 	const info = engine.renderInfo();
 	rec.rendered = info !== undefined

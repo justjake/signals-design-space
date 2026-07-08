@@ -3605,6 +3605,25 @@ export function createCosignalEngine(options?: EngineOptions) {
 			canonicalValue(h: SignalHandle): unknown {
 				return values[h.id >> 2];
 			},
+			/** Context sensitivity for the two-level suspense rule (owner
+			 * amendment): true while EXECUTING a render pass that includes at
+			 * least one deferred (transition) batch. Cold path — consulted only
+			 * when unboxing a pending box during render. */
+			inTransitionRender(): boolean {
+				if (passOpen === 0 || passExecuting === 0 || readCtx !== C.CTX_RENDER) {
+					return false;
+				}
+				let m = passIncludeMask;
+				while (m !== 0) {
+					const bit = m & -m;
+					const slot = 31 - Math.clz32(bit);
+					if ((batchToken[slot] & 1) === 1) {
+						return true;
+					}
+					m &= m - 1;
+				}
+				return false;
+			},
 			/** The §12.3 (Solid-adapted) thenable-slot key: node×WORLD identity.
 			 * Canonical evaluations share one key; pass-world evaluations key on
 			 * the pass's INCLUDE MASK — the stable identity across restarts and
