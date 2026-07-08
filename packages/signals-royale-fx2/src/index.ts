@@ -180,11 +180,27 @@ function readValue(x: AnyReadable): unknown {
   return value;
 }
 
-/** Newest intent: canonical plus every live draft; never suspends. Inside a
- * computed evaluation or render pass, resolves that context's own world. */
+/** Newest intent: canonical plus every live draft; never suspends. That is
+ * the AMBIENT meaning — inside an evaluation context, latest() resolves that
+ * context's own world instead, because reading ahead of your world is a
+ * tear: a draft evaluation sees its draft world, a canonical computed or
+ * effect evaluation sees canonical, a render pass sees the pass's world. */
 export function latest<T>(x: Readable<T>): T {
   const node = nodeOf(x);
-  const world = getCurrentWorld() ?? currentRenderWorld ?? latestWorld();
+  let world = getCurrentWorld();
+  if (world === null) {
+    if (getActiveConsumer() !== null) {
+      // A canonical evaluation (computed or effect) is running. Its context
+      // world is canonical, and this read is a real dependency: track it so
+      // a later change to x re-runs the consumer rather than leaving it
+      // permanently stale.
+      world = CANONICAL_WORLD;
+      if (node.kind === 'cell') readCell(node as CellNode<unknown>);
+      else readDerived(node as DerivedNode<unknown>);
+    } else {
+      world = renderWorld() ?? latestWorld();
+    }
+  }
   const env = resolveEnvelope(node, world);
   if (env.kind === 'error') throw env.box.error;
   return env.value as T;
@@ -203,7 +219,7 @@ export function committed<T>(x: Readable<T>, container?: object): T {
  * loading behind a stale value. Passive by contract: never evaluates,
  * never refetches, never suspends. */
 export function isPending(x: AnyReadable): boolean {
-  return isPendingPassive(nodeOf(x), getCurrentWorld() ?? currentRenderWorld);
+  return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld());
 }
 
 function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
@@ -366,10 +382,20 @@ export type { TraceEvent };
 // of the app-facing API, but public so the bindings package stays honest).
 // ---------------------------------------------------------------------------
 
-/** The render pass's world, stickily set by the bindings' hooks so that
- * latest()/isPending() called as plain functions during render resolve the
- * pass's own world instead of reading ahead of it. */
-let currentRenderWorld: World | null = null;
+/** Installed by the bindings: returns the current render pass's draft ids
+ * while a component render is executing, null otherwise. latest() and
+ * isPending() called as plain functions during render resolve the pass's
+ * own world instead of reading ahead of it; outside render they are
+ * ambient again. A provider (not a sticky setter) because only the host
+ * knows when React is rendering — a world left behind after a pass would
+ * silently blind ambient readers to live drafts. */
+let renderWorldProvider: (() => readonly DraftId[] | null) | null = null;
+
+function renderWorld(): World | null {
+  if (renderWorldProvider === null) return null;
+  const ids = renderWorldProvider();
+  return ids === null ? null : worldOf(ids);
+}
 
 export const reactIntegration = {
   nodeOf,
@@ -404,8 +430,8 @@ export const reactIntegration = {
   },
   setCommittedWorld,
   setRenderWriteGuard,
-  setRenderWorld(ids: readonly DraftId[] | null): void {
-    currentRenderWorld = ids === null ? null : worldOf(ids);
+  setRenderWorldProvider(fn: (() => readonly DraftId[] | null) | null): void {
+    renderWorldProvider = fn;
   },
   trace(kind: string, x: AnyReadable | null, cause: number, data?: unknown): number {
     const t = getActiveTracer();
@@ -461,7 +487,7 @@ export function resetEngineForTest(): void {
   setAmbientClassifier(null);
   setRenderWriteGuard(null);
   setOnDraftAppend(null);
-  currentRenderWorld = null;
+  renderWorldProvider = null;
   getActiveTracer()?.stop();
 }
 

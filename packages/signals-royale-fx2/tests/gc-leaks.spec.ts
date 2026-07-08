@@ -10,7 +10,15 @@
  * - Draft retirement drops rebase logs and world memos (quiescence).
  */
 import { describe, expect, test } from 'vitest';
-import { computed, effect, reactIntegration as ri, read, signal, type Signal } from '../src/index.ts';
+import {
+  computed,
+  effect,
+  effectScope,
+  reactIntegration as ri,
+  read,
+  signal,
+  type Signal,
+} from '../src/index.ts';
 import { type CellNode, type Link } from '../src/graph.ts';
 
 function subCount(x: Signal<number>): number {
@@ -97,6 +105,28 @@ describe('leak audit', () => {
     const dispose = effect(() => void base.get());
     expect(subCount(base)).toBe(1);
     dispose();
+    expect(subCount(base)).toBe(0);
+  });
+
+  test('a scope-owned effect survives GC of its unused per-effect disposer', async () => {
+    const base = signal(1);
+    let runs = 0;
+    const disposeScope = effectScope(() => {
+      // Common usage: the per-effect disposer is dropped because the scope
+      // owns the effect. Collecting that disposer is not abandonment — the
+      // effect must stay live until the scope goes.
+      void effect(() => {
+        base.get();
+        runs++;
+      });
+    });
+    expect(runs).toBe(1);
+    await collect(10);
+    base.set(2);
+    expect(runs).toBe(2); // still alive: the scope is the owner
+    disposeScope();
+    base.set(3);
+    expect(runs).toBe(2); // scope disposal is the reclamation path
     expect(subCount(base)).toBe(0);
   });
 });

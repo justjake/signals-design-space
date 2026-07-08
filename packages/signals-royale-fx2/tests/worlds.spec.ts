@@ -156,6 +156,60 @@ describe('per-root committed views', () => {
   });
 });
 
+describe('latest() context resolution', () => {
+  // The rule: latest() means "newest intent" only in AMBIENT code. Inside an
+  // evaluation context it resolves that context's own world — reading ahead
+  // of your world is a tear.
+
+  test('inside a canonical computed evaluation, latest() resolves canonical — never a draft', () => {
+    const a = signal(1);
+    const c = computed(() => latest(a) * 10);
+    const id = inDraft(() => a.set(2));
+    expect(read(c)).toBe(10); // canonical evaluation must not read ahead
+    expect(ri.resolveEnvelope(c, [id])).toEqual({ kind: 'value', value: 20 }); // its own world
+    expect(latest(c)).toBe(20); // ambient: newest intent
+    ri.retireDraft(id);
+    expect(read(c)).toBe(20);
+  });
+
+  test('latest() inside a computed is a tracked dependency — no permanent staleness', () => {
+    const a = signal(1);
+    const c = computed(() => latest(a) + 1);
+    expect(read(c)).toBe(2);
+    a.set(5);
+    expect(read(c)).toBe(6);
+  });
+
+  test('latest() inside an effect tracks canonically: re-runs on folds, never on draft writes', () => {
+    const a = signal(0);
+    const seen: number[] = [];
+    effect(() => {
+      seen.push(latest(a));
+    });
+    a.set(1);
+    expect(seen).toEqual([0, 1]);
+    const id = inDraft(() => a.set(9));
+    expect(seen).toEqual([0, 1]); // draft writes are invisible to effects
+    ri.retireDraft(id);
+    expect(seen).toEqual([0, 1, 9]); // the fold is a write: effect re-runs
+  });
+
+  test('render-world resolution is scoped by the provider: outside render, latest() is ambient', () => {
+    const a = signal(0);
+    let rendering = true;
+    ri.setRenderWorldProvider(() => (rendering ? [] : null));
+    try {
+      const id = inDraft(() => a.set(7));
+      expect(latest(a)).toBe(0); // an urgent pass's render body: the pass's world, not the draft
+      rendering = false;
+      expect(latest(a)).toBe(7); // ambient again: newest intent
+      ri.retireDraft(id);
+    } finally {
+      ri.setRenderWorldProvider(null);
+    }
+  });
+});
+
 describe('quiescence', () => {
   test('retiring the last draft drops logs and world memos', async () => {
     const a = signal(0);

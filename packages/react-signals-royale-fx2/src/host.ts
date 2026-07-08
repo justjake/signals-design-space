@@ -66,6 +66,22 @@ function renderWriteGuard(): void {
   }
 }
 
+/** The world ids the most recent subscribing hook resolved. Meaningful only
+ * while React is actually rendering — the provider below gates on the live
+ * render dispatcher, so plain latest()/isPending() calls in a render body
+ * resolve the pass's world, while ambient calls (event handlers, effects,
+ * module code) resolve newest intent. */
+let lastRenderWorldIds: readonly DraftId[] | null = null;
+
+export function noteRenderWorld(ids: readonly DraftId[]): void {
+  lastRenderWorldIds = ids;
+}
+
+function renderWorldProvider(): readonly DraftId[] | null {
+  const H = sharedInternals().H;
+  return H != null && renderDispatchers.has(H) ? lastRenderWorldIds : null;
+}
+
 /** Drafts created for plain React.startTransition scopes (no helper). */
 const draftsByTransition = new WeakMap<object, DraftId>();
 
@@ -198,6 +214,7 @@ export function registerReactSignals(): ReactSignalsHandle {
   engine.setAmbientClassifier(ambientClassifier);
   engine.setRenderWriteGuard(renderWriteGuard);
   engine.setOnDraftAppend(handleDraftAppend);
+  engine.setRenderWorldProvider(renderWorldProvider);
   handle = {
     errors: [],
     dispose() {
@@ -206,6 +223,7 @@ export function registerReactSignals(): ReactSignalsHandle {
       engine.setAmbientClassifier(null);
       engine.setRenderWriteGuard(null);
       engine.setOnDraftAppend(null);
+      engine.setRenderWorldProvider(null);
       mutationSubs.clear();
       handle = null;
     },
@@ -221,12 +239,14 @@ export function resetReactSignalsForTest(): void {
   draftRecipients.clear();
   renderedDrafts.clear();
   mutationSubs.clear();
+  lastRenderWorldIds = null;
   if (wasRegistered) {
     // resetEngineForTest cleared the engine hooks; re-arm them.
     (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = dispatchMutationWindow;
     engine.setAmbientClassifier(ambientClassifier);
     engine.setRenderWriteGuard(renderWriteGuard);
     engine.setOnDraftAppend(handleDraftAppend);
+    engine.setRenderWorldProvider(renderWorldProvider);
     handle!.errors.length = 0;
   }
 }

@@ -23,6 +23,7 @@ import {
   useSignalTransition,
   useValue,
 } from '../src/index.ts';
+import { WorldContext } from '../src/scope.ts';
 
 let h: Harness;
 beforeEach(() => {
@@ -194,6 +195,81 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
     expect(text(container)).toBe('v:6;');
     expect(seen).not.toContain(3);
     expect(seen).not.toContain(4);
+  });
+});
+
+describe('the latest() context rule', () => {
+  // With a transition draft held over canonical state, each context must
+  // resolve its OWN world: the transition's render sees the draft, an
+  // urgent render body does not, a canonical computed evaluation resolves
+  // canonical (and stays live — the read is tracked), and ambient code sees
+  // newest intent. Reading ahead of your world is a tear.
+  test('urgent bodies, canonical computeds, the transition render, and ambient code', async () => {
+    const a = signal(1);
+    const b = signal(0); // unrelated urgent driver
+    const hold = signal(false);
+    const gate = deferred<void>();
+    const viaComputed = computed(() => latest(a) * 100);
+    // Every render of the probe records the pass's world size next to what a
+    // plain latest(a) call in the body resolved. While the draft is held the
+    // pair must agree: draft-carrying passes see 2, urgent passes see 1 —
+    // whichever order React runs them in.
+    let held = false;
+    const samples: Array<{ drafts: number; l: number }> = [];
+
+    function UrgentProbe() {
+      const n = useValue(b);
+      const ids = React.useContext(WorldContext).ids;
+      if (held) samples.push({ drafts: ids.length, l: latest(a) });
+      return <b>u:{n};</b>;
+    }
+    function TransitionReader() {
+      const v = useValue(a);
+      const holding = useValue(hold);
+      if (holding && !gate.settled) throw gate.promise;
+      return <span>t:{v};</span>;
+    }
+    const { container } = await h.mount(
+      <React.Suspense fallback={<i>fb</i>}>
+        <UrgentProbe />
+        <TransitionReader />
+      </React.Suspense>,
+    );
+    expect(text(container)).toBe('u:0;t:1;');
+    expect(read(viaComputed)).toBe(100);
+
+    held = true;
+    await act(() => {
+      startTransitionWrite(() => {
+        a.set(2);
+        hold.set(true);
+      });
+    });
+    expect(text(container)).toBe('u:0;t:1;'); // held: committed DOM unchanged
+    expect(latest(a)).toBe(2); // ambient: newest intent
+    expect(read(a)).toBe(1); // canonical read: drafts hidden
+    expect(read(viaComputed)).toBe(100); // canonical computed evaluation: canonical
+    const draftPasses = samples.filter((s) => s.drafts > 0);
+    expect(draftPasses.length).toBeGreaterThan(0);
+    expect(draftPasses.every((s) => s.l === 2)).toBe(true); // the transition's render sees its draft
+
+    await act(() => b.set(1));
+    expect(text(container)).toBe('u:1;t:1;');
+    const urgentPasses = samples.filter((s) => s.drafts === 0);
+    expect(urgentPasses.length).toBeGreaterThan(0);
+    expect(urgentPasses.every((s) => s.l === 1)).toBe(true); // urgent bodies never see the draft
+    expect(latest(a)).toBe(2); // ambient still sees the draft after that urgent pass
+    expect(read(viaComputed)).toBe(100);
+    held = false;
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(text(container)).toBe('u:1;t:2;');
+    expect(read(a)).toBe(2);
+    expect(read(viaComputed)).toBe(200); // tracked: the fold re-ran it
+    expect(latest(a)).toBe(2);
   });
 });
 

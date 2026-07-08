@@ -861,15 +861,20 @@ const droppedDisposers = new FinalizationRegistry<WatcherNode>((w) => disposeWat
 
 export function makeEffect(fn: () => void | (() => void)): () => void {
   const w = makeWatcher(fn);
-  if (activeScope !== null && !activeScope.disposed) {
-    (activeScope.children ??= []).push(w);
+  const owned = activeScope !== null && !activeScope.disposed;
+  if (owned) {
+    (activeScope!.children ??= []).push(w);
   }
   executeWatcher(w);
   const dispose = () => {
     droppedDisposers.unregister(dispose);
     disposeWatcher(w);
   };
-  droppedDisposers.register(dispose, w, dispose);
+  // An effect created inside a scope (or another effect) lives and dies
+  // with its owner; dropping the per-effect disposer is normal usage there,
+  // not abandonment. Only ownerless effects arm the reclamation registry —
+  // a collected disposer must never kill an effect something still owns.
+  if (!owned) droppedDisposers.register(dispose, w, dispose);
   return dispose;
 }
 

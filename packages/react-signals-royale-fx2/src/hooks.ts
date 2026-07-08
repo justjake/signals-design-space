@@ -21,7 +21,7 @@ import {
   type Signal,
   type SignalOptions,
 } from 'signals-royale-fx2';
-import { captureRenderDispatcher } from './host.ts';
+import { captureRenderDispatcher, noteRenderWorld } from './host.ts';
 import { ContainerContext, WorldContext } from './scope.ts';
 
 type AnyReadable = Signal<any> | Computed<any>;
@@ -72,7 +72,7 @@ function unwrapForRender(x: AnyReadable, ids: readonly DraftId[]): unknown {
 export function useValue<T>(x: Readable<T>): T {
   captureRenderDispatcher();
   const world = React.useContext(WorldContext);
-  engine.setRenderWorld(world.ids);
+  noteRenderWorld(world.ids);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
   const epochSnap = React.useCallback(() => engine.epochSnapshot(x as AnyReadable), [x]);
   React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
@@ -100,6 +100,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
  * world-independent (ambient pendingness) for the same reason as useValue's. */
 export function useIsPending(x: AnyReadable): boolean {
   captureRenderDispatcher();
+  noteRenderWorld(React.useContext(WorldContext).ids);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
   const snap = React.useCallback(() => engine.isPendingIn(x as AnyReadable, null), [x]);
   return React.useSyncExternalStore(subscribe, snap, () => false);
@@ -108,6 +109,7 @@ export function useIsPending(x: AnyReadable): boolean {
 /** What this root's screen shows for x (the per-root committed view). */
 export function useCommitted<T>(x: Readable<T>): T {
   captureRenderDispatcher();
+  noteRenderWorld(React.useContext(WorldContext).ids);
   const container = React.useContext(ContainerContext);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
   const committedSnap = React.useCallback(

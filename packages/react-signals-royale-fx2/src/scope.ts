@@ -24,8 +24,10 @@
 import * as React from 'react';
 import { reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
 import {
+  captureRenderDispatcher,
   confirmCommit,
   markDraftRendered,
+  noteRenderWorld,
   registerProvider,
   type ProviderRecord,
 } from './host.ts';
@@ -53,6 +55,12 @@ export interface SignalScopeProps {
 export function SignalScope(props: SignalScopeProps): React.ReactElement {
   const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD);
   const container = props.container ?? null;
+  // Note this pass's world for plain latest()/isPending() calls in render
+  // bodies below. Every pass that carries drafts re-renders this scope (the
+  // drafts live in its reducer state), so the note lands at the top of the
+  // pass, in tree order, before any component can read.
+  captureRenderDispatcher();
+  noteRenderWorld(world.ids);
   // A pass carrying these drafts is being rendered; late appends to them
   // must re-dispatch (see module comment).
   for (const id of world.ids) markDraftRendered(id);
