@@ -17,7 +17,7 @@ fails=0; synced=0
 for d in /tmp/royale-*/; do
   slug="$(basename "$d" | sed 's/^royale-//')"
   [ -d "$d/.git" ] || continue
-  case "$slug" in bench*|main-fix*|ci*) continue;; esac  # orchestrator rigs, not contestant work
+  case "$slug" in fm1|fm2|fh1|fh2|fx1|fx2|sh1|sh2|sx1|sx2|sm1|sm2) ;; *) continue;; esac  # contestants only
 
   if git -C "$MAIN" fetch --quiet "$d" "+refs/heads/royale/*:refs/heads/royale/*" 2>/dev/null; then
     synced=$((synced+1))
