@@ -43,6 +43,8 @@ export type Equality<T> = (a: T, b: T) => boolean;
 
 /** One recorded write: either a plain replacement or a functional update. */
 type Op<T> = { fn: ((prev: T) => T) | null; value: T | undefined };
+/** A queued write: `ep` null = urgent; `seq` orders it against base history. */
+type PendingOp<T> = Op<T> & { ep: Episode | null; seq: WriteSeq };
 
 const is: Equality<unknown> = Object.is;
 
@@ -139,6 +141,18 @@ export function engineNow(): { writeSeq: WriteSeq; openEpisodes: number } {
   return { writeSeq, openEpisodes: openEpisodes.length };
 }
 
+export function openEpisodesSnapshot(): readonly Episode[] {
+  return openEpisodes;
+}
+
+/** Would this episode's ops change what `node` shows? (Corrective joins.) */
+export function episodeAffects(ep: Episode, node: Node): boolean {
+  if (ep.state !== 'open') return false;
+  if (node instanceof Cell) return ep.cells.has(node);
+  if (ep.refreshMarks !== null && ep.refreshMarks.has(node)) return true;
+  return new Frame([ep], -1).touches(node);
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -202,6 +216,9 @@ export interface Sub {
   cells: Set<Cell<any>> | null;
   /** True for isPending probes: delivered on pending flips, not value changes. */
   probe: boolean;
+  /** True for committed-view watchers: also delivered when a commit changes
+   * their node's committed snapshot. */
+  committedWatcher?: boolean;
   lastPending?: boolean;
   /** Trace id of the delivery that caused the sub's latest render. */
   causeId: TraceEventId;
@@ -237,8 +254,14 @@ export class Cell<T> {
   observedCleanup: (() => void) | null = null;
   observedActive = false;
   observedTaskQueued = false;
-  /** Open-episode ops touching this cell. */
-  ops: Map<Episode, Op<T>[]> | null = null;
+  /**
+   * Present while any op references an open episode: the update queue.
+   * `base` is the canonical value when the queue formed; ops replay from it
+   * in scheduling order (exactly React's updater-queue arithmetic — a skipped
+   * transition op re-applies in its original position when it lands, so an
+   * urgent ×2 over a pending +2 on 1 shows 2 now and (1+2)×2 = 6 after).
+   */
+  pend: { base: T; ops: Array<PendingOp<T>> } | null = null;
   /** MVCC history: [replacedAtSeq, priorValue], appended on base writes while
    * render passes are live so a pinned pass never sees a newer base. */
   hist: Array<[WriteSeq, T]> | null = null;
@@ -1099,20 +1122,51 @@ function writeCell<T>(cell: Cell<T>, op: Op<T>): void {
     );
   }
   const token = host !== null ? host.currentBatchToken() : null;
+  cell.materialize();
+  const prevCause = traceCause;
   if (token !== null) {
     recordEpisodeOp(cell, op, episodeFor(token));
-    return;
+  } else if (cell.pend === null) {
+    // Fast path: no update queue on this cell.
+    const next = applyOp(op, cell.value);
+    if (!cell.equals(cell.value, next)) {
+      setCanonical(cell, next, null);
+      flushAll();
+    }
+  } else {
+    // Queue in scheduling order; canonical refolds over urgent+retired ops.
+    cell.pend.ops.push({ fn: op.fn, value: op.value, ep: null, seq: writeSeq + 1 });
+    const next = foldQueue(cell, null, -1);
+    if (!cell.equals(cell.value, next)) setCanonical(cell, next, null);
+    else notifyDownstream(cell as Cell<any>, null); // queue shape changed: drafts refold
+    pendingEpoch++;
+    flushAll();
   }
-  cell.materialize();
-  const next = applyOp(op, cell.value);
-  if (cell.equals(cell.value, next)) return;
-  baseWrite(cell, next, null);
-  flushAll();
+  traceCause = prevCause;
 }
 
-/** Replace the canonical base value. `episode` names the batch this fold came
- * from (retirement) or null for a direct urgent write. */
-function baseWrite<T>(cell: Cell<T>, next: T, episode: Episode | null): void {
+/**
+ * Replay the cell's update queue for one world.
+ * Included: urgent ops (up to `pinSeq` when pinned), ops of retired episodes
+ * (from their retirement seq), and ops of `episodes`. Order is scheduling
+ * order — a landing transition op re-applies in its original position.
+ */
+function foldQueue<T>(cell: Cell<T>, episodes: Episode[] | null, pinSeq: WriteSeq): T {
+  const pend = cell.pend!;
+  let value = pend.base;
+  for (const op of pend.ops) {
+    const ep = op.ep;
+    const visible =
+      ep === null || ep.state === 'retired'
+        ? pinSeq < 0 || op.seq <= pinSeq
+        : ep.state === 'open' && episodes !== null && episodes.includes(ep);
+    if (visible) value = applyOp(op, value);
+  }
+  return value;
+}
+
+/** Set the cached canonical value (a base write): history, marks, deliveries. */
+function setCanonical<T>(cell: Cell<T>, next: T, episode: Episode | null): void {
   if (passFrames.size > 0) {
     (cell.hist ??= []).push([writeSeq + 1, cell.value]);
     cellsWithHistory.add(cell as Cell<any>);
@@ -1134,29 +1188,34 @@ function baseWrite<T>(cell: Cell<T>, next: T, episode: Episode | null): void {
   notifyDownstream(cell as Cell<any>, null);
 }
 
-/** A transition-classified write: append to the episode's log, never touch
- * the base. Equal writes drop against the value the episode's world shows. */
+/** A transition-classified write: append to the update queue tagged with the
+ * episode. Never touches canonical. Equal set()s drop against the value the
+ * episode's own world currently shows. */
 function recordEpisodeOp<T>(cell: Cell<T>, op: Op<T>, ep: Episode): void {
-  cell.materialize();
-  let cur = cell.value;
-  const prior = cell.ops?.get(ep);
-  if (prior !== undefined) for (const p of prior) cur = applyOp(p as Op<T>, cur);
-  const next = applyOp(op, cur);
-  if (op.fn === null && cell.equals(cur, next)) return;
-  (cell.ops ??= new Map()).set(
-    ep,
-    prior !== undefined ? ((prior as Op<T>[]).push(op), prior) : ([op] as Op<unknown>[]),
-  );
+  const pend = (cell.pend ??= { base: cell.value, ops: [] });
+  const before = foldQueue(cell, [ep], -1);
+  const next = applyOp(op, before);
+  if (op.fn === null && cell.equals(before, next)) return;
+  pend.ops.push({ fn: op.fn, value: op.value, ep, seq: writeSeq });
   ep.cells.add(cell as Cell<any>);
   ep.version++;
   pendingEpoch++;
   if (trace !== null) {
-    const cause = trace.emit('write', ep.openTrace, cell.label, cell);
-    setTraceCause(cause);
+    setTraceCause(trace.emit('write', ep.openTrace, cell.label, cell));
   }
   ep.armAutoRetire();
   notifyDownstream(cell as Cell<any>, ep);
   flushAll();
+}
+
+/** Collapse the queue once no op references an open episode. */
+function collapseQueue(cell: Cell<any>): void {
+  const pend = cell.pend;
+  if (pend === null) return;
+  for (const op of pend.ops) {
+    if (op.ep !== null && op.ep.state === 'open') return;
+  }
+  cell.pend = null;
 }
 
 /**
@@ -1253,7 +1312,9 @@ function flushDeliveries(): void {
       for (const episode of episodes) {
         if (episode !== null && episode.state !== 'open') continue;
         if (!sub.probe && sameAsSnapshot(sub, episode)) continue;
-        if (episode !== null) episode.noteDelivery(sub);
+        // Probes and unrooted subscribers take the delivery but never gate
+        // the episode's retirement — no commit of theirs will ever name it.
+        if (episode !== null && !sub.probe && sub.rootKey !== null) episode.noteDelivery(sub);
         host.deliver(sub, episode);
       }
     }
@@ -1337,24 +1398,28 @@ export class Episode {
   }
 
   noteDelivery(sub: Sub): void {
+    if (sub.rootKey === null) return;
     this.everDelivered = true;
-    const rootKey = sub.rootKey ?? UNROOTED;
-    let set = this.roots.get(rootKey);
+    let set = this.roots.get(sub.rootKey);
     if (set === undefined) {
       set = new Set();
-      this.roots.set(rootKey, set);
+      this.roots.set(sub.rootKey, set);
     }
     set.add(sub);
   }
 
   subGone(sub: Sub): void {
     if (this.state !== 'open') return;
-    const rootKey = sub.rootKey ?? UNROOTED;
-    const set = this.roots.get(rootKey);
+    if (sub.rootKey === null) return;
+    const set = this.roots.get(sub.rootKey);
     if (set === undefined || !set.delete(sub)) return;
-    if (set.size === 0) {
-      this.roots.delete(rootKey);
-      if (this.roots.size === 0) retireEpisode(this);
+    if (set.size === 0) this.roots.delete(sub.rootKey);
+    if (this.roots.size === 0) {
+      // Defer: a StrictMode-style unsubscribe/resubscribe flap within one
+      // commit must not retire the batch out from under the resubscriber.
+      queueMicrotask(() => {
+        if (this.state === 'open' && this.roots.size === 0) retireEpisode(this);
+      });
     }
   }
 
@@ -1376,8 +1441,6 @@ export class Episode {
   }
 }
 
-const UNROOTED: object = { unrooted: true };
-
 /** Find or create the episode for an ambient batch token. */
 export function episodeFor(token: object): Episode {
   let ep = episodesByToken.get(token);
@@ -1394,17 +1457,19 @@ export function episodeFor(token: object): Episode {
  * against today's base — the rebase), then drop every trace of it. */
 export function retireEpisode(ep: Episode): void {
   if (ep.state !== 'open') return;
-  ep.state = 'retired';
   const cause = trace !== null ? trace.emit('batch-retire', ep.openTrace, `episode ${ep.seq}`) : 0;
   const prevCause = setTraceCause(cause);
+  ep.state = 'retired';
   unregisterEpisode(ep);
   for (const cell of ep.cells) {
-    const ops = cell.ops?.get(ep);
-    cell.ops?.delete(ep);
-    if (ops === undefined) continue;
-    let next = cell.value;
-    for (const op of ops) next = applyOp(op, next);
-    if (!cell.equals(cell.value, next)) baseWrite(cell, next, ep);
+    const pend = cell.pend;
+    if (pend === null) continue;
+    // The landing ops become canonically visible now: restamp them at the
+    // retirement seq so passes pinned earlier keep excluding them.
+    for (const op of pend.ops) if (op.ep === ep) op.seq = writeSeq + 1;
+    const next = foldQueue(cell, null, -1);
+    collapseQueue(cell);
+    if (!cell.equals(cell.value, next)) setCanonical(cell, next, ep);
   }
   adoptWorldContexts(ep);
   pendingEpoch++;
@@ -1419,7 +1484,11 @@ export function abortEpisode(ep: Episode): void {
   if (trace !== null) trace.emit('batch-abort', ep.openTrace, `episode ${ep.seq}`);
   unregisterEpisode(ep);
   for (const cell of ep.cells) {
-    cell.ops?.delete(ep);
+    const pend = cell.pend;
+    if (pend !== null) {
+      pend.ops = pend.ops.filter((op) => op.ep !== ep);
+      collapseQueue(cell);
+    }
     notifyDownstream(cell, null);
   }
   dropWorldContexts(ep);
@@ -1522,12 +1591,10 @@ export class Frame {
     let result = false;
     for (const s of d.sources) {
       if (s instanceof Cell) {
-        if (s.ops !== null) {
-          for (const ep of this.episodes) {
-            if (s.ops.has(ep)) {
-              result = true;
-              break;
-            }
+        for (const ep of this.episodes) {
+          if (ep.cells.has(s)) {
+            result = true;
+            break;
           }
         }
       } else if (this.touches(s)) {
@@ -1563,13 +1630,10 @@ function baseValueAt<T>(cell: Cell<T>, pinSeq: WriteSeq): T {
 
 function frameCellRead<T>(cell: Cell<T>, frame: Frame): T {
   cell.materialize();
-  let value = baseValueAt(cell, frame.pinSeq);
-  if (cell.ops !== null) {
-    for (const ep of frame.episodes) {
-      const ops = cell.ops.get(ep);
-      if (ops !== undefined) for (const op of ops) value = applyOp(op as Op<T>, value);
-    }
-  }
+  const value =
+    cell.pend !== null
+      ? foldQueue(cell, frame.episodes, frame.pinSeq)
+      : baseValueAt(cell, frame.pinSeq);
   const run = activeEvalRun;
   if (run !== null && run.frame === frame) {
     run.cells?.add(cell as Cell<any>);
@@ -1792,8 +1856,12 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
       if (sub.probe) continue;
       try {
         const slot = peekSlot(sub.node, frame);
+        const prev = view.get(sub.node);
         view.set(sub.node, slot);
         recordGlobalCommit(sub.node, slot);
+        if (sub.committedWatcher === true && !Object.is(prev, slot) && host !== null) {
+          host.deliver(sub, null);
+        }
       } catch {
         // A throwing read cannot be on screen; skip the snapshot.
       }
@@ -1835,7 +1903,18 @@ function pruneHistory(): void {
 function pruneRootViews(): void {
   if (openEpisodes.length > 0) return;
   for (const [rootKey, view] of rootViews) {
+    const subs = subsByRoot.get(rootKey);
     for (const [node, slot] of view) {
+      let liveHere = false;
+      if (subs !== undefined) {
+        for (const sub of subs) {
+          if (sub.node === node) {
+            liveHere = true;
+            break;
+          }
+        }
+      }
+      if (liveHere) continue; // this root still renders it: keep its screen
       const canonical = node instanceof Cell ? node.value : node.slot;
       if (Object.is(canonical, slot)) view.delete(node);
     }
@@ -1898,13 +1977,13 @@ export function committed<T>(node: Cell<T> | Derived<T>, rootKey?: object): T {
   let slot: unknown;
   let found = false;
   if (rootKey !== undefined) {
+    // Per-root: this root's snapshots or canonical — never another root's.
     const view = rootViews.get(rootKey);
     if (view !== undefined && view.has(node as Node)) {
       slot = view.get(node as Node);
       found = true;
     }
-  }
-  if (!found) {
+  } else {
     const global = node instanceof Cell ? node.committedValue : node.committedSlot;
     if (global !== null) {
       slot = global.v;
@@ -1927,15 +2006,8 @@ export function committed<T>(node: Cell<T> | Derived<T>, rootKey?: object): T {
  */
 export function isPending(node: Node): boolean {
   if (node instanceof Cell) {
-    if (node.ops === null || node.ops.size === 0) return false;
-    for (const ep of openEpisodes) {
-      const ops = node.ops.get(ep);
-      if (ops === undefined) continue;
-      let value = node.value;
-      for (const op of ops) value = applyOp(op, value);
-      if (!node.equals(node.value, value)) return true;
-    }
-    return false;
+    if (node.pend === null) return false;
+    return !node.equals(node.value, foldQueue(node, openEpisodes, -1));
   }
   // Async in flight on any track?
   if (node.ctx !== null && node.ctx.pendingBox !== null) return true;
