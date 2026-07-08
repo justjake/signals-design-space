@@ -1,7 +1,7 @@
 From 8c2e8cb6f53b49ecd141df55aafefced0d65fbf8 Mon Sep 17 00:00:00 2001
 From: Jake Teton-Landis <just.1.jake@gmail.com>
 Date: Wed, 8 Jul 2026 14:16:31 -0400
-Subject: [PATCH 2/2] ReactSignalSeam protocol suite: pass/commit reporting,
+Subject: [PATCH 2/3] ReactSignalSeam protocol suite: pass/commit reporting,
  transition lane naming, pinned-lane joins, exact mutation bracket, render
  info truth
 

@@ -34,7 +34,8 @@ in a batch never propagate.
 | Real-React gate | `npx vitest run` in react package (fork build, jsdom, raw createRoot + act, no RTL) | **24 passed (24)** — scenarios 1-18 |
 | Fork protocol suite | `cd vendor/react && yarn test --no-watchman ReactSignalSeam` | **6 passed, 6 total** |
 | Upstream adjacent suites | `yarn test --no-watchman ReactAsyncActions ReactBatching ReactFlushSync ReactIncrementalScheduling ReactIncrementalUpdates ReactInterleavedUpdates ReactSchedulerIntegration ReactTransition ReactUpdatePriority ReactDefaultTransitionIndicator` | **13 suites passed; 121 passed, 1 skipped** |
-| Shared battery (verify-kit) | `npx vitest run` in `royale/verify-kit/battery` | **25 passed (25)** |
+| Shared battery (verify-kit) | `npx vitest run` in `royale/verify-kit/battery` | **25 passed (25)** (calibration reference alt-b: 24/25) |
+| Fork hygiene | `yarn flow dom-node`; `yarn linc`; `yarn prettier` | Flow: "No errors!"; lint passed; prettier clean |
 
 Output snippets (verbatim):
 
@@ -44,9 +45,9 @@ Output snippets (verbatim):
       Tests  211 passed (211)
 == deep fuzz 4x (1200 seeds)
       Tests  1 passed (1)
-== real-React gate
- Test Files  3 passed (3)
-      Tests  24 passed (24)
+== real-React gate (final run includes the adapter-load smoke spec)
+ Test Files  4 passed (4)
+      Tests  25 passed (25)
 == shared battery
  Test Files  1 passed (1)
       Tests  25 passed (25)
@@ -105,17 +106,51 @@ packages/ ':!packages/*/src/__tests__*'` sums to 188.
 
 Adapter registered as `Royale FM1` (`testPullCounts: true`; sanity tests
 green including exact pull counts; `cleanup()` disposes the build scope —
-no leak asymmetry). Isolated-runner table: see the Round 2 addendum at the
-bottom (run shared the machine with three other entrants' benchmark
-processes; treat timings as noisy).
+no leak asymmetry, flagged: disposal is deterministic, nothing waits on GC).
+
+Isolated runner, `--rounds 3`, vs Alien Signals (same process conditions;
+three other entrants were benchmarking on the machine concurrently — treat
+absolute numbers as noisy, ratios as indicative):
+
+| suite | Royale FM1 | Alien | ratio |
+|---|---|---|---|
+| createSignals | 6.35 | 1.75 | 3.6x |
+| createComputations | 176.6 | 59.1 | 3.0x |
+| updateSignals | 436.3 | 272.1 | 1.6x |
+| avoidablePropagation | 173.2 | 102.3 | 1.7x |
+| broadPropagation | 178.8 | 81.5 | 2.2x |
+| deepPropagation | 70.3 | 31.0 | 2.3x |
+| diamond | 133.7 | 79.0 | 1.7x |
+| mux | 137.9 | 79.1 | 1.7x |
+| repeatedObservers | 16.0 | 18.9 | **0.84x** |
+| triangle | 40.0 | 22.8 | 1.8x |
+| unstable | 24.1 | 18.7 | 1.3x |
+| molBench | 14.8 | 15.7 | **0.94x** |
+| cellx1000 | 9.3 | 3.7 | 2.5x |
+| cellx2500 | 41.9 | 11.5 | 3.6x |
+| kairo 2-10x5 lazy80% | 255.7 | 146.1 | 1.8x |
+| kairo 6-10x10 dyn25% lazy80% | 142.6 | 97.7 | 1.5x |
+| kairo 4-1000x12 dyn5% | 318.6 | 264.8 | 1.2x |
+| kairo 25-1000x5 | 306.5 | 347.6 | **0.88x** |
+| kairo 3-5x500 | 132.0 | 72.6 | 1.8x |
+| kairo 6-100x15 dyn50% | 201.8 | 151.9 | 1.3x |
+
+Rough geometric mean ~1.7x alien (incumbents hover at parity). The Round 2
+perf pass took the worst suites from 5-12x down to this: a live push-pull
+shortcut (the stale wave is authoritative for live nodes, so clean live
+computeds validate O(1)), an in-place dependency prefix fast path (steady
+re-evaluations allocate nothing and never relink), frame-stamp dedupe
+replacing per-run Sets, and a flush cursor replacing queue shifts. The
+remaining gap is the value-aware seen column (my revert semantics cost one
+comparison per edge per poll) and per-evaluation frame objects.
 
 ### React seam (bench/react-bench.mjs, jsdom, real timers, per-scenario child)
 
 | scenario | stat | fm1 | stock uSES baseline |
 |---|---|---|---|
-| fanout (5000 cells, 200 writes) | median write->commit | 1.958 ms | 1.740 ms |
-| transition (2000 cells + 30 urgent) | urgent p95 | 1.971 ms | 0.368 ms |
-| mount (5000 cells, 5 roots) | median | 52.8 ms | 48.2 ms |
+| fanout (5000 cells, 200 writes) | median write->commit | 1.848 ms | 1.815 ms |
+| transition (2000 cells + 30 urgent) | urgent p95 | 2.113 ms | 0.322 ms |
+| mount (5000 cells, 5 roots) | median | 49.8 ms | 45.6 ms |
 
 Reading the transition row honestly: the baseline's `startTransition` over a
 uSES store **degrades to a blocking synchronous render** (React warns), so

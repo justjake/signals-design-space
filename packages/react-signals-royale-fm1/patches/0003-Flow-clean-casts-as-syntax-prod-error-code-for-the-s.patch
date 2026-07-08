@@ -1,0 +1,86 @@
+From e21af8570716eacaa5bf57f27befcf8d197f24b7 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 14:50:32 -0400
+Subject: [PATCH 3/3] Flow-clean casts (as-syntax), prod error code for the
+ seam provider message
+
+---
+ .../react-reconciler/src/ReactFiberWorkLoop.js     | 14 +++++++-------
+ scripts/error-codes/codes.json                     |  3 ++-
+ 2 files changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index ba2e01ac0f..eda62276cb 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -820,7 +820,7 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+   // beside it.
+   const seamPinnedLane = getPinnedLane();
+   if (seamPinnedLane !== NoLane) {
+-    return (seamPinnedLane: any);
++    return seamPinnedLane as any;
+   }
+   // Special cases
+   const mode = fiber.mode;
+@@ -879,16 +879,16 @@ installSignalSeamProvider({
+       (executionContext & RenderContext) !== NoContext &&
+       workInProgressRootRenderLanes !== NoLanes
+     ) {
+-      return (pickArbitraryLane(workInProgressRootRenderLanes): any);
++      return pickArbitraryLane(workInProgressRootRenderLanes) as any;
+     }
+     const transition = requestCurrentTransition();
+     if (
+       transition !== null &&
+       !(enableGestureTransition && transition.gesture)
+     ) {
+-      return (requestTransitionLane(transition): any);
++      return requestTransitionLane(transition) as any;
+     }
+-    return (eventPriorityToLane(resolveUpdatePriority()): any);
++    return eventPriorityToLane(resolveUpdatePriority()) as any;
+   },
+   currentRenderInfo(): null | {container: mixed, lanes: number} {
+     if (
+@@ -898,7 +898,7 @@ installSignalSeamProvider({
+     ) {
+       return {
+         container: workInProgressRoot.containerInfo,
+-        lanes: (workInProgressRootRenderLanes: any),
++        lanes: workInProgressRootRenderLanes as any,
+       };
+     }
+     return null;
+@@ -2324,7 +2324,7 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
+   // Signal seam: a fresh stack begins (or, for NoLanes, resets) the render
+   // pass on this root. Fires after the update queue drained so the runtime
+   // observes a consistent world when it pins the pass's snapshot.
+-  emitPassStart(root.containerInfo, (lanes: any));
++  emitPassStart(root.containerInfo, lanes as any);
+ 
+   if (__DEV__) {
+     resetOwnerStackLimit();
+@@ -3811,7 +3811,7 @@ function commitRoot(
+   // Signal seam: this commit makes `lanes` visible on this root; the runtime
+   // retires the batches those lanes carried and advances its per-root
+   // committed view.
+-  emitPassCommit(root.containerInfo, (lanes: any), (root.pendingLanes: any));
++  emitPassCommit(root.containerInfo, lanes as any, root.pendingLanes as any);
+ 
+   // Reset this before firing side effects so we can detect recursive updates.
+   didIncludeCommitPhaseUpdate = false;
+diff --git a/scripts/error-codes/codes.json b/scripts/error-codes/codes.json
+index f475821238..ede60dcb98 100644
+--- a/scripts/error-codes/codes.json
++++ b/scripts/error-codes/codes.json
+@@ -586,5 +586,6 @@
+   "598": "Maximum update depth exceeded. This could be an infinite loop. This can happen when a component repeatedly calls setState during render phase or inside useLayoutEffect, causing infinite render loop. React limits the number of nested updates to prevent infinite loops.",
+   "599": "Expected an initialized chunk but got an initialized stream chunk instead. This payload may have been submitted by an older version of React.",
+   "600": "A rejected Promise was passed to React without a `reason` property. React threw a generic error from where the Promise was used to assist in identifying the problematic Promise. Make sure that instrumented Promises correctly set the `reason` property when setting `status` to `'rejected'`.",
+-  "601": "A chunk pair is incomplete. This is a bug in React."
++  "601": "A chunk pair is incomplete. This is a bug in React.",
++  "602": "The signal seam provider is not installed."
+ }
+-- 
+2.50.1 (Apple Git-155)
+

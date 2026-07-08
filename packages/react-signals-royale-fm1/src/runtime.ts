@@ -241,9 +241,14 @@ function labelOf(node: Readable<unknown>): string | undefined {
 }
 
 /** isPending probes flip urgently even when raised inside a transition: the
- * microtask escapes the transition scope. */
+ * microtask escapes the transition scope. One microtask covers any burst of
+ * draft writes. */
+let probesScheduled = false;
 function schedulePendingProbes(): void {
+	if (probesScheduled) return;
+	probesScheduled = true;
 	queueMicrotask(() => {
+		probesScheduled = false;
 		pendingProbes.forEach((probe) => probe());
 	});
 }
