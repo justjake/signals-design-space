@@ -49,11 +49,16 @@ FinalizationRegistry machinery; the tracer surface; every test suite.
    `tools/schema.ts` approach) — one source of truth for arena geometry,
    and the generator also emits per-column reset/scrub metadata (values,
    fns, extras, clocks), so free/reset correctness is generated, not
-   hand-maintained. Growth uses alt-b's discipline everywhere: hot code
-   closes over immutable buffers, per-operation slack is reserved,
-   allocators flag growth, and closures rebuild at operation boundaries —
-   the current WorldArena mid-operation-growth-with-reload style is
-   retired at the merge.
+   hand-maintained. Growth (owner ruling: EVERY arena must support
+   resizing — exhaustion is never fatal): the kernel keeps its
+   closure-rebuild growth at operation boundaries; world arenas grow by
+   copy (doubling) mid-operation through the shell indirection, with the
+   reload-after-allocation discipline confined to the few named allocation
+   sites the schema enumerates. Hot paths run on plain fixed-length views
+   in both cases — length-tracking resizable-buffer views are banned (a
+   measured +56% arena-walk regression). Initial reservations are generous
+   named bounds so growth stays rare; growth being rare never licenses an
+   exhaustion throw.
 6. **`ctx.use` ports as-is; SSR serialize/initialize is in scope** (port
    the design from alt-b's react.ts §13.8 shape).
 
