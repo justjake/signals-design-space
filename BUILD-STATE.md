@@ -630,18 +630,38 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
 
 ## In progress / exact next actions
 
-**Priority 5 — observers/watchers/subscriptions as arena records.** Nothing
-started. The extras column joins the schema (tools/schema.ts, layoutVersion
-bump); subscription dependency = {lastValue, lastValidatedAt} rides the
-RESERVED link clock slots (the world-arena clock column's link slots,
-reserved since priority 3); watchers keep lastRenderedValue; baselines
-advance only after committed render / urgent correction / completed
-recapture; corrective delivery + mount fixups keep ALL causal metadata
-(clocks only gate re-comparison — the bump table's reader half finally
-lands). Watcher/Subscription classes + managers die. Read RenderPass.ts
-(Watcher + snapshots), SubscriptionManager.ts, ObservationIndex.ts, and
-alt-b's observer sections first. The V-urgent-committed-branch pin and the
-oracle lockstep remain the contract.
+**Priority 5 (observers) is COMPLETE** (items 12-15 above; commits b22b174,
+853bc66, 65a3f42, ebd5244). Successor order, per owner ruling 2's
+sequencing:
+
+1. **World-arena growth restoration (owner ruling 2 — the unit the ruling
+   queued immediately after observers).** Restore grow-by-copy (doubling)
+   for world-arena buffers + ALL columns (memory, clocks — now also
+   cutoffVals; the schema roster keeps every column in the growth loop
+   automatically), mid-operation capable through the shell indirection
+   (a.memory reassigned; hot walks that cached `memory` locals must
+   re-load after any allocating call — CONFINE the discipline to the
+   allocation sites and ENUMERATE those sites in the schema/generated
+   region, generated-or-listed, never folklore). KEEP: plain fixed-length
+   views (length-tracking resizable-buffer views stay banned — the +56%
+   conviction), the generous initial reservation, ARENA_POOL_CAP,
+   arenaExhausted dies (exhaustion is never fatal). Re-express the
+   arena-sa2/sd arenaInitInts pins as REAL mid-operation growth pins again
+   (note the reversal in BUILD-STATE + the commit message). GATE: cold-
+   render + wide-mask interleaved medians-of-3 at parity with leg-start
+   (an explicit exception to the no-perf-bench rule for this unit only),
+   plus a growth-path test exercising a mid-operation doubling. NOTE for
+   the builder: observer dep chains live in arena link records and
+   subscription DEP_HEAD/DEP_TAIL name arena link ids — growth must keep
+   link ids stable (grow-by-copy does; only the buffer object changes).
+2. **Priority 6 — render integration** (RenderPass machinery folds into
+   the engine module; protocol v2 contract unchanged). Then priorities
+   7-10 as listed under "Unstarted".
+
+WORKTREE NOTE: the user is actively drafting src/Allocator.ts +
+tests/allocator.spec.ts (untracked) in THIS worktree — likely the growth
+unit's allocator sketch. Leave both alone; they pass standalone as of this
+writing. Full-suite tallies may drift by their test count while untracked.
 
 ## Environment notes for successors
 
@@ -676,6 +696,20 @@ oracle lockstep remain the contract.
   Tree at run end: flattening @ 0e741c3, only pnpm-lock.yaml uncommitted,
   cosignals 360 green / react 72 / conformance 179×2 / oracle 82.
   Next action: priority 3 step 1 in "In progress / exact next actions".
+- Run 5 (third builder, leg 5 — priority 5 observers + owner rulings 1+2
+  landed mid-leg): commits b22b174 (schema v3: extras column + observer
+  families + allocator-keyed generated scrub/grow), 853bc66 (watchers as
+  arena records), 65a3f42 (subscriptions as arena records; SubscriptionManager
+  deleted), ebd5244 (at-least-once observers: consult-driven clocks +
+  cutoffVals layout v4 + model co-evolution + 3 new battery pins), plus
+  cherry-picks bfdc85c/b28602c (the two owner plan amendments). Suites at
+  run end: cosignals 368 passed / 1 skipped (365 + the 3 at-least-once
+  pins; excludes the user's untracked draft spec), oracle 82, cosignals-
+  react 72/72 (real fork), conformance FRAMEWORK=cosignals 179/179 +
+  cosignals-concurrent 179/179 (this worktree's harness), typecheck clean
+  for cosignals + cosignals-react + cosignals-oracle. NOT run: daishi
+  verifier, perf benches (lead owns; the growth unit carries its own
+  sanctioned gate). Next action: growth restoration (above).
 - Run 4 (second builder, priority 4 — episodes): one commit (episodes; see
   Done continued 5). Suites at run end: cosignals 31 files / 362 passed /
   1 skipped (the 2 new equality pins joined), oracle 82 passed,
