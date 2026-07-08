@@ -5,7 +5,10 @@ import {
   computed,
   effect,
   latest,
+  isPending,
+  refresh,
   retireBatch,
+  useThenable,
   withWorld,
   withWriteBatch,
 } from "../src/index";
@@ -53,6 +56,16 @@ test("lazy initializers run once at first materialization, including set", () =>
   expect(value.get()).toBe(2);
 });
 
+test("lazy initializers are untracked and cannot write", () => {
+  const target = atom(0);
+  const source = atom(() => {
+    target.set(1);
+    return 2;
+  });
+  expect(() => source.get()).toThrow(/initializer/);
+  expect(target.get()).toBe(0);
+});
+
 test("lifetime effects coalesce observation flaps", async () => {
   const starts: string[] = [];
   const value = atom(1, {
@@ -92,4 +105,59 @@ test("discard removes a draft without touching canonical state", () => {
   withWriteBatch(16, () => value.set(9));
   retireBatch(16, false);
   expect(value.get()).toBe(1);
+});
+
+test("pending is graph state and all async reads register before suspension", async () => {
+  let resolveOne!: (value: number) => void;
+  let resolveTwo!: (value: number) => void;
+  const one = new Promise<number>((resolve) => {
+    resolveOne = resolve;
+  });
+  const two = new Promise<number>((resolve) => {
+    resolveTwo = resolve;
+  });
+  const value = computed(() => useThenable(one) + useThenable(two));
+  let first: unknown;
+  try {
+    value.get();
+  } catch (error) {
+    first = error;
+  }
+  let retry: unknown;
+  try {
+    value.get();
+  } catch (error) {
+    retry = error;
+  }
+  expect(retry).toBe(first);
+  expect(isPending(value)).toBe(true);
+  resolveOne(1);
+  resolveTwo(2);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(value.get()).toBe(3);
+});
+
+test("refresh serves stale while a replacement settles", async () => {
+  let resolve!: (value: number) => void;
+  let request = Promise.resolve(1);
+  const value = computed(() => useThenable(request));
+  let first: unknown;
+  try {
+    value.get();
+  } catch (error) {
+    first = error;
+  }
+  await first;
+  expect(value.get()).toBe(1);
+  request = new Promise<number>((done) => {
+    resolve = done;
+  });
+  refresh(value);
+  expect(value.get()).toBe(1);
+  expect(isPending(value)).toBe(true);
+  resolve(2);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(value.get()).toBe(2);
 });
