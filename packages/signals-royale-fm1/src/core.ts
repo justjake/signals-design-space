@@ -132,9 +132,12 @@ export class Atom<T> {
 	version: NodeVersion = 1;
 	/** Live subscribers (computeds with subscribers, effects, watchers). */
 	subs = new Set<LiveConsumer>();
-	equals: (a: T, b: T) => boolean;
+	/** Stored bivariantly so Atom<number> flows where Atom<unknown> is read. */
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	equals: (a: any, b: any) => boolean;
 	label: string | undefined;
-	onObserved: AtomOptions<T>['onObserved'];
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	onObserved: ((ctx: { get(): any; set(v: any): void }) => void | (() => void)) | undefined;
 	observedCleanup: (() => void) | void = undefined;
 	observedActive = false;
 	observeCheckQueued = false;
@@ -359,7 +362,8 @@ export class Computed<T> {
 	deps: SourceNode[] = [];
 	seen: unknown[] = [];
 	subs = new Set<LiveConsumer>();
-	equals: (a: T, b: T) => boolean;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	equals: (a: any, b: any) => boolean;
 	label: string | undefined;
 	/** Bumped by refresh(): forces re-evaluation with unchanged inputs. */
 	refreshVersion = 0;
@@ -550,7 +554,7 @@ function disposeChildren(owner: Owner): void {
 // Effects
 
 export class EffectNode implements Owner {
-	fn: () => void | (() => void);
+	fn: () => unknown;
 	cleanup: (() => void) | void = undefined;
 	deps: SourceNode[] = [];
 	seen: unknown[] = [];
@@ -559,7 +563,7 @@ export class EffectNode implements Owner {
 	queued = false;
 	disposed = false;
 
-	constructor(fn: () => void | (() => void)) {
+	constructor(fn: () => unknown) {
 		this.fn = fn;
 		adopt(this);
 		this.run();
@@ -613,7 +617,8 @@ export class EffectNode implements Owner {
 				emitTrace('effect-run', currentCause, {});
 			}
 			trackedRun(this, true, () => {
-				this.cleanup = this.fn();
+				const result = this.fn();
+				this.cleanup = typeof result === 'function' ? (result as () => void) : undefined;
 			});
 		} finally {
 			currentOwner = prevOwner;

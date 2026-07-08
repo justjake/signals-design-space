@@ -1,7 +1,14 @@
 {
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"allowImportingTsExtensions": true
+		"allowImportingTsExtensions": true,
+		"types": [
+			"node"
+		]
 	},
-	"include": ["src", "tests", "royale"]
+	"include": [
+		"src",
+		"tests",
+		"royale"
+	]
 }

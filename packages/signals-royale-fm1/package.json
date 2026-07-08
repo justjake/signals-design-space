@@ -14,6 +14,7 @@
 		"test": "vitest run"
 	},
 	"devDependencies": {
+		"@types/node": "^26.1.1",
 		"reactive-framework-test-suite": "0.0.2",
 		"typescript": "6.0.3",
 		"vitest": "4.1.6"
