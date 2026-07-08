@@ -30,7 +30,7 @@
  * 19  watchers map + nodeToWatchers index mutation     | dual store               | must move together via removeWatcher (a map-only delete strands the per-node index entry) | T7, cosignals-react graph-consumers.spec.tsx
  * 20  dependencyEdges/graphviz snapshot                | arenas (both lists)      | arena-only diagnostics (current structure; persists with the arenas) | graphviz docstring; not behavior-bearing
  * 21  shim liveness flips (claim/orphan/finalize)      | via one setter           | union + both stores (delegates to Watcher.live + removeWatcher) | cosignals-react hooks.spec StrictMode netting + graph-consumers.spec.tsx
- * 22  useSignal render branches (watchers.get/w.live)  | bridge watchers          | bridge watcher records are the one source | cosignals-react battery/hooks.spec
+ * 22  useSignal render branches (watchers.get/w.live)  | engine watchers          | engine watcher records are the one source | cosignals-react battery/hooks.spec
  * 23  committed-subscription dep snapshots (captureRun) | committed values + obs union | value-gated at boundary operations, no edge store; the capture's committed evaluations populate the root's arena, whose marks the re-checks validate through | concurrent-battery case 16, observe-union.spec, cosignals-react hooks.spec useSignalEffect
  *
  * Part 2 — dual-representation agreements: pair | enforcement
@@ -48,7 +48,7 @@
  * A12 shim previousCells ≡ last committed value        | cosignals-react hooks.spec 'ctx.previous returns the last committed value'
  */
 import { describe, expect, it } from 'vitest';
-import { Atom, Computed, effect, effectScope, engine, __resetEngineForTest, type CosignalEngine } from '../src/index.js';
+import { Atom, Computed, effect, effectScope, engine, __TEST__resetEngine, type CosignalEngine } from '../src/index.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
@@ -56,13 +56,13 @@ const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res)
 /** Fresh engine in comparison posture (a lossless session tracer is the event
  * surface; quiet arms by the production derivation; no driver — the tests
  * pass explicit batch ids). */
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	attachRefereeStream(engine);
 	return engine;
 }
@@ -80,7 +80,7 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 
 describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores', () => {
 	it('T1: fires with K1 empty (kernel-only), holds across a store handoff, releases only when both empty', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = (() => { const n0 = b.internalsForAtom(atom as Atom<unknown>); n0.name = 'a'; return n0; })();
 		const dispose = effect(() => {
@@ -101,7 +101,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 	});
 
 	it('T2: UNION-TRANSITIVE (row 18) — a watcher over an overlay COMPUTED retains the atoms its evaluation reads; a direct atom watcher joining is an interior transition', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = (() => { const n0 = b.internalsForAtom(atom as Atom<unknown>); n0.name = 'a'; return n0; })();
 		const oc = b.computed('oc', (read) => read(node));
@@ -126,7 +126,7 @@ describe('§1 rows 1/2/17 — observation is a UNION refcount over both stores',
 
 describe('§1 rows 3/4 — kernel liveness transitions consult K0 only', () => {
 	it('T3: an unwatched kernel computed goes lazy-dirty regardless of live K1 watchers over the same atom', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const handle = new Atom(1);
 		const node = b.internalsForAtom(handle as Atom<unknown>);
 		node.name = 'a';
@@ -165,8 +165,8 @@ describe('§1 rows 3/4 — kernel liveness transitions consult K0 only', () => {
 });
 
 describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush + K1 walk), each serving its own consumers', () => {
-	it('T5: a kernel effect (no K1 record) and a bridge watcher (no K0 link) both hear one write', () => {
-		const b = bridge();
+	it('T5: a kernel effect (no K1 record) and an engine watcher (no K0 link) both hear one write', () => {
+		const b = freshEngine();
 		const handle = new Atom(0);
 		const node = b.internalsForAtom(handle as Atom<unknown>);
 		node.name = 'a';
@@ -191,7 +191,7 @@ describe('§1 rows 6/10 — one logged write notifies via BOTH stores (K0 flush 
 
 describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COMPUTEDS world-route through the S-C seam', () => {
 	it('T6 (re-pinned at S-C): a kernel computed read inside a world evaluation ADOPTS and evaluates under that world (arena links recorded); the kernel cache stays newest-coherent because worlds never touch it; kernel-frame reads still serve newest', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const handle = new Atom(0);
 		const node = b.internalsForAtom(handle as Atom<unknown>);
 		node.name = 'a';
@@ -200,7 +200,7 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 			kcEvals++;
 			return (handle.state as number) + 100;
 		});
-		const c = b.computed('c', () => kc.state); // standalone kernel computed inside a bridge fn
+		const c = b.computed('c', () => kc.state); // standalone kernel computed inside an engine fn
 		const t = b.openBatch();
 		b.write(t.id, node, 0, 5); // kernel newest = 5
 		const p = b.renderStart('A', []); // t excluded: the render world's a is 0
@@ -233,7 +233,7 @@ describe('§1 rows 8/9 — kernel-FRAME reads are never world-routed; kernel COM
 
 describe('§1 rows 13/16/19 — the two watcher stores move together (removeWatcher)', () => {
 	it('T7: removeWatcher retires the id map, the per-node walk index, and open mounted lists in one call', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		let evals = 0;
 		const c = b.computed('c', (read) => {
@@ -261,7 +261,7 @@ describe('§1 rows 13/16/19 — the two watcher stores move together (removeWatc
 
 describe('§2 A4 — handle resolution vs the one engine registry', () => {
 	it('T8: resolution is idempotent content allocation — one node per handle, registry-probed by kernel record id, and writes land on it', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const handle = new Atom(0);
 		handle.set(1); // standalone history first (the node-less arm: kernel only)
 		const n = b.internalsForAtom(handle as Atom<unknown>); // content allocates ONCE; base seeds from kernel-current
@@ -279,7 +279,7 @@ describe('§2 A4 — handle resolution vs the one engine registry', () => {
 
 describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still drains (population coverage)', () => {
 	it('T9: links recorded AFTER the write (the mount + re-staled loop populate the committed arena) still route the retirement drain to the watcher', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(a));
 		const t = b.openBatch();
@@ -297,7 +297,7 @@ describe('§2 A5/A11 + rows 11/14 — structure recorded AFTER a write still dra
 
 describe('§2 A10 — batch records are episode-lifetime (they outlive their log entries by construction)', () => {
 	it('T10: a retired batch record persists while the episode stays open and drops at the episode close', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		const t = b.openBatch();
 		b.write(t.id, a, 0, 1);

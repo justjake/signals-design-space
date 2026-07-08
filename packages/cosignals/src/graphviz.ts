@@ -6,7 +6,7 @@
  * graph is exactly {graphviz.ts}; either diagnostics entry loads without
  * the other.
  *
- *  - `dependencyGraphToDot(bridge)` — a snapshot of the live dependency
+ *  - `dependencyGraphToDot(engine)` — a snapshot of the live dependency
  *    graph: atoms (annotated with how many log entries their history currently
  *    holds), computeds, the dependency edges the live per-world arenas
  *    currently hold (the structure the routing walks consult — links follow
@@ -33,9 +33,9 @@ function quoteDotString(s: string): string {
 }
 
 /** Snapshot of the live dependency graph: nodes, recorded dependency edges, observers. */
-export function dependencyGraphToDot(bridge: CosignalEngine): string {
+export function dependencyGraphToDot(engine: CosignalEngine): string {
 	const lines: string[] = ['digraph cosignals {', '\trankdir=LR;', '\tnode [fontname="monospace"];'];
-	for (const n of bridge.idToInternals.values()) {
+	for (const n of engine.idToInternals.values()) {
 		if (n.kind === 'atom') {
 			const log = n.log.length > 0 ? `|log:${n.log.length}` : '';
 			lines.push(`\tn${n.id} [shape=box, label=${quoteDotString(`${n.name}#${n.id}${log}`)}];`);
@@ -43,15 +43,15 @@ export function dependencyGraphToDot(bridge: CosignalEngine): string {
 			lines.push(`\tn${n.id} [shape=ellipse, label=${quoteDotString(`${n.name}#${n.id}`)}];`);
 		}
 	}
-	for (const [dep, outs] of bridge.dependencyEdges) {
+	for (const [dep, outs] of engine.dependencyEdges) {
 		for (const out of outs) lines.push(`\tn${dep} -> n${out};`);
 	}
-	for (const w of bridge.watchers.values()) {
+	for (const w of engine.watchers.values()) {
 		if (!w.live) continue;
 		lines.push(`\tw${w.id} [shape=house, label=${quoteDotString(`${w.name}@${w.root}`)}];`);
 		lines.push(`\tn${w.node} -> w${w.id} [style=dashed];`);
 	}
-	for (const sub of bridge.idToSubscription.values()) {
+	for (const sub of engine.idToSubscription.values()) {
 		lines.push(`\te${sub.id} [shape=cds, label=${quoteDotString(`${sub.name}@${sub.root} runs:${sub.runs}`)}];`);
 		for (const d of sub.deps) lines.push(`\tn${d.node.id} -> e${sub.id} [style=dotted];`);
 	}

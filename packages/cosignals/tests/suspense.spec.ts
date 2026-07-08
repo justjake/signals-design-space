@@ -20,7 +20,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { mountEngineReactEffect } from './helpers.js';
-import { Atom, Computed, SuspendedRead, effect, engine, __resetEngineForTest } from '../src/index';
+import { Atom, Computed, SuspendedRead, effect, engine, __TEST__resetEngine } from '../src/index';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
 	let resolve!: (v: T) => void;
@@ -293,20 +293,20 @@ describe('ctx.use', () => {
 // model deliberately models no suspense (declared in the oracle README).
 
 /** Fresh engine for the engine-direct tests: finish any leftover episode,
- * then reset (the per-test bridge analog). */
-function bridge() {
+ * then reset (one fresh engine per test). */
+function freshEngine() {
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
 describe('committed-subscription dep snapshots under suspension (battery 16d)', () => {
 	test('a stable pending sentinel VALUE is not a flip; the settled value is', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const d = deferred<string>();
 		const sentinel = new SuspendedRead(d.promise);
 		const gate = b.atom('gate', 0);
@@ -332,7 +332,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 	});
 
 	test('a dep whose committed re-read THROWS a still-pending suspension is skipped, not a crash and not a flip', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const d = deferred<string>();
 		const sentinel = new SuspendedRead(d.promise);
 		const gate = b.atom('gate', 0);

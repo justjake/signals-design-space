@@ -469,23 +469,22 @@ graph themselves.
 
 One module is the engine; everything else orbits it:
 
-- **`CosignalEngine.ts`** — the engine. Reads top to bottom: storage layout
-  (the record families and column-coherence functions above), the kernel
-  algorithm, updated-at clocks, the live operation table and growth, the
-  computed evaluation policy (exceptions and suspense), the observed
-  lifecycle, world arenas, observer records, committed observers, render
-  integration, and reclamation last.
+- **`CosignalEngine.ts`** — the engine, one module holding the whole
+  machine. Reads top to bottom: storage layout (the record families and
+  column-coherence functions above), the kernel algorithm, updated-at
+  clocks, the live operation table and growth, the computed evaluation
+  policy (exceptions and suspense), the observed lifecycle, then the
+  concurrent machinery — its vocabulary and node records, the observation
+  index, write logs and the episode lifecycle, batches and retirement,
+  worlds, world arenas, delivery, settlement, observer records, committed
+  observers, render integration, the public dispatch and the engine
+  surface, and the one composition function — with reclamation last.
 - **`index.ts`** — the package entry: the `Atom`/`ReducerAtom`/`Computed`
   classes, `effect`, `batch`, `configure` — the policy layer over the
   kernel, and the whole-package vocabulary in its header.
-- Satellites, composed at module initialization: `concurrent.ts` (the
-  engine surface and orchestration), `World.ts` (world folds and
-  evaluation), `WriteLog.ts` (the write log and the episode lifecycle),
-  `Batch.ts` (batch records and retirement), `NotificationQueue.ts`
-  (delivery walks and corrections), `ObservationIndex.ts` (observed-
-  lifecycle refcounts), `settlement.ts` (async settlement),
-  `ConcurrentEngine.ts` (the composition root), with `errors.ts`,
-  `Tracer.ts`, and `graphviz.ts` self-contained.
+- Self-contained companions: `errors.ts` (the error classes), `Tracer.ts`
+  (the `cosignals/trace` recorder), and `graphviz.ts`
+  (`cosignals/graphviz`).
 
 ## The React driver
 

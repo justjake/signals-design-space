@@ -26,7 +26,7 @@ const WARMUP = envInt('WARMUP', 1);
 // instance; this tree has ONE module engine.
 const b = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 // Anchor-tree retained event log (this tree retains no events; nothing to bound).
 const clearEvents = b.events !== undefined ? () => { b.events.length = 0; } : () => {};
 let evals = 0;

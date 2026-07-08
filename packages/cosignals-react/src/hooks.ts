@@ -25,10 +25,14 @@ import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type 
 // ---- activation -------------------------------------------------------------------
 
 export type CosignalReactHandle = {
-	/** The engine surface (the same module-level object `cosignals` exports as
-	 * `engine`; the field keeps the bindings' historical name). */
-	bridge: CosignalEngine;
+	/** The engine surface — the same module-level object `cosignals`
+	 * exports as `engine`. */
+	engine: CosignalEngine;
+	/** The protocol adapter coupling the engine to the React build's
+	 * external-runtime events (diagnostics: `shim.takeErrors()`). */
 	shim: Shim;
+	/** Releases the React-side registrations (protocol listeners, the
+	 * batch-id allocator) — mainly for tests. */
 	dispose: () => void;
 };
 
@@ -41,7 +45,7 @@ export type CosignalReactHandle = {
  * throws on stock React — see assertForkPresent. One registration at a
  * time: dispose the handle before registering again. Dispose releases the
  * React-side registrations only — the engine's driver slot is cleared only
- * by the test-only engine reset (`__resetEngineForTest`), so tests reset
+ * by the test-only engine reset (`__TEST__resetEngine`), so tests reset
  * the engine between registrations.
  */
 export function registerCosignalReact(): CosignalReactHandle {
@@ -51,7 +55,7 @@ export function registerCosignalReact(): CosignalReactHandle {
 	const shim = new Shim();
 	setActiveShim(shim);
 	return {
-		bridge: engine,
+		engine,
 		shim,
 		dispose: () => {
 			shim.dispose();
@@ -78,7 +82,7 @@ export type SignalSource<T> = Atom<T> | ReducerAtom<T, unknown> | Computed<T>;
 
 function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
 	if (signal instanceof Atom) return shim.internalsForAtom(signal as Atom<unknown>);
-	if (signal instanceof Computed) return shim.bridge.internalsForComputed(signal as Computed<unknown>);
+	if (signal instanceof Computed) return shim.engine.internalsForComputed(signal as Computed<unknown>);
 	throw new Error('cosignals-react: useSignal accepts Atom/ReducerAtom/Computed handles (useComputed results are Computed handles).');
 }
 
@@ -119,7 +123,7 @@ function createSignalRecord(node: AnyInternals, bump: () => void): SignalRecord 
  * Mounting is the subtle case. A component can mount while other updates
  * are in flight, and its subscription only activates at commit — so writes
  * could slip by unobserved between its render and its commit. The layout
- * effect below claims the subscription, and the bridge's mount fixup (run
+ * effect below claims the subscription, and the engine's mount fixup (run
  * at the commit edge) closes the window: for every still-live batch that
  * touched relevant state but was not part of this component's render, a
  * corrective re-render is scheduled into that batch's own lane via the
@@ -146,17 +150,17 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 	const rec = state.current;
 
 	const rendering = shim.renderingRoot();
-	const bridge = shim.bridge;
+	const engine = shim.engine;
 	let value: unknown;
 	if (rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
 		const render = rendering.renderPass;
 		rec.root = rendering.id;
-		const w = rec.watcherId === undefined ? undefined : bridge.watchers.get(rec.watcherId);
+		const w = rec.watcherId === undefined ? undefined : engine.watchers.get(rec.watcherId);
 		if (w === undefined) {
 			// Mount: create the watcher in this render's world; the value it renders
 			// is captured so the commit-edge fixup can compare against it.
 			value = shim.hookRead(() => {
-				const created = bridge.mountWatcher(render.id, node, 'w?');
+				const created = engine.mountWatcher(render.id, node, 'w?');
 				created.name = `w${created.id}`;
 				rec.watcherId = created.id;
 				shim.targets.set(created.id, rec.target);
@@ -165,21 +169,21 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 			});
 		} else if (w.live) {
 			// Re-render: re-arm the watcher's delivery dedup and read this render's world.
-			bridge.renderWatcher(render.id, w.id);
-			value = shim.hookRead(() => bridge.renderValue(node, render));
+			engine.renderWatcher(render.id, w.id);
+			value = shim.hookRead(() => engine.renderValue(node, render));
 		} else {
 			// Reveal-shaped re-render (previously hidden content shown again, e.g.
 			// React Activity/Offscreen): adopt the dormant watcher into this render
 			// so the commit-edge mount fixup reconciles it — against batches this
 			// render did not include, and against committed state — as if it were
 			// a fresh mount.
-			bridge.adoptRevealedMount(render.id, w.id);
+			engine.adoptRevealedMount(render.id, w.id);
 			shim.noteCreated(rendering, w.id);
-			value = shim.hookRead(() => bridge.renderValue(node, render));
+			value = shim.hookRead(() => engine.renderValue(node, render));
 		}
 	} else {
 		// Render outside a tracked render pass (defensive): unrouted newest read.
-		value = shim.hookRead(() => bridge.newestValue(node));
+		value = shim.hookRead(() => engine.newestValue(node));
 	}
 	rec.lastValue = value;
 
@@ -250,7 +254,7 @@ export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unkno
 	const handle = React.useMemo(
 		() => {
 			const c = new Computed<T>(fn, { label: `useComputed#${nextComputedSerial++}` });
-			shim.bridge.internalsForComputed(c as Computed<unknown>); // allocate engine content + wrap for world evaluation
+			shim.engine.internalsForComputed(c as Computed<unknown>); // allocate engine content + wrap for world evaluation
 			return c;
 		},
 		// The user's deps ARE the memo key: a changed fn takes effect only with changed deps.
@@ -260,7 +264,7 @@ export function useComputed<T>(fn: (ctx: BoundCtx<T>) => T, deps: readonly unkno
 	React.useEffect(() => {
 		const prev = prevRef.current;
 		prevRef.current = handle;
-		if (prev !== null && prev !== handle) shim.bridge.disposeComputed(prev as Computed<unknown>);
+		if (prev !== null && prev !== handle) shim.engine.disposeComputed(prev as Computed<unknown>);
 	}, [shim, handle]);
 	return handle;
 }

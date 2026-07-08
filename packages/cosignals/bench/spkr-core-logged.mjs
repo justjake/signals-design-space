@@ -21,7 +21,7 @@ const WARMUP = envInt('WARMUP', 2);
 // instance; this tree has ONE module engine.
 const b = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 const atoms = [];
 for (let i = 0; i < 4; i++) atoms.push(b.atom(`a${i}`, 0));
 const computeds = [];

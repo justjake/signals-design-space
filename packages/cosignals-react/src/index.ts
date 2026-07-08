@@ -24,7 +24,7 @@ export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './sh
 // `Computed` is the supported derived type — `useComputed` returns one, and
 // standalone instances world-route through the core's computed-read seam),
 // the write/read utilities that are world-safe under React, and the types
-// those signatures mention (`CosignalReactHandle.bridge` is a
+// those signatures mention (`CosignalReactHandle.engine` is a
 // `CosignalEngine` — the module-level engine surface). Engine internals
 // (`engine` the value, `attachDriver`, `Watcher`, `TraceEvent`, node/log
 // entry types, …) stay available on the power-user path: import them from

@@ -16,7 +16,7 @@
  *      every nodeIndex-keyed row, so a new tenant at the same index never
  *      sees the old tenant's rows (watcher rows, observation refs, walk
  *      stamps, per-arena shadow lookups).
- *  P3  the kernel-GEN test seam: __bumpNodeGenForTest re-expressed as a
+ *  P3  the kernel-GEN test seam: __TEST__bumpNodeGen re-expressed as a
  *      LIVE record's tenancy bump in kernel memory — arena shadows re-tenant
  *      cold and watcher stamps go stale, exactly as a real free+reuse.
  *
@@ -25,18 +25,18 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Atom, Computed } from '../src/index.js';
-import { attachDriver, BATCH_NONE, engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type CosignalEngine, type Watcher } from '../src/CosignalEngine.js';
+import { attachDriver, BATCH_NONE, engine, __TEST__resetEngine, type AnyInternals, type AtomInternals, type CosignalEngine, type Watcher } from '../src/CosignalEngine.js';
 import { getKernelGeneration, getKernelNodeIndex } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest({ devChecks: true });
+	__TEST__resetEngine({ devChecks: true });
 	// R-5: a devChecks harness that opens batches must attach a driver first.
 	attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
 	return engine;
@@ -56,7 +56,7 @@ function commitWrite(b: CosignalEngine, node: AtomInternals, value: unknown): vo
 }
 
 /** The engine's dense nodeIndex-keyed columns (probes only observe; they never mutate). */
-const cols = (b: CosignalEngine) => b.__columnsForTest();
+const cols = (b: CosignalEngine) => b.__TEST__columns();
 
 /** A node record's nodeIndex, read live from kernel memory (field 7). */
 const ixOf = getKernelNodeIndex;
@@ -65,7 +65,7 @@ const genOf = getKernelGeneration;
 
 describe('P1 — dormant-watcher aliasing across record reuse', () => {
 	it('a watcher mounted in an uncommitted render on a later-disposed computed skips loudly at its commit instead of binding the record\'s new tenant', () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const a = b.atom('a', 1);
 		const keep = b.computed('keep', (read) => read(a));
@@ -102,9 +102,9 @@ describe('P1 — dormant-watcher aliasing across record reuse', () => {
 
 		// Commit the OLD render: the dormant watcher's activation resolves its
 		// node — the generation stamp must MISS (loud skip), never bind cNew.
-		const skipsBefore = b.__staleWatcherSkips;
+		const skipsBefore = b.__TEST__staleWatcherSkips;
 		b.renderEnd(p.id, 'commit');
-		expect(b.__staleWatcherSkips).toBeGreaterThan(skipsBefore); // the skip is loud
+		expect(b.__TEST__staleWatcherSkips).toBeGreaterThan(skipsBefore); // the skip is loud
 		expect(w.live).toBe(false); // never activated: no observation retain on the new tenant
 		expect(oldEvals).toBe(oldEvalsBeforeCommit); // the dead fn never ran again
 
@@ -124,7 +124,7 @@ describe('P1 — dormant-watcher aliasing across record reuse', () => {
 
 describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 	it('a reused record inherits its slot\'s nodeIndex; create/drop churn neither grows the engine columns nor a live arena\'s nodeToShadow', () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const at = new Atom(1);
 		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
@@ -136,7 +136,7 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 		b.disposeComputed(warm as unknown as Computed<unknown>);
 
 		const arrBase = cols(b).nodeIndexToInternals.length;
-		const shell = b.__arenaForTest('R')!;
+		const shell = b.__TEST__arena('R')!;
 		const shadowBase = shell.nodeToShadow.length;
 		const indexes = new Set<number>();
 		const N = 200;
@@ -155,7 +155,7 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 	});
 
 	it('fresh slots take fresh indexes: two live nodes never share a nodeIndex', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const c1 = new Computed(() => 1);
 		const c2 = new Computed(() => 2);
 		b.internalsForComputed(c1 as unknown as Computed<unknown>);
@@ -168,7 +168,7 @@ describe('P2 — nodeIndex lifecycle: recycling bounds the columns', () => {
 
 describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s rows', () => {
 	it('after the record frees, every nodeIndex-keyed row is cleared (watcher rows, observation refs, walk stamps, node registry, arena shadows)', () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const a = b.atom('a', 5);
 		const keep = b.computed('keep', (read) => read(a));
@@ -205,7 +205,7 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 		expect(cols(b).obsDeps[ix]).toBeUndefined();
 		expect(cols(b).lastWalk[ix]).toBe(0);
 		expect(cols(b).evalMark[ix]).toBe(0);
-		expect(b.__arenaForTest('R')!.nodeToShadow[ix] ?? 0).toBe(0);
+		expect(b.__TEST__arena('R')!.nodeToShadow[ix] ?? 0).toBe(0);
 		expect(b.idToInternals.has(oldId)).toBe(false);
 
 		// New tenant at the same index: fresh rows only.
@@ -220,7 +220,7 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 	});
 
 	it('a stale observation reference to a freed node never corrupts the new tenant\'s refcount (object-identity guard)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const gate = b.atom('gate', 1);
 		const a = b.atom('a', 5);
@@ -251,8 +251,8 @@ describe('P2 — record-free scrub: a new tenant never sees the old tenant\'s ro
 });
 
 describe('P3 — the kernel-GEN referee seam', () => {
-	it('__bumpNodeGenForTest bumps the LIVE record\'s kernel GEN: arena shadows re-tenant cold and dormant watcher stamps go stale', () => {
-		const b = bridge();
+	it('__TEST__bumpNodeGen bumps the LIVE record\'s kernel GEN: arena shadows re-tenant cold and dormant watcher stamps go stale', () => {
+		const b = freshEngine();
 		armArenaCheck(b);
 		const a = b.atom('a', 1);
 		let evals = 0;
@@ -269,7 +269,7 @@ describe('P3 — the kernel-GEN referee seam', () => {
 		const p = b.renderStart('R2', []);
 		const wDormant = b.mountWatcher(p.id, c, 'Wdormant');
 
-		b.__bumpNodeGenForTest(c.id); // the free-list reuse analog, forced on a live record
+		b.__TEST__bumpNodeGen(c.id); // the free-list reuse analog, forced on a live record
 		expect(genOf(c.handle._id)).toBe(genBefore + 1); // the seam moves KERNEL tenancy
 
 		// Arena re-tenancy: the read refolds cold, never serves the dead tenancy.
@@ -277,9 +277,9 @@ describe('P3 — the kernel-GEN referee seam', () => {
 		expect(evals).toBeGreaterThan(evalsBefore);
 
 		// Watcher staleness: the dormant watcher's commit skips loudly.
-		const skipsBefore = b.__staleWatcherSkips;
+		const skipsBefore = b.__TEST__staleWatcherSkips;
 		b.renderEnd(p.id, 'commit');
-		expect(b.__staleWatcherSkips).toBeGreaterThan(skipsBefore);
+		expect(b.__TEST__staleWatcherSkips).toBeGreaterThan(skipsBefore);
 		expect(wDormant.live).toBe(false);
 	});
 });

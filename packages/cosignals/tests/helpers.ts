@@ -33,7 +33,7 @@ import {
 	attachDriver,
 	engine,
 	BATCH_NONE,
-	__resetEngineForTest,
+	__TEST__resetEngine,
 	ScheduleError as EScheduleError,
 	type AnyInternals as EInternals,
 	type AtomInternals as EAtomInternals,
@@ -42,7 +42,7 @@ import {
 	type Subscription as ESubscription,
 	type World as EWorld,
 } from '../src/CosignalEngine.js';
-import { __peekNextBatchIdForTest } from '../src/CosignalEngine.js';
+import { __TEST__peekNextBatchId } from '../src/CosignalEngine.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
@@ -140,7 +140,7 @@ const coreEffectMounts = new Map<number, number>();
  * propagation over its subscriber links re-runs it at exactly the writes
  * that advance the newest fold (the eager kernel apply). The mount run
  * baselines silently; later runs value-gate on `Object.is` and report
- * through the bridge's `logCoreEffectRun` trace seam.
+ * through the engine's `logCoreEffectRun` trace seam.
  *
  * Names take a per-mount ordinal suffix (`#k`): sibling core-effect firing
  * order under one operation is implementation-defined by contract, so the
@@ -187,15 +187,15 @@ export class TwinDriver {
 	 * passes explicit batch ids through the engine write surface. */
 	readonly engine: CosignalEngine = (() => {
 		drainLeftoverEpisode();
-		__resetEngineForTest({ devChecks: true });
+		__TEST__resetEngine({ devChecks: true });
 		attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
 		return engine;
 	})();
 	/** BatchIds are MONOTONIC ACROSS RESETS (the engine counter survives
-	 * `__resetEngineForTest`); the model's restart at 1 — so the harness
+	 * `__TEST__resetEngine`); the model's restart at 1 — so the harness
 	 * rebases: engine id = model id + base, and engine events normalize by
 	 * subtracting it before comparison. */
-	private readonly batchIdBase = __peekNextBatchIdForTest() - 1;
+	private readonly batchIdBase = __TEST__peekNextBatchId() - 1;
 	/** The engine's event stream: a lossless session tracer attached at
 	 * engine reset, decoded to TraceEvents on demand (the engine creates no
 	 * event objects — tests/trace-events.ts). */
@@ -215,7 +215,7 @@ export class TwinDriver {
 	/** Model react-effect id → engine subscription id. The id spaces diverge
 	 * once a core effect mounts: the model's `nextEffect` ticks for BOTH
 	 * effect kinds, the engine's only for committed observers (core effects
-	 * are kernel `effect()`s, not bridge records). */
+	 * are kernel `effect()`s, not engine records). */
 	private effectMap = new Map<number, number>();
 
 	constructor() {
@@ -592,7 +592,7 @@ export class TwinDriver {
 /**
  * Finish the PREVIOUS test's leftover episode so the reset's idle
  * preconditions hold (the fresh-model analog: a test may legitimately end
- * mid-episode — the old per-test bridges were simply abandoned; the one
+ * mid-episode — the old per-test engines were simply abandoned; the one
  * engine instead closes the episode out, exactly as the schedule
  * generator's close-out does). The reset preconditions still fail loudly
  * for a reset attempted INSIDE any frame — that stays a bug to fix.

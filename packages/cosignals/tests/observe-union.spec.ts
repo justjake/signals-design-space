@@ -1,6 +1,6 @@
 /**
  * The observation union (AtomOptions.effect over BOTH consumer kinds):
- * kernel-subscriber liveness (the D1 bit) and bridge-watcher liveness feed
+ * kernel-subscriber liveness (the D1 bit) and engine-watcher liveness feed
  * ONE refcount owned by the atom's lifecycle registration, so an atom
  * observes once when its first consumer of ANY kind attaches and unobserves
  * only when the last consumer of EVERY kind detaches. The microtask flap
@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { mountEngineReactEffectPick } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
-import { engine, __resetEngineForTest, Atom, effect, type CosignalEngine } from '../src/index.js';
+import { engine, __TEST__resetEngine, Atom, effect, type CosignalEngine } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
@@ -33,20 +33,20 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 
 /** A fresh engine reset (production posture — the only posture: no
  * event objects exist; quiet arming follows the production derivation). */
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
-describe('observation union at the bridge', () => {
+describe('observation union at the engine', () => {
 	it('a live watcher alone observes; dropping it unobserves', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
@@ -63,7 +63,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('kernel subscriber + watcher = ONE observation; unobserve only after BOTH detach', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const dispose = effect(() => {
@@ -85,7 +85,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('deferMountEffects hidden prepare never observes; the adoptRevealedMount reveal observes exactly once', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const hidden = b.renderStart('A', []);
@@ -106,7 +106,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('same-tick handoff between consumer kinds coalesces (no flap either direction)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
@@ -135,7 +135,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('cold flap: commit-subscribe and unsubscribe within one tick net to nothing', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
@@ -147,7 +147,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('re-asserting watcher liveness is edge-filtered (idempotent, no double retain)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const p = b.renderStart('A', []);
@@ -162,7 +162,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('quiet mode: observation transitions need no armed pipeline (production posture)', async () => {
-		const b = bridge(); // production posture (quiet arms by derivation alone)
+		const b = freshEngine(); // production posture (quiet arms by derivation alone)
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		expect(b.quiet).toBe(true);
@@ -182,7 +182,7 @@ describe('observation union at the bridge', () => {
 	});
 
 	it('observation transitions are direct callbacks — never events (lockstep surface unchanged)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const stream = attachRefereeStream(b); // referee posture: decode the packed stream
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
@@ -206,7 +206,7 @@ describe('observation union at the bridge', () => {
 	// atom observed ONLY by a useSignalEffect never triggered its observe
 	// lifecycle (the incident-I3-shaped asymmetry the plan closed).
 	it('an atom observed ONLY by a committed subscription observes; removal unobserves; a dep flip moves the retain', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const { atom: atomB, log: logB } = observedAtom(0);
 		const nodeA = b.internalsForAtom(atom as Atom<unknown>);

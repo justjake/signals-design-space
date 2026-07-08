@@ -146,7 +146,7 @@ import { CycleError, InvariantViolation, ScheduleError, getOrThrow } from './err
 // class the engine constructs only at runtime, so both module-evaluation
 // orders converge (index.ts's standaloneQuiet note tells the fast-arm half
 // of the story).
-import { Atom, Computed, __lifecycleWrite, __plainAtomWrite, __resetPolicyForTest, __setStandaloneQuiet } from './index.js';
+import { Atom, Computed, __lifecycleWrite, __plainAtomWrite, __TEST__resetPolicy, __setStandaloneQuiet } from './index.js';
 import type { AtomCtx, ComputedCtx, UseKey } from './index.js';
 
 // The engine's error classes (errors.ts), re-exported: they are engine
@@ -943,7 +943,7 @@ export let routingActive = false;
 
 
 /**
- * The reset epoch: bumped once per `__resetEngineForTest`, never in
+ * The reset epoch: bumped once per `__TEST__resetEngine`, never in
  * production. Every cross-reset microtask (settle drain, lifecycle flush,
  * thenable settle-invalidate, unhandled rethrow) captures the epoch at
  * schedule time and no-ops if it moved — a microtask scheduled by a dead
@@ -2696,7 +2696,7 @@ export function writeNewest(id: NodeId, value: unknown): void {
  *    hoisted functions behind the one `ctx` object the kernel passes every
  *    computed getter ({@link POLICY_CTX}), with the thenable protocol
  *    (`unwrapThenable`, mirroring React's trackUsedThenable), the per-node
- *    keyed request cache (`__ctxUse`, shared with the concurrent machinery's
+ *    keyed request cache (`ctxUseKeyed`, shared with the concurrent machinery's
  *    ctx-shaped world fns), and the key serialization;
  *  - the settle TAP seam (`__setSettleTap`): the concurrent machinery's hook
  *    into thenable settlement, consulted by the per-thenable shared
@@ -2851,18 +2851,18 @@ const useCaches = new Map<number, Map<string, PromiseLike<unknown>>>();
 
 /** The record-free scrub's suspense half (called by the engine's record-free
  * hook): drop the freed record's request cache. @internal */
-export function __clearUseCacheForIndex(nodeIndex: number): void {
+function __clearUseCacheForIndex(nodeIndex: number): void {
 	useCaches.delete(nodeIndex);
 }
 
-/** Test-only (`__resetEngineForTest`): every request cache drops. @internal */
-export function __resetSuspenseForTest(): void {
+/** Test-only (`__TEST__resetEngine`): every request cache drops. @internal */
+function __TEST__resetSuspense(): void {
 	useCaches.clear();
 }
 
 /** Test seam: a record's ctx.use request cache, by node index (the leak
  * audit probes clearing at record free). @internal */
-export function __useCacheForTest(nodeIndex: number): Map<string, PromiseLike<unknown>> | undefined {
+export function __TEST__useCache(nodeIndex: number): Map<string, PromiseLike<unknown>> | undefined {
 	return useCaches.get(nodeIndex);
 }
 
@@ -2877,7 +2877,7 @@ export function __useCacheForTest(nodeIndex: number): Map<string, PromiseLike<un
  * different key). Entries evaporate at the record's free (the scrub above).
  * @internal — engine seam, not public API.
  */
-export function __ctxUse(
+function ctxUseKeyed(
 	nodeIndex: number,
 	sourceOrKey: unknown,
 	factory: (() => PromiseLike<unknown>) | undefined,
@@ -2913,6 +2913,10 @@ export function __ctxUse(
 	return unwrapThenable(t);
 }
 
+// The id-keyed core, exported for the suites that drive the request cache
+// directly (a test-only export; the engine's own callers are same-file).
+export { ctxUseKeyed as __TEST__ctxUse };
+
 /**
  * ctx.use (hoisted; called from POLICY_CTX): resolve the evaluating
  * COMPUTED RECORD from the kernel's `activeSub` — id-keyed, no instance
@@ -2927,7 +2931,7 @@ export function ctxUse(sourceOrKey: unknown, factory: (() => PromiseLike<unknown
 	if (c === 0 || (E.buffer()[c + NodeField.FLAGS]! & NodeFlag.K_COMPUTED) === 0) {
 		throw new Error('cosignals: ctx.use may only be called during a computed evaluation.');
 	}
-	return __ctxUse(E.buffer()[c + NodeField.NODE_INDEX]!, sourceOrKey, factory);
+	return ctxUseKeyed(E.buffer()[c + NodeField.NODE_INDEX]!, sourceOrKey, factory);
 }
 
 /**
@@ -2965,7 +2969,7 @@ export function storeThrown(c: NodeId, e: unknown, oldValue: unknown, oldExc: No
 function attachSettleListener(c: NodeId, t: InstrumentedThenable): void {
 	// ENGINE-EPOCH GUARD (cross-reset microtask discipline): the listener
 	// captures the epoch at attach; a settlement delivered after
-	// `__resetEngineForTest` must not touch the scrubbed arena (the record
+	// `__TEST__resetEngine` must not touch the scrubbed arena (the record
 	// id may already belong to a new tenant). Belt and suspenders: the
 	// stale-guard below is ALSO inert post-reset — the scrubbed record's
 	// flags read 0 and the values column no longer holds the thenable.
@@ -3097,10 +3101,10 @@ const lifecycleStates = new Map<NodeId, LifecycleState>();
 let lifecycleQueue: LifecycleState[] = [];
 let lifecycleFlushScheduled = false;
 
-/** Test-only (`__resetEngineForTest`): drop every active record and the
+/** Test-only (`__TEST__resetEngine`): drop every active record and the
  * queue; the scheduled flush (if any) is engine-epoch guarded and goes
  * inert. @internal */
-export function __resetLifecycleForTest(): void {
+export function __TEST__resetLifecycle(): void {
 	lifecycleStates.clear();
 	lifecycleQueue = [];
 	// lifecycleFlushScheduled stays as-is: the pending microtask (if one is
@@ -3256,12 +3260,12 @@ function releaseLifecycle(id: NodeId): void {
  * only — observation transitions are not TraceEvents and never enter the
  * trace stream. @internal
  */
-export function __lifecycleRetain(id: NodeId): void {
+function __lifecycleRetain(id: NodeId): void {
 	shiftLifecycleCount(id, 1);
 }
 
 /** @internal */
-export function __lifecycleRelease(id: NodeId): void {
+function __lifecycleRelease(id: NodeId): void {
 	shiftLifecycleCount(id, -1);
 }
 
@@ -3285,7 +3289,7 @@ export function __lifecycleRelease(id: NodeId): void {
  *
  * These sections are internal machinery of the single `cosignals` entry —
  * index.ts imports and re-exports them — and the one engine composes at
- * module initialization ({@link composeEngine}; `__resetEngineForTest`
+ * module initialization ({@link composeEngine}; `__TEST__resetEngine`
  * re-runs it, nothing else does). There is no installation step: the public
  * Atom/Computed methods dispatch into the engine's paths directly — writes
  * through {@link writeAtomConcurrent} (behind the `standaloneQuiet` fast
@@ -3639,10 +3643,10 @@ export const enum WriteKind {
  * mutation site lives beside the machinery it counts (log-entry appends in
  * the write-log section, batch creation in the batch section, world
  * evaluations in the worlds section, composition in the composition
- * section), and the snapshot reader is `__coreProbes()` in the public-
+ * section), and the snapshot reader is `__TEST__coreProbes()` in the public-
  * dispatch section.
  */
-export const probes = { logEntries: 0, batches: 0, worldEvals: 0, bridges: 0 };
+export const probes = { logEntries: 0, batches: 0, worldEvals: 0, compositions: 0 };
 
 /** The decoded shape of the engine's observable events (same shapes as the
  * reference model's events, so the two can be compared entry by entry). The
@@ -3774,11 +3778,11 @@ export type TraceHooks = {
 	opEnd(): void;
 };
 
-// (SLOT_COUNT — the 31-slot table bound — lives in Batch.ts with the slot table.)
+// (SLOT_COUNT — the 31-slot table bound — lives in the batch section with the slot table.)
 
 // ---- module state: the one engine -------------------------------------------------
 // There is exactly one concurrent engine per process (always-concurrent —
-// the composition runs at module initialization, `__resetEngineForTest`
+// the composition runs at module initialization, `__TEST__resetEngine`
 // re-runs it). The bindings the operational surface reads live here as
 // module state; `composeEngine` (the composition section) re-initializes
 // every field at each composition.
@@ -3795,7 +3799,7 @@ let driver: EngineDriver | undefined;
  * no engine content takes the plain graph write (the internals-less arm — its
  * whole history is quiet folds, so kernel-current is its committed base).
  */
-export let quiet = true;
+let quiet = true;
 // (quiet and no driver — the public fast-arm flag `standaloneQuiet` — lives
 // in index.ts beside the write methods that read it every call; the quiet
 // derivation lands it there through `__setStandaloneQuiet`.)
@@ -3805,7 +3809,7 @@ export let quiet = true;
 // logic never reads it.)
 
 /** Test surface — a snapshot of the engine-activity counters for the zero-cost test. @internal */
-export function __coreProbes(): { logEntries: number; batches: number; worldEvals: number; bridges: number } {
+export function __TEST__coreProbes(): { logEntries: number; batches: number; worldEvals: number; compositions: number } {
 	return { ...probes };
 }
 
@@ -3880,12 +3884,12 @@ function getResidentInternals(id: NodeId): AnyInternals | undefined {
 
 /** Test seam: resolve a node id to its resident internals, exactly as
  * {@link getResidentInternals} does on the warm paths. @internal */
-export function __internalsByIdForTest(id: NodeId): AnyInternals | undefined {
+export function __TEST__internalsById(id: NodeId): AnyInternals | undefined {
 	return getResidentInternals(id);
 }
 
 /** Test seam: every resident internals record, in NodeIndex order. @internal */
-export function __eachInternalsForTest(): AnyInternals[] {
+export function __TEST__eachInternals(): AnyInternals[] {
 	return nodeIndexToInternals.filter((n): n is AnyInternals => n !== undefined);
 }
 
@@ -3913,7 +3917,7 @@ export function __engineWriteNode(node: AtomInternals, kind: WriteKind, payload:
  * doubling starts from it). */
 export type ArenaInitInts = number;
 
-/** Engine tuning — accepted by `__resetEngineForTest`; a never-reset
+/** Engine tuning — accepted by `__TEST__resetEngine`; a never-reset
  * production process runs the defaults. */
 export type EngineResetOptions = {
 	/**
@@ -3957,7 +3961,7 @@ export type EngineResetOptions = {
  *  - the listeners are delivered at each operation's boundary (never
  *    mid-operation).
  *  - `protocolReset` (test-only) clears the host's protocol registry (the
- *    fork's full slot tenancy); `__resetEngineForTest` invokes it first,
+ *    fork's full slot tenancy); `__TEST__resetEngine` invokes it first,
  *    before scrubbing the engine.
  *
  * Hosts that open batches must retire them — `openBatch`/`retire`/
@@ -3976,13 +3980,13 @@ export type EngineDriver = {
 	/** An urgent pre-paint correction (mount window / committed-truth drift). */
 	onCorrection?: (w: Watcher) => void;
 	/** Test-only: reset the host's protocol registry (invoked first by
-	 * `__resetEngineForTest`; never called in production). */
+	 * `__TEST__resetEngine`; never called in production). */
 	protocolReset?: () => void;
 };
 
 /**
  * Installs the driver, exactly once per process: a second attach throws;
- * `__resetEngineForTest` clears the slot. Throws inside any open
+ * `__TEST__resetEngine` clears the slot. Throws inside any open
  * evaluation/fold frame — the seam must not move under a live frame.
  */
 export function attachDriver(d: EngineDriver): void {
@@ -4002,7 +4006,7 @@ export function attachDriver(d: EngineDriver): void {
 
 /**
  * The armed checker's window into the engine — returned by
- * `__checkerInternals()`, consumed only by the test-side
+ * `__TEST__checkerInternals()`, consumed only by the test-side
  * checker (tests/arena-checker.ts: the divergence check and the structural
  * validator). Readonly-shaped: live state getters plus bracket methods
  * that keep every mutation's save/restore discipline engine-side.
@@ -4203,7 +4207,7 @@ let serveOverride: WorldArena | typeof FOLD_TRUTH | undefined;
 let suspendedCount = 0;
 /** The armed divergence-check hook: the test-side structural checker lives
  * in tests/arena-checker.ts and installs itself here through
- * `__checkerInternals().armEpilogueCheck`. Fired at every public
+ * `__TEST__checkerInternals().armEpilogueCheck`. Fired at every public
  * operation's epilogue after the settlement fixed point; any mismatch it
  * finds throws — a test failure. Production never installs one,
  * so the epilogue pays one undefined test. (settlement consumes it.) */
@@ -4304,7 +4308,7 @@ function indexInternals(node: AnyInternals): void {
 /** Embedding/test constructor: a named engine atom (creates the public
  * handle and its engine content in one step — the model-comparison harness
  * names nodes so streams compare by name). */
-export function atom(name: string, initial: Value, equals?: Equals): AtomInternals {
+function atom(name: string, initial: Value, equals?: Equals): AtomInternals {
 	const handle = new Atom<Value>(initial, equals === undefined ? undefined : { isEqual: equals });
 	const node = new AtomInternals(handle._id, getKernelNodeIndex(handle._id), name, initial, equals ?? Object.is, equals === undefined, handle);
 	(handle as Atom<unknown>)._internals = node;
@@ -4322,7 +4326,7 @@ export function atom(name: string, initial: Value, equals?: Equals): AtomInterna
  * their strong deps; trace hooks fire). World evaluations run the same fn
  * with the arena readers through `arenaUpdateComputed`.
  */
-export function computed(name: string, fn: ComputedFn, equals?: Equals): ComputedInternals {
+function computed(name: string, fn: ComputedFn, equals?: Equals): ComputedInternals {
 	// id/ix land after the kernel record exists (the getter closure needs
 	// the internals object first); nothing reads them in between. The handle
 	// slot is strong: an embedding/test-created node is the public object and
@@ -4369,7 +4373,7 @@ export function internalsForComputed(c: Computed<unknown>): ComputedInternals {
 				return node.prevCommitted;
 			},
 			use: <V>(sourceOrKey: unknown, factory?: () => PromiseLike<V>): V =>
-				__ctxUse(node.ix, sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V,
+				ctxUseKeyed(node.ix, sourceOrKey, factory as (() => PromiseLike<unknown>) | undefined) as V,
 		} as ComputedCtx<unknown>;
 		node.fn = () => {
 			try {
@@ -4425,7 +4429,7 @@ export function internalsForComputed(c: Computed<unknown>): ComputedInternals {
  * scrub (__onRecordFree) clearing every remaining nodeIndex-keyed row
  * before the slot's index can be inherited by a new tenant.
  */
-export function disposeComputed(handle: Computed<unknown>): void {
+function disposeComputed(handle: Computed<unknown>): void {
 	// Row resolution + the handle cross-check: `handle._internals === node` is
 	// the identity/liveness test here (a re-tenanted id resolves to the
 	// slot's new tenant, which can never be this handle's node).
@@ -4597,7 +4601,7 @@ function getKernelStrongDeps(node: ComputedInternals): AnyInternals[] {
 }
 
 /** Root record lookup-or-create. */
-export function root(id: RootId): RootState {
+function root(id: RootId): RootState {
 	let r = roots.get(id);
 	if (r === undefined) {
 		r = { id, committedBatches: new Set(), commitGen: 0, committedBits: 0, committedDirtySlots: 0 };
@@ -4836,15 +4840,13 @@ export type WriteRecord = {
  * candidate set when its log reaches exactly this length — see the
  * candidate-set invariant on `EpisodeLifecycle.foldCandidates`.
  */
-export const FOLD_VALVE_THRESHOLD = 1024;
+const FOLD_VALVE_THRESHOLD = 1024;
 
 /** Build the materialized face of one stored record (see WriteLogEntry).
- * (`WriteKind` is concurrent.ts's const enum, imported type-only: this one
- * kind branch compares the bare 0/1 codes the two declarations share by
- * construction.) */
+ */
 function materializeRecord(e: WriteRecord): WriteLogEntry {
 	const op: WriteLogEntry['op'] =
-		e.kind === 0 /* WriteKind.SET */
+		e.kind === WriteKind.SET
 			? { kind: 'set', value: e.payload }
 			: { kind: 'update', fn: e.payload as (prev: Value) => Value };
 	return { op, batch: e.batch, slot: e.slot, seq: e.seq, retiredSeq: e.retiredSeq };
@@ -4855,11 +4857,11 @@ function materializeRecord(e: WriteRecord): WriteLogEntry {
  * always in sequence order (the log only ever appends, and the valve
  * removes only whole prefixes). Empty for the quiet population.
  */
-export class WriteLog {
+class WriteLog {
 	/** Live entries, oldest first (sequence order). */
 	entries: WriteRecord[] = [];
 	/** Live entries not yet retirement-stamped (the write path's
-	 * retired-history drop arm reads it; Batch.ts decrements at stamping). */
+	 * retired-history drop arm reads it; retirement stamping decrements it). */
 	unretired = 0;
 	/** The newest retirement stamp over LIVE entries (stamps are monotone,
 	 * so plain assignment at each stamping maintains it; recomputed when a
@@ -5112,7 +5114,7 @@ export type Batch = {
 };
 
 /** One entry of the 31-slot recycling table a written batch occupies (see
- * the slot/intern/tenant definitions in concurrent.ts's header). */
+ * the slot/intern/tenant definitions in the batch section's header). */
 export type BatchSlotMeta = {
 	id: BatchSlot;
 	tenant: BatchId | undefined;
@@ -5136,14 +5138,14 @@ const SLOT_COUNT = 31; // at most 31 live batches — one per React lane, and sl
  * With protocol v2 these ids are stored verbatim in React's batch registry,
  * so monotonicity is what keeps a stale fork-side id from ever colliding
  * with a later batch. Module-level deliberately: the counter survives
- * `__resetEngineForTest` (which re-runs the factory below) — a host lane
+ * `__TEST__resetEngine` (which re-runs the factory below) — a host lane
  * table can legally hold an id across an engine reset, and monotonicity
  * guarantees a stale id can never collide with a post-reset batch. */
 let nextBatchId = 1;
 
 /** The next id the allocator would hand out (test harnesses rebase their
  * model↔engine batch-id comparison on it across resets). @internal */
-export function __peekNextBatchIdForTest(): BatchId {
+export function __TEST__peekNextBatchId(): BatchId {
 	return nextBatchId;
 }
 
@@ -5380,7 +5382,7 @@ function retireInner(batch: Batch): void {
 		}
 	}
 	if (touchedAny) advanceCommitted();
-	// The bounded-memory fold valve (see WriteLog.ts foldRetiredPrefix for
+	// The bounded-memory fold valve (see foldRetiredPrefix above for
 	// the two-clause predicate) — a size check unless a candidate exists.
 	runFoldValve();
 	// Committed-truth flip site: retirement — after stamps +
@@ -5427,7 +5429,7 @@ function retireInner(batch: Batch): void {
 	if (ambientBatch === batch.id) ambientBatch = undefined;
 	// The last retirement with every render closed ends the episode: the
 	// durable handoff runs and the episode's records drop wholesale
-	// (WriteLog.ts maybeCloseEpisode) — before quiet re-derives below, so
+	// (maybeCloseEpisode above) — before quiet re-derives below, so
 	// notification/settlement callbacks of this same operation classify
 	// their writes against the post-episode state, exactly as the
 	// reference model's derivation does.
@@ -5694,12 +5696,9 @@ function isVisible(e: WriteRecord, world: World): boolean {
  * updaters run under both fold guards: the engine's (routed reads throw)
  * and the kernel's POISON table (raw public reads/writes throw exactly as
  * in the standalone path). ReducerAtom dispatches arrive here too: the
- * closure carries the reducer and the captured action. (`WriteKind` is
- * concurrent.ts's const enum, imported type-only: this one comparison
- * uses the bare 0/1 codes the two declarations share by construction —
- * the WriteLog.ts pattern.) */
+ * closure carries the reducer and the captured action. */
 function applyOp(atom: AtomInternals, kind: WriteKind, payload: unknown, prev: Value): Value {
-	if (kind === 0 /* WriteKind.SET */) return payload;
+	if (kind === WriteKind.SET) return payload;
 	return runInFoldCallback(() => {
 		// The kernel's fold-purity POISON table guards the replay exactly
 		// like the plain-path update() (CosignalEngine.ts's fold-guard pair).
@@ -5923,7 +5922,8 @@ const untrackedReader: Reader = (dep) => {
  * (values + refolds through their own walks), route write-time deliveries
  * over strong links, seed durable drains from their dirty lists, and carry
  * the mount-fixup closure over reverse links. The full vocabulary (world,
- * fold, batch, watcher) is defined at the top of concurrent.ts.
+ * fold, batch, watcher) is defined at the top of the concurrent machinery
+ * below.
  *
  * Layout discipline: ArenaField/ArenaLinkField/ArenaFlag/ArenaGeom/ArenaWalk
  * are same-file const enums declared in the record-layout region above —
@@ -5937,12 +5937,10 @@ const untrackedReader: Reader = (dep) => {
  *    family (arenaLink/arenaPropagate/arenaCheckDirty's free half…) — pure
  *    functions over one arena that re-state the kernel's walks (see the
  *    kernel-correspondence note above arenaLink below);
- *  - `createWorldArena`: the engine-facing serving/lifecycle layer (serve,
- *    refold, claim/release, fanout, decay, routing walks) as a factory in
- *    the kernel's own style — it closes over its state and assigns its
- *    operation table onto the one shared engine core record (World.ts
- *    `EngineCore`), whose late-bound slots resolve the World ⇄ arena ⇄
- *    settlement recursion at call time.
+ *  - the engine-facing serving/lifecycle layer (serve, refold,
+ *    claim/release, fanout, decay, routing walks) — plain module functions
+ *    over the arena registries; the World ⇄ arena ⇄ settlement recursion
+ *    resolves by same-module function hoisting.
  */
 
 
@@ -5981,7 +5979,7 @@ export function getKernelNodeIndex(id: NodeId): NodeIndex {
 // kernel serves newest, and the kernel's own dep links carry the newest
 // strong walks (subscription reach, the fixup closure's kernel leg). When
 // the test harness arms the divergence checker (tests/arena-checker.ts, fed
-// through `__checkerInternals`), every
+// through `__TEST__checkerInternals`), every
 // public operation's epilogue serves each live arena's shadows from the
 // arena (its own walks) and compares against fold-truth — a
 // naive cache-free re-fold — and any divergence throws. ArenaField/ArenaLinkField/
@@ -6556,9 +6554,9 @@ export const FOLD_TRUTH = Symbol('cosignals.foldTruth');
 
 /** The arena record layout as plain numbers, restricted to the fields the
  * test-side structural validator reads (`ArenaCheckerInternals.layout`
- * — concurrent.ts documents the data-passing decision). Built here, in the
- * enums' own file, so the view is in sync by construction; a fresh object
- * per call, exactly as the in-class construction allocated. */
+ * documents the data-passing decision). Built beside the enums, so the
+ * view is in sync by construction; a fresh object per call, exactly as the
+ * in-class construction allocated. */
 export function arenaCheckerLayout(): {
 	readonly ArenaGeom: { readonly ID_TO_COLUMN_SHIFT: number; readonly CLOCK_LIMIT: number };
 	readonly ArenaField: { readonly NODE: number; readonly MARK: number; readonly FLAGS: number; readonly DEPS: number; readonly SUBS: number };
@@ -6968,7 +6966,7 @@ function arenaUpdateShadow(a: WorldArena, sh: number): boolean {
  * arena-only routing override. The evaluating world is
  * set so raw-handle reads route. Observed nodes capture the strong deps
  * of this run and re-point their retains afterward (the world-path
- * retain re-point — see ObservationIndex.ts). */
+ * retain re-point — see the observation index's syncObservedDeps). */
 function arenaUpdateComputed(a: WorldArena, sh: number): boolean {
 	const nid: NodeIndex = a.memory[sh + ArenaField.NODE]!;
 	const node = nodeIndexToInternals[nid] as ComputedInternals;
@@ -7492,7 +7490,7 @@ function collectArenaClosure(a: WorldArena, node: AnyInternals, closure: Set<Nod
 /**
  * One fold-truth evaluation frame (the armed checker's naive fn runs —
  * the evaluator itself lives in tests/arena-checker.ts and reaches this
- * only through `__checkerInternals`): the serve override becomes
+ * only through `__TEST__checkerInternals`): the serve override becomes
  * FOLD_TRUTH, so routed atom reads inside `fn` fold plain from their
  * write logs and no arena-refold route survives into the frame — nothing
  * routes back into the arena under check; the world is pinned for those
@@ -7563,7 +7561,7 @@ function dependencyEdges(): Map<NodeId, Set<NodeId>> {
 
 /** Test seam: a committed arena's (dep → sub) link mode, or undefined
  * when no link exists (the mode-transition pins read it). @internal */
-function __arenaLinkMode(rootId: RootId, dep: AnyInternals, sub: AnyInternals): 'strong' | 'weak' | undefined {
+function __TEST__arenaLinkMode(rootId: RootId, dep: AnyInternals, sub: AnyInternals): 'strong' | 'weak' | undefined {
 	const a = rootToArena.get(rootId);
 	if (a === undefined) return undefined;
 	const depSh = a.nodeToShadow[dep.ix] ?? 0;
@@ -7580,7 +7578,7 @@ function __arenaLinkMode(rootId: RootId, dep: AnyInternals, sub: AnyInternals): 
 /** Test seam: a committed arena's live (dep → sub) link record id, or 0
  * when no link exists (freelist-discipline pins capture ids before a
  * teardown). @internal */
-function __arenaLinkIdForTest(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number {
+function __TEST__arenaLinkId(rootId: RootId, dep: AnyInternals, sub: AnyInternals): number {
 	const a = rootToArena.get(rootId);
 	if (a === undefined) return 0;
 	const depSh = a.nodeToShadow[dep.ix] ?? 0;
@@ -7599,7 +7597,7 @@ function __arenaLinkIdForTest(rootId: RootId, dep: AnyInternals, sub: AnyInterna
  * freed link's stale nextDep still names its former
  * neighbor, never the free list: arenaCheckDirty reads NEXT_DEP off links
  * a mid-walk purge freed. @internal */
-function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): number {
+function __TEST__arenaLinkNextDep(rootId: RootId, linkId: number): number {
 	const a = rootToArena.get(rootId);
 	if (a === undefined) return -1;
 	return a.memory[linkId + ArenaLinkField.NEXT_DEP] ?? -1;
@@ -7626,10 +7624,8 @@ function __arenaLinkNextDepForTest(rootId: RootId, linkId: number): number {
 //    correction every compare-and-correct site shares.
 
 /** The queued-notification kinds (the notify columns' kind codes). Same-file
- * const enum with its one consumer, the flush loop; resident enqueue sites
- * pass the bare 0-3 codes (numeric literals are assignable, so cross-module
- * callers never name this type — cross-module const enum access does not
- * survive esbuild). */
+ * const enum: the enqueue sites name the members and they inline to the
+ * bare 0-3 codes under whole-program emit and per-file transforms alike. */
 const enum NotifyKind {
 	DELIVERY = 0,
 	MOUNT_CORRECTIVE = 1,
@@ -7750,7 +7746,7 @@ function deliver(w: Watcher, batch: Batch, slot: BatchSlotMeta, seq: Seq): void 
 	if ((w.dedupBits & bit) === 0) {
 		w.dedupBits |= bit;
 		if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, false);
-		if (onDelivery !== undefined) queueNotify(0, w, batch, slot.id);
+		if (onDelivery !== undefined) queueNotify(NotifyKind.DELIVERY, w, batch, slot.id);
 		return;
 	}
 	// Bit set: suppress iff no started-and-uncommitted render on the
@@ -7761,7 +7757,7 @@ function deliver(w: Watcher, batch: Batch, slot: BatchSlotMeta, seq: Seq): void 
 	const p = rootToOpenRender.get(w.root);
 	if (p !== undefined && ((p.maskBits >>> slot.id) & 1) === 1 && p.pin < seq) {
 		if (tr !== undefined) tr.delivery(w, batch.id, slot.id, seq, true);
-		if (onDelivery !== undefined) queueNotify(0, w, batch, slot.id);
+		if (onDelivery !== undefined) queueNotify(NotifyKind.DELIVERY, w, batch, slot.id);
 	} else {
 		if (tr !== undefined) tr.suppressed(w, batch.id, slot.id, seq);
 	}
@@ -7823,7 +7819,7 @@ function correctWatcher(w: Watcher, wInternals: AnyInternals, now: Value, cause:
 	}
 	w.lastRenderedValue = now; // the urgent pre-paint re-render
 	w.dedupBits = 0; // dedup bits re-arm at the watcher's render
-	if (onCorrection !== undefined) queueNotify(2, w, undefined, 0);
+	if (onCorrection !== undefined) queueNotify(NotifyKind.CORRECTION, w, undefined, 0);
 	return true;
 }
 
@@ -8074,7 +8070,7 @@ function endOperation(): void {
 	flushNotify();
 }
 
-/** Queue depth (diagnostics — the engine's __arenaStats). */
+/** Queue depth (diagnostics — the engine's __TEST__arenaStats). */
 function getPendingSettleCount(): number {
 	return pendingSettle.length;
 }
@@ -8689,7 +8685,7 @@ function replayReactEffect(id: SubscriptionId): void {
  * operation boundary — the adapter owns the body run). */
 function runCommittedSubscription(sub: Subscription): void {
 	if (sub.refire !== undefined) {
-		queueNotify(3, undefined, undefined, 0, sub);
+		queueNotify(NotifyKind.SUBSCRIPTION_REFIRE, undefined, undefined, 0, sub);
 		return;
 	}
 	sub.cleanups++;
@@ -9505,7 +9501,7 @@ function runMountFixup(w: Watcher, node: AnyInternals, committingRender: RenderP
 		if (tr !== undefined) tr.mountCorrective(w, b.id, slot.id);
 		correctives++;
 		w.dedupBits |= 1 << slot.id; // the corrective is a state update scheduled into the batch's lane (the protocol's runInBatch)
-		if (onMountCorrective !== undefined) queueNotify(1, w, b, slot.id);
+		if (onMountCorrective !== undefined) queueNotify(NotifyKind.MOUNT_CORRECTIVE, w, b, slot.id);
 	}
 	// Urgent-correction half — the four-condition test, decided before any
 	// evaluation: same render, no committed-truth advance, no per-root
@@ -9557,7 +9553,7 @@ function dependencyClosureOf(nodeId: NodeId, render?: RenderPass): Set<NodeId> {
 	const closure = new Set<NodeId>([nodeId]);
 	// Public/diagnostic entry: the id is not provably a node record id,
 	// so the row resolution carries its own identity check (see
-	// concurrent.ts getResidentInternals).
+	// getResidentInternals's liveness note).
 	const ix = getKernelNodeIndex(nodeId);
 	const node = ix < nodeIndexToInternals.length ? nodeIndexToInternals[ix] : undefined;
 	if (node === undefined || node.id !== nodeId) return closure; // unregistered/dead id: nothing routes
@@ -9624,7 +9620,7 @@ function invalidateBatchCache(id: BatchId): void {
 
 // ---- quiescence reclamation + the checker window (the divergence
 // check and structural validator are test machinery and live in
-// tests/arena-checker.ts, fed through __checkerInternals below) ----
+// tests/arena-checker.ts, fed through __TEST__checkerInternals below) ----
 
 /** The watcher-population refcount, derived (dev-assertable) form: live
  * watchers of the root + live committed subscriptions of the root. */
@@ -9663,7 +9659,7 @@ function arenaQuiesceSweep(): void {
  * Production code never calls this and installs no hook. Reads the current
  * composition at call time (reset-safe: re-arm after a reset). @internal
  */
-export function __checkerInternals(): ArenaCheckerInternals {
+export function __TEST__checkerInternals(): ArenaCheckerInternals {
 	return {
 		// The layout view is built by arenaCheckerLayout beside the enums
 		// (same-file const enum discipline): in sync by construction.
@@ -9698,19 +9694,19 @@ export function __checkerInternals(): ArenaCheckerInternals {
  * pool/wrap pins read shell state (claimGen, buffer identity,
  * column capacities) and force the clocks toward the Int32 ceiling.
  * @internal */
-export function __arenaForTest(rootId: RootId): WorldArena | undefined {
+export function __TEST__arena(rootId: RootId): WorldArena | undefined {
 	return rootToArena.get(rootId);
 }
 
 /** Test seam: pooled arena shells (the pool reuse/cap pins). @internal */
-export function __arenaPoolForTest(): WorldArena[] {
+export function __TEST__arenaPool(): WorldArena[] {
 	return arenaPool;
 }
 
 /** Test seam: the current composition's dense nodeIndex-keyed columns (the
  * leak/elements-kind audits probe row clearing and packedness; identity
  * changes at reset). @internal */
-export function __columnsForTest(): {
+export function __TEST__columns(): {
 	nodeIndexToInternals: (AnyInternals | undefined)[];
 	lastWalk: number[];
 	evalMark: number[];
@@ -9726,12 +9722,12 @@ export function __columnsForTest(): {
  * so the bump writes the live record's GEN field in kernel memory: arena
  * shadows re-tenant cold at their next consult and watcher stamps go
  * stale, exactly as a real free+reuse would move them. @internal */
-export function __bumpNodeGenForTest(id: NodeId): void {
+export function __TEST__bumpNodeGen(id: NodeId): void {
 	E.buffer()[id + NodeField.GEN]++;
 }
 
 /** Arena stats (tests/bench). @internal */
-export function __arenaStats(): { committed: number; renders: number; pooled: number; suspended: number; pendingSettlements: number; dirty: number } {
+export function __TEST__arenaStats(): { committed: number; renders: number; pooled: number; suspended: number; pendingSettlements: number; dirty: number } {
 	let renders = 0;
 	let dirty = 0;
 	for (const p of rootToOpenRender.values()) {
@@ -9744,25 +9740,7 @@ export function __arenaStats(): { committed: number; renders: number; pooled: nu
 }
 
 
-// (runInFoldTruthFrame — the armed checker's naive evaluation frame — lives in
-// CosignalEngine.ts with the serve-override state; __checkerInternals wires it.)
-
-// ---- observed-closure maintenance ----
-// The observation index — shiftObservedCount/enterObservation/
-// exitObservation and the two dep-
-// snapshot re-pointers — lives in ObservationIndex.ts (composed as `obs`; the
-
 // ------------------------------------------------------ the write path
-
-function internalsById(id: NodeId): AnyInternals {
-	// Public surface: the caller's id is not provably a node record id, so
-	// the row resolution carries its own identity check (a garbage id —
-	// e.g. a link record's — reads free-list residue as its NODE_INDEX and
-	// could alias an unrelated row).
-	const hit = getResidentInternals(id);
-	if (hit === undefined || hit.id !== id) throw new ScheduleError(`unknown node ${id}`);
-	return hit;
-}
 
 // ------------------------------------------------------ the write path
 
@@ -9791,7 +9769,7 @@ function internalsById(id: NodeId): AnyInternals {
  * once, at the acceptance decision. The direct kernel apply below runs no
  * policy comparator (a public-method re-entry would double-invoke it).
  */
-export function quietWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
+function quietWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
 	if (evalDepth > 0) throw new ScheduleError('signal write during a world evaluation / render — write from an event handler or effect instead');
 	if (inFoldCallback) throw new ScheduleError('signal write inside an updater/reducer fold — updaters and reducers must be pure');
 	// Public-operation frame (matches `write`): the fused kernel
@@ -9814,13 +9792,13 @@ function quietWriteInner(node: AtomInternals, kind: WriteKind, payload: unknown)
 	// 12.9 → 17.7 ns): equality drops on one bare Object.is — no
 	// applyOp/isAtomValueEqual call layer on the dominant write shape.
 	let next: Value;
-	if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
+	if (kind === WriteKind.SET && node.eqIsDefault) {
 		if (Object.is(payload, prev)) {
 			return; // equality drop against base — the write log is empty by the quiet invariant
 		}
 		next = payload;
 	} else {
-		next = kind === 0 /* WriteKind.SET */ ? payload : applyOp(node, kind, payload, prev);
+		next = kind === WriteKind.SET ? payload : applyOp(node, kind, payload, prev);
 		if (isAtomValueEqual(node, prev, next)) {
 			return; // policy equality drop — once, kernel order (current, incoming)
 		}
@@ -9851,7 +9829,7 @@ function quietWriteInner(node: AtomInternals, kind: WriteKind, payload: unknown)
  * none, so it joins the ambient default batch — unless the engine is
  * quiet, in which case the write folds directly (no ambient batch is
  * created while nothing is pending). */
-export function bareWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
+function bareWrite(node: AtomInternals, kind: WriteKind, payload: unknown): void {
 	if (quiet) {
 		quietWrite(node, kind, payload);
 		return;
@@ -9867,8 +9845,8 @@ export function bareWrite(node: AtomInternals, kind: WriteKind, payload: unknown
 	writeInBatch(ambient.id, node, kind, payload);
 }
 
-// (endOperation — the compound-operation tail every public exit owes — lives in
-// settlement.ts with the operation epilogue; aliased above.)
+// (endOperation — the compound-operation tail every public exit owes — lives
+// in the settlement section with the operation epilogue.)
 
 /**
  * The write path (the embedding/protocol surface: an explicit batch id, or
@@ -9921,7 +9899,7 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 	// keeps the entries for the episode's wholesale drop), so the acceptance
 	// decision must run there exactly as in the empty case.
 	if (log.length === 0) {
-		if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
+		if (kind === WriteKind.SET && node.eqIsDefault) {
 			// Fast arm — bench-pinned, do not fold into the general arm
 			// (A/B-measured: folding the two write-path fast arms
 			// into their isAtomValueEqual general arms cost +11% bare / +3-6%
@@ -9950,7 +9928,7 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 		// newest is the value every world folds to; untracked, so a write
 		// issued from inside a kernel effect frame records no link.
 		const newest = untracked(() => E.readAtom(node.id));
-		if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
+		if (kind === WriteKind.SET && node.eqIsDefault) {
 			if (Object.is(payload, newest)) {
 				const tr = trace;
 				if (tr !== undefined) tr.writeDropped(node, batchId);
@@ -10014,7 +9992,7 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
 	// apply's effect flush re-enters the public write path, so writes made
 	// by core effects during this apply classify normally (a recursion
 	// guard here would silently bypass recording).
-	if (kind === 0 /* WriteKind.SET */ && node.eqIsDefault) {
+	if (kind === WriteKind.SET && node.eqIsDefault) {
 		// Fast arm — bench-pinned, do not fold into the general arm
 		// (A/B-measured: folding the two write-path fast arms
 		// into their isAtomValueEqual general arms cost +11% bare / +3-6%
@@ -10049,7 +10027,7 @@ function writeInBatchInner(batchId: BatchId | undefined, node: AtomInternals, ki
  * implementation-defined (kernel subscriber-link order); values and the
  * operation each run fires at are the contract.
  */
-export function logCoreEffectRun(name: string, value: Value): void {
+function logCoreEffectRun(name: string, value: Value): void {
 	const tr = trace;
 	if (tr !== undefined) tr.coreEffectRun(name, value);
 }
@@ -10057,13 +10035,13 @@ export function logCoreEffectRun(name: string, value: Value): void {
 // ------------------------------------------- episodes and quiescence
 
 /** Synchronously abandons every work-in-progress render. */
-export function discardAllWip(): void {
+function discardAllWip(): void {
 	for (const p of [...rootToOpenRender.values()]) {
 		renderEnd(p.id, 'discard');
 	}
 }
 
-export function quiescent(): boolean {
+function quiescent(): boolean {
 	return liveBatchCount === 0 && rootToOpenRender.size === 0;
 }
 
@@ -10073,7 +10051,7 @@ export function quiescent(): boolean {
  * episode log, so the routing coverage committed observers rely
  * on survives by persistence (nothing re-records because nothing
  * was lost). The episode's own records are ALREADY gone: the episode close
- * (WriteLog.ts maybeCloseEpisode) ran inside the retirement or render close
+ * (maybeCloseEpisode) ran inside the retirement or render close
  * that reached quiescence, dropping write records and retired batch
  * records wholesale — this operation is the public epoch/bookkeeping reset
  * over what remains. Two arena duties run, in order: the zero-consumer
@@ -10096,7 +10074,7 @@ export function quiescent(): boolean {
  * so trace decode fidelity (not engine correctness) degrades past
  * 2^31-1 created sequences.
  */
-export function quiesce(): void {
+function quiesce(): void {
 	if (!quiescent()) throw new ScheduleError('quiescence requires no live batches, pins, or parked actions');
 	// Residue check: quiescent ⇒ the episode close already ran (it fires
 	// inside the transition that emptied the batch/render tables) — so the
@@ -10131,27 +10109,22 @@ export function quiesce(): void {
 
 // ------------------------------------------------------------ world reads
 
-/** The value of a node in a named world (adapter/test surface). */
-function readWorldValue(node: AnyInternals, world: World): Value {
-	return evaluate(node, world);
-}
-
-export function committedValue(node: AnyInternals, root: RootId): Value {
+function committedValue(node: AnyInternals, root: RootId): Value {
 	return evaluate(node, { kind: 'committed', root });
 }
 
-export function newestValue(node: AnyInternals): Value {
+function newestValue(node: AnyInternals): Value {
 	return evaluate(node, NEWEST);
 }
 
-export function renderValue(node: AnyInternals, render: RenderPass): Value {
+function renderValue(node: AnyInternals, render: RenderPass): Value {
 	return evaluate(node, { kind: 'render', render });
 }
 
 // ------------------------------------------------- the engine reset (test-only)
 
 /**
- * Idle preconditions for `__resetEngineForTest`: a reset from inside any
+ * Idle preconditions for `__TEST__resetEngine`: a reset from inside any
  * open frame or half-finished operation must fail the running test loudly, not
  * corrupt the next one. Asserted, in order: quiescent (no live batches —
  * parked actions included — and no open renders); no public operation, no
@@ -10161,16 +10134,16 @@ export function renderValue(node: AnyInternals, render: RenderPass): Value {
  * kernel's synchronous batch()/effect queue empty.
  */
 function assertIdleForReset(): void {
-	if (!quiescent()) throw new ScheduleError('__resetEngineForTest requires quiescence: no live batches (parked actions included) and no open renders');
-	if (opDepth !== 0) throw new ScheduleError('__resetEngineForTest inside a public operation (opDepth !== 0)');
-	if (evalDepth !== 0) throw new ScheduleError('__resetEngineForTest inside a world evaluation (evalDepth !== 0)');
-	if (inFoldCallback) throw new ScheduleError('__resetEngineForTest inside an updater/reducer/equality callback');
-	if (captureFrame !== undefined) throw new ScheduleError('__resetEngineForTest inside an open capture frame');
-	if (serveOverride !== undefined) throw new ScheduleError('__resetEngineForTest inside an arena evaluation frame');
-	if (currentSink !== 0) throw new ScheduleError('__resetEngineForTest inside a fold-through evaluation frame');
-	if (suspendDepth !== 0) throw new ScheduleError('__resetEngineForTest inside a hook-initiated (suspending) evaluation');
-	if (notifyState.flushing) throw new ScheduleError('__resetEngineForTest inside a notification flush');
-	if (notifyState.n !== 0) throw new ScheduleError('__resetEngineForTest with queued notifications undelivered');
+	if (!quiescent()) throw new ScheduleError('__TEST__resetEngine requires quiescence: no live batches (parked actions included) and no open renders');
+	if (opDepth !== 0) throw new ScheduleError('__TEST__resetEngine inside a public operation (opDepth !== 0)');
+	if (evalDepth !== 0) throw new ScheduleError('__TEST__resetEngine inside a world evaluation (evalDepth !== 0)');
+	if (inFoldCallback) throw new ScheduleError('__TEST__resetEngine inside an updater/reducer/equality callback');
+	if (captureFrame !== undefined) throw new ScheduleError('__TEST__resetEngine inside an open capture frame');
+	if (serveOverride !== undefined) throw new ScheduleError('__TEST__resetEngine inside an arena evaluation frame');
+	if (currentSink !== 0) throw new ScheduleError('__TEST__resetEngine inside a fold-through evaluation frame');
+	if (suspendDepth !== 0) throw new ScheduleError('__TEST__resetEngine inside a hook-initiated (suspending) evaluation');
+	if (notifyState.flushing) throw new ScheduleError('__TEST__resetEngine inside a notification flush');
+	if (notifyState.n !== 0) throw new ScheduleError('__TEST__resetEngine with queued notifications undelivered');
 	// (A settlement drain in progress holds opDepth > 0 — covered above.
 	// Queued-but-undrained settlements are legal: the queue dies with the
 	// composition and the scheduled microtask is engine-epoch guarded.)
@@ -10199,34 +10172,46 @@ function assertIdleForReset(): void {
  *     disarms, devChecks/arenaInitInts land as reset parameters, and the
  *     driver slot is empty (attach again after the reset).
  *
- * BatchIds stay monotonic across resets (Batch.ts's module-level counter
+ * BatchIds stay monotonic across resets (the batch section's module-level counter
  * survives the recomposition): a host lane table can legally hold an id
  * across a reset, and monotonicity guarantees a stale id can never collide
  * with a post-reset batch.
  */
-export function __resetEngineForTest(options?: EngineResetOptions): void {
+export function __TEST__resetEngine(options?: EngineResetOptions): void {
 	assertIdleForReset();
 	const d = driver;
 	if (d !== undefined && d.protocolReset !== undefined) d.protocolReset();
 	__resetKernelForTest(); // bumps the engine epoch; scrubs kernel state
-	__resetPolicyForTest();
-	__resetSuspenseForTest();
+	__TEST__resetPolicy();
+	__TEST__resetSuspense();
 	probes.logEntries = 0;
 	probes.batches = 0;
 	probes.worldEvals = 0;
-	probes.bridges = 0;
+	probes.compositions = 0;
 	composeEngine(options);
 }
 
 // ---------------------------------------------------- the engine surface
 
 /**
- * The engine surface — the module's operational API grouped as one record
- * (the kernel's own op-table pattern): every function field is the module
- * function above, every accessor reads the current composition's state, so
- * the record stays valid across `__resetEngineForTest`. The test
- * harnesses, the diagnostics tooling, and the React bindings all drive this
- * one object; nothing constructs engines.
+ * The engine surface — the one diagnostics-and-integration record. It
+ * exists for exactly three consumers, and its membership is curated
+ * against them (a member with no consumer in these three is
+ * module-internal, not surface):
+ *
+ *  - the REACT BINDINGS (cosignals-react): the protocol event handlers
+ *    drive renders/batches/commits, the hooks resolve nodes and read
+ *    world values, and the shim reads the batch registry and devChecks;
+ *  - the TEST HARNESSES (this package's suites, the reference-model
+ *    lockstep adapter, the sibling packages' suites): the embedding
+ *    constructors (atom/computed), world reads, state registries, and the
+ *    __TEST__-prefixed seams;
+ *  - the DIAGNOSTICS TOOLING (cosignals/trace, cosignals/graphviz): the
+ *    trace-recorder slot and the read-only graph/registry views.
+ *
+ * Every function field is a module function above; every accessor reads
+ * the current composition's state, so the record stays valid across
+ * `__TEST__resetEngine`. Nothing constructs engines — this is the one.
  */
 export const engine = {
 	// creation + resolution
@@ -10235,14 +10220,12 @@ export const engine = {
 	internalsForAtom,
 	internalsForComputed,
 	disposeComputed,
-	internalsById,
 	root,
 	// batches + writes
 	openBatch,
 	liveBatches,
 	write: writeInBatch,
 	bareWrite,
-	quietWrite,
 	retire,
 	settleAction,
 	// renders + watchers
@@ -10256,7 +10239,6 @@ export const engine = {
 	adoptRevealedMount,
 	removeWatcher,
 	commitBatches,
-	dependencyClosureOf,
 	// subscriptions
 	mountCommittedObserver,
 	captureRun,
@@ -10267,7 +10249,6 @@ export const engine = {
 	discardAllWip,
 	quiescent,
 	quiesce,
-	read: readWorldValue,
 	committedValue,
 	newestValue,
 	renderValue,
@@ -10275,22 +10256,21 @@ export const engine = {
 	foldAtom,
 	logCoreEffectRun,
 	// test seams
-	__coreProbes,
-	__checkerInternals,
-	__arenaForTest,
-	__arenaPoolForTest,
-	__bumpNodeGenForTest,
-	__arenaStats,
-	__arenaLinkMode,
-	__arenaLinkIdForTest,
-	__arenaLinkNextDepForTest,
-	__setSettleCapForTest: setSettleCap,
-	__columnsForTest,
+	__TEST__checkerInternals,
+	__TEST__arena,
+	__TEST__arenaPool,
+	__TEST__bumpNodeGen,
+	__TEST__arenaStats,
+	__TEST__arenaLinkMode,
+	__TEST__arenaLinkId,
+	__TEST__arenaLinkNextDep,
+	__TEST__setSettleCap: setSettleCap,
+	__TEST__columns,
 	/** @internal bytecode-smoke seams (the smoke must exercise budgeted arena
 	 * walk families directly; production never calls these). */
-	__eachArenaForTest: eachArena,
-	__fanAtomsToArenaForTest: fanAtomsToArena,
-	__arenaServeForTest: arenaServe,
+	__TEST__eachArena: eachArena,
+	__TEST__fanAtomsToArena: fanAtomsToArena,
+	__TEST__arenaServe: arenaServe,
 	// state (current composition; identity changes at reset)
 	/** Diagnostics/test view of the internals registry as id → internals,
 	 * materialized per access from the dense column (the engine maintains no
@@ -10339,15 +10319,6 @@ export const engine = {
 	get ambientBatch(): BatchId | undefined {
 		return ambientBatch;
 	},
-	get inFoldCallback(): boolean {
-		return inFoldCallback;
-	},
-	get activeWorld(): World | undefined {
-		return activeWorld;
-	},
-	set activeWorld(w: World | undefined) {
-		setWorld(w);
-	},
 	get suspendDepth(): number {
 		return suspendDepth;
 	},
@@ -10377,12 +10348,6 @@ export const engine = {
 	set onDelivery(fn: ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined) {
 		onDelivery = fn;
 	},
-	get onMountCorrective(): ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined {
-		return onMountCorrective;
-	},
-	set onMountCorrective(fn: ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined) {
-		onMountCorrective = fn;
-	},
 	get onCorrection(): ((w: Watcher) => void) | undefined {
 		return onCorrection;
 	},
@@ -10396,7 +10361,7 @@ export const engine = {
 		return dependencyEdges();
 	},
 	/** Stale-watcher loud skips (the dormant-watcher aliasing pin). @internal */
-	get __staleWatcherSkips(): number {
+	get __TEST__staleWatcherSkips(): number {
 		return staleWatcherSkips;
 	},
 };
@@ -10415,7 +10380,7 @@ export type CosignalEngine = typeof engine;
 // same-module calls; the runtime attachment seams — attachDriver, the
 // trace slot, the checker hooks — each have one documented owner). Runs at
 // module initialization (the call is the last statement in this file) and
-// at each `__resetEngineForTest`.
+// at each `__TEST__resetEngine`.
 
 /** The quiet derivation — quiet ⇔ zero live batches and zero open renders
  * and no episode write records held (the episode close empties
@@ -10463,7 +10428,7 @@ const kernelTrackedReader: Reader = (dep) => {
  * and the engine-activity probes (the reset re-baselines them itself).
  */
 function composeEngine(options?: EngineResetOptions): void {
-	probes.bridges++; // engine-activity counter: counts compositions (module init + resets; tests/one-core.spec.ts)
+	probes.compositions++; // engine-activity counter (module init + resets; tests/one-core.spec.ts)
 	// section 7 — registries, dense columns, clocks, listeners, shared state
 	idToRenderPass = new Map();
 	roots = new Map();
@@ -10619,7 +10584,7 @@ const reclaimSkipped = new Map<NodeId, ReclaimRetryEntry>();
  * getter call, no let-slot hole check on the kernel's unwatched edge).
  * Cross-module trigger sites import the live binding. @internal */
 // eslint-disable-next-line no-var
-export var reclaimSkippedN = 0;
+var reclaimSkippedN = 0;
 
 /** Ids whose blocking guard just cleared (clearing sites push; the boundary
  * drain re-attempts). */
@@ -10635,7 +10600,7 @@ var reclaimWorkPending = false;
 
 /** The deferred-cleanup drain guard (take-before-call): set while
  * phase 2 runs taken entries; a reentrant boundary (a cleanup writing an
- * atom) finds it set and does no cleanup work. Joins `__resetEngineForTest`'s
+ * atom) finds it set and does no cleanup work. Joins `__TEST__resetEngine`'s
  * assertIdle preconditions. */
 // eslint-disable-next-line no-var
 var reclaimDrainGuard = false;
@@ -10721,7 +10686,7 @@ function reclaimDropSkip(id: NodeId, gen: Generation): void {
  * (clearing sites fire mid-walk, where structural teardown is unsafe).
  * @internal
  */
-export function noteReclaimRetry(id: NodeId): void {
+function noteReclaimRetry(id: NodeId): void {
 	if (reclaimSkippedN === 0 || !reclaimSkipped.has(id)) {
 		return;
 	}
@@ -10738,7 +10703,7 @@ export function noteReclaimRetry(id: NodeId): void {
  * memberships clear at once. Conservative by construction: each retry
  * re-verifies all guards and re-files if still blocked. @internal
  */
-export function reclaimRetryAllSkipped(): void {
+function reclaimRetryAllSkipped(): void {
 	if (reclaimSkippedN === 0) {
 		return;
 	}
@@ -10944,13 +10909,13 @@ function drainReclaimWork(): void {
  * compares. Runs the trailing boundary so phase 2 lands synchronously.
  * @internal
  */
-export function __simulateReclaimForTest(id: NodeId, gen?: Generation, epoch?: number): void {
+export function __TEST__simulateReclaim(id: NodeId, gen?: Generation, epoch?: number): void {
 	reclaimNode(id, gen ?? E.buffer()[id + NodeField.GEN], epoch ?? engineEpoch);
 	maybeBoundary();
 }
 
 /** Reclamation observability (test-only). @internal */
-export function __reclaimStatsForTest(): {
+export function __TEST__reclaimStats(): {
 	skipped: number;
 	retryQueue: number;
 	deferredCleanups: number;
@@ -10971,17 +10936,17 @@ export function __reclaimStatsForTest(): {
 // ---- the test reset's kernel half (test-only) -----------------------------------
 
 /**
- * Kernel idle preconditions for `__resetEngineForTest` — a reset from inside
+ * Kernel idle preconditions for `__TEST__resetEngine` — a reset from inside
  * any live kernel frame would corrupt the next test instead of failing this
  * one. @internal
  */
 function __assertKernelIdleForReset(): void {
-	if (enterDepth !== 0) throw new Error('cosignals: __resetEngineForTest inside an open kernel frame (enterDepth !== 0)');
-	if (batchDepth !== 0) throw new Error('cosignals: __resetEngineForTest inside batch() (batchDepth !== 0)');
-	if (runDepth !== 0) throw new Error('cosignals: __resetEngineForTest inside an effect run');
-	if (queuedLength !== notifyIndex) throw new Error('cosignals: __resetEngineForTest with queued effects unflushed');
-	if (E === POISON) throw new Error('cosignals: __resetEngineForTest inside a fold-purity frame');
-	if (reclaimDrainGuard === true) throw new Error('cosignals: __resetEngineForTest inside the deferred-cleanup drain (a reclaimed record\'s user cleanup is on the stack)');
+	if (enterDepth !== 0) throw new Error('cosignals: __TEST__resetEngine inside an open kernel frame (enterDepth !== 0)');
+	if (batchDepth !== 0) throw new Error('cosignals: __TEST__resetEngine inside batch() (batchDepth !== 0)');
+	if (runDepth !== 0) throw new Error('cosignals: __TEST__resetEngine inside an effect run');
+	if (queuedLength !== notifyIndex) throw new Error('cosignals: __TEST__resetEngine with queued effects unflushed');
+	if (E === POISON) throw new Error('cosignals: __TEST__resetEngine inside a fold-purity frame');
+	if (reclaimDrainGuard === true) throw new Error('cosignals: __TEST__resetEngine inside the deferred-cleanup drain (a reclaimed record\'s user cleanup is on the stack)');
 }
 
 /**
@@ -10990,11 +10955,11 @@ function __assertKernelIdleForReset(): void {
  * never a reallocation (the arena keeps any grown capacity; the live
  * operation table stays valid because it closes over the same buffer).
  * Bumps the reset epoch, which every cross-reset microtask consults. The
- * caller (`__resetEngineForTest`) owns ordering: driver protocol reset
+ * caller (`__TEST__resetEngine`) owns ordering: driver protocol reset
  * first, then this, then the concurrent machinery's recomposition.
  * @internal
  */
-export function __resetKernelForTest(): void {
+function __resetKernelForTest(): void {
 	__assertKernelIdleForReset();
 	engineEpoch++;
 	E.buffer().fill(0, 0, recNext); // watermark-bounded: only the used range holds records

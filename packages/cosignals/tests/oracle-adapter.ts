@@ -2,7 +2,7 @@
  * The adapter that drives the CONCURRENT engine and the reference model
  * (`cosignals-oracle`) in lockstep: it implements the reference model's
  * `EngineAdapter` surface (its adapter.ts — "an engine plugs into the fuzz
- * harness by implementing this surface") over the bridge, so the model's
+ * harness by implementing this surface") over the engine, so the model's
  * differ can replay one schedule into both and compare every observable
  * after every step. The reference model package is imported by relative
  * path: it is a dev-side referee, deliberately NOT a package dependency of
@@ -21,12 +21,12 @@ import {
 	engine,
 	BATCH_NONE,
 	ScheduleError,
-	__resetEngineForTest,
+	__TEST__resetEngine,
 	type AtomInternals,
 	type CosignalEngine,
 } from '../src/CosignalEngine.js';
-import { __peekNextBatchIdForTest } from '../src/CosignalEngine.js';
-import { __eachInternalsForTest, __internalsByIdForTest } from '../src/CosignalEngine.js';
+import { __TEST__peekNextBatchId } from '../src/CosignalEngine.js';
+import { __TEST__eachInternals, __TEST__internalsById } from '../src/CosignalEngine.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import {
@@ -106,7 +106,7 @@ function watcherAt(b: CosignalEngine, index: number): number {
 
 /** Mirrors the model's `effectAt`: index over react-effect ids in creation
  * order (the engine's subs store holds ONLY committed observers — core
- * effects are kernel `effect()`s, not bridge records — so its key sequence
+ * effects are kernel `effect()`s, not engine records — so its key sequence
  * is exactly the model's reactEffects key sequence, by INDEX; the id VALUES
  * diverge once a core effect mounts, which is why resolution is positional). */
 function effectAt(b: CosignalEngine, index: number): number {
@@ -116,21 +116,21 @@ function effectAt(b: CosignalEngine, index: number): number {
 	return ids[index % ids.length]!;
 }
 
-/** Per-bridge count of applyEngineOp calls: the tracer-independent uniq
+/** Per-engine count of applyEngineOp calls: the tracer-independent uniq
  * component that replaced the retained log's `b.events.length` when the
- * object channel died. Only per-bridge uniqueness and run-to-run determinism
+ * object channel died. Only per-engine uniqueness and run-to-run determinism
  * matter here — when NAME PARITY with the model matters (lockstep), the
  * differ supplies the model's own event count as `namingEvents`. */
 const appliedOps = new Map<number, number>();
 
-/** Apply ONE schedule op to a bridge holding the fixed topology (applyOneOp twin).
+/** Apply ONE schedule op to an engine holding the fixed topology (applyOneOp twin).
  * `namingEvents` (when given) replaces the engine's own op count in the
  * `${events}.${seq}.${epoch}` uniq: the model creates names off ITS stream
  * length, and since S-B the engine legitimately delivers FEWER deliveryish
  * events (the ⊆ bound — lane degradation is a correction, not a delivery),
  * so name parity requires the MODEL's count — the differ supplies it. */
 export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: number): boolean {
-	const allNodes = __eachInternalsForTest();
+	const allNodes = __TEST__eachInternals();
 	const atoms = allNodes.filter((n): n is AtomInternals => n.kind === 'atom').slice(0, 4);
 	const nodes = allNodes.slice(0, 8);
 	/** The schedule's write vocabulary → the engine's scalar (kind, payload)
@@ -239,12 +239,12 @@ export function applyEngineOp(b: CosignalEngine, op: ScheduleOp, namingEvents?: 
 /**
  * A fresh CONCURRENT engine presented through the reference model's
  * EngineAdapter surface (its `modelAsEngine` template with the model
- * replaced by the real engine). The bridge is structurally
+ * replaced by the real engine). The adapter is structurally
  * snapshot-compatible with the model, so the reference model's own
  * `snapshotModel` reads the engine's observables — engine internals
  * (kernel arena, union edges, memos) are never compared.
  */
-export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __syncNamingEvents(n: number): void } {
+export function engineAsAdapter(): EngineAdapter & { engine: CosignalEngine; __syncNamingEvents(n: number): void } {
 	// THE ONE ENGINE, reset per schedule (the fresh-model analog). A test
 	// may legitimately end mid-episode; close it out before the reset's
 	// idle preconditions run (the helpers.ts drain, inlined).
@@ -257,12 +257,12 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __s
 	// engine with it on, proving the flag perturbs no engine semantics.
 	// R-5: devChecks harnesses that open batches attach a driver first —
 	// the minimal context-free driver (explicit ids drive the writes).
-	__resetEngineForTest({ devChecks: true });
+	__TEST__resetEngine({ devChecks: true });
 	attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
 	const b = engine;
 	// BatchIds are monotonic across resets; the model restarts at 1 — the
 	// adapter rebases engine event batch ids into the model's space.
-	const batchIdBase = __peekNextBatchIdForTest() - 1;
+	const batchIdBase = __TEST__peekNextBatchId() - 1;
 	// The engine's event stream: a lossless session tracer decoded on demand
 	// (the packed records are the only event channel; tests/trace-events.ts).
 	const stream = attachRefereeStream(b);
@@ -279,7 +279,7 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __s
 	let drained = 0;
 	let namingEvents: number | undefined;
 	return {
-		bridge: b,
+		engine: b,
 		/** Name parity under the ⊆ delivery bound: the differ reports the
 		 * model's pre-op event count so `${events}.…` names match its. */
 		__syncNamingEvents(n: number): void {
@@ -293,7 +293,7 @@ export function engineAsAdapter(): EngineAdapter & { bridge: CosignalEngine; __s
 		snapshot: () =>
 			snapshotModel(
 				Object.assign(Object.create(b as object), {
-					idToNode: new Map(__eachInternalsForTest().map((n) => [n.id, n])),
+					idToNode: new Map(__TEST__eachInternals().map((n) => [n.id, n])),
 				}) as unknown as CosignalModel,
 			),
 		drainEvents() {
@@ -438,8 +438,8 @@ export function diffAgainstModelTolerant(
 	let drained = 0;
 	const modelPool = new Map<string, number>();
 	const engineUsed = new Map<string, number>();
-	const namedEngine = engine as EngineAdapter & { __syncNamingEvents?(n: number): void; bridge?: CosignalEngine };
-	const dpc = namedEngine.bridge !== undefined ? new DeliveryPrecedesCorrection(namedEngine.bridge) : undefined;
+	const namedEngine = engine as EngineAdapter & { __syncNamingEvents?(n: number): void; engine?: CosignalEngine };
+	const dpc = namedEngine.engine !== undefined ? new DeliveryPrecedesCorrection(namedEngine.engine) : undefined;
 	for (let step = 0; step < ops.length; step++) {
 		const namingEvents = m.events.length; // the model's pre-op count — its uniq naming input
 		const ok = applyOneOp(m, ops[step]!);
@@ -511,7 +511,7 @@ class DeliveryPrecedesCorrection {
 	private marks = new Map<string, DpcMark>();
 	private preOpBatchWriteSeq = 0;
 
-	constructor(private bridge: CosignalEngine) {}
+	constructor(private engine: CosignalEngine) {}
 
 	private resetAll(): void {
 		this.marks.clear();
@@ -520,7 +520,7 @@ class DeliveryPrecedesCorrection {
 	private markOf(name: string): DpcMark {
 		let mk = this.marks.get(name);
 		if (mk === undefined) {
-			mk = { seq: this.bridge.seq, notified: false, disarmed: false, boundaries: 0 };
+			mk = { seq: this.engine.seq, notified: false, disarmed: false, boundaries: 0 };
 			this.marks.set(name, mk);
 		}
 		return mk;
@@ -532,8 +532,8 @@ class DeliveryPrecedesCorrection {
 		this.preOpBatchWriteSeq = 0;
 		if (op.t === 'retire' || op.t === 'settle') {
 			try {
-				const id = batchAt(this.bridge, op.batch);
-				this.preOpBatchWriteSeq = (id !== undefined ? this.bridge.idToBatch.get(id)?.lastWriteSeq : 0) ?? 0;
+				const id = batchAt(this.engine, op.batch);
+				this.preOpBatchWriteSeq = (id !== undefined ? this.engine.idToBatch.get(id)?.lastWriteSeq : 0) ?? 0;
 			} catch {
 				// no batches yet: the op will skip
 			}
@@ -541,7 +541,7 @@ class DeliveryPrecedesCorrection {
 	}
 
 	afterOp(op: ScheduleOp, events: ModelEvent[]): string | undefined {
-		const b = this.bridge;
+		const b = this.engine;
 		const singleBoundary = op.t === 'retire' || op.t === 'settle';
 		for (const e of events) {
 			const t = e.type;
@@ -555,7 +555,7 @@ class DeliveryPrecedesCorrection {
 					continue;
 				}
 				const w = [...b.watchers.values()].find((x) => x.name === name);
-				const node = w !== undefined ? __internalsByIdForTest(w.node) : undefined;
+				const node = w !== undefined ? __TEST__internalsById(w.node) : undefined;
 				const untrackedConsumer = node !== undefined && node.name === 'cMix';
 				if (
 					singleBoundary &&

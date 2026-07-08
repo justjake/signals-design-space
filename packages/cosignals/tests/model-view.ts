@@ -41,7 +41,7 @@ export class RefereeMirror {
 	private origins = new Map<AtomInternals, Value>();
 	private archives = new Map<AtomInternals, WriteLogEntry[]>();
 
-	/** Install the drop feed on a bridge (call once, at driver setup): every
+	/** Install the drop feed on an engine (call once, at driver setup): every
 	 * entry leaving a write log — fold-valve fold or episode drop —
 	 * archives here. */
 	attach(engine: CosignalEngine): void {

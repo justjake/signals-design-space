@@ -1,7 +1,7 @@
 /**
  * Trace semantics coverage for cosignals/trace: every traced event class
  * fires with correct payloads on a representative schedule (a staged
- * narrative over one traced bridge, then a fuzz sweep proving the capture's
+ * narrative over one traced engine, then a fuzz sweep proving the capture's
  * integrity — losslessness, total decode/format, terminating causality, and
  * the test-side decoder's coverage of the packed stream, which is the engine's
  * ONLY event output). Causality (CAUSE edges + queries) and the stable human
@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { generateSchedule } from '../../cosignals-oracle/src/schedule.js';
-import { engine, __resetEngineForTest, type TraceEvent, type CosignalEngine } from '../src/CosignalEngine.js';
+import { engine, __TEST__resetEngine, type TraceEvent, type CosignalEngine } from '../src/CosignalEngine.js';
 import { attachTracer, formatTrace, formatTraceRecord, Tracer, type TraceRecord, type TraceKind } from '../src/Tracer.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 import { attachRefereeStream, decodeTraceEvent, decodedTraceEvents } from './trace-events.js';
@@ -20,15 +20,15 @@ function tick(): () => number {
 	return () => (t += 10);
 }
 
-/** Fresh engine (the per-test bridge analog): finish any leftover episode
+/** Fresh engine (per test): finish any leftover episode
  * so the reset's idle preconditions hold, then reset. */
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
@@ -51,7 +51,7 @@ function tevents<T extends TraceEvent['type']>(tr: Tracer, type: T): Extract<Tra
 describe('R11 event-class coverage (staged narrative, one traced engine)', () => {
 	// ONE module-scope engine init for the whole staged narrative (the its
 	// share state deliberately; no per-test reset in this block).
-	const b = bridge();
+	const b = freshEngine();
 	const flag = b.atom('flag', 0);
 	const a = b.atom('a', 0);
 	const bb = b.atom('b', 0);
@@ -348,7 +348,7 @@ describe('R11 event-class coverage (staged narrative, one traced engine)', () =>
 describe('R11 fuzz sweep: lossless capture, total decode, terminating causality (oracle schedules)', () => {
 	it('20 seeds × 60 steps: session lossless; decode/format total; referee decode covers the stream; causality terminates', () => {
 		for (let seed = 1; seed <= 20; seed++) {
-			const b = bridge(); // drains the previous seed's leftovers, then resets
+			const b = freshEngine(); // drains the previous seed's leftovers, then resets
 			buildEngineTopology(b);
 			const tr = attachTracer(b, { mode: 'session', refCapacity: 0 });
 			for (const op of generateSchedule(seed, 60)) applyEngineOp(b, op);
@@ -359,9 +359,9 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 
 			// the test-side decoder maps every TraceEvent-vocabulary record and
 			// nothing else (kind-for-kind agreement with a manual partition)
-			const bridgeEvents = decodedTraceEvents(tr);
+			const engineEvents = decodedTraceEvents(tr);
 			const mapped = decoded.filter((e) => decodeTraceEvent(e) !== undefined);
-			expect(bridgeEvents.length, `seed ${seed}: referee coverage`).toBe(mapped.length);
+			expect(engineEvents.length, `seed ${seed}: referee coverage`).toBe(mapped.length);
 			// every render end has exactly one disposition record BEFORE its
 			// consequences and exactly one checkpoint marker after them
 			const renderEnds = decoded.filter((e) => e.kind === 'render-end');
@@ -386,7 +386,7 @@ describe('R11 fuzz sweep: lossless capture, total decode, terminating causality 
 
 describe('R11 slot backstop (fresh engine: 31 live tenants, keep-the-dirt table)', () => {
 	it('backstop release records loudly, then the claim proceeds', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		const tr = attachTracer(b, { mode: 'session' });
 		const batches = [];
@@ -411,7 +411,7 @@ describe('R11 slot backstop (fresh engine: 31 live tenants, keep-the-dirt table)
 
 describe('fixed memory under a tracer: the engine retains nothing on the tracer’s behalf', () => {
 	it('production posture: hammering writes stores records ONLY in the tracer’s own fixed ring', () => {
-		const b = bridge(); // production posture — no event objects exist anywhere
+		const b = freshEngine(); // production posture — no event objects exist anywhere
 		const a = b.atom('a', 0);
 		const tr = attachTracer(b, { mode: 'ring', capacity: 256, now: tick() });
 		const N = 5000;
@@ -427,7 +427,7 @@ describe('fixed memory under a tracer: the engine retains nothing on the tracer�
 	});
 
 	it('referee posture: a lossless session decodes the complete stream (lockstep needs it)', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const stream = attachRefereeStream(b, { now: tick() }); // the referee’s session tracer
 		const a = b.atom('a', 0);
 		const t = b.openBatch();

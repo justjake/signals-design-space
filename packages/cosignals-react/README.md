@@ -93,7 +93,7 @@ createRoot(document.getElementById('root')!).render(<Counter />);
 `registerCosignalReact()` attaches the engine's driver — write
 classification and per-render world routing — and subscribes to the
 protocol events. It returns a handle
-(`{ bridge, shim, dispose }`: the engine surface, the protocol adapter,
+(`{ engine, shim, dispose }`: the engine surface, the protocol adapter,
 and a teardown); `dispose()` releases the React-side registrations
 (mainly for tests).
 

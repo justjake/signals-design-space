@@ -1,7 +1,7 @@
 /**
  * Shared harness: per-test ENGINE RESET + shim registration (`cosignals` has
- * ONE module-level engine — `__resetEngineForTest` is the fresh-engine
- * analog of the old per-test bridge construction), react-dom/client roots,
+ * ONE module-level engine — `__TEST__resetEngine` is the fresh-engine
+ * analog of the old per-test engine construction), react-dom/client roots,
  * and act plumbing. The engine's event stream is its packed trace records —
  * the harness attaches the referee's lossless session tracer right after
  * the reset and exposes the decoded stream as `events` (the deleted object
@@ -10,16 +10,16 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __resetEngineForTest, engine, type AtomInternals, type CosignalEngine, type WriteLogEntry } from 'cosignals';
+import { __TEST__resetEngine, engine, type AtomInternals, type CosignalEngine, type WriteLogEntry } from 'cosignals';
 import { attachRefereeStream, type RefereeStream } from '../../cosignals/tests/trace-events.js';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 export type Harness = {
 	handle: CosignalReactHandle;
 	/** THE engine surface (the module-level engine; the name is historical). */
-	bridge: CosignalEngine;
-	/** The decoded event stream (lossless session tracer attached at bridge
-	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads). */
+	engine: CosignalEngine;
+	/** The decoded event stream (lossless session tracer attached at engine
+	 * birth; `events.eventsOfType(...)` replaces the old engine log reads). */
 	events: RefereeStream;
 	/** Log entries as they dropped from the write logs — sealed-chunk folds
 	 * and episode drops (op-replay-fidelity
@@ -36,7 +36,7 @@ export type Harness = {
 export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// Close out whatever episode the previous test left open (a test may
 	// legitimately end mid-render or with an unsettled parked action; the old
-	// per-test bridges were simply abandoned — the ONE engine closes the
+	// per-test engines were simply abandoned — the ONE engine closes the
 	// episode out instead, so the reset's idle preconditions hold).
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
@@ -54,7 +54,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
 	// production posture (defined fall-throughs, no warning allocation).
-	__resetEngineForTest({ devChecks: opts?.devChecks ?? true });
+	__TEST__resetEngine({ devChecks: opts?.devChecks ?? true });
 	// The referee stream attaches AFTER the reset (the fresh composition's
 	// trace slot starts empty) and before the first engine operation, so the
 	// session is complete from event 0.
@@ -66,7 +66,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	const containers: HTMLElement[] = [];
 	const h: Harness = {
 		handle,
-		bridge: engine,
+		engine,
 		events,
 		compacted,
 		roots,

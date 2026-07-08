@@ -25,7 +25,7 @@ import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignals-oracle/src/schedule.js';
 import { mountEngineReactEffect } from './helpers.js';
 import { dependencyGraphToDot, traceToDot } from '../src/graphviz.js';
-import { engine, __resetEngineForTest, type CosignalEngine } from '../src/CosignalEngine.js';
+import { engine, __TEST__resetEngine, type CosignalEngine } from '../src/CosignalEngine.js';
 import { attachTracer, REF_DROPPED, Tracer } from '../src/Tracer.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 
@@ -47,21 +47,21 @@ function src(rel: string): string {
 		.replace(/\/\/[^\n]*/g, '');
 }
 
-/** Fresh engine (the per-test bridge analog): finish any leftover episode
+/** Fresh engine (one fresh engine per test): finish any leftover episode
  * so the reset's idle preconditions hold, then reset. */
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
 /** A tracer over a fresh engine reset, for driving the recorder synthetically. */
 function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
-	return attachTracer(bridge(), opts);
+	return attachTracer(freshEngine(), opts);
 }
 
 /** One record per call, with a recognizable payload (the typed epoch-reset
@@ -143,7 +143,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 
 describe('R11 runtime enable/disable', () => {
 	it('the slot stays undefined without attach; attach/stop/re-attach at runtime', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		expect(b.trace).toBeUndefined();
 		b.bareWrite(a, 0, 1);
@@ -162,7 +162,7 @@ describe('R11 runtime enable/disable', () => {
 		expect(tr.attached).toBe(false);
 		b.bareWrite(a, 0, 3);
 		expect(tr.stats().recorded).toBe(recorded); // capture frozen, still decodable
-		// The bridge was at rest for every write above, so the captured records
+		// The engine was at rest for every write above, so the captured records
 		// are quiet folds (the production default write path), not log entries.
 		expect(tr.events('quiet-write').length).toBeGreaterThan(0);
 
@@ -176,7 +176,7 @@ describe('R11 runtime enable/disable', () => {
 		// ONE engine now, so the runs are sequential RESETS: run traced,
 		// snapshot every observable, reset, run untraced, compare snapshots.
 		const run = (traced: boolean) => {
-			const b = bridge();
+			const b = freshEngine();
 			buildEngineTopology(b);
 			const tr = traced ? attachTracer(b, { mode: 'ring', capacity: 16 }) : undefined; // tiny ring: wrap under load
 			for (const op of generateSchedule(7, 80)) applyEngineOp(b, op);
@@ -292,7 +292,7 @@ describe('R11 recorder details', () => {
 
 describe('R11 Graphviz renderers', () => {
 	it('dependencyGraphToDot: nodes, K1 union edges, watchers, effects', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const flag = b.atom('flag', 0);
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(flag) ? read(a) : 0));
@@ -300,7 +300,7 @@ describe('R11 Graphviz renderers', () => {
 		b.mountWatcher(p.id, c, 'W');
 		b.renderEnd(p.id, 'commit');
 		// A committed observer (core effect()s are kernel effects now — no
-		// bridge record, so nothing of theirs appears in the dump).
+		// engine record, so nothing of theirs appears in the dump).
 		mountEngineReactEffect(b, 'A', c, 'E');
 		const dot = dependencyGraphToDot(b);
 		expect(dot).toMatch(/^digraph cosignals \{/);
@@ -312,7 +312,7 @@ describe('R11 Graphviz renderers', () => {
 	});
 
 	it('traceToDot: cause edges drawn within the kept set; filter respected', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(a));
 		const tr = attachTracer(b);

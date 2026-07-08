@@ -202,7 +202,7 @@
  * implementation sites in CosignalEngine.ts.
  */
 
-import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, NOT_ROUTED, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, routedAtomRead, routedComputedRead, untracked, values, writeAtom, writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __resetLifecycleForTest } from './CosignalEngine.js';
+import { ArenaShape, E, MIN_INITIAL_RECORDS, NodeField, NodeFlag, NOT_ROUTED, activeSub, batchDepth, flush, fns, foldGuardRestore, foldGuardSwap, maybeBoundary, requestCapacity, routingActive, routedAtomRead, routedComputedRead, untracked, values, writeAtom, writeAtomConcurrent, __engineAtomInternalsById, __engineWriteNode, __TEST__resetLifecycle } from './CosignalEngine.js';
 import type { AtomInternals, ComputedInternals, NodeId, ValueIndex } from './CosignalEngine.js';
 
 // ---- sentinels ----------------------------------------------------------------
@@ -281,7 +281,7 @@ export type ComputedCtx<T> = {
 // policy layer below reads the current operation table through the one
 // mutable slot `E` (re-linked only at growth boundaries) and the shared
 // side columns/scalars through their imported bindings.
-export { NodeField, LinkField, NodeFlag } from './CosignalEngine.js';
+export { NodeField, LinkField } from './CosignalEngine.js';
 
 
 
@@ -302,15 +302,15 @@ export { NodeField, LinkField, NodeFlag } from './CosignalEngine.js';
 // runs (asserted behaviorally by tests/one-core.spec.ts).
 
 /** Whole-op codes for the engine write dispatch (0 = set, 1 = update).
- * Shares the 0/1 encoding with ConcurrentEngine.ts's `const enum WriteKind` by
- * construction (the two collapse conceptually; this alias is the public
- * type name). @internal */
-export type WriteKind = 0 | 1;
+ * Shares the 0/1 encoding with the engine's `const enum WriteKind` by
+ * construction. Internal: consumers never name write kinds — the public
+ * methods (set/update/dispatch) are the whole vocabulary. */
+type WriteKind = 0 | 1;
 
 /** @internal Test seam (leak audit): a record's side-column slots. freeNode
  * must clear all three, or freed records pin dead values/closures for the
  * arena's life; tests/leak-audit.spec.ts probes exactly that. Read-only. */
-export function __kernelSideColumnsForTest(id: NodeId): { value: unknown; aux: unknown; fn: Function | undefined } {
+export function __TEST__kernelSideColumns(id: NodeId): { value: unknown; aux: unknown; fn: Function | undefined } {
 	const v: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
 	return { value: values[v], aux: values[v + ArenaShape.AUX_VALUE_OFFSET], fn: fns[id >> ArenaShape.ID_TO_FN_SHIFT] };
 }
@@ -357,13 +357,13 @@ export function __lifecycleWrite(id: NodeId, kind: WriteKind, payload: unknown):
 // (The engine's lifecycle contexts write through __lifecycleWrite above by a
 // direct cyclic-module import — CosignalEngine.ts's dispatchLifecycleWrite.)
 
-/** Test-only policy scrub (`__resetEngineForTest`'s index.ts half):
+/** Test-only policy scrub (`__TEST__resetEngine`'s index.ts half):
  * configure() state returns to defaults; the lifecycle map, queue, and its
  * scheduled flush drop (the flush microtask is engine-epoch guarded).
  * @internal */
-export function __resetPolicyForTest(): void {
+export function __TEST__resetPolicy(): void {
 	forbidWritesInComputeds = false;
-	__resetLifecycleForTest();
+	__TEST__resetLifecycle();
 }
 
 // (maybeBoundary / boundaryWork / flush — the operation-boundary machinery
@@ -423,13 +423,11 @@ export function __setStandaloneQuiet(v: boolean): void {
 
 // ---- observed lifecycle (AtomOptions.effect) -----------------------------------
 // The observed-lifecycle option — the per-atom state map, the union
-// refcount, and the flap-damped microtask flush — lives in the engine's observed-lifecycle section
-// (its header carries the full story). The Atom constructor below marks
-// each lifecycle-carrying atom's record; the kernel arm feeds
-// the refcount from linkInsert/unlink; the watcher arm enters
-// through these re-exported seams (called by the
-// concurrent engine's observation index).
-export { __lifecycleRetain, __lifecycleRelease } from './CosignalEngine.js';
+// refcount, and the flap-damped microtask flush — lives in the engine's
+// observed-lifecycle section (its header carries the full story). The Atom
+// constructor below marks each lifecycle-carrying atom's record; the kernel
+// arm feeds the refcount from linkInsert/unlink; the watcher arm enters
+// through the observation index, same-module with the seams it consumes.
 
 // ---- writes (shared by Atom.set / update / dispatch / lifecycle ctx) -----------
 // (writeAtom lives in CosignalEngine.ts: every binding it touches per call — values,
@@ -461,10 +459,10 @@ function runFold<T>(fn: () => T): T {
 // The suspension/exception machinery — the thenable protocol, the ctx.use
 // request cache, the kernel's storeThrown/boxedRead cold hooks, and the
 // settle tap — lives in the engine (its section header carries the full story).
-// __ctxUse is re-exported for the test suites (the arena and leak-audit
+// __TEST__ctxUse is re-exported for the test suites (the arena and leak-audit
 // specs drive the request cache directly); the engine itself imports it
 // from './CosignalEngine.js'.
-export { __ctxUse } from './CosignalEngine.js';
+export { __TEST__ctxUse } from './CosignalEngine.js';
 
 
 
@@ -738,7 +736,7 @@ export type Signal<T> = Atom<T> | Computed<T>;
 /**
  * Runs `fn` immediately with dependency tracking and re-runs it when tracked
  * signals change. Effects always observe the newest world (every write
- * applied) — with no bridge registered, simply the current values. `fn` may
+ * applied) — with no driver attached, simply the current values. `fn` may
  * return a cleanup run before each re-run and at dispose. Returns a disposer.
  */
 export function effect(fn: () => void | (() => void)): () => void {
@@ -828,10 +826,10 @@ export {
 	BATCH_NONE,
 	// @internal test seams (the suites reset the one engine per test and
 	// one-core.spec proves the zero-cost promise through the probes):
-	__resetEngineForTest,
-	__coreProbes,
-	__internalsByIdForTest,
-	__eachInternalsForTest,
+	__TEST__resetEngine,
+	__TEST__coreProbes,
+	__TEST__internalsById,
+	__TEST__eachInternals,
 } from './CosignalEngine.js';
 export type {
 	// the driver seam + the engine surface's type + reset options
@@ -844,12 +842,7 @@ export type {
 	WorldArena,
 	ComputedInternals,
 	AnyInternals,
-	Batch,
 	RenderPass,
-	RenderPassState,
-	RootState,
-	BatchSlotMeta,
-	WatcherSnapshot,
 	Subscription,
 	// operations and worlds (the tracing hook types stay on the
 	// `cosignals/trace` side of the seam; this entry never names them.
@@ -860,19 +853,13 @@ export type {
 	World,
 	TraceEvent,
 	Reader,
-	ComputedFn,
 	Equals,
 	// scalar brands
 	Value,
-	NodeId,
 	BatchId,
 	BatchSlot,
 	RootId,
 	RenderPassId,
-	WatcherId,
-	SubscriptionId,
 	Seq,
-	Epoch,
-	CommitGen,
 	BatchSlotSet,
 } from './CosignalEngine.js';

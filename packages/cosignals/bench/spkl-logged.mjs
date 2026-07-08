@@ -21,7 +21,7 @@ const OPS = envInt('OPS', SHAPE_OPS[SHAPE]);
 // instance; this tree has ONE module engine.
 const bridge = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 const decoy = bridge.atom('decoy', 0);
 bridge.computed('decoyC', (read) => Number(read(decoy)) + 1);
 
@@ -45,7 +45,7 @@ if (bridge.events !== undefined) {
 		throw new Error('SPK-L invariant: the quiet workload must not touch the bridge');
 	}
 } else {
-	const probes = mod.__coreProbes();
+	const probes = (mod.__TEST__coreProbes ?? mod.__coreProbes)();
 	if (bridge.liveBatches().length !== 0 || probes.logEntries !== 0 || probes.batches !== 0) {
 		throw new Error(`SPK-L invariant: the quiet workload must not touch the engine (${JSON.stringify(probes)})`);
 	}

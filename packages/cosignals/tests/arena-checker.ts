@@ -1,6 +1,6 @@
 /**
  * THE ARMED DIVERGENCE CHECKER + STRUCTURAL VALIDATOR (test-side
- * machinery — the engine keeps only the narrow `__checkerInternals`
+ * machinery — the engine keeps only the narrow `__TEST__checkerInternals`
  * window and the fold-truth frame discipline). Armed by the test harness — the lockstep driver, the fuzz-corpus
  * adapter, and the arena suites — via `armArenaCheck`; production installs
  * nothing and pays one undefined test per operation epilogue.
@@ -34,9 +34,9 @@ type NaiveOutcome = { threw: boolean; v: Value };
 
 /** Per-composition checker state, held OUTSIDE the engine. */
 type CheckerState = {
-	readonly bridge: CosignalEngine;
+	readonly engine: CosignalEngine;
 	readonly views: ArenaCheckerInternals;
-	/** The engine epoch this state was built against — `__resetEngineForTest`
+	/** The engine epoch this state was built against — `__TEST__resetEngine`
 	 * re-composes the engine, so cached internals (the old core's brackets)
 	 * must rebuild when the epoch moves. */
 	readonly epoch: number;
@@ -55,16 +55,16 @@ const states = new WeakMap<CosignalEngine, CheckerState>();
 function stateFor(b: CosignalEngine): CheckerState {
 	let st = states.get(b);
 	if (st === undefined || st.epoch !== engineEpoch) {
-		st = { bridge: b, views: b.__checkerInternals(), epoch: engineEpoch, checking: false, naiveStack: new Set() };
+		st = { engine: b, views: b.__TEST__checkerInternals(), epoch: engineEpoch, checking: false, naiveStack: new Set() };
 		states.set(b, st);
 	}
 	return st;
 }
 
 /**
- * Arm the S-A dual-bookkeeping divergence check on a bridge: every public
+ * Arm the S-A dual-bookkeeping divergence check on an engine: every public
  * operation's epilogue (after its settlement fixed point) runs one full
- * check pass. Idempotent; stays armed for the bridge's life.
+ * check pass. Idempotent; stays armed for the engine's life.
  */
 export function armArenaCheck(b: CosignalEngine): void {
 	const st = stateFor(b);
@@ -153,7 +153,7 @@ function runCheck(st: CheckerState): void {
 
 /**
  * Fold-truth (the check's reference side): a naive, cache-free evaluation —
- * atoms replay their write logs (the bridge's public `foldAtom`, the same fold
+ * atoms replay their write logs (the engine's public `foldAtom`, the same fold
  * every world serve is defined against); computed fns re-run with naive
  * readers (tracked ≡ untracked: structure is not being recorded) inside the
  * engine's fold-truth frame, so raw-handle reads inside fns fold plain too
@@ -161,7 +161,7 @@ function runCheck(st: CheckerState): void {
  * memoize and rethrow (identity-stable).
  */
 function naiveValue(st: CheckerState, node: AnyInternals, world: World, memo: Map<AnyInternals, NaiveOutcome>): Value {
-	if (node.kind === 'atom') return st.bridge.foldAtom(node, world);
+	if (node.kind === 'atom') return st.engine.foldAtom(node, world);
 	const hit = memo.get(node);
 	if (hit !== undefined) {
 		if (hit.threw) throw hit.v;

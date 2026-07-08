@@ -33,7 +33,7 @@ const WARMUP = envInt('WARMUP', 1);
 // instance; this tree has ONE module engine.
 const b = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 
 // Delivery accounting, per arm. Anchor tree: the bridge retains decoded
 // event objects on `b.events` (minted inside the write call — part of that

@@ -111,44 +111,44 @@ base.set(2);
 // THE one engine with the S-A divergence check armed: every op epilogue
 // serves every arena shadow through the arena's own walks
 // (arenaServe → arenaCheckDirty). Always-concurrent: no registration step.
-const bridge = engine;
-armArenaCheck(bridge);
-const at = bridge.atom('at', 1);
-const at2 = bridge.atom('at2', 2);
-const cc = bridge.computed('cc', (read) => (read(at) as number) + (read(at2) as number));
-const cc2 = bridge.computed('cc2', (read, untrackedRead) => (read(cc) as number) + (untrackedRead(at) as number));
-const render = bridge.renderStart('R', []);
-bridge.mountWatcher(render.id, cc2 as AnyInternals, 'W');
-bridge.renderEnd(render.id, 'commit');
+const eng = engine;
+armArenaCheck(eng);
+const at = eng.atom('at', 1);
+const at2 = eng.atom('at2', 2);
+const cc = eng.computed('cc', (read) => (read(at) as number) + (read(at2) as number));
+const cc2 = eng.computed('cc2', (read, untrackedRead) => (read(cc) as number) + (untrackedRead(at) as number));
+const render = eng.renderStart('R', []);
+eng.mountWatcher(render.id, cc2 as AnyInternals, 'W');
+eng.renderEnd(render.id, 'commit');
 for (let i = 0; i < 50; i++) {
-	const t = bridge.openBatch();
+	const t = eng.openBatch();
 	// update-op log entries make committed folds run the updater: foldAtom.
-	bridge.write(t.id, at as never, 1, (prev: unknown) => (prev as number) + 1);
-	bridge.retire(t.id);
+	eng.write(t.id, at as never, 1, (prev: unknown) => (prev as number) + 1);
+	eng.retire(t.id);
 }
-const t2 = bridge.openBatch();
-bridge.write(t2.id, at2 as never, 0, 100);
-bridge.retire(t2.id);
+const t2 = eng.openBatch();
+eng.write(t2.id, at2 as never, 0, 100);
+eng.retire(t2.id);
 
 function commitWrite(node: AnyInternals, value: unknown): void {
-	const t = bridge.openBatch();
-	bridge.write(t.id, node as never, 0, value);
-	bridge.retire(t.id);
+	const t = eng.openBatch();
+	eng.write(t.id, node as never, 0, value);
+	eng.retire(t.id);
 }
 
 // Dead-watcher constant cone: marks survive the drain (no live watcher to
 // re-evaluate), so the armed epilogue's serves run arenaUpdateShadow (the dirty
 // atom), arenaUpdateComputed (the promoted computed, folding UNCHANGED), and
 // arenaCheckDirty (the pending-only grandchild's walk).
-const atG = bridge.atom('atG', 0);
-const cGate = bridge.computed('cGate', (read) => {
+const atG = eng.atom('atG', 0);
+const cGate = eng.computed('cGate', (read) => {
 	read(atG);
 	return 7;
 });
-const top2 = bridge.computed('top2', (read) => read(cGate));
-const p2 = bridge.renderStart('R2', []);
-const w2 = bridge.mountWatcher(p2.id, top2 as AnyInternals, 'W2');
-bridge.renderEnd(p2.id, 'commit');
+const top2 = eng.computed('top2', (read) => read(cGate));
+const p2 = eng.renderStart('R2', []);
+const w2 = eng.mountWatcher(p2.id, top2 as AnyInternals, 'W2');
+eng.renderEnd(p2.id, 'commit');
 w2.live = false;
 commitWrite(atG as AnyInternals, 1);
 commitWrite(atG as AnyInternals, 2);
@@ -162,18 +162,18 @@ commitWrite(atG as AnyInternals, 2);
 // — a pre-existing S-A hole (probed on the B2 base commit) that
 // stale-serves value-carrying top-first cones; constants keep every serve
 // in agreement regardless of walk depth.
-const topK = bridge.computed('topK', (read) => {
+const topK = eng.computed('topK', (read) => {
 	read(cK);
 	return 11;
 });
-const cK = bridge.computed('cK', (read) => {
+const cK = eng.computed('cK', (read) => {
 	read(atK);
 	return 7;
 });
-const atK = bridge.atom('atK', 0);
-const p5 = bridge.renderStart('R5', []);
-const w5 = bridge.mountWatcher(p5.id, topK as AnyInternals, 'W5');
-bridge.renderEnd(p5.id, 'commit');
+const atK = eng.atom('atK', 0);
+const p5 = eng.renderStart('R5', []);
+const w5 = eng.mountWatcher(p5.id, topK as AnyInternals, 'W5');
+eng.renderEnd(p5.id, 'commit');
 w5.live = false;
 commitWrite(atK as AnyInternals, 1);
 commitWrite(atK as AnyInternals, 2);
@@ -187,22 +187,22 @@ commitWrite(atK as AnyInternals, 2);
 // refolds the dirty base (descend arm; committed fold, value unchanged)
 // and sees the unchanged constant above it (unwind arm), leaving flags
 // clean and every value as it was.
-bridge.__eachArenaForTest((a: WorldArena) => {
+eng.__TEST__eachArena((a: WorldArena) => {
 	if (a.root !== 'R5' || a.kind !== 'committed') return;
-	bridge.__fanAtomsToArenaForTest(a, [atK], false);
-	bridge.__arenaServeForTest(a, topK as AnyInternals);
+	eng.__TEST__fanAtomsToArena(a, [atK], false);
+	eng.__TEST__arenaServe(a, topK as AnyInternals);
 });
 
 // In-arena dynamic dep drop + re-link: arenaUnlink, arenaFreeLink, then arenaAllocLink
 // popping the freed records back into live chains.
-const gateB = bridge.atom('gateB', 0);
-const extra = bridge.atom('extra', 5);
-const cDyn = bridge.computed('cDyn', (read) => ((read(gateB) as number) === 0 ? read(extra) : 0));
-const p3 = bridge.renderStart('R3', []);
-bridge.mountWatcher(p3.id, cDyn as AnyInternals, 'W3');
-bridge.renderEnd(p3.id, 'commit');
+const gateB = eng.atom('gateB', 0);
+const extra = eng.atom('extra', 5);
+const cDyn = eng.computed('cDyn', (read) => ((read(gateB) as number) === 0 ? read(extra) : 0));
+const p3 = eng.renderStart('R3', []);
+eng.mountWatcher(p3.id, cDyn as AnyInternals, 'W3');
+eng.renderEnd(p3.id, 'commit');
 commitWrite(gateB as AnyInternals, 1);
 commitWrite(gateB as AnyInternals, 0);
 commitWrite(extra as AnyInternals, 6);
 
-process.stdout.write(`@@SMOKE-OK ${c3.state} ${String(bridge.committedValue(cc2 as AnyInternals, 'R'))} ${String(bridge.committedValue(cDyn as AnyInternals, 'R3'))}\n`);
+process.stdout.write(`@@SMOKE-OK ${c3.state} ${String(eng.committedValue(cc2 as AnyInternals, 'R'))} ${String(eng.committedValue(cDyn as AnyInternals, 'R3'))}\n`);

@@ -17,7 +17,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom, ReducerAtom, SuspendedRead, effect, __internalsByIdForTest, type AtomInternals } from 'cosignals';
+import { Atom, ReducerAtom, SuspendedRead, effect, __TEST__internalsById, type AtomInternals } from 'cosignals';
 import * as CosignalReact from '../src/index.js';
 import { useSignal, useComputed, useSignalEffect, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
@@ -64,8 +64,8 @@ describe('battery (spec §6) at React level', () => {
 		// Divergence window: committed world (and the DOM) hold the old value
 		// while the newest world already folded the pending write.
 		expect(text(container)).toBe('c:10;s:1;');
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
-		expect(h.bridge.newestValue(node)).toBe(2);
+		const node = __TEST__internalsById(a._id) as AtomInternals;
+		expect(h.engine.newestValue(node)).toBe(2);
 		gate.settled = true;
 		await act(async () => {
 			gate.resolve();
@@ -97,7 +97,7 @@ describe('battery (spec §6) at React level', () => {
 			flushSync(() => b.set(2)); // urgent synchronous commit excludes it
 			mid = text(container);
 			// Always-log: the excluded write already holds a log entry.
-			const node = __internalsByIdForTest(a._id) as AtomInternals;
+			const node = __TEST__internalsById(a._id) as AtomInternals;
 			expect(node.log.length).toBe(1);
 		});
 		expect(mid).toBe('a:0;b:2;');
@@ -218,7 +218,7 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:5;');
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
+		const node = __TEST__internalsById(a._id) as AtomInternals;
 		// Both writes held log entries (the retained referee event log counts
 		// them; the log entries themselves compacted into base at retirement).
 		expect(h.events.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
@@ -350,11 +350,11 @@ describe('battery (spec §6) at React level', () => {
 		// The batch retired through the same disposition-blind path: fold
 		// happened. React's "abandoned" report survives only as the shim's
 		// source-created batch-disposition record — pin it with the right value.
-		const orphanNode = __internalsByIdForTest(orphan._id)!;
+		const orphanNode = __TEST__internalsById(orphan._id)!;
 		expect(h.events.eventsOfType('retired').length).toBeGreaterThan(0);
 		const dispositions = h.events.tracer.events('batch-disposition');
 		expect(dispositions.some((d) => d.data['committed'] === false)).toBe(true);
-		expect(h.bridge.committedValue(orphanNode, 'root-1')).toBe(5); // persistence
+		expect(h.engine.committedValue(orphanNode, 'root-1')).toBe(5); // persistence
 		expect(text(container)).toBe('s:0;'); // untouched subscriber unaffected
 	});
 
@@ -368,8 +368,8 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:2;');
-		expect(h.bridge.quiescent()).toBe(true); // everything retired
-		h.bridge.quiesce(); // bumps the epoch and renumbers the counters
+		expect(h.engine.quiescent()).toBe(true); // everything retired
+		h.engine.quiesce(); // bumps the epoch and renumbers the counters
 		expect(h.events.eventsOfType('epoch-reset').length).toBe(1);
 		await act(async () => {
 			a.set(3); // life continues in the new episode
@@ -623,7 +623,7 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 				await io.promise;
 				settled.resolve();
 			});
-			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
+			actionBatch = h.engine.liveBatches().find((t) => t.parked)?.id;
 		});
 		expect(argCounts).toEqual([0]);
 		expect(actionBatch).toBeDefined(); // the action's batch opened parked, eagerly
@@ -642,9 +642,9 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 		// while the retired record lingers, 'unknown batch' once the engine
 		// reclaims it (mid-episode batch reclamation frees fully-drained
 		// retired records).
-		const settledState = h.bridge.idToBatch.get(actionBatch!)?.state;
+		const settledState = h.engine.idToBatch.get(actionBatch!)?.state;
 		expect(settledState === undefined || settledState === 'retired').toBe(true);
-		expect(() => h.bridge.write(actionBatch!, aNode, 0, 9)).toThrow(/retired batch|unknown batch/);
+		expect(() => h.engine.write(actionBatch!, aNode, 0, 9)).toThrow(/retired batch|unknown batch/);
 	});
 });
 
@@ -665,7 +665,7 @@ describe('context-free writes (BATCH_NONE is unreachable once a renderer provide
 		const io = deferred<void>();
 		const settled = deferred<void>();
 		const { container } = await h.mount(<Reader id="a" atom={a} />);
-		expect(h.bridge.quiet).toBe(true);
+		expect(h.engine.quiet).toBe(true);
 		await act(async () => {
 			startSignalTransition(async () => {
 				await io.promise;
@@ -674,13 +674,13 @@ describe('context-free writes (BATCH_NONE is unreachable once a renderer provide
 			});
 		});
 		// The action is parked: the pipeline is armed until it settles.
-		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(true);
-		expect(h.bridge.quiet).toBe(false);
+		expect(h.engine.liveBatches().some((t) => t.parked)).toBe(true);
+		expect(h.engine.quiet).toBe(false);
 		// The out-of-context write while the window is open: NOT ambient — the
 		// protocol supplies a real write batch (urgent), with a close edge.
 		flag.set(7);
-		expect(h.bridge.ambientBatch).toBeUndefined(); // no ambient create, ever
-		expect(h.bridge.liveBatches().some((t) => !t.parked && !t.ambient)).toBe(true); // it rode a protocol batch
+		expect(h.engine.ambientBatch).toBeUndefined(); // no ambient create, ever
+		expect(h.engine.liveBatches().some((t) => !t.parked && !t.ambient)).toBe(true); // it rode a protocol batch
 		// The window closes: the action settles; the write's own batch closes
 		// via the protocol's guaranteed close edge. Nothing lives on.
 		await act(async () => {
@@ -688,11 +688,11 @@ describe('context-free writes (BATCH_NONE is unreachable once a renderer provide
 			await settled.promise;
 		});
 		await act(async () => {});
-		expect(h.bridge.liveBatches()).toHaveLength(0);
-		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (write logs compacted)
-		expect(h.bridge.quiet).toBe(true); // quiet mode re-armed for the next episode
-		const flagNode = __internalsByIdForTest(flag._id)!;
-		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // the write persisted (committed truth)
+		expect(h.engine.liveBatches()).toHaveLength(0);
+		expect(h.engine.quiescent()).toBe(true); // quiesce() reachable (write logs compacted)
+		expect(h.engine.quiet).toBe(true); // quiet mode re-armed for the next episode
+		const flagNode = __TEST__internalsById(flag._id)!;
+		expect(h.engine.committedValue(flagNode, 'root-1')).toBe(7); // the write persisted (committed truth)
 		expect(text(container)).toBe('a:1;');
 	});
 
@@ -744,13 +744,13 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 			startSignalTransition(async () => {
 				b.set(1); // sync part classifies into the action's batch: the transition renders + commits (locks in) while parked
 				await gate.promise;
-				h.bridge.write(actionBatch!, aNode, 0, 1); // member writes: committed truth moves at each…
-				h.bridge.write(actionBatch!, aNode, 0, 2);
-				h.bridge.write(actionBatch!, aNode, 0, 3);
+				h.engine.write(actionBatch!, aNode, 0, 1); // member writes: committed truth moves at each…
+				h.engine.write(actionBatch!, aNode, 0, 2);
+				h.engine.write(actionBatch!, aNode, 0, 3);
 				wrote.resolve();
 				await hold.promise; // …but the action stays parked past the assertion
 			});
-			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
+			actionBatch = h.engine.liveBatches().find((t) => t.parked)?.id;
 		});
 		expect(runs).toEqual([0]); // b's lock-in commit: value gate holds (a unchanged)
 		await act(async () => {
@@ -801,11 +801,11 @@ describe('EF2 boundary semantics for useSignalEffect (amended 2026-07-06 — eff
 			startSignalTransition(async () => {
 				b.set(1);
 				await gate.promise;
-				h.bridge.write(actionBatch!, aNode, 0, 7); // the member write lands while the effect is live…
+				h.engine.write(actionBatch!, aNode, 0, 7); // the member write lands while the effect is live…
 				wrote.resolve();
 				await hold.promise; // …but its durable flip is the settlement, later
 			});
-			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
+			actionBatch = h.engine.liveBatches().find((t) => t.parked)?.id;
 		});
 		await act(async () => {
 			gate.resolve();

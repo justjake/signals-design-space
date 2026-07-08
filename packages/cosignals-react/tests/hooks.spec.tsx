@@ -6,7 +6,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom, BATCH_NONE, __internalsByIdForTest, __resetEngineForTest, attachDriver, type AtomInternals } from 'cosignals';
+import { Atom, ReducerAtom, BATCH_NONE, __TEST__internalsById, __TEST__resetEngine, attachDriver, type AtomInternals } from 'cosignals';
 import { registerCosignalReact, requireShim, useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
@@ -43,7 +43,7 @@ describe('useSignal', () => {
 		expect(text(container)).toBe('15');
 		// The log entry holds the updater function itself, not a pre-folded value,
 		// so each world can replay it against its own view.
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
+		const node = __TEST__internalsById(a._id) as AtomInternals;
 		const ops = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
 		expect(ops).toContain('update');
 	});
@@ -62,7 +62,7 @@ describe('useSignal', () => {
 			root.render(<div />);
 		});
 		await act(async () => {}); // debounced unsubscribe finalizes
-		expect(h.bridge.watchers.size).toBe(0);
+		expect(h.engine.watchers.size).toBe(0);
 		const before = renders;
 		await act(async () => {
 			a.set(9);
@@ -121,12 +121,12 @@ describe('useSignal', () => {
 		);
 		expect(text(container)).toBe('1');
 		await act(async () => {}); // orphan sweep + unsub debounce settle
-		expect(h.bridge.watchers.size).toBe(1);
+		expect(h.engine.watchers.size).toBe(1);
 		await act(async () => {
 			a.set(2);
 		});
 		expect(text(container)).toBe('2');
-		expect(h.bridge.watchers.size).toBe(1);
+		expect(h.engine.watchers.size).toBe(1);
 	});
 });
 
@@ -227,7 +227,7 @@ describe('useReducerAtom (§3.2)', () => {
 			r.dispatch(7);
 		});
 		expect(text(container)).toBe('107');
-		const node = __internalsByIdForTest(r._id) as AtomInternals;
+		const node = __TEST__internalsById(r._id) as AtomInternals;
 		const kinds = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
 		expect(kinds).toContain('update'); // re-pinned: dispatch → update(s => reduce(s, action))
 	});
@@ -282,7 +282,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 	// MECHANISM. Observation is ONE core concept counted over the UNION of
 	// consumer kinds: kernel subscribers (a live computed chain, a core
 	// effect()) flip the kernel liveness bit (D1), and React subscribers —
-	// bridge watchers created by useSignal — retain/release the SAME refcount
+	// engine watchers created by useSignal — retain/release the SAME refcount
 	// when their engine-side liveness flips (commit layout loop, reveal
 	// resubscribe, orphan sweep, debounce-finalized unsubscribe). The callback
 	// fires on the union's 0→1 transition, the cleanup on its 1→0, both
@@ -521,25 +521,25 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 	test('quiet-mode interplay: observation transitions need no armed pipeline and leave none armed', async () => {
 		h = makeHarness(); // quiet derives on its own — observation (the harness tracer) never arms it
 		const { atom: a, log } = observedAtom(0);
-		expect(h.bridge.quiet).toBe(true);
+		expect(h.engine.quiet).toBe(true);
 		function View() {
 			return <span>v:{useSignal(a)};</span>;
 		}
 		const { root, container } = await h.mount(<View />);
 		await act(async () => {});
 		expect(log).toEqual(['observe']); // watcher attach worked while quiet
-		expect(h.bridge.quiet).toBe(true); // and armed no pipeline
+		expect(h.engine.quiet).toBe(true); // and armed no pipeline
 		await act(async () => {
 			a.set(5); // quiet fold: no log entries — deliveries still flow
 		});
 		expect(text(container)).toBe('v:5;');
-		expect(h.bridge.quiet).toBe(true);
+		expect(h.engine.quiet).toBe(true);
 		await act(async () => {
 			root.render(<div />);
 		});
 		await act(async () => {});
 		expect(log).toEqual(['observe', 'unobserve']);
-		expect(h.bridge.quiet).toBe(true);
+		expect(h.engine.quiet).toBe(true);
 	});
 });
 
@@ -553,7 +553,7 @@ describe('registration lifecycle (module active-shim slot)', () => {
 		// (dispose never detaches), so the engine resets first — the one way
 		// the driver slot clears — before B can attach its own.
 		handleA.shim.dispose();
-		__resetEngineForTest({ devChecks: true });
+		__TEST__resetEngine({ devChecks: true });
 		const handleB = registerCosignalReact();
 		try {
 			expect(requireShim()).toBe(handleB.shim);

@@ -11,7 +11,7 @@
  *         refresh targets forever. Pinned here through the quiescence
  *         observable — a stranded entry re-evaluates the dead watcher's
  *         node at quiesce().
- *  22     useSignal's render branches key on bridge watcher records only
+ *  22     useSignal's render branches key on engine watcher records only
  *         (mount / re-render / reveal) — enforced by hooks.spec.tsx and
  *         battery.spec.tsx (StrictMode netting, Activity reveal scenarios).
  *  23     committed-subscription dep snapshots (the engine's captureRun —
@@ -44,14 +44,14 @@ describe('rows 19/21 — shim unsubscribe keeps every watcher store coherent (re
 		}
 		const { root, container } = await h.mount(<View />);
 		expect(text(container)).toBe('2');
-		expect(h.bridge.watchers.size).toBe(1);
+		expect(h.engine.watchers.size).toBe(1);
 		await act(async () => {
 			root.render(<span>gone</span>); // component unmounts; cleanup queues the debounced unsub
 		});
-		await act(async () => {}); // debounce microtask fires → finalizeUnsub → bridge.removeWatcher
-		expect(h.bridge.watchers.size).toBe(0);
+		await act(async () => {}); // debounce microtask fires → finalizeUnsub → engine.removeWatcher
+		expect(h.engine.watchers.size).toBe(0);
 		const before = evals;
-		h.bridge.quiesce(); // refresh targets = K1-touched nodes still holding watchers
+		h.engine.quiesce(); // refresh targets = K1-touched nodes still holding watchers
 		expect(evals).toBe(before); // a stranded per-node entry would re-evaluate the dead node here
 	});
 
@@ -73,14 +73,14 @@ describe('rows 19/21 — shim unsubscribe keeps every watcher store coherent (re
 		);
 		expect(text(container)).toBe('11');
 		await act(async () => {}); // orphan sweep + unsub debounce settle
-		expect(h.bridge.watchers.size).toBe(1); // the double-mount netted to one live watcher
+		expect(h.engine.watchers.size).toBe(1); // the double-mount netted to one live watcher
 		await act(async () => {
 			root.render(<span>gone</span>);
 		});
 		await act(async () => {}); // debounce-finalized unsubscribe for the survivor
-		expect(h.bridge.watchers.size).toBe(0);
+		expect(h.engine.watchers.size).toBe(0);
 		const before = evals;
-		h.bridge.quiesce();
+		h.engine.quiesce();
 		expect(evals).toBe(before); // neither the swept orphans nor the survivor left an index entry
 	});
 });

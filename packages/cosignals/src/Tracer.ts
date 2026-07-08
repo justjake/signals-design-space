@@ -331,7 +331,7 @@ const EVAL_STACK_DEPTH = 1024;
 // ---- the tracer ------------------------------------------------------------------
 
 export class Tracer implements TraceHooks {
-	private readonly bridge: CosignalEngine;
+	private readonly engine: CosignalEngine;
 	private readonly mode: 'ring' | 'session';
 	private readonly cap: number; // ring capacity or session chunk size (records)
 	private readonly capMask: number;
@@ -357,8 +357,8 @@ export class Tracer implements TraceHooks {
 	private evalSp = 0;
 	private evalOverflow = 0;
 
-	constructor(bridge: CosignalEngine, opts?: TracerOptions) {
-		this.bridge = bridge;
+	constructor(engine: CosignalEngine, opts?: TracerOptions) {
+		this.engine = engine;
 		this.mode = opts?.mode ?? 'ring';
 		this.cap = this.mode === 'ring'
 			? roundUpToPowerOfTwo(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
@@ -373,13 +373,13 @@ export class Tracer implements TraceHooks {
 		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE));
 	}
 
-	/** Detach from the bridge: recording stops, the capture stays decodable. */
+	/** Detach from the engine: recording stops, the capture stays decodable. */
 	stop(): void {
-		if (this.bridge.trace === this) this.bridge.trace = undefined;
+		if (this.engine.trace === this) this.engine.trace = undefined;
 	}
 
 	get attached(): boolean {
-		return this.bridge.trace === this;
+		return this.engine.trace === this;
 	}
 
 	// ------------------------------------------------------------ emit core
@@ -913,12 +913,12 @@ export class Tracer implements TraceHooks {
  * decoding. To capture a provably complete SESSION, attach before the
  * engine's first operation.
  */
-export function attachTracer(bridge: CosignalEngine, opts?: TracerOptions): Tracer {
-	if (bridge.trace !== undefined) {
-		throw new Error('cosignals/trace: a tracer is already attached to this bridge (stop() it first)');
+export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Tracer {
+	if (engine.trace !== undefined) {
+		throw new Error('cosignals/trace: a tracer is already attached to this engine (stop() it first)');
 	}
-	const tracer = new Tracer(bridge, opts);
-	bridge.trace = tracer;
+	const tracer = new Tracer(engine, opts);
+	engine.trace = tracer;
 	return tracer;
 }
 

@@ -11,7 +11,7 @@
  * here: after the report is processed, committed-world reads for that root
  * INCLUDE the reported batch's writes.
  *
- * React never produces this shape on its own (for batches carrying bridge
+ * React never produces this shape on its own (for batches carrying engine
  * batches, the committing render's own batch set covers the delta by
  * construction), so the report is injected directly into the shim's
  * `onRootCommitted` handler while a REAL transition batch is live and not
@@ -19,7 +19,7 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, __internalsByIdForTest, type AtomInternals } from 'cosignals';
+import { Atom, __TEST__internalsById, type AtomInternals } from 'cosignals';
 import { useSignal } from '../src/index.js';
 import { makeHarness, act, text, type Harness } from './helpers.js';
 
@@ -47,33 +47,33 @@ describe('root-commit report reconciliation (W11)', () => {
 		const shim = h.handle.shim as unknown as ShimPrivate;
 		expect(shim.rootsByContainer.size).toBe(1);
 		const [rootContainer, rec] = [...shim.rootsByContainer.entries()][0]!;
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
+		const node = __TEST__internalsById(a._id) as AtomInternals;
 
 		await act(async () => {
 			// A REAL protocol batch: the transition write classifies into it and
 			// it stays live — no render has rendered or committed it yet, so
 			// render-end has NOT locked it into the root's committed table.
 			React.startTransition(() => a.set(7));
-			const batch = h.bridge.liveBatches().find((t) => !t.ambient);
+			const batch = h.engine.liveBatches().find((t) => !t.ambient);
 			expect(batch).toBeDefined();
 			// Protocol v2: the engine BatchId IS the id React's reports carry
 			// (the shim's allocator handed it out at the batch's creation).
 			const tid = batch!.id;
-			const root = h.bridge.root(rec.id);
+			const root = h.engine.root(rec.id);
 			expect(root.committedBatches.has(tid)).toBe(false); // render-end never saw it
 			const genBefore = root.commitGen;
-			expect(h.bridge.committedValue(node, rec.id)).toBe(0); // still pending for this root
+			expect(h.engine.committedValue(node, rec.id)).toBe(0); // still pending for this root
 
 			// React's report names the live batch render-end didn't lock in.
 			shim.handleRootCommitted(rootContainer, [tid], 1);
 
 			// The COMPLETE lock-in, not the half-job: committed-world reads for
 			// this root now include the batch's writes...
-			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
+			expect(h.engine.committedValue(node, rec.id)).toBe(7);
 			// ...because the committed-batch set and the bit mask the visibility
 			// check reads moved TOGETHER, with the generation.
 			expect(root.committedBatches.has(tid)).toBe(true);
-			const slot = h.bridge.idToBatch.get(tid)!.slot;
+			const slot = h.engine.idToBatch.get(tid)!.slot;
 			expect(slot).toBeDefined();
 			expect((root.committedBits >>> slot!) & 1).toBe(1);
 			expect(root.commitGen).toBe(genBefore + 1);
@@ -81,7 +81,7 @@ describe('root-commit report reconciliation (W11)', () => {
 			// Re-reporting the same batch is an idempotent set-add: no-op.
 			shim.handleRootCommitted(rootContainer, [tid], 2);
 			expect(root.commitGen).toBe(genBefore + 1);
-			expect(h.bridge.committedValue(node, rec.id)).toBe(7);
+			expect(h.engine.committedValue(node, rec.id)).toBe(7);
 		});
 
 		// The act flush lets the transition render, commit, and retire through
@@ -89,6 +89,6 @@ describe('root-commit report reconciliation (W11)', () => {
 		// committed (the other caller of the same idempotent operation), and the
 		// screen settles on the batch's value.
 		expect(text(container)).toBe('v:7;');
-		expect(h.bridge.committedValue(node, rec.id)).toBe(7);
+		expect(h.engine.committedValue(node, rec.id)).toBe(7);
 	});
 });

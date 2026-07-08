@@ -1,11 +1,11 @@
 /**
  * Trace smoke test: drive a real React scenario through the bindings and
  * assert the semantic record classes appear in the trace — proving the
- * bindings route through the bridge (no bypass): writes, render lifecycle,
+ * bindings route through the engine (no bypass): writes, render lifecycle,
  * per-root commits, deliveries, and the mount-fixup disposition. The tracer
  * is the harness's own session tracer (the packed stream is the engine's
- * only event output, so every harness bridge carries one from birth —
- * one tracer per bridge; attach mechanics are pinned in the cosignals suite).
+ * only event output, so every harness engine carries one from birth —
+ * one tracer per engine; attach mechanics are pinned in the cosignals suite).
  */
 import { expect, test, afterEach } from 'vitest';
 import * as React from 'react';
@@ -29,7 +29,7 @@ function Reader({ id, atom }: { id: string; atom: Atom<number> }) {
 
 test('tracer observes writes, render lifecycle, root commits, deliveries, and fixups', async () => {
 	h = makeHarness();
-	const tracer = h.events.tracer; // the harness's session tracer records from bridge birth
+	const tracer = h.events.tracer; // the harness's session tracer records from engine birth
 	const a = new Atom(0);
 	function App({ extra }: { extra: boolean }) {
 		return (

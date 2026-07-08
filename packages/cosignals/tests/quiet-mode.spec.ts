@@ -17,8 +17,8 @@ import { describe, expect, it } from 'vitest';
 import { mountEngineCoreEffect, mountEngineReactEffect } from './helpers.js';
 import { attachRefereeStream } from './trace-events.js';
 import {
-	__coreProbes,
-	__resetEngineForTest,
+	__TEST__coreProbes,
+	__TEST__resetEngine,
 	Atom,
 	Computed,
 	effect,
@@ -36,12 +36,12 @@ function quietBridge(): CosignalEngine {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
 const probes = () => {
-	const p = __coreProbes();
+	const p = __TEST__coreProbes();
 	return { logEntries: p.logEntries, batches: p.batches };
 };
 

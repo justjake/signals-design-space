@@ -16,7 +16,7 @@
  *    heuristic never runs (see scenarios R12/R12b for the warning pins).
  */
 import { afterEach, describe, expect, test } from 'vitest';
-import { Atom, __resetEngineForTest } from 'cosignals';
+import { Atom, __TEST__resetEngine } from 'cosignals';
 import { registerCosignalReact, startSignalTransition, type CosignalReactHandle } from '../src/index.js';
 
 /** The shim's protocol listeners, driven directly (TypeScript-private only;
@@ -32,7 +32,7 @@ function register(devChecks: boolean): CosignalReactHandle {
 	// The reset clears the previous test's driver slot (dispose never
 	// detaches) and lands devChecks as a reset parameter; the fresh
 	// registration then attaches this test's driver.
-	__resetEngineForTest({ devChecks });
+	__TEST__resetEngine({ devChecks });
 	handle = registerCosignalReact();
 	return handle;
 }
@@ -48,8 +48,8 @@ describe('write classifier: no batch context (BATCH_NONE)', () => {
 		const a = new Atom(0);
 		expect(() => a.set(5)).toThrow(/protocol violation — signal write with no batch context/);
 		expect(a.state).toBe(0); // the classifier threw before any write landed
-		expect(h.bridge.liveBatches()).toHaveLength(0); // no batch created
-		expect(h.bridge.ambientBatch).toBeUndefined(); // and never an ambient batch
+		expect(h.engine.liveBatches()).toHaveLength(0); // no batch created
+		expect(h.engine.ambientBatch).toBeUndefined(); // and never an ambient batch
 	});
 
 	test('off: a context-free write takes the engine no-context fall-through (quiet fold, no batch)', () => {
@@ -62,14 +62,14 @@ describe('write classifier: no batch context (BATCH_NONE)', () => {
 		// materialization of "React batch id 0" as its own mapped engine
 		// batch. BATCH_NONE now means what it says — no batch context — so
 		// the write takes the ENGINE's own no-context path: with nothing
-		// pending the bridge is QUIET and the write folds directly; no batch
+		// pending the engine is QUIET and the write folds directly; no batch
 		// of any kind materializes (ambient included).
-		expect(h.bridge.ambientBatch).toBeUndefined();
-		expect(h.bridge.liveBatches()).toHaveLength(0);
+		expect(h.engine.ambientBatch).toBeUndefined();
+		expect(h.engine.liveBatches()).toHaveLength(0);
 		// Later context-free writes fold the same way — still no batch.
 		b.set(7);
 		expect(b.state).toBe(7);
-		expect(h.bridge.liveBatches()).toHaveLength(0);
+		expect(h.engine.liveBatches()).toHaveLength(0);
 	});
 });
 
@@ -95,8 +95,8 @@ describe('startSignalTransition: no batch context (BATCH_NONE)', () => {
 		// No parked action batch was created for BATCH_NONE — nothing could
 		// ever settle it; the write folded quietly (the engine's no-context
 		// path), creating no batch at all.
-		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(false);
-		expect(h.bridge.liveBatches()).toHaveLength(0);
+		expect(h.engine.liveBatches().some((t) => t.parked)).toBe(false);
+		expect(h.engine.liveBatches()).toHaveLength(0);
 	});
 });
 
@@ -106,9 +106,9 @@ describe('render start over a still-open render', () => {
 		const shim = h.shim as unknown as ShimListeners;
 		const container = {};
 		shim.handleRenderStart(container, []);
-		expect([...h.bridge.idToRenderPass.values()].filter((p) => p.state !== 'ended')).toHaveLength(1);
+		expect([...h.engine.idToRenderPass.values()].filter((p) => p.state !== 'ended')).toHaveLength(1);
 		expect(() => shim.handleRenderStart(container, [])).toThrow(/protocol violation — render pass started .* still open/);
-		shim.handleRenderEnd(container, false); // close the frame so the bridge quiesces
+		shim.handleRenderEnd(container, false); // close the frame so the engine quiesces
 	});
 
 	test('off: the stale render is discarded silently (no error log) and the new render opens', () => {
@@ -116,11 +116,11 @@ describe('render start over a still-open render', () => {
 		const shim = h.shim as unknown as ShimListeners;
 		const container = {};
 		shim.handleRenderStart(container, []);
-		const first = [...h.bridge.idToRenderPass.values()].find((p) => p.state !== 'ended')!;
+		const first = [...h.engine.idToRenderPass.values()].find((p) => p.state !== 'ended')!;
 		shim.handleRenderStart(container, []); // desync repair: discard, then start fresh
 		expect(h.shim.errors).toHaveLength(0); // the old loud error log is gone
 		expect(first.state).toBe('ended'); // the stale render was discarded (it can never double-account)
-		const open = [...h.bridge.idToRenderPass.values()].filter((p) => p.state !== 'ended');
+		const open = [...h.engine.idToRenderPass.values()].filter((p) => p.state !== 'ended');
 		expect(open).toHaveLength(1); // exactly the fresh render remains
 		expect(open[0]!.id).not.toBe(first.id);
 		shim.handleRenderEnd(container, false);

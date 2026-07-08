@@ -255,7 +255,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		});
 		await act(async () => {});
 		expect(renders).toBe(before);
-		expect(h.bridge.watchers.size).toBe(0);
+		expect(h.engine.watchers.size).toBe(0);
 	});
 
 	test('R9: StrictMode double render + double effects stay correct', async () => {
@@ -276,7 +276,7 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 		);
 		expect(text(container)).toBe('0/0');
 		await act(async () => {}); // let debounced netting settle
-		expect(h.bridge.watchers.size).toBe(2); // one per useSignal, net of doubles
+		expect(h.engine.watchers.size).toBe(2); // one per useSignal, net of doubles
 		await act(async () => {
 			a.set(3);
 		});
@@ -352,10 +352,10 @@ describe('react-concurrent-store scenarios (derived; R1-R14)', () => {
 				a.set(1); // transition context: the action's batch
 				await io.promise;
 				b.set(2); // bare continuation: urgent protocol batch (React parity)
-				h.bridge.write(actionBatch!, cNode, 0, 3); // attributed to the action's batch
+				h.engine.write(actionBatch!, cNode, 0, 3); // attributed to the action's batch
 				settled.resolve();
 			});
-			actionBatch = h.bridge.liveBatches().find((t) => t.parked)?.id;
+			actionBatch = h.engine.liveBatches().find((t) => t.parked)?.id;
 		});
 		expect(text(container)).toBe('a:0;b:0;c:0;'); // parked: nothing committed
 		await act(async () => {

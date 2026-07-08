@@ -7,7 +7,7 @@
 // ENGINE directly — a fan-out write inside one side's evaluation would corrupt
 // the other side by construction (the model half of that case runs in the
 // reference model's own suite).
-import { engine, __resetEngineForTest } from '../src/CosignalEngine.js';
+import { engine, __TEST__resetEngine } from '../src/CosignalEngine.js';
 /**
  * The 17-case acceptance battery of the behavioral contract, as
  * deterministic named tests asserting the required outcomes at model level.
@@ -785,7 +785,7 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 	it('render-phase writes throw in all builds', () => {
 		// Engine leg (see the header note): same schedule, driven on the engine
 		// surface directly (production posture: fresh reset, no driver).
-		__resetEngineForTest();
+		__TEST__resetEngine();
 		const m = engine;
 		const a = m.atom('a', 0);
 		const t = m.openBatch();
@@ -1082,7 +1082,7 @@ describe('at-least-once observers (re-fires are clock-gated; no per-dep value ba
 		// which the lockstep fan-out cannot express (the model re-derives per
 		// re-check by design — its naive evaluation is the reference, not a
 		// cost model).
-		__resetEngineForTest();
+		__TEST__resetEngine();
 		const m = engine;
 		const x = m.atom('x', 0);
 		const y = m.atom('y', 0);
