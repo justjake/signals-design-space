@@ -666,35 +666,92 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     gates fine). Left for the lead's branch-level ledger; not silently
     accepted.
 
+## Owner ruling 3 (start of leg 6, plan amended as 6f40bee — cherry-picked bd656e0)
+
+World-state storage gets built TWICE (arena + plain-object) behind a
+COMPOSITION-TIME seam (selected once at engine composition, never a runtime
+interface — call sites stay monomorphic; two processes compare, like the
+A/B benches). Contract surface: claim/release per world, shadow read/write,
+dependency record/purge, dirty marks, clock slots, reclamation-guard
+membership queries. Per-world-kind selection is allowed (render worlds =
+episode-lifetime eden territory, objects may win; committed roots =
+persistent routing, arenas likely hold). Benches decide; default
+disposition = keep the winner per kind, delete the loser. SEQUENCING:
+growth restoration first (unchanged — arenas remain an implementation
+regardless), then render integration ROUTES WORLD ACCESS THROUGH THE
+NARROW FUNCTION SET as it moves (do not scatter direct arena-memory access
+into moved code; do NOT build the seam yet), then a later leg does the
+seam extraction + object implementation + dual gate.
+
+## Done (continued 9) — leg 6
+
+17. **World-arena growth restoration (owner ruling 2 executed; layout v5)**:
+    - **Schema**: ArenaGeom.MAX_BUFFER_BYTES → INIT_BUFFER_BYTES (same 2^26
+      value — now the generous DEFAULT initial reservation, not a ceiling);
+      NEW generated `growWorldArenaBuffers(a, needInts)` — grow-by-copy
+      doubling of the record store + every recordBuffer column (clocks;
+      the roster carries them, so a new buffer column cannot miss growth);
+      the reload-after-allocation discipline is schema DATA
+      (`growthReloadSites`, validated non-empty) emitted into the generated
+      function's doc — generated-or-listed, never folklore. Sites:
+      arenaAllocShadow/arenaAllocLink (the only triggers), arenaLinkInsert,
+      buildObserverDepChain, the refold family (fresh reads after any
+      fold/fn call), the no-allocation walks (cache freely).
+    - **Engine**: WorldArena.memory/clocks now mutable fields; constructor
+      takes initInts (claim passes core.arenaInitInts); the bump arms call
+      growWorldArenaBuffers when `id + STRIDE > memory.length` (the
+      id+STRIDE form is robust to non-stride-multiple test knob values —
+      typed-array OOB stores fail SILENTLY, so the guard must cover the
+      whole record); arenaExhausted DELETED. Exported
+      WORLD_ARENA_INIT_INTS = INIT_BUFFER_BYTES>>2 (ConcurrentEngine's
+      `?? 8192` default replaced — 8192 would have made growth common).
+    - **The one real reload bug found**: buildObserverDepChain (leg-5 code,
+      written under the stable-buffer assumption) cached `a.memory` BEFORE
+      its per-dep arenaAllocLink loop — the first mid-chain doubling would
+      have written links into the orphaned buffer. Fixed (re-load after the
+      alloc); everything else was already reload-correct by shape (carried
+      from main). Doc-level fixes: arenaCheckDirty's wrapper doc no longer
+      justifies caching by "buffers never move"; ARENA_POOL_CAP,
+      WorldArena.memory, fresh-record invariant, claim comment,
+      EngineResetOptions.arenaInitInts + ArenaInitInts + EngineCore docs
+      all teach growth again; stale "re-derivation pending" section note
+      fixed.
+    - **Pins re-expressed as honest growth pins**: arena-sa2 "stride-sized
+      initial arena" now also asserts memory.length grew AND
+      clocks.length === memory.length>>3 (the columns grew together);
+      arena-sd "growth across pooled tenancies" comment un-inerted; NEW
+      arena-sd pin "observer dep-chain capture across mid-loop doubling" —
+      24-dep capture under arenaInitInts:16 asserts the arena grew DURING
+      captureRun, the chain re-fires on a late dep's write (the exact
+      record a stale view would have corrupted), and an identity-equal
+      write stays quiet over the re-built chain (fast negative guard).
+      leak-audit's pool test asserts honest growth again automatically.
+    - **GATE (sanctioned interleaved medians, COSIGNAL_ROOT both ways vs
+      main, harness tsx)**: cold-render main 420.2 vs WT 397.3 ns (-5.5%,
+      WT faster); storm main 149.65 vs WT 151.21 ns (+1.0%); wide-mask
+      first 3 rounds read main 167.1 vs WT 181.4 (+8.6%) with heavily
+      overlapping spreads (main's own rounds spanned 166-185) — extended
+      to 8 interleaved rounds: main 174.48 vs WT 174.73 (+0.1%, parity).
+      Checksums identical both sides on all three shapes. GATE PASSED.
+    - Suites: cosignals 372/1skip (368 + 1 new growth pin + the user
+      draft's 3), oracle 82/1skip, react 72/72, conformance 179×2,
+      cosignals typecheck clean.
+
 ## In progress / exact next actions
 
 **Priority 5 (observers) is COMPLETE** (items 12-15 above; commits b22b174,
 853bc66, 65a3f42, ebd5244) **plus the lead-verdict fix round (item 16)**.
-Successor order, per owner ruling 2's sequencing:
+**Growth restoration (leg 6 unit 1, item 17) is COMPLETE.** Successor
+order:
 
-1. **World-arena growth restoration (owner ruling 2 — the unit the ruling
-   queued immediately after observers).** Restore grow-by-copy (doubling)
-   for world-arena buffers + ALL columns (memory, clocks — now also
-   cutoffVals; the schema roster keeps every column in the growth loop
-   automatically), mid-operation capable through the shell indirection
-   (a.memory reassigned; hot walks that cached `memory` locals must
-   re-load after any allocating call — CONFINE the discipline to the
-   allocation sites and ENUMERATE those sites in the schema/generated
-   region, generated-or-listed, never folklore). KEEP: plain fixed-length
-   views (length-tracking resizable-buffer views stay banned — the +56%
-   conviction), the generous initial reservation, ARENA_POOL_CAP,
-   arenaExhausted dies (exhaustion is never fatal). Re-express the
-   arena-sa2/sd arenaInitInts pins as REAL mid-operation growth pins again
-   (note the reversal in BUILD-STATE + the commit message). GATE: cold-
-   render + wide-mask interleaved medians-of-3 at parity with leg-start
-   (an explicit exception to the no-perf-bench rule for this unit only),
-   plus a growth-path test exercising a mid-operation doubling. NOTE for
-   the builder: observer dep chains live in arena link records and
-   subscription DEP_HEAD/DEP_TAIL name arena link ids — growth must keep
-   link ids stable (grow-by-copy does; only the buffer object changes).
-2. **Priority 6 — render integration** (RenderPass machinery folds into
-   the engine module; protocol v2 contract unchanged). Then priorities
-   7-10 as listed under "Unstarted".
+1. **Priority 6 — render integration** (RenderPass machinery folds into
+   the engine module; protocol v2 contract unchanged). Owner ruling 3's
+   discipline applies to the move: per-world state access in the moved
+   orchestration goes through the narrow function set (core operation
+   table + named probes), never direct arena-memory reads — but do NOT
+   build the storage seam itself yet. Then priorities 7-10 as listed
+   under "Unstarted", then ruling 3's seam extraction + object
+   implementation + dual gate (its own leg).
 
 WORKTREE NOTE: the user is actively drafting src/Allocator.ts +
 tests/allocator.spec.ts (untracked) in THIS worktree — likely the growth

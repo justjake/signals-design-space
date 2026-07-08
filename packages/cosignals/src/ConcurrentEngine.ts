@@ -42,7 +42,7 @@ import { createObservationIndex, type ObservationIndex } from './ObservationInde
 import { createEpisodeLifecycle, type EpisodeLifecycle, type WriteLogEntry } from './WriteLog.js';
 import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
-import { createCommittedObservers, createWorldArena } from './CosignalEngine.js';
+import { createCommittedObservers, createWorldArena, WORLD_ARENA_INIT_INTS } from './CosignalEngine.js';
 import { createSettlement } from './settlement.js';
 import { createRenderPassManager, type RenderPass, type RenderPassManager, type Watcher } from './RenderPass.js';
 import type { Atom, Computed } from './index.js';
@@ -208,7 +208,7 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 		getSeq: host.getSeq,
 		getCommittedAdvance: host.getCommittedAdvance,
 		advanceCommitted: host.advanceCommitted,
-		arenaInitInts: options?.arenaInitInts ?? 8192,
+		arenaInitInts: options?.arenaInitInts ?? WORLD_ARENA_INIT_INTS,
 	});
 	createWorld(core);
 	createWorldArena(core);

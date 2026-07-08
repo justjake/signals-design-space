@@ -3,7 +3,7 @@
 // hydrators, and the side-column rosters. Imports nothing from the engine;
 // none of it ships on a hot path.
 
-export const LAYOUT_VERSION = 4;
+export const LAYOUT_VERSION = 5;
 
 export type FieldInfo = {
 	name: string;

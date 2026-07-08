@@ -708,26 +708,25 @@ function recordFreeImpl(recordId: NodeId, nodeIndex: number): void {
 }
 
 // (getKernelGeneration / getKernelNodeIndex — the live kernel-memory tenancy/index
-// reads — live in WorldArena.ts beside their hottest consumers, imported
-// above for the registry and the resident walks.)
+// reads — live in the engine module's world-arena section beside their
+// hottest consumers, imported above for the registry and the resident walks.)
 
 /** An arena buffer capacity, counted in Int32 slots (stride-8 records: one
- * node shadow or one dependency link per record). Inert since the
- * fixed-reservation contract (see EngineResetOptions.arenaInitInts). */
+ * node shadow or one dependency link per record; positive — the growth
+ * doubling starts from it). */
 export type ArenaInitInts = number;
 
 /** Engine tuning — accepted by `__resetEngineForTest`; a never-reset
  * production process runs the defaults. */
 export type EngineResetOptions = {
 	/**
-	 * INERT (kept for reset-API stability): under the fixed-reservation
-	 * contract every arena allocates its whole record reservation at
-	 * construction (zero-fill demand-paged, so untouched records cost no
-	 * resident memory) and never grows — there is no initial capacity to
-	 * set and no growth to force. The option once sized a growable buffer;
-	 * the arena suites that shrank it to force mid-operation growth now pin
-	 * the same scenarios against the fixed-reservation contract (growth
-	 * cannot corrupt what never moves).
+	 * The world arenas' initial buffer reservation. Defaults to the
+	 * generous engine reservation (64MiB of records — zero-fill
+	 * demand-paged, so untouched records cost no resident memory and
+	 * growth stays rare); an arena that outgrows its reservation doubles
+	 * its buffers by copy, mid-operation — exhaustion is never fatal. The
+	 * arena suites shrink this to force that growth path on every
+	 * allocation (tests/arena-sa2.spec.ts, tests/arena-sd.spec.ts).
 	 */
 	arenaInitInts?: ArenaInitInts;
 	/**

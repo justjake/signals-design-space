@@ -132,8 +132,10 @@ export const ALLOCATOR_FAMILIES: Record<'node' | 'link', string[]> = {
  * shadow/link record ordinal (id >> ID_TO_COLUMN_SHIFT); the one
  * `keyedBy: 'nodeIndex'` column (nodeToShadow) indexes by the kernel's
  * dense node ordinal. `storage: 'growArray'` columns grow together in the
- * shadow allocator; `storage: 'recordBuffer'` is a typed buffer fixed at
- * the arena's full record reservation (one slot per record).
+ * shadow allocator; `storage: 'recordBuffer'` is a typed buffer sized one
+ * slot per record with the arena's record store — created beside it and
+ * grown by copy WITH it (the generated growWorldArenaBuffers), so it
+ * always covers every record id the store can issue.
  */
 export type WorldColumn = {
 	/** field name on the WorldArena class */
@@ -164,10 +166,25 @@ export type ArenaDomain = {
 	shapeEnum: { name: string; doc: string[]; consts: ShapeConst[] };
 };
 
+/**
+ * One entry of the world arenas' reload-after-allocation discipline (owner
+ * ruling: every arena resizes; world-arena buffers grow by copy through the
+ * shell indirection, so a cached buffer view goes stale the moment an
+ * allocation doubles the arena). The discipline is confined to the sites
+ * enumerated here and emitted into growWorldArenaBuffers' doc — a site is
+ * generated-or-listed, never folklore.
+ */
+export type GrowthReloadSite = {
+	/** engine function name(s) */
+	site: string;
+	/** its obligation (or why it is exempt) — pre-wrapped doc lines */
+	rule: string[];
+};
+
 export type Schema = {
 	layoutVersion: number;
 	kernel: ArenaDomain & { columns: KernelColumn[] };
-	worldArena: ArenaDomain & { columns: WorldColumn[] };
+	worldArena: ArenaDomain & { columns: WorldColumn[]; growthReloadSites: GrowthReloadSite[] };
 };
 
 // ---- validation ------------------------------------------------------------------
@@ -239,11 +256,14 @@ export function defineSchema(s: Schema): Schema {
 			throw new Error(`schema: world column ${c.name} undocumented`);
 		}
 		if (c.storage === 'recordBuffer' && (c.grownWithShadow || c.keyedBy !== 'record')) {
-			throw new Error(`schema: world column ${c.name}: record buffers are fixed at the reservation and key by record`);
+			throw new Error(`schema: world column ${c.name}: record buffers grow with the record store (never the shadow loop) and key by record`);
 		}
 	}
 	if (!s.worldArena.columns.some((c) => c.grownWithShadow)) {
 		throw new Error('schema: the world arena needs at least one grown-together column');
+	}
+	if (s.worldArena.growthReloadSites.length === 0) {
+		throw new Error('schema: the world arena growth discipline needs its enumerated reload sites');
 	}
 	return s;
 }
@@ -251,7 +271,7 @@ export function defineSchema(s: Schema): Schema {
 // ---- the schema ------------------------------------------------------------------
 
 export const schema: Schema = defineSchema({
-	layoutVersion: 4,
+	layoutVersion: 5,
 	kernel: {
 		name: 'kernel',
 		stride: 8,
@@ -786,17 +806,21 @@ export const schema: Schema = defineSchema({
 					],
 				},
 				{
-					name: 'MAX_BUFFER_BYTES', value: 67108864, doc: [
-						'2^26 — the fixed per-arena record reservation (64MiB of Int32:',
-						'2M stride-8 records, plus a float64 clock slot per record beside',
-						'it). Each arena shell allocates the whole reservation ONCE and',
-						'never grows: fresh zeroed pages are zero-fill demand-paged, so the',
-						'reservation costs address space while resident memory tracks only',
-						'the records actually touched (the dalien-signals record-store',
-						'pattern). Buffer identity is therefore stable by construction, the',
-						'views are plain fixed-length typed arrays (full V8 element-access',
-						'optimization), and no growth machinery exists to get wrong. A view',
-						'that outgrows the reservation throws (arenaExhausted).',
+					name: 'INIT_BUFFER_BYTES', value: 67108864, doc: [
+						'2^26 — the DEFAULT initial per-arena record reservation (64MiB of',
+						'Int32: 2M stride-8 records, plus a float64 clock slot per record',
+						'beside it), generous ON PURPOSE so growth stays rare. A fresh',
+						'zeroed allocation this size is nearly free: the pages are',
+						'zero-fill demand-paged, so the reservation costs address space',
+						'while resident memory tracks only the records actually touched',
+						'(the dalien-signals record-store pattern). NOT a ceiling: an',
+						'allocation past the current capacity doubles the buffers by copy,',
+						'mid-operation (growWorldArenaBuffers) — exhaustion is never fatal,',
+						'by owner ruling. EngineResetOptions.arenaInitInts overrides the',
+						'initial size (the arena suites shrink it to force mid-operation',
+						'growth). The views stay plain fixed-length typed arrays (full V8',
+						'element-access optimization): length-tracking resizable-buffer',
+						'views are banned — a measured +56% arena-walk regression.',
 					],
 				},
 			],
@@ -895,7 +919,7 @@ export const schema: Schema = defineSchema({
 				scrubOnLinkFree: true,
 				doc: [
 					'The per-world updated-at clock column, one float64 slot per record,',
-					'fixed at the arena record reservation. A shadow',
+					'sized with the record store (grown by copy beside it). A shadow',
 					"record's slot is the node's per-root committed clock: a process-",
 					'monotone stamp (drawn from the engine\'s one clockSource) moved by',
 					'the OBSERVER CONSULTS of a COMMITTED arena — the drains, boundary',
@@ -936,6 +960,48 @@ export const schema: Schema = defineSchema({
 					'SPANNING consults re-fires — deterministically, whoever reads in',
 					'between. Valid iff the clock slot is non-zero (zero = never',
 					'consulted; an evicted tenancy scrubs both).',
+				],
+			},
+		],
+		growthReloadSites: [
+			{
+				site: 'arenaAllocShadow / arenaAllocLink',
+				rule: [
+					'the ONLY growth triggers (the bump arm doubles before issuing the',
+					'id); arenaAllocShadow caches `a.memory` only after that arm,',
+					'arenaAllocLink caches nothing.',
+				],
+			},
+			{
+				site: 'arenaLinkInsert',
+				rule: [
+					're-loads `a.memory` after its arenaAllocLink call (the tail probes',
+					'before the call read `a.memory` directly).',
+				],
+			},
+			{
+				site: 'buildObserverDepChain',
+				rule: [
+					're-loads `a.memory` after the arenaAllocLink inside its per-dep',
+					'loop (link ids threaded so far stay valid — ids never move).',
+				],
+			},
+			{
+				site: 'the refold family',
+				rule: [
+					'arenaServe / arenaCheckDirtyLoop / arenaUpdateAndShallow /',
+					'arenaUpdateShadow / arenaUpdateComputed / arenaFoldOutcome allocate',
+					'TRANSITIVELY (fn runs and comparator calls can record deps): each',
+					'reads `a.memory` fresh after any fold/update/fn call instead of',
+					'caching across it — the carried kernel-correspondence shape.',
+				],
+			},
+			{
+				site: 'the no-allocation walks',
+				rule: [
+					'propagate/fanout/collect/renumber walks and the detach/unlink/',
+					'evict/free paths never allocate — free to cache views for the',
+					'whole walk (each site notes it where it caches).',
 				],
 			},
 		],
@@ -1116,13 +1182,48 @@ export function generateLayoutBlock(s: Schema): string {
 	emitDomainEnums(out, w, worldShifts);
 
 	// World-arena column functions (over the WorldArena instance): the
+	// buffer growth (record store + record-buffer columns, by copy), the
 	// grown-together loop, the evict scrub, and the release reset.
+	{
+		const growDoc = [
+			"Grow one world arena's record store and every record-keyed buffer",
+			'column BY COPY (doubling) to cover `needInts` Int32 slots (generated',
+			'from the column roster — a new record-buffer column cannot miss the',
+			'growth; exhaustion is never fatal, by owner ruling). Mid-operation',
+			'growth is safe through the shell indirection: only the buffer',
+			'OBJECTS change — record ids, and every structure holding them',
+			'(observer dep chains included), stay stable — and the replacement',
+			'buffers are zeroed past the copied prefix, preserving the',
+			'fresh-record invariant. The price is the reload-after-allocation',
+			'discipline, confined to the sites enumerated here',
+			'(generated-or-listed, never folklore):',
+		];
+		for (const site of w.growthReloadSites) {
+			growDoc.push(` - ${site.site}:`);
+			growDoc.push(...site.rule.map((l) => `   ${l}`));
+		}
+		out.push(...docBlock(growDoc, 0));
+		out.push('function growWorldArenaBuffers(a: WorldArena, needInts: number): void {');
+		out.push('\tlet len = a.memory.length;');
+		out.push('\twhile (len < needInts) len *= 2;');
+		out.push('\tif (len === a.memory.length) return;');
+		out.push('\tconst memory = new Int32Array(len);');
+		out.push('\tmemory.set(a.memory);');
+		out.push('\ta.memory = memory;');
+		for (const c of w.columns.filter((col) => col.storage === 'recordBuffer')) {
+			out.push(`\tconst ${c.name} = new Float64Array(len >> ${w.shapeEnum.name}.ID_TO_COLUMN_SHIFT);`);
+			out.push(`\t${c.name}.set(a.${c.name});`);
+			out.push(`\ta.${c.name} = ${c.name};`);
+		}
+		out.push('}');
+		out.push('');
+	}
 	const grown = w.columns.filter((c) => c.grownWithShadow);
 	out.push(...docBlock([
 		'Grow the world arena\'s grown-together per-record columns to cover one',
 		'column index (generated from the column roster — a new column cannot',
 		'miss the growth loop). Called by the shadow allocator; record-buffer',
-		'columns are fixed at the full reservation and never grow.',
+		'columns grow with the record store instead (growWorldArenaBuffers).',
 	], 0));
 	out.push('function growWorldArenaColumns(a: WorldArena, columnIndex: number): void {');
 	out.push(`\twhile (a.${grown[0].name}.length <= columnIndex) {`);
