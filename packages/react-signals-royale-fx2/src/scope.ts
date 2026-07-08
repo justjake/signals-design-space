@@ -38,8 +38,14 @@ export interface WorldState {
 }
 
 const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
+/** Context default: rendering outside any SignalScope. Same empty world as
+ * a fresh scope but a distinct identity, because the two differ at fold
+ * time — a scoped subscriber gets transition values through render-pass
+ * worlds (silent folds are fine), an unscoped one only ever sees canonical
+ * state and must be woken by the fold itself. */
+export const UNSCOPED_WORLD: WorldState = { ids: [], rev: 0 };
 
-export const WorldContext = React.createContext<WorldState>(EMPTY_WORLD);
+export const WorldContext = React.createContext<WorldState>(UNSCOPED_WORLD);
 export const ContainerContext = React.createContext<object | null>(null);
 
 function worldsReducer(prev: WorldState, id: DraftId): WorldState {

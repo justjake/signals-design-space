@@ -79,6 +79,14 @@ export interface ReactiveNode {
    * of every subscriber.
    */
   reactEpoch: number;
+  /**
+   * Companion epoch that never goes silent: advances on every canonical
+   * change, silent draft folds included. Subscribers rendering outside any
+   * SignalScope snapshot this one — no render-pass world ever delivers to
+   * them, so the fold is their only channel and a suppressed epoch would
+   * strand them on stale state.
+   */
+  canonicalEpoch: number;
 }
 
 let writeEpoch: WriteEpoch = 1;
@@ -201,6 +209,7 @@ export function makeCell<T>(
     lifetimePending: false,
     worldMemos: null,
     reactEpoch: 1,
+    canonicalEpoch: 1,
   };
 }
 
@@ -228,6 +237,7 @@ export function makeDerived<T>(
     refreshNonce: undefined,
     worldMemos: null,
     reactEpoch: 1,
+    canonicalEpoch: 1,
   };
 }
 
@@ -361,6 +371,7 @@ export function withSuppressedReactEpoch<T>(fn: () => T): T {
 
 export function bumpReactEpoch(node: ReactiveNode): void {
   node.reactEpoch++;
+  node.canonicalEpoch++;
 }
 
 /**
@@ -383,6 +394,7 @@ function mark(node: ReactiveNode, cause: TraceEventId): void {
     return;
   }
   if (node.kind === 'derived') {
+    node.canonicalEpoch++;
     if (!reactEpochSuppressed) node.reactEpoch++;
     for (let l = node.subs; l !== undefined; l = l.nextSub) {
       mark(l.sub, cause);
@@ -419,6 +431,7 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
   node.causeEvent = cause;
   node.version++;
   node.reactEpoch++;
+  node.canonicalEpoch++;
   for (let l = node.subs; l !== undefined; l = l.nextSub) {
     mark(l.sub, cause);
   }
@@ -426,16 +439,32 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
 }
 
 /** Notify leaf observers of a node without touching canonical state (draft
- * activity: ops appended or a draft discarded — speculative readers must
- * re-resolve, canonical readers see no change). */
+ * activity: ops appended, retired, or discarded — speculative readers must
+ * re-resolve, canonical readers see no change). The wave follows watched
+ * derived edges down to the leaves: probes subscribe to the node they probe
+ * (a computed, usually), not to the drafted input, so stopping at the cell
+ * would leave every downstream subscriber unaware. Watchers without a
+ * notify callback (effects) are canonical-only and stay untouched. */
 export function pokeLeafObservers(node: ReactiveNode): void {
-  for (let l = node.subs; l !== undefined; l = l.nextSub) {
-    const sub = l.sub;
-    if (sub.kind === 'watcher' && (sub as WatcherNode).onNotify !== undefined) {
-      scheduleWatcher(sub as WatcherNode);
-      sub.flags = Flags.Dirty;
+  let seen: Set<ReactiveNode> | null = null;
+  const walk = (n: ReactiveNode): void => {
+    for (let l = n.subs; l !== undefined; l = l.nextSub) {
+      const sub = l.sub;
+      if (sub.kind === 'watcher') {
+        if ((sub as WatcherNode).onNotify !== undefined) {
+          scheduleWatcher(sub as WatcherNode);
+          sub.flags = Flags.Dirty;
+        }
+      } else if (sub.kind === 'derived') {
+        seen ??= new Set();
+        if (!seen.has(sub)) {
+          seen.add(sub);
+          walk(sub);
+        }
+      }
     }
-  }
+  };
+  walk(node);
   if (batchDepth === 0) flush();
 }
 
@@ -596,6 +625,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
   cell.value = next;
   cell.version++;
   writeEpoch++;
+  cell.canonicalEpoch++;
   if (!reactEpochSuppressed) cell.reactEpoch++;
   const cause = hooks.trace !== null ? hooks.trace('write', cell, currentCause) : NO_EVENT;
   propagateFrom(cell as CellNode<unknown>, cause);
@@ -749,6 +779,7 @@ function makeWatcher(fn: (() => void | (() => void)) | undefined): WatcherNode {
     onNotify: undefined,
     worldMemos: null,
     reactEpoch: 1,
+    canonicalEpoch: 1,
   };
 }
 

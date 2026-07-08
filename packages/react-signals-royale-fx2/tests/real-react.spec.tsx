@@ -408,6 +408,82 @@ describe('scenario 7 — one transition across two roots', () => {
   });
 });
 
+describe('silent folds must repair subscribers the render-pass worlds never reached', () => {
+  // A retirement is silent (no subscription-epoch bump) because render-pass
+  // worlds already delivered the draft's values to every subscriber. That
+  // premise only holds for subscribers whose root carried the draft. The two
+  // shapes below never carried it, so the fold is their ONLY delivery
+  // channel — they must converge, not stay stale until the next write.
+  test('a subscriber outside any SignalScope converges when a transition retires via a scoped root', async () => {
+    const { createRoot } = await import('react-dom/client');
+    const a = signal(1);
+    const gate = deferred<void>();
+    function Suspender() {
+      const v = useValue(a);
+      if (v === 2 && !gate.settled) throw gate.promise;
+      return <span>s:{v};</span>;
+    }
+    const scoped = await h.mount(
+      <React.Suspense fallback={<i>fb</i>}>
+        <Suspender />
+      </React.Suspense>,
+    );
+    const bareContainer = document.createElement('div');
+    document.body.appendChild(bareContainer);
+    h.containers.push(bareContainer);
+    const bareRoot = createRoot(bareContainer); // deliberately NO SignalScope
+    function Bare() {
+      return <b>b:{useValue(a)};</b>;
+    }
+    await act(() => bareRoot.render(<Bare />));
+    expect(text(bareContainer)).toBe('b:1;');
+    await act(() => {
+      startTransitionWrite(() => a.set(2));
+    });
+    // Held by the scoped root; canonical unchanged, so the bare root shows 1.
+    expect(text(scoped.container)).toBe('s:1;');
+    expect(text(bareContainer)).toBe('b:1;');
+    expect(read(a)).toBe(1);
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(text(scoped.container)).toBe('s:2;');
+    expect(read(a)).toBe(2);
+    expect(text(bareContainer)).toBe('b:2;'); // repaired by the fold itself
+    await act(() => bareRoot.unmount());
+  });
+
+  test('a scope mounted mid-transition (never dispatched the draft) converges at retirement', async () => {
+    const a = signal(1);
+    const gate = deferred<void>();
+    function Suspender() {
+      const v = useValue(a);
+      if (v === 2 && !gate.settled) throw gate.promise;
+      return <span>s:{v};</span>;
+    }
+    const first = await h.mount(
+      <React.Suspense fallback={<i>fb</i>}>
+        <Suspender />
+      </React.Suspense>,
+    );
+    await act(() => {
+      startTransitionWrite(() => a.set(2));
+    });
+    expect(text(first.container)).toBe('s:1;');
+    // This root registers after the draft's dispatch: its passes never carry
+    // the draft, so it renders the committed world only.
+    const late = await h.mount(<Reader id="r" atom={a} />);
+    expect(text(late.container)).toBe('r:1;');
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(text(first.container)).toBe('s:2;');
+    expect(text(late.container)).toBe('r:2;'); // the fold was loud for it
+  });
+});
+
 describe('scenario 8 — StrictMode nets one subscription and one observation', () => {
   test('double-mount: one observe; writes deliver; unmount cleans up once', async () => {
     const log: string[] = [];

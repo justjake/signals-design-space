@@ -22,7 +22,7 @@ import {
   type SignalOptions,
 } from 'signals-royale-fx2';
 import { captureRenderDispatcher, noteRenderWorld } from './host.ts';
-import { ContainerContext, WorldContext } from './scope.ts';
+import { ContainerContext, UNSCOPED_WORLD, WorldContext } from './scope.ts';
 
 type AnyReadable = Signal<any> | Computed<any>;
 type Readable<T> = Signal<T> | Computed<T>;
@@ -68,13 +68,25 @@ function unwrapForRender(x: AnyReadable, ids: readonly DraftId[]): unknown {
  * must re-render: urgent canonical changes, settlements, rollbacks — while
  * values a transition already delivered through render-pass worlds fold
  * silently. The render VALUE resolves the pass's own world from context.
+ *
+ * Silent folds are safe only for subscribers a render-pass world can reach.
+ * Outside any SignalScope there is no world carrier, so those subscribers
+ * snapshot the canonical epoch instead — it counts silent folds, which are
+ * their only delivery channel for committed transitions.
  */
 export function useValue<T>(x: Readable<T>): T {
   captureRenderDispatcher();
   const world = React.useContext(WorldContext);
   noteRenderWorld(world.ids);
+  const scoped = world !== UNSCOPED_WORLD;
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
-  const epochSnap = React.useCallback(() => engine.epochSnapshot(x as AnyReadable), [x]);
+  const epochSnap = React.useCallback(
+    () =>
+      scoped
+        ? engine.epochSnapshot(x as AnyReadable)
+        : engine.canonicalEpochSnapshot(x as AnyReadable),
+    [x, scoped],
+  );
   React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
   const value = unwrapForRender(x as AnyReadable, world.ids) as T;
   traceDelivery(x as AnyReadable, value);

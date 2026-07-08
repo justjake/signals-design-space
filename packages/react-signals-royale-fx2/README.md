@@ -38,6 +38,12 @@ engine then folds it into committed state, and passes still holding the id
 resolve identical values. What is on screen per root is queryable at any
 time (`committed(x, container)`, `useCommitted`).
 
+Roots without a `SignalScope` still work, in a degraded mode: their
+components only ever see committed state (no transition previews), and when
+a transition commits elsewhere the fold itself re-renders them — hooks
+outside any scope subscribe to a canonical change counter that folds always
+advance, so they converge instead of holding a transition or going stale.
+
 ## The fork: 11 lines, one file
 
 Everything above runs on stock React semantics. One required capability

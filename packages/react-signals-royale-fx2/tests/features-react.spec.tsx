@@ -112,6 +112,38 @@ describe('scenario 11 — suspense family', () => {
     expect(text(container)).toBe('i;d:two');
   });
 
+  test('refresh inside a transition, inputs unchanged: useIsPending flips while stale serves', async () => {
+    const param = signal(0);
+    const r = makeResource(param);
+    function Probe() {
+      return <em>{useIsPending(r.data) ? 'P' : 'i'};</em>;
+    }
+    const { container } = await h.mount(
+      <>
+        <Probe />
+        <React.Suspense fallback={<i>loading</i>}>
+          <DataView data={r.data} />
+        </React.Suspense>
+      </>,
+    );
+    await r.settle('0:0', 'one');
+    expect(text(container)).toBe('i;d:one');
+    await act(() => {
+      startTransitionWrite(() => {
+        r.refresh(); // param unchanged: the hidden nonce is the only signal
+      });
+    });
+    expect(r.fetchCount()).toBe(2); // the transition's world refetched
+    expect(read(r.data)).toBe('one'); // canonical still serves stale
+    // The transition parks on the refetch; the committed screen must show
+    // the stale value WITH the pending indicator engaged — the nonce draft
+    // has to reach the probe's subscription like any other drafted input.
+    expect(text(container)).toBe('P;d:one');
+    await r.settle('0:1', 'two');
+    expect(text(container)).toBe('i;d:two'); // the refetch commits with the transition
+    expect(r.fetchCount()).toBe(2);
+  });
+
   test('settlement inside a transition commits with the transition', async () => {
     const param = signal(0);
     const r = makeResource(param);

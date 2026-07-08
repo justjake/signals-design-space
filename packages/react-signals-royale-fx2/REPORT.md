@@ -35,9 +35,9 @@ plus one jest test file (excluded by the metric). Ledger:
 
 | Lines | What | Why it cannot be userland |
 |---|---|---|
-| 6 (comment x4 + hook read + start call) at `flushMutationEffects` entry | emit window-start per commit | Stock React exposes no signal at mutation-phase entry: `getSnapshotBeforeUpdate` fires only on class fibers with pending updates (a commit caused by unrelated state bypasses any fixed component); insertion/layout effects run per-fiber inside/after the phase with no phase-entry ordering guarantee; a `MutationObserver` reports asynchronously after the fact — too late to disconnect; patching DOM prototypes observes mutations but cannot attribute them to React vs third parties, which is the entire contract. Bracketing requires standing inside the commit. |
+| 5 (comment x3 + hook read + start call) at `flushMutationEffects` entry | emit window-start per commit | Stock React exposes no signal at mutation-phase entry: `getSnapshotBeforeUpdate` fires only on class fibers with pending updates (a commit caused by unrelated state bypasses any fixed component); insertion/layout effects run per-fiber inside/after the phase with no phase-entry ordering guarantee; a `MutationObserver` reports asynchronously after the fact — too late to disconnect; patching DOM prototypes observes mutations but cannot attribute them to React vs third parties, which is the entire contract. Bracketing requires standing inside the commit. |
 | 2 (blank + stop call) after the mutation loop | emit window-stop before layout effects | Same argument, exit edge: the contract is an exact bracket (user/layout/passive effects outside the window), so the stop must fire after the last host mutation and before the layout phase — a point only the reconciler reaches. |
-| 3 (comment x2 + assignment) at EOF | `__FX2_REACT_PROTOCOL__ = 1` handshake | RULES requires registration to fail loudly on a stock build. Userland cannot decide whether a build will call the hook except by triggering a real commit and waiting — that is not failing loudly at registration time. One marker line makes the capability detectable. |
+| 4 (blank + comment x2 + assignment) at EOF | `__FX2_REACT_PROTOCOL__ = 1` handshake | RULES requires registration to fail loudly on a stock build. Userland cannot decide whether a build will call the hook except by triggering a real commit and waiting — that is not failing loudly at registration time. One marker line makes the capability detectable (see §8 for the markerless alternative and why the marker stays). |
 
 The window dispatch reads `globalThis.__FX2_MUTATION_WINDOW__` per commit —
 uninstalled cost is one null check; stock behavior is unchanged (pinned by a
@@ -50,22 +50,22 @@ fork test).
 | Typecheck engine | `pnpm typecheck` (packages/signals-royale-fx2) | pass (tsc --noEmit, strict) |
 | Typecheck react | `pnpm typecheck` (packages/react-signals-royale-fx2) | pass |
 | Conformance | `pnpm exec vitest run tests/conformance.spec.ts` | **179 passed (179)** |
-| Engine suite | `pnpm test` (engine) | **221 passed (221)** — includes oracle default + leak audit |
-| Oracle default | in suite | `oracle fuzz (300 seeds x 90 steps)` + sabotage canary, pass |
+| Engine suite | `pnpm test` (engine) | **224 passed (224)** — includes oracle default + leak audit |
+| Oracle default | in suite | `oracle fuzz (300 seeds x 90 steps)` + 2 sabotage canaries, pass |
 | Oracle deep sweep | `ROYALE_FX2_SEEDS=1200 pnpm exec vitest run tests/oracle-fuzz.spec.ts` | `oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on every seed` pass |
 | Leak audit | `vitest run tests/gc-leaks.spec.ts` (forks pool, --expose-gc) | 6 passed (6) |
-| Real-React gate | `pnpm test` (react pkg; raw createRoot + act, jsdom, own fork build) | **28 passed (28)** — scenarios 1–18 + host guarantees |
+| Real-React gate | `pnpm test` (react pkg; raw createRoot + act, jsdom, own fork build) | **31 passed (31)** — scenarios 1–18 + host guarantees |
 | Fork protocol | `cd vendor/react && yarn test --no-watchman ReactDOMFx2MutationWindow` | `Tests: 6 passed, 6 total` |
 | Adjacent upstream | `yarn test --no-watchman ReactDOMRoot ReactFlushSync ReactTransition` | `70 passed, 1 skipped` (skip is upstream's) |
-| Pristine patches | `git am patches/*` onto `e71a6393e6` in a fresh worktree | patched tree `30b03c73…` == fork branch tree (bit-identical); `./build.sh` builds (`Built: 19.3.0`); gate re-run green on the fresh build |
+| Pristine patches | `git am patches/*` onto `e71a6393e6` in a fresh worktree | patched tree `6d72a7a9…` == fork branch tree (bit-identical); `./build.sh` builds (`Built: 19.3.0`); gate re-run green on the fresh build |
 | Shared battery | `pnpm test` in `royale/verify-kit/battery` (ADAPTER → my `royale/adapter.ts`, links → my fork build) | **25 passed (25)** |
 
 Verbatim tails:
 
 ```
 Tests  179 passed (179)          # conformance
-Tests  221 passed (221)          # engine suite
-Tests  28 passed (28)            # real-React gate
+Tests  224 passed (224)          # engine suite
+Tests  31 passed (31)            # real-React gate
 Tests: 6 passed, 6 total         # fork protocol (jest)
 Tests  25 passed (25)            # shared battery
 ✓ oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on every seed
@@ -77,13 +77,16 @@ Tests  25 passed (25)            # shared battery
 node royale/verify/count-loc.mjs --fork vendor/react --base e71a6393e66b0d2add46ba2b2c5db563a0563828 \
   --head royale/fx2-react --lib packages/signals-royale-fx2 --lib packages/react-signals-royale-fx2
 forkLoc: 11
-libLoc: 2193
+libLoc: 2239
 ```
 
 - **Fork: 11** (incumbent: 1510 — 137x smaller; below the 200–520 estimate).
-- **Library: 2193** — engine 1814 (graph 726, worlds 412, index 361, asyncs
-  171, tracer 96, lifetime 48) + react 379 (host 182, hooks 86, scope 65,
+- **Library: 2239** — engine 1838 (graph 747, worlds 412, index 364, asyncs
+  171, tracer 96, lifetime 48) + react 401 (host 196, hooks 93, scope 66,
   transitions 30, index 16). Incumbents ≈ 4700–5000.
+- At the judged commit the count was 11 / 2194 (an earlier revision of this
+  section misquoted 2193); the +45 since is the judgement fixes (§10), all
+  library-side.
 
 ## 5. Benchmarks
 
@@ -225,6 +228,20 @@ Nothing in the shared battery is disputed.
   function cannot reach; every judged shape (probes that subscribe, or any
   ancestor that does) is covered. Recommendation in docs: subscribe with
   `useValue` when rendering, peek with `latest` elsewhere.
+- **The mutation-window carrier is one global slot.** The fork reads
+  `globalThis.__FX2_MUTATION_WINDOW__`; if a bundler ships duplicate copies
+  of these bindings, the last `registerReactSignals()` wins the slot and the
+  other copy's `onDomMutation` subscribers go quiet (last-writer-wins, no
+  error). Registration is process-global by design — one React build, one
+  hook — so the mitigation is packaging: dedupe the library.
+- **The 3 handshake lines are a convenience, not strictly forced.** A
+  markerless registration probe is arguably possible: `flushSync` a probe
+  render into a detached root at registration time and observe whether the
+  window fires during that commit. The marker stays because the probe turns
+  "fail loudly at registration" into "fail after a side-effectful
+  experiment" (a real commit, layout/passive effects, timing assumptions on
+  the first window dispatch); the trade-off is 3 fork lines that a stricter
+  count could argue down to 8.
 - milomg `unstable` is 2.96x alien (dynamic-dependency churn re-links
   eagerly); overall geomean 1.278 is behind the alien-parity bar.
 - Transition-scenario p95 (10 ms ≈ one slice) is above the baseline's 2.7 ms
@@ -247,3 +264,85 @@ Nothing in the shared battery is disputed.
   corner without a fork line.
 - Wire the causality tracer into the playground UI (the format is already
   human-readable; a live "why did this re-render" panel is one afternoon).
+
+## 10. Judgement fixes
+
+The judgement round verified the headline (11-line fork bit-identical under
+patch replay, gates reproduced, 9/9 probes green) and found two undisclosed
+correctness gaps. Both are fixed below; the fork is untouched (tree still
+`6d72a7a9…`, patches unchanged).
+
+### 10.1 Mixed-root fold staleness (moderate)
+
+A `useValue` subscriber in a root without `SignalScope` went stale when a
+transition retired via a scoped root's commit: the silent fold suppresses
+the `reactEpoch` snapshot bump, so epoch-snapshot subscribers outside any
+scope bailed forever (judge probe E i-b pinned the bare root at `b:1;` with
+canonical already 2, repaired only by the next canonical write). Resolution:
+converge, not enforce — `SignalScope` is a public export, and a scope-less
+root is a legitimate degraded mode (canonical-only view, no transition
+worlds). Two parts:
+
+- Engine: every node carries a `canonicalEpoch` companion to `reactEpoch`
+  that silent folds still advance. Hooks rendering outside any scope
+  (detected by a distinct context-default identity) snapshot the companion;
+  scoped subscribers keep `reactEpoch`, so the post-fold repair storm the
+  epoch design exists to prevent does not return.
+- Bindings: a fold is silent only when every currently mounted scope carried
+  the draft. A scope mounted mid-transition never carried it — the same
+  staleness class one level up — so its presence makes the retirement loud.
+
+Regression tests, verified failing pre-fix: react `silent folds must repair
+subscribers the render-pass worlds never reached` (bare root `b:1;` vs
+expected `b:2;`; late-mounted scope `r:1;` vs `r:2;`); engine worlds.spec
+`a silent fold keeps the react epoch still but advances the canonical
+epoch`. The oracle learned the class: every fuzz schedule now runs bail-style
+bare subscribers (subscribe, snapshot the canonical epoch, re-read only on
+change) over cell 0 and comp 0, retires are ~50% silent, and a second
+sabotage canary (snapshot blinded back to `reactEpoch`) is caught. Re-run
+against the judge's pinned probes: 8/9 pass; the one failure is the
+pinned-as-observed staleness expectation itself, which now reads `b:2;` —
+the value the probe comments call fully correct.
+
+### 10.2 useIsPending during transition-owned refresh (minor)
+
+`refresh(x)` inside a transition with unchanged inputs was correct at engine
+level (in-world refetch, stale serves, commits with the transition) but the
+rendered `useIsPending` hook never flipped: the draft-side nonce append
+poked only the nonce cell's direct leaf observers, and pending probes
+subscribe to the computed they probe, not to its hidden input. Fix:
+`pokeLeafObservers` now walks watched derived edges down to the leaves, so
+draft activity on any input reaches every downstream subscription (draft
+appends, folds, discards, and per-root commit pokes all inherit the wave;
+effects remain canonical-only and are never poked). Regression tests,
+verified failing pre-fix: react `refresh inside a transition, inputs
+unchanged: useIsPending flips while stale serves` (`i;d:one` vs expected
+`P;d:one`); engine worlds.spec `a draft append notifies leaf observers of
+computeds over the cell`. Judge probe B now logs `engine isPending: true
+hook rendered: d:one;p:P`.
+
+### 10.3 Report corrections and disclosures
+
+- Fork ledger line-split corrected to 5/2/4 (was 6/2/3; total 11 exact, §2).
+- Pristine patched-tree hash corrected to `6d72a7a9…` (was misquoted
+  `30b03c73…`, §3).
+- Judged-commit libLoc was 2194 (was misquoted 2193, §4).
+- Added to §8: the `__FX2_MUTATION_WINDOW__` global-carrier caveat
+  (last-writer-wins across duplicate library copies) and the judge's note
+  that a markerless flushSync probe-commit detection was arguably possible
+  (the 3 marker lines stay; the trade-off is recorded).
+
+### 10.4 Fresh outputs (this session, suites sequential)
+
+```
+tsc --noEmit                     # engine and react packages: clean
+Tests  224 passed (224)          # engine suite (was 221: +2 worlds, +1 canary)
+✓ oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on every seed
+Tests  31 passed (31)            # real-React gate (was 28: +3 regressions)
+Tests  25 passed (25)            # shared battery (royale/verify-kit/battery)
+probes: 1 failed | 8 passed      # /tmp/fx2-probes: E(i-b) pinned-staleness line, now b:2;
+```
+
+LOC delta (`node royale/verify/count-loc.mjs`, same invocation as §4):
+forkLoc 11 → **11** (fork untouched); libLoc 2194 → **2239** (+45, all
+library-side: graph +20, host +14, hooks +7, index +3, scope +1).

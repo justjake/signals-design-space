@@ -98,7 +98,10 @@ type Step =
   | { t: 'open' }
   | { t: 'draftSet'; draft: number; cell: number; v: number }
   | { t: 'draftUpdate'; draft: number; cell: number; k: number }
-  | { t: 'retire'; draft: number }
+  /** silent mirrors the React bindings' fold-after-commit: no reactEpoch
+   * bump. Model semantics are identical; the bare subscribers below assert
+   * the canonical channel still converges. */
+  | { t: 'retire'; draft: number; silent: boolean }
   | { t: 'discard'; draft: number }
   | { t: 'readCanonical'; ref: Ref }
   | { t: 'readWorld'; ref: Ref; ids: number[] }
@@ -153,7 +156,9 @@ function generate(rand: () => number, steps: number): Step[] {
       const ix = Math.floor(rand() * draftIds.length);
       const d = draftIds[ix];
       draftIds = draftIds.filter((x) => x !== d);
-      out.push(rand() < 0.7 ? { t: 'retire', draft: d } : { t: 'discard', draft: d });
+      out.push(
+        rand() < 0.7 ? { t: 'retire', draft: d, silent: rand() < 0.5 } : { t: 'discard', draft: d },
+      );
     } else if (r < 0.8) {
       out.push({ t: 'readCanonical', ref: anyRef() });
     } else if (r < 0.9) {
@@ -186,6 +191,43 @@ function runSchedule(steps: Step[]): string | null {
 
   const engRead = (ref: Ref): number => ('cell' in ref ? read(engCells[ref.cell]) : read(engComps[ref.comp]));
 
+  // Bare subscribers: the scope-less React shape. Subscribe, snapshot the
+  // canonical epoch, re-read only when the snapshot changes (the
+  // useSyncExternalStore bail). Their view must track model canonical state
+  // through every fold — silent ones included (the bare-root fold class).
+  interface BareSub {
+    ref: Ref;
+    snap: number;
+    view: number;
+    unsub: () => void;
+  }
+  const bareSubs: BareSub[] = [];
+  const attachBare = (ref: Ref) => {
+    const target = 'cell' in ref ? engCells[ref.cell] : engComps[ref.comp];
+    const sub: BareSub = {
+      ref,
+      snap: ri.canonicalEpochSnapshot(target),
+      view: engRead(ref),
+      unsub: () => {},
+    };
+    sub.unsub = ri.subscribe(target, () => {
+      const s = ri.canonicalEpochSnapshot(target);
+      if (s === sub.snap) return;
+      sub.snap = s;
+      sub.view = engRead(ref);
+    });
+    bareSubs.push(sub);
+  };
+  const checkBareSubs = (): string | null => {
+    for (const sub of bareSubs) {
+      const want = modelEval(model, exprs, sub.ref, null);
+      if (sub.view !== want) {
+        return `bare subscriber ${JSON.stringify(sub.ref)}: view ${sub.view} != model ${want}`;
+      }
+    }
+    return null;
+  };
+
   const refreshExpectedEffect = () => {
     if (effectRef === null) return;
     const v = modelEval(model, exprs, effectRef, null);
@@ -202,6 +244,7 @@ function runSchedule(steps: Step[]): string | null {
         case 'cell': {
           model.cells.push({ base: s.init, intents: [] });
           engCells.push(signal(s.init));
+          if (engCells.length === 1) attachBare({ cell: 0 });
           break;
         }
         case 'comp': {
@@ -226,6 +269,7 @@ function runSchedule(steps: Step[]): string | null {
               }
             });
             refreshExpectedEffect();
+            attachBare({ comp: 0 });
           }
           break;
         }
@@ -275,7 +319,7 @@ function runSchedule(steps: Step[]): string | null {
         case 'retire': {
           if (model.drafts.get(s.draft) !== 'live') break;
           model.drafts.set(s.draft, 'retired');
-          ri.retireDraft(engDrafts.get(s.draft)!);
+          ri.retireDraft(engDrafts.get(s.draft)!, { silent: s.silent });
           refreshExpectedEffect();
           break;
         }
@@ -316,6 +360,10 @@ function runSchedule(steps: Step[]): string | null {
           break;
         }
       }
+      // Bare subscribers converge synchronously (notifications flush with
+      // the wave), so their view must match model canonical after any step.
+      const bare = checkBareSubs();
+      if (bare !== null) return fail(bare);
     }
     // Final canonical sweep + effect-log comparison.
     for (let cix = 0; cix < engCells.length; cix++) {
@@ -334,6 +382,7 @@ function runSchedule(steps: Step[]): string | null {
     return null;
   } finally {
     disposeEffect?.();
+    for (const sub of bareSubs) sub.unsub();
   }
 }
 
@@ -369,12 +418,33 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
         { t: 'cell', init: 1 },
         { t: 'open' },
         { t: 'draftSet', draft: 0, cell: 0, v: 9 },
-        { t: 'retire', draft: 0 },
+        { t: 'retire', draft: 0, silent: false },
         { t: 'readCanonical', ref: { cell: 0 } },
       ];
       expect(runSchedule(schedule)).not.toBeNull();
     } finally {
       (ri as { retireDraft: typeof real }).retireDraft = real;
+      resetEngineForTest();
+    }
+  });
+
+  test('canary: a bare subscriber blinded to silent folds is caught (the scope-less staleness class)', () => {
+    // Sabotage: the bare subscriber's snapshot reverts to the world-delivered
+    // epoch, which silent folds keep still — exactly the pre-fix wiring that
+    // stranded subscribers outside any SignalScope.
+    const real = ri.canonicalEpochSnapshot;
+    (ri as { canonicalEpochSnapshot: typeof real }).canonicalEpochSnapshot = (x) =>
+      ri.epochSnapshot(x);
+    try {
+      const schedule: Step[] = [
+        { t: 'cell', init: 1 },
+        { t: 'open' },
+        { t: 'draftSet', draft: 0, cell: 0, v: 9 },
+        { t: 'retire', draft: 0, silent: true },
+      ];
+      expect(runSchedule(schedule)).not.toBeNull();
+    } finally {
+      (ri as { canonicalEpochSnapshot: typeof real }).canonicalEpochSnapshot = real;
       resetEngineForTest();
     }
   });

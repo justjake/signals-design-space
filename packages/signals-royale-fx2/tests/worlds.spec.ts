@@ -56,6 +56,32 @@ describe('draft visibility', () => {
     expect(latest(a)).toBe(5);
     expect(read(a)).toBe(5);
   });
+
+  test('a silent fold keeps the react epoch still but advances the canonical epoch', () => {
+    const a = signal(1);
+    // A bail-style subscriber outside any scope: re-reads only when its
+    // snapshot changes (the useSyncExternalStore contract). Its snapshot is
+    // the canonical epoch — render-pass worlds never deliver to it, so the
+    // fold must be visible on its channel.
+    let snap = ri.canonicalEpochSnapshot(a);
+    let view = read(a);
+    const unsub = ri.subscribe(a, () => {
+      const s = ri.canonicalEpochSnapshot(a);
+      if (s === snap) return;
+      snap = s;
+      view = read(a);
+    });
+    const reactSnapBefore = ri.epochSnapshot(a);
+    const id = inDraft(() => a.set(9));
+    expect(view).toBe(1); // drafts stay invisible to canonical subscribers
+    ri.retireDraft(id, { silent: true });
+    expect(read(a)).toBe(9);
+    expect(view).toBe(9); // the fold reached the canonical channel
+    // The world-delivered channel stayed silent: scoped subscribers, whose
+    // render passes already carried the draft, schedule no repair renders.
+    expect(ri.epochSnapshot(a)).toBe(reactSnapBefore);
+    unsub();
+  });
 });
 
 describe('dispatch-order replay (React updater-queue arithmetic)', () => {
@@ -136,6 +162,25 @@ describe('computeds across worlds', () => {
     expect(isPending(a)).toBe(false);
     expect(isPending(c)).toBe(false);
     expect(read(c)).toBe(18);
+  });
+
+  test('a draft append notifies leaf observers of computeds over the cell', () => {
+    // Pending probes subscribe to the node they probe, not to its inputs.
+    // Draft activity on an input must therefore travel the watched edges
+    // down to leaf observers, or a probe over a computed never wakes up —
+    // its snapshot would flip (the deps scan sees the drafted cell) but
+    // nothing tells it to look.
+    const a = signal(1);
+    const c = computed(() => a.get() * 2);
+    const flips: boolean[] = [];
+    const unsub = ri.subscribe(c, () => flips.push(isPending(c)));
+    expect(read(c)).toBe(2); // establish the watched a -> c edge
+    const id = inDraft(() => a.set(9));
+    expect(flips).toContain(true); // the append reached the probe
+    ri.retireDraft(id, { silent: true });
+    expect(flips[flips.length - 1]).toBe(false); // and so did the fold
+    expect(read(c)).toBe(18);
+    unsub();
   });
 });
 

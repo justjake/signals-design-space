@@ -460,6 +460,12 @@ export const reactIntegration = {
   epochSnapshot(x: AnyReadable): number {
     return nodeOf(x).reactEpoch;
   },
+  /** Like epochSnapshot, but silent draft folds count too. For subscribers
+   * outside any SignalScope: render-pass worlds never deliver to them, so
+   * the fold is the only channel that can repair their view. */
+  canonicalEpochSnapshot(x: AnyReadable): number {
+    return nodeOf(x).canonicalEpoch;
+  },
   hasLiveDrafts(ids: readonly DraftId[]): boolean {
     return worldOf(ids).drafts.length > 0;
   },

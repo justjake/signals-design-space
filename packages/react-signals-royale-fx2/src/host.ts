@@ -32,6 +32,10 @@ export interface ReactSignalsHandle {
 const providers = new Set<ProviderRecord>();
 /** Providers that received each draft's dispatch and have not committed it. */
 const draftRecipients = new Map<DraftId, Set<ProviderRecord>>();
+/** Everyone who EVER received each draft's dispatch. A scope mounted after
+ * the broadcast is missing here: its passes never carried the draft, so a
+ * silent fold would strand its subscribers — the retirement must be loud. */
+const draftAudience = new Map<DraftId, Set<ProviderRecord>>();
 const mutationSubs = new Set<(phase: 'start' | 'stop', container: Element) => void>();
 /** Hook dispatchers observed during renders; a write under one is a bug. */
 const renderDispatchers = new WeakSet<object>();
@@ -102,6 +106,7 @@ function ambientClassifier(): DraftId | null {
 export function broadcastDraft(id: DraftId): void {
   const recipients = new Set(providers);
   draftRecipients.set(id, recipients);
+  draftAudience.set(id, new Set(recipients));
   for (const p of recipients) p.dispatch(id);
   if (recipients.size === 0) {
     // No mounted scope observes this draft; it retires as soon as the
@@ -109,6 +114,7 @@ export function broadcastDraft(id: DraftId): void {
     queueMicrotask(() => {
       if (draftRecipients.get(id)?.size === 0) {
         draftRecipients.delete(id);
+        draftAudience.delete(id);
         engine.retireDraft(id);
       }
     });
@@ -139,10 +145,23 @@ export function registerProvider(p: ProviderRecord): () => void {
       recipients.delete(p);
       if (recipients.size === 0) {
         draftRecipients.delete(id);
+        draftAudience.delete(id);
         engine.retireDraft(id);
       }
     }
   };
+}
+
+/** True when every currently mounted scope carried this draft, i.e. every
+ * scoped subscriber already received its values through render-pass worlds
+ * and the fold needs no repairs. */
+function foldReachedEveryScope(id: DraftId): boolean {
+  const audience = draftAudience.get(id);
+  if (audience === undefined) return false;
+  for (const p of providers) {
+    if (!audience.has(p)) return false;
+  }
+  return true;
 }
 
 /** A provider committed a render pass whose world contained these drafts. */
@@ -156,9 +175,12 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
     if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
       draftRecipients.delete(id);
       renderedDrafts.delete(id);
-      // Silent: render-pass worlds already delivered these values to every
-      // subscriber under a scope; the fold must not schedule repairs.
-      engine.retireDraft(id, { silent: true });
+      // Silent only when render-pass worlds already delivered these values
+      // to every scope (subscribers outside scopes are covered separately by
+      // the canonical epoch). A scope mounted mid-transition never carried
+      // the draft, so its subscribers need the loud fold.
+      engine.retireDraft(id, { silent: foldReachedEveryScope(id) });
+      draftAudience.delete(id);
     }
   }
 }
@@ -237,6 +259,7 @@ export function resetReactSignalsForTest(): void {
   resetEngineForTest();
   providers.clear();
   draftRecipients.clear();
+  draftAudience.clear();
   renderedDrafts.clear();
   mutationSubs.clear();
   lastRenderWorldIds = null;
