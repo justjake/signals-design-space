@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { createRuntime, type Atom, type Runtime } from '../src/index';
+import { expect, it } from "vitest";
+import { createRuntime, type Atom, type Runtime } from "../src/index";
 
 const gc = (globalThis as { gc?: () => void }).gc;
 
@@ -20,8 +20,8 @@ function droppedComputed(runtime: Runtime, source: Atom<number>): WeakRef<object
   return new WeakRef(computed);
 }
 
-it('reclaims dropped computed handles and clears retired episode state', async () => {
-  expect(gc).toBeTypeOf('function');
+it("reclaims dropped computed handles and clears retired episode state", async () => {
+  expect(gc).toBeTypeOf("function");
   const runtime = createRuntime();
   const source = runtime.atom(1);
   const reference = droppedComputed(runtime, source);
@@ -30,4 +30,26 @@ it('reclaims dropped computed handles and clears retired episode state', async (
   const batch = runtime.allocateBatch(true);
   runtime.retireBatch(batch, false);
   expect(runtime.liveBatchCount()).toBe(0);
+});
+
+it("finalizes a dropped standalone effect handle", async () => {
+  const runtime = createRuntime();
+  const source = runtime.atom(0);
+  let runs = 0;
+  const reference = (() => {
+    const dispose = runtime.effect(() => {
+      source.get();
+      ++runs;
+    });
+    return new WeakRef(dispose);
+  })();
+  expect(runs).toBe(1);
+  expect(await collect(reference)).toBe(true);
+  for (let i = 0; i < 10 && source.subscribers.size !== 0; ++i) {
+    gc?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(source.subscribers.size).toBe(0);
+  source.set(1);
+  expect(runs).toBe(1);
 });

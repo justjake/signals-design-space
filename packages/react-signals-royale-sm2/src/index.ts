@@ -5,7 +5,7 @@ export {
   register,
   resetForTest,
   type RegistrationHandle,
-} from './protocol';
+} from "./protocol";
 export {
   startTransitionWrite,
   useAtom,
@@ -16,5 +16,22 @@ export {
   useSignalEffect,
   useValue,
   type Readable,
-} from './hooks';
-export { trace, type TraceView } from './trace';
+} from "./hooks";
+export { trace, type TraceView } from "./trace";
+export {
+  Atom,
+  Computed,
+  atom,
+  batch,
+  committed,
+  computed,
+  effect,
+  initializeAtomState,
+  isPending,
+  latest,
+  refresh,
+  serializeAtomState,
+  untracked,
+  type AtomOptions,
+  type ComputedOptions,
+} from "./api";

@@ -1,5 +1,5 @@
-import type { RuntimeEvent } from 'signals-royale-sm2';
-import { getRuntime } from './protocol';
+import type { RuntimeEvent } from "signals-royale-sm2";
+import { getRuntime } from "./protocol";
 
 interface TraceEvent {
   id: number;
@@ -44,10 +44,17 @@ export function trace(capacity = 1024): TraceView {
     }
     records.push(record);
     byId.set(record.id, record);
-    if (event.kind === 'batch-open' && event.batchId !== undefined) {
+    if (event.kind === "batch-open" && event.batchId !== undefined) {
       batchOpen.set(event.batchId, record.id);
     }
-    if (event.batchId !== undefined && event.kind !== 'batch-open') {
+    if (
+      event.batchId !== undefined &&
+      (event.kind === "write" ||
+        event.kind === "refresh" ||
+        event.kind === "render-pass-start" ||
+        event.kind === "root-commit" ||
+        event.kind === "batch-retire")
+    ) {
       batchCause.set(event.batchId, record.id);
     }
     if (event.subject !== undefined) subjectCause.set(event.subject, record.id);
@@ -60,7 +67,7 @@ export function trace(capacity = 1024): TraceView {
         const candidate = records[i];
         if (
           candidate.subject === subject &&
-          (candidate.kind === 'component-render' || candidate.kind === 'component-delivery')
+          (candidate.kind === "component-render" || candidate.kind === "component-delivery")
         ) {
           current = candidate;
           break;

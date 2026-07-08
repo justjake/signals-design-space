@@ -1,6 +1,6 @@
-import * as React from 'react';
-import { Atom, Computed, type AtomOptions } from 'signals-royale-sm2';
-import { currentContainer, getRuntime, register } from './protocol';
+import * as React from "react";
+import { Atom, Computed, type AtomOptions } from "signals-royale-sm2";
+import { currentContainer, getRuntime, register } from "./protocol";
 
 export type Readable<T> = Atom<T> | Computed<T>;
 
@@ -30,7 +30,7 @@ export function useValue<T>(node: Readable<T>): T {
   const value = node.get();
   const batches = getRuntime().renderBatches();
   getRuntime().emitDebug({
-    kind: 'component-render',
+    kind: "component-render",
     subject: node,
     batchId: batches === null ? undefined : batches[batches.length - 1],
   });
@@ -50,7 +50,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
   React.useEffect(() => getRuntime().effect(() => fnRef.current()), []);
 }
 
-export function useIsPending(node: Readable<unknown>): boolean {
+export function useIsPending<T>(node: Readable<T>): boolean {
   register();
   const runtime = getRuntime();
   const [, bump] = React.useReducer((value: number) => value + 1, 0);
@@ -76,7 +76,9 @@ export function useCommitted<T>(node: Readable<T>): T {
       runtime.runInBatch(batchId ?? 0, bump),
     );
     const unsubscribeRoot = runtime.subscribeRoot((committedContainer, batches) => {
-      if (committedContainer === container) runtime.runInBatch(batches[0] ?? 0, bump);
+      if (committedContainer === container && batches.length !== 0) {
+        runtime.runInBatch(batches[0], bump);
+      }
     });
     return () => {
       unsubscribeNode();

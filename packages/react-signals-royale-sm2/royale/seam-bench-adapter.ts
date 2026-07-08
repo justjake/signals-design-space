@@ -1,9 +1,9 @@
-import { getRuntime, register, startTransitionWrite, useValue } from '../src/index';
+import { getRuntime, register, startTransitionWrite, useValue } from "../src/index";
 
 register();
 
 export default {
-  name: 'royale-sm2',
+  name: "royale-sm2",
   createCells(count: number) {
     const runtime = getRuntime();
     const cells = new Array(count);

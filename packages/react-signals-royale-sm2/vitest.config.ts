@@ -1,9 +1,9 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ['tests/**/*.spec.ts', 'tests/**/*.spec.tsx'],
-    pool: 'forks',
-    execArgv: ['--expose-gc'],
+    include: ["tests/**/*.spec.ts", "tests/**/*.spec.tsx"],
+    pool: "forks",
+    execArgv: ["--expose-gc"],
   },
 });

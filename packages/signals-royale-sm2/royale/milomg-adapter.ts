@@ -1,11 +1,11 @@
-import { createRuntime, type Atom, type Computed } from '../src/index';
+import { createRuntime, type Atom, type Computed } from "../src/index";
 
 type Cell = Atom<unknown> | Computed<unknown>;
 const runtime = createRuntime();
 let disposeBuild: (() => void) | undefined;
 
 export default {
-  name: 'Royale SM2',
+  name: "Royale SM2",
   createSignal(initialValue: unknown): Cell {
     return runtime.atom(initialValue);
   },
@@ -13,7 +13,7 @@ export default {
     return signal.get();
   },
   writeSignal(signal: Cell, value: unknown): void {
-    if ('set' in signal) signal.set(value);
+    if ("set" in signal) signal.set(value);
   },
   createComputed(fn: () => unknown): Cell {
     return runtime.computed(fn);

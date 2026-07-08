@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { createRuntime, type BatchId, type HostProtocol } from '../src/index';
+import { describe, expect, it } from "vitest";
+import { createRuntime, type BatchId, type HostProtocol } from "../src/index";
 
 function random(seed: number): () => number {
   let state = seed | 0;
@@ -14,8 +14,9 @@ interface ModelBatch {
   values: Map<number, number>;
 }
 
-describe('reducer-capsule oracle', () => {
-  const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
+describe("reducer-capsule oracle", () => {
+  const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+    ?.env;
   const seeds = Number(env?.ORACLE_SEEDS ?? 300);
   const steps = Number(env?.ORACLE_STEPS ?? 90);
 
@@ -57,7 +58,7 @@ describe('reducer-capsule oracle', () => {
           if (actual !== expected) {
             throw new Error(
               `seed=${seed} ${label}: atom ${i}, expected ${expected}, got ${actual}\n` +
-                `shrunk schedule:\n${history.join('\n')}`,
+                `shrunk schedule:\n${history.join("\n")}`,
             );
           }
         }
@@ -67,7 +68,7 @@ describe('reducer-capsule oracle', () => {
         if (actualTotal !== expectedTotal) {
           throw new Error(
             `seed=${seed} ${label}: total expected ${expectedTotal}, got ${actualTotal}\n` +
-              `shrunk schedule:\n${history.join('\n')}`,
+              `shrunk schedule:\n${history.join("\n")}`,
           );
         }
       };
@@ -105,7 +106,7 @@ describe('reducer-capsule oracle', () => {
             const batch = batches.get(id)!;
             batch.values.set(index, (batch.values.get(index) ?? canonical[index]) + delta);
           }
-          history.push(`update a${index} ${delta >= 0 ? '+' : ''}${delta} @${id}`);
+          history.push(`update a${index} ${delta >= 0 ? "+" : ""}${delta} @${id}`);
         } else if (roll < 0.67 && batches.size !== 0) {
           const id = batches.keys().next().value as BatchId;
           const committed = rng() < 0.75;
@@ -115,13 +116,13 @@ describe('reducer-capsule oracle', () => {
             for (const [index, value] of batch.values) canonical[index] = value;
           }
           batches.delete(id);
-          history.push(`retire ${id} ${committed ? 'commit' : 'rollback'}`);
+          history.push(`retire ${id} ${committed ? "commit" : "rollback"}`);
         } else {
           rendering = [];
           for (const id of batches.keys()) {
             if (rng() < 0.6) rendering.push(id);
           }
-          history.push(`render [${rendering.join(',')}]`);
+          history.push(`render [${rendering.join(",")}]`);
           check(`step ${step}`);
           rendering = null;
         }
@@ -130,7 +131,7 @@ describe('reducer-capsule oracle', () => {
     }
   });
 
-  it('regression: urgent transforms replay through a live capsule', () => {
+  it("regression: urgent transforms replay through a live capsule", () => {
     const runtime = createRuntime();
     let batch = 0;
     runtime.attachHost({
@@ -149,7 +150,7 @@ describe('reducer-capsule oracle', () => {
     expect(count.get()).toBe(4);
   });
 
-  it('regression: abandoning a capsule restores canonical state', () => {
+  it("regression: abandoning a capsule restores canonical state", () => {
     const runtime = createRuntime();
     let writing = runtime.allocateBatch(true);
     let rendering: BatchId[] | null = null;
@@ -159,13 +160,13 @@ describe('reducer-capsule oracle', () => {
       getRenderContainer: () => null,
       runInBatch: (_id, fn) => fn(),
     });
-    const value = runtime.atom('old');
-    value.set('draft');
+    const value = runtime.atom("old");
+    value.set("draft");
     rendering = [writing];
-    expect(value.get()).toBe('draft');
+    expect(value.get()).toBe("draft");
     rendering = null;
     writing = 0;
     runtime.retireBatch(1, false);
-    expect(value.get()).toBe('old');
+    expect(value.get()).toBe("old");
   });
 });

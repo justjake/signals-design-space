@@ -91,13 +91,13 @@ export class Atom<T> extends Node<T> {
     this.key = options.key;
   }
 
-  private readonly effect?: AtomOptions<T>['effect'];
+  private readonly effect?: AtomOptions<T>["effect"];
 
   materialize(): T {
     if (!this.ready) {
       const initial = this.initial as AtomInitial<T>;
       this.initial = undefined;
-      if (typeof initial === 'function') {
+      if (typeof initial === "function") {
         ++this.runtime.writesForbidden;
         try {
           this.value = (initial as () => T)();
@@ -163,7 +163,7 @@ export class Atom<T> extends Node<T> {
     if (this.observationWanted === (this.observationCleanup !== undefined)) return;
     if (this.observationWanted) {
       const cleanup = this.effect?.({ get: () => this.peek(), set: (value) => this.set(value) });
-      this.observationCleanup = typeof cleanup === 'function' ? cleanup : () => {};
+      this.observationCleanup = typeof cleanup === "function" ? cleanup : () => {};
     } else {
       this.observationCleanup?.();
       this.observationCleanup = undefined;
@@ -180,16 +180,15 @@ class Reaction extends Scope implements Tracker {
   active = true;
   private cleanup: (() => void) | undefined;
   private firstRun = true;
+  private cause: number | undefined;
 
-  constructor(
-    private readonly runtime: Runtime,
-    private readonly fn: () => void | (() => void),
-  ) {
+  constructor(private readonly runtime: Runtime, private readonly fn: () => void | (() => void)) {
     super();
   }
 
   invalidate(cause?: number): void {
     if (!this.active || this.scheduled) return;
+    this.cause = cause;
     this.scheduled = true;
     this.runtime.scheduleReaction(this, cause);
   }
@@ -207,14 +206,15 @@ class Reaction extends Scope implements Tracker {
     this.scheduled = false;
     if (!this.active || !this.shouldRun() || !this.active) return;
     this.firstRun = false;
-    this.runtime.emitDebug({ kind: 'effect-run', subject: this });
+    this.runtime.emitDebug({ kind: "effect-run", subject: this, batchId: this.cause });
+    this.cause = undefined;
     this.runtime.untracked(() => super.dispose());
     this.runtime.untracked(() => this.cleanup?.());
     this.cleanup = undefined;
     this.collecting.clear();
     this.collectedValues.clear();
     const cleanup = this.runtime.evaluate(this, this.fn, this);
-    if (typeof cleanup === 'function') this.cleanup = cleanup;
+    if (typeof cleanup === "function") this.cleanup = cleanup;
     for (const dependency of this.dependencies) {
       if (!this.collecting.has(dependency)) dependency.remove(this);
     }
@@ -307,6 +307,8 @@ interface LiveBatch {
   id: BatchId;
   deferred: boolean;
   capsules: Map<Atom<unknown>, Capsule>;
+  computeds: Set<Computed<unknown>>;
+  roots: Set<object>;
 }
 
 export interface HostProtocol {
@@ -327,7 +329,9 @@ export class Runtime {
   private readonly watchers: Watcher[] = [];
   private readonly observations = new Set<Atom<unknown>>();
   private readonly batchWatchers = new Set<() => void>();
-  private readonly rootWatchers = new Set<(container: object, batches: readonly BatchId[]) => void>();
+  private readonly rootWatchers = new Set<
+    (container: object, batches: readonly BatchId[]) => void
+  >();
   private readonly eventListeners = new Set<(event: RuntimeEvent) => void>();
   private observationsQueued = false;
   private host: HostProtocol | undefined;
@@ -415,7 +419,7 @@ export class Runtime {
   }
 
   endBatch(): void {
-    if (this.batchDepth === 0) throw new Error('endBatch called without startBatch');
+    if (this.batchDepth === 0) throw new Error("endBatch called without startBatch");
     if (--this.batchDepth === 0) this.flush();
   }
 
@@ -472,8 +476,14 @@ export class Runtime {
 
   allocateBatch(deferred: boolean): BatchId {
     const id = this.nextBatchId++;
-    this.liveBatches.set(id, { id, deferred, capsules: new Map() });
-    this.emitDebug({ kind: 'batch-open', batchId: id });
+    this.liveBatches.set(id, {
+      id,
+      deferred,
+      capsules: new Map(),
+      computeds: new Set(),
+      roots: new Set(),
+    });
+    this.emitDebug({ kind: "batch-open", batchId: id });
     return id;
   }
 
@@ -531,29 +541,33 @@ export class Runtime {
     return () => this.batchWatchers.delete(callback);
   }
 
-  subscribeRoot(
-    callback: (container: object, batches: readonly BatchId[]) => void,
-  ): () => void {
+  subscribeRoot(callback: (container: object, batches: readonly BatchId[]) => void): () => void {
     this.rootWatchers.add(callback);
     return () => this.rootWatchers.delete(callback);
   }
 
   refresh<T>(node: Atom<T> | Computed<T>): void {
+    const id = this.host?.getCurrentWriteBatch() ?? 0;
+    this.emitDebug({ kind: "refresh", subject: node, batchId: id || undefined });
     if (node instanceof Computed) {
       node.refresh(true);
-      node.invalidate();
+      node.invalidate(id || undefined);
     } else {
-      node.notify();
+      node.notify(id || undefined);
+    }
+    if (this.isDeferredBatch(id)) {
+      for (const watcher of this.batchWatchers) watcher();
     }
   }
 
   write<T>(atom: Atom<T>, update: (previous: T) => T): void {
-    if (this.writesForbidden !== 0) throw new Error('A lazy initializer cannot write');
-    if (this.host?.getRenderBatches() != null) throw new Error('Signals cannot be written during render');
+    if (this.writesForbidden !== 0) throw new Error("A lazy initializer cannot write");
+    if (this.host?.getRenderBatches() != null)
+      throw new Error("Signals cannot be written during render");
     this.startBatch();
     try {
       const id = this.host?.getCurrentWriteBatch() ?? 0;
-      this.emitDebug({ kind: 'write', subject: atom, batchId: id || undefined });
+      this.emitDebug({ kind: "write", subject: atom, batchId: id || undefined });
       const batch = this.liveBatches.get(id);
       if (batch?.deferred) {
         let capsule = batch.capsules.get(atom as Atom<unknown>) as Capsule<T> | undefined;
@@ -591,8 +605,11 @@ export class Runtime {
       committed = new Set();
       this.rootBatches.set(container, committed);
     }
-    for (const id of batchIds) committed.add(id);
-    this.emitDebug({ kind: 'root-commit', subject: container, batchId: batchIds[0] });
+    for (const id of batchIds) {
+      committed.add(id);
+      this.liveBatches.get(id)?.roots.add(container);
+    }
+    this.emitDebug({ kind: "root-commit", subject: container, batchId: batchIds[0] });
     for (const watcher of this.rootWatchers) watcher(container, batchIds);
   }
 
@@ -600,7 +617,7 @@ export class Runtime {
     const batch = this.liveBatches.get(id);
     if (batch === undefined) return;
     this.liveBatches.delete(id);
-    this.emitDebug({ kind: 'batch-retire', batchId: id, committed });
+    this.emitDebug({ kind: "batch-retire", batchId: id, committed });
     this.suppressWatchers = committed;
     try {
       for (const capsule of batch.capsules.values()) {
@@ -610,6 +627,8 @@ export class Runtime {
     } finally {
       this.suppressWatchers = false;
     }
+    for (const computed of batch.computeds) computed.dropWorld(id);
+    for (const root of batch.roots) this.rootBatches.get(root)?.delete(id);
     for (const watcher of this.batchWatchers) watcher();
     this.flush();
   }
@@ -631,6 +650,10 @@ export class Runtime {
 
   liveBatchCount(): number {
     return this.liveBatches.size;
+  }
+
+  registerWorldComputed(id: BatchId, computed: Computed<unknown>): void {
+    this.liveBatches.get(id)?.computeds.add(computed);
   }
 
   subscribeDebug(listener: (event: RuntimeEvent) => void): () => void {
@@ -664,9 +687,9 @@ export function getDefaultRuntime(): Runtime {
 }
 
 type ThenableState =
-  | { status: 'pending'; promise: PromiseLike<unknown> }
-  | { status: 'fulfilled'; value: unknown }
-  | { status: 'rejected'; error: unknown };
+  | { status: "pending"; promise: PromiseLike<unknown>; listeners: Set<WeakRef<() => void>> }
+  | { status: "fulfilled"; value: unknown }
+  | { status: "rejected"; error: unknown };
 
 const thenables = new WeakMap<object, ThenableState>();
 
@@ -675,6 +698,7 @@ export class Computed<T> extends Node<T> implements Tracker {
   readonly collectedValues = new Map<Node<unknown>, unknown>();
   readonly dependencies = new Set<Node<unknown>>();
   readonly dependencyValues = new Map<Node<unknown>, unknown>();
+  private readonly worldDependencies = new Map<BatchId, Set<Node<unknown>>>();
   private readonly equals: (a: T, b: T) => boolean;
   private value!: T;
   private hasValue = false;
@@ -683,7 +707,15 @@ export class Computed<T> extends Node<T> implements Tracker {
   private connected = false;
   private error: unknown;
   private pending: PromiseLike<unknown> | undefined;
+  private pendingObjects: object[] = [];
   private settledDirty = false;
+  private readonly onThenableSettled = () => {
+    this.settledDirty = true;
+    this.runtime.emitDebug({ kind: "suspense-settlement", subject: this });
+    this.invalidate();
+    this.runtime.flush();
+  };
+  private readonly thenableListener = new WeakRef(this.onThenableSettled);
 
   constructor(
     runtime: Runtime,
@@ -701,7 +733,8 @@ export class Computed<T> extends Node<T> implements Tracker {
   }
 
   get(): T {
-    if (this.runtime.renderBatches() !== null) return this.readWorld();
+    const batches = this.runtime.renderBatches();
+    if (batches !== null && batches.length !== 0) return this.readWorld(batches);
     this.refresh();
     this.runtime.track(this);
     if (this.pending !== undefined && !this.hasValue) throw this.pending;
@@ -722,44 +755,48 @@ export class Computed<T> extends Node<T> implements Tracker {
   }
 
   isPending(): boolean {
-    this.refresh();
-    return this.pending !== undefined;
+    for (const object of this.pendingObjects) {
+      if (thenables.get(object)?.status === "pending") return true;
+    }
+    return false;
   }
 
-  private readWorld(): T {
+  private readWorld(batches: readonly BatchId[]): T {
     this.collecting.clear();
     this.collectedValues.clear();
+    this.pending = undefined;
+    this.pendingObjects = [];
     const pending: PromiseLike<unknown>[] = [];
     const use = <U>(promise: PromiseLike<U>): U => {
       const object = promise as object;
       let state = thenables.get(object);
       if (state === undefined) {
-        state = { status: 'pending', promise };
+        state = { status: "pending", promise, listeners: new Set() };
         thenables.set(object, state);
-        const settle = () => {
-          this.settledDirty = true;
-          this.runtime.emitDebug({ kind: 'suspense-settlement', subject: this });
-          this.invalidate();
-          this.runtime.flush();
-        };
         promise.then(
           (value) => {
-            thenables.set(object, { status: 'fulfilled', value });
-            this.runtime.emitDebug({ kind: 'suspense-settlement', subject: this });
-            settle();
+            const pendingState = thenables.get(object);
+            thenables.set(object, { status: "fulfilled", value });
+            if (pendingState?.status === "pending") {
+              for (const listener of pendingState.listeners) listener.deref()?.();
+            }
           },
           (error) => {
-            thenables.set(object, { status: 'rejected', error });
-            this.runtime.emitDebug({ kind: 'suspense-settlement', subject: this });
-            settle();
+            const pendingState = thenables.get(object);
+            thenables.set(object, { status: "rejected", error });
+            if (pendingState?.status === "pending") {
+              for (const listener of pendingState.listeners) listener.deref()?.();
+            }
           },
         );
       }
-      if (state.status === 'pending') {
+      if (state.status === "pending") {
+        state.listeners.add(this.thenableListener);
+        this.pendingObjects.push(object);
         pending.push(promise);
         return undefined as U;
       }
-      if (state.status === 'rejected') throw state.error;
+      if (state.status === "rejected") throw state.error;
       return state.value as U;
     };
     let value!: T;
@@ -767,14 +804,41 @@ export class Computed<T> extends Node<T> implements Tracker {
     try {
       value = this.runtime.evaluate(this, () => this.compute(use));
     } catch (caught) {
-      error = caught;
+      if (
+        caught !== null &&
+        (typeof caught === "object" || typeof caught === "function") &&
+        typeof (caught as PromiseLike<unknown>).then === "function"
+      ) {
+        pending.push(caught as PromiseLike<unknown>);
+        this.pendingObjects.push(caught as object);
+        const state = thenables.get(caught as object);
+        if (state?.status === "pending") state.listeners.add(this.thenableListener);
+      } else {
+        error = caught;
+      }
     }
+    const key = batches[batches.length - 1];
+    const previousDependencies = this.worldDependencies.get(key);
+    if (previousDependencies !== undefined && this.connected) {
+      for (const dependency of previousDependencies) {
+        if (!this.collecting.has(dependency) && !this.usedOutsideWorld(dependency, key)) {
+          dependency.remove(this);
+        }
+      }
+    }
+    const nextDependencies = new Set<Node<unknown>>();
     for (const dependency of this.collecting) {
-      if (this.dependencies.has(dependency)) continue;
-      this.dependencies.add(dependency);
-      this.dependencyValues.set(dependency, this.collectedValues.get(dependency));
-      if (this.connected) dependency.add(this);
+      nextDependencies.add(dependency);
+      if (
+        this.connected &&
+        (previousDependencies === undefined || !previousDependencies.has(dependency)) &&
+        !this.usedOutsideWorld(dependency, key)
+      ) {
+        dependency.add(this);
+      }
     }
+    this.worldDependencies.set(key, nextDependencies);
+    this.runtime.registerWorldComputed(key, this as Computed<unknown>);
     if (pending.length !== 0) {
       this.pending = pending[0];
       const batches = this.runtime.renderBatches();
@@ -793,7 +857,11 @@ export class Computed<T> extends Node<T> implements Tracker {
   }
 
   refresh(force = false): boolean {
-    if (!force && !this.settledDirty && (this.hasValue || this.error !== undefined || this.pending !== undefined)) {
+    if (
+      !force &&
+      !this.settledDirty &&
+      (this.hasValue || this.error !== undefined || this.pending !== undefined)
+    ) {
       let changed = false;
       for (const dependency of this.dependencies) {
         if (dependency instanceof Computed) dependency.refresh();
@@ -809,7 +877,7 @@ export class Computed<T> extends Node<T> implements Tracker {
       this.dirty = true;
     }
     if (!this.dirty && !force) return false;
-    if (this.evaluating) throw new Error('Reactive cycle detected');
+    if (this.evaluating) throw new Error("Reactive cycle detected");
     const previousValue = this.value;
     const previousError = this.error;
     const hadValue = this.hasValue;
@@ -818,41 +886,58 @@ export class Computed<T> extends Node<T> implements Tracker {
     this.evaluating = true;
     this.settledDirty = false;
     this.pending = undefined;
+    this.pendingObjects = [];
     this.error = undefined;
     const pending: PromiseLike<unknown>[] = [];
     const use = <U>(promise: PromiseLike<U>): U => {
       const object = promise as object;
       let state = thenables.get(object);
       if (state === undefined) {
-        state = { status: 'pending', promise };
+        state = { status: "pending", promise, listeners: new Set() };
         thenables.set(object, state);
         promise.then(
           (value) => {
-            thenables.set(object, { status: 'fulfilled', value });
-            this.settledDirty = true;
-            this.invalidate();
-            this.runtime.flush();
+            const pendingState = thenables.get(object);
+            thenables.set(object, { status: "fulfilled", value });
+            if (pendingState?.status === "pending") {
+              for (const listener of pendingState.listeners) listener.deref()?.();
+            }
           },
           (error) => {
-            thenables.set(object, { status: 'rejected', error });
-            this.settledDirty = true;
-            this.invalidate();
-            this.runtime.flush();
+            const pendingState = thenables.get(object);
+            thenables.set(object, { status: "rejected", error });
+            if (pendingState?.status === "pending") {
+              for (const listener of pendingState.listeners) listener.deref()?.();
+            }
           },
         );
       }
-      if (state.status === 'pending') {
+      if (state.status === "pending") {
+        state.listeners.add(this.thenableListener);
+        this.pendingObjects.push(object);
         pending.push(promise);
         return undefined as U;
       }
-      if (state.status === 'rejected') throw state.error;
+      if (state.status === "rejected") throw state.error;
       return state.value as U;
     };
     let next!: T;
     try {
       next = this.runtime.evaluate(this, () => this.compute(use));
     } catch (error) {
-      if (pending.length === 0) this.error = error;
+      if (
+        pending.length === 0 &&
+        error !== null &&
+        (typeof error === "object" || typeof error === "function") &&
+        typeof (error as PromiseLike<unknown>).then === "function"
+      ) {
+        pending.push(error as PromiseLike<unknown>);
+        this.pendingObjects.push(error as object);
+        const state = thenables.get(error as object);
+        if (state?.status === "pending") state.listeners.add(this.thenableListener);
+      } else if (pending.length === 0) {
+        this.error = error;
+      }
     } finally {
       this.evaluating = false;
       this.reconcileDependencies();
@@ -882,18 +967,54 @@ export class Computed<T> extends Node<T> implements Tracker {
 
   protected observed(value: boolean): void {
     this.connected = value;
+    const all = new Set<Node<unknown>>();
     for (const dependency of this.dependencies) {
+      all.add(dependency);
+    }
+    for (const dependencies of this.worldDependencies.values()) {
+      for (const dependency of dependencies) all.add(dependency);
+    }
+    for (const dependency of all) {
       if (value) dependency.add(this);
       else dependency.remove(this);
     }
   }
 
+  dropWorld(id: BatchId): void {
+    const dependencies = this.worldDependencies.get(id);
+    if (dependencies === undefined) return;
+    this.worldDependencies.delete(id);
+    if (!this.connected) return;
+    for (const dependency of dependencies) {
+      if (!this.usedOutsideWorld(dependency, id)) dependency.remove(this);
+    }
+  }
+
+  private usedOutsideWorld(dependency: Node<unknown>, excluded: BatchId): boolean {
+    if (this.dependencies.has(dependency)) return true;
+    for (const [id, dependencies] of this.worldDependencies) {
+      if (id !== excluded && dependencies.has(dependency)) return true;
+    }
+    return false;
+  }
+
+  private usedByWorld(dependency: Node<unknown>): boolean {
+    for (const dependencies of this.worldDependencies.values()) {
+      if (dependencies.has(dependency)) return true;
+    }
+    return false;
+  }
+
   private reconcileDependencies(): void {
     for (const dependency of this.dependencies) {
-      if (!this.collecting.has(dependency) && this.connected) dependency.remove(this);
+      if (!this.collecting.has(dependency) && this.connected && !this.usedByWorld(dependency)) {
+        dependency.remove(this);
+      }
     }
     for (const dependency of this.collecting) {
-      if (!this.dependencies.has(dependency) && this.connected) dependency.add(this);
+      if (!this.dependencies.has(dependency) && this.connected && !this.usedByWorld(dependency)) {
+        dependency.add(this);
+      }
     }
     this.dependencies.clear();
     this.dependencyValues.clear();

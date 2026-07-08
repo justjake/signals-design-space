@@ -9,9 +9,15 @@ export {
   type ComputedOptions,
   type HostProtocol,
   type RuntimeEvent,
-} from './runtime';
+} from "./runtime";
 
-import { getDefaultRuntime, type Atom, type AtomOptions, type Computed, type ComputedOptions } from './runtime';
+import {
+  getDefaultRuntime,
+  type Atom,
+  type AtomOptions,
+  type Computed,
+  type ComputedOptions,
+} from "./runtime";
 
 const runtime = getDefaultRuntime();
 
@@ -43,7 +49,7 @@ export function serializeAtomState(
 ): string {
   const state: Record<string, unknown> = {};
   for (const current of atoms) {
-    if (current.key === undefined) throw new Error('Every serialized atom needs a key');
+    if (current.key === undefined) throw new Error("Every serialized atom needs a key");
     state[current.key] = current.peek();
   }
   return JSON.stringify(state, replacer);
@@ -56,7 +62,7 @@ export function initializeAtomState(
 ): void {
   const state = JSON.parse(json, reviver) as Record<string, unknown>;
   for (const current of atoms) {
-    if (current.key === undefined) throw new Error('Every initialized atom needs a key');
+    if (current.key === undefined) throw new Error("Every initialized atom needs a key");
     if (Object.hasOwn(state, current.key)) current.install(state[current.key]);
   }
 }

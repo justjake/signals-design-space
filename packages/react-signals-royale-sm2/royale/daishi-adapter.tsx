@@ -1,5 +1,5 @@
-import * as React from 'react';
-import { getRuntime, register, useValue } from '../src/index';
+import * as React from "react";
+import { getRuntime, register, useValue } from "../src/index";
 
 register();
 const count = getRuntime().atom(0);

@@ -1,11 +1,11 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from "vitest";
 import {
   SkipTest,
   setExpect,
   testSuite,
   type ReactiveFramework,
-} from 'reactive-framework-test-suite';
-import adapter from '../royale/harness-adapter';
+} from "reactive-framework-test-suite";
+import adapter from "../royale/harness-adapter";
 
 setExpect(expect);
 

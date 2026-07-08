@@ -1,5 +1,5 @@
-import * as React from 'react';
-import { createRuntime, type BatchId, type Runtime } from 'signals-royale-sm2';
+import * as React from "react";
+import { createRuntime, type BatchId, type Runtime } from "signals-royale-sm2";
 
 interface ForkListener {
   onRenderPassStart?(container: object, batches: readonly BatchId[]): void;
@@ -28,7 +28,7 @@ export interface RegistrationHandle {
 
 const fork = React as unknown as Partial<ForkReact>;
 const frames = new WeakMap<object, readonly BatchId[]>();
-const mutationListeners = new Set<(phase: 'start' | 'stop', container: Element) => void>();
+const mutationListeners = new Set<(phase: "start" | "stop", container: Element) => void>();
 let runtime = createRuntime();
 let registration: RegistrationHandle | undefined;
 
@@ -41,7 +41,7 @@ function requiredFork(): ForkReact {
     fork.unstable_runInBatch === undefined ||
     fork.unstable_resetBatchRegistryForTest === undefined
   ) {
-    throw new Error('react-signals-royale-sm2 requires its patched React build');
+    throw new Error("react-signals-royale-sm2 requires its patched React build");
   }
   return fork as ForkReact;
 }
@@ -61,7 +61,7 @@ export function register(): RegistrationHandle {
     getCurrentWriteBatch: () => api.unstable_getCurrentWriteBatch(),
     getRenderBatches() {
       const context = api.unstable_getRenderContext();
-      return context === null ? null : (frames.get(context.container) ?? []);
+      return context === null ? null : frames.get(context.container) ?? [];
     },
     getRenderContainer: () => api.unstable_getRenderContext()?.container ?? null,
     runInBatch: (batchId, fn) => api.unstable_runInBatch(batchId, fn),
@@ -69,20 +69,20 @@ export function register(): RegistrationHandle {
   const unsubscribe = api.unstable_subscribeToExternalRuntime({
     onRenderPassStart(container, batches) {
       frames.set(container, batches);
-      runtime.emitDebug({ kind: 'render-pass-start', subject: container, batchId: batches[0] });
+      runtime.emitDebug({ kind: "render-pass-start", subject: container, batchId: batches[0] });
     },
     onRenderPassEnd(container, committed) {
       runtime.emitDebug({
-        kind: committed ? 'render-pass-commit' : 'render-pass-discard',
+        kind: committed ? "render-pass-commit" : "render-pass-discard",
         subject: container,
       });
       frames.delete(container);
     },
     onBeforeMutation(container) {
-      for (const listener of mutationListeners) listener('start', container);
+      for (const listener of mutationListeners) listener("start", container);
     },
     onAfterMutation(container) {
-      for (const listener of mutationListeners) listener('stop', container);
+      for (const listener of mutationListeners) listener("stop", container);
     },
     onRootCommitted(container, batches) {
       runtime.rootCommitted(container, batches);
@@ -116,7 +116,7 @@ export function currentContainer(): object | undefined {
 }
 
 export function onDomMutation(
-  listener: (phase: 'start' | 'stop', container: Element) => void,
+  listener: (phase: "start" | "stop", container: Element) => void,
 ): () => void {
   mutationListeners.add(listener);
   return () => mutationListeners.delete(listener);

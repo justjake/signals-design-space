@@ -1,7 +1,7 @@
-import * as React from 'react';
-import * as ReactDOMClient from 'react-dom/client';
-import { flushSync } from 'react-dom';
-import { Atom, Computed } from 'signals-royale-sm2';
+import * as React from "react";
+import * as ReactDOMClient from "react-dom/client";
+import { flushSync } from "react-dom";
+import { Atom, Computed } from "signals-royale-sm2";
 import {
   getRuntime,
   onDomMutation,
@@ -14,12 +14,12 @@ import {
   useIsPending,
   useSignalEffect,
   useValue,
-} from '../src/index';
+} from "../src/index";
 
 type Readable = Atom<unknown> | Computed<unknown>;
 
 const adapter = {
-  slug: 'sm2',
+  slug: "sm2",
   React,
   ReactDOMClient,
   async act<T>(fn: () => T | Promise<T>): Promise<undefined> {

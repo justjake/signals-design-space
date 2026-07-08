@@ -1,9 +1,9 @@
-import { createRuntime } from '../src/index';
+import { createRuntime } from "../src/index";
 
 const runtime = createRuntime();
 
 export default {
-  name: 'signals-royale-sm2',
+  name: "signals-royale-sm2",
   signal<T>(initialValue: T) {
     const signal = runtime.atom(initialValue);
     return { read: () => signal.get(), write: (value: T) => signal.set(value) };
