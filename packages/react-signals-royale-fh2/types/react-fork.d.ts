@@ -1,9 +1,13 @@
 /**
- * Ambient declarations for the external-signals seam these bindings
+ * Module augmentation for the external-signals seam these bindings
  * consume. The patched React build exposes `unstable_externalSignals` from
  * react-dom/client; @types/react-dom covers only the stock surface, so the
- * seam is declared here. Lanes cross the seam as opaque numbers.
+ * seam is added here (the import marks this file as a module so the
+ * declaration merges instead of replacing). Lanes cross the seam as opaque
+ * numbers.
  */
+import 'react-dom/client';
+
 declare module 'react-dom/client' {
 	/** An opaque React scheduling lane bitmask. */
 	export type SignalsLanes = number;
