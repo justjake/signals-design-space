@@ -484,6 +484,9 @@ function run(e: EffectNode): void {
 function runCleanup(e: EffectNode): void {
 	const cleanup = e.cleanup as () => void;
 	e.cleanup = undefined;
+	if (typeof cleanup !== 'function') {
+		return; // effect bodies may return non-cleanup values; ignore them
+	}
 	const prevSub = activeSub;
 	activeSub = undefined;
 	try {

@@ -24,8 +24,6 @@ import {
 	batch as graphBatch,
 	canonicalAtomValue,
 	collectWatchers,
-	createAtomNode,
-	createComputedNode,
 	createEffect,
 	createScope,
 	disposeEffect,
@@ -99,10 +97,9 @@ function applyOp(v: unknown, op: Op): unknown {
 	return op.update !== undefined ? op.update(v) : op.set;
 }
 
-interface AtomRec {
+interface AtomRec extends AtomNode {
 	t: 0;
 	id: RecId;
-	node: AtomNode;
 	label: string | undefined;
 	/** While draft operations are pending: the value before the first queued
 	 * operation (React's baseState) and the insertion-ordered queue. Both
@@ -118,10 +115,9 @@ interface AtomRec {
 	obsScheduled: boolean;
 }
 
-interface ComputedRec {
+interface ComputedRec extends ComputedNode {
 	t: 1;
 	id: RecId;
-	node: ComputedNode;
 	userFn: (use: Use) => unknown;
 	equals: Equality;
 	label: string | undefined;
@@ -302,7 +298,7 @@ export function openBatches(): Batch[] {
  * raw fold.) */
 function replayQueue(rec: AtomRec, include: readonly Batch[] | null): unknown {
 	let v = rec.baseValue;
-	const equals = rec.node.equals;
+	const equals = rec.equals;
 	for (const op of rec.queue!) {
 		if (op.b === null || (include !== null && include.includes(op.b))) {
 			const next = applyOp(v, op);
@@ -539,13 +535,7 @@ let activeWorld: WorldCache | null = null;
 let worldEvalStack: ComputedRec[] = [];
 /** Non-null while any computed evaluation (canonical or world) runs: `use`
  * resolves against it. */
-let activeEval: {
-	entry: AsyncEntry;
-	pendingSlots: Slot[];
-	pendingInner: ComputedRec[];
-	stamp: number;
-	readonly: boolean;
-} | null = null;
+let activeEval: EvalFrame | null = null;
 
 function recordRead(rec: Rec): void {
 	const wc = activeWorld;
@@ -564,7 +554,7 @@ function recordRead(rec: Rec): void {
 function atomValueInWorld(rec: AtomRec, wc: WorldCache): unknown {
 	materialize(rec);
 	if (rec.queue === null) {
-		return canonicalAtomValue(rec.node);
+		return canonicalAtomValue(rec);
 	}
 	return replayQueue(rec, wc.batches);
 }
@@ -635,14 +625,11 @@ function withWorld<T>(wc: WorldCache, fn: () => T): T {
 // Record registry (node -> record) and constructors.
 // ---------------------------------------------------------------------------
 
-const atomRecs = new WeakMap<AtomNode, AtomRec>();
-const computedRecs = new WeakMap<ComputedNode, ComputedRec>();
-
 function recOfAtomNode(node: AtomNode): AtomRec {
-	return atomRecs.get(node)!;
+	return node as AtomRec;
 }
 function recOfComputedNode(node: ComputedNode): ComputedRec {
-	return computedRecs.get(node)!;
+	return node as ComputedRec;
 }
 function recOf(x: Readable<unknown>): Rec {
 	return x as unknown as Rec;
@@ -657,11 +644,21 @@ function asAtomRec(x: Atom<unknown>): AtomRec {
 
 export function atom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<T> {
 	const lazy = typeof initial === 'function';
-	const node = createAtomNode(lazy ? undefined : initial, (options?.equals as Equality) ?? defaultEquals);
+	const value = lazy ? undefined : initial;
+	// One object per atom: the record IS the graph node (handle identity,
+	// no side tables on the hot creation path).
 	const rec: AtomRec = {
+		kind: NodeKind.Atom,
+		flags: 1 /* Flags.Mutable */,
+		subs: undefined,
+		subsTail: undefined,
+		deps: undefined,
+		depsTail: undefined,
+		value,
+		staged: value,
+		equals: (options?.equals as Equality) ?? defaultEquals,
 		t: 0,
 		id: nextRecId++,
-		node,
 		label: options?.label,
 		baseValue: undefined,
 		queue: null,
@@ -671,7 +668,6 @@ export function atom<T>(initial: T | (() => T), options?: AtomOptions<T>): Atom<
 		obsActive: false,
 		obsScheduled: false,
 	};
-	atomRecs.set(node, rec);
 	return rec as unknown as Atom<T>;
 }
 
@@ -683,13 +679,19 @@ export function computed<T>(fn: (use: Use) => T, options?: ComputedOptions<T>): 
 		isPendingValue(a) || isPendingValue(b) || a instanceof AsyncError || b instanceof AsyncError
 			? Object.is(a, b)
 			: userEquals(a, b);
-	const node = createComputedNode(() => runEvaluation(rec, canonicalEntryOf(rec), false), equals);
 	const rec: ComputedRec = {
+		kind: NodeKind.Computed,
+		flags: 0 /* Flags.None */,
+		subs: undefined,
+		subsTail: undefined,
+		deps: undefined,
+		depsTail: undefined,
+		value: undefined,
+		fn: () => runEvaluation(rec, canonicalEntryOf(rec), false),
+		equals,
 		t: 1,
 		id: nextRecId++,
-		node,
 		userFn: fn as (use: Use) => unknown,
-		equals,
 		label: options?.label,
 		pendingBox: undefined,
 		lastSettled: undefined,
@@ -698,7 +700,6 @@ export function computed<T>(fn: (use: Use) => T, options?: ComputedOptions<T>): 
 		reuseEntry: undefined,
 		refreshing: undefined,
 	};
-	computedRecs.set(node, rec);
 	return rec as unknown as Computed<T>;
 }
 
@@ -712,8 +713,8 @@ function materialize(rec: AtomRec): void {
 		initDepth++;
 		try {
 			const v = untracked(init);
-			rec.node.value = v;
-			rec.node.staged = v;
+			rec.value = v;
+			rec.staged = v;
 		} finally {
 			initDepth--;
 		}
@@ -826,6 +827,14 @@ function attachSlot(slot: Slot): void {
 	);
 }
 
+interface EvalFrame {
+	entry: AsyncEntry;
+	pendingSlots: Slot[];
+	pendingInner: ComputedRec[];
+	stamp: number;
+	readonly: boolean;
+}
+
 function runEvaluation(rec: ComputedRec, entry: AsyncEntry, readonly: boolean): unknown {
 	const stamp = evalStampCounter++;
 	entry.evalStamp = stamp;
@@ -840,10 +849,10 @@ function runEvaluation(rec: ComputedRec, entry: AsyncEntry, readonly: boolean): 
 		threw = true;
 		error = e;
 	}
-	const ctx = activeEval;
+	const frame = activeEval;
 	activeEval = prev;
-	entry.pendingInner = ctx.pendingInner;
-	if (ctx.pendingSlots.length > 0 || ctx.pendingInner.length > 0) {
+	entry.pendingInner = frame.pendingInner;
+	if (frame.pendingSlots.length > 0 || frame.pendingInner.length > 0) {
 		// A pending evaluation is pending regardless of what the poisoned
 		// tail of the body did; errors thrown past a pending read are moot.
 		return pendingBoxFor(rec);
@@ -882,7 +891,7 @@ function onSlotSettled(slot: Slot): void {
 				}
 			} else {
 				graphEpoch++;
-				withCause(ev, () => invalidateComputed(rec.node));
+				withCause(ev, () => invalidateComputed(rec));
 			}
 		} else {
 			// A draft-world settlement is a draft-world change: bump the
@@ -963,8 +972,8 @@ export function updateInBatch<T>(b: Batch, a: Atom<T>, fn: (prev: T) => T): void
  * insertion order. Works against `staged` (the newest canonical intent) so
  * a revert inside a graph batch still cuts off cleanly at the flush. */
 function urgentWrite(rec: AtomRec, op: Op): void {
-	const value = applyOp(rec.node.staged, op);
-	const equal = rec.node.equals(rec.node.staged, value);
+	const value = applyOp(rec.staged, op);
+	const equal = rec.equals(rec.staged, value);
 	if (op.update === undefined && equal) {
 		if (tracing()) {
 			emit('write-dropped', { tid: rec.id, label: rec.label, batch: 0 });
@@ -992,11 +1001,18 @@ function urgentWrite(rec: AtomRec, op: Op): void {
 			return;
 		}
 	}
-	applyCanonicalWrite(rec, value);
+	// Equality already judged above: apply directly.
+	graphEpoch++;
+	if (tracing()) {
+		const w = emit('write', { tid: rec.id, label: rec.label, batch: 0 });
+		withCause(w, () => writeAtom(rec, value));
+	} else {
+		writeAtom(rec, value);
+	}
 }
 
 function applyCanonicalWrite(rec: AtomRec, value: unknown): void {
-	const node = rec.node;
+	const node = rec;
 	if (node.equals(node.staged, value)) {
 		if (tracing()) {
 			emit('write-dropped', { tid: rec.id, label: rec.label, batch: 0 });
@@ -1019,7 +1035,7 @@ function draftWrite(b: Batch, rec: AtomRec, op: Op): void {
 	if (op.update === undefined) {
 		// Equal writes drop — equality judged in the batch's own world.
 		const current = atomValueInWorld(rec, worldFor([b]));
-		if (rec.node.equals(current, op.set)) {
+		if (rec.equals(current, op.set)) {
 			if (tracing()) {
 				emit('write-dropped', { tid: rec.id, label: rec.label, batch: b.id });
 			}
@@ -1027,7 +1043,7 @@ function draftWrite(b: Batch, rec: AtomRec, op: Op): void {
 		}
 	}
 	if (rec.queue === null) {
-		rec.baseValue = rec.node.staged;
+		rec.baseValue = rec.staged;
 		rec.queue = [];
 	}
 	rec.queue.push(op);
@@ -1078,7 +1094,7 @@ function refreshCanonical(rec: ComputedRec): void {
 	if (rec.canonicalEntry === undefined) {
 		// A synchronous computed: refresh is a plain recompute.
 		graphEpoch++;
-		invalidateComputed(rec.node);
+		invalidateComputed(rec);
 		return;
 	}
 	if (rec.refreshing !== undefined) {
@@ -1114,7 +1130,7 @@ function adoptRefreshEntry(rec: ComputedRec, entry: AsyncEntry): void {
 	killEntry(rec.canonicalEntry);
 	rec.canonicalEntry = entry;
 	graphEpoch++;
-	invalidateComputed(rec.node);
+	invalidateComputed(rec);
 	bumpPending();
 }
 
@@ -1189,9 +1205,9 @@ export function subscribe(
 			() => {
 				try {
 					if (rec.t === 0) {
-						readAtom(rec.node);
+						readAtom(rec);
 					} else {
-						readComputed(rec.node);
+						readComputed(rec);
 					}
 				} catch {
 					// A throwing target still subscribes: the value is the error.
@@ -1220,7 +1236,7 @@ export function subscribe(
  * dependency sets. */
 function draftDeliver(b: Batch, rec: Rec): void {
 	const found = new Set<EffectNode>();
-	collectWatchers(rec.node, found);
+	collectWatchers(rec, found);
 	for (const wc of worldCaches.values()) {
 		if (wc.batches.includes(b)) {
 			chaseWorldReads(wc, rec, found);
@@ -1231,7 +1247,7 @@ function draftDeliver(b: Batch, rec: Rec): void {
 
 function draftDeliverIn(wc: WorldCache, rec: Rec): void {
 	const found = new Set<EffectNode>();
-	collectWatchers(rec.node, found);
+	collectWatchers(rec, found);
 	chaseWorldReads(wc, rec, found);
 	notifyFound(found, wc.batches[wc.batches.length - 1] ?? null);
 }
@@ -1248,7 +1264,7 @@ function chaseWorldReads(wc: WorldCache, rec: Rec, found: Set<EffectNode>): void
 		for (const reader of readers) {
 			if (!seen.has(reader)) {
 				seen.add(reader);
-				collectWatchers(reader.node, found);
+				collectWatchers(reader, found);
 				stack.push(reader);
 			}
 		}
@@ -1272,8 +1288,8 @@ function notifyFound(found: Set<EffectNode>, b: Batch | null): void {
 // ---------------------------------------------------------------------------
 
 worldHooks.onWatched = (node) => {
-	const rec = atomRecs.get(node as AtomNode);
-	if (rec !== undefined) {
+	if ((node as Partial<AtomRec>).t === 0) {
+		const rec = node as AtomRec;
 		materialize(rec); // subscription is a materialization point
 		if (rec.observed !== undefined) {
 			scheduleObservation(rec);
@@ -1281,9 +1297,8 @@ worldHooks.onWatched = (node) => {
 	}
 };
 worldHooks.onUnwatched = (node) => {
-	const rec = atomRecs.get(node as AtomNode);
-	if (rec !== undefined && rec.observed !== undefined) {
-		scheduleObservation(rec);
+	if ((node as Partial<AtomRec>).t === 0 && (node as AtomRec).observed !== undefined) {
+		scheduleObservation(node as AtomRec);
 	}
 };
 
@@ -1301,7 +1316,7 @@ function scheduleObservation(rec: AtomRec): void {
 
 function settleObservation(rec: AtomRec): void {
 	rec.obsScheduled = false;
-	const shouldBeActive = rec.node.subs !== undefined;
+	const shouldBeActive = rec.subs !== undefined;
 	if (shouldBeActive === rec.obsActive) {
 		return;
 	}
@@ -1309,7 +1324,7 @@ function settleObservation(rec: AtomRec): void {
 		rec.obsActive = true;
 		materialize(rec);
 		rec.obsCleanup = rec.observed!({
-			get: () => untracked(() => canonicalAtomValue(rec.node)),
+			get: () => untracked(() => canonicalAtomValue(rec)),
 			set: (v) => applyCanonicalWrite(rec, v),
 		});
 	} else {
@@ -1364,7 +1379,7 @@ function committedAtomValue(rec: AtomRec, view: RootView): unknown {
 	if (view.map.has(rec)) {
 		return view.map.get(rec);
 	}
-	return canonicalAtomValue(rec.node);
+	return canonicalAtomValue(rec);
 }
 
 function committedComputedValue(rec: ComputedRec, view: RootView): unknown {
@@ -1388,13 +1403,15 @@ function committedComputedValue(rec: ComputedRec, view: RootView): unknown {
 // ---------------------------------------------------------------------------
 
 function resolveRead(rec: Rec, v: unknown): unknown {
-	if (activeEval !== null && isPendingValue(v)) {
-		// Forward pending: the enclosing evaluation parks on this node too.
-		activeEval.pendingInner.push((v as InternalPendingBox)._rec);
-		return POISON;
-	}
-	if (v instanceof AsyncError) {
-		throw v;
+	if (v !== null && typeof v === 'object') {
+		if (activeEval !== null && isPendingValue(v)) {
+			// Forward pending: the enclosing evaluation parks on this node too.
+			activeEval.pendingInner.push((v as InternalPendingBox)._rec);
+			return POISON;
+		}
+		if (v instanceof AsyncError) {
+			throw v;
+		}
 	}
 	return v;
 }
@@ -1415,9 +1432,9 @@ export function read<T>(x: Readable<T>): T {
 		if (rec.init !== undefined) {
 			materialize(rec);
 		}
-		v = readAtom(rec.node);
+		v = readAtom(rec);
 	} else {
-		v = readComputed(rec.node);
+		v = readComputed(rec);
 	}
 	return resolveRead(rec, v) as T;
 }
@@ -1428,7 +1445,7 @@ export function readInWorld<T>(x: Readable<T>, batches: Batch[]): T {
 	const rec = recOf(x);
 	if (batches.length === 0) {
 		return untracked(() =>
-			rec.t === 0 ? ((rec.init !== undefined ? materialize(rec) : undefined), canonicalAtomValue(rec.node)) : readComputed(rec.node),
+			rec.t === 0 ? ((rec.init !== undefined ? materialize(rec) : undefined), canonicalAtomValue(rec)) : readComputed(rec),
 		) as T;
 	}
 	const wc = worldFor(batches);
@@ -1453,9 +1470,9 @@ export function latest<T>(x: Readable<T>): T {
 		if (rec.init !== undefined) {
 			materialize(rec);
 		}
-		v = readAtom(rec.node);
+		v = readAtom(rec);
 	} else {
-		v = readComputed(rec.node);
+		v = readComputed(rec);
 	}
 	const open = openBatchesByKey.size > 0 ? [...openBatchesByKey.values()] : null;
 	if (open !== null) {
@@ -1504,14 +1521,14 @@ export function isPending(x: Readable<unknown>): boolean {
 	if (rec.refreshing !== undefined) {
 		return true;
 	}
-	const v = untracked(() => readComputed(rec.node));
+	const v = untracked(() => readComputed(rec));
 	if (isPendingValue(v)) {
 		return true;
 	}
 	// Transitive scan over canonical dependency edges: a draft write or
 	// refresh upstream means newer data is on the way here.
 	const seen = new Set<ReactiveNode>();
-	const stack: ReactiveNode[] = [rec.node];
+	const stack: ReactiveNode[] = [rec];
 	while (stack.length > 0) {
 		const node = stack.pop()!;
 		if (seen.has(node)) {
@@ -1521,24 +1538,20 @@ export function isPending(x: Readable<unknown>): boolean {
 		for (let l = node.deps; l !== undefined; l = l.nextDep) {
 			const dep = l.dep;
 			if (dep.kind === NodeKind.Atom) {
-				const depRec = atomRecs.get(dep as AtomNode);
-				if (depRec !== undefined) {
-					for (const b of openBatchesByKey.values()) {
-						if (b.touched.has(depRec)) {
-							return true;
-						}
+				const depRec = dep as AtomRec;
+				for (const b of openBatchesByKey.values()) {
+					if (b.touched.has(depRec)) {
+						return true;
 					}
 				}
 			} else if (dep.kind === NodeKind.Computed) {
-				const depRec = computedRecs.get(dep as ComputedNode);
-				if (depRec !== undefined) {
-					if (depRec.refreshing !== undefined) {
+				const depRec = dep as ComputedRec;
+				if (depRec.refreshing !== undefined) {
+					return true;
+				}
+				for (const b of openBatchesByKey.values()) {
+					if (b.refreshes.has(depRec)) {
 						return true;
-					}
-					for (const b of openBatchesByKey.values()) {
-						if (b.refreshes.has(depRec)) {
-							return true;
-						}
 					}
 				}
 				stack.push(dep);
@@ -1570,7 +1583,7 @@ export function pendingBatchesFor(x: Readable<unknown>): Batch[] {
 	const out = new Set<Batch>();
 	const rec = recOf(x);
 	const roots = new Set<ReactiveNode>();
-	const stack: ReactiveNode[] = [rec.node];
+	const stack: ReactiveNode[] = [rec];
 	while (stack.length > 0) {
 		const node = stack.pop()!;
 		if (roots.has(node)) {
@@ -1578,21 +1591,17 @@ export function pendingBatchesFor(x: Readable<unknown>): Batch[] {
 		}
 		roots.add(node);
 		if (node.kind === NodeKind.Atom) {
-			const depRec = atomRecs.get(node as AtomNode);
-			if (depRec !== undefined) {
-				for (const b of openBatchesByKey.values()) {
-					if (b.touched.has(depRec)) {
-						out.add(b);
-					}
+			const depRec = node as AtomRec;
+			for (const b of openBatchesByKey.values()) {
+				if (b.touched.has(depRec)) {
+					out.add(b);
 				}
 			}
 		} else if (node.kind === NodeKind.Computed) {
-			const depRec = computedRecs.get(node as ComputedNode);
-			if (depRec !== undefined) {
-				for (const b of openBatchesByKey.values()) {
-					if (b.refreshes.has(depRec)) {
-						out.add(b);
-					}
+			const depRec = node as ComputedRec;
+			for (const b of openBatchesByKey.values()) {
+				if (b.refreshes.has(depRec)) {
+					out.add(b);
 				}
 			}
 			for (let l = node.deps; l !== undefined; l = l.nextDep) {
@@ -1698,7 +1707,7 @@ export function serializeAtomState(
 	atoms.forEach((a, i) => {
 		const rec = asAtomRec(a);
 		materialize(rec);
-		out[ssrKey(rec, i)] = canonicalAtomValue(rec.node);
+		out[ssrKey(rec, i)] = canonicalAtomValue(rec);
 	});
 	return JSON.stringify(out, replacer);
 }
@@ -1723,8 +1732,8 @@ export function initializeAtomState(
 export function installState<T>(a: Atom<T>, value: T): void {
 	const rec = asAtomRec(a as Atom<unknown>);
 	rec.init = undefined;
-	rec.node.value = value;
-	rec.node.staged = value;
+	rec.value = value;
+	rec.staged = value;
 	graphEpoch++; // world caches folding over this base must not reuse
 	if (tracing()) {
 		emit('install', { tid: rec.id, label: rec.label });
