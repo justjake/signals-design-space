@@ -726,8 +726,8 @@ export class Computed<T> {
 	 * keyed-use entries. Created on first `refresh`. */
 	epoch: Atom<number> | null = null;
 	epochSeen = 0;
-	/** In-flight refetches started by `refresh` and not yet settled. */
-	refreshPending = 0;
+	/** Thenables of refetches started by `refresh`; pruned once settled. */
+	refreshing: Set<PromiseLike<unknown>> | null = null;
 	wc: WorldEntry[] | null = null;
 	computing = false;
 	pokedAt = 0;
@@ -1088,6 +1088,7 @@ let pokeEpoch = 0;
  * may depend on signals its canonical evaluation does not. */
 function pokeHooks(origin: Source, stamp: BatchId, causeEv: EventId): void {
 	const epoch = ++pokeEpoch;
+	const prevCause = causeEv !== 0 ? setCause(causeEv) : -1;
 	const stack: Source[] = [origin];
 	while (stack.length > 0) {
 		const n = stack.pop()!;
@@ -1110,6 +1111,7 @@ function pokeHooks(origin: Source, stamp: BatchId, causeEv: EventId): void {
 			for (const c of n.draftSubs) stack.push(c);
 		}
 	}
+	if (prevCause !== -1) setCause(prevCause);
 }
 
 /** Subscribe a host callback to change pokes on an atom or computed. Counts as
@@ -1445,10 +1447,19 @@ export function isPending(xx: Node): boolean {
 		}
 		return false;
 	}
-	if (x.pend !== null && x.settled !== UNSET) return true;
-	if (x.refreshPending > 0) return true;
+	if (x.pend !== null && x.settled !== UNSET && thenRecord(x.pend.thenable).status === 0) {
+		return true;
+	}
+	if (x.refreshing !== null) {
+		for (const t of x.refreshing) {
+			if (thenRecord(t).status === 0) return true;
+			x.refreshing.delete(t);
+		}
+	}
 	if (x.wc !== null) {
-		for (const e of x.wc) if (e.pend !== null) return true;
+		for (const e of x.wc) {
+			if (e.pend !== null && thenRecord(e.pend.thenable).status === 0) return true;
+		}
 	}
 	if (x.epoch !== null && isPending(x.epoch as AnyAtom)) return true;
 	return false;
@@ -1499,12 +1510,10 @@ export function refresh(xx: Node): void {
 		}
 	}
 	if (box !== null) {
-		c.refreshPending++;
-		const done = () => {
-			c.refreshPending--;
-		};
-		box.thenable.then(done, done);
+		(c.refreshing ??= new Set()).add(box.thenable);
 	}
+	// Poke AFTER the eager refetch so subscribers observe the pending flip.
+	pokeHooks(c, b?.id ?? URGENT, ev);
 }
 
 // ---- SSR ------------------------------------------------------------------------

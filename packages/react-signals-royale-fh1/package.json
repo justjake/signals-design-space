@@ -1,0 +1,28 @@
+{
+	"name": "react-signals-royale-fh1",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "React bindings for signals-royale-fh1 over the signal-seam React fork: world-resolved hooks, transition batches, causality tracing, DOM mutation window, SSR.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
+		"jsdom": "^26.1.0",
+		"react": "link:../../vendor/react/build/oss-experimental/react",
+		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
+		"signals-royale-fh1": "link:../signals-royale-fh1",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

@@ -52,6 +52,7 @@ export type {
 	BatchId,
 	AnyAtom,
 	AnyComputed,
+	Node,
 } from './engine';
 export {
 	startTrace,
