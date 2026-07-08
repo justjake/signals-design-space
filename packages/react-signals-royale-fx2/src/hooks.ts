@@ -27,20 +27,13 @@ import { ContainerContext, WorldContext } from './scope.ts';
 type AnyReadable = Signal<any> | Computed<any>;
 type Readable<T> = Signal<T> | Computed<T>;
 
-function snapshotOf(x: AnyReadable, ids: readonly DraftId[]): unknown {
-  const env: Envelope = engine.resolveEnvelope(x, ids);
-  if (env.kind === 'value') return env.value;
-  if (env.kind === 'pending') return env.episode; // stable per pending span
-  return env.box; // stable per error
-}
-
 const lastDelivered = new WeakMap<object, unknown>();
 const NEVER = Symbol('never-delivered');
 
-function traceDelivery(x: AnyReadable, snap: unknown): void {
+function traceDelivery(x: AnyReadable, value: unknown): void {
   const prev = lastDelivered.has(x) ? lastDelivered.get(x) : NEVER;
-  if (prev !== snap) {
-    lastDelivered.set(x, snap);
+  if (prev !== value) {
+    lastDelivered.set(x, value);
     engine.trace('deliver', x, engine.causeOf(x));
   }
 }
@@ -62,19 +55,30 @@ function unwrapForRender(x: AnyReadable, ids: readonly DraftId[]): unknown {
   throw env.episode.promise;
 }
 
-/** Subscribing read hook: resolves this render pass's world. */
+/**
+ * Subscribing read hook: resolves this render pass's world.
+ *
+ * The useSyncExternalStore snapshot is deliberately WORLD-INDEPENDENT — the
+ * engine's subscription epoch, not a value. React compares snapshots to
+ * detect store mutations: a per-world snapshot would read as a mutation
+ * during every transition pass (demoting the transition to a synchronous
+ * render), and a committed-value snapshot would read as a mutation right
+ * AFTER every transition commit (a synchronous repair render of every
+ * subscriber). The epoch advances exactly when committed-view subscribers
+ * must re-render: urgent canonical changes, settlements, rollbacks — while
+ * values a transition already delivered through render-pass worlds fold
+ * silently. The render VALUE resolves the pass's own world from context.
+ */
 export function useValue<T>(x: Readable<T>): T {
   captureRenderDispatcher();
-  const ids = React.useContext(WorldContext);
-  engine.setRenderWorld(ids);
+  const world = React.useContext(WorldContext);
+  engine.setRenderWorld(world.ids);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
-  const snap = React.useSyncExternalStore(
-    subscribe,
-    () => snapshotOf(x as AnyReadable, ids),
-    () => snapshotOf(x as AnyReadable, ids),
-  );
-  traceDelivery(x as AnyReadable, snap);
-  return unwrapForRender(x as AnyReadable, ids) as T;
+  const epochSnap = React.useCallback(() => engine.epochSnapshot(x as AnyReadable), [x]);
+  React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
+  const value = unwrapForRender(x as AnyReadable, world.ids) as T;
+  traceDelivery(x as AnyReadable, value);
+  return value;
 }
 
 /** A component-scoped computed (disposed by dropping; graph edges are
@@ -92,16 +96,13 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 }
 
 /** True while newer data exists behind the committed value of x: a pending
- * transition draft on it, or an async refetch behind stale. */
+ * transition draft on it, or an async refetch behind stale. The snapshot is
+ * world-independent (ambient pendingness) for the same reason as useValue's. */
 export function useIsPending(x: AnyReadable): boolean {
   captureRenderDispatcher();
-  const ids = React.useContext(WorldContext);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
-  return React.useSyncExternalStore(
-    subscribe,
-    () => engine.isPendingIn(x as AnyReadable, ids),
-    () => false,
-  );
+  const snap = React.useCallback(() => engine.isPendingIn(x as AnyReadable, null), [x]);
+  return React.useSyncExternalStore(subscribe, snap, () => false);
 }
 
 /** What this root's screen shows for x (the per-root committed view). */
@@ -109,11 +110,11 @@ export function useCommitted<T>(x: Readable<T>): T {
   captureRenderDispatcher();
   const container = React.useContext(ContainerContext);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
-  const snap = React.useSyncExternalStore(
-    subscribe,
+  const committedSnap = React.useCallback(
     () => engine.committedSnapshot(x as AnyReadable, container ?? undefined),
-    () => engine.committedSnapshot(x as AnyReadable, undefined),
+    [x, container],
   );
+  const snap = React.useSyncExternalStore(subscribe, committedSnap, committedSnap);
   if (snap !== null && typeof snap === 'object' && 'engineErrorBox' in (snap as object)) {
     throw (snap as { engineErrorBox: unknown }).engineErrorBox;
   }

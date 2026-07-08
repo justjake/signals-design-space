@@ -69,6 +69,16 @@ export interface ReactiveNode {
   label: string | undefined;
   /** World-resolution memos, managed by worlds.ts; null while quiescent. */
   worldMemos: Map<string, unknown> | null;
+  /**
+   * Subscription epoch for React: advances exactly when committed-view
+   * subscribers must re-render — urgent canonical changes, settlements,
+   * rollbacks. Draft folds advance it ONLY when no render pass carried the
+   * draft (see worlds.retireDraft): folds whose values were already
+   * delivered through render-pass worlds stay silent here, which is what
+   * keeps a transition commit from triggering a synchronous repair render
+   * of every subscriber.
+   */
+  reactEpoch: number;
 }
 
 let writeEpoch: WriteEpoch = 1;
@@ -190,6 +200,7 @@ export function makeCell<T>(
     lifetimeActive: false,
     lifetimePending: false,
     worldMemos: null,
+    reactEpoch: 1,
   };
 }
 
@@ -216,6 +227,7 @@ export function makeDerived<T>(
     asyncState: null,
     refreshNonce: undefined,
     worldMemos: null,
+    reactEpoch: 1,
   };
 }
 
@@ -333,6 +345,24 @@ const watcherQueue: WatcherNode[] = [];
 /** Leaf observers marked by the current wave; reported to afterPropagate. */
 const markedLeaves: ReactiveNode[] = [];
 
+/** While true, canonical changes do not advance reactEpoch (a silent draft
+ * fold: render-pass worlds already delivered these values). */
+let reactEpochSuppressed = false;
+
+export function withSuppressedReactEpoch<T>(fn: () => T): T {
+  const prev = reactEpochSuppressed;
+  reactEpochSuppressed = true;
+  try {
+    return fn();
+  } finally {
+    reactEpochSuppressed = prev;
+  }
+}
+
+export function bumpReactEpoch(node: ReactiveNode): void {
+  node.reactEpoch++;
+}
+
 /**
  * Invalidation marks are always Check ("possibly stale"): consumers confirm
  * against dependency VERSIONS before recomputing or re-running. Versions —
@@ -353,6 +383,7 @@ function mark(node: ReactiveNode, cause: TraceEventId): void {
     return;
   }
   if (node.kind === 'derived') {
+    if (!reactEpochSuppressed) node.reactEpoch++;
     for (let l = node.subs; l !== undefined; l = l.nextSub) {
       mark(l.sub, cause);
     }
@@ -387,6 +418,7 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
   node.flags = Flags.Dirty;
   node.causeEvent = cause;
   node.version++;
+  node.reactEpoch++;
   for (let l = node.subs; l !== undefined; l = l.nextSub) {
     mark(l.sub, cause);
   }
@@ -564,6 +596,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
   cell.value = next;
   cell.version++;
   writeEpoch++;
+  if (!reactEpochSuppressed) cell.reactEpoch++;
   const cause = hooks.trace !== null ? hooks.trace('write', cell, currentCause) : NO_EVENT;
   propagateFrom(cell as CellNode<unknown>, cause);
   return true;
@@ -715,6 +748,7 @@ function makeWatcher(fn: (() => void | (() => void)) | undefined): WatcherNode {
     children: undefined,
     onNotify: undefined,
     worldMemos: null,
+    reactEpoch: 1,
   };
 }
 

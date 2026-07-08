@@ -210,17 +210,31 @@ if (scenario === 'fanout') {
   const uRoot = impl.createRoot(uContainer);
   uRoot.render(e(Urgent, null));
   await waitFor(() => uContainer.textContent === 'u:0');
-  impl.writeManyInTransition(cells, 7);
+  // Urgent input at ~16ms intervals. In a single-threaded runtime a blocking
+  // bulk render shows up as INPUT DELAY: the tick (and its urgent commit)
+  // cannot even start until the block ends. Measure each tick's latency
+  // from its scheduled time to its committed urgent update — that includes
+  // queueing delay, which is what a user feels.
   const lat = [];
-  for (let k = 1; k <= 30; k++) {
-    const t0 = performance.now();
+  let k = 0;
+  let fired = false;
+  const t0 = performance.now();
+  while (k < 60) {
+    const scheduledAt = t0 + k * 16;
+    await new Promise((res) => setTimeout(res, Math.max(0, scheduledAt - performance.now())));
+    if (!fired && k === 5) {
+      fired = true;
+      impl.writeManyInTransition(cells, 7); // the bulk rewrite lands mid-stream
+    }
+    k++;
     setUrgent(k);
-    await waitFor(() => urgentShown === k);
-    lat.push(performance.now() - t0);
-    await new Promise((res) => setTimeout(res, 16));
+    await waitFor(() => urgentShown === k, 60000);
+    lat.push(performance.now() - scheduledAt);
   }
   row('p95-urgent-during-transition', p95(lat));
+  row('max-urgent-during-transition', Math.max(...lat));
   await waitFor(() => container.textContent.includes('7'), 60000);
+  row('transition-completed-after', performance.now() - t0);
 } else if (scenario === 'mount') {
   const times = [];
   for (let k = 0; k < 5; k++) {

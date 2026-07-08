@@ -99,6 +99,22 @@ export function broadcastDraft(id: DraftId): void {
   }
 }
 
+/** Drafts some render pass has already resolved against. An append to one
+ * of these re-dispatches, so React restarts the passes that saw a partial
+ * batch (see SignalScope's module comment). */
+const renderedDrafts = new Set<DraftId>();
+
+export function markDraftRendered(id: DraftId): void {
+  renderedDrafts.add(id);
+}
+
+function handleDraftAppend(id: DraftId): void {
+  if (!renderedDrafts.has(id)) return;
+  const recipients = draftRecipients.get(id);
+  if (recipients === undefined) return;
+  for (const p of recipients) p.dispatch(id);
+}
+
 export function registerProvider(p: ProviderRecord): () => void {
   providers.add(p);
   return () => {
@@ -123,7 +139,10 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
     const recipients = draftRecipients.get(id);
     if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
       draftRecipients.delete(id);
-      engine.retireDraft(id);
+      renderedDrafts.delete(id);
+      // Silent: render-pass worlds already delivered these values to every
+      // subscriber under a scope; the fold must not schedule repairs.
+      engine.retireDraft(id, { silent: true });
     }
   }
 }
@@ -178,6 +197,7 @@ export function registerReactSignals(): ReactSignalsHandle {
   (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = dispatchMutationWindow;
   engine.setAmbientClassifier(ambientClassifier);
   engine.setRenderWriteGuard(renderWriteGuard);
+  engine.setOnDraftAppend(handleDraftAppend);
   handle = {
     errors: [],
     dispose() {
@@ -185,6 +205,7 @@ export function registerReactSignals(): ReactSignalsHandle {
       (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = undefined;
       engine.setAmbientClassifier(null);
       engine.setRenderWriteGuard(null);
+      engine.setOnDraftAppend(null);
       mutationSubs.clear();
       handle = null;
     },
@@ -198,12 +219,14 @@ export function resetReactSignalsForTest(): void {
   resetEngineForTest();
   providers.clear();
   draftRecipients.clear();
+  renderedDrafts.clear();
   mutationSubs.clear();
   if (wasRegistered) {
     // resetEngineForTest cleared the engine hooks; re-arm them.
     (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = dispatchMutationWindow;
     engine.setAmbientClassifier(ambientClassifier);
     engine.setRenderWriteGuard(renderWriteGuard);
+    engine.setOnDraftAppend(handleDraftAppend);
     handle!.errors.length = 0;
   }
 }

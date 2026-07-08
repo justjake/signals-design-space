@@ -69,6 +69,7 @@ import {
   sealDraft,
   setAmbientClassifier,
   setCommittedWorld,
+  setOnDraftAppend,
   unwrapForEval,
   worldOf,
 } from './worlds.ts';
@@ -427,6 +428,12 @@ export const reactIntegration = {
   isPendingIn(x: AnyReadable, ids: readonly DraftId[] | null): boolean {
     return isPendingPassive(nodeOf(x), ids === null ? null : worldOf(ids));
   },
+  setOnDraftAppend,
+  /** Subscription epoch: the useSyncExternalStore snapshot. Changes exactly
+   * when committed-view subscribers must re-render. */
+  epochSnapshot(x: AnyReadable): number {
+    return nodeOf(x).reactEpoch;
+  },
   hasLiveDrafts(ids: readonly DraftId[]): boolean {
     return worldOf(ids).drafts.length > 0;
   },
@@ -453,6 +460,7 @@ export function resetEngineForTest(): void {
   flushLifetimeTransitions();
   setAmbientClassifier(null);
   setRenderWriteGuard(null);
+  setOnDraftAppend(null);
   currentRenderWorld = null;
   getActiveTracer()?.stop();
 }

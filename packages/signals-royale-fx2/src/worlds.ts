@@ -32,6 +32,7 @@ import {
   type ReactiveNode,
   type TraceEventId,
   NO_EVENT,
+  bumpReactEpoch,
   currentWriteEpoch,
   ensureFresh,
   hooks,
@@ -42,6 +43,7 @@ import {
   startBatch,
   endBatch,
   untracked,
+  withSuppressedReactEpoch,
   writeCell,
 } from './graph.ts';
 import {
@@ -142,6 +144,13 @@ function logFor(cell: CellNode<unknown>): RebaseLog {
   return log;
 }
 
+/** Notified on each draft append (the bindings restart any render pass that
+ * already observed the draft, so a pass never sees half a batch). */
+let onDraftAppend: ((id: DraftId) => void) | null = null;
+export function setOnDraftAppend(fn: ((id: DraftId) => void) | null): void {
+  onDraftAppend = fn;
+}
+
 /** Record a drafted write intent. Speculative subscribers (isPending probes,
  * latest() viewers) get poked; canonical values do not move. */
 export function appendDraftIntent(
@@ -161,6 +170,7 @@ export function appendDraftIntent(
     cell.causeEvent = draft.lastWriteEvent;
   }
   pokeLeafObservers(cell);
+  onDraftAppend?.(draft.id);
 }
 
 /** Record an urgent intent on a cell that currently has a rebase log, so
@@ -194,8 +204,14 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
 }
 
 /** Fold a draft into canonical state through the normal write path, then
- * let stale world sets resolve it as a no-op. */
-export function retireDraft(id: DraftId): void {
+ * let stale world sets resolve it as a no-op.
+ *
+ * `silent` folds keep subscription epochs still: use it when render-pass
+ * worlds already delivered the draft's values to every subscriber (a
+ * committed transition), so the fold must not schedule repair renders.
+ * A loud fold (the default) is for drafts nothing rendered — their values
+ * become visible only through this fold, so subscribers re-render. */
+export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
   liveDrafts.delete(id);
@@ -211,23 +227,31 @@ export function retireDraft(id: DraftId): void {
       : NO_EVENT;
   draft.retireEvent = evt;
   const prevCause = setCurrentCause(evt);
-  startBatch();
-  try {
-    for (const cell of draft.cells) {
-      // The draft is marked retired, so the full committed replay includes
-      // its intents interleaved with urgent ones in dispatch order.
-      writeCell(cell, replayLog(cell, null));
-      pokeLeafObservers(cell);
+  const fold = () => {
+    startBatch();
+    try {
+      for (const cell of draft.cells) {
+        // The draft is marked retired, so the full committed replay
+        // includes its intents interleaved with urgent ones in dispatch
+        // order.
+        writeCell(cell, replayLog(cell, null));
+        pokeLeafObservers(cell);
+      }
+    } finally {
+      endBatch();
     }
+  };
+  try {
+    if (opts?.silent === true) withSuppressedReactEpoch(fold);
+    else fold();
   } finally {
-    endBatch();
     setCurrentCause(prevCause);
   }
   releaseLogs(draft);
   maybeQuiesce();
 }
 
-/** Roll back an abandoned draft; speculative readers re-resolve without it. */
+/** Roll back an abandoned draft: anyone who saw it re-resolves without it. */
 export function discardDraft(id: DraftId): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
@@ -235,7 +259,10 @@ export function discardDraft(id: DraftId): void {
   draft.state = 'discarded';
   worldEpoch++;
   if (hooks.trace !== null) hooks.trace('draft-discard', null, draft.openEvent);
-  for (const cell of draft.cells) pokeLeafObservers(cell);
+  for (const cell of draft.cells) {
+    bumpReactEpoch(cell);
+    pokeLeafObservers(cell);
+  }
   releaseLogs(draft);
   maybeQuiesce();
 }

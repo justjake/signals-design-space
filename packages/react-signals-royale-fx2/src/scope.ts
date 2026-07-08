@@ -1,13 +1,20 @@
 /**
  * SignalScope: the per-root world carrier.
  *
- * Its reducer state is the list of transition draft ids this root has been
- * told about. Because every draft dispatch happens inside its transition's
- * scope, React's own update queues decide which render passes see which
- * ids: urgent passes skip pending transition updates (world = committed
- * base), the transition's own passes include them, and a rebased retry
- * recomputes the same queue over new state. That IS the render-pass world
- * definition — no lane bookkeeping of our own.
+ * Its reducer state is the set of transition draft ids this root has been
+ * told about (plus a revision counter, below). Because every draft dispatch
+ * happens inside its transition's scope, React's own update queues decide
+ * which render passes see which ids: urgent passes skip pending transition
+ * updates (world = committed base), the transition's own passes include
+ * them, and a rebased retry recomputes the same queue over new state. That
+ * IS the render-pass world definition — no lane bookkeeping of our own.
+ *
+ * The revision counter handles one hazard: a write appended to a draft
+ * AFTER some pass already rendered that draft (an async transition writing
+ * across awaits). The host re-dispatches the draft id; the reducer returns
+ * a fresh state object even though the id set is unchanged, which makes
+ * React re-render the transition's passes against the completed batch —
+ * a pass never commits half a batch.
  *
  * On each commit the scope records its committed world per container (the
  * per-root committed view) and confirms the drafts it carried; when every
@@ -16,16 +23,26 @@
  */
 import * as React from 'react';
 import { reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
-import { confirmCommit, registerProvider, type ProviderRecord } from './host.ts';
+import {
+  confirmCommit,
+  markDraftRendered,
+  registerProvider,
+  type ProviderRecord,
+} from './host.ts';
 
-const EMPTY_WORLD: readonly DraftId[] = [];
+export interface WorldState {
+  ids: readonly DraftId[];
+  rev: number;
+}
 
-export const WorldContext = React.createContext<readonly DraftId[]>(EMPTY_WORLD);
+const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
+
+export const WorldContext = React.createContext<WorldState>(EMPTY_WORLD);
 export const ContainerContext = React.createContext<object | null>(null);
 
-function worldsReducer(prev: readonly DraftId[], id: DraftId): readonly DraftId[] {
-  if (prev.includes(id)) return prev;
-  return [...prev, id];
+function worldsReducer(prev: WorldState, id: DraftId): WorldState {
+  if (prev.ids.includes(id)) return { ids: prev.ids, rev: prev.rev + 1 };
+  return { ids: [...prev.ids, id], rev: prev.rev + 1 };
 }
 
 export interface SignalScopeProps {
@@ -36,6 +53,9 @@ export interface SignalScopeProps {
 export function SignalScope(props: SignalScopeProps): React.ReactElement {
   const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD);
   const container = props.container ?? null;
+  // A pass carrying these drafts is being rendered; late appends to them
+  // must re-dispatch (see module comment).
+  for (const id of world.ids) markDraftRendered(id);
   const record = React.useMemo<ProviderRecord>(
     () => ({ dispatch, container }),
     [dispatch, container],
@@ -43,8 +63,8 @@ export function SignalScope(props: SignalScopeProps): React.ReactElement {
   React.useLayoutEffect(() => registerProvider(record), [record]);
   React.useLayoutEffect(() => {
     // Runs exactly at this root's commits of world-carrying passes.
-    engine.traceNode('root-commit', null, 0, { world });
-    confirmCommit(record, world);
+    engine.traceNode('root-commit', null, 0, { world: world.ids });
+    confirmCommit(record, world.ids);
   }, [record, world]);
   return React.createElement(
     ContainerContext.Provider,
