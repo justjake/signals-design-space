@@ -295,12 +295,20 @@ export function openBatches(): Batch[] {
 }
 
 /** Replays an atom's queue over its base, including exactly the canonical
- * operations plus those owned by batches in `include`. */
+ * operations plus those owned by batches in `include`. Every step is
+ * equality-gated, exactly like a direct canonical write: an operation whose
+ * result the atom's equality calls equal leaves the running value alone.
+ * (With the default Object.is equality this is indistinguishable from a
+ * raw fold.) */
 function replayQueue(rec: AtomRec, include: readonly Batch[] | null): unknown {
 	let v = rec.baseValue;
+	const equals = rec.node.equals;
 	for (const op of rec.queue!) {
 		if (op.b === null || (include !== null && include.includes(op.b))) {
-			v = applyOp(v, op);
+			const next = applyOp(v, op);
+			if (!equals(v, next)) {
+				v = next;
+			}
 		}
 	}
 	return v;
@@ -387,11 +395,31 @@ export function retireBatch(b: Batch): void {
 			endBatch();
 		}
 	});
+	// The fold reshaped queues whether or not canonical moved (a retired
+	// functional update can be a canonical no-op yet still change every
+	// open world folding after it): invalidate world caches and wake the
+	// still-open batches' readers.
+	graphEpoch++;
+	for (const rec of b.touched) {
+		wakeOpenWorlds(rec);
+	}
 	b.touched.clear();
 	b.refreshes.clear();
 	b.deliveredTo.clear();
 	bumpPending();
 	maybeQuiesce();
+}
+
+function wakeOpenWorlds(rec: AtomRec): void {
+	if (rec.queue === null) {
+		return;
+	}
+	for (const b2 of openBatchesByKey.values()) {
+		if (b2.touched.has(rec)) {
+			b2.version++;
+			draftDeliver(b2, rec);
+		}
+	}
 }
 
 /**
@@ -407,11 +435,13 @@ export function discardBatch(b: Batch): void {
 	openBatchesByKey.delete(b.key);
 	const ev = tracing() ? emit('batch-discard', { batch: b.id }) : 0;
 	pruneWorldsWith(b);
+	graphEpoch++; // dropped operations reshape every fold that included them
 	for (const rec of b.touched) {
 		if (rec.queue !== null) {
 			rec.queue = rec.queue.filter((op) => op.b !== b);
 			compactQueue(rec);
 		}
+		wakeOpenWorlds(rec);
 	}
 	const seen = [...b.deliveredTo];
 	b.touched.clear();
@@ -934,7 +964,8 @@ export function updateInBatch<T>(b: Batch, a: Atom<T>, fn: (prev: T) => T): void
  * a revert inside a graph batch still cuts off cleanly at the flush. */
 function urgentWrite(rec: AtomRec, op: Op): void {
 	const value = applyOp(rec.node.staged, op);
-	if (op.update === undefined && rec.node.equals(rec.node.staged, value)) {
+	const equal = rec.node.equals(rec.node.staged, value);
+	if (op.update === undefined && equal) {
 		if (tracing()) {
 			emit('write-dropped', { tid: rec.id, label: rec.label, batch: 0 });
 		}
@@ -942,6 +973,24 @@ function urgentWrite(rec: AtomRec, op: Op): void {
 	}
 	if (rec.queue !== null) {
 		rec.queue.push(op);
+		if (equal) {
+			// The canonical value does not move, but the queue did: every
+			// draft world folding it changed. Invalidate world caches and
+			// wake the draft readers — canonical propagation won't.
+			graphEpoch++;
+			for (const b of openBatchesByKey.values()) {
+				if (b.touched.has(rec)) {
+					b.version++;
+					if (tracing()) {
+						const w = emit('write', { tid: rec.id, label: rec.label, batch: b.id });
+						withCause(w, () => draftDeliver(b, rec));
+					} else {
+						draftDeliver(b, rec);
+					}
+				}
+			}
+			return;
+		}
 	}
 	applyCanonicalWrite(rec, value);
 }
