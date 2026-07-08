@@ -31,35 +31,29 @@ const PASS: Expectation = { kind: 'pass' };
 type PerImpl = Partial<Record<string, Expectation>>;
 
 const TABLE: Record<string, PerImpl> = {
-	'RCC-RT1.scope-read': {
-		// Bare accessor inside its own transition scope reads the committed
-		// value, not the staged write (pinned 2026-07-08).
-		'solid-react': { kind: 'variant', variant: 'hidden-even-in-scope' },
-	},
+	// RCC-RT1.scope-read: solid-react's bare accessor used to resolve
+	// committed state even inside the scope that staged the write; fixed
+	// 2026-07-08 (ambient-scope world resolver) — it now follows the
+	// ambient-W0 branch like alt-a/alt-b.
 	'RCC-RT4-newest': {
 		cosignals: { kind: 'variant', variant: 'newest' },
 		'alt-a': { kind: 'skip', reason: 'ruled drafts-hidden (ambient-W0)' },
 		'alt-b': { kind: 'skip', reason: 'ruled drafts-hidden (ambient-W0)' },
-		'solid-react': { kind: 'skip', reason: 'discovered drafts-hidden (bare accessor)' },
+		'solid-react': { kind: 'skip', reason: 'ruled drafts-hidden (documented in package README)' },
 	},
 	'RCC-RT4-drafts-hidden': {
 		cosignals: { kind: 'skip', reason: 'ruled newest (scenario R15)' },
 		'alt-a': { kind: 'variant', variant: 'drafts-hidden' },
 		'alt-b': { kind: 'variant', variant: 'drafts-hidden' },
-		'solid-react': { kind: 'variant', variant: 'drafts-hidden (discovered, unruled)' },
+		'solid-react': { kind: 'variant', variant: 'drafts-hidden (ruled; README-documented)' },
 	},
-	'RCC-EF1.count-hold': {
-		// Its tracked effects are held while a transition is live and flush at
-		// the transition's commit (documented engine design): urgent-commit
-		// flips reach effects late, at the boundary, with the boundary value.
-		'solid-react': { kind: 'variant', variant: 'effects-held-during-transition' },
-	},
-	'RCC-UM2.render-write': {
-		'solid-react': {
-			kind: 'finding',
-			note: 'render-phase writes are accepted silently — no guard in the bridge (pinned 2026-07-08)',
-		},
-	},
+	// RCC-EF1.count-hold: solid-react's tracked effects previously deferred
+	// urgent-commit runs until an unrelated held transition ended; fixed
+	// 2026-07-08 (world-split effect delivery) — effects now run at every
+	// commit that changes committed state, like the other implementations.
+	// RCC-UM2.render-write: solid-react accepted render-phase writes
+	// silently; fixed 2026-07-08 (bridge rejects writes while React render
+	// is on the callstack).
 	'FIND-ALTB-WEDGE.filter': {
 		'alt-b': {
 			kind: 'finding',
@@ -74,18 +68,10 @@ const TABLE: Record<string, PerImpl> = {
 	},
 	// FIND-THENABLE.gate: the solid-react freeze did not reproduce on
 	// retest (2026-07-08); the row now pins the working hold on all four.
-	'DAISHI-2': {
-		'solid-react': {
-			kind: 'finding',
-			note: 'mount-under-urgent-fire commits a torn frame: readers resolve their slice-time worlds (2,3,4,5,6 in one painted commit; passive-visible, pinned 2026-07-08)',
-		},
-	},
-	'DAISHI-8': {
-		'solid-react': {
-			kind: 'finding',
-			note: 'useDeferredValue mount-under-urgent-fire commits torn frames — same slice-time world drift as DAISHI-2 (pinned 2026-07-08)',
-		},
-	},
+	// DAISHI-2/DAISHI-8: solid-react's torn mounted frames (readers
+	// resolving slice-time worlds) fixed 2026-07-08 — the bridge pins each
+	// node's first-read value per render pass, and the commit fixup corrects
+	// staleness pre-paint.
 };
 
 export function expectationFor(rowId: string, entry: BatteryEntry): Expectation {

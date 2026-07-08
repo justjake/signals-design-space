@@ -28,7 +28,7 @@ exercised. Test titles cite row ids, so a report line reads `RCC-RT3.hold
 | cosignals | `cosignals` | suspense | **newest** (scenario R15, canonical) |
 | alt-a | `cosignals-alt-a` | suspense | **drafts-hidden** (ambient-W0, SPEC-RESOLUTIONS divergence) |
 | alt-b | `cosignals-alt-b` | suspense | **drafts-hidden** (ambient-W0, pinned in both gate modes) |
-| solid-react | `concurrent-solid-react` | defer-write | **drafts-hidden** (discovered — see below) |
+| solid-react | `concurrent-solid-react` | defer-write | **drafts-hidden** (ruled + documented — see below) |
 
 A fifth Playwright project, **react-control**, drives the `/control/` page:
 vanilla React (useState + startTransition + Suspense) on the same patched
@@ -36,17 +36,14 @@ build, no signals engine. It exists to attribute behavior: anything all four
 implementations show identically is checked against the control before any
 engine is blamed. Control rows live in section O.
 
-**solid-react RT4 ruling, as discovered (2026-07-08):** its own suite and
-README never exercise or state the outside-render-read case. Source analysis
-(`src/solid/core.ts`, the world-selection ternary in `read()`): a context-free
-accessor call — the default for event handlers, timers, promise continuations,
-and this playground's shim (`SolidAtom.state` is a bare accessor) — always
-returns the committed `_value`, never the staged `_pendingValue`
-(drafts-hidden). The library's own documented `runWithOwner` idiom re-enters a
-non-null owner and falls through to the pending value (newest). The battery
-asserts the shim-reachable behavior: **drafts-hidden**, recorded as discovered
-rather than ruled — the split is unaudited in that package, not a deliberate
-divergence.
+**solid-react RT4 ruling (discovered 2026-07-08, ruled + documented the same
+day):** a context-free accessor call — the default for event handlers, timers,
+promise continuations, and this playground's shim (`SolidAtom.state` is a bare
+accessor) — resolves committed state only (drafts-hidden). The package now
+states this as its contract (README, "Which world does a read see?") and adds
+one carve-out fixed alongside: code inside the very transition scope that
+staged a value reads its own draft back (the same-scope surprise RCC-RT1
+caught is gone; its test now takes the ambient-W0 branch).
 
 ## WON'T-PROMISE guardrail
 
@@ -99,20 +96,20 @@ firing order (EF4).
 
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
-| RCC-RT1.scope-read | inside a transition scope, a read after a write sees the scope's own draft; sources: alt-a#15, alt-b#18/19 | scope read via `__store.transitionScopeProbe` | pass · pass · pass · variant:hidden (bare accessor in scope does not see own staged write — recorded) | `__store` scope-read capture | implemented |
+| RCC-RT1.scope-read | inside a transition scope, a read after a write sees the scope's own draft; sources: alt-a#15, alt-b#18/19 | scope read via `__store.transitionScopeProbe` | all pass (solid-react fixed 2026-07-08: ambient-scope world resolver — a scope reads its own draft) | `__store` scope-read capture | implemented |
 | RCC-RT1.frozen-view | a paused-and-resumed render answers reads identically across the pause | fork-only | — | — | doc: needs yield-edge introspection ([fork tests 7,8]); browser-indirect via RCC-RT5.lattice latch |
 | RCC-RT2.yield-gap | writes landing while a pass is paused are not observed by that pass | fork-only | — | — | doc: [fork tests 9,10]; browser-indirect via DAISHI-3/DAISHI-6 transient checks |
 | RCC-RT3.hold | urgent +1 commits alone while a held transition's count+10 stays invisible; release folds both; sources: R3/R4, alt-a#4, alt-b#2 | hold=gate (all four) | all pass | write-hold harness, count trace | implemented |
 | RCC-RT3.sliced | urgent write mid-slice of a heavy transition render never reveals the transition's writes | hold=sliced, lattice work 20ms×25 | all pass | lattice knob, count trace | implemented |
 | RCC-RT3.nav-hold | urgent counter/evens commits while a navigation is held; committed view stays on the old page (lab hold scenario) | hold=nav | all pass | app testids, hold/release | implemented |
 | RCC-RT4-newest | outside-render read (evaluate stack) during a pending count transition sees the pending write | hold=gate / sliced (solid) | variant:newest · skip:ruled-hidden · skip:ruled-hidden · skip:ruled-hidden | `__store.read` | implemented |
-| RCC-RT4-drafts-hidden | outside-render read during a pending count transition sees only committed state | hold=gate / sliced (solid) | skip:ruled-newest · variant:hidden · variant:hidden · variant:hidden(discovered) | `__store.read` | implemented |
+| RCC-RT4-drafts-hidden | outside-render read during a pending count transition sees only committed state | hold=gate / sliced (solid) | skip:ruled-newest · variant:hidden · variant:hidden · variant:hidden (ruled; README-documented) | `__store.read` | implemented |
 | RCC-RT5.lattice | N=20 lattice readers agree in every committed frame across a burst of transition increments | lattice, per-commit latch | all pass | tear lattice + latch | implemented |
 | RCC-RT5.cross-hook | app consistency verdict never flips TORN through the standard drive (hold, urgent interleave, release, filter) | hold=nav | all pass | armTornWatch, torn tally | implemented |
 | RCC-RT5.double-read | one component reading the same atom through two hooks never sees them disagree (source: R5) | during increments burst | all pass | probe component, latch | implemented |
 | RCC-RT6.mount-mid-nav-hold | probe mounted during a held navigation paints committed values, self-consistent, converges after release (sources: R6/R11, alt-a#5, battery 9/10) | hold=nav, mount-probe toggle | all pass | mount probe log | implemented |
 | RCC-RT6.mount-mid-count-hold | probe mounted while count+10 is pending shows committed count, never the draft; joins the transition's commit at release | hold=gate / sliced (solid) | all pass | mount probe log | implemented |
-| RCC-RT6.daishi-mount | 20 readers mounted via transition while an outside-React interval increments urgently: no torn commit, final agreement | auto-increment 50ms, hold=sliced | pass · pass · pass · FINDING (shares DAISHI-2/4) | lattice latch, auto-inc | implemented (shares DAISHI-2/4) |
+| RCC-RT6.daishi-mount | 20 readers mounted via transition while an outside-React interval increments urgently: no torn commit, final agreement | auto-increment 50ms, hold=sliced | all pass (solid-react fixed with DAISHI-2/4: per-pass value pinning) | lattice latch, auto-inc | implemented (shares DAISHI-2/4) |
 | RCC-RT5/6.alt-b-mount-world | alt-b ruling (its suite #3): a component mounting inside a transition's commit reads the pending world in that same commit — same-commit agreement is what RT5/RT6 demand; which world the joint commit shows may differ | hold=sliced | all pass (agreement asserted, world recorded) | mount probe log | implemented |
 | RCC-RT2.late-write | a write landing after a transition started (while pending) does not appear in the transition's committed frame unless rebased in order (sources: daishi-6 arithmetic, UM1) | hold=gate | all pass | count trace | implemented |
 
@@ -121,7 +118,7 @@ firing order (EF4).
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
 | RCC-UM1.rebase | +10 transition and +1 urgent dispatched in one task: urgent commits alone first, final = 11, committed sequence never shows 10 (sources: R-lab rebase, daishi-6) | same-task dispatch | all pass | count text trace | implemented |
-| RCC-UM2.render-write | a render-phase write to a shared atom is rejected (error boundary catches; committed state unmoved) (source: R7) | test-mode probe under error boundary | pass · pass · pass · FINDING (not rejected — recorded) | render-write probe, error boundary | implemented |
+| RCC-UM2.render-write | a render-phase write to a shared atom is rejected (error boundary catches; committed state unmoved) (source: R7) | test-mode probe under error boundary | all pass (solid-react fixed 2026-07-08: bridge rejects render-phase writes) | render-write probe, error boundary | implemented |
 | RCC-UM3 | tolerance: React's same-component setState-in-render pattern is not extended to library state; battery never exercises a render-phase library write channel | — | — | — | doc: tolerance |
 | RCC-UM4.replay | interrupted/replayed renders are idempotent: interruption burst produces exact arithmetic, no duplicate resource creations per epoch | during DAISHI-5 + SU1 | all pass | fetch counters | implemented (asserted inside DAISHI-5 / RCC-SU1) |
 
@@ -218,15 +215,15 @@ stronger than the original on purpose, noted here for comparability.
 | id | scenario | parameters | expected | instrumentation | status |
 | --- | --- | --- | --- | --- | --- |
 | DAISHI-1 | no tearing finally on update (transition): 5 transition increments over the mounted lattice → all readers settle at exactly 5 | transition increments | all pass | lattice | implemented |
-| DAISHI-2 | no tearing finally on mount (transition): auto-increment running, lattice mounted via transition → readers agree at settle | auto-inc 50ms | pass · pass · pass · **FINDING (torn mount frame: readers resolve slice-time worlds — 2,3,4,5,6 in one painted commit; caught by BOTH latches 2026-07-08)** | lattice, auto-inc, dual latch | implemented |
+| DAISHI-2 | no tearing finally on mount (transition): auto-increment running, lattice mounted via transition → readers agree at settle | auto-inc 50ms | all pass (solid-react fixed 2026-07-08: per-render-pass value pinning + pre-paint fixup) | lattice, auto-inc, dual latch | implemented |
 | DAISHI-3 | no tearing temporarily on update: per-commit latch stays clean through the increment burst | transition increments | all pass | lattice latch | implemented |
-| DAISHI-4 | no tearing temporarily on mount: latch stays clean while mounting under auto-increment | auto-inc 50ms | pass · pass · pass · **FINDING (shares DAISHI-2 torn-mount finding)** | lattice latch | implemented |
+| DAISHI-4 | no tearing temporarily on mount: latch stays clean while mounting under auto-increment | auto-inc 50ms | all pass (shares DAISHI-2 fix) | lattice latch | implemented |
 | DAISHI-5 | can interrupt render: avg click-to-return < 300ms with 20ms×20 reader work | lattice work 20ms | all pass | in-page timestamps | implemented |
 | DAISHI-6 | can branch state (wip): settle at 1; two pending transition +1s; while pending readers still show 1; urgent double → 2 everywhere; settle → 6 | transition +1 button, double button | all pass | lattice, count trace | implemented |
 | DAISHI-7 | useDeferredValue: no tearing finally on update (urgent increments, deferred readers) | deferred lattice | all pass | deferred lattice | implemented |
-| DAISHI-8 | useDeferredValue: no tearing finally on mount | deferred lattice, auto-inc | pass · pass · pass · **FINDING (torn mount frames, same slice-time drift as DAISHI-2)** | deferred lattice | implemented |
+| DAISHI-8 | useDeferredValue: no tearing finally on mount | deferred lattice, auto-inc | all pass (solid-react fixed with DAISHI-2: per-pass value pinning) | deferred lattice | implemented |
 | DAISHI-9 | useDeferredValue: no tearing temporarily on update | deferred lattice | all pass | deferred latch | implemented |
-| DAISHI-10 | useDeferredValue: no tearing temporarily on mount | deferred lattice, auto-inc | pass · pass · pass · **FINDING (shares DAISHI-8)** | deferred latch | implemented |
+| DAISHI-10 | useDeferredValue: no tearing temporarily on mount | deferred lattice, auto-inc | all pass (shares DAISHI-8 fix) | deferred latch | implemented |
 
 ## M. Session-finding regression pins (7 rows)
 
@@ -235,7 +232,7 @@ stronger than the original on purpose, noted here for comparability.
 | FIND-ALTB-WEDGE.filter | value-changing derived write (table filter) during a held navigation wedges alt-b's main thread in an update loop | hold=nav, filter input | pass · pass · **FINDING (test.fail: wedge)** · pass | watchdog + CDP stack capture | implemented |
 | FIND-ALTB-WEDGE.rows | same wedge class via add-rows during hold | hold=nav, add-rows | pass · pass · **FINDING (test.fail: wedge)** · pass | watchdog + CDP stack | implemented |
 | FIND-EQUAL-SAFE | equality-cutoff urgent writes (counter, evens toggle) during hold stay safe on every implementation — the wedge's positive boundary | hold=nav | all pass | watchdog (must not fire) | implemented |
-| FIND-SOLID-HEAP | dirty-heap lockup trio pin: urgent signal write outside any transition with computed-subscribed components keeps the page live (rAF cadence + clock + responsive evaluate) — pins the degraded-memo workaround in the solid-react shim | urgent write, dashboard computeds | all pass (solid-react is the pinned subject) | rAF health, watchdog | implemented |
+| FIND-SOLID-HEAP | dirty-heap lockup trio pin: urgent signal write outside any transition with computed-subscribed components keeps the page live (rAF cadence + clock + responsive evaluate) — the shim runs real Solid memos again (engine fixed + probe hardened against heap parking); the row guards the lockup class | urgent write, dashboard computeds | all pass (solid-react is the pinned subject) | rAF health, watchdog | implemented |
 | FIND-THENABLE.gate | foreign (non-Promise) thenable thrown by the write-hold gate holds the transition open with live urgent commits on every implementation — the historical solid-react freeze did NOT reproduce on retest (2026-07-08), so the row pins the working hold | foreign-thenable toggle, hold=gate | all pass | thenable toggle, clock watch | implemented |
 | FIND-THENABLE.nav | foreign thenable on route resources during a held navigation: suspense impls unaffected; solid-react unaffected too (defer-write never throws it) — divergence boundary recorded | foreign-thenable toggle, hold=nav | all pass | thenable toggle | implemented |
 | FIND-URGENT-USE | urgent-lane React.use(pendingPromise) retry in a real browser: resolve pings the retry and content appears (positive pin). The repro's wedge is an act()-harness artifact (non-awaited sync act; identical on pristine upstream — SPEC-RESOLUTIONS item 12), unreachable in a browser, so this row pins the working browser behavior instead of expecting failure | test-mode use(P) probe | all pass | use-probe testids | implemented |

@@ -95,6 +95,9 @@ export interface Computed<T> extends RawSignal<T>, Owner {
   // node's stable Suspense thenable from here (fires when pending status
   // clears or turns into a real error).
   _onStatusSettled?: () => void;
+  // [react-adapt E10] the transition currently holding a forced re-run for
+  // this tracked effect (dedup for world-split effect delivery).
+  _heldBy?: Transition;
 }
 
 export interface Root extends Owner {

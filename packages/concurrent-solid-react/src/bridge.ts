@@ -19,7 +19,12 @@
  * the same thenable and converge instead of refetch-looping.
  */
 import { NotReadyError } from "./solid/error.js";
-import { setWriteRouter, staleValues } from "./solid/core.js";
+import {
+  setAmbientWorldResolver,
+  setRenderValueInterceptor,
+  setWriteRouter,
+  staleValues
+} from "./solid/core.js";
 import {
   activeTransition,
   createBridgeTransition,
@@ -91,6 +96,15 @@ export class Bridge {
   readonly worlds = new Map<number, WorldRecord>();
   /** container -> the transition world of its open render pass (null = urgent) */
   readonly passWorlds = new Map<unknown, Transition | null>();
+  /**
+   * container -> per-pass pinned read values. React time-slices a render
+   * pass while the engine keeps committing urgent writes between slices; the
+   * first value each node produces in a pass is pinned for the pass's whole
+   * life, so every component in one committed frame agrees. Staleness is
+   * corrected pre-paint by the commit fixup. Cleared on pass start/end;
+   * deliberately kept across yields and suspensions (the frame is one pass).
+   */
+  readonly passValues = new Map<unknown, Map<object, unknown>>();
   private serial = 0;
   private unsubscribe: () => void;
   private unregisterAllocator: () => void;
@@ -111,11 +125,39 @@ export class Bridge {
     });
     this.unsubscribe = fork.unstable_subscribeToExternalRuntime({
       onRenderPassStart: (container, included) =>
-        this.guard(() => this.beginPass(container, included)),
-      onRenderPassEnd: container => this.guard(() => this.passWorlds.delete(container)),
+        this.guard(() => {
+          this.passValues.delete(container);
+          this.beginPass(container, included);
+        }),
+      onRenderPassEnd: container =>
+        this.guard(() => {
+          this.passWorlds.delete(container);
+          this.passValues.delete(container);
+        }),
       onBatchRetired: token => this.guard(() => this.retire(token))
     });
     setWriteRouter(el => this.routeWrite(el));
+    // [react-adapt E5] lets an untracked read inside a startTransition scope
+    // (or a re-wrapped async-action continuation) see the scope's own staged
+    // writes; all other outside-render reads resolve committed state.
+    setAmbientWorldResolver(() => {
+      if (renderReadDepth > 0) return null;
+      const token = this.fork.unstable_getCurrentWriteBatch();
+      if (!(token & 1)) return null;
+      const rec = this.worlds.get(token);
+      return rec && isTransitionLive(rec.transition) ? currentTransition(rec.transition) : null;
+    });
+    // [react-adapt E13] per-pass value pinning; passthrough outside render
+    // (commit fixups must see live values).
+    setRenderValueInterceptor((el, value) => {
+      const ctx = this.fork.unstable_getRenderContext();
+      if (ctx === null) return value;
+      let pinned = this.passValues.get(ctx.container);
+      if (pinned === undefined) this.passValues.set(ctx.container, (pinned = new Map()));
+      if (pinned.has(el)) return pinned.get(el);
+      pinned.set(el, value);
+      return value;
+    });
   }
 
   private guard(fn: () => void): void {
@@ -174,6 +216,16 @@ export class Bridge {
   /** [react-adapt E3] setSignal classification hook. */
   private routeWrite(_el: Signal<any> | Computed<any>): (() => void) | undefined {
     if (renderReadDepth > 0) return; // internal writes during a render read keep the render's world
+    if (this.fork.unstable_getRenderContext() !== null) {
+      // React renders speculatively and replays them freely; a write issued
+      // from a render body can run any number of times, including from
+      // renders whose output is discarded. (Engine-internal writes during a
+      // render read run under renderReadDepth and are exempt above.)
+      throw new Error(
+        "concurrent-solid-react: signal write during React render. Rendering must stay " +
+          "pure — move the write to an event handler or an effect."
+      );
+    }
     const token = this.fork.unstable_getCurrentWriteBatch();
     if (!(token & 1)) return; // urgent (or no batch): ambient world untouched
     const rec = this.worlds.get(token);
@@ -237,7 +289,10 @@ export class Bridge {
 
   dispose(): void {
     setWriteRouter(null);
+    setAmbientWorldResolver(null);
+    setRenderValueInterceptor(null);
     this.unsubscribe();
+    this.passValues.clear();
     this.unregisterAllocator();
     // Complete any worlds still open so engine state doesn't leak across
     // tests: writes are real (React never reverts them either).

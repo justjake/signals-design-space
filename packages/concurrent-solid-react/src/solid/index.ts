@@ -82,8 +82,16 @@ export {
   type IQueue,
   type QueueCallback
 } from "./scheduler.js";
-// [react-adapt E3] write classification hook
-export { setWriteRouter, runTracked, type WriteRouter } from "./core.js";
+// [react-adapt E3/E5] bridge classification hooks
+export {
+  setWriteRouter,
+  setAmbientWorldResolver,
+  setRenderValueInterceptor,
+  runTracked,
+  type WriteRouter,
+  type AmbientWorldResolver,
+  type RenderValueInterceptor
+} from "./core.js";
 export {
   DEV,
   type Dev,

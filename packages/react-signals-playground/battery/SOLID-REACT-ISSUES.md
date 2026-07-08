@@ -4,6 +4,39 @@ Handoff document, written 2026-07-08. Audience: an agent working on
 `packages/concurrent-solid-react` (a Solid 2.0 reactive core hosted inside
 React through a bridge) with no other context about this repository.
 
+## Resolution status (updated 2026-07-08, later the same day)
+
+All five issues are resolved in `packages/concurrent-solid-react`; the
+playground shim runs real Solid memos again and the battery rows flipped
+(expectations.ts + MANIFEST.md updated). Summary:
+
+1. **Heap lockup** — no longer reproducible after unrelated engine fixes, and
+   the class is now structurally impossible: the render probe reads under the
+   mid-recompute flag every heap-insertion path skips, so it can never be
+   parked in the dirty heap (probe hardening in `src/reader.ts`; regression
+   pin `test/wedge-repro.test.tsx` — hangs pre-fix).
+2. **Torn mounted frames** — fixed by per-render-pass value pinning: the
+   bridge pins each node's first-read value for the pass's lifetime, and the
+   commit-time fixup corrects staleness pre-paint. Verified: the DAISHI-2
+   drive records zero torn frames in both latches.
+3. **Render-phase writes** — now rejected (throw) by the bridge whenever
+   React render is on the callstack; engine-internal render-read work stays
+   exempt. Package test added.
+4. **Effects held by unrelated transitions** — changed: tracked-effect
+   delivery is split by world. Urgent commits run effects immediately
+   (committed values); a transition's own pokes hold a forced re-run released
+   at that batch's commit. Effects still never observe drafts. Package tests
+   added; the battery's variant row now asserts the standard behavior.
+5. **Outside-render reads** — ruled and documented (package README, "Which
+   world does a read see?"): committed-only, with the same-scope case fixed —
+   a startTransition callback reads its own staged writes back. Package test
+   added; RCC-RT1.scope-read now takes the standard branch.
+
+The "resolved since last documented" thenable-freeze item was already pinned
+by the package gate ("held transition leaves committed state on screen;
+urgent writes rebase on top" in `test/react-real.test.tsx` drives urgent
+commits through a promise-held transition).
+
 Where the evidence lives:
 
 - The app: `packages/react-signals-playground` — one React app that runs

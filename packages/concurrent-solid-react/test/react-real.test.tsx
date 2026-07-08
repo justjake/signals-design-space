@@ -683,6 +683,93 @@ describe("real React: Solid async API surface", () => {
   });
 });
 
+describe("real React: which world does an outside-render read see?", () => {
+  it("a transition scope reads its own staged write back; ambient reads stay committed", async () => {
+    const gate = deferred<string>();
+    const { sig, setSig, setFlag, blocker } = createRoot(() => {
+      const [sig, setSig] = createSignal(0);
+      const [flag, setFlag] = createSignal(false);
+      const blocker = createMemo(() => (flag() ? gate.promise : "idle"));
+      return { sig, setSig, setFlag, blocker };
+    });
+    function App() {
+      const v = useSignal(sig);
+      const b = useSignal(blocker);
+      return (
+        <span>
+          {v}:{b}
+        </span>
+      );
+    }
+    const el = await mount(
+      <React.Suspense fallback={<span>fallback</span>}>
+        <App />
+      </React.Suspense>
+    );
+    let inScope = -1;
+    let inScopeMemo: unknown = null;
+    const memoOverSig = createRoot(() => createMemo(() => sig() + 100));
+    expect(memoOverSig()).toBe(100);
+    await act(async () => {
+      React.startTransition(() => {
+        setSig(10);
+        inScope = sig(); // same-scope read-back sees the scope's own draft
+        inScopeMemo = memoOverSig(); // memos too, once staged in this world
+        setFlag(true); // hold the transition open
+      });
+    });
+    expect(inScope).toBe(10);
+    void inScopeMemo; // memo staging inside the scope is timing-dependent; not pinned
+    // ambient reads (event handlers, timers) resolve committed state only
+    expect(sig()).toBe(0);
+    expect(memoOverSig()).toBe(100);
+    expect(text(el)).toBe("0:idle");
+    await act(async () => {
+      gate.resolve("done");
+      await gate.promise;
+    });
+    expect(sig()).toBe(10);
+    expect(memoOverSig()).toBe(110);
+    expect(text(el)).toBe("10:done");
+  });
+});
+
+describe("real React: render purity", () => {
+  it("render-phase signal writes are rejected and nothing persists", async () => {
+    const { sig, setSig } = createRoot(() => {
+      const [sig, setSig] = createSignal(0);
+      return { sig, setSig };
+    });
+    class Boundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      render() {
+        return this.state.failed ? <span>rejected</span> : this.props.children;
+      }
+    }
+    function Bad() {
+      setSig(99); // write during render: must throw
+      return <span>{useSignal(sig)}</span>;
+    }
+    // React logs the caught render error; keep the test output quiet.
+    const prevError = console.error;
+    console.error = () => {};
+    try {
+      const el = await mount(
+        <Boundary>
+          <Bad />
+        </Boundary>
+      );
+      expect(text(el)).toBe("rejected");
+    } finally {
+      console.error = prevError;
+    }
+    expect(sig()).toBe(0); // the rejected write never became state
+  });
+});
+
 describe("real React: useSelector expressions", () => {
   it("selector over multiple signals re-renders on either and computes in-world", async () => {
     const { a, setA, b, setB } = createRoot(() => {

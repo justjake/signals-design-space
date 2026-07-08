@@ -21,6 +21,7 @@ import {
   createMemo,
   createRoot,
   createSignal,
+  createTrackedEffect,
   flush,
   isPending,
   NotReadyError
@@ -230,6 +231,58 @@ describe("E2/E8/E10: bridge transitions stage and commit atomically", () => {
     expect(urgentRead(() => held())).toBe("h0"); // still held
     commitWorld(t, key);
     expect(held()).toBe("h1");
+  });
+});
+
+describe("E10: effect delivery is split by world (issue 4)", () => {
+  it("urgent commits run tracked effects even while an unrelated transition is held", () => {
+    const log: string[] = [];
+    const { setA, setB } = createRoot(() => {
+      const [a, setA] = createSignal("a0");
+      const [b, setB] = createSignal("b0");
+      createTrackedEffect(() => {
+        log.push(`${a()}:${b()}`);
+      });
+      return { setA, setB };
+    });
+    flush();
+    expect(log).toEqual(["a0:b0"]);
+    const t = createBridgeTransition();
+    const key = {};
+    retainTransition(t, key);
+    runInTransition(t, () => setA("a1"));
+    flush();
+    // the transition's draft is held: no effect run, no draft observation
+    expect(log).toEqual(["a0:b0"]);
+    // an unrelated urgent commit still reaches the effect (committed values:
+    // old a, new b) — the held transition must not defer it
+    setB("b1");
+    flush();
+    expect(log).toEqual(["a0:b0", "a0:b1"]);
+    // the transition's own commit re-runs it with the final committed pair
+    commitWorld(t, key);
+    expect(log).toEqual(["a0:b0", "a0:b1", "a1:b1"]);
+  });
+
+  it("a transition-only change still reaches the effect exactly once, at its commit", () => {
+    const log: number[] = [];
+    const { setA } = createRoot(() => {
+      const [a, setA] = createSignal(0);
+      createTrackedEffect(() => {
+        log.push(a());
+      });
+      return { setA };
+    });
+    flush();
+    const t = createBridgeTransition();
+    const key = {};
+    retainTransition(t, key);
+    runInTransition(t, () => setA(1));
+    runInTransition(t, () => setA(2)); // second poke must not double-queue
+    flush();
+    expect(log).toEqual([0]);
+    commitWorld(t, key);
+    expect(log).toEqual([0, 2]);
   });
 });
 

@@ -82,6 +82,18 @@ The **two-level rule** decides suspension vs stale content:
   refetch, which must suspend (that's how a transition stays pending in
   React until its data lands).
 
+### Which world does a read see?
+
+The contract, by read site:
+
+| read site | world |
+|---|---|
+| component render (`useSignal`/`useSelector`/`useComputed`) | the render pass's world: staged values for a transition render, committed values otherwise |
+| memo / effect *compute* inside the engine | the world that invalidated the node (a transition's cone recomputes in that transition) |
+| `useSignalEffect` / `createTrackedEffect` observation | committed values only, at every commit that changes them — an urgent commit reaches effects even while an unrelated transition is held; a transition's own writes reach them at that batch's commit |
+| bare accessor call outside render (event handler, timer, promise continuation) | committed values only — a pending transition's draft is invisible — **except** inside the very scope that staged the value: code in a `startTransition` callback (or a re-wrapped async-action continuation) reads its own writes back |
+| render-phase writes | rejected (throw): React renders speculatively and replays renders freely |
+
 ### Component subscription (leak-free two-phase reads)
 
 React may discard any render, so renders must not mutate the graph:
@@ -180,13 +192,14 @@ pnpm -C packages/concurrent-solid-react typecheck
 
 ## Known divergences and limitations
 
-- **Committed derived staleness under rebase.** An urgent write to a
-  transition-held *signal* updates both worlds correctly, but *memos* over it
-  refresh their committed copy only when the transition commits. An urgent
-  render that reads both the rebased signal and a memo over it can see the
-  memo lag for the transition's duration. The from-scratch engines solve
-  this with per-world memo caches; fixing it here would mean recomputing
-  memos twice per flush (once per world).
+- **Async memos' committed copies lag under rebase.** An urgent write to a
+  transition-held signal updates both value channels, and the *sync* memo
+  cone over it is refreshed in the committed world synchronously (an
+  untracked shadow pass — `refreshCommittedCone` — so an urgent frame never
+  paints a fresh signal beside a stale derived). A memo whose compute
+  returns a promise is skipped by that pass (a committed-world refetch would
+  collide with the transition's in-flight one), so *async* memos' committed
+  copies still lag until the transition commits.
 - **Transitions entangle more readily than React lanes.** Two live batches
   that write the same signal, or that React renders in one pass, merge into
   one Solid transition and then commit together. Disjoint batches stay

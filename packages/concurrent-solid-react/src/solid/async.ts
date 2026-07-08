@@ -21,6 +21,7 @@ import {
   assignOrMergeLane,
   clock,
   dirtyQueue,
+  enqueueTrackedRun,
   flush,
   globalQueue,
   insertSubs,
@@ -97,11 +98,8 @@ function forEachDependent(el: Computed<any>, fn: (node: Computed<any>, link: Lin
 // settles and when an `isPending` observer must re-evaluate after a real error).
 function enqueueForRerun(node: Computed<any>): void {
   if ((node as any)._type === EFFECT_TRACKED) {
-    const tracked = node as any;
-    if (!tracked._modified) {
-      tracked._modified = true;
-      tracked._queue.enqueue(EFFECT_USER, tracked._run);
-    }
+    // [react-adapt E10] world-split tracked-effect delivery (see scheduler)
+    enqueueTrackedRun(node);
   } else {
     const queue = node._flags & REACTIVE_ZOMBIE ? zombieQueue : dirtyQueue;
     if (queue._min > node._height) queue._min = node._height;

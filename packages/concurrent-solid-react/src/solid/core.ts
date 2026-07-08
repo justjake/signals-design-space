@@ -64,6 +64,7 @@ import {
   currentTransition,
   isTransitionLive,
   projectionWriteActive,
+  refreshCommittedCone,
   queuePendingNode,
   registerOptimisticNode,
   runInTransition,
@@ -166,7 +167,11 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   if (!create) {
     const reentry = (el as any)._reentryWorld as Transition | undefined;
     (el as any)._reentryWorld = undefined;
-    const liveReentry = reentry && isTransitionLive(reentry) ? reentry : undefined;
+    // [react-adapt E10] tracked effects never re-enter a draft world: their
+    // contract is committed-only observation. Their delivery is world-split
+    // instead (enqueueTrackedRun) — held runs fire after the world commits.
+    const liveReentry =
+      reentry && isTransitionLive(reentry) && isEffect !== EFFECT_TRACKED ? reentry : undefined;
     const target = liveReentry ?? el._transition;
     if (target && (!isEffect || activeTransition || liveReentry)) {
       prevWorld = activeTransition;
@@ -779,7 +784,12 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     (!__DEV__ || !strictRead)
   ) {
     if (c && tracking) link(el, c as Computed<any>);
-    return (!c || el._pendingValue === NOT_PENDING ? el._value : el._pendingValue) as T;
+    const fastValue = (!c || el._pendingValue === NOT_PENDING ? el._value : el._pendingValue) as T;
+    // [react-adapt E13] render-pass value pinning (render-probe reads only)
+    if (c !== null && renderValueInterceptor !== null && (c as any)._isRenderProbe === true) {
+      return renderValueInterceptor(el, fastValue) as T;
+    }
+    return fastValue;
   }
 
   if (__DEV__ && strictRead && owner._statusFlags & STATUS_PENDING) {
@@ -940,6 +950,26 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // effects) see _pendingValue so that latest() and direct reads stay consistent.
   // Exception: resolved projection store properties (firewall, owner !== el) whose
   // STATUS_PENDING has been cleared always return _pendingValue.
+  // [react-adapt E5] Outside any tracking scope, reads resolve the committed
+  // world — with one exception: code running inside the very scope that
+  // staged a value (the startTransition callback or async-action continuation
+  // that wrote it) reads its own draft back. The bridge resolves the ambient
+  // scope's world through React's write-batch probe; every other
+  // outside-render read stays committed-only (README: "Which world does a
+  // read see?").
+  if (
+    c === null &&
+    ambientWorldResolver !== null &&
+    el._pendingValue !== NOT_PENDING &&
+    el._transition &&
+    isTransitionLive(el._transition)
+  ) {
+    const scope = ambientWorldResolver();
+    if (scope !== null && currentTransition(el._transition) === scope) {
+      return el._pendingValue as T;
+    }
+  }
+
   // [react-adapt E9] world selection resolves merged transitions: a stale
   // (React render) reader sees a staged value only when the current render
   // world is the transition holding it.
@@ -966,6 +996,10 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     !el._subs
   ) {
     unobserved(el as Computed<unknown>);
+  }
+  // [react-adapt E13] render-pass value pinning (render-probe reads only)
+  if (c !== null && renderValueInterceptor !== null && (c as any)._isRenderProbe === true) {
+    return renderValueInterceptor(el, value) as T;
   }
   return value;
 }
@@ -1028,6 +1062,11 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
         if (el._latestValueComputed) setSignal(el._latestValueComputed, next.staged);
         el._time = clock;
         insertSubs(el);
+        // The cone's normal recompute refreshes only the staged world (E9);
+        // the committed-world shadow refresh runs NOW — React's discrete
+        // render fires at the end of this event, before any flush, and must
+        // not paint this signal's fresh committed value beside stale memos.
+        refreshCommittedCone([el]);
         schedule();
         return next.committed;
       }
@@ -1046,6 +1085,31 @@ export type WriteRouter = (el: Signal<any> | Computed<any>) => (() => void) | un
 let writeRouter: WriteRouter | null = null;
 export function setWriteRouter(router: WriteRouter | null): void {
   writeRouter = router;
+}
+
+// [react-adapt E5] Resolves the transition world of the ambient (non-render)
+// scope, if any — how an untracked read inside a startTransition callback
+// sees the scope's own staged writes. Installed by the React bridge.
+export type AmbientWorldResolver = () => Transition | null;
+let ambientWorldResolver: AmbientWorldResolver | null = null;
+export function setAmbientWorldResolver(resolver: AmbientWorldResolver | null): void {
+  ambientWorldResolver = resolver;
+}
+
+// [react-adapt E13] Per-render-pass value pinning. React time-slices a
+// concurrent render pass; the engine's flushes keep committing urgent writes
+// between slices, so two components reading the same node in different
+// slices could paint different values in ONE committed frame (tearing). The
+// bridge pins each node's first-read value for the lifetime of the pass;
+// the commit-time fixup then corrects any staleness pre-paint. Consulted
+// only for render-probe reads (see reader.ts).
+export type RenderValueInterceptor = (
+  el: Signal<any> | Computed<any>,
+  value: unknown
+) => unknown;
+let renderValueInterceptor: RenderValueInterceptor | null = null;
+export function setRenderValueInterceptor(interceptor: RenderValueInterceptor | null): void {
+  renderValueInterceptor = interceptor;
 }
 
 function setSignalStock<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T)): T {

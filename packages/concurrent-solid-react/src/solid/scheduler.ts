@@ -13,7 +13,7 @@ import {
   STATUS_PENDING,
   STATUS_UNINITIALIZED
 } from "./constants.js";
-import { currentOptimisticLane, updatePendingSignal } from "./core.js";
+import { currentOptimisticLane, untrack, updatePendingSignal } from "./core.js";
 import { DEV } from "./dev.js";
 import { NotReadyError } from "./error.js";
 import { insertIntoHeap, runHeap, type Heap } from "./heap.js";
@@ -223,6 +223,102 @@ export function entangleTransitions(a: Transition, b: Transition): Transition {
 /** [react-adapt E9] A transition that has neither completed nor been absorbed. */
 export function isTransitionLive(t: Transition | null | undefined): boolean {
   return !!t && currentTransition(t)._done !== true;
+}
+
+/**
+ * [react-adapt E3] Committed-world refresh for the memo cone over a
+ * dual-channel (urgent-write-to-transition-held-signal) rebase. The normal
+ * recompute of such a cone runs in the transition's world and refreshes only
+ * staged values; without this pass a memo's committed copy would lag its
+ * committed inputs until the transition ends — an urgent render could paint
+ * `count = 1` beside `doubled = 0` in one frame.
+ *
+ * The refresh is a shadow evaluation: untracked (no dependency relinking —
+ * links are shared between worlds), writes `_value` only (staged values stay
+ * rebased), and never touches async/status machinery. A compute that
+ * suspends, throws, or returns a promise keeps its stale committed copy
+ * (async memos' committed copies remain a documented residual gap). Readers
+ * of changed memos are woken through the tracked-run path.
+ *
+ * Runs SYNCHRONOUSLY inside the dual-channel write: React flushes discrete
+ * updates at the end of the event, before microtasks, so a refresh deferred
+ * to the flush would let that render paint the fresh signal beside a stale
+ * memo.
+ */
+export function refreshCommittedCone(sources: Array<Signal<any> | Computed<any>>): void {
+  // Collect the pure-memo cone, breadth-first, then refresh in height order
+  // so memo-over-memo reads its refreshed inputs.
+  const cone: Computed<any>[] = [];
+  const seen = new Set<object>();
+  const wake = new Set<any>();
+  const visit = (node: Signal<any> | Computed<any>) => {
+    for (let s = node._subs; s !== null; s = s._nextSub) {
+      const sub = s._sub as any;
+      if (seen.has(sub)) continue;
+      seen.add(sub);
+      if (sub._type === EFFECT_TRACKED) wake.add(sub);
+      else if (typeof sub._fn === "function" && !sub._type) {
+        cone.push(sub);
+        visit(sub);
+      }
+    }
+  };
+  for (const source of sources) visit(source);
+  cone.sort((a, b) => a._height - b._height);
+  for (const memo of cone) {
+    if (memo._flags & REACTIVE_DISPOSED) continue;
+    const prev = memo._value;
+    let next: any;
+    try {
+      next = untrack(() => memo._fn(prev));
+    } catch {
+      continue; // pending/error in the committed world: keep the stale copy
+    }
+    if (
+      next !== null &&
+      typeof next === "object" &&
+      (typeof (next as any).then === "function" || (next as any)[Symbol.asyncIterator])
+    ) {
+      continue; // async compute: committed copy stays stale (residual gap)
+    }
+    if (memo._equals && memo._equals(prev, next)) continue;
+    memo._value = next;
+    for (let s = memo._subs; s !== null; s = s._nextSub) {
+      const sub = s._sub as any;
+      if (sub._type === EFFECT_TRACKED) wake.add(sub);
+    }
+  }
+  for (const sub of wake) enqueueTrackedRun(sub);
+}
+
+/**
+ * [react-adapt E10] Deliver a tracked-effect run, split by world. A poke born
+ * under a live transition holds a FORCED re-run in that transition's stash
+ * (released at React's commit of the batch) WITHOUT consuming the `_modified`
+ * dedup flag — so an unrelated urgent commit in between still runs the effect
+ * against committed values (a single shared flag would let the stashed run
+ * swallow every urgent poke until the transition ends). React reader nodes
+ * are exempt: their wake-ups only schedule renders, which React lanes itself.
+ */
+export function enqueueTrackedRun(sub: any): void {
+  if (activeTransition && !currentOptimisticLane && !sub._isReactReader) {
+    const holder = currentTransition(activeTransition);
+    if (sub._heldBy && currentTransition(sub._heldBy) === holder) return;
+    sub._heldBy = holder;
+    holder._queueStash._queues[EFFECT_USER - 1].push(() => {
+      if (sub._heldBy && currentTransition(sub._heldBy) === holder) sub._heldBy = undefined;
+      // Forced: the transition's commit just changed committed values this
+      // effect depends on, whether or not an urgent run fired in between.
+      sub._modified = true;
+      sub._run();
+    });
+    schedule();
+    return;
+  }
+  if (!sub._modified) {
+    sub._modified = true;
+    sub._queue.enqueue(EFFECT_USER, sub._run);
+  }
 }
 
 function mergeTransitionState(target: Transition, outgoing: Transition): void {
@@ -586,10 +682,7 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
     // Tracked effects bypass heap, go directly to effect queue
     const sub = s._sub as any;
     if (sub._type === EFFECT_TRACKED) {
-      if (!sub._modified) {
-        sub._modified = true;
-        sub._queue.enqueue(EFFECT_USER, sub._run);
-      }
+      enqueueTrackedRun(sub);
       continue;
     }
 

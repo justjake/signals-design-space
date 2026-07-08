@@ -17,7 +17,12 @@
  *    settle re-runs — delivers a wake-up through `_run`/`_notifyStatus`
  *    instead of recomputing it; the wake-up schedules a React re-render.
  */
-import { EFFECT_TRACKED, NOT_PENDING, REACTIVE_OPTIMISTIC_DIRTY } from "./solid/constants.js";
+import {
+  EFFECT_TRACKED,
+  NOT_PENDING,
+  REACTIVE_OPTIMISTIC_DIRTY,
+  REACTIVE_RECOMPUTING_DEPS
+} from "./solid/constants.js";
 import { runTracked } from "./solid/core.js";
 import { deferUnobserved, link, unlinkSubs } from "./solid/graph.js";
 import { dispose } from "./solid/owner.js";
@@ -87,6 +92,9 @@ function bareNode(name: string): Computed<any> {
 // Shared probe for render-phase reads. Only one render read is in flight at a
 // time on a JS thread, and frames save/restore, so a single node suffices.
 const PROBE = bareNode("react-render-probe");
+// [react-adapt E13] reads observed through the probe go through the bridge's
+// per-render-pass value pinning (tearing prevention for time-sliced passes).
+(PROBE as any)._isRenderProbe = true;
 
 /**
  * Run `fn` in a tracking frame against the probe; return its result plus the
@@ -97,7 +105,22 @@ const PROBE = bareNode("react-render-probe");
 export function probeRead<T>(fn: () => T): { value: T; deps: DepNode[] } {
   PROBE._deps = null;
   PROBE._depsTail = null;
-  PROBE._flags = 0;
+  // The probe reads like a mid-recompute node: REACTIVE_RECOMPUTING_DEPS
+  // makes every heap-insertion path (insertIntoHeap / insertIntoHeapHeight)
+  // skip it, so graph work triggered inside the frame — a pull-recompute of
+  // a dirty memo, a height adjustment — can never park the probe in the
+  // dirty heap. A parked probe is fatal: the next frame's flag reset would
+  // defeat deleteFromHeap's guard and runHeap would spin on that level
+  // forever (the "urgent write wedges the page" lockup class).
+  PROBE._flags = REACTIVE_RECOMPUTING_DEPS;
+  // Scrub state that propagation may have stamped on the probe while it was
+  // transiently linked in an earlier frame (status walks, world stamps).
+  PROBE._statusFlags = 0;
+  PROBE._error = undefined;
+  PROBE._pendingSource = undefined;
+  PROBE._pendingSources = undefined;
+  PROBE._transition = null;
+  PROBE._reentryWorld = undefined;
   try {
     const value = runTracked(PROBE, fn);
     return { value, deps: harvestProbe() };
@@ -106,6 +129,8 @@ export function probeRead<T>(fn: () => T): { value: T; deps: DepNode[] } {
     // the commit still subscribes to them so settlement re-renders the host.
     (e as any).__csrDeps = harvestProbe();
     throw e;
+  } finally {
+    PROBE._flags = 0;
   }
 }
 

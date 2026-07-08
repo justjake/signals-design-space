@@ -47,6 +47,13 @@ export function insertIntoHeap(n: Computed<any>, heap: Heap) {
     n._flags = (flags & ~(REACTIVE_CHECK | REACTIVE_DIRTY)) | REACTIVE_DIRTY | REACTIVE_IN_HEAP;
   } else n._flags = flags | REACTIVE_IN_HEAP;
   if (!(flags & REACTIVE_IN_HEAP_HEIGHT)) actualInsertIntoHeap(n, heap);
+  // [react-adapt E13] Maintain the mark invariant. markHeap latches once per
+  // drain cycle; a node inserted after that pass would sit in the heap
+  // unmarked, and a render-time pull (updateIfNecessary reached through a
+  // React render read) would skip it — serving a stale memo beside a fresh
+  // signal in one evaluation (a torn read). Stock Solid never pulls between
+  // flushes, so the latch was harmless there.
+  if (heap._marked) markNode(n);
 }
 
 export function insertIntoHeapHeight(n: Computed<unknown>, heap: Heap) {
