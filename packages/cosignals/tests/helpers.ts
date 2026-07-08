@@ -33,16 +33,16 @@ import {
 	attachDriver,
 	engine,
 	BATCH_NONE,
-	__resetEngineForTest,
+	__TEST__resetEngine,
 	ScheduleError as EScheduleError,
 	type AnyInternals as EInternals,
 	type AtomInternals as EAtomInternals,
 	type CosignalEngine,
 	type RenderPass as ERenderPass,
-	type Subscription as ESubscription,
+	type SignalEffect as ESignalEffect,
 	type World as EWorld,
-} from '../src/concurrent.js';
-import { __peekNextBatchIdForTest } from '../src/Batch.js';
+} from '../src/CosignalEngine.js';
+import { __TEST__peekNextBatchId } from '../src/CosignalEngine.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import { armArenaCheck, checkArenas } from './arena-checker.js';
 import { effect, type Atom } from '../src/index.js';
@@ -98,24 +98,24 @@ function capture(fn: () => unknown): Thrown {
 }
 
 // ---- effect constructors (test-side compositions over the real
-// mechanism: mountCommittedObserver + a `body` + captureRun; the body path is
+// mechanism: mountSignalEffect + a `body` + captureSignalEffectRun; the body path is
 // the engine's inline-run + event-creation machinery lockstep compares) ----------
 
 /** Effect configuration — a single-node body (the engine counterpart of the
  * model's mountReactEffect). */
-export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: EInternals, name: string): ESubscription {
-	const e = b.mountCommittedObserver(rootId, name);
-	e.body = () => void b.captureRead(node);
-	b.captureRun(e.id, e.body);
+export function mountEngineReactEffect(b: CosignalEngine, rootId: string, node: EInternals, name: string): ESignalEffect {
+	const e = b.mountSignalEffect(rootId, name);
+	e.body = () => void b.readSignalEffectDep(node);
+	b.captureSignalEffectRun(e.id, e.body);
 	return e;
 }
 
 /** Referee configuration — a body that re-chooses deps CAUSALLY:
- * captureRead(sel) ? captureRead(a) : captureRead(b). */
-export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, sel: EInternals, a: EInternals, bb: EInternals, name: string): ESubscription {
-	const e = b.mountCommittedObserver(rootId, name);
-	e.body = () => void (b.captureRead(sel) ? b.captureRead(a) : b.captureRead(bb));
-	b.captureRun(e.id, e.body);
+ * readSignalEffectDep(sel) ? readSignalEffectDep(a) : readSignalEffectDep(b). */
+export function mountEngineReactEffectPick(b: CosignalEngine, rootId: string, sel: EInternals, a: EInternals, bb: EInternals, name: string): ESignalEffect {
+	const e = b.mountSignalEffect(rootId, name);
+	e.body = () => void (b.readSignalEffectDep(sel) ? b.readSignalEffectDep(a) : b.readSignalEffectDep(bb));
+	b.captureSignalEffectRun(e.id, e.body);
 	return e;
 }
 
@@ -140,7 +140,7 @@ const coreEffectMounts = new Map<number, number>();
  * propagation over its subscriber links re-runs it at exactly the writes
  * that advance the newest fold (the eager kernel apply). The mount run
  * baselines silently; later runs value-gate on `Object.is` and report
- * through the bridge's `logCoreEffectRun` trace seam.
+ * through the engine's `logCoreEffectRun` trace seam.
  *
  * Names take a per-mount ordinal suffix (`#k`): sibling core-effect firing
  * order under one operation is implementation-defined by contract, so the
@@ -187,15 +187,15 @@ export class TwinDriver {
 	 * passes explicit batch ids through the engine write surface. */
 	readonly engine: CosignalEngine = (() => {
 		drainLeftoverEpisode();
-		__resetEngineForTest({ devChecks: true });
+		__TEST__resetEngine({ devChecks: true });
 		attachDriver({ currentBatch: () => BATCH_NONE, worldFor: () => undefined });
 		return engine;
 	})();
 	/** BatchIds are MONOTONIC ACROSS RESETS (the engine counter survives
-	 * `__resetEngineForTest`); the model's restart at 1 — so the harness
+	 * `__TEST__resetEngine`); the model's restart at 1 — so the harness
 	 * rebases: engine id = model id + base, and engine events normalize by
 	 * subtracting it before comparison. */
-	private readonly batchIdBase = __peekNextBatchIdForTest() - 1;
+	private readonly batchIdBase = __TEST__peekNextBatchId() - 1;
 	/** The engine's event stream: a lossless session tracer attached at
 	 * engine reset, decoded to TraceEvents on demand (the engine creates no
 	 * event objects — tests/trace-events.ts). */
@@ -212,10 +212,10 @@ export class TwinDriver {
 	 * ids recycle). Snapshots/events compare by NAME, never by id. */
 	private nodeMap = new Map<AnyNode, EInternals>();
 	private idToEngineRenderPass = new Map<number, ERenderPass>();
-	/** Model react-effect id → engine subscription id. The id spaces diverge
+	/** Model react-effect id → engine SignalEffect id. The id spaces diverge
 	 * once a core effect mounts: the model's `nextEffect` ticks for BOTH
 	 * effect kinds, the engine's only for committed observers (core effects
-	 * are kernel `effect()`s, not bridge records). */
+	 * are kernel `effect()`s, not engine records). */
 	private effectMap = new Map<number, number>();
 
 	constructor() {
@@ -494,12 +494,12 @@ export class TwinDriver {
 
 	removeReactEffect(id: number): void {
 		this.both('removeReactEffect', () => this.model.removeReactEffect(id), () =>
-			this.engine.removeSubscription(this.toEngineEffect(id)));
+			this.engine.removeSignalEffect(this.toEngineEffect(id)));
 	}
 
 	replayReactEffect(id: number): void {
 		this.both('replayReactEffect', () => this.model.replayReactEffect(id), () =>
-			this.engine.replayReactEffect(this.toEngineEffect(id)));
+			this.engine.replaySignalEffect(this.toEngineEffect(id)));
 	}
 
 	mountCoreEffect(node: AnyNode, name: string, writeTo?: AtomNode): CoreEffect {
@@ -592,7 +592,7 @@ export class TwinDriver {
 /**
  * Finish the PREVIOUS test's leftover episode so the reset's idle
  * preconditions hold (the fresh-model analog: a test may legitimately end
- * mid-episode — the old per-test bridges were simply abandoned; the one
+ * mid-episode — the old per-test engines were simply abandoned; the one
  * engine instead closes the episode out, exactly as the schedule
  * generator's close-out does). The reset preconditions still fail loudly
  * for a reset attempted INSIDE any frame — that stays a bug to fix.

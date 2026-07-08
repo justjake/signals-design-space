@@ -16,7 +16,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { Atom, Computed, effect } from '../src/index';
-import { E, maybeBoundary, __reclaimStatsForTest } from '../src/CosignalEngine.js';
+import { E, maybeBoundary, __TEST__reclaimStats } from '../src/CosignalEngine.js';
 
 describe('kernel link free list threads through a spare field', () => {
 	test('#203 shape with a primed free list: the mid-walk-freed link must not lead into the free list', () => {
@@ -168,15 +168,15 @@ describe('mass-teardown sweep restores ascending free-list order', () => {
 		for (const id of ids) {
 			E.disposeEffect(id);
 		}
-		expect(__reclaimStatsForTest().pendingFree).toBe(BATCH);
+		expect(__TEST__reclaimStats().pendingFree).toBe(BATCH);
 
 		// One boundary sweeps the whole batch. Effects were created (and so
 		// disposed) in ascending id order, so a plain LIFO thread would hand
 		// the HIGHEST freed id back first; the mass-teardown sort must hand
 		// back the lowest ids, ascending.
 		maybeBoundary();
-		expect(__reclaimStatsForTest().pendingFree).toBe(0);
-		const recNextAfterSweep = __reclaimStatsForTest().recNext;
+		expect(__TEST__reclaimStats().pendingFree).toBe(0);
+		const recNextAfterSweep = __TEST__reclaimStats().recNext;
 		const a1 = new Atom(1);
 		const a2 = new Atom(2);
 		const a3 = new Atom(3);
@@ -192,7 +192,7 @@ describe('mass-teardown sweep restores ascending free-list order', () => {
 		expect(observed).toBe(3);
 		a1.set(10);
 		expect(observed).toBe(12);
-		expect(__reclaimStatsForTest().recNext).toBe(recNextAfterSweep);
+		expect(__TEST__reclaimStats().recNext).toBe(recNextAfterSweep);
 		disposeProbe();
 	});
 });

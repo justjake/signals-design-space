@@ -186,14 +186,21 @@ with a `key` to change reducers).
 
 ### `useSignalEffect(fn, deps?)`
 
-An effect whose signal reads resolve **in the committed world of the
-component's root** — never pending state. Rationale: effects perform side
-effects (network, imperative DOM, logging), and side effects must track
-what the user actually sees; a pending transition may still be discarded.
+One effect with two invalidation planes: a committed React dependency change,
+or a change reaching a signal read by the effect's previous run. Both paths
+share one cleanup/body owner. If one write reaches the effect through React
+props and signal propagation, it runs once with the committed React closure
+and committed signal values—never first with old props and new signals.
 
-It re-fires (cleanup, then run) when a durable accepted change touched a
-value it read: a root committing UI that includes a batch, a batch
-retiring, an async action settling. The contract is **at-least-once** —
+A signal-only change runs the body directly and does **not** schedule a React
+render. Matching React work defers the signal request until that render
+commits or is discarded; a suspended render never races an older closure.
+If React invokes the hook more than once in one render pass, only the final
+dependency report participates in commit arbitration.
+Signal reads resolve in the committed world of the component's root, never
+pending state, and are retracked as ordinary graph edges after every run.
+
+The durable-change contract is **at-least-once** —
 re-fire decisions are made by change clocks, never by comparing values, so
 a round trip that lands back on an equal value (write A→B, then B→A,
 across separate updates) may re-fire the effect even though everything it

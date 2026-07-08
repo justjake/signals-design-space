@@ -53,7 +53,7 @@
  * semantics continuously; this file is the hand-pinned matrix.
  */
 import { describe, expect, it } from 'vitest';
-import { Atom, engine, ReducerAtom, __resetEngineForTest } from '../src/index.js';
+import { Atom, engine, ReducerAtom, __TEST__resetEngine } from '../src/index.js';
 import type { Equals, Value } from '../src/index.js';
 
 type Pair = [Value, Value];
@@ -85,7 +85,7 @@ function freshEngine(): void {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 }
 
 describe('R-2 order: isEqual(current, incoming), everywhere', () => {

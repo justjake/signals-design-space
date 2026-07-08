@@ -3,11 +3,11 @@
  *  - ONE public entry: `cosignals` exports the base API plus the concurrent
  *    engine's surface (attachDriver / engine / engine types); no
  *    `./concurrent` entry exists.
- *  - ZERO COST WHEN UNUSED, asserted behaviorally: the engine composes at
- *    module initialization, but with no driver attached and no batch ever
+ *  - ZERO COST WHEN UNUSED, asserted behaviorally: the default engine instance
+ *    is created at module initialization, but with no driver attached and no batch ever
  *    opened, heavy create/write/read/effect traffic creates zero log
  *    entries, zero batches, zero world evaluations (the engine's
- *    activity probes, `__coreProbes`; events are packed trace records
+ *    activity probes, `__TEST__coreProbes`; events are packed trace records
  *    behind per-site tracer guards — no tracer, no event machinery at all).
  *    Sync-only apps pay one predictable boolean check per public read/write
  *    and nothing else.
@@ -25,8 +25,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-	__coreProbes,
-	__resetEngineForTest,
+	__TEST__coreProbes,
+	__TEST__resetEngine,
 	attachDriver,
 	Atom,
 	batch,
@@ -53,14 +53,14 @@ describe('one entry', () => {
 
 describe('zero cost with no driver attached (behavioral)', () => {
 	it('heavy sync-only traffic creates zero log entries/batches/worlds', () => {
-		const before = __coreProbes();
+		const before = __TEST__coreProbes();
 		// (No event probe anymore: events are packed trace records, created only
 		// behind each site's tracer guard — the object channel is gone, so with
-		// no tracer there is no event machinery left to count. `bridges` counts
-		// COMPOSITIONS now: exactly one, the module-initialization compose —
+		// no tracer there is no event machinery left to count. `compositions` counts
+		// COMPOSITIONS now: exactly one, the default instance's initial compose —
 		// always-concurrent means the engine exists, and the zero-cost promise
 		// is that it never RUNS for plain traffic.)
-		expect(before).toEqual({ logEntries: 0, batches: 0, worldEvals: 0, bridges: 1 });
+		expect(before).toEqual({ logEntries: 0, batches: 0, worldEvals: 0, compositions: 1 });
 
 		// Heavy create/write/read/derive/effect traffic through the public API.
 		const atoms = Array.from({ length: 50 }, (_, i) => new Atom(i));
@@ -90,7 +90,7 @@ describe('zero cost with no driver attached (behavioral)', () => {
 
 		expect(sink).not.toBe(0); // the traffic really ran
 		expect(effectRuns).toBeGreaterThan(1);
-		expect(__coreProbes()).toEqual(before); // NOTHING concurrent ever executed
+		expect(__TEST__coreProbes()).toEqual(before); // NOTHING concurrent ever executed
 	});
 });
 
@@ -99,11 +99,11 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		const minimal = { currentBatch: () => BATCH_NONE, worldFor: () => undefined };
 		attachDriver(minimal);
 		expect(() => attachDriver(minimal)).toThrow(/already attached/); // one driver per composition
-		expect(__coreProbes().bridges).toBe(1); // attach composes nothing — the module composition is the one
-		__resetEngineForTest(); // clears the driver slot (and everything else)
+		expect(__TEST__coreProbes().compositions).toBe(1); // attach does not rebuild the instance
+		__TEST__resetEngine(); // clears the driver slot (and everything else)
 		attachDriver(minimal); // a fresh composition accepts a fresh driver
 		expect(() => attachDriver(minimal)).toThrow(/already attached/);
-		__resetEngineForTest(); // leave the rest of the file driver-less (quiet ≡ sync)
+		__TEST__resetEngine(); // leave the rest of the file driver-less (quiet ≡ sync)
 	});
 
 	it('plain atoms/computeds/effects behave exactly as sync (values, laziness, batching)', () => {
@@ -122,19 +122,19 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		const dispose = effect(() => {
 			seen.push(sum.state);
 		});
-		const entriesBefore = __coreProbes().logEntries;
+		const entriesBefore = __TEST__coreProbes().logEntries;
 		batch(() => {
 			a.set(10);
 			b.set(20);
 		});
 		expect(seen).toEqual([3, 30]); // one flush at batch close, exactly as sync
 		expect(untracked(() => sum.state)).toBe(30);
-		expect(__coreProbes().logEntries).toBe(entriesBefore); // quiet: no log entries
+		expect(__TEST__coreProbes().logEntries).toBe(entriesBefore); // quiet: no log entries
 		dispose();
 	});
 
 	it('zero batches: content-less traffic still does zero log entry/world work', () => {
-		const before = __coreProbes();
+		const before = __TEST__coreProbes();
 		const a = new Atom(0);
 		const c = new Computed(() => a.state + 1);
 		let sink = 0;
@@ -148,7 +148,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		}
 		dispose();
 		expect(sink).toBeGreaterThan(0);
-		const after = __coreProbes();
+		const after = __TEST__coreProbes();
 		expect(after.logEntries).toBe(before.logEntries);
 		expect(after.batches).toBe(before.batches);
 		expect(after.worldEvals).toBe(before.worldEvals);
@@ -167,14 +167,14 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		// folds to committed base + kernel in one step (Phase 1b semantics,
 		// unchanged by the merge).
 		const la = engine.atom('pub', 0);
-		const before = __coreProbes();
+		const before = __TEST__coreProbes();
 		la.handle.set(7); // application code writing through the public API, while QUIET
 		(la.handle as Atom<number>).update((n) => n + 1);
 		expect(la.log.materialize()).toHaveLength(0); // no log entry
 		expect(engine.ambientBatch).toBeUndefined(); // ambient batch NOT created while quiet
 		expect(engine.newestValue(la)).toBe(8); // kernel advanced
 		expect(engine.committedValue(la, 'A')).toBe(8); // committed truth advanced WITH it
-		const afterQuiet = __coreProbes();
+		const afterQuiet = __TEST__coreProbes();
 		expect(afterQuiet.logEntries).toBe(before.logEntries);
 		expect(afterQuiet.batches).toBe(before.batches);
 		// ARM the pipeline (a live batch exists): the same public writes now
@@ -218,7 +218,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		const r = engine.internalsForAtom(rHandle as unknown as Atom<number>);
 		r.name = 'regReducer';
 		// No reducer wiring: dispatch records as an update whose closure carries the reducer.
-		const before = __coreProbes();
+		const before = __TEST__coreProbes();
 		let sink = 0;
 		for (let round = 0; round < 50; round++) {
 			for (let i = 0; i < handles.length; i++) {
@@ -231,7 +231,7 @@ describe('always-concurrent, quiet: sync semantics preserved', () => {
 		dispose();
 		expect(sink).not.toBe(0);
 		expect(effectRuns).toBeGreaterThan(1); // kernel effects observed the quiet folds
-		const after = __coreProbes();
+		const after = __TEST__coreProbes();
 		expect(after.logEntries).toBe(before.logEntries); // ZERO log entries
 		expect(after.batches).toBe(before.batches); // ZERO batches (no ambient create)
 		expect(engine.ambientBatch).toBeUndefined();

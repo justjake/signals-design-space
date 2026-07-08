@@ -189,15 +189,17 @@ any of this.
 
 ### What subscribers may see: at-least-once
 
-Subscribed observers — components subscribed through the React driver, and
-effect-style subscriptions such as `useSignalEffect`'s — follow an
+Subscribed observers — components subscribed through the React driver and
+`useSignalEffect` graph terminals — follow an
 **at-least-once** contract: an observer re-fires when a durable accepted
 change touched a value it read, and it may re-fire even though the value it
 then reads compares equal to what it last saw. The engine stamps every
 change with a per-root clock and revalidates observers against those
 clocks — a producer whose clock is unmoved is skipped without any work, and
 a producer whose clock moved re-fires the observer without a value
-comparison. A round trip through several boundaries (write A→B, then B→A)
+comparison. SignalEffect dependencies are ordinary graph edges, retracked on
+every actual run; there is no parallel dependency snapshot or global scan.
+A round trip through several boundaries (write A→B, then B→A)
 is two accepted changes, so an observer that saw neither intermediate state
 may still re-fire once at the end. What does NOT change: many writes inside
 one boundary still coalesce into one re-fire, and write acceptance still
@@ -206,6 +208,30 @@ and moves no clock. Observer callbacks should be idempotent (the same
 discipline React's Strict Mode teaches for effects).
 
 ## API
+
+The named exports use one default browser instance. Servers should create an
+instance per request; every graph, cache, lifecycle queue, async request cache,
+world, and reclamation registry then belongs to that request:
+
+```ts
+import { createCosignals } from 'cosignals';
+
+const server = createCosignals();
+const count = new server.Atom(1);
+count.set(7);
+const state = server.serializeAtomState({ count });
+
+const client = createCosignals();
+const clientCount = new client.Atom(0);
+client.initializeAtomState(state, { count: clientCount }); // before hydration
+```
+
+Serialization keys are supplied by the application; labels and construction
+order are not stable identities. A replacer/reviver may be passed as the
+second/third argument. Unknown serialized keys warn, while missing keys leave
+their constructor defaults unchanged. Serialization and initialization require
+the instance to have no live batch or render, so SSR never captures a
+speculative world.
 
 ### `new Atom(initial, options?)`
 
@@ -358,11 +384,11 @@ fixed-size record in one shared `Int32Array` — a contiguous arena, like an
 array of structs in C. Reads, writes, and invalidation walks are index
 arithmetic over those records: no per-operation allocation on hot paths,
 nothing for the garbage collector to trace. A record id is the record's
-starting offset in the array; id `0` means "none". Observers live in the
-same arena: a **watcher** record is one component subscribed through the
-driver, and a **subscription** record is one effect-style subscription —
-both served by the node allocator, so they share its free list, generation
-stamps, and side-column scrubbing.
+starting offset in the array; id `0` means "none". Component watchers and
+SignalEffect identities also use records from this allocator. A
+SignalEffect's dependency edges themselves live in its root's committed
+world graph, where writes reach it by the same traversal used for other
+dependents.
 
 ```mermaid
 classDiagram
@@ -397,44 +423,40 @@ classDiagram
         6 NODE_IX : watched node dense ordinal
         7 NODE_INDEX : dense ordinal for side tables
     }
-    class Subscription["subscription record - 8 int32 slots"] {
+    class SignalEffect["SignalEffect identity record - 8 int32 slots"] {
         0 FLAGS : kind and live bits
         1 FREE_NEXT : free-list thread while recycled
-        2 DEP_HEAD : first per-world dependency link
-        3 DEP_TAIL : last per-world dependency link
         5 GEN : generation
         7 NODE_INDEX : dense ordinal for side tables
     }
     class SideColumns["side columns - indexed by the same id"] {
         values : current + pending value or cleanup; a watcher's rendered value
-        fns : computed getters, effect bodies, subscription re-fire callbacks
+        fns : computed getters and core effect bodies
         extras : one object of cold oddments per observer record
         clocks : float64 stamps - a node's updated-at, an observer's last-validated-at
     }
     Node --> Link : DEPS / SUBS
     Link --> Node : DEP / SUB
     Watcher --> Node : NODE
-    Subscription --> Node : dependency links
+    Node --> SignalEffect : committed-world dependency links
     Node ..> SideColumns : id >> shift
 ```
 
 All four record families share the arena, the 8-slot stride, and the
-allocators (nodes, watchers, and subscriptions draw from one; links from
-the other). JavaScript values and functions cannot live in an `Int32Array`,
+allocators (nodes, watchers, and SignalEffects draw from one; links from the
+other). JavaScript values and functions cannot live in an `Int32Array`,
 so they sit in ordinary arrays running parallel to the arena (the side
 columns), indexed by shifting the same record id; clock stamps live in a
 parallel `Float64Array` the same way. Kernel capacity grows by rebuilding
 over doubled buffers at safe operation boundaries; freed records are
 recycled through free lists.
 
-Each open world (a committed root, or one in-progress render) additionally
-owns a **world arena** from a small pool: the same record shape carrying
-that world's per-node value state (shadow records) and its per-world
-dependency edges (arena links), plus its own value, clock, and
-suspended-list columns. World arenas grow by copying into doubled buffers —
-mid-operation if an allocation demands it — and release back to the pool
-scrubbed when their world closes, so open/close churn allocates nothing in
-steady state. Per-root **clocks** live here: an observer's re-validation
+Each open world additionally owns pooled shadow/link storage with its own
+value, clock, and suspended-list columns. Lifetime selects the representation:
+persistent committed-root worlds use packed typed arrays; temporary render
+attempts use compact JS arrays, avoiding the large reservation cost when many
+short-lived renders coexist. Both grow by doubling and are scrubbed before
+pool reuse. Per-root **clocks** live in the committed representation: an observer's re-validation
 compares the watched node's per-root updated-at stamp against the
 observer's last-validated stamp, which is what lets boundary re-checks skip
 untouched dependencies without evaluating anything (the at-least-once
@@ -461,37 +483,35 @@ stateDiagram-v2
 The reactive semantics are compatible with
 [alien-signals](https://github.com/stackblitz/alien-signals) (the same
 push-pull algorithm, re-expressed over arena records), validated against a
-179-case conformance suite. The layout enums (`NodeField`, `LinkField`,
-`NodeFlag`, `ArenaShape`) are exported for tools that want to walk the
-graph themselves.
+179-case conformance suite. `NodeField` and `LinkField` are exported for
+tools that walk the packed graph.
 
 ### Package layout
 
 One module is the engine; everything else orbits it:
 
-- **`CosignalEngine.ts`** — the engine. Reads top to bottom: storage layout
-  (the record families and column-coherence functions above), the kernel
-  algorithm, updated-at clocks, the live operation table and growth, the
-  computed evaluation policy (exceptions and suspense), the observed
-  lifecycle, world arenas, observer records, committed observers, render
-  integration, and reclamation last.
-- **`index.ts`** — the package entry: the `Atom`/`ReducerAtom`/`Computed`
-  classes, `effect`, `batch`, `configure` — the policy layer over the
-  kernel, and the whole-package vocabulary in its header.
-- Satellites, composed at module initialization: `concurrent.ts` (the
-  engine surface and orchestration), `World.ts` (world folds and
-  evaluation), `WriteLog.ts` (the write log and the episode lifecycle),
-  `Batch.ts` (batch records and retirement), `NotificationQueue.ts`
-  (delivery walks and corrections), `ObservationIndex.ts` (observed-
-  lifecycle refcounts), `settlement.ts` (async settlement),
-  `ConcurrentEngine.ts` (the composition root), with `errors.ts`,
-  `Tracer.ts`, and `graphviz.ts` self-contained.
+- **`CosignalEngine.ts`** — the engine, one module holding the whole
+  machine and the `createCosignals()` instance factory. Reads top to bottom: storage layout (the record families and
+  column-coherence functions above), the kernel algorithm, updated-at
+  clocks, the live operation table and growth, the computed evaluation
+  policy (exceptions and suspense), the observed lifecycle, then the
+  concurrent machinery — its vocabulary and node records, observation
+  liveness, write logs and the episode lifecycle, batches and retirement,
+  worlds, world storage, delivery, settlement, watcher and SignalEffect
+  records, render integration, composition, reclamation, the public policy
+  classes, and SSR helpers. Each factory call closes this state over a fresh
+  instance; the named exports are one default call.
+- **`index.ts`** — the curated package re-export list. It owns no state or
+  behavior.
+- Self-contained companions: `errors.ts` (the error classes), `Tracer.ts`
+  (the `cosignals/trace` recorder), and `graphviz.ts`
+  (`cosignals/graphviz`).
 
 ## The React driver
 
-The concurrent engine is always present, but it only learns about renders,
+The concurrent engine is always present in each instance, but it only learns about renders,
 batches, and commits from a **driver** — one small adapter record installed
-with `attachDriver(driver)`, at most once per process. The driver answers
+with `attachDriver(driver)`, at most once per engine instance. The driver answers
 two questions per operation (which batch does this write belong to? which
 world should this read resolve in?) and receives the engine's re-render
 decisions as callbacks it schedules into the host's own lanes.
@@ -538,10 +558,10 @@ importing the engine pulls in neither.
 - **Purity where replay demands it.** Updaters, reducers, and equality
   comparators run under a guard that makes signal reads and writes inside
   them throw (see the API section). This is what makes worlds replayable.
-- **One engine per process.** The engine composes at module initialization;
-  there is nothing to construct. At most one driver can attach, and
-  attaching twice throws. Test suites reset the engine between tests
-  through a dedicated test-only entry point.
+- **One driver per engine.** Named exports use the default browser engine;
+  `createCosignals()` creates isolated engines for server requests or other
+  independent ownership domains. Attaching a second driver to the same
+  engine throws.
 - **Writes during renders throw.** Speculative renders must not mutate
   shared state.
 - **Evergreen runtimes.** The library targets modern JavaScript

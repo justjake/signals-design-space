@@ -13,26 +13,26 @@
  * node id; fn closures resolve the later-declared handles), forcing the
  * top-first serve order that consults the walk while the base is cold.
  *
- * All bridges run with the S-A divergence check armed (arena-served ≡
+ * Every engine reset runs with the divergence check armed (arena-served ≡
  * memo-served after every public operation) — the unfixed walk fails
  * these pins with `S-A divergence: … arena-served <stale> ≠ memo-served
  * <fresh>` out of the boundary operation's epilogue.
  */
 import { describe, expect, it } from 'vitest';
-import { __ctxUse, SuspendedRead } from '../src/index.js';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/concurrent.js';
+import { __TEST__ctxUse, SuspendedRead } from '../src/index.js';
+import { engine, __TEST__resetEngine, type AnyInternals, type CosignalEngine, type Reader, type Value } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	const b = engine;
 	armArenaCheck(b);
 	return b;
@@ -76,7 +76,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 
 describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note)', () => {
 	it('ATOM cold base: top-first-created cone (lowest id serves first) refolds through a decay-evicted atom instead of stale-serving', () => {
-		const b = bridge();
+		const b = freshEngine();
 		// TOP FIRST — lowest node id; the fn closures resolve the handles
 		// declared below (bodies only run at evaluation time).
 		let mid!: AnyInternals;
@@ -99,7 +99,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 	});
 
 	it('COMPUTED cold base: a settlement-marked suspended leaf decays cold under an unwatched cone — the top-first walk must refold through it', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		// TOP FIRST again; the suspending leaf and the atom get the highest ids.
 		let mid!: AnyInternals;
 		let leaf!: AnyInternals;
@@ -110,7 +110,7 @@ describe('S-A cold-base visibility in the walk (§4.2/§4.3; B2 41fe7d6 bug note
 			return v instanceof SuspendedRead ? 'p' : v; // DERIVED from the sentinel (mid itself never box-suspends)
 		});
 		const gate = deferred<string>();
-		leaf = suspending(b, 'leaf', () => __ctxUse(leaf.ix, 'x', () => gate.promise));
+		leaf = suspending(b, 'leaf', () => __TEST__ctxUse(leaf.ix, 'x', () => gate.promise));
 		k = b.atom('k', 0);
 		const w = mount(b, 'R', top, 'W');
 		expect(w.lastRenderedValue).toBe('p:0'); // leaf suspended; mid derives; cone cached

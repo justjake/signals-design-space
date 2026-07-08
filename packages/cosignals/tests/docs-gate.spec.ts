@@ -156,6 +156,67 @@ describe('docs gate: banned vocabulary in shipped sources', () => {
 	});
 });
 
+describe('docs gate: test-seam naming (__TEST__ prefix)', () => {
+	const srcDirs = [join(pkgDir, 'src'), join(reactPkgDir, 'src')];
+
+	/** Production seams that legitimately carry a __ prefix without being
+	 * test-only (each is consumed by the package's own runtime paths):
+	 * the policy layer's plain write tail and lifecycle write path, the
+	 * standalone fast-arm flag's setter, and the engine's handle-free
+	 * write-path resolution pair. Everything else exported with a __ prefix
+	 * must be a __TEST__-prefixed test seam. */
+	const PRODUCTION_DUNDER_EXPORTS = new Set([
+		'__plainAtomWrite',
+		'__lifecycleWrite',
+		'__setStandaloneQuiet',
+		'__engineAtomInternalsById',
+		'__engineWriteNode',
+	]);
+
+	/** Exported identifiers of a TS source: declaration exports and export
+	 * lists (aliases count by their EXPORTED name). */
+	function exportedNames(text: string): string[] {
+		const out: string[] = [];
+		for (const m of text.matchAll(/export (?:function|const|var|let|class|type|interface) ([A-Za-z_$][\w$]*)/g)) {
+			out.push(m[1]!);
+		}
+		for (const m of text.matchAll(/export \{([^}]*)\}/g)) {
+			for (const entry of m[1]!.split(',')) {
+				const name = (entry.includes(' as ') ? entry.split(' as ')[1]! : entry).trim();
+				if (name.length > 0) out.push(name);
+			}
+		}
+		return out;
+	}
+
+	it('no identifier anywhere uses the retired *ForTest suffix', () => {
+		// Scans every identifier, not just exports: internal helpers must not
+		// carry the retired convention either (test-only naming is __TEST__*).
+		// Foreign API names we call but do not define are allowlisted: the
+		// React fork follows the reconciler's own naming conventions.
+		const foreignApi = new Set(['externalRuntimeResetBatchRegistryForTest', 'unstable_resetBatchRegistryForTest']);
+		for (const dir of srcDirs) {
+			for (const file of sourceFiles(dir)) {
+				const hits = [...readFileSync(file, 'utf8').matchAll(/\b_{0,2}\w+ForTests?\b/g)]
+					.map((m) => m[0])
+					.filter((n) => !foreignApi.has(n));
+				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
+			}
+		}
+	});
+
+	it('every exported __-identifier is a __TEST__ seam or an allowlisted production seam', () => {
+		for (const dir of srcDirs) {
+			for (const file of sourceFiles(dir)) {
+				const hits = exportedNames(readFileSync(file, 'utf8')).filter(
+					(n) => n.startsWith('__') && !n.startsWith('__TEST__') && !PRODUCTION_DUNDER_EXPORTS.has(n),
+				);
+				expect(hits, `${file}\n${hits.join('\n')}`).toEqual([]);
+			}
+		}
+	});
+});
+
 describe('docs gate: source comments are self-contained', () => {
 	const srcDirs = [join(pkgDir, 'src'), join(reactPkgDir, 'src')];
 

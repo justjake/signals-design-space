@@ -1,6 +1,6 @@
 /**
  * cosignals-react — public surface. The bindings couple `cosignals`'s
- * always-on concurrent engine to the external-runtime protocol of a patched
+ * default concurrent engine to the external-runtime protocol of a patched
  * React build: `registerCosignalReact()` attaches the engine's driver and
  * subscribes to the protocol's events, and the hooks below are the
  * component-side surface.
@@ -24,8 +24,8 @@ export { Shim, assertForkPresent, type BoundCtx, type WatcherTarget } from './sh
 // `Computed` is the supported derived type — `useComputed` returns one, and
 // standalone instances world-route through the core's computed-read seam),
 // the write/read utilities that are world-safe under React, and the types
-// those signatures mention (`CosignalReactHandle.bridge` is a
-// `CosignalEngine` — the module-level engine surface). Engine internals
+// those signatures mention (`CosignalReactHandle.bridge` is the default
+// instance's `CosignalEngine`). Engine internals
 // (`engine` the value, `attachDriver`, `Watcher`, `TraceEvent`, node/log
 // entry types, …) stay available on the power-user path: import them from
 // 'cosignals'.

@@ -7,7 +7,7 @@
 // ENGINE directly — a fan-out write inside one side's evaluation would corrupt
 // the other side by construction (the model half of that case runs in the
 // reference model's own suite).
-import { engine, __resetEngineForTest } from '../src/concurrent.js';
+import { engine, __TEST__resetEngine } from '../src/CosignalEngine.js';
 /**
  * The 17-case acceptance battery of the behavioral contract, as
  * deterministic named tests asserting the required outcomes at model level.
@@ -785,7 +785,7 @@ describe('case 14 — StrictMode and replayed renders (model-expressible half)',
 	it('render-phase writes throw in all builds', () => {
 		// Engine leg (see the header note): same schedule, driven on the engine
 		// surface directly (production posture: fresh reset, no driver).
-		__resetEngineForTest();
+		__TEST__resetEngine();
 		const m = engine;
 		const a = m.atom('a', 0);
 		const t = m.openBatch();
@@ -871,7 +871,7 @@ describe('case 16 — effects observe committed state only', () => {
 		m.write(t.id, a, set(1));
 		const p0 = openRender(m, 'A', [t]);
 		m.renderEnd(p0.id, 'commit'); // t locks into A (still live, parked)
-		const e = m.mountReactEffect('A', a, 'E'); // snapshot: a@1
+		const e = m.mountReactEffect('A', a, 'E'); // dependency a@1
 		expect(e.lastValue).toBe(1);
 		const p1 = openRender(m, 'A', []); // A opens a new frame pinned at a=1…
 		m.renderYield(p1.id);
@@ -897,7 +897,7 @@ describe('case 16 — effects observe committed state only', () => {
 		m.write(t.id, a, set(1));
 		const p = openRender(m, 'A', [t]);
 		m.renderEnd(p.id, 'commit'); // t committed into A
-		const e = m.mountReactEffect('A', a, 'E'); // snapshot a@1
+		const e = m.mountReactEffect('A', a, 'E'); // dependency a@1
 		m.write(t.id, a, set(2));
 		m.write(t.id, a, set(3));
 		m.write(t.id, a, set(4)); // three member writes, no boundary between
@@ -916,7 +916,7 @@ describe('case 16 — effects observe committed state only', () => {
 		m.write(t.id, a, set(1));
 		const p = openRender(m, 'A', [t]);
 		m.renderEnd(p.id, 'commit');
-		const e = m.mountReactEffect('A', a, 'E'); // snapshot a@1
+		const e = m.mountReactEffect('A', a, 'E'); // dependency a@1
 		m.write(t.id, a, set(2)); // a durable flip while the effect is live…
 		m.removeReactEffect(e.id); // …but the effect unmounts before any boundary
 		expect(e.cleanups).toBe(1); // cleanup is GUARANTEED at unmount
@@ -936,12 +936,12 @@ describe('case 16 — effects observe committed state only', () => {
 		expect(e.deps.map((d) => d.node.name)).toEqual(['flag', 'b']);
 		const t1 = m.openBatch('urgent');
 		m.write(t1.id, b, set(21));
-		m.retire(t1.id); // b is in the snapshot → re-fire + recapture
+		m.retire(t1.id); // b has an edge → re-fire + retrack
 		expect(e.runs).toBe(1);
 		expect(e.lastValue).toBe(21);
 		const t2 = m.openBatch('urgent');
 		m.write(t2.id, a, set(11));
-		m.retire(t2.id); // a is NOT in the snapshot: no fire
+		m.retire(t2.id); // a has no edge: no fire
 		expect(e.runs).toBe(1);
 		const t3 = m.openBatch('urgent');
 		m.write(t3.id, flag, set(1));
@@ -1082,7 +1082,7 @@ describe('at-least-once observers (re-fires are clock-gated; no per-dep value ba
 		// which the lockstep fan-out cannot express (the model re-derives per
 		// re-check by design — its naive evaluation is the reference, not a
 		// cost model).
-		__resetEngineForTest();
+		__TEST__resetEngine();
 		const m = engine;
 		const x = m.atom('x', 0);
 		const y = m.atom('y', 0);

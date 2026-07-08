@@ -14,17 +14,17 @@
  * armed (arena-served ≡ memo-served after every public operation).
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __TEST__resetEngine, type AnyInternals, type CosignalEngine } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
-function bridge(arm = false): CosignalEngine {
+function freshEngine(arm = false): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	const b = engine;
 	if (arm) armArenaCheck(b);
 	return b;
@@ -48,7 +48,7 @@ describe('world-arena link free list threads through a spare field (row 2 twin)'
 	it('freed links keep NEXT_DEP naming former neighbors — never the free list', () => {
 		// Checker deliberately DISARMED: the armed epilogue refolds every
 		// dirty shadow, re-allocating the freed records this test inspects.
-		const b = bridge(false);
+		const b = freshEngine(false);
 
 		// Spare cone (torn down first so the free list is non-empty when the
 		// cone under test is torn — a fresh arena's zero free head masks the
@@ -68,9 +68,9 @@ describe('world-arena link free list threads through a spare field (row 2 twin)'
 		mount(b, 'R', parent, 'W');
 
 		// Capture live link record ids before any teardown.
-		const lAsp = b.__arenaLinkIdForTest('R', spareAtom, spareC);
-		const lVp = b.__arenaLinkIdForTest('R', victimC, parent);
-		const lSv = b.__arenaLinkIdForTest('R', s2, victimC);
+		const lAsp = b.__TEST__arenaLinkId('R', spareAtom, spareC);
+		const lVp = b.__TEST__arenaLinkId('R', victimC, parent);
+		const lSv = b.__TEST__arenaLinkId('R', s2, victimC);
 		expect(lAsp).not.toBe(0);
 		expect(lVp).not.toBe(0);
 		expect(lSv).not.toBe(0);
@@ -82,23 +82,23 @@ describe('world-arena link free list threads through a spare field (row 2 twin)'
 		// (spareAtom→spareC) was spareC's ONLY dep: former nextDep = 0. With
 		// the free list threaded through NEXT_DEP this reads the link freed
 		// just before it instead.
-		expect(b.__arenaLinkNextDepForTest('R', lAsp)).toBe(0);
+		expect(b.__TEST__arenaLinkNextDep('R', lAsp)).toBe(0);
 
 		// Tear the cone under test against the now-populated free list.
 		commitWrite(b, gate, 1);
 		// (victimC→parent) was parent's deps tail: former nextDep = 0.
 		// Pre-fix this reads the PRIMED free head — a walk holding this link
 		// across a mid-walk free would continue INTO the free list.
-		expect(b.__arenaLinkNextDepForTest('R', lVp)).toBe(0);
+		expect(b.__TEST__arenaLinkNextDep('R', lVp)).toBe(0);
 		// (s2→victimC) was victimC's only dep: former nextDep = 0. Pre-fix it
 		// reads the (victimC→parent) record — the free-list chain.
-		expect(b.__arenaLinkNextDepForTest('R', lSv)).toBe(0);
+		expect(b.__TEST__arenaLinkNextDep('R', lSv)).toBe(0);
 
 		// Recycling still works through the spare-field free list: re-link
 		// the dropped cone (allocations pop the freed records) and advance.
 		commitWrite(b, gate, 0);
 		expect(b.committedValue(parent, 'R')).toBe(5);
-		expect(b.__arenaLinkMode('R', victimC, parent)).toBe('strong');
+		expect(b.__TEST__arenaLinkMode('R', victimC, parent)).toBe('strong');
 		commitWrite(b, s2, 9);
 		expect(b.committedValue(parent, 'R')).toBe(9);
 
@@ -113,7 +113,7 @@ describe('world-arena link free list threads through a spare field (row 2 twin)'
 		// Armed throughout: every public op's epilogue serves every shadow
 		// FROM THE ARENA (arenaCheckDirty walks included) and compares against
 		// the memo-served value; the structural validator runs first.
-		const b = bridge(true);
+		const b = freshEngine(true);
 		const s = b.atom('s', 0);
 		const s3 = b.atom('s3', 0);
 		let phase2 = false;

@@ -14,9 +14,8 @@
  *  22     useSignal's render branches key on bridge watcher records only
  *         (mount / re-render / reveal) — enforced by hooks.spec.tsx and
  *         battery.spec.tsx (StrictMode netting, Activity reveal scenarios).
- *  23     committed-subscription dep snapshots (the engine's captureRun —
- *         the promoted useSignalEffect mechanism) compare committed-world
- *         VALUES at EF2 boundaries, no edge store — enforced by
+ *  23     SignalEffect terminal links (the promoted useSignalEffect
+ *         mechanism) are the dependency and liveness state — enforced by
  *         hooks.spec.tsx useSignalEffect + battery EF2 boundary suites.
  */
 import { describe, expect, test, afterEach } from 'vitest';

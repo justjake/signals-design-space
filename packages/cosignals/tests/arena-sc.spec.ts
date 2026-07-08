@@ -21,24 +21,24 @@
  *    node's current generation; a dead-GEN shadow never serves — evict,
  *    refold cold under the new tenant) is what makes the reuse sound.
  *    The schedule forces the reuse through the id-tenancy seam
- *    (__bumpNodeGenForTest); it asserts the dead tenancy's
+ *    (__TEST__bumpNodeGen); it asserts the dead tenancy's
  *    cached value never serves and the refold runs the current fn cold.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __TEST__resetEngine, type AnyInternals, type CosignalEngine } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import { Atom, Computed, effect } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	const b = engine;
 	armArenaCheck(b); // armed: arena serves ≡ fold truth at every epilogue
 	return b;
@@ -70,7 +70,7 @@ function commitWrite(b: CosignalEngine, node: AnyInternals, value: unknown): voi
 
 describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)', () => {
 	it('committed re-evaluation THROUGH A DRAIN re-points retains at the committed run\'s deps: A gains/holds, B releases', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom: atomA, log: logA } = observedAtom(10);
 		const { atom: atomB, log: logB } = observedAtom(20);
 		const nA = b.internalsForAtom(atomA as Atom<unknown>);
@@ -113,7 +113,7 @@ describe('S-C entry gate 1 — M6 world-path observation retain re-point (§4.7)
 
 describe('S-C entry gate 2 — N-1 dispose-reuse-read id tenancy (§4.5.3)', () => {
 	it('a dead-GEN shadow under a live committed arena never serves: cold refold under the new tenant, never the dead value/fn', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 5);
 		let evals = 0;
 		const c = b.computed('c', (read) => {
@@ -126,7 +126,7 @@ describe('S-C entry gate 2 — N-1 dispose-reuse-read id tenancy (§4.5.3)', () 
 
 		// Dispose-reuse analog: the seam forces the generation move the kernel
 		// free list performs at real id reuse.
-		b.__bumpNodeGenForTest(c.id);
+		b.__TEST__bumpNodeGen(c.id);
 
 		// Read WITHOUT any committed-truth motion: the shadow still holds the
 		// old tenancy's cached value 10 and no mark is pending — only the GEN
@@ -134,7 +134,7 @@ describe('S-C entry gate 2 — N-1 dispose-reuse-read id tenancy (§4.5.3)', () 
 		// again), never serve the dead tenancy's cached 10 silently.
 		expect(b.committedValue(c, 'R')).toBe(10);
 		expect(evals).toBeGreaterThan(evalsBefore); // refolded — did not serve the dead shadow
-		expect(b.__arenaLinkMode('R', a, c)).toBe('strong'); // re-tenanted: links re-recorded under the new GEN
+		expect(b.__TEST__arenaLinkMode('R', a, c)).toBe('strong'); // re-tenanted: links re-recorded under the new GEN
 
 		// And the re-tenanted shadow routes: a committed write reaches the cone.
 		commitWrite(b, a, 6);
@@ -144,7 +144,7 @@ describe('S-C entry gate 2 — N-1 dispose-reuse-read id tenancy (§4.5.3)', () 
 
 describe('S-C — N-1 REAL-REUSE leg (§4.5.3): a disposed computed\'s kernel id, reused by a new tenant, never serves the dead value/fn/comparator', () => {
 	it('dispose → kernel id reuse → reads run the NEW tenant cold; the dead fn and dead comparator never run again', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 5);
 		let oldEvals = 0;
 		let oldCompares = 0;
@@ -183,7 +183,7 @@ describe('S-C — N-1 REAL-REUSE leg (§4.5.3): a disposed computed\'s kernel id
 		expect(b.newestValue(cNew)).toBe(1005); // kernel serving under the reused id: the new tenant's fn
 		expect(oldEvals).toBe(oldEvalsAtDispose); // the dead fn never ran again
 		expect(oldCompares).toBe(oldComparesAtDispose); // the dead comparator never ran again
-		expect(b.__arenaLinkMode('R', a, cNew)).toBe('strong'); // re-tenanted links under the new bridge id
+		expect(b.__TEST__arenaLinkMode('R', a, cNew)).toBe('strong'); // re-tenanted links under the new record id
 
 		// And the new tenancy routes: a committed write reaches the cone.
 		commitWrite(b, a, 6);
@@ -194,7 +194,7 @@ describe('S-C — N-1 REAL-REUSE leg (§4.5.3): a disposed computed\'s kernel id
 
 describe('S-C — §4.5.3 per-world equality record (custom-equality computeds under arenas)', () => {
 	it('comparator-order pin: a deliberately NON-SYMMETRIC comparator runs in HEAD\'s isEqual(prev, next) order at every arena compare site', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const x = b.atom('x', 2);
 		// isEqual(prev, next) = next <= prev: with prev=2, next=1 this is equal
 		// (no change); the flipped order would report a change and
@@ -216,7 +216,7 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 	});
 
 	it('codex 6\'s reference-preservation shape in THREE arenas at once: each arena keeps ITS OWN previous reference on an equal refold — never the kernel\'s', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const x = b.atom('x', 1);
 		const y = b.atom('y', 0); // the refold driver: marks cArr without moving [x]
 		const cArr = b.computed('cArr', (read) => {
@@ -248,7 +248,7 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 	});
 
 	it('equality never bridges an exceptional boundary: value→box and box→value are CHANGES even under an always-equal comparator (which still gates value→value)', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const gate = b.atom('gate', 0);
 		// Pathological comparator: EVERYTHING is "equal". If equality could
 		// bridge an exceptional boundary, the box below would never serve (or
@@ -272,7 +272,7 @@ describe('S-C — §4.5.3 per-world equality record (custom-equality computeds u
 
 describe('§4.9.1 hang schedule — kernel computeds under worlds via arena frames (ported from research/experiments/world-tagged-links-spike-code/tests/hang.spec.ts; pinned GREEN at S-C)', () => {
 	it('dep-flipping kernel computeds evaluated under two divergent worlds, deliveries and mid-eval kernel propagation interleaved, then the unwatched-dispose cascade: terminates, per-world correct, kernel sound', () => {
-		const b = bridge();
+		const b = freshEngine();
 		// The NF2 graph: c = (flag ? a : bb) + 1 through a middle computed —
 		// REAL kernel Computed records, watched by a kernel effect so the
 		// unwatched/dispose cascades engage (the historical hang site: world

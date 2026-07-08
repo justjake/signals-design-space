@@ -22,10 +22,10 @@ const NC = envInt('NC', 64);
 const EVENTS = env('EVENTS', 'truncate');
 
 // A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
-// instance; this tree has ONE module engine.
+// instance; this tree resets its default engine.
 const b = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 // Event retention exists only on the anchor tree (this tree deleted the
 // retained event log — nothing accumulates, and the EVENTS knob's
 // truncate/retain split measures nothing here; its rows report 0).
@@ -60,7 +60,7 @@ b.write(holderA.id, atoms[0], 0, 1);
 let holderB;
 
 const k1EdgeCount = () => { let n = 0; for (const s of b.dependencyEdges.values()) n += s.size; return n; };
-const logTotal = () => { let n = 0; for (const nd of (b.idToNode !== undefined ? b.idToNode.values() : mod.__eachInternalsForTest())) if (nd.kind === 'atom') n += nd.log.length; return n; };
+const logTotal = () => { let n = 0; for (const nd of (b.idToNode !== undefined ? b.idToNode.values() : (mod.__TEST__eachInternals ?? mod.__eachInternalsForTest)())) if (nd.kind === 'atom') n += nd.log.length; return n; };
 
 const samples = [];
 const t0 = Date.now();

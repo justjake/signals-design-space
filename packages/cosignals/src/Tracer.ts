@@ -20,7 +20,7 @@
  *
  * ## Loading and cost
  * This module imports the engine as types only — its runtime module graph is
- * exactly {Tracer.ts}, and `./concurrent.ts` never imports it back, so neither
+ * exactly {Tracer.ts}, and the engine module never imports it back, so neither
  * entry pulls the other into a bundle. Until `attachTracer(engine)` runs,
  * the engine's only tracing artifact is its `trace` slot, `undefined`
  * forever, checked once per emit site (tests/trace-off.spec.ts asserts the
@@ -96,7 +96,7 @@
  *  mount-correction     {watcher, from, to}                  the urgent pre-paint fix: committed truth moved while the mounting render was in flight
  *  reconcile-correction {watcher, root, from, to, cause}     a retirement or root commit moved committed truth; this watcher's on-screen value had to follow
  *  core-effect-run      {effect, value}                      a core effect ran (core effects observe the newest world)
- *  react-effect-run     {effect, root, value, values?}       a committed-world observer ran (it sees exactly what its root's UI shows); values = its dep snapshot, when captured
+ *  react-effect-run     {effect, root, value, values?}       a committed SignalEffect ran; values = trace-only reads from that run
  *  react-effect-cleanup {effect, root}                       a committed-world observer's cleanup ran (before a re-run, or at removal)
  *  render-committed       {renderPass, root}                   checkpoint marker: the commit's consequences (retirement folds, lock-ins, drains, fixups) have all landed
  *  render-discarded       {renderPass, root}                   checkpoint marker: the discard's consequences have all landed
@@ -156,7 +156,7 @@ import type {
 	Value,
 	Watcher,
 	World,
-} from './concurrent.js';
+} from './CosignalEngine.js';
 
 // ---- record layout ---------------------------------------------------------------
 // Same-file const enums: esbuild-based toolchains inline the members as
@@ -331,7 +331,7 @@ const EVAL_STACK_DEPTH = 1024;
 // ---- the tracer ------------------------------------------------------------------
 
 export class Tracer implements TraceHooks {
-	private readonly bridge: CosignalEngine;
+	private readonly engine: CosignalEngine;
 	private readonly mode: 'ring' | 'session';
 	private readonly cap: number; // ring capacity or session chunk size (records)
 	private readonly capMask: number;
@@ -357,8 +357,8 @@ export class Tracer implements TraceHooks {
 	private evalSp = 0;
 	private evalOverflow = 0;
 
-	constructor(bridge: CosignalEngine, opts?: TracerOptions) {
-		this.bridge = bridge;
+	constructor(engine: CosignalEngine, opts?: TracerOptions) {
+		this.engine = engine;
 		this.mode = opts?.mode ?? 'ring';
 		this.cap = this.mode === 'ring'
 			? roundUpToPowerOfTwo(opts?.capacity ?? 1 << 16, POW2_CAPACITY_FLOOR)
@@ -373,13 +373,13 @@ export class Tracer implements TraceHooks {
 		this.chunks.push(new Int32Array(this.cap * TraceRec.STRIDE));
 	}
 
-	/** Detach from the bridge: recording stops, the capture stays decodable. */
+	/** Detach from the engine: recording stops, the capture stays decodable. */
 	stop(): void {
-		if (this.bridge.trace === this) this.bridge.trace = undefined;
+		if (this.engine.trace === this) this.engine.trace = undefined;
 	}
 
 	get attached(): boolean {
-		return this.bridge.trace === this;
+		return this.engine.trace === this;
 	}
 
 	// ------------------------------------------------------------ emit core
@@ -913,20 +913,22 @@ export class Tracer implements TraceHooks {
  * decoding. To capture a provably complete SESSION, attach before the
  * engine's first operation.
  */
-export function attachTracer(bridge: CosignalEngine, opts?: TracerOptions): Tracer {
-	if (bridge.trace !== undefined) {
-		throw new Error('cosignals/trace: a tracer is already attached to this bridge (stop() it first)');
+export function attachTracer(engine: CosignalEngine, opts?: TracerOptions): Tracer {
+	if (engine.trace !== undefined) {
+		throw new Error('cosignals/trace: a tracer is already attached to this engine (stop() it first)');
 	}
-	const tracer = new Tracer(bridge, opts);
-	bridge.trace = tracer;
+	const tracer = new Tracer(engine, opts);
+	engine.trace = tracer;
 	return tracer;
 }
 
 // ---- human formatting ---------------------------------------------------------------
 
-function formatValue(v: unknown): string {
+/** One value formatter, two faces: subjects render unquoted (they are
+ * labels); data values quote strings that would not scan as one word. */
+function formatValue(v: unknown, subject = false): string {
 	if (v === REF_DROPPED) return '«dropped»';
-	if (typeof v === 'string') return /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v);
+	if (typeof v === 'string') return subject || /^[\w:.-]+$/.test(v) ? v : JSON.stringify(v);
 	return String(v);
 }
 
@@ -938,18 +940,13 @@ function formatValue(v: unknown): string {
 export function formatTraceRecord(e: TraceRecord): string {
 	const entries = Object.entries(e.data);
 	// the first field is the subject, rendered inside the parens
-	const head = entries.length > 0 ? formatSubject(entries[0]![1]) : '';
+	const head = entries.length > 0 ? formatValue(entries[0]![1], true) : '';
 	const rest = entries.slice(1).map(([k, v]) => `${k}=${formatValue(v)}`).join(' ');
 	const cause = e.cause === undefined ? '' : ` <- #${e.cause}`;
 	return `#${e.id} +${e.dt}µs ${e.kind}(${head})${rest.length > 0 ? ` ${rest}` : ''}${cause}`;
-}
-
-function formatSubject(v: unknown): string {
-	return typeof v === 'string' ? v : String(v);
 }
 
 /** The whole capture (or any decoded slice), one line per event. */
 export function formatTrace(events: TraceRecord[]): string {
 	return events.map(formatTraceRecord).join('\n');
 }
-

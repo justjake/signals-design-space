@@ -15,11 +15,11 @@ const REPS = envInt('REPS', 7);
 const WARMUP = envInt('WARMUP', 2);
 
 // A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
-// instance; this tree has ONE module engine (production posture either way:
+// instance; this tree resets its default engine (production posture either way:
 // quiet ON, no event retention).
 const bridge = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 
 let sink = 0;
 const a = new Atom(0);
@@ -68,7 +68,7 @@ perWrite.sort((x, y) => x - y);
 const med = perWrite[perWrite.length >> 1];
 // Quiet-mode invariants, asserted in the bench itself: zero pipeline
 // activity, committed == kernel == last write.
-const probes = mod.__coreProbes();
+const probes = (mod.__TEST__coreProbes ?? mod.__coreProbes)();
 if (probes.logEntries !== 0 || probes.batches !== 0) {
 	throw new Error(`SPK-W quiet invariant: pipeline activity while quiet (${JSON.stringify(probes)})`);
 }

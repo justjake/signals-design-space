@@ -16,10 +16,10 @@ const REPS = envInt('REPS', 7);
 const WARMUP = envInt('WARMUP', 2);
 
 // A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree registers a bridge
-// instance; this tree has ONE module engine.
+// instance; this tree resets its default engine.
 const b = typeof mod.registerReactBridge === 'function'
 	? mod.registerReactBridge()
-	: (mod.__resetEngineForTest?.(), mod.engine);
+	: ((mod.__TEST__resetEngine ?? mod.__resetEngineForTest)?.(), mod.engine);
 const a = b.atom('a', 0);
 let evals = 0;
 let top;

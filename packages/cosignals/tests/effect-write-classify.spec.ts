@@ -15,7 +15,7 @@
  * is the hand pin.
  */
 import { describe, expect, it } from 'vitest';
-import { Atom, effect, engine, __resetEngineForTest } from '../src/index.js';
+import { Atom, effect, engine, __TEST__resetEngine } from '../src/index.js';
 
 function freshEngine(): void {
 	engine.discardAllWip();
@@ -23,7 +23,7 @@ function freshEngine(): void {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 }
 
 describe('R-3: effect writes during the fused apply classify normally', () => {

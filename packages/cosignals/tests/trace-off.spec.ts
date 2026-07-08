@@ -25,29 +25,19 @@ import { describe, expect, it } from 'vitest';
 import { generateSchedule } from '../../cosignals-oracle/src/schedule.js';
 import { mountEngineReactEffect } from './helpers.js';
 import { dependencyGraphToDot, traceToDot } from '../src/graphviz.js';
-import { engine, __resetEngineForTest, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __TEST__resetEngine, type CosignalEngine } from '../src/CosignalEngine.js';
 import { attachTracer, REF_DROPPED, Tracer } from '../src/Tracer.js';
 import { applyEngineOp, buildEngineTopology } from './oracle-adapter.js';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The concurrent engine's module set (the one entry plus its extracted
- * mechanism modules) — every source-discipline scan below covers all of
- * them, so an extraction can never silently exit the zero-cost contract. */
+/** The engine's module set — the one engine module (every section: kernel,
+ * evaluation policy, observed lifecycle, the concurrent machinery, world
+ * arenas, observers, render integration, reclamation) plus its error
+ * classes. Every source-discipline scan below covers all of them, so a
+ * future extraction can never silently exit the zero-cost contract. */
 const ENGINE_MODULES = [
-	'src/concurrent.ts',
-	'src/ConcurrentEngine.ts',
 	'src/errors.ts',
-	'src/NotificationQueue.ts',
-	'src/ObservationIndex.ts',
-	'src/WriteLog.ts',
-	'src/Batch.ts',
-	'src/World.ts',
-	'src/settlement.ts',
-	// The engine module — kernel, evaluation policy, observed lifecycle,
-	// world arenas, observer records, committed observers, render
-	// integration, reclamation — the same zero-cost scans cover every
-	// section.
 	'src/CosignalEngine.ts',
 ];
 
@@ -57,21 +47,21 @@ function src(rel: string): string {
 		.replace(/\/\/[^\n]*/g, '');
 }
 
-/** Fresh engine (the per-test bridge analog): finish any leftover episode
+/** Fresh engine (one fresh engine per test): finish any leftover episode
  * so the reset's idle preconditions hold, then reset. */
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
 /** A tracer over a fresh engine reset, for driving the recorder synthetically. */
 function bareTracer(opts?: Parameters<typeof attachTracer>[1]): Tracer {
-	return attachTracer(bridge(), opts);
+	return attachTracer(freshEngine(), opts);
 }
 
 /** One record per call, with a recognizable payload (the typed epoch-reset
@@ -94,34 +84,32 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 	});
 
 	it("the engine's only tracing state is the one nullable slot, captured locally", () => {
-		// The slot's STORAGE is the shared engine-core record's `trace` field
-		// (World.ts declares it; the engine surface exposes the `engine.trace`
-		// accessor pair over it). Mechanism modules capture it locally per
-		// site — `const tr = core.trace;` (or `const tr = c.trace;` over a
-		// one-load core alias) for the core-wired factories, or through a
-		// deps arrow (`trace: () => core.trace`) for the arrow-wired ones.
-		const lines = src('src/concurrent.ts').split('\n');
+		// The slot's STORAGE is the engine module's one `trace` let (the
+		// engine surface exposes the `engine.trace` accessor pair over it).
+		// Every instrumentation site captures it locally — `const tr =
+		// trace;` — and fires hooks only behind that local's undefined check.
+		const allowed = [
+			/^let trace: TraceHooks \| undefined;$/,
+			/^const tr = trace;/,
+			/^trace = undefined;$/,
+			/^return trace;$/,
+			/^trace = hooks;$/,
+			/^get trace\(\): TraceHooks \| undefined \{$/,
+			/^set trace\(hooks: TraceHooks \| undefined\) \{$/,
+		];
+		const lines = src('src/CosignalEngine.ts').split('\n');
+		let accessorPair = 0;
 		for (const line of lines) {
-			if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;
+			if (!/(^|[^.\w'])trace\b/.test(line)) continue;
 			const t = line.trim();
+			if (t === 'return trace;' || t === 'trace = hooks;') accessorPair++;
 			expect(
-				t.startsWith('const tr = core.trace;') || t.startsWith('const tr = c.trace;') || t === 'return core.trace;' || t === 'core.trace = hooks;',
+				allowed.some((p) => p.test(t)),
 				`unexpected use of the trace slot: ${t}`,
 			).toBe(true);
 		}
-		// The engine-surface accessor pair is the only surface over the core field.
-		expect(src('src/concurrent.ts')).toMatch(/return core\.trace;/);
-		for (const rel of ['src/World.ts', 'src/CosignalEngine.ts', 'src/settlement.ts', 'src/Batch.ts', 'src/NotificationQueue.ts', 'src/ConcurrentEngine.ts']) {
-			const lines2 = src(rel).split('\n');
-			for (const line of lines2) {
-				if (!/\bcore\.trace\b/.test(line) && !/\bc\.trace\b/.test(line)) continue;
-				const t = line.trim();
-				expect(
-					t.startsWith('const tr = core.trace;') || t.startsWith('const tr = c.trace;') || t === 'trace: undefined,' || t === 'trace: () => core.trace,' || t.startsWith('trace: TraceHooks | undefined;'),
-					`unexpected use of the trace slot in ${rel}: ${t}`,
-				).toBe(true);
-			}
-		}
+		// The engine-surface accessor pair is the only surface over the slot.
+		expect(accessorPair).toBe(2);
 	});
 
 	it('every hook invocation sits behind a single tr !== undefined check', () => {
@@ -155,7 +143,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 
 describe('R11 runtime enable/disable', () => {
 	it('the slot stays undefined without attach; attach/stop/re-attach at runtime', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		expect(b.trace).toBeUndefined();
 		b.bareWrite(a, 0, 1);
@@ -174,7 +162,7 @@ describe('R11 runtime enable/disable', () => {
 		expect(tr.attached).toBe(false);
 		b.bareWrite(a, 0, 3);
 		expect(tr.stats().recorded).toBe(recorded); // capture frozen, still decodable
-		// The bridge was at rest for every write above, so the captured records
+		// The engine was at rest for every write above, so the captured records
 		// are quiet folds (the production default write path), not log entries.
 		expect(tr.events('quiet-write').length).toBeGreaterThan(0);
 
@@ -188,7 +176,7 @@ describe('R11 runtime enable/disable', () => {
 		// ONE engine now, so the runs are sequential RESETS: run traced,
 		// snapshot every observable, reset, run untraced, compare snapshots.
 		const run = (traced: boolean) => {
-			const b = bridge();
+			const b = freshEngine();
 			buildEngineTopology(b);
 			const tr = traced ? attachTracer(b, { mode: 'ring', capacity: 16 }) : undefined; // tiny ring: wrap under load
 			for (const op of generateSchedule(7, 80)) applyEngineOp(b, op);
@@ -304,7 +292,7 @@ describe('R11 recorder details', () => {
 
 describe('R11 Graphviz renderers', () => {
 	it('dependencyGraphToDot: nodes, K1 union edges, watchers, effects', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const flag = b.atom('flag', 0);
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => (read(flag) ? read(a) : 0));
@@ -312,7 +300,7 @@ describe('R11 Graphviz renderers', () => {
 		b.mountWatcher(p.id, c, 'W');
 		b.renderEnd(p.id, 'commit');
 		// A committed observer (core effect()s are kernel effects now — no
-		// bridge record, so nothing of theirs appears in the dump).
+		// engine record, so nothing of theirs appears in the dump).
 		mountEngineReactEffect(b, 'A', c, 'E');
 		const dot = dependencyGraphToDot(b);
 		expect(dot).toMatch(/^digraph cosignals \{/);
@@ -324,7 +312,7 @@ describe('R11 Graphviz renderers', () => {
 	});
 
 	it('traceToDot: cause edges drawn within the kept set; filter respected', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(a));
 		const tr = attachTracer(b);

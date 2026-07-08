@@ -6,9 +6,9 @@
  */
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
-import { Atom, ReducerAtom, BATCH_NONE, __internalsByIdForTest, __resetEngineForTest, attachDriver, type AtomInternals } from 'cosignals';
+import { Atom, ReducerAtom, BATCH_NONE, __TEST__internalsById, __TEST__resetEngine, attachDriver, untracked, type AtomInternals } from 'cosignals';
 import { registerCosignalReact, requireShim, useSignal, useComputed, useReducerAtom, useSignalEffect } from '../src/index.js';
-import { makeHarness, act, text, type Harness } from './helpers.js';
+import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
 
 let h: Harness;
 afterEach(async () => {
@@ -43,7 +43,7 @@ describe('useSignal', () => {
 		expect(text(container)).toBe('15');
 		// The log entry holds the updater function itself, not a pre-folded value,
 		// so each world can replay it against its own view.
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
+		const node = __TEST__internalsById(a._id) as AtomInternals;
 		const ops = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((r) => r.op.kind);
 		expect(ops).toContain('update');
 	});
@@ -227,13 +227,242 @@ describe('useReducerAtom (§3.2)', () => {
 			r.dispatch(7);
 		});
 		expect(text(container)).toBe('107');
-		const node = __internalsByIdForTest(r._id) as AtomInternals;
+		const node = __TEST__internalsById(r._id) as AtomInternals;
 		const kinds = [...node.log.materialize(), ...h.compacted.filter((c) => c.atom === node).map((c) => c.entry)].map((x) => x.op.kind);
 		expect(kinds).toContain('update'); // re-pinned: dispatch → update(s => reduce(s, action))
 	});
 });
 
 describe('useSignalEffect (§5.11)', () => {
+	test('converges one signal change delivered through React props and signal dependencies into one run', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const observed: Array<{ aFromReact: number; aFromSignal: number }> = [];
+
+		function Child({ aFromReact }: { aFromReact: number }) {
+			useSignalEffect(() => {
+				observed.push({ aFromReact, aFromSignal: a.state });
+			}, [aFromReact]);
+			return null;
+		}
+
+		function Parent() {
+			return <Child aFromReact={useSignal(a)} />;
+		}
+
+		await h.mount(<Parent />);
+		expect(observed).toEqual([{ aFromReact: 0, aFromSignal: 0 }]);
+		await act(async () => {
+			a.set(1);
+		});
+		expect(observed).toEqual([
+			{ aFromReact: 0, aFromSignal: 0 },
+			{ aFromReact: 1, aFromSignal: 1 },
+		]);
+	});
+
+	test('signal-only notification runs without rendering the component', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const observed: number[] = [];
+		let renders = 0;
+		function View() {
+			renders++;
+			useSignalEffect(() => {
+				observed.push(a.state);
+			}, []);
+			return null;
+		}
+		await h.mount(<View />);
+		const rendersAfterMount = renders;
+		await act(async () => {
+			a.set(1);
+		});
+		expect(observed).toEqual([0, 1]);
+		expect(renders).toBe(rendersAfterMount);
+	});
+
+	test('a signal write from the body reruns only after the current dependency frame closes', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const observed: number[] = [];
+		let renders = 0;
+		function View() {
+			renders++;
+			useSignalEffect(() => {
+				const value = a.state;
+				observed.push(value);
+				if (value < 2) a.set(value + 1);
+			}, []);
+			return null;
+		}
+		await h.mount(<View />);
+		expect(observed).toEqual([0, 1, 2]);
+		expect(renders).toBe(1);
+	});
+
+	test('React-only dependency change runs once and retracks signal dependencies', async () => {
+		h = makeHarness();
+		const a = new Atom(10);
+		const b = new Atom(20);
+		const observed: number[] = [];
+		function View({ pickA }: { pickA: boolean }) {
+			useSignalEffect(() => {
+				observed.push((pickA ? a : b).state);
+			}, [pickA]);
+			return null;
+		}
+		const { root } = await h.mount(<View pickA={true} />);
+		await act(async () => {
+			root.render(<View pickA={false} />);
+		});
+		expect(observed).toEqual([10, 20]);
+		await act(async () => {
+			a.set(11);
+		});
+		expect(observed).toEqual([10, 20]);
+		await act(async () => {
+			b.set(21);
+		});
+		expect(observed).toEqual([10, 20, 21]);
+	});
+
+	test('same-root React work with unchanged deps neither loses nor duplicates a signal request', async () => {
+		h = makeHarness();
+		const signalOnly = new Atom(0);
+		const renderTick = new Atom(0);
+		const observed: number[] = [];
+		function View() {
+			void useSignal(renderTick);
+			useSignalEffect(() => {
+				observed.push(signalOnly.state);
+			}, []);
+			return null;
+		}
+		await h.mount(<View />);
+		await act(async () => {
+			signalOnly.set(1);
+			renderTick.set(1);
+		});
+		expect(observed).toEqual([0, 1]);
+	});
+
+	test('the final report wins when a render-phase rerender reverts the React deps', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const observed: number[] = [];
+		function View() {
+			const value = useSignal(a);
+			const [rerendered, setRerendered] = React.useState(false);
+			const dep = value === 1 && !rerendered ? 1 : 0;
+			useSignalEffect(() => {
+				observed.push(a.state);
+			}, [dep]);
+			if (value === 1 && !rerendered) setRerendered(true);
+			return null;
+		}
+		await h.mount(<View />);
+		await act(async () => {
+			a.set(1);
+		});
+		expect(observed).toEqual([0, 1]);
+	});
+
+	test('a matching suspended render never runs the old React closure early', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const gate = deferred<void>();
+		const observed: Array<{ prop: number; signal: number }> = [];
+		function Child({ value }: { value: number }) {
+			useSignalEffect(() => {
+				observed.push({ prop: value, signal: a.state });
+			}, [value]);
+			if (value > 0 && !gate.settled) throw gate.promise;
+			return null;
+		}
+		function Parent() {
+			return <React.Suspense fallback={null}><Child value={useSignal(a)} /></React.Suspense>;
+		}
+		await h.mount(<Parent />);
+		await act(async () => {
+			React.startTransition(() => a.set(1));
+		});
+		expect(observed).toEqual([{ prop: 0, signal: 0 }]);
+		gate.settled = true;
+		await act(async () => {
+			gate.resolve();
+		});
+		expect(observed).toEqual([
+			{ prop: 0, signal: 0 },
+			{ prop: 1, signal: 1 },
+		]);
+	});
+
+	test('StrictMode replay and signal reruns share one cleanup owner', async () => {
+		h = makeHarness();
+		const a = new Atom(0);
+		const log: string[] = [];
+		function View() {
+			useSignalEffect(() => {
+				const value = a.state;
+				log.push(`run:${value}`);
+				return () => log.push(`clean:${value}`);
+			}, []);
+			return null;
+		}
+		const { root } = await h.mount(<React.StrictMode><View /></React.StrictMode>);
+		expect(log).toEqual(['run:0', 'clean:0', 'run:0']);
+		await act(async () => {
+			a.set(1);
+		});
+		expect(log).toEqual(['run:0', 'clean:0', 'run:0', 'clean:0', 'run:1']);
+		await act(async () => {
+			root.render(<React.StrictMode><div /></React.StrictMode>);
+		});
+		expect(log).toEqual(['run:0', 'clean:0', 'run:0', 'clean:0', 'run:1', 'clean:1']);
+	});
+
+	test('dynamic and untracked dependencies move lifecycle liveness by real graph edge', async () => {
+		h = makeHarness();
+		const lifecycle: string[] = [];
+		const observed = (name: string) => new Atom(0, {
+			effect: () => {
+				lifecycle.push(`observe:${name}`);
+				return () => lifecycle.push(`unobserve:${name}`);
+			},
+		});
+		const chooseA = new Atom(true);
+		const a = observed('a');
+		const b = observed('b');
+		const ignored = observed('ignored');
+		let runs = 0;
+		function View() {
+			useSignalEffect(() => {
+				runs++;
+				void (chooseA.state ? a.state : b.state);
+				void untracked(() => ignored.state);
+			}, []);
+			return null;
+		}
+		const { root } = await h.mount(<View />);
+		await act(async () => {});
+		expect(lifecycle).toEqual(['observe:a']);
+		await act(async () => {
+			ignored.set(1);
+		});
+		expect(runs).toBe(1);
+		await act(async () => {
+			chooseA.set(false);
+		});
+		await act(async () => {});
+		expect(lifecycle).toEqual(['observe:a', 'observe:b', 'unobserve:a']);
+		await act(async () => {
+			root.render(<div />);
+		});
+		await act(async () => {});
+		expect(lifecycle).toEqual(['observe:a', 'observe:b', 'unobserve:a', 'unobserve:b']);
+	});
+
 	test('observes committed values and re-fires on committed flips only', async () => {
 		h = makeHarness();
 		const a = new Atom(0);
@@ -303,8 +532,8 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 	test('useSignalEffect-only subscriber counts toward the union: observe after the first run, unobserve after unmount (OL1 re-pin, effects unification)', async () => {
 		// Before the unification an atom observed ONLY by a useSignalEffect
 		// never triggered its observe lifecycle — the incident-I3-shaped
-		// asymmetry OL1 forbids ("ALL consumer kinds"). The promoted
-		// subscription's dep snapshot now holds one retain per node.
+		// asymmetry OL1 forbids ("ALL consumer kinds"). The SignalEffect's
+		// ordinary strong edges now hold one retain per dependency.
 		h = makeHarness();
 		const { atom: a, log } = observedAtom(0);
 		function View() {
@@ -324,7 +553,7 @@ describe('AtomOptions.effect observed lifecycle on the React path (observation u
 		await act(async () => {
 			root.render(<div />);
 		});
-		await act(async () => {}); // teardown releases the snapshot's retains
+		await act(async () => {}); // teardown removes the terminal's edges
 		expect(log).toEqual(['observe', 'unobserve']);
 	});
 
@@ -553,7 +782,7 @@ describe('registration lifecycle (module active-shim slot)', () => {
 		// (dispose never detaches), so the engine resets first — the one way
 		// the driver slot clears — before B can attach its own.
 		handleA.shim.dispose();
-		__resetEngineForTest({ devChecks: true });
+		__TEST__resetEngine({ devChecks: true });
 		const handleB = registerCosignalReact();
 		try {
 			expect(requireShim()).toBe(handleB.shim);

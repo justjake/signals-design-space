@@ -20,7 +20,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { mountEngineReactEffect } from './helpers.js';
-import { Atom, Computed, SuspendedRead, effect, engine, __resetEngineForTest } from '../src/index';
+import { Atom, Computed, SuspendedRead, effect, engine, __TEST__resetEngine } from '../src/index';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
 	let resolve!: (v: T) => void;
@@ -287,26 +287,25 @@ describe('ctx.use', () => {
 	});
 });
 
-// Battery 16d at the ENGINE level (the adapter rule promoted verbatim into
-// the committed-subscription boundary scan): a dep whose committed re-read is
-// a still-pending suspension is NOT a flip. Engine-direct — the reference
+// Battery 16d at the engine level: validating a SignalEffect dependency that
+// still resolves to the same pending suspension is NOT a flip. Engine-direct — the reference
 // model deliberately models no suspense (declared in the oracle README).
 
 /** Fresh engine for the engine-direct tests: finish any leftover episode,
- * then reset (the per-test bridge analog). */
-function bridge() {
+ * then reset (one fresh engine per test). */
+function freshEngine() {
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
-describe('committed-subscription dep snapshots under suspension (battery 16d)', () => {
+describe('SignalEffect dependency links under suspension (battery 16d)', () => {
 	test('a stable pending sentinel VALUE is not a flip; the settled value is', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const d = deferred<string>();
 		const sentinel = new SuspendedRead(d.promise);
 		const gate = b.atom('gate', 0);
@@ -317,7 +316,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 			read(gate);
 			return settled === undefined ? sentinel : settled;
 		});
-		const e = mountEngineReactEffect(b, 'A', c, 'E'); // snapshot: (c, sentinel)
+		const e = mountEngineReactEffect(b, 'A', c, 'E'); // link stamp: (c, sentinel)
 		expect(e.lastValue).toBe(sentinel);
 		const t1 = b.openBatch();
 		b.write(t1.id, gate, 0, 1);
@@ -332,7 +331,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 	});
 
 	test('a dep whose committed re-read THROWS a still-pending suspension is skipped, not a crash and not a flip', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const d = deferred<string>();
 		const sentinel = new SuspendedRead(d.promise);
 		const gate = b.atom('gate', 0);
@@ -342,7 +341,7 @@ describe('committed-subscription dep snapshots under suspension (battery 16d)', 
 			if (pending) throw sentinel; // hook-shaped rethrow on re-evaluation
 			return 'v0';
 		});
-		const e = mountEngineReactEffect(b, 'A', c, 'E'); // snapshot: (c, 'v0')
+		const e = mountEngineReactEffect(b, 'A', c, 'E'); // link stamp: (c, 'v0')
 		pending = true;
 		const t = b.openBatch();
 		b.write(t.id, gate, 0, 1);

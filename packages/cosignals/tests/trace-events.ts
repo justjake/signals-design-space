@@ -4,7 +4,7 @@
  * instrumentation site writes a fixed-size record into the attached tracer,
  * and every event consumer — the lockstep
  * driver's comparison, the reference-model adapter, specs — attaches a
- * lossless session tracer at bridge birth and decodes records back into
+ * lossless session tracer at engine birth and decodes records back into
  * `TraceEvent` objects (the decoded shape, still declared in
  * src/concurrent.ts because the package entry re-exports it) on demand here.
  *
@@ -18,13 +18,13 @@
  * streams by JSON, so key order is load-bearing.
  *
  * Ref-ring sizing is load-bearing too: correction from/to values, effect
- * values, and react-effect dep snapshots live in the tracer's ref ring, and
+ * values, and SignalEffect trace-only read values live in the tracer's ref ring, and
  * lockstep re-reads the whole session's stream after every op — an
  * overwritten ref would decode as REF_DROPPED and fail the comparison
  * loudly. `attachRefereeStream` therefore attaches with a large ref
  * capacity (2^16) instead of the diagnostic default (256).
  */
-import type { TraceEvent, CosignalEngine, Value } from '../src/concurrent.js';
+import type { TraceEvent, CosignalEngine, Value } from '../src/CosignalEngine.js';
 import { attachTracer, Tracer, type TraceRecord, type TracerOptions } from '../src/Tracer.js';
 import { engineEpoch } from '../src/CosignalEngine.js';
 import type { ModelEvent } from '../../cosignals-oracle/src/model.js';
@@ -125,7 +125,7 @@ export function decodedTraceEvents(tr: Tracer): TraceEvent[] {
 }
 
 /**
- * The comparison view of one bridge's event stream: a lossless session tracer
+ * The comparison view of one engine's event stream: a lossless session tracer
  * plus an incrementally-maintained decode of its TraceEvent-mapped records
  * (session records are immutable and ids are dense, so decoding forward from
  * a cursor is sound and each record decodes exactly once). Presents the
@@ -172,9 +172,9 @@ export class RefereeStream {
 const streams = new WeakMap<CosignalEngine, { epoch: number; stream: RefereeStream }>();
 
 /**
- * Attach the comparison's lossless session tracer to a fresh bridge and return
- * its decoded stream (registered per bridge so shared drivers can find it —
- * `refereeStreamOf`). Attach before the bridge's first operation: session
+ * Attach the comparison's lossless session tracer to a fresh engine and return
+ * its decoded stream (registered per engine so shared drivers can find it —
+ * `refereeStreamOf`). Attach before the engine's first operation: session
  * completeness is what makes the decoded stream comparable from event 0.
  */
 export function attachRefereeStream(b: CosignalEngine, opts?: TracerOptions): RefereeStream {
@@ -184,7 +184,7 @@ export function attachRefereeStream(b: CosignalEngine, opts?: TracerOptions): Re
 }
 
 /** The stream attached to `b` THIS EPOCH, or throw (attachRefereeStream
- * after every `__resetEngineForTest`). */
+ * after every `__TEST__resetEngine`). */
 export function refereeStreamOf(b: CosignalEngine): RefereeStream {
 	const s = streams.get(b);
 	if (s === undefined || s.epoch !== engineEpoch) throw new Error('no referee stream attached to this engine composition (call attachRefereeStream after the reset)');

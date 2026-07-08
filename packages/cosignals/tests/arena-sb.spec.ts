@@ -18,23 +18,23 @@
  *    (weak links never carry deliveries through the delivery walk;
  *    drains still reach through them).
  *
- * Every bridge runs with the divergence check armed (arena-served ≡
+ * Every engine reset runs with the divergence check armed (arena-served ≡
  * fold-truth after every public operation) — these schedules must stay
  * clean under the checker while exhibiting the pinned lane outcomes.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, type AnyInternals, type CosignalEngine } from '../src/concurrent.js';
+import { engine, __TEST__resetEngine, type AnyInternals, type CosignalEngine } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 import { attachRefereeStream, refereeStreamOf } from './trace-events.js';
 
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	const b = engine;
 	attachRefereeStream(b); // the decoded packed stream is the event surface
 	armArenaCheck(b);
@@ -73,7 +73,7 @@ function d1Topology(b: CosignalEngine) {
 
 describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 	it('D1-1 second-write-before-render-restart: the pre-discard write delivers (render arena route); the gap write delivers NOTHING — not even a suppression; value repairs at retirement', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { flag, a, c } = d1Topology(b);
 		const w = mount(b, 'R', c, 'W'); // committed arena: {flag,b}→c
 		expect(w.lastRenderedValue).toBe(2);
@@ -114,7 +114,7 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 	});
 
 	it('D1-2 write-after-discard-before-restart: the gap write reaches nothing; the repair arrives in TWO drain corrections as committed truth moves', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { flag, a, c } = d1Topology(b);
 		const w = mount(b, 'R', c, 'W');
 
@@ -142,7 +142,7 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 	});
 
 	it('D1-3 batch-attribution variant (codex 4): U retires FIRST — its boundary shows no motion at all; the whole repair lands at T\'s boundary, attributed to T\'s lane', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { flag, a, c } = d1Topology(b);
 		const w = mount(b, 'R', c, 'W');
 
@@ -176,7 +176,7 @@ describe('S-NF2-D1 — the dead-arena retreat, pinned (§4.4.5)', () => {
 
 describe('S-B routing coverage pins (§4.4.1 / §4.4.2)', () => {
 	it('M1 population schedule: mount C=f(A), commit, handler write in a FRESH batch — the walk finds A→C in the root\'s committed arena (the re-staled loop populated it)', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const A = b.atom('A', 0);
 		const C = b.computed('C', (read) => read(A));
 		const w = mount(b, 'R', C, 'W');
@@ -188,15 +188,15 @@ describe('S-B routing coverage pins (§4.4.1 / §4.4.2)', () => {
 	});
 
 	it('untracked-fan member THROUGH the new routing: weak links never carry the delivery walk; drains still expand over them', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const a = b.atom('a', 1);
 		const bb = b.atom('b', 2);
 		const c = b.computed('c', (read, untracked) => (read(bb) as number) + (untracked(a) as number));
 		const d = b.computed('d', (read) => (read(c) as number) * 1);
 		const w = mount(b, 'R', d, 'W');
 		expect(w.lastRenderedValue).toBe(3);
-		expect(b.__arenaLinkMode('R', a, c)).toBe('weak');
-		expect(b.__arenaLinkMode('R', bb, c)).toBe('strong');
+		expect(b.__TEST__arenaLinkMode('R', a, c)).toBe('weak');
+		expect(b.__TEST__arenaLinkMode('R', bb, c)).toBe('strong');
 
 		const T = b.openBatch();
 		b.write(T.id, a, 0, 100); // untracked dep: the walk tests the weak bit and skips

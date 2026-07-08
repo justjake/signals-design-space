@@ -1,7 +1,6 @@
 /**
- * cosignals-react — the protocol shim. One Shim instance couples the one cosignals
- * engine (the module-level concurrent engine `cosignals` exports as `engine`;
- * nothing constructs engines) to a React build implementing the cosignals
+ * cosignals-react — the protocol shim. One Shim instance couples cosignals'
+ * default browser engine to a React build implementing the cosignals
  * external-runtime protocol.
  * Stock React never reveals when it starts, pauses, commits, or discards a
  * render pass — which is exactly what an external store must know to stay
@@ -165,7 +164,7 @@ export function getActiveShim(): Shim | undefined {
 // ---- the shim --------------------------------------------------------------------
 
 export class Shim {
-	/** THE engine surface (`cosignals`'s one module-level engine; the field
+	/** The default browser engine surface; the field
 	 * keeps the bindings' historical name to spare every call site). */
 	readonly bridge: CosignalEngine;
 	/** Development-time checks (the engine's EngineResetOptions.devChecks,
@@ -188,25 +187,8 @@ export class Shim {
 	targets = new Map<number, WatcherTarget>();
 	/** watcher id -> claimed by a committed layout effect (StrictMode orphan sweep). */
 	claimed = new Set<number>();
-	/**
-	 * The React effect-timing shell (the one piece of effect machinery that
-	 * stays adapter-side): user refire bodies queued by the engine's
-	 * per-root-commit boundary scan must not run inside onRenderPassEnd —
-	 * React captures its re-pend classification before emitting render end,
-	 * so a body write there could desync lock-in accounting. While
-	 * `holdingRefires` is set (around
-	 * bridge.renderEnd for a COMMIT), refires park here and flush at the
-	 * root-commit report. THE PROTOCOL'S ORDERING GUARANTEE makes that safe:
-	 * the fork emits `onRootCommitted` immediately after the render frame
-	 * closes, in the same synchronous commit sequence, with no user code
-	 * (effects, event handlers, timers) able to run between the two events —
-	 * so the boundary values the engine's scan captured are still the values
-	 * when the refires flush. Retirement/settlement refires run at their own
-	 * operation boundary.
-	 */
-	private holdingRefires = false;
-	private heldRefires: (() => void)[] = [];
-
+	/** SignalEffect id -> its hook-owned stable cleanup/body runner. */
+	private effectRunners = new Map<number, () => void>();
 	constructor() {
 		this.bridge = engine;
 		this.devChecks = engine.devChecks;
@@ -224,7 +206,7 @@ export class Shim {
 			// render context (stack-accurate — a COMPLETED-but-uncommitted render
 			// is not "in render", and interleaved roots each see their own
 			// render); anything else resolves newest (undefined). Effect fires
-			// need no arm here: the ENGINE's captureRun frame owns
+			// need no arm here: the engine's SignalEffect frame owns
 			// committed-for-root routing and dependency capture (the promoted
 			// mechanism), and the engine consults its own frame before this
 			// provider.
@@ -247,6 +229,7 @@ export class Shim {
 			onDelivery: (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)), // re-render in the write's own batch
 			onMountCorrective: (w, batch) => this.guard(() => this.bumpInBatch(w.id, batch.id)), // join a still-live batch this mount's render missed
 			onCorrection: (w) => this.guard(() => this.bumpInBatch(w.id, undefined)), // urgent pre-paint fix: discrete-urgent fallback lane
+			onSignalEffect: (effect) => this.guard(() => this.effectRunners.get(effect.id)?.()),
 			// Test-only: the engine reset invokes this first, before scrubbing
 			// engine state, so React's batch registry drops its slot tenancy
 			// while the engine composition those ids point into still exists.
@@ -287,7 +270,7 @@ export class Shim {
 		this.unsubscribe();
 		this.unregisterAllocator();
 		this.targets.clear();
-		this.heldRefires.length = 0;
+		this.effectRunners.clear();
 	}
 
 	/** Listener bodies never throw across React's commit; failures are recorded. */
@@ -422,16 +405,8 @@ export class Shim {
 		// onBatchRetired events for the same commit arrive. The mount fixup
 		// for watchers created this render runs inside renderEnd; the corrective
 		// re-renders it emits reach React through the direct listeners
-		// (delivered at the operation boundary, inside this call). Effect
-		// REFIRES the commit's boundary scan queues are HELD here and flushed
-		// at the root-commit report (see holdingRefires) — render-end precedes
-		// React's re-pend classification, the report follows it.
-		this.holdingRefires = true;
-		try {
-			this.bridge.renderEnd(render.id, 'commit');
-		} finally {
-			this.holdingRefires = false;
-		}
+		// (delivered at the operation boundary, inside this call).
+		this.bridge.renderEnd(render.id, 'commit');
 		rec.renderPass = undefined;
 		// (ctx.previous cells update inside bridge.renderEnd — the
 		// cells live on the engine's computed nodes, beside their ctx adapter.)
@@ -458,7 +433,6 @@ export class Shim {
 	}
 
 	private handleBatchRetired(batchId: BatchId, committed: boolean): void {
-		this.flushHeldRefires(); // defensive: nothing stays parked past its commit's own events
 		const t = this.bridge.idToBatch.get(batchId);
 		if (t === undefined || t.state !== 'live') return; // already retired, or a stale/foreign id — nothing to do
 		// The committed/abandoned fact is BORN here — React's own report about
@@ -469,9 +443,8 @@ export class Shim {
 		// batch) create none.
 		const tr = this.bridge.trace;
 		if (tr !== undefined) tr.batchDisposition(batchId, committed);
-		// Retirement/settlement are effect boundaries:
-		// the engine's boundary scan runs inside retire/settleAction and
-		// queued refires fire at the operation boundary, inside this call.
+		// Retirement/settlement flush dirty SignalEffect terminals and deliver
+		// their runner requests at this operation boundary.
 		if (t.parked) this.bridge.settleAction(batchId); // async action reached settlement
 		else this.bridge.retire(batchId); // batch done everywhere: its writes become permanent history
 	}
@@ -497,28 +470,9 @@ export class Shim {
 			if (this.bridge.idToBatch.get(batchId)?.state === 'live') reported.push(batchId);
 		}
 		if (reported.length !== 0) this.bridge.commitBatches(rec.id, reported);
-		// The root-commit REPORT is where the commit's effect refires run
-		// (React's re-pend classification is behind us; the protocol's
-		// ordering guarantee puts no user code
-		// between the frame close and this report, so the boundary values are
-		// unchanged — see holdingRefires). commitBatches is itself a boundary
-		// operation: when the report
+		// commitBatches is itself a boundary operation: when the report
 		// actually moved committed truth, the engine re-checked that root's
-		// committed observers inside the call.
-		this.flushHeldRefires();
-	}
-
-	/** Runs commit-held effect refires (see holdingRefires). */
-	private flushHeldRefires(): void {
-		if (this.heldRefires.length === 0) return;
-		const held = this.heldRefires.splice(0);
-		for (const run of held) {
-			try {
-				run();
-			} catch (error) {
-				this.errors.push(error);
-			}
-		}
+		// committed SignalEffects inside the call.
 	}
 
 	// ---- direct listeners -> React ---------------------------------------------
@@ -554,7 +508,7 @@ export class Shim {
 	 * ordinary no-context write (quiet fold when nothing is pending, else the
 	 * ambient batch) — the same defined fall-through a bare non-React write
 	 * takes. Effects stay BOUNDARY consumers of such writes: the engine
-	 * re-checks their snapshots at the next boundary (retirement, settlement,
+	 * validates their dirty graph edges at the next boundary (retirement, settlement,
 	 * per-root commit), never mid-write. */
 	currentBatch(): BatchId {
 		if (React.unstable_getRenderContext() !== null) {
@@ -589,12 +543,16 @@ export class Shim {
 			// on genuine handler writes during someone else's action —
 			// accepted imprecision for a dev-only warning.
 			const t = this.bridge.idToBatch.get(batchId);
-			if (
-				t !== undefined &&
-				!t.action &&
-				!t.deferred &&
-				this.bridge.liveBatches().some((lt) => lt.parked)
-			) {
+			let parked = false;
+			if (t !== undefined && !t.action && !t.deferred) {
+				for (const live of this.bridge.liveBatches()) {
+					if (live.parked) {
+						parked = true;
+						break;
+					}
+				}
+			}
+			if (parked) {
 				this.devWarn('a signal write after await landed outside the action — wrap it in startTransition');
 			}
 		}
@@ -602,34 +560,30 @@ export class Shim {
 	}
 
 	// ---- useSignalEffect timing shell -------------------------------------------------
-	// The MECHANISM (registration, capture frame, dep snapshots, value-gated
-	// boundary re-checks, observation retains) lives in the engine
-	// (mountCommittedObserver / captureRun / removeSubscription). What stays
-	// here is exactly the React-phase knowledge: refires queued during a
-	// COMMIT's render-end hold until the root-commit report (holdingRefires).
+	// The graph terminal, retracking, validation, and liveness live in the engine
+	// (mountSignalEffect / captureSignalEffectRun / removeSignalEffect). What stays
+	// here is React closure and passive-effect ownership.
 
 	registerEffect(root: RootId, refire: () => void): number {
 		this.bridge.root(root); // materialize the per-root committed table (as before)
-		const sub = this.bridge.mountCommittedObserver(root, `effect@${root}`, () => {
-			// Invoked by the engine at the boundary operation's end. Inside a
-			// commit's render-end: park until the root-commit report. Everywhere
-			// else (retirement, settlement, quiet fold, frame-close flush of a
-			// deferred flip): run now — the engine op has fully completed.
-			if (this.holdingRefires) this.heldRefires.push(refire);
-			else refire();
-		});
-		return sub.id;
+		const effect = this.bridge.mountSignalEffect(root, `effect@${root}`);
+		this.effectRunners.set(effect.id, refire);
+		return effect.id;
+	}
+
+	renderSignalEffect(renderPassId: number, id: number, willRun: boolean): void {
+		this.bridge.renderSignalEffect(renderPassId, id, willRun);
 	}
 
 	unregisterEffect(id: number): void {
-		if (this.bridge.idToSubscription.has(id)) this.bridge.removeSubscription(id);
+		this.effectRunners.delete(id);
+		if (this.bridge.idToSignalEffect.has(id)) this.bridge.removeSignalEffect(id);
 	}
 
-	/** Runs an effect body under the ENGINE's committed-for-root capture
-	 * frame (the promoted mechanism); the engine stores the dep snapshot. */
+	/** Runs an effect body while its committed graph terminal retracks. */
 	captureEffectRun(id: number, body: () => void): void {
-		if (!this.bridge.idToSubscription.has(id)) return; // torn down between queue and run
-		this.bridge.captureRun(id, body);
+		if (!this.bridge.idToSignalEffect.has(id)) return; // torn down between queue and run
+		this.bridge.captureSignalEffectRun(id, body);
 	}
 
 	// ---- node resolution --------------------------------------------------------

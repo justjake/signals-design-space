@@ -17,7 +17,7 @@
  * observation index in src/concurrent.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { engine, __resetEngineForTest, Atom, Computed, effect, type CosignalEngine } from '../src/index.js';
+import { engine, __TEST__resetEngine, Atom, Computed, effect, type CosignalEngine } from '../src/index.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => queueMicrotask(res));
 
@@ -33,20 +33,20 @@ function observedAtom(initial: number): { atom: Atom<number>; log: string[] } {
 }
 
 /** A fresh engine reset (production posture; quiet arms by the production derivation). */
-function bridge(): CosignalEngine {
+function freshEngine(): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest();
+	__TEST__resetEngine();
 	return engine;
 }
 
 describe('transitive observation through derived nodes', () => {
 	it('two watchers sharing one derived node: created ≠ observed, ONE observe at first liveness, release after the LAST leaves', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const node = b.internalsForAtom(atom as Atom<unknown>);
 		const oc = b.computed('oc', (read) => read(node));
@@ -71,7 +71,7 @@ describe('transitive observation through derived nodes', () => {
 	});
 
 	it('dep-flip moves the retain to the branch the re-evaluation took; a same-tick flip-flap coalesces', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom: atomA, log: logA } = observedAtom(10);
 		const { atom: atomB, log: logB } = observedAtom(20);
 		const na = b.internalsForAtom(atomA as Atom<unknown>);
@@ -106,7 +106,7 @@ describe('transitive observation through derived nodes', () => {
 	});
 
 	it('depth-2 chain retains the leaf atom; removeWatcher releases the whole closure', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(3);
 		const na = b.internalsForAtom(atom as Atom<unknown>);
 		const cB = b.computed('cB', (read) => (read(na) as number) * 2);
@@ -123,7 +123,7 @@ describe('transitive observation through derived nodes', () => {
 	});
 
 	it('quiesce: the K1 bulk-reset produces NO unobserve/reobserve flap while a watcher stays live', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom, log } = observedAtom(0);
 		const na = b.internalsForAtom(atom as Atom<unknown>);
 		const oc = b.computed('oc', (read) => read(na));
@@ -157,7 +157,7 @@ describe('transitive observation through derived nodes', () => {
 	});
 
 	it('a computed that THROWS after reading some atoms retains exactly the deps read up to the throw', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		const { atom: atomA, log: logA } = observedAtom(0);
 		const { atom: atomB, log: logB } = observedAtom(0);
 		const na = b.internalsForAtom(atomA as Atom<unknown>);

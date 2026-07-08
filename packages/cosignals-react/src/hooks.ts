@@ -1,7 +1,7 @@
 /**
  * cosignals-react — the hook surface: useSignal, useComputed, useReducerAtom,
  * useSignalEffect, startSignalTransition, plus registerCosignalReact — the
- * activation call that couples `cosignals`'s one module-level engine to a
+ * activation call that couples `cosignals`'s default browser engine to a
  * protocol React build via the Shim (whose constructor attaches the engine
  * driver — the seam that arms write classification and world routing).
  *
@@ -25,8 +25,8 @@ import { ROOT_UNKNOWN, Shim, getActiveShim, setActiveShim, unregisterShim, type 
 // ---- activation -------------------------------------------------------------------
 
 export type CosignalReactHandle = {
-	/** The engine surface (the same module-level object `cosignals` exports as
-	 * `engine`; the field keeps the bindings' historical name). */
+	/** The default browser instance's engine surface; the field keeps the
+	 * bindings' historical name. */
 	bridge: CosignalEngine;
 	shim: Shim;
 	dispose: () => void;
@@ -41,7 +41,7 @@ export type CosignalReactHandle = {
  * throws on stock React — see assertForkPresent. One registration at a
  * time: dispose the handle before registering again. Dispose releases the
  * React-side registrations only — the engine's driver slot is cleared only
- * by the test-only engine reset (`__resetEngineForTest`), so tests reset
+ * by the test-only engine reset (`__TEST__resetEngine`), so tests reset
  * the engine between registrations.
  */
 export function registerCosignalReact(): CosignalReactHandle {
@@ -196,7 +196,7 @@ export function useSignal<T>(signal: SignalSource<T>): T {
 			rec.pendingUnsub = true;
 			queueMicrotask(() => {
 				// The disposed guard is the cross-reset guard: tests dispose the
-				// shim before resetting the one engine, and a microtask crossing
+				// shim before resetting the default engine, and a microtask crossing
 				// that boundary would tear down a watcher id inside a fresh
 				// composition it never belonged to. A disposed shim's pending
 				// unsubscribes died with its targets.
@@ -313,30 +313,77 @@ export function useReducerAtom<S, A>(reducer: (state: S, action: A) => S, initia
 export function useSignalEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
 	const shim = requireShim();
 	const rootRef = React.useRef<RootId | undefined>(undefined);
+	const stateRef = React.useRef<{
+		id: number | undefined;
+		fn: (() => void | (() => void)) | undefined;
+		deps: readonly unknown[] | undefined;
+		cleanup: void | (() => void);
+		hasRun: boolean;
+		disposed: boolean;
+		run: () => void;
+	} | null>(null);
+	if (stateRef.current === null) {
+		stateRef.current = {
+			id: undefined,
+			fn: undefined,
+			deps: undefined,
+			cleanup: undefined,
+			hasRun: false,
+			disposed: false,
+			run: () => {
+				const current = stateRef.current!;
+				current.cleanup = current.fn!();
+			},
+		};
+	}
+	const state = stateRef.current;
 	const rendering = shim.renderingRoot();
 	if (rendering !== undefined) rootRef.current = rendering.id; // idempotent render capture
+	if (state.id !== undefined && state.hasRun && rendering?.renderPass !== undefined && rendering.renderPass.state !== 'ended') {
+		const previousDeps = state.deps;
+		let changed = deps === undefined || previousDeps === undefined || deps.length !== previousDeps.length;
+		if (!changed && deps !== undefined && previousDeps !== undefined) {
+			for (let i = 0; i < deps.length; i++) {
+				if (!Object.is(deps[i], previousDeps[i])) {
+					changed = true;
+					break;
+				}
+			}
+		}
+		shim.renderSignalEffect(rendering.renderPass.id, state.id, changed);
+	}
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	React.useEffect(() => {
 		const root = rootRef.current ?? ROOT_UNKNOWN;
-		let cleanup: void | (() => void);
-		let disposed = false;
-		const id = shim.registerEffect(root, () => {
-			if (disposed) return;
-			if (typeof cleanup === 'function') cleanup();
-			fire();
-		});
-		const fire = (): void => {
-			shim.captureEffectRun(id, () => {
-				cleanup = fn();
+		state.disposed = false;
+		state.fn = fn;
+		state.deps = deps;
+		state.hasRun = true;
+		if (state.id === undefined) {
+			const id = shim.registerEffect(root, () => {
+				if (state.disposed || state.id === undefined || state.fn === undefined) return;
+				const cleanup = state.cleanup;
+				state.cleanup = undefined;
+				if (typeof cleanup === 'function') cleanup();
+				shim.captureEffectRun(state.id, state.run);
 			});
-		};
-		fire();
+			state.id = id;
+		}
+		const cleanup = state.cleanup;
+		state.cleanup = undefined;
+		if (typeof cleanup === 'function') cleanup();
+		shim.captureEffectRun(state.id, state.run);
+	}, deps === undefined ? undefined : [shim, ...deps]);
+	React.useEffect(() => {
 		return () => {
-			disposed = true;
-			shim.unregisterEffect(id);
+			state.disposed = true;
+			if (state.id !== undefined) shim.unregisterEffect(state.id);
+			state.id = undefined;
+			const cleanup = state.cleanup;
+			state.cleanup = undefined;
 			if (typeof cleanup === 'function') cleanup();
 		};
-	}, deps === undefined ? undefined : [shim, ...deps]);
+	}, [shim, state]);
 }
 
 // ---- startSignalTransition ------------------------------------------------------------------

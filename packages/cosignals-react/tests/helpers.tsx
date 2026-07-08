@@ -1,6 +1,6 @@
 /**
  * Shared harness: per-test ENGINE RESET + shim registration (`cosignals` has
- * ONE module-level engine — `__resetEngineForTest` is the fresh-engine
+ * default browser engine — `__TEST__resetEngine` is the fresh-engine
  * analog of the old per-test bridge construction), react-dom/client roots,
  * and act plumbing. The engine's event stream is its packed trace records —
  * the harness attaches the referee's lossless session tracer right after
@@ -10,13 +10,13 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { __resetEngineForTest, engine, type AtomInternals, type CosignalEngine, type WriteLogEntry } from 'cosignals';
+import { __TEST__resetEngine, engine, type AtomInternals, type CosignalEngine, type WriteLogEntry } from 'cosignals';
 import { attachRefereeStream, type RefereeStream } from '../../cosignals/tests/trace-events.js';
 import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 export type Harness = {
 	handle: CosignalReactHandle;
-	/** THE engine surface (the module-level engine; the name is historical). */
+	/** The default engine surface; the name is historical. */
 	bridge: CosignalEngine;
 	/** The decoded event stream (lossless session tracer attached at bridge
 	 * birth; `events.eventsOfType(...)` replaces the old bridge log reads). */
@@ -54,7 +54,7 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
 	// production posture (defined fall-throughs, no warning allocation).
-	__resetEngineForTest({ devChecks: opts?.devChecks ?? true });
+	__TEST__resetEngine({ devChecks: opts?.devChecks ?? true });
 	// The referee stream attaches AFTER the reset (the fresh composition's
 	// trace slot starts empty) and before the first engine operation, so the
 	// session is complete from event 0.

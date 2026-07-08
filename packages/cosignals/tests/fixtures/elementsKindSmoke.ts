@@ -10,7 +10,7 @@
  * in this bundled module otherwise).
  */
 import { Atom, Computed, effect } from '../../src/index';
-import { engine, __columnsForTest, type AtomInternals, type CosignalEngine, type Watcher } from '../../src/concurrent';
+import { engine, __TEST__columns, type AtomInternals, type CosignalEngine, type Watcher } from '../../src/CosignalEngine';
 
 const hasHoley = new Function('a', 'return %HasHoleyElements(a);') as (a: unknown) => boolean;
 const isSmi = new Function('a', 'return %HasSmiElements(a);') as (a: unknown) => boolean;
@@ -75,7 +75,7 @@ for (const w of watchers) b.removeWatcher(w.id);
 
 // ---- the probes ------------------------------------------------------------
 type Probe = { name: string; arr: unknown; smi: boolean };
-const columns = __columnsForTest();
+const columns = __TEST__columns();
 const probes: Probe[] = [
 	{ name: 'nodeIndexToInternals', arr: columns.nodeIndexToInternals, smi: false },
 	{ name: 'lastWalk', arr: columns.lastWalk, smi: true },
@@ -83,7 +83,7 @@ const probes: Probe[] = [
 	{ name: 'obsRefs', arr: columns.obsRefs, smi: true },
 	{ name: 'obsDeps', arr: columns.obsDeps, smi: false },
 	{ name: 'nodeToWatchers', arr: columns.nodeToWatchers, smi: false },
-	{ name: 'committed-arena nodeToShadow', arr: b.__arenaForTest('R')!.nodeToShadow, smi: true },
+	{ name: 'committed-arena nodeToShadow', arr: b.__TEST__arena('R')!.nodeToShadow, smi: true },
 ];
 let failed = false;
 for (const p of probes) {

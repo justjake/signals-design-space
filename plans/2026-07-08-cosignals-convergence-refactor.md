@@ -1,8 +1,22 @@
 # Cosignals convergence refactor
 
-Status: pre-implementation. The decisions marked **LOCKED** are the contract
-for the upcoming refactor. Earlier refactor plans are historical evidence, not
-the target architecture.
+Status: implemented. The decisions marked **LOCKED** below are the resulting
+contract. Earlier refactor plans are historical evidence, not the target
+architecture.
+
+Implementation outcome:
+
+- `SignalEffect` is a committed-arena graph terminal with ordinary packed
+  dependency links; snapshot notification state and its compatibility API are
+  gone.
+- `useSignalEffect` has one stable cleanup/body owner and causally arbitrates
+  React and signal requests; signal-only runs schedule no React render.
+- `createCosignals()` owns all mutable state per invocation. Named exports use
+  one default browser instance; SSR creates one instance per request.
+- The semantic state machine is in `CosignalEngine.ts`; `index.ts` is only a
+  curated re-export list. The former callback-bag modules were deleted.
+- Committed graph state stays packed. Temporary render worlds use small JS
+  arrays and are reclaimed with the render.
 
 ## Refactor frame
 
@@ -10,7 +24,8 @@ These decisions were already made:
 
 - **LOCKED — request-isolated SSR:** `createCosignals()` creates a real engine
   instance. Mutable graph, world, lifecycle, async, and reclamation state is
-  per instance. The browser API may expose one default instance.
+  per instance. The browser API may expose one default instance. State
+  serialization and initialization require no live batch or render.
 - **LOCKED — flatten before splitting:** initially colocate the semantic state
   machine in one engine module. Extract only acyclic leaves that own their
   representation and do not need an `EngineCore`-shaped callback bag.
@@ -134,7 +149,7 @@ The completed implementation must delete, not preserve beside `SignalEffect`:
 Diagnostic trace snapshots may be materialized only when tracing is enabled;
 they are not live dependency state.
 
-## Regression schedules required before conversion
+## Regression schedules
 
 1. **Dual-plane convergence:** the Parent/Child example above produces one
    update run and never observes old React props with new signal state.
@@ -153,8 +168,11 @@ they are not live dependency state.
    unmount cleans once with no post-unmount run.
 9. **Lifecycle liveness:** adding, flipping, and removing dynamic dependencies
    moves `AtomOptions.effect` observation exactly once per real edge change.
+10. **Render-attempt overwrite:** if one hook renders more than once in the
+    same pass, only its final React-dependency report participates in commit.
+11. **Body write:** a signal write from the body queues any rerun until the
+    current dependency frame closes and does not render the component.
 
-The dual-plane schedule must be red on the current implementation before the
-conversion starts; the signal-only schedule is a baseline that must remain
-green. The exact Parent/Child repro is already known to fail today with three
-observed rows: mount, mixed old/new, then converged new/new.
+Before conversion, the exact Parent/Child schedule was red with three observed
+rows: mount, mixed old/new, then converged new/new. It now passes with the mount
+row and one converged update row; the signal-only baseline remains green.

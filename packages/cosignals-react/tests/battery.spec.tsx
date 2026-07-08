@@ -17,7 +17,7 @@
 import { describe, expect, test, afterEach } from 'vitest';
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Atom, ReducerAtom, SuspendedRead, effect, __internalsByIdForTest, type AtomInternals } from 'cosignals';
+import { Atom, ReducerAtom, SuspendedRead, effect, __TEST__internalsById, type AtomInternals } from 'cosignals';
 import * as CosignalReact from '../src/index.js';
 import { useSignal, useComputed, useSignalEffect, startSignalTransition } from '../src/index.js';
 import { makeHarness, act, text, deferred, type Harness } from './helpers.js';
@@ -64,7 +64,7 @@ describe('battery (spec §6) at React level', () => {
 		// Divergence window: committed world (and the DOM) hold the old value
 		// while the newest world already folded the pending write.
 		expect(text(container)).toBe('c:10;s:1;');
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
+		const node = __TEST__internalsById(a._id) as AtomInternals;
 		expect(h.bridge.newestValue(node)).toBe(2);
 		gate.settled = true;
 		await act(async () => {
@@ -97,7 +97,7 @@ describe('battery (spec §6) at React level', () => {
 			flushSync(() => b.set(2)); // urgent synchronous commit excludes it
 			mid = text(container);
 			// Always-log: the excluded write already holds a log entry.
-			const node = __internalsByIdForTest(a._id) as AtomInternals;
+			const node = __TEST__internalsById(a._id) as AtomInternals;
 			expect(node.log.length).toBe(1);
 		});
 		expect(mid).toBe('a:0;b:2;');
@@ -218,7 +218,7 @@ describe('battery (spec §6) at React level', () => {
 		});
 		await act(async () => {});
 		expect(text(container)).toBe('a:5;');
-		const node = __internalsByIdForTest(a._id) as AtomInternals;
+		const node = __TEST__internalsById(a._id) as AtomInternals;
 		// Both writes held log entries (the retained referee event log counts
 		// them; the log entries themselves compacted into base at retirement).
 		expect(h.events.eventsOfType('write').filter((e) => e.node === node.name).length).toBe(2);
@@ -350,7 +350,7 @@ describe('battery (spec §6) at React level', () => {
 		// The batch retired through the same disposition-blind path: fold
 		// happened. React's "abandoned" report survives only as the shim's
 		// source-created batch-disposition record — pin it with the right value.
-		const orphanNode = __internalsByIdForTest(orphan._id)!;
+		const orphanNode = __TEST__internalsById(orphan._id)!;
 		expect(h.events.eventsOfType('retired').length).toBeGreaterThan(0);
 		const dispositions = h.events.tracer.events('batch-disposition');
 		expect(dispositions.some((d) => d.data['committed'] === false)).toBe(true);
@@ -691,7 +691,7 @@ describe('context-free writes (BATCH_NONE is unreachable once a renderer provide
 		expect(h.bridge.liveBatches()).toHaveLength(0);
 		expect(h.bridge.quiescent()).toBe(true); // quiesce() reachable (write logs compacted)
 		expect(h.bridge.quiet).toBe(true); // quiet mode re-armed for the next episode
-		const flagNode = __internalsByIdForTest(flag._id)!;
+		const flagNode = __TEST__internalsById(flag._id)!;
 		expect(h.bridge.committedValue(flagNode, 'root-1')).toBe(7); // the write persisted (committed truth)
 		expect(text(container)).toBe('a:1;');
 	});

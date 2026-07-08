@@ -26,26 +26,26 @@ import {
 	LinkField,
 	NodeField,
 	SuspendedRead,
-	__ctxUse,
-	__kernelSideColumnsForTest,
+	__TEST__ctxUse,
+	__TEST__kernelSideColumns,
 	effect,
 	effectScope,
 } from '../src/index.js';
-import { engine, __resetEngineForTest, type AnyInternals, type AtomInternals, type ComputedInternals, type CosignalEngine, type EngineResetOptions } from '../src/concurrent.js';
+import { engine, __TEST__resetEngine, type AnyInternals, type AtomInternals, type ComputedInternals, type CosignalEngine, type EngineResetOptions } from '../src/CosignalEngine.js';
 import { E } from '../src/CosignalEngine.js';
-import { __useCacheForTest } from '../src/CosignalEngine.js';
+import { __TEST__useCache } from '../src/CosignalEngine.js';
 import { armArenaCheck } from './arena-checker.js';
 
 const tick = (): Promise<void> => new Promise<void>((res) => setTimeout(res, 0));
 
-function bridge(options?: EngineResetOptions): CosignalEngine {
+function freshEngine(options?: EngineResetOptions): CosignalEngine {
 	// Finish the previous test's leftover episode so the reset's idle preconditions hold.
 	engine.discardAllWip();
 	for (const t of engine.liveBatches()) {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	__resetEngineForTest(options);
+	__TEST__resetEngine(options);
 	return engine;
 }
 
@@ -69,7 +69,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 }
 
 /** The engine's dense nodeIndex-keyed columns (probes only observe; they never mutate). */
-const engineCols = (b: CosignalEngine) => b.__columnsForTest();
+const engineCols = (b: CosignalEngine) => b.__TEST__columns();
 
 /** Sample the kernel node free-list head: create a throwaway Computed (alloc
  * pops the free list first) and dispose it right back. */
@@ -108,7 +108,7 @@ describe('1. KERNEL (index.ts arena)', () => {
 			engine.disposeComputed(c as unknown as Computed<unknown>);
 		}
 		expect(ids.size).toBeLessThanOrEqual(2); // LIFO freelist steady state
-		const cols = __kernelSideColumnsForTest(lastId);
+		const cols = __TEST__kernelSideColumns(lastId);
 		expect(cols.value).toBeUndefined(); // cached value released
 		expect(cols.aux).toBeUndefined(); // the aux slot stays empty for computeds by construction now (ctx.use is id-keyed; the engine never pins handles)
 		expect(cols.fn).toBeUndefined(); // getter closure released
@@ -133,7 +133,7 @@ describe('1. KERNEL (index.ts arena)', () => {
 
 describe('2. ENGINE REGISTRY (nodeIndexToInternals + dense per-node columns)', () => {
 	it('adopt/dispose churn returns idToInternals to baseline, recycles kernel ids AND their nodeIndexes, and the record-free scrub leaves only cleared dense rows (RECLAIMED; columns bounded by node count)', () => {
-		const b = bridge();
+		const b = freshEngine();
 		const at = new Atom(1);
 		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const keep = b.computed('keep', (read) => read(an));
@@ -172,7 +172,7 @@ describe('2. ENGINE REGISTRY (nodeIndexToInternals + dense per-node columns)', (
 
 describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 	it('kernel-node recreation churn (dispose → new node → re-evaluate) does NOT grow a LIVE committed arena: dead shadows recycle through the per-arena free list (LEAK-FIXED)', () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b); // fold-truth divergence check armed across record reuse
 		const at = new Atom(1);
 		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
@@ -183,7 +183,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const warm = new Computed(() => (at.state as number) * 2);
 		b.committedValue(b.internalsForComputed(warm as unknown as Computed<unknown>), 'R');
 		b.disposeComputed(warm as unknown as Computed<unknown>);
-		const shell = b.__arenaForTest('R')!;
+		const shell = b.__TEST__arena('R')!;
 		const next0 = shell.next;
 		const wlen0 = shell.memory.length;
 		const vals0 = shell.vals.length;
@@ -209,16 +209,16 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		// by peak node count, not creation count.
 		expect(shell.nodeToShadow.length).toBeLessThan(N);
 		expect(w.live).toBe(true);
-		expect(b.__arenaStats().committed).toBe(1);
+		expect(b.__TEST__arenaStats().committed).toBe(1);
 	});
 
 	it('dispose-while-suspended purges the suspended-list entry and its nodeToShadow row from the live arena; a post-dispose settlement is inert (RECLAIMED)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const gate = deferred<string>();
 		const c: ComputedInternals = b.computed('c', () => {
 			try {
-				return __ctxUse(c.ix, 'k', () => gate.promise);
+				return __TEST__ctxUse(c.ix, 'k', () => gate.promise);
 			} catch (err) {
 				if (err instanceof SuspendedRead) return err; // background fold (battery 16d)
 				throw err;
@@ -227,22 +227,22 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		const keep = b.computed('keep', () => 0);
 		mount(b, 'R', keep, 'W'); // arena stays alive without watching c
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead);
-		expect(b.__arenaStats().suspended).toBe(1);
+		expect(b.__TEST__arenaStats().suspended).toBe(1);
 		b.disposeComputed((c as ComputedInternals).handle);
-		expect(b.__arenaStats().suspended).toBe(0); // arenaEvictShadow swap-removed the entry
+		expect(b.__TEST__arenaStats().suspended).toBe(0); // arenaEvictShadow swap-removed the entry
 		gate.resolve('x');
 		await tick();
-		expect(b.__arenaStats().pendingSettlements).toBe(0); // tap fast-out: nothing suspended anywhere
+		expect(b.__TEST__arenaStats().pendingSettlements).toBe(0); // tap fast-out: nothing suspended anywhere
 	});
 
 	it('adversarial reuse interleaving: settle marks a shadow DIRTY-and-listed, dispose orphans it with the stale list entry outstanding, the record reuses, decay stays exact (LEAK-FIXED pin)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const at = new Atom(1);
 		const an = b.internalsForAtom(at as unknown as Atom<unknown>);
 		const gate = deferred<string>();
 		const c: ComputedInternals = b.computed('c', () => {
-			try { return __ctxUse(c.ix, 'k', () => gate.promise); } catch (err) {
+			try { return __TEST__ctxUse(c.ix, 'k', () => gate.promise); } catch (err) {
 				if (err instanceof SuspendedRead) return err;
 				throw err;
 			}
@@ -252,7 +252,7 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 		expect(b.committedValue(c, 'R')).toBeInstanceOf(SuspendedRead); // c cached suspended, UNWATCHED
 		gate.resolve('data');
 		await tick(); // settlement drain marks c DIRTY + lists it (no decay runs in the drain)
-		const shell = b.__arenaForTest('R')!;
+		const shell = b.__TEST__arena('R')!;
 		b.disposeComputed((c as ComputedInternals).handle); // orphan the record while its stale dirty-list entry is outstanding
 		const nextAfterDispose = shell.next;
 		const c2 = new Computed(() => (at.state as number) + 7); // reuse: the freed SHADOW record re-tenants…
@@ -271,28 +271,28 @@ describe('3. ARENA SHADOWS (the live-arena record plane)', () => {
 
 describe('4. ARENA POOL', () => {
 	it('bounded at 8 shells; pooled capacity is the tenancy high-water and small tenancies never grow it (BOUNDED-BY-DESIGN; cap/scrub/growth pinned by arena-sd.spec.ts)', () => {
-		const b = bridge({ arenaInitInts: 64 });
+		const b = freshEngine({ arenaInitInts: 64 });
 		const atoms = Array.from({ length: 40 }, (_, i) => b.atom(`a${i}`, i));
 		const big = b.computed('big', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		const w = mount(b, 'B', big, 'WB');
-		expect(b.__arenaForTest('B')!.memory.length).toBeGreaterThan(64); // the big tenancy grew its buffer
+		expect(b.__TEST__arena('B')!.memory.length).toBeGreaterThan(64); // the big tenancy grew its buffer
 		w.live = false;
 		b.quiesce();
-		const capAfterBig = Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length));
+		const capAfterBig = Math.max(...b.__TEST__arenaPool().map((a) => a.memory.length));
 		for (let i = 0; i < 12; i++) {
 			const s = b.computed(`s${i}`, (read) => read(atoms[0]!));
 			const ws = mount(b, `S${i}`, s, `WS${i}`); // small tenancies churn pool claims (render + committed shells)
 			ws.live = false;
 			b.quiesce();
 		}
-		expect(b.__arenaPoolForTest().length).toBeLessThanOrEqual(8); // the cap: extra releases DROP the shell
-		expect(Math.max(...b.__arenaPoolForTest().map((a) => a.memory.length))).toBe(capAfterBig); // capacity kept (by design), never grown by small renders
+		expect(b.__TEST__arenaPool().length).toBeLessThanOrEqual(8); // the cap: extra releases DROP the shell
+		expect(Math.max(...b.__TEST__arenaPool().map((a) => a.memory.length))).toBe(capAfterBig); // capacity kept (by design), never grown by small renders
 	});
 });
 
 describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 	it('open/write/retire churn incl. parked actions stays bounded with NO quiesce() call (regression pin: each episode close drops its records; with no tracer attached the record sites are dead branches — nothing event-shaped exists to retain)', () => {
-		const b = bridge(); // production posture: no referee, no tracer, no armed checker
+		const b = freshEngine(); // production posture: no referee, no tracer, no armed checker
 		const an = b.atom('a', 0);
 		const c = b.computed('c', (read) => read(an));
 		const w = mount(b, 'R', c, 'W');
@@ -317,14 +317,14 @@ describe('5. WRITE LOGS / BATCHES / RENDER PASSES', () => {
 		expect(an.log.length).toBe(0); // write logs dropped whole at the episode closes
 		expect(an.log.entries.length).toBe(0); // no entry survives the drop
 		expect(b.trace).toBeUndefined(); // no tracer ⇒ every record site stayed one dead branch (nothing created anywhere)
-		expect(b.__arenaStats().dirty).toBeLessThanOrEqual(4); // boundary decay keeps the dirty lists to live cones
+		expect(b.__TEST__arenaStats().dirty).toBeLessThanOrEqual(4); // boundary decay keeps the dirty lists to live cones
 		expect(b.committedValue(c, 'R')).toBe(1400);
 	});
 });
 
 describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 	it('watcher mount/remove churn empties both watcher stores, releases every observation retain, and balances the observed-lifecycle union (RECLAIMED; dual-store rule pinned by graph-consumers T7 + the react shim suite)', async () => {
-		const b = bridge(); // reset FIRST: the kernel scrub would orphan handles created before it
+		const b = freshEngine(); // reset FIRST: the kernel scrub would orphan handles created before it
 		let effects = 0;
 		let cleanups = 0;
 		const at = new Atom(1, { effect: () => { effects++; return () => { cleanups++; }; } });
@@ -343,18 +343,18 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 		expect(engineCols(b).obsRefs.every((r) => r === 0)).toBe(true);
 		expect(engineCols(b).nodeToWatchers.every((l) => l === undefined || l.length === 0)).toBe(true);
 		b.quiesce();
-		expect(b.__arenaStats().committed).toBe(0); // zero consumers: the arena released to the pool
+		expect(b.__TEST__arenaStats().committed).toBe(0); // zero consumers: the arena released to the pool
 	});
 
 	it('suspend/settle churn drains the settlement queue and suspended lists to zero every cycle; the per-node ctx.use cache is bounded by node lifetime (RECLAIMED + noted contract)', async () => {
-		const b = bridge();
+		const b = freshEngine();
 		armArenaCheck(b);
 		const version = b.atom('v', 0);
 		const gates = Array.from({ length: 20 }, () => deferred<string>());
 		const c: ComputedInternals = b.computed('c', (read) => {
 			const v = read(version) as number;
 			try {
-				return __ctxUse(c.ix, `k${v}`, () => gates[v]!.promise);
+				return __TEST__ctxUse(c.ix, `k${v}`, () => gates[v]!.promise);
 			} catch (err) {
 				if (err instanceof SuspendedRead) return err;
 				throw err;
@@ -363,13 +363,13 @@ describe('6 + 7. WATCHERS / OBSERVATION / SETTLEMENT', () => {
 		mount(b, 'R', c, 'W');
 		for (let v = 0; v < 20; v++) {
 			if (v > 0) commitWrite(b, version, v);
-			expect(b.__arenaStats().suspended).toBe(1);
+			expect(b.__TEST__arenaStats().suspended).toBe(1);
 			gates[v]!.resolve(`d${v}`);
 			await tick();
-			expect(b.__arenaStats().suspended).toBe(0); // settlement re-marked + the correction consumed the box
-			expect(b.__arenaStats().pendingSettlements).toBe(0); // queue drained to its fixed point
+			expect(b.__TEST__arenaStats().suspended).toBe(0); // settlement re-marked + the correction consumed the box
+			expect(b.__TEST__arenaStats().pendingSettlements).toBe(0); // queue drained to its fixed point
 			expect(b.committedValue(c, 'R')).toBe(`d${v}`);
 		}
-		expect(__useCacheForTest(c.ix)!.size).toBe(20); // per-key cache is monotone PER NODE and dies with it — the documented ctx.use contract
+		expect(__TEST__useCache(c.ix)!.size).toBe(20); // per-key cache is monotone PER NODE and dies with it — the documented ctx.use contract
 	});
 });

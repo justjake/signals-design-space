@@ -27,7 +27,7 @@ const ROUNDS = envInt('ROUNDS', 30);
 const WARMUP = envInt('WARMUP', 5);
 
 // A/B seam (COSIGNAL_ROOT swaps trees): the anchor tree injects a per-test
-// bridge into the bindings; this tree has ONE module engine and the
+// bridge into the bindings; this tree uses the default engine and the
 // bindings attach to it — registerCosignalReact() takes nothing.
 const oldTree = typeof mod.__newBridgeForTest === 'function';
 const bridge = oldTree ? mod.__newBridgeForTest() : mod.engine;
@@ -60,7 +60,7 @@ for (let r = 0; r < WARMUP; r++) await round();
 const times = [];
 for (let r = 0; r < ROUNDS; r++) times.push(await round());
 times.sort((x, y) => x - y);
-const node = oldTree ? bridge.kernelIdToNode.get(a._id) : bridge.idToNode !== undefined ? bridge.idToNode.get(a._id) : mod.__internalsByIdForTest(a._id);
+const node = oldTree ? bridge.kernelIdToNode.get(a._id) : bridge.idToNode !== undefined ? bridge.idToNode.get(a._id) : (mod.__TEST__internalsById ?? mod.__internalsByIdForTest)(a._id);
 const checksum = container.textContent.length + Number(bridge.newestValue(node));
 row({
 	gate: 'SPK-R', config: 'react-cosignals', shape: `N${N}`,
