@@ -37,7 +37,7 @@ jobs:
             milomg-reactivity-benchmark \
             upstream-alien-signals
           git -C milomg-reactivity-benchmark fetch \
-            https://github.com/justjake/js-reactivity-benchmark.git "$MILOMG_FORK_SHA"
+            https://github.com/justjake/js-reactivity-benchmark.git refs/heads/royale-bench
           git -C milomg-reactivity-benchmark checkout "$MILOMG_FORK_SHA"
           git -C milomg-reactivity-benchmark apply --binary \
             "$GITHUB_WORKSPACE/royale/ci/milomg-royale.patch"
