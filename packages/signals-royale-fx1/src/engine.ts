@@ -130,6 +130,8 @@ const episodesByToken = new Map<object, Episode>();
 const passFrames = new Map<object, Frame>();
 /** Cells that grew MVCC history entries; cleared when no pass is live. */
 const cellsWithHistory = new Set<Cell<any>>();
+/** Cells with a live update queue; swept for collapse when frames close. */
+const cellsWithQueues = new Set<Cell<any>>();
 
 /** Per-root committed snapshots (what is on that root's screen). */
 const rootViews = new Map<object, Map<Cell<any> | Derived<any>, unknown>>();
@@ -261,7 +263,7 @@ export class Cell<T> {
    * transition op re-applies in its original position when it lands, so an
    * urgent ×2 over a pending +2 on 1 shows 2 now and (1+2)×2 = 6 after).
    */
-  pend: { base: T; ops: Array<PendingOp<T>> } | null = null;
+  pend: { base: T; baseSeq: WriteSeq; ops: Array<PendingOp<T>> } | null = null;
   /** MVCC history: [replacedAtSeq, priorValue], appended on base writes while
    * render passes are live so a pinned pass never sees a newer base. */
   hist: Array<[WriteSeq, T]> | null = null;
@@ -1153,13 +1155,21 @@ function writeCell<T>(cell: Cell<T>, op: Op<T>): void {
  */
 function foldQueue<T>(cell: Cell<T>, episodes: Episode[] | null, pinSeq: WriteSeq): T {
   const pend = cell.pend!;
-  let value = pend.base;
+  // A pass pinned before the queue formed starts from its own pinned base
+  // (the queue's ops all postdate it; episode ops replay against it).
+  let value =
+    pinSeq >= 0 && pend.baseSeq > pinSeq ? baseValueAt(cell, pinSeq) : pend.base;
   for (const op of pend.ops) {
     const ep = op.ep;
+    // A world that explicitly contains the op's episode sees it regardless of
+    // its retirement state — a pass that rendered the episode keeps seeing it
+    // through its own commit even though retirement restamps the op.
     const visible =
-      ep === null || ep.state === 'retired'
-        ? pinSeq < 0 || op.seq <= pinSeq
-        : ep.state === 'open' && episodes !== null && episodes.includes(ep);
+      ep !== null && episodes !== null && ep.state !== 'aborted' && episodes.includes(ep)
+        ? true
+        : ep === null || ep.state === 'retired'
+          ? pinSeq < 0 || op.seq <= pinSeq
+          : false;
     if (visible) value = applyOp(op, value);
   }
   return value;
@@ -1192,7 +1202,8 @@ function setCanonical<T>(cell: Cell<T>, next: T, episode: Episode | null): void 
  * episode. Never touches canonical. Equal set()s drop against the value the
  * episode's own world currently shows. */
 function recordEpisodeOp<T>(cell: Cell<T>, op: Op<T>, ep: Episode): void {
-  const pend = (cell.pend ??= { base: cell.value, ops: [] });
+  const pend = (cell.pend ??= { base: cell.value, baseSeq: cell.baseSeq, ops: [] });
+  cellsWithQueues.add(cell as Cell<any>);
   const before = foldQueue(cell, [ep], -1);
   const next = applyOp(op, before);
   if (op.fn === null && cell.equals(before, next)) return;
@@ -1208,14 +1219,35 @@ function recordEpisodeOp<T>(cell: Cell<T>, op: Op<T>, ep: Episode): void {
   flushAll();
 }
 
-/** Collapse the queue once no op references an open episode. */
+/**
+ * Collapse the queue once nothing needs its structure: no op references an
+ * open episode, and no live pass frame still includes a retired one (a pass
+ * that rendered an episode keeps reading its ops through its own commit).
+ */
 function collapseQueue(cell: Cell<any>): void {
   const pend = cell.pend;
-  if (pend === null) return;
+  if (pend === null) {
+    cellsWithQueues.delete(cell);
+    return;
+  }
   for (const op of pend.ops) {
-    if (op.ep !== null && op.ep.state === 'open') return;
+    if (op.ep === null) continue;
+    if (op.ep.state === 'open') return;
+    if (op.ep.state === 'retired' && frameHolds(op.ep)) return;
   }
   cell.pend = null;
+  cellsWithQueues.delete(cell);
+}
+
+function frameHolds(ep: Episode): boolean {
+  for (const frame of passFrames.values()) {
+    if (frame.episodes.includes(ep)) return true;
+  }
+  return false;
+}
+
+function sweepQueues(): void {
+  for (const cell of [...cellsWithQueues]) collapseQueue(cell);
 }
 
 /**
@@ -1813,6 +1845,7 @@ export function beginPass(rootKey: object, episodes: Episode[]): Frame {
   if (prior !== undefined && trace !== null) {
     trace.emit('pass-discard', traceCause, undefined);
   }
+  if (prior !== undefined) passFrames.delete(rootKey);
   const committed = committedByRoot.get(rootKey);
   const all =
     committed !== undefined && committed.length > 0 ? [...committed, ...episodes] : episodes;
@@ -1881,6 +1914,7 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
   if (stillOpen.length > 0) committedByRoot.set(rootKey, stillOpen);
   else committedByRoot.delete(rootKey);
 
+  sweepQueues();
   if (passFrames.size === 0) pruneHistory();
   pruneRootViews();
   flushProbes();
@@ -1890,6 +1924,7 @@ export function commitPass(rootKey: object, episodes: Episode[]): void {
 /** The host discarded a root's work without committing (root unmounted). */
 export function discardPass(rootKey: object): void {
   passFrames.delete(rootKey);
+  sweepQueues();
   if (passFrames.size === 0) pruneHistory();
 }
 
@@ -2154,6 +2189,8 @@ export function resetEngine(): void {
   passFrames.clear();
   cellsWithHistory.forEach((c) => (c.hist = null));
   cellsWithHistory.clear();
+  cellsWithQueues.forEach((c) => (c.pend = null));
+  cellsWithQueues.clear();
   rootViews.clear();
   committedByRoot.clear();
   subsByRoot.clear();
