@@ -438,15 +438,49 @@ describe("real React protocol", () => {
     expect(renders).toBe(1);
   });
 
-  it("records a causal chain through lane retirement to the originating write", async () => {
+  it("records urgent and retired causal chains to their originating writes", async () => {
     const trace = startTrace(128);
-    const value = atom(0, { label: "count" });
+    const gate = deferred<string>();
+    const value = atom(1, { label: "count" });
+    const blocked = atom(false);
+    const data = computed((use) => (blocked.state ? use(gate.promise) : "ready"));
     function App() {
-      return <span>{useValue(value)}</span>;
+      return (
+        <span>
+          {useValue(value)}:{useValue(data)}
+        </span>
+      );
     }
-    const container = await mount(<App />);
-    await act(async () => startTransitionWrite(() => value.set(1)));
-    expect(container.textContent).toBe("1");
+    const container = await mount(
+      <React.Suspense fallback="fallback">
+        <App />
+      </React.Suspense>,
+    );
+    await act(async () => {
+      startTransitionWrite(() => {
+        value.update((current) => current * 2);
+        blocked.set(true);
+      });
+    });
+    await act(async () => value.update((current) => current + 1));
+    expect(container.textContent).toBe("2:ready");
+    let urgentWrite = 0;
+    let urgentDelivery = 0;
+    for (const event of trace.events()) {
+      if (event.kind === "write" && event.label === "count" && event.detail === "urgent") {
+        urgentWrite = event.id;
+      } else if (event.kind === "component delivery" && event.cause === urgentWrite) {
+        urgentDelivery = event.id;
+      }
+    }
+    expect(urgentWrite).not.toBe(0);
+    expect(urgentDelivery).not.toBe(0);
+
+    await act(async () => {
+      gate.resolve("done");
+      await gate.promise;
+    });
+    expect(container.textContent).toBe("4:done");
     const kinds = new Set<string>();
     for (const event of trace.events()) kinds.add(event.kind);
     expect(kinds.has("write")).toBe(true);
@@ -456,7 +490,7 @@ describe("real React protocol", () => {
     expect(kinds.has("root commit")).toBe(true);
     expect(kinds.has("batch retire")).toBe(true);
     expect(trace.whyLastDelivery(value).join("\n")).toMatch(
-      /committed lane[\s\S]*batch retire[\s\S]*write/,
+      /committed lane[\s\S]*batch retire[\s\S]*write count.*deferred/,
     );
     trace.stop();
   });
