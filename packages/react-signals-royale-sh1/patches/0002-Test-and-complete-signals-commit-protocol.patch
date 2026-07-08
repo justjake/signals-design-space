@@ -1,7 +1,7 @@
 From 257e8fd98b23fe942762a6d5aef3c7c935f360cb Mon Sep 17 00:00:00 2001
 From: Jake Teton-Landis <just.1.jake@gmail.com>
 Date: Wed, 8 Jul 2026 13:28:54 -0400
-Subject: [PATCH 2/2] Test and complete signals commit protocol
+Subject: [PATCH 2/3] Test and complete signals commit protocol
 
 ---
  .../src/ReactFiberWorkLoop.js                 |  6 +-
