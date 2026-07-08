@@ -231,10 +231,12 @@ export interface WatchdogOutcome<T> {
 }
 
 /**
- * Race `action` against a watchdog. On timeout, interrupt V8 with
- * Debugger.pause, capture the live main-thread stack, attach it to the
- * report, and hand the verdict back — the scenario decides whether a wedge
- * is a failure or an expected finding for its implementation.
+ * Race `action` against a watchdog. The CDP debugger is armed BEFORE the
+ * action runs — Debugger.enable never completes once the main thread is
+ * already spinning, so arming afterward would hang the capture itself. On
+ * timeout, Debugger.pause interrupts V8 wherever it is, the live stack is
+ * attached to the report, and the verdict goes back to the scenario — which
+ * decides whether a wedge is a failure or the expected finding.
  */
 export async function withWatchdog<T>(
 	page: Page,
@@ -243,55 +245,50 @@ export async function withWatchdog<T>(
 	timeoutMs: number,
 	action: () => Promise<T>,
 ): Promise<WatchdogOutcome<T>> {
-	let timer: NodeJS.Timeout | undefined;
-	const timedOut = new Promise<'timeout'>((resolve) => {
-		timer = setTimeout(() => resolve('timeout'), timeoutMs);
-	});
-	const raced = await Promise.race([action().then((value) => ({ value })), timedOut]);
-	clearTimeout(timer);
-	if (raced !== 'timeout') return { wedged: false, value: raced.value };
-
-	const stack = await captureMainThreadStack(page);
-	await testInfo.attach(`${label}-wedge-stack`, {
-		body: stack.join('\n'),
-		contentType: 'text/plain',
-	});
-	return { wedged: true, stack };
-}
-
-/**
- * Interrupt the page's main thread and report where it is. A busy-looping
- * page pauses inside the loop; an idle page reports the idle marker instead
- * (Debugger.pause only fires on the next executed statement).
- */
-export async function captureMainThreadStack(page: Page): Promise<string[]> {
 	const cdp = await page.context().newCDPSession(page);
-	try {
-		await cdp.send('Debugger.enable');
-		const paused = new Promise<string[]>((resolve) => {
-			cdp.on('Debugger.paused', (event) =>
-				resolve(
-					event.callFrames.map(
-						(frame) =>
-							`${frame.functionName || '(anonymous)'} @ ${frame.url
-								.split('/')
-								.slice(-2)
-								.join('/')}:${frame.location.lineNumber + 1}`,
-					),
+	const paused = new Promise<string[]>((resolve) => {
+		cdp.on('Debugger.paused', (event) =>
+			resolve(
+				event.callFrames.map(
+					(frame) =>
+						`${frame.functionName || '(anonymous)'} @ ${frame.url
+							.split('/')
+							.slice(-2)
+							.join('/')}:${frame.location.lineNumber + 1}`,
 				),
-			);
+			),
+		);
+	});
+	await cdp.send('Debugger.enable');
+	try {
+		let timer: NodeJS.Timeout | undefined;
+		const timedOut = new Promise<'timeout'>((resolve) => {
+			timer = setTimeout(() => resolve('timeout'), timeoutMs);
 		});
-		await cdp.send('Debugger.pause');
-		const frames = await Promise.race([
+		const raced = await Promise.race([action().then((value) => ({ value })), timedOut]);
+		clearTimeout(timer);
+		if (raced !== 'timeout') return { wedged: false, value: raced.value };
+
+		await cdp.send('Debugger.pause').catch(() => {});
+		const stack = await Promise.race([
 			paused,
 			new Promise<string[]>((resolve) =>
 				setTimeout(() => resolve(['<no pause within 5s — main thread appears idle>']), 5000),
 			),
 		]);
 		await cdp.send('Debugger.resume').catch(() => {});
-		return frames;
+		await testInfo.attach(`${label}-wedge-stack`, {
+			body: stack.join('\n'),
+			contentType: 'text/plain',
+		});
+		return { wedged: true, stack };
 	} finally {
-		await cdp.detach().catch(() => {});
+		// A wedged renderer never acks the detach; don't let cleanup hang the
+		// test on it.
+		await Promise.race([
+			cdp.detach().catch(() => {}),
+			new Promise((resolve) => setTimeout(resolve, 1000)),
+		]);
 	}
 }
 

@@ -21,11 +21,12 @@ export type Expectation =
 
 const PASS: Expectation = { kind: 'pass' };
 
-/** solid-react: a thrown promise (the gate harness) freezes all commits — its documented defer-write divergence. */
-const GATE_FREEZE: Expectation = {
-	kind: 'skip',
-	reason: 'gate-freeze: thrown promises freeze all commits on defer-write (documented divergence)',
-};
+// History note: the gate harness (thrown promises in transition renders)
+// was expected to freeze solid-react's commits — its shim documents that
+// divergence from an earlier engine snapshot. Retested 2026-07-08 against
+// current sources (with the shim's memo degradation in place): the hold
+// behaves exactly like the suspense implementations, so no gate row skips
+// solid-react anymore and FIND-THENABLE.gate pins the working hold.
 
 type PerImpl = Partial<Record<string, Expectation>>;
 
@@ -35,8 +36,6 @@ const TABLE: Record<string, PerImpl> = {
 		// value, not the staged write (pinned 2026-07-08).
 		'solid-react': { kind: 'variant', variant: 'hidden-even-in-scope' },
 	},
-	'RCC-RT3.hold': { 'solid-react': GATE_FREEZE },
-	'RCC-RT2.late-write': { 'solid-react': GATE_FREEZE },
 	'RCC-RT4-newest': {
 		cosignals: { kind: 'variant', variant: 'newest' },
 		'alt-a': { kind: 'skip', reason: 'ruled drafts-hidden (ambient-W0)' },
@@ -49,19 +48,12 @@ const TABLE: Record<string, PerImpl> = {
 		'alt-b': { kind: 'variant', variant: 'drafts-hidden' },
 		'solid-react': { kind: 'variant', variant: 'drafts-hidden (discovered, unruled)' },
 	},
-	'RCC-RT6.mount-mid-count-hold': { 'solid-react': GATE_FREEZE },
 	'RCC-UM2.render-write': {
 		'solid-react': {
 			kind: 'finding',
 			note: 'render-phase writes are accepted silently — no guard in the bridge (pinned 2026-07-08)',
 		},
 	},
-	'RCC-SU3.interleaved-gates': { 'solid-react': GATE_FREEZE },
-	'RCC-AT2.post-await-urgent': { 'solid-react': GATE_FREEZE },
-	'RCC-AT3.rejoin': { 'solid-react': GATE_FREEZE },
-	'RCC-SP3.flushsync-hold': { 'solid-react': GATE_FREEZE },
-	'RCC-PR2.quiet-then-defer': { 'solid-react': GATE_FREEZE },
-	'RCC-EF1.count-hold': { 'solid-react': GATE_FREEZE },
 	'FIND-ALTB-WEDGE.filter': {
 		'alt-b': {
 			kind: 'finding',
@@ -74,12 +66,8 @@ const TABLE: Record<string, PerImpl> = {
 			note: 'add-rows during a held transition wedges the main thread (same class as the filter wedge)',
 		},
 	},
-	'FIND-THENABLE.gate': {
-		'solid-react': {
-			kind: 'finding',
-			note: 'a thrown foreign thenable freezes all commits until it resolves, then React recovers with a sync render',
-		},
-	},
+	// FIND-THENABLE.gate: the solid-react freeze did not reproduce on
+	// retest (2026-07-08); the row now pins the working hold on all four.
 };
 
 export function expectationFor(rowId: string, entry: BatteryEntry): Expectation {

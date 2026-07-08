@@ -52,5 +52,5 @@ pnpm battery -g RCC-RT4           # one manifest row family
 Lines read `RCC-RT3.hold [alt-b]`. Failures marked FINDING are asserted
 divergences (`test.fail` — a wedge or documented quirk the manifest expects);
 if one starts passing, the run goes red so the manifest gets updated. Skips
-carry the mechanism reason (`skip:gate-freeze` — a thrown promise freezes
-solid-react's commits, its documented defer-write divergence).
+carry the ruling as the reason (`RCC-RT4-newest [alt-b]` skips with "ruled
+drafts-hidden" — the other RT4 variant is the one alt-b must pass).
