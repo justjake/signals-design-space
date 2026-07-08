@@ -10,7 +10,19 @@ export type AtomCtx<T> = { readonly state: T; set(value: T): void; update(fn: (c
 export type AtomOptions<T> = { effect?: (ctx: AtomCtx<T>) => void | (() => void); isEqual?: (a: T, b: T) => boolean; label?: string };
 export type ComputedOptions<T> = { isEqual?: (a: T, b: T) => boolean; label?: string };
 export type ConfigureOptions = { forbidWritesInComputeds?: boolean; initialRecords?: number };
-export type CreateCosignalsOptions = { arenaInitInts?: number; devChecks?: boolean };
+export type CreateCosignalsOptions = {
+	/** Initial world-arena buffer reservation, in Int32 slots (see EngineResetOptions). */
+	arenaInitInts?: number;
+	/** Arms development-time checks (see EngineResetOptions). */
+	devChecks?: boolean;
+	/** Initial kernel-arena capacity floor, in units (one node plus two dependency
+	 * edges each). Defaults SMALL — the arena grows on demand (grow-by-copy), so
+	 * a server creating one instance per request does not reserve the maximum up
+	 * front. Raise it before building a large graph to avoid growth pauses; the
+	 * arena never shrinks. `configure({ initialRecords })` and the
+	 * COSIGNAL_INITIAL_RECORDS env var raise it too. */
+	initialRecords?: number;
+};
 
 // ---- semantic number types ------------------------------------------------------
 // Leniently branded id types, zero runtime cost: the brand is an optional
@@ -219,6 +231,62 @@ export const enum ArenaShape {
 	REC_SLACK = 1280,
 }
 
+/**
+ * Thrown when a read observes a pending suspension. Carries the pending
+ * thenable; the React bindings (`cosignals-react`) catch it at render read
+ * sites and forward it to Suspense.
+ *
+ * Defined once at module scope and shared by every {@link createCosignals}
+ * instance: it is a stateless marker, so a single class lets the exported
+ * `err instanceof SuspendedRead` check succeed for suspensions raised by any
+ * instance. A per-instance class (as an inner class of the factory would be)
+ * would make that check silently fail for handles created by
+ * `createCosignals()`. The sibling error classes ({@link CycleError},
+ * {@link ScheduleError}, {@link InvariantViolation}) are already module-level
+ * in `errors.ts` for the same reason.
+ */
+class SuspendedRead {
+	readonly thenable: PromiseLike<unknown>;
+	constructor(thenable: PromiseLike<unknown>) {
+		this.thenable = thenable;
+	}
+}
+
+/**
+ * Cross-instance handle brands, carried on the Atom/Computed class prototypes
+ * (global-registry symbols so the value is identical across module copies).
+ * Every {@link createCosignals} call defines its own Atom/Computed classes, so
+ * `x instanceof Atom` from one instance rejects another instance's handles;
+ * these brands let {@link isAtom}/{@link isComputed} — and the React bindings —
+ * recognize a handle's TYPE regardless of which instance created it. WHICH
+ * instance owns a handle is the separate `_engine` field, asserted at the
+ * engine surface (see the ownership guards).
+ */
+const ATOM_BRAND: unique symbol = Symbol.for('cosignals.handle.atom');
+const COMPUTED_BRAND: unique symbol = Symbol.for('cosignals.handle.computed');
+
+// Kernel-arena capacity floors, in configured units (one node + two dependency
+// edges each). The arena grows by rebuild on demand, so a floor is a starting
+// reservation, never a ceiling.
+/** Smallest legal floor; the option/env/configure() paths all enforce it. */
+const MIN_INITIAL_RECORDS = 2;
+/** The DEFAULT browser instance's floor — the historical reservation, kept so
+ * its behavior is unchanged. `createCosignals()` for user code defaults SMALL
+ * instead (see {@link SMALL_INITIAL_RECORDS}). */
+const DEFAULT_INITIAL_RECORDS = 1 << 20;
+/** `createCosignals()`'s default floor: small enough that many instances (e.g.
+ * one per server request) cost kilobytes each, not the ~120MB the max reserves;
+ * still above the op-boundary slack watermark so a fresh instance does not grow
+ * on its first write. */
+const SMALL_INITIAL_RECORDS = 1 << 10;
+
+/** COSIGNAL_INITIAL_RECORDS parsed to units, or undefined when unset/invalid. */
+function readEnvInitialRecords(): number | undefined {
+	const env = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+		.process?.env?.COSIGNAL_INITIAL_RECORDS;
+	const n = env !== undefined ? Number(env) : NaN;
+	return Number.isFinite(n) && n >= MIN_INITIAL_RECORDS ? Math.ceil(n) : undefined;
+}
 
 export function createCosignals(options?: CreateCosignalsOptions) {
 	/**
@@ -460,10 +528,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		a.signalEffects.fill(undefined);
 	}
 
-	/** Mass-teardown bounds for the boundary sweep (from dalien-signals). Free
-	 * lists are LIFO: a huge teardown hands ids back highest-first and the next
-	 * build scatters across the arena; a batch crossing both bounds pays a sort
-	 * to restore ascending reuse. */
+	/** Mass-teardown bounds for the boundary sweep. Free lists are LIFO: a huge
+	 * teardown hands ids back highest-first and the next build scatters across the
+	 * arena; a batch crossing both bounds pays a sort to restore ascending reuse. */
 	const enum MassTeardown {
 		/** Pending node frees must exceed this count (absolute floor). */
 		MIN_BATCH = 4096,
@@ -755,6 +822,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		}
 
 		// ---- upstream system.ts, transliterated -------------------------------------
+		// "Upstream" throughout this file means alien-signals
+		// (https://github.com/stackblitz/alien-signals): this kernel is its
+		// push-pull algorithm re-expressed over arena records, and comments cite
+		// its symbol names (ReactiveFlags, link(), Recursed, …) as the reference.
 		// The world-arena sections re-derive these walks over their own layout on
 		// purpose; suites, not prose, keep the twins in step — port rules, not text.
 
@@ -1668,16 +1739,19 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 
 	// ---- the live op table + growth ------------------------------------------------
 
-	/** Default capacity floor when neither COSIGNAL_INITIAL_RECORDS nor configure() sets one. */
-	const DEFAULT_INITIAL_RECORDS = 1 << 20;
-	/** Smallest legal capacity floor, in records — the env parse and configure() validation both enforce it. */
-	const MIN_INITIAL_RECORDS = 2;
-
+	// Capacity floor resolution (constants + env parse are module-level):
+	//   1. an explicit `initialRecords` option wins;
+	//   2. else the COSIGNAL_INITIAL_RECORDS env override;
+	//   3. else SMALL — the arena grows on demand, so a fresh instance stays
+	//      tiny. The DEFAULT browser instance passes DEFAULT_INITIAL_RECORDS
+	//      explicitly (see `createCosignals({ initialRecords: ... })` at the
+	//      default-instance construction), keeping its behavior unchanged.
 	const initialRecords = (() => {
-		const env = (globalThis as { process?: { env?: Record<string, string | undefined> } })
-			.process?.env?.COSIGNAL_INITIAL_RECORDS;
-		const n = env !== undefined ? Number(env) : NaN;
-		return Number.isFinite(n) && n >= MIN_INITIAL_RECORDS ? Math.ceil(n) : DEFAULT_INITIAL_RECORDS;
+		const explicit = options?.initialRecords;
+		if (explicit !== undefined) {
+			return Number.isFinite(explicit) && explicit >= MIN_INITIAL_RECORDS ? Math.ceil(explicit) : SMALL_INITIAL_RECORDS;
+		}
+		return readEnvInitialRecords() ?? SMALL_INITIAL_RECORDS;
 	})();
 
 	// A configured unit budgets one node + two link records; configure({initialRecords}) raises this floor.
@@ -1790,6 +1864,15 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			notifyIndex = 0;
 			queuedLength = 0;
 		}
+		// A core effect run here may have issued a quiet write that owed the
+		// committed-world boundary drain (it could not run inline inside the
+		// kernel frame). Now that the outermost flush's frames have closed
+		// (enterDepth back to 0), run it — but only when this flush is NOT nested
+		// inside a public write operation (opDepth 0): that operation's own tail
+		// owns the drain and runs it after ITS committed-truth fan, so draining
+		// here first would scan before that fan lands. drainQuietBoundary's own
+		// enterDepth check makes re-entrant (mid-effect) flushes no-op.
+		if (opDepth === 0) drainQuietBoundary();
 	}
 
 	function throwFold(): never {
@@ -1898,15 +1981,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	 * that never throws or suspends never reaches this section.
 	 */
 
-	/** Thrown when a read observes a pending suspension. Carries the pending
-	 * thenable; the React bindings (`cosignals-react`) catch it at render read
-	 * sites and forward it to Suspense. */
-	class SuspendedRead {
-		readonly thenable: PromiseLike<unknown>;
-		constructor(thenable: PromiseLike<unknown>) {
-			this.thenable = thenable;
-		}
-	}
+	// SuspendedRead is a module-level class (see its definition above
+	// createCosignals): one shared marker so `instanceof SuspendedRead` works
+	// for suspensions from any instance.
 
 	type InstrumentedThenable = PromiseLike<unknown> & {
 		status?: 'pending' | 'fulfilled' | 'rejected';
@@ -2894,6 +2971,16 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	let walkGen = 0;
 	/** Live SignalEffect count (fast bail on dirty-cone collection). */
 	let signalEffectCount = 0;
+	/** A quiet write marked committed truth but could not run the committed-world
+	 * boundary drain inline — it happened inside a kernel effect frame
+	 * (enterDepth > 0) or a running SignalEffect body (activeSignalEffect set),
+	 * where the SignalEffect runner's routed reads would record no dependency
+	 * links. The drain is owed at the next true boundary ({@link drainQuietBoundary}). */
+	let quietBoundaryOwed = false;
+	/** Re-entrancy guard for {@link drainQuietBoundary}: a SignalEffect body run
+	 * inside the drain may itself write, re-owing the drain; the active loop
+	 * picks that up rather than nesting. */
+	let quietBoundaryActive = false;
 	// ---- direct listeners (attachDriver copies them off the driver record; the
 	// delivery/fixup/correction sites read one direct slot each) ----
 	let onDelivery: ((w: Watcher, batch: Batch, slot: BatchSlot) => void) | undefined;
@@ -4422,7 +4509,12 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (prevDep !== 0) memory[prevDep + ArenaLinkField.NEXT_DEP] = newLink;
 		else memory[sub + ArenaField.DEPS] = newLink;
 		arenaSubsAppend(a, newLink, weak); // subs-side wiring + mode, on the matching list
-		if ((memory[sub + ArenaField.FLAGS]! & ArenaFlag.K_EFFECT) !== 0 && !weak) shiftEffectDep(a, dep as ShadowId, 1);
+		// The K_EFFECT-sub bookkeeping (SignalEffect terminal dep counts) can only
+		// apply when a SignalEffect exists at all — the bit is set only on terminal
+		// shadows. Gate on the scalar count first so every OTHER link op (all
+		// render-arena links; every link when no SignalEffect is mounted) skips the
+		// flags read entirely.
+		if (signalEffectCount !== 0 && !weak && (memory[sub + ArenaField.FLAGS]! & ArenaFlag.K_EFFECT) !== 0) shiftEffectDep(a, dep as ShadowId, 1);
 		return newLink;
 	}
 
@@ -4431,6 +4523,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		const dep = memory[id + ArenaLinkField.DEP]!;
 		const prevDep = memory[id + ArenaLinkField.PREV_DEP]!;
 		const nextDep = memory[id + ArenaLinkField.NEXT_DEP]!;
+		// The K_EFFECT-sub teardown mirrors arenaLinkInsert's append bookkeeping.
+		// It stays a single flags read (no signalEffectCount prefix): arenaUnlink
+		// is at its inline byte budget, and the K_EFFECT bit is set only when a
+		// SignalEffect exists, so this already resolves false when none do.
 		if ((memory[sub + ArenaField.FLAGS]! & ArenaFlag.K_EFFECT) !== 0 && (memory[id + ArenaLinkField.MODE]! & ArenaLinkMode.WEAK) === 0) {
 			shiftEffectDep(a, dep as ShadowId, -1);
 		}
@@ -4879,11 +4975,17 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 			}
 			if (arenaFrame === a && (worldUntrackedDepth === 0 || arenaFrameShadow !== worldUntrackedShadow)) {
 				const link = arenaLink(a, sh, arenaFrameShadow, arenaFrameCycle, false);
-				const effect = a.signalEffects[arenaFrameShadow >> ArenaGeom.ID_TO_COLUMN_SHIFT];
-				if (effect !== undefined) {
-					a.clocks[link >> ArenaGeom.ID_TO_COLUMN_SHIFT] = settleObserverClock(a, node);
-					effect.lastValue = a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
-					effect.traceValues?.push(effect.lastValue);
+				// SignalEffect terminal bookkeeping (the frame's own shadow is a
+				// terminal): only reachable when a SignalEffect is mounted, so the
+				// scalar gate keeps every OTHER tracked read off the signalEffects
+				// column entirely.
+				if (signalEffectCount !== 0) {
+					const effect = a.signalEffects[arenaFrameShadow >> ArenaGeom.ID_TO_COLUMN_SHIFT];
+					if (effect !== undefined) {
+						a.clocks[link >> ArenaGeom.ID_TO_COLUMN_SHIFT] = settleObserverClock(a, node);
+						effect.lastValue = a.vals[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT];
+						effect.traceValues?.push(effect.lastValue);
+					}
 				}
 				const oc = obsCapture;
 				if (oc !== undefined) oc.push(node);
@@ -4922,7 +5024,9 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		let effect: SignalEffect | undefined;
 		if (arenaFrame === a && (worldUntrackedDepth === 0 || arenaFrameShadow !== worldUntrackedShadow)) {
 			effectLink = arenaLink(a, sh, arenaFrameShadow, arenaFrameCycle, false);
-			effect = a.signalEffects[arenaFrameShadow >> ArenaGeom.ID_TO_COLUMN_SHIFT];
+			// Scalar gate (see the atom path): no signalEffects lookup on tracked
+			// reads while no SignalEffect is mounted.
+			effect = signalEffectCount !== 0 ? a.signalEffects[arenaFrameShadow >> ArenaGeom.ID_TO_COLUMN_SHIFT] : undefined;
 			const oc = obsCapture;
 			if (oc !== undefined) oc.push(node);
 		}
@@ -5996,6 +6100,10 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function runOperationEpilogue(): void {
 		if (opDepth !== 0) return; // nested operation: the outer epilogue owns the boundary
 		if (pendingSettle.length !== 0 && !settleDraining) drainSettlements();
+		// Safety net: consume any quiet-pipeline boundary owed by a write issued
+		// from inside a frame that could not drain it (e.g. a SignalEffect body
+		// writing during a settlement drain). A no-op when nothing is owed.
+		drainQuietBoundary();
 		if (epilogueCheck !== undefined) epilogueCheck();
 	}
 
@@ -6340,7 +6448,13 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	function captureSignalEffectRun(id: SignalEffectId, body: () => void): void {
 		const effect = idToSignalEffect.get(id);
 		if (effect === undefined) throw new ScheduleError(`unknown SignalEffect ${id}`);
-		if (evalDepth > 0) throw new ScheduleError('SignalEffect execution is illegal inside an open evaluation frame');
+		// The body does committed-world routed reads to record its dependency
+		// links; those resolve only outside every kernel effect frame (enterDepth
+		// 0) and world evaluation (evalDepth 0). Running it inside one would record
+		// zero links and silently drop the effect's dependencies — so the engine's
+		// own scheduling defers it to a boundary, and a mistimed embedder call
+		// throws loudly rather than corrupting.
+		if (evalDepth > 0 || enterDepth > 0) throw new ScheduleError('SignalEffect execution is illegal inside an open evaluation/effect frame');
 		if (effect.pendingReactRun) {
 			effect.pendingSlots &= ~effect.pendingReactSlots;
 			effect.pendingReactSlots = 0;
@@ -7246,13 +7360,52 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		if (tr !== undefined) tr.quietWrite(node, node.baseSeq);
 		// Direct kernel apply — a public-method re-entry would re-run the
 		// policy comparator. Flushed effects classify normally on re-entry.
+		// writeNewest may run core effects (a kernel flush): one of those bodies
+		// can issue a nested quiet write, which owes the boundary drain rather
+		// than running it inside that kernel frame (see drainQuietBoundary).
 		writeNewest(node.id, next);
-		// Committed-truth flip site: quiet fold.
+		// Committed-truth flip site: quiet fold. Always marks — the deferred
+		// drain (or this write's own, below) scans from these marks.
 		fanAtomsToCommittedArenas(getSingleAtomBuffer(node));
-		if (watchers.size !== 0) quietDrain();
-		if (signalEffectCount !== 0) flushDirtySignalEffects(undefined);
-		for (const a of rootToArena.values()) arenaDecay(a); // boundary mark decay
-		if (notifyState.n !== 0) flushNotify();
+		// The committed-world boundary drain: watcher reconcile, dirty
+		// SignalEffect terminals (their runner does committed routed reads that
+		// record dependency links), mark decay, notification delivery. It is
+		// valid only at a true boundary — outside every kernel effect frame and
+		// SignalEffect body — so mark it owed and let drainQuietBoundary run it
+		// now if we are at one, or the enclosing outermost operation run it later.
+		quietBoundaryOwed = true;
+		drainQuietBoundary();
+	}
+
+	/** Runs the owed quiet-pipeline boundary drain iff we are at a true
+	 * operation boundary: no open kernel effect frame (enterDepth 0) and no
+	 * running SignalEffect body (activeSignalEffect undefined), where the
+	 * SignalEffect runner's routed reads resolve committed and record links.
+	 * Inside such a frame it is a no-op; the frame's outermost caller
+	 * ({@link quietWriteInner}'s tail, or {@link flush}) drains once it closes.
+	 * The loop re-drains when a SignalEffect body writes and re-owes it, so a
+	 * sibling terminal newly dirtied by that write runs at THIS boundary rather
+	 * than being dropped to an unrelated one. */
+	function drainQuietBoundary(): void {
+		if (!quietBoundaryOwed || quietBoundaryActive || enterDepth !== 0 || activeSignalEffect !== undefined) return;
+		quietBoundaryActive = true;
+		try {
+			let guard = 0;
+			while (quietBoundaryOwed) {
+				if (++guard > settleCap) {
+					throw new InvariantViolation(
+						`quiet SignalEffect drain exceeded ${settleCap} iterations — a SignalEffect body is synchronously re-triggering itself`,
+					);
+				}
+				quietBoundaryOwed = false;
+				if (watchers.size !== 0) quietDrain();
+				if (signalEffectCount !== 0) flushDirtySignalEffects(undefined);
+				for (const a of rootToArena.values()) arenaDecay(a); // boundary mark decay
+				if (notifyState.n !== 0) flushNotify();
+			}
+		} finally {
+			quietBoundaryActive = false;
+		}
 	}
 
 	/** A bare write (no batch context) joins the ambient default batch, or folds
@@ -7530,15 +7683,35 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 		// creation + resolution
 		atom,
 		computed,
-		internalsForAtom,
-		internalsForComputed,
-		disposeComputed,
+		// Handle-taking surface entries assert instance ownership (see
+		// assertOwnHandle/assertOwnInternals): a handle from another
+		// createCosignals() instance throws loudly instead of resolving its id
+		// against this arena. The internal callers use the raw closures, so the
+		// assert never taxes the hot write/read paths.
+		internalsForAtom: (atom: Atom<unknown>) => {
+			assertOwnHandle(atom);
+			return internalsForAtom(atom);
+		},
+		internalsForComputed: (c: Computed<unknown>) => {
+			assertOwnHandle(c);
+			return internalsForComputed(c);
+		},
+		disposeComputed: (c: Computed<unknown>) => {
+			assertOwnHandle(c);
+			return disposeComputed(c);
+		},
 		root,
 		// batches + writes
 		openBatch,
 		liveBatches,
-		write: writeInBatch,
-		bareWrite,
+		write: (batchId: BatchId | undefined, node: AtomInternals, kind: WriteKind, payload: unknown) => {
+			assertOwnInternals(node);
+			return writeInBatch(batchId, node, kind, payload);
+		},
+		bareWrite: (node: AtomInternals, kind: WriteKind, payload: unknown) => {
+			assertOwnInternals(node);
+			return bareWrite(node, kind, payload);
+		},
 		retire,
 		settleAction,
 		// renders + watchers
@@ -8296,6 +8469,11 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	class Atom<T> {
 		/** Kernel record id; consumed by the React bindings (`cosignals-react`). @internal */
 		readonly _id: NodeId;
+		/** The engine surface that owns this handle. Every handle-taking engine
+		 * entry point asserts it, so a handle used with a DIFFERENT
+		 * createCosignals() instance throws a clear error instead of silently
+		 * resolving its id against the wrong arena. @internal */
+		readonly _engine = engine;
 		/** @internal */
 		readonly _isEqual: ((a: unknown, b: unknown) => boolean) | undefined;
 		/** Engine internals, allocated lazily at first engine content (a log
@@ -8391,6 +8569,8 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 	class Computed<T> {
 		/** Kernel record id; consumed by the React bindings (`cosignals-react`). @internal */
 		readonly _id: NodeId;
+		/** The owning engine surface (see {@link Atom._engine}). @internal */
+		readonly _engine = engine;
 		/** Engine internals, allocated lazily at first engine content (see
 		 * {@link Atom._internals}). @internal */
 		_internals: ComputedInternals | undefined = undefined;
@@ -8439,6 +8619,33 @@ export function createCosignals(options?: CreateCosignalsOptions) {
 				}
 			}
 			return E.computedRead(this._id) as T;
+		}
+	}
+
+	// Cross-instance TYPE brands on the class prototypes (see the module-level
+	// ATOM_BRAND/COMPUTED_BRAND note): every instance's prototype carries the same
+	// brand value, so isAtom/isComputed recognize handles from any instance.
+	// ReducerAtom extends Atom and inherits the atom brand.
+	(Atom.prototype as unknown as Record<symbol, unknown>)[ATOM_BRAND] = true;
+	(Computed.prototype as unknown as Record<symbol, unknown>)[COMPUTED_BRAND] = true;
+
+	/** Assert a public handle belongs to THIS engine instance; the loud
+	 * alternative to the silent cross-instance corruption a foreign id would
+	 * cause (its `_id` resolved against this arena addresses a different record). */
+	function assertOwnHandle(handle: { _engine?: unknown }): void {
+		if (handle._engine !== engine) {
+			throw new Error('cosignals: handle belongs to a different engine instance');
+		}
+	}
+
+	/** Ownership assert for a resolved internals record, reached through its
+	 * (possibly weak) handle; a collected handle cannot be re-associated with a
+	 * foreign engine, so an unresolvable one passes. */
+	function assertOwnInternals(node: AnyInternals): void {
+		const h = node._h;
+		const handle = h instanceof WeakRef ? h.deref() : h;
+		if (handle !== undefined && (handle as { _engine?: unknown })._engine !== engine) {
+			throw new Error('cosignals: handle belongs to a different engine instance');
 		}
 	}
 
@@ -8559,7 +8766,10 @@ export type CosignalEngine = Cosignals['engine'];
 export type EngineDriver = Parameters<Cosignals['attachDriver']>[0];
 export type EngineResetOptions = NonNullable<Parameters<Cosignals['__TEST__resetEngine']>[0]>;
 
-const defaultCosignals = createCosignals();
+// The default browser instance keeps the historical large floor (env override
+// honored), so its behavior is unchanged; only user `createCosignals()` calls
+// default SMALL.
+const defaultCosignals = createCosignals({ initialRecords: readEnvInitialRecords() ?? DEFAULT_INITIAL_RECORDS });
 export const Atom = defaultCosignals.Atom;
 export type Atom<T> = InstanceType<typeof defaultCosignals.Atom<T>>;
 export const ReducerAtom = defaultCosignals.ReducerAtom;
@@ -8568,6 +8778,18 @@ export const Computed = defaultCosignals.Computed;
 export type Computed<T> = InstanceType<typeof defaultCosignals.Computed<T>>;
 export type Signal<T> = Atom<T> | Computed<T>;
 export type ReducerAtomOptions<S> = AtomOptions<S>;
+
+/** True for an Atom (or ReducerAtom) handle from ANY createCosignals()
+ * instance. Uses a shared prototype brand rather than `instanceof`, which each
+ * instance's own class would fail for another instance's handles — the check
+ * embedders (and the React bindings) need to accept per-instance handles. */
+export function isAtom(x: unknown): x is Atom<unknown> {
+	return typeof x === 'object' && x !== null && (x as Record<symbol, unknown>)[ATOM_BRAND] === true;
+}
+/** True for a Computed handle from ANY createCosignals() instance (see {@link isAtom}). */
+export function isComputed(x: unknown): x is Computed<unknown> {
+	return typeof x === 'object' && x !== null && (x as Record<symbol, unknown>)[COMPUTED_BRAND] === true;
+}
 export const effect = defaultCosignals.effect;
 export const effectScope = defaultCosignals.effectScope;
 export const batch = defaultCosignals.batch;
@@ -8577,8 +8799,9 @@ export const untracked = defaultCosignals.untracked;
 export const configure = defaultCosignals.configure;
 export const serializeAtomState = defaultCosignals.serializeAtomState;
 export const initializeAtomState = defaultCosignals.initializeAtomState;
-export const SuspendedRead = defaultCosignals.SuspendedRead;
-export type SuspendedRead = InstanceType<typeof defaultCosignals.SuspendedRead>;
+// SuspendedRead is the module-level class, exported directly at the file tail
+// (one shared class across instances — see its definition). Every instance's
+// `.SuspendedRead` is this same class.
 export const attachDriver = defaultCosignals.attachDriver;
 export const engine = defaultCosignals.engine;
 export const BATCH_NONE = defaultCosignals.BATCH_NONE;
@@ -8653,4 +8876,4 @@ export type TraceEvent =
 	| { type: 'render-discarded'; renderPass: RenderPassId; root: RootId }
 	| { type: 'epoch-reset'; epoch: Epoch };
 
-export { CycleError, InvariantViolation, ScheduleError };
+export { CycleError, InvariantViolation, ScheduleError, SuspendedRead };

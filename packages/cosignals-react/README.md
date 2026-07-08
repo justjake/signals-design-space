@@ -186,17 +186,20 @@ with a `key` to change reducers).
 
 ### `useSignalEffect(fn, deps?)`
 
-One effect with two invalidation planes: a committed React dependency change,
-or a change reaching a signal read by the effect's previous run. Both paths
-share one cleanup/body owner. If one write reaches the effect through React
-props and signal propagation, it runs once with the committed React closure
-and committed signal values—never first with old props and new signals.
+One effect that can be requested to run two ways: by a committed React
+dependency (`deps`) change, or by a change reaching a signal the effect read on
+its previous run. Both requests share one cleanup/body owner. If one write
+reaches the effect through both a committed render and signal propagation, it
+runs once with the committed React closure and committed signal values — never
+first with old props and new signals.
 
 A signal-only change runs the body directly and does **not** schedule a React
 render. Matching React work defers the signal request until that render
 commits or is discarded; a suspended render never races an older closure.
 If React invokes the hook more than once in one render pass, only the final
-dependency report participates in commit arbitration.
+dependency report participates in commit arbitration. A signal write from
+inside the body queues any resulting rerun until the current run finishes,
+and never re-renders the component from inside the body.
 Signal reads resolve in the committed world of the component's root, never
 pending state, and are retracked as ordinary graph edges after every run.
 
@@ -241,6 +244,51 @@ startSignalTransition(async () => {
 Returning a promise from `fn` parks the transition until it settles
 (React async-action semantics), so the pending state stays pending across
 the whole action.
+
+## Server rendering
+
+The browser bindings use one default engine instance: `registerCosignalReact()`
+with no argument binds it, and `Atom`/`Computed`/`ReducerAtom` imported from
+this package (or from `cosignals`) belong to it.
+
+For SSR, each request needs its own isolated graph so concurrent requests never
+share state. Create a per-request instance with `createCosignals()` (see the
+`cosignals` README for the engine-level serialize/hydrate recipe) and bind it
+for one synchronous render:
+
+```tsx
+import { createCosignals } from 'cosignals';
+import { registerCosignalReact } from 'cosignals-react';
+
+const instance = createCosignals();
+const count = new instance.Atom(0);
+instance.initializeAtomState(state, { count }); // hydrate this request's atoms
+
+const handle = registerCosignalReact(instance); // bind this request's engine
+try {
+  const html = renderToString(<App count={count} />); // synchronous
+} finally {
+  handle.dispose();
+}
+```
+
+While `instance` is bound, every hook — and every handle created with
+`instance.Atom` / `useComputed` / `useReducerAtom` — routes through that
+request's graph. A handle from a *different* instance passed to a hook throws a
+clear "handle belongs to a different engine instance" error rather than reading
+the wrong graph.
+
+Scope and limits — read before relying on this:
+
+- **Synchronous only.** `renderToString` runs to completion on one call stack,
+  so the register → render → dispose block is race-free. Because registration is
+  a single **global** active shim (one at a time), it is **not** safe for
+  streaming or concurrent SSR that keeps several instances live at once — a
+  second concurrent `registerCosignalReact` throws rather than corrupting.
+  Streaming SSR with per-request isolation is a planned follow-up.
+- Serialize/hydrate the request's state through the engine (`instance`'s
+  `serializeAtomState` / `initializeAtomState`); those require no live batch or
+  render, so SSR never captures a speculative world.
 
 ## How writes are classified
 

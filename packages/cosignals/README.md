@@ -226,6 +226,20 @@ const clientCount = new client.Atom(0);
 client.initializeAtomState(state, { count: clientCount }); // before hydration
 ```
 
+Each `createCosignals()` instance starts with a **small** storage arena and
+grows it on demand, so creating one per request (thousands over a process
+lifetime) costs kilobytes each rather than reserving the maximum up front. The
+default browser instance keeps its larger starting reservation. To pre-size an
+instance that will build a large graph, pass `createCosignals({ initialRecords
+})` (units of one node plus two dependency edges).
+
+Every handle belongs to the instance that created it. Handles are not
+interchangeable across instances: passing one instance's `Atom`/`Computed` to
+another instance's engine surface (or React binding) throws
+`cosignals: handle belongs to a different engine instance` rather than silently
+reading the wrong graph. `import { isAtom, isComputed } from 'cosignals'`
+recognizes a handle's type across instances.
+
 Serialization keys are supplied by the application; labels and construction
 order are not stable identities. A replacer/reviver may be passed as the
 second/third argument. Unknown serialized keys warn, while missing keys leave
