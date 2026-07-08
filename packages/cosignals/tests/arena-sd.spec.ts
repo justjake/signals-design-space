@@ -187,33 +187,29 @@ describe('S-D pool shell reuse (§4.8)', () => {
 		expect(b.committedValue(sum2, 'S')).toBe(276 - 7 + 1007);
 	});
 
-	it('observer dep-chain capture across mid-loop doubling: links allocated while the chain builds stay valid (ids stable; stale cached views would corrupt silently)', () => {
+	it('wide observer capture over a grown arena: snapshot stamps survive growth and the boundary re-check gates exactly once', () => {
 		const b = freshEngine({ arenaInitInts: 16 });
 		const atoms = Array.from({ length: 24 }, (_, i) => b.atom(`a${i}`, i));
 		// A committed consumer materializes the root's arena and shadows every
-		// atom, leaving the buffer close to its grown capacity...
+		// atom, doubling the buffers repeatedly; the capture's dep snapshot
+		// (plain entries carrying read-time stamps and close-time shadow
+		// hints) must stay coherent across every doubling.
 		const sum = b.computed('sum', (read) => atoms.reduce((s, n) => s + (read(n) as number), 0));
 		mount(b, 'R', sum, 'W');
-		const shell = b.__TEST__arena('R')!;
-		const beforeCapture = shell.memory.length;
-		// ...so the capture close's per-dep link loop (one arena link per dep,
-		// threaded through the subscription record) must double the buffers
-		// MID-LOOP — the exact shape where a stale cached view would write
-		// into the orphaned buffer.
 		const e = b.mountCommittedObserver('R', 'E');
 		e.body = () => {
 			for (const at of atoms) void b.captureRead(at);
 		};
 		b.captureRun(e.id, e.body);
-		expect(shell.memory.length).toBeGreaterThan(beforeCapture); // the chain build itself grew the arena
 		expect(e.deps.length).toBe(24);
 		expect(e.runs).toBe(0); // runs counts RE-fires (the mount capture is run zero)
-		// The boundary re-check walks the grown chain: a write to a LATE dep —
-		// its link was allocated after the doubling — re-fires exactly once...
+		// The boundary re-check consults the wide snapshot: a write to a LATE
+		// dep — its shadow was allocated after several doublings — re-fires
+		// exactly once...
 		commitWrite(b, atoms[20]!, 999);
 		expect(e.runs).toBe(1);
 		// ...and an identity-equal write (rejected at acceptance) leaves every
-		// dep clean: the fast negative guard skips over the re-built chain.
+		// dep clean: the fast negative guard skips the whole snapshot.
 		commitWrite(b, atoms[20]!, 999);
 		expect(e.runs).toBe(1);
 	});

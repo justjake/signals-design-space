@@ -365,13 +365,12 @@ export const enum LinkField {
  * allocator serves). Observer records carry no kernel dependency links,
  * so the kernel walks never reach them; slots 1/5/7 keep their allocator
  * meanings (free-list thread / GEN / NODE_INDEX) and the engine interprets
- * slots 0/2-4/6 — BY ROLE for 2-4/6 (the FLAGS kind bit is the role):
- * a watcher binds one watched node (NODE/NODE_GEN/NODE_IX) plus its
- * delivery dedup word; a subscription threads its dep-snapshot chain
- * (DEP_HEAD/DEP_TAIL — world-arena link records in the committed arena of
- * its root, each link's clock slot carrying that dep's lastValidatedAt
- * stamp). Side columns, also by role — values: watcher last rendered
- * value; clocks: watcher lastValidatedAt; fns: subscription refire (the
+ * slots 0/2-4/6 (the FLAGS kind bit is the role): a watcher binds one
+ * watched node (NODE/NODE_GEN/NODE_IX) plus its delivery dedup word; a
+ * subscription's whole role state — its dep snapshot, stamps included —
+ * lives in its extras object (see ObserverDep), so its 2-4/6 slots stay
+ * 0. Side columns, also by role — values: watcher last rendered value;
+ * clocks: watcher lastValidatedAt; fns: subscription refire (the
  * dormant-callback pattern); extras: the one ObserverExtras object (both
  * roles; each role's fields idle at their defaults on the other).
  */
@@ -382,12 +381,8 @@ const enum ObserverField {
 	FREE_NEXT = 1,
 	/** Watcher: the watched node record id (the component reads this node). */
 	NODE = 2,
-	/** Subscription: first dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the observer record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot). */
-	DEP_HEAD = 2,
 	/** Watcher: the watched record's tenancy generation (kernel GEN) at mount: record ids recycle, so every watcher→node resolution generation-checks this stamp and skips loudly on mismatch. */
 	NODE_GEN = 3,
-	/** Subscription: last dependency link of the current snapshot (append cursor; 0 = empty). */
-	DEP_TAIL = 3,
 	/** Watcher: per-(watcher, slot) delivery dedup bits, one int word (bit i = batch slot i): a second write in the same slot delivers again only if no scheduled-but-unstarted render will fold it anyway. */
 	DEDUP_BITS = 4,
 	/** Allocator-owned tenancy generation (shared meaning with NodeField.GEN): bumped when the record frees. */
@@ -766,8 +761,8 @@ const enum ArenaGeom {
  * record-keyed buffer column joins this growth — the layout note above;
  * exhaustion is never fatal, growth replaces it). Mid-operation
  * growth is safe through the shell indirection: only the buffer
- * OBJECTS change — record ids, and every structure holding them
- * (observer dep chains included), stay stable — and the replacement
+ * OBJECTS change — record ids, and every structure holding them,
+ * stay stable — and the replacement
  * buffers are zeroed past the copied prefix, preserving the
  * fresh-record invariant. The price is the reload-after-allocation
  * discipline, confined to the sites enumerated here (an allocating site
@@ -779,9 +774,6 @@ const enum ArenaGeom {
  *  - arenaLinkInsert:
  *    re-loads `a.memory` after its arenaAllocLink call (the tail probes
  *    before the call read `a.memory` directly).
- *  - buildObserverDepChain:
- *    re-loads `a.memory` after the arenaAllocLink inside its per-dep
- *    loop (link ids threaded so far stay valid — ids never move).
  *  - the refold family:
  *    arenaServe / arenaCheckDirtyLoop / arenaUpdateAndShallow /
  *    arenaUpdateShadow / arenaUpdateComputed / arenaFoldOutcome allocate
@@ -5491,7 +5483,7 @@ export function routedAtomRead(atom: Atom<unknown>): unknown {
 	const cap = routedCap;
 	const node = internalsForAtom(atom);
 	const v = routedRead(node, world);
-	if (cap !== undefined) cap.deps.push({ node, value: v, stamp: committedDepStamp(cap.sub.root, node) });
+	if (cap !== undefined) cap.deps.push({ node, value: v, stamp: committedDepStamp(cap.sub.root, node), shadow: 0 });
 	return v;
 }
 
@@ -5520,7 +5512,7 @@ export function routedComputedRead(c: Computed<unknown>): unknown {
 		if (oc !== undefined) oc.push(node);
 	}
 	const v = evaluate(node, world);
-	if (cap !== undefined) cap.deps.push({ node, value: v, stamp: committedDepStamp(cap.sub.root, node) });
+	if (cap !== undefined) cap.deps.push({ node, value: v, stamp: committedDepStamp(cap.sub.root, node), shadow: 0 });
 	return v;
 }
 
@@ -5958,8 +5950,8 @@ export class WorldArena {
 	 * COPY (doubling) whenever an allocation outruns it: exhaustion is
 	 * never fatal, growth replaces it. Growth mid-operation is safe through
 	 * this shell indirection — growWorldArenaBuffers reassigns the field,
-	 * record ids never change (observer dep chains and every other
-	 * id-holding structure are untouched), and the sites that cache the
+	 * record ids never change (every
+	 * id-holding structure is untouched), and the sites that cache the
 	 * view across an allocating call re-load it after (the discipline is
 	 * enumerated in growWorldArenaBuffers' doc, kept current there).
 	 * Growth stays RARE by the reservation's generosity: a fresh zeroed
@@ -7990,8 +7982,8 @@ function getPendingSettleCount(): number {
 // delivery walks, the boundary re-checks, the bindings, the tests) keeps
 // the property surface it always had. The role LIFECYCLES live in their
 // own sections — render integration below for watchers; the committed-
-// observer lifecycle for subscriptions; this section owns the record, its
-// storage discipline, and the subscription dep-chain builders.
+// observer lifecycle for subscriptions; this section owns the record and
+// its storage discipline.
 
 /** The watcher's rendered-world snapshot: what the mounting render saw
  * (the render's slot sets copied by integer assignment). Stored flattened
@@ -8005,11 +7997,32 @@ type WatcherSnapshot = {
 	rootCommitGen: CommitGen;
 };
 
+/**
+ * One dep-snapshot entry of a subscription — the routed reads of the last
+ * run, in read order, one shape from the push site on (monomorphic):
+ *
+ *  - `value` is a capture artifact (the trace records and `lastValue`
+ *    serve it — it never gates a re-fire).
+ *  - `stamp` is the producer's committed clock AT THE READ — the dep's
+ *    lastValidatedAt. Read-time, not frame-close-time, because an effect
+ *    body may WRITE mid-run and the boundary re-check must still see that
+ *    write as newer than the snapshot. The completed recapture is the ONE
+ *    stamp-advance site a subscription has. Stamps are plain clock values
+ *    (the settle source is monotone for the composition and shadow clock
+ *    slots scrub to 0 on evict/release, so a stale stamp can never
+ *    compare equal to a different consult's clock).
+ *  - `shadow` caches the producer's committed-arena shadow at capture
+ *    CLOSE (a guard hint — the re-check resolves the live shadow through
+ *    nodeToShadow and falls back to evaluation on any mismatch, so a
+ *    re-keyed shadow can never serve a stale skip).
+ */
+type ObserverDep = { node: AnyInternals; value: Value; stamp: Clock; shadow: number };
+
 /** Shared default for the extras object's dep snapshot: replaced wholesale
  * by every capture close, never mutated in place — so all observers can
  * share one empty array until their first capture (watchers keep it for
  * the record's life). */
-const NO_DEPS: { node: AnyInternals; value: Value }[] = [];
+const NO_DEPS: ObserverDep[] = [];
 
 /** The extras-column object of an observer record — the cold oddments of
  * BOTH roles in one shape (one hidden class, so every extras access site
@@ -8030,8 +8043,9 @@ type ObserverExtras = {
 	includedBits: BatchSlotSet;
 	rootCommitGen: CommitGen;
 	// — subscription role:
-	/** Dep snapshot: the routed reads of the last run, in read order. */
-	deps: { node: AnyInternals; value: Value }[];
+	/** Dep snapshot: the routed reads of the last run, in read order (see
+	 * ObserverDep — stamps and shadow hints ride the entries). */
+	deps: ObserverDep[];
 	/** Snapshot nodes currently holding observation retains (re-pointed per
 	 * run — see the observation index's shiftObservedCount). Node OBJECTS,
 	 * not ids: a retained node's record can free and re-tenant while the
@@ -8184,7 +8198,7 @@ export class Observer {
 	 * correction (a folded shadow's clock is never 0). Corrections outside
 	 * the committing render's own window gate on this stamp alone: clock
 	 * mismatch means re-fire, no value comparison. (A subscription's
-	 * counterpart stamps ride its dep-chain links — see ObserverField.) */
+	 * counterpart stamps ride its dep-snapshot entries — see ObserverDep.) */
 	get lastValidatedAt(): Clock {
 		return E.clocks()[this.rec >> ArenaShape.ID_TO_CLOCK_SHIFT]!;
 	}
@@ -8209,11 +8223,12 @@ export class Observer {
 
 	// ------------------------------------------------- subscription role
 
-	/** Dep snapshot: the routed reads of the last run, in read order. */
-	get deps(): { node: AnyInternals; value: Value }[] {
+	/** Dep snapshot: the routed reads of the last run, in read order (see
+	 * ObserverDep). */
+	get deps(): ObserverDep[] {
 		return this.x.deps;
 	}
-	set deps(v: { node: AnyInternals; value: Value }[]) {
+	set deps(v: ObserverDep[]) {
 		this.x.deps = v;
 	}
 
@@ -8341,13 +8356,10 @@ function newSubscription(id: ObserverId, name: string, root: RootId, refire: (()
  * the dep snapshot. The FIELD lives on the shared engine core record (the
  * read-routing resolution consults it per routed read); the committed-
  * observers factory below is its one writer, through the core's
- * `setCaptureFrame`. Each entry carries the read's value (a capture
- * artifact: the trace records and `lastValue` serve it — it never gates a
- * re-fire) and the producer's committed clock AT THE READ (`stamp` — the
- * dep's lastValidatedAt seed; read-time, not frame-close-time, because an
- * effect body may WRITE mid-run and the boundary re-check must still see
- * that write as newer than the snapshot). */
-type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value; stamp: Clock }[] };
+ * `setCaptureFrame`. The entries are ObserverDep records (value, read-time
+ * stamp; the close fills the shadow hints), installed wholesale as the
+ * subscription's snapshot when the frame closes. */
+type CaptureFrame = { sub: Subscription; deps: ObserverDep[] };
 
 /** A node's per-root committed clock by nodeIndex (0 = never consulted).
  * Exported for the watcher correction gate and the commit populator's stamp
@@ -8357,62 +8369,6 @@ type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Valu
 function committedNodeClock(a: WorldArena, ix: NodeIndex): Clock {
 	const sh = ix < a.nodeToShadow.length ? a.nodeToShadow[ix]! : 0;
 	return sh === 0 ? 0 : a.clocks[sh >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
-}
-
-/** Free a subscription's dependency-link chain back to its arena's link
- * pool (recapture replaces the snapshot wholesale; removal tears it down).
- * {@link scrubWorldLinkColumnsOnFree} clears each link's clock slot on free. */
-function freeObserverDepChain(a: WorldArena, sub: Subscription): void {
-	const memory = E.buffer();
-	let l = memory[sub.rec + ObserverField.DEP_HEAD]!;
-	while (l !== 0) {
-		const next = a.memory[l + ArenaLinkField.NEXT_DEP]!;
-		arenaFreeLink(a, l);
-		l = next;
-	}
-	memory[sub.rec + ObserverField.DEP_HEAD] = 0;
-	memory[sub.rec + ObserverField.DEP_TAIL] = 0;
-}
-
-/**
- * Build a subscription's dependency chain from a completed capture: one
- * world-arena LINK record per dep read, in read order, threaded through the
- * subscription record's DEP_HEAD/DEP_TAIL cursors. Each link's clock slot
- * carries that dep's lastValidatedAt (the read-time stamp); its DEP field
- * caches the producer's shadow at capture (a diagnostic hint — the re-check
- * resolves the live shadow through nodeToShadow and falls back to
- * evaluation on any mismatch, so a re-keyed shadow can never serve a stale
- * skip). The links are ONE-SIDED on purpose: they live only on this chain,
- * never on any producer's subscriber list, so every existing walk —
- * delivery, mark propagation, drain candidate collection, the fixup
- * closure, the structural checker — sees exactly the structure it saw
- * before subscriptions had records at all (causal routing metadata is
- * untouched; the chain is revalidation state).
- */
-function buildObserverDepChain(a: WorldArena, sub: Subscription, deps: { node: AnyInternals; value: Value; stamp: Clock }[]): void {
-	freeObserverDepChain(a, sub);
-	let head = 0;
-	let tail = 0;
-	for (let i = 0; i < deps.length; i++) {
-		const d = deps[i]!;
-		const l = arenaAllocLink(a); // may grow the arena: re-load memory after (ids threaded so far stay valid)
-		const am = a.memory;
-		am[l + ArenaLinkField.VERSION] = 0;
-		am[l + ArenaLinkField.DEP] = d.node.ix < a.nodeToShadow.length ? a.nodeToShadow[d.node.ix]! : 0;
-		am[l + ArenaLinkField.SUB] = 0; // one-sided: no subscriber-list membership, no owner shadow
-		am[l + ArenaLinkField.PREV_SUB] = 0;
-		am[l + ArenaLinkField.NEXT_SUB] = 0;
-		am[l + ArenaLinkField.PREV_DEP] = tail;
-		am[l + ArenaLinkField.NEXT_DEP] = 0;
-		am[l + ArenaLinkField.MODE] = ArenaLinkMode.WEAK;
-		a.clocks[l >> ArenaGeom.ID_TO_COLUMN_SHIFT] = d.stamp;
-		if (tail !== 0) am[tail + ArenaLinkField.NEXT_DEP] = l;
-		else head = l;
-		tail = l;
-	}
-	const memory = E.buffer();
-	memory[sub.rec + ObserverField.DEP_HEAD] = head;
-	memory[sub.rec + ObserverField.DEP_TAIL] = tail;
 }
 
 // ---- the committed-observer lifecycle ----
@@ -8481,13 +8437,14 @@ function captureRun(id: SubscriptionId, body: () => void): void {
 		setCaptureFrame(undefined);
 		sub.deps = frame.deps;
 		sub.lastValue = frame.deps.length === 0 ? undefined : frame.deps[frame.deps.length - 1]!.value;
-		// The completed recapture is the ONE stamp-advance site a
-		// subscription has: rebuild the dependency-link chain (each
-		// link's clock slot = that dep's read-time producer stamp).
-		// deps.length > 0 implies the committed arena exists — the
-		// capture's own evaluations materialized it.
+		// Close-time shadow hints for the boundary re-check's fast guard.
+		// deps.length > 0 implies the committed arena exists — the capture's
+		// own evaluations materialized it; no arena ⇒ hints stay 0 and the
+		// guard always evaluates.
 		const a = rootToArena.get(sub.root);
-		if (a !== undefined) buildObserverDepChain(a, sub, frame.deps);
+		if (a !== undefined) {
+			for (const d of frame.deps) d.shadow = d.node.ix < a.nodeToShadow.length ? a.nodeToShadow[d.node.ix]! : 0;
+		}
 		// Observation re-point after the frame closes, so discovery
 		// evaluations run on a clean frame stack (same rule as
 		// syncObservedDeps).
@@ -8502,7 +8459,7 @@ function captureRead(node: AnyInternals): Value {
 	const frame = captureFrame;
 	if (frame === undefined) throw new ScheduleError('captureRead requires an open captureRun frame');
 	const v = evaluate(node, { kind: 'committed', root: frame.sub.root });
-	frame.deps.push({ node, value: v, stamp: committedDepStamp(frame.sub.root, node) });
+	frame.deps.push({ node, value: v, stamp: committedDepStamp(frame.sub.root, node), shadow: 0 });
 	return v;
 }
 
@@ -8524,17 +8481,13 @@ function removeSubscription(id: SubscriptionId): void {
 	sub.cleanups++;
 	const tr = trace;
 	if (tr !== undefined) tr.reactEffectCleanup(sub.name, sub.root);
-	// Release the snapshot's observation retains.
+	// Release the snapshot's observation retains. (The dep snapshot itself
+	// is plain handle data — it dies with the handle.)
 	const held = sub.obsDeps;
 	if (held !== undefined) {
 		sub.obsDeps = undefined;
 		for (const dep of held) shiftObservedCount(dep, -1);
 	}
-	// Free the dependency-link chain back to its arena (the arena is
-	// alive while the subscription counted as a consumer; defensive
-	// probe anyway — a reset tears both down wholesale).
-	const a = rootToArena.get(sub.root);
-	if (a !== undefined) freeObserverDepChain(a, sub);
 	// Record free LAST (flags zero immediately — `live` reads false, so
 	// queued refires no-op; the free itself defers to the boundary sweep).
 	E.disposeObserver(sub.rec);
@@ -8618,21 +8571,17 @@ function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void 
 		if (rootToOpenRender.has(sub.root)) continue; // deferred to the frame's close
 		const world: World = { kind: 'committed', root: sub.root };
 		const a = rootToArena.get(sub.root);
-		const memory = E.buffer();
 		let changed = false;
 		const deps = sub.deps;
-		// The chain and the dep array are parallel by construction (both
-		// written by the same capture close, one entry per read).
-		let l = a === undefined ? 0 : memory[sub.rec + ObserverField.DEP_HEAD]!;
-		for (let i = 0; i < deps.length && (a === undefined || l !== 0); i++) {
+		for (let i = 0; i < deps.length; i++) {
 			const d = deps[i]!;
-			const stamp = a === undefined ? 0 : a.clocks[l >> ArenaGeom.ID_TO_COLUMN_SHIFT]!;
+			const stamp = a === undefined ? 0 : d.stamp;
 			if (a !== undefined) {
 				const sh = d.node.ix < a.nodeToShadow.length ? a.nodeToShadow[d.node.ix]! : 0;
 				const vi = sh >> ArenaGeom.ID_TO_COLUMN_SHIFT;
 				if (
 					sh !== 0
-					&& sh === a.memory[l + ArenaLinkField.DEP]
+					&& sh === d.shadow
 					&& (a.memory[sh + ArenaField.FLAGS]! & (ArenaFlag.VALID | ArenaFlag.DIRTY | ArenaFlag.PENDING | ArenaFlag.HAS_BOX)) === ArenaFlag.VALID
 					&& a.memory[sh + ArenaField.NODE_GEN] === getKernelGeneration(d.node.id)
 					&& a.clocks[vi] === stamp
@@ -8644,7 +8593,6 @@ function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void 
 					// reference just fails the guard and settles below.
 					&& Object.is(a.cutoffVals[vi], a.vals[vi])
 				) {
-					l = a.memory[l + ArenaLinkField.NEXT_DEP]!;
 					continue; // the fast negative guard: no evaluation, no comparison
 				}
 			}
@@ -8652,7 +8600,6 @@ function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void 
 				evaluate(d.node, world);
 			} catch (err) {
 				if (err instanceof SuspendedRead) {
-					if (a !== undefined) l = a.memory[l + ArenaLinkField.NEXT_DEP]!;
 					continue; // still-pending suspension: not a flip (pinned in tests/concurrent-battery.spec.ts; the clock stays unsettled — the settle transition decides)
 				}
 				throw err;
@@ -8663,7 +8610,6 @@ function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void 
 				changed = true;
 				break;
 			}
-			if (a !== undefined) l = a.memory[l + ArenaLinkField.NEXT_DEP]!;
 		}
 		if (changed) runCommittedSubscription(sub);
 	}
