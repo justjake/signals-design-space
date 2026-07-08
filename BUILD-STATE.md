@@ -517,6 +517,32 @@ growth-pin duty); the reversal noted in BUILD-STATE + the commit message.
     E.buffer()/extras reads (the record-storage shape).
     Suites: cosignals 362/1skip, oracle 82, react 72/72 — green.
 
+14. **Subscriptions as arena records + SubscriptionManager dies (commit C1
+    — storage only, semantics untouched)**: SubscriptionManager.ts DELETED;
+    the whole lifecycle (mount/captureRun/captureRead/remove/replay/
+    boundary revalidation) is the engine's "committed observers" section —
+    a factory (createCommittedObservers) that assigns its operation table,
+    the subscription store included, onto the core record
+    (core.idToSubscription + five ops + revalidateCommittedSubscriptions;
+    no manager object). Subscription is a lean handle: own fields id
+    (monotone — registration order = the boundary scan's iteration order =
+    the model's map order) + rec (K_SUBSCRIPTION record, OBSERVER_LIVE at
+    alloc) + ONE cached extras-object reference. Storage: refire in the fns
+    column (the dormant-callback pattern, mission-normative); everything
+    cold ({name, root, deps pairs, obsDeps, body, lastValue, runs,
+    cleanups}) in the ONE extras object — held by the column (scrubbed at
+    free) AND by the handle: the counters are TOMBSTONE DIAGNOSTICS (the
+    battery reads a removed subscription's runs/cleanups after later
+    boundaries; record Int32 fields zero at the sweep, so counters could
+    not live there — SubscriptionField deliberately has no RUNS/CLEANUPS).
+    removeSubscription frees the record (flags zero immediately — queued
+    refires read live=false and no-op; free defers to the sweep).
+    CaptureFrame type moved to the engine; World.ts/concurrent.ts/
+    ConcurrentEngine re-pointed; trace-off ENGINE_MODULES: the dead
+    SubscriptionManager.ts path removed (CosignalEngine.ts entry covers the
+    section — documented in the list comment).
+    Suites: cosignals 362/1skip, oracle 82, react 72/72 — green.
+
 ## In progress / exact next actions
 
 **Priority 5 — observers/watchers/subscriptions as arena records.** Nothing

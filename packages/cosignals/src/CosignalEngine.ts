@@ -87,15 +87,17 @@
  * budget suite.
  */
 
-import { CycleError, InvariantViolation } from './errors.js';
+import { CycleError, InvariantViolation, ScheduleError } from './errors.js';
 import type { AtomCtx, ComputedCtx, UseKey } from './index.js';
 // Type-only composition imports (erased at emit — the engine never imports
-// the policy or machinery modules at runtime): the world-arena section's
-// factory signs itself against the engine core record and the machinery's
-// entity types while those still live in their pre-merge modules.
+// the policy or machinery modules at runtime): the world-arena and observer
+// sections' factories sign themselves against the engine core record and
+// the machinery's entity types while those still live in their pre-merge
+// modules.
 import type { EngineCore, World } from './World.js';
-import type { AnyInternals, AtomInternals, ComputedInternals, CommitGen, Equals, Reader, RenderPassId, RootId, Seq, Value, WatcherId } from './concurrent.js';
+import type { AnyInternals, AtomInternals, ComputedInternals, CommitGen, Equals, Reader, RenderPassId, RootId, Seq, SubscriptionId, Value, WatcherId } from './concurrent.js';
 import type { BatchSlotSet } from './Batch.js';
+import type { ObservationIndex } from './ObservationIndex.js';
 
 /**
  * The one evaluation context, passed by the kernel to every computed getter
@@ -315,12 +317,15 @@ export const enum WatcherField {
  * WatcherField). Its dependency snapshot is a chain of world-arena
  * link records in the committed arena of the subscription's root
  * (DEP_HEAD/DEP_TAIL below thread it), each carrying the observer's
- * lastValidatedAt stamp in the arena's per-record clock column; the
- * dep node objects ride the extras column in read order. The side
- * columns carry: values — the last captured value (the last dep read);
- * fns — the adapter-registered refire callback; extras — name, root,
- * the dep-node array, the retained observation set, and the
- * test-configured body.
+ * lastValidatedAt stamp in the arena's per-record clock column. The
+ * side columns carry: fns — the adapter-registered refire callback
+ * (the dormant-callback pattern); extras — the subscription's cold
+ * record object (name, root, the dep-node array in read order, the
+ * retained observation set, the test-configured body, the last
+ * captured value, and the run/cleanup counters — the counters are
+ * tombstone diagnostics the suites may read after removal, so the
+ * handle keeps the object reference while the column slot scrubs at
+ * free). The values slots stay empty on purpose.
  */
 export const enum SubscriptionField {
 	/** Kind + observer-state bits (NodeFlag.K_SUBSCRIPTION, NodeFlag.OBSERVER_LIVE). */
@@ -331,12 +336,8 @@ export const enum SubscriptionField {
 	DEP_HEAD = 2,
 	/** Last dependency link of the current snapshot (append cursor; 0 = empty). */
 	DEP_TAIL = 3,
-	/** Run counter (the model-comparison suites read it; bumped per re-fire). */
-	RUNS = 4,
 	/** Allocator-owned tenancy generation (shared meaning with NodeField.GEN). */
 	GEN = 5,
-	/** Cleanup counter (bumped before every re-fire and at removal; the model-comparison suites read it). */
-	CLEANUPS = 6,
 	/** Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); subscription records consume ordinals but no dense column stores rows for them. */
 	NODE_INDEX = 7,
 }
@@ -497,7 +498,7 @@ export const enum ArenaShape {
  */
 function scrubNodeColumnsOnFree(id: NodeId, clocks: Float64Array): void {
 	const base: ValueIndex = id >> ArenaShape.ID_TO_VALUE_SHIFT;
-	values[base] = undefined; // current/computed value — observer records: a watcher's last rendered value / a subscription's last captured value
+	values[base] = undefined; // current/computed value — watcher records: the last rendered value (subscriptions keep values in their extras object instead)
 	values[base + ArenaShape.AUX_VALUE_OFFSET] = undefined; // signal pending value or effect cleanup fn (computeds and observer records: empty on purpose)
 	fns[id >> ArenaShape.ID_TO_FN_SHIFT] = undefined; // computed getter / effect fn / an atom's dormant lifecycle callback / a subscription's refire callback
 	extras[id >> ArenaShape.ID_TO_EXTRAS_SHIFT] = undefined; // general per-record object: cold oddments that don't earn a dedicated column (observer records: name/root/snapshot or name/root/deps/observation-retains/body)
@@ -5541,4 +5542,376 @@ export class Watcher {
  * slot the record owned. */
 export function freeWatcherRecord(w: Watcher): void {
 	E.disposeObserver(w.rec);
+}
+
+// ---- committed observers (subscriptions) -------------------------------------------
+// The one core `run`-action consumer record — committed observers, the
+// production useSignalEffect mechanism — and its whole lifecycle:
+// registration, the capture frame that snapshots deps under the committed
+// world, removal, the test-side replay surface, and the boundary
+// revalidation. `deliver`-action consumers (component re-renders) are the
+// Watcher records above; only the firing machinery is shared. Core
+// `effect()`s hold no Subscription: they are real kernel effects, flushed
+// by the eager kernel apply (their trace seam, logCoreEffectRun, lives with
+// the engine surface's trace sites).
+
+/** The extras-column object of a subscription record: the observer's cold
+ * record state. Held BOTH by the extras column (the storage roster — the
+ * slot scrubs at record free) and by the handle (one cached reference, so
+ * the run/cleanup counters stay readable after removal — the suites read a
+ * removed subscription's counters as tombstone diagnostics). */
+type SubscriptionExtras = {
+	name: string;
+	root: RootId;
+	/** Dep snapshot: the routed reads of the last run, in read order. */
+	deps: { node: AnyInternals; value: Value }[];
+	/** Snapshot nodes currently holding observation retains
+	 * (re-pointed per run exactly like watcher obsDeps; see the observation
+	 * index's shiftObservedCount).
+	 * Node OBJECTS, not ids: a retained node's record can free and re-tenant
+	 * while the stale reference lingers, and shiftObservedCount's identity
+	 * guard is what keeps the eventual release from touching the new
+	 * tenant. */
+	obsDeps: Set<AnyInternals> | undefined;
+	/** Test-configured body (re-run inline through the capture frame). */
+	body: (() => void) | undefined;
+	/** Last captured value (the last dep read). */
+	lastValue: Value;
+	runs: number;
+	cleanups: number;
+};
+
+/**
+ * One committed observer, as a handle over its arena record. A subscription
+ * is a registration saying WHO is notified and IN WHICH WORLD its reads
+ * resolve; `deps` is the (node, value) snapshot `captureRun` recorded under
+ * the committed world of the subscription's root; re-checks are gated over
+ * it and fire at the boundary operations (per-root commit, retirement,
+ * settlement, quiet fold; one re-check per boundary operation, at the
+ * boundary value, never while the subscription's own root has an open
+ * render frame — deferred flips flush at that frame's close). `refire`
+ * (adapter-registered) rides the operation-boundary notification queue and
+ * lives in the fns column (the dormant-callback pattern); test-configured
+ * subscriptions store a `body` and re-run it inline through the same
+ * capture frame, so the model-comparison suites exercise the real
+ * mechanism.
+ *
+ * Storage: own fields are the monotone subscription id (registration
+ * order — the boundary scan's iteration order, i.e. the reference model's
+ * map order; never recycles) and the kernel record id (kind
+ * K_SUBSCRIPTION — see SubscriptionField). The record carries the liveness
+ * bit and the dep-chain cursors; the cold state lives in the extras object
+ * (cached on the handle — see SubscriptionExtras for why).
+ */
+export class Subscription {
+	readonly id: SubscriptionId;
+	/** The subscription's arena record (kind K_SUBSCRIPTION). @internal */
+	readonly rec: NodeId;
+	/** The extras object, cached (see SubscriptionExtras). @internal */
+	private readonly x: SubscriptionExtras;
+
+	constructor(id: SubscriptionId, name: string, root: RootId, refire: (() => void) | undefined) {
+		this.id = id;
+		const rec = E.newObserver(NodeFlag.K_SUBSCRIPTION | NodeFlag.OBSERVER_LIVE);
+		this.rec = rec;
+		fns[rec >> ArenaShape.ID_TO_FN_SHIFT] = refire;
+		const x: SubscriptionExtras = {
+			name,
+			root,
+			deps: [],
+			obsDeps: undefined,
+			body: undefined,
+			lastValue: undefined,
+			runs: 0,
+			cleanups: 0,
+		};
+		extras[rec >> ArenaShape.ID_TO_EXTRAS_SHIFT] = x;
+		this.x = x;
+	}
+
+	get name(): string {
+		return this.x.name;
+	}
+
+	/** Owning root. */
+	get root(): RootId {
+		return this.x.root;
+	}
+
+	/** Dep snapshot: the routed reads of the last run, in read order. */
+	get deps(): { node: AnyInternals; value: Value }[] {
+		return this.x.deps;
+	}
+	set deps(v: { node: AnyInternals; value: Value }[]) {
+		this.x.deps = v;
+	}
+
+	/** Adapter-owned refire (cleanup + body scheduling), queued at the
+	 * operation boundary; undefined for test-configured subscriptions. Lives
+	 * in the fns column — the dormant-callback pattern. */
+	get refire(): (() => void) | undefined {
+		return fns[this.rec >> ArenaShape.ID_TO_FN_SHIFT] as (() => void) | undefined;
+	}
+
+	/** Test-configured body (re-run inline through the capture frame). */
+	get body(): (() => void) | undefined {
+		return this.x.body;
+	}
+	set body(v: (() => void) | undefined) {
+		this.x.body = v;
+	}
+
+	/** Last captured value (the last dep read). */
+	get lastValue(): Value {
+		return this.x.lastValue;
+	}
+	set lastValue(v: Value) {
+		this.x.lastValue = v;
+	}
+
+	get runs(): number {
+		return this.x.runs;
+	}
+	set runs(n: number) {
+		this.x.runs = n;
+	}
+
+	get cleanups(): number {
+		return this.x.cleanups;
+	}
+	set cleanups(n: number) {
+		this.x.cleanups = n;
+	}
+
+	/** Subscribed bit (NodeFlag.OBSERVER_LIVE): flips at removal so queued
+	 * refires no-op — nothing runs after teardown. Unlike a watcher's, this
+	 * setter shifts no observation (subscription retains ride the dep
+	 * snapshot's obsDeps re-point instead). A freed record's flags word is
+	 * 0, so a dead handle reads not-live. */
+	get live(): boolean {
+		return (E.buffer()[this.rec + SubscriptionField.FLAGS]! & NodeFlag.OBSERVER_LIVE) !== 0;
+	}
+	set live(value: boolean) {
+		const memory = E.buffer();
+		const flags = memory[this.rec + SubscriptionField.FLAGS]!;
+		memory[this.rec + SubscriptionField.FLAGS] = value ? flags | NodeFlag.OBSERVER_LIVE : flags & ~NodeFlag.OBSERVER_LIVE;
+	}
+
+	get obsDeps(): Set<AnyInternals> | undefined {
+		return this.x.obsDeps;
+	}
+	set obsDeps(v: Set<AnyInternals> | undefined) {
+		this.x.obsDeps = v;
+	}
+}
+
+/** The core capture frame `captureRun` opens: while set (and no evaluation
+ * world is on stack) routed reads resolve committed-for-root and append to
+ * the dep snapshot. The FIELD lives on the shared engine core record (the
+ * read-routing resolution consults it per routed read); the committed-
+ * observers factory below is its one writer, through the core's
+ * `setCaptureFrame`. */
+export type CaptureFrame = { sub: Subscription; deps: { node: AnyInternals; value: Value }[] };
+
+/**
+ * The committed-observers factory — a factory in the kernel's own style: it
+ * closes over the subscription store and assigns its operation table onto
+ * the shared engine core record (mount/capture/remove/replay + the boundary
+ * revalidation the resident orchestration and the settlement drain reach as
+ * table calls). The composition site (ConcurrentEngine.ts) runs it last;
+ * `observation` is the observation index's slice (the dep-snapshot
+ * re-pointer and the refcount shift that releases a removed snapshot's
+ * retains).
+ */
+export function createCommittedObservers(core: EngineCore, observation: Pick<ObservationIndex, 'syncSubscriptionObservation' | 'shiftObservedCount'>): void {
+	// Composition-time locals (the codegen doctrine): every function a warm
+	// path calls binds once; mutable core state (trace, captureFrame, the
+	// guards, the live count) stays plain field reads off the core record.
+	const { evaluate, isValueChanged, root, setCaptureFrame } = core;
+	const rootToOpenRender = core.rootToOpenRender;
+	const { queueNotify, flushNotify } = core.notify;
+	const { syncSubscriptionObservation, shiftObservedCount } = observation;
+	const idToSubscription = new Map<SubscriptionId, Subscription>();
+	let nextSubscriptionId = 1;
+
+	/**
+	 * Register a committed observer (the production `useSignalEffect`
+	 * surface). Registration is illegal inside an open evaluation frame —
+	 * the record is committed-consumer state; it must never exist for a
+	 * discarded render attempt (the render-stack half of the guard is
+	 * adapter-enforced, since "on a render call stack" is a host predicate).
+	 * The caller then runs `captureRun` from the host's effect phase to take
+	 * the first dep snapshot.
+	 */
+	function mountCommittedObserver(rootId: RootId, name: string, refire?: () => void): Subscription {
+		if (core.evalDepth > 0 || core.inFoldCallback) {
+			throw new ScheduleError('effect registration is illegal inside an open evaluation/fold frame');
+		}
+		const sub = new Subscription(nextSubscriptionId++ as SubscriptionId, name, rootId, refire);
+		root(rootId);
+		idToSubscription.set(sub.id, sub);
+		core.committedSubCount += 1;
+		return sub;
+	}
+
+	// (The test-side convenience constructors mountReactEffect /
+	// mountReactEffectPick — 4-line compositions of mountCommittedObserver +
+	// a `body` + captureRun — live in tests/helpers.ts. The `body` mechanism
+	// itself stays here: it is the inline-run + event-creation path the
+	// model-comparison suites drive.)
+
+	/**
+	 * Runs a subscription body under the core capture frame: the effective
+	 * world becomes committed-for-root, every routed read (raw atom reads
+	 * through the routed-read resolution, engine computed reads through
+	 * `captureRead`) appends to the dep snapshot, and reads inside a
+	 * computed's own evaluation stay the computed's (the evaluation world on
+	 * stack outranks the frame). A mid-body throw installs the partial
+	 * snapshot: the deps read before the throw are real dependencies. After
+	 * the frame closes, the snapshot's observation retains re-point (effect
+	 * deps count toward the observation union exactly like watcher closures
+	 * — the observation index's shiftObservedCount).
+	 */
+	function captureRun(id: SubscriptionId, body: () => void): void {
+		const sub = idToSubscription.get(id);
+		if (sub === undefined) throw new ScheduleError(`unknown committed subscription ${id}`);
+		if (core.captureFrame !== undefined) throw new ScheduleError('captureRun frames do not nest — one effect body runs at a time');
+		if (core.evalDepth > 0) throw new ScheduleError('captureRun is illegal inside an open evaluation frame');
+		const frame: CaptureFrame = { sub, deps: [] };
+		setCaptureFrame(frame);
+		try {
+			body();
+		} finally {
+			setCaptureFrame(undefined);
+			sub.deps = frame.deps;
+			sub.lastValue = frame.deps.length === 0 ? undefined : frame.deps[frame.deps.length - 1]!.value;
+			// Observation re-point after the frame closes, so discovery
+			// evaluations run on a clean frame stack (same rule as
+			// syncObservedDeps).
+			syncSubscriptionObservation(sub);
+		}
+	}
+
+	/** A routed read inside an open capture frame (node form: test-configured
+	 * bodies land here; raw kernel atom and computed reads route through the
+	 * routed-read seams instead, which push the same dep-snapshot entries). */
+	function captureRead(node: AnyInternals): Value {
+		const frame = core.captureFrame;
+		if (frame === undefined) throw new ScheduleError('captureRead requires an open captureRun frame');
+		const v = evaluate(node, { kind: 'committed', root: frame.sub.root });
+		frame.deps.push({ node, value: v });
+		return v;
+	}
+
+	/**
+	 * Remove a subscription (unmount / teardown). Cleanup invocation is the
+	 * REGISTRAR's job (the adapter runs the user cleanup; test
+	 * configurations count it here) — guaranteed at unmount, while a make-up
+	 * fire is not. Nothing may run after teardown: the record's liveness bit
+	 * clears with the record (queued refires check it and no-op), the
+	 * observation retains release, and the record frees at the next boundary
+	 * sweep. The handle's cached extras keep the final counters readable —
+	 * a removed subscription's tombstone diagnostics.
+	 */
+	function removeSubscription(id: SubscriptionId): void {
+		const sub = idToSubscription.get(id);
+		if (sub === undefined) throw new ScheduleError(`unknown subscription ${id}`);
+		idToSubscription.delete(id);
+		core.committedSubCount -= 1;
+		sub.cleanups++;
+		const tr = core.trace;
+		if (tr !== undefined) tr.reactEffectCleanup(sub.name, sub.root);
+		// Release the snapshot's observation retains.
+		const held = sub.obsDeps;
+		if (held !== undefined) {
+			sub.obsDeps = undefined;
+			for (const dep of held) shiftObservedCount(dep, -1);
+		}
+		// Record free LAST (flags zero immediately — `live` reads false, so
+		// queued refires no-op; the free itself defers to the boundary sweep).
+		E.disposeObserver(sub.rec);
+	}
+
+	/** Test surface — StrictMode-style replay: cleanup + unconditional
+	 * re-run + recapture. Illegal while the subscription's root has an open
+	 * render frame (React double-invokes effects post-commit, never
+	 * mid-render). */
+	function replayReactEffect(id: SubscriptionId): void {
+		const sub = idToSubscription.get(id);
+		if (sub === undefined) throw new ScheduleError(`unknown react effect ${id}`);
+		if (rootToOpenRender.has(sub.root)) {
+			throw new ScheduleError('replay requires the effect root to have no open render frame');
+		}
+		runCommittedSubscription(sub);
+		flushNotify();
+	}
+
+	/** The inline re-fire (test-configured `body` subscriptions): cleanup +
+	 * body re-run through the real capture frame + records
+	 * (adapter-registered subscriptions instead queue their refire to the
+	 * operation boundary — the adapter owns the body run). */
+	function runCommittedSubscription(sub: Subscription): void {
+		if (sub.refire !== undefined) {
+			queueNotify(3, undefined, undefined, 0, sub);
+			return;
+		}
+		sub.cleanups++;
+		const tr = core.trace;
+		if (tr !== undefined) tr.reactEffectCleanup(sub.name, sub.root);
+		const body = sub.body;
+		if (body !== undefined) captureRun(sub.id, body);
+		sub.runs++;
+		// The dep-values array is the one per-record payload a site allocates,
+		// and only under the guard: the model-comparison suites compare it
+		// entry by entry, so the record must carry the real snapshot.
+		if (tr !== undefined) tr.reactEffectRun(sub.name, sub.root, sub.lastValue, sub.deps.map((d) => d.value));
+	}
+
+	/**
+	 * The boundary re-check: once per boundary OPERATION — per-root commit,
+	 * retirement, settlement, quiet fold — gated over each subscription's
+	 * dep snapshot, at the boundary value (multiple member writes coalesce),
+	 * and never while the subscription's own root has an open render frame
+	 * (the deferred flip flushes at that frame's close — commit or discard).
+	 * A retirement re-checks every root (a write-free retirement still
+	 * flushes pending member-write flips); a plain commit re-checks its own
+	 * root. Runs at the END of the boundary operation, after every
+	 * committed-side mutation of the boundary has landed (the same
+	 * mutate-then-notify ordering every boundary shares).
+	 */
+	function revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void {
+		if (core.committedSubCount === 0) return;
+		for (const sub of [...idToSubscription.values()]) {
+			if (!sub.live) continue;
+			if (rootFilter !== undefined && sub.root !== rootFilter) continue;
+			if (rootToOpenRender.has(sub.root)) continue; // deferred to the frame's close
+			const world: World = { kind: 'committed', root: sub.root };
+			let changed = false;
+			const deps = sub.deps;
+			for (let i = 0; i < deps.length; i++) {
+				const d = deps[i]!;
+				let now: Value;
+				try {
+					now = evaluate(d.node, world);
+				} catch (err) {
+					if (err instanceof SuspendedRead) continue; // still-pending suspension: not a flip (pinned in tests/concurrent-battery.spec.ts)
+					throw err;
+				}
+				if (isValueChanged(d.node, d.value, now)) {
+					changed = true;
+					break;
+				}
+			}
+			if (changed) runCommittedSubscription(sub);
+		}
+	}
+
+	// ---- the operation table (late-bound onto the shared core record) ----
+	core.idToSubscription = idToSubscription;
+	core.mountCommittedObserver = mountCommittedObserver;
+	core.captureRun = captureRun;
+	core.captureRead = captureRead;
+	core.removeSubscription = removeSubscription;
+	core.replayReactEffect = replayReactEffect;
+	core.revalidateCommittedSubscriptions = revalidateCommittedSubscriptions;
 }

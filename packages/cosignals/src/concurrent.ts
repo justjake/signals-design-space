@@ -198,7 +198,7 @@ import { TAPE_CHUNK_ENTRIES, WriteLog, type WriteLogEntry } from './WriteLog.js'
 import { BATCH_NONE, type Batch, type BatchId, type BatchSlot, type BatchSlotMeta, type BatchSlotSet, type BatchManager } from './Batch.js';
 import { NEWEST, type EngineCore, type World } from './World.js';
 import { WorldArena, arenaCheckerLayout, arenaHoldsSuspended, arenaRenumberMarks, getKernelNodeIndex } from './CosignalEngine.js';
-import type { Subscription } from './SubscriptionManager.js';
+import type { Subscription } from './CosignalEngine.js';
 import { Watcher, type RenderPass, type RenderPassManager } from './RenderPass.js';
 
 // ---- error carriers (errors.ts; re-exported — they are public surface) -----------
@@ -229,10 +229,11 @@ export type { Batch, BatchId, BatchSlot, BatchSlotMeta, BatchSlotSet } from './B
 export type RootId = string;
 export type RenderPassId = number;
 export type WatcherId = number;
-/** A committed `run`-action subscription's id: the SubscriptionManager's own
- * mount counter — not a kernel record id of any kind (kernel effect records
- * travel as NodeId). Leniently branded (CosignalEngine.ts IdBrand) so the spaces
- * cannot cross. */
+/** A committed `run`-action subscription's id: the committed-observers
+ * section's monotone mount counter (registration order — the boundary
+ * scan's iteration order, the reference model's map order) — never a kernel
+ * record id (subscription RECORDS recycle; this id never does). Leniently
+ * branded (CosignalEngine.ts IdBrand) so the spaces cannot cross. */
 export type SubscriptionId = number & IdBrand<'subscription'>;
 /** A point on the one global sequence line (log-entry seqs, pins, retirement
  * stamps, write clocks, the committed-advance counter). */
@@ -409,13 +410,13 @@ export type RootState = {
 
 // The committed `run`-action Subscription record and its whole lifecycle
 // (registration, capture frame, removal, replay, boundary revalidation)
-// live in SubscriptionManager.ts; the type is re-exported here — it is
-// engine
+// live in the engine module's committed-observers section
+// (CosignalEngine.ts); the class is re-exported here — it is engine
 // surface. The `World` type — one self-consistent assignment of values to
 // all atoms — and the fold/evaluation/read-routing machinery live in
 // World.ts, beside the one shared engine-core record the strongly-connected
 // mechanism factories are wired through.
-export type { Subscription } from './SubscriptionManager.js';
+export type { Subscription } from './CosignalEngine.js';
 export type { World } from './World.js';
 
 /** The decoded shape of the engine's observable events (same shapes as the
@@ -932,8 +933,8 @@ let slots: BatchSlotMeta[];
 let idToRenderPass: Map<RenderPassId, RenderPass>;
 let roots: Map<RootId, RootState>;
 let watchers: Map<WatcherId, Watcher>;
-/** The committed `run`-action subscription store (alias of
- * SubscriptionManager.ts's, by identity). */
+/** The committed `run`-action subscription store (alias of the engine's
+ * committed-observers table, by identity). */
 let idToSubscription: Map<SubscriptionId, Subscription>;
 // (The trace recorder slot and the direct listeners live on the shared
 // engine core record; the `engine` surface object at the bottom of this
@@ -1121,13 +1122,13 @@ function composeEngine(options?: EngineResetOptions): void {
 	idToBatch = eng.batch.idToBatch;
 	slots = eng.batch.slots;
 	renderOps = eng.render;
-	idToSubscription = eng.subs.idToSubscription;
-	mountCommittedObserver = eng.subs.mountCommittedObserver;
-	captureRun = eng.subs.captureRun;
-	captureRead = eng.subs.captureRead;
-	removeSubscription = eng.subs.removeSubscription;
-	replayReactEffect = eng.subs.replayReactEffect;
-	revalidateCommittedSubscriptions = eng.subs.revalidateCommittedSubscriptions;
+	idToSubscription = core.idToSubscription;
+	mountCommittedObserver = core.mountCommittedObserver;
+	captureRun = core.captureRun;
+	captureRead = core.captureRead;
+	removeSubscription = core.removeSubscription;
+	replayReactEffect = core.replayReactEffect;
+	revalidateCommittedSubscriptions = core.revalidateCommittedSubscriptions;
 	kernelTrackedReader = eng.kernelTrackedReader;
 	evaluate = core.evaluate;
 	foldAtomOp = core.foldAtom;

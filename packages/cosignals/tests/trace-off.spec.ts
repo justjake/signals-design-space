@@ -44,10 +44,10 @@ const ENGINE_MODULES = [
 	'src/Batch.ts',
 	'src/World.ts',
 	'src/settlement.ts',
-	'src/SubscriptionManager.ts',
 	'src/RenderPass.ts',
 	// The fused engine module (the flattening): carries the former Kernel.ts,
-	// suspense.ts, and lifecycle.ts — the same zero-cost scans cover it.
+	// suspense.ts, lifecycle.ts, and SubscriptionManager.ts (the
+	// committed-observers section) — the same zero-cost scans cover it.
 	'src/CosignalEngine.ts',
 ];
 

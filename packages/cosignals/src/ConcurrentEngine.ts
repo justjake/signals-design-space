@@ -20,8 +20,9 @@
  *      its close sweeps the batch manager's record registry);
  *   6. deliver's walk orchestration, then the render-pass manager (each
  *      assigns its late-bound slots);
- *   7. the subscription manager (its boundary revalidation joins the core
- *      table).
+ *   7. the committed observers (the engine module's observer section — its
+ *      whole operation table, the subscription store included, joins the
+ *      core record).
  *
  * The quiet derivation lives here: quiet ⇔ zero live batches and zero open
  * renders and no episode write records held — recomputed only at pipeline
@@ -41,9 +42,8 @@ import { createObservationIndex, type ObservationIndex } from './ObservationInde
 import { createEpisodeLifecycle, type EpisodeLifecycle, type WriteLogEntry } from './WriteLog.js';
 import { createBatchManager, type BatchId, type BatchManager } from './Batch.js';
 import { createEngineCore, createWorld, type EngineCore } from './World.js';
-import { createWorldArena } from './CosignalEngine.js';
+import { createCommittedObservers, createWorldArena } from './CosignalEngine.js';
 import { createSettlement } from './settlement.js';
-import { createSubscriptionManager, type SubscriptionManager } from './SubscriptionManager.js';
 import { createRenderPassManager, type RenderPass, type RenderPassManager, type Watcher } from './RenderPass.js';
 import type { Atom, Computed } from './index.js';
 import type { AnyInternals, AtomInternals, ComputedInternals, EngineResetOptions, Reader, RenderPassId, RootId, RootState, Seq, Value, WatcherId } from './concurrent.js';
@@ -129,7 +129,6 @@ export type ConcurrentEngine = {
 	episode: EpisodeLifecycle;
 	batch: BatchManager;
 	render: RenderPassManager;
-	subs: SubscriptionManager;
 	/** The quiet derivation (composition-owned; see the module header). */
 	recomputeQuiet(): void;
 	/** Kernel-frame tracked reader (engine-created computeds' newest runs):
@@ -237,12 +236,13 @@ export function createConcurrentEngine(host: ConcurrentEngineHost, options?: Eng
 		if (oc !== undefined) oc.push(dep);
 		return host.readKernelValue(dep);
 	};
-	// ---- the subscription manager (its boundary revalidation joins the
-	// core table — the orchestration and the settlement drain reach it as
-	// table calls). The manager takes its core and observation slices whole:
-	// its factory binds the stable operations once and reads the mutable
-	// core fields (trace, captureFrame, guards, the live count) in place.
-	const subs = createSubscriptionManager({ core, observation: obs });
-	core.revalidateCommittedSubscriptions = subs.revalidateCommittedSubscriptions;
-	return { core, notify, obs, episode, batch: batchOps, render, subs, recomputeQuiet, kernelTrackedReader };
+	// ---- the committed observers (the engine module's observer section —
+	// no manager object: the factory assigns its whole operation table, the
+	// subscription store included, onto the core record; the orchestration
+	// and the settlement drain reach the boundary revalidation as table
+	// calls). The factory binds the stable operations once and reads the
+	// mutable core fields (trace, captureFrame, guards, the live count) in
+	// place.
+	createCommittedObservers(core, obs);
+	return { core, notify, obs, episode, batch: batchOps, render, recomputeQuiet, kernelTrackedReader };
 }

@@ -39,9 +39,9 @@ import { ScheduleError } from './errors.js';
 import { probes, type ConcurrentEngineHost } from './ConcurrentEngine.js';
 import { FOLD_TRUTH, type WorldArena } from './CosignalEngine.js';
 import type { Batch, BatchManager, BatchSlot, BatchSlotMeta, BatchSlotSet } from './Batch.js';
-import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
+import type { AnyInternals, ArenaInitInts, AtomInternals, ComputedInternals, NodeId, NodeIndex, Reader, RenderPass, RenderPassId, RootId, RootState, Seq, SubscriptionId, TraceHooks, Value, Watcher, WatcherId, WriteKind } from './concurrent.js';
 import type { ObservationIndex } from './ObservationIndex.js';
-import type { CaptureFrame, SubscriptionManager } from './SubscriptionManager.js';
+import type { CaptureFrame, Subscription } from './CosignalEngine.js';
 import type { EpisodeLifecycle } from './WriteLog.js';
 import type { NotificationQueue, NotifyState } from './NotificationQueue.js';
 
@@ -160,9 +160,9 @@ export type EngineCore = {
 	evalDepth: number;
 	/** True inside an updater/reducer/equals callback (reads+writes throw). (World) */
 	inFoldCallback: boolean;
-	/** The core capture frame `captureRun` opens (subscription-manager state;
-	 * the routing resolution consults it per routed read — see
-	 * SubscriptionManager.ts). */
+	/** The core capture frame `captureRun` opens (committed-observer state;
+	 * the routing resolution consults it per routed read — see the engine's
+	 * committed-observers section). */
 	captureFrame: CaptureFrame | undefined;
 	/** >0 while a hook-initiated evaluation may legally suspend the render
 	 * (the bindings' `evaluateSuspending` bumps it via the class accessor);
@@ -269,8 +269,17 @@ export type EngineCore = {
 	setSettleCap(n: number): void;
 	getPendingSettleCount(): number;
 
-	// ---- late-bound: the subscription manager ----
-	revalidateCommittedSubscriptions: SubscriptionManager['revalidateCommittedSubscriptions'];
+	// ---- late-bound: committed observers (the engine's observer section) ----
+	/** The committed `run`-action subscription store (factory-owned; the
+	 * engine surface and the resident readers — quiesce sweep, tests — alias
+	 * it by identity). */
+	idToSubscription: Map<SubscriptionId, Subscription>;
+	mountCommittedObserver(rootId: RootId, name: string, refire?: () => void): Subscription;
+	captureRun(id: SubscriptionId, body: () => void): void;
+	captureRead(node: AnyInternals): Value;
+	removeSubscription(id: SubscriptionId): void;
+	replayReactEffect(id: SubscriptionId): void;
+	revalidateCommittedSubscriptions(rootFilter: RootId | undefined): void;
 
 	// ---- late-bound: deliver (the walk orchestration) ----
 	/** The one urgent pre-paint watcher correction (NotificationQueue.ts). */
@@ -393,7 +402,13 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 		endOperation: LATE,
 		setSettleCap: LATE,
 		getPendingSettleCount: LATE,
-		// late-bound: the subscription manager
+		// late-bound: committed observers
+		idToSubscription: LATE,
+		mountCommittedObserver: LATE,
+		captureRun: LATE,
+		captureRead: LATE,
+		removeSubscription: LATE,
+		replayReactEffect: LATE,
 		revalidateCommittedSubscriptions: LATE,
 		// late-bound: deliver
 		correctWatcher: LATE,

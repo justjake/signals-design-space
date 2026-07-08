@@ -57,9 +57,7 @@ export const FIELDS_BY_RECORD: Record<string, readonly FieldInfo[]> = {
 		{ name: "FREE_NEXT", slot: 1, kind: "NodeId", doc: "Allocator-owned: the node free list threads here while the record is freed (0 while live)." },
 		{ name: "DEP_HEAD", slot: 2, kind: "ArenaLinkId", doc: "First dependency link of the current snapshot — a link record in the root's committed WORLD arena (cross-arena reference: the subscription record lives in the kernel arena, its dep chain in the world arena; 0 = empty snapshot)." },
 		{ name: "DEP_TAIL", slot: 3, kind: "ArenaLinkId", doc: "Last dependency link of the current snapshot (append cursor; 0 = empty)." },
-		{ name: "RUNS", slot: 4, kind: "u31", doc: "Run counter (the model-comparison suites read it; bumped per re-fire)." },
 		{ name: "GEN", slot: 5, kind: "u31", doc: "Allocator-owned tenancy generation (shared meaning with NodeField.GEN)." },
-		{ name: "CLEANUPS", slot: 6, kind: "u31", doc: "Cleanup counter (bumped before every re-fire and at removal; the model-comparison suites read it)." },
 		{ name: "NODE_INDEX", slot: 7, kind: "ordinal", doc: "Allocator-owned dense per-record ordinal (shared meaning with NodeField.NODE_INDEX); subscription records consume ordinals but no dense column stores rows for them." },
 	],
 	arenaShadow: [
