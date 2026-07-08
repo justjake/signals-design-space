@@ -100,6 +100,16 @@ test("a deferred reducer replays over an urgent write", () => {
   expect(value.get()).toBe(4);
 });
 
+test("latest derives the newest world without changing canonical cache", () => {
+  const source = atom(1);
+  const derived = computed(() => source.get() * 10);
+  expect(derived.get()).toBe(10);
+  withWriteBatch(8, () => source.set(2));
+  expect(derived.get()).toBe(10);
+  expect(latest(derived)).toBe(20);
+  retireBatch(8, false);
+});
+
 test("discard removes a draft without touching canonical state", () => {
   const value = atom(1);
   withWriteBatch(16, () => value.set(9));

@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   atom,
+  batchCause,
   committed,
   computed,
   effect,
@@ -89,6 +90,13 @@ function onProtocolEvent(event: ProtocolEvent): void {
   traceEvent("root commit", undefined, event.lanes);
   const pass = passes.get(event.container);
   if (pass !== undefined) {
+    for (const [cell] of pass.values) {
+      for (const batchId of liveBatchIds()) {
+        if (((event.lanes ?? 0) & batchId) !== 0) {
+          traceEvent("component delivery", batchCause(batchId), batchId, cell);
+        }
+      }
+    }
     recordCommitted(event.container, pass.values);
     passes.delete(event.container);
   }
@@ -210,7 +218,6 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
 }
 
 export function useIsPending<T>(cell: Cell<T>): boolean {
-  useValue(cell);
   const [, render] = React.useReducer((value: number) => value + 1, 0);
   React.useLayoutEffect(() => {
     let active = true;
@@ -219,9 +226,11 @@ export function useIsPending<T>(cell: Cell<T>): boolean {
         if (active) render();
       });
     });
+    const stopObservation = observeCell(cell);
     return () => {
       active = false;
       stop();
+      stopObservation();
     };
   }, [cell]);
   const context = requireProtocol().getRenderContext();

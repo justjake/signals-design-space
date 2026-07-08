@@ -15,7 +15,9 @@ import {
 } from "signals-royale-sx2";
 import {
   register,
+  reduce,
   startTransitionWrite,
+  useComputed,
   useIsPending,
   useValue,
   write,
@@ -164,6 +166,29 @@ test("a transition pruned by unmount rolls its draft back", async () => {
   roots.length = 0;
   expect(value.get()).toBe(0);
   expect(liveBatchIds()).toEqual([]);
+});
+
+test("branch state shows urgent 2 before the transition lands 6", async () => {
+  const branch = atom(1);
+  const count = atom(1);
+  const gate = deferred<void>();
+  function App() {
+    const branchValue = useValue(branch);
+    const product = useComputed(() => branch.get() * count.get(), []);
+    if (branchValue === 3 && !gate.settled) throw gate.promise;
+    return <span>{product}</span>;
+  }
+  const { container } = await mount(
+    <React.Suspense fallback={null}>
+      <App />
+    </React.Suspense>,
+  );
+  await act(async () => startTransitionWrite(() => write(branch, 3)));
+  await act(async () => reduce(count, (value) => value * 2));
+  expect(container.textContent).toBe("2");
+  gate.settled = true;
+  await act(async () => gate.resolve());
+  expect(container.textContent).toBe("6");
 });
 
 test("write during render fails loudly", async () => {

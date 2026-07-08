@@ -1,0 +1,290 @@
+From 0c550b378baff2cbe271a6d239eddfae8abad3d8 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:22:44 -0400
+Subject: [PATCH 1/4] Add minimal external signals protocol
+
+---
+ .../src/ReactFiberRootScheduler.js            | 10 ++
+ .../src/ReactFiberWorkLoop.js                 | 97 +++++++++++++++++++
+ .../__tests__/ReactExternalSignals-test.js    | 70 +++++++++++++
+ .../react/src/ReactSharedInternalsClient.js   |  2 +
+ 4 files changed, 179 insertions(+)
+ create mode 100644 packages/react-reconciler/src/__tests__/ReactExternalSignals-test.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberRootScheduler.js b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+index cc97e21d54..f47aeda09b 100644
+--- a/packages/react-reconciler/src/ReactFiberRootScheduler.js
++++ b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+@@ -112,6 +112,13 @@ let mightHavePendingSyncWork: boolean = false;
+ let isFlushingWork: boolean = false;
+ 
+ let currentEventTransitionLane: Lane = NoLane;
++let externalSignalLane: Lane = NoLane;
++
++export function setExternalSignalLane(lane: Lane): Lane {
++  const previous = externalSignalLane;
++  externalSignalLane = lane;
++  return previous;
++}
+ 
+ export function ensureRootIsScheduled(root: FiberRoot): void {
+   // This function is called whenever a root receives an update. It does two
+@@ -701,6 +708,9 @@ export function requestTransitionLane(
+   // TODO: Make this non-nullable. Requires a tweak to useOptimistic.
+   transition: Transition | null,
+ ): Lane {
++  if (externalSignalLane !== NoLane) {
++    return externalSignalLane;
++  }
+   // The algorithm for assigning an update to a lane should be stable for all
+   // updates at the same priority within the same event. To do this, the
+   // inputs to the algorithm must be the same.
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..cd9c081279 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -404,6 +404,7 @@ import {
+   flushSyncWorkOnAllRoots,
+   flushSyncWorkOnLegacyRootsOnly,
+   requestTransitionLane,
++  setExternalSignalLane,
+ } from './ReactFiberRootScheduler';
+ import {getMaskedContext, getUnmaskedContext} from './ReactFiberLegacyContext';
+ import {logUncaughtError} from './ReactFiberErrorLogger';
+@@ -528,6 +529,56 @@ const FALLBACK_THROTTLE_MS: number = 300;
+ // The absolute time for when we should start giving up on rendering
+ // more and prefer CPU suspense heuristics instead.
+ let workInProgressRootRenderTargetTime: number = Infinity;
++
++type ExternalSignalEvent = {
++  type: 'pass' | 'commit' | 'mutation',
++  phase?: 'start' | 'stop' | 'commit' | 'discard',
++  container: mixed,
++  lanes?: Lanes,
++  pending?: Lanes,
++};
++
++const externalSignalListeners: Set<(ExternalSignalEvent) => void> = new Set();
++const externalSignalPasses: WeakMap<FiberRoot, Lanes> = new WeakMap();
++
++function emitExternalSignalEvent(event: ExternalSignalEvent): void {
++  externalSignalListeners.forEach(listener => listener(event));
++}
++
++ReactSharedInternals.L = {
++  version: 1,
++  subscribe(listener: ExternalSignalEvent => void): () => void {
++    externalSignalListeners.add(listener);
++    return () => externalSignalListeners.delete(listener);
++  },
++  getWriteLane(): Lane {
++    if ((executionContext & RenderContext) !== NoContext) {
++      throw new Error('External signals cannot be written during render.');
++    }
++    const transition = requestCurrentTransition();
++    return transition === null ? NoLane : requestTransitionLane(transition);
++  },
++  getRenderContext(): null | {container: mixed, lanes: Lanes} {
++    return (executionContext & RenderContext) !== NoContext &&
++      workInProgressRoot !== null
++      ? {
++          container: workInProgressRoot.containerInfo,
++          lanes: entangledRenderLanes,
++        }
++      : null;
++  },
++  runInLane<R>(lane: Lane, fn: () => R): R {
++    const previousLane = setExternalSignalLane(lane);
++    const previousTransition = ReactSharedInternals.T;
++    ReactSharedInternals.T = {_updatedFibers: new Set()} as any;
++    try {
++      return fn();
++    } finally {
++      ReactSharedInternals.T = previousTransition;
++      setExternalSignalLane(previousLane);
++    }
++  },
++};
+ // How long a render is supposed to take before we start following CPU
+ // suspense heuristics and opt out of rendering more content.
+ const RENDER_TIMEOUT_MS = 500;
+@@ -2269,6 +2320,26 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
+ 
+   finishQueueingConcurrentUpdates();
+ 
++  const previousSignalPass = externalSignalPasses.get(root);
++  if (previousSignalPass !== undefined) {
++    emitExternalSignalEvent({
++      type: 'pass',
++      phase: 'discard',
++      container: root.containerInfo,
++      lanes: previousSignalPass,
++    });
++    externalSignalPasses.delete(root);
++  }
++  if (lanes !== NoLanes) {
++    externalSignalPasses.set(root, entangledRenderLanes);
++    emitExternalSignalEvent({
++      type: 'pass',
++      phase: 'start',
++      container: root.containerInfo,
++      lanes: entangledRenderLanes,
++    });
++  }
++
+   if (__DEV__) {
+     resetOwnerStackLimit();
+ 
+@@ -3742,6 +3813,8 @@ function commitRoot(
+     remainingLanes &= ~GestureLane;
+   }
+ 
++  const externalSignalCommittedLanes = getEntangledLanes(root, lanes);
++
+   markRootFinished(
+     root,
+     lanes,
+@@ -3751,6 +3824,20 @@ function commitRoot(
+     suspendedRetryLanes,
+   );
+ 
++  externalSignalPasses.delete(root);
++  emitExternalSignalEvent({
++    type: 'pass',
++    phase: 'commit',
++    container: root.containerInfo,
++    lanes: externalSignalCommittedLanes,
++  });
++  emitExternalSignalEvent({
++    type: 'commit',
++    container: root.containerInfo,
++    lanes: externalSignalCommittedLanes,
++    pending: root.pendingLanes,
++  });
++
+   // Reset this before firing side effects so we can detect recursive updates.
+   didIncludeCommitPhaseUpdate = false;
+ 
+@@ -4012,6 +4099,11 @@ function flushMutationEffects(): void {
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
++    emitExternalSignalEvent({
++      type: 'mutation',
++      phase: 'start',
++      container: root.containerInfo,
++    });
+     try {
+       // The next phase is the mutation phase, where we mutate the host tree.
+       commitMutationEffects(root, finishedWork, lanes);
+@@ -4023,6 +4115,11 @@ function flushMutationEffects(): void {
+       }
+       resetAfterCommit(root.containerInfo);
+     } finally {
++      emitExternalSignalEvent({
++        type: 'mutation',
++        phase: 'stop',
++        container: root.containerInfo,
++      });
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+diff --git a/packages/react-reconciler/src/__tests__/ReactExternalSignals-test.js b/packages/react-reconciler/src/__tests__/ReactExternalSignals-test.js
+new file mode 100644
+index 0000000000..36f50266bc
+--- /dev/null
++++ b/packages/react-reconciler/src/__tests__/ReactExternalSignals-test.js
+@@ -0,0 +1,70 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @emails react-core
++ * @jest-environment node
++ */
++
++'use strict';
++
++let React;
++let ReactNoop;
++let act;
++let protocol;
++
++describe('external signals protocol', () => {
++  beforeEach(() => {
++    jest.resetModules();
++    React = require('react');
++    ReactNoop = require('react-noop-renderer');
++    act = require('internal-test-utils').act;
++    protocol =
++      React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE.L;
++  });
++
++  it('classifies a transition and pins corrective updates to its lane', () => {
++    expect(protocol.version).toBe(1);
++    expect(protocol.getWriteLane()).toBe(0);
++    let lane;
++    React.startTransition(() => {
++      lane = protocol.getWriteLane();
++      expect(protocol.getWriteLane()).toBe(lane);
++    });
++    expect(lane).not.toBe(0);
++    protocol.runInLane(lane, () => {
++      expect(protocol.getWriteLane()).toBe(lane);
++    });
++  });
++
++  it('reports the render world and its commit disposition', async () => {
++    const events = [];
++    const stop = protocol.subscribe(event => events.push(event));
++    const root = ReactNoop.createRoot();
++    let context;
++    function App() {
++      context = protocol.getRenderContext();
++      return 'ok';
++    }
++    await act(() => root.render(<App />));
++    expect(context).not.toBe(null);
++    expect(context.lanes).not.toBe(0);
++    expect(events.map(event => `${event.type}:${event.phase || ''}`)).toEqual(
++      expect.arrayContaining(['pass:start', 'pass:commit', 'commit:']),
++    );
++    stop();
++  });
++
++  it('brackets the host mutation phase', async () => {
++    const phases = [];
++    const stop = protocol.subscribe(event => {
++      if (event.type === 'mutation') phases.push(event.phase);
++    });
++    const root = ReactNoop.createRoot();
++    await act(() => root.render(<span>A</span>));
++    expect(phases).toEqual(['start', 'stop']);
++    stop();
++  });
++});
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 1599e57a6f..7a86c55cd1 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -27,6 +27,7 @@ export type SharedStateClient = {
+   T: null | Transition, // ReactCurrentBatchConfig for Transitions
+   S: null | onStartTransitionFinish,
+   G: null | onStartGestureTransitionFinish,
++  L: any, // Optional external signal protocol installed by a renderer.
+ 
+   // DEV-only
+ 
+@@ -62,6 +63,7 @@ const ReactSharedInternals: SharedStateClient = {
+   A: null,
+   T: null,
+   S: null,
++  L: null,
+ } as any;
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+-- 
+2.50.1 (Apple Git-155)
+

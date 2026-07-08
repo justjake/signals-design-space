@@ -118,7 +118,7 @@ function run(seed: number): void {
   for (const batchId of liveBatchIds()) retireBatch(batchId, false);
 }
 
-test("randomized replay oracle", () => {
+test("randomized replay oracle (300 seeds x 90 steps by default)", () => {
   const seeds = Number(process.env.ORACLE_SEEDS ?? 300);
   for (let seed = 1; seed <= seeds; seed++) run(seed);
 });

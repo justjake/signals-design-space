@@ -30,6 +30,7 @@ type LiveBatch = {
   atoms: Set<Atom<unknown>>;
   computeds: Set<Computed<unknown>>;
   openCause?: number;
+  lastCause?: number;
 };
 type ThenableRecord = {
   thenable: PromiseLike<unknown>;
@@ -331,7 +332,8 @@ export class Atom<T> implements Source {
   }
 
   set(value: T): void {
-    if (initializerDepth !== 0) throw new Error("Signals cannot be written by a lazy initializer");
+    if (initializerDepth !== 0)
+      throw new Error("Signals cannot be written by a lazy initializer");
     this.ensure();
     if (writeBatch !== 0) {
       this.writeDraft(() => value);
@@ -433,11 +435,12 @@ export class Atom<T> implements Source {
       operations = [];
       this.drafts.set(writeBatch, operations);
     }
-    const cause = emitTrace("write", undefined, writeBatch);
+    const live = liveBatches.get(writeBatch);
+    const cause = emitTrace("write", live?.openCause, writeBatch);
     operations.push({ apply, cause });
     if (!wasPending) this.notifyPending();
-    const live = liveBatches.get(writeBatch);
     live?.atoms.add(this as Atom<unknown>);
+    if (live !== undefined) live.lastCause = cause;
     this.notifyViews(writeBatch, cause);
     notifyViews(writeBatch, cause);
   }
@@ -616,11 +619,12 @@ export class Computed<T> extends Observer implements Source {
   refresh(): void {
     if (writeBatch !== 0) {
       this.refreshBatches.add(writeBatch);
-      liveBatches
-        .get(writeBatch)
-        ?.computeds.add(this as unknown as Computed<unknown>);
+      const live = liveBatches.get(writeBatch);
+      live?.computeds.add(this as unknown as Computed<unknown>);
+      const cause = emitTrace("refresh", live?.openCause, writeBatch);
+      if (live !== undefined) live.lastCause = cause;
       this.notifyPending();
-      notifyViews(writeBatch);
+      notifyViews(writeBatch, cause);
       return;
     }
     this.dirty = true;
@@ -688,6 +692,21 @@ export class Computed<T> extends Observer implements Source {
       }
     }
     return false;
+  }
+
+  latest(lanes: number): T {
+    try {
+      return this.getWorld(lanes);
+    } catch (error) {
+      if (
+        error !== null &&
+        (typeof error === "object" || typeof error === "function") &&
+        "then" in error
+      ) {
+        return this.hasValue ? this.value : (undefined as T);
+      }
+      throw error;
+    }
   }
 
   subscribePending(subscriber: () => void): () => void {
@@ -928,7 +947,12 @@ export function read<T>(cell: Atom<T> | Computed<T>): T {
 
 export function latest<T>(cell: Atom<T> | Computed<T>): T {
   if (activeWorld !== undefined) return cell.get();
-  return cell instanceof Atom ? cell.latest() : cell.get();
+  if (cell instanceof Atom) return cell.latest();
+  let lanes = 0;
+  for (const [batchId] of liveBatches) lanes |= batchId;
+  return lanes === 0
+    ? cell.get()
+    : withWorld({ lanes, deferred: true }, () => cell.latest(lanes));
 }
 
 export function set<T>(cell: Atom<T>, value: T): void {
@@ -1009,6 +1033,10 @@ export function liveBatchIds(cell?: {
     if (cell === undefined || cell.hasDraft(batchId)) ids.push(batchId);
   }
   return ids;
+}
+
+export function batchCause(batchId: BatchId): number | undefined {
+  return liveBatches.get(batchId)?.lastCause;
 }
 
 export function retireBatch(batchId: BatchId, commit: boolean): void {

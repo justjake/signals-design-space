@@ -3,7 +3,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { atom, latest } from "signals-royale-sx2";
+import { atom, latest, trace } from "signals-royale-sx2";
 import {
   onDomMutation,
   reduce,
@@ -71,6 +71,7 @@ test("a suspended transition stays hidden and rebases over urgent state", async 
   const value = atom(1);
   const blocker = atom(0);
   const gate = deferred<void>();
+  const tracer = trace();
   function App() {
     const current = useValue(value);
     const blocked = useValue(blocker);
@@ -97,9 +98,14 @@ test("a suspended transition stays hidden and rebases over urgent state", async 
   expect(latest(value)).toBe(2);
   await act(async () => reduce(value, (previous) => previous + 1));
   expect(view.textContent).toBe("2:true");
+  expect(tracer.whyLastDelivery(value)[1]).toBe("write [batch 0]");
   gate.settled = true;
   await act(async () => gate.resolve());
   expect(view.textContent).toBe("4:false");
+  expect(tracer.whyLastDelivery(value).join(" -> ")).toMatch(
+    /component delivery \[batch \d+\] -> write \[batch \d+\] -> batch open/,
+  );
+  tracer.stop();
 });
 
 test("flushSync excludes a live transition draft", async () => {
