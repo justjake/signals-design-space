@@ -333,3 +333,71 @@ describe('two-tier graph: tracking and waves', () => {
     expect(subEdgeCount(base)).toBe(0);
   });
 });
+
+describe('two-tier graph: leaf delivery re-entrancy', () => {
+  // A leaf's onNotify may write, and that write flushes re-entrantly (the
+  // effect stage is guarded by the flushing flag; delivery is not). These
+  // tests pin the wave-snapshot contract: a wave's iteration never sees
+  // leaves marked during its own delivery — they are delivered by the nested
+  // wave the marking write triggers, exactly once.
+
+  test('Q1 [guard: passes pre- and post-storage-change] a leaf marked during delivery is delivered by the nested wave, not the current iteration', () => {
+    const x = makeCell(0);
+    const y = makeCell(0);
+    const events: string[] = [];
+    const stopL1 = observeNode(x, () => {
+      events.push('L1:begin');
+      writeCell(y, readCell(y) + 1); // marks L2; flushes re-entrantly
+      events.push('L1:end');
+    });
+    const stopL2 = observeNode(y, () => events.push('L2'));
+    const stopL3 = observeNode(x, () => events.push('L3'));
+    writeCell(x, 1);
+    // L2 rides the nested wave inside L1's callback; the outer wave's
+    // iteration stays exactly its snapshot [L1, L3]. Each delivered once.
+    expect(events).toEqual(['L1:begin', 'L2', 'L1:end', 'L3']);
+    stopL1();
+    stopL2();
+    stopL3();
+  });
+
+  test('Q2 [guard: passes pre- and post-storage-change] doubly-nested delivery keeps every undelivered snapshot entry intact', () => {
+    // Three waves deep: the outer wave still holds an undelivered leaf (L5)
+    // while two nested waves mark and deliver. A buffer-reuse scheme that
+    // handed the outer wave's storage to a nested wave would overwrite L5's
+    // slot with L4b and lose the notification; the sequence pins against it.
+    const x = makeCell(0);
+    const y = makeCell(0);
+    const z = makeCell(0);
+    const events: string[] = [];
+    const stops: Array<() => void> = [];
+    stops.push(
+      observeNode(x, () => {
+        events.push('L1:begin');
+        writeCell(y, readCell(y) + 1); // marks L2
+        events.push('L1:end');
+      }),
+    );
+    stops.push(
+      observeNode(y, () => {
+        events.push('L2:begin');
+        writeCell(z, readCell(z) + 1); // marks L4a, L4b two waves deep
+        events.push('L2:end');
+      }),
+    );
+    stops.push(observeNode(z, () => events.push('L4a')));
+    stops.push(observeNode(z, () => events.push('L4b')));
+    stops.push(observeNode(x, () => events.push('L5')));
+    writeCell(x, 1);
+    expect(events).toEqual([
+      'L1:begin',
+      'L2:begin',
+      'L4a',
+      'L4b',
+      'L2:end',
+      'L1:end',
+      'L5',
+    ]);
+    for (const stop of stops) stop();
+  });
+});

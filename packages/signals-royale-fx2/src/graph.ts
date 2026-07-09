@@ -543,9 +543,28 @@ function assertDepsFromEval(sub: ReactiveNode, myStamp: EvalStamp): void {
 // Invalidation (push through watched edges)
 // ---------------------------------------------------------------------------
 
-const watcherQueue: WatcherNode[] = [];
-/** Leaf observers marked by the current wave; notified after effects settle. */
-const markedLeaves: ReactiveNode[] = [];
+/** Effect watchers scheduled by the current wave. Cleared by logical length
+ * (watcherCount), never `.length = 0`: V8 right-trims the backing store on a
+ * length reset, so a truncated queue re-grows its capacity from zero on
+ * every wave (O(log n) reallocations plus copies, garbage proportional to
+ * peak wave width). The price of retained capacity is that consumed slots
+ * are nulled at drain — a soft-cleared slot must not pin a disposed watcher.
+ * Append-then-fully-drain with the w.disposed drain-time check as the
+ * tombstone; there is no mid-queue removal, so no compaction machinery. */
+const watcherQueue: Array<WatcherNode | undefined> = [];
+let watcherCount = 0;
+
+/** Leaf observers marked by the current wave; notified after effects settle.
+ * Double-buffered under the same retained-capacity discipline: a draining
+ * wave iterates its own buffer while re-marks from onNotify land in the
+ * spare, so a wave's iteration never sees entries added during delivery. */
+let markedLeaves: Array<ReactiveNode | undefined> = [];
+let markedCount = 0;
+/** The off-duty leaf buffer; null while checked out by a draining frame.
+ * Delivery can nest (onNotify may write, and that flush drains the buffer
+ * this frame's re-marks are landing in), so a doubly-nested frame finds the
+ * spare checked out and must not reuse a buffer that is mid-iteration. */
+let spareLeaves: Array<ReactiveNode | undefined> | null = [];
 
 /** While true, canonical changes do not advance reactEpoch (a silent draft
  * fold: render-pass worlds already delivered these values). */
@@ -649,9 +668,9 @@ function scheduleWatcher(w: WatcherNode): void {
   if (w.scheduled || w.disposed) return;
   w.scheduled = true;
   if (w.onNotify !== undefined) {
-    markedLeaves.push(w);
+    markedLeaves[markedCount++] = w;
   } else {
-    watcherQueue.push(w);
+    watcherQueue[watcherCount++] = w;
   }
 }
 
@@ -794,40 +813,61 @@ const enum Limit {
  * (cleared), not left armed for unrelated writes to trigger later. */
 export function flush(): void {
   if (flushing) return;
-  if (watcherQueue.length === 0 && markedLeaves.length === 0) return;
+  if (watcherCount === 0 && markedCount === 0) return;
   flushing = true;
   try {
     let guard = 0;
-    while (queueHead < watcherQueue.length) {
+    while (queueHead < watcherCount) {
       if (++guard > Limit.FlushRuns) throw new Error('effect flush did not settle (cycle?)');
-      const w = watcherQueue[queueHead++];
+      const i = queueHead++;
+      const w = watcherQueue[i]!;
+      watcherQueue[i] = undefined; // consumed slot must not pin the watcher
       w.scheduled = false;
       if (w.disposed || (w.flags & Flag.StaleMask) === 0) continue;
       runWatcher(w);
     }
-    watcherQueue.length = 0;
+    watcherCount = 0;
     queueHead = 0;
   } catch (e) {
-    for (let i = queueHead; i < watcherQueue.length; i++) {
-      const w = watcherQueue[i];
+    // Preempted effects are skipped, not left armed for unrelated writes to
+    // trigger later; their unconsumed slots get the same nulling discipline.
+    for (let i = queueHead; i < watcherCount; i++) {
+      const w = watcherQueue[i]!;
+      watcherQueue[i] = undefined;
       w.scheduled = false;
       w.flags &= ~Flag.StaleMask;
     }
-    watcherQueue.length = 0;
+    watcherCount = 0;
     queueHead = 0;
     throw e;
   } finally {
     flushing = false;
-    if (markedLeaves.length > 0) {
-      const leaves = markedLeaves.splice(0, markedLeaves.length);
-      for (const leaf of leaves) {
-        const w = leaf as WatcherNode;
+    if (markedCount > 0) {
+      // Take this wave's buffer and swap the spare in as the push target:
+      // leaves marked during delivery land there for the NEXT wave, so this
+      // iteration never sees them. A doubly-nested delivery finds the spare
+      // checked out (null) and takes a fresh array — that rare frame pays
+      // the old per-wave allocation rather than clobbering a live iteration.
+      const leaves = markedLeaves;
+      const n = markedCount;
+      markedLeaves = spareLeaves ?? [];
+      spareLeaves = null;
+      markedCount = 0;
+      for (let i = 0; i < n; i++) {
+        const w = leaves[i] as WatcherNode;
         w.scheduled = false;
         w.flags &= ~Flag.StaleMask;
       }
-      for (const leaf of leaves) {
-        const w = leaf as WatcherNode;
-        if (!w.disposed) w.onNotify?.();
+      try {
+        for (let i = 0; i < n; i++) {
+          const w = leaves[i] as WatcherNode;
+          if (!w.disposed) w.onNotify?.();
+        }
+      } finally {
+        // Null consumed slots — retained capacity must not pin watchers —
+        // and hand the buffer back as the spare, also on a throwing notify.
+        for (let i = 0; i < n; i++) leaves[i] = undefined;
+        spareLeaves = leaves;
       }
     }
   }
