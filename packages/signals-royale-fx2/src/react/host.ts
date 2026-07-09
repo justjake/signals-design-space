@@ -121,8 +121,8 @@ function renderWriteGuard(): void {
  *   covers same-stack handoffs between React work-loop tasks (a suspended
  *   pass followed by another root's pass in one flush);
  * - consumption requires a live hooks dispatcher (render bodies only).
- * When no valid note exists during a render, reads fall back to CANONICAL —
- * wrong-toward-canonical is the safe direction; stale worlds and draft
+ * When no valid note exists during a render, reads fall back to BASE —
+ * wrong-toward-base is the safe direction; stale worlds and draft
  * leaks into urgent passes are never acceptable. */
 interface RenderWorldNote {
   scope: ProviderRecord | null;
@@ -153,7 +153,7 @@ function armNoteExpiry(mine: RenderWorldNote): void {
 
 /** The scope's own render: authoritative for its pass, always overwrites.
  * An empty world clears instead of installing — a null note already means
- * CANONICAL to every consumer, and steady-state renders stay allocation-free. */
+ * BASE to every consumer, and steady-state renders stay allocation-free. */
 export function noteRenderWorld(scope: ProviderRecord, ids: readonly DraftId[]): void {
   captureRenderDispatcher();
   if (ids.length === 0) {
@@ -185,9 +185,9 @@ export function renderPassIds(scope: ProviderRecord | null): readonly DraftId[] 
   return note !== null && note.scope === scope ? note.ids : null;
 }
 
-function renderWorldProvider(): readonly DraftId[] | 'canonical' | null {
+function renderWorldProvider(): readonly DraftId[] | 'base' | null {
   if (!isRendering()) return null; // ambient: newest intent
-  return note === null ? 'canonical' : note.ids;
+  return note === null ? 'base' : note.ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,8 +262,8 @@ interface RenderedResolution {
  *   scope never carried the draft (stock parity — a new root never holds
  *   another root's pending updates), and the retirement fold is loud for
  *   exactly that case;
- * - the draft already folded silently (epoch snapshots stay still by
- *   design) and canonical moved past what was rendered — repair urgently.
+ * - the draft already folded silently (storeVersion snapshots stay still by
+ *   design) and base state moved past what was rendered — repair urgently.
  *
  * `deliver` is the hook's draft-lane channel: it dedupes against the ids
  * already dispatched since the hook's last render (a correction shares that
@@ -308,9 +308,9 @@ function ambientClassifier(): Draft | null {
     draftsByTransition.set(T, draft);
     broadcastDraft(draft.id);
   }
-  // A retired or discarded draft classifies as canonical: its effects are
-  // already folded or rolled back, so a late write under the same transition
-  // object must be urgent, never an append to a finished batch.
+  // A retired or discarded draft classifies as urgent (base state): its
+  // effects are already folded or rolled back, so a late write under the same
+  // transition object must be urgent, never an append to a finished batch.
   return draft.state === 'open' || draft.state === 'sealed' ? draft : null;
 }
 
@@ -384,10 +384,12 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
     if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
       const silent = foldReachedEveryScope(id);
       forgetDraft(id);
-      // Silent only when render-pass worlds already delivered these values
-      // to every scope (subscribers outside scopes are covered separately by
-      // the canonical epoch). A scope mounted mid-transition never carried
-      // the draft, so its subscribers need the loud fold.
+      // Fold loudness: silent when every mounted scope carried this draft —
+      // each scope's render passes already delivered the values, so no
+      // subscriber is owed a repair render. Loud otherwise: a scope that
+      // never carried the draft (mounted mid-transition) has subscribers
+      // still showing pre-draft values, and the fold's storeVersion bump is
+      // what re-renders them into the folded state.
       retireDraft(id, { silent });
     }
   }

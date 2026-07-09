@@ -1,24 +1,26 @@
 /**
- * Worlds: draft overlays that make React transitions invisible to canonical
+ * Worlds: draft overlays that make React transitions invisible to base-state
  * readers until they commit.
  *
  * A DRAFT is the engine-side record of one transition batch: write intents
- * (set values and update functions) against base cells. A WORLD is
- * "canonical state plus an ordered set of drafts" — exactly what one React
- * render pass is allowed to see.
+ * (set values and update functions) against cells. A WORLD is "base state
+ * plus an ordered set of drafts" — exactly what one React render pass is
+ * allowed to see.
  *
  * Replay follows React's updater-queue rules. While any draft touches a
- * cell, the cell keeps a REBASE LOG: its base value plus all intents in the
- * order they were dispatched (the intent array IS dispatch order). Views
- * then differ only in which intents they include:
+ * cell, the cell keeps a REBASE LOG: the value it held before the first
+ * draft intent (valueBeforeDrafts) plus all intents in the order they were
+ * dispatched (the intent array IS dispatch order). Views then differ only
+ * in which intents they include:
  *
- * - canonical = base + urgent intents (drafts skipped, later urgents still
- *   apply — so a counter at 1 with a pending transition "+2" shows 2 after
- *   an urgent "*2");
- * - a world   = base + urgent intents + its drafts' intents, all in
- *   dispatch order (the transition lands at (1+2)*2 = 6, never a reorder).
+ * - base state = valueBeforeDrafts + urgent intents (drafts skipped, later
+ *   urgents still apply — so a counter at 1 with a pending transition "+2"
+ *   shows 2 after an urgent "*2");
+ * - a world    = valueBeforeDrafts + urgent intents + its drafts' intents,
+ *   all in dispatch order (the transition lands at (1+2)*2 = 6, never a
+ *   reorder).
  *
- * Retiring a draft folds the full replay into canonical state through the
+ * Retiring a draft folds the full replay into base state through the
  * ordinary write path (effects, equality, propagation) and marks the draft
  * retired, so render passes still holding its id resolve identical values.
  * When the last draft touching a cell dies, the log is dropped — a
@@ -31,11 +33,11 @@ import {
   type DerivedNode,
   type ReactiveNode,
   type TraceEventId,
-  type WriteEpoch,
+  type GraphChangeClock,
   Flag,
   NO_EVENT,
-  bumpStoreEpochLoud,
-  currentWriteEpoch,
+  bumpStoreVersionLoud,
+  currentGraphChange,
   ensureFresh,
   peekCell,
   pokeDraftWatchers,
@@ -44,7 +46,7 @@ import {
   endBatch,
   traceHook,
   untracked,
-  withSuppressedStoreEpoch,
+  withSuppressedStoreVersion,
   writeCell,
 } from './graph.ts';
 import {
@@ -53,14 +55,16 @@ import {
   type Suspension,
   makeErrorBox,
   makeSuspension,
-  setOnSettlementEpoch,
+  setOnSettlement,
   trackThenable,
 } from './asyncs.ts';
 
 export type DraftId = Brand<number, 'DraftId'>;
 export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded';
-/** Bumps whenever any draft's ops or state change; world memos key on it. */
-export type WorldEpoch = Brand<number, 'WorldEpoch'>;
+/** Monotone logical clock: ticks on any draft activity — opens, intents,
+ * retires, discards, and thenable settlement (see setOnSettlement). World
+ * memos and the world cache hold validAtDraftChange readings of it. */
+export type DraftChangeClock = Brand<number, 'DraftChangeClock'>;
 
 export type OpKind = 'set' | 'update';
 
@@ -72,8 +76,8 @@ export interface Intent {
 }
 
 export interface RebaseLog {
-  /** Canonical value when the first draft intent arrived. */
-  base: unknown;
+  /** The cell's value when the first draft intent arrived. */
+  valueBeforeDrafts: unknown;
   intents: Intent[];
 }
 
@@ -92,18 +96,18 @@ let nextDraftId: DraftId = 1;
 const liveDrafts = new Map<DraftId, Draft>();
 /** Cells with at least one live draft intent. */
 const rebaseLogs = new Map<CellNode<unknown>, RebaseLog>();
-let worldEpoch: WorldEpoch = 1;
+let draftChangeClock: DraftChangeClock = 1;
 /** Nodes holding world memos, for sweeping at quiescence. */
 const memoNodes = new Set<ReactiveNode>();
 /** Per-root committed draft sets, recorded by the bindings at root commits. */
 const committedWorlds = new WeakMap<object, readonly DraftId[]>();
 
-setOnSettlementEpoch(() => {
-  worldEpoch++;
+setOnSettlement(() => {
+  draftChangeClock++;
 });
 
-export function currentWorldEpoch(): WorldEpoch {
-  return worldEpoch;
+export function currentDraftChange(): DraftChangeClock {
+  return draftChangeClock;
 }
 
 export function liveDraftCount(): number {
@@ -120,7 +124,7 @@ export function openDraft(): Draft {
     lastWriteEvent: NO_EVENT,
   };
   liveDrafts.set(draft.id, draft);
-  worldEpoch++;
+  draftChangeClock++;
   return draft;
 }
 
@@ -131,16 +135,16 @@ export function sealDraft(draft: Draft): void {
 function logFor(cell: CellNode<unknown>): RebaseLog {
   let log = rebaseLogs.get(cell);
   if (log === undefined) {
-    // Capture the base BEFORE any drafted intent; materializes lazy
-    // cells (replay needs the base for the equality/update contract).
-    log = { base: untracked(() => peekCell(cell)), intents: [] };
+    // Capture the value BEFORE any drafted intent; materializes lazy cells
+    // (replay needs the starting value for the equality/update contract).
+    log = { valueBeforeDrafts: untracked(() => peekCell(cell)), intents: [] };
     rebaseLogs.set(cell, log);
   }
   return log;
 }
 
 /** Record a drafted write intent. Draft watchers (isPending probes, latest()
- * viewers) get poked; canonical values do not move. Subscribers of the cell
+ * viewers) get poked; base values do not move. Subscribers of the cell
  * — and of watched computeds over it — additionally receive the draft id on
  * their draft-lane channel, so exactly the affected components join the
  * transition's render passes (write-time dispatch runs inside the
@@ -158,7 +162,7 @@ export function appendDraftIntent(
   // position.
   logFor(cell).intents.push({ kind, payload, draft });
   draft.cells.add(cell);
-  worldEpoch++;
+  draftChangeClock++;
   let cause: TraceEventId = NO_EVENT;
   if (traceHook !== null) {
     cause = draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
@@ -168,7 +172,7 @@ export function appendDraftIntent(
 }
 
 /** Record an urgent intent on a cell that currently has a rebase log, so
- * pending worlds replay it in dispatch order. The canonical write itself is
+ * pending worlds replay it in dispatch order. The base-state write itself is
  * performed by the caller. */
 export function appendUrgentIntent(cell: CellNode<unknown>, kind: OpKind, payload: unknown): boolean {
   const log = rebaseLogs.get(cell);
@@ -176,14 +180,15 @@ export function appendUrgentIntent(cell: CellNode<unknown>, kind: OpKind, payloa
   // Array order is dispatch order; retirement flips visibility, never
   // position.
   log.intents.push({ kind, payload, draft: null });
-  worldEpoch++;
+  draftChangeClock++;
   return true;
 }
 
 /** An urgent intent on a drafted cell rebases every pending world over the
- * new canonical value. When the canonical write itself cuts off on equality,
- * nothing propagates — yet the drafted replays changed (base…draft…urgent
- * lands differently than base…draft), so each live draft's audience must be
+ * new base value. When the base-state write itself cuts off on equality,
+ * nothing propagates — yet the drafted replays changed
+ * (valueBeforeDrafts…draft…urgent lands differently than
+ * valueBeforeDrafts…draft), so each live draft's audience must be
  * poked AND woken or its transition commits the pre-rebase value. The
  * changed-write path needs none of this: the wave re-renders subscribers
  * urgently, and React restarts in-progress transition work after an
@@ -202,13 +207,13 @@ export function pokeRebasedCell(cell: CellNode<unknown>): void {
   }
 }
 
-/** Replay a cell's log for a world (or for canonical state, when `world` is
+/** Replay a cell's log for a world (or for base state, when `world` is
  * null): urgent and retired intents always apply; drafted intents apply
  * only when the world includes their draft. */
 function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
   const log = rebaseLogs.get(cell);
   if (log === undefined) return untracked(() => peekCell(cell));
-  let value = log.base;
+  let value = log.valueBeforeDrafts;
   for (const intent of log.intents) {
     const d = intent.draft;
     const included =
@@ -221,10 +226,10 @@ function replayLog(cell: CellNode<unknown>, world: World | null): unknown {
   return value;
 }
 
-/** Fold a draft into canonical state through the normal write path, then
+/** Fold a draft into base state through the normal write path, then
  * let stale world sets resolve it as a no-op.
  *
- * `silent` folds keep subscription epochs still: use it when render-pass
+ * `silent` folds keep store versions still: use it when render-pass
  * worlds already delivered the draft's values to every subscriber (a
  * committed transition), so the fold must not schedule repair renders.
  * A loud fold (the default) is for drafts nothing rendered — their values
@@ -234,7 +239,7 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
   if (draft === undefined) return;
   liveDrafts.delete(id);
   draft.state = 'retired';
-  worldEpoch++;
+  draftChangeClock++;
   const evt =
     traceHook !== null
       ? traceHook(
@@ -260,7 +265,7 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
     }
   };
   try {
-    if (opts?.silent === true) withSuppressedStoreEpoch(fold);
+    if (opts?.silent === true) withSuppressedStoreVersion(fold);
     else fold();
   } finally {
     setCurrentCause(prevCause);
@@ -270,17 +275,17 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
 }
 
 /** Roll back an abandoned draft: anyone who saw it re-resolves without it.
- * The store-epoch bump is deliberately loud — subscribers rendered the
+ * The storeVersion bump is deliberately loud — subscribers rendered the
  * draft's values, and the rollback is new information no render pass shows. */
 export function discardDraft(id: DraftId): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
   liveDrafts.delete(id);
   draft.state = 'discarded';
-  worldEpoch++;
+  draftChangeClock++;
   const evt = traceHook !== null ? traceHook('draft-discard', null, draft.openEvent) : NO_EVENT;
   for (const cell of draft.cells) {
-    bumpStoreEpochLoud(cell);
+    bumpStoreVersionLoud(cell);
     pokeDraftWatchers(cell, evt);
   }
   releaseLogs(draft);
@@ -312,14 +317,14 @@ function maybeQuiesce(): void {
 }
 
 /** True while the draft is open or sealed (retired/discarded ids are dead:
- * their effects are already canonical or rolled back). */
+ * their effects are already folded into base state or rolled back). */
 export function isLiveDraft(id: DraftId): boolean {
   return liveDrafts.has(id);
 }
 
 const NO_IDS: readonly DraftId[] = [];
 
-/** Live drafts holding intents against this node's canonical sources (the
+/** Live drafts holding intents against this node's base-state sources (the
  * node itself for a cell; its transitive dependency cells for a derived).
  * Serves late-subscription repair: a subscriber that mounted after the
  * write-time wakes asks which transitions it missed. */
@@ -405,22 +410,22 @@ export interface World {
   sig: string;
 }
 
-export const CANONICAL_WORLD: World = { drafts: [], sig: '' };
+export const BASE_WORLD: World = { drafts: [], sig: '' };
 
 /** Normalize a render pass's draft-id set: retired and discarded drafts drop
- * out (their effects are already canonical / rolled back), order is
+ * out (their effects are already in base state / rolled back), order is
  * creation order regardless of arrival order. */
 export function makeWorld(ids: readonly DraftId[]): World {
-  if (ids.length === 0) return CANONICAL_WORLD;
+  if (ids.length === 0) return BASE_WORLD;
   const drafts: Draft[] = [];
   for (const [id, draft] of liveDrafts) {
     if (ids.includes(id)) drafts.push(draft);
   }
-  if (drafts.length === 0) return CANONICAL_WORLD;
+  if (drafts.length === 0) return BASE_WORLD;
   return { drafts, sig: drafts.map((d) => d.id).join(',') };
 }
 
-/** The world an evaluation is running in; null means canonical. */
+/** The world an evaluation is running in; null means base state. */
 let currentWorld: World | null = null;
 
 export function getCurrentWorld(): World | null {
@@ -439,20 +444,23 @@ export function withWorld<T>(world: World | null, fn: () => T): T {
 
 /** World objects per id-array identity (React state arrays are stable
  * across renders, so this makes repeated resolves allocation-free). */
-const worldCache = new WeakMap<readonly DraftId[], { epoch: WorldEpoch; world: World }>();
+const worldCache = new WeakMap<
+  readonly DraftId[],
+  { validAtDraftChange: DraftChangeClock; world: World }
+>();
 
 export function worldOf(ids: readonly DraftId[]): World {
-  if (ids.length === 0) return CANONICAL_WORLD;
+  if (ids.length === 0) return BASE_WORLD;
   const hit = worldCache.get(ids);
-  if (hit !== undefined && hit.epoch === worldEpoch) return hit.world;
+  if (hit !== undefined && hit.validAtDraftChange === draftChangeClock) return hit.world;
   const world = makeWorld(ids);
-  worldCache.set(ids, { epoch: worldEpoch, world });
+  worldCache.set(ids, { validAtDraftChange: draftChangeClock, world });
   return world;
 }
 
 interface WorldMemo {
-  writeEpoch: WriteEpoch;
-  worldEpoch: WorldEpoch;
+  validAtGraphChange: GraphChangeClock;
+  validAtDraftChange: DraftChangeClock;
   state: DerivedState;
 }
 
@@ -497,7 +505,7 @@ function reconcileStates(
   return (prev.throwable as ErrorBox).error === (next.throwable as ErrorBox).error ? prev : next;
 }
 
-/** Resolve a node's value as seen by a world. A canonical world hits the
+/** Resolve a node's value as seen by a world. The base world hits the
  * ordinary graph and returns the NODE ITSELF as the state view (cells and
  * deriveds carry the DerivedState shape; the trivial read allocates
  * nothing); drafted worlds replay intents (cells) or draft-evaluate
@@ -513,8 +521,8 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
   const memo = memoFor(node, world.sig);
   if (
     memo !== undefined &&
-    memo.writeEpoch === currentWriteEpoch() &&
-    memo.worldEpoch === worldEpoch
+    memo.validAtGraphChange === currentGraphChange() &&
+    memo.validAtDraftChange === draftChangeClock
   ) {
     return memo.state;
   }
@@ -523,7 +531,11 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
       ? { flags: 0, value: replayLog(node as CellNode<unknown>, world), throwable: null }
       : draftEvaluate(node as DerivedNode<unknown>, world, memo?.state);
   const state = reconcileStates(node, memo?.state, fresh);
-  storeMemo(node, world.sig, { writeEpoch: currentWriteEpoch(), worldEpoch, state });
+  storeMemo(node, world.sig, {
+    validAtGraphChange: currentGraphChange(),
+    validAtDraftChange: draftChangeClock,
+    state,
+  });
   return state;
 }
 
@@ -562,7 +574,7 @@ function draftEvaluate(
     return { flags: 0, value, throwable: null };
   } catch (e) {
     if (e === WORLD_PARKED) {
-      // The canonical value doubles as the stale serve (sentinel = none yet).
+      // The base value doubles as the stale serve (sentinel = none yet).
       return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension };
     }
     if (
@@ -593,7 +605,7 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
 /** Unwrap a resolved state from inside another evaluation: values flow,
  * errors rethrow their stable reason, suspended forwards by parking the
  * reader (no stale serve here — a world evaluation must not fold a stale
- * canonical value into a draft-world result). */
+ * base value into a draft-world result). */
 export function unwrapForEval(st: DerivedState, park: (t: PromiseLike<unknown>) => unknown): unknown {
   const asyncBits = st.flags & Flag.AsyncMask;
   if (asyncBits === 0) return st.value;
@@ -605,9 +617,9 @@ export function unwrapForEval(st: DerivedState, park: (t: PromiseLike<unknown>) 
 // Ambient views
 // ---------------------------------------------------------------------------
 
-/** Newest intent: canonical plus every live draft, in creation order. */
+/** Newest intent: base state plus every live draft, in creation order. */
 export function latestWorld(): World {
-  if (liveDrafts.size === 0) return CANONICAL_WORLD;
+  if (liveDrafts.size === 0) return BASE_WORLD;
   const drafts = [...liveDrafts.values()];
   return { drafts, sig: drafts.map((d) => d.id).join(',') };
 }
@@ -617,7 +629,7 @@ export function setCommittedWorld(container: object, ids: readonly DraftId[]): v
 }
 
 export function committedWorldOf(container: object | undefined): World {
-  if (container === undefined) return CANONICAL_WORLD;
+  if (container === undefined) return BASE_WORLD;
   const ids = committedWorlds.get(container);
-  return ids === undefined ? CANONICAL_WORLD : worldOf(ids);
+  return ids === undefined ? BASE_WORLD : worldOf(ids);
 }

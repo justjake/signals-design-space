@@ -46,7 +46,7 @@ function valueState(value: unknown): { flags: number; value: unknown; throwable:
 }
 
 describe('draft visibility', () => {
-  test('draft writes are invisible to canonical readers until retirement', () => {
+  test('draft writes are invisible to base-state readers until retirement', () => {
     const a = signal(0);
     const id = inDraft(() => a.set(1));
     expect(read(a)).toBe(0);
@@ -75,7 +75,7 @@ describe('draft visibility', () => {
     expect(runs).toBe(2); // one batched fold
   });
 
-  test('discard rolls back: canonical unchanged, latest reverts', () => {
+  test('discard rolls back: base state unchanged, latest reverts', () => {
     const a = signal(5);
     const id = inDraft(() => a.update((x) => x + 10));
     expect(latest(a)).toBe(15);
@@ -84,22 +84,22 @@ describe('draft visibility', () => {
     expect(read(a)).toBe(5);
   });
 
-  test('a silent fold keeps the store epoch still; a loud fold bumps it', () => {
-    // Fold loudness is the whole storeEpoch contract: silent folds carry
+  test('a silent fold keeps the store version still; a loud fold bumps it', () => {
+    // Fold loudness is the whole storeVersion contract: silent folds carry
     // values that render-pass worlds already delivered to every subscriber,
     // so the snapshot must not move (no repair-render storm at transition
     // commit); loud folds are for drafts nothing rendered, so subscribers
     // must re-render.
     const a = signal(1);
     const silentId = inDraft(() => a.set(9));
-    const before = nodeOf(a).storeEpoch;
+    const before = nodeOf(a).storeVersion;
     retireDraft(silentId, { silent: true });
-    expect(read(a)).toBe(9); // the fold landed canonically
-    expect(nodeOf(a).storeEpoch).toBe(before); // and the snapshot stayed still
+    expect(read(a)).toBe(9); // the fold landed in base state
+    expect(nodeOf(a).storeVersion).toBe(before); // and the snapshot stayed still
     const loudId = inDraft(() => a.set(11));
     retireDraft(loudId);
     expect(read(a)).toBe(11);
-    expect(nodeOf(a).storeEpoch).toBeGreaterThan(before); // loud: re-render due
+    expect(nodeOf(a).storeVersion).toBeGreaterThan(before); // loud: re-render due
   });
 });
 
@@ -126,8 +126,8 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
 
   test('[falsify-first, oracle catch seed 5] an urgent equality-cutoff write on a drafted cell re-wakes the draft audience', () => {
     // An urgent intent on a drafted cell rebases the pending worlds even
-    // when the canonical write cuts off on equality: base…+1 is 6, but
-    // base…+1…set(5) is 5. No wave runs (canonical never moved), so without
+    // when the base-state write cuts off on equality: replaying …+1 gives
+    // 6, but …+1…set(5) gives 5. No wave runs (base state never moved), so without
     // an explicit poke-and-wake the draft's audience keeps the pre-rebase
     // value and the transition would commit it.
     const a = signal(5);
@@ -137,7 +137,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     runInDraft(d, () => a.update((x) => x + 1));
     expect(wakes).toEqual([d.id]);
     expect(stateIn(a, [d.id])).toEqual(valueState(6));
-    a.set(5); // equality cutoff: canonical stays 5, no propagation
+    a.set(5); // equality cutoff: base state stays 5, no propagation
     expect(stateIn(a, [d.id])).toEqual(valueState(5)); // ...but the replay rebased
     expect(wakes).toEqual([d.id, d.id]); // and the audience heard about it
     retireDraft(d.id, { silent: true });
@@ -172,7 +172,7 @@ describe('computeds across worlds', () => {
     const pick = computed(() => (flag.get() ? right.get() : left.get()));
     expect(read(pick)).toBe('L');
     const id = inDraft(() => flag.set(true));
-    expect(read(pick)).toBe('L'); // canonical branch untouched
+    expect(read(pick)).toBe('L'); // base-state branch untouched
     expect(stateIn(pick, [id])).toEqual(valueState('R'));
     retireDraft(id);
     expect(read(pick)).toBe('R');
@@ -192,7 +192,7 @@ describe('computeds across worlds', () => {
   test('isPending flips for drafted cells and computeds over them', () => {
     const a = signal(1);
     const c = computed(() => a.get() * 2);
-    expect(read(c)).toBe(2); // establish canonical deps
+    expect(read(c)).toBe(2); // establish base-state deps
     expect(isPending(a)).toBe(false);
     expect(isPending(c)).toBe(false);
     const id = inDraft(() => a.set(9));
@@ -234,7 +234,7 @@ describe('per-root committed views', () => {
     setCommittedWorld(rootB, []); // root B still on base
     expect(committed(a, rootA)).toBe(1);
     expect(committed(a, rootB)).toBe(0);
-    expect(committed(a)).toBe(0); // no container: canonical
+    expect(committed(a)).toBe(0); // no container: base state
     retireDraft(id);
     expect(committed(a, rootA)).toBe(1);
     expect(committed(a, rootB)).toBe(1); // retired drafts resolve as no-ops
@@ -246,11 +246,11 @@ describe('latest() context resolution', () => {
   // evaluation context it resolves that context's own world — reading ahead
   // of your world is a tear.
 
-  test('inside a canonical computed evaluation, latest() resolves canonical — never a draft', () => {
+  test('inside a base-state computed evaluation, latest() resolves base state — never a draft', () => {
     const a = signal(1);
     const c = computed(() => latest(a) * 10);
     const id = inDraft(() => a.set(2));
-    expect(read(c)).toBe(10); // canonical evaluation must not read ahead
+    expect(read(c)).toBe(10); // base-state evaluation must not read ahead
     expect(stateIn(c, [id])).toEqual(valueState(20)); // its own world
     expect(latest(c)).toBe(20); // ambient: newest intent
     retireDraft(id);
@@ -265,7 +265,7 @@ describe('latest() context resolution', () => {
     expect(read(c)).toBe(6);
   });
 
-  test('latest() inside an effect tracks canonically: re-runs on folds, never on draft writes', () => {
+  test('latest() inside an effect tracks base state: re-runs on folds, never on draft writes', () => {
     const a = signal(0);
     const seen: number[] = [];
     effect(() => {

@@ -1,9 +1,9 @@
-# Two-tier graph rebuild: watched push discipline over unwatched stamp-pull
+# Two-tier graph rebuild: watched push discipline over unwatched validAt-gated pull
 
 Design for rebuilding `src/graph.ts` so the WATCHED tier (nodes with observers,
 plus everything on a path between a watched node and its transitive
 dependencies) runs the full alien-signals edge discipline, while the UNWATCHED
-tier keeps the existing stamp-pull validation. The tiering itself is decided;
+tier keeps the existing validAt-gated pull validation. The tiering itself is decided;
 this document fixes the concrete mechanics. Reference implementation: the
 verbatim alien-signals core at `upstream-alien-signals/src/system.ts`. All fx2
 line numbers cite `src/graph.ts` at commit `8072ddd` unless another file is
@@ -14,10 +14,10 @@ owner-decided amendment sharing the same read-path surgery). Three deltas
 between this design and the as-built code, each found by the tests and
 documented inline where the design said something else:
 
-- stamp uniqueness (section 2): the case-3 dedup probe requires eval stamps
-  that are NEVER reused; the pre-existing restore discipline recycles values,
-  so new stamps come from a monotonic counter (`stampCounter`) behind the
-  pass-scoped `evalStamp`;
+- pass-id uniqueness (section 2): the case-3 dedup probe requires eval pass
+  ids that are NEVER reused; the pre-existing restore discipline recycles
+  values, so new ids come from a monotonic counter (`evalPassCounter`) behind
+  the pass-scoped `evalPass`;
 - never-computed exemption (section 6, step 5): pending-edge delivery skips
   nodes with `version === 0` — born-Dirty, no dep edges, so no wave was ever
   swallowed and there is no missed edge to deliver;
@@ -39,17 +39,17 @@ What fx2 already has, what alien has, and the deltas this rebuild closes.
 
 | Concern | alien (`system.ts`) | fx2 (`graph.ts`) | Delta |
 | --- | --- | --- | --- |
-| Node record | `ReactiveNode` lines 1-7: four list heads + flags | lines 73-109: same heads + `observerCount`, `validatedEpoch`, value `version`, React epochs, `worldMemos`, `causeEvent` | none (fx2 is a superset) |
-| Link record | lines 9-17: both lists doubly linked; `version` is a tracking-pass stamp | lines 59-71: deps singly linked (`nextDep` only), subs doubly linked, `inSubs`, `stamp`, `version` | naming collision + threading decision, section 2 |
-| link() protocol | 4 cases, lines 51-91: tail repeat (52-54), `nextDep` in-place reuse (56-61), `subsTail` same-pass dedup (62-65), create + thread both lists (66-90) | `trackRead` lines 321-350: has cases 1 (323, stamp-guarded), 2 (325-329), 4 minus subs install for unwatched subs (330-349) | case 3 missing: non-adjacent re-read in one pass creates a duplicate edge |
+| Node record | `ReactiveNode` lines 1-7: four list heads + flags | lines 73-109: same heads + `observerCount`, `validAtGraphChange` (then on the shared record), value `version`, the React snapshot counters, `worldMemos`, `causeEvent` | none (fx2 is a superset) |
+| Link record | lines 9-17: both lists doubly linked; `version` is a tracking-pass marker | lines 59-71: deps singly linked (`nextDep` only), subs doubly linked, `inSubs`, `evalPass`, `version` | naming collision + threading decision, section 2 |
+| link() protocol | 4 cases, lines 51-91: tail repeat (52-54), `nextDep` in-place reuse (56-61), `subsTail` same-pass dedup (62-65), create + thread both lists (66-90) | `trackRead` lines 321-350: has cases 1 (323, pass-guarded), 2 (325-329), 4 minus subs install for unwatched subs (330-349) | case 3 missing: non-adjacent re-read in one pass creates a duplicate edge |
 | Trim after eval | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114) | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because the lifetime-effect machinery keys on the count |
-| Propagate | iterative, explicit stack, flag protocol with `RecursedCheck`/`Recursed` reentrancy bits (118-174) | recursive `mark()` (402-422): Check-only marking, causeEvent, epoch bumps on Clean→Check (416-417), watcher scheduling (404-406, 424-432) | recursion → stack bound on deep chains; traversal-bit decision, section 3 |
+| Propagate | iterative, explicit stack, flag protocol with `RecursedCheck`/`Recursed` reentrancy bits (118-174) | recursive `mark()` (402-422): Check-only marking, causeEvent, snapshot-counter bumps on Clean→Check (416-417), watcher scheduling (404-406, 424-432) | recursion → stack bound on deep chains; traversal-bit decision, section 3 |
 | Pull validation | iterative `checkDirty` (176-237) resolving Pending via `update()` + `shallowPropagate` (239-250) | recursive `ensureFresh` (760-783): version comparison per edge; no shallowPropagate | deliberate divergence, section 5 |
-| Watched/unwatched boundary | single-tier: every edge always in both lists | already two-tier: `inSubs` per edge, `addObserver`/`removeObserver` cascades (290-318), `validatedEpoch` vs global `WriteEpoch` (764) | promote does not validate — two verified defects, section 6 |
-| Async, worlds, tracer, epochs | absent | threaded through the same nodes | must survive unchanged, section 8 |
+| Watched/unwatched boundary | single-tier: every edge always in both lists | already two-tier: `inSubs` per edge, `addObserver`/`removeObserver` cascades (290-318), `validAtGraphChange` vs the global `GraphChangeClock` (764) | promote does not validate — two verified defects, section 6 |
+| Async, worlds, tracer, clocks | absent | threaded through the same nodes | must survive unchanged, section 8 |
 
 The name collision to keep straight: alien's `Link.version` is a
-tracking-pass stamp and corresponds to fx2's `Link.stamp`. fx2's
+tracking-pass marker and corresponds to fx2's `Link.evalPass`. fx2's
 `Link.version` (the dependency's value generation captured at last read) has
 no alien equivalent — alien's ground truth is flags plus `update()`, fx2's is
 versions. One name per concept; fx2's names stay.
@@ -68,7 +68,8 @@ AssertionError: expected 2 to be 4   // d = a*2 after a.set(2); d.get() served 2
 Probe B — notification plane. Dispose an effect over a computed (demote seeds
 Check, line 313), subscribe a leaf, write the dependency. `mark()`
 early-returns on the pre-existing Check without descending (403-407), so the
-new subscriber is never scheduled and `reactEpoch` never advances:
+new subscriber is never scheduled and the uSES snapshot counter (today's
+`storeVersion`) never advances:
 
 ```
 AssertionError: expected +0 to be 1  // notify count after the write
@@ -91,7 +92,7 @@ The rebuild keeps this contract and extends it to late subscribers: arriving
 at an already-stale node means the edge you care about already fired (or,
 stale-Clean, could never fire), so promote delivers the pending edge once at
 subscribe time. React bindings tolerate the wake by construction — notify
-leads to a snapshot compare, and the epoch is unchanged.
+leads to a snapshot compare, and the store version is unchanged.
 
 ## 2. Link layout
 
@@ -106,7 +107,7 @@ interface Link {
   prevSub: Link | undefined; // subs list: doubly linked
   nextSub: Link | undefined;
   inSubs: boolean;           // present in dep's subs list (watched edges only)
-  stamp: number;             // eval-generation stamp (alien's Link.version role)
+  evalPass: number;          // eval-pass reading (alien's Link.version role)
 }
 ```
 
@@ -138,42 +139,42 @@ link, probe `dep.subsTail`:
 
 ```ts
 const ps = dep.subsTail;
-if (ps !== undefined && ps.sub === sub && ps.stamp === evalStamp) return ps;
+if (ps !== undefined && ps.sub === sub && ps.evalPass === evalPass) return ps;
 ```
 
-This works for the same reason alien's does: cases 1/2 re-stamp on reuse
-(line 327) and new links carry the current stamp, so a non-adjacent re-read
+This works for the same reason alien's does: cases 1/2 re-mark on reuse
+(line 327) and new links carry the current pass id, so a non-adjacent re-read
 finds its own earlier link at the dep's subs tail. It only fires for watched
 subs (unwatched edges never enter subs lists); unwatched non-adjacent
 re-reads keep today's tolerated duplicate forward edges — version-consistent,
 forward-only garbage. [behavioral for watched edge counts → falsify-first,
 test T9]
 
-**As-built addition — stamp uniqueness.** The probe's soundness argument is
-"a stamp match means this edge was stamped by the pass in progress, therefore
-it sits inside the kept prefix". That implication needs stamp VALUES that are
+**As-built addition — pass-id uniqueness.** The probe's soundness argument is
+"a pass match means this edge was marked by the pass in progress, therefore
+it sits inside the kept prefix". That implication needs pass VALUES that are
 never reused, and the pre-existing discipline reuses them: every eval's
-`finally` restores `evalStamp = myStamp`, so after an outer eval completes,
+`finally` restores `evalPass = myPass`, so after an outer eval completes,
 the global sits below values its nested evals used, and a later pass can
 hand out one of those values again. A recycled value could match an edge
 from a dead pass whose position is outside the kept prefix; trackRead would
 return it without advancing the cursor, and trimDeps would then truncate a
 dependency the evaluation genuinely read — a silently missing edge. Fix:
-new stamps come from a monotonic `stampCounter` (`newEvalStamp()`), while
-`evalStamp` keeps the exact same pass-scoped restore behavior. Comparisons
+new ids come from a monotonic `evalPassCounter` (`newEvalPass()`), while
+`evalPass` keeps the exact same pass-scoped restore behavior. Comparisons
 are equality-only, so nothing else observes the value change.
 
 **As-built update — edges are evaluation-only.** The one non-evaluation edge
 source, `adoptDepLink` (the hidden refetch-nonce edge, appended with
-`stamp: 0`), was deleted with the refresh() API. The stamp-0 class the dedup
+`evalPass: 0`), was deleted with the refresh() API. The pass-0 class the dedup
 probe had to coexist with — edges sitting in a deps list that no evaluation
 read — no longer exists, so the invariant is now unconditional: **a
 derived's deps list is exactly what its last evaluation read, in read
-order.** Every edge is created or re-stamped inside the evaluation that read
-it, and stamps assigned during a pass (including by nested evals) are all
-`>= myStamp` under the monotonic counter, so the invariant has a mechanical
+order.** Every edge is created or re-marked inside the evaluation that read
+it, and pass ids assigned during a pass (including by nested evals) are all
+`>= myPass` under the monotonic counter, so the invariant has a mechanical
 shadow: after `trimDeps`, every retained link satisfies
-`l.stamp >= myStamp`. A dev-gated assertion (`assertDepsFromEval`, run after
+`l.evalPass >= myPass`. A dev-gated assertion (`assertDepsFromEval`, run after
 the trim in `recompute` and `runWatcher`) enforces exactly that; the gate is
 a module const off `NODE_ENV`, so bundler builds strip the walk and
 unbundled production pays one always-false branch per evaluation.
@@ -224,7 +225,7 @@ Alien traversal bits **not adopted** — `RecursedCheck` (4) and `Recursed`
 - alien needs them to keep flag-only invalidation precise when a wave reaches
   a node that is mid-tracking; fx2's recompute trigger is versions, and a
   mark landing on a computing node is overwritten by `recompute`'s exit rule
-  (self-affecting evaluations stay Dirty via the pre-eval epoch comparison,
+  (self-affecting evaluations stay Dirty via the pre-eval clock comparison,
   728-755);
 - watcher re-run precision comes from `runWatcher`'s version validation
   (849-864), not from mark-time flag distinctions;
@@ -248,14 +249,15 @@ shape — a link cursor plus an explicit stack of suspended `nextSub` positions
    554-574);
 3. Watcher → `scheduleWatcher` (markedLeaves vs watcherQueue split unchanged,
    424-432); do not descend;
-4. Derived → `canonicalEpoch++`, `reactEpoch++` unless suppressed (silent
-   draft folds, 377-394); descend into its subs.
+4. Derived → bump the global validation clock and the node's uSES snapshot
+   counter (the latter unless suppressed — silent draft folds, 377-394);
+   descend into its subs.
 
 Call sites: `propagateFrom` (435-440) and `invalidateDerived` (447-458) route
 their subs loops through the shared traversal; flush discipline
-(`batchDepth === 0` → `flush()`) unchanged. The epoch bump must happen
-exactly once per wave per derived (the Clean→Check transition), same as
-today — uSES snapshots are contract.
+(`batchDepth === 0` → `flush()`) unchanged. The snapshot-counter bump must
+happen exactly once per wave per derived (the Clean→Check transition), same
+as today — uSES snapshots are contract.
 
 **Stale-cover invariant** (named, load-bearing): for every watched edge,
 *dep stale ⇒ sub is stale or scheduled*. Visit rule 1's early-return is sound
@@ -302,8 +304,8 @@ contract. Where fx2 deliberately diverges from alien, and why:
   versions (`writeCell` 673-690), not staleness.
 - **Tier fast paths:** watched → Clean returns immediately (761-763, flags
   trustworthy under the stale-cover invariant); unwatched → Clean plus
-  `validatedEpoch === writeEpoch` returns immediately (764) — the quiet-read
-  O(1) short-circuit that justifies the unwatched tier.
+  `validAtGraphChange === graphChangeClock` returns immediately (764) — the
+  quiet-read O(1) short-circuit that justifies the unwatched tier.
 - **Async/pending threads through untouched.** A parked evaluation returns
   through `finishComputeImpl` (asyncs.ts 170-198): the version advances so
   downstream re-pulls and parks on the Suspension; the async machine (the
@@ -336,7 +338,7 @@ Rewrites `addObserver` (290-301). Fixes probes A and B.
    b. `promote(l.dep)` — depth-first over the reachable dep closure. Cycles
       are impossible: dep edges exist only after an evaluation, and cyclic
       evaluation throws (721);
-   c. stamp-validate the edge once:
+   c. version-validate the edge once:
       `edgeFresh := l.version === l.dep.version && (dep is a Cell || dep is Clean after its promote)`.
       The version match alone is insufficient — a stale-unwatched dep has not
       recomputed, so its version cannot have moved even if its own inputs did;
@@ -362,7 +364,7 @@ Rewrites `addObserver` (290-301). Fixes probes A and B.
    edge-triggered contract's "no Clean→stale transition happened yet".
    Without the exemption, every subscribe-before-first-pull (T11's
    incremental build; `useIsPending` over a cold computed) pays a spurious
-   wake. React tolerated it (epoch-unchanged snapshot compare), but the wake
+   wake. React tolerated it (version-unchanged snapshot compare), but the wake
    was semantically wrong, and T11 caught it double-counting.
 6. `noteLifetimeTransition(node)` — lifetime setup coalescing unchanged.
    (This step read `hooks.observation(node, true)` when the rebuild landed;
@@ -385,23 +387,23 @@ Rewrites `removeObserver` (303-318).
    `demote(l.dep)` — the cascade unlink of back-edges down the chain,
    symmetric with promote (counts increment once per watched sub edge and
    decrement once per removal).
-4. Stamp seeding for the unwatched tier:
-   - Clean at demote → `validatedEpoch = writeEpoch`. Sound: watched-Clean
-     means no dependency changed since last validation (push marks were
-     reliable), and "now" is `writeEpoch`; the next quiet read short-circuits
-     O(1) instead of paying an up-walk.
-   - stale at demote → `validatedEpoch = 0`, forcing the up-walk on next
+4. validAtGraphChange seeding for the unwatched tier:
+   - Clean at demote → `validAtGraphChange = graphChangeClock`. Sound:
+     watched-Clean means no dependency changed since last validation (push
+     marks were reliable), and "now" is the clock's reading; the next quiet
+     read short-circuits O(1) instead of paying an up-walk.
+   - stale at demote → `validAtGraphChange = 0`, forcing the up-walk on next
      read.
 5. Drop the unconditional `Check` seeding (current line 313). Its job —
    distrust of flags across the boundary — moves to the two crossings that
    actually need it: promote validates on re-watch, and unwatched pulls never
-   trust Clean without `validatedEpoch`. (It was also insufficient: probe A's
+   trust Clean without `validAtGraphChange`. (It was also insufficient: probe A's
    node was never previously watched, so demote seeding never covered it.)
 6. `noteLifetimeTransition(node)` (originally `hooks.observation(node,
    false)`; same folding note as promote step 6).
 
 Edge versions need no demote writes: `l.version` is maintained by
-`recompute`/`readCell` in both tiers and is exactly the stamp promote
+`recompute`/`readCell` in both tiers and is exactly the reading promote
 validates.
 
 Leak story (NEVER-LEAK rule): demote removes every back-edge promote's
@@ -434,10 +436,10 @@ promote is behavioral → covered by falsify-first probes A/B]
 - **Lifetime effects**: the lifetime scheduler fires on the same 0↔1
   transitions with microtask coalescing (now `noteLifetimeTransition` in
   graph.ts; the `hooks.observation` seam over lifetime.ts at the time).
-- **uSES epochs**: every bump site preserved — `writeCell` (685-686),
-  `invalidateDerived` (452-453), the Clean→Check derived bump in the wave
-  (416-417), `bumpReactEpoch` on discard (worlds.ts 262), and reactEpoch
-  suppression for silent folds.
+- **uSES snapshot counters**: every bump site preserved — `writeCell`
+  (685-686), `invalidateDerived` (452-453), the Clean→Check derived bump in
+  the wave (416-417), the loud discard-time bump (worlds.ts 262; today
+  `bumpStoreVersionLoud`), and snapshot suppression for silent folds.
 - **Batching and flush**: `batchBase` net-revert version restore (554-574),
   effects-settle-before-leaf-notify ordering and throwing-effect abort
   (593-633).
@@ -461,7 +463,7 @@ test labeled falsify-first (failing output captured pre-change) or parity
 (suites are the evidence, structural asserts pin the shape).
 
 - T1 falsify-first (output captured: `expected 2 to be 4`) — promote
-  stamp-validates the value plane: unwatched read, write dep,
+  version-validates the value plane: unwatched read, write dep,
   subscribe-without-pull, read serves the fresh value.
 - T2 falsify-first (output captured: `expected +0 to be 1`) — promote
   delivers the pending staleness edge: effect dispose (stale at demote),
@@ -473,12 +475,12 @@ test labeled falsify-first (failing output captured pre-change) or parity
 - T4 parity — promote links transitively: subscribe a leaf over a 3-deep
   chain; assert `inSubs` on every closure edge, per-node `observerCount`,
   `Watched` set; unsubscribe reverses all of it.
-- T5 parity — demote unlinks and stamps: after last-observer removal, subs
+- T5 parity — demote unlinks and seeds: after last-observer removal, subs
   lists empty down the chain, `Watched` cleared,
-  `validatedEpoch === currentWriteEpoch()` where Clean, `0` where stale.
+  `validAtGraphChange === currentGraphChange()` where Clean, `0` where stale.
 - T6 parity (pin) — recompute counts across watch → demote → quiet-read
   cycles are unchanged, guarding the dropped Check seeding and the
-  `validatedEpoch` seeding.
+  `validAtGraphChange` seeding.
 - T7 parity (gc-leaks extension) — abandoned unwatched reads leave no
   back-edges: evaluate a chain unwatched, drop handles, WeakRef + gc asserts
   collection; structural sweep asserts zero subs entries. Add
@@ -486,7 +488,7 @@ test labeled falsify-first (failing output captured pre-change) or parity
 - T8 parity — quiet-read O(1) short-circuit preserved: after one validated
   unwatched read, repeat reads with no intervening write do zero recomputes
   anywhere in a wide instrumented graph and hit the
-  `validatedEpoch === writeEpoch` return.
+  `validAtGraphChange === graphChangeClock` return.
 - T9 falsify-first — `trackRead` case-3 dedup: a watched consumer reading
   `a, b, a` in one evaluation ends with exactly one link to `a` (capture
   today's duplicate-edge count first).
@@ -508,7 +510,7 @@ the pre-rebuild graph in the landing session:
   `RangeError: Maximum call stack size exceeded` (at depth 150 000) — all
   pass post-rebuild;
 - T4/T5 fail pre-change on the structural asserts (`Flag.Watched`,
-  validation stamps did not exist), pass post-rebuild; T6/T8/T10 parity pins
+  validAtGraphChange seeding did not exist), pass post-rebuild; T6/T8/T10 parity pins
   pass on both sides;
 - T12 as inherited from the skeleton asserted `readDerived(d) === 6` after
   the suffix trim; the correct expectation is `15` — the next pull
@@ -538,12 +540,12 @@ suite 278 = 265 prior + 11 tier tests + 2 leak-audit extensions; deep oracle
   gains.
 - **Wide fanout** (one cell, many watched subscribers) — the wave is O(N)
   either way; markedLeaves batching unchanged. Expect neutral.
-- **Quiet reads** (unwatched, read-heavy) — stamp-pull's home turf and the
-  reason the unwatched tier exists: O(1) `validatedEpoch` short-circuit vs
-  alien's O(deps) per-read walk. Demote's Clean seeding removes the one-time
+- **Quiet reads** (unwatched, read-heavy) — validAt-gated pull's home turf
+  and the reason the unwatched tier exists: O(1) `validAtGraphChange`
+  short-circuit vs alien's O(deps) per-read walk. Demote's Clean seeding removes the one-time
   post-demote up-walk. Gate: flat read cost vs graph depth.
 - **Subscribe/unsubscribe churn** (mount storms, StrictMode double-mounts) —
-  the new cost center: stamp validation adds two loads and a compare per
+  the new cost center: version validation adds two loads and a compare per
   closure edge on top of the linking promote already does. Expect
   noise-level; gate with coarse floors and no steady deopts, not per-edge
   pins.
@@ -559,18 +561,18 @@ ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in RE
 
 1. Promote-time wake delivery is a behavior change for plain `observeNode`
    subscribers (one wake when subscribing to a stale node). React bindings
-   tolerate it (epoch-unchanged snapshot compare), but battery and
+   tolerate it (version-unchanged snapshot compare), but battery and
    host-guarantees must confirm no commit-report ordering diffs.
 2. Dropping demote's Check seeding makes promote validation the single line
    of defense; any future path that sets `Watched` without promote would
    resurrect the stale-Clean bug. Mitigation: the dev assertion
    `Watched ⟺ observerCount > 0` for non-watchers.
-3. The iterative propagate must reproduce the epoch-bump-exactly-once-per-wave
-   rule; the oracle does not check epochs, so the React suites and
-   host-guarantees are the referee for uSES snapshots.
+3. The iterative propagate must reproduce the snapshot-bump-exactly-once-
+   per-wave rule; the oracle does not check store versions, so the React
+   suites and host-guarantees are the referee for uSES snapshots.
 4. `ensureFresh` stays recursive: deep pull chains keep stack exposure —
    consciously deferred, benchmark-gated.
-5. `validatedEpoch = writeEpoch` at demote assumes watched-Clean implies
+5. `validAtGraphChange = graphChangeClock` at demote assumes watched-Clean implies
    fresh; poke paths mark only leaf watchers (475, 509) and worlds folds go
    through `writeCell`, so no overlay path leaves a watched derived
    Clean-but-stale — T6 pins this.
@@ -578,10 +580,10 @@ ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in RE
 ## 11. DerivedState merge (owner-decided amendment, landed with the rebuild)
 
 The duplication being removed: `envelopeOf` (asyncs.ts) manufactured a fresh
-Envelope record on EVERY canonical read — even the trivial value case — and
-`resolveEnvelope`'s canonical cell path allocated the same wrapper; meanwhile
-`node.asyncState` already encoded the same 3-state machine. One canonical
-model replaces both: node-resident state read through one protocol.
+Envelope record on EVERY base-state read — even the trivial value case — and
+`resolveEnvelope`'s base cell path allocated the same wrapper; meanwhile
+`node.asyncState` already encoded the same 3-state machine. One model
+replaces both: node-resident state read through one protocol.
 
 **The state shape** — `DerivedState` (asyncs.ts), and nodes ARE it:
 
@@ -601,14 +603,14 @@ interface DerivedState {
   including cells and watchers (shape discipline: no post-construction
   property addition). Cells never set the bits but share the uniform
   `{ flags, value, throwable }` read protocol — which is what deletes the
-  canonical cell wrapper allocation. The slot stores the Suspension RECORD,
+  base-world cell wrapper allocation. The slot stores the Suspension RECORD,
   not its promise: the engine needs `.settled` for the identity-reuse rule
   and `.resolve` at settlement; the promise is what gets thrown. It stores
   the ErrorBox, not the error alone: box identity is the
   rethrow-same-reference contract, and `sameError` reuse plus memo
   reconciliation compare through it.
 - `node.asyncState` is deleted. Park/settle/error transitions
-  (`canonicalUse`, `finishCompute`) are flag+slot writes preserving:
+  (`baseUse`, `finishCompute`) are flag+slot writes preserving:
   suspension identity reuse while unsettled, sameError box reuse,
   settlement-behaves-like-a-write propagation.
 - "stale" is DERIVED, not stored: stale ⇔ `value !== UNINITIALIZED`. Both
@@ -621,7 +623,7 @@ interface DerivedState {
   async bits are ever set). `reconcileStates` (was `reconcileEnvelopes`) is
   flag/value/throwable compares preserving `equals()`, suspension-identity
   and box-identity semantics exactly.
-- `resolveEnvelope` → `resolveState`: a canonical world freshens the node
+- `resolveEnvelope` → `resolveState`: the base world freshens the node
   (`peekCell`/`ensureFresh`) and returns THE NODE as the state view — zero
   allocation; drafted worlds return memo records as before.
   `unwrapForEval`, hooks' `unwrapState`, `latest`, `committed`,
@@ -641,9 +643,9 @@ interface DerivedState {
   box, no marker field to collide with user values).
 
 **What still allocates on reads, honestly:** drafted-world resolutions
-allocate one memo record per (node, world-signature) per epoch change
+allocate one memo record per (node, world-signature) per clock change
 (amortized by the memo hit path), plus the world objects `worldOf` caches
-per ids-array identity. Canonical reads — the hot path — allocate nothing.
+per ids-array identity. Base-state reads — the hot path — allocate nothing.
 
 **Verification stance:** parity-gated. The 278-test suite, the 1200-seed
 oracle (whose `readWorld`/canary steps consume `resolveState` directly),
@@ -700,23 +702,24 @@ document's sections above describe the code at landing time. The mapping:
   disposal is `Watching` set with `Watched` clear.
 - `pokeLeafObservers`/`pokeAndWakeLeafObservers` became ONE iterative
   `pokeDraftWatchers(node, cause, wake?)` sharing the wave's cursor +
-  frame-stack skeleton, deduped by a per-node poke stamp against a
-  monotonic per-walk serial (no allocation, no clearing — the EvalStamp
+  frame-stack skeleton, deduped by a per-node pokePass reading against the
+  running walk's id (no allocation, no clearing — the EvalPass
   discipline). Poked watchers are marked `StaleCheck` for parity with the
   wave; the choice is arbitrary because render-notify watchers are never
   validated (flush clears staleness unconditionally before delivery). The
   walk threads `causeEvent` like the wave.
-- `reactEpoch` is now `storeEpoch` — THE useSyncExternalStore snapshot;
-  bump = subscribers re-render. The `canonicalEpoch` companion is deleted
-  with the unscoped hook mode: every scope-consuming hook now requires a
-  SignalScope and throws without one, so the silent-fold delivery channel
-  is always the render-pass world. Settlement and discard bump through one
-  helper (`bumpStoreEpochLoud`) that bypasses suppression: suppression
-  exists only for silent draft folds, and those two carry information no
-  render pass has shown.
+- The per-node uSES counter is now `storeVersion` — THE useSyncExternalStore
+  snapshot; bump = subscribers re-render. Its base-clock companion (a second
+  per-node counter that served the unscoped hook mode) is deleted with that
+  mode: every scope-consuming hook now requires a SignalScope and throws
+  without one, so the silent-fold delivery channel is always the render-pass
+  world. Settlement and discard bump through one helper
+  (`bumpStoreVersionLoud`) that bypasses suppression: suppression exists
+  only for silent draft folds, and those two carry information no render
+  pass has shown.
 - graph.ts carries a contract-matrix comment over the colocated walks
   (propagateWave, pokeDraftWatchers, propagateFrom, invalidateDerived):
-  rows = walks, columns = marks staleness / bumps storeEpoch / schedules
+  rows = walks, columns = marks staleness / bumps storeVersion / schedules
   effects / schedules render subscribers / dedup mechanism.
 - worlds.ts intents lost their write-only `seq` field (`OpSeq` died with
   it): the intent array IS dispatch order; retirement flips visibility,

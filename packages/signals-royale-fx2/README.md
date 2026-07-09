@@ -87,7 +87,7 @@ isPending(count)   // true while newer data exists behind the shown value
 
 Inside a computed evaluation (or a render pass, through the React bindings)
 `latest` and `get` resolve that context's own world — reading ahead of your
-world would be a tear. In a canonical computed or effect, `latest(x)` is
+world would be a tear. In a base-state computed or effect, `latest(x)` is
 also a tracked dependency: when `x` changes, the reader re-runs. What
 distinguishes `latest` from `get` is that it never suspends, not that it
 reads a different world from inside an evaluation.
@@ -226,8 +226,8 @@ render pass may see; React does:
   them in dispatch order, which is how a counter at 1 with a pending "+2"
   transition shows 2 after an urgent doubling and settles at 6 — never a
   reorder, never a torn 3.
-- The `useSyncExternalStore` subscription underneath snapshots a
-  subscription epoch — never a value. Transition drafts never touch that
+- The `useSyncExternalStore` subscription underneath snapshots a per-node
+  store version — never a value. Transition drafts never touch that
   snapshot, so React's transition machinery — holding, time slicing,
   interruption, retries — keeps working; there is no synchronous fallback
   and no tearing window.
@@ -241,7 +241,7 @@ Plain `latest(x)` / `isPending(x)` calls in render bodies resolve the
 current pass's world through a validity-gated note: the note is written by
 the pass that owns it and expires at the end of its synchronous window, so
 a pass that did not refresh it (an urgent pass over an untouched subtree,
-another root's render, an interleaved flush) falls back to CANONICAL rather
+another root's render, an interleaved flush) falls back to BASE rather
 than consuming a stale world or leaking live drafts into an urgent frame.
 
 Every scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,

@@ -3,8 +3,8 @@
  *
  * The subscribing read hook owns TWO channels:
  *
- * - Store channel (useSyncExternalStore): the snapshot is a subscription
- *   epoch — a stable identity, never a value — so equal resolutions never
+ * - Store channel (useSyncExternalStore): the snapshot is the node's store
+ *   version — a stable identity, never a value — so equal resolutions never
  *   re-render and the store never "changes" during a transition. Drafts
  *   live in worlds, not in the store, which is what keeps React's
  *   transition machinery (holding, time slicing, interruption) intact.
@@ -13,7 +13,7 @@
  *   cell, exactly the subscribers of that cell (and of watched computeds
  *   over it) receive the draft id as a reducer dispatch inside the
  *   transition's own scope. React's update queues then decide visibility
- *   per pass: urgent passes skip the update (canonical), the transition's
+ *   per pass: urgent passes skip the update (base state), the transition's
  *   passes include it, rebased retries recompute it. The render value
  *   resolves the hook's own world — no context value ever changes, so a
  *   transition re-renders only the components its writes actually touch.
@@ -106,7 +106,7 @@ function unwrapState(st: DerivedState, world: World): unknown {
  * state. Both come from React state for THIS pass, so neither can run
  * ahead of it.
  *
- * The storeEpoch snapshot is silent-fold-blind by design: render-pass
+ * The storeVersion snapshot is silent-fold-blind by design: render-pass
  * worlds already delivered a committed transition's values to every
  * subscriber, so no post-commit repair storm exists. The gap for
  * subscribers that attached late is closed by correctSubscription at
@@ -149,7 +149,7 @@ export function useValue<T>(x: Readable<T>): T {
       const off = observeNode(node, cb, deliver);
       // The subscription attaches at commit, after the render that created
       // it: repair anything that happened in between (live drafts this hook
-      // missed, silent folds the epoch snapshot cannot see).
+      // missed, silent folds the storeVersion snapshot cannot see).
       if (rendered.current.live) {
         correctSubscription(node, rendered.current, scope, deliver, wake);
       }
@@ -157,11 +157,11 @@ export function useValue<T>(x: Readable<T>): T {
     },
     [node, scope, deliver, wake],
   );
-  // The store snapshot: storeEpoch changes exactly when committed-view
+  // The store snapshot: storeVersion changes exactly when committed-view
   // subscribers must re-render (silent draft folds stay still — their
   // values arrived through render-pass worlds).
-  const epochSnap = React.useCallback(() => node.storeEpoch, [node]);
-  React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
+  const versionSnap = React.useCallback(() => node.storeVersion, [node]);
+  React.useSyncExternalStore(subscribe, versionSnap, versionSnap);
   const world = worldOf(ids);
   const st = resolveState(node, world);
   const value = unwrapState(st, world);
@@ -182,7 +182,7 @@ export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
   return useValue(c);
 }
 
-/** Engine effect bound to the component lifetime: observes canonical
+/** Engine effect bound to the component lifetime: observes base
  * (committed) values only, cleanup honored, StrictMode nets one. */
 export function useSignalEffect(fn: () => void | (() => void)): void {
   React.useEffect(() => engineEffect(fn), []);

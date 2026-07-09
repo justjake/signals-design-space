@@ -1,7 +1,7 @@
 /**
  * Two-tier graph mechanics: promotion into the watched tier (subscriber
  * edges installed, push marks trustworthy) and demotion back to the
- * unwatched tier (forward edges only, stamp-pull validation on read).
+ * unwatched tier (forward edges only, validAt-gated pull validation on read).
  *
  * Regime labels, per standing verification orders:
  * - [falsify-first] tests were run against the pre-rebuild graph and failed
@@ -17,7 +17,7 @@ import {
   type ReactiveNode,
   Flag,
   batch,
-  currentWriteEpoch,
+  currentGraphChange,
   makeCell,
   makeDerived,
   makeEffect,
@@ -145,23 +145,23 @@ describe('two-tier graph: promote/demote structure', () => {
     expect(depEdgeCount(d1, c)).toBe(1);
   });
 
-  test('T5 [parity] demote seeds the validation stamp: writeEpoch when Clean, 0 when stale', () => {
+  test('T5 [parity] demote seeds validAtGraphChange: the clock reading when Clean, 0 when stale', () => {
     const c = makeCell(1);
     const d1 = makeDerived(() => readCell(c) + 1);
     const d2 = makeDerived(() => readDerived(d1) + 1);
     const stop = observeNode(d2, () => {});
     expect(readDerived(d2)).toBe(3);
     stop(); // Clean at demote: the next quiet read must short-circuit O(1)
-    expect(d1.validatedEpoch).toBe(currentWriteEpoch());
-    expect(d2.validatedEpoch).toBe(currentWriteEpoch());
+    expect(d1.validAtGraphChange).toBe(currentGraphChange());
+    expect(d2.validAtGraphChange).toBe(currentGraphChange());
 
     const stop2 = observeNode(d2, () => {});
     batch(() => {
       writeCell(c, 2); // wave marks d1/d2 before the flush is due
       stop2(); // stale at demote: force the up-walk on next read
     });
-    expect(d1.validatedEpoch).toBe(0);
-    expect(d2.validatedEpoch).toBe(0);
+    expect(d1.validAtGraphChange).toBe(0);
+    expect(d2.validAtGraphChange).toBe(0);
     expect(readDerived(d2)).toBe(4);
   });
 
@@ -206,8 +206,8 @@ describe('two-tier graph: promote/demote structure', () => {
     });
     expect(readDerived(wide)).toBe(1225);
     expect(evals).toBe(1);
-    // Precondition of the O(1) return: Clean plus a current validation stamp.
-    expect(wide.validatedEpoch).toBe(currentWriteEpoch());
+    // Precondition of the O(1) return: Clean plus a current validAtGraphChange reading.
+    expect(wide.validAtGraphChange).toBe(currentGraphChange());
     expect((wide.flags & (Flag.StaleCheck | Flag.StaleDirty)) === 0).toBe(true);
     for (let i = 0; i < 100; i++) readDerived(wide);
     expect(evals).toBe(1);

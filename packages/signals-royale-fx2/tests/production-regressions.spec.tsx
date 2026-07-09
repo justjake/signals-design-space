@@ -3,7 +3,7 @@
  * Production-round regressions.
  *
  * Tear family: latest()/isPending() in ANY render body must resolve that
- * pass's world or fall back to CANONICAL. Wrong-toward-canonical is
+ * pass's world or fall back to BASE. Wrong-toward-base is
  * acceptable; wrong-toward-stale-world or wrong-toward-drafts never is.
  * Each shape below renders a component that did NOT refresh the scope's
  * render-world note and asserts it cannot consume a stale one.
@@ -58,7 +58,7 @@ function makeHeld() {
 }
 
 describe('tear: the render-world note is validity-gated', () => {
-  test('an urgent pass over an unrelated subtree (same root) resolves canonical', async () => {
+  test('an urgent pass over an unrelated subtree (same root) resolves base state', async () => {
     const { a, Holder, start, release } = makeHeld();
     const probed: number[] = [];
     let bump!: () => void;
@@ -82,12 +82,12 @@ describe('tear: the render-world note is validity-gated', () => {
     await act(() => bump());
     expect(text(container)).toContain('p:1;');
     expect(read(a)).toBe(1);
-    expect(probed).toEqual([1]); // canonical, never the held draft
+    expect(probed).toEqual([1]); // base state, never the held draft
     await release();
     expect(text(container)).toBe('h:2;p:1;');
   });
 
-  test('two roots back-to-back: a hook-free second root resolves canonical', async () => {
+  test('two roots back-to-back: a hook-free second root resolves base state', async () => {
     const { Holder, a, start, release } = makeHeld();
     await h.mount(
       <React.Suspense fallback={null}>
@@ -108,7 +108,7 @@ describe('tear: the render-world note is validity-gated', () => {
     await act(() => {
       plainRoot.render(<Plain />);
     });
-    expect(sampled).toEqual([1]); // canonical fallback, not the scoped draft
+    expect(sampled).toEqual([1]); // base-state fallback, not the scoped draft
     await release();
     await act(() => plainRoot.unmount());
     div.remove();
@@ -163,7 +163,7 @@ describe('tear: the render-world note is validity-gated', () => {
       expect(itemRenders).toBeGreaterThanOrEqual(3);
       expect(itemRenders).toBeLessThan(24); // the transition pass is mid-flight
       flushSync(() => bump());
-      expect(sampled).toEqual([1]); // urgent interleave: canonical, not the draft
+      expect(sampled).toEqual([1]); // urgent interleave: base state, not the draft
       const done = Date.now() + 15000;
       while (!text(container).includes('n:24;') && Date.now() < done) await tick(10);
       expect(text(container)).toContain('n:24;');
@@ -174,7 +174,7 @@ describe('tear: the render-world note is validity-gated', () => {
     div.remove();
   }, 30000);
 
-  test('StrictMode double render: both invocations of an urgent pass resolve canonical', async () => {
+  test('StrictMode double render: both invocations of an urgent pass resolve base state', async () => {
     const { a, Holder, start, release } = makeHeld();
     const probed: number[] = [];
     let bump!: () => void;
@@ -195,7 +195,7 @@ describe('tear: the render-world note is validity-gated', () => {
     await start();
     await act(() => bump());
     expect(probed.length).toBeGreaterThanOrEqual(1); // double-invoked in dev
-    expect(probed.every((v) => v === 1)).toBe(true); // canonical in every invocation
+    expect(probed.every((v) => v === 1)).toBe(true); // base state in every invocation
     await release();
     expect(text(container)).toBe('h:2;p:1;');
   });
