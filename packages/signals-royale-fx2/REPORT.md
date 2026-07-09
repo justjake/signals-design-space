@@ -168,8 +168,9 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
 - Concurrent model: classification, render-pass consistency, urgent-during-
   transition rebase, rollback re-notify, per-root committed views, flushSync
   exclusion, quiescence — done.
-- Read family: get/latest/committed/isPending/refresh — done, including the
-  adjudicated latest() context rule (§7.1).
+- Read family: get/latest/committed/isPending — done, including the
+  adjudicated latest() context rule (§7.1). (`refresh` shipped here
+  originally; removed by owner ruling — §16.)
 - Async/Suspense: evaluate-to-pending, parallel parks, stable thenables,
   error boxes, two-level suspend-vs-stale, settlement-as-write with world
   attribution — done.
@@ -719,3 +720,25 @@ LOC self-count (same counter and rules as §4):
 node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2
 → libLoc 2437  (engine 1973 + react bindings 464)
 ```
+
+## 16. refresh() removed (deletion round, owner ruling)
+
+`refresh(x)` and its machinery are gone: the export, the hidden per-computed
+nonce cell (`refreshNonce` + `ensureRefreshNonce`), the recompute pre-read,
+`adoptDepLink` (its only creation site for non-evaluation edges), and the
+`makeCell` lazy opt-out (only the nonce passed it, as a no-op). The
+userspace replacement is a version signal the computed reads — same
+classification behavior, zero engine surface; the README's "Refetching"
+section is the recipe. §10.2's regression test left with the API; the
+settlement-in-transition and stale-serve tests were rewritten to drive their
+refetches with a user nonce and pass unchanged against both the pre- and
+post-deletion engine. Structural dividend: evaluation is now the only source
+of dependency edges, so "a derived's deps list is exactly what its last
+evaluation read, in read order" is unconditional — a dev-gated assertion
+after every trim enforces it (docs/two-tier-graph.md), and the stamp-0
+adopted-edge class exits the dedup probe's domain. Gates: tsc clean;
+274 passed (278 − 4 refresh-only tests); oracle 3 passed at 1200 seeds;
+battery 23 passed / 2 failed — scenario 16 DOM-mutation (pre-existing
+exemption) plus scenario 11's refresh test (`adapter.refresh is not a
+function`, the expected hole for a deleted API; battery.spec.tsx is shared
+and stays untouched).

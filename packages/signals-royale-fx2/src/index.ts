@@ -37,17 +37,10 @@ import {
   untracked as graphUntracked,
   useImpl,
   writeCell,
-  ensureFresh,
   pokeLeafObservers,
   NO_EVENT,
 } from './graph.ts';
-import {
-  type DerivedState,
-  type ErrorBox,
-  type Suspension,
-  ensureRefreshNonce,
-  isErrorBox,
-} from './asyncs.ts';
+import { type DerivedState, type ErrorBox, type Suspension, isErrorBox } from './asyncs.ts';
 import {
   type Draft,
   type DraftId,
@@ -248,32 +241,6 @@ function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
     if ((l.dep.flags & Flags.Cell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
   }
   return false;
-}
-
-const bumpNonce = (n: unknown): unknown => (n as number) + 1;
-
-/** Force a refetch with unchanged inputs; the stale value keeps serving.
- * An urgent refresh starts the refetch immediately (before subscribers are
- * notified, so pending probes flip in the same wave); a refresh inside a
- * transition belongs to that transition — its world refetches when that
- * world next evaluates, and the result commits with it. */
-export function refresh(x: AnyReadable): void {
-  const node = nodeOf(x);
-  if ((node.flags & Flags.Derived) === 0) {
-    throw new TypeError('refresh(x) expects a computed; signals have nothing to refetch');
-  }
-  const nonce = ensureRefreshNonce(node as DerivedNode<unknown>) as CellNode<unknown>;
-  const draft = classifyWrite();
-  if (draft !== null) {
-    appendDraftIntent(draft, nonce, 'update', bumpNonce);
-  } else {
-    guardRenderWrite();
-    appendUrgentIntent(nonce, 'update', bumpNonce);
-    graphBatch(() => {
-      writeCell(nonce, (graphUntracked(() => peekCell(nonce)) as number) + 1);
-      graphUntracked(() => ensureFresh(node as DerivedNode<unknown>));
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------

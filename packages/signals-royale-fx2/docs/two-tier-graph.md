@@ -118,7 +118,7 @@ threading.
 Justification for omitting `prevDep` (the owner-sanctioned alternative to
 adding it): every deps-list mutation in either tier is one of
 
-- append at tail — `trackRead` 340-342, `adoptDepLink` 544;
+- append at tail — `trackRead` 340-342;
 - in-place reuse at the `depsTail` cursor — 325-329;
 - suffix truncation after `depsTail` — `trimDeps` 353-367, O(1) per dropped
   link because the suffix is wholly discarded and the subs side already has
@@ -130,8 +130,8 @@ side), demote removes back-edges (subs side, doubly linked). In alien,
 `prevDep` serves `unlink()` mid-list integrity and the backward walk in
 `isValidLink` (252-261) — and `isValidLink` exists solely to serve the
 `Recursed` reentrancy protocol, which section 3 declines. If a future change
-needs mid-list dep unlink, adding `prevDep` is mechanical at four sites
-(`trackRead` create, `adoptDepLink`, `trimDeps`, `unlinkAllDeps`).
+needs mid-list dep unlink, adding `prevDep` is mechanical at three sites
+(`trackRead` create, `trimDeps`, `unlinkAllDeps`).
 
 `trackRead` gains alien's case 3 (same-pass dedup): before creating a new
 link, probe `dep.subsTail`:
@@ -162,6 +162,21 @@ dependency the evaluation genuinely read — a silently missing edge. Fix:
 new stamps come from a monotonic `stampCounter` (`newEvalStamp()`), while
 `evalStamp` keeps the exact same pass-scoped restore behavior. Comparisons
 are equality-only, so nothing else observes the value change.
+
+**As-built update — edges are evaluation-only.** The one non-evaluation edge
+source, `adoptDepLink` (the hidden refetch-nonce edge, appended with
+`stamp: 0`), was deleted with the refresh() API. The stamp-0 class the dedup
+probe had to coexist with — edges sitting in a deps list that no evaluation
+read — no longer exists, so the invariant is now unconditional: **a
+derived's deps list is exactly what its last evaluation read, in read
+order.** Every edge is created or re-stamped inside the evaluation that read
+it, and stamps assigned during a pass (including by nested evals) are all
+`>= myStamp` under the monotonic counter, so the invariant has a mechanical
+shadow: after `trimDeps`, every retained link satisfies
+`l.stamp >= myStamp`. A dev-gated assertion (`assertDepsFromEval`, run after
+the trim in `recompute` and `runWatcher`) enforces exactly that; the gate is
+a module const off `NODE_ENV`, so bundler builds strip the walk and
+unbundled production pays one always-false branch per evaluation.
 
 ## 3. Flag bit allocation
 
@@ -241,8 +256,9 @@ only under it. Today it holds for edges created by evaluation — `readCell`/
 `readDerived` freshen the dep before `trackRead` links — and is violated by
 pull-less linking (`observeNode` 995-1023, promote's cascade). The rule:
 **any site installing a back-edge onto a stale dep applies the visit rules to
-the sub**. Promote (section 6) is the enforcement point; `adoptDepLink`
-(530-550) links a cell (never stale) and is trivially covered.
+the sub**. Promote (section 6) is the sole enforcement point: evaluation is
+the only other site that creates dep edges, and it freshens the dep before
+linking.
 
 `pokeLeafObservers` / `pokeAndWakeLeafObservers` (467-526) are **not**
 converted: they are worlds-overlay traversals with different marking (leaf
@@ -272,8 +288,8 @@ contract. Where fx2 deliberately diverges from alien, and why:
   validates at run (`runWatcher` 849-864). Both end at "effect re-runs iff a
   dep value actually changed"; fx2's exact counts stay the contract.
 - **Dirty producers are exhaustive and unchanged:** creation
-  (`makeDerived` 240), `invalidateDerived` — thenable settlement and refresh
-  treated as writes (447-458), self-affecting evaluations (`recompute` exit
+  (`makeDerived` 240), `invalidateDerived` — thenable settlement treated as
+  a write (447-458), self-affecting evaluations (`recompute` exit
   rule, 755), and poke marking of leaf watchers only (475, 509). Alien's
   "signal write sets its own Dirty" has no fx2 equivalent: cells carry
   versions (`writeCell` 673-690), not staleness.

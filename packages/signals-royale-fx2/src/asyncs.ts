@@ -19,17 +19,14 @@
  */
 
 import {
-  type CellNode,
   type DerivedNode,
   ASYNC_MASK,
   Flags,
   PARKED,
-  adoptDepLink,
   ensureFresh,
   hooks,
   invalidateDerived,
   isUninitialized,
-  makeCell,
   NO_EVENT,
   setCurrentCause,
   setFinishComputeImpl,
@@ -235,20 +232,3 @@ function finishCompute(
 
 setUseImpl(canonicalUse as never);
 setFinishComputeImpl(finishCompute as never);
-
-/**
- * Force a refetch with unchanged inputs. The hidden nonce cell is a real
- * tracked dependency, so the bump routes through write classification: an
- * urgent refresh invalidates canonically, a refresh inside a transition
- * writes a draft op and the refetch belongs to that world until it commits.
- */
-export function ensureRefreshNonce(node: DerivedNode<unknown>): CellNode<number> {
-  if (node.refreshNonce === undefined) {
-    node.refreshNonce = makeCell(0, {
-      label: node.label !== undefined ? `${node.label}.refresh` : 'refresh',
-      lazy: false,
-    });
-    adoptDepLink(node.refreshNonce, node);
-  }
-  return node.refreshNonce;
-}

@@ -8,7 +8,6 @@ import {
   computed,
   nodeOf,
   read,
-  refresh,
   serializeAtomState,
   initializeAtomState,
   signal,
@@ -20,7 +19,6 @@ import {
   useAtom,
   useCommitted,
   useComputed,
-  useIsPending,
   useSignalEffect,
   useSignalTransition,
   useValue,
@@ -37,12 +35,13 @@ afterEach(async () => {
 });
 
 describe('scenario 11 — suspense family', () => {
+  /** The resource idiom: one request per param key, so requests are stable
+   * across re-evaluations and a param change is what refetches. */
   function makeResource(param: Signal<number>) {
-    let epoch = 0;
     let fetchCount = 0;
     const gates = new Map<string, ReturnType<typeof deferred<string>>>();
     const data = computed((use) => {
-      const key = `${param.get()}:${epoch}`;
+      const key = `${param.get()}`;
       let g = gates.get(key);
       if (g === undefined) {
         g = deferred<string>();
@@ -54,10 +53,6 @@ describe('scenario 11 — suspense family', () => {
     return {
       data,
       fetchCount: () => fetchCount,
-      refresh() {
-        epoch++;
-        refresh(data);
-      },
       async settle(key: string, v: string) {
         await act(async () => {
           gates.get(key)!.resolve(v);
@@ -81,66 +76,9 @@ describe('scenario 11 — suspense family', () => {
       </React.Suspense>,
     );
     expect(text(container)).toBe('loading');
-    await r.settle('0:0', 'one');
+    await r.settle('0', 'one');
     expect(text(container)).toBe('d:one');
     expect(r.fetchCount()).toBe(1);
-  });
-
-  test('refresh: stale + isPending, never the fallback', async () => {
-    const param = signal(0);
-    const r = makeResource(param);
-    function Probe() {
-      return <em>{useIsPending(r.data) ? 'P' : 'i'};</em>;
-    }
-    const { container } = await h.mount(
-      <>
-        <Probe />
-        <React.Suspense fallback={<i>loading</i>}>
-          <DataView data={r.data} />
-        </React.Suspense>
-      </>,
-    );
-    await r.settle('0:0', 'one');
-    expect(text(container)).toBe('i;d:one');
-    await act(() => {
-      r.refresh();
-    });
-    expect(text(container)).toBe('P;d:one');
-    expect(r.fetchCount()).toBe(2);
-    await r.settle('0:1', 'two');
-    expect(text(container)).toBe('i;d:two');
-  });
-
-  test('refresh inside a transition, inputs unchanged: useIsPending flips while stale serves', async () => {
-    const param = signal(0);
-    const r = makeResource(param);
-    function Probe() {
-      return <em>{useIsPending(r.data) ? 'P' : 'i'};</em>;
-    }
-    const { container } = await h.mount(
-      <>
-        <Probe />
-        <React.Suspense fallback={<i>loading</i>}>
-          <DataView data={r.data} />
-        </React.Suspense>
-      </>,
-    );
-    await r.settle('0:0', 'one');
-    expect(text(container)).toBe('i;d:one');
-    await act(() => {
-      startTransitionWrite(() => {
-        r.refresh(); // param unchanged: the hidden nonce is the only signal
-      });
-    });
-    expect(r.fetchCount()).toBe(2); // the transition's world refetched
-    expect(read(r.data)).toBe('one'); // canonical still serves stale
-    // The transition parks on the refetch; the committed screen must show
-    // the stale value WITH the pending indicator engaged — the nonce draft
-    // has to reach the probe's subscription like any other drafted input.
-    expect(text(container)).toBe('P;d:one');
-    await r.settle('0:1', 'two');
-    expect(text(container)).toBe('i;d:two'); // the refetch commits with the transition
-    expect(r.fetchCount()).toBe(2);
   });
 
   test('settlement inside a transition commits with the transition', async () => {
@@ -151,15 +89,14 @@ describe('scenario 11 — suspense family', () => {
         <DataView data={r.data} />
       </React.Suspense>,
     );
-    await r.settle('0:0', 'one');
+    await r.settle('0', 'one');
     await act(() => {
       startTransitionWrite(() => {
         param.set(1);
-        r.refresh();
       });
     });
     expect(text(container)).toBe('d:one'); // transition holds on the fetch
-    await r.settle('1:1', 'TWO');
+    await r.settle('1', 'TWO');
     expect(text(container)).toBe('d:TWO'); // lands with the transition
     expect(read(r.data)).toBe('TWO');
   });

@@ -1,16 +1,6 @@
-/** Async semantics: pending/error as graph state, suspensions, refresh. */
+/** Async semantics: pending/error as graph state, suspensions, refetching. */
 import { describe, expect, test } from 'vitest';
-import {
-  Flags,
-  computed,
-  effect,
-  isPending,
-  latest,
-  reactIntegration as ri,
-  read,
-  refresh,
-  signal,
-} from '../src/index.ts';
+import { computed, effect, isPending, latest, read, signal } from '../src/index.ts';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -51,8 +41,11 @@ describe('pending as graph state', () => {
 
   test('stale value keeps serving while a refetch is pending; latest never suspends', async () => {
     const gates = [deferred<number>(), deferred<number>()];
-    let epoch = 0;
-    const c = computed((use) => use(gates[epoch].promise));
+    // A user-owned nonce cell is the refetch trigger: the computed reads it,
+    // so a bump invalidates with the data inputs unchanged and starts a new
+    // fetch through the ordinary write path.
+    const nonce = signal(0);
+    const c = computed((use) => use(gates[nonce.get()].promise));
     gates[0].resolve(1);
     try {
       read(c); // first touch attaches to the (already resolved) thenable
@@ -61,8 +54,7 @@ describe('pending as graph state', () => {
     }
     await tick();
     expect(read(c)).toBe(1);
-    epoch = 1;
-    refresh(c);
+    nonce.set(1);
     expect(read(c)).toBe(1); // stale serves
     expect(latest(c)).toBe(1);
     expect(isPending(c)).toBe(true);
@@ -138,85 +130,5 @@ describe('errors are reference-stable boxes', () => {
     const d = computed(() => c.get());
     expect(() => read(d)).toThrow(boom);
     expect(() => read(d)).toThrow(boom);
-  });
-});
-
-describe('refresh classification', () => {
-  /** The resource idiom: one request per (param, epoch) key, so requests are
-   * stable across re-evaluations and refreshes create fresh keys. */
-  function makeResource(param: ReturnType<typeof signal<number>>) {
-    let epoch = 0;
-    let fetchCount = 0;
-    const gates = new Map<string, ReturnType<typeof deferred<string>>>();
-    const data = computed((use) => {
-      const key = `${param.get()}:${epoch}`;
-      let g = gates.get(key);
-      if (g === undefined) {
-        g = deferred<string>();
-        gates.set(key, g);
-        fetchCount++;
-      }
-      return use(g.promise);
-    });
-    return {
-      data,
-      gates,
-      fetchCount: () => fetchCount,
-      refresh() {
-        epoch++;
-        refresh(data);
-      },
-    };
-  }
-
-  test('urgent refresh refetches with unchanged inputs; stale serves', async () => {
-    const param = signal(0);
-    const r = makeResource(param);
-    try {
-      read(r.data);
-    } catch {
-      /* first load parked */
-    }
-    r.gates.get('0:0')!.resolve('one');
-    await tick();
-    expect(read(r.data)).toBe('one');
-    expect(r.fetchCount()).toBe(1);
-    r.refresh();
-    expect(read(r.data)).toBe('one'); // stale keeps serving
-    expect(isPending(r.data)).toBe(true);
-    expect(r.fetchCount()).toBe(2);
-    r.gates.get('0:1')!.resolve('two');
-    await tick();
-    expect(read(r.data)).toBe('two');
-  });
-
-  test('refresh inside a draft belongs to that draft: canonical is untouched until fold', async () => {
-    const param = signal(0);
-    const r = makeResource(param);
-    try {
-      read(r.data);
-    } catch {
-      /* park */
-    }
-    r.gates.get('0:0')!.resolve('one');
-    await tick();
-    expect(read(r.data)).toBe('one');
-    const d = ri.openDraft();
-    ri.runInDraft(d.id, () => {
-      param.set(1);
-      r.refresh();
-    });
-    ri.sealDraft(d.id);
-    expect(read(r.data)).toBe('one'); // canonical: no refetch yet
-    const st = ri.resolveState(r.data, [d.id]);
-    expect((st.flags & Flags.DerivedSuspended) !== 0).toBe(true); // the draft world is fetching '1:1'
-    expect(r.fetchCount()).toBe(2);
-    r.gates.get('1:1')!.resolve('TWO');
-    await tick();
-    expect(ri.resolveState(r.data, [d.id])).toMatchObject({ value: 'TWO', throwable: null });
-    expect(read(r.data)).toBe('one'); // still canonical-stale
-    ri.retireDraft(d.id);
-    expect(read(r.data)).toBe('TWO'); // fold re-fetches nothing: same key, same gate
-    expect(r.fetchCount()).toBe(2);
   });
 });

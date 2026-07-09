@@ -217,8 +217,6 @@ export interface DerivedNode<T> extends ReactiveNode {
   fn: (use: UseFn) => T;
   equals: EqualsFn<T>;
   computing: boolean;
-  /** Hidden refresh input; created on first refresh(x). */
-  refreshNonce: CellNode<number> | undefined;
 }
 
 export interface WatcherNode extends ReactiveNode {
@@ -247,10 +245,9 @@ export function makeCell<T>(
     equals?: EqualsFn<T>;
     label?: string;
     onObserved?: (ctx: { get(): T; set(v: T): void }) => void | (() => void);
-    lazy?: boolean;
   },
 ): CellNode<T> {
-  const lazyInit = typeof initial === 'function' && opts?.lazy !== false;
+  const lazyInit = typeof initial === 'function';
   return {
     flags: Flags.Cell,
     version: 1,
@@ -296,7 +293,6 @@ export function makeDerived<T>(
     fn,
     equals: opts?.equals ?? defaultEquals,
     computing: false,
-    refreshNonce: undefined,
     worldMemos: null,
     reactEpoch: 1,
     canonicalEpoch: 1,
@@ -446,6 +442,28 @@ function trimDeps(sub: ReactiveNode): void {
   }
 }
 
+/** Dev-only invariant net: a node's deps list is exactly what its last
+ * evaluation read, in read order. Evaluation is the only site that creates
+ * or keeps dep edges, and every touch (re)stamps with the pass in progress,
+ * so after trimming every retained edge must carry a stamp from this eval
+ * or a nested one — stamps are monotonic and never reused, so `>= myStamp`
+ * is exact. Gated on a module const so bundler NODE_ENV replacement strips
+ * the walk from production builds; unbundled production pays one
+ * always-false branch per evaluation, never the walk. */
+const DEV_EVAL_CHECKS: boolean =
+  typeof process !== 'undefined' && process.env.NODE_ENV !== 'production';
+function assertDepsFromEval(sub: ReactiveNode, myStamp: number): void {
+  for (let l = sub.deps; l !== undefined; l = l.nextDep) {
+    if (l.stamp < myStamp) {
+      throw new Error(
+        `invariant violation: a dependency edge survived trimming that the finished evaluation never read${
+          sub.label !== undefined ? ` (sub "${sub.label}")` : ''
+        }`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Invalidation (push through watched edges)
 // ---------------------------------------------------------------------------
@@ -570,8 +588,8 @@ export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): voi
 
 /**
  * Invalidate a derived from outside the dependency graph (thenable
- * settlement, refresh). Treated exactly like a write: the version advances
- * so downstream validation re-pulls, subscribers get marked, effects run.
+ * settlement). Treated exactly like a write: the version advances so
+ * downstream validation re-pulls, subscribers get marked, effects run.
  */
 export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventId): void {
   writeEpoch++;
@@ -649,30 +667,6 @@ export function pokeAndWakeLeafObservers(node: ReactiveNode, id: number): void {
   if (batchDepth === 0) flush();
   for (const leaf of wakes) {
     if (!leaf.disposed && leaf.onDraftWake !== undefined) leaf.onDraftWake(id);
-  }
-}
-
-/** Append a dependency edge outside evaluation (the hidden refresh nonce).
- * The edge participates in watch bookkeeping like any tracked read. */
-export function adoptDepLink(dep: ReactiveNode, sub: ReactiveNode): void {
-  for (let l = sub.deps; l !== undefined; l = l.nextDep) {
-    if (l.dep === dep) return;
-  }
-  const link: Link = {
-    dep,
-    sub,
-    version: dep.version,
-    nextDep: sub.deps,
-    prevSub: undefined,
-    nextSub: undefined,
-    inSubs: false,
-    stamp: 0,
-  };
-  sub.deps = link;
-  if (sub.depsTail === undefined) sub.depsTail = link;
-  if ((sub.flags & Flags.Watched) !== 0) {
-    linkIntoSubs(link);
-    addObserver(dep);
   }
 }
 
@@ -859,7 +853,6 @@ function recompute(node: DerivedNode<unknown>): void {
   let error: unknown;
   let value: unknown;
   try {
-    if (node.refreshNonce !== undefined) readCell(node.refreshNonce);
     value = node.fn((t) => useImpl(t, node) as never);
   } catch (e) {
     if (e === PARKED) parked = true;
@@ -872,6 +865,7 @@ function recompute(node: DerivedNode<unknown>): void {
     evalStamp = myStamp;
     activeConsumer = prevConsumer;
     trimDeps(node);
+    if (DEV_EVAL_CHECKS) assertDepsFromEval(node, myStamp);
     node.computing = false;
   }
   const changed = finishComputeImpl(node, { parked, error, hasError, value });
@@ -1033,6 +1027,7 @@ function executeWatcher(w: WatcherNode): void {
     activeConsumer = prevConsumer;
     activeScope = prevScope;
     trimDeps(w);
+    if (DEV_EVAL_CHECKS) assertDepsFromEval(w, myStamp);
   }
 }
 
