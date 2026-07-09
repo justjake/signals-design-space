@@ -1,0 +1,220 @@
+From 12763dcc67f53297a507fd179d5d6c30352a6467 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:29:54 -0400
+Subject: [PATCH 2/4] Pin late signal deliveries to live batch lanes
+
+---
+ .../src/ReactFiberSignalRuntime.js             | 18 ++++++++++++++++++
+ .../react-reconciler/src/ReactFiberWorkLoop.js |  8 +++++++-
+ packages/react/index.development.js            |  1 +
+ .../react/index.experimental.development.js    |  1 +
+ packages/react/index.experimental.js           |  1 +
+ packages/react/index.fb.js                     |  1 +
+ packages/react/index.js                        |  1 +
+ packages/react/index.stable.development.js     |  1 +
+ packages/react/index.stable.js                 |  1 +
+ packages/react/src/ReactClient.js              |  7 ++++++-
+ .../react/src/ReactSharedInternalsClient.js    |  2 ++
+ packages/react/src/ReactSignalRuntime.js       |  5 +++++
+ 12 files changed, 45 insertions(+), 2 deletions(-)
+
+diff --git a/packages/react-reconciler/src/ReactFiberSignalRuntime.js b/packages/react-reconciler/src/ReactFiberSignalRuntime.js
+index cc38171ede..bbad0743f5 100644
+--- a/packages/react-reconciler/src/ReactFiberSignalRuntime.js
++++ b/packages/react-reconciler/src/ReactFiberSignalRuntime.js
+@@ -16,6 +16,24 @@ import ReactSharedInternals from 'shared/ReactSharedInternals';
+ const batchesByLane: Int32Array = new Int32Array(31);
+ const renderedBatches: Map<FiberRoot, Array<number>> = new Map();
+ 
++export function laneForSignalBatch(batch: number): Lane {
++  for (let index = 0, lane = 1; index < 31; index++, lane *= 2) {
++    if (batchesByLane[index] === batch) return lane;
++  }
++  return 0;
++}
++
++ReactSharedInternals.P = function <T>(batch: number, scope: () => T): T {
++  if (laneForSignalBatch(batch) === 0) return scope();
++  const previous = ReactSharedInternals.T;
++  ReactSharedInternals.T = ({_signalBatch: batch}: any);
++  try {
++    return scope();
++  } finally {
++    ReactSharedInternals.T = previous;
++  }
++};
++
+ function batchesFor(lanes: Lanes): Array<number> {
+   const result = [];
+   let lane = 1;
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index 0edc8db6c9..636ec5c7a6 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -230,6 +230,7 @@ import {
+ import {requestCurrentTransition} from './ReactFiberTransition';
+ import {
+   claimSignalBatch,
++  laneForSignalBatch,
+   signalCommit,
+   signalMutation,
+   signalRenderEnd,
+@@ -855,7 +856,12 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+       transition._updatedFibers.add(fiber);
+     }
+ 
+-    const lane = requestTransitionLane(transition);
++    const pinnedLane =
++      transition._signalBatch === undefined
++        ? NoLane
++        : laneForSignalBatch(transition._signalBatch);
++    const lane =
++      pinnedLane === NoLane ? requestTransitionLane(transition) : pinnedLane;
+     claimSignalBatch(lane, transition);
+     return lane;
+   }
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index d6292a93d7..835ea1f9c3 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -47,6 +47,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   unstable_LegacyHidden,
+   Activity,
+   ViewTransition,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 4663404763..6bad657bcf 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -31,6 +31,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   optimisticKey,
+   Activity,
+   unstable_getCacheForType,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 95696e4ff6..0cde9ecb5c 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -31,6 +31,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   optimisticKey,
+   Activity,
+   Activity as unstable_Activity,
+diff --git a/packages/react/index.fb.js b/packages/react/index.fb.js
+index f08bb173c1..d9a100e6d4 100644
+--- a/packages/react/index.fb.js
++++ b/packages/react/index.fb.js
+@@ -33,6 +33,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   StrictMode,
+   Suspense,
+   Activity,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index cdef8c4ec2..7894653dfd 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -48,6 +48,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   unstable_LegacyHidden,
+   Activity,
+   unstable_Scope,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 50e4570b75..a869237ac4 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -35,6 +35,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index c514f4774f..a5c17dd96a 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -35,6 +35,7 @@ export {
+   startTransition,
+   unstable_registerSignalRuntime,
+   unstable_runWithSignalBatch,
++  unstable_runInSignalBatch,
+   useId,
+   useCallback,
+   useContext,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 5f1e3e7b19..2cd8594196 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -64,7 +64,11 @@ import {addTransitionType} from './ReactTransitionType';
+ import {act} from './ReactAct';
+ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
+-import {registerSignalRuntime, runWithSignalBatch} from './ReactSignalRuntime';
++import {
++  registerSignalRuntime,
++  runInSignalBatch,
++  runWithSignalBatch,
++} from './ReactSignalRuntime';
+ 
+ const Children = {
+   map,
+@@ -122,6 +126,7 @@ export {
+   use,
+   registerSignalRuntime as unstable_registerSignalRuntime,
+   runWithSignalBatch as unstable_runWithSignalBatch,
++  runInSignalBatch as unstable_runInSignalBatch,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 024b95c96b..cd2c86bdba 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -29,6 +29,7 @@ export type SharedStateClient = {
+   G: null | onStartGestureTransitionFinish,
+   R: null | mixed, // Optional external signal runtime.
+   B: number, // External signal batch active while a transition is created.
++  P: null | (<T>(number, () => T) => T), // Renderer-provided live-batch pin.
+ 
+   // DEV-only
+ 
+@@ -66,6 +67,7 @@ const ReactSharedInternals: SharedStateClient = {
+   S: null,
+   R: null,
+   B: 0,
++  P: null,
+ } as any;
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+diff --git a/packages/react/src/ReactSignalRuntime.js b/packages/react/src/ReactSignalRuntime.js
+index 8e0c7c6fc4..ad8bbe7213 100644
+--- a/packages/react/src/ReactSignalRuntime.js
++++ b/packages/react/src/ReactSignalRuntime.js
+@@ -29,3 +29,8 @@ export function runWithSignalBatch<T>(batch: number, scope: () => T): T {
+     ReactSharedInternals.B = previous;
+   }
+ }
++
++export function runInSignalBatch<T>(batch: number, scope: () => T): T {
++  const pin = ReactSharedInternals.P;
++  return pin === null ? scope() : pin(batch, scope);
++}
+-- 
+2.50.1 (Apple Git-155)
+

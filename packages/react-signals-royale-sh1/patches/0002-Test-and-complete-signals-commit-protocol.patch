@@ -1,0 +1,180 @@
+From 257e8fd98b23fe942762a6d5aef3c7c935f360cb Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:28:54 -0400
+Subject: [PATCH 2/4] Test and complete signals commit protocol
+
+---
+ .../src/ReactFiberWorkLoop.js                 |  6 +-
+ .../src/__tests__/ReactSignalsRuntime-test.js | 99 +++++++++++++++++++
+ packages/react/src/ReactClient.js             | 12 +++
+ 3 files changed, 114 insertions(+), 3 deletions(-)
+ create mode 100644 packages/react-reconciler/src/__tests__/ReactSignalsRuntime-test.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index 7f43b25281..c2fc281302 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -3879,15 +3879,12 @@ function commitRoot(
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
+-    const signalRuntime = ReactSharedInternals.X;
+-    if (signalRuntime !== null) signalRuntime.mutation(root, true);
+     try {
+       // The first phase a "before mutation" phase. We use this phase to read the
+       // state of the host tree right before we mutate it. This is where
+       // getSnapshotBeforeUpdate is called.
+       commitBeforeMutationEffects(root, finishedWork, lanes);
+     } finally {
+-      if (signalRuntime !== null) signalRuntime.mutation(root, false);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+@@ -4041,6 +4038,8 @@ function flushMutationEffects(): void {
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
++    const signalRuntime = ReactSharedInternals.X;
++    if (signalRuntime !== null) signalRuntime.mutation(root, true);
+     try {
+       // The next phase is the mutation phase, where we mutate the host tree.
+       commitMutationEffects(root, finishedWork, lanes);
+@@ -4052,6 +4051,7 @@ function flushMutationEffects(): void {
+       }
+       resetAfterCommit(root.containerInfo);
+     } finally {
++      if (signalRuntime !== null) signalRuntime.mutation(root, false);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+diff --git a/packages/react-reconciler/src/__tests__/ReactSignalsRuntime-test.js b/packages/react-reconciler/src/__tests__/ReactSignalsRuntime-test.js
+new file mode 100644
+index 0000000000..a125ced1ec
+--- /dev/null
++++ b/packages/react-reconciler/src/__tests__/ReactSignalsRuntime-test.js
+@@ -0,0 +1,99 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @emails react-core
++ * @jest-environment node
++ */
++
++'use strict';
++
++let React;
++let ReactNoop;
++let Scheduler;
++let waitForAll;
++
++describe('external transactional signals runtime', () => {
++  beforeEach(() => {
++    jest.resetModules();
++    React = require('react');
++    ReactNoop = require('react-noop-renderer');
++    Scheduler = require('scheduler');
++    waitForAll = require('internal-test-utils').waitForAll;
++  });
++
++  function runtime(events) {
++    const lanes = new Map();
++    return {
++      lane(batch) {
++        return lanes.get(batch) || 0;
++      },
++      schedule(root, lane, batch) {
++        lanes.set(batch, lane);
++        events.push(['schedule', lane, batch]);
++      },
++      render(root, lanes) {
++        events.push(['render', lanes]);
++        return ['world'];
++      },
++      commit(root, lanes, remaining) {
++        events.push(['commit', lanes, remaining]);
++      },
++      mutation(root, start) {
++        events.push(['mutation', start]);
++      },
++    };
++  }
++
++  it('publishes one render world only while React is rendering', async () => {
++    const events = [];
++    const signals = React.unstable_Signals;
++    signals.register(runtime(events));
++    function App() {
++      Scheduler.log(signals.world());
++      return <span />;
++    }
++    ReactNoop.render(<App />);
++    await waitForAll([['world']]);
++    expect(signals.world()).toBe(null);
++    expect(events.some(event => event[0] === 'render')).toBe(true);
++    expect(events.some(event => event[0] === 'commit')).toBe(true);
++  });
++
++  it('attributes updates and reuses the original transition lane', async () => {
++    const events = [];
++    const signals = React.unstable_Signals;
++    signals.register(runtime(events));
++    let set;
++    function App() {
++      const [value, update] = React.useState(0);
++      set = update;
++      Scheduler.log(value);
++      return value;
++    }
++    ReactNoop.render(<App />);
++    await waitForAll([0]);
++    React.startTransition(() => signals.run(7, () => set(1)));
++    await waitForAll([1]);
++    const lane = events.find(event => event[0] === 'schedule')[1];
++    signals.run(7, () => set(2));
++    await waitForAll([2]);
++    const schedules = events.filter(event => event[0] === 'schedule');
++    expect(schedules).toEqual([
++      ['schedule', lane, 7],
++      ['schedule', lane, 7],
++    ]);
++  });
++
++  it('rejects a competing runtime and can reset the registry', () => {
++    const signals = React.unstable_Signals;
++    signals.register(runtime([]));
++    expect(() => signals.register(runtime([]))).toThrow(
++      'different external signal runtime',
++    );
++    signals.reset();
++    expect(() => signals.register(runtime([]))).not.toThrow();
++  });
++});
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index c628e39a7d..718b1812d7 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -98,6 +98,18 @@ const unstable_Signals = {
+   world() {
+     return ReactSharedInternals.R;
+   },
++  urgent(fn) {
++    const transition = ReactSharedInternals.T;
++    const batch = ReactSharedInternals.B;
++    ReactSharedInternals.T = null;
++    ReactSharedInternals.B = 0;
++    try {
++      return fn();
++    } finally {
++      ReactSharedInternals.T = transition;
++      ReactSharedInternals.B = batch;
++    }
++  },
+   reset() {
+     ReactSharedInternals.X = null;
+     ReactSharedInternals.B = 0;
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,273 @@
+From afe45089d087bc8f3f6e460f7fef0973c5df3703 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 14:24:49 -0400
+Subject: [PATCH 1/2] Signal seam: lane facts + pinned transition lane for
+ external signal runtimes
+
+A minimal introspection channel published on ReactSharedInternals. React
+exposes raw facts (pass start, root updated, commit, mutation bracket, all
+in lane vocabulary) and two queries (current write lane, current render
+container), plus one control: a pinned transition lane so a runtime can
+route a corrective update into a live batch's own lane. Every batch, world,
+and store concept lives in the external runtime.
+---
+ .../src/ReactFiberRootScheduler.js            |   7 ++
+ .../src/ReactFiberSignalSeam.js               | 107 ++++++++++++++++++
+ .../src/ReactFiberWorkLoop.js                 |  53 +++++++++
+ 3 files changed, 167 insertions(+)
+ create mode 100644 packages/react-reconciler/src/ReactFiberSignalSeam.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberRootScheduler.js b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+index cc97e21d54..5aceb982ad 100644
+--- a/packages/react-reconciler/src/ReactFiberRootScheduler.js
++++ b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+@@ -82,6 +82,7 @@ import {
+   syncNestedUpdateFlag,
+ } from './ReactProfilerTimer';
+ import {peekEntangledActionLane} from './ReactFiberAsyncAction';
++import signalSeam from './ReactFiberSignalSeam';
+ 
+ import noop from 'shared/noop';
+ import reportGlobalError from 'shared/reportGlobalError';
+@@ -708,6 +709,12 @@ export function requestTransitionLane(
+   // The trick we use is to cache the first of each of these inputs within an
+   // event. Then reset the cached values once we can be sure the event is
+   // over. Our heuristic for that is whenever we enter a concurrent work loop.
++  // Signal seam: a runtime pinning a corrective update to a live batch's
++  // lane wins over the per-event lane, so the update commits with its batch.
++  const pinnedLane = signalSeam.pinnedTransitionLane;
++  if (pinnedLane !== NoLane) {
++    return pinnedLane;
++  }
+   if (currentEventTransitionLane === NoLane) {
+     // All transitions within the same event are assigned the same lane.
+     const actionScopeLane = peekEntangledActionLane();
+diff --git a/packages/react-reconciler/src/ReactFiberSignalSeam.js b/packages/react-reconciler/src/ReactFiberSignalSeam.js
+new file mode 100644
+index 0000000000..0bc84c390d
+--- /dev/null
++++ b/packages/react-reconciler/src/ReactFiberSignalSeam.js
+@@ -0,0 +1,107 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++/**
++ * The signal seam: a minimal introspection channel that lets an external
++ * signal runtime participate in concurrent rendering without tearing.
++ *
++ * Design: React exposes raw facts (lanes, roots, phase edges) and one control
++ * (a pinned transition lane); every batch/world/store concept lives in the
++ * runtime. The seam object is published on ReactSharedInternals so a runtime
++ * loaded from the `react` package can reach it; its absence on stock React is
++ * the runtime's feature-detection signal.
++ *
++ * Facts, from the reconciler to the runtime:
++ * - onPassStart(container, lanes): a fresh render stack was prepared for a
++ *   root; `lanes` is the entangled set the pass will consume (NoLanes when
++ *   the stack was reset without new work).
++ * - onRootUpdated(container, lanes): updates were scheduled on a root.
++ * - onCommit(container, committedLanes, remainingLanes): a commit finished
++ *   `committedLanes` (entanglement-expanded) on a root; `remainingLanes` is
++ *   what is still pending there.
++ * - onMutation(container, active): brackets exactly the phase in which React
++ *   mutates the host tree for a commit.
++ *
++ * Queries, installed by the work loop for the runtime to call:
++ * - getWriteLane(): the transition lane a store write issued right now
++ *   belongs to, or 0 for urgent writes.
++ * - getRenderContainer(): the container whose render pass is executing on
++ *   this stack, or null (write-during-render detection and world routing).
++ *
++ * Control:
++ * - pinnedTransitionLane: while nonzero, transitions claim exactly this lane.
++ *   The runtime pins it around a corrective update so the update rides
++ *   INSIDE the pending batch's own lane and commits with it, never beside it.
++ */
++
++import type {FiberRoot} from './ReactInternalTypes';
++import type {Lane, Lanes} from './ReactFiberLane';
++
++import ReactSharedInternals from 'shared/ReactSharedInternals';
++
++export type SignalRuntime = {
++  onPassStart: (container: mixed, lanes: Lanes) => void,
++  onRootUpdated: (container: mixed, lanes: Lanes) => void,
++  onCommit: (
++    container: mixed,
++    committedLanes: Lanes,
++    remainingLanes: Lanes,
++  ) => void,
++  onMutation: (container: mixed, active: boolean) => void,
++};
++
++export type SignalSeam = {
++  runtime: SignalRuntime | null,
++  getWriteLane: null | (() => Lane),
++  getRenderContainer: null | (() => mixed),
++  pinnedTransitionLane: Lane,
++};
++
++const seam: SignalSeam = {
++  runtime: null,
++  getWriteLane: null,
++  getRenderContainer: null,
++  pinnedTransitionLane: (0: any),
++};
++
++(ReactSharedInternals: any).signalSeam = seam;
++
++export default seam;
++
++export function onSignalPassStart(root: FiberRoot, lanes: Lanes): void {
++  const runtime = seam.runtime;
++  if (runtime !== null) {
++    runtime.onPassStart(root.containerInfo, lanes);
++  }
++}
++
++export function onSignalRootUpdated(root: FiberRoot, lanes: Lanes): void {
++  const runtime = seam.runtime;
++  if (runtime !== null) {
++    runtime.onRootUpdated(root.containerInfo, lanes);
++  }
++}
++
++export function onSignalCommit(
++  root: FiberRoot,
++  committedLanes: Lanes,
++  remainingLanes: Lanes,
++): void {
++  const runtime = seam.runtime;
++  if (runtime !== null) {
++    runtime.onCommit(root.containerInfo, committedLanes, remainingLanes);
++  }
++}
++
++export function onSignalMutation(root: FiberRoot, active: boolean): void {
++  const runtime = seam.runtime;
++  if (runtime !== null) {
++    runtime.onMutation(root.containerInfo, active);
++  }
++}
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..c60e6ec907 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -228,6 +228,12 @@ import {
+   eventPriorityToLane,
+ } from './ReactEventPriorities';
+ import {requestCurrentTransition} from './ReactFiberTransition';
++import signalSeam, {
++  onSignalPassStart,
++  onSignalRootUpdated,
++  onSignalCommit,
++  onSignalMutation,
++} from './ReactFiberSignalSeam';
+ import {
+   SelectiveHydrationException,
+   beginWork,
+@@ -853,6 +859,31 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+   return eventPriorityToLane(resolveUpdatePriority());
+ }
+ 
++// Signal-seam queries (see ReactFiberSignalSeam). The write cascade mirrors
++// requestUpdateLane minus the fiber-specific cases: an external store write
++// has no fiber, and a write during render is the runtime's own error to
++// raise, so the query only answers "which transition lane, if any".
++signalSeam.getWriteLane = function (): Lane {
++  const transition = requestCurrentTransition();
++  if (
++    transition !== null &&
++    !(enableGestureTransition && (transition: any).gesture)
++  ) {
++    return requestTransitionLane(transition);
++  }
++  return NoLane;
++};
++
++signalSeam.getRenderContainer = function (): mixed {
++  if (
++    (executionContext & RenderContext) !== NoContext &&
++    workInProgressRoot !== null
++  ) {
++    return workInProgressRoot.containerInfo;
++  }
++  return null;
++};
++
+ function requestRetryLane(fiber: Fiber) {
+   // This is a fork of `requestUpdateLane` designed specifically for Suspense
+   // "retries" — a special update that attempts to flip a Suspense boundary
+@@ -1754,6 +1785,9 @@ function isRenderConsistentWithExternalStores(finishedWork: Fiber): boolean {
+ function markRootUpdated(root: FiberRoot, updatedLanes: Lanes) {
+   _markRootUpdated(root, updatedLanes);
+ 
++  // Signal seam: pending edge — the runtime learns which roots carry a lane.
++  onSignalRootUpdated(root, updatedLanes);
++
+   if (enableInfiniteRenderLoopDetection) {
+     // Check for recursive updates
+     if (executionContext & RenderContext) {
+@@ -2269,6 +2303,11 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
+ 
+   finishQueueingConcurrentUpdates();
+ 
++  // Signal seam: a fresh stack starts (or, for NoLanes, resets) this root's
++  // render pass. After the concurrent update queue drained, so the runtime
++  // latches a consistent cutoff for the pass's world.
++  onSignalPassStart(root, lanes === NoLanes ? NoLanes : entangledRenderLanes);
++
+   if (__DEV__) {
+     resetOwnerStackLimit();
+ 
+@@ -3742,6 +3781,11 @@ function commitRoot(
+     remainingLanes &= ~GestureLane;
+   }
+ 
++  // Signal seam: the write set this commit makes visible spans the finished
++  // lanes plus what they were entangled with. Capture before markRootFinished
++  // clears the entanglement bookkeeping.
++  const signalCommittedLanes = mergeLanes(lanes, getEntangledLanes(root, lanes));
++
+   markRootFinished(
+     root,
+     lanes,
+@@ -3751,6 +3795,10 @@ function commitRoot(
+     suspendedRetryLanes,
+   );
+ 
++  // Signal seam: finish edge — lanes leaving root.pendingLanes retire their
++  // batches exactly once, at the same moment React's own books change.
++  onSignalCommit(root, signalCommittedLanes, root.pendingLanes);
++
+   // Reset this before firing side effects so we can detect recursive updates.
+   didIncludeCommitPhaseUpdate = false;
+ 
+@@ -4012,6 +4060,10 @@ function flushMutationEffects(): void {
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
++    // Signal seam: bracket exactly the window in which React mutates the
++    // host tree, so a MutationObserver client can ignore React's own
++    // mutations while still catching third-party ones.
++    onSignalMutation(root, true);
+     try {
+       // The next phase is the mutation phase, where we mutate the host tree.
+       commitMutationEffects(root, finishedWork, lanes);
+@@ -4023,6 +4075,7 @@ function flushMutationEffects(): void {
+       }
+       resetAfterCommit(root.containerInfo);
+     } finally {
++      onSignalMutation(root, false);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+-- 
+2.50.1 (Apple Git-155)
+

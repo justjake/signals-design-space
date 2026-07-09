@@ -1,0 +1,26 @@
+{
+	"name": "react-signals-royale-sx1",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"exports": "./src/index.ts",
+	"scripts": {
+		"bench:react": "tsx bench/react-bench.mjs",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"signals-royale-sx1": "link:../signals-royale-sx1",
+		"react": "link:../../vendor/react/build/oss-experimental/react",
+		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler"
+	},
+	"devDependencies": {
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
+		"jsdom": "^26.1.0",
+		"tsx": "4.23.0",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

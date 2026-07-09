@@ -1,0 +1,26 @@
+{
+  "name": "react-signals-royale-sm1",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "bench:react": "esbuild bench/react-bench.mjs --bundle --platform=node --format=esm --external:react --external:react-dom '--external:react-dom/*' --external:scheduler --external:jsdom --outfile=dist/react-bench.mjs && node dist/react-bench.mjs",
+    "bench:seam": "esbuild royale/seam-bench-run.ts --bundle --platform=node --format=esm --external:react --external:react-dom '--external:react-dom/*' --external:scheduler --external:jsdom --outfile=dist/seam-bench-run.mjs && node dist/seam-bench-run.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "link:../../vendor/react/build/oss-experimental/react",
+    "react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+    "scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
+    "signals-royale-sm1": "link:../signals-royale-sm1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "esbuild": "0.28.1",
+    "jsdom": "^26.1.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.6"
+  }
+}

@@ -1,0 +1,311 @@
+From 7eebe334d127f4f34e3e179f6905a4618d50c1dd Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 14:27:50 -0400
+Subject: [PATCH 1/2] External-signals seam: render identity for external
+ stores
+
+One injectable runtime (pass started/discarded, commit phases bracketing
+the DOM mutation window exactly, per-root committed lanes) plus three
+inbound helpers: a forced update lane so corrective re-renders join a live
+batch's own commit, the current transition scope's lane for batch keying,
+and a root-lane kick that guarantees every batch a close edge. Existence
+of the react-dom 'unstable_externalSignals' export is the handshake.
+---
+ packages/react-dom/client.js                  |   7 +-
+ .../react-dom/src/client/ReactDOMClient.js    |   1 +
+ .../src/client/ReactDOMExternalSignals.js     |  31 ++++
+ .../src/ReactFiberExternalSignals.js          | 136 ++++++++++++++++++
+ .../src/ReactFiberWorkLoop.js                 |  36 +++++
+ 5 files changed, 210 insertions(+), 1 deletion(-)
+ create mode 100644 packages/react-dom/src/client/ReactDOMExternalSignals.js
+ create mode 100644 packages/react-reconciler/src/ReactFiberExternalSignals.js
+
+diff --git a/packages/react-dom/client.js b/packages/react-dom/client.js
+index 4d57f56da0..9ef581bdeb 100644
+--- a/packages/react-dom/client.js
++++ b/packages/react-dom/client.js
+@@ -7,4 +7,9 @@
+  * @flow
+  */
+ 
+-export {createRoot, hydrateRoot, version} from './src/client/ReactDOMClient';
++export {
++  createRoot,
++  hydrateRoot,
++  unstable_externalSignals,
++  version,
++} from './src/client/ReactDOMClient';
+diff --git a/packages/react-dom/src/client/ReactDOMClient.js b/packages/react-dom/src/client/ReactDOMClient.js
+index 9a9f3157b8..b53cab36f2 100644
+--- a/packages/react-dom/src/client/ReactDOMClient.js
++++ b/packages/react-dom/src/client/ReactDOMClient.js
+@@ -49,6 +49,7 @@ function findDOMNode(
+ // Expose findDOMNode on internals
+ Internals.findDOMNode = findDOMNode;
+ 
++export {unstable_externalSignals} from './ReactDOMExternalSignals';
+ export {ReactVersion as version, createRoot, hydrateRoot};
+ 
+ const foundDevTools = injectIntoDevTools();
+diff --git a/packages/react-dom/src/client/ReactDOMExternalSignals.js b/packages/react-dom/src/client/ReactDOMExternalSignals.js
+new file mode 100644
+index 0000000000..cbad44c668
+--- /dev/null
++++ b/packages/react-dom/src/client/ReactDOMExternalSignals.js
+@@ -0,0 +1,31 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++// Userland surface of the external-signals seam. Its existence is the
++// protocol handshake: stock React has no `unstable_externalSignals` export,
++// so a signals library that requires the seam fails loudly at registration
++// on an unpatched build.
++
++import {
++  injectExternalSignalsRuntime,
++  runWithForcedLane,
++  requestCurrentTransitionLane,
++  scheduleExternalRootLane,
++} from 'react-reconciler/src/ReactFiberExternalSignals';
++import {isInvalidExecutionContextForEventFunction} from 'react-reconciler/src/ReactFiberWorkLoop';
++
++export const unstable_externalSignals = {
++  inject: injectExternalSignalsRuntime,
++  runWithLane: runWithForcedLane,
++  currentTransitionLane: requestCurrentTransitionLane,
++  scheduleRootLane: scheduleExternalRootLane,
++  // True during the render phase: the window in which store writes must be
++  // rejected (commit-phase and event writes stay legal).
++  isRenderPhase: isInvalidExecutionContextForEventFunction,
++};
+diff --git a/packages/react-reconciler/src/ReactFiberExternalSignals.js b/packages/react-reconciler/src/ReactFiberExternalSignals.js
+new file mode 100644
+index 0000000000..d52b834907
+--- /dev/null
++++ b/packages/react-reconciler/src/ReactFiberExternalSignals.js
+@@ -0,0 +1,136 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++// External-signals seam: render identity for external state libraries.
++//
++// A concurrent-safe external store needs to know four things React never
++// tells it: when a render pass starts (and for which root and lanes), when
++// a pass's work reaches the screen (per-root commit, bracketing the DOM
++// mutation phase exactly), which lane a transition-classified write will
++// schedule on, and how to schedule follow-up work onto a specific lane so
++// corrective re-renders land inside the owning batch's commit instead of
++// beside it. This module is that seam and nothing more: one injectable
++// runtime for the outbound events, and three inbound helpers. Subscription
++// bookkeeping, speculative state, and delivery policy all stay in userland.
++
++import type {FiberRoot} from './ReactInternalTypes';
++import type {Lane, Lanes} from './ReactFiberLane';
++
++import {NoLane, markRootUpdated} from './ReactFiberLane';
++import {
++  ensureRootIsScheduled,
++  requestTransitionLane,
++} from './ReactFiberRootScheduler';
++import ReactSharedInternals from 'shared/ReactSharedInternals';
++
++export type ExternalSignalsCommitPhase =
++  | 'mutation-start' // immediately before React mutates the host tree
++  | 'mutation-stop' // immediately after; layout and passive effects follow
++  | 'committed'; // the pass's work is current; lanes name what committed
++
++export type ExternalSignalsRuntime = {
++  onPassStarted: (root: FiberRoot, lanes: Lanes) => void,
++  onPassDiscarded: (root: FiberRoot, lanes: Lanes) => void,
++  onCommitPhase: (
++    root: FiberRoot,
++    phase: ExternalSignalsCommitPhase,
++    lanes: Lanes,
++  ) => void,
++};
++
++let runtime: ExternalSignalsRuntime | null = null;
++
++/**
++ * Installs the external runtime. One slot: installing replaces the previous
++ * runtime and returns an uninstaller. The seam's existence is the protocol
++ * handshake — stock React has no such export, so a library that requires it
++ * can fail loudly at registration.
++ */
++export function injectExternalSignalsRuntime(
++  next: ExternalSignalsRuntime,
++): () => void {
++  runtime = next;
++  return () => {
++    if (runtime === next) {
++      runtime = null;
++    }
++  };
++}
++
++export function externalSignalsPassStarted(
++  root: FiberRoot,
++  lanes: Lanes,
++): void {
++  if (runtime !== null) {
++    runtime.onPassStarted(root, lanes);
++  }
++}
++
++export function externalSignalsPassDiscarded(
++  root: FiberRoot,
++  lanes: Lanes,
++): void {
++  if (runtime !== null) {
++    runtime.onPassDiscarded(root, lanes);
++  }
++}
++
++export function externalSignalsCommitPhase(
++  root: FiberRoot,
++  phase: ExternalSignalsCommitPhase,
++  lanes: Lanes,
++): void {
++  if (runtime !== null) {
++    runtime.onCommitPhase(root, phase, lanes);
++  }
++}
++
++// A forced update lane, consulted by requestUpdateLane ahead of every other
++// classification rule. This is how a corrective re-render joins a live
++// batch: the store schedules the subscriber's own update while the batch's
++// lane is forced, so React folds the correction into that batch's render
++// and commit rather than creating a fresh one.
++let forcedLane: Lane = NoLane;
++
++export function getForcedExternalLane(): Lane {
++  return forcedLane;
++}
++
++export function runWithForcedLane<T>(lane: Lane, fn: () => T): T {
++  const prev = forcedLane;
++  forcedLane = lane;
++  try {
++    return fn();
++  } finally {
++    forcedLane = prev;
++  }
++}
++
++/**
++ * The lane an update scheduled by the current transition scope would get
++ * (NoLane outside a transition). Lets the store key its draft batch by the
++ * same lane React will render, without scheduling anything yet.
++ */
++export function requestCurrentTransitionLane(): Lane {
++  const transition = ReactSharedInternals.T;
++  if (transition === null) {
++    return NoLane;
++  }
++  return requestTransitionLane(transition);
++}
++
++/**
++ * Guarantees a close edge for a batch: marks the lane pending on a root and
++ * schedules it, so the lane renders and commits (retiring the batch) even
++ * when no subscribed component exists. A bailed-out root render is cheap.
++ */
++export function scheduleExternalRootLane(root: FiberRoot, lane: Lane): void {
++  markRootUpdated(root, lane);
++  ensureRootIsScheduled(root);
++}
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..951b694256 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -405,6 +405,12 @@ import {
+   flushSyncWorkOnLegacyRootsOnly,
+   requestTransitionLane,
+ } from './ReactFiberRootScheduler';
++import {
++  externalSignalsPassStarted,
++  externalSignalsPassDiscarded,
++  externalSignalsCommitPhase,
++  getForcedExternalLane,
++} from './ReactFiberExternalSignals';
+ import {getMaskedContext, getUnmaskedContext} from './ReactFiberLegacyContext';
+ import {logUncaughtError} from './ReactFiberErrorLogger';
+ import {
+@@ -808,6 +814,13 @@ export function getCurrentTime(): number {
+ }
+ 
+ export function requestUpdateLane(fiber: Fiber): Lane {
++  // An external store scheduling a corrective re-render into a live batch
++  // pins that batch's lane for the duration of the dispatch.
++  const forcedExternalLane = getForcedExternalLane();
++  if (forcedExternalLane !== NoLane) {
++    return forcedExternalLane;
++  }
++
+   // Special cases
+   const mode = fiber.mode;
+   if (!disableLegacyMode && (mode & ConcurrentMode) === NoMode) {
+@@ -2007,6 +2020,17 @@ function finalizeRender(lanes: Lanes, finalizationTime: number): void {
+ }
+ 
+ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
++  // Render identity for external stores: a fresh stack is a new render
++  // pass; an existing work-in-progress tree thrown away here was a pass
++  // that will never commit.
++  if (workInProgress !== null && workInProgressRoot !== null) {
++    externalSignalsPassDiscarded(
++      workInProgressRoot,
++      workInProgressRootRenderLanes,
++    );
++  }
++  externalSignalsPassStarted(root, lanes);
++
+   if (enableProfilerTimer && enableComponentPerformanceTrack) {
+     // The order of tracks within a group are determined by the earliest start time.
+     // Are tracks should show up in priority order and we should ideally always show
+@@ -4005,6 +4029,11 @@ function flushMutationEffects(): void {
+     (finishedWork.subtreeFlags & MutationMask) !== NoFlags;
+   const rootMutationHasEffect = (finishedWork.flags & MutationMask) !== NoFlags;
+ 
++  // The external-signals mutation window brackets exactly React's own DOM
++  // mutation phase: nothing React does to the host tree happens outside
++  // these two edges, and layout/passive effects happen after the stop edge.
++  externalSignalsCommitPhase(root, 'mutation-start', lanes);
++
+   if (subtreeMutationHasEffects || rootMutationHasEffect) {
+     const prevTransition = ReactSharedInternals.T;
+     ReactSharedInternals.T = null;
+@@ -4030,11 +4059,18 @@ function flushMutationEffects(): void {
+     }
+   }
+ 
++  externalSignalsCommitPhase(root, 'mutation-stop', lanes);
++
+   // The work-in-progress tree is now the current tree. This must come after
+   // the mutation phase, so that the previous tree is still current during
+   // componentWillUnmount, but before the layout phase, so that the finished
+   // work is current during componentDidMount/Update.
+   root.current = finishedWork;
++
++  // The committed edge: the finished lanes' external batches retire here,
++  // before layout effects run, so effects observe post-retirement state.
++  externalSignalsCommitPhase(root, 'committed', lanes);
++
+   pendingEffectsStatus = PENDING_LAYOUT_PHASE;
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,26 @@
+{
+	"name": "react-signals-royale-fm2",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./royale/adapter": "./royale/adapter.ts"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.2",
+		"@types/react": "19.1.8",
+		"@types/react-dom": "19.1.6",
+		"jsdom": "26.1.0",
+		"react": "link:../../vendor/react/build/oss-experimental/react",
+		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
+		"signals-royale-fm2": "link:../signals-royale-fm2",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

@@ -1,0 +1,132 @@
+From 7944cbad7a58e59e1afa1621f610a1e6d16f3572 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:39:34 -0400
+Subject: [PATCH 3/4] Make signals protocol closure-safe
+
+---
+ packages/react/src/ReactClient.js             | 48 ++-----------------
+ .../react/src/ReactSharedInternalsClient.js   | 44 +++++++++++++++++
+ 2 files changed, 47 insertions(+), 45 deletions(-)
+
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 718b1812d7..667a488c0d 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -58,7 +58,9 @@ import {
+   useOptimistic,
+   useActionState,
+ } from './ReactHooks';
+-import ReactSharedInternals from './ReactSharedInternalsClient';
++import ReactSharedInternals, {
++  unstable_Signals,
++} from './ReactSharedInternalsClient';
+ import {startTransition, startGestureTransition} from './ReactStartTransition';
+ import {addTransitionType} from './ReactTransitionType';
+ import {act} from './ReactAct';
+@@ -73,50 +75,6 @@ const Children = {
+   only,
+ };
+ 
+-const unstable_Signals = {
+-  register(runtime) {
+-    const current = ReactSharedInternals.X;
+-    if (current !== null && current !== runtime) {
+-      throw new Error(
+-        'A different external signal runtime is already registered.',
+-      );
+-    }
+-    ReactSharedInternals.X = runtime;
+-    return () => {
+-      if (ReactSharedInternals.X === runtime) ReactSharedInternals.X = null;
+-    };
+-  },
+-  run(batch, fn) {
+-    const previous = ReactSharedInternals.B;
+-    ReactSharedInternals.B = batch;
+-    try {
+-      return fn();
+-    } finally {
+-      ReactSharedInternals.B = previous;
+-    }
+-  },
+-  world() {
+-    return ReactSharedInternals.R;
+-  },
+-  urgent(fn) {
+-    const transition = ReactSharedInternals.T;
+-    const batch = ReactSharedInternals.B;
+-    ReactSharedInternals.T = null;
+-    ReactSharedInternals.B = 0;
+-    try {
+-      return fn();
+-    } finally {
+-      ReactSharedInternals.T = transition;
+-      ReactSharedInternals.B = batch;
+-    }
+-  },
+-  reset() {
+-    ReactSharedInternals.X = null;
+-    ReactSharedInternals.B = 0;
+-    ReactSharedInternals.R = null;
+-  },
+-};
+-
+ export {
+   Children,
+   createRef,
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 76a74f5601..4c3cdc30bd 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -85,4 +85,48 @@ if (__DEV__) {
+   ReactSharedInternals.recentlyCreatedOwnerStacks = 0;
+ }
+ 
++export const unstable_Signals = {
++  register(runtime) {
++    const current = ReactSharedInternals.X;
++    if (current !== null && current !== runtime) {
++      throw new Error(
++        'A different external signal runtime is already registered.',
++      );
++    }
++    ReactSharedInternals.X = runtime;
++    return () => {
++      if (ReactSharedInternals.X === runtime) ReactSharedInternals.X = null;
++    };
++  },
++  run(batch, fn) {
++    const previous = ReactSharedInternals.B;
++    ReactSharedInternals.B = batch;
++    try {
++      return fn();
++    } finally {
++      ReactSharedInternals.B = previous;
++    }
++  },
++  world() {
++    return ReactSharedInternals.R;
++  },
++  urgent(fn) {
++    const transition = ReactSharedInternals.T;
++    const batch = ReactSharedInternals.B;
++    ReactSharedInternals.T = null;
++    ReactSharedInternals.B = 0;
++    try {
++      return fn();
++    } finally {
++      ReactSharedInternals.T = transition;
++      ReactSharedInternals.B = batch;
++    }
++  },
++  reset() {
++    ReactSharedInternals.X = null;
++    ReactSharedInternals.B = 0;
++    ReactSharedInternals.R = null;
++  },
++};
++
+ export default ReactSharedInternals;
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,31 @@
+{
+	"name": "react-signals-royale-fm1",
+	"private": true,
+	"version": "0.1.0",
+	"license": "MIT",
+	"description": "React bindings for signals-royale-fm1 over the signal-seam React fork: render passes pin snapshot worlds, transitions record write intents, commits fold them onto the canonical base.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"build:react": "./build.sh"
+	},
+	"dependencies": {
+		"signals-royale-fm1": "link:../signals-royale-fm1"
+	},
+	"devDependencies": {
+		"@types/node": "24.10.9",
+		"@types/react": "19.2.13",
+		"@types/react-dom": "19.2.3",
+		"jsdom": "27.4.0",
+		"react": "link:../../vendor/react/build/oss-experimental/react",
+		"react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+		"scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
+		"typescript": "6.0.3",
+		"vitest": "4.1.6"
+	}
+}

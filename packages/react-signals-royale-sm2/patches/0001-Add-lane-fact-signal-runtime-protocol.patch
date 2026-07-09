@@ -1,0 +1,564 @@
+From 5a968f65b4ebe7fb3c77213e21392cc11fd984d3 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 15:07:26 -0400
+Subject: [PATCH] Add lane-fact signal runtime protocol
+
+---
+ .../src/ReactFiberWorkLoop.js                 |  65 ++++++
+ .../src/__tests__/ReactSignalRuntime-test.js  | 220 ++++++++++++++++++
+ .../react/index.experimental.development.js   |   5 +
+ packages/react/index.experimental.js          |   5 +
+ packages/react/index.js                       |   5 +
+ packages/react/src/ReactClient.js             |  12 +
+ .../react/src/ReactSharedInternalsClient.js   |  35 +++
+ packages/react/src/ReactSignalRuntime.js      |  59 +++++
+ 8 files changed, 406 insertions(+)
+ create mode 100644 packages/react-reconciler/src/__tests__/ReactSignalRuntime-test.js
+ create mode 100644 packages/react/src/ReactSignalRuntime.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..8c350b5f8f 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -439,6 +439,22 @@ let workInProgressRoot: FiberRoot | null = null;
+ let workInProgress: Fiber | null = null;
+ // The lanes we're rendering
+ let workInProgressRootRenderLanes: Lanes = NoLanes;
++let signalRenderRoot: FiberRoot | null = null;
++let signalRenderLanes: Lanes = NoLanes;
++let signalRenderContext = null;
++
++ReactSharedInternals.signalRuntime.getWriteLane = function (): Lane {
++  const transition = requestCurrentTransition();
++  return transition === null
++    ? eventPriorityToLane(resolveUpdatePriority())
++    : requestTransitionLane(transition);
++};
++ReactSharedInternals.signalRuntime.getRenderContext = function () {
++  return (executionContext & RenderContext) === NoContext ||
++    workInProgressRoot === null
++    ? null
++    : signalRenderContext;
++};
+ 
+ export opaque type SuspendedReason = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+ const NotSuspended: SuspendedReason = 0;
+@@ -808,6 +824,9 @@ export function getCurrentTime(): number {
+ }
+ 
+ export function requestUpdateLane(fiber: Fiber): Lane {
++  const pinnedLane = ReactSharedInternals.signalRuntime.pinnedLane;
++  if (pinnedLane !== NoLane) return pinnedLane;
++
+   // Special cases
+   const mode = fiber.mode;
+   if (!disableLegacyMode && (mode & ConcurrentMode) === NoMode) {
+@@ -2258,6 +2277,23 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
+   workInProgressRootRecoverableErrors = null;
+   workInProgressRootDidIncludeRecursiveRenderUpdate = false;
+ 
++  const previousSignalRoot = signalRenderRoot;
++  if (previousSignalRoot !== null) {
++    ReactSharedInternals.signalRuntime.listener?.onRenderStop?.(
++      previousSignalRoot.containerInfo,
++      signalRenderLanes,
++      false,
++      previousSignalRoot.pendingLanes,
++    );
++  }
++  signalRenderRoot = root;
++  signalRenderLanes = lanes;
++  signalRenderContext = {container: root.containerInfo, lanes};
++  ReactSharedInternals.signalRuntime.listener?.onRenderStart?.(
++    root.containerInfo,
++    lanes,
++  );
++
+   // Get the lanes that are entangled with whatever we're about to render. We
+   // track these separately so we can distinguish the priority of the render
+   // task from the priority of the lanes it is entangled with. For example, a
+@@ -3751,6 +3787,11 @@ function commitRoot(
+     suspendedRetryLanes,
+   );
+ 
++  ReactSharedInternals.signalRuntime.listener?.onCommitStart?.(
++    root.containerInfo,
++    lanes,
++  );
++
+   // Reset this before firing side effects so we can detect recursive updates.
+   didIncludeCommitPhaseUpdate = false;
+ 
+@@ -4001,6 +4042,9 @@ function flushMutationEffects(): void {
+   const root = pendingEffectsRoot;
+   const finishedWork = pendingFinishedWork;
+   const lanes = pendingEffectsLanes;
++  ReactSharedInternals.signalRuntime.listener?.onMutationStart?.(
++    root.containerInfo,
++  );
+   const subtreeMutationHasEffects =
+     (finishedWork.subtreeFlags & MutationMask) !== NoFlags;
+   const rootMutationHasEffect = (finishedWork.flags & MutationMask) !== NoFlags;
+@@ -4030,6 +4074,10 @@ function flushMutationEffects(): void {
+     }
+   }
+ 
++  ReactSharedInternals.signalRuntime.listener?.onMutationStop?.(
++    root.containerInfo,
++  );
++
+   // The work-in-progress tree is now the current tree. This must come after
+   // the mutation phase, so that the previous tree is still current during
+   // componentWillUnmount, but before the layout phase, so that the finished
+@@ -4134,6 +4182,23 @@ function flushLayoutEffects(): void {
+     );
+   }
+ 
++  ReactSharedInternals.signalRuntime.listener?.onRenderStop?.(
++    root.containerInfo,
++    lanes,
++    true,
++    root.pendingLanes,
++  );
++  ReactSharedInternals.signalRuntime.listener?.onCommitStop?.(
++    root.containerInfo,
++    lanes,
++    root.pendingLanes,
++  );
++  if (signalRenderRoot === root && signalRenderLanes === lanes) {
++    signalRenderRoot = null;
++    signalRenderLanes = NoLanes;
++    signalRenderContext = null;
++  }
++
+   pendingEffectsStatus = PENDING_AFTER_MUTATION_PHASE;
+ }
+ 
+diff --git a/packages/react-reconciler/src/__tests__/ReactSignalRuntime-test.js b/packages/react-reconciler/src/__tests__/ReactSignalRuntime-test.js
+new file mode 100644
+index 0000000000..7adb74a9d5
+--- /dev/null
++++ b/packages/react-reconciler/src/__tests__/ReactSignalRuntime-test.js
+@@ -0,0 +1,220 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @emails react-core
++ * @jest-environment node
++ */
++
++'use strict';
++
++let React;
++let ReactNoop;
++let Scheduler;
++let waitForAll;
++
++describe('ReactSignalRuntime', () => {
++  beforeEach(() => {
++    jest.resetModules();
++    React = require('react');
++    ReactNoop = require('react-noop-renderer');
++    Scheduler = require('scheduler');
++    waitForAll = require('internal-test-utils').waitForAll;
++  });
++
++  it('uses one React lane as the transition write identity', () => {
++    let firstLane;
++    let secondLane;
++    let deferred;
++
++    React.startTransition(() => {
++      firstLane = React.unstable_getCurrentSignalWriteLane();
++      secondLane = React.unstable_getCurrentSignalWriteLane();
++      deferred = React.unstable_isCurrentSignalWriteDeferred();
++    });
++
++    expect(firstLane).toBeGreaterThan(0);
++    expect(secondLane).toBe(firstLane);
++    expect(deferred).toBe(true);
++    expect(React.unstable_isCurrentSignalWriteDeferred()).toBe(false);
++  });
++
++  it('reports the active render lanes and commit edges', async () => {
++    const events = [];
++    const contexts = [];
++    let setValue;
++    let transitionLane;
++    const unsubscribe = React.unstable_subscribeToSignalRuntime({
++      onRenderStart(container, lanes) {
++        events.push(['render-start', container, lanes]);
++      },
++      onCommitStart(container, lanes) {
++        events.push(['commit-start', container, lanes]);
++      },
++      onCommitStop(container, lanes, remainingLanes) {
++        events.push(['commit-stop', container, lanes, remainingLanes]);
++      },
++      onRenderStop(container, lanes, committed) {
++        events.push(['render-stop', container, lanes, committed]);
++      },
++    });
++
++    function App() {
++      const [value, set] = React.useState(0);
++      setValue = set;
++      contexts.push(React.unstable_getSignalRenderContext());
++      Scheduler.log(value);
++      return value;
++    }
++
++    const root = ReactNoop.createRoot();
++    root.render(<App />);
++    await waitForAll([0]);
++    events.length = 0;
++    contexts.length = 0;
++
++    React.startTransition(() => {
++      transitionLane = React.unstable_getCurrentSignalWriteLane();
++      React.unstable_runWithSignalLane(transitionLane, () => setValue(1));
++    });
++    await waitForAll([1]);
++
++    expect(contexts).toHaveLength(1);
++    expect(contexts[0].lanes & transitionLane).toBe(transitionLane);
++    expect(events.map(event => event[0])).toEqual([
++      'render-start',
++      'commit-start',
++      'render-stop',
++      'commit-stop',
++    ]);
++    expect(events[0][2] & transitionLane).toBe(transitionLane);
++    expect(events[2][3]).toBe(true);
++    unsubscribe();
++  });
++
++  it('lets lane zero escape a surrounding transition', async () => {
++    let setDeferred;
++    let setUrgent;
++
++    function App() {
++      const [deferred, setDeferredState] = React.useState(0);
++      const [urgent, setUrgentState] = React.useState(0);
++      setDeferred = setDeferredState;
++      setUrgent = setUrgentState;
++      Scheduler.log(`${deferred}:${urgent}`);
++      return null;
++    }
++
++    const root = ReactNoop.createRoot();
++    root.render(<App />);
++    await waitForAll(['0:0']);
++
++    React.startTransition(() => {
++      const lane = React.unstable_getCurrentSignalWriteLane();
++      React.unstable_runWithSignalLane(lane, () => setDeferred(1));
++      React.unstable_runWithSignalLane(0, () => setUrgent(1));
++    });
++    await waitForAll(['0:1', '1:1']);
++  });
++
++  it('keeps a layout correction on its owning lane', async () => {
++    const renderLanes = [];
++    const remainingLanes = [];
++    let setVisible;
++    let transitionLane;
++    const unsubscribe = React.unstable_subscribeToSignalRuntime({
++      onRenderStart(container, lanes) {
++        renderLanes.push(lanes);
++      },
++      onCommitStop(container, lanes, remaining) {
++        if ((lanes & transitionLane) !== 0) remainingLanes.push(remaining);
++      },
++    });
++
++    function Child() {
++      const [revision, setRevision] = React.useState(0);
++      React.useLayoutEffect(() => {
++        if (revision === 0) {
++          React.unstable_runWithSignalLane(transitionLane, () => {
++            setRevision(1);
++          });
++        }
++      }, [revision]);
++      Scheduler.log(`child:${revision}`);
++      return null;
++    }
++
++    function App() {
++      const [visible, set] = React.useState(false);
++      setVisible = set;
++      return visible ? <Child /> : null;
++    }
++
++    const root = ReactNoop.createRoot();
++    root.render(<App />);
++    await waitForAll([]);
++    renderLanes.length = 0;
++
++    React.startTransition(() => {
++      transitionLane = React.unstable_getCurrentSignalWriteLane();
++      React.unstable_runWithSignalLane(transitionLane, () => setVisible(true));
++    });
++    await waitForAll(['child:0', 'child:1']);
++
++    expect(renderLanes).toHaveLength(2);
++    expect(renderLanes[0] & transitionLane).toBe(transitionLane);
++    expect(renderLanes[1] & transitionLane).toBe(transitionLane);
++    expect(remainingLanes[0] & transitionLane).toBe(transitionLane);
++    expect(remainingLanes[1] & transitionLane).toBe(0);
++    unsubscribe();
++  });
++
++  it('brackets mutation before layout and closes the commit afterward', async () => {
++    const events = [];
++    const unsubscribe = React.unstable_subscribeToSignalRuntime({
++      onCommitStart() {
++        events.push('commit-start');
++      },
++      onMutationStart() {
++        events.push('mutation-start');
++      },
++      onMutationStop() {
++        events.push('mutation-stop');
++      },
++      onCommitStop() {
++        events.push('commit-stop');
++      },
++    });
++
++    function App() {
++      React.useLayoutEffect(() => {
++        events.push('layout');
++      });
++      return 'value';
++    }
++
++    const root = ReactNoop.createRoot();
++    root.render(<App />);
++    await waitForAll([]);
++    expect(events).toEqual([
++      'commit-start',
++      'mutation-start',
++      'mutation-stop',
++      'layout',
++      'commit-stop',
++    ]);
++    unsubscribe();
++  });
++
++  it('has one explicit, reclaimable listener slot', () => {
++    const unsubscribe = React.unstable_subscribeToSignalRuntime({});
++    expect(() => React.unstable_subscribeToSignalRuntime({})).toThrow(
++      'Only one signal runtime can be registered at a time.',
++    );
++    unsubscribe();
++    const nextUnsubscribe = React.unstable_subscribeToSignalRuntime({});
++    nextUnsubscribe();
++  });
++});
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 8ff2e1d257..c0d4fdd541 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -55,6 +55,11 @@ export {
+   useSyncExternalStore,
+   useTransition,
+   useActionState,
++  unstable_subscribeToSignalRuntime,
++  unstable_getCurrentSignalWriteLane,
++  unstable_isCurrentSignalWriteDeferred,
++  unstable_getSignalRenderContext,
++  unstable_runWithSignalLane,
+   version,
+   act, // DEV-only
+   captureOwnerStack, // DEV-only
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 881a71b250..9651ae2d25 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -56,6 +56,11 @@ export {
+   useSyncExternalStore,
+   useTransition,
+   useActionState,
++  unstable_subscribeToSignalRuntime,
++  unstable_getCurrentSignalWriteLane,
++  unstable_isCurrentSignalWriteDeferred,
++  unstable_getSignalRenderContext,
++  unstable_runWithSignalLane,
+   version,
+ } from './src/ReactClient';
+ 
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 140174ec01..a118ff5eab 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -73,5 +73,10 @@ export {
+   useState,
+   useTransition,
+   useActionState,
++  unstable_subscribeToSignalRuntime,
++  unstable_getCurrentSignalWriteLane,
++  unstable_isCurrentSignalWriteDeferred,
++  unstable_getSignalRenderContext,
++  unstable_runWithSignalLane,
+   version,
+ } from './src/ReactClient';
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 5d1c7f3ac0..1eb9105410 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -64,6 +64,13 @@ import {addTransitionType} from './ReactTransitionType';
+ import {act} from './ReactAct';
+ import {captureOwnerStack} from './ReactOwnerStack';
+ import * as ReactCompilerRuntime from './ReactCompilerRuntime';
++import {
++  subscribeToSignalRuntime,
++  getCurrentSignalWriteLane,
++  isCurrentSignalWriteDeferred,
++  getSignalRenderContext,
++  runWithSignalLane,
++} from './ReactSignalRuntime';
+ 
+ const Children = {
+   map,
+@@ -134,4 +141,9 @@ export {
+   useId,
+   act,
+   captureOwnerStack,
++  subscribeToSignalRuntime as unstable_subscribeToSignalRuntime,
++  getCurrentSignalWriteLane as unstable_getCurrentSignalWriteLane,
++  isCurrentSignalWriteDeferred as unstable_isCurrentSignalWriteDeferred,
++  getSignalRenderContext as unstable_getSignalRenderContext,
++  runWithSignalLane as unstable_runWithSignalLane,
+ };
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 1599e57a6f..76602f389d 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -21,12 +21,41 @@ type onStartGestureTransitionFinish = (
+   ?GestureOptions,
+ ) => () => void;
+ 
++export type SignalRenderContext = {
++  container: mixed,
++  lanes: number,
++};
++
++export type SignalRuntimeListener = {
++  onRenderStart?: (container: mixed, lanes: number) => void,
++  onRenderStop?: (
++    container: mixed,
++    lanes: number,
++    committed: boolean,
++    remainingLanes: number,
++  ) => void,
++  onCommitStart?: (container: mixed, lanes: number) => void,
++  onCommitStop?: (
++    container: mixed,
++    lanes: number,
++    remainingLanes: number,
++  ) => void,
++  onMutationStart?: (container: mixed) => void,
++  onMutationStop?: (container: mixed) => void,
++};
++
+ export type SharedStateClient = {
+   H: null | Dispatcher, // ReactCurrentDispatcher for Hooks
+   A: null | AsyncDispatcher, // ReactCurrentCache for Cache
+   T: null | Transition, // ReactCurrentBatchConfig for Transitions
+   S: null | onStartTransitionFinish,
+   G: null | onStartGestureTransitionFinish,
++  signalRuntime: {
++    listener: null | SignalRuntimeListener,
++    pinnedLane: number,
++    getWriteLane: null | (() => number),
++    getRenderContext: null | (() => SignalRenderContext | null),
++  },
+ 
+   // DEV-only
+ 
+@@ -62,6 +91,12 @@ const ReactSharedInternals: SharedStateClient = {
+   A: null,
+   T: null,
+   S: null,
++  signalRuntime: {
++    listener: null,
++    pinnedLane: 0,
++    getWriteLane: null,
++    getRenderContext: null,
++  },
+ } as any;
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+diff --git a/packages/react/src/ReactSignalRuntime.js b/packages/react/src/ReactSignalRuntime.js
+new file mode 100644
+index 0000000000..af524576ee
+--- /dev/null
++++ b/packages/react/src/ReactSignalRuntime.js
+@@ -0,0 +1,59 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++import type {
++  SignalRenderContext,
++  SignalRuntimeListener,
++} from './ReactSharedInternalsClient';
++
++import ReactSharedInternals from 'shared/ReactSharedInternals';
++
++export function subscribeToSignalRuntime(
++  listener: SignalRuntimeListener,
++): () => void {
++  const runtime = ReactSharedInternals.signalRuntime;
++  if (runtime.listener !== null) {
++    throw new Error('Only one signal runtime can be registered at a time.');
++  }
++  runtime.listener = listener;
++  return () => {
++    if (runtime.listener === listener) runtime.listener = null;
++  };
++}
++
++export function getCurrentSignalWriteLane(): number {
++  const getWriteLane = ReactSharedInternals.signalRuntime.getWriteLane;
++  if (getWriteLane === null) {
++    throw new Error('The active renderer does not support the signal runtime.');
++  }
++  return getWriteLane();
++}
++
++export function isCurrentSignalWriteDeferred(): boolean {
++  return ReactSharedInternals.T !== null;
++}
++
++export function getSignalRenderContext(): SignalRenderContext | null {
++  const getRenderContext = ReactSharedInternals.signalRuntime.getRenderContext;
++  return getRenderContext === null ? null : getRenderContext();
++}
++
++export function runWithSignalLane<T>(lane: number, fn: () => T): T {
++  const runtime = ReactSharedInternals.signalRuntime;
++  const previousLane = runtime.pinnedLane;
++  const previousTransition = ReactSharedInternals.T;
++  runtime.pinnedLane = lane;
++  if (lane === 0) ReactSharedInternals.T = null;
++  try {
++    return fn();
++  } finally {
++    ReactSharedInternals.T = previousTransition;
++    runtime.pinnedLane = previousLane;
++  }
++}
+-- 
+2.50.1 (Apple Git-155)
+

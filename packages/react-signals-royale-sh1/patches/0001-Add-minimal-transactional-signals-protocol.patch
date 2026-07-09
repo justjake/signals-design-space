@@ -1,0 +1,275 @@
+From acbc6a545ce6a7a7f25145294b89cc0c867836b4 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:17:37 -0400
+Subject: [PATCH 1/4] Add minimal transactional signals protocol
+
+---
+ .../src/ReactFiberWorkLoop.js                 | 29 ++++++++++++++++
+ packages/react/index.development.js           |  1 +
+ .../react/index.experimental.development.js   |  1 +
+ packages/react/index.experimental.js          |  1 +
+ packages/react/index.fb.js                    |  1 +
+ packages/react/index.js                       |  1 +
+ packages/react/index.stable.development.js    |  1 +
+ packages/react/index.stable.js                |  1 +
+ packages/react/src/ReactClient.js             | 33 +++++++++++++++++++
+ .../react/src/ReactSharedInternalsClient.js   |  6 ++++
+ 10 files changed, 75 insertions(+)
+
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..7f43b25281 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -828,6 +828,13 @@ export function requestUpdateLane(fiber: Fiber): Lane {
+     return pickArbitraryLane(workInProgressRootRenderLanes);
+   }
+ 
++  const signalRuntime = ReactSharedInternals.X;
++  const signalBatch = ReactSharedInternals.B;
++  if (signalRuntime !== null && signalBatch !== 0) {
++    const lane = signalRuntime.lane(signalBatch);
++    if (lane !== NoLane) return lane;
++  }
++
+   const transition = requestCurrentTransition();
+   if (transition !== null) {
+     if (enableGestureTransition) {
+@@ -1011,6 +1018,10 @@ export function scheduleUpdateOnFiber(
+ 
+   // Mark that the root has a pending update.
+   markRootUpdated(root, lane);
++  const signalRuntime = ReactSharedInternals.X;
++  if (signalRuntime !== null && ReactSharedInternals.B !== 0) {
++    signalRuntime.schedule(root, lane, ReactSharedInternals.B);
++  }
+ 
+   if (
+     (executionContext & RenderContext) !== NoContext &&
+@@ -2643,6 +2654,11 @@ function renderRootSync(
+     markRenderStarted(lanes);
+   }
+ 
++  const signalRuntime = ReactSharedInternals.X;
++  if (signalRuntime !== null) {
++    ReactSharedInternals.R = signalRuntime.render(root, lanes);
++  }
++
+   let didSuspendInShell = false;
+   let exitStatus = workInProgressRootExitStatus;
+   outer: do {
+@@ -2735,6 +2751,7 @@ function renderRootSync(
+   if (enableSchedulingProfiler) {
+     markRenderStopped();
+   }
++  ReactSharedInternals.R = null;
+ 
+   if (workInProgress !== null) {
+     // Did not complete the tree. This can happen if something suspended in
+@@ -2803,6 +2820,11 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+     markRenderStarted(lanes);
+   }
+ 
++  const signalRuntime = ReactSharedInternals.X;
++  if (signalRuntime !== null) {
++    ReactSharedInternals.R = signalRuntime.render(root, lanes);
++  }
++
+   outer: do {
+     try {
+       if (
+@@ -3012,6 +3034,7 @@ function renderRootConcurrent(root: FiberRoot, lanes: Lanes): RootExitStatus {
+   popDispatcher(prevDispatcher);
+   popAsyncDispatcher(prevAsyncDispatcher);
+   executionContext = prevExecutionContext;
++  ReactSharedInternals.R = null;
+ 
+   // Check if the tree has completed.
+   if (workInProgress !== null) {
+@@ -3751,6 +3774,9 @@ function commitRoot(
+     suspendedRetryLanes,
+   );
+ 
++  const signalRuntime = ReactSharedInternals.X;
++  if (signalRuntime !== null) signalRuntime.commit(root, lanes, remainingLanes);
++
+   // Reset this before firing side effects so we can detect recursive updates.
+   didIncludeCommitPhaseUpdate = false;
+ 
+@@ -3853,12 +3879,15 @@ function commitRoot(
+     setCurrentUpdatePriority(DiscreteEventPriority);
+     const prevExecutionContext = executionContext;
+     executionContext |= CommitContext;
++    const signalRuntime = ReactSharedInternals.X;
++    if (signalRuntime !== null) signalRuntime.mutation(root, true);
+     try {
+       // The first phase a "before mutation" phase. We use this phase to read the
+       // state of the host tree right before we mutate it. This is where
+       // getSnapshotBeforeUpdate is called.
+       commitBeforeMutationEffects(root, finishedWork, lanes);
+     } finally {
++      if (signalRuntime !== null) signalRuntime.mutation(root, false);
+       // Reset the priority to the previous non-sync value.
+       executionContext = prevExecutionContext;
+       setCurrentUpdatePriority(previousPriority);
+diff --git a/packages/react/index.development.js b/packages/react/index.development.js
+index 5ee39427fd..ba7da64272 100644
+--- a/packages/react/index.development.js
++++ b/packages/react/index.development.js
+@@ -38,6 +38,7 @@ export {
+   createElement,
+   createRef,
+   use,
++  unstable_Signals,
+   forwardRef,
+   isValidElement,
+   lazy,
+diff --git a/packages/react/index.experimental.development.js b/packages/react/index.experimental.development.js
+index 8ff2e1d257..b75f2aaab5 100644
+--- a/packages/react/index.experimental.development.js
++++ b/packages/react/index.experimental.development.js
+@@ -22,6 +22,7 @@ export {
+   createElement,
+   createRef,
+   use,
++  unstable_Signals,
+   forwardRef,
+   isValidElement,
+   lazy,
+diff --git a/packages/react/index.experimental.js b/packages/react/index.experimental.js
+index 881a71b250..0b6c9f9817 100644
+--- a/packages/react/index.experimental.js
++++ b/packages/react/index.experimental.js
+@@ -22,6 +22,7 @@ export {
+   createElement,
+   createRef,
+   use,
++  unstable_Signals,
+   forwardRef,
+   isValidElement,
+   lazy,
+diff --git a/packages/react/index.fb.js b/packages/react/index.fb.js
+index d61af001a5..05b840cdbe 100644
+--- a/packages/react/index.fb.js
++++ b/packages/react/index.fb.js
+@@ -46,6 +46,7 @@ export {
+   addTransitionType as unstable_addTransitionType,
+   unstable_useCacheRefresh,
+   use,
++  unstable_Signals,
+   useActionState,
+   useCallback,
+   useContext,
+diff --git a/packages/react/index.js b/packages/react/index.js
+index 140174ec01..f10f8c8528 100644
+--- a/packages/react/index.js
++++ b/packages/react/index.js
+@@ -39,6 +39,7 @@ export {
+   createElement,
+   createRef,
+   use,
++  unstable_Signals,
+   forwardRef,
+   isValidElement,
+   lazy,
+diff --git a/packages/react/index.stable.development.js b/packages/react/index.stable.development.js
+index 5fd89390bc..3ef8b8c58c 100644
+--- a/packages/react/index.stable.development.js
++++ b/packages/react/index.stable.development.js
+@@ -25,6 +25,7 @@ export {
+   createElement,
+   createRef,
+   use,
++  unstable_Signals,
+   forwardRef,
+   isValidElement,
+   lazy,
+diff --git a/packages/react/index.stable.js b/packages/react/index.stable.js
+index 830a4e9bb5..b30c6156db 100644
+--- a/packages/react/index.stable.js
++++ b/packages/react/index.stable.js
+@@ -25,6 +25,7 @@ export {
+   createElement,
+   createRef,
+   use,
++  unstable_Signals,
+   forwardRef,
+   isValidElement,
+   lazy,
+diff --git a/packages/react/src/ReactClient.js b/packages/react/src/ReactClient.js
+index 5d1c7f3ac0..c628e39a7d 100644
+--- a/packages/react/src/ReactClient.js
++++ b/packages/react/src/ReactClient.js
+@@ -73,6 +73,38 @@ const Children = {
+   only,
+ };
+ 
++const unstable_Signals = {
++  register(runtime) {
++    const current = ReactSharedInternals.X;
++    if (current !== null && current !== runtime) {
++      throw new Error(
++        'A different external signal runtime is already registered.',
++      );
++    }
++    ReactSharedInternals.X = runtime;
++    return () => {
++      if (ReactSharedInternals.X === runtime) ReactSharedInternals.X = null;
++    };
++  },
++  run(batch, fn) {
++    const previous = ReactSharedInternals.B;
++    ReactSharedInternals.B = batch;
++    try {
++      return fn();
++    } finally {
++      ReactSharedInternals.B = previous;
++    }
++  },
++  world() {
++    return ReactSharedInternals.R;
++  },
++  reset() {
++    ReactSharedInternals.X = null;
++    ReactSharedInternals.B = 0;
++    ReactSharedInternals.R = null;
++  },
++};
++
+ export {
+   Children,
+   createRef,
+@@ -119,6 +151,7 @@ export {
+   getCacheForType as unstable_getCacheForType,
+   useCacheRefresh as unstable_useCacheRefresh,
+   use,
++  unstable_Signals,
+   // enableScopeAPI
+   REACT_SCOPE_TYPE as unstable_Scope,
+   // enableTransitionTracing
+diff --git a/packages/react/src/ReactSharedInternalsClient.js b/packages/react/src/ReactSharedInternalsClient.js
+index 1599e57a6f..76a74f5601 100644
+--- a/packages/react/src/ReactSharedInternalsClient.js
++++ b/packages/react/src/ReactSharedInternalsClient.js
+@@ -27,6 +27,9 @@ export type SharedStateClient = {
+   T: null | Transition, // ReactCurrentBatchConfig for Transitions
+   S: null | onStartTransitionFinish,
+   G: null | onStartGestureTransitionFinish,
++  X: null | any, // External signal runtime.
++  B: number, // External transaction issuing the current update.
++  R: null | mixed, // External world for the current render call stack.
+ 
+   // DEV-only
+ 
+@@ -62,6 +65,9 @@ const ReactSharedInternals: SharedStateClient = {
+   A: null,
+   T: null,
+   S: null,
++  X: null,
++  B: 0,
++  R: null,
+ } as any;
+ if (enableGestureTransition) {
+   ReactSharedInternals.G = null;
+-- 
+2.50.1 (Apple Git-155)
+

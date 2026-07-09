@@ -1,0 +1,27 @@
+{
+  "name": "react-signals-royale-fx2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bench": "node bench/react-bench.mjs"
+  },
+  "dependencies": {
+    "signals-royale-fx2": "link:../signals-royale-fx2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "jsdom": "^26.0.0",
+    "react": "link:../../vendor/react/build/oss-experimental/react",
+    "react-dom": "link:../../vendor/react/build/oss-experimental/react-dom",
+    "scheduler": "link:../../vendor/react/build/oss-experimental/scheduler",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

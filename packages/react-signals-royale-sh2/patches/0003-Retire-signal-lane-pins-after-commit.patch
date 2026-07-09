@@ -1,0 +1,27 @@
+From 0a7732658a796a2cf9cb21e577fb172528877d52 Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 13:36:26 -0400
+Subject: [PATCH 3/4] Retire signal lane pins after commit
+
+---
+ packages/react-reconciler/src/ReactFiberSignalRuntime.js | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/packages/react-reconciler/src/ReactFiberSignalRuntime.js b/packages/react-reconciler/src/ReactFiberSignalRuntime.js
+index bbad0743f5..c51a2ded9f 100644
+--- a/packages/react-reconciler/src/ReactFiberSignalRuntime.js
++++ b/packages/react-reconciler/src/ReactFiberSignalRuntime.js
+@@ -85,6 +85,10 @@ export function signalCommit(root: FiberRoot, lanes: Lanes): void {
+   const batches = renderedBatches.get(root) || batchesFor(lanes);
+   renderedBatches.delete(root);
+   if (runtime !== null) runtime.commit(root.containerInfo, batches);
++  let lane = 1;
++  for (let index = 0; index < 31; index++, lane *= 2) {
++    if ((lanes & lane) !== 0) batchesByLane[index] = 0;
++  }
+ }
+ 
+ export function signalMutation(root: FiberRoot, start: boolean): void {
+-- 
+2.50.1 (Apple Git-155)
+

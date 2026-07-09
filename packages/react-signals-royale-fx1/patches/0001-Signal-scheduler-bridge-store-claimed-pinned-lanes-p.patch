@@ -1,0 +1,179 @@
+From affd956caec89e1b86f8d66da66bc8a90553916d Mon Sep 17 00:00:00 2001
+From: Jake Teton-Landis <just.1.jake@gmail.com>
+Date: Wed, 8 Jul 2026 15:07:31 -0400
+Subject: [PATCH 1/2] Signal-scheduler bridge: store-claimed pinned lanes +
+ pass/commit/mutation reports
+
+An external signal store owns update scheduling: it claims a transition lane
+per store batch (claimTransitionLane) and pins it on the transition objects it
+dispatches under (transition._signalLane, honored by requestTransitionLane),
+so corrective re-renders land inside the owning batch's commit. React reports
+pass starts (prepareFreshStack), per-root commits, and the exact DOM mutation
+window (flushMutationEffects bracket) through one bridge object published at
+globalThis.__SIGNALS_ROYALE_FX1__.
+---
+ .../src/ReactFiberRootScheduler.js            | 13 ++++++
+ .../src/ReactFiberSignalScheduler.js          | 44 +++++++++++++++++++
+ .../src/ReactFiberWorkLoop.js                 | 23 ++++++++++
+ 3 files changed, 80 insertions(+)
+ create mode 100644 packages/react-reconciler/src/ReactFiberSignalScheduler.js
+
+diff --git a/packages/react-reconciler/src/ReactFiberRootScheduler.js b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+index cc97e21d54..cd98106347 100644
+--- a/packages/react-reconciler/src/ReactFiberRootScheduler.js
++++ b/packages/react-reconciler/src/ReactFiberRootScheduler.js
+@@ -11,6 +11,7 @@ import type {FiberRoot} from './ReactInternalTypes';
+ import type {Lane, Lanes} from './ReactFiberLane';
+ import type {PriorityLevel} from 'scheduler/src/SchedulerPriorities';
+ import type {Transition} from 'react/src/ReactStartTransition';
++import {signalScheduler} from './ReactFiberSignalScheduler';
+ 
+ import {
+   disableLegacyMode,
+@@ -701,6 +702,16 @@ export function requestTransitionLane(
+   // TODO: Make this non-nullable. Requires a tweak to useOptimistic.
+   transition: Transition | null,
+ ): Lane {
++  if (transition !== null) {
++    // An external signal store may have claimed a lane for the batch this
++    // transition belongs to; every update dispatched under it — including
++    // corrective re-renders long after this event — must share that lane so
++    // they all land in the same commit.
++    const pinned = (transition as any)._signalLane;
++    if (pinned != null) {
++      return pinned as Lane;
++    }
++  }
+   // The algorithm for assigning an update to a lane should be stable for all
+   // updates at the same priority within the same event. To do this, the
+   // inputs to the algorithm must be the same.
+@@ -727,6 +738,8 @@ export function didCurrentEventScheduleTransition(): boolean {
+   return currentEventTransitionLane !== NoLane;
+ }
+ 
++signalScheduler.claimTransitionLane = () => requestTransitionLane(null);
++
+ export function markIndicatorHandled(root: FiberRoot): void {
+   if (enableDefaultTransitionIndicator) {
+     // The current transition event rendered a synchronous loading state.
+diff --git a/packages/react-reconciler/src/ReactFiberSignalScheduler.js b/packages/react-reconciler/src/ReactFiberSignalScheduler.js
+new file mode 100644
+index 0000000000..27767e7fc5
+--- /dev/null
++++ b/packages/react-reconciler/src/ReactFiberSignalScheduler.js
+@@ -0,0 +1,44 @@
++/**
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *
++ * @flow
++ */
++
++// Bridge for an external signal store that owns update scheduling. The store
++// claims a transition lane per store batch and pins it on the transition
++// objects it dispatches under (`transition._signalLane`), so every update for
++// that batch — including corrective re-renders issued much later — lands in
++// the same commit. In return React reports, through the callbacks below, when
++// a render pass starts, when a root commits, and the exact DOM mutation
++// window. The store discovers the bridge via a well-known global; a build
++// without it fails the store's registration loudly.
++
++import type {FiberRoot} from './ReactInternalTypes';
++import type {Lane, Lanes} from './ReactFiberLane';
++
++type SignalSchedulerBridge = {
++  // Filled by React at module load:
++  claimTransitionLane: null | (() => Lane),
++  getWorkInProgress: null | (() => {root: FiberRoot, lanes: Lanes} | null),
++  isRendering: null | (() => boolean),
++  // Filled by the store at registration:
++  onPassStart: null | ((root: FiberRoot, lanes: Lanes) => void),
++  onCommit: null | ((root: FiberRoot, lanes: Lanes) => void),
++  onMutation: null | ((root: FiberRoot, start: boolean) => void),
++};
++
++export const signalScheduler: SignalSchedulerBridge = {
++  claimTransitionLane: null,
++  getWorkInProgress: null,
++  isRendering: null,
++  onPassStart: null,
++  onCommit: null,
++  onMutation: null,
++};
++
++if (typeof globalThis !== 'undefined') {
++  (globalThis as any).__SIGNALS_ROYALE_FX1__ = signalScheduler;
++}
+diff --git a/packages/react-reconciler/src/ReactFiberWorkLoop.js b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+index f0ca7d71b6..cccf6882e9 100644
+--- a/packages/react-reconciler/src/ReactFiberWorkLoop.js
++++ b/packages/react-reconciler/src/ReactFiberWorkLoop.js
+@@ -8,6 +8,7 @@
+  */
+ 
+ import {REACT_STRICT_MODE_TYPE} from 'shared/ReactSymbols';
++import {signalScheduler} from './ReactFiberSignalScheduler';
+ 
+ import type {
+   Wakeable,
+@@ -767,6 +768,13 @@ export function getWorkInProgressRoot(): FiberRoot | null {
+   return workInProgressRoot;
+ }
+ 
++signalScheduler.getWorkInProgress = () =>
++  workInProgressRoot === null
++    ? null
++    : {root: workInProgressRoot, lanes: workInProgressRootRenderLanes};
++signalScheduler.isRendering = () =>
++  (executionContext & RenderContext) !== NoContext;
++
+ export function getCommittingRoot(): FiberRoot | null {
+   return pendingEffectsRoot;
+ }
+@@ -2269,6 +2277,10 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
+ 
+   finishQueueingConcurrentUpdates();
+ 
++  if (signalScheduler.onPassStart !== null) {
++    signalScheduler.onPassStart(root, lanes);
++  }
++
+   if (__DEV__) {
+     resetOwnerStackLimit();
+ 
+@@ -4005,6 +4017,9 @@ function flushMutationEffects(): void {
+     (finishedWork.subtreeFlags & MutationMask) !== NoFlags;
+   const rootMutationHasEffect = (finishedWork.flags & MutationMask) !== NoFlags;
+ 
++  if (signalScheduler.onMutation !== null) {
++    signalScheduler.onMutation(root, true);
++  }
+   if (subtreeMutationHasEffects || rootMutationHasEffect) {
+     const prevTransition = ReactSharedInternals.T;
+     ReactSharedInternals.T = null;
+@@ -4030,12 +4045,20 @@ function flushMutationEffects(): void {
+     }
+   }
+ 
++  if (signalScheduler.onMutation !== null) {
++    signalScheduler.onMutation(root, false);
++  }
++
+   // The work-in-progress tree is now the current tree. This must come after
+   // the mutation phase, so that the previous tree is still current during
+   // componentWillUnmount, but before the layout phase, so that the finished
+   // work is current during componentDidMount/Update.
+   root.current = finishedWork;
+   pendingEffectsStatus = PENDING_LAYOUT_PHASE;
++
++  if (signalScheduler.onCommit !== null) {
++    signalScheduler.onCommit(root, lanes);
++  }
+ }
+ 
+ function flushLayoutEffects(): void {
+-- 
+2.50.1 (Apple Git-155)
+

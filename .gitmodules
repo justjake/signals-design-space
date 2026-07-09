@@ -43,3 +43,51 @@
 	path = daishi-concurrent-benchmark
 	url = https://github.com/justjake/will-this-react-global-state-work-in-concurrent-rendering
 	branch = react-seam
+[submodule "packages/react-signals-royale-fm1/react-fork"]
+	path = packages/react-signals-royale-fm1/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/fm1-react
+[submodule "packages/react-signals-royale-fm2/react-fork"]
+	path = packages/react-signals-royale-fm2/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/fm2-react
+[submodule "packages/react-signals-royale-fh1/react-fork"]
+	path = packages/react-signals-royale-fh1/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/fh1-react
+[submodule "packages/react-signals-royale-fh2/react-fork"]
+	path = packages/react-signals-royale-fh2/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/fh2-react
+[submodule "packages/react-signals-royale-fx1/react-fork"]
+	path = packages/react-signals-royale-fx1/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/fx1-react
+[submodule "packages/react-signals-royale-fx2/react-fork"]
+	path = packages/react-signals-royale-fx2/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/fx2-react
+[submodule "packages/react-signals-royale-sh1/react-fork"]
+	path = packages/react-signals-royale-sh1/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/sh1-react
+[submodule "packages/react-signals-royale-sh2/react-fork"]
+	path = packages/react-signals-royale-sh2/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/sh2-react
+[submodule "packages/react-signals-royale-sx1/react-fork"]
+	path = packages/react-signals-royale-sx1/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/sx1-react
+[submodule "packages/react-signals-royale-sx2/react-fork"]
+	path = packages/react-signals-royale-sx2/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/sx2-react
+[submodule "packages/react-signals-royale-sm1/react-fork"]
+	path = packages/react-signals-royale-sm1/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/sm1-react
+[submodule "packages/react-signals-royale-sm2/react-fork"]
+	path = packages/react-signals-royale-sm2/react-fork
+	url = https://github.com/justjake/react.git
+	branch = royale/sm2-react-rewrite
