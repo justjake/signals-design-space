@@ -9,7 +9,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import {
-  ASYNC_MASK,
+  Flag,
   computed,
   effect,
   isPending,
@@ -364,7 +364,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
           const engIds = ids.map((ix) => engDrafts.get(ix)!.id);
           const target = 'cell' in s.ref ? engCells[s.ref.cell] : engComps[s.ref.comp];
           const st = resolveState(nodeOf(target), worldOf(engIds));
-          if ((st.flags & ASYNC_MASK) !== 0) return fail(`world read: unexpected flags ${st.flags}`);
+          if ((st.flags & Flag.AsyncMask) !== 0) return fail(`world read: unexpected flags ${st.flags}`);
           const want = modelEval(model, exprs, s.ref, ids);
           if (st.value !== want) return fail(`world read [${ids}]: engine ${String(st.value)} != model ${want}`);
           break;

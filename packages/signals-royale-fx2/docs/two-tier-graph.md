@@ -183,21 +183,28 @@ unbundled production pays one always-false branch per evaluation.
 Exact constants, extending the documented layout at lines 30-57:
 
 ```ts
-export const Flags = {
-  Cell:             0b0000_0001, // node type: writable source
-  Derived:          0b0000_0010, // node type: cached computed
-  Watcher:          0b0000_0100, // node type: effect or leaf observer
-  Check:            0b0000_1000, // staleness: possibly stale; confirm dep versions
-  Dirty:            0b0001_0000, // staleness: must recompute on next pull
-  Watched:          0b0010_0000, // tier: back-edges installed, push marks trustworthy
-  DerivedError:     0b0100_0000, // async: latest eval threw; ErrorBox in node.throwable
-  DerivedSuspended: 0b1000_0000, // async: latest eval parked; Suspension in node.throwable
-} as const satisfies Record<string, Flags>;
+export const enum Flag {
+  Cell             = 0b0000_0001, // node type: writable source
+  Derived          = 0b0000_0010, // node type: cached computed
+  Watcher          = 0b0000_0100, // node type: effect or leaf observer
+  Check            = 0b0000_1000, // staleness: possibly stale; confirm dep versions
+  Dirty            = 0b0001_0000, // staleness: must recompute on next pull
+  Watched          = 0b0010_0000, // tier: back-edges installed, push marks trustworthy
+  DerivedError     = 0b0100_0000, // async: latest eval threw; ErrorBox in node.throwable
+  DerivedSuspended = 0b1000_0000, // async: latest eval parked; Suspension in node.throwable
+  StaleMask = Check | Dirty,
+  AsyncMask = DerivedError | DerivedSuspended,
+}
+export type Flags = Brand<number, 'Flags'>; // the stored word (see graph.ts)
 ```
 
+(The rebuild landed these as an erasable const object; the later hygiene
+round converted them to the `const enum` above and branded the stored
+word — same bits, same table.)
+
 The two async bits are the DerivedState merge's exclusive value-plane field
-(section 11): clear-then-set discipline exactly like `STALE_MASK`, both-clear
-is the plain-value state, `ASYNC_MASK` is exported as the read protocol.
+(section 11): clear-then-set discipline exactly like `Flag.StaleMask`,
+both-clear is the plain-value state, `Flag.AsyncMask` is the read protocol.
 
 `Watched` semantics:
 
@@ -207,7 +214,7 @@ is the plain-value state, `ASYNC_MASK` is exported as the read protocol.
 - watchers: set at creation, cleared in `disposeWatcher` before
   `unlinkAllDeps`. This collapses `trackRead`'s two-branch watched test
   (343-344) and `ensureFresh`'s `observerCount` load (761) into
-  `(flags & Flags.Watched) !== 0`;
+  `(flags & Flag.Watched) !== 0`;
 - debug assertion (dev builds/tests): for non-watchers,
   `Watched ⟺ observerCount > 0`.
 
@@ -421,8 +428,9 @@ promote is behavioral → covered by falsify-first probes A/B]
 - **Async**: Suspension identity and reuse, ThenableBox, settlement-as-write,
   pending-forwards parking, stale serves (asyncs.ts entire; `readValue`
   index.ts 162-183).
-- **Tracer hooks**: `hooks.trace` sites and `causeEvent` threading — the
-  iterative propagate carries the wave's cause exactly as `mark` does.
+- **Tracer hooks**: `hooks.trace` sites (today the `traceHook` module
+  binding) and `causeEvent` threading — the iterative propagate carries the
+  wave's cause exactly as `mark` does.
 - **Lifetime effects**: the lifetime scheduler fires on the same 0↔1
   transitions with microtask coalescing (now `noteLifetimeTransition` in
   graph.ts; the `hooks.observation` seam over lifetime.ts at the time).
@@ -499,7 +507,7 @@ the pre-rebuild graph in the landing session:
   `expected 20 to be 30`, T9 `expected 2 to be 1`, T11
   `RangeError: Maximum call stack size exceeded` (at depth 150 000) — all
   pass post-rebuild;
-- T4/T5 fail pre-change on the structural asserts (`Flags.Watched`,
+- T4/T5 fail pre-change on the structural asserts (`Flag.Watched`,
   validation stamps did not exist), pass post-rebuild; T6/T8/T10 parity pins
   pass on both sides;
 - T12 as inherited from the skeleton asserted `readDerived(d) === 6` after
@@ -579,7 +587,7 @@ model replaces both: node-resident state read through one protocol.
 
 ```ts
 interface DerivedState {
-  flags: Flags;      // read via ASYNC_MASK bits ONLY (node views carry more)
+  flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
   value: unknown;    // UNINITIALIZED sentinel when no settled value exists
   throwable: ErrorBox | Suspension | null; // null ⇔ plain value state
 }
@@ -587,8 +595,8 @@ interface DerivedState {
 
 - Two flag bits in the MAIN node flags word (section 3): `DerivedError`
   0b0100_0000, `DerivedSuspended` 0b1000_0000; exclusive field with
-  `ASYNC_MASK`, clear-then-set exactly like `STALE_MASK`, both-clear =
-  value state.
+  `Flag.AsyncMask`, clear-then-set exactly like `Flag.StaleMask`,
+  both-clear = value state.
 - `node.throwable` is initialized `null` at construction on EVERY node kind
   including cells and watchers (shape discipline: no post-construction
   property addition). Cells never set the bits but share the uniform
@@ -621,10 +629,10 @@ interface DerivedState {
   `(throwable as ErrorBox).error`; suspended → live drafts throw the
   promise, else stale serves, else throw.
 - The `Envelope` type export is gone; `DerivedState`, `ErrorBox`,
-  `Suspension`, `Flags`, `ASYNC_MASK`, `isErrorBox`, `isUninitialized` are
-  the replacement protocol exports. No alias survives — one name per
-  concept, and every importer (worlds, index, react hooks/host, tests, the
-  oracle) consumes the new shape directly.
+  `Suspension`, `Flag` (with `Flag.AsyncMask`), `isErrorBox`,
+  `isUninitialized` are the replacement protocol exports. No alias
+  survives — one name per concept, and every importer (worlds, index,
+  react hooks/host, tests, the oracle) consumes the new shape directly.
 - `committedSnapshot`'s per-call `{ engineErrorBox }` marker allocation is
   gone (it was also identity-unstable — a fresh object per `getSnapshot`
   call is a useSyncExternalStore hazard): the snapshot returns the ErrorBox

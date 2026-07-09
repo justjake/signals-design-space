@@ -21,13 +21,32 @@
  */
 
 import type { ErrorBox, Suspension } from './asyncs.ts';
+import type { DraftId } from './worlds.ts';
 
 export type EqualsFn<T> = (a: T, b: T) => boolean;
+
+/** Weak number brand. Plain numbers assign in, so creation and increment
+ * stay cast-free (`let x: EvalStamp = 1; x++`), but a value of one brand
+ * does not assign to a slot or parameter of another — counter mixups are
+ * type errors. The symbol is declared, never created: purely type-level,
+ * and the runtime representation stays a bare number. */
+declare const brand: unique symbol;
+export type Brand<T, B extends string> = T & { readonly [brand]?: B };
+
 /** Monotonic count of canonical writes; validation shortcut for unwatched reads. */
-export type WriteEpoch = number;
+export type WriteEpoch = Brand<number, 'WriteEpoch'>;
 /** Per-node value generation; an edge is fresh while its snapshot matches. */
-export type NodeVersion = number;
-export type TraceEventId = number;
+export type NodeVersion = Brand<number, 'NodeVersion'>;
+export type TraceEventId = Brand<number, 'TraceEventId'>;
+/** Tracking stamp of one evaluation pass; monotonic, never reused (see
+ * stampCounter). */
+export type EvalStamp = Brand<number, 'EvalStamp'>;
+/** Subscription epoch for scoped React subscribers; silent draft folds do
+ * not advance it (see ReactiveNode.reactEpoch). */
+export type ReactEpoch = Brand<number, 'ReactEpoch'>;
+/** Subscription epoch counting every canonical change, silent folds
+ * included (see ReactiveNode.canonicalEpoch). */
+export type CanonicalEpoch = Brand<number, 'CanonicalEpoch'>;
 
 /**
  * Per-node flags word — the full bit layout:
@@ -60,25 +79,31 @@ export type TraceEventId = number;
  *   test on the hot paths;
  * - watchers: set at creation, cleared at dispose.
  *
- * Kept as erasable-syntax consts (a const object, not a const enum) so the
- * TS source runs directly under node's type stripping.
+ * Naming: Flag is one bit, Flags is the stored word. The word stays a
+ * branded number rather than a Flag-typed field because TS5 types const
+ * enum unions as the enum, which would force a cast on every |= / &=
+ * composition. The toolchain compiles TS everywhere (vitest/esbuild, tsc):
+ * esbuild inlines Flag members within this file and compiles cross-file
+ * consumers to object lookups — the same cost as a const object — while
+ * tsc-compiled consumers inline everywhere.
  */
-export type Flags = number;
-export const Flags = {
-  Cell: 0b0000_0001,
-  Derived: 0b0000_0010,
-  Watcher: 0b0000_0100,
-  Check: 0b0000_1000,
-  Dirty: 0b0001_0000,
-  Watched: 0b0010_0000,
-  DerivedError: 0b0100_0000,
-  DerivedSuspended: 0b1000_0000,
-} as const satisfies Record<string, Flags>;
-/** Both staleness bits; (flags & STALE_MASK) === 0 is the Clean state. */
-const STALE_MASK: Flags = Flags.Check | Flags.Dirty;
-/** Both value-plane bits; (flags & ASYNC_MASK) === 0 is the plain-value
- * state. Exported: this is how DerivedState views are read (see asyncs.ts). */
-export const ASYNC_MASK: Flags = Flags.DerivedError | Flags.DerivedSuspended;
+export const enum Flag {
+  Cell = 0b0000_0001,
+  Derived = 0b0000_0010,
+  Watcher = 0b0000_0100,
+  Check = 0b0000_1000,
+  Dirty = 0b0001_0000,
+  Watched = 0b0010_0000,
+  DerivedError = 0b0100_0000,
+  DerivedSuspended = 0b1000_0000,
+  /** Both staleness bits; (flags & StaleMask) === 0 is the Clean state. */
+  StaleMask = Check | Dirty,
+  /** Both value-plane bits; (flags & AsyncMask) === 0 is the plain-value
+   * state — how DerivedState views are read (see asyncs.ts). */
+  AsyncMask = DerivedError | DerivedSuspended,
+}
+/** The stored per-node word: a composition of Flag bits. */
+export type Flags = Brand<number, 'Flags'>;
 
 export interface Link {
   dep: ReactiveNode;
@@ -91,7 +116,7 @@ export interface Link {
   /** Present in dep's subscriber list (only while sub is watched). */
   inSubs: boolean;
   /** Eval-generation stamp: marks the edge as re-read by the current run. */
-  stamp: number;
+  stamp: EvalStamp;
 }
 
 export interface ReactiveNode {
@@ -131,7 +156,7 @@ export interface ReactiveNode {
    * keeps a transition commit from triggering a synchronous repair render
    * of every subscriber.
    */
-  reactEpoch: number;
+  reactEpoch: ReactEpoch;
   /**
    * Companion epoch that never goes silent: advances on every canonical
    * change, silent draft folds included. Subscribers rendering outside any
@@ -139,19 +164,19 @@ export interface ReactiveNode {
    * them, so the fold is their only channel and a suppressed epoch would
    * strand them on stale state.
    */
-  canonicalEpoch: number;
+  canonicalEpoch: CanonicalEpoch;
 }
 
 let writeEpoch: WriteEpoch = 1;
 /** The tracking stamp of the evaluation pass in progress. */
-let evalStamp = 1;
+let evalStamp: EvalStamp = 1;
 /** Stamp counter — monotonic, never reused. Uniqueness is load-bearing for
  * the same-pass dedup probe in trackRead: a stamp match there asserts "this
  * edge was stamped by the pass in progress", and a recycled value could match
  * an edge from a dead pass, whose position may be outside the kept prefix —
  * trimming would then silently drop a dependency the evaluation read. */
-let stampCounter = 1;
-function newEvalStamp(): number {
+let stampCounter: EvalStamp = 1;
+function newEvalStamp(): EvalStamp {
   evalStamp = ++stampCounter;
   return evalStamp;
 }
@@ -164,22 +189,22 @@ export function currentWriteEpoch(): WriteEpoch {
 }
 
 // ---------------------------------------------------------------------------
-// Hooks the engine layer installs (write classification, tracing). Kept as
-// mutable module bindings so the graph itself stays dependency-free.
+// Tracing seam. tracer.ts installs the hook; a mutable module binding (not
+// an object) so the detached fast path stays one null check per emit site,
+// and the graph itself stays runtime-dependency-free.
 // ---------------------------------------------------------------------------
 
-export interface GraphHooks {
-  /** Return a draft sink for this write, or null for a canonical write. */
-  classifyWrite: ((cell: CellNode<unknown>) => boolean) | null;
-  trace:
-    | ((kind: string, node: ReactiveNode | null, cause: TraceEventId, data?: unknown) => TraceEventId)
-    | null;
-}
+export type TraceFn = (
+  kind: string,
+  node: ReactiveNode | null,
+  cause: TraceEventId,
+  data?: unknown,
+) => TraceEventId;
 
-export const hooks: GraphHooks = {
-  classifyWrite: null,
-  trace: null,
-};
+export let traceHook: TraceFn | null = null;
+export function setTraceHook(fn: TraceFn | null): void {
+  traceHook = fn;
+}
 
 export const NO_EVENT: TraceEventId = 0;
 /** Ambient causal parent for the operation in progress (write/effect/settle). */
@@ -224,7 +249,7 @@ export interface WatcherNode extends ReactiveNode {
   /** Draft-lane channel: receives the id of a draft whose new intent touches
    * this leaf's sources. Distinct from onNotify so speculative activity never
    * looks like a store change to snapshot-comparing subscribers. */
-  onDraftWake: ((id: number) => void) | undefined;
+  onDraftWake: ((id: DraftId) => void) | undefined;
 }
 
 export type UseFn = <U>(t: PromiseLike<U>) => U;
@@ -243,7 +268,7 @@ export function makeCell<T>(
 ): CellNode<T> {
   const lazyInit = typeof initial === 'function';
   return {
-    flags: Flags.Cell,
+    flags: Flag.Cell,
     version: 1,
     throwable: null,
     subs: undefined,
@@ -272,7 +297,7 @@ export function makeDerived<T>(
   opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
   return {
-    flags: Flags.Derived | Flags.Dirty,
+    flags: Flag.Derived | Flag.Dirty,
     version: 0,
     throwable: null,
     subs: undefined,
@@ -336,16 +361,16 @@ function unlinkFromSubs(link: Link): void {
 export function addObserver(node: ReactiveNode): void {
   node.observerCount++;
   if (node.observerCount === 1) {
-    node.flags |= Flags.Watched;
-    if ((node.flags & Flags.Derived) !== 0) {
+    node.flags |= Flag.Watched;
+    if ((node.flags & Flag.Derived) !== 0) {
       let invalid = false;
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         linkIntoSubs(l);
         const dep = l.dep;
         addObserver(dep);
-        if (l.version !== dep.version || (dep.flags & STALE_MASK) !== 0) invalid = true;
+        if (l.version !== dep.version || (dep.flags & Flag.StaleMask) !== 0) invalid = true;
       }
-      if (invalid && (node.flags & STALE_MASK) === 0) node.flags |= Flags.Check;
+      if (invalid && (node.flags & Flag.StaleMask) === 0) node.flags |= Flag.Check;
     }
     noteLifetimeTransition(node);
   }
@@ -365,13 +390,13 @@ export function addObserver(node: ReactiveNode): void {
 export function removeObserver(node: ReactiveNode): void {
   node.observerCount--;
   if (node.observerCount === 0) {
-    node.flags &= ~Flags.Watched;
-    if ((node.flags & Flags.Derived) !== 0) {
+    node.flags &= ~Flag.Watched;
+    if ((node.flags & Flag.Derived) !== 0) {
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         unlinkFromSubs(l);
         removeObserver(l.dep);
       }
-      node.validatedEpoch = (node.flags & STALE_MASK) === 0 ? writeEpoch : 0;
+      node.validatedEpoch = (node.flags & Flag.StaleMask) === 0 ? writeEpoch : 0;
     }
     noteLifetimeTransition(node);
   }
@@ -397,7 +422,7 @@ let lifetimeFlushScheduled = false;
 
 /** Called at the promote/demote boundary (observation count 0<->1). */
 function noteLifetimeTransition(node: ReactiveNode): void {
-  if ((node.flags & Flags.Cell) === 0) return;
+  if ((node.flags & Flag.Cell) === 0) return;
   const cell = node as CellNode<unknown>;
   if (cell.lifetime === undefined) return;
   pendingLifetimeCells.add(cell);
@@ -443,7 +468,7 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
     sub.depsTail = next;
     return next;
   }
-  const watched = (sub.flags & Flags.Watched) !== 0;
+  const watched = (sub.flags & Flag.Watched) !== 0;
   if (watched) {
     // Same-pass dedup for non-adjacent re-reads: this sub's earlier link
     // sits at the dep's subs tail (cursor reuse re-stamps, new watched edges
@@ -502,7 +527,7 @@ function trimDeps(sub: ReactiveNode): void {
  * always-false branch per evaluation, never the walk. */
 const DEV_EVAL_CHECKS: boolean =
   typeof process !== 'undefined' && process.env.NODE_ENV !== 'production';
-function assertDepsFromEval(sub: ReactiveNode, myStamp: number): void {
+function assertDepsFromEval(sub: ReactiveNode, myStamp: EvalStamp): void {
   for (let l = sub.deps; l !== undefined; l = l.nextDep) {
     if (l.stamp < myStamp) {
       throw new Error(
@@ -579,16 +604,16 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
   top: do {
     const sub = cur.sub;
     const flags = sub.flags;
-    if ((flags & STALE_MASK) !== 0) {
-      if ((flags & Flags.Watcher) !== 0 && !(sub as WatcherNode).scheduled) {
+    if ((flags & Flag.StaleMask) !== 0) {
+      if ((flags & Flag.Watcher) !== 0 && !(sub as WatcherNode).scheduled) {
         scheduleWatcher(sub as WatcherNode);
       }
     } else {
-      sub.flags = flags | Flags.Check;
+      sub.flags = flags | Flag.Check;
       sub.causeEvent = cause;
-      if ((flags & Flags.Watcher) !== 0) {
+      if ((flags & Flag.Watcher) !== 0) {
         scheduleWatcher(sub as WatcherNode);
-      } else if ((flags & Flags.Derived) !== 0) {
+      } else if ((flags & Flag.Derived) !== 0) {
         sub.canonicalEpoch++;
         if (!reactEpochSuppressed) sub.reactEpoch++;
         const subSubs = sub.subs;
@@ -643,7 +668,7 @@ export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): voi
  */
 export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventId): void {
   writeEpoch++;
-  node.flags = (node.flags & ~STALE_MASK) | Flags.Dirty;
+  node.flags = (node.flags & ~Flag.StaleMask) | Flag.Dirty;
   node.causeEvent = cause;
   node.version++;
   node.reactEpoch++;
@@ -664,12 +689,12 @@ export function pokeLeafObservers(node: ReactiveNode): void {
   const walk = (n: ReactiveNode): void => {
     for (let l = n.subs; l !== undefined; l = l.nextSub) {
       const sub = l.sub;
-      if ((sub.flags & Flags.Watcher) !== 0) {
+      if ((sub.flags & Flag.Watcher) !== 0) {
         if ((sub as WatcherNode).onNotify !== undefined) {
           scheduleWatcher(sub as WatcherNode);
-          sub.flags = (sub.flags & ~STALE_MASK) | Flags.Dirty;
+          sub.flags = (sub.flags & ~Flag.StaleMask) | Flag.Dirty;
         }
-      } else if ((sub.flags & Flags.Derived) !== 0) {
+      } else if ((sub.flags & Flag.Derived) !== 0) {
         seen ??= new Set();
         if (!seen.has(sub)) {
           seen.add(sub);
@@ -691,20 +716,20 @@ export function pokeLeafObservers(node: ReactiveNode): void {
  * delivery: the wave's own effects may dispose subscriptions, and a leaf
  * disposed by them must not receive the draft id.
  */
-export function pokeAndWakeLeafObservers(node: ReactiveNode, id: number): void {
+export function pokeAndWakeLeafObservers(node: ReactiveNode, id: DraftId): void {
   let seen: Set<ReactiveNode> | null = null;
   const wakes: WatcherNode[] = [];
   const walk = (n: ReactiveNode): void => {
     for (let l = n.subs; l !== undefined; l = l.nextSub) {
       const sub = l.sub;
-      if ((sub.flags & Flags.Watcher) !== 0) {
+      if ((sub.flags & Flag.Watcher) !== 0) {
         const leaf = sub as WatcherNode;
         if (leaf.onNotify !== undefined) {
           scheduleWatcher(leaf);
-          leaf.flags = (leaf.flags & ~STALE_MASK) | Flags.Dirty;
+          leaf.flags = (leaf.flags & ~Flag.StaleMask) | Flag.Dirty;
         }
         if (!leaf.disposed && leaf.onDraftWake !== undefined) wakes.push(leaf);
-      } else if ((sub.flags & Flags.Derived) !== 0) {
+      } else if ((sub.flags & Flag.Derived) !== 0) {
         seen ??= new Set();
         if (!seen.has(sub)) {
           seen.add(sub);
@@ -758,6 +783,12 @@ let flushing = false;
  * and repeated shifts would make wide flushes quadratic). */
 let queueHead = 0;
 
+/** Hard iteration ceiling: converts livelock into a thrown error. */
+const enum Limit {
+  /** Queued-effect runs per flush before declaring a non-settling cycle. */
+  FlushRuns = 100_000,
+}
+
 /** Run queued effects until settled, then deliver leaf notifications. A
  * throwing effect aborts the flush; the effects it preempted are skipped
  * (cleared), not left armed for unrelated writes to trigger later. */
@@ -768,10 +799,10 @@ export function flush(): void {
   try {
     let guard = 0;
     while (queueHead < watcherQueue.length) {
-      if (++guard > 100000) throw new Error('effect flush did not settle (cycle?)');
+      if (++guard > Limit.FlushRuns) throw new Error('effect flush did not settle (cycle?)');
       const w = watcherQueue[queueHead++];
       w.scheduled = false;
-      if (w.disposed || (w.flags & STALE_MASK) === 0) continue;
+      if (w.disposed || (w.flags & Flag.StaleMask) === 0) continue;
       runWatcher(w);
     }
     watcherQueue.length = 0;
@@ -780,7 +811,7 @@ export function flush(): void {
     for (let i = queueHead; i < watcherQueue.length; i++) {
       const w = watcherQueue[i];
       w.scheduled = false;
-      w.flags &= ~STALE_MASK;
+      w.flags &= ~Flag.StaleMask;
     }
     watcherQueue.length = 0;
     queueHead = 0;
@@ -792,7 +823,7 @@ export function flush(): void {
       for (const leaf of leaves) {
         const w = leaf as WatcherNode;
         w.scheduled = false;
-        w.flags &= ~STALE_MASK;
+        w.flags &= ~Flag.StaleMask;
       }
       for (const leaf of leaves) {
         const w = leaf as WatcherNode;
@@ -854,7 +885,7 @@ export function writeCell<T>(cell: CellNode<T>, next: T): boolean {
   writeEpoch++;
   cell.canonicalEpoch++;
   if (!reactEpochSuppressed) cell.reactEpoch++;
-  const cause = hooks.trace !== null ? hooks.trace('write', cell, currentCause) : NO_EVENT;
+  const cause = traceHook !== null ? traceHook('write', cell, currentCause) : NO_EVENT;
   propagateFrom(cell as CellNode<unknown>, cause);
   return true;
 }
@@ -921,20 +952,20 @@ function recompute(node: DerivedNode<unknown>): void {
   if (changed) node.version++;
   // A computed whose evaluation wrote state is self-affecting: its inputs
   // moved under it, so it never caches — every read re-evaluates.
-  node.flags = (node.flags & ~STALE_MASK) | (writeEpoch !== preEpoch ? Flags.Dirty : 0);
+  node.flags = (node.flags & ~Flag.StaleMask) | (writeEpoch !== preEpoch ? Flag.Dirty : 0);
   node.validatedEpoch = preEpoch;
 }
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
 export function ensureFresh(node: DerivedNode<unknown>): void {
   const flags = node.flags;
-  if ((flags & Flags.Watched) !== 0) {
+  if ((flags & Flag.Watched) !== 0) {
     // Watched: push marks are trustworthy (promote validated the closure).
-    if ((flags & STALE_MASK) === 0) return;
-  } else if ((flags & STALE_MASK) === 0 && node.validatedEpoch === writeEpoch) {
+    if ((flags & Flag.StaleMask) === 0) return;
+  } else if ((flags & Flag.StaleMask) === 0 && node.validatedEpoch === writeEpoch) {
     return;
   }
-  if ((node.flags & Flags.Dirty) !== 0 || node.value === UNINITIALIZED) {
+  if ((node.flags & Flag.Dirty) !== 0 || node.value === UNINITIALIZED) {
     recompute(node);
     return;
   }
@@ -942,13 +973,13 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
   // in first-read order, recomputing only if some version truly advanced.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
     const dep = l.dep;
-    if ((dep.flags & Flags.Derived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
+    if ((dep.flags & Flag.Derived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
     if (l.version !== dep.version) {
       recompute(node);
       return;
     }
   }
-  node.flags &= ~STALE_MASK;
+  node.flags &= ~Flag.StaleMask;
   node.validatedEpoch = writeEpoch;
 }
 
@@ -989,7 +1020,7 @@ function makeWatcher(fn: (() => void | (() => void)) | undefined): WatcherNode {
   return {
     // Watchers are born watched (they exist to observe) and drop the bit at
     // dispose; their edges never go through promote/demote counting.
-    flags: Flags.Watcher | Flags.Watched,
+    flags: Flag.Watcher | Flag.Watched,
     version: 0,
     throwable: null,
     subs: undefined,
@@ -1019,11 +1050,11 @@ function runWatcher(w: WatcherNode): void {
   // Validate: a Check-marked watcher whose derived deps cut off must not
   // re-run its body. Validation can itself run user code (computed fns) that
   // disposes this very watcher — re-check after every pull.
-  if ((w.flags & Flags.Check) !== 0) {
+  if ((w.flags & Flag.Check) !== 0) {
     let changed = false;
     for (let l = w.deps; l !== undefined; l = l.nextDep) {
       const dep = l.dep;
-      if ((dep.flags & Flags.Derived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
+      if ((dep.flags & Flag.Derived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
       if (w.disposed) return;
       if (l.version !== dep.version) {
         changed = true;
@@ -1031,11 +1062,11 @@ function runWatcher(w: WatcherNode): void {
       }
     }
     if (!changed) {
-      w.flags &= ~STALE_MASK;
+      w.flags &= ~Flag.StaleMask;
       return;
     }
   }
-  w.flags &= ~STALE_MASK;
+  w.flags &= ~Flag.StaleMask;
   executeWatcher(w);
 }
 
@@ -1065,7 +1096,7 @@ function executeWatcher(w: WatcherNode): void {
   activeScope = w;
   const myStamp = newEvalStamp();
   w.depsTail = undefined;
-  const cause = hooks.trace !== null ? hooks.trace('effect-run', w, w.causeEvent) : NO_EVENT;
+  const cause = traceHook !== null ? traceHook('effect-run', w, w.causeEvent) : NO_EVENT;
   const prevCause = setCurrentCause(cause);
   try {
     const ret = w.fn();
@@ -1083,7 +1114,7 @@ function executeWatcher(w: WatcherNode): void {
 export function disposeWatcher(w: WatcherNode): void {
   if (w.disposed) return;
   w.disposed = true;
-  w.flags &= ~Flags.Watched;
+  w.flags &= ~Flag.Watched;
   try {
     if (w.children !== undefined) {
       for (const child of w.children) disposeWatcher(child);
@@ -1169,7 +1200,7 @@ export function makeScope(fn: () => void): () => void {
 export function observeNode(
   node: ReactiveNode,
   notify: () => void,
-  draftWake?: (id: number) => void,
+  draftWake?: (id: DraftId) => void,
 ): () => void {
   const leaf = makeWatcher(undefined);
   leaf.onNotify = notify;
@@ -1179,8 +1210,8 @@ export function observeNode(
   const prevConsumer = activeConsumer;
   activeConsumer = leaf;
   try {
-    if ((node.flags & Flags.Cell) !== 0) readCell(node as CellNode<unknown>);
-    else if ((node.flags & Flags.Derived) !== 0) {
+    if ((node.flags & Flag.Cell) !== 0) readCell(node as CellNode<unknown>);
+    else if ((node.flags & Flag.Derived) !== 0) {
       // Subscribe to invalidation only; do not force evaluation here.
       const link = trackRead(node, leaf);
       link.version = node.version;
@@ -1194,8 +1225,8 @@ export function observeNode(
       // edges, so no wave was ever swallowed and there is no missed edge —
       // exactly the edge-triggered contract's "no Clean→stale transition
       // happened yet".
-      if ((node.flags & STALE_MASK) !== 0 && node.version !== 0) {
-        leaf.flags |= Flags.Check;
+      if ((node.flags & Flag.StaleMask) !== 0 && node.version !== 0) {
+        leaf.flags |= Flag.Check;
         leaf.causeEvent = node.causeEvent;
         scheduleWatcher(leaf);
       }

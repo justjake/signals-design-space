@@ -35,7 +35,7 @@ import {
   type Signal,
   type SignalOptions,
 } from '../index.ts';
-import { ASYNC_MASK, Flags, observeNode, type ReactiveNode } from '../graph.ts';
+import { Flag, observeNode, type ReactiveNode } from '../graph.ts';
 import { resolveState, worldOf, type DraftId, type World } from '../worlds.ts';
 import { type DerivedState, type ErrorBox, type Suspension } from '../asyncs.ts';
 import { getActiveTracer } from '../tracer.ts';
@@ -72,9 +72,9 @@ function traceDelivery(node: ReactiveNode, value: unknown): void {
  * - a never-settled value suspends everywhere.
  */
 function unwrapState(st: DerivedState, world: World): unknown {
-  const asyncBits = st.flags & ASYNC_MASK;
+  const asyncBits = st.flags & Flag.AsyncMask;
   if (asyncBits === 0) return st.value;
-  if (asyncBits === Flags.DerivedError) throw (st.throwable as ErrorBox).error;
+  if (asyncBits === Flag.DerivedError) throw (st.throwable as ErrorBox).error;
   const suspension = st.throwable as Suspension;
   if (world.drafts.length > 0) throw suspension.promise;
   if (!isUninitialized(st.value)) return st.value; // settled history: stale serves

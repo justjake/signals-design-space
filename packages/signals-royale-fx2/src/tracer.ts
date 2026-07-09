@@ -9,7 +9,7 @@
  * silently.
  */
 
-import { type ReactiveNode, type TraceEventId, NO_EVENT, hooks } from './graph.ts';
+import { type ReactiveNode, type TraceEventId, NO_EVENT, setTraceHook } from './graph.ts';
 
 export interface TraceEvent {
   id: TraceEventId;
@@ -25,6 +25,16 @@ export interface TracerOptions {
   capacity?: number;
 }
 
+/** Hard ceilings and defaults for the ring and its walks. */
+const enum Limit {
+  /** Smallest allowed ring; tiny rings evict too fast to answer anything. */
+  MinCapacity = 16,
+  /** Default ring capacity in events. */
+  DefaultCapacity = 4096,
+  /** whyLastDelivery chain ceiling: a corrupt cause chain must not hang. */
+  MaxChainWalk = 1000,
+}
+
 export class Tracer {
   private ring: (TraceEvent | undefined)[];
   private head = 0;
@@ -37,7 +47,7 @@ export class Tracer {
   private lastDelivery = new Map<ReactiveNode | object, TraceEventId>();
 
   constructor(opts?: TracerOptions) {
-    const capacity = Math.max(16, opts?.capacity ?? 4096);
+    const capacity = Math.max(Limit.MinCapacity, opts?.capacity ?? Limit.DefaultCapacity);
     this.ring = new Array(capacity);
   }
 
@@ -94,7 +104,7 @@ export class Tracer {
     const chain: string[] = [];
     let id: TraceEventId = start;
     let guard = 0;
-    while (id !== NO_EVENT && guard++ < 1000) {
+    while (id !== NO_EVENT && guard++ < Limit.MaxChainWalk) {
       const evt = this.find(id);
       if (evt === undefined) {
         chain.push(`#${id} (evicted from ring; ${this.dropped} events dropped)`);
@@ -110,7 +120,7 @@ export class Tracer {
     this.stopped = true;
     if (activeTracer === this) {
       activeTracer = null;
-      hooks.trace = null;
+      setTraceHook(null);
     }
   }
 }
@@ -122,7 +132,7 @@ export function attachTracer(opts?: TracerOptions): Tracer {
   activeTracer?.stop();
   const tracer = new Tracer(opts);
   activeTracer = tracer;
-  hooks.trace = (kind, node, cause, data) => tracer.emit(kind, node, cause, data);
+  setTraceHook((kind, node, cause, data) => tracer.emit(kind, node, cause, data));
   return tracer;
 }
 

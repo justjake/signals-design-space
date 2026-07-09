@@ -13,8 +13,10 @@ The root entry (`signals-royale-fx2`) is React-free and dependency-free.
 React bindings ship as a subpath — `signals-royale-fx2/react` — with
 `react`/`react-dom` (>= 19) as peer dependencies; they run on stock React,
 no patches or build flags. TypeScript source is the artifact (`exports`
-points at `src/`); every syntax used is erasable, so it also runs directly
-under Node's type stripping.
+points at `src/`): consume it with any TypeScript-compiling toolchain
+(bundlers, vitest, tsc). Numeric constant families are `const enum`s, so
+loaders that only strip types (Node's `--experimental-strip-types`) are not
+supported.
 
 ## Core API
 

@@ -774,3 +774,52 @@ clean; 275 passed (274 + the new leak pin); oracle 3 passed at 1200 seeds;
 gc-leaks 9; battery at the pinned 23 passed / 2 failed / 1 unhandled error
 (scenario 11 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both
 owner-exempt; the unhandled error is the same refresh TypeError).
+
+## 18. Type/constant hygiene (weak brands, const enums, dead seams)
+
+Three moves, refactor-parity, one commit. **Weak branded number types**: a
+shared `Brand<T, B>` helper in graph.ts (declared-never-created unique
+symbol, optional property — purely type-level) brands every named counter:
+`WriteEpoch`, `NodeVersion`, `TraceEventId`, `EvalStamp` (new name for the
+previously bare eval-stamp numbers: `evalStamp`, `stampCounter`,
+`Link.stamp`), `ReactEpoch`/`CanonicalEpoch` (the two subscription epochs),
+`Flags` (the stored word), and worlds.ts's `DraftId`, `WorldEpoch`, `OpSeq`.
+Weak means creation and increment stay cast-free while cross-brand
+assignments and parameter passes are type errors. The migration surfaced
+ZERO cross-brand errors in the existing code; that null result was verified
+positively with a temporary `@ts-expect-error` probe file exercising all ten
+cross-brand flows (every suppression was required — the brands bite — then
+the probe was deleted). Ripple typing fixes in the same spirit:
+`WorldMemo.writeEpoch` is a `WriteEpoch` (was bare `number`), and the
+draft-wake seam (`onDraftWake`, `pokeAndWakeLeafObservers`, `observeNode`'s
+`draftWake`) takes `DraftId` via a type-only worlds.ts import (erased; the
+graph stays runtime-dependency-free). **Const enums**: the flag bits are now
+`const enum Flag` with `StaleMask = Check | Dirty` and `AsyncMask =
+DerivedError | DerivedSuspended` as members (the former `STALE_MASK` /
+`ASYNC_MASK` consts); `Flag` is one bit, `Flags` stays the branded stored
+word (TS5 would force a cast on every `|=` if fields carried the enum type).
+The flush guard ceiling (`Limit.FlushRuns` = 100 000) and the tracer's ring
+constants (`Limit.MinCapacity`/`DefaultCapacity`/`MaxChainWalk`) join
+per-file `Limit` enums. `NO_EVENT` and `REPAIR_WAKE` deliberately stay
+branded const sentinels, not one-member enums — each is a sentinel of an
+existing branded type (`TraceEventId`, `DraftId`) and reads better where it
+lives. This reverses §13's erasable-syntax choice on purpose: the toolchain
+compiles TS everywhere (vitest/esbuild; no `erasableSyntaxOnly`, nothing
+runs Node strip-types — empirically confirmed strip-only mode rejects
+enums), esbuild inlines members same-file and compiles cross-file consumers
+to object lookups (same cost as the const object), and README's
+type-stripping claim is updated accordingly. **Dead seams**: worlds.ts's
+`getDraft` deleted (zero callers — its last ones died with
+`reactIntegration`); `GraphHooks.classifyWrite` deleted (never installed,
+never called; the live classifier is worlds.ts's `classifyWrite` invoked
+directly from index.ts write paths, and the hook's doc comment contradicted
+its own boolean type), which left `trace` as the interface's only member —
+so the `GraphHooks` interface and `hooks` object are gone entirely,
+replaced by a `traceHook` module binding + `setTraceHook` setter (matching
+`useImpl`/`setUseImpl`), keeping the detached fast path at one null check
+per emit site. Public API rename: `Flags`-the-const-object and `ASYNC_MASK`
+are replaced by `Flag` (tests updated; the shared battery adapter never
+touched them). Gates: tsc clean; 275 passed; oracle 3 passed at 1200 seeds;
+battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
+`adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
+the unhandled error is the same refresh TypeError).

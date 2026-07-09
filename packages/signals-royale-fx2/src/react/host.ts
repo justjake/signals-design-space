@@ -16,7 +16,7 @@
 /// <reference path="./scheduler.d.ts" />
 import * as React from 'react';
 import * as Scheduler from 'scheduler';
-import { ASYNC_MASK, pokeLeafObservers, type ReactiveNode } from '../graph.ts';
+import { Flag, pokeLeafObservers, type ReactiveNode } from '../graph.ts';
 import {
   type Draft,
   type DraftId,
@@ -284,7 +284,7 @@ export function correctSubscription(
     deliver(id);
   }
   const st = resolveState(node, worldOf(rendered.ids));
-  if ((st.flags & ASYNC_MASK) === 0 && !Object.is(st.value, rendered.value)) {
+  if ((st.flags & Flag.AsyncMask) === 0 && !Object.is(st.value, rendered.value)) {
     dispatch(REPAIR_WAKE);
   }
 }

@@ -20,11 +20,10 @@
 
 import {
   type DerivedNode,
-  ASYNC_MASK,
-  Flags,
+  type Flags,
+  Flag,
   PARKED,
   ensureFresh,
-  hooks,
   invalidateDerived,
   isUninitialized,
   NO_EVENT,
@@ -33,6 +32,7 @@ import {
   setUseImpl,
   startBatch,
   endBatch,
+  traceHook,
   untracked,
 } from './graph.ts';
 
@@ -83,7 +83,7 @@ export function isErrorBox(v: unknown): v is ErrorBox {
  * nodes (cells and deriveds ARE this shape; resolving a canonical world
  * allocates nothing) and per-world memo records:
  *
- * - flags: read via the async bits ONLY (`flags & ASYNC_MASK`); node-backed
+ * - flags: read via the async bits ONLY (`flags & Flag.AsyncMask`); node-backed
  *   views carry type/staleness/tier bits in the same word. Both async bits
  *   clear = plain value state.
  * - value: the settled value; the UNINITIALIZED sentinel when none exists
@@ -155,7 +155,7 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
  * the wave's notifications run), then release the suspensions so suspended
  * renders retry against the settled graph. */
 function settle(box: ThenableBox): void {
-  const cause = hooks.trace !== null ? hooks.trace('settle', null, NO_EVENT) : NO_EVENT;
+  const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT;
   onSettlementEpoch?.();
   const nodes = [...box.parkedNodes];
   box.parkedNodes.clear();
@@ -190,12 +190,12 @@ function canonicalUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): 
   // Reuse the span's suspension so Suspense retries see one stable thenable —
   // but never a settled one, or a suspended render would retry in a loop.
   const suspension =
-    (flags & Flags.DerivedSuspended) !== 0 && !(consumer.throwable as Suspension).settled
+    (flags & Flag.DerivedSuspended) !== 0 && !(consumer.throwable as Suspension).settled
       ? (consumer.throwable as Suspension)
       : makeSuspension();
   box.parkedSuspensions.add(suspension);
   consumer.throwable = suspension;
-  consumer.flags = (flags & ~ASYNC_MASK) | Flags.DerivedSuspended;
+  consumer.flags = (flags & ~Flag.AsyncMask) | Flag.DerivedSuspended;
   throw PARKED;
 }
 
@@ -210,15 +210,15 @@ function finishCompute(
     return true;
   }
   if (outcome.hasError) {
-    if ((flags & Flags.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
+    if ((flags & Flag.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
     const sameError =
-      (flags & Flags.DerivedError) !== 0 && (node.throwable as ErrorBox).error === outcome.error;
+      (flags & Flag.DerivedError) !== 0 && (node.throwable as ErrorBox).error === outcome.error;
     if (!sameError) node.throwable = makeErrorBox(outcome.error);
-    node.flags = (flags & ~ASYNC_MASK) | Flags.DerivedError;
+    node.flags = (flags & ~Flag.AsyncMask) | Flag.DerivedError;
     return !sameError;
   }
-  if ((flags & Flags.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
-  node.flags = flags & ~ASYNC_MASK;
+  if ((flags & Flag.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
+  node.flags = flags & ~Flag.AsyncMask;
   node.throwable = null;
   const prev = node.value;
   if (isUninitialized(prev) || !node.equals(prev, outcome.value)) {
@@ -227,7 +227,7 @@ function finishCompute(
   }
   // The value itself is unchanged; downstream still re-pulls when this ends
   // a pending or error span (readers may have parked or thrown).
-  return (flags & ASYNC_MASK) !== 0;
+  return (flags & Flag.AsyncMask) !== 0;
 }
 
 setUseImpl(canonicalUse as never);
