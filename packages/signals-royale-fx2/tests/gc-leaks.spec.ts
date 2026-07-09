@@ -81,7 +81,7 @@ describe('leak audit', () => {
     expect(runs).toBe(1); // and it never runs again
   });
 
-  test('a dropped leaf subscription handle reclaims', async () => {
+  test('a dropped subscription handle reclaims', async () => {
     const base = signal(1);
     (() => {
       void observeNode(nodeOf(base), () => {});
@@ -171,7 +171,7 @@ describe('leak audit', () => {
     expect(read(top)).toBe(2); // watched evaluation links base -> top
     expect(subCount(base)).toBe(1);
     await collect(10);
-    // The registry disposed the leaf; the demote cascade unhooked the chain.
+    // The registry disposed the subscription; the demote cascade unhooked the chain.
     expect(subCount(base)).toBe(0);
   });
 
@@ -205,12 +205,12 @@ describe('leak audit', () => {
     expect(payloadRef.deref()).toBeUndefined();
   });
 
-  test('[guard] a disposed leaf observer collects even though the leaf buffer retains capacity', async () => {
+  test('[guard] a disposed subscription collects even though the render-notify buffer retains capacity', async () => {
     const cell = signal(0);
     const payloadRef = (() => {
-      const payload = { tag: 'leaf-closure-payload' };
+      const payload = { tag: 'subscription-closure-payload' };
       const unsub = observeNode(nodeOf(cell), () => void payload);
-      cell.set(1); // delivery consumes the leaf's buffer slot
+      cell.set(1); // delivery consumes the subscription's buffer slot
       unsub();
       return new WeakRef(payload);
     })();

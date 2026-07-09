@@ -24,25 +24,30 @@ import {
 } from '../src/index.ts';
 import {
   discardDraft,
+  draftsAffecting,
+  isLiveDraft,
   openDraft,
   resolveState,
   retireDraft,
   runInDraft,
   worldOf,
   type Draft,
+  type DraftId,
 } from '../src/worlds.ts';
-import { observeNode, type ReactiveNode } from '../src/graph.ts';
+import { observeNode } from '../src/graph.ts';
 
 /** The engine touch points the sabotage canaries below override, so the
  * oracle is proven to catch a broken engine rather than a broken harness. */
 interface EngineSeams {
   retire(draft: Draft, opts: { silent: boolean }): void;
-  canonicalSnap(node: ReactiveNode): number;
+  /** The draft-lane reducer channel: every wake a scoped subscriber receives
+   * (write-time pokes and attach-time joins alike) flows through here. */
+  deliverWake(join: (id: DraftId) => void, id: DraftId): void;
 }
 
 const realSeams: EngineSeams = {
   retire: (draft, opts) => retireDraft(draft.id, opts),
-  canonicalSnap: (node) => node.canonicalEpoch,
+  deliverWake: (join, id) => join(id),
 };
 
 // ---------------------------------------------------------------------------
@@ -64,20 +69,21 @@ function mulberry32(seed: number): () => number {
 // The model
 // ---------------------------------------------------------------------------
 
-type ModelIntent = { seq: number; kind: 'set' | 'update'; payload: number | ((p: number) => number); draft: number | null };
+type ModelIntent = { kind: 'set' | 'update'; payload: number | ((p: number) => number); draft: number | null };
 type ModelCell = { base: number; intents: ModelIntent[] };
 type DraftState = 'live' | 'retired' | 'discarded';
 
 interface Model {
   cells: ModelCell[];
   drafts: Map<number, DraftState>;
-  seq: number;
 }
 
 function modelValue(m: Model, cellIx: number, worldIds: readonly number[] | 'latest' | null): number {
   const cell = m.cells[cellIx];
   const live = (id: number) => m.drafts.get(id) === 'live';
   let v = cell.base;
+  // Array order is dispatch order; retirement flips visibility, never
+  // position (mirrors the engine's rebase log exactly).
   for (const it of cell.intents) {
     const included =
       it.draft === null ||
@@ -121,9 +127,9 @@ type Step =
   | { t: 'open' }
   | { t: 'draftSet'; draft: number; cell: number; v: number }
   | { t: 'draftUpdate'; draft: number; cell: number; k: number }
-  /** silent mirrors the React bindings' fold-after-commit: no reactEpoch
-   * bump. Model semantics are identical; the bare subscribers below assert
-   * the canonical channel still converges. */
+  /** silent mirrors the React bindings' fold-after-commit: no storeEpoch
+   * bump. Model semantics are identical; the scoped subscribers below assert
+   * the world-delivery channel makes them converge anyway. */
   | { t: 'retire'; draft: number; silent: boolean }
   | { t: 'discard'; draft: number }
   | { t: 'readCanonical'; ref: Ref }
@@ -202,11 +208,12 @@ function generate(rand: () => number, steps: number): Step[] {
 
 function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | null {
   resetEngineForTest();
-  const model: Model = { cells: [], drafts: new Map(), seq: 0 };
+  const model: Model = { cells: [], drafts: new Map() };
   const exprs: Expr[] = [];
   const engCells: Signal<number>[] = [];
   const engComps: Computed<number>[] = [];
   const engDrafts = new Map<number, Draft>(); // schedule draft ix -> engine draft record (transient: dies with this run)
+  const idToIx = new Map<DraftId, number>(); // engine draft id -> schedule ix
   const effectLog: number[] = [];
   const expectedEffectLog: number[] = [];
   let effectRef: Ref | null = null;
@@ -214,39 +221,100 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
 
   const engRead = (ref: Ref): number => ('cell' in ref ? read(engCells[ref.cell]) : read(engComps[ref.comp]));
 
-  // Bare subscribers: the scope-less React shape. Subscribe, snapshot the
-  // canonical epoch, re-read only when the snapshot changes (the
-  // useSyncExternalStore bail). Their view must track model canonical state
-  // through every fold — silent ones included (the bare-root fold class).
-  interface BareSub {
+  // Scoped subscribers: the (only) React hook shape. Subscribe with both
+  // channels of useValue — the store channel (snapshot the storeEpoch,
+  // re-read on change: the useSyncExternalStore bail) and the draft-lane
+  // channel (wakes deliver draft ids into a per-subscriber world, exactly
+  // like the per-hook reducer; attach-time joins mirror correctSubscription
+  // for drafts that wrote before the subscription existed). Their rendered
+  // view must match the model's value FOR THEIR WORLD after every rerender —
+  // and silent folds keep them converged with canonical without any epoch
+  // bump, because retirement flips a draft's intents from world-only to
+  // always-included without moving them ("visibility, never position").
+  interface ScopedSub {
     ref: Ref;
+    /** The reducer world: engine ids of drafts delivered to this sub. */
+    ids: Set<DraftId>;
     snap: number;
-    view: number;
+    view: unknown;
+    /** Strong subs additionally carry model-side wake bookkeeping: the
+     * model knows exactly which drafts wrote their cell, so a dropped wake
+     * is a failure, not a smaller world. Cell subscribers are strong (a
+     * cell's poke audience is total); computed subscribers are not (their
+     * watched dep set is the last canonical evaluation's reads, so a draft
+     * write to a branch only a draft world reads legitimately never wakes
+     * them). */
+    modelIds: Set<number> | null;
+    failure: string | null;
     unsub: () => void;
   }
-  const bareSubs: BareSub[] = [];
-  const attachBare = (ref: Ref) => {
+  const scopedSubs: ScopedSub[] = [];
+  const attachScoped = (ref: Ref, strong: boolean) => {
     const target = 'cell' in ref ? engCells[ref.cell] : engComps[ref.comp];
     const node = nodeOf(target);
-    const sub: BareSub = {
+    const sub: ScopedSub = {
       ref,
-      snap: seams.canonicalSnap(node),
-      view: engRead(ref),
+      ids: new Set(),
+      snap: node.storeEpoch,
+      view: undefined,
+      modelIds: strong ? new Set() : null,
+      failure: null,
       unsub: () => {},
     };
-    sub.unsub = observeNode(node, () => {
-      const s = seams.canonicalSnap(node);
-      if (s === sub.snap) return;
-      sub.snap = s;
-      sub.view = engRead(ref);
-    });
-    bareSubs.push(sub);
-  };
-  const checkBareSubs = (): string | null => {
-    for (const sub of bareSubs) {
-      const want = modelEval(model, exprs, sub.ref, null);
+    const rerender = () => {
+      for (const id of [...sub.ids]) {
+        if (!isLiveDraft(id)) sub.ids.delete(id); // the reducer's prune
+      }
+      const st = resolveState(node, worldOf([...sub.ids]));
+      if ((st.flags & Flag.AsyncMask) !== 0) {
+        sub.failure ??= `scoped subscriber ${JSON.stringify(ref)}: unexpected async flags ${st.flags}`;
+        return;
+      }
+      sub.view = st.value;
+      // Rerender-time agreement: the engine's resolution of this sub's
+      // world matches the model's.
+      const ixs = [...sub.ids]
+        .map((id) => idToIx.get(id)!)
+        .filter((ix) => model.drafts.get(ix) === 'live');
+      const want = modelEval(model, exprs, ref, ixs);
       if (sub.view !== want) {
-        return `bare subscriber ${JSON.stringify(sub.ref)}: view ${sub.view} != model ${want}`;
+        sub.failure ??= `scoped subscriber ${JSON.stringify(ref)}: rerender view ${String(sub.view)} != model ${want} for world [${ixs}]`;
+      }
+    };
+    const join = (id: DraftId) => {
+      if (!isLiveDraft(id)) return;
+      sub.ids.add(id);
+      rerender();
+    };
+    sub.unsub = observeNode(
+      node,
+      () => {
+        const s = node.storeEpoch;
+        if (s === sub.snap) return;
+        sub.snap = s;
+        rerender();
+      },
+      (id) => seams.deliverWake(join, id),
+    );
+    // The subscription attaches after drafts may already hold intents on
+    // this node's sources; join them (correctSubscription's job in the
+    // bindings), through the same sabotage seam as write-time wakes.
+    for (const id of draftsAffecting(node)) seams.deliverWake(join, id);
+    sub.snap = node.storeEpoch;
+    rerender();
+    scopedSubs.push(sub);
+  };
+  const checkScopedSubs = (): string | null => {
+    for (const sub of scopedSubs) {
+      if (sub.failure !== null) return sub.failure;
+      if (sub.modelIds === null) continue;
+      // Strong (cell) subscribers: the model's own wake bookkeeping is the
+      // expectation, so a swallowed wake or a missed silent fold surfaces
+      // as a stale view here — this is the silent-fold honesty check.
+      const liveIxs = [...sub.modelIds].filter((ix) => model.drafts.get(ix) === 'live');
+      const want = modelEval(model, exprs, sub.ref, liveIxs);
+      if (sub.view !== want) {
+        return `scoped subscriber ${JSON.stringify(sub.ref)}: view ${String(sub.view)} != model ${want} for world [${liveIxs}]`;
       }
     }
     return null;
@@ -268,7 +336,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
         case 'cell': {
           model.cells.push({ base: s.init, intents: [] });
           engCells.push(signal(s.init));
-          if (engCells.length === 1) attachBare({ cell: 0 });
+          if (engCells.length === 1) attachScoped({ cell: 0 }, true);
           break;
         }
         case 'comp': {
@@ -293,19 +361,19 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
               }
             });
             refreshExpectedEffect();
-            attachBare({ comp: 0 });
+            attachScoped({ comp: 0 }, false);
           }
           break;
         }
         case 'set': {
-          model.cells[s.cell].intents.push({ seq: model.seq++, kind: 'set', payload: s.v, draft: null });
+          model.cells[s.cell].intents.push({ kind: 'set', payload: s.v, draft: null });
           engCells[s.cell].set(s.v);
           refreshExpectedEffect();
           break;
         }
         case 'update': {
           const k = s.k;
-          model.cells[s.cell].intents.push({ seq: model.seq++, kind: 'update', payload: (p) => p + k, draft: null });
+          model.cells[s.cell].intents.push({ kind: 'update', payload: (p) => p + k, draft: null });
           engCells[s.cell].update((p) => p + k);
           refreshExpectedEffect();
           break;
@@ -313,7 +381,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
         case 'batchWrites': {
           batch(() => {
             for (const w of s.writes) {
-              model.cells[w.cell].intents.push({ seq: model.seq++, kind: 'set', payload: w.v, draft: null });
+              model.cells[w.cell].intents.push({ kind: 'set', payload: w.v, draft: null });
               engCells[w.cell].set(w.v);
             }
           });
@@ -324,19 +392,30 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
           const d = openDraft();
           const ix = engDrafts.size;
           engDrafts.set(ix, d);
+          idToIx.set(d.id, ix);
           model.drafts.set(ix, 'live');
           break;
         }
         case 'draftSet': {
           if (model.drafts.get(s.draft) !== 'live') break;
-          model.cells[s.cell].intents.push({ seq: model.seq++, kind: 'set', payload: s.v, draft: s.draft });
+          model.cells[s.cell].intents.push({ kind: 'set', payload: s.v, draft: s.draft });
+          for (const sub of scopedSubs) {
+            if (sub.modelIds !== null && 'cell' in sub.ref && sub.ref.cell === s.cell) {
+              sub.modelIds.add(s.draft);
+            }
+          }
           runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].set(s.v));
           break;
         }
         case 'draftUpdate': {
           if (model.drafts.get(s.draft) !== 'live') break;
           const k = s.k;
-          model.cells[s.cell].intents.push({ seq: model.seq++, kind: 'update', payload: (p) => p + k, draft: s.draft });
+          model.cells[s.cell].intents.push({ kind: 'update', payload: (p) => p + k, draft: s.draft });
+          for (const sub of scopedSubs) {
+            if (sub.modelIds !== null && 'cell' in sub.ref && sub.ref.cell === s.cell) {
+              sub.modelIds.add(s.draft);
+            }
+          }
           runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].update((p) => p + k));
           break;
         }
@@ -384,10 +463,10 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
           break;
         }
       }
-      // Bare subscribers converge synchronously (notifications flush with
-      // the wave), so their view must match model canonical after any step.
-      const bare = checkBareSubs();
-      if (bare !== null) return fail(bare);
+      // Scoped subscribers converge synchronously (wakes and notifications
+      // flush with the walk), so their views are checkable after any step.
+      const scoped = checkScopedSubs();
+      if (scoped !== null) return fail(scoped);
     }
     // Final canonical sweep + effect-log comparison.
     for (let cix = 0; cix < engCells.length; cix++) {
@@ -406,7 +485,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     return null;
   } finally {
     disposeEffect?.();
-    for (const sub of bareSubs) sub.unsub();
+    for (const sub of scopedSubs) sub.unsub();
   }
 }
 
@@ -453,13 +532,18 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
     }
   });
 
-  test('canary: a bare subscriber blinded to silent folds is caught (the scope-less staleness class)', () => {
-    // Sabotage: the bare subscriber's snapshot reverts to the world-delivered
-    // epoch (reactEpoch), which silent folds keep still — exactly the pre-fix
-    // wiring that stranded subscribers outside any SignalScope.
+  test('canary: a scoped subscriber with a sabotaged draft-lane channel is caught (the silent-fold staleness class)', () => {
+    // Sabotage: the reducer channel drops every wake. The subscriber's
+    // storeEpoch snapshot is silent-fold-blind BY DESIGN, so the wake
+    // channel is its only route to a silently folded draft's values — with
+    // wakes dropped it strands on the pre-draft view during the draft's
+    // life and stays stranded after the silent fold. The oracle must see
+    // both as staleness against its wake bookkeeping.
     const sabotaged: EngineSeams = {
       ...realSeams,
-      canonicalSnap: (node) => node.reactEpoch,
+      deliverWake: () => {
+        /* sabotage: the reducer never hears about the draft */
+      },
     };
     try {
       const schedule: Step[] = [

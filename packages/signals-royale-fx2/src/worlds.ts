@@ -1,17 +1,16 @@
 /**
- * Worlds: speculative overlays that make React transitions invisible to
- * canonical readers until they commit.
+ * Worlds: draft overlays that make React transitions invisible to canonical
+ * readers until they commit.
  *
  * A DRAFT is the engine-side record of one transition batch: write intents
  * (set values and update functions) against base cells. A WORLD is
  * "canonical state plus an ordered set of drafts" — exactly what one React
  * render pass is allowed to see.
  *
- * Replay follows React's updater-queue rules. Every intent — urgent or
- * drafted — gets a global sequence number at dispatch. While any draft
- * touches a cell, the cell keeps a REBASE LOG: its base value plus all
- * intents in dispatch order. Views then differ only in which intents they
- * include:
+ * Replay follows React's updater-queue rules. While any draft touches a
+ * cell, the cell keeps a REBASE LOG: its base value plus all intents in the
+ * order they were dispatched (the intent array IS dispatch order). Views
+ * then differ only in which intents they include:
  *
  * - canonical = base + urgent intents (drafts skipped, later urgents still
  *   apply — so a counter at 1 with a pending transition "+2" shows 2 after
@@ -35,18 +34,17 @@ import {
   type WriteEpoch,
   Flag,
   NO_EVENT,
-  bumpReactEpoch,
+  bumpStoreEpochLoud,
   currentWriteEpoch,
   ensureFresh,
   peekCell,
-  pokeAndWakeLeafObservers,
-  pokeLeafObservers,
+  pokeDraftWatchers,
   setCurrentCause,
   startBatch,
   endBatch,
   traceHook,
   untracked,
-  withSuppressedReactEpoch,
+  withSuppressedStoreEpoch,
   writeCell,
 } from './graph.ts';
 import {
@@ -63,13 +61,10 @@ export type DraftId = Brand<number, 'DraftId'>;
 export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded';
 /** Bumps whenever any draft's ops or state change; world memos key on it. */
 export type WorldEpoch = Brand<number, 'WorldEpoch'>;
-/** Global dispatch order across urgent and drafted intents. */
-export type OpSeq = Brand<number, 'OpSeq'>;
 
 export type OpKind = 'set' | 'update';
 
 export interface Intent {
-  seq: OpSeq;
   kind: OpKind;
   payload: unknown;
   /** The draft that issued this intent; null for urgent intents. */
@@ -93,7 +88,6 @@ export interface Draft {
 }
 
 let nextDraftId: DraftId = 1;
-let nextSeq: OpSeq = 1;
 /** Open and sealed drafts, in creation order (Map preserves insertion). */
 const liveDrafts = new Map<DraftId, Draft>();
 /** Cells with at least one live draft intent. */
@@ -137,7 +131,7 @@ export function sealDraft(draft: Draft): void {
 function logFor(cell: CellNode<unknown>): RebaseLog {
   let log = rebaseLogs.get(cell);
   if (log === undefined) {
-    // Capture the base BEFORE any speculative intent; materializes lazy
+    // Capture the base BEFORE any drafted intent; materializes lazy
     // cells (replay needs the base for the equality/update contract).
     log = { base: untracked(() => peekCell(cell)), intents: [] };
     rebaseLogs.set(cell, log);
@@ -145,11 +139,11 @@ function logFor(cell: CellNode<unknown>): RebaseLog {
   return log;
 }
 
-/** Record a drafted write intent. Speculative subscribers (isPending probes,
- * latest() viewers) get poked; canonical values do not move. Subscribers of
- * the cell — and of watched computeds over it — additionally receive the
- * draft id on their draft-lane channel, so exactly the affected components
- * join the transition's render passes (write-time dispatch runs inside the
+/** Record a drafted write intent. Draft watchers (isPending probes, latest()
+ * viewers) get poked; canonical values do not move. Subscribers of the cell
+ * — and of watched computeds over it — additionally receive the draft id on
+ * their draft-lane channel, so exactly the affected components join the
+ * transition's render passes (write-time dispatch runs inside the
  * transition scope; late appends re-dispatch to the same audience). */
 export function appendDraftIntent(
   draft: Draft,
@@ -160,14 +154,17 @@ export function appendDraftIntent(
   if (draft.state !== 'open') {
     throw new Error('cannot write into a batch that already ended');
   }
-  logFor(cell).intents.push({ seq: nextSeq++, kind, payload, draft });
+  // Array order is dispatch order; retirement flips visibility, never
+  // position.
+  logFor(cell).intents.push({ kind, payload, draft });
   draft.cells.add(cell);
   worldEpoch++;
+  let cause: TraceEventId = NO_EVENT;
   if (traceHook !== null) {
-    draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
-    cell.causeEvent = draft.lastWriteEvent;
+    cause = draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
+    cell.causeEvent = cause;
   }
-  pokeAndWakeLeafObservers(cell, draft.id);
+  pokeDraftWatchers(cell, cause, draft.id);
 }
 
 /** Record an urgent intent on a cell that currently has a rebase log, so
@@ -176,9 +173,33 @@ export function appendDraftIntent(
 export function appendUrgentIntent(cell: CellNode<unknown>, kind: OpKind, payload: unknown): boolean {
   const log = rebaseLogs.get(cell);
   if (log === undefined) return false;
-  log.intents.push({ seq: nextSeq++, kind, payload, draft: null });
+  // Array order is dispatch order; retirement flips visibility, never
+  // position.
+  log.intents.push({ kind, payload, draft: null });
   worldEpoch++;
   return true;
+}
+
+/** An urgent intent on a drafted cell rebases every pending world over the
+ * new canonical value. When the canonical write itself cuts off on equality,
+ * nothing propagates — yet the drafted replays changed (base…draft…urgent
+ * lands differently than base…draft), so each live draft's audience must be
+ * poked AND woken or its transition commits the pre-rebase value. The
+ * changed-write path needs none of this: the wave re-renders subscribers
+ * urgently, and React restarts in-progress transition work after an
+ * interleaved urgent commit, so those passes re-resolve their worlds live. */
+export function pokeRebasedCell(cell: CellNode<unknown>): void {
+  const log = rebaseLogs.get(cell);
+  if (log === undefined) return;
+  let woken: Set<Draft> | null = null;
+  for (const intent of log.intents) {
+    const d = intent.draft;
+    if (d === null || (d.state !== 'open' && d.state !== 'sealed')) continue;
+    if (woken === null) woken = new Set();
+    else if (woken.has(d)) continue;
+    woken.add(d);
+    pokeDraftWatchers(cell, NO_EVENT, d.id);
+  }
 }
 
 /** Replay a cell's log for a world (or for canonical state, when `world` is
@@ -232,14 +253,14 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
         // includes its intents interleaved with urgent ones in dispatch
         // order.
         writeCell(cell, replayLog(cell, null));
-        pokeLeafObservers(cell);
+        pokeDraftWatchers(cell, evt);
       }
     } finally {
       endBatch();
     }
   };
   try {
-    if (opts?.silent === true) withSuppressedReactEpoch(fold);
+    if (opts?.silent === true) withSuppressedStoreEpoch(fold);
     else fold();
   } finally {
     setCurrentCause(prevCause);
@@ -248,17 +269,19 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
   maybeQuiesce();
 }
 
-/** Roll back an abandoned draft: anyone who saw it re-resolves without it. */
+/** Roll back an abandoned draft: anyone who saw it re-resolves without it.
+ * The store-epoch bump is deliberately loud — subscribers rendered the
+ * draft's values, and the rollback is new information no render pass shows. */
 export function discardDraft(id: DraftId): void {
   const draft = liveDrafts.get(id);
   if (draft === undefined) return;
   liveDrafts.delete(id);
   draft.state = 'discarded';
   worldEpoch++;
-  if (traceHook !== null) traceHook('draft-discard', null, draft.openEvent);
+  const evt = traceHook !== null ? traceHook('draft-discard', null, draft.openEvent) : NO_EVENT;
   for (const cell of draft.cells) {
-    bumpReactEpoch(cell);
-    pokeLeafObservers(cell);
+    bumpStoreEpochLoud(cell);
+    pokeDraftWatchers(cell, evt);
   }
   releaseLogs(draft);
   maybeQuiesce();
@@ -307,7 +330,7 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
   const collect = (n: ReactiveNode): void => {
     if (visited.has(n)) return;
     visited.add(n);
-    if ((n.flags & Flag.Cell) !== 0) {
+    if ((n.flags & Flag.KindCell) !== 0) {
       sources.add(n as CellNode<unknown>);
       return;
     }
@@ -468,7 +491,7 @@ function reconcileStates(
     const equals = (node as DerivedNode<unknown>).equals ?? Object.is;
     return equals(prev.value, next.value) ? prev : next;
   }
-  if (asyncBits === Flag.DerivedSuspended) {
+  if (asyncBits === Flag.AsyncSuspended) {
     return prev.throwable === next.throwable && prev.value === next.value ? prev : next;
   }
   return (prev.throwable as ErrorBox).error === (next.throwable as ErrorBox).error ? prev : next;
@@ -477,12 +500,12 @@ function reconcileStates(
 /** Resolve a node's value as seen by a world. A canonical world hits the
  * ordinary graph and returns the NODE ITSELF as the state view (cells and
  * deriveds carry the DerivedState shape; the trivial read allocates
- * nothing); drafted worlds replay intents (cells) or speculatively evaluate
+ * nothing); drafted worlds replay intents (cells) or draft-evaluate
  * (deriveds) into memo records per (node, world signature). */
 export function resolveState(node: ReactiveNode, world: World): DerivedState {
   if (world.drafts.length === 0) {
     untracked(() => {
-      if ((node.flags & Flag.Cell) !== 0) peekCell(node as CellNode<unknown>);
+      if ((node.flags & Flag.KindCell) !== 0) peekCell(node as CellNode<unknown>);
       else ensureFresh(node as DerivedNode<unknown>);
     });
     return node as CellNode<unknown> | DerivedNode<unknown>;
@@ -496,7 +519,7 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
     return memo.state;
   }
   const fresh: DerivedState =
-    (node.flags & Flag.Cell) !== 0
+    (node.flags & Flag.KindCell) !== 0
       ? { flags: 0, value: replayLog(node as CellNode<unknown>, world), throwable: null }
       : draftEvaluate(node as DerivedNode<unknown>, world, memo?.state);
   const state = reconcileStates(node, memo?.state, fresh);
@@ -521,7 +544,7 @@ function draftEvaluate(
   // Suspense retries must observe one stable thenable per pending span.
   const suspension =
     prev !== undefined &&
-    (prev.flags & Flag.DerivedSuspended) !== 0 &&
+    (prev.flags & Flag.AsyncSuspended) !== 0 &&
     !(prev.throwable as Suspension).settled
       ? (prev.throwable as Suspension)
       : makeSuspension();
@@ -540,16 +563,16 @@ function draftEvaluate(
   } catch (e) {
     if (e === WORLD_PARKED) {
       // The canonical value doubles as the stale serve (sentinel = none yet).
-      return { flags: Flag.DerivedSuspended, value: node.value, throwable: suspension };
+      return { flags: Flag.AsyncSuspended, value: node.value, throwable: suspension };
     }
     if (
       prev !== undefined &&
-      (prev.flags & Flag.DerivedError) !== 0 &&
+      (prev.flags & Flag.AsyncError) !== 0 &&
       (prev.throwable as ErrorBox).error === e
     ) {
       return prev;
     }
-    return { flags: Flag.DerivedError, value: node.value, throwable: makeErrorBox(e) };
+    return { flags: Flag.AsyncError, value: node.value, throwable: makeErrorBox(e) };
   } finally {
     currentPark = prevPark;
     sigs.delete(world.sig);
@@ -570,11 +593,11 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
 /** Unwrap a resolved state from inside another evaluation: values flow,
  * errors rethrow their stable reason, suspended forwards by parking the
  * reader (no stale serve here — a world evaluation must not fold a stale
- * canonical value into a speculative result). */
+ * canonical value into a draft-world result). */
 export function unwrapForEval(st: DerivedState, park: (t: PromiseLike<unknown>) => unknown): unknown {
   const asyncBits = st.flags & Flag.AsyncMask;
   if (asyncBits === 0) return st.value;
-  if (asyncBits === Flag.DerivedError) throw (st.throwable as ErrorBox).error;
+  if (asyncBits === Flag.AsyncError) throw (st.throwable as ErrorBox).error;
   return park((st.throwable as Suspension).promise);
 }
 

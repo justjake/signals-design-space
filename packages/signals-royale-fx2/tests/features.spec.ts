@@ -33,12 +33,12 @@ describe('lifetime effects', () => {
     const dispose = effect(() => void c.get()); // observes the chain into a
     await tick();
     expect(log).toEqual(['on:0']);
-    const unsub = observeNode(nodeOf(a), () => {}); // second kind: leaf subscription
+    const unsub = observeNode(nodeOf(a), () => {}); // second kind: store subscription
     await tick();
     expect(log).toEqual(['on:0']); // union: still one observation
     dispose();
     await tick();
-    expect(log).toEqual(['on:0']); // leaf still holds it
+    expect(log).toEqual(['on:0']); // the subscription still holds it
     unsub();
     await tick();
     expect(log).toEqual(['on:0', 'off']);

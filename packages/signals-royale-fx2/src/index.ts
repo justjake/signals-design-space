@@ -52,6 +52,7 @@ import {
   getCurrentWorld,
   latestWorld,
   peekWorldMemo,
+  pokeRebasedCell,
   resolveState,
   setAmbientClassifier,
   unwrapForEval,
@@ -145,14 +146,14 @@ function readValue(x: AnyReadable): unknown {
     // Inside a draft evaluation every read resolves that world.
     return unwrapForEval(resolveState(node, world), getCurrentPark()!);
   }
-  if ((node.flags & Flag.Cell) !== 0) return readCell(node as CellNode<unknown>);
+  if ((node.flags & Flag.KindCell) !== 0) return readCell(node as CellNode<unknown>);
   const value = readDerived(node as DerivedNode<unknown>);
   const flags = node.flags;
   if ((flags & Flag.AsyncMask) !== 0) {
-    if ((flags & Flag.DerivedError) !== 0) throw (node.throwable as ErrorBox).error;
+    if ((flags & Flag.AsyncError) !== 0) throw (node.throwable as ErrorBox).error;
     const suspension = node.throwable as Suspension;
     const consumer = getActiveConsumer();
-    if (consumer !== null && (consumer.flags & Flag.Derived) !== 0) {
+    if (consumer !== null && (consumer.flags & Flag.KindDerived) !== 0) {
       // Pending forwards: park the evaluating computed on this suspension.
       useImpl(suspension.promise, consumer as DerivedNode<unknown>);
     }
@@ -184,14 +185,14 @@ export function latest<T>(x: Readable<T>): T {
       // a later change to x re-runs the consumer rather than leaving it
       // permanently stale.
       world = CANONICAL_WORLD;
-      if ((node.flags & Flag.Cell) !== 0) readCell(node as CellNode<unknown>);
+      if ((node.flags & Flag.KindCell) !== 0) readCell(node as CellNode<unknown>);
       else readDerived(node as DerivedNode<unknown>);
     } else {
       world = renderWorld() ?? latestWorld();
     }
   }
   const st = resolveState(node, world);
-  if ((st.flags & Flag.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
+  if ((st.flags & Flag.AsyncError) !== 0) throw (st.throwable as ErrorBox).error;
   return stateValue(st) as T;
 }
 
@@ -199,7 +200,7 @@ export function latest<T>(x: Readable<T>): T {
 export function committed<T>(x: Readable<T>, container?: object): T {
   const node = nodeOf(x);
   const st = resolveState(node, committedWorldOf(container));
-  if ((st.flags & Flag.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
+  if ((st.flags & Flag.AsyncError) !== 0) throw (st.throwable as ErrorBox).error;
   return stateValue(st) as T;
 }
 
@@ -208,7 +209,7 @@ export function committed<T>(x: Readable<T>, container?: object): T {
  * error the caller rethrows. The React bindings' useCommitted snapshot. */
 export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
   const st = resolveState(node, committedWorldOf(container));
-  if ((st.flags & Flag.DerivedError) !== 0) return st.throwable;
+  if ((st.flags & Flag.AsyncError) !== 0) return st.throwable;
   return stateValue(st);
 }
 
@@ -223,16 +224,16 @@ export function isPending(x: AnyReadable): boolean {
 /** Node-level pendingness probe; `world` scopes the suspended-memo check
  * (null = ambient). The React bindings' useIsPending snapshot. */
 export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
-  if ((node.flags & Flag.Cell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
-  if ((node.flags & Flag.Derived) === 0) return false;
-  if ((node.flags & Flag.DerivedSuspended) !== 0) return true;
+  if ((node.flags & Flag.KindCell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
+  if ((node.flags & Flag.KindDerived) === 0) return false;
+  if ((node.flags & Flag.AsyncSuspended) !== 0) return true;
   if (world !== null && world.drafts.length > 0) {
     const memo = peekWorldMemo(node, world.sig);
-    if (memo !== undefined && (memo.flags & Flag.DerivedSuspended) !== 0) return true;
+    if (memo !== undefined && (memo.flags & Flag.AsyncSuspended) !== 0) return true;
   }
   // A drafted input means this computed has newer data pending too.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
-    if ((l.dep.flags & Flag.Cell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
+    if ((l.dep.flags & Flag.KindCell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
   }
   return false;
 }
@@ -259,8 +260,11 @@ function writeSignal<T>(x: Signal<T>, value: T): void {
     return;
   }
   // Urgent: canonical moves now; pending worlds replay it in dispatch order.
-  appendUrgentIntent(cell, 'set', value);
-  writeCell(x.node, value);
+  const rebased = appendUrgentIntent(cell, 'set', value);
+  const changed = writeCell(x.node, value);
+  // Equality cutoff with pending drafts: canonical did not move (no wave
+  // ran) but the drafted replays did — their audiences must still hear it.
+  if (rebased && !changed) pokeRebasedCell(cell);
 }
 
 function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
@@ -271,8 +275,9 @@ function updateSignal<T>(x: Signal<T>, fn: (prev: T) => T): void {
     appendDraftIntent(draft, cell, 'update', fn);
     return;
   }
-  appendUrgentIntent(cell, 'update', fn);
-  writeCell(x.node, fn(graphUntracked(() => peekCell(x.node))));
+  const rebased = appendUrgentIntent(cell, 'update', fn);
+  const changed = writeCell(x.node, fn(graphUntracked(() => peekCell(x.node))));
+  if (rebased && !changed) pokeRebasedCell(cell);
 }
 
 export function set<T>(x: Signal<T>, value: T): void {
@@ -393,7 +398,7 @@ export function resetEngineForTest(): void {
 
 export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags };
 /** The DerivedState read protocol: the Flag bit constants (test async bits
- * via Flag.AsyncMask/DerivedError/DerivedSuspended), the error-box identity
+ * via Flag.AsyncMask/AsyncError/AsyncSuspended), the error-box identity
  * check, and the never-settled sentinel test. */
 export { Flag, isErrorBox, isUninitialized };
 export { CANONICAL_WORLD };

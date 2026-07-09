@@ -198,7 +198,7 @@ if (scenario === 'fanout') {
   let urgentShown = 0;
   // Urgent input is modeled as REAL discrete events (clicks) through
   // React's event system, the priority a user's keystroke gets — not a
-  // bare setState from a timer, which rides the default lane and queues
+  // plain setState from a timer, which rides the default lane and queues
   // FIFO behind other normal-priority scheduler tasks by design.
   function Urgent() {
     const [n, setN] = React.useState(0);

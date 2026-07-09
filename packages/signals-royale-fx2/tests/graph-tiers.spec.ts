@@ -26,6 +26,7 @@ import {
   readDerived,
   writeCell,
 } from '../src/graph.ts';
+import { appendDraftIntent, discardDraft, openDraft } from '../src/worlds.ts';
 
 /** Edges in dep's subscriber list pointing at sub (watched edges only). */
 function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
@@ -55,7 +56,7 @@ function isWatched(n: ReactiveNode): boolean {
  * resurrect the stale-Clean serve that promote exists to prevent. */
 function expectTierInvariant(nodes: ReactiveNode[]): void {
   for (const n of nodes) {
-    if ((n.flags & Flag.Watcher) !== 0) continue;
+    if ((n.flags & Flag.Watching) !== 0) continue;
     expect(isWatched(n)).toBe(n.observerCount > 0);
   }
 }
@@ -123,7 +124,7 @@ describe('two-tier graph: promote/demote structure', () => {
     const stop = observeNode(d2, () => {});
     expect(subEdgeCount(c, d1)).toBe(1);
     expect(subEdgeCount(d1, d2)).toBe(1);
-    expect(subEdgeCount(d2)).toBe(1); // the leaf
+    expect(subEdgeCount(d2)).toBe(1); // the subscription
     expect(c.observerCount).toBe(1);
     expect(d1.observerCount).toBe(1);
     expect(d2.observerCount).toBe(1);
@@ -207,7 +208,7 @@ describe('two-tier graph: promote/demote structure', () => {
     expect(evals).toBe(1);
     // Precondition of the O(1) return: Clean plus a current validation stamp.
     expect(wide.validatedEpoch).toBe(currentWriteEpoch());
-    expect((wide.flags & (Flag.Check | Flag.Dirty)) === 0).toBe(true);
+    expect((wide.flags & (Flag.StaleCheck | Flag.StaleDirty)) === 0).toBe(true);
     for (let i = 0; i < 100; i++) readDerived(wide);
     expect(evals).toBe(1);
   });
@@ -279,7 +280,7 @@ describe('two-tier graph: tracking and waves', () => {
     expect(a.observerCount).toBe(0);
   });
 
-  test('T10 [parity pin] leaf notification is edge-triggered; a pull re-arms', () => {
+  test('T10 [parity pin] render notification is edge-triggered; a pull re-arms', () => {
     const a = makeCell(1);
     const d = makeDerived(() => readCell(a) * 2);
     expect(readDerived(d)).toBe(2); // Clean before subscribing: no wake due
@@ -300,6 +301,42 @@ describe('two-tier graph: tracking and waves', () => {
     stop();
   });
 
+  test('T11b [falsify-first] a drafted write pokes subscribers through a deep watched chain', () => {
+    // The drafted twin of T11: a draft intent travels the same watched
+    // closure as the wave (draft activity must reach subscribers of
+    // computeds over the drafted cell), so its walk needs the same
+    // iterative discipline. Pre-change failure quoted in the commit.
+    const DEPTH = 150_000;
+    const base = makeCell(0);
+    const disposers: Array<() => void> = [];
+    let topNotified = 0;
+    const wakes: number[] = [];
+    let prev: ReactiveNode = base;
+    for (let i = 0; i < DEPTH; i++) {
+      const p = prev;
+      const d = makeDerived(() =>
+        ((p.flags & Flag.KindCell) !== 0
+          ? readCell(p as CellNode<number>)
+          : readDerived(p as DerivedNode<number>)) + 1,
+      );
+      disposers.push(
+        i === DEPTH - 1
+          ? observeNode(d, () => topNotified++, (id) => wakes.push(id))
+          : observeNode(d, () => {}),
+      );
+      readDerived(d);
+      prev = d;
+    }
+    const draft = openDraft();
+    appendDraftIntent(draft, base as CellNode<unknown>, 'set', 1);
+    expect(topNotified).toBe(1); // the poke reached the deepest subscriber
+    expect(wakes).toEqual([draft.id]); // and so did the draft-lane wake
+    discardDraft(draft.id); // rollback pokes the same closure again
+    expect(topNotified).toBe(2);
+    for (let i = disposers.length - 1; i >= 0; i--) disposers[i]();
+    expect(subEdgeCount(base)).toBe(0);
+  });
+
   test('T11 [falsify-first] a write through a deep watched chain completes', () => {
     // Pre-rebuild failure: RangeError: Maximum call stack size exceeded —
     // the recursive wave overflowed at this depth; the iterative propagate
@@ -313,7 +350,7 @@ describe('two-tier graph: tracking and waves', () => {
     for (let i = 0; i < DEPTH; i++) {
       const p = prev;
       const d = makeDerived(() =>
-        ((p.flags & Flag.Cell) !== 0
+        ((p.flags & Flag.KindCell) !== 0
           ? readCell(p as CellNode<number>)
           : readDerived(p as DerivedNode<number>)) + 1,
       );
@@ -334,14 +371,14 @@ describe('two-tier graph: tracking and waves', () => {
   });
 });
 
-describe('two-tier graph: leaf delivery re-entrancy', () => {
-  // A leaf's onNotify may write, and that write flushes re-entrantly (the
+describe('two-tier graph: render-notify delivery re-entrancy', () => {
+  // A subscriber's onNotify may write, and that write flushes re-entrantly (the
   // effect stage is guarded by the flushing flag; delivery is not). These
   // tests pin the wave-snapshot contract: a wave's iteration never sees
-  // leaves marked during its own delivery — they are delivered by the nested
+  // subscribers marked during its own delivery — they are delivered by the nested
   // wave the marking write triggers, exactly once.
 
-  test('Q1 [guard: passes pre- and post-storage-change] a leaf marked during delivery is delivered by the nested wave, not the current iteration', () => {
+  test('Q1 [guard: passes pre- and post-storage-change] a subscriber marked during delivery is delivered by the nested wave, not the current iteration', () => {
     const x = makeCell(0);
     const y = makeCell(0);
     const events: string[] = [];
@@ -362,7 +399,7 @@ describe('two-tier graph: leaf delivery re-entrancy', () => {
   });
 
   test('Q2 [guard: passes pre- and post-storage-change] doubly-nested delivery keeps every undelivered snapshot entry intact', () => {
-    // Three waves deep: the outer wave still holds an undelivered leaf (L5)
+    // Three waves deep: the outer wave still holds an undelivered subscriber (L5)
     // while two nested waves mark and deliver. A buffer-reuse scheme that
     // handed the outer wave's storage to a nested wave would overwrite L5's
     // slot with L4b and lose the notification; the sequence pins against it.

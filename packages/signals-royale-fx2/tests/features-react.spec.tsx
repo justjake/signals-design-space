@@ -19,6 +19,7 @@ import {
   useAtom,
   useCommitted,
   useComputed,
+  useIsPending,
   useSignalEffect,
   useSignalTransition,
   useValue,
@@ -245,6 +246,53 @@ describe('scenario 18 — SSR', () => {
     expect(text(container)).toBe('5:x');
     expect(renders).toBe(1);
     expect(initRuns).toBe(0);
+  });
+});
+
+describe('hooks demand a SignalScope', () => {
+  // The hooks have no unscoped mode: a scope is the world carrier, and a
+  // subscriber without one has no channel for transition worlds at all.
+  // Rendering any scope-consuming hook outside a SignalScope throws with a
+  // message naming the fixes.
+  class Boundary extends React.Component<
+    { children: React.ReactNode },
+    { error: Error | null }
+  > {
+    state: { error: Error | null } = { error: null };
+    static getDerivedStateFromError(error: Error) {
+      return { error };
+    }
+    render() {
+      return this.state.error !== null ? <i>caught:{this.state.error.message}</i> : this.props.children;
+    }
+  }
+
+  test('[falsify-first] every scope-consuming hook throws without a scope, naming the fixes', async () => {
+    const { createRoot } = await import('react-dom/client');
+    const a = signal(1);
+    const cases: Array<[string, () => React.ReactNode]> = [
+      ['useValue', () => <span>{useValue(a)}</span>],
+      ['useComputed', () => <span>{useComputed(() => a.peek() + 1, [])}</span>],
+      ['useIsPending', () => <span>{String(useIsPending(a))}</span>],
+      ['useCommitted', () => <span>{useCommitted(a)}</span>],
+    ];
+    for (const [name, render] of cases) {
+      const Hooked = () => <>{render()}</>;
+      const div = document.body.appendChild(document.createElement('div'));
+      const root = createRoot(div); // deliberately no SignalScope
+      await act(() => {
+        root.render(
+          <Boundary>
+            <Hooked />
+          </Boundary>,
+        );
+      });
+      expect(text(div), name).toContain('caught:');
+      expect(text(div), name).toContain('SignalScope');
+      expect(text(div), name).toContain('wrapCreateRoot');
+      await act(() => root.unmount());
+      div.remove();
+    }
   });
 });
 

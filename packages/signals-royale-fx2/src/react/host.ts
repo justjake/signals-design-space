@@ -16,7 +16,7 @@
 /// <reference path="./scheduler.d.ts" />
 import * as React from 'react';
 import * as Scheduler from 'scheduler';
-import { Flag, pokeLeafObservers, type ReactiveNode } from '../graph.ts';
+import { Flag, NO_EVENT, pokeDraftWatchers, type ReactiveNode } from '../graph.ts';
 import {
   type Draft,
   type DraftId,
@@ -372,11 +372,12 @@ function foldReachedEveryScope(id: DraftId): boolean {
 /** A provider committed a render pass whose world contained these drafts. */
 export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void {
   if (p.container !== null) setCommittedWorld(p.container, ids);
-  // Per-root committed views changed; wake leaf observers of every cell the
-  // committed drafts touched (the useValue crowd bails on equal snapshots,
-  // so this is cheap).
+  // Per-root committed views changed; poke the draft watchers of every cell
+  // the committed drafts touched (the useValue crowd bails on equal
+  // snapshots, so this is cheap). No engine event exists for a root commit,
+  // so the poke carries no cause.
   for (const draft of worldOf(ids).drafts) {
-    for (const cell of draft.cells) pokeLeafObservers(cell);
+    for (const cell of draft.cells) pokeDraftWatchers(cell, NO_EVENT);
   }
   for (const id of ids) {
     const recipients = draftRecipients.get(id);
