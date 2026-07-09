@@ -20,16 +20,12 @@ function subCount(x: Signal<number>): number {
 }
 
 describe('registration', () => {
-  test('fails loudly on a React build without the fx2 protocol', () => {
+  test('registers on stock React (no build marker) and is idempotent', () => {
+    // This suite runs against an unpatched React build; registration must
+    // succeed with no global handshake of any kind.
     const g = globalThis as Record<string, unknown>;
-    const saved = g.__FX2_REACT_PROTOCOL__;
-    delete g.__FX2_REACT_PROTOCOL__;
-    try {
-      expect(() => registerReactSignals()).toThrow(/fx2 external-state protocol/);
-    } finally {
-      g.__FX2_REACT_PROTOCOL__ = saved;
-    }
-    // With the marker restored, registration succeeds and is idempotent.
+    expect(g.__FX2_REACT_PROTOCOL__).toBeUndefined();
+    expect(g.__FX2_MUTATION_WINDOW__).toBeUndefined();
     const h1 = registerReactSignals();
     const h2 = registerReactSignals();
     expect(h1).toBe(h2);

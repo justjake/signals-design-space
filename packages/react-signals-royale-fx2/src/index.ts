@@ -3,18 +3,16 @@
  * engine, built on the premise that React's own update queues are the
  * source of truth for which speculative state a render pass may see.
  *
- * Requires a React build with the fx2 external-state protocol (an 11-line
- * patch: the DOM mutation window hook plus a handshake marker). Everything
- * else — transition worlds, rebase, per-root committed views, suspense
- * behavior — runs on stock React semantics.
+ * Runs on stock React — no patches, no build flags. Transition worlds,
+ * rebase, per-root committed views, and suspense behavior all ride public
+ * React semantics (state updates, context, useSyncExternalStore).
  */
 export {
   registerReactSignals,
   resetReactSignalsForTest,
-  onDomMutation,
   type ReactSignalsHandle,
 } from './host.ts';
-export { SignalScope, wrapCreateRoot, WorldContext, ContainerContext } from './scope.ts';
+export { SignalScope, wrapCreateRoot, ScopeContext } from './scope.ts';
 export {
   useValue,
   useComputed,

@@ -1,9 +1,11 @@
 # signals-royale-fx2 — REPORT
 
 Entry: `packages/signals-royale-fx2` (engine) + `packages/react-signals-royale-fx2`
-(bindings) + an 11-line React patch (`patches/`, one commit over
-`e71a6393e6`). All numbers below were produced by fresh runs in the final
-verification session; command lines are verbatim.
+(bindings). **As of the Production round (§11) the entry is FORKLESS: zero
+React patches, fork LOC 0** — the earlier 11-line mutation-window patch and
+its surface were removed by owner ruling; §§2–10 describe prior rounds and
+are kept as history. Numbers in each section were produced by fresh runs in
+that round's verification session; command lines are verbatim.
 
 ## 1. Design summary
 
@@ -346,3 +348,143 @@ probes: 1 failed | 8 passed      # /tmp/fx2-probes: E(i-b) pinned-staleness line
 LOC delta (`node royale/verify/count-loc.mjs`, same invocation as §4):
 forkLoc 11 → **11** (fork untouched); libLoc 2194 → **2239** (+45, all
 library-side: graph +20, host +14, hooks +7, index +3, scope +1).
+
+## 11. Production round: forkless, tear-closed, targeted wakes
+
+Owner-ruled directives, all landed this session. Everything below runs on
+STOCK React: `vendor/react` checked out at the base commit
+`e71a6393e66b0d2add46ba2b2c5db563a0563828` (no fork commit), stock artifacts
+built via `./fork/build-react.sh` — the same commit the npm canary
+`19.3.0-canary-e71a6393-20260702` is cut from, chosen over the npm tarball
+so the exact bits are reproducible offline. The built `react-dom` contains
+zero `FX2` symbols (grep-verified). The fork branch `royale/fx2-react`
+stays in git history only.
+
+### 11.1 Fork removal
+
+- `onDomMutation` deleted from the bindings and from the RoyaleAdapter;
+  `__FX2_MUTATION_WINDOW__` / `__FX2_REACT_PROTOCOL__` consumption deleted;
+  `registerReactSignals()` succeeds on stock React (pinned by a test that
+  asserts no global marker exists).
+- `patches/` and `build.sh` removed from the react package.
+- The mutation-window test became a README statement: DOM-mutation
+  attribution needs reconciler cooperation and is out of scope. The shared
+  battery's scenario 16 is exempt by owner ruling — run expecting exactly
+  that one failure (`TypeError: adapter.onDomMutation is not a function`).
+- §8's `__FX2_MUTATION_WINDOW__` global-carrier and markerless-handshake
+  caveats are obsolete: the surface no longer exists.
+- Fork LOC: **0** (`count-loc.mjs --head HEAD`, diff base..base is empty).
+
+### 11.2 The latest() no-hook tear, closed in userland
+
+The old ambient render-world note was a sticky module global gated only on
+"a hooks dispatcher is live": any pass that did not itself re-note could
+consume another pass's world. Now the note is VALIDITY-GATED:
+
+- per-scope: the note carries the writing scope's identity-stable record;
+  any fx2 hook rendering under a different scope kills it (foreign roots
+  never inherit);
+- per-window: a note carrying live drafts expires at the end of the
+  synchronous window that wrote it — a microtask covers every stack unwind
+  (event handlers, urgent flushes between slices), and an immediate-priority
+  `scheduler` task covers same-stack handoffs between work-loop tasks (a
+  fast-suspending pass followed by another root's render in one flush);
+- fallback: a render with no valid note resolves CANONICAL (per ruling,
+  wrong-toward-canonical is acceptable; stale worlds and drafts-in-urgent
+  never are). Ambient (non-render) reads still see newest intent.
+
+Regression tests, each verified failing pre-fix with the draft value where
+canonical was required (`expected [2] to deeply equal [1]`):
+urgent pass over an unrelated subtree while a transition is held; two roots
+back-to-back (bare second root); interleaved `flushSync` while a transition
+pass is mid-flight; StrictMode double render. Residual corner, disclosed:
+within one synchronous chunk, a second pass that renders ZERO fx2 hooks or
+scopes before a plain `latest()` call can still consume the first pass's
+note if the scheduler ran it before the expiry task (only possible for a
+starved, already-expired task) — no known reachable shape on stock React's
+scheduler, and every judged shape is covered by the tests above.
+
+### 11.3 The transition broad-wake, killed
+
+Before: every draft dispatch changed the WorldContext value (`{ids, rev}`),
+re-rendering EVERY `useValue` consumer in the transition pass — renders
+scaled with subscriber count. Now:
+
+- ScopeContext's value is the scope's identity-stable record (never
+  replaced), so the scope re-renders alone and React bails out below it;
+  world membership travels through the scope's note and per-hook state.
+- Each `useValue` owns a draft-lane channel: a second `useReducer` next to
+  the epoch-snapshot `useSyncExternalStore`. Draft writes never bump the
+  uSES snapshot (snapshot world-independence is what prevents the
+  sync-fallback de-opt); they dispatch the draft id into the reducers of
+  exactly the written cell's subscribers (walking watched computed edges),
+  at write time — where React's ambient `.T` is already the transition —
+  so the updates ride the owning lanes.
+- Corrections after the fact (components mounting mid-transition, appends
+  delivered from plain contexts) set-and-restore `ReactSharedInternals.T`
+  to the owning transition object around the dispatch (technique proven in
+  the fx1 entry), gated on the draft's scope audience: a hook inside a root
+  that carried the draft joins it; a root that never carried it stays on
+  the committed world and converges through the loud fold (stock parity —
+  a new root never holds another root's pending updates).
+- Late appends to a live rendered draft re-dispatch per written cell only;
+  the scope's reducer still confirms per-root commits and drives fold
+  loudness (draftAudience unchanged).
+
+Measured wake counts (the required proof, render-count assertions on all
+N): 8 subscribers, transition drafts 1 cell → renders `[1,1,1,2,1,1,1,1]`
+(pre-fix: `[2,2,2,2,2,2,2,2]`), committed text correct, retirement still a
+silent fold (no post-commit renders). Late-append test: untouched
+subscribers stay at their mount count through first write, append, and
+commit, and the committed DOM never shows a partial batch (pre-fix the
+append leaked `1;2;…` into a committed frame through the sync lane).
+Preserved and re-proven by the suite: urgent passes exclude drafts, rebase
+retries recompute, bare-root canonicalEpoch convergence, StrictMode
+double-dispatch netting, interleaved transitions keep distinct audiences
+(T1's wakes never render T2's subscribers; commits entangle only through
+the shared scope queue, stock updater rules).
+
+react-bench deltas (same harness as §5, stock React, medians of 3 runs):
+
+| scenario | stat | royale-fx2 | uses-baseline | prior round (fx2/base) |
+|---|---|---|---|---|
+| fanout | median write→commit | 3.62 ms | 3.15 ms | 3.12 / 2.64 |
+| transition | p95 urgent | 10.06 ms | 3.61 ms | 10.11 / 2.72 |
+| transition | **max urgent** | **10.12 ms** | **330.48 ms** | 10.28 / 329.05 |
+| transition | completed after | 1759 ms | 1423 ms | 1781 / 1427 |
+| mount | median 5000-cell | 52.8 ms | 50.3 ms | 57.04 / 48.77 |
+
+Mount overhead dropped from ~17% to ~5% (context-value churn gone; the
+scope never re-renders its subtree). Fanout stays ~17%: it is a pure
+urgent-path scenario (no transitions), so it never exercised the broad
+wake — its delta is the engine's write→notify machinery vs a bare array
+store, unchanged this round. The transition columns are unchanged by
+design: that scenario drafts EVERY cell, so the audience is everyone; the
+targeted-wake win shows in the wake-count test (1 of N) and in mount.
+Honest note: React's dev build prints a "large number of updates inside
+startTransition" advisory during the 2000-cell rewrite (one reducer
+dispatch per affected subscriber); it is a dev-only heuristic, absent in
+production builds, and the measured time-slicing (10 ms max urgent) shows
+no de-opt.
+
+### 11.4 Fresh gates (this session, suites sequential, stock React)
+
+```
+tsc --noEmit                     # engine and react packages: clean
+Tests  179 passed (179)          # conformance
+Tests  224 passed (224)          # engine suite (oracle default + leak audit)
+✓ oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on every seed
+Tests  38 passed (38)            # real-React gate (31 − scenario 16 − protocol test
+                                 #   + stock-registration + 8 production regressions)
+Tests  1 failed | 24 passed (25) # shared battery: the one failure is scenario 16,
+                                 #   TypeError: adapter.onDomMutation is not a function (exempt)
+forkLoc: 0                       # count-loc.mjs, --head HEAD at base commit
+libLoc: 2339                     # engine 1895 (graph 773, worlds 438, index 369,
+                                 #   asyncs 171, tracer 96, lifetime 48)
+                                 # react 444 (host 236, hooks 113, scope 54,
+                                 #   transitions 30, index 11); was 2239 (+100)
+```
+
+All seven production regressions were run before the fix and failed with
+the exact tear/broad-wake symptoms quoted above; the suite output is
+reproducible by checking out the spec alone onto the prior commit.

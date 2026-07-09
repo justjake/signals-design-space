@@ -9,24 +9,24 @@
  * them, and a rebased retry recomputes the same queue over new state. That
  * IS the render-pass world definition — no lane bookkeeping of our own.
  *
- * The revision counter handles one hazard: a write appended to a draft
- * AFTER some pass already rendered that draft (an async transition writing
- * across awaits). The host re-dispatches the draft id; the reducer returns
- * a fresh state object even though the id set is unchanged, which makes
- * React re-render the transition's passes against the completed batch —
- * a pass never commits half a batch.
+ * The scope's render does exactly two things per world-carrying pass: it
+ * notes the pass's world in the host (for plain latest()/isPending() calls
+ * below and for hooks mounting inside the pass — validity-gated there), and
+ * at commit it confirms the drafts this root carried. It deliberately does
+ * NOT wake its subtree: the ScopeContext value is an identity-stable record
+ * and the children element is unchanged, so React bails out below the scope
+ * and only components with their own pending updates render — value
+ * subscribers are woken per drafted cell through their own reducers.
  *
- * On each commit the scope records its committed world per container (the
- * per-root committed view) and confirms the drafts it carried; when every
- * root that received a draft has committed it, the draft retires (folds
- * into canonical state).
+ * The revision counter handles one hazard: a wake for a draft id the state
+ * already contains (an append to an already-rendered draft) must still
+ * produce a fresh state object, so React re-renders the transition's passes
+ * against the completed batch — a pass never commits half a batch.
  */
 import * as React from 'react';
 import { reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
 import {
-  captureRenderDispatcher,
   confirmCommit,
-  markDraftRendered,
   noteRenderWorld,
   registerProvider,
   type ProviderRecord,
@@ -37,21 +37,23 @@ export interface WorldState {
   rev: number;
 }
 
-const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
-/** Context default: rendering outside any SignalScope. Same empty world as
- * a fresh scope but a distinct identity, because the two differ at fold
- * time — a scoped subscriber gets transition values through render-pass
- * worlds (silent folds are fine), an unscoped one only ever sees canonical
- * state and must be woken by the fold itself. */
-export const UNSCOPED_WORLD: WorldState = { ids: [], rev: 0 };
+export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
 
-export const WorldContext = React.createContext<WorldState>(UNSCOPED_WORLD);
-export const ContainerContext = React.createContext<object | null>(null);
-
-function worldsReducer(prev: WorldState, id: DraftId): WorldState {
-  if (prev.ids.includes(id)) return { ids: prev.ids, rev: prev.rev + 1 };
-  return { ids: [...prev.ids, id], rev: prev.rev + 1 };
+/** Shared by the scope and every useValue hook: accumulate live draft ids,
+ * prune dead ones (retired and discarded drafts resolve canonically anyway,
+ * and a long-lived subscriber must not grow history forever), and always
+ * return a fresh object so a re-dispatched id still restarts the pass. */
+export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
+  const live = prev.ids.filter((d) => engine.isLiveDraft(d));
+  const add = engine.isLiveDraft(id) && !live.includes(id);
+  if (add) live.push(id);
+  const ids = !add && live.length === prev.ids.length ? prev.ids : live;
+  return { ids, rev: prev.rev + 1 };
 }
+
+/** The scope's identity-stable record, or null outside any SignalScope.
+ * Unscoped subscribers get the canonical-only view (see hooks.ts). */
+export const ScopeContext = React.createContext<ProviderRecord | null>(null);
 
 export interface SignalScopeProps {
   container?: object;
@@ -61,30 +63,21 @@ export interface SignalScopeProps {
 export function SignalScope(props: SignalScopeProps): React.ReactElement {
   const [world, dispatch] = React.useReducer(worldsReducer, EMPTY_WORLD);
   const container = props.container ?? null;
-  // Note this pass's world for plain latest()/isPending() calls in render
-  // bodies below. Every pass that carries drafts re-renders this scope (the
-  // drafts live in its reducer state), so the note lands at the top of the
-  // pass, in tree order, before any component can read.
-  captureRenderDispatcher();
-  noteRenderWorld(world.ids);
-  // A pass carrying these drafts is being rendered; late appends to them
-  // must re-dispatch (see module comment).
-  for (const id of world.ids) markDraftRendered(id);
   const record = React.useMemo<ProviderRecord>(
     () => ({ dispatch, container }),
     [dispatch, container],
   );
+  // Note this pass's world. Every pass that carries drafts re-renders this
+  // scope (the drafts live in its reducer state), so the note lands at the
+  // top of the pass, in tree order, before any component can read.
+  noteRenderWorld(record, world.ids);
   React.useLayoutEffect(() => registerProvider(record), [record]);
   React.useLayoutEffect(() => {
     // Runs exactly at this root's commits of world-carrying passes.
     engine.traceNode('root-commit', null, 0, { world: world.ids });
     confirmCommit(record, world.ids);
   }, [record, world]);
-  return React.createElement(
-    ContainerContext.Provider,
-    { value: container },
-    React.createElement(WorldContext.Provider, { value: world }, props.children),
-  );
+  return React.createElement(ScopeContext.Provider, { value: record }, props.children);
 }
 
 export interface WrappedRoot {

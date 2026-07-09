@@ -26,7 +26,6 @@ import {
   type UseFn,
 } from 'signals-royale-fx2';
 import {
-  onDomMutation,
   registerReactSignals,
   resetReactSignalsForTest,
   startTransitionWrite,
@@ -153,9 +152,9 @@ const adapter = {
       },
     };
   },
-  onDomMutation(cb: (phase: 'start' | 'stop', container: Element) => void): () => void {
-    return onDomMutation(cb);
-  },
+  // onDomMutation is intentionally absent: bracketing React's DOM mutation
+  // phase needs reconciler cooperation, and this package runs on stock React
+  // by design. The shared battery's scenario 16 is exempt by owner ruling.
 };
 
 export default adapter;

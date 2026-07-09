@@ -16,7 +16,6 @@ import {
   type Signal,
 } from 'signals-royale-fx2';
 import {
-  onDomMutation,
   startTransitionWrite,
   useAtom,
   useCommitted,
@@ -252,46 +251,9 @@ describe('scenario 15 — causality traces', () => {
   });
 });
 
-describe('scenario 16 — the DOM mutation window', () => {
-  test('an observer blinded during the window sees zero React mutations', async () => {
-    const a = signal(0);
-    function App() {
-      return <span>r:{useValue(a)};</span>;
-    }
-    const { container } = await h.mount(<App />);
-    const leaked: MutationRecord[] = [];
-    const mo = new MutationObserver((records) => leaked.push(...records));
-    const observe = () =>
-      mo.observe(container, { childList: true, characterData: true, subtree: true });
-    observe();
-    const phases: string[] = [];
-    const off = onDomMutation((phase, c) => {
-      phases.push(`${phase}:${c === container ? 'here' : 'other'}`);
-      if (phase === 'start') {
-        leaked.push(...mo.takeRecords());
-        mo.disconnect();
-      } else {
-        observe();
-      }
-    });
-    await act(() => {
-      a.set(1);
-    });
-    leaked.push(...mo.takeRecords());
-    expect(text(container)).toBe('r:1;');
-    expect(leaked).toEqual([]);
-    const here = phases.filter((p) => p.endsWith(':here'));
-    expect(here.length).toBeGreaterThanOrEqual(2);
-    for (let i = 0; i < here.length; i += 2) {
-      expect(here[i]).toBe('start:here');
-      expect(here[i + 1]).toBe('stop:here');
-    }
-    container.appendChild(document.createElement('div'));
-    expect(mo.takeRecords().length).toBeGreaterThan(0); // third-party still seen
-    mo.disconnect();
-    off();
-  });
-});
+// Scenario 16 (the DOM mutation window) is intentionally absent: bracketing
+// React's mutation phase needs reconciler cooperation, which is out of scope
+// for a stock-React package. Owner-ruled exemption; see README + REPORT.
 
 describe('scenario 17 — lazy initializers under React', () => {
   test('initializer runs at first render read, once', async () => {

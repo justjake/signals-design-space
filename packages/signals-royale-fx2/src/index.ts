@@ -56,9 +56,11 @@ import {
   committedWorldOf,
   discardAllDrafts,
   discardDraft,
+  draftsAffecting,
   getCurrentPark,
   getCurrentWorld,
   getDraft,
+  isLiveDraft,
   latestWorld,
   liveDraftCount,
   openDraft,
@@ -69,7 +71,6 @@ import {
   sealDraft,
   setAmbientClassifier,
   setCommittedWorld,
-  setOnDraftAppend,
   unwrapForEval,
   worldOf,
 } from './worlds.ts';
@@ -382,19 +383,23 @@ export type { TraceEvent };
 // of the app-facing API, but public so the bindings package stays honest).
 // ---------------------------------------------------------------------------
 
-/** Installed by the bindings: returns the current render pass's draft ids
- * while a component render is executing, null otherwise. latest() and
- * isPending() called as plain functions during render resolve the pass's
- * own world instead of reading ahead of it; outside render they are
- * ambient again. A provider (not a sticky setter) because only the host
- * knows when React is rendering — a world left behind after a pass would
- * silently blind ambient readers to live drafts. */
-let renderWorldProvider: (() => readonly DraftId[] | null) | null = null;
+/** Installed by the bindings: answers "what world is rendering right now".
+ * - draft ids: the pass's world was noted by this pass and is still valid;
+ * - 'canonical': a component render is executing but no valid note exists
+ *   (the note expired or belongs to another pass) — plain latest()/
+ *   isPending() must fall back to CANONICAL rather than read a stale world
+ *   or read ahead into live drafts;
+ * - null: no render is executing — ambient reads see newest intent.
+ * A provider (not a sticky setter) because only the host knows when React
+ * is rendering and which notes a pass refreshed. */
+let renderWorldProvider: (() => readonly DraftId[] | 'canonical' | null) | null = null;
 
 function renderWorld(): World | null {
   if (renderWorldProvider === null) return null;
   const ids = renderWorldProvider();
-  return ids === null ? null : worldOf(ids);
+  if (ids === null) return null;
+  if (ids === 'canonical') return CANONICAL_WORLD;
+  return worldOf(ids);
 }
 
 export const reactIntegration = {
@@ -402,8 +407,12 @@ export const reactIntegration = {
   worldOf,
   resolveEnvelope: (x: AnyReadable, ids: readonly DraftId[]): Envelope =>
     resolveEnvelope(nodeOf(x), worldOf(ids)),
-  subscribe(x: AnyReadable, notify: () => void): () => void {
-    return observeNode(nodeOf(x), notify);
+  /** Leaf subscription. `notify` is the store-change channel (snapshot
+   * comparisons re-render); `draftWake` is the draft-lane channel — it
+   * receives the id of any draft whose intents reach this node, so only
+   * affected subscribers join a transition's render passes. */
+  subscribe(x: AnyReadable, notify: () => void, draftWake?: (id: DraftId) => void): () => void {
+    return observeNode(nodeOf(x), notify, draftWake);
   },
   openDraft,
   sealDraft: (id: DraftId): void => {
@@ -430,7 +439,7 @@ export const reactIntegration = {
   },
   setCommittedWorld,
   setRenderWriteGuard,
-  setRenderWorldProvider(fn: (() => readonly DraftId[] | null) | null): void {
+  setRenderWorldProvider(fn: (() => readonly DraftId[] | 'canonical' | null) | null): void {
     renderWorldProvider = fn;
   },
   trace(kind: string, x: AnyReadable | null, cause: number, data?: unknown): number {
@@ -454,7 +463,12 @@ export const reactIntegration = {
   isPendingIn(x: AnyReadable, ids: readonly DraftId[] | null): boolean {
     return isPendingPassive(nodeOf(x), ids === null ? null : worldOf(ids));
   },
-  setOnDraftAppend,
+  isLiveDraft,
+  /** Live drafts whose intents reach this node; late subscribers use it to
+   * discover transitions whose write-time wakes they missed. */
+  draftsAffecting(x: AnyReadable): readonly DraftId[] {
+    return draftsAffecting(nodeOf(x));
+  },
   /** Subscription epoch: the useSyncExternalStore snapshot. Changes exactly
    * when committed-view subscribers must re-render. */
   epochSnapshot(x: AnyReadable): number {
@@ -492,7 +506,6 @@ export function resetEngineForTest(): void {
   flushLifetimeTransitions();
   setAmbientClassifier(null);
   setRenderWriteGuard(null);
-  setOnDraftAppend(null);
   renderWorldProvider = null;
   getActiveTracer()?.stop();
 }

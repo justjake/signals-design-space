@@ -43,6 +43,7 @@ import {
   startBatch,
   endBatch,
   untracked,
+  wakeLeafDraftSubscribers,
   withSuppressedReactEpoch,
   writeCell,
 } from './graph.ts';
@@ -144,15 +145,12 @@ function logFor(cell: CellNode<unknown>): RebaseLog {
   return log;
 }
 
-/** Notified on each draft append (the bindings restart any render pass that
- * already observed the draft, so a pass never sees half a batch). */
-let onDraftAppend: ((id: DraftId) => void) | null = null;
-export function setOnDraftAppend(fn: ((id: DraftId) => void) | null): void {
-  onDraftAppend = fn;
-}
-
 /** Record a drafted write intent. Speculative subscribers (isPending probes,
- * latest() viewers) get poked; canonical values do not move. */
+ * latest() viewers) get poked; canonical values do not move. Subscribers of
+ * the cell — and of watched computeds over it — additionally receive the
+ * draft id on their draft-lane channel, so exactly the affected components
+ * join the transition's render passes (write-time dispatch runs inside the
+ * transition scope; late appends re-dispatch to the same audience). */
 export function appendDraftIntent(
   draft: Draft,
   cell: CellNode<unknown>,
@@ -170,7 +168,7 @@ export function appendDraftIntent(
     cell.causeEvent = draft.lastWriteEvent;
   }
   pokeLeafObservers(cell);
-  onDraftAppend?.(draft.id);
+  wakeLeafDraftSubscribers(cell, draft.id);
 }
 
 /** Record an urgent intent on a cell that currently has a rebase log, so
@@ -289,6 +287,44 @@ function maybeQuiesce(): void {
   rebaseLogs.clear();
   for (const node of memoNodes) node.worldMemos = null;
   memoNodes.clear();
+}
+
+/** True while the draft is open or sealed (retired/discarded ids are dead:
+ * their effects are already canonical or rolled back). */
+export function isLiveDraft(id: DraftId): boolean {
+  return liveDrafts.has(id);
+}
+
+const NO_IDS: readonly DraftId[] = [];
+
+/** Live drafts holding intents against this node's canonical sources (the
+ * node itself for a cell; its transitive dependency cells for a derived).
+ * Serves late-subscription repair: a subscriber that mounted after the
+ * write-time wakes asks which transitions it missed. */
+export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
+  if (liveDrafts.size === 0) return NO_IDS;
+  const sources = new Set<CellNode<unknown>>();
+  const visited = new Set<ReactiveNode>();
+  const collect = (n: ReactiveNode): void => {
+    if (visited.has(n)) return;
+    visited.add(n);
+    if (n.kind === 'cell') {
+      sources.add(n as CellNode<unknown>);
+      return;
+    }
+    for (let l = n.deps; l !== undefined; l = l.nextDep) collect(l.dep);
+  };
+  collect(node);
+  const out: DraftId[] = [];
+  for (const [id, draft] of liveDrafts) {
+    for (const cell of draft.cells) {
+      if (sources.has(cell)) {
+        out.push(id);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /** True while some live draft holds intents against this cell. */

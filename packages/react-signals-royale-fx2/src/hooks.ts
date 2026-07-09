@@ -1,13 +1,22 @@
 /**
  * React hooks over the engine.
  *
- * The subscribing read hook resolves the render pass's world (from
- * SignalScope state) and subscribes through useSyncExternalStore. The
- * subscription snapshot is a stable identity key — the resolved value for
- * plain values, the episode for pending spans, the error box for failures —
- * so equal resolutions never re-render and the store never "changes" during
- * a transition (which is exactly what keeps React's transition holding
- * behavior intact: transition drafts live in worlds, not in the store).
+ * The subscribing read hook owns TWO channels:
+ *
+ * - Store channel (useSyncExternalStore): the snapshot is a subscription
+ *   epoch — a stable identity, never a value — so equal resolutions never
+ *   re-render and the store never "changes" during a transition. Drafts
+ *   live in worlds, not in the store, which is what keeps React's
+ *   transition machinery (holding, time slicing, interruption) intact.
+ *
+ * - Draft-lane channel (a per-hook reducer): when a transition writes a
+ *   cell, exactly the subscribers of that cell (and of watched computeds
+ *   over it) receive the draft id as a reducer dispatch inside the
+ *   transition's own scope. React's update queues then decide visibility
+ *   per pass: urgent passes skip the update (canonical), the transition's
+ *   passes include it, rebased retries recompute it. The render value
+ *   resolves the hook's own world — no context value ever changes, so a
+ *   transition re-renders only the components its writes actually touch.
  */
 import * as React from 'react';
 import {
@@ -21,11 +30,18 @@ import {
   type Signal,
   type SignalOptions,
 } from 'signals-royale-fx2';
-import { captureRenderDispatcher, noteRenderWorld } from './host.ts';
-import { ContainerContext, UNSCOPED_WORLD, WorldContext } from './scope.ts';
+import {
+  correctSubscription,
+  dispatchDraftWake,
+  noteHookRender,
+  renderPassIds,
+} from './host.ts';
+import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts';
 
 type AnyReadable = Signal<any> | Computed<any>;
 type Readable<T> = Signal<T> | Computed<T>;
+
+const NO_IDS: readonly DraftId[] = [];
 
 const lastDelivered = new WeakMap<object, unknown>();
 const NEVER = Symbol('never-delivered');
@@ -46,8 +62,7 @@ function traceDelivery(x: AnyReadable, value: unknown): void {
  *   (useIsPending is the indicator; no fallback flash);
  * - a never-settled value suspends everywhere.
  */
-function unwrapForRender(x: AnyReadable, ids: readonly DraftId[]): unknown {
-  const env: Envelope = engine.resolveEnvelope(x, ids);
+function unwrapEnvelope(env: Envelope, ids: readonly DraftId[]): unknown {
   if (env.kind === 'value') return env.value;
   if (env.kind === 'error') throw env.box.error;
   if (engine.hasLiveDrafts(ids)) throw env.episode.promise;
@@ -56,30 +71,52 @@ function unwrapForRender(x: AnyReadable, ids: readonly DraftId[]): unknown {
 }
 
 /**
- * Subscribing read hook: resolves this render pass's world.
+ * Subscribing read hook.
  *
- * The useSyncExternalStore snapshot is deliberately WORLD-INDEPENDENT — the
- * engine's subscription epoch, not a value. React compares snapshots to
- * detect store mutations: a per-world snapshot would read as a mutation
- * during every transition pass (demoting the transition to a synchronous
- * render), and a committed-value snapshot would read as a mutation right
- * AFTER every transition commit (a synchronous repair render of every
- * subscriber). The epoch advances exactly when committed-view subscribers
- * must re-render: urgent canonical changes, settlements, rollbacks — while
- * values a transition already delivered through render-pass worlds fold
- * silently. The render VALUE resolves the pass's own world from context.
+ * Render world = the pass's valid note when the hook's scope wrote one
+ * (covers components mounting inside a transition pass, whose reducers
+ * never received the write-time dispatch), else the hook's own reducer
+ * state. Both come from React state for THIS pass, so neither can run
+ * ahead of it.
  *
- * Silent folds are safe only for subscribers a render-pass world can reach.
- * Outside any SignalScope there is no world carrier, so those subscribers
- * snapshot the canonical epoch instead — it counts silent folds, which are
- * their only delivery channel for committed transitions.
+ * Outside any SignalScope there is no world carrier: the hook renders the
+ * canonical view and snapshots the canonical epoch, which counts silent
+ * folds — their only delivery channel for committed transitions. Scoped
+ * subscribers keep the silent-fold-blind epoch (render-pass worlds already
+ * delivered those values), so no post-commit repair storm exists; the gap
+ * for subscribers that attached late is closed by correctSubscription at
+ * subscribe time.
  */
 export function useValue<T>(x: Readable<T>): T {
-  captureRenderDispatcher();
-  const world = React.useContext(WorldContext);
-  noteRenderWorld(world.ids);
-  const scoped = world !== UNSCOPED_WORLD;
-  const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
+  const scope = React.useContext(ScopeContext);
+  const scoped = scope !== null;
+  const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD);
+  noteHookRender(scope, scoped ? hookWorld.ids : NO_IDS);
+  const ids = scoped ? (renderPassIds(scope) ?? hookWorld.ids) : NO_IDS;
+  // One mutable stash per hook (not per render): what the latest completed
+  // render resolved, for the subscribe-time repair check.
+  const rendered = React.useRef<{ ids: readonly DraftId[]; value: unknown; live: boolean }>({
+    ids: NO_IDS,
+    value: undefined,
+    live: false,
+  });
+  const subscribe = React.useCallback(
+    (cb: () => void) => {
+      const off = engine.subscribe(
+        x as AnyReadable,
+        cb,
+        scope !== null ? (id) => dispatchDraftWake(id, wake) : undefined,
+      );
+      // The subscription attaches at commit, after the render that created
+      // it: repair anything that happened in between (live drafts this hook
+      // missed, silent folds the epoch snapshot cannot see).
+      if (scope !== null && rendered.current.live) {
+        correctSubscription(x, rendered.current, scope, wake);
+      }
+      return off;
+    },
+    [x, scope, wake],
+  );
   const epochSnap = React.useCallback(
     () =>
       scoped
@@ -88,9 +125,14 @@ export function useValue<T>(x: Readable<T>): T {
     [x, scoped],
   );
   React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
-  const value = unwrapForRender(x as AnyReadable, world.ids) as T;
+  const env = engine.resolveEnvelope(x as AnyReadable, ids);
+  const value = unwrapEnvelope(env, ids);
+  const stash = rendered.current;
+  stash.ids = ids;
+  stash.value = value;
+  stash.live = true;
   traceDelivery(x as AnyReadable, value);
-  return value;
+  return value as T;
 }
 
 /** A component-scoped computed (disposed by dropping; graph edges are
@@ -111,8 +153,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
  * transition draft on it, or an async refetch behind stale. The snapshot is
  * world-independent (ambient pendingness) for the same reason as useValue's. */
 export function useIsPending(x: AnyReadable): boolean {
-  captureRenderDispatcher();
-  noteRenderWorld(React.useContext(WorldContext).ids);
+  noteHookRender(React.useContext(ScopeContext), null);
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
   const snap = React.useCallback(() => engine.isPendingIn(x as AnyReadable, null), [x]);
   return React.useSyncExternalStore(subscribe, snap, () => false);
@@ -120,12 +161,12 @@ export function useIsPending(x: AnyReadable): boolean {
 
 /** What this root's screen shows for x (the per-root committed view). */
 export function useCommitted<T>(x: Readable<T>): T {
-  captureRenderDispatcher();
-  noteRenderWorld(React.useContext(WorldContext).ids);
-  const container = React.useContext(ContainerContext);
+  const scope = React.useContext(ScopeContext);
+  noteHookRender(scope, null);
+  const container = scope?.container ?? undefined;
   const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
   const committedSnap = React.useCallback(
-    () => engine.committedSnapshot(x as AnyReadable, container ?? undefined),
+    () => engine.committedSnapshot(x as AnyReadable, container),
     [x, container],
   );
   const snap = React.useSyncExternalStore(subscribe, committedSnap, committedSnap);

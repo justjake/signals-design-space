@@ -170,6 +170,10 @@ export interface WatcherNode extends ReactiveNode {
   /** Owner scope; disposing the scope disposes the watcher. */
   children: WatcherNode[] | undefined;
   onNotify: (() => void) | undefined;
+  /** Draft-lane channel: receives the id of a draft whose new intent touches
+   * this leaf's sources. Distinct from onNotify so speculative activity never
+   * looks like a store change to snapshot-comparing subscribers. */
+  onDraftWake: ((id: number) => void) | undefined;
 }
 
 export type UseFn = <U>(t: PromiseLike<U>) => U;
@@ -466,6 +470,32 @@ export function pokeLeafObservers(node: ReactiveNode): void {
   };
   walk(node);
   if (batchDepth === 0) flush();
+}
+
+/**
+ * Deliver a draft id to every leaf observer downstream of a node, walking
+ * watched derived edges exactly like pokeLeafObservers. Called at intent-
+ * append time, so the delivery runs in the writer's ambient context (inside
+ * a React transition scope, the dispatches ride that transition's lanes).
+ */
+export function wakeLeafDraftSubscribers(node: ReactiveNode, id: number): void {
+  let seen: Set<ReactiveNode> | null = null;
+  const walk = (n: ReactiveNode): void => {
+    for (let l = n.subs; l !== undefined; l = l.nextSub) {
+      const sub = l.sub;
+      if (sub.kind === 'watcher') {
+        const leaf = sub as WatcherNode;
+        if (!leaf.disposed && leaf.onDraftWake !== undefined) leaf.onDraftWake(id);
+      } else if (sub.kind === 'derived') {
+        seen ??= new Set();
+        if (!seen.has(sub)) {
+          seen.add(sub);
+          walk(sub);
+        }
+      }
+    }
+  };
+  walk(node);
 }
 
 /** Append a dependency edge outside evaluation (the hidden refresh nonce).
@@ -777,6 +807,7 @@ function makeWatcher(fn: (() => void | (() => void)) | undefined): WatcherNode {
     disposed: false,
     children: undefined,
     onNotify: undefined,
+    onDraftWake: undefined,
     worldMemos: null,
     reactEpoch: 1,
     canonicalEpoch: 1,
@@ -935,9 +966,14 @@ export function makeScope(fn: () => void): () => void {
  * callback runs after the wave and its effects settle, so subscribers can
  * re-read a consistent graph.
  */
-export function observeNode(node: ReactiveNode, notify: () => void): () => void {
+export function observeNode(
+  node: ReactiveNode,
+  notify: () => void,
+  draftWake?: (id: number) => void,
+): () => void {
   const leaf = makeWatcher(undefined);
   leaf.onNotify = notify;
+  leaf.onDraftWake = draftWake;
   evalStamp++;
   leaf.depsTail = undefined;
   const prevConsumer = activeConsumer;

@@ -1,23 +1,27 @@
 /**
- * The host seam: registration handshake, the provider registry that carries
+ * The host seam: registration, the provider registry that carries
  * transition drafts into React state, write classification for plain
- * React.startTransition scopes, the write-during-render guard, and the DOM
- * mutation window surface.
+ * React.startTransition scopes, the write-during-render guard, the
+ * validity-gated render-world note, and draft-lane wake dispatch.
  *
  * The design premise of this package: React itself is the world clock.
  * A transition draft becomes visible to a render pass only because that
- * pass's SignalScope reducer state contains the draft id — and React's own
- * update queues decide which passes those are. The bindings never guess at
- * lanes; they read worlds out of React state.
+ * pass's React state contains the draft id — and React's own update queues
+ * decide which passes those are. The bindings never guess at lanes; they
+ * read worlds out of React state. Everything runs on stock React.
  */
 import * as React from 'react';
+import * as Scheduler from 'scheduler';
 import {
   reactIntegration as engine,
   resetEngineForTest,
   type DraftId,
 } from 'signals-royale-fx2';
 
-/** One registered SignalScope instance (one per root in practice). */
+/** One registered SignalScope instance (one per root in practice). The
+ * record is identity-stable for the scope's lifetime: it is the ScopeContext
+ * value (so context never re-renders consumers) and the key notes are
+ * validity-checked against. */
 export interface ProviderRecord {
   dispatch: (id: DraftId) => void;
   container: object | null;
@@ -36,9 +40,10 @@ const draftRecipients = new Map<DraftId, Set<ProviderRecord>>();
  * the broadcast is missing here: its passes never carried the draft, so a
  * silent fold would strand its subscribers — the retirement must be loud. */
 const draftAudience = new Map<DraftId, Set<ProviderRecord>>();
-const mutationSubs = new Set<(phase: 'start' | 'stop', container: Element) => void>();
-/** Hook dispatchers observed during renders; a write under one is a bug. */
-const renderDispatchers = new WeakSet<object>();
+/** The React transition object that owns each live draft. Late deliveries
+ * (subscriber corrections, appends from plain contexts) restore it around
+ * the dispatch so the update joins the owning transition's lanes. */
+const draftOwners = new Map<DraftId, object>();
 
 let handle: ReactSignalsHandle | null = null;
 
@@ -54,15 +59,28 @@ function sharedInternals(): SharedInternals {
   return (secret ?? {}) as SharedInternals;
 }
 
-/** Record "we are rendering under this dispatcher" — called by every hook. */
-export function captureRenderDispatcher(): void {
+/** Hook dispatchers observed during renders. React parks a context-only
+ * dispatcher in H between renders (non-null!), so "H is set" alone cannot
+ * gate render detection; only dispatchers captured while an fx2 hook was
+ * executing identify a live component render. Dispatchers are per-build
+ * singletons, so one capture covers every later render. */
+const renderDispatchers = new WeakSet<object>();
+
+/** Record "we are rendering under this dispatcher" — called on every scope
+ * and hook render (they only execute inside component bodies). */
+function captureRenderDispatcher(): void {
   const H = sharedInternals().H;
   if (H != null) renderDispatchers.add(H);
 }
 
-function renderWriteGuard(): void {
+/** True while React is executing a component render on this thread. */
+function isRendering(): boolean {
   const H = sharedInternals().H;
-  if (H != null && renderDispatchers.has(H)) {
+  return H != null && renderDispatchers.has(H);
+}
+
+function renderWriteGuard(): void {
+  if (isRendering()) {
     throw new Error(
       'signals-royale-fx2: state was written during a React render. ' +
         'Render must be pure; move the write into an event handler or effect.',
@@ -70,21 +88,186 @@ function renderWriteGuard(): void {
   }
 }
 
-/** The world ids the most recent subscribing hook resolved. Meaningful only
- * while React is actually rendering — the provider below gates on the live
- * render dispatcher, so plain latest()/isPending() calls in a render body
- * resolve the pass's world, while ambient calls (event handlers, effects,
- * module code) resolve newest intent. */
-let lastRenderWorldIds: readonly DraftId[] | null = null;
+// ---------------------------------------------------------------------------
+// The render-world note (validity-gated)
+// ---------------------------------------------------------------------------
 
-export function noteRenderWorld(ids: readonly DraftId[]): void {
-  lastRenderWorldIds = ids;
+/** What the current render pass may see, as declared BY that pass: written
+ * by the pass's SignalScope render (its reducer state is the pass world) and
+ * refreshed by every fx2 hook the pass renders. Consumed by plain latest()/
+ * isPending() calls in render bodies below, and by hooks mounting inside the
+ * pass.
+ *
+ * Validity is the contract: a pass that did not refresh the note cannot
+ * consume a stale one. Enforced by construction —
+ * - the note dies when any render under a DIFFERENT scope record notes
+ *   (foreign roots overwrite/clear, never inherit);
+ * - a note carrying live drafts dies at the end of the synchronous work
+ *   chunk that wrote it: a microtask covers stack unwinds (event handlers,
+ *   interleaved urgent flushes), and an immediate-priority scheduler task
+ *   covers same-stack handoffs between React work-loop tasks (a suspended
+ *   pass followed by another root's pass in one flush);
+ * - consumption requires a live hooks dispatcher (render bodies only).
+ * When no valid note exists during a render, reads fall back to CANONICAL —
+ * wrong-toward-canonical is the safe direction; stale worlds and draft
+ * leaks into urgent passes are never acceptable. */
+interface RenderWorldNote {
+  scope: ProviderRecord | null;
+  ids: readonly DraftId[];
 }
 
-function renderWorldProvider(): readonly DraftId[] | null {
-  const H = sharedInternals().H;
-  return H != null && renderDispatchers.has(H) ? lastRenderWorldIds : null;
+let note: RenderWorldNote | null = null;
+
+function expiryFor(mine: RenderWorldNote): () => void {
+  return () => {
+    if (note === mine) note = null;
+  };
 }
+
+function armNoteExpiry(mine: RenderWorldNote): void {
+  const expire = expiryFor(mine);
+  queueMicrotask(expire);
+  // The scheduler's task queue is a min-heap on expiration: an immediate
+  // task scheduled now runs before any waiting normal-priority render task,
+  // even when the work loop continues in the same stack.
+  try {
+    Scheduler.unstable_scheduleCallback(Scheduler.unstable_ImmediatePriority, expire);
+  } catch {
+    // No scheduler host (non-DOM test rigs): the microtask still covers
+    // every path that unwinds the stack.
+  }
+}
+
+/** The scope's own render: authoritative for its pass, always overwrites.
+ * An empty world clears instead of installing — a null note already means
+ * CANONICAL to every consumer, and steady-state renders stay allocation-free. */
+export function noteRenderWorld(scope: ProviderRecord, ids: readonly DraftId[]): void {
+  captureRenderDispatcher();
+  if (ids.length === 0) {
+    note = null;
+    return;
+  }
+  if (note !== null && note.scope === scope && note.ids === ids) return; // StrictMode re-render
+  note = { scope, ids };
+  armNoteExpiry(note);
+}
+
+/** Every fx2 hook render: kills a foreign scope's leftovers, and (when the
+ * hook carries world state of its own) re-establishes a note for passes the
+ * scope itself did not render — the hook's ids come from React's update
+ * queues for THIS pass, so they never run ahead of it. */
+export function noteHookRender(scope: ProviderRecord | null, ids: readonly DraftId[] | null): void {
+  captureRenderDispatcher();
+  if (note !== null && note.scope !== scope) note = null;
+  if (note === null && ids !== null && ids.length > 0) {
+    note = { scope, ids };
+    armNoteExpiry(note);
+  }
+}
+
+/** The valid note's ids for a scope, or null. Hooks resolve their render
+ * value against this when present (it covers components mounting inside a
+ * transition pass, whose own reducers never received the dispatch). */
+export function renderPassIds(scope: ProviderRecord | null): readonly DraftId[] | null {
+  return note !== null && note.scope === scope ? note.ids : null;
+}
+
+function renderWorldProvider(): readonly DraftId[] | 'canonical' | null {
+  if (!isRendering()) return null; // ambient: newest intent
+  return note === null ? 'canonical' : note.ids;
+}
+
+// ---------------------------------------------------------------------------
+// Draft ownership and wake dispatch
+// ---------------------------------------------------------------------------
+
+function rememberOwner(id: DraftId): void {
+  // Sweep first so the map stays bounded by live drafts even when a draft
+  // is discarded engine-side without host involvement.
+  for (const known of [...draftOwners.keys()]) {
+    if (!engine.isLiveDraft(known)) draftOwners.delete(known);
+  }
+  const T = sharedInternals().T;
+  if (T != null) draftOwners.set(id, T);
+}
+
+/**
+ * Dispatch a draft-lane wake. At write time React's ambient transition is
+ * already installed (the write ran inside startTransition), so the dispatch
+ * rides its lanes as-is. Corrections after the fact — late subscriptions,
+ * appends delivered from plain contexts — restore the OWNING transition
+ * object around the dispatch, so the update still classifies as that
+ * transition's work instead of landing synchronously (which would commit
+ * draft values into an urgent frame).
+ */
+export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void): void {
+  const internals = sharedInternals();
+  if (internals.T != null) {
+    dispatch(id);
+    return;
+  }
+  const owner = draftOwners.get(id);
+  if (owner === undefined) {
+    dispatch(id);
+    return;
+  }
+  const prev = internals.T;
+  internals.T = owner;
+  try {
+    dispatch(id);
+  } finally {
+    internals.T = prev;
+  }
+}
+
+/** A repair wake: never a live draft id (draft ids start at 1), so the
+ * reducer prunes it to a pure revision bump — an urgent re-render against
+ * whatever the queues say the world is now. */
+export const REPAIR_WAKE: DraftId = 0;
+
+interface RenderedResolution {
+  ids: readonly DraftId[];
+  value: unknown;
+  /** False until the hook's first completed render fills the stash. */
+  live: boolean;
+}
+
+/**
+ * Late-subscription repair, run when a scoped subscriber's engine
+ * subscription attaches (React commits it after the render that created
+ * it). Two gaps are possible for a subscriber that was not yet subscribed
+ * at write time:
+ * - a LIVE draft carried by this subscriber's root never reached its
+ *   reducer (a component mounted mid-transition) — join the owning
+ *   transition so this subscriber converges with that root's commit.
+ *   Roots OUTSIDE the draft's audience stay on the committed world: their
+ *   scope never carried the draft (stock parity — a new root never holds
+ *   another root's pending updates), and the retirement fold is loud for
+ *   exactly that case;
+ * - the draft already folded silently (epoch snapshots stay still by
+ *   design) and canonical moved past what was rendered — repair urgently.
+ */
+export function correctSubscription(
+  x: unknown,
+  rendered: RenderedResolution,
+  scope: ProviderRecord,
+  dispatch: (id: DraftId) => void,
+): void {
+  for (const id of engine.draftsAffecting(x as never)) {
+    if (rendered.ids.includes(id)) continue;
+    const audience = draftAudience.get(id);
+    if (audience === undefined || !audience.has(scope)) continue;
+    dispatchDraftWake(id, dispatch);
+  }
+  const env = engine.resolveEnvelope(x as never, rendered.ids);
+  if (env.kind === 'value' && !Object.is(env.value, rendered.value)) {
+    dispatch(REPAIR_WAKE);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Draft broadcast and per-root commit bookkeeping
+// ---------------------------------------------------------------------------
 
 /** Drafts created for plain React.startTransition scopes (no helper). */
 const draftsByTransition = new WeakMap<object, DraftId>();
@@ -101,9 +284,13 @@ function ambientClassifier(): DraftId | null {
   return id;
 }
 
-/** Send a draft id to every provider, inside the current React context, so
- * the dispatches ride the transition's own lanes. */
+/** Send a draft id to every scope, inside the current React context, so the
+ * dispatches ride the transition's own lanes. Scopes are the only broadcast
+ * audience: value subscribers are woken per drafted cell instead (see
+ * dispatchDraftWake), so a transition re-renders each root's scope plus
+ * exactly the subscribers its writes touch. */
 export function broadcastDraft(id: DraftId): void {
+  rememberOwner(id);
   const recipients = new Set(providers);
   draftRecipients.set(id, recipients);
   draftAudience.set(id, new Set(recipients));
@@ -113,28 +300,17 @@ export function broadcastDraft(id: DraftId): void {
     // writing scope finishes (microtask keeps ops-append ordering).
     queueMicrotask(() => {
       if (draftRecipients.get(id)?.size === 0) {
-        draftRecipients.delete(id);
-        draftAudience.delete(id);
+        forgetDraft(id);
         engine.retireDraft(id);
       }
     });
   }
 }
 
-/** Drafts some render pass has already resolved against. An append to one
- * of these re-dispatches, so React restarts the passes that saw a partial
- * batch (see SignalScope's module comment). */
-const renderedDrafts = new Set<DraftId>();
-
-export function markDraftRendered(id: DraftId): void {
-  renderedDrafts.add(id);
-}
-
-function handleDraftAppend(id: DraftId): void {
-  if (!renderedDrafts.has(id)) return;
-  const recipients = draftRecipients.get(id);
-  if (recipients === undefined) return;
-  for (const p of recipients) p.dispatch(id);
+function forgetDraft(id: DraftId): void {
+  draftRecipients.delete(id);
+  draftAudience.delete(id);
+  draftOwners.delete(id);
 }
 
 export function registerProvider(p: ProviderRecord): () => void {
@@ -144,8 +320,7 @@ export function registerProvider(p: ProviderRecord): () => void {
     for (const [id, recipients] of draftRecipients) {
       recipients.delete(p);
       if (recipients.size === 0) {
-        draftRecipients.delete(id);
-        draftAudience.delete(id);
+        forgetDraft(id);
         engine.retireDraft(id);
       }
     }
@@ -173,14 +348,13 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
   for (const id of ids) {
     const recipients = draftRecipients.get(id);
     if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
-      draftRecipients.delete(id);
-      renderedDrafts.delete(id);
+      const silent = foldReachedEveryScope(id);
+      forgetDraft(id);
       // Silent only when render-pass worlds already delivered these values
       // to every scope (subscribers outside scopes are covered separately by
       // the canonical epoch). A scope mounted mid-transition never carried
       // the draft, so its subscribers need the loud fold.
-      engine.retireDraft(id, { silent: foldReachedEveryScope(id) });
-      draftAudience.delete(id);
+      engine.retireDraft(id, { silent });
     }
   }
 }
@@ -189,64 +363,23 @@ export function reportError(e: unknown): void {
   if (handle !== null) handle.errors.push(e);
 }
 
-function dispatchMutationWindow(container: unknown, isStart: boolean): void {
-  const phase = isStart ? 'start' : 'stop';
-  engine.traceNode(`mutation-${phase}`, null, 0, undefined);
-  for (const cb of mutationSubs) {
-    try {
-      cb(phase, container as Element);
-    } catch (e) {
-      reportError(e);
-    }
-  }
-}
-
-/** Subscribe to the exact bracket around React's DOM mutation phase, per
- * root commit. Requires a React build with the fx2 protocol. */
-export function onDomMutation(cb: (phase: 'start' | 'stop', container: Element) => void): () => void {
-  requireRegistered();
-  mutationSubs.add(cb);
-  return () => {
-    mutationSubs.delete(cb);
-  };
-}
-
-function requireRegistered(): void {
-  if (handle === null) {
-    throw new Error('signals-royale-fx2: call registerReactSignals() before using the bindings');
-  }
-}
-
 /**
- * Register the bindings against the current React build. Fails loudly on a
- * build without the fx2 protocol (the mutation window would be silently
- * dead otherwise). Idempotent per process.
+ * Register the bindings against the current React build. Stock React is the
+ * only requirement: the bindings drive everything through public state and
+ * context primitives. Idempotent per process.
  */
 export function registerReactSignals(): ReactSignalsHandle {
   if (handle !== null) return handle;
-  const marker = (globalThis as Record<string, unknown>).__FX2_REACT_PROTOCOL__;
-  if (marker !== 1) {
-    throw new Error(
-      'signals-royale-fx2: this React build does not implement the fx2 external-state ' +
-        'protocol (__FX2_REACT_PROTOCOL__ !== 1). Build React from the fx2 patch series; ' +
-        'stock React cannot expose the DOM mutation window these bindings guarantee.',
-    );
-  }
-  (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = dispatchMutationWindow;
   engine.setAmbientClassifier(ambientClassifier);
   engine.setRenderWriteGuard(renderWriteGuard);
-  engine.setOnDraftAppend(handleDraftAppend);
   engine.setRenderWorldProvider(renderWorldProvider);
   handle = {
     errors: [],
     dispose() {
       if (handle === null) return;
-      (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = undefined;
       engine.setAmbientClassifier(null);
       engine.setRenderWriteGuard(null);
-      engine.setOnDraftAppend(null);
       engine.setRenderWorldProvider(null);
-      mutationSubs.clear();
       handle = null;
     },
   };
@@ -260,15 +393,12 @@ export function resetReactSignalsForTest(): void {
   providers.clear();
   draftRecipients.clear();
   draftAudience.clear();
-  renderedDrafts.clear();
-  mutationSubs.clear();
-  lastRenderWorldIds = null;
+  draftOwners.clear();
+  note = null;
   if (wasRegistered) {
     // resetEngineForTest cleared the engine hooks; re-arm them.
-    (globalThis as Record<string, unknown>).__FX2_MUTATION_WINDOW__ = dispatchMutationWindow;
     engine.setAmbientClassifier(ambientClassifier);
     engine.setRenderWriteGuard(renderWriteGuard);
-    engine.setOnDraftAppend(handleDraftAppend);
     engine.setRenderWorldProvider(renderWorldProvider);
     handle!.errors.length = 0;
   }
