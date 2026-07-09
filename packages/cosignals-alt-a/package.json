@@ -18,6 +18,9 @@
 		"test": "vitest run",
 		"gen": "node --experimental-strip-types tools/gen-layout.ts"
 	},
+	"dependencies": {
+		"react-signals-utils": "workspace:*"
+	},
 	"devDependencies": {
 		"@lab/arena": "workspace:*",
 		"esbuild": "0.28.1",

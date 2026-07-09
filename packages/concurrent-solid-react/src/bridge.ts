@@ -1,6 +1,5 @@
 /**
- * The fork-protocol bridge: maps React's external-runtime protocol (batch
- * tokens, render passes, retirements) onto the Solid core's transitions.
+ * Maps the shared React batch registry onto the Solid core's transitions.
  *
  * The world model, in one paragraph: every *deferred* fork batch token owns a
  * Solid `Transition`. Deferred writes stage into that transition's
@@ -41,31 +40,13 @@ import {
 import { STATUS_PENDING } from "./solid/constants.js";
 import type { Computed, Signal } from "./solid/types.js";
 import { pokeReadersInCone, probeRead, type DepNode } from "./reader.js";
+import { ReactBatchRegistry } from "react-signals-utils";
 
-/** The fork protocol surface this bridge consumes (all exports of the
- * patched `react` package; presence of the entry points IS the protocol). */
 export interface ForkReact {
-  unstable_subscribeToExternalRuntime(listener: ExternalRuntimeListener): () => void;
-  unstable_registerBatchIdAllocator(allocate: (deferred: boolean) => number): () => void;
-  unstable_getCurrentWriteBatch(): number;
-  unstable_getRenderContext(): null | { container: unknown };
-  unstable_runInBatch<R>(batchId: number, fn: () => R): R;
-  unstable_resetBatchRegistryForTest?(): void;
-}
-
-export interface ExternalRuntimeListener {
-  onRenderPassStart?: (container: unknown, includedBatches: ReadonlyArray<number>) => void;
-  onRenderPassYield?: (container: unknown) => void;
-  onRenderPassResume?: (container: unknown) => void;
-  onRenderPassEnd?: (container: unknown, committed: boolean) => void;
-  onBeforeMutation?: (container: unknown) => void;
-  onAfterMutation?: (container: unknown) => void;
-  onBatchRetired?: (batchId: number, committed: boolean) => void;
-  onRootCommitted?: (
-    container: unknown,
-    committedBatches: ReadonlyArray<number>,
-    rootCommitGeneration: number
-  ) => void;
+  __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: {
+    T?: { gesture?: unknown } | null;
+    E?: unknown;
+  };
 }
 
 interface WorldRecord {
@@ -105,25 +86,21 @@ export class Bridge {
    * deliberately kept across yields and suspensions (the frame is one pass).
    */
   readonly passValues = new Map<unknown, Map<object, unknown>>();
-  private serial = 0;
+  private registry: ReactBatchRegistry;
   private unsubscribe: () => void;
-  private unregisterAllocator: () => void;
 
   constructor(fork: ForkReact) {
     this.fork = fork;
-    this.unregisterAllocator = fork.unstable_registerBatchIdAllocator(deferred => {
-      // Allocation-only (may run mid-render/mid-commit): create the token,
-      // record the world, run nothing else.
-      const token = (++this.serial << 1) | (deferred ? 1 : 0);
-      if (deferred) {
-        const transition = createBridgeTransition();
-        const retainer = { csrToken: token };
-        retainTransition(transition, retainer);
-        this.worlds.set(token, { token, transition, retainer });
-      }
-      return token;
-    });
-    this.unsubscribe = fork.unstable_subscribeToExternalRuntime({
+    this.registry = new ReactBatchRegistry(fork);
+    this.unsubscribe = this.registry.subscribe({
+      onBatchOpened: token =>
+        this.guard(() => {
+          if (!(token & 1)) return;
+          const transition = createBridgeTransition();
+          const retainer = { csrToken: token };
+          retainTransition(transition, retainer);
+          this.worlds.set(token, { token, transition, retainer });
+        }),
       onRenderPassStart: (container, included) =>
         this.guard(() => {
           this.passValues.delete(container);
@@ -142,7 +119,9 @@ export class Bridge {
     // writes; all other outside-render reads resolve committed state.
     setAmbientWorldResolver(() => {
       if (renderReadDepth > 0) return null;
-      const token = this.fork.unstable_getCurrentWriteBatch();
+      const scope = this.fork.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.T;
+      if (scope === null || scope === undefined || scope.gesture) return null;
+      const token = this.registry.getCurrentWriteBatch();
       if (!(token & 1)) return null;
       const rec = this.worlds.get(token);
       return rec && isTransitionLive(rec.transition) ? currentTransition(rec.transition) : null;
@@ -150,7 +129,7 @@ export class Bridge {
     // [react-adapt E13] per-pass value pinning; passthrough outside render
     // (commit fixups must see live values).
     setRenderValueInterceptor((el, value) => {
-      const ctx = this.fork.unstable_getRenderContext();
+      const ctx = this.registry.getRenderContext();
       if (ctx === null) return value;
       let pinned = this.passValues.get(ctx.container);
       if (pinned === undefined) this.passValues.set(ctx.container, (pinned = new Map()));
@@ -216,7 +195,7 @@ export class Bridge {
   /** [react-adapt E3] setSignal classification hook. */
   private routeWrite(_el: Signal<any> | Computed<any>): (() => void) | undefined {
     if (renderReadDepth > 0) return; // internal writes during a render read keep the render's world
-    if (this.fork.unstable_getRenderContext() !== null) {
+    if (this.registry.getRenderContext() !== null) {
       // React renders speculatively and replays them freely; a write issued
       // from a render body can run any number of times, including from
       // renders whose output is discarded. (Engine-internal writes during a
@@ -226,7 +205,7 @@ export class Bridge {
           "pure — move the write to an event handler or an effect."
       );
     }
-    const token = this.fork.unstable_getCurrentWriteBatch();
+    const token = this.registry.getCurrentWriteBatch();
     if (!(token & 1)) return; // urgent (or no batch): ambient world untouched
     const rec = this.worlds.get(token);
     if (!rec || !isTransitionLive(rec.transition)) return;
@@ -247,7 +226,7 @@ export class Bridge {
 
   /** The transition world of the render pass currently on the callstack. */
   currentRenderWorld(): Transition | null {
-    const ctx = this.fork.unstable_getRenderContext();
+    const ctx = this.registry.getRenderContext();
     if (!ctx) return null;
     const world = this.passWorlds.get(ctx.container) ?? null;
     return world && isTransitionLive(world) ? currentTransition(world) : null;
@@ -279,11 +258,11 @@ export class Bridge {
   ): void {
     const token = world && isTransitionLive(world) ? this.tokenOfWorld(world) : 0;
     const fire = () => {
-      if (token && this.worlds.has(token)) this.fork.unstable_runInBatch(token, wake);
-      else if (forceUrgent) this.fork.unstable_runInBatch(0, wake);
+      if (token && this.worlds.has(token)) this.registry.runInBatch(token, wake);
+      else if (forceUrgent) this.registry.runInBatch(0, wake);
       else wake();
     };
-    if (this.fork.unstable_getRenderContext() !== null) queueMicrotask(() => this.guard(fire));
+    if (this.registry.getRenderContext() !== null) queueMicrotask(() => this.guard(fire));
     else fire();
   }
 
@@ -293,10 +272,10 @@ export class Bridge {
     setRenderValueInterceptor(null);
     this.unsubscribe();
     this.passValues.clear();
-    this.unregisterAllocator();
+    this.registry.dispose();
     // Complete any worlds still open so engine state doesn't leak across
     // tests: writes are real (React never reverts them either).
-    for (const rec of [...this.worlds.values()]) this.retire(rec.token);
+    for (const rec of this.worlds.values()) this.retire(rec.token);
     this.passWorlds.clear();
     if (bridge === this) bridge = null;
   }
@@ -384,16 +363,13 @@ export function attachBridge(fork: ForkReact): Bridge {
 }
 
 export function assertForkPresent(react: Partial<ForkReact>): asserts react is ForkReact {
-  if (
-    typeof react.unstable_subscribeToExternalRuntime !== "function" ||
-    typeof react.unstable_registerBatchIdAllocator !== "function" ||
-    typeof react.unstable_getCurrentWriteBatch !== "function" ||
-    typeof react.unstable_runInBatch !== "function"
-  ) {
+  const channel = react.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?.E as
+    | { forkProtocolVersion?: unknown }
+    | null
+    | undefined;
+  if (channel?.forkProtocolVersion !== 1) {
     throw new Error(
-      "concurrent-solid-react requires the cosignal React fork (external-runtime protocol v2). " +
-        "Stock React lacks the batch-token protocol; a silent degraded mode would reintroduce " +
-        "tearing with no error at the cause, so registration fails loudly instead."
+      "concurrent-solid-react requires the patched React signals protocol; stock React is unsupported."
     );
   }
 }

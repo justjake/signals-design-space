@@ -1,23 +1,7 @@
-/**
- * devChecks — the protocol-edge fail-fast switch (EngineResetOptions.devChecks:
- * a reset parameter of the default engine instance).
- *
- * This file NEVER imports react-dom, on purpose: the external-runtime
- * provider registers when a renderer module loads, so here
- * unstable_getCurrentWriteBatch() returns the real BATCH_NONE (0, "no
- * renderer provider registered") — the exact state the integration contract
- * makes unreachable in an app. That lets these tests drive every guarded
- * site genuinely, with no mocking:
- *
- *  - armed (devChecks: true — every other suite file, via makeHarness):
- *    protocol violations THROW at the violating call.
- *  - off (devChecks: false — the production default): each guarded site is
- *    one boolean branch into its defined fall-through, and the dev-warning
- *    heuristic never runs (see scenarios R12/R12b for the warning pins).
- */
 import { afterEach, describe, expect, test } from 'vitest';
-import { Atom, __TEST__resetEngine } from 'cosignals';
-import { registerCosignalReact, startSignalTransition, type CosignalReactHandle } from '../src/index.js';
+import 'react-dom/client';
+import { __TEST__resetEngine } from 'cosignals';
+import { registerCosignalReact, type CosignalReactHandle } from '../src/index.js';
 
 /** The shim's protocol listeners, driven directly (TypeScript-private only;
  * the protocol host is what normally calls these). */
@@ -40,64 +24,6 @@ function register(devChecks: boolean): CosignalReactHandle {
 afterEach(() => {
 	handle?.dispose();
 	handle = undefined;
-});
-
-describe('write classifier: no batch context (BATCH_NONE)', () => {
-	test('armed: a context-free write throws a protocol violation, and no state moves', () => {
-		const h = register(true);
-		const a = new Atom(0);
-		expect(() => a.set(5)).toThrow(/protocol violation — signal write with no batch context/);
-		expect(a.state).toBe(0); // the classifier threw before any write landed
-		expect(h.bridge.liveBatches()).toHaveLength(0); // no batch created
-		expect(h.bridge.ambientBatch).toBeUndefined(); // and never an ambient batch
-	});
-
-	test('off: a context-free write takes the engine no-context fall-through (quiet fold, no batch)', () => {
-		const h = register(false);
-		const a = new Atom(0);
-		const b = new Atom(0);
-		a.set(5);
-		expect(a.state).toBe(5); // newest world: the write landed
-		// Protocol v2 deleted the id-translation layer, and with it the v1
-		// materialization of "React batch id 0" as its own mapped engine
-		// batch. BATCH_NONE now means what it says — no batch context — so
-		// the write takes the ENGINE's own no-context path: with nothing
-		// pending the bridge is QUIET and the write folds directly; no batch
-		// of any kind materializes (ambient included).
-		expect(h.bridge.ambientBatch).toBeUndefined();
-		expect(h.bridge.liveBatches()).toHaveLength(0);
-		// Later context-free writes fold the same way — still no batch.
-		b.set(7);
-		expect(b.state).toBe(7);
-		expect(h.bridge.liveBatches()).toHaveLength(0);
-	});
-});
-
-describe('startSignalTransition: no batch context (BATCH_NONE)', () => {
-	test('armed: throws to the caller, before React.startTransition swallows scope errors', () => {
-		register(true);
-		let ran = false;
-		expect(() =>
-			startSignalTransition(() => {
-				ran = true;
-			}),
-		).toThrow(/no transition batch context/);
-		expect(ran).toBe(false); // the action body never started
-	});
-
-	test('off: the action runs; with no batch to park, its writes take the no-context fall-through', () => {
-		const h = register(false);
-		const a = new Atom(0);
-		startSignalTransition(() => {
-			a.set(3);
-		});
-		expect(a.state).toBe(3);
-		// No parked action batch was created for BATCH_NONE — nothing could
-		// ever settle it; the write folded quietly (the engine's no-context
-		// path), creating no batch at all.
-		expect(h.bridge.liveBatches().some((t) => t.parked)).toBe(false);
-		expect(h.bridge.liveBatches()).toHaveLength(0);
-	});
 });
 
 describe('render start over a still-open render', () => {

@@ -31,14 +31,11 @@ import { committed, latest, refresh } from '../src/index';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type ReactWithReset = typeof React & { unstable_resetBatchRegistryForTest(): void };
-
 let handle: AltBReactHandle;
 let roots: Root[];
 let containers: HTMLElement[];
 
 beforeEach(() => {
-	(React as ReactWithReset).unstable_resetBatchRegistryForTest();
 	__resetEngineForTests();
 	handle = registerAltBReact();
 	roots = [];
@@ -52,7 +49,6 @@ afterEach(async () => {
 		}
 	});
 	handle.dispose();
-	(React as ReactWithReset).unstable_resetBatchRegistryForTest();
 });
 
 async function mount(node: React.ReactNode): Promise<HTMLElement> {

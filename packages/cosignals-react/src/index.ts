@@ -1,8 +1,8 @@
 /**
  * cosignals-react — public surface. The bindings couple `cosignals`'s
- * default concurrent engine to the external-runtime protocol of a patched
- * React build: `registerCosignalReact()` attaches the engine's driver and
- * subscribes to the protocol's events, and the hooks below are the
+ * default concurrent engine to the private signals taps of a patched React
+ * build: `registerCosignalReact()` attaches the engine's driver and
+ * subscribes to React's scheduling events, and the hooks below are the
  * component-side surface.
  */
 

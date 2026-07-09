@@ -35,7 +35,7 @@ export type CosignalReactHandle = {
 /**
  * Activates the bindings: attaches the engine driver (write classification,
  * world routing, delivery listeners — the Shim constructor's job) and
- * subscribes the shim to the external-runtime protocol events. Call during
+ * subscribes the shim to the private React signals taps. Call during
  * app setup, after importing react-dom/client (the renderer must have
  * registered its protocol provider first), before rendering any root;
  * throws on stock React — see assertForkPresent. One registration at a
@@ -86,7 +86,7 @@ export function requireShim(): Shim {
 export type SignalSource<T> = Atom<T> | ReducerAtom<T, unknown> | Computed<T>;
 
 function resolveNode(shim: Shim, signal: SignalSource<unknown>): AnyInternals {
-	// Brand-based, not `instanceof`: createCosignals() mints per-instance
+	// Brand-based, not `instanceof`: createCosignals() creates per-instance
 	// Atom/Computed classes, so `instanceof Atom` from the default instance
 	// rejects a per-request handle. isAtom/isComputed recognize a handle from ANY
 	// instance; the bridge's internalsForAtom/internalsForComputed then assert the
@@ -137,8 +137,8 @@ function createSignalRecord(node: AnyInternals, bump: () => void): SignalRecord 
  * effect below claims the subscription, and the bridge's mount fixup (run
  * at the commit edge) closes the window: for every still-live batch that
  * touched relevant state but was not part of this component's render, a
- * corrective re-render is scheduled into that batch's own lane via the
- * protocol's unstable_runInBatch — the component joins the pending update
+ * corrective re-render is scheduled into that batch's own lane — the
+ * component joins the pending update
  * instead of revealing it early or missing it — and one comparison against
  * committed-state-as-of-now catches anything that committed or retired
  * during the window, fixed urgently before paint.
@@ -435,21 +435,10 @@ export function useSignalEffect(fn: () => void | (() => void), deps?: readonly u
  */
 export function startSignalTransition(fn: () => unknown): void {
 	const shim = requireShim();
-	// BATCH_NONE ("no renderer provider registered") is unreachable once a
-	// renderer has loaded, and it is a global condition — none here means
-	// none inside the transition scope too. The dev check throws HERE, before
-	// React.startTransition, because startTransition reports a sync throw
-	// from its scope as an uncaught error instead of propagating it.
-	if (shim.devChecks && React.unstable_getCurrentWriteBatch() === BATCH_NONE) {
-		throw new Error('cosignals: no transition batch context — the renderer did not provide an external-runtime write batch.');
-	}
 	React.startTransition((): void => {
-		// The action's batch context is React's own transition scope: inside
-		// this callback unstable_getCurrentWriteBatch() returns the
-		// transition batch's id — the engine BatchId the shim's allocator
-		// handed out at the batch's creation — and the shim's classifier
-		// routes every write executed here into that batch.
-		const batchId = React.unstable_getCurrentWriteBatch();
+		// React's transition scope selects the registry batch; the shim maps it
+		// to the engine batch used by every signal write in this callback.
+		const batchId = shim.currentBatch();
 		// Upgrade the batch to action semantics immediately (parked — kept pending —
 		// until the action settles), before fn writes anything: the parked
 		// batch holds the pending window open for the action's whole life,

@@ -7,7 +7,7 @@
  * the reset and exposes the decoded stream as `events` (the deleted object
  * log's shape).
  */
-import * as React from 'react';
+import type * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { __TEST__resetEngine, engine, type AtomInternals, type CosignalEngine, type WriteLogEntry } from 'cosignals';
@@ -43,14 +43,6 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 		if (t.parked) engine.settleAction(t.id);
 		else engine.retire(t.id);
 	}
-	// Protocol v2 test seam: scrub React's batch registry before the engine
-	// reset. BatchIds stay monotonic across resets, so a stale slot left by a
-	// previous test (an unsettled action, an unflushed close edge) can never
-	// collide with this test's ids — but it could still deliver late protocol
-	// events for a dead composition. The scrub emits no retirement events.
-	// (The reset repeats it through the previous driver's protocolReset;
-	// the explicit call also covers a first run with no driver attached.)
-	React.unstable_resetBatchRegistryForTest();
 	// devChecks arms by default so the suite exercises the protocol-edge
 	// throws and the dev warnings; pass { devChecks: false } to pin the
 	// production posture (defined fall-throughs, no warning allocation).
@@ -95,14 +87,6 @@ export function makeHarness(opts?: { devChecks?: boolean }): Harness {
 			await act(async () => {}); // drain debounced unsubscribes
 			for (const c of containers) c.remove();
 			handle.dispose();
-			// Leave the registry clean for whatever runs next (makeHarness
-			// scrubs again defensively): after dispose the slots' ids name a
-			// composition this shim no longer listens to. Parked settlements
-			// that fire later no-op — the scrub cleared their slots and their
-			// callbacks self-invalidate. (The engine driver slot stays
-			// attached until the next test's reset clears it; the disposed
-			// shim's driver is inert.)
-			React.unstable_resetBatchRegistryForTest();
 			if (errors.length > 0) {
 				throw new Error(`shim recorded errors: ${errors.map((e) => String(e)).join(' | ')}`);
 			}

@@ -27,7 +27,6 @@ import { probeRead } from "../src/reader.js";
 let handle: BridgeHandle;
 let roots: Array<{ root: Root; el: HTMLElement }> = [];
 beforeEach(() => {
-  (React as any).unstable_resetBatchRegistryForTest?.();
   handle = registerConcurrentSolidReact();
 });
 afterEach(async () => {
@@ -40,7 +39,6 @@ afterEach(async () => {
   roots = [];
   handle.dispose();
   flush();
-  (React as any).unstable_resetBatchRegistryForTest?.();
 });
 
 it("a pull-recompute inside a probe frame never parks the probe in the heap", { timeout: 5000 }, () => {

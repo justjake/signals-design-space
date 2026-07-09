@@ -51,20 +51,19 @@ test suite.)
 
 ## Requirements
 
-React itself does not expose when it starts, pauses, or commits a render
-— so these bindings require a React build implementing the
-**cosignals external-runtime protocol**: a patched React that emits batch,
-render, and commit events to an external store and provides an API
-to schedule updates into a specific batch. Concretely the build exposes:
+React itself does not expose when it starts, pauses, or commits a render,
+so these bindings require a patched build with private signals taps. The
+fork reports raw scheduling facts through React's private internals:
 
 - render events (start with the included batches, yield, resume,
   end with committed/discarded disposition), per-root commit events, and
   batch retirement events;
-- a batch-identity registration (the bindings supply the id for every
-  React batch at its creation, so both sides speak one shared id space),
-  a write-context API (which batch is the code currently executing on
-  behalf of?), and `unstable_runInBatch` (schedule a state update so it
-  renders and commits with a specific batch).
+- the current write lane and render context;
+- an operation that schedules a state update in a live lane.
+
+`react-signals-utils` is the sole owner of batch identity and retirement. It
+converts those facts into stable batches for all signal implementations; the
+React fork does not expose a public signals API.
 
 `registerCosignalReact()` feature-detects the protocol at startup: on a
 stock React (where these entry points simply don't exist) it throws
@@ -293,14 +292,12 @@ Scope and limits — read before relying on this:
 ## How writes are classified
 
 Every `atom.set` / `atom.update` / `reducerAtom.dispatch` is attributed
-to the batch context in which it executes, via the protocol's
-write-context API: an event handler's discrete urgent batch, a
-transition or async-action batch, or the ambient default batch when no
+to the batch context in which it executes: an event handler's discrete urgent
+batch, a transition or async-action batch, or the ambient default batch when no
 context exists. Functional updates and reducer actions are recorded
 whole — not pre-folded — so each world replays them against its own view.
-Corrective re-renders and deliveries are scheduled with
-`unstable_runInBatch`, so they render and commit in the lanes of the
-batch that caused them.
+Corrective re-renders and deliveries are scheduled back into the live lane
+of the batch that caused them.
 
 ## Testing
 

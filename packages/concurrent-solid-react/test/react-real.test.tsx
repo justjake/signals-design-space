@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * The real-React gate: concurrent-solid-react against the patched React
- * build (vendor/react fork, external-runtime protocol v2), mirroring the
+ * build and shared batch registry, mirroring the
  * cosignals-alt-a/alt-b RTL gates. Every scenario here runs the REAL fork —
  * no doubles.
  */
@@ -44,7 +44,6 @@ let handle: BridgeHandle;
 let roots: Array<{ root: Root; el: HTMLElement }> = [];
 
 beforeEach(() => {
-  (React as any).unstable_resetBatchRegistryForTest?.();
   handle = registerConcurrentSolidReact();
 });
 
@@ -59,7 +58,6 @@ afterEach(async () => {
   const errors = [...handle.errors];
   handle.dispose();
   flush();
-  (React as any).unstable_resetBatchRegistryForTest?.();
   expect(errors).toEqual([]);
 });
 

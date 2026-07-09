@@ -18,6 +18,9 @@
 		"test": "vitest run",
 		"gen": "node --experimental-strip-types --no-warnings tools/gen-layout.ts"
 	},
+	"dependencies": {
+		"react-signals-utils": "workspace:*"
+	},
 	"devDependencies": {
 		"@types/node": "24.13.2",
 		"typescript": "6.0.3",

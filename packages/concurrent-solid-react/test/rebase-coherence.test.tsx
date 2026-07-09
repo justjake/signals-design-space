@@ -30,7 +30,6 @@ function deferred<T>() {
 let handle: BridgeHandle;
 let roots: Array<{ root: Root; el: HTMLElement }> = [];
 beforeEach(() => {
-  (React as any).unstable_resetBatchRegistryForTest?.();
   handle = registerConcurrentSolidReact();
 });
 afterEach(async () => {
@@ -43,7 +42,6 @@ afterEach(async () => {
   roots = [];
   handle.dispose();
   flush();
-  (React as any).unstable_resetBatchRegistryForTest?.();
 });
 
 it("RT3.hold shape: verdict memo never observes count without doubled", async () => {

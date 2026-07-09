@@ -38,7 +38,6 @@ let handle: BridgeHandle;
 let roots: Array<{ root: Root; el: HTMLElement }> = [];
 
 beforeEach(() => {
-  (React as any).unstable_resetBatchRegistryForTest?.();
   handle = registerConcurrentSolidReact();
 });
 
@@ -53,7 +52,6 @@ afterEach(async () => {
   const errors = [...handle.errors];
   handle.dispose();
   flush();
-  (React as any).unstable_resetBatchRegistryForTest?.();
   expect(errors).toEqual([]);
 });
 

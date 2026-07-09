@@ -15,6 +15,9 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest run"
 	},
+	"dependencies": {
+		"react-signals-utils": "workspace:*"
+	},
 	"devDependencies": {
 		"@types/node": "24.13.2",
 		"@types/react": "^19.1.8",

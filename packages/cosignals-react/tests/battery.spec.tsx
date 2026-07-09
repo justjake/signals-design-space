@@ -650,12 +650,9 @@ describe('W20 — startSignalTransition passes nothing to fn; the settled action
 
 describe('context-free writes (BATCH_NONE is unreachable once a renderer provider exists)', () => {
 	test('post-handshake, an out-of-React-context write STILL rides a protocol batch: the BATCH_NONE state is unreachable', async () => {
-		// Unreachability, proven on the happy path: once a renderer provider
-		// exists (the shim's handshake asserts one),
-		// unstable_getCurrentWriteBatch() creates a real batch id for EVERY
+		// Once the renderer taps exist, the registry creates a batch for every
 		// write — even from a bare timer-style call stack — with a guaranteed
-		// close edge (the id is the engine BatchId the shim's allocator handed
-		// out at creation). So the classifier's BATCH_NONE protocol-violation
+		// close edge. So the classifier's BATCH_NONE protocol-violation
 		// check (devChecks, armed by this harness) never fires in the React
 		// path, and no ambient batch is ever created. dev-checks.spec.ts
 		// drives the BATCH_NONE state itself in a renderer-less environment.

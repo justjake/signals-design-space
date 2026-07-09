@@ -8,7 +8,7 @@
  * world-aware fixup and entangles corrections itself), and (3) route
  * committed effects through `engine.committedEffect` (per-root views,
  * §13.4). Broadcast lane inheritance needs nothing here: the engine fires
- * watcher callbacks inside `unstable_runInBatch` scopes, so the hook's
+ * watcher callbacks inside registry batch scopes, so the hook's
  * setState lands in the writing batch's own lanes automatically.
  */
 import * as React from 'react';

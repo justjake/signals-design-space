@@ -420,129 +420,61 @@ export function initializeAtomState(
 	}
 }
 
-// ============================================================================
-// The REAL React bridge (§6 over the patched build's external-runtime
-// protocol v2) and the hook surface (§4/§13). The test double stays the unit
-// suites' fork; this adapter is the production one. Protocol deltas vs the
-// spec's §6.1, with the sound degradations taken (do NOT patch React):
-//
-// - No batch-open listener event: protocol v2 instead has the HOST allocate
-//   batch ids (unstable_registerBatchIdAllocator), called at every batch's
-//   creation with its deferred classification. That call IS the §6.2
-//   claim/mint edge: we mint `(serial << 1) | deferred` (the spec's token
-//   encoding), so bit 0 answers isCurrentWriteDeferred with no second call.
-// - No render lineage (§6.3) — and none is needed: pending state is a
-//   node-held box (Solid-async model), so suspense-retry identity is keyed
-//   by the NODE, not by which render attempt asked. Interleaved works on one
-//   root cannot alias each other's thenables.
-// - onRootCommitted(container, batches[], generation) replaces
-//   onBatchCommitted(container, token): fanned out per batch id.
-// - onRenderPassEnd carries `committed`; the engine's §6 listener ignores it
-//   (per-root committed truth arrives via onRootCommitted).
-// - The engine keeps ONE pass scalar set (§6.3 one-pass-at-a-time); if the
-//   protocol opens a pass while another container's is open (defensive —
-//   the host closes frames before restarting), the stale frame is ended
-//   first, matching the shim precedent in cosignals-react.
-// ============================================================================
-
 type ReactRuntime = {
-	unstable_registerBatchIdAllocator(fn: (deferred: boolean) => number): () => void;
-	unstable_subscribeToExternalRuntime(l: {
-		onRenderPassStart?: (container: unknown, includedBatches: readonly number[]) => void;
-		onRenderPassYield?: (container: unknown) => void;
-		onRenderPassResume?: (container: unknown) => void;
-		onRenderPassEnd?: (container: unknown, committed: boolean) => void;
-		onBatchRetired?: (batchId: number, committed: boolean) => void;
-		onRootCommitted?: (
-			container: unknown,
-			committedBatches: readonly number[],
-			generation: number,
-		) => void;
-		onBeforeMutation?: (container: unknown) => void;
-		onAfterMutation?: (container: unknown) => void;
-	}): () => void;
-	unstable_getCurrentWriteBatch(): number;
-	unstable_getRenderContext(): { container: unknown } | null;
-	unstable_runInBatch(batchId: number, fn: () => void): boolean;
-	unstable_resetBatchRegistryForTest?(): void;
 	startTransition(scope: () => void): void;
 };
 
 export class ReactFork implements ForkLike {
 	private listeners = new Set<ExternalRuntimeListener>();
-	private live = new Map<number, boolean>(); // token → deferred
-	private serial = 0;
+	private readonly registry: ReactBatchRegistry;
+	private readonly unsubscribeRegistry: () => void;
 	private passContainer: Container | undefined = undefined;
-	private unsubs: Array<() => void> = [];
 	/** runInBatch outcomes, for entanglement assertions (test parity with the double). */
 	readonly entangleLog: Array<{ token: number; ran: boolean }> = [];
 
 	constructor(private readonly R: ReactRuntime) {
-		if (typeof R.unstable_subscribeToExternalRuntime !== 'function') {
-			// §6.7 version-skew rule: refuse stock React loudly; a silent
-			// degraded mode would reintroduce tearing with no error at the cause.
-			throw new Error(
-				'cosignals-alt-b/react: this React build does not implement the external-runtime protocol (stock React); concurrent bindings require the patched build',
-			);
-		}
-		this.unsubs.push(
-			R.unstable_registerBatchIdAllocator((deferred) => {
-				const token = (++this.serial << 1) | (deferred ? 1 : 0);
-				this.live.set(token, deferred);
-				this.emit((l) => l.onBatchOpened?.(token));
-				return token;
-			}),
-			R.unstable_subscribeToExternalRuntime({
-				onRenderPassStart: (container, included) => {
-					if (this.passContainer !== undefined) {
-						const prev = this.passContainer;
-						this.passContainer = undefined;
-						this.emit((l) => l.onRenderPassEnd?.(prev));
-					}
-					this.passContainer = container;
-					const tokens = included.filter((t) => this.live.has(t));
-					// Lineage is dead protocol weight in the Solid-async model
-					// (pending state is node-held, not positional); 0 keeps the
-					// listener signature shared with the test double.
-					this.emit((l) => l.onRenderPassStart?.(container, tokens, 0));
-				},
-				onRenderPassYield: (container) => {
-					if (this.passContainer === container) {
-						this.emit((l) => l.onRenderPassYield?.(container));
-					}
-				},
-				onRenderPassResume: (container) => {
-					if (this.passContainer === container) {
-						this.emit((l) => l.onRenderPassResume?.(container));
-					}
-				},
-				onRenderPassEnd: (container, committed) => {
-					if (this.passContainer !== container) {
-						return;
-					}
+		this.registry = new ReactBatchRegistry(R);
+		this.unsubscribeRegistry = this.registry.subscribe({
+			onBatchOpened: (token) => this.emit((listener) => listener.onBatchOpened?.(token)),
+			onRenderPassStart: (container, tokens) => {
+				if (this.passContainer !== undefined) {
+					const previous = this.passContainer;
 					this.passContainer = undefined;
-					void committed; // §6 listener derives commit state from onBatchRetired
-					this.emit((l) => l.onRenderPassEnd?.(container));
-				},
-				onBatchRetired: (token, committed) => {
-					this.live.delete(token);
-					this.emit((l) => l.onBatchRetired?.(token, committed));
-				},
-				onRootCommitted: (container, committedBatches) => {
-					for (const token of committedBatches) {
-						this.emit((l) => l.onBatchCommitted?.(container, token));
-					}
-				},
-				onBeforeMutation: (container) => this.emit((l) => l.onBeforeMutation?.(container)),
-				onAfterMutation: (container) => this.emit((l) => l.onAfterMutation?.(container)),
-			}),
-		);
+					this.emit((listener) => listener.onRenderPassEnd?.(previous));
+				}
+				this.passContainer = container;
+				this.emit((listener) => listener.onRenderPassStart?.(container, tokens, 0));
+			},
+			onRenderPassYield: (container) => {
+				if (this.passContainer === container) {
+					this.emit((listener) => listener.onRenderPassYield?.(container));
+				}
+			},
+			onRenderPassResume: (container) => {
+				if (this.passContainer === container) {
+					this.emit((listener) => listener.onRenderPassResume?.(container));
+				}
+			},
+			onRenderPassEnd: (container) => {
+				if (this.passContainer !== container) return;
+				this.passContainer = undefined;
+				this.emit((listener) => listener.onRenderPassEnd?.(container));
+			},
+			onBatchRetired: (token, committed) =>
+				this.emit((listener) => listener.onBatchRetired?.(token, committed)),
+			onRootCommitted: (container, tokens) => {
+				for (const token of tokens) {
+					this.emit((listener) => listener.onBatchCommitted?.(container, token));
+				}
+			},
+			onBeforeMutation: (container) =>
+				this.emit((listener) => listener.onBeforeMutation?.(container)),
+			onAfterMutation: (container) =>
+				this.emit((listener) => listener.onAfterMutation?.(container)),
+		});
 	}
 
-	/** Errors thrown by protocol listeners, captured here — the fork's events
-	 * fire synchronously inside commitRoot and the scheduler microtask, so a
-	 * listener throw must never propagate into React (§6.7 listener-error
-	 * rule; same posture as alt-a's bridge guard). */
+	/** Listener errors must not escape through React's scheduler or commit. */
 	readonly listenerErrors: unknown[] = [];
 
 	private emit(fn: (l: ExternalRuntimeListener) => void): void {
@@ -563,16 +495,13 @@ export class ReactFork implements ForkLike {
 	}
 
 	isCurrentWriteDeferred(): boolean {
-		// Side-effect-free classification (§6.4 documents this as pure): the
-		// first unstable_getCurrentWriteBatch call in an event CREATES the
-		// batch identity, so a probe must read the current-transition slot.
-		// Mirrors the classifier's own transition arm (non-gesture scope ⇒
-		// a write issued now is deferred).
+		// Do not ask the registry: that would create a batch for a read-only
+		// probe. React's current transition slot classifies without side effects.
 		const t = this.currentTransitionScope() as { gesture?: unknown } | null;
 		return t !== null && !t.gesture;
 	}
 
-	/** The transition-scope object whose batch we last minted, for the
+	/** The transition-scope object whose batch we last created, for the
 	 * read-your-own-draft probe (ambient-W0 semantics). */
 	private lastScopeT: unknown = null;
 	private lastScopeToken = 0;
@@ -587,7 +516,7 @@ export class ReactFork implements ForkLike {
 	}
 
 	getCurrentWriteBatch(): number {
-		const token = this.R.unstable_getCurrentWriteBatch();
+		const token = this.registry.getCurrentWriteBatch();
 		// Remember (T → token) so ambient reads later in the SAME synchronous
 		// transition scope resolve that batch's world (read-your-own-draft).
 		if ((token & 1) === 1) {
@@ -600,9 +529,9 @@ export class ReactFork implements ForkLike {
 		return token;
 	}
 
-	/** Ambient-W0 semantics (SPEC-RESOLUTIONS §ambient-W0): the deferred
+	/** The deferred
 	 * batch whose write scope is executing NOW, or 0. Identity-keyed on the
-	 * reconciler's current-transition slot: minted at the scope's first
+	 * reconciler's current-transition slot: created at the scope's first
 	 * write; reads before any write correctly see W0 (no draft exists). A
 	 * different transition or plain handler has a different (or null) T. */
 	getAmbientReadToken(): number {
@@ -614,13 +543,14 @@ export class ReactFork implements ForkLike {
 	}
 
 	getRenderContext(): { container: Container } | undefined {
-		return this.R.unstable_getRenderContext() ?? undefined;
+		return this.registry.getRenderContext() ?? undefined;
 	}
 
 	runInBatch(token: number, fn: () => void): boolean {
 		let ran = false;
 		try {
-			ran = this.R.unstable_runInBatch(token, fn) !== false;
+			this.registry.runInBatch(token, fn);
+			ran = true;
 		} catch {
 			ran = false; // e.g. called during render: fall back to urgent (§6.5)
 		}
@@ -629,25 +559,23 @@ export class ReactFork implements ForkLike {
 	}
 
 	liveTokens(): number[] {
-		return [...this.live.keys()];
+		return this.registry.liveTokens();
 	}
 
 	isBatchLive(token: number): boolean {
-		return this.live.has(token);
+		return this.registry.isBatchLive(token);
 	}
 
 	isQuiescent(): boolean {
-		return this.live.size === 0 && this.passContainer === undefined;
+		return !this.registry.hasLiveBatches() && this.passContainer === undefined;
 	}
 
 	hasOpenWork(): boolean {
-		if (this.live.size !== 0 || this.passContainer !== undefined) {
+		if (this.registry.hasLiveBatches() || this.passContainer !== undefined) {
 			return true;
 		}
-		// An open transition scope whose batch is not minted yet (protocol v2
-		// mints lazily): the reconciler's current-transition slot is the only
-		// pre-mint witness. Reading it through the shared-internals export is
-		// the sound alternative to patching a pure classification API in.
+		// A transition with no signal write has no registry batch yet. React's
+		// current-transition slot is the only side-effect-free witness.
 		const internals = (
 			this.R as unknown as {
 				__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: { T?: unknown };
@@ -656,31 +584,29 @@ export class ReactFork implements ForkLike {
 		if (internals !== undefined && internals.T !== null && internals.T !== undefined) {
 			return true;
 		}
-		return this.R.unstable_getRenderContext() !== null;
+		return this.registry.getRenderContext() !== null;
 	}
 
 	startTransition(scope: () => void): number {
 		let token = 0;
 		this.R.startTransition(() => {
 			scope();
-			token = this.R.unstable_getCurrentWriteBatch(); // mints the transition batch
+			token = this.registry.getCurrentWriteBatch();
 		});
 		return token;
 	}
 
 	dispose(): void {
-		for (const u of this.unsubs) {
-			u();
-		}
-		this.unsubs.length = 0;
+		this.unsubscribeRegistry();
+		this.registry.dispose();
 		this.listeners.clear();
-		this.live.clear();
 	}
 }
 
 // ---- activation + hooks (§4.5/§13) ---------------------------------------------
 
 import * as ReactNS from 'react';
+import { ReactBatchRegistry } from 'react-signals-utils';
 import { attachFork, detachFork } from './engine';
 import type { AtomOptions as AtomOpts, ReducerAtomOptions as ReducerOpts } from './engine';
 
