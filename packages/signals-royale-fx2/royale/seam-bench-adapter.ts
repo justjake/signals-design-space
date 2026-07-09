@@ -1,7 +1,7 @@
 /** react-seam-bench Contender for fx2. */
 import type { ComponentType, ReactNode } from 'react';
 import { batch, set, signal, type Signal } from 'signals-royale-fx2';
-import { SignalScope, registerReactSignals, startTransitionWrite, useValue } from '../src/index.ts';
+import { SignalScope, registerReactSignals, startTransitionWrite, useValue } from '../src/react/index.ts';
 
 registerReactSignals();
 

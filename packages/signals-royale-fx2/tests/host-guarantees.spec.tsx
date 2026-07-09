@@ -9,7 +9,7 @@ import {
   read,
   type Signal,
 } from 'signals-royale-fx2';
-import { registerReactSignals, startTransitionWrite, useValue } from '../src/index.ts';
+import { registerReactSignals, startTransitionWrite, useValue } from 'signals-royale-fx2/react';
 import { makeHarness, text } from './helpers.tsx';
 
 function subCount(x: Signal<number>): number {

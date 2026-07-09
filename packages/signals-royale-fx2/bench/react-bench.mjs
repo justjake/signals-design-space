@@ -79,7 +79,7 @@ async function waitFor(predicate, timeoutMs = 30000) {
 let impl;
 if (contender === 'royale-fx2') {
   const engine = await import('signals-royale-fx2');
-  const bindings = await import('../src/index.ts');
+  const bindings = await import('../src/react/index.ts');
   bindings.registerReactSignals();
   const wrappedCreateRoot = bindings.wrapCreateRoot(ReactDOMClient.createRoot);
   impl = {

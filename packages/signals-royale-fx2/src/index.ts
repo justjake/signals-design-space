@@ -380,8 +380,8 @@ export { attachTracer, getActiveTracer, Tracer };
 export type { TraceEvent };
 
 // ---------------------------------------------------------------------------
-// React integration surface (consumed by react-signals-royale-fx2; not part
-// of the app-facing API, but public so the bindings package stays honest).
+// React integration surface (consumed by the ./react bindings; not part
+// of the app-facing API, but public so the bindings layer stays honest).
 // ---------------------------------------------------------------------------
 
 /** Installed by the bindings: answers "what world is rendering right now".

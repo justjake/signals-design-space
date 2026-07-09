@@ -24,7 +24,7 @@
  * against the completed batch — a pass never commits half a batch.
  */
 import * as React from 'react';
-import { reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
+import { reactIntegration as engine, type DraftId } from '../index.ts';
 import {
   confirmCommit,
   noteRenderWorld,

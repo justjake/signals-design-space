@@ -8,6 +8,6 @@ export default defineConfig({
         execArgv: ['--expose-gc'],
       },
     },
-    include: ['tests/**/*.spec.ts'],
+    include: ['tests/**/*.spec.{ts,tsx}'],
   },
 });

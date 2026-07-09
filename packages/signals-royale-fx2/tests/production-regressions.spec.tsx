@@ -17,8 +17,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx';
 import { latest, read, signal, reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
-import { startTransitionWrite, useValue } from '../src/index.ts';
-import { broadcastDraft, draftWakeStats } from '../src/host.ts';
+import { startTransitionWrite, useValue } from 'signals-royale-fx2/react';
+import { broadcastDraft, draftWakeStats } from '../src/react/host.ts';
 
 let h: Harness;
 beforeEach(() => {

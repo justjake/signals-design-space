@@ -1,5 +1,5 @@
 /**
- * react-signals-royale-fx2 — React bindings for the signals-royale-fx2
+ * signals-royale-fx2/react — React bindings for the signals-royale-fx2
  * engine, built on the premise that React's own update queues are the
  * source of truth for which speculative state a render pass may see.
  *

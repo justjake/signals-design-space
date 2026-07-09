@@ -35,7 +35,7 @@ import {
   useSignalEffect,
   useValue,
   wrapCreateRoot,
-} from '../src/index.ts';
+} from '../src/react/index.ts';
 
 export interface RoyaleHandle {
   errors: unknown[];

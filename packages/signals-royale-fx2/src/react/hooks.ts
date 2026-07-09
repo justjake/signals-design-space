@@ -32,7 +32,7 @@ import {
   type Envelope,
   type Signal,
   type SignalOptions,
-} from 'signals-royale-fx2';
+} from '../index.ts';
 import {
   correctSubscription,
   dispatchDraftWake,

@@ -1,11 +1,14 @@
 # signals-royale-fx2 — REPORT
 
-Entry: `packages/signals-royale-fx2` (engine) + `packages/react-signals-royale-fx2`
-(bindings). **As of the Production round (§11) the entry is FORKLESS: zero
-React patches, fork LOC 0** — the earlier 11-line mutation-window patch and
-its surface were removed by owner ruling; §§2–10 describe prior rounds and
-are kept as history. Numbers in each section were produced by fresh runs in
-that round's verification session; command lines are verbatim.
+Entry: `packages/signals-royale-fx2` — engine at the root export, React
+bindings at the `./react` subpath (consolidated from the former
+`packages/react-signals-royale-fx2` in §14; earlier sections name the two
+packages as they were in those rounds and are kept as history). **As of the
+Production round (§11) the entry is FORKLESS: zero React patches, fork LOC
+0** — the earlier 11-line mutation-window patch and its surface were removed
+by owner ruling; §§2–10 describe prior rounds and are kept as history.
+Numbers in each section were produced by fresh runs in that round's
+verification session; command lines are verbatim.
 
 ## 1. Design summary
 
@@ -591,3 +594,52 @@ Gates fresh this session: engine `tsc` clean + 224 passed; deep oracle
 every seed` green; react `tsc` clean + 41 passed; battery 24 passed / 1
 failed (scenario 16, exempt). Residue grep for `'cell'|'derived'|'watcher'`
 string literals over both `src/` trees: zero hits.
+
+## 14. Package consolidation (refactor-parity)
+
+The two packages became one: `packages/react-signals-royale-fx2` is deleted
+and the bindings live at `signals-royale-fx2/react`.
+
+- Layout: bindings source moved (git mv, history preserved) to
+  `src/react/` (`index`, `host`, `scope`, `hooks`, `transitions`,
+  `scheduler.d.ts`); bindings imports of the engine became relative
+  (`../index.ts`). React specs moved into `tests/` and keep their
+  `@vitest-environment jsdom` docblocks (engine specs stay node); one merged
+  vitest config, forks pool + `--expose-gc` retained for the leak suite.
+  The React bench scripts moved under `bench/`; the shared-surface adapters
+  moved into `royale/`.
+- Exports map: `{ ".": "./src/index.ts", "./react": "./src/react/index.ts" }`.
+  Tests import both specifiers by package name (Node/Vite self-reference
+  through the exports map), so the map itself is exercised by the suite —
+  resolution verified by running, not assumed.
+- React dependency: the `link:` deps on the local vendor build are replaced
+  by the published npm canary cut from the same pinned commit —
+  `react`/`react-dom` `19.3.0-canary-e71a6393-20260702`,
+  `scheduler` `0.28.0-canary-e71a6393-20260702` (existence verified with
+  `npm view`; installed versions confirmed at runtime). `react` +
+  `react-dom` `>=19.0.0` are peerDependencies. `host.ts` now carries a
+  triple-slash reference to `scheduler.d.ts` so external programs that pull
+  in the bindings without the whole `src/` tree still see the ambient
+  `scheduler` declaration.
+- Shared battery: its adapter shim and dep repointed at the consolidated
+  package and reinstalled; `battery.spec.tsx` untouched.
+- READMEs merged into one npm-standalone document (engine first, bindings
+  section after). This REPORT absorbed the bindings package's REPORT with
+  history intact (git mv; §§1–13 unchanged).
+
+No behavior change expected, none observed; the gates are the evidence,
+all run fresh against the npm-canary React:
+
+```
+Tests  265 passed (265)          # merged suite (224 engine + 41 react), tsc clean
+Tests  3 passed (3)              # oracle default (300 seeds x 90 steps)
+Tests  3 passed (3)              # oracle deep (ROYALE_FX2_SEEDS=1200)
+Tests  1 failed | 24 passed (25) # shared battery — scenario 16 only (exempt)
+```
+
+LOC self-count (consolidated package, same counter and rules as §4):
+
+```
+node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2
+→ libLoc 2362  (engine 1909 + react bindings 453)
+```

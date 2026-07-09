@@ -22,7 +22,7 @@ import {
   useIsPending,
   useSignalTransition,
   useValue,
-} from '../src/index.ts';
+} from 'signals-royale-fx2/react';
 
 let h: Harness;
 beforeEach(() => {

@@ -7,7 +7,7 @@ import {
   resetReactSignalsForTest,
   wrapCreateRoot,
   type ReactSignalsHandle,
-} from '../src/index.ts';
+} from 'signals-royale-fx2/react';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

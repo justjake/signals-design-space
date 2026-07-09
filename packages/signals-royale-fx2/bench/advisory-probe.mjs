@@ -15,7 +15,7 @@ const React = (await import('react')).default ?? (await import('react'));
 const { createRoot } = await import('react-dom/client');
 const { signal } = await import('signals-royale-fx2');
 const { registerReactSignals, useValue, wrapCreateRoot, startTransitionWrite } = await import(
-  '../src/index.ts'
+  '../src/react/index.ts'
 );
 
 registerReactSignals();

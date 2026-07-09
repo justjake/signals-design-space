@@ -10,13 +10,17 @@
  * decide which passes those are. The bindings never guess at lanes; they
  * read worlds out of React state. Everything runs on stock React.
  */
+// The `scheduler` package ships untyped; the ambient declaration lives in
+// scheduler.d.ts. The reference pulls it into any program that includes this
+// file (external tools typecheck the adapter without the full src tree).
+/// <reference path="./scheduler.d.ts" />
 import * as React from 'react';
 import * as Scheduler from 'scheduler';
 import {
   reactIntegration as engine,
   resetEngineForTest,
   type DraftId,
-} from 'signals-royale-fx2';
+} from '../index.ts';
 
 /** One registered SignalScope instance (one per root in practice). The
  * record is identity-stable for the scope's lifetime: it is the ScopeContext

@@ -1,6 +1,6 @@
 /** Daishi tearing-matrix adapter: three hooks over one module-level store. */
 import { signal, update } from 'signals-royale-fx2';
-import { registerReactSignals, useValue } from '../src/index.ts';
+import { registerReactSignals, useValue } from '../src/react/index.ts';
 
 registerReactSignals();
 

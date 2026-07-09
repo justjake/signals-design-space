@@ -8,7 +8,7 @@
  * which opens and broadcasts a draft on the spot.
  */
 import * as React from 'react';
-import { reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
+import { reactIntegration as engine, type DraftId } from '../index.ts';
 import { broadcastDraft } from './host.ts';
 
 function runDraftScope(scope: () => void): DraftId {
