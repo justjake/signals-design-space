@@ -70,7 +70,7 @@ function mulberry32(seed: number): () => number {
 // ---------------------------------------------------------------------------
 
 type ModelIntent = { kind: 'set' | 'update'; payload: number | ((p: number) => number); draft: number | null };
-type ModelCell = { base: number; intents: ModelIntent[] };
+type ModelCell = { init: number; intents: ModelIntent[] };
 type DraftState = 'live' | 'retired' | 'discarded';
 
 interface Model {
@@ -81,7 +81,7 @@ interface Model {
 function modelValue(m: Model, cellIx: number, worldIds: readonly number[] | 'latest' | null): number {
   const cell = m.cells[cellIx];
   const live = (id: number) => m.drafts.get(id) === 'live';
-  let v = cell.base;
+  let v = cell.init;
   // Array order is dispatch order; retirement flips visibility, never
   // position (mirrors the engine's rebase log exactly).
   for (const it of cell.intents) {
@@ -127,12 +127,12 @@ type Step =
   | { t: 'open' }
   | { t: 'draftSet'; draft: number; cell: number; v: number }
   | { t: 'draftUpdate'; draft: number; cell: number; k: number }
-  /** silent mirrors the React bindings' fold-after-commit: no storeEpoch
+  /** silent mirrors the React bindings' fold-after-commit: no storeVersion
    * bump. Model semantics are identical; the scoped subscribers below assert
    * the world-delivery channel makes them converge anyway. */
   | { t: 'retire'; draft: number; silent: boolean }
   | { t: 'discard'; draft: number }
-  | { t: 'readCanonical'; ref: Ref }
+  | { t: 'readBase'; ref: Ref }
   | { t: 'readWorld'; ref: Ref; ids: number[] }
   | { t: 'readLatest'; cell: number }
   | { t: 'probePending'; cell: number };
@@ -189,7 +189,7 @@ function generate(rand: () => number, steps: number): Step[] {
         rand() < 0.7 ? { t: 'retire', draft: d, silent: rand() < 0.5 } : { t: 'discard', draft: d },
       );
     } else if (r < 0.8) {
-      out.push({ t: 'readCanonical', ref: anyRef() });
+      out.push({ t: 'readBase', ref: anyRef() });
     } else if (r < 0.9) {
       const ids = draftIds.filter(() => rand() < 0.5);
       out.push({ t: 'readWorld', ref: anyRef(), ids });
@@ -222,14 +222,14 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
   const engRead = (ref: Ref): number => ('cell' in ref ? read(engCells[ref.cell]) : read(engComps[ref.comp]));
 
   // Scoped subscribers: the (only) React hook shape. Subscribe with both
-  // channels of useValue — the store channel (snapshot the storeEpoch,
+  // channels of useValue — the store channel (snapshot the storeVersion,
   // re-read on change: the useSyncExternalStore bail) and the draft-lane
   // channel (wakes deliver draft ids into a per-subscriber world, exactly
   // like the per-hook reducer; attach-time joins mirror correctSubscription
   // for drafts that wrote before the subscription existed). Their rendered
   // view must match the model's value FOR THEIR WORLD after every rerender —
-  // and silent folds keep them converged with canonical without any epoch
-  // bump, because retirement flips a draft's intents from world-only to
+  // and silent folds keep them converged with base state without any
+  // storeVersion bump, because retirement flips a draft's intents from world-only to
   // always-included without moving them ("visibility, never position").
   interface ScopedSub {
     ref: Ref;
@@ -241,7 +241,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
      * model knows exactly which drafts wrote their cell, so a dropped wake
      * is a failure, not a smaller world. Cell subscribers are strong (a
      * cell's poke audience is total); computed subscribers are not (their
-     * watched dep set is the last canonical evaluation's reads, so a draft
+     * watched dep set is the last base-state evaluation's reads, so a draft
      * write to a branch only a draft world reads legitimately never wakes
      * them). */
     modelIds: Set<number> | null;
@@ -255,7 +255,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     const sub: ScopedSub = {
       ref,
       ids: new Set(),
-      snap: node.storeEpoch,
+      snap: node.storeVersion,
       view: undefined,
       modelIds: strong ? new Set() : null,
       failure: null,
@@ -289,7 +289,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     sub.unsub = observeNode(
       node,
       () => {
-        const s = node.storeEpoch;
+        const s = node.storeVersion;
         if (s === sub.snap) return;
         sub.snap = s;
         rerender();
@@ -300,7 +300,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
     // this node's sources; join them (correctSubscription's job in the
     // bindings), through the same sabotage seam as write-time wakes.
     for (const id of draftsAffecting(node)) seams.deliverWake(join, id);
-    sub.snap = node.storeEpoch;
+    sub.snap = node.storeVersion;
     rerender();
     scopedSubs.push(sub);
   };
@@ -334,7 +334,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
       const fail = (msg: string) => `step ${i} ${JSON.stringify(s)}: ${msg}`;
       switch (s.t) {
         case 'cell': {
-          model.cells.push({ base: s.init, intents: [] });
+          model.cells.push({ init: s.init, intents: [] });
           engCells.push(signal(s.init));
           if (engCells.length === 1) attachScoped({ cell: 0 }, true);
           break;
@@ -432,10 +432,10 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
           discardDraft(engDrafts.get(s.draft)!.id);
           break;
         }
-        case 'readCanonical': {
+        case 'readBase': {
           const got = engRead(s.ref);
           const want = modelEval(model, exprs, s.ref, null);
-          if (got !== want) return fail(`canonical read: engine ${got} != model ${want}`);
+          if (got !== want) return fail(`base read: engine ${got} != model ${want}`);
           break;
         }
         case 'readWorld': {
@@ -468,7 +468,7 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
       const scoped = checkScopedSubs();
       if (scoped !== null) return fail(scoped);
     }
-    // Final canonical sweep + effect-log comparison.
+    // Final base-state sweep + effect-log comparison.
     for (let cix = 0; cix < engCells.length; cix++) {
       const got = read(engCells[cix]);
       const want = modelValue(model, cix, null);
@@ -489,7 +489,19 @@ function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | nu
   }
 }
 
-/** Greedy shrink: drop one step at a time while the failure reproduces. */
+/** Greedy shrink: drop one step at a time while the failure reproduces.
+ * A candidate that THROWS inside runSchedule (dropping a creation step
+ * leaves later steps referencing cells or drafts that never exist) is not
+ * a valid reproduction of the returned-string failure — treat it as
+ * non-reproducing and move on, never crash the shrink loop. */
+function reproduces(candidate: Step[]): boolean {
+  try {
+    return runSchedule(candidate) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function shrink(steps: Step[]): Step[] {
   let current = steps;
   let progress = true;
@@ -497,7 +509,7 @@ function shrink(steps: Step[]): Step[] {
     progress = false;
     for (let i = 0; i < current.length; i++) {
       const candidate = current.slice(0, i).concat(current.slice(i + 1));
-      if (candidate.length > 0 && runSchedule(candidate) !== null) {
+      if (candidate.length > 0 && reproduces(candidate)) {
         current = candidate;
         progress = true;
         break;
@@ -524,7 +536,7 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
         { t: 'open' },
         { t: 'draftSet', draft: 0, cell: 0, v: 9 },
         { t: 'retire', draft: 0, silent: false },
-        { t: 'readCanonical', ref: { cell: 0 } },
+        { t: 'readBase', ref: { cell: 0 } },
       ];
       expect(runSchedule(schedule, sabotaged)).not.toBeNull();
     } finally {
@@ -534,7 +546,7 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
 
   test('canary: a scoped subscriber with a sabotaged draft-lane channel is caught (the silent-fold staleness class)', () => {
     // Sabotage: the reducer channel drops every wake. The subscriber's
-    // storeEpoch snapshot is silent-fold-blind BY DESIGN, so the wake
+    // storeVersion snapshot is silent-fold-blind BY DESIGN, so the wake
     // channel is its only route to a silently folded draft's values — with
     // wakes dropped it strands on the pre-draft view during the draft's
     // life and stays stranded after the silent fold. The oracle must see

@@ -21,7 +21,7 @@ function runDraftScope(scope: () => void): void {
   }
 }
 
-/** Run writes as one transition batch: invisible to canonical readers and
+/** Run writes as one transition batch: invisible to base-state readers and
  * the committed DOM until React commits the transition. */
 export function startTransitionWrite(scope: () => void): void {
   React.startTransition(() => {

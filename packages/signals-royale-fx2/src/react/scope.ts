@@ -42,7 +42,7 @@ export interface WorldState {
 export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
 
 /** Shared by the scope and every useValue hook: accumulate live draft ids,
- * prune dead ones (retired and discarded drafts resolve canonically anyway,
+ * prune dead ones (retired and discarded drafts resolve to base state anyway,
  * and a long-lived subscriber must not grow history forever), and always
  * return a fresh object so a re-dispatched id still restarts the pass. */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {

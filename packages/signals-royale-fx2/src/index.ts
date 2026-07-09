@@ -2,12 +2,12 @@
  * signals-royale-fx2 — a concurrent signal engine designed to ride React's
  * own scheduling machinery instead of forking it.
  *
- * Canonical state lives in a conventional signal graph (lazy cached
+ * Base state lives in a conventional signal graph (lazy cached
  * computeds, effects, batching). Concurrency is a thin overlay: writes
  * issued inside a React transition become DRAFTS (ordered logs of write
- * intents), and readers resolve values in a WORLD — canonical state plus
+ * intents), and readers resolve values in a WORLD — base state plus
  * the drafts a specific render pass is allowed to see. Draft intents
- * replay over the live canonical value, so urgent writes rebase pending
+ * replay over the live base value, so urgent writes rebase pending
  * transitions by construction. See worlds.ts for the full model.
  */
 
@@ -41,7 +41,7 @@ import {
   type Draft,
   type DraftId,
   type World,
-  CANONICAL_WORLD,
+  BASE_WORLD,
   appendDraftIntent,
   appendUrgentIntent,
   cellHasDraftIntents,
@@ -83,7 +83,7 @@ export class Signal<T> {
   constructor(initial: T | (() => T), opts?: SignalOptions<T>) {
     this.node = makeCell(initial, opts);
   }
-  /** Canonical read (tracked inside computations); in a draft evaluation,
+  /** Base-state read (tracked inside computations); in a draft evaluation,
    * resolves that evaluation's own world. */
   get(): T {
     return readValue(this) as T;
@@ -96,7 +96,7 @@ export class Signal<T> {
   update(fn: (prev: T) => T): void {
     updateSignal(this, fn);
   }
-  /** Untracked canonical read. */
+  /** Untracked base-state read. */
   peek(): T {
     return graphUntracked(() => peekCell(this.node));
   }
@@ -170,21 +170,21 @@ function stateValue(st: DerivedState): unknown {
   return isUninitialized(st.value) ? undefined : st.value;
 }
 
-/** Newest intent: canonical plus every live draft; never suspends. That is
+/** Newest intent: base state plus every live draft; never suspends. That is
  * the AMBIENT meaning — inside an evaluation context, latest() resolves that
  * context's own world instead, because reading ahead of your world is a
- * tear: a draft evaluation sees its draft world, a canonical computed or
- * effect evaluation sees canonical, a render pass sees the pass's world. */
+ * tear: a draft evaluation sees its draft world, a base-state computed or
+ * effect evaluation sees base state, a render pass sees the pass's world. */
 export function latest<T>(x: Readable<T>): T {
   const node = nodeOf(x);
   let world = getCurrentWorld();
   if (world === null) {
     if (getActiveConsumer() !== null) {
-      // A canonical evaluation (computed or effect) is running. Its context
-      // world is canonical, and this read is a real dependency: track it so
+      // A base-state evaluation (computed or effect) is running. Its context
+      // world is the base world, and this read is a real dependency: track it so
       // a later change to x re-runs the consumer rather than leaving it
       // permanently stale.
-      world = CANONICAL_WORLD;
+      world = BASE_WORLD;
       if ((node.flags & Flag.KindCell) !== 0) readCell(node as CellNode<unknown>);
       else readDerived(node as DerivedNode<unknown>);
     } else {
@@ -259,10 +259,10 @@ function writeSignal<T>(x: Signal<T>, value: T): void {
     appendDraftIntent(draft, cell, 'set', value);
     return;
   }
-  // Urgent: canonical moves now; pending worlds replay it in dispatch order.
+  // Urgent: base state moves now; pending worlds replay it in dispatch order.
   const rebased = appendUrgentIntent(cell, 'set', value);
   const changed = writeCell(x.node, value);
-  // Equality cutoff with pending drafts: canonical did not move (no wave
+  // Equality cutoff with pending drafts: base state did not move (no wave
   // ran) but the drafted replays did — their audiences must still hear it.
   if (rebased && !changed) pokeRebasedCell(cell);
 }
@@ -316,7 +316,7 @@ function atomEntries(atoms: AtomMap): Array<[string, Signal<unknown>]> {
     : Object.entries(atoms);
 }
 
-/** Serialize canonical atom state under app-supplied keys. */
+/** Serialize base atom state under app-supplied keys. */
 export function serializeAtomState(
   atoms: AtomMap,
   replacer?: (key: string, value: unknown) => unknown,
@@ -362,17 +362,17 @@ export type { TraceEvent };
 
 /** Installed by the bindings: answers "what world is rendering right now".
  * - draft ids: the pass's world was noted by this pass and is still valid;
- * - 'canonical': a component render is executing but no valid note exists
+ * - 'base': a component render is executing but no valid note exists
  *   (the note expired or belongs to another pass) — plain latest()/
- *   isPending() must fall back to CANONICAL rather than read a stale world
+ *   isPending() must fall back to BASE rather than read a stale world
  *   or read ahead into live drafts;
  * - null: no render is executing — ambient reads see newest intent.
  * A provider (not a sticky setter) because only the host knows when React
  * is rendering and which notes a pass refreshed. */
-let renderWorldProvider: (() => readonly DraftId[] | 'canonical' | null) | null = null;
+let renderWorldProvider: (() => readonly DraftId[] | 'base' | null) | null = null;
 
 export function setRenderWorldProvider(
-  fn: (() => readonly DraftId[] | 'canonical' | null) | null,
+  fn: (() => readonly DraftId[] | 'base' | null) | null,
 ): void {
   renderWorldProvider = fn;
 }
@@ -381,7 +381,7 @@ function renderWorld(): World | null {
   if (renderWorldProvider === null) return null;
   const ids = renderWorldProvider();
   if (ids === null) return null;
-  if (ids === 'canonical') return CANONICAL_WORLD;
+  if (ids === 'base') return BASE_WORLD;
   return worldOf(ids);
 }
 
@@ -401,4 +401,4 @@ export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, 
  * via Flag.AsyncMask/AsyncError/AsyncSuspended), the error-box identity
  * check, and the never-settled sentinel test. */
 export { Flag, isErrorBox, isUninitialized };
-export { CANONICAL_WORLD };
+export { BASE_WORLD };

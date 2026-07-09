@@ -129,8 +129,8 @@ describe('leak audit', () => {
       payloadRef = new WeakRef(payload);
       retireDraft(draft.id);
     })();
-    expect(read(a).n).toBe(1); // the fold landed the logged payload canonically
-    a.set({ n: 2 }); // canonical moves on: nothing references the payload
+    expect(read(a).n).toBe(1); // the fold landed the logged payload in base state
+    a.set({ n: 2 }); // base state moves on: nothing references the payload
     await collect(10);
     expect(committedReducerState.length).toBe(1); // the id is still held — and inert
     expect(draftRef.deref()).toBeUndefined();

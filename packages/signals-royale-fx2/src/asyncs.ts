@@ -42,9 +42,9 @@ export interface ThenableBox {
   status: ThenableStatus;
   value: unknown;
   reason: unknown;
-  /** Canonical computeds whose latest evaluation parked on this thenable. */
+  /** Computeds whose latest base-state evaluation parked on this thenable. */
   parkedNodes: Set<DerivedNode<unknown>>;
-  /** Suspensions (canonical or per-world) waiting on this thenable. */
+  /** Suspensions (base-state or per-world) waiting on this thenable. */
   parkedSuspensions: Set<Suspension>;
 }
 
@@ -79,8 +79,8 @@ export function isErrorBox(v: unknown): v is ErrorBox {
 }
 
 /**
- * The uniform read protocol for a resolved value — one shape for canonical
- * nodes (cells and deriveds ARE this shape; resolving a canonical world
+ * The uniform read protocol for a resolved value — one shape for the graph's
+ * own nodes (cells and deriveds ARE this shape; resolving the base world
  * allocates nothing) and per-world memo records:
  *
  * - flags: read via the async bits ONLY (`flags & Flag.AsyncMask`); node-backed
@@ -103,9 +103,9 @@ export interface DerivedState {
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>();
 
 /** Installed by worlds.ts: settlement also invalidates world memos. */
-let onSettlementEpoch: (() => void) | null = null;
-export function setOnSettlementEpoch(fn: () => void): void {
-  onSettlementEpoch = fn;
+let onSettlement: (() => void) | null = null;
+export function setOnSettlement(fn: () => void): void {
+  onSettlement = fn;
 }
 
 export function makeSuspension(): Suspension {
@@ -156,7 +156,7 @@ export function trackThenable(t: PromiseLike<unknown>): ThenableBox {
  * renders retry against the settled graph. */
 function settle(box: ThenableBox): void {
   const cause = traceHook !== null ? traceHook('settle', null, NO_EVENT) : NO_EVENT;
-  onSettlementEpoch?.();
+  onSettlement?.();
   const nodes = [...box.parkedNodes];
   box.parkedNodes.clear();
   const suspensions = [...box.parkedSuspensions];
@@ -180,8 +180,8 @@ function settle(box: ThenableBox): void {
   }
 }
 
-/** use(t) inside a canonical evaluation. */
-function canonicalUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
+/** use(t) inside a base-state evaluation. */
+function baseUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
   const box = trackThenable(t);
   if (box.status === 'fulfilled') return box.value;
   if (box.status === 'rejected') throw box.reason;
@@ -205,7 +205,7 @@ function finishCompute(
 ): boolean {
   const flags = node.flags;
   if (outcome.parked) {
-    // canonicalUse installed the suspended state. Advance the version so
+    // baseUse installed the suspended state. Advance the version so
     // downstream readers re-pull and park on the (possibly fresh) suspension.
     return true;
   }
@@ -230,5 +230,5 @@ function finishCompute(
   return (flags & Flag.AsyncMask) !== 0;
 }
 
-setUseImpl(canonicalUse as never);
+setUseImpl(baseUse as never);
 setFinishComputeImpl(finishCompute as never);

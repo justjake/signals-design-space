@@ -198,12 +198,12 @@ describe('scenarios 3 + 13 — urgent-during-transition rebases by replay', () =
 });
 
 describe('the latest() context rule', () => {
-  // With a transition draft held over canonical state, each context must
+  // With a transition draft held over base state, each context must
   // resolve its OWN world: the transition's render sees the draft, an
-  // urgent render body does not, a canonical computed evaluation resolves
-  // canonical (and stays live — the read is tracked), and ambient code sees
+  // urgent render body does not, a base-state computed evaluation resolves
+  // base state (and stays live — the read is tracked), and ambient code sees
   // newest intent. Reading ahead of your world is a tear.
-  test('urgent bodies, canonical computeds, the transition render, and ambient code', async () => {
+  test('urgent bodies, base-state computeds, the transition render, and ambient code', async () => {
     const a = signal(1);
     const b = signal(0); // unrelated urgent driver
     const hold = signal(false);
@@ -248,8 +248,8 @@ describe('the latest() context rule', () => {
     });
     expect(text(container)).toBe('u:0;t:1;'); // held: committed DOM unchanged
     expect(latest(a)).toBe(2); // ambient: newest intent
-    expect(read(a)).toBe(1); // canonical read: drafts hidden
-    expect(read(viaComputed)).toBe(100); // canonical computed evaluation: canonical
+    expect(read(a)).toBe(1); // base-state read: drafts hidden
+    expect(read(viaComputed)).toBe(100); // base-state computed evaluation: base state
     const draftPasses = samples.filter((s) => s.v === 2);
     expect(draftPasses.length).toBeGreaterThan(0);
     expect(draftPasses.every((s) => s.l === 2)).toBe(true); // the transition's render sees its draft
@@ -398,7 +398,7 @@ describe('scenario 7 — one transition across two roots', () => {
     expect(text(two.container)).toBe('r:1;'); // committed there
     expect(committed(a, one.container)).toBe(0);
     expect(committed(a, two.container)).toBe(1);
-    expect(read(a)).toBe(0); // canonical folds only when every root commits
+    expect(read(a)).toBe(0); // base state folds only when every root commits
     await act(async () => {
       gate.resolve();
       await gate.promise;
@@ -410,7 +410,7 @@ describe('scenario 7 — one transition across two roots', () => {
 });
 
 describe('silent folds must repair subscribers the render-pass worlds never reached', () => {
-  // A retirement is silent (no store-epoch bump) because render-pass worlds
+  // A retirement is silent (no storeVersion bump) because render-pass worlds
   // already delivered the draft's values to every subscriber. That premise
   // only holds for subscribers whose root carried the draft. The shape below
   // never carried it, so the fold is its ONLY delivery channel — it must
