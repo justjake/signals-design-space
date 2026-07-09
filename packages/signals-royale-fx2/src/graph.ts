@@ -27,14 +27,34 @@ export type WriteEpoch = number;
 export type NodeVersion = number;
 export type TraceEventId = number;
 
-/** Node staleness. Kept as erasable-syntax consts (a const object, not a
- * const enum) so the TS source runs directly under node's type stripping. */
-export type Flags = 0 | 1 | 2;
+/**
+ * Per-node flags word — the full bit layout:
+ *
+ *   0b0000_0001  Cell     node type: writable source
+ *   0b0000_0010  Derived  node type: cached computed
+ *   0b0000_0100  Watcher  node type: effect or leaf observer
+ *   0b0000_1000  Check    staleness: possibly stale; confirm dependency
+ *                         versions before recomputing
+ *   0b0001_0000  Dirty    staleness: must recompute on next pull
+ *   0b0010_0000+          reserved for the watched/unwatched tier bits
+ *
+ * Exactly one type bit is set at creation and never changes. Check and
+ * Dirty form an exclusive staleness field: at most one is set, and both
+ * clear is the Clean state — staleness writes clear the whole field before
+ * setting, so a single-bit test reads the exact state. Kept as
+ * erasable-syntax consts (a const object, not a const enum) so the TS
+ * source runs directly under node's type stripping.
+ */
+export type Flags = number;
 export const Flags = {
-  Clean: 0,
-  Check: 1,
-  Dirty: 2,
+  Cell: 0b0000_0001,
+  Derived: 0b0000_0010,
+  Watcher: 0b0000_0100,
+  Check: 0b0000_1000,
+  Dirty: 0b0001_0000,
 } as const satisfies Record<string, Flags>;
+/** Both staleness bits; (flags & STALE_MASK) === 0 is the Clean state. */
+const STALE_MASK: Flags = Flags.Check | Flags.Dirty;
 
 export interface Link {
   dep: ReactiveNode;
@@ -51,7 +71,6 @@ export interface Link {
 }
 
 export interface ReactiveNode {
-  kind: 'cell' | 'derived' | 'watcher';
   flags: Flags;
   version: NodeVersion;
   /** Subscriber list (watched edges + leaf observers). */
@@ -139,7 +158,6 @@ export function setCurrentCause(id: TraceEventId): TraceEventId {
 const UNINITIALIZED = Symbol('uninitialized');
 
 export interface CellNode<T> extends ReactiveNode {
-  kind: 'cell';
   value: T | typeof UNINITIALIZED;
   initializer: (() => T) | undefined;
   equals: EqualsFn<T>;
@@ -150,7 +168,6 @@ export interface CellNode<T> extends ReactiveNode {
 }
 
 export interface DerivedNode<T> extends ReactiveNode {
-  kind: 'derived';
   value: T | typeof UNINITIALIZED;
   fn: (use: UseFn) => T;
   equals: EqualsFn<T>;
@@ -162,7 +179,6 @@ export interface DerivedNode<T> extends ReactiveNode {
 }
 
 export interface WatcherNode extends ReactiveNode {
-  kind: 'watcher';
   fn: (() => void | (() => void)) | undefined;
   cleanup: (() => void) | undefined;
   scheduled: boolean;
@@ -193,8 +209,7 @@ export function makeCell<T>(
 ): CellNode<T> {
   const lazyInit = typeof initial === 'function' && opts?.lazy !== false;
   return {
-    kind: 'cell',
-    flags: Flags.Clean,
+    flags: Flags.Cell,
     version: 1,
     subs: undefined,
     subsTail: undefined,
@@ -222,8 +237,7 @@ export function makeDerived<T>(
   opts?: { equals?: EqualsFn<T>; label?: string },
 ): DerivedNode<T> {
   return {
-    kind: 'derived',
-    flags: Flags.Dirty,
+    flags: Flags.Derived | Flags.Dirty,
     version: 0,
     subs: undefined,
     subsTail: undefined,
@@ -276,7 +290,7 @@ function unlinkFromSubs(link: Link): void {
 export function addObserver(node: ReactiveNode): void {
   node.observerCount++;
   if (node.observerCount === 1) {
-    if (node.kind === 'derived') {
+    if ((node.flags & Flags.Derived) !== 0) {
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         linkIntoSubs(l);
         addObserver(l.dep);
@@ -289,14 +303,14 @@ export function addObserver(node: ReactiveNode): void {
 export function removeObserver(node: ReactiveNode): void {
   node.observerCount--;
   if (node.observerCount === 0) {
-    if (node.kind === 'derived') {
+    if ((node.flags & Flags.Derived) !== 0) {
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         unlinkFromSubs(l);
         removeObserver(l.dep);
       }
       // An unwatched cache can no longer trust push marks; force lazy
       // revalidation on the next read.
-      if (node.flags === Flags.Clean) node.flags = Flags.Check;
+      if ((node.flags & STALE_MASK) === 0) node.flags |= Flags.Check;
       node.validatedEpoch = 0;
     }
     hooks.observation?.(node, false);
@@ -326,7 +340,8 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
   if (tail === undefined) sub.deps = link;
   else tail.nextDep = link;
   sub.depsTail = link;
-  const watched = sub.kind === 'watcher' ? !(sub as WatcherNode).disposed : sub.observerCount > 0;
+  const watched =
+    (sub.flags & Flags.Watcher) !== 0 ? !(sub as WatcherNode).disposed : sub.observerCount > 0;
   if (watched) {
     linkIntoSubs(link);
     addObserver(dep);
@@ -385,19 +400,19 @@ export function bumpReactEpoch(node: ReactiveNode): void {
  * revert inside a batch a true no-op.
  */
 function mark(node: ReactiveNode, cause: TraceEventId): void {
-  if (node.flags !== Flags.Clean) {
-    if (node.kind === 'watcher' && !(node as WatcherNode).scheduled) {
+  if ((node.flags & STALE_MASK) !== 0) {
+    if ((node.flags & Flags.Watcher) !== 0 && !(node as WatcherNode).scheduled) {
       scheduleWatcher(node as WatcherNode);
     }
     return;
   }
-  node.flags = Flags.Check;
+  node.flags |= Flags.Check;
   node.causeEvent = cause;
-  if (node.kind === 'watcher') {
+  if ((node.flags & Flags.Watcher) !== 0) {
     scheduleWatcher(node as WatcherNode);
     return;
   }
-  if (node.kind === 'derived') {
+  if ((node.flags & Flags.Derived) !== 0) {
     node.canonicalEpoch++;
     if (!reactEpochSuppressed) node.reactEpoch++;
     for (let l = node.subs; l !== undefined; l = l.nextSub) {
@@ -431,7 +446,7 @@ export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): voi
  */
 export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventId): void {
   writeEpoch++;
-  node.flags = Flags.Dirty;
+  node.flags = (node.flags & ~STALE_MASK) | Flags.Dirty;
   node.causeEvent = cause;
   node.version++;
   node.reactEpoch++;
@@ -454,12 +469,12 @@ export function pokeLeafObservers(node: ReactiveNode): void {
   const walk = (n: ReactiveNode): void => {
     for (let l = n.subs; l !== undefined; l = l.nextSub) {
       const sub = l.sub;
-      if (sub.kind === 'watcher') {
+      if ((sub.flags & Flags.Watcher) !== 0) {
         if ((sub as WatcherNode).onNotify !== undefined) {
           scheduleWatcher(sub as WatcherNode);
-          sub.flags = Flags.Dirty;
+          sub.flags = (sub.flags & ~STALE_MASK) | Flags.Dirty;
         }
-      } else if (sub.kind === 'derived') {
+      } else if ((sub.flags & Flags.Derived) !== 0) {
         seen ??= new Set();
         if (!seen.has(sub)) {
           seen.add(sub);
@@ -487,14 +502,14 @@ export function pokeAndWakeLeafObservers(node: ReactiveNode, id: number): void {
   const walk = (n: ReactiveNode): void => {
     for (let l = n.subs; l !== undefined; l = l.nextSub) {
       const sub = l.sub;
-      if (sub.kind === 'watcher') {
+      if ((sub.flags & Flags.Watcher) !== 0) {
         const leaf = sub as WatcherNode;
         if (leaf.onNotify !== undefined) {
           scheduleWatcher(leaf);
-          leaf.flags = Flags.Dirty;
+          leaf.flags = (leaf.flags & ~STALE_MASK) | Flags.Dirty;
         }
         if (!leaf.disposed && leaf.onDraftWake !== undefined) wakes.push(leaf);
-      } else if (sub.kind === 'derived') {
+      } else if ((sub.flags & Flags.Derived) !== 0) {
         seen ??= new Set();
         if (!seen.has(sub)) {
           seen.add(sub);
@@ -528,7 +543,7 @@ export function adoptDepLink(dep: ReactiveNode, sub: ReactiveNode): void {
   };
   sub.deps = link;
   if (sub.depsTail === undefined) sub.depsTail = link;
-  if (sub.observerCount > 0 || (sub.kind === 'watcher' && !(sub as WatcherNode).disposed)) {
+  if (sub.observerCount > 0 || ((sub.flags & Flags.Watcher) !== 0 && !(sub as WatcherNode).disposed)) {
     linkIntoSubs(link);
     addObserver(dep);
   }
@@ -585,7 +600,7 @@ export function flush(): void {
       if (++guard > 100000) throw new Error('effect flush did not settle (cycle?)');
       const w = watcherQueue[queueHead++];
       w.scheduled = false;
-      if (w.disposed || w.flags === Flags.Clean) continue;
+      if (w.disposed || (w.flags & STALE_MASK) === 0) continue;
       runWatcher(w);
     }
     watcherQueue.length = 0;
@@ -594,7 +609,7 @@ export function flush(): void {
     for (let i = queueHead; i < watcherQueue.length; i++) {
       const w = watcherQueue[i];
       w.scheduled = false;
-      w.flags = Flags.Clean;
+      w.flags &= ~STALE_MASK;
     }
     watcherQueue.length = 0;
     queueHead = 0;
@@ -606,7 +621,7 @@ export function flush(): void {
       for (const leaf of leaves) {
         const w = leaf as WatcherNode;
         w.scheduled = false;
-        w.flags = Flags.Clean;
+        w.flags &= ~STALE_MASK;
       }
       hooks.afterPropagate?.(leaves);
       for (const leaf of leaves) {
@@ -737,7 +752,7 @@ function recompute(node: DerivedNode<unknown>): void {
   if (changed) node.version++;
   // A computed whose evaluation wrote state is self-affecting: its inputs
   // moved under it, so it never caches — every read re-evaluates.
-  node.flags = writeEpoch !== preEpoch ? Flags.Dirty : Flags.Clean;
+  node.flags = (node.flags & ~STALE_MASK) | (writeEpoch !== preEpoch ? Flags.Dirty : 0);
   node.validatedEpoch = preEpoch;
 }
 
@@ -745,11 +760,11 @@ function recompute(node: DerivedNode<unknown>): void {
 export function ensureFresh(node: DerivedNode<unknown>): void {
   if (node.observerCount > 0) {
     // Watched: push marks are trustworthy.
-    if (node.flags === Flags.Clean) return;
-  } else if (node.flags === Flags.Clean && node.validatedEpoch === writeEpoch) {
+    if ((node.flags & STALE_MASK) === 0) return;
+  } else if ((node.flags & STALE_MASK) === 0 && node.validatedEpoch === writeEpoch) {
     return;
   }
-  if (node.flags === Flags.Dirty || node.value === UNINITIALIZED) {
+  if ((node.flags & Flags.Dirty) !== 0 || node.value === UNINITIALIZED) {
     recompute(node);
     return;
   }
@@ -757,13 +772,13 @@ export function ensureFresh(node: DerivedNode<unknown>): void {
   // in first-read order, recomputing only if some version truly advanced.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
     const dep = l.dep;
-    if (dep.kind === 'derived') ensureFresh(dep as DerivedNode<unknown>);
+    if ((dep.flags & Flags.Derived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
     if (l.version !== dep.version) {
       recompute(node);
       return;
     }
   }
-  node.flags = Flags.Clean;
+  node.flags &= ~STALE_MASK;
   node.validatedEpoch = writeEpoch;
 }
 
@@ -802,8 +817,7 @@ export { UNINITIALIZED };
 
 function makeWatcher(fn: (() => void | (() => void)) | undefined): WatcherNode {
   return {
-    kind: 'watcher',
-    flags: Flags.Clean,
+    flags: Flags.Watcher,
     version: 0,
     subs: undefined,
     subsTail: undefined,
@@ -832,11 +846,11 @@ function runWatcher(w: WatcherNode): void {
   // Validate: a Check-marked watcher whose derived deps cut off must not
   // re-run its body. Validation can itself run user code (computed fns) that
   // disposes this very watcher — re-check after every pull.
-  if (w.flags === Flags.Check) {
+  if ((w.flags & Flags.Check) !== 0) {
     let changed = false;
     for (let l = w.deps; l !== undefined; l = l.nextDep) {
       const dep = l.dep;
-      if (dep.kind === 'derived') ensureFresh(dep as DerivedNode<unknown>);
+      if ((dep.flags & Flags.Derived) !== 0) ensureFresh(dep as DerivedNode<unknown>);
       if (w.disposed) return;
       if (l.version !== dep.version) {
         changed = true;
@@ -844,11 +858,11 @@ function runWatcher(w: WatcherNode): void {
       }
     }
     if (!changed) {
-      w.flags = Flags.Clean;
+      w.flags &= ~STALE_MASK;
       return;
     }
   }
-  w.flags = Flags.Clean;
+  w.flags &= ~STALE_MASK;
   executeWatcher(w);
 }
 
@@ -991,8 +1005,8 @@ export function observeNode(
   const prevConsumer = activeConsumer;
   activeConsumer = leaf;
   try {
-    if (node.kind === 'cell') readCell(node as CellNode<unknown>);
-    else if (node.kind === 'derived') {
+    if ((node.flags & Flags.Cell) !== 0) readCell(node as CellNode<unknown>);
+    else if ((node.flags & Flags.Derived) !== 0) {
       // Subscribe to invalidation only; do not force evaluation here.
       const link = trackRead(node, leaf);
       link.version = node.version;

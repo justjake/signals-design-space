@@ -12,6 +12,7 @@
 import {
   type CellNode,
   type ReactiveNode,
+  Flags,
   hooks,
   peekCell,
   untracked,
@@ -26,7 +27,7 @@ const pending = new Set<CellNode<unknown>>();
 let scheduled = false;
 
 function onObservation(node: ReactiveNode, _on: boolean): void {
-  if (node.kind !== 'cell') return;
+  if ((node.flags & Flags.Cell) === 0) return;
   const cell = node as CellNode<unknown>;
   if (cell.lifetime === undefined) return;
   pending.add(cell);

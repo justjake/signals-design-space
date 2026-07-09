@@ -18,6 +18,7 @@ import {
   type ReactiveNode,
   type UseFn,
   type WatcherNode,
+  Flags,
   getActiveConsumer,
   hooks,
   isUninitialized,
@@ -165,13 +166,13 @@ function readValue(x: AnyReadable): unknown {
     // Inside a draft evaluation every read resolves that world.
     return unwrapForEval(resolveEnvelope(node, world), getCurrentPark()!);
   }
-  if (node.kind === 'cell') return readCell(node as CellNode<unknown>);
+  if ((node.flags & Flags.Cell) !== 0) return readCell(node as CellNode<unknown>);
   const value = readDerived(node as DerivedNode<unknown>);
   const st = asyncStateOf(node as DerivedNode<unknown>);
   if (st !== null) {
     if (st.kind === 'error') throw st.box.error;
     const consumer = getActiveConsumer();
-    if (consumer !== null && consumer.kind === 'derived') {
+    if (consumer !== null && (consumer.flags & Flags.Derived) !== 0) {
       // Pending forwards: park the evaluating computed on this suspension.
       useImpl(st.suspension.promise, consumer as DerivedNode<unknown>);
     }
@@ -196,7 +197,7 @@ export function latest<T>(x: Readable<T>): T {
       // a later change to x re-runs the consumer rather than leaving it
       // permanently stale.
       world = CANONICAL_WORLD;
-      if (node.kind === 'cell') readCell(node as CellNode<unknown>);
+      if ((node.flags & Flags.Cell) !== 0) readCell(node as CellNode<unknown>);
       else readDerived(node as DerivedNode<unknown>);
     } else {
       world = renderWorld() ?? latestWorld();
@@ -224,8 +225,8 @@ export function isPending(x: AnyReadable): boolean {
 }
 
 function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
-  if (node.kind === 'cell') return cellHasDraftIntents(node as CellNode<unknown>);
-  if (node.kind !== 'derived') return false;
+  if ((node.flags & Flags.Cell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
+  if ((node.flags & Flags.Derived) === 0) return false;
   const st = asyncStateOf(node as DerivedNode<unknown>);
   if (st !== null && st.kind === 'pending') return true;
   if (world !== null && world.drafts.length > 0) {
@@ -234,7 +235,7 @@ function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
   }
   // A drafted input means this computed has newer data pending too.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
-    if (l.dep.kind === 'cell' && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
+    if ((l.dep.flags & Flags.Cell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
   }
   return false;
 }
@@ -248,7 +249,7 @@ const bumpNonce = (n: unknown): unknown => (n as number) + 1;
  * world next evaluates, and the result commits with it. */
 export function refresh(x: AnyReadable): void {
   const node = nodeOf(x);
-  if (node.kind !== 'derived') {
+  if ((node.flags & Flags.Derived) === 0) {
     throw new TypeError('refresh(x) expects a computed; signals have nothing to refetch');
   }
   const nonce = ensureRefreshNonce(node as DerivedNode<unknown>) as CellNode<unknown>;

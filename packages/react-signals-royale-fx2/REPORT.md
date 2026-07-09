@@ -566,3 +566,28 @@ Gates fresh this session: engine `tsc` clean + 224 passed; oracle fuzz 1200
 seeds × 90 steps green; react `tsc` clean + 41 passed (38 + the burst
 regression + 2 append guards); battery 24 passed / 1 failed (scenario 16,
 exempt).
+
+## 13. Node type moved into the flags word (refactor-parity)
+
+Preparation for the two-tier watched/unwatched graph rebuild, which needs
+more flag bits than a scalar staleness enum leaves room for:
+
+- `Flags` is now a bitmask word with explicit binary literals and the full
+  layout documented at the definition (`graph.ts`): type bits
+  `Cell`/`Derived`/`Watcher` (`0b1`/`0b10`/`0b100`), staleness bits
+  `Check`/`Dirty` (`0b1000`/`0b1_0000`), `0b10_0000` and up reserved for
+  the tier bits.
+- The `kind` string discriminant is deleted from node records; every node
+  kind check in both packages is a bit test with an explicit cast at the
+  test site (alien-signals style). The react package needed no changes —
+  its `.kind` reads are Envelope fields, a different record.
+- The staleness machine is unchanged: Check and Dirty stay exclusive,
+  both-clear is Clean, and staleness writes clear the field before setting,
+  so single-bit tests read exact states.
+
+No behavior change expected, none observed; the gates are the evidence.
+Gates fresh this session: engine `tsc` clean + 224 passed; deep oracle
+`oracle fuzz (1200 seeds x 90 steps) > engine matches the naive model on
+every seed` green; react `tsc` clean + 41 passed; battery 24 passed / 1
+failed (scenario 16, exempt). Residue grep for `'cell'|'derived'|'watcher'`
+string literals over both `src/` trees: zero hits.

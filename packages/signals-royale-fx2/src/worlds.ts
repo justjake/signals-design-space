@@ -31,6 +31,7 @@ import {
   type DerivedNode,
   type ReactiveNode,
   type TraceEventId,
+  Flags,
   NO_EVENT,
   bumpReactEpoch,
   currentWriteEpoch,
@@ -307,7 +308,7 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
   const collect = (n: ReactiveNode): void => {
     if (visited.has(n)) return;
     visited.add(n);
-    if (n.kind === 'cell') {
+    if ((n.flags & Flags.Cell) !== 0) {
       sources.add(n as CellNode<unknown>);
       return;
     }
@@ -474,7 +475,7 @@ function reconcileEnvelopes(node: ReactiveNode, prev: Envelope | undefined, next
 export function resolveEnvelope(node: ReactiveNode, world: World): Envelope {
   if (world.drafts.length === 0) {
     return untracked(() => {
-      if (node.kind === 'cell') {
+      if ((node.flags & Flags.Cell) !== 0) {
         return { kind: 'value', value: peekCell(node as CellNode<unknown>) } as Envelope;
       }
       ensureFresh(node as DerivedNode<unknown>);
@@ -490,7 +491,7 @@ export function resolveEnvelope(node: ReactiveNode, world: World): Envelope {
     return memo.env;
   }
   const fresh: Envelope =
-    node.kind === 'cell'
+    (node.flags & Flags.Cell) !== 0
       ? { kind: 'value', value: replayLog(node as CellNode<unknown>, world) }
       : draftEvaluate(node as DerivedNode<unknown>, world, memo?.env);
   const env = reconcileEnvelopes(node, memo?.env, fresh);
