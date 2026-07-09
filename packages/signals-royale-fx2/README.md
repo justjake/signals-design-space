@@ -5,7 +5,7 @@ rendering. It is two layers:
 
 - a conventional signal graph — writable signals, lazy cached computeds,
   effects, batching — with exact recompute counts and equality cutoff;
-- a small concurrency overlay — WORLDS — that lets speculative writes (React
+- a small concurrency overlay — WORLDS — that lets drafted writes (React
   transitions) stay invisible to committed readers until they land, while
   every reader still sees an internally consistent snapshot.
 
@@ -72,7 +72,7 @@ When a draft RETIRES (its transition committed everywhere), the full replay
 folds into committed state through the ordinary write path — effects run,
 equality applies — and renders still holding the draft's id resolve the same
 values, so retirement is invisible to them. A discarded draft rolls back:
-speculative readers are re-notified and re-resolve without it. When the last
+draft readers are re-notified and re-resolve without it. When the last
 draft dies, every per-draft structure is dropped; a quiescent engine holds
 nothing extra.
 
@@ -244,11 +244,13 @@ a pass that did not refresh it (an urgent pass over an untouched subtree,
 another root's render, an interleaved flush) falls back to CANONICAL rather
 than consuming a stale world or leaking live drafts into an urgent frame.
 
-Roots without a `SignalScope` still work, in a degraded mode: their
-components only ever see committed state (no transition previews), and when
-a transition commits elsewhere the fold itself re-renders them — hooks
-outside any scope subscribe to a canonical change counter that folds always
-advance, so they converge instead of holding a transition or going stale.
+Every scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,
+`useCommitted`) requires a `SignalScope` above it and throws without one:
+the scope is the world carrier, and a subscriber outside any scope would
+have no channel for transition worlds at all. Create roots with
+`wrapCreateRoot(createRoot)` (the packaged wrapper installs the scope per
+root) or wrap the tree in `<SignalScope>` yourself. Plain function reads
+(`latest`, `committed`, `isPending`) work anywhere, scope or not.
 
 ## Out of scope: DOM-mutation attribution
 

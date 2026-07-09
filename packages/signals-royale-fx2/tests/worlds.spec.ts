@@ -84,30 +84,22 @@ describe('draft visibility', () => {
     expect(read(a)).toBe(5);
   });
 
-  test('a silent fold keeps the react epoch still but advances the canonical epoch', () => {
+  test('a silent fold keeps the store epoch still; a loud fold bumps it', () => {
+    // Fold loudness is the whole storeEpoch contract: silent folds carry
+    // values that render-pass worlds already delivered to every subscriber,
+    // so the snapshot must not move (no repair-render storm at transition
+    // commit); loud folds are for drafts nothing rendered, so subscribers
+    // must re-render.
     const a = signal(1);
-    // A bail-style subscriber outside any scope: re-reads only when its
-    // snapshot changes (the useSyncExternalStore contract). Its snapshot is
-    // the canonical epoch — render-pass worlds never deliver to it, so the
-    // fold must be visible on its channel.
-    let snap = nodeOf(a).canonicalEpoch;
-    let view = read(a);
-    const unsub = observeNode(nodeOf(a), () => {
-      const s = nodeOf(a).canonicalEpoch;
-      if (s === snap) return;
-      snap = s;
-      view = read(a);
-    });
-    const reactSnapBefore = nodeOf(a).reactEpoch;
-    const id = inDraft(() => a.set(9));
-    expect(view).toBe(1); // drafts stay invisible to canonical subscribers
-    retireDraft(id, { silent: true });
-    expect(read(a)).toBe(9);
-    expect(view).toBe(9); // the fold reached the canonical channel
-    // The world-delivered channel stayed silent: scoped subscribers, whose
-    // render passes already carried the draft, schedule no repair renders.
-    expect(nodeOf(a).reactEpoch).toBe(reactSnapBefore);
-    unsub();
+    const silentId = inDraft(() => a.set(9));
+    const before = nodeOf(a).storeEpoch;
+    retireDraft(silentId, { silent: true });
+    expect(read(a)).toBe(9); // the fold landed canonically
+    expect(nodeOf(a).storeEpoch).toBe(before); // and the snapshot stayed still
+    const loudId = inDraft(() => a.set(11));
+    retireDraft(loudId);
+    expect(read(a)).toBe(11);
+    expect(nodeOf(a).storeEpoch).toBeGreaterThan(before); // loud: re-render due
   });
 });
 
@@ -130,6 +122,27 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     expect(stateIn(a, [id])).toEqual(valueState(6)); // (1+2)*2
     retireDraft(id);
     expect(read(a)).toBe(6);
+  });
+
+  test('[falsify-first, oracle catch seed 5] an urgent equality-cutoff write on a drafted cell re-wakes the draft audience', () => {
+    // An urgent intent on a drafted cell rebases the pending worlds even
+    // when the canonical write cuts off on equality: base…+1 is 6, but
+    // base…+1…set(5) is 5. No wave runs (canonical never moved), so without
+    // an explicit poke-and-wake the draft's audience keeps the pre-rebase
+    // value and the transition would commit it.
+    const a = signal(5);
+    const d = openDraft();
+    const wakes: number[] = [];
+    const unsub = observeNode(nodeOf(a), () => {}, (id) => wakes.push(id));
+    runInDraft(d, () => a.update((x) => x + 1));
+    expect(wakes).toEqual([d.id]);
+    expect(stateIn(a, [d.id])).toEqual(valueState(6));
+    a.set(5); // equality cutoff: canonical stays 5, no propagation
+    expect(stateIn(a, [d.id])).toEqual(valueState(5)); // ...but the replay rebased
+    expect(wakes).toEqual([d.id, d.id]); // and the audience heard about it
+    retireDraft(d.id, { silent: true });
+    expect(read(a)).toBe(5);
+    unsub();
   });
 
   test('two drafts interleaved with urgent writes replay in dispatch order', () => {
@@ -191,10 +204,10 @@ describe('computeds across worlds', () => {
     expect(read(c)).toBe(18);
   });
 
-  test('a draft append notifies leaf observers of computeds over the cell', () => {
+  test('a draft append notifies subscribers of computeds over the cell', () => {
     // Pending probes subscribe to the node they probe, not to its inputs.
     // Draft activity on an input must therefore travel the watched edges
-    // down to leaf observers, or a probe over a computed never wakes up —
+    // down to the subscribers, or a probe over a computed never wakes up —
     // its snapshot would flip (the deps scan sees the drafted cell) but
     // nothing tells it to look.
     const a = signal(1);

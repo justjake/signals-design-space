@@ -557,7 +557,7 @@ ms/2e5 (parity). `bench/react-bench.mjs` in line with the numbers recorded in RE
 
 ## 10. Risks
 
-1. Promote-time wake delivery is a behavior change for bare `observeNode`
+1. Promote-time wake delivery is a behavior change for plain `observeNode`
    subscribers (one wake when subscribing to a stale node). React bindings
    tolerate it (epoch-unchanged snapshot compare), but battery and
    host-guarantees must confirm no commit-report ordering diffs.
@@ -604,7 +604,7 @@ interface DerivedState {
   canonical cell wrapper allocation. The slot stores the Suspension RECORD,
   not its promise: the engine needs `.settled` for the identity-reuse rule
   and `.resolve` at settlement; the promise is what gets thrown. It stores
-  the ErrorBox, not the bare error: box identity is the
+  the ErrorBox, not the error alone: box identity is the
   rethrow-same-reference contract, and `sameError` reuse plus memo
   reconciliation compare through it.
 - `node.asyncState` is deleted. Park/settle/error transitions
@@ -659,10 +659,12 @@ capacity from zero (O(log n) reallocations, garbage proportional to peak
 wave width), and the leaf drain's splice snapshot added one array per wave.
 As built:
 
-- `watcherQueue` clears by logical length (`watcherCount`); the `queueHead`
-  drain cursor and the `w.disposed` drain-time tombstone are unchanged
+- `effectQueue` (was `watcherQueue`) clears by logical length (`effectCount`);
+  the `queueHead` drain cursor and the drain-time disposed tombstone
+  (Watched clear, since the walk-modernization round) are unchanged
   (append-then-fully-drain, no mid-queue removal, no compaction).
-- `markedLeaves` is double-buffered: a wave iterates its own buffer while
+- `renderNotifyQueue` (was `markedLeaves`) is double-buffered: a wave
+  iterates its own buffer while
   re-marks from `onNotify` land in the spare, preserving the snapshot rule
   (a wave's iteration never sees entries added during delivery). A
   doubly-nested delivery finds the spare checked out and takes a fresh
@@ -679,3 +681,43 @@ As built:
 Measured (bench/queue-probe.mts, 2000 subscribers x 50 waves, per-wave
 heapUsed delta after forced GC): leaf-notify burst 244,280 -> 256 B/wave
 median; effect burst 68,056 -> 256 B/wave median.
+
+## 13. Walk modernization (as built, later round)
+
+A later round reorganized the flags word and unified the walks; this
+document's sections above describe the code at landing time. The mapping:
+
+- Flag renames: `Cell`→`KindCell`, `Derived`→`KindDerived`,
+  `Watcher`→`Watching` (alien's name), `Check`→`StaleCheck`,
+  `Dirty`→`StaleDirty`, `DerivedError`→`AsyncError`,
+  `DerivedSuspended`→`AsyncSuspended`.
+- New capability bits route dispatch (never callback presence):
+  `WatchRender` (render-notify queue), `WatchRunEffect` (validated effect
+  queue), `WatchDraft` (draft pings/wakes). Component subscription =
+  `Watching|WatchRender|WatchDraft`; engine effect = `Watching|WatchRunEffect`;
+  scope anchor = `Watching` alone. The `scheduled`/`computing` bools became
+  the `Scheduled`/`Computing` bits; the `disposed` bool is gone — watcher
+  disposal is `Watching` set with `Watched` clear.
+- `pokeLeafObservers`/`pokeAndWakeLeafObservers` became ONE iterative
+  `pokeDraftWatchers(node, cause, wake?)` sharing the wave's cursor +
+  frame-stack skeleton, deduped by a per-node poke stamp against a
+  monotonic per-walk serial (no allocation, no clearing — the EvalStamp
+  discipline). Poked watchers are marked `StaleCheck` for parity with the
+  wave; the choice is arbitrary because render-notify watchers are never
+  validated (flush clears staleness unconditionally before delivery). The
+  walk threads `causeEvent` like the wave.
+- `reactEpoch` is now `storeEpoch` — THE useSyncExternalStore snapshot;
+  bump = subscribers re-render. The `canonicalEpoch` companion is deleted
+  with the unscoped hook mode: every scope-consuming hook now requires a
+  SignalScope and throws without one, so the silent-fold delivery channel
+  is always the render-pass world. Settlement and discard bump through one
+  helper (`bumpStoreEpochLoud`) that bypasses suppression: suppression
+  exists only for silent draft folds, and those two carry information no
+  render pass has shown.
+- graph.ts carries a contract-matrix comment over the colocated walks
+  (propagateWave, pokeDraftWatchers, propagateFrom, invalidateDerived):
+  rows = walks, columns = marks staleness / bumps storeEpoch / schedules
+  effects / schedules render subscribers / dedup mechanism.
+- worlds.ts intents lost their write-only `seq` field (`OpSeq` died with
+  it): the intent array IS dispatch order; retirement flips visibility,
+  never position.

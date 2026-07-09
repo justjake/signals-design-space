@@ -3,7 +3,7 @@
  *
  * Measures what one invalidation wave allocates when a single cell fans out
  * to many subscribers, for the two scheduling queues separately:
- * - leaf-notify burst: subscribers are leaf observers (onNotify), so every
+ * - render-notify burst: subscribers are store subscriptions (onNotify), so every
  *   wave fills and drains the marked-leaves buffer;
  * - effect burst: subscribers are effects, so every wave fills and drains
  *   the watcher queue.
@@ -49,7 +49,7 @@ function measure(label: string, setup: () => (i: number) => void): void {
   );
 }
 
-measure('leaf-notify burst', () => {
+measure('render-notify burst', () => {
   const cell = signal(0);
   let hits = 0;
   for (let s = 0; s < SUBS; s++) held.push(observeNode(nodeOf(cell), () => void hits++));

@@ -87,7 +87,7 @@ describe('tear: the render-world note is validity-gated', () => {
     expect(text(container)).toBe('h:2;p:1;');
   });
 
-  test('two roots back-to-back: a bare second root resolves canonical', async () => {
+  test('two roots back-to-back: a hook-free second root resolves canonical', async () => {
     const { Holder, a, start, release } = makeHeld();
     await h.mount(
       <React.Suspense fallback={null}>
@@ -95,21 +95,22 @@ describe('tear: the render-world note is validity-gated', () => {
       </React.Suspense>,
     );
     await start();
-    // A bare root (no SignalScope, zero hooks) rendered right after the
-    // transition pass: no pass of this root ever refreshed any note.
+    // A plain root (no SignalScope, zero hooks — plain latest() calls are
+    // legal anywhere) rendered right after the transition pass: no pass of
+    // this root ever refreshed any note.
     const sampled: number[] = [];
-    function Bare() {
+    function Plain() {
       sampled.push(latest(a));
-      return <i>bare</i>;
+      return <i>plain</i>;
     }
     const div = document.body.appendChild(document.createElement('div'));
-    const bare = createRoot(div);
+    const plainRoot = createRoot(div);
     await act(() => {
-      bare.render(<Bare />);
+      plainRoot.render(<Plain />);
     });
     expect(sampled).toEqual([1]); // canonical fallback, not the scoped draft
     await release();
-    await act(() => bare.unmount());
+    await act(() => plainRoot.unmount());
     div.remove();
   });
 

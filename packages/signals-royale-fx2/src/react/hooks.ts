@@ -44,6 +44,7 @@ import {
   dispatchDraftWake,
   noteHookRender,
   renderPassIds,
+  type ProviderRecord,
 } from './host.ts';
 import { EMPTY_WORLD, ScopeContext, worldsReducer } from './scope.ts';
 
@@ -51,6 +52,21 @@ type AnyReadable = Signal<any> | Computed<any>;
 type Readable<T> = Signal<T> | Computed<T>;
 
 const NO_IDS: readonly DraftId[] = [];
+
+/** The hooks have no mode without a SignalScope: the scope is the world
+ * carrier, and a subscriber without one would have no channel for
+ * transition worlds at all. Rendering a scope-consuming hook outside a
+ * scope is a wiring error — fail loudly, at the hook, naming the fixes. */
+function requireScope(hook: string): ProviderRecord {
+  const scope = React.useContext(ScopeContext);
+  if (scope === null) {
+    throw new Error(
+      `${hook} was rendered without a SignalScope above it. ` +
+        'Create roots with wrapCreateRoot(createRoot), or wrap the tree in <SignalScope>.',
+    );
+  }
+  return scope;
+}
 
 const lastDelivered = new WeakMap<ReactiveNode, unknown>();
 const NEVER = Symbol('never-delivered');
@@ -74,7 +90,7 @@ function traceDelivery(node: ReactiveNode, value: unknown): void {
 function unwrapState(st: DerivedState, world: World): unknown {
   const asyncBits = st.flags & Flag.AsyncMask;
   if (asyncBits === 0) return st.value;
-  if (asyncBits === Flag.DerivedError) throw (st.throwable as ErrorBox).error;
+  if (asyncBits === Flag.AsyncError) throw (st.throwable as ErrorBox).error;
   const suspension = st.throwable as Suspension;
   if (world.drafts.length > 0) throw suspension.promise;
   if (!isUninitialized(st.value)) return st.value; // settled history: stale serves
@@ -90,21 +106,18 @@ function unwrapState(st: DerivedState, world: World): unknown {
  * state. Both come from React state for THIS pass, so neither can run
  * ahead of it.
  *
- * Outside any SignalScope there is no world carrier: the hook renders the
- * canonical view and snapshots the canonical epoch, which counts silent
- * folds — their only delivery channel for committed transitions. Scoped
- * subscribers keep the silent-fold-blind epoch (render-pass worlds already
- * delivered those values), so no post-commit repair storm exists; the gap
- * for subscribers that attached late is closed by correctSubscription at
+ * The storeEpoch snapshot is silent-fold-blind by design: render-pass
+ * worlds already delivered a committed transition's values to every
+ * subscriber, so no post-commit repair storm exists. The gap for
+ * subscribers that attached late is closed by correctSubscription at
  * subscribe time.
  */
 export function useValue<T>(x: Readable<T>): T {
   const node = nodeOf(x);
-  const scope = React.useContext(ScopeContext);
-  const scoped = scope !== null;
+  const scope = requireScope('useValue');
   const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD);
-  noteHookRender(scope, scoped ? hookWorld.ids : NO_IDS);
-  const ids = scoped ? (renderPassIds(scope) ?? hookWorld.ids) : NO_IDS;
+  noteHookRender(scope, hookWorld.ids);
+  const ids = renderPassIds(scope) ?? hookWorld.ids;
   // Draft ids delivered to this hook's reducer since its last render. The
   // dispatch is scheduling-only, so a repeat id adds nothing: it is already
   // sitting undelivered in this hook's queue and the pass that consumes it
@@ -133,24 +146,21 @@ export function useValue<T>(x: Readable<T>): T {
   });
   const subscribe = React.useCallback(
     (cb: () => void) => {
-      const off = observeNode(node, cb, scope !== null ? deliver : undefined);
+      const off = observeNode(node, cb, deliver);
       // The subscription attaches at commit, after the render that created
       // it: repair anything that happened in between (live drafts this hook
       // missed, silent folds the epoch snapshot cannot see).
-      if (scope !== null && rendered.current.live) {
+      if (rendered.current.live) {
         correctSubscription(node, rendered.current, scope, deliver, wake);
       }
       return off;
     },
     [node, scope, deliver, wake],
   );
-  // Subscription epoch snapshots: reactEpoch changes exactly when scoped
-  // committed-view subscribers must re-render; canonicalEpoch counts silent
-  // draft folds too — the only channel for subscribers outside any scope.
-  const epochSnap = React.useCallback(
-    () => (scoped ? node.reactEpoch : node.canonicalEpoch),
-    [node, scoped],
-  );
+  // The store snapshot: storeEpoch changes exactly when committed-view
+  // subscribers must re-render (silent draft folds stay still — their
+  // values arrived through render-pass worlds).
+  const epochSnap = React.useCallback(() => node.storeEpoch, [node]);
   React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
   const world = worldOf(ids);
   const st = resolveState(node, world);
@@ -166,6 +176,7 @@ export function useValue<T>(x: Readable<T>): T {
 /** A component-scoped computed (disposed by dropping; graph edges are
  * dependency-ward only, so unmount reclaims it structurally). */
 export function useComputed<T>(fn: () => T, deps: readonly unknown[]): T {
+  requireScope('useComputed'); // fail with this hook's name, not useValue's
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const c = React.useMemo(() => computed(fn), deps as unknown[]);
   return useValue(c);
@@ -182,7 +193,7 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
  * world-independent (ambient pendingness) for the same reason as useValue's. */
 export function useIsPending(x: AnyReadable): boolean {
   const node = nodeOf(x);
-  noteHookRender(React.useContext(ScopeContext), null);
+  noteHookRender(requireScope('useIsPending'), null);
   const subscribe = React.useCallback((cb: () => void) => observeNode(node, cb), [node]);
   const snap = React.useCallback(() => isPendingPassive(node, null), [node]);
   return React.useSyncExternalStore(subscribe, snap, () => false);
@@ -191,9 +202,9 @@ export function useIsPending(x: AnyReadable): boolean {
 /** What this root's screen shows for x (the per-root committed view). */
 export function useCommitted<T>(x: Readable<T>): T {
   const node = nodeOf(x);
-  const scope = React.useContext(ScopeContext);
+  const scope = requireScope('useCommitted');
   noteHookRender(scope, null);
-  const container = scope?.container ?? undefined;
+  const container = scope.container ?? undefined;
   const subscribe = React.useCallback((cb: () => void) => observeNode(node, cb), [node]);
   const committedSnap = React.useCallback(
     () => committedSnapshot(node, container),

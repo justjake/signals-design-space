@@ -1,7 +1,7 @@
 /**
  * signals-royale-fx2/react — React bindings for the signals-royale-fx2
  * engine, built on the premise that React's own update queues are the
- * source of truth for which speculative state a render pass may see.
+ * source of truth for which draft state a render pass may see.
  *
  * Runs on stock React — no patches, no build flags. Transition worlds,
  * rebase, per-root committed views, and suspense behavior all ride public

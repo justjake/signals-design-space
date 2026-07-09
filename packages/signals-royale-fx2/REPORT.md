@@ -152,7 +152,7 @@ The story is the max column: the stock store degrades the bulk rewrite to a
 synchronous blocking render — one 329 ms input freeze — while these bindings
 keep the rewrite a real time-sliced transition; the worst urgent tick ever
 waits ~10 ms (one slice), at the cost of the transition itself finishing
-~25% later and ~18% fanout/mount overhead vs the bare store.
+~25% later and ~18% fanout/mount overhead vs the plain store.
 
 ## 6. Feature coverage
 
@@ -219,7 +219,7 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
    reproduces the fork branch tree hash exactly; fork files reformatted
    under React's own prettier (test file only; metric unchanged at 11).
 4. **react-bench urgent input switched to real click events** so the urgent
-   lane is what user input actually gets (a bare `setState` from a timer
+   lane is what user input actually gets (a plain `setState` from a timer
    rides the default lane and queues FIFO behind the scheduler); per-tick
    latency re-anchors to each tick's intended moment.
 
@@ -252,7 +252,7 @@ Nothing in the shared battery is disputed.
   eagerly); overall geomean 1.278 is behind the alien-parity bar.
 - Transition-scenario p95 (10 ms ≈ one slice) is above the baseline's 2.7 ms
   happy path; the baseline's 329 ms max is the failure mode the design
-  removes. Fanout/mount carry ~18% overhead vs a bare store.
+  removes. Fanout/mount carry ~18% overhead vs a plain store.
 - Timing numbers were taken on a shared machine (a sibling entrant's run
   overlapped part of the window).
 - The benchmark clone's `x-reactivity` sanity failure is pre-existing
@@ -283,7 +283,7 @@ correctness gaps. Both are fixed below; the fork is untouched (tree still
 A `useValue` subscriber in a root without `SignalScope` went stale when a
 transition retired via a scoped root's commit: the silent fold suppresses
 the `reactEpoch` snapshot bump, so epoch-snapshot subscribers outside any
-scope bailed forever (judge probe E i-b pinned the bare root at `b:1;` with
+scope bailed forever (judge probe E i-b pinned the unscoped root at `b:1;` with
 canonical already 2, repaired only by the next canonical write). Resolution:
 converge, not enforce — `SignalScope` is a public export, and a scope-less
 root is a legitimate degraded mode (canonical-only view, no transition
@@ -299,11 +299,11 @@ worlds). Two parts:
   staleness class one level up — so its presence makes the retirement loud.
 
 Regression tests, verified failing pre-fix: react `silent folds must repair
-subscribers the render-pass worlds never reached` (bare root `b:1;` vs
+subscribers the render-pass worlds never reached` (unscoped root `b:1;` vs
 expected `b:2;`; late-mounted scope `r:1;` vs `r:2;`); engine worlds.spec
 `a silent fold keeps the react epoch still but advances the canonical
 epoch`. The oracle learned the class: every fuzz schedule now runs bail-style
-bare subscribers (subscribe, snapshot the canonical epoch, re-read only on
+unscoped subscribers (subscribe, snapshot the canonical epoch, re-read only on
 change) over cell 0 and comp 0, retires are ~50% silent, and a second
 sabotage canary (snapshot blinded back to `reactEpoch`) is caught. Re-run
 against the judge's pinned probes: 8/9 pass; the one failure is the
@@ -400,7 +400,7 @@ consume another pass's world. Now the note is VALIDITY-GATED:
 Regression tests, each verified failing pre-fix with the draft value where
 canonical was required (`expected [2] to deeply equal [1]`):
 urgent pass over an unrelated subtree while a transition is held; two roots
-back-to-back (bare second root); interleaved `flushSync` while a transition
+back-to-back (unscoped second root); interleaved `flushSync` while a transition
 pass is mid-flight; StrictMode double render. Residual corner, disclosed:
 within one synchronous chunk, a second pass that renders ZERO fx2 hooks or
 scopes before a plain `latest()` call can still consume the first pass's
@@ -443,7 +443,7 @@ subscribers stay at their mount count through first write, append, and
 commit, and the committed DOM never shows a partial batch (pre-fix the
 append leaked `1;2;…` into a committed frame through the sync lane).
 Preserved and re-proven by the suite: urgent passes exclude drafts, rebase
-retries recompute, bare-root canonicalEpoch convergence, StrictMode
+retries recompute, unscoped-root canonicalEpoch convergence, StrictMode
 double-dispatch netting, interleaved transitions keep distinct audiences
 (T1's wakes never render T2's subscribers; commits entangle only through
 the shared scope queue, stock updater rules).
@@ -461,7 +461,7 @@ react-bench deltas (same harness as §5, stock React, medians of 3 runs):
 Mount overhead dropped from ~17% to ~5% (context-value churn gone; the
 scope never re-renders its subtree). Fanout stays ~17%: it is a pure
 urgent-path scenario (no transitions), so it never exercised the broad
-wake — its delta is the engine's write→notify machinery vs a bare array
+wake — its delta is the engine's write→notify machinery vs a plain array
 store, unchanged this round. The transition columns are unchanged by
 design: that scenario drafts EVERY cell, so the audience is everyone; the
 targeted-wake win shows in the wake-count test (1 of N) and in mount.
@@ -781,7 +781,7 @@ Three moves, refactor-parity, one commit. **Weak branded number types**: a
 shared `Brand<T, B>` helper in graph.ts (declared-never-created unique
 symbol, optional property — purely type-level) brands every named counter:
 `WriteEpoch`, `NodeVersion`, `TraceEventId`, `EvalStamp` (new name for the
-previously bare eval-stamp numbers: `evalStamp`, `stampCounter`,
+previously plain eval-stamp numbers: `evalStamp`, `stampCounter`,
 `Link.stamp`), `ReactEpoch`/`CanonicalEpoch` (the two subscription epochs),
 `Flags` (the stored word), and worlds.ts's `DraftId`, `WorldEpoch`, `OpSeq`.
 Weak means creation and increment stay cast-free while cross-brand
@@ -790,7 +790,7 @@ ZERO cross-brand errors in the existing code; that null result was verified
 positively with a temporary `@ts-expect-error` probe file exercising all ten
 cross-brand flows (every suppression was required — the brands bite — then
 the probe was deleted). Ripple typing fixes in the same spirit:
-`WorldMemo.writeEpoch` is a `WriteEpoch` (was bare `number`), and the
+`WorldMemo.writeEpoch` is a `WriteEpoch` (was plain `number`), and the
 draft-wake seam (`onDraftWake`, `pokeAndWakeLeafObservers`, `observeNode`'s
 `draftWake`) takes `DraftId` via a type-only worlds.ts import (erased; the
 graph stays runtime-dependency-free). **Const enums**: the flag bits are now
@@ -867,3 +867,67 @@ passed at ROYALE_FX2_SEEDS=1200 (title-verified 1200 seeds x 90 steps);
 battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
 the unhandled error is the same refresh TypeError).
+
+## 20. Walk modernization (mandatory SignalScope, unified poke walk, flag table)
+
+Owner-specified in full; two commits (the WaveFrame amortization is the
+second, separately revertable).
+
+- **Mandatory SignalScope.** The unscoped hook mode is deleted: every
+  scope-consuming hook (`useValue`, `useComputed`, `useIsPending`,
+  `useCommitted`) throws without a scope, naming `wrapCreateRoot` and
+  `<SignalScope>` as the fixes (falsify-first: the throw test rendered fine
+  pre-change). `canonicalEpoch` is deleted entirely; `reactEpoch` is renamed
+  `storeEpoch` — THE useSyncExternalStore snapshot; bump = subscribers
+  re-render. Fold loudness is unchanged: loud folds bump it, silent folds
+  suppress it, and the audience decision stays in `confirmCommit`. The
+  unscoped-convergence tests died with the contract they tested.
+- **Oracle model swap + coverage delta.** The scope-less subscriber model
+  class and its canary modeled the deleted contract and are gone. Replacing
+  them, every fuzz schedule now runs SCOPED subscribers over cell 0 and
+  comp 0: both channels of `useValue` (storeEpoch snapshot with bail, plus a
+  draft-lane world fed by `onDraftWake` wakes and `draftsAffecting`
+  attach-time joins), pruned like the reducer, resolved through
+  `resolveState`. The cell subscriber is strong — the model keeps its own
+  wake bookkeeping, so a dropped wake or missed silent fold fails after any
+  step; the computed subscriber asserts rerender-time agreement only (its
+  watched dep set is the last canonical evaluation's reads, so a draft write
+  to a world-only branch legitimately never wakes it). Lost coverage: none
+  that the surviving engine has (canonicalEpoch had no remaining consumer).
+  Gained: the draft-lane wake channel and attach-time repair are fuzzed for
+  the first time. Bonus catch (seed 5, pinned falsify-first in worlds.spec):
+  an urgent equality-cutoff write on a drafted cell appended its intent but
+  poked and woke nobody — every pending world's replay changed with no
+  notification, so a held transition would commit the pre-rebase value.
+  Fixed engine-side: `pokeRebasedCell` pokes-and-wakes each live draft's
+  audience exactly on the cutoff path (the changed path needs nothing:
+  the wave re-renders urgently and React restarts in-progress transition
+  work after an interleaved urgent commit).
+- **Unified iterative poke walk.** `pokeLeafObservers` +
+  `pokeAndWakeLeafObservers` are ONE `pokeDraftWatchers(node, cause, wake?)`
+  sharing the wave's cursor + frame-stack skeleton; dedup is a per-node poke
+  stamp against a monotonic per-walk serial (zero allocation, no clearing —
+  the EvalStamp discipline). Falsify-first: the drafted twin of T11 (150k
+  watched chain) blew the JS stack (`RangeError: Maximum call stack size
+  exceeded` in the recursive walk). The dead marking split is gone: pokes
+  now mark `StaleCheck` like the wave — the choice is arbitrary and
+  documented (render-notify watchers are never validated; flush clears
+  staleness unconditionally pre-delivery). `causeEvent` threads through the
+  poke like the wave.
+- **Flag reorganization.** Kinds (`KindCell`, `KindDerived`, `Watching`),
+  creation-fixed capabilities (`WatchRender`, `WatchRunEffect`,
+  `WatchDraft`), staleness (`StaleCheck`, `StaleDirty`), async (`AsyncError`,
+  `AsyncSuspended`), state (`Watched`, `Scheduled`, `Computing`). Dispatch
+  routes on capability bits, never callback presence. The
+  `scheduled`/`computing` bools became bits (render-notify drain and the
+  catch path fold Scheduled+StaleMask into one masked store; the effect
+  drain clears Scheduled alone because validation still reads StaleCheck);
+  `disposed` is deleted — disposal = Watching set, Watched clear (the
+  Watched double role is documented in the layout comment). Dead
+  `CellNode.lifetimePending` deleted.
+- **Walk colocation + smalls.** The four walk entry points sit in one
+  graph.ts section under a contract-matrix comment. Settlement and discard
+  bump epochs through one helper (`bumpStoreEpochLoud`) whose comment states
+  why they bypass suppression. The write-only intent `seq` field, `nextSeq`
+  and `OpSeq` are deleted; both push sites carry the invariant: array order
+  is dispatch order; retirement flips visibility, never position.

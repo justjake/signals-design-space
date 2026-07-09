@@ -91,8 +91,8 @@ export function isErrorBox(v: unknown): v is ErrorBox {
  *   value keeps serving while the refetch runs (stale ⇔ value is not the
  *   sentinel; unwrap sites normalize the sentinel to undefined).
  * - throwable: the value-plane companion — the ErrorBox whose .error every
- *   read rethrows (DerivedError), the Suspension whose .promise suspends a
- *   reader (DerivedSuspended), null in the value state.
+ *   read rethrows (AsyncError), the Suspension whose .promise suspends a
+ *   reader (AsyncSuspended), null in the value state.
  */
 export interface DerivedState {
   flags: Flags;
@@ -190,12 +190,12 @@ function canonicalUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): 
   // Reuse the span's suspension so Suspense retries see one stable thenable —
   // but never a settled one, or a suspended render would retry in a loop.
   const suspension =
-    (flags & Flag.DerivedSuspended) !== 0 && !(consumer.throwable as Suspension).settled
+    (flags & Flag.AsyncSuspended) !== 0 && !(consumer.throwable as Suspension).settled
       ? (consumer.throwable as Suspension)
       : makeSuspension();
   box.parkedSuspensions.add(suspension);
   consumer.throwable = suspension;
-  consumer.flags = (flags & ~Flag.AsyncMask) | Flag.DerivedSuspended;
+  consumer.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncSuspended;
   throw PARKED;
 }
 
@@ -210,14 +210,14 @@ function finishCompute(
     return true;
   }
   if (outcome.hasError) {
-    if ((flags & Flag.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
+    if ((flags & Flag.AsyncSuspended) !== 0) (node.throwable as Suspension).resolve();
     const sameError =
-      (flags & Flag.DerivedError) !== 0 && (node.throwable as ErrorBox).error === outcome.error;
+      (flags & Flag.AsyncError) !== 0 && (node.throwable as ErrorBox).error === outcome.error;
     if (!sameError) node.throwable = makeErrorBox(outcome.error);
-    node.flags = (flags & ~Flag.AsyncMask) | Flag.DerivedError;
+    node.flags = (flags & ~Flag.AsyncMask) | Flag.AsyncError;
     return !sameError;
   }
-  if ((flags & Flag.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
+  if ((flags & Flag.AsyncSuspended) !== 0) (node.throwable as Suspension).resolve();
   node.flags = flags & ~Flag.AsyncMask;
   node.throwable = null;
   const prev = node.value;

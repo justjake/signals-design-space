@@ -54,7 +54,8 @@ export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
 }
 
 /** The scope's identity-stable record, or null outside any SignalScope.
- * Unscoped subscribers get the canonical-only view (see hooks.ts). */
+ * Scope-consuming hooks throw on null — there is no mode without a scope
+ * (see hooks.ts requireScope). */
 export const ScopeContext = React.createContext<ProviderRecord | null>(null);
 
 export interface SignalScopeProps {
