@@ -641,18 +641,11 @@ function scheduleWatcher(w: WatcherNode): void {
 // ---------------------------------------------------------------------------
 
 /** Suspended traversal positions for the iterative walks (heap, not the JS
- * call stack, so walk depth is bounded by memory rather than stack frames).
- * One persistent array + top cursor, shared by the wave and the poke walk:
- * no walk runs user code mid-traversal, so a walk always finishes before
- * another starts (the base cursor in each walk keeps even an accidental
- * nesting correct). Array storage, deliberately NOT an object freelist —
- * recycled frame objects graduate to old-gen and every store into them pays
- * a generational write barrier, while slot stores into one long-lived array
- * stay cheap. The correctness price of retained capacity: every slot is
- * nulled on pop and on the exception path, because a parked slot must not
- * pin a Link (and through it a disposed subscriber's whole closure). */
-const frameStack: Array<Link | undefined> = [];
-let frameTop = 0;
+ * call stack, so walk depth is bounded by memory rather than stack frames). */
+interface WaveFrame {
+  value: Link | undefined;
+  prev: WaveFrame | undefined;
+}
 
 /**
  * The invalidation wave: push marks down the watched subs closure.
@@ -681,53 +674,48 @@ function propagateWave(link: Link | undefined, cause: TraceEventId): void {
   if (link === undefined) return;
   let cur: Link = link;
   let next: Link | undefined = cur.nextSub;
-  const base = frameTop;
-  try {
-    top: do {
-      const sub = cur.sub;
-      const flags = sub.flags;
-      if ((flags & Flag.StaleMask) !== 0) {
-        if ((flags & (Flag.Watching | Flag.Scheduled)) === Flag.Watching) {
-          scheduleWatcher(sub as WatcherNode);
-        }
-      } else {
-        sub.flags = flags | Flag.StaleCheck;
-        sub.causeEvent = cause;
-        if ((flags & Flag.Watching) !== 0) {
-          scheduleWatcher(sub as WatcherNode);
-        } else if ((flags & Flag.KindDerived) !== 0) {
-          if (!storeEpochSuppressed) sub.storeEpoch++;
-          const subSubs = sub.subs;
-          if (subSubs !== undefined) {
-            cur = subSubs;
-            if (cur.nextSub !== undefined) {
-              frameStack[frameTop++] = next;
-              next = cur.nextSub;
-            }
-            continue;
+  let stack: WaveFrame | undefined;
+  top: do {
+    const sub = cur.sub;
+    const flags = sub.flags;
+    if ((flags & Flag.StaleMask) !== 0) {
+      if ((flags & (Flag.Watching | Flag.Scheduled)) === Flag.Watching) {
+        scheduleWatcher(sub as WatcherNode);
+      }
+    } else {
+      sub.flags = flags | Flag.StaleCheck;
+      sub.causeEvent = cause;
+      if ((flags & Flag.Watching) !== 0) {
+        scheduleWatcher(sub as WatcherNode);
+      } else if ((flags & Flag.KindDerived) !== 0) {
+        if (!storeEpochSuppressed) sub.storeEpoch++;
+        const subSubs = sub.subs;
+        if (subSubs !== undefined) {
+          cur = subSubs;
+          if (cur.nextSub !== undefined) {
+            stack = { value: next, prev: stack };
+            next = cur.nextSub;
           }
+          continue;
         }
       }
-      if (next !== undefined) {
-        cur = next;
+    }
+    if (next !== undefined) {
+      cur = next;
+      next = cur.nextSub;
+      continue;
+    }
+    while (stack !== undefined) {
+      const resume = stack.value;
+      stack = stack.prev;
+      if (resume !== undefined) {
+        cur = resume;
         next = cur.nextSub;
-        continue;
+        continue top;
       }
-      while (frameTop > base) {
-        const resume = frameStack[--frameTop];
-        frameStack[frameTop] = undefined; // popped slot must not pin the Link
-        if (resume !== undefined) {
-          cur = resume;
-          next = cur.nextSub;
-          continue top;
-        }
-      }
-      break;
-    } while (true);
-  } finally {
-    // Exception path: unwound frames get the same slot hygiene.
-    while (frameTop > base) frameStack[--frameTop] = undefined;
-  }
+    }
+    break;
+  } while (true);
 }
 
 /** Serial of the poke walk in progress. Monotonic and never reused, so a
@@ -766,51 +754,46 @@ export function pokeDraftWatchers(node: ReactiveNode, cause: TraceEventId, wake?
   if (first !== undefined) {
     let cur: Link = first;
     let next: Link | undefined = cur.nextSub;
-    const base = frameTop;
-    try {
-      top: do {
-        const sub = cur.sub;
-        if (sub.pokeStamp !== serial) {
-          sub.pokeStamp = serial;
-          const flags = sub.flags;
-          if ((flags & Flag.WatchDraft) !== 0) {
-            const w = sub as WatcherNode;
-            scheduleWatcher(w);
-            if ((w.flags & Flag.StaleMask) === 0) w.flags |= Flag.StaleCheck;
-            w.causeEvent = cause;
-            if (wake !== undefined && w.onDraftWake !== undefined) (wakes ??= []).push(w);
-          } else if ((flags & Flag.KindDerived) !== 0) {
-            const subSubs = sub.subs;
-            if (subSubs !== undefined) {
-              cur = subSubs;
-              if (cur.nextSub !== undefined) {
-                frameStack[frameTop++] = next;
-                next = cur.nextSub;
-              }
-              continue;
+    let stack: WaveFrame | undefined;
+    top: do {
+      const sub = cur.sub;
+      if (sub.pokeStamp !== serial) {
+        sub.pokeStamp = serial;
+        const flags = sub.flags;
+        if ((flags & Flag.WatchDraft) !== 0) {
+          const w = sub as WatcherNode;
+          scheduleWatcher(w);
+          if ((w.flags & Flag.StaleMask) === 0) w.flags |= Flag.StaleCheck;
+          w.causeEvent = cause;
+          if (wake !== undefined && w.onDraftWake !== undefined) (wakes ??= []).push(w);
+        } else if ((flags & Flag.KindDerived) !== 0) {
+          const subSubs = sub.subs;
+          if (subSubs !== undefined) {
+            cur = subSubs;
+            if (cur.nextSub !== undefined) {
+              stack = { value: next, prev: stack };
+              next = cur.nextSub;
             }
+            continue;
           }
         }
-        if (next !== undefined) {
-          cur = next;
+      }
+      if (next !== undefined) {
+        cur = next;
+        next = cur.nextSub;
+        continue;
+      }
+      while (stack !== undefined) {
+        const resume = stack.value;
+        stack = stack.prev;
+        if (resume !== undefined) {
+          cur = resume;
           next = cur.nextSub;
-          continue;
+          continue top;
         }
-        while (frameTop > base) {
-          const resume = frameStack[--frameTop];
-          frameStack[frameTop] = undefined; // popped slot must not pin the Link
-          if (resume !== undefined) {
-            cur = resume;
-            next = cur.nextSub;
-            continue top;
-          }
-        }
-        break;
-      } while (true);
-    } finally {
-      // Exception path: unwound frames get the same slot hygiene.
-      while (frameTop > base) frameStack[--frameTop] = undefined;
-    }
+      }
+      break;
+    } while (true);
   }
   if (batchDepth === 0) flush();
   if (wakes !== null) {

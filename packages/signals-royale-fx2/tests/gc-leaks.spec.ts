@@ -21,7 +21,6 @@ import {
 } from '../src/index.ts';
 import { observeNode, type CellNode, type Link } from '../src/graph.ts';
 import {
-  discardDraft,
   liveDraftCount,
   openDraft,
   resolveState,
@@ -243,56 +242,6 @@ describe('leak audit', () => {
     armed = false;
     await collect(10);
     expect(payloadRef.deref()).toBeUndefined();
-  });
-
-  test('[guard] the walk frame stack retains capacity but never pins Links (wave)', async () => {
-    // The walks suspend traversal positions in a persistent parallel-array
-    // stack (retained capacity, like the flush queues). A frame slot holds a
-    // Link — an edge record referencing both endpoint nodes — so a slot that
-    // survived its pop would pin a disposed subscriber's whole closure.
-    // Passes only if slots are nulled on pop.
-    const linkRef = (() => {
-      const base = signal(0);
-      const mid = computed(() => base.get() + 1);
-      // Two subscriptions on mid make it a branch point: descending into it
-      // pushes the pending sibling — base's SECOND subscriber edge — into a
-      // frame. That Link is the WeakRef target.
-      const offMid1 = observeNode(nodeOf(mid), () => {});
-      const offMid2 = observeNode(nodeOf(mid), () => {});
-      expect(read(mid)).toBe(1); // watched evaluation installs the base -> mid edge
-      const offBase = observeNode(nodeOf(base), () => {});
-      const pending = (nodeOf(base) as CellNode<number>).subs!.nextSub!;
-      const ref = new WeakRef(pending);
-      base.set(1); // the wave pushes and pops the frame
-      offMid1();
-      offMid2();
-      offBase();
-      return ref;
-    })();
-    await collect(10);
-    expect(linkRef.deref()).toBeUndefined();
-  });
-
-  test('[guard] the walk frame stack retains capacity but never pins Links (poke walk)', async () => {
-    const linkRef = (() => {
-      const base = signal(0);
-      const mid = computed(() => base.get() + 1);
-      const offMid1 = observeNode(nodeOf(mid), () => {});
-      const offMid2 = observeNode(nodeOf(mid), () => {});
-      expect(read(mid)).toBe(1); // watched evaluation installs the base -> mid edge
-      const offBase = observeNode(nodeOf(base), () => {});
-      const pending = (nodeOf(base) as CellNode<number>).subs!.nextSub!;
-      const ref = new WeakRef(pending);
-      const draft = openDraft();
-      runInDraft(draft, () => base.set(1)); // the poke walk pushes and pops the frame
-      discardDraft(draft.id);
-      offMid1();
-      offMid2();
-      offBase();
-      return ref;
-    })();
-    await collect(10);
-    expect(linkRef.deref()).toBeUndefined();
   });
 
   test('a scope-owned effect survives GC of its unused per-effect disposer', async () => {
