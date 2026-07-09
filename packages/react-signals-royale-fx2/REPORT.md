@@ -488,3 +488,81 @@ libLoc: 2339                     # engine 1895 (graph 773, worlds 438, index 369
 All seven production regressions were run before the fix and failed with
 the exact tear/broad-wake symptoms quoted above; the suite output is
 reproducible by checking out the spec alone onto the prior commit.
+
+## 12. Draft-wake dedup + fused intent-append walk
+
+Two costs in the write path of a transition, both removed this session:
+
+- **Per-write re-dispatch.** Every drafted write re-dispatched the draft id
+  to every downstream subscriber hook (`appendDraftIntent` → leaf
+  `onDraftWake` → the hook's reducer), and `worldsReducer` returns a fresh
+  state object by design, so React could never bail: a transition writing
+  one cell 100× sent 100 identical dispatches per hook. Fixed at the hook
+  layer — the engine walk stays dumb. Each `useValue` keeps a ref'd Set of
+  draft ids delivered since its last render; the wake closure skips ids
+  already in the set. The set is cleared UNCONDITIONALLY in the render
+  body: the dispatch is scheduling-only, so a skipped id is one already
+  sitting undelivered in this hook's queue and the pass that consumes it
+  resolves the world live — but once a pass has consumed the draft, a new
+  intent must re-dispatch or React bails out and the transition commits a
+  stale frame. Over-clearing (abandoned pass, StrictMode double render)
+  only permits a redundant dispatch — the pre-change behavior. Writes
+  during render throw, so no delivery can race the clear. The commit-time
+  correction path (`correctSubscription`) now routes through the same
+  delivered-set, so a correction delivery also suppresses later duplicate
+  write-time wakes. The scope path needed nothing: `broadcastDraft` was
+  already once-per-draft-per-scope (confirmed — the scope's dispatch is
+  called only there; late appends reach it through nothing but the hooks).
+- **Double traversal.** `appendDraftIntent` ran two identical walks
+  back-to-back (`pokeLeafObservers`, then `wakeLeafDraftSubscribers`) over
+  the same watched-derived frontier. Fused into one walk
+  (`pokeAndWakeLeafObservers`) that schedules the notify leaves, flushes,
+  then delivers the draft id — flush first because the wave's own effects
+  may dispose subscriptions, and a disposed leaf must not receive the id.
+  `pokeLeafObservers` survives for the retire/discard paths, which poke
+  without waking.
+
+Falsify evidence (regression run against the pre-change tree):
+
+```
+× wake: … > a same-cell write burst dispatches one draft-lane wake per
+  subscriber, not one per write
+  AssertionError: expected 400 to be 4 // Object.is equality
+```
+
+(4 subscribers × 100 writes = 400 reducer dispatches before the transition
+pass rendered; now 4 — one per hook, counted through a test-only seam on
+`dispatchDraftWake`.) The two guard tests — late append to a cell the
+transition pass already rendered (exactly one additional transition render,
+appended value commits), and the StrictMode double-render-then-append
+variant — pass both before and after the change; they pin the
+clear-on-render contract that keeps dedup from swallowing late appends.
+The wake-count test (8 subscribers, renders `[1,1,1,2,1,1,1,1]`) stays
+green, as do all prior suites.
+
+react-bench (medians of 3 runs per side, same harness as §5):
+
+| scenario | stat | before | after |
+|---|---|---|---|
+| transition | p95 urgent | 9.99 ms | 9.88 ms |
+| transition | max urgent | 10.68 ms | 10.38 ms |
+| transition | completed after | 1745 ms | 1755 ms |
+| fanout | median write→commit | 2.85 ms | 2.47 ms |
+| mount | median 5000-cell | 51.8 ms | 53.9 ms |
+
+Neutral within noise, by design: the bench's transition scenario writes
+each cell once, so dedup never engages there and the fused walk saves one
+short traversal per write. The win is the burst shape (N×writes → 1
+dispatch per hook), pinned by the regression test rather than a bench.
+Dev-build advisory (probed via `bench/advisory-probe.mjs`): the "large
+number of updates inside startTransition" warning counts DISTINCT fibers
+(`_updatedFibers` is a Set), not dispatches — so dedup cannot change it. A
+same-cell burst over ≤10 subscribers stays silent (before and after); over
+>10 subscribers it still fires (11+ fibers genuinely update once each), as
+does the 2000-cell rewrite. Dev-only heuristic, absent in production
+builds.
+
+Gates fresh this session: engine `tsc` clean + 224 passed; oracle fuzz 1200
+seeds × 90 steps green; react `tsc` clean + 41 passed (38 + the burst
+regression + 2 append guards); battery 24 passed / 1 failed (scenario 16,
+exempt).

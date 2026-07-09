@@ -18,7 +18,7 @@ import { createRoot } from 'react-dom/client';
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx';
 import { latest, read, signal, reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
 import { startTransitionWrite, useValue } from '../src/index.ts';
-import { broadcastDraft } from '../src/host.ts';
+import { broadcastDraft, draftWakeStats } from '../src/host.ts';
 
 let h: Harness;
 beforeEach(() => {
@@ -329,6 +329,124 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
       await gate.promise;
     });
     expect(text(container)).toBe('a:1;b:2;'); // both worlds land, each its own values
+  });
+
+  test('a same-cell write burst dispatches one draft-lane wake per subscriber, not one per write', async () => {
+    const SUBS = 4;
+    const cell = signal(0);
+    const renders = new Array<number>(SUBS).fill(0);
+    function Sub({ i }: { i: number }) {
+      renders[i]++;
+      return <i>{useValue(cell)};</i>;
+    }
+    const { container } = await h.mount(
+      <>
+        {Array.from({ length: SUBS }, (_, i) => (
+          <Sub key={i} i={i} />
+        ))}
+      </>,
+    );
+    draftWakeStats.dispatches = 0;
+    let dispatchesBeforeRender = -1;
+    await act(() => {
+      startTransitionWrite(() => {
+        for (let k = 1; k <= 100; k++) cell.set(k);
+      });
+      // Sampled synchronously after the writes, before React renders the
+      // transition pass: what the burst itself cost in reducer dispatches.
+      dispatchesBeforeRender = draftWakeStats.dispatches;
+    });
+    expect(dispatchesBeforeRender).toBe(SUBS); // one per subscribing hook
+    await act(async () => {});
+    expect(text(container)).toBe('100;'.repeat(SUBS));
+    expect(renders).toEqual(new Array(SUBS).fill(2)); // mount + one transition pass
+  });
+
+  test('late append to a cell the transition pass already rendered re-dispatches and lands', async () => {
+    // Guards the dedup's clear-on-render contract: after a pass consumed the
+    // draft, a new intent on the SAME cell must re-dispatch (a swallowed wake
+    // would let React bail out and commit a stale frame).
+    const { cells, renders, grid } = makeGrid();
+    const hold = signal(false);
+    const gate = deferred<void>();
+    function Suspender() {
+      const held = useValue(hold);
+      if (held && !gate.settled) throw gate.promise;
+      return <b>s;</b>;
+    }
+    const { container } = await h.mount(
+      <>
+        {grid}
+        <React.Suspense fallback={null}>
+          <Suspender />
+        </React.Suspense>
+      </>,
+    );
+    let id!: DraftId;
+    await act(() => {
+      React.startTransition(() => {
+        id = engine.openDraft().id;
+        broadcastDraft(id);
+        engine.runInDraft(id, () => {
+          cells[0].set(1);
+          hold.set(true);
+        });
+      });
+    });
+    // The held transition pass rendered subscriber 0 with the draft value.
+    const afterHeldPass = renders[0];
+    expect(afterHeldPass).toBe(2);
+    await act(() => {
+      engine.runInDraft(id, () => cells[0].set(2));
+      engine.sealDraft(id);
+    });
+    expect(renders[0]).toBe(afterHeldPass + 1); // exactly one more transition render
+    expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;'); // still held, still invisible
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(text(container)).toBe('2;0;0;0;0;0;0;0;s;'); // the appended value committed
+  });
+
+  test('StrictMode: append after a double-rendered pass still lands', async () => {
+    const { cells, grid } = makeGrid();
+    const hold = signal(false);
+    const gate = deferred<void>();
+    function Suspender() {
+      const held = useValue(hold);
+      if (held && !gate.settled) throw gate.promise;
+      return <b>s;</b>;
+    }
+    const { container } = await h.mount(
+      <React.StrictMode>
+        {grid}
+        <React.Suspense fallback={null}>
+          <Suspender />
+        </React.Suspense>
+      </React.StrictMode>,
+    );
+    let id!: DraftId;
+    await act(() => {
+      React.startTransition(() => {
+        id = engine.openDraft().id;
+        broadcastDraft(id);
+        engine.runInDraft(id, () => {
+          cells[0].set(1);
+          hold.set(true);
+        });
+      });
+    });
+    expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;'); // held
+    await act(() => {
+      engine.runInDraft(id, () => cells[0].set(2));
+      engine.sealDraft(id);
+    });
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(text(container)).toBe('2;0;0;0;0;0;0;0;s;'); // no swallowed re-render
   });
 
   test('StrictMode: double-dispatched wakes net to a consistent commit', async () => {

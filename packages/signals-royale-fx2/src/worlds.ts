@@ -38,12 +38,12 @@ import {
   hooks,
   isUninitialized,
   peekCell,
+  pokeAndWakeLeafObservers,
   pokeLeafObservers,
   setCurrentCause,
   startBatch,
   endBatch,
   untracked,
-  wakeLeafDraftSubscribers,
   withSuppressedReactEpoch,
   writeCell,
 } from './graph.ts';
@@ -167,8 +167,7 @@ export function appendDraftIntent(
     draft.lastWriteEvent = hooks.trace('write', cell, draft.openEvent, { draft: draft.id });
     cell.causeEvent = draft.lastWriteEvent;
   }
-  pokeLeafObservers(cell);
-  wakeLeafDraftSubscribers(cell, draft.id);
+  pokeAndWakeLeafObservers(cell, draft.id);
 }
 
 /** Record an urgent intent on a cell that currently has a rebase log, so

@@ -473,19 +473,27 @@ export function pokeLeafObservers(node: ReactiveNode): void {
 }
 
 /**
- * Deliver a draft id to every leaf observer downstream of a node, walking
- * watched derived edges exactly like pokeLeafObservers. Called at intent-
- * append time, so the delivery runs in the writer's ambient context (inside
- * a React transition scope, the dispatches ride that transition's lanes).
+ * Intent-append traversal: pokeLeafObservers plus draft-id delivery to the
+ * same leaf frontier in ONE walk (the two jobs visit identical watched
+ * derived edges, and intent appends need both every time). Runs in the
+ * writer's ambient context, so inside a React transition scope the wake
+ * dispatches ride that transition's lanes. Notify flush still precedes wake
+ * delivery: the wave's own effects may dispose subscriptions, and a leaf
+ * disposed by them must not receive the draft id.
  */
-export function wakeLeafDraftSubscribers(node: ReactiveNode, id: number): void {
+export function pokeAndWakeLeafObservers(node: ReactiveNode, id: number): void {
   let seen: Set<ReactiveNode> | null = null;
+  const wakes: WatcherNode[] = [];
   const walk = (n: ReactiveNode): void => {
     for (let l = n.subs; l !== undefined; l = l.nextSub) {
       const sub = l.sub;
       if (sub.kind === 'watcher') {
         const leaf = sub as WatcherNode;
-        if (!leaf.disposed && leaf.onDraftWake !== undefined) leaf.onDraftWake(id);
+        if (leaf.onNotify !== undefined) {
+          scheduleWatcher(leaf);
+          leaf.flags = Flags.Dirty;
+        }
+        if (!leaf.disposed && leaf.onDraftWake !== undefined) wakes.push(leaf);
       } else if (sub.kind === 'derived') {
         seen ??= new Set();
         if (!seen.has(sub)) {
@@ -496,6 +504,10 @@ export function wakeLeafDraftSubscribers(node: ReactiveNode, id: number): void {
     }
   };
   walk(node);
+  if (batchDepth === 0) flush();
+  for (const leaf of wakes) {
+    if (!leaf.disposed && leaf.onDraftWake !== undefined) leaf.onDraftWake(id);
+  }
 }
 
 /** Append a dependency edge outside evaluation (the hidden refresh nonce).

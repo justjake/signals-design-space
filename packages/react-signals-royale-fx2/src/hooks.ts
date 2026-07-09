@@ -17,6 +17,9 @@
  *   passes include it, rebased retries recompute it. The render value
  *   resolves the hook's own world — no context value ever changes, so a
  *   transition re-renders only the components its writes actually touch.
+ *   Dispatches are deduped per hook per render window (see `delivered`
+ *   below): a burst of writes to one cell costs each subscriber one
+ *   dispatch, not one per write.
  */
 import * as React from 'react';
 import {
@@ -93,6 +96,25 @@ export function useValue<T>(x: Readable<T>): T {
   const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD);
   noteHookRender(scope, scoped ? hookWorld.ids : NO_IDS);
   const ids = scoped ? (renderPassIds(scope) ?? hookWorld.ids) : NO_IDS;
+  // Draft ids delivered to this hook's reducer since its last render. The
+  // dispatch is scheduling-only, so a repeat id adds nothing: it is already
+  // sitting undelivered in this hook's queue and the pass that consumes it
+  // resolves the world live, appends included. Cleared UNCONDITIONALLY each
+  // render because a pass that consumed the draft ends the guarantee — a
+  // later append must re-dispatch or React bails out and the transition
+  // commits a stale frame. Over-clearing (abandoned pass, StrictMode double
+  // render) only permits a redundant dispatch, which is harmless; writes
+  // during render throw, so no delivery can race the clear.
+  const delivered = React.useRef<Set<DraftId>>(new Set());
+  delivered.current.clear();
+  const deliver = React.useCallback(
+    (id: DraftId) => {
+      if (delivered.current.has(id)) return;
+      delivered.current.add(id);
+      dispatchDraftWake(id, wake);
+    },
+    [wake],
+  );
   // One mutable stash per hook (not per render): what the latest completed
   // render resolved, for the subscribe-time repair check.
   const rendered = React.useRef<{ ids: readonly DraftId[]; value: unknown; live: boolean }>({
@@ -102,20 +124,16 @@ export function useValue<T>(x: Readable<T>): T {
   });
   const subscribe = React.useCallback(
     (cb: () => void) => {
-      const off = engine.subscribe(
-        x as AnyReadable,
-        cb,
-        scope !== null ? (id) => dispatchDraftWake(id, wake) : undefined,
-      );
+      const off = engine.subscribe(x as AnyReadable, cb, scope !== null ? deliver : undefined);
       // The subscription attaches at commit, after the render that created
       // it: repair anything that happened in between (live drafts this hook
       // missed, silent folds the epoch snapshot cannot see).
       if (scope !== null && rendered.current.live) {
-        correctSubscription(x, rendered.current, scope, wake);
+        correctSubscription(x, rendered.current, scope, deliver, wake);
       }
       return off;
     },
-    [x, scope, wake],
+    [x, scope, deliver, wake],
   );
   const epochSnap = React.useCallback(
     () =>

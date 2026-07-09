@@ -191,6 +191,10 @@ function rememberOwner(id: DraftId): void {
   if (T != null) draftOwners.set(id, T);
 }
 
+/** Test-only counter of draft-lane dispatches that actually reached a
+ * reducer (i.e. survived per-hook dedup). Nothing in the bindings reads it. */
+export const draftWakeStats = { dispatches: 0 };
+
 /**
  * Dispatch a draft-lane wake. At write time React's ambient transition is
  * already installed (the write ran inside startTransition), so the dispatch
@@ -201,6 +205,7 @@ function rememberOwner(id: DraftId): void {
  * draft values into an urgent frame).
  */
 export function dispatchDraftWake(id: DraftId, dispatch: (id: DraftId) => void): void {
+  draftWakeStats.dispatches++;
   const internals = sharedInternals();
   if (internals.T != null) {
     dispatch(id);
@@ -246,18 +251,24 @@ interface RenderedResolution {
  *   exactly that case;
  * - the draft already folded silently (epoch snapshots stay still by
  *   design) and canonical moved past what was rendered — repair urgently.
+ *
+ * `deliver` is the hook's draft-lane channel: it dedupes against the ids
+ * already dispatched since the hook's last render (a correction shares that
+ * budget with write-time wakes) and restores the owning transition around
+ * the dispatch. `dispatch` is the raw reducer for the urgent repair bump.
  */
 export function correctSubscription(
   x: unknown,
   rendered: RenderedResolution,
   scope: ProviderRecord,
+  deliver: (id: DraftId) => void,
   dispatch: (id: DraftId) => void,
 ): void {
   for (const id of engine.draftsAffecting(x as never)) {
     if (rendered.ids.includes(id)) continue;
     const audience = draftAudience.get(id);
     if (audience === undefined || !audience.has(scope)) continue;
-    dispatchDraftWake(id, dispatch);
+    deliver(id);
   }
   const env = engine.resolveEnvelope(x as never, rendered.ids);
   if (env.kind === 'value' && !Object.is(env.value, rendered.value)) {
