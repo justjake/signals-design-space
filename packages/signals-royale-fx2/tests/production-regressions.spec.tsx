@@ -16,8 +16,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act, deferred, makeHarness, text, tick, React, type Harness } from './helpers.tsx';
-import { latest, read, signal, reactIntegration as engine, type DraftId } from 'signals-royale-fx2';
+import { latest, read, signal } from 'signals-royale-fx2';
 import { startTransitionWrite, useValue } from 'signals-royale-fx2/react';
+import { openDraft, runInDraft, sealDraft, type Draft } from '../src/worlds.ts';
 import { broadcastDraft, draftWakeStats } from '../src/react/host.ts';
 
 let h: Harness;
@@ -253,12 +254,12 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
       </>,
     );
     const mounted = [...renders];
-    let id!: DraftId;
+    let draft!: Draft;
     await act(() => {
       React.startTransition(() => {
-        id = engine.openDraft().id;
-        broadcastDraft(id);
-        engine.runInDraft(id, () => {
+        draft = openDraft();
+        broadcastDraft(draft.id);
+        runInDraft(draft, () => {
           cells[0].set(1);
           hold.set(true);
         });
@@ -270,8 +271,8 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
     // wake must ride the OWNING transition's lane, so the committed DOM
     // stays untouched and untouched subscribers stay asleep.
     await act(() => {
-      engine.runInDraft(id, () => cells[1].set(2));
-      engine.sealDraft(id);
+      runInDraft(draft, () => cells[1].set(2));
+      sealDraft(draft);
     });
     expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;'); // still held, still invisible
     for (let i = 2; i < N; i++) expect(renders[i]).toBe(mounted[i]); // never woken
@@ -382,12 +383,12 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
         </React.Suspense>
       </>,
     );
-    let id!: DraftId;
+    let draft!: Draft;
     await act(() => {
       React.startTransition(() => {
-        id = engine.openDraft().id;
-        broadcastDraft(id);
-        engine.runInDraft(id, () => {
+        draft = openDraft();
+        broadcastDraft(draft.id);
+        runInDraft(draft, () => {
           cells[0].set(1);
           hold.set(true);
         });
@@ -397,8 +398,8 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
     const afterHeldPass = renders[0];
     expect(afterHeldPass).toBe(2);
     await act(() => {
-      engine.runInDraft(id, () => cells[0].set(2));
-      engine.sealDraft(id);
+      runInDraft(draft, () => cells[0].set(2));
+      sealDraft(draft);
     });
     expect(renders[0]).toBe(afterHeldPass + 1); // exactly one more transition render
     expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;'); // still held, still invisible
@@ -426,12 +427,12 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
         </React.Suspense>
       </React.StrictMode>,
     );
-    let id!: DraftId;
+    let draft!: Draft;
     await act(() => {
       React.startTransition(() => {
-        id = engine.openDraft().id;
-        broadcastDraft(id);
-        engine.runInDraft(id, () => {
+        draft = openDraft();
+        broadcastDraft(draft.id);
+        runInDraft(draft, () => {
           cells[0].set(1);
           hold.set(true);
         });
@@ -439,8 +440,8 @@ describe('wake: transition passes re-render only drafted-cell subscribers', () =
     });
     expect(text(container)).toBe('0;0;0;0;0;0;0;0;s;'); // held
     await act(() => {
-      engine.runInDraft(id, () => cells[0].set(2));
-      engine.sealDraft(id);
+      runInDraft(draft, () => cells[0].set(2));
+      sealDraft(draft);
     });
     await act(async () => {
       gate.resolve();

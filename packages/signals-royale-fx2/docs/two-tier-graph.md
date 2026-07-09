@@ -42,7 +42,7 @@ What fx2 already has, what alien has, and the deltas this rebuild closes.
 | Node record | `ReactiveNode` lines 1-7: four list heads + flags | lines 73-109: same heads + `observerCount`, `validatedEpoch`, value `version`, React epochs, `worldMemos`, `causeEvent` | none (fx2 is a superset) |
 | Link record | lines 9-17: both lists doubly linked; `version` is a tracking-pass stamp | lines 59-71: deps singly linked (`nextDep` only), subs doubly linked, `inSubs`, `stamp`, `version` | naming collision + threading decision, section 2 |
 | link() protocol | 4 cases, lines 51-91: tail repeat (52-54), `nextDep` in-place reuse (56-61), `subsTail` same-pass dedup (62-65), create + thread both lists (66-90) | `trackRead` lines 321-350: has cases 1 (323, stamp-guarded), 2 (325-329), 4 minus subs install for unwatched subs (330-349) | case 3 missing: non-adjacent re-read in one pass creates a duplicate edge |
-| Trim after eval | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114) | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because `hooks.observation` and lifetime.ts key on the count |
+| Trim after eval | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114) | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because the lifetime-effect machinery keys on the count |
 | Propagate | iterative, explicit stack, flag protocol with `RecursedCheck`/`Recursed` reentrancy bits (118-174) | recursive `mark()` (402-422): Check-only marking, causeEvent, epoch bumps on Clean→Check (416-417), watcher scheduling (404-406, 424-432) | recursion → stack bound on deep chains; traversal-bit decision, section 3 |
 | Pull validation | iterative `checkDirty` (176-237) resolving Pending via `update()` + `shallowPropagate` (239-250) | recursive `ensureFresh` (760-783): version comparison per edge; no shallowPropagate | deliberate divergence, section 5 |
 | Watched/unwatched boundary | single-tier: every edge always in both lists | already two-tier: `inSubs` per edge, `addObserver`/`removeObserver` cascades (290-318), `validatedEpoch` vs global `WriteEpoch` (764) | promote does not validate — two verified defects, section 6 |
@@ -202,8 +202,8 @@ is the plain-value state, `ASYNC_MASK` is exported as the read protocol.
 `Watched` semantics:
 
 - cells/deriveds: mirror of `observerCount > 0`, set in promote (0→1),
-  cleared in demote (1→0). `observerCount` stays authoritative — lifetime.ts
-  and demote need the count; the flag is the one-load hot-path test;
+  cleared in demote (1→0). `observerCount` stays authoritative — lifetime
+  effects and demote need the count; the flag is the one-load hot-path test;
 - watchers: set at creation, cleared in `disposeWatcher` before
   `unlinkAllDeps`. This collapses `trackRead`'s two-branch watched test
   (343-344) and `ensureFresh`'s `observerCount` load (761) into
@@ -357,8 +357,10 @@ Rewrites `addObserver` (290-301). Fixes probes A and B.
    incremental build; `useIsPending` over a cold computed) pays a spurious
    wake. React tolerated it (epoch-unchanged snapshot compare), but the wake
    was semantically wrong, and T11 caught it double-counting.
-6. `hooks.observation(node, true)` — lifetime setup coalescing unchanged
-   (lifetime.ts 29-38).
+6. `noteLifetimeTransition(node)` — lifetime setup coalescing unchanged.
+   (This step read `hooks.observation(node, true)` when the rebuild landed;
+   the lifetime machinery has since been folded into graph.ts and the hook
+   indirection deleted — promote and demote call the scheduler directly.)
 
 Cost: O(edges in the newly watched closure), which promote already pays for
 linking; validation adds two loads and a compare per edge. Promoting a node
@@ -388,7 +390,8 @@ Rewrites `removeObserver` (303-318).
    actually need it: promote validates on re-watch, and unwatched pulls never
    trust Clean without `validatedEpoch`. (It was also insufficient: probe A's
    node was never previously watched, so demote seeding never covered it.)
-6. `hooks.observation(node, false)`.
+6. `noteLifetimeTransition(node)` (originally `hooks.observation(node,
+   false)`; same folding note as promote step 6).
 
 Edge versions need no demote writes: `l.version` is maintained by
 `recompute`/`readCell` in both tiers and is exactly the stamp promote
@@ -420,8 +423,9 @@ promote is behavioral → covered by falsify-first probes A/B]
   index.ts 162-183).
 - **Tracer hooks**: `hooks.trace` sites and `causeEvent` threading — the
   iterative propagate carries the wave's cause exactly as `mark` does.
-- **Lifetime effects**: `hooks.observation` fires on the same 0↔1
-  transitions with microtask coalescing (lifetime.ts).
+- **Lifetime effects**: the lifetime scheduler fires on the same 0↔1
+  transitions with microtask coalescing (now `noteLifetimeTransition` in
+  graph.ts; the `hooks.observation` seam over lifetime.ts at the time).
 - **uSES epochs**: every bump site preserved — `writeCell` (685-686),
   `invalidateDerived` (452-453), the Clean→Check derived bump in the wave
   (416-417), `bumpReactEpoch` on discard (worlds.ts 262), and reactEpoch
@@ -437,7 +441,10 @@ promote is behavioral → covered by falsify-first probes A/B]
   rebuild alone. The DerivedState merge, section 11, deliberately changes
   the read-protocol surface: `Envelope` → `DerivedState`,
   `reactIntegration.resolveEnvelope` → `resolveState`, and the bindings'
-  unwrap sites moved with it.)
+  unwrap sites moved with it. `reactIntegration` itself was later dissolved
+  by owner ruling: the react directory is part of the library, so the
+  bindings import graph.ts/worlds.ts/tracer.ts directly and unwrap user
+  handles at their own boundary with `nodeOf`.)
 
 ## 8. Test plan
 

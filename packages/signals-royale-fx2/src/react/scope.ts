@@ -24,7 +24,9 @@
  * against the completed batch — a pass never commits half a batch.
  */
 import * as React from 'react';
-import { reactIntegration as engine, type DraftId } from '../index.ts';
+import { NO_EVENT } from '../graph.ts';
+import { isLiveDraft, type DraftId } from '../worlds.ts';
+import { getActiveTracer } from '../tracer.ts';
 import {
   confirmCommit,
   noteRenderWorld,
@@ -44,8 +46,8 @@ export const EMPTY_WORLD: WorldState = { ids: [], rev: 0 };
  * and a long-lived subscriber must not grow history forever), and always
  * return a fresh object so a re-dispatched id still restarts the pass. */
 export function worldsReducer(prev: WorldState, id: DraftId): WorldState {
-  const live = prev.ids.filter((d) => engine.isLiveDraft(d));
-  const add = engine.isLiveDraft(id) && !live.includes(id);
+  const live = prev.ids.filter((d) => isLiveDraft(d));
+  const add = isLiveDraft(id) && !live.includes(id);
   if (add) live.push(id);
   const ids = !add && live.length === prev.ids.length ? prev.ids : live;
   return { ids, rev: prev.rev + 1 };
@@ -74,7 +76,7 @@ export function SignalScope(props: SignalScopeProps): React.ReactElement {
   React.useLayoutEffect(() => registerProvider(record), [record]);
   React.useLayoutEffect(() => {
     // Runs exactly at this root's commits of world-carrying passes.
-    engine.traceNode('root-commit', null, 0, { world: world.ids });
+    getActiveTracer()?.emit('root-commit', null, NO_EVENT, { world: world.ids });
     confirmCommit(record, world.ids);
   }, [record, world]);
   return React.createElement(ScopeContext.Provider, { value: record }, props.children);

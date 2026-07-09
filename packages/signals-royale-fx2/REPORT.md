@@ -742,3 +742,35 @@ battery 23 passed / 2 failed — scenario 16 DOM-mutation (pre-existing
 exemption) plus scenario 11's refresh test (`adapter.refresh is not a
 function`, the expected hole for a deleted API; battery.spec.tsx is shared
 and stays untouched).
+
+## 17. Two indirections dissolved (refactor round, owner rulings)
+
+`reactIntegration` is gone. The ~30-member object existed as a privacy wall
+between the engine and `src/react/`, but the react directory is part of the
+library — there is nothing to wall off. The bindings now import what they
+use directly from graph.ts, worlds.ts, tracer.ts, and index.ts, and unwrap
+user handles at their own boundary: hooks call `nodeOf(x)` once and work
+with `ReactiveNode` records (subscriptions are `observeNode(node, …)`, epoch
+snapshots are field reads), and the ambient classifier keys Draft RECORDS
+by transition object (`WeakMap<transition, Draft>`), deleting the per-
+drafted-write id→record lookup the old seam paid. Three engine members the
+object had privatized are exported from where they live: index.ts's
+`setRenderWorldProvider`, `isPendingPassive`, `committedSnapshot`. One rule
+survives the wall's demolition because it is a leak rule, not a privacy
+rule: long-lived React state (reducer worlds, committed id sets) holds draft
+IDS, never Draft records — a record captured in a committed reducer state
+that never updates again would be retained forever; a stale id is inert. A
+gc-leaks test pins it (retired draft's id held in a long-lived array; the
+Draft record and its logged payload are WeakRef-collectible). The
+lifetime-effect hook ceremony went with it: lifetime.ts folded into graph.ts
+verbatim, the promote/demote sites call `noteLifetimeTransition` directly,
+and `GraphHooks` shrank to `classifyWrite` + `trace` — `observation` and
+`installLifetimeHook` deleted, and `afterPropagate` deleted after verifying
+zero installers across all 281 revisions (the two-stage flush itself —
+effects before leaf notifies — is load-bearing and stays). The oracle's
+sabotage canaries, which monkey-patched object members, now inject their
+sabotage through an explicit seams parameter of `runSchedule`. Gates: tsc
+clean; 275 passed (274 + the new leak pin); oracle 3 passed at 1200 seeds;
+gc-leaks 9; battery at the pinned 23 passed / 2 failed / 1 unhandled error
+(scenario 11 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both
+owner-exempt; the unhandled error is the same refresh TypeError).

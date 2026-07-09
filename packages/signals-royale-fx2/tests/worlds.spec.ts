@@ -6,16 +6,37 @@ import {
   isPending,
   latest,
   committed,
-  reactIntegration as ri,
+  nodeOf,
   read,
+  setRenderWorldProvider,
   signal,
+  type Computed,
+  type Signal,
 } from '../src/index.ts';
+import {
+  discardDraft,
+  liveDraftCount,
+  openDraft,
+  resolveState,
+  retireDraft,
+  runInDraft,
+  sealDraft,
+  setCommittedWorld,
+  worldOf,
+  type DraftId,
+} from '../src/worlds.ts';
+import { observeNode } from '../src/graph.ts';
 
-function inDraft(fn: () => void): number {
-  const d = ri.openDraft();
-  ri.runInDraft(d.id, fn);
-  ri.sealDraft(d.id);
+function inDraft(fn: () => void): DraftId {
+  const d = openDraft();
+  runInDraft(d, fn);
+  sealDraft(d);
   return d.id;
+}
+
+/** Resolve a handle's state as seen by the world of these draft ids. */
+function stateIn(x: Signal<any> | Computed<any>, ids: readonly DraftId[]): unknown {
+  return resolveState(nodeOf(x), worldOf(ids));
 }
 
 /** A drafted world's memo record for a plain value (the DerivedState shape:
@@ -30,8 +51,8 @@ describe('draft visibility', () => {
     const id = inDraft(() => a.set(1));
     expect(read(a)).toBe(0);
     expect(latest(a)).toBe(1);
-    expect(ri.resolveState(a, [id])).toEqual(valueState(1));
-    ri.retireDraft(id);
+    expect(stateIn(a, [id])).toEqual(valueState(1));
+    retireDraft(id);
     expect(read(a)).toBe(1);
     expect(latest(a)).toBe(1);
   });
@@ -50,7 +71,7 @@ describe('draft visibility', () => {
       b.set(2);
     });
     expect(runs).toBe(1); // drafts do not touch effects
-    ri.retireDraft(id);
+    retireDraft(id);
     expect(runs).toBe(2); // one batched fold
   });
 
@@ -58,7 +79,7 @@ describe('draft visibility', () => {
     const a = signal(5);
     const id = inDraft(() => a.update((x) => x + 10));
     expect(latest(a)).toBe(15);
-    ri.discardDraft(id);
+    discardDraft(id);
     expect(latest(a)).toBe(5);
     expect(read(a)).toBe(5);
   });
@@ -69,23 +90,23 @@ describe('draft visibility', () => {
     // snapshot changes (the useSyncExternalStore contract). Its snapshot is
     // the canonical epoch — render-pass worlds never deliver to it, so the
     // fold must be visible on its channel.
-    let snap = ri.canonicalEpochSnapshot(a);
+    let snap = nodeOf(a).canonicalEpoch;
     let view = read(a);
-    const unsub = ri.subscribe(a, () => {
-      const s = ri.canonicalEpochSnapshot(a);
+    const unsub = observeNode(nodeOf(a), () => {
+      const s = nodeOf(a).canonicalEpoch;
       if (s === snap) return;
       snap = s;
       view = read(a);
     });
-    const reactSnapBefore = ri.epochSnapshot(a);
+    const reactSnapBefore = nodeOf(a).reactEpoch;
     const id = inDraft(() => a.set(9));
     expect(view).toBe(1); // drafts stay invisible to canonical subscribers
-    ri.retireDraft(id, { silent: true });
+    retireDraft(id, { silent: true });
     expect(read(a)).toBe(9);
     expect(view).toBe(9); // the fold reached the canonical channel
     // The world-delivered channel stayed silent: scoped subscribers, whose
     // render passes already carried the draft, schedule no repair renders.
-    expect(ri.epochSnapshot(a)).toBe(reactSnapBefore);
+    expect(nodeOf(a).reactEpoch).toBe(reactSnapBefore);
     unsub();
   });
 });
@@ -96,8 +117,8 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     const id = inDraft(() => a.update((x) => x + 1));
     a.update((x) => x * 2);
     expect(read(a)).toBe(2); // urgent skipped the draft, applied *2 to base 1
-    expect(ri.resolveState(a, [id])).toEqual(valueState(4)); // (1+1)*2
-    ri.retireDraft(id);
+    expect(stateIn(a, [id])).toEqual(valueState(4)); // (1+1)*2
+    retireDraft(id);
     expect(read(a)).toBe(4);
   });
 
@@ -106,8 +127,8 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     const id = inDraft(() => a.update((x) => x + 2));
     a.update((x) => x * 2);
     expect(read(a)).toBe(2);
-    expect(ri.resolveState(a, [id])).toEqual(valueState(6)); // (1+2)*2
-    ri.retireDraft(id);
+    expect(stateIn(a, [id])).toEqual(valueState(6)); // (1+2)*2
+    retireDraft(id);
     expect(read(a)).toBe(6);
   });
 
@@ -117,15 +138,15 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     a.update((x) => x * 10); // seq2 urgent
     const d2 = inDraft(() => a.update((x) => x + 3)); // seq3
     expect(read(a)).toBe(10);
-    expect(ri.resolveState(a, [d1])).toEqual(valueState(20)); // (1+1)*10
-    expect(ri.resolveState(a, [d2])).toEqual(valueState(13)); // 1*10+3
-    expect(ri.resolveState(a, [d1, d2])).toEqual(valueState(23)); // (1+1)*10+3
-    ri.retireDraft(d1);
+    expect(stateIn(a, [d1])).toEqual(valueState(20)); // (1+1)*10
+    expect(stateIn(a, [d2])).toEqual(valueState(13)); // 1*10+3
+    expect(stateIn(a, [d1, d2])).toEqual(valueState(23)); // (1+1)*10+3
+    retireDraft(d1);
     expect(read(a)).toBe(20);
     // d2's world resolves the same values before and after d1's fold.
-    expect(ri.resolveState(a, [d1, d2])).toEqual(valueState(23));
-    expect(ri.resolveState(a, [d2])).toEqual(valueState(23));
-    ri.retireDraft(d2);
+    expect(stateIn(a, [d1, d2])).toEqual(valueState(23));
+    expect(stateIn(a, [d2])).toEqual(valueState(23));
+    retireDraft(d2);
     expect(read(a)).toBe(23);
   });
 });
@@ -139,8 +160,8 @@ describe('computeds across worlds', () => {
     expect(read(pick)).toBe('L');
     const id = inDraft(() => flag.set(true));
     expect(read(pick)).toBe('L'); // canonical branch untouched
-    expect(ri.resolveState(pick, [id])).toEqual(valueState('R'));
-    ri.retireDraft(id);
+    expect(stateIn(pick, [id])).toEqual(valueState('R'));
+    retireDraft(id);
     expect(read(pick)).toBe('R');
   });
 
@@ -148,11 +169,11 @@ describe('computeds across worlds', () => {
     const a = signal({ n: 1 });
     const c = computed(() => ({ n: a.get().n + 1 }));
     const id = inDraft(() => a.set({ n: 5 }));
-    const state1 = ri.resolveState(c, [id]);
-    const state2 = ri.resolveState(c, [id]);
+    const state1 = stateIn(c, [id]);
+    const state2 = stateIn(c, [id]);
     expect(state1).toBe(state2); // stable identity for unchanged resolution
     expect((state1 as { value: { n: number } }).value.n).toBe(6);
-    ri.retireDraft(id);
+    retireDraft(id);
   });
 
   test('isPending flips for drafted cells and computeds over them', () => {
@@ -164,7 +185,7 @@ describe('computeds across worlds', () => {
     const id = inDraft(() => a.set(9));
     expect(isPending(a)).toBe(true);
     expect(isPending(c)).toBe(true);
-    ri.retireDraft(id);
+    retireDraft(id);
     expect(isPending(a)).toBe(false);
     expect(isPending(c)).toBe(false);
     expect(read(c)).toBe(18);
@@ -179,11 +200,11 @@ describe('computeds across worlds', () => {
     const a = signal(1);
     const c = computed(() => a.get() * 2);
     const flips: boolean[] = [];
-    const unsub = ri.subscribe(c, () => flips.push(isPending(c)));
+    const unsub = observeNode(nodeOf(c), () => flips.push(isPending(c)));
     expect(read(c)).toBe(2); // establish the watched a -> c edge
     const id = inDraft(() => a.set(9));
     expect(flips).toContain(true); // the append reached the probe
-    ri.retireDraft(id, { silent: true });
+    retireDraft(id, { silent: true });
     expect(flips[flips.length - 1]).toBe(false); // and so did the fold
     expect(read(c)).toBe(18);
     unsub();
@@ -196,12 +217,12 @@ describe('per-root committed views', () => {
     const rootA = {};
     const rootB = {};
     const id = inDraft(() => a.set(1));
-    ri.setCommittedWorld(rootA, [id]); // root A committed the transition
-    ri.setCommittedWorld(rootB, []); // root B still on base
+    setCommittedWorld(rootA, [id]); // root A committed the transition
+    setCommittedWorld(rootB, []); // root B still on base
     expect(committed(a, rootA)).toBe(1);
     expect(committed(a, rootB)).toBe(0);
     expect(committed(a)).toBe(0); // no container: canonical
-    ri.retireDraft(id);
+    retireDraft(id);
     expect(committed(a, rootA)).toBe(1);
     expect(committed(a, rootB)).toBe(1); // retired drafts resolve as no-ops
   });
@@ -217,9 +238,9 @@ describe('latest() context resolution', () => {
     const c = computed(() => latest(a) * 10);
     const id = inDraft(() => a.set(2));
     expect(read(c)).toBe(10); // canonical evaluation must not read ahead
-    expect(ri.resolveState(c, [id])).toEqual(valueState(20)); // its own world
+    expect(stateIn(c, [id])).toEqual(valueState(20)); // its own world
     expect(latest(c)).toBe(20); // ambient: newest intent
-    ri.retireDraft(id);
+    retireDraft(id);
     expect(read(c)).toBe(20);
   });
 
@@ -241,22 +262,22 @@ describe('latest() context resolution', () => {
     expect(seen).toEqual([0, 1]);
     const id = inDraft(() => a.set(9));
     expect(seen).toEqual([0, 1]); // draft writes are invisible to effects
-    ri.retireDraft(id);
+    retireDraft(id);
     expect(seen).toEqual([0, 1, 9]); // the fold is a write: effect re-runs
   });
 
   test('render-world resolution is scoped by the provider: outside render, latest() is ambient', () => {
     const a = signal(0);
     let rendering = true;
-    ri.setRenderWorldProvider(() => (rendering ? [] : null));
+    setRenderWorldProvider(() => (rendering ? [] : null));
     try {
       const id = inDraft(() => a.set(7));
       expect(latest(a)).toBe(0); // an urgent pass's render body: the pass's world, not the draft
       rendering = false;
       expect(latest(a)).toBe(7); // ambient again: newest intent
-      ri.retireDraft(id);
+      retireDraft(id);
     } finally {
-      ri.setRenderWorldProvider(null);
+      setRenderWorldProvider(null);
     }
   });
 });
@@ -266,11 +287,11 @@ describe('quiescence', () => {
     const a = signal(0);
     const c = computed(() => a.get() + 1);
     const id = inDraft(() => a.set(1));
-    ri.resolveState(c, [id]);
-    expect(ri.liveDraftCount()).toBe(1);
-    ri.retireDraft(id);
-    expect(ri.liveDraftCount()).toBe(0);
-    expect(ri.nodeOf(c).worldMemos).toBeNull();
-    expect(ri.nodeOf(a).worldMemos).toBeNull();
+    stateIn(c, [id]);
+    expect(liveDraftCount()).toBe(1);
+    retireDraft(id);
+    expect(liveDraftCount()).toBe(0);
+    expect(nodeOf(c).worldMemos).toBeNull();
+    expect(nodeOf(a).worldMemos).toBeNull();
   });
 });

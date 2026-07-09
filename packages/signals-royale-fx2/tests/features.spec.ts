@@ -6,12 +6,14 @@ import {
   effect,
   initializeAtomState,
   installState,
-  reactIntegration as ri,
+  nodeOf,
   read,
   serializeAtomState,
   signal,
   update,
 } from '../src/index.ts';
+import { observeNode } from '../src/graph.ts';
+import { openDraft, retireDraft, runInDraft, sealDraft } from '../src/worlds.ts';
 
 const tick = () => new Promise<void>((r) => setTimeout(r));
 
@@ -31,7 +33,7 @@ describe('lifetime effects', () => {
     const dispose = effect(() => void c.get()); // observes the chain into a
     await tick();
     expect(log).toEqual(['on:0']);
-    const unsub = ri.subscribe(a, () => {}); // second kind: leaf subscription
+    const unsub = observeNode(nodeOf(a), () => {}); // second kind: leaf subscription
     await tick();
     expect(log).toEqual(['on:0']); // union: still one observation
     dispose();
@@ -108,7 +110,7 @@ describe('lazy initializers', () => {
       runs++;
       return 3;
     });
-    const unsub = ri.subscribe(a, () => {});
+    const unsub = observeNode(nodeOf(a), () => {});
     expect(runs).toBe(1);
     unsub();
   });
@@ -186,10 +188,10 @@ describe('causality tracer', () => {
   test('draft chains: retire event points at the draft last write, opens the fold writes', () => {
     const t = attachTracer();
     const a = signal(1, { label: 'a' });
-    const d = ri.openDraft();
-    ri.runInDraft(d.id, () => a.update((x) => x + 1));
-    ri.sealDraft(d.id);
-    ri.retireDraft(d.id);
+    const d = openDraft();
+    runInDraft(d, () => a.update((x) => x + 1));
+    sealDraft(d);
+    retireDraft(d.id);
     const events = t.events();
     const retire = events.find((e) => e.kind === 'draft-retire')!;
     const draftWrite = events.find((e) => e.id === retire.cause)!;

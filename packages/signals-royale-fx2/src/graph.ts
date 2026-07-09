@@ -56,8 +56,8 @@ export type TraceEventId = number;
  * Watched semantics per node type:
  * - cells and deriveds: mirror of observerCount > 0, set by promote (0→1)
  *   and cleared by demote (1→0). observerCount stays authoritative
- *   (lifetime.ts and demote need the count); the flag is the one-load test
- *   on the hot paths;
+ *   (lifetime effects and demote need the count); the flag is the one-load
+ *   test on the hot paths;
  * - watchers: set at creation, cleared at dispose.
  *
  * Kept as erasable-syntax consts (a const object, not a const enum) so the
@@ -164,17 +164,13 @@ export function currentWriteEpoch(): WriteEpoch {
 }
 
 // ---------------------------------------------------------------------------
-// Hooks the engine layer installs (worlds, lifetime, tracing). Kept as
+// Hooks the engine layer installs (write classification, tracing). Kept as
 // mutable module bindings so the graph itself stays dependency-free.
 // ---------------------------------------------------------------------------
 
 export interface GraphHooks {
   /** Return a draft sink for this write, or null for a canonical write. */
   classifyWrite: ((cell: CellNode<unknown>) => boolean) | null;
-  /** Observation count moved 0->1 (true) or 1->0 (false). */
-  observation: ((node: ReactiveNode, on: boolean) => void) | null;
-  /** A canonical write/invalidations wave finished propagating. */
-  afterPropagate: ((marked: ReactiveNode[]) => void) | null;
   trace:
     | ((kind: string, node: ReactiveNode | null, cause: TraceEventId, data?: unknown) => TraceEventId)
     | null;
@@ -182,8 +178,6 @@ export interface GraphHooks {
 
 export const hooks: GraphHooks = {
   classifyWrite: null,
-  observation: null,
-  afterPropagate: null,
   trace: null,
 };
 
@@ -353,7 +347,7 @@ export function addObserver(node: ReactiveNode): void {
       }
       if (invalid && (node.flags & STALE_MASK) === 0) node.flags |= Flags.Check;
     }
-    hooks.observation?.(node, true);
+    noteLifetimeTransition(node);
   }
 }
 
@@ -379,7 +373,63 @@ export function removeObserver(node: ReactiveNode): void {
       }
       node.validatedEpoch = (node.flags & STALE_MASK) === 0 ? writeEpoch : 0;
     }
-    hooks.observation?.(node, false);
+    noteLifetimeTransition(node);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lifetime effects: an atom option that runs setup when the atom gains its
+// first subscriber of ANY kind (computed chain, effect, or React component)
+// and runs the returned cleanup when the last subscriber of every kind is
+// gone. Exactly one observation is active across the union of kinds.
+//
+// Transitions within one tick coalesce through a microtask, so
+// subscribe/unsubscribe flaps (StrictMode double-mounts, list reorders)
+// net out instead of bouncing the resource.
+// ---------------------------------------------------------------------------
+
+/** Host microtask scheduler (present in every supported runtime; typed here
+ * so the engine's type surface stays lib-agnostic). */
+declare const queueMicrotask: (fn: () => void) => void;
+
+const pendingLifetimeCells = new Set<CellNode<unknown>>();
+let lifetimeFlushScheduled = false;
+
+/** Called at the promote/demote boundary (observation count 0<->1). */
+function noteLifetimeTransition(node: ReactiveNode): void {
+  if ((node.flags & Flags.Cell) === 0) return;
+  const cell = node as CellNode<unknown>;
+  if (cell.lifetime === undefined) return;
+  pendingLifetimeCells.add(cell);
+  if (!lifetimeFlushScheduled) {
+    lifetimeFlushScheduled = true;
+    queueMicrotask(flushLifetimeTransitions);
+  }
+}
+
+/** Settle observation state now (also called from tests). */
+export function flushLifetimeTransitions(): void {
+  lifetimeFlushScheduled = false;
+  const cells = [...pendingLifetimeCells];
+  pendingLifetimeCells.clear();
+  for (const cell of cells) {
+    const shouldBeActive = cell.observerCount > 0;
+    if (shouldBeActive === cell.lifetimeActive) continue;
+    cell.lifetimeActive = shouldBeActive;
+    if (shouldBeActive) {
+      const ctx = {
+        get: () => untracked(() => peekCell(cell)),
+        set: (v: unknown) => {
+          writeCell(cell, v);
+        },
+      };
+      const cleanup = cell.lifetime!(ctx);
+      cell.lifetimeCleanup = typeof cleanup === 'function' ? cleanup : undefined;
+    } else {
+      const cleanup = cell.lifetimeCleanup;
+      cell.lifetimeCleanup = undefined;
+      if (cleanup !== undefined) untracked(cleanup);
+    }
   }
 }
 
@@ -469,7 +519,7 @@ function assertDepsFromEval(sub: ReactiveNode, myStamp: number): void {
 // ---------------------------------------------------------------------------
 
 const watcherQueue: WatcherNode[] = [];
-/** Leaf observers marked by the current wave; reported to afterPropagate. */
+/** Leaf observers marked by the current wave; notified after effects settle. */
 const markedLeaves: ReactiveNode[] = [];
 
 /** While true, canonical changes do not advance reactEpoch (a silent draft
@@ -744,7 +794,6 @@ export function flush(): void {
         w.scheduled = false;
         w.flags &= ~STALE_MASK;
       }
-      hooks.afterPropagate?.(leaves);
       for (const leaf of leaves) {
         const w = leaf as WatcherNode;
         if (!w.disposed) w.onNotify?.();

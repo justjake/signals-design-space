@@ -23,22 +23,22 @@
  */
 import * as React from 'react';
 import {
-  ASYNC_MASK,
-  Flags,
   computed,
+  committedSnapshot,
   effect as engineEffect,
   isErrorBox,
+  isPendingPassive,
   isUninitialized,
+  nodeOf,
   signal,
-  reactIntegration as engine,
   type Computed,
-  type DerivedState,
-  type DraftId,
-  type ErrorBox,
   type Signal,
   type SignalOptions,
-  type Suspension,
 } from '../index.ts';
+import { ASYNC_MASK, Flags, observeNode, type ReactiveNode } from '../graph.ts';
+import { resolveState, worldOf, type DraftId, type World } from '../worlds.ts';
+import { type DerivedState, type ErrorBox, type Suspension } from '../asyncs.ts';
+import { getActiveTracer } from '../tracer.ts';
 import {
   correctSubscription,
   dispatchDraftWake,
@@ -52,14 +52,14 @@ type Readable<T> = Signal<T> | Computed<T>;
 
 const NO_IDS: readonly DraftId[] = [];
 
-const lastDelivered = new WeakMap<object, unknown>();
+const lastDelivered = new WeakMap<ReactiveNode, unknown>();
 const NEVER = Symbol('never-delivered');
 
-function traceDelivery(x: AnyReadable, value: unknown): void {
-  const prev = lastDelivered.has(x) ? lastDelivered.get(x) : NEVER;
+function traceDelivery(node: ReactiveNode, value: unknown): void {
+  const prev = lastDelivered.has(node) ? lastDelivered.get(node) : NEVER;
   if (prev !== value) {
-    lastDelivered.set(x, value);
-    engine.trace('deliver', x, engine.causeOf(x));
+    lastDelivered.set(node, value);
+    getActiveTracer()?.emit('deliver', node, node.causeEvent);
   }
 }
 
@@ -71,12 +71,12 @@ function traceDelivery(x: AnyReadable, value: unknown): void {
  *   (useIsPending is the indicator; no fallback flash);
  * - a never-settled value suspends everywhere.
  */
-function unwrapState(st: DerivedState, ids: readonly DraftId[]): unknown {
+function unwrapState(st: DerivedState, world: World): unknown {
   const asyncBits = st.flags & ASYNC_MASK;
   if (asyncBits === 0) return st.value;
   if (asyncBits === Flags.DerivedError) throw (st.throwable as ErrorBox).error;
   const suspension = st.throwable as Suspension;
-  if (engine.hasLiveDrafts(ids)) throw suspension.promise;
+  if (world.drafts.length > 0) throw suspension.promise;
   if (!isUninitialized(st.value)) return st.value; // settled history: stale serves
   throw suspension.promise;
 }
@@ -99,6 +99,7 @@ function unwrapState(st: DerivedState, ids: readonly DraftId[]): unknown {
  * subscribe time.
  */
 export function useValue<T>(x: Readable<T>): T {
+  const node = nodeOf(x);
   const scope = React.useContext(ScopeContext);
   const scoped = scope !== null;
   const [hookWorld, wake] = React.useReducer(worldsReducer, EMPTY_WORLD);
@@ -132,32 +133,33 @@ export function useValue<T>(x: Readable<T>): T {
   });
   const subscribe = React.useCallback(
     (cb: () => void) => {
-      const off = engine.subscribe(x as AnyReadable, cb, scope !== null ? deliver : undefined);
+      const off = observeNode(node, cb, scope !== null ? deliver : undefined);
       // The subscription attaches at commit, after the render that created
       // it: repair anything that happened in between (live drafts this hook
       // missed, silent folds the epoch snapshot cannot see).
       if (scope !== null && rendered.current.live) {
-        correctSubscription(x, rendered.current, scope, deliver, wake);
+        correctSubscription(node, rendered.current, scope, deliver, wake);
       }
       return off;
     },
-    [x, scope, deliver, wake],
+    [node, scope, deliver, wake],
   );
+  // Subscription epoch snapshots: reactEpoch changes exactly when scoped
+  // committed-view subscribers must re-render; canonicalEpoch counts silent
+  // draft folds too — the only channel for subscribers outside any scope.
   const epochSnap = React.useCallback(
-    () =>
-      scoped
-        ? engine.epochSnapshot(x as AnyReadable)
-        : engine.canonicalEpochSnapshot(x as AnyReadable),
-    [x, scoped],
+    () => (scoped ? node.reactEpoch : node.canonicalEpoch),
+    [node, scoped],
   );
   React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
-  const st = engine.resolveState(x as AnyReadable, ids);
-  const value = unwrapState(st, ids);
+  const world = worldOf(ids);
+  const st = resolveState(node, world);
+  const value = unwrapState(st, world);
   const stash = rendered.current;
   stash.ids = ids;
   stash.value = value;
   stash.live = true;
-  traceDelivery(x as AnyReadable, value);
+  traceDelivery(node, value);
   return value as T;
 }
 
@@ -179,21 +181,23 @@ export function useSignalEffect(fn: () => void | (() => void)): void {
  * transition draft on it, or an async refetch behind stale. The snapshot is
  * world-independent (ambient pendingness) for the same reason as useValue's. */
 export function useIsPending(x: AnyReadable): boolean {
+  const node = nodeOf(x);
   noteHookRender(React.useContext(ScopeContext), null);
-  const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
-  const snap = React.useCallback(() => engine.isPendingIn(x as AnyReadable, null), [x]);
+  const subscribe = React.useCallback((cb: () => void) => observeNode(node, cb), [node]);
+  const snap = React.useCallback(() => isPendingPassive(node, null), [node]);
   return React.useSyncExternalStore(subscribe, snap, () => false);
 }
 
 /** What this root's screen shows for x (the per-root committed view). */
 export function useCommitted<T>(x: Readable<T>): T {
+  const node = nodeOf(x);
   const scope = React.useContext(ScopeContext);
   noteHookRender(scope, null);
   const container = scope?.container ?? undefined;
-  const subscribe = React.useCallback((cb: () => void) => engine.subscribe(x as AnyReadable, cb), [x]);
+  const subscribe = React.useCallback((cb: () => void) => observeNode(node, cb), [node]);
   const committedSnap = React.useCallback(
-    () => engine.committedSnapshot(x as AnyReadable, container),
-    [x, container],
+    () => committedSnapshot(node, container),
+    [node, container],
   );
   const snap = React.useSyncExternalStore(subscribe, committedSnap, committedSnap);
   if (isErrorBox(snap)) throw snap.error;

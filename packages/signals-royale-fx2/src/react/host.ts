@@ -16,12 +16,20 @@
 /// <reference path="./scheduler.d.ts" />
 import * as React from 'react';
 import * as Scheduler from 'scheduler';
+import { ASYNC_MASK, pokeLeafObservers, type ReactiveNode } from '../graph.ts';
 import {
-  ASYNC_MASK,
-  reactIntegration as engine,
-  resetEngineForTest,
+  type Draft,
   type DraftId,
-} from '../index.ts';
+  draftsAffecting,
+  isLiveDraft,
+  openDraft,
+  resolveState,
+  retireDraft,
+  setAmbientClassifier,
+  setCommittedWorld,
+  worldOf,
+} from '../worlds.ts';
+import { resetEngineForTest, setRenderWorldProvider, setRenderWriteGuard } from '../index.ts';
 
 /** One registered SignalScope instance (one per root in practice). The
  * record is identity-stable for the scope's lifetime: it is the ScopeContext
@@ -190,7 +198,7 @@ function rememberOwner(id: DraftId): void {
   // Sweep first so the map stays bounded by live drafts even when a draft
   // is discarded engine-side without host involvement.
   for (const known of [...draftOwners.keys()]) {
-    if (!engine.isLiveDraft(known)) draftOwners.delete(known);
+    if (!isLiveDraft(known)) draftOwners.delete(known);
   }
   const T = sharedInternals().T;
   if (T != null) draftOwners.set(id, T);
@@ -263,19 +271,19 @@ interface RenderedResolution {
  * the dispatch. `dispatch` is the raw reducer for the urgent repair bump.
  */
 export function correctSubscription(
-  x: unknown,
+  node: ReactiveNode,
   rendered: RenderedResolution,
   scope: ProviderRecord,
   deliver: (id: DraftId) => void,
   dispatch: (id: DraftId) => void,
 ): void {
-  for (const id of engine.draftsAffecting(x as never)) {
+  for (const id of draftsAffecting(node)) {
     if (rendered.ids.includes(id)) continue;
     const audience = draftAudience.get(id);
     if (audience === undefined || !audience.has(scope)) continue;
     deliver(id);
   }
-  const st = engine.resolveState(x as never, rendered.ids);
+  const st = resolveState(node, worldOf(rendered.ids));
   if ((st.flags & ASYNC_MASK) === 0 && !Object.is(st.value, rendered.value)) {
     dispatch(REPAIR_WAKE);
   }
@@ -285,19 +293,25 @@ export function correctSubscription(
 // Draft broadcast and per-root commit bookkeeping
 // ---------------------------------------------------------------------------
 
-/** Drafts created for plain React.startTransition scopes (no helper). */
-const draftsByTransition = new WeakMap<object, DraftId>();
+/** Drafts created for plain React.startTransition scopes (no helper). The
+ * values are Draft RECORDS, not ids: an entry dies with its transition
+ * object (WeakMap), and handing the record straight to write classification
+ * spares every drafted write an id lookup. */
+const draftsByTransition = new WeakMap<object, Draft>();
 
-function ambientClassifier(): DraftId | null {
+function ambientClassifier(): Draft | null {
   const T = sharedInternals().T;
   if (T == null) return null;
-  let id = draftsByTransition.get(T);
-  if (id === undefined) {
-    id = engine.openDraft().id;
-    draftsByTransition.set(T, id);
-    broadcastDraft(id);
+  let draft = draftsByTransition.get(T);
+  if (draft === undefined) {
+    draft = openDraft();
+    draftsByTransition.set(T, draft);
+    broadcastDraft(draft.id);
   }
-  return id;
+  // A retired or discarded draft classifies as canonical: its effects are
+  // already folded or rolled back, so a late write under the same transition
+  // object must be urgent, never an append to a finished batch.
+  return draft.state === 'open' || draft.state === 'sealed' ? draft : null;
 }
 
 /** Send a draft id to every scope, inside the current React context, so the
@@ -317,7 +331,7 @@ export function broadcastDraft(id: DraftId): void {
     queueMicrotask(() => {
       if (draftRecipients.get(id)?.size === 0) {
         forgetDraft(id);
-        engine.retireDraft(id);
+        retireDraft(id);
       }
     });
   }
@@ -337,7 +351,7 @@ export function registerProvider(p: ProviderRecord): () => void {
       recipients.delete(p);
       if (recipients.size === 0) {
         forgetDraft(id);
-        engine.retireDraft(id);
+        retireDraft(id);
       }
     }
   };
@@ -357,10 +371,13 @@ function foldReachedEveryScope(id: DraftId): boolean {
 
 /** A provider committed a render pass whose world contained these drafts. */
 export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void {
-  if (p.container !== null) engine.setCommittedWorld(p.container, ids);
-  // Per-root committed views changed; wake their passive subscribers (the
-  // useValue crowd bails on equal snapshots, so this is cheap).
-  engine.pokeDraftCells(ids);
+  if (p.container !== null) setCommittedWorld(p.container, ids);
+  // Per-root committed views changed; wake leaf observers of every cell the
+  // committed drafts touched (the useValue crowd bails on equal snapshots,
+  // so this is cheap).
+  for (const draft of worldOf(ids).drafts) {
+    for (const cell of draft.cells) pokeLeafObservers(cell);
+  }
   for (const id of ids) {
     const recipients = draftRecipients.get(id);
     if (recipients !== undefined && recipients.delete(p) && recipients.size === 0) {
@@ -370,7 +387,7 @@ export function confirmCommit(p: ProviderRecord, ids: readonly DraftId[]): void 
       // to every scope (subscribers outside scopes are covered separately by
       // the canonical epoch). A scope mounted mid-transition never carried
       // the draft, so its subscribers need the loud fold.
-      engine.retireDraft(id, { silent });
+      retireDraft(id, { silent });
     }
   }
 }
@@ -386,16 +403,16 @@ export function reportError(e: unknown): void {
  */
 export function registerReactSignals(): ReactSignalsHandle {
   if (handle !== null) return handle;
-  engine.setAmbientClassifier(ambientClassifier);
-  engine.setRenderWriteGuard(renderWriteGuard);
-  engine.setRenderWorldProvider(renderWorldProvider);
+  setAmbientClassifier(ambientClassifier);
+  setRenderWriteGuard(renderWriteGuard);
+  setRenderWorldProvider(renderWorldProvider);
   handle = {
     errors: [],
     dispose() {
       if (handle === null) return;
-      engine.setAmbientClassifier(null);
-      engine.setRenderWriteGuard(null);
-      engine.setRenderWorldProvider(null);
+      setAmbientClassifier(null);
+      setRenderWriteGuard(null);
+      setRenderWorldProvider(null);
       handle = null;
     },
   };
@@ -413,9 +430,9 @@ export function resetReactSignalsForTest(): void {
   note = null;
   if (wasRegistered) {
     // resetEngineForTest cleared the engine hooks; re-arm them.
-    engine.setAmbientClassifier(ambientClassifier);
-    engine.setRenderWriteGuard(renderWriteGuard);
-    engine.setRenderWorldProvider(renderWorldProvider);
+    setAmbientClassifier(ambientClassifier);
+    setRenderWriteGuard(renderWriteGuard);
+    setRenderWorldProvider(renderWorldProvider);
     handle!.errors.length = 0;
   }
 }

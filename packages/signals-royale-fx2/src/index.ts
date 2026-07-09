@@ -17,17 +17,15 @@ import {
   type EqualsFn,
   type ReactiveNode,
   type UseFn,
-  type WatcherNode,
   ASYNC_MASK,
   Flags,
+  flushLifetimeTransitions,
   getActiveConsumer,
-  hooks,
   isUninitialized,
   makeCell,
   makeDerived,
   makeEffect,
   makeScope,
-  observeNode,
   peekCell,
   readCell,
   readDerived,
@@ -37,8 +35,6 @@ import {
   untracked as graphUntracked,
   useImpl,
   writeCell,
-  pokeLeafObservers,
-  NO_EVENT,
 } from './graph.ts';
 import { type DerivedState, type ErrorBox, type Suspension, isErrorBox } from './asyncs.ts';
 import {
@@ -52,29 +48,16 @@ import {
   classifyWrite,
   committedWorldOf,
   discardAllDrafts,
-  discardDraft,
-  draftsAffecting,
   getCurrentPark,
   getCurrentWorld,
-  getDraft,
-  isLiveDraft,
   latestWorld,
-  liveDraftCount,
-  openDraft,
   peekWorldMemo,
   resolveState,
-  retireDraft,
-  runInDraft,
-  sealDraft,
   setAmbientClassifier,
-  setCommittedWorld,
   unwrapForEval,
   worldOf,
 } from './worlds.ts';
-import { installLifetimeHook, flushLifetimeTransitions } from './lifetime.ts';
 import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer.ts';
-
-installLifetimeHook();
 
 // ---------------------------------------------------------------------------
 // Public handle types
@@ -220,6 +203,15 @@ export function committed<T>(x: Readable<T>, container?: object): T {
   return stateValue(st) as T;
 }
 
+/** Committed-view snapshot with stable identity: the value, or the ErrorBox
+ * itself (identity-stable for the whole error span — see isErrorBox) whose
+ * error the caller rethrows. The React bindings' useCommitted snapshot. */
+export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
+  const st = resolveState(node, committedWorldOf(container));
+  if ((st.flags & Flags.DerivedError) !== 0) return st.throwable;
+  return stateValue(st);
+}
+
 /** Cheap flip-only probe: true while newer data exists behind what is on
  * screen — a pending transition draft on this atom, or an async refetch
  * loading behind a stale value. Passive by contract: never evaluates,
@@ -228,7 +220,9 @@ export function isPending(x: AnyReadable): boolean {
   return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld());
 }
 
-function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
+/** Node-level pendingness probe; `world` scopes the suspended-memo check
+ * (null = ambient). The React bindings' useIsPending snapshot. */
+export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
   if ((node.flags & Flags.Cell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
   if ((node.flags & Flags.Derived) === 0) return false;
   if ((node.flags & Flags.DerivedSuspended) !== 0) return true;
@@ -357,8 +351,8 @@ export { attachTracer, getActiveTracer, Tracer };
 export type { TraceEvent };
 
 // ---------------------------------------------------------------------------
-// React integration surface (consumed by the ./react bindings; not part
-// of the app-facing API, but public so the bindings layer stays honest).
+// Render-world provider (installed by the ./react bindings, which import
+// engine modules directly — the react directory is part of the library).
 // ---------------------------------------------------------------------------
 
 /** Installed by the bindings: answers "what world is rendering right now".
@@ -372,6 +366,12 @@ export type { TraceEvent };
  * is rendering and which notes a pass refreshed. */
 let renderWorldProvider: (() => readonly DraftId[] | 'canonical' | null) | null = null;
 
+export function setRenderWorldProvider(
+  fn: (() => readonly DraftId[] | 'canonical' | null) | null,
+): void {
+  renderWorldProvider = fn;
+}
+
 function renderWorld(): World | null {
   if (renderWorldProvider === null) return null;
   const ids = renderWorldProvider();
@@ -379,104 +379,6 @@ function renderWorld(): World | null {
   if (ids === 'canonical') return CANONICAL_WORLD;
   return worldOf(ids);
 }
-
-export const reactIntegration = {
-  nodeOf,
-  worldOf,
-  resolveState: (x: AnyReadable, ids: readonly DraftId[]): DerivedState =>
-    resolveState(nodeOf(x), worldOf(ids)),
-  /** Leaf subscription. `notify` is the store-change channel (snapshot
-   * comparisons re-render); `draftWake` is the draft-lane channel — it
-   * receives the id of any draft whose intents reach this node, so only
-   * affected subscribers join a transition's render passes. */
-  subscribe(x: AnyReadable, notify: () => void, draftWake?: (id: DraftId) => void): () => void {
-    return observeNode(nodeOf(x), notify, draftWake);
-  },
-  openDraft,
-  sealDraft: (id: DraftId): void => {
-    const d = getDraft(id);
-    if (d !== undefined) sealDraft(d);
-  },
-  retireDraft,
-  discardDraft,
-  runInDraft: <T>(id: DraftId, fn: () => T): T => {
-    const d = getDraft(id);
-    if (d === undefined) throw new Error(`draft ${id} is not live`);
-    return runInDraft(d, fn);
-  },
-  liveDraftCount,
-  setAmbientClassifier: (fn: (() => DraftId | null) | null): void => {
-    if (fn === null) {
-      setAmbientClassifier(null);
-      return;
-    }
-    setAmbientClassifier(() => {
-      const id = fn();
-      return id === null ? null : (getDraft(id) ?? null);
-    });
-  },
-  setCommittedWorld,
-  setRenderWriteGuard,
-  setRenderWorldProvider(fn: (() => readonly DraftId[] | 'canonical' | null) | null): void {
-    renderWorldProvider = fn;
-  },
-  trace(kind: string, x: AnyReadable | null, cause: number, data?: unknown): number {
-    const t = getActiveTracer();
-    if (t === null) return NO_EVENT;
-    return t.emit(kind, x === null ? null : nodeOf(x), cause, data);
-  },
-  traceNode(kind: string, node: ReactiveNode | null, cause: number, data?: unknown): number {
-    const t = getActiveTracer();
-    if (t === null) return NO_EVENT;
-    return t.emit(kind, node, cause, data);
-  },
-  causeOf(x: AnyReadable): number {
-    return nodeOf(x).causeEvent;
-  },
-  draftEvents(id: DraftId): { open: number; lastWrite: number } {
-    const d = getDraft(id);
-    return { open: d?.openEvent ?? NO_EVENT, lastWrite: d?.lastWriteEvent ?? NO_EVENT };
-  },
-  flushLifetimeTransitions,
-  isPendingIn(x: AnyReadable, ids: readonly DraftId[] | null): boolean {
-    return isPendingPassive(nodeOf(x), ids === null ? null : worldOf(ids));
-  },
-  isLiveDraft,
-  /** Live drafts whose intents reach this node; late subscribers use it to
-   * discover transitions whose write-time wakes they missed. */
-  draftsAffecting(x: AnyReadable): readonly DraftId[] {
-    return draftsAffecting(nodeOf(x));
-  },
-  /** Subscription epoch: the useSyncExternalStore snapshot. Changes exactly
-   * when committed-view subscribers must re-render. */
-  epochSnapshot(x: AnyReadable): number {
-    return nodeOf(x).reactEpoch;
-  },
-  /** Like epochSnapshot, but silent draft folds count too. For subscribers
-   * outside any SignalScope: render-pass worlds never deliver to them, so
-   * the fold is the only channel that can repair their view. */
-  canonicalEpochSnapshot(x: AnyReadable): number {
-    return nodeOf(x).canonicalEpoch;
-  },
-  hasLiveDrafts(ids: readonly DraftId[]): boolean {
-    return worldOf(ids).drafts.length > 0;
-  },
-  /** Committed-view snapshot with stable identity: the value, or the
-   * ErrorBox itself (identity-stable for the whole error span — see
-   * isErrorBox) whose error the call site rethrows. */
-  committedSnapshot(x: AnyReadable, container: object | undefined): unknown {
-    const st = resolveState(nodeOf(x), committedWorldOf(container));
-    if ((st.flags & Flags.DerivedError) !== 0) return st.throwable;
-    return stateValue(st);
-  },
-  /** Wake leaf observers of every cell the given live drafts touch (used
-   * after a per-root commit updates that root's committed view). */
-  pokeDraftCells(ids: readonly DraftId[]): void {
-    for (const draft of worldOf(ids).drafts) {
-      for (const cell of draft.cells) pokeLeafObservers(cell);
-    }
-  },
-};
 
 /** Reset seam for tests: discard live drafts, settle lifetime flaps, drop
  * ambient classification, detach any tracer. Existing atoms stay valid. */

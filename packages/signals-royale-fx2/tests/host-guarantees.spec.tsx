@@ -3,19 +3,14 @@
 import { describe, expect, test } from 'vitest';
 import * as React from 'react';
 import { act } from 'react';
-import {
-  reactIntegration as engine,
-  signal,
-  read,
-  type Signal,
-} from 'signals-royale-fx2';
+import { nodeOf, signal, read, type Signal } from 'signals-royale-fx2';
+import { liveDraftCount } from '../src/worlds.ts';
 import { registerReactSignals, startTransitionWrite, useValue } from 'signals-royale-fx2/react';
 import { makeHarness, text } from './helpers.tsx';
 
 function subCount(x: Signal<number>): number {
   let n = 0;
-  const node = engine.nodeOf(x) as { subs?: { nextSub?: unknown } };
-  for (let l = node.subs as { nextSub?: unknown } | undefined; l !== undefined; l = l.nextSub as never) n++;
+  for (let l = nodeOf(x).subs; l !== undefined; l = l.nextSub) n++;
   return n;
 }
 
@@ -51,8 +46,8 @@ describe('unmount reclamation', () => {
     });
     await act(async () => {});
     expect(text(container)).toContain('1');
-    expect(engine.liveDraftCount()).toBe(0); // retired at commit: quiescent
-    expect(engine.nodeOf(a).worldMemos).toBeNull();
+    expect(liveDraftCount()).toBe(0); // retired at commit: quiescent
+    expect(nodeOf(a).worldMemos).toBeNull();
     await act(() => {
       root.render(null);
     });
@@ -76,8 +71,8 @@ describe('unmount reclamation', () => {
     await act(async () => {});
     expect(text(m1.container)).toBe('5');
     expect(text(m2.container)).toBe('5');
-    expect(engine.liveDraftCount()).toBe(0);
+    expect(liveDraftCount()).toBe(0);
     await h.cleanup();
-    expect(engine.liveDraftCount()).toBe(0);
+    expect(liveDraftCount()).toBe(0);
   });
 });
