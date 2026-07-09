@@ -1,6 +1,7 @@
 /** Async semantics: pending/error as graph state, suspensions, refresh. */
 import { describe, expect, test } from 'vitest';
 import {
+  Flags,
   computed,
   effect,
   isPending,
@@ -207,12 +208,12 @@ describe('refresh classification', () => {
     });
     ri.sealDraft(d.id);
     expect(read(r.data)).toBe('one'); // canonical: no refetch yet
-    const env = ri.resolveEnvelope(r.data, [d.id]);
-    expect(env.kind).toBe('pending'); // the draft world is fetching '1:1'
+    const st = ri.resolveState(r.data, [d.id]);
+    expect((st.flags & Flags.DerivedSuspended) !== 0).toBe(true); // the draft world is fetching '1:1'
     expect(r.fetchCount()).toBe(2);
     r.gates.get('1:1')!.resolve('TWO');
     await tick();
-    expect(ri.resolveEnvelope(r.data, [d.id])).toMatchObject({ kind: 'value', value: 'TWO' });
+    expect(ri.resolveState(r.data, [d.id])).toMatchObject({ value: 'TWO', throwable: null });
     expect(read(r.data)).toBe('one'); // still canonical-stale
     ri.retireDraft(d.id);
     expect(read(r.data)).toBe('TWO'); // fold re-fetches nothing: same key, same gate

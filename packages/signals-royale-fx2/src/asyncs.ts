@@ -21,6 +21,8 @@
 import {
   type CellNode,
   type DerivedNode,
+  ASYNC_MASK,
+  Flags,
   PARKED,
   adoptDepLink,
   ensureFresh,
@@ -61,9 +63,45 @@ export interface ErrorBox {
   error: unknown;
 }
 
-export type AsyncState =
-  | { kind: 'pending'; suspension: Suspension }
-  | { kind: 'error'; box: ErrorBox };
+/** Box identity is the rethrow-same-reference contract: every read of an
+ * erroring computed rethrows the same reason, and identity-comparing
+ * consumers (snapshot equality, memo reconciliation) rely on the box staying
+ * the same object for the whole error span. Boxes are registered so value
+ * channels that hand a box to a caller (committedSnapshot) can be told apart
+ * from user values without a marker allocation. */
+const errorBoxes = new WeakSet<object>();
+
+export function makeErrorBox(error: unknown): ErrorBox {
+  const box: ErrorBox = { error };
+  errorBoxes.add(box);
+  return box;
+}
+
+export function isErrorBox(v: unknown): v is ErrorBox {
+  return typeof v === 'object' && v !== null && errorBoxes.has(v);
+}
+
+/**
+ * The uniform read protocol for a resolved value — one shape for canonical
+ * nodes (cells and deriveds ARE this shape; resolving a canonical world
+ * allocates nothing) and per-world memo records:
+ *
+ * - flags: read via the async bits ONLY (`flags & ASYNC_MASK`); node-backed
+ *   views carry type/staleness/tier bits in the same word. Both async bits
+ *   clear = plain value state.
+ * - value: the settled value; the UNINITIALIZED sentinel when none exists
+ *   yet. A suspended state with a settled value is "stale" — the previous
+ *   value keeps serving while the refetch runs (stale ⇔ value is not the
+ *   sentinel; unwrap sites normalize the sentinel to undefined).
+ * - throwable: the value-plane companion — the ErrorBox whose .error every
+ *   read rethrows (DerivedError), the Suspension whose .promise suspends a
+ *   reader (DerivedSuspended), null in the value state.
+ */
+export interface DerivedState {
+  flags: Flags;
+  value: unknown;
+  throwable: ErrorBox | Suspension | null;
+}
 
 const boxes = new WeakMap<PromiseLike<unknown>, ThenableBox>();
 
@@ -145,25 +183,22 @@ function settle(box: ThenableBox): void {
   }
 }
 
-export function asyncStateOf(node: DerivedNode<unknown>): AsyncState | null {
-  return node.asyncState as AsyncState | null;
-}
-
 /** use(t) inside a canonical evaluation. */
 function canonicalUse(t: PromiseLike<unknown>, consumer: DerivedNode<unknown>): unknown {
   const box = trackThenable(t);
   if (box.status === 'fulfilled') return box.value;
   if (box.status === 'rejected') throw box.reason;
   box.parkedNodes.add(consumer);
-  const prior = consumer.asyncState as AsyncState | null;
+  const flags = consumer.flags;
   // Reuse the span's suspension so Suspense retries see one stable thenable —
   // but never a settled one, or a suspended render would retry in a loop.
   const suspension =
-    prior !== null && prior.kind === 'pending' && !prior.suspension.settled
-      ? prior.suspension
+    (flags & Flags.DerivedSuspended) !== 0 && !(consumer.throwable as Suspension).settled
+      ? (consumer.throwable as Suspension)
       : makeSuspension();
   box.parkedSuspensions.add(suspension);
-  consumer.asyncState = { kind: 'pending', suspension } satisfies AsyncState;
+  consumer.throwable = suspension;
+  consumer.flags = (flags & ~ASYNC_MASK) | Flags.DerivedSuspended;
   throw PARKED;
 }
 
@@ -171,22 +206,23 @@ function finishCompute(
   node: DerivedNode<unknown>,
   outcome: { parked: boolean; error: unknown; hasError: boolean; value: unknown },
 ): boolean {
-  const prior = node.asyncState as AsyncState | null;
+  const flags = node.flags;
   if (outcome.parked) {
-    // canonicalUse installed the pending state. Advance the version so
+    // canonicalUse installed the suspended state. Advance the version so
     // downstream readers re-pull and park on the (possibly fresh) suspension.
     return true;
   }
   if (outcome.hasError) {
-    if (prior !== null && prior.kind === 'pending') prior.suspension.resolve();
-    const sameError = prior !== null && prior.kind === 'error' && prior.box.error === outcome.error;
-    node.asyncState = sameError
-      ? prior
-      : ({ kind: 'error', box: { error: outcome.error } } satisfies AsyncState);
+    if ((flags & Flags.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
+    const sameError =
+      (flags & Flags.DerivedError) !== 0 && (node.throwable as ErrorBox).error === outcome.error;
+    if (!sameError) node.throwable = makeErrorBox(outcome.error);
+    node.flags = (flags & ~ASYNC_MASK) | Flags.DerivedError;
     return !sameError;
   }
-  if (prior !== null && prior.kind === 'pending') prior.suspension.resolve();
-  node.asyncState = null;
+  if ((flags & Flags.DerivedSuspended) !== 0) (node.throwable as Suspension).resolve();
+  node.flags = flags & ~ASYNC_MASK;
+  node.throwable = null;
   const prev = node.value;
   if (isUninitialized(prev) || !node.equals(prev, outcome.value)) {
     node.value = outcome.value;
@@ -194,29 +230,11 @@ function finishCompute(
   }
   // The value itself is unchanged; downstream still re-pulls when this ends
   // a pending or error span (readers may have parked or thrown).
-  return prior !== null;
+  return (flags & ASYNC_MASK) !== 0;
 }
 
 setUseImpl(canonicalUse as never);
 setFinishComputeImpl(finishCompute as never);
-
-/** A derived's canonical result envelope, after ensureFresh. */
-export type Envelope =
-  | { kind: 'value'; value: unknown }
-  | { kind: 'pending'; suspension: Suspension; stale: boolean; value: unknown }
-  | { kind: 'error'; box: ErrorBox };
-
-export function envelopeOf(node: DerivedNode<unknown>): Envelope {
-  const st = node.asyncState as AsyncState | null;
-  if (st === null) return { kind: 'value', value: node.value };
-  if (st.kind === 'error') return { kind: 'error', box: st.box };
-  return {
-    kind: 'pending',
-    suspension: st.suspension,
-    stale: !isUninitialized(node.value),
-    value: isUninitialized(node.value) ? undefined : node.value,
-  };
-}
 
 /**
  * Force a refetch with unchanged inputs. The hidden nonce cell is a real

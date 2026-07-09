@@ -18,13 +18,19 @@ function inDraft(fn: () => void): number {
   return d.id;
 }
 
+/** A drafted world's memo record for a plain value (the DerivedState shape:
+ * async flag bits clear, no throwable). */
+function valueState(value: unknown): { flags: number; value: unknown; throwable: null } {
+  return { flags: 0, value, throwable: null };
+}
+
 describe('draft visibility', () => {
   test('draft writes are invisible to canonical readers until retirement', () => {
     const a = signal(0);
     const id = inDraft(() => a.set(1));
     expect(read(a)).toBe(0);
     expect(latest(a)).toBe(1);
-    expect(ri.resolveEnvelope(a, [id])).toEqual({ kind: 'value', value: 1 });
+    expect(ri.resolveState(a, [id])).toEqual(valueState(1));
     ri.retireDraft(id);
     expect(read(a)).toBe(1);
     expect(latest(a)).toBe(1);
@@ -90,7 +96,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     const id = inDraft(() => a.update((x) => x + 1));
     a.update((x) => x * 2);
     expect(read(a)).toBe(2); // urgent skipped the draft, applied *2 to base 1
-    expect(ri.resolveEnvelope(a, [id])).toEqual({ kind: 'value', value: 4 }); // (1+1)*2
+    expect(ri.resolveState(a, [id])).toEqual(valueState(4)); // (1+1)*2
     ri.retireDraft(id);
     expect(read(a)).toBe(4);
   });
@@ -100,7 +106,7 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     const id = inDraft(() => a.update((x) => x + 2));
     a.update((x) => x * 2);
     expect(read(a)).toBe(2);
-    expect(ri.resolveEnvelope(a, [id])).toEqual({ kind: 'value', value: 6 }); // (1+2)*2
+    expect(ri.resolveState(a, [id])).toEqual(valueState(6)); // (1+2)*2
     ri.retireDraft(id);
     expect(read(a)).toBe(6);
   });
@@ -111,14 +117,14 @@ describe('dispatch-order replay (React updater-queue arithmetic)', () => {
     a.update((x) => x * 10); // seq2 urgent
     const d2 = inDraft(() => a.update((x) => x + 3)); // seq3
     expect(read(a)).toBe(10);
-    expect(ri.resolveEnvelope(a, [d1])).toEqual({ kind: 'value', value: 20 }); // (1+1)*10
-    expect(ri.resolveEnvelope(a, [d2])).toEqual({ kind: 'value', value: 13 }); // 1*10+3
-    expect(ri.resolveEnvelope(a, [d1, d2])).toEqual({ kind: 'value', value: 23 }); // (1+1)*10+3
+    expect(ri.resolveState(a, [d1])).toEqual(valueState(20)); // (1+1)*10
+    expect(ri.resolveState(a, [d2])).toEqual(valueState(13)); // 1*10+3
+    expect(ri.resolveState(a, [d1, d2])).toEqual(valueState(23)); // (1+1)*10+3
     ri.retireDraft(d1);
     expect(read(a)).toBe(20);
     // d2's world resolves the same values before and after d1's fold.
-    expect(ri.resolveEnvelope(a, [d1, d2])).toEqual({ kind: 'value', value: 23 });
-    expect(ri.resolveEnvelope(a, [d2])).toEqual({ kind: 'value', value: 23 });
+    expect(ri.resolveState(a, [d1, d2])).toEqual(valueState(23));
+    expect(ri.resolveState(a, [d2])).toEqual(valueState(23));
     ri.retireDraft(d2);
     expect(read(a)).toBe(23);
   });
@@ -133,7 +139,7 @@ describe('computeds across worlds', () => {
     expect(read(pick)).toBe('L');
     const id = inDraft(() => flag.set(true));
     expect(read(pick)).toBe('L'); // canonical branch untouched
-    expect(ri.resolveEnvelope(pick, [id])).toEqual({ kind: 'value', value: 'R' });
+    expect(ri.resolveState(pick, [id])).toEqual(valueState('R'));
     ri.retireDraft(id);
     expect(read(pick)).toBe('R');
   });
@@ -142,10 +148,10 @@ describe('computeds across worlds', () => {
     const a = signal({ n: 1 });
     const c = computed(() => ({ n: a.get().n + 1 }));
     const id = inDraft(() => a.set({ n: 5 }));
-    const env1 = ri.resolveEnvelope(c, [id]);
-    const env2 = ri.resolveEnvelope(c, [id]);
-    expect(env1).toBe(env2); // stable identity for unchanged resolution
-    expect((env1 as { value: { n: number } }).value.n).toBe(6);
+    const state1 = ri.resolveState(c, [id]);
+    const state2 = ri.resolveState(c, [id]);
+    expect(state1).toBe(state2); // stable identity for unchanged resolution
+    expect((state1 as { value: { n: number } }).value.n).toBe(6);
     ri.retireDraft(id);
   });
 
@@ -211,7 +217,7 @@ describe('latest() context resolution', () => {
     const c = computed(() => latest(a) * 10);
     const id = inDraft(() => a.set(2));
     expect(read(c)).toBe(10); // canonical evaluation must not read ahead
-    expect(ri.resolveEnvelope(c, [id])).toEqual({ kind: 'value', value: 20 }); // its own world
+    expect(ri.resolveState(c, [id])).toEqual(valueState(20)); // its own world
     expect(latest(c)).toBe(20); // ambient: newest intent
     ri.retireDraft(id);
     expect(read(c)).toBe(20);
@@ -260,7 +266,7 @@ describe('quiescence', () => {
     const a = signal(0);
     const c = computed(() => a.get() + 1);
     const id = inDraft(() => a.set(1));
-    ri.resolveEnvelope(c, [id]);
+    ri.resolveState(c, [id]);
     expect(ri.liveDraftCount()).toBe(1);
     ri.retireDraft(id);
     expect(ri.liveDraftCount()).toBe(0);

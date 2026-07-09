@@ -1,0 +1,335 @@
+/**
+ * Two-tier graph mechanics: promotion into the watched tier (subscriber
+ * edges installed, push marks trustworthy) and demotion back to the
+ * unwatched tier (forward edges only, stamp-pull validation on read).
+ *
+ * Regime labels, per standing verification orders:
+ * - [falsify-first] tests were run against the pre-rebuild graph and failed
+ *   with the quoted output; the rebuild makes them pass.
+ * - [parity] tests pin structure or exact counts; the full suites (265
+ *   tests, 1200-seed oracle, battery) are the behavioral referee.
+ */
+import { describe, expect, test } from 'vitest';
+import {
+  type CellNode,
+  type DerivedNode,
+  type Link,
+  type ReactiveNode,
+  Flags,
+  batch,
+  currentWriteEpoch,
+  makeCell,
+  makeDerived,
+  makeEffect,
+  observeNode,
+  readCell,
+  readDerived,
+  writeCell,
+} from '../src/graph.ts';
+
+/** Edges in dep's subscriber list pointing at sub (watched edges only). */
+function subEdgeCount(dep: ReactiveNode, sub?: ReactiveNode): number {
+  let n = 0;
+  for (let l: Link | undefined = dep.subs; l !== undefined; l = l.nextSub) {
+    if (sub === undefined || l.sub === sub) n++;
+  }
+  return n;
+}
+
+/** Edges in sub's dependency list pointing at dep (both tiers). */
+function depEdgeCount(sub: ReactiveNode, dep: ReactiveNode): number {
+  let n = 0;
+  for (let l: Link | undefined = sub.deps; l !== undefined; l = l.nextDep) {
+    if (l.dep === dep) n++;
+  }
+  return n;
+}
+
+function isWatched(n: ReactiveNode): boolean {
+  return (n.flags & Flags.Watched) !== 0;
+}
+
+/** The tier invariant promote/demote must maintain: for cells and deriveds
+ * the Watched bit mirrors observerCount (watchers own their bit through
+ * create/dispose). A path that set Watched without promote-validation would
+ * resurrect the stale-Clean serve that promote exists to prevent. */
+function expectTierInvariant(nodes: ReactiveNode[]): void {
+  for (const n of nodes) {
+    if ((n.flags & Flags.Watcher) !== 0) continue;
+    expect(isWatched(n)).toBe(n.observerCount > 0);
+  }
+}
+
+describe('two-tier graph: promote validation', () => {
+  test('T1 [falsify-first] subscribe-without-pull then read serves the fresh value', () => {
+    // Pre-rebuild failure: AssertionError: expected 2 to be 4 — promote
+    // installed back-edges and trusted the stale Clean flags, so the watched
+    // fast path served the cached value.
+    const a = makeCell(1);
+    const d = makeDerived(() => readCell(a) * 2);
+    expect(readDerived(d)).toBe(2); // caches while unwatched
+    writeCell(a, 2); // no back-edges: no push mark reaches d
+    const stop = observeNode(d, () => {}); // subscribe WITHOUT pulling
+    expect(readDerived(d)).toBe(4);
+    stop();
+  });
+
+  test('T2 [falsify-first] subscribing to a stale node delivers the pending edge once; a pull re-arms', () => {
+    // Pre-rebuild failure: AssertionError: expected +0 to be 1 — the node
+    // was stale when the subscriber arrived, and the wave's early-return on
+    // pre-existing staleness meant the new subscriber never heard anything.
+    const a = makeCell(1);
+    const d = makeDerived(() => readCell(a) * 2);
+    const stopEffect = makeEffect(() => void readDerived(d));
+    batch(() => {
+      writeCell(a, 2); // marks d through the watched edge
+      stopEffect(); // demote runs while d is stale
+    });
+    let notifies = 0;
+    const stop = observeNode(d, () => notifies++);
+    expect(notifies).toBe(1); // the missed staleness edge, delivered at subscribe
+    expect(readDerived(d)).toBe(4); // pull re-arms the edge trigger
+    writeCell(a, 3);
+    expect(notifies).toBe(2);
+    stop();
+  });
+
+  test('T3 [falsify-first] promote validates transitively through the dep closure', () => {
+    // Pre-rebuild failure: AssertionError: expected 20 to be 30 — the write
+    // invalidated c -> d1 while everything was unwatched; promote linked the
+    // closure without checking whether the flags deserved trust.
+    const c = makeCell(1);
+    const d1 = makeDerived(() => readCell(c) + 1);
+    const d2 = makeDerived(() => readDerived(d1) * 10);
+    expect(readDerived(d2)).toBe(20);
+    writeCell(c, 2);
+    const stop = observeNode(d2, () => {});
+    expect(readDerived(d2)).toBe(30);
+    stop();
+  });
+});
+
+describe('two-tier graph: promote/demote structure', () => {
+  test('T4 [parity] promote links the dep closure; demote reverses it exactly', () => {
+    const c = makeCell(1);
+    const d1 = makeDerived(() => readCell(c) + 1);
+    const d2 = makeDerived(() => readDerived(d1) + 1);
+    expect(readDerived(d2)).toBe(3);
+    // Unwatched evaluation registered nothing subscriber-side.
+    expect(subEdgeCount(c)).toBe(0);
+    expect(subEdgeCount(d1)).toBe(0);
+    expectTierInvariant([c, d1, d2]);
+
+    const stop = observeNode(d2, () => {});
+    expect(subEdgeCount(c, d1)).toBe(1);
+    expect(subEdgeCount(d1, d2)).toBe(1);
+    expect(subEdgeCount(d2)).toBe(1); // the leaf
+    expect(c.observerCount).toBe(1);
+    expect(d1.observerCount).toBe(1);
+    expect(d2.observerCount).toBe(1);
+    expect(isWatched(c) && isWatched(d1) && isWatched(d2)).toBe(true);
+    expectTierInvariant([c, d1, d2]);
+
+    stop();
+    expect(subEdgeCount(c)).toBe(0);
+    expect(subEdgeCount(d1)).toBe(0);
+    expect(subEdgeCount(d2)).toBe(0);
+    expect(c.observerCount).toBe(0);
+    expect(d1.observerCount).toBe(0);
+    expect(d2.observerCount).toBe(0);
+    expect(isWatched(c) || isWatched(d1) || isWatched(d2)).toBe(false);
+    expectTierInvariant([c, d1, d2]);
+    // Forward edges survive for the unwatched tier's pull validation.
+    expect(depEdgeCount(d2, d1)).toBe(1);
+    expect(depEdgeCount(d1, c)).toBe(1);
+  });
+
+  test('T5 [parity] demote seeds the validation stamp: writeEpoch when Clean, 0 when stale', () => {
+    const c = makeCell(1);
+    const d1 = makeDerived(() => readCell(c) + 1);
+    const d2 = makeDerived(() => readDerived(d1) + 1);
+    const stop = observeNode(d2, () => {});
+    expect(readDerived(d2)).toBe(3);
+    stop(); // Clean at demote: the next quiet read must short-circuit O(1)
+    expect(d1.validatedEpoch).toBe(currentWriteEpoch());
+    expect(d2.validatedEpoch).toBe(currentWriteEpoch());
+
+    const stop2 = observeNode(d2, () => {});
+    batch(() => {
+      writeCell(c, 2); // wave marks d1/d2 before the flush is due
+      stop2(); // stale at demote: force the up-walk on next read
+    });
+    expect(d1.validatedEpoch).toBe(0);
+    expect(d2.validatedEpoch).toBe(0);
+    expect(readDerived(d2)).toBe(4);
+  });
+
+  test('T6 [parity pin] recompute counts across watch -> demote -> quiet-read cycles', () => {
+    let e1 = 0;
+    let e2 = 0;
+    const c = makeCell(1);
+    const d1 = makeDerived(() => (e1++, readCell(c) + 1));
+    const d2 = makeDerived(() => (e2++, readDerived(d1) + 1));
+    expect(readDerived(d2)).toBe(3);
+    expect([e1, e2]).toEqual([1, 1]);
+
+    const stop = observeNode(d2, () => {});
+    expect([e1, e2]).toEqual([1, 1]); // subscribing evaluates nothing
+    writeCell(c, 2);
+    expect([e1, e2]).toEqual([1, 1]); // marking is lazy
+    expect(readDerived(d2)).toBe(4);
+    expect([e1, e2]).toEqual([2, 2]);
+
+    stop(); // Clean at demote
+    expect(readDerived(d2)).toBe(4); // quiet read: no walk, no recompute
+    expect(readDerived(d2)).toBe(4);
+    expect([e1, e2]).toEqual([2, 2]);
+
+    writeCell(c, 3); // unwatched: versions move, no marks
+    expect(readDerived(d2)).toBe(5); // up-walk finds the moved version
+    expect([e1, e2]).toEqual([3, 3]);
+
+    writeCell(c, 3); // equal write: no version movement
+    expect(readDerived(d2)).toBe(5);
+    expect([e1, e2]).toEqual([3, 3]);
+  });
+
+  test('T8 [parity] quiet reads short-circuit: zero recomputes on a wide validated graph', () => {
+    const cells = Array.from({ length: 50 }, (_, i) => makeCell(i));
+    let evals = 0;
+    const wide = makeDerived(() => {
+      evals++;
+      let sum = 0;
+      for (const c of cells) sum += readCell(c);
+      return sum;
+    });
+    expect(readDerived(wide)).toBe(1225);
+    expect(evals).toBe(1);
+    // Precondition of the O(1) return: Clean plus a current validation stamp.
+    expect(wide.validatedEpoch).toBe(currentWriteEpoch());
+    expect((wide.flags & (Flags.Check | Flags.Dirty)) === 0).toBe(true);
+    for (let i = 0; i < 100; i++) readDerived(wide);
+    expect(evals).toBe(1);
+  });
+
+  test('T12 [parity] promoting a computing node with an unmatched deps suffix stays consistent', () => {
+    const x = makeCell(1);
+    const y = makeCell(2);
+    let subscribeNow = false;
+    let stop: (() => void) | undefined;
+    let notified = 0;
+    const d: DerivedNode<number> = makeDerived(() => {
+      const vx = readCell(x);
+      if (subscribeNow) {
+        subscribeNow = false;
+        // Subscribe to the node mid-evaluation: promote walks the full deps
+        // list, including the y edge beyond the cursor that this pass will
+        // not re-read.
+        stop = observeNode(d, () => notified++);
+        return vx;
+      }
+      return vx + readCell(y);
+    });
+    expect(readDerived(d)).toBe(3); // deps [x, y], unwatched
+    subscribeNow = true;
+    writeCell(x, 5); // unwatched: versions move, no marks
+    expect(readDerived(d)).toBe(5); // mid-eval promote; trimDeps drops the y suffix
+    expect(y.subs).toBeUndefined();
+    expect(y.observerCount).toBe(0); // suffix unlink kept observer bookkeeping symmetric
+    expect(x.observerCount).toBe(1);
+    expect(d.observerCount).toBe(1);
+    expect(isWatched(d) && isWatched(x)).toBe(true);
+    expect(isWatched(y)).toBe(false);
+    expectTierInvariant([x, y, d as ReactiveNode]);
+
+    writeCell(y, 9); // the dropped edge must not notify
+    expect(notified).toBe(0);
+    writeCell(x, 6); // the kept edge must
+    expect(notified).toBe(1);
+    // The pull re-evaluates the full body: y is re-read, re-linked, and —
+    // because d is watched now — promoted back into the watched tier.
+    expect(readDerived(d)).toBe(15);
+    expect(y.observerCount).toBe(1);
+    expect(isWatched(y)).toBe(true);
+    expectTierInvariant([x, y, d as ReactiveNode]);
+    stop!();
+    expect(y.observerCount).toBe(0);
+  });
+});
+
+describe('two-tier graph: tracking and waves', () => {
+  test('T9 [falsify-first] non-adjacent re-reads in one watched pass dedup to a single edge', () => {
+    // Pre-rebuild failure: AssertionError: expected 2 to be 1 — the second
+    // read of `a` (non-adjacent, past the cursor) created a duplicate
+    // watched edge, double-counting the observer.
+    const a = makeCell(1);
+    const b = makeCell(2);
+    const d = makeDerived(() => readCell(a) + readCell(b) + readCell(a));
+    const stop = observeNode(d, () => {});
+    expect(readDerived(d)).toBe(4);
+    expect(subEdgeCount(a, d)).toBe(1);
+    expect(depEdgeCount(d, a)).toBe(1);
+    expect(a.observerCount).toBe(1);
+    // The dedup is stable across re-evaluations.
+    writeCell(b, 5);
+    expect(readDerived(d)).toBe(7);
+    expect(subEdgeCount(a, d)).toBe(1);
+    expect(a.observerCount).toBe(1);
+    stop();
+    expect(a.observerCount).toBe(0);
+  });
+
+  test('T10 [parity pin] leaf notification is edge-triggered; a pull re-arms', () => {
+    const a = makeCell(1);
+    const d = makeDerived(() => readCell(a) * 2);
+    expect(readDerived(d)).toBe(2); // Clean before subscribing: no wake due
+    let n = 0;
+    const stop = observeNode(d, () => n++);
+    writeCell(a, 2);
+    const afterFirst = n;
+    writeCell(a, 3); // no pull between: the edge already fired
+    const afterSecond = n;
+    expect(readDerived(d)).toBe(6); // re-arm
+    writeCell(a, 4);
+    const afterThird = n;
+    expect({ afterFirst, afterSecond, afterThird }).toEqual({
+      afterFirst: 1,
+      afterSecond: 1,
+      afterThird: 2,
+    });
+    stop();
+  });
+
+  test('T11 [falsify-first] a write through a deep watched chain completes', () => {
+    // Pre-rebuild failure: RangeError: Maximum call stack size exceeded —
+    // the recursive wave overflowed at this depth; the iterative propagate
+    // carries it. (Pull-side recursion is consciously retained; this test
+    // never deep-pulls.)
+    const DEPTH = 150_000;
+    const base = makeCell(0);
+    const disposers: Array<() => void> = [];
+    let topNotified = 0;
+    let prev: ReactiveNode = base;
+    for (let i = 0; i < DEPTH; i++) {
+      const p = prev;
+      const d = makeDerived(() =>
+        ((p.flags & Flags.Cell) !== 0
+          ? readCell(p as CellNode<number>)
+          : readDerived(p as DerivedNode<number>)) + 1,
+      );
+      // Watch and evaluate incrementally so promote and pull stay depth-1;
+      // only the write's wave spans the whole chain.
+      disposers.push(
+        observeNode(d, i === DEPTH - 1 ? () => topNotified++ : () => {}),
+      );
+      readDerived(d);
+      prev = d;
+    }
+    expect((prev as DerivedNode<number>).value).toBe(DEPTH);
+    writeCell(base, 1);
+    expect(topNotified).toBe(1);
+    // Reverse order keeps demote cascades depth-1 as well.
+    for (let i = disposers.length - 1; i >= 0; i--) disposers[i]();
+    expect(subEdgeCount(base)).toBe(0);
+  });
+});

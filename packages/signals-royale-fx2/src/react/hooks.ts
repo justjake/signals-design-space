@@ -23,15 +23,21 @@
  */
 import * as React from 'react';
 import {
+  ASYNC_MASK,
+  Flags,
   computed,
   effect as engineEffect,
+  isErrorBox,
+  isUninitialized,
   signal,
   reactIntegration as engine,
   type Computed,
+  type DerivedState,
   type DraftId,
-  type Envelope,
+  type ErrorBox,
   type Signal,
   type SignalOptions,
+  type Suspension,
 } from '../index.ts';
 import {
   correctSubscription,
@@ -65,12 +71,14 @@ function traceDelivery(x: AnyReadable, value: unknown): void {
  *   (useIsPending is the indicator; no fallback flash);
  * - a never-settled value suspends everywhere.
  */
-function unwrapEnvelope(env: Envelope, ids: readonly DraftId[]): unknown {
-  if (env.kind === 'value') return env.value;
-  if (env.kind === 'error') throw env.box.error;
-  if (engine.hasLiveDrafts(ids)) throw env.suspension.promise;
-  if (env.stale) return env.value;
-  throw env.suspension.promise;
+function unwrapState(st: DerivedState, ids: readonly DraftId[]): unknown {
+  const asyncBits = st.flags & ASYNC_MASK;
+  if (asyncBits === 0) return st.value;
+  if (asyncBits === Flags.DerivedError) throw (st.throwable as ErrorBox).error;
+  const suspension = st.throwable as Suspension;
+  if (engine.hasLiveDrafts(ids)) throw suspension.promise;
+  if (!isUninitialized(st.value)) return st.value; // settled history: stale serves
+  throw suspension.promise;
 }
 
 /**
@@ -143,8 +151,8 @@ export function useValue<T>(x: Readable<T>): T {
     [x, scoped],
   );
   React.useSyncExternalStore(subscribe, epochSnap, epochSnap);
-  const env = engine.resolveEnvelope(x as AnyReadable, ids);
-  const value = unwrapEnvelope(env, ids);
+  const st = engine.resolveState(x as AnyReadable, ids);
+  const value = unwrapState(st, ids);
   const stash = rendered.current;
   stash.ids = ids;
   stash.value = value;
@@ -188,9 +196,7 @@ export function useCommitted<T>(x: Readable<T>): T {
     [x, container],
   );
   const snap = React.useSyncExternalStore(subscribe, committedSnap, committedSnap);
-  if (snap !== null && typeof snap === 'object' && 'engineErrorBox' in (snap as object)) {
-    throw (snap as { engineErrorBox: unknown }).engineErrorBox;
-  }
+  if (isErrorBox(snap)) throw snap.error;
   return snap as T;
 }
 
