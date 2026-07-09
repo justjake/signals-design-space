@@ -42,7 +42,7 @@ What fx2 already has, what alien has, and the deltas this rebuild closes.
 | Node record | `ReactiveNode` lines 1-7: four list heads + flags | lines 73-109: same heads + `observerCount`, `validatedEpoch`, value `version`, React epochs, `worldMemos`, `causeEvent` | none (fx2 is a superset) |
 | Link record | lines 9-17: both lists doubly linked; `version` is a tracking-pass stamp | lines 59-71: deps singly linked (`nextDep` only), subs doubly linked, `inSubs`, `stamp`, `version` | naming collision + threading decision, section 2 |
 | link() protocol | 4 cases, lines 51-91: tail repeat (52-54), `nextDep` in-place reuse (56-61), `subsTail` same-pass dedup (62-65), create + thread both lists (66-90) | `trackRead` lines 321-350: has cases 1 (323, stamp-guarded), 2 (325-329), 4 minus subs install for unwatched subs (330-349) | case 3 missing: non-adjacent re-read in one pass creates a duplicate edge |
-| Trim after eval | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114) | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because `hooks.observation` and lifetime.ts key on the count |
+| Trim after eval | per-link `unlink()` (93-116), fires `unwatched()` when `dep.subs` empties (112-114) | `trimDeps` (353-367): suffix truncation + `unlinkFromSubs`/`removeObserver` per watched edge | equivalent; fx2 keys teardown on `observerCount` 1→0 (303-318), not subs emptiness, because the lifetime-effect machinery keys on the count |
 | Propagate | iterative, explicit stack, flag protocol with `RecursedCheck`/`Recursed` reentrancy bits (118-174) | recursive `mark()` (402-422): Check-only marking, causeEvent, epoch bumps on Clean→Check (416-417), watcher scheduling (404-406, 424-432) | recursion → stack bound on deep chains; traversal-bit decision, section 3 |
 | Pull validation | iterative `checkDirty` (176-237) resolving Pending via `update()` + `shallowPropagate` (239-250) | recursive `ensureFresh` (760-783): version comparison per edge; no shallowPropagate | deliberate divergence, section 5 |
 | Watched/unwatched boundary | single-tier: every edge always in both lists | already two-tier: `inSubs` per edge, `addObserver`/`removeObserver` cascades (290-318), `validatedEpoch` vs global `WriteEpoch` (764) | promote does not validate — two verified defects, section 6 |
@@ -118,7 +118,7 @@ threading.
 Justification for omitting `prevDep` (the owner-sanctioned alternative to
 adding it): every deps-list mutation in either tier is one of
 
-- append at tail — `trackRead` 340-342, `adoptDepLink` 544;
+- append at tail — `trackRead` 340-342;
 - in-place reuse at the `depsTail` cursor — 325-329;
 - suffix truncation after `depsTail` — `trimDeps` 353-367, O(1) per dropped
   link because the suffix is wholly discarded and the subs side already has
@@ -130,8 +130,8 @@ side), demote removes back-edges (subs side, doubly linked). In alien,
 `prevDep` serves `unlink()` mid-list integrity and the backward walk in
 `isValidLink` (252-261) — and `isValidLink` exists solely to serve the
 `Recursed` reentrancy protocol, which section 3 declines. If a future change
-needs mid-list dep unlink, adding `prevDep` is mechanical at four sites
-(`trackRead` create, `adoptDepLink`, `trimDeps`, `unlinkAllDeps`).
+needs mid-list dep unlink, adding `prevDep` is mechanical at three sites
+(`trackRead` create, `trimDeps`, `unlinkAllDeps`).
 
 `trackRead` gains alien's case 3 (same-pass dedup): before creating a new
 link, probe `dep.subsTail`:
@@ -163,36 +163,58 @@ new stamps come from a monotonic `stampCounter` (`newEvalStamp()`), while
 `evalStamp` keeps the exact same pass-scoped restore behavior. Comparisons
 are equality-only, so nothing else observes the value change.
 
+**As-built update — edges are evaluation-only.** The one non-evaluation edge
+source, `adoptDepLink` (the hidden refetch-nonce edge, appended with
+`stamp: 0`), was deleted with the refresh() API. The stamp-0 class the dedup
+probe had to coexist with — edges sitting in a deps list that no evaluation
+read — no longer exists, so the invariant is now unconditional: **a
+derived's deps list is exactly what its last evaluation read, in read
+order.** Every edge is created or re-stamped inside the evaluation that read
+it, and stamps assigned during a pass (including by nested evals) are all
+`>= myStamp` under the monotonic counter, so the invariant has a mechanical
+shadow: after `trimDeps`, every retained link satisfies
+`l.stamp >= myStamp`. A dev-gated assertion (`assertDepsFromEval`, run after
+the trim in `recompute` and `runWatcher`) enforces exactly that; the gate is
+a module const off `NODE_ENV`, so bundler builds strip the walk and
+unbundled production pays one always-false branch per evaluation.
+
 ## 3. Flag bit allocation
 
 Exact constants, extending the documented layout at lines 30-57:
 
 ```ts
-export const Flags = {
-  Cell:             0b0000_0001, // node type: writable source
-  Derived:          0b0000_0010, // node type: cached computed
-  Watcher:          0b0000_0100, // node type: effect or leaf observer
-  Check:            0b0000_1000, // staleness: possibly stale; confirm dep versions
-  Dirty:            0b0001_0000, // staleness: must recompute on next pull
-  Watched:          0b0010_0000, // tier: back-edges installed, push marks trustworthy
-  DerivedError:     0b0100_0000, // async: latest eval threw; ErrorBox in node.throwable
-  DerivedSuspended: 0b1000_0000, // async: latest eval parked; Suspension in node.throwable
-} as const satisfies Record<string, Flags>;
+export const enum Flag {
+  Cell             = 0b0000_0001, // node type: writable source
+  Derived          = 0b0000_0010, // node type: cached computed
+  Watcher          = 0b0000_0100, // node type: effect or leaf observer
+  Check            = 0b0000_1000, // staleness: possibly stale; confirm dep versions
+  Dirty            = 0b0001_0000, // staleness: must recompute on next pull
+  Watched          = 0b0010_0000, // tier: back-edges installed, push marks trustworthy
+  DerivedError     = 0b0100_0000, // async: latest eval threw; ErrorBox in node.throwable
+  DerivedSuspended = 0b1000_0000, // async: latest eval parked; Suspension in node.throwable
+  StaleMask = Check | Dirty,
+  AsyncMask = DerivedError | DerivedSuspended,
+}
+export type Flags = Brand<number, 'Flags'>; // the stored word (see graph.ts)
 ```
 
+(The rebuild landed these as an erasable const object; the later hygiene
+round converted them to the `const enum` above and branded the stored
+word — same bits, same table.)
+
 The two async bits are the DerivedState merge's exclusive value-plane field
-(section 11): clear-then-set discipline exactly like `STALE_MASK`, both-clear
-is the plain-value state, `ASYNC_MASK` is exported as the read protocol.
+(section 11): clear-then-set discipline exactly like `Flag.StaleMask`,
+both-clear is the plain-value state, `Flag.AsyncMask` is the read protocol.
 
 `Watched` semantics:
 
 - cells/deriveds: mirror of `observerCount > 0`, set in promote (0→1),
-  cleared in demote (1→0). `observerCount` stays authoritative — lifetime.ts
-  and demote need the count; the flag is the one-load hot-path test;
+  cleared in demote (1→0). `observerCount` stays authoritative — lifetime
+  effects and demote need the count; the flag is the one-load hot-path test;
 - watchers: set at creation, cleared in `disposeWatcher` before
   `unlinkAllDeps`. This collapses `trackRead`'s two-branch watched test
   (343-344) and `ensureFresh`'s `observerCount` load (761) into
-  `(flags & Flags.Watched) !== 0`;
+  `(flags & Flag.Watched) !== 0`;
 - debug assertion (dev builds/tests): for non-watchers,
   `Watched ⟺ observerCount > 0`.
 
@@ -241,8 +263,9 @@ only under it. Today it holds for edges created by evaluation — `readCell`/
 `readDerived` freshen the dep before `trackRead` links — and is violated by
 pull-less linking (`observeNode` 995-1023, promote's cascade). The rule:
 **any site installing a back-edge onto a stale dep applies the visit rules to
-the sub**. Promote (section 6) is the enforcement point; `adoptDepLink`
-(530-550) links a cell (never stale) and is trivially covered.
+the sub**. Promote (section 6) is the sole enforcement point: evaluation is
+the only other site that creates dep edges, and it freshens the dep before
+linking.
 
 `pokeLeafObservers` / `pokeAndWakeLeafObservers` (467-526) are **not**
 converted: they are worlds-overlay traversals with different marking (leaf
@@ -272,8 +295,8 @@ contract. Where fx2 deliberately diverges from alien, and why:
   validates at run (`runWatcher` 849-864). Both end at "effect re-runs iff a
   dep value actually changed"; fx2's exact counts stay the contract.
 - **Dirty producers are exhaustive and unchanged:** creation
-  (`makeDerived` 240), `invalidateDerived` — thenable settlement and refresh
-  treated as writes (447-458), self-affecting evaluations (`recompute` exit
+  (`makeDerived` 240), `invalidateDerived` — thenable settlement treated as
+  a write (447-458), self-affecting evaluations (`recompute` exit
   rule, 755), and poke marking of leaf watchers only (475, 509). Alien's
   "signal write sets its own Dirty" has no fx2 equivalent: cells carry
   versions (`writeCell` 673-690), not staleness.
@@ -341,8 +364,10 @@ Rewrites `addObserver` (290-301). Fixes probes A and B.
    incremental build; `useIsPending` over a cold computed) pays a spurious
    wake. React tolerated it (epoch-unchanged snapshot compare), but the wake
    was semantically wrong, and T11 caught it double-counting.
-6. `hooks.observation(node, true)` — lifetime setup coalescing unchanged
-   (lifetime.ts 29-38).
+6. `noteLifetimeTransition(node)` — lifetime setup coalescing unchanged.
+   (This step read `hooks.observation(node, true)` when the rebuild landed;
+   the lifetime machinery has since been folded into graph.ts and the hook
+   indirection deleted — promote and demote call the scheduler directly.)
 
 Cost: O(edges in the newly watched closure), which promote already pays for
 linking; validation adds two loads and a compare per edge. Promoting a node
@@ -372,7 +397,8 @@ Rewrites `removeObserver` (303-318).
    actually need it: promote validates on re-watch, and unwatched pulls never
    trust Clean without `validatedEpoch`. (It was also insufficient: probe A's
    node was never previously watched, so demote seeding never covered it.)
-6. `hooks.observation(node, false)`.
+6. `noteLifetimeTransition(node)` (originally `hooks.observation(node,
+   false)`; same folding note as promote step 6).
 
 Edge versions need no demote writes: `l.version` is maintained by
 `recompute`/`readCell` in both tiers and is exactly the stamp promote
@@ -402,10 +428,12 @@ promote is behavioral → covered by falsify-first probes A/B]
 - **Async**: Suspension identity and reuse, ThenableBox, settlement-as-write,
   pending-forwards parking, stale serves (asyncs.ts entire; `readValue`
   index.ts 162-183).
-- **Tracer hooks**: `hooks.trace` sites and `causeEvent` threading — the
-  iterative propagate carries the wave's cause exactly as `mark` does.
-- **Lifetime effects**: `hooks.observation` fires on the same 0↔1
-  transitions with microtask coalescing (lifetime.ts).
+- **Tracer hooks**: `hooks.trace` sites (today the `traceHook` module
+  binding) and `causeEvent` threading — the iterative propagate carries the
+  wave's cause exactly as `mark` does.
+- **Lifetime effects**: the lifetime scheduler fires on the same 0↔1
+  transitions with microtask coalescing (now `noteLifetimeTransition` in
+  graph.ts; the `hooks.observation` seam over lifetime.ts at the time).
 - **uSES epochs**: every bump site preserved — `writeCell` (685-686),
   `invalidateDerived` (452-453), the Clean→Check derived bump in the wave
   (416-417), `bumpReactEpoch` on discard (worlds.ts 262), and reactEpoch
@@ -421,7 +449,10 @@ promote is behavioral → covered by falsify-first probes A/B]
   rebuild alone. The DerivedState merge, section 11, deliberately changes
   the read-protocol surface: `Envelope` → `DerivedState`,
   `reactIntegration.resolveEnvelope` → `resolveState`, and the bindings'
-  unwrap sites moved with it.)
+  unwrap sites moved with it. `reactIntegration` itself was later dissolved
+  by owner ruling: the react directory is part of the library, so the
+  bindings import graph.ts/worlds.ts/tracer.ts directly and unwrap user
+  handles at their own boundary with `nodeOf`.)
 
 ## 8. Test plan
 
@@ -476,7 +507,7 @@ the pre-rebuild graph in the landing session:
   `expected 20 to be 30`, T9 `expected 2 to be 1`, T11
   `RangeError: Maximum call stack size exceeded` (at depth 150 000) — all
   pass post-rebuild;
-- T4/T5 fail pre-change on the structural asserts (`Flags.Watched`,
+- T4/T5 fail pre-change on the structural asserts (`Flag.Watched`,
   validation stamps did not exist), pass post-rebuild; T6/T8/T10 parity pins
   pass on both sides;
 - T12 as inherited from the skeleton asserted `readDerived(d) === 6` after
@@ -556,7 +587,7 @@ model replaces both: node-resident state read through one protocol.
 
 ```ts
 interface DerivedState {
-  flags: Flags;      // read via ASYNC_MASK bits ONLY (node views carry more)
+  flags: Flags;      // read via Flag.AsyncMask bits ONLY (node views carry more)
   value: unknown;    // UNINITIALIZED sentinel when no settled value exists
   throwable: ErrorBox | Suspension | null; // null ⇔ plain value state
 }
@@ -564,8 +595,8 @@ interface DerivedState {
 
 - Two flag bits in the MAIN node flags word (section 3): `DerivedError`
   0b0100_0000, `DerivedSuspended` 0b1000_0000; exclusive field with
-  `ASYNC_MASK`, clear-then-set exactly like `STALE_MASK`, both-clear =
-  value state.
+  `Flag.AsyncMask`, clear-then-set exactly like `Flag.StaleMask`,
+  both-clear = value state.
 - `node.throwable` is initialized `null` at construction on EVERY node kind
   including cells and watchers (shape discipline: no post-construction
   property addition). Cells never set the bits but share the uniform
@@ -598,10 +629,10 @@ interface DerivedState {
   `(throwable as ErrorBox).error`; suspended → live drafts throw the
   promise, else stale serves, else throw.
 - The `Envelope` type export is gone; `DerivedState`, `ErrorBox`,
-  `Suspension`, `Flags`, `ASYNC_MASK`, `isErrorBox`, `isUninitialized` are
-  the replacement protocol exports. No alias survives — one name per
-  concept, and every importer (worlds, index, react hooks/host, tests, the
-  oracle) consumes the new shape directly.
+  `Suspension`, `Flag` (with `Flag.AsyncMask`), `isErrorBox`,
+  `isUninitialized` are the replacement protocol exports. No alias
+  survives — one name per concept, and every importer (worlds, index,
+  react hooks/host, tests, the oracle) consumes the new shape directly.
 - `committedSnapshot`'s per-call `{ engineErrorBox }` marker allocation is
   gone (it was also identity-unstable — a fresh object per `getSnapshot`
   call is a useSyncExternalStore hazard): the snapshot returns the ErrorBox

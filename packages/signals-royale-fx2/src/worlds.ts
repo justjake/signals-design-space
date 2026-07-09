@@ -27,23 +27,24 @@
  */
 
 import {
+  type Brand,
   type CellNode,
   type DerivedNode,
   type ReactiveNode,
   type TraceEventId,
-  ASYNC_MASK,
-  Flags,
+  type WriteEpoch,
+  Flag,
   NO_EVENT,
   bumpReactEpoch,
   currentWriteEpoch,
   ensureFresh,
-  hooks,
   peekCell,
   pokeAndWakeLeafObservers,
   pokeLeafObservers,
   setCurrentCause,
   startBatch,
   endBatch,
+  traceHook,
   untracked,
   withSuppressedReactEpoch,
   writeCell,
@@ -58,12 +59,12 @@ import {
   trackThenable,
 } from './asyncs.ts';
 
-export type DraftId = number;
+export type DraftId = Brand<number, 'DraftId'>;
 export type DraftState = 'open' | 'sealed' | 'retired' | 'discarded';
 /** Bumps whenever any draft's ops or state change; world memos key on it. */
-export type WorldEpoch = number;
+export type WorldEpoch = Brand<number, 'WorldEpoch'>;
 /** Global dispatch order across urgent and drafted intents. */
-export type OpSeq = number;
+export type OpSeq = Brand<number, 'OpSeq'>;
 
 export type OpKind = 'set' | 'update';
 
@@ -115,16 +116,12 @@ export function liveDraftCount(): number {
   return liveDrafts.size;
 }
 
-export function getDraft(id: DraftId): Draft | undefined {
-  return liveDrafts.get(id);
-}
-
 export function openDraft(): Draft {
   const draft: Draft = {
     id: nextDraftId++,
     state: 'open',
     cells: new Set(),
-    openEvent: hooks.trace !== null ? hooks.trace('draft-open', null, NO_EVENT) : NO_EVENT,
+    openEvent: traceHook !== null ? traceHook('draft-open', null, NO_EVENT) : NO_EVENT,
     retireEvent: NO_EVENT,
     lastWriteEvent: NO_EVENT,
   };
@@ -166,8 +163,8 @@ export function appendDraftIntent(
   logFor(cell).intents.push({ seq: nextSeq++, kind, payload, draft });
   draft.cells.add(cell);
   worldEpoch++;
-  if (hooks.trace !== null) {
-    draft.lastWriteEvent = hooks.trace('write', cell, draft.openEvent, { draft: draft.id });
+  if (traceHook !== null) {
+    draft.lastWriteEvent = traceHook('write', cell, draft.openEvent, { draft: draft.id });
     cell.causeEvent = draft.lastWriteEvent;
   }
   pokeAndWakeLeafObservers(cell, draft.id);
@@ -218,8 +215,8 @@ export function retireDraft(id: DraftId, opts?: { silent?: boolean }): void {
   draft.state = 'retired';
   worldEpoch++;
   const evt =
-    hooks.trace !== null
-      ? hooks.trace(
+    traceHook !== null
+      ? traceHook(
           'draft-retire',
           null,
           draft.lastWriteEvent !== NO_EVENT ? draft.lastWriteEvent : draft.openEvent,
@@ -258,7 +255,7 @@ export function discardDraft(id: DraftId): void {
   liveDrafts.delete(id);
   draft.state = 'discarded';
   worldEpoch++;
-  if (hooks.trace !== null) hooks.trace('draft-discard', null, draft.openEvent);
+  if (traceHook !== null) traceHook('draft-discard', null, draft.openEvent);
   for (const cell of draft.cells) {
     bumpReactEpoch(cell);
     pokeLeafObservers(cell);
@@ -310,7 +307,7 @@ export function draftsAffecting(node: ReactiveNode): readonly DraftId[] {
   const collect = (n: ReactiveNode): void => {
     if (visited.has(n)) return;
     visited.add(n);
-    if ((n.flags & Flags.Cell) !== 0) {
+    if ((n.flags & Flag.Cell) !== 0) {
       sources.add(n as CellNode<unknown>);
       return;
     }
@@ -431,7 +428,7 @@ export function worldOf(ids: readonly DraftId[]): World {
 }
 
 interface WorldMemo {
-  writeEpoch: number;
+  writeEpoch: WriteEpoch;
   worldEpoch: WorldEpoch;
   state: DerivedState;
 }
@@ -465,13 +462,13 @@ function reconcileStates(
   next: DerivedState,
 ): DerivedState {
   if (prev === undefined) return next;
-  const asyncBits = next.flags & ASYNC_MASK;
-  if ((prev.flags & ASYNC_MASK) !== asyncBits) return next;
+  const asyncBits = next.flags & Flag.AsyncMask;
+  if ((prev.flags & Flag.AsyncMask) !== asyncBits) return next;
   if (asyncBits === 0) {
     const equals = (node as DerivedNode<unknown>).equals ?? Object.is;
     return equals(prev.value, next.value) ? prev : next;
   }
-  if (asyncBits === Flags.DerivedSuspended) {
+  if (asyncBits === Flag.DerivedSuspended) {
     return prev.throwable === next.throwable && prev.value === next.value ? prev : next;
   }
   return (prev.throwable as ErrorBox).error === (next.throwable as ErrorBox).error ? prev : next;
@@ -485,7 +482,7 @@ function reconcileStates(
 export function resolveState(node: ReactiveNode, world: World): DerivedState {
   if (world.drafts.length === 0) {
     untracked(() => {
-      if ((node.flags & Flags.Cell) !== 0) peekCell(node as CellNode<unknown>);
+      if ((node.flags & Flag.Cell) !== 0) peekCell(node as CellNode<unknown>);
       else ensureFresh(node as DerivedNode<unknown>);
     });
     return node as CellNode<unknown> | DerivedNode<unknown>;
@@ -499,7 +496,7 @@ export function resolveState(node: ReactiveNode, world: World): DerivedState {
     return memo.state;
   }
   const fresh: DerivedState =
-    (node.flags & Flags.Cell) !== 0
+    (node.flags & Flag.Cell) !== 0
       ? { flags: 0, value: replayLog(node as CellNode<unknown>, world), throwable: null }
       : draftEvaluate(node as DerivedNode<unknown>, world, memo?.state);
   const state = reconcileStates(node, memo?.state, fresh);
@@ -524,7 +521,7 @@ function draftEvaluate(
   // Suspense retries must observe one stable thenable per pending span.
   const suspension =
     prev !== undefined &&
-    (prev.flags & Flags.DerivedSuspended) !== 0 &&
+    (prev.flags & Flag.DerivedSuspended) !== 0 &&
     !(prev.throwable as Suspension).settled
       ? (prev.throwable as Suspension)
       : makeSuspension();
@@ -543,16 +540,16 @@ function draftEvaluate(
   } catch (e) {
     if (e === WORLD_PARKED) {
       // The canonical value doubles as the stale serve (sentinel = none yet).
-      return { flags: Flags.DerivedSuspended, value: node.value, throwable: suspension };
+      return { flags: Flag.DerivedSuspended, value: node.value, throwable: suspension };
     }
     if (
       prev !== undefined &&
-      (prev.flags & Flags.DerivedError) !== 0 &&
+      (prev.flags & Flag.DerivedError) !== 0 &&
       (prev.throwable as ErrorBox).error === e
     ) {
       return prev;
     }
-    return { flags: Flags.DerivedError, value: node.value, throwable: makeErrorBox(e) };
+    return { flags: Flag.DerivedError, value: node.value, throwable: makeErrorBox(e) };
   } finally {
     currentPark = prevPark;
     sigs.delete(world.sig);
@@ -575,9 +572,9 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
  * reader (no stale serve here — a world evaluation must not fold a stale
  * canonical value into a speculative result). */
 export function unwrapForEval(st: DerivedState, park: (t: PromiseLike<unknown>) => unknown): unknown {
-  const asyncBits = st.flags & ASYNC_MASK;
+  const asyncBits = st.flags & Flag.AsyncMask;
   if (asyncBits === 0) return st.value;
-  if (asyncBits === Flags.DerivedError) throw (st.throwable as ErrorBox).error;
+  if (asyncBits === Flag.DerivedError) throw (st.throwable as ErrorBox).error;
   return park((st.throwable as Suspension).promise);
 }
 

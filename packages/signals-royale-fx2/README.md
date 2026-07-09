@@ -13,8 +13,10 @@ The root entry (`signals-royale-fx2`) is React-free and dependency-free.
 React bindings ship as a subpath — `signals-royale-fx2/react` — with
 `react`/`react-dom` (>= 19) as peer dependencies; they run on stock React,
 no patches or build flags. TypeScript source is the artifact (`exports`
-points at `src/`); every syntax used is erasable, so it also runs directly
-under Node's type stripping.
+points at `src/`): consume it with any TypeScript-compiling toolchain
+(bundlers, vitest, tsc). Numeric constant families are `const enum`s, so
+loaders that only strip types (Node's `--experimental-strip-types`) are not
+supported.
 
 ## Core API
 
@@ -81,7 +83,6 @@ count.get()        // committed state plus applied urgent writes; drafts hidden
 latest(count)      // newest intent, drafts included; never suspends
 committed(count)   // what is on screen (per root with committed(x, container))
 isPending(count)   // true while newer data exists behind the shown value
-refresh(query)     // force a refetch with unchanged inputs; stale keeps serving
 ```
 
 Inside a computed evaluation (or a render pass, through the React bindings)
@@ -111,6 +112,28 @@ const user = computed((use) => use(fetchUser(id.get())));
   A function that creates a brand-new promise on every evaluation would
   refetch on every settlement — that is a data-layer bug this engine cannot
   paper over.
+
+## Refetching
+
+To refetch with unchanged inputs, own the trigger: keep a version signal,
+read it inside the computed, and bump it to fetch again. There is no
+dedicated refetch API because a version bump is an ordinary write, and
+ordinary writes already do everything a refetch needs.
+
+```ts
+const userVersion = signal(0);
+const user = computed((use) => use(fetchUser(id.get(), userVersion.get())));
+
+userVersion.update((v) => v + 1); // refetch now; user keeps serving stale
+```
+
+- While the new fetch is pending the computed serves its last value and
+  `isPending(user)` is true — exactly as if `id` had changed.
+- It composes with transitions for free: the bump is classified like any
+  other write, so a bump inside a transition refetches in that transition's
+  world — the current screen holds, and the result commits with it.
+- Include the version in the request's cache key (as in `fetchUser` above)
+  so each bump creates exactly one new request.
 
 ## Observed lifecycle
 

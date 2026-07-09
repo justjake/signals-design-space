@@ -9,19 +9,41 @@
  */
 import { describe, expect, test } from 'vitest';
 import {
-  ASYNC_MASK,
+  Flag,
   computed,
   effect,
   isPending,
   latest,
+  nodeOf,
   read,
-  reactIntegration as ri,
   resetEngineForTest,
   signal,
   batch,
   type Computed,
   type Signal,
 } from '../src/index.ts';
+import {
+  discardDraft,
+  openDraft,
+  resolveState,
+  retireDraft,
+  runInDraft,
+  worldOf,
+  type Draft,
+} from '../src/worlds.ts';
+import { observeNode, type ReactiveNode } from '../src/graph.ts';
+
+/** The engine touch points the sabotage canaries below override, so the
+ * oracle is proven to catch a broken engine rather than a broken harness. */
+interface EngineSeams {
+  retire(draft: Draft, opts: { silent: boolean }): void;
+  canonicalSnap(node: ReactiveNode): number;
+}
+
+const realSeams: EngineSeams = {
+  retire: (draft, opts) => retireDraft(draft.id, opts),
+  canonicalSnap: (node) => node.canonicalEpoch,
+};
 
 // ---------------------------------------------------------------------------
 // Deterministic PRNG
@@ -178,13 +200,13 @@ function generate(rand: () => number, steps: number): Step[] {
 // Execution: engine + model side by side
 // ---------------------------------------------------------------------------
 
-function runSchedule(steps: Step[]): string | null {
+function runSchedule(steps: Step[], seams: EngineSeams = realSeams): string | null {
   resetEngineForTest();
   const model: Model = { cells: [], drafts: new Map(), seq: 0 };
   const exprs: Expr[] = [];
   const engCells: Signal<number>[] = [];
   const engComps: Computed<number>[] = [];
-  const engDrafts = new Map<number, number>(); // schedule draft ix -> engine draft id
+  const engDrafts = new Map<number, Draft>(); // schedule draft ix -> engine draft record (transient: dies with this run)
   const effectLog: number[] = [];
   const expectedEffectLog: number[] = [];
   let effectRef: Ref | null = null;
@@ -205,14 +227,15 @@ function runSchedule(steps: Step[]): string | null {
   const bareSubs: BareSub[] = [];
   const attachBare = (ref: Ref) => {
     const target = 'cell' in ref ? engCells[ref.cell] : engComps[ref.comp];
+    const node = nodeOf(target);
     const sub: BareSub = {
       ref,
-      snap: ri.canonicalEpochSnapshot(target),
+      snap: seams.canonicalSnap(node),
       view: engRead(ref),
       unsub: () => {},
     };
-    sub.unsub = ri.subscribe(target, () => {
-      const s = ri.canonicalEpochSnapshot(target);
+    sub.unsub = observeNode(node, () => {
+      const s = seams.canonicalSnap(node);
       if (s === sub.snap) return;
       sub.snap = s;
       sub.view = engRead(ref);
@@ -298,36 +321,36 @@ function runSchedule(steps: Step[]): string | null {
           break;
         }
         case 'open': {
-          const d = ri.openDraft();
+          const d = openDraft();
           const ix = engDrafts.size;
-          engDrafts.set(ix, d.id);
+          engDrafts.set(ix, d);
           model.drafts.set(ix, 'live');
           break;
         }
         case 'draftSet': {
           if (model.drafts.get(s.draft) !== 'live') break;
           model.cells[s.cell].intents.push({ seq: model.seq++, kind: 'set', payload: s.v, draft: s.draft });
-          ri.runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].set(s.v));
+          runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].set(s.v));
           break;
         }
         case 'draftUpdate': {
           if (model.drafts.get(s.draft) !== 'live') break;
           const k = s.k;
           model.cells[s.cell].intents.push({ seq: model.seq++, kind: 'update', payload: (p) => p + k, draft: s.draft });
-          ri.runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].update((p) => p + k));
+          runInDraft(engDrafts.get(s.draft)!, () => engCells[s.cell].update((p) => p + k));
           break;
         }
         case 'retire': {
           if (model.drafts.get(s.draft) !== 'live') break;
           model.drafts.set(s.draft, 'retired');
-          ri.retireDraft(engDrafts.get(s.draft)!, { silent: s.silent });
+          seams.retire(engDrafts.get(s.draft)!, { silent: s.silent });
           refreshExpectedEffect();
           break;
         }
         case 'discard': {
           if (model.drafts.get(s.draft) !== 'live') break;
           model.drafts.set(s.draft, 'discarded');
-          ri.discardDraft(engDrafts.get(s.draft)!);
+          discardDraft(engDrafts.get(s.draft)!.id);
           break;
         }
         case 'readCanonical': {
@@ -338,10 +361,10 @@ function runSchedule(steps: Step[]): string | null {
         }
         case 'readWorld': {
           const ids = s.ids.filter((ix) => model.drafts.get(ix) === 'live');
-          const engIds = ids.map((ix) => engDrafts.get(ix)!);
+          const engIds = ids.map((ix) => engDrafts.get(ix)!.id);
           const target = 'cell' in s.ref ? engCells[s.ref.cell] : engComps[s.ref.comp];
-          const st = ri.resolveState(target, engIds);
-          if ((st.flags & ASYNC_MASK) !== 0) return fail(`world read: unexpected flags ${st.flags}`);
+          const st = resolveState(nodeOf(target), worldOf(engIds));
+          if ((st.flags & Flag.AsyncMask) !== 0) return fail(`world read: unexpected flags ${st.flags}`);
           const want = modelEval(model, exprs, s.ref, ids);
           if (st.value !== want) return fail(`world read [${ids}]: engine ${String(st.value)} != model ${want}`);
           break;
@@ -410,9 +433,11 @@ const STEPS = 90;
 
 describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
   test('canary: a sabotaged engine is caught by the oracle', () => {
-    const real = ri.retireDraft;
-    (ri as { retireDraft: typeof real }).retireDraft = () => {
-      /* sabotage: retirement silently dropped */
+    const sabotaged: EngineSeams = {
+      ...realSeams,
+      retire: () => {
+        /* sabotage: retirement silently dropped */
+      },
     };
     try {
       const schedule: Step[] = [
@@ -422,20 +447,20 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
         { t: 'retire', draft: 0, silent: false },
         { t: 'readCanonical', ref: { cell: 0 } },
       ];
-      expect(runSchedule(schedule)).not.toBeNull();
+      expect(runSchedule(schedule, sabotaged)).not.toBeNull();
     } finally {
-      (ri as { retireDraft: typeof real }).retireDraft = real;
       resetEngineForTest();
     }
   });
 
   test('canary: a bare subscriber blinded to silent folds is caught (the scope-less staleness class)', () => {
     // Sabotage: the bare subscriber's snapshot reverts to the world-delivered
-    // epoch, which silent folds keep still — exactly the pre-fix wiring that
-    // stranded subscribers outside any SignalScope.
-    const real = ri.canonicalEpochSnapshot;
-    (ri as { canonicalEpochSnapshot: typeof real }).canonicalEpochSnapshot = (x) =>
-      ri.epochSnapshot(x);
+    // epoch (reactEpoch), which silent folds keep still — exactly the pre-fix
+    // wiring that stranded subscribers outside any SignalScope.
+    const sabotaged: EngineSeams = {
+      ...realSeams,
+      canonicalSnap: (node) => node.reactEpoch,
+    };
     try {
       const schedule: Step[] = [
         { t: 'cell', init: 1 },
@@ -443,9 +468,8 @@ describe(`oracle fuzz (${SEEDS} seeds x ${STEPS} steps)`, () => {
         { t: 'draftSet', draft: 0, cell: 0, v: 9 },
         { t: 'retire', draft: 0, silent: true },
       ];
-      expect(runSchedule(schedule)).not.toBeNull();
+      expect(runSchedule(schedule, sabotaged)).not.toBeNull();
     } finally {
-      (ri as { canonicalEpochSnapshot: typeof real }).canonicalEpochSnapshot = real;
       resetEngineForTest();
     }
   });

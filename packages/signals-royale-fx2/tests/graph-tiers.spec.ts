@@ -15,7 +15,7 @@ import {
   type DerivedNode,
   type Link,
   type ReactiveNode,
-  Flags,
+  Flag,
   batch,
   currentWriteEpoch,
   makeCell,
@@ -46,7 +46,7 @@ function depEdgeCount(sub: ReactiveNode, dep: ReactiveNode): number {
 }
 
 function isWatched(n: ReactiveNode): boolean {
-  return (n.flags & Flags.Watched) !== 0;
+  return (n.flags & Flag.Watched) !== 0;
 }
 
 /** The tier invariant promote/demote must maintain: for cells and deriveds
@@ -55,7 +55,7 @@ function isWatched(n: ReactiveNode): boolean {
  * resurrect the stale-Clean serve that promote exists to prevent. */
 function expectTierInvariant(nodes: ReactiveNode[]): void {
   for (const n of nodes) {
-    if ((n.flags & Flags.Watcher) !== 0) continue;
+    if ((n.flags & Flag.Watcher) !== 0) continue;
     expect(isWatched(n)).toBe(n.observerCount > 0);
   }
 }
@@ -207,7 +207,7 @@ describe('two-tier graph: promote/demote structure', () => {
     expect(evals).toBe(1);
     // Precondition of the O(1) return: Clean plus a current validation stamp.
     expect(wide.validatedEpoch).toBe(currentWriteEpoch());
-    expect((wide.flags & (Flags.Check | Flags.Dirty)) === 0).toBe(true);
+    expect((wide.flags & (Flag.Check | Flag.Dirty)) === 0).toBe(true);
     for (let i = 0; i < 100; i++) readDerived(wide);
     expect(evals).toBe(1);
   });
@@ -313,7 +313,7 @@ describe('two-tier graph: tracking and waves', () => {
     for (let i = 0; i < DEPTH; i++) {
       const p = prev;
       const d = makeDerived(() =>
-        ((p.flags & Flags.Cell) !== 0
+        ((p.flags & Flag.Cell) !== 0
           ? readCell(p as CellNode<number>)
           : readDerived(p as DerivedNode<number>)) + 1,
       );

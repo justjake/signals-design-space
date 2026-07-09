@@ -168,8 +168,9 @@ waits ~10 ms (one slice), at the cost of the transition itself finishing
 - Concurrent model: classification, render-pass consistency, urgent-during-
   transition rebase, rollback re-notify, per-root committed views, flushSync
   exclusion, quiescence — done.
-- Read family: get/latest/committed/isPending/refresh — done, including the
-  adjudicated latest() context rule (§7.1).
+- Read family: get/latest/committed/isPending — done, including the
+  adjudicated latest() context rule (§7.1). (`refresh` shipped here
+  originally; removed by owner ruling — §16.)
 - Async/Suspense: evaluate-to-pending, parallel parks, stable thenables,
   error boxes, two-level suspend-vs-stale, settlement-as-write with world
   attribution — done.
@@ -719,3 +720,106 @@ LOC self-count (same counter and rules as §4):
 node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2
 → libLoc 2437  (engine 1973 + react bindings 464)
 ```
+
+## 16. refresh() removed (deletion round, owner ruling)
+
+`refresh(x)` and its machinery are gone: the export, the hidden per-computed
+nonce cell (`refreshNonce` + `ensureRefreshNonce`), the recompute pre-read,
+`adoptDepLink` (its only creation site for non-evaluation edges), and the
+`makeCell` lazy opt-out (only the nonce passed it, as a no-op). The
+userspace replacement is a version signal the computed reads — same
+classification behavior, zero engine surface; the README's "Refetching"
+section is the recipe. §10.2's regression test left with the API; the
+settlement-in-transition and stale-serve tests were rewritten to drive their
+refetches with a user nonce and pass unchanged against both the pre- and
+post-deletion engine. Structural dividend: evaluation is now the only source
+of dependency edges, so "a derived's deps list is exactly what its last
+evaluation read, in read order" is unconditional — a dev-gated assertion
+after every trim enforces it (docs/two-tier-graph.md), and the stamp-0
+adopted-edge class exits the dedup probe's domain. Gates: tsc clean;
+274 passed (278 − 4 refresh-only tests); oracle 3 passed at 1200 seeds;
+battery 23 passed / 2 failed — scenario 16 DOM-mutation (pre-existing
+exemption) plus scenario 11's refresh test (`adapter.refresh is not a
+function`, the expected hole for a deleted API; battery.spec.tsx is shared
+and stays untouched).
+
+## 17. Two indirections dissolved (refactor round, owner rulings)
+
+`reactIntegration` is gone. The ~30-member object existed as a privacy wall
+between the engine and `src/react/`, but the react directory is part of the
+library — there is nothing to wall off. The bindings now import what they
+use directly from graph.ts, worlds.ts, tracer.ts, and index.ts, and unwrap
+user handles at their own boundary: hooks call `nodeOf(x)` once and work
+with `ReactiveNode` records (subscriptions are `observeNode(node, …)`, epoch
+snapshots are field reads), and the ambient classifier keys Draft RECORDS
+by transition object (`WeakMap<transition, Draft>`), deleting the per-
+drafted-write id→record lookup the old seam paid. Three engine members the
+object had privatized are exported from where they live: index.ts's
+`setRenderWorldProvider`, `isPendingPassive`, `committedSnapshot`. One rule
+survives the wall's demolition because it is a leak rule, not a privacy
+rule: long-lived React state (reducer worlds, committed id sets) holds draft
+IDS, never Draft records — a record captured in a committed reducer state
+that never updates again would be retained forever; a stale id is inert. A
+gc-leaks test pins it (retired draft's id held in a long-lived array; the
+Draft record and its logged payload are WeakRef-collectible). The
+lifetime-effect hook ceremony went with it: lifetime.ts folded into graph.ts
+verbatim, the promote/demote sites call `noteLifetimeTransition` directly,
+and `GraphHooks` shrank to `classifyWrite` + `trace` — `observation` and
+`installLifetimeHook` deleted, and `afterPropagate` deleted after verifying
+zero installers across all 281 revisions (the two-stage flush itself —
+effects before leaf notifies — is load-bearing and stays). The oracle's
+sabotage canaries, which monkey-patched object members, now inject their
+sabotage through an explicit seams parameter of `runSchedule`. Gates: tsc
+clean; 275 passed (274 + the new leak pin); oracle 3 passed at 1200 seeds;
+gc-leaks 9; battery at the pinned 23 passed / 2 failed / 1 unhandled error
+(scenario 11 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both
+owner-exempt; the unhandled error is the same refresh TypeError).
+
+## 18. Type/constant hygiene (weak brands, const enums, dead seams)
+
+Three moves, refactor-parity, one commit. **Weak branded number types**: a
+shared `Brand<T, B>` helper in graph.ts (declared-never-created unique
+symbol, optional property — purely type-level) brands every named counter:
+`WriteEpoch`, `NodeVersion`, `TraceEventId`, `EvalStamp` (new name for the
+previously bare eval-stamp numbers: `evalStamp`, `stampCounter`,
+`Link.stamp`), `ReactEpoch`/`CanonicalEpoch` (the two subscription epochs),
+`Flags` (the stored word), and worlds.ts's `DraftId`, `WorldEpoch`, `OpSeq`.
+Weak means creation and increment stay cast-free while cross-brand
+assignments and parameter passes are type errors. The migration surfaced
+ZERO cross-brand errors in the existing code; that null result was verified
+positively with a temporary `@ts-expect-error` probe file exercising all ten
+cross-brand flows (every suppression was required — the brands bite — then
+the probe was deleted). Ripple typing fixes in the same spirit:
+`WorldMemo.writeEpoch` is a `WriteEpoch` (was bare `number`), and the
+draft-wake seam (`onDraftWake`, `pokeAndWakeLeafObservers`, `observeNode`'s
+`draftWake`) takes `DraftId` via a type-only worlds.ts import (erased; the
+graph stays runtime-dependency-free). **Const enums**: the flag bits are now
+`const enum Flag` with `StaleMask = Check | Dirty` and `AsyncMask =
+DerivedError | DerivedSuspended` as members (the former `STALE_MASK` /
+`ASYNC_MASK` consts); `Flag` is one bit, `Flags` stays the branded stored
+word (TS5 would force a cast on every `|=` if fields carried the enum type).
+The flush guard ceiling (`Limit.FlushRuns` = 100 000) and the tracer's ring
+constants (`Limit.MinCapacity`/`DefaultCapacity`/`MaxChainWalk`) join
+per-file `Limit` enums. `NO_EVENT` and `REPAIR_WAKE` deliberately stay
+branded const sentinels, not one-member enums — each is a sentinel of an
+existing branded type (`TraceEventId`, `DraftId`) and reads better where it
+lives. This reverses §13's erasable-syntax choice on purpose: the toolchain
+compiles TS everywhere (vitest/esbuild; no `erasableSyntaxOnly`, nothing
+runs Node strip-types — empirically confirmed strip-only mode rejects
+enums), esbuild inlines members same-file and compiles cross-file consumers
+to object lookups (same cost as the const object), and README's
+type-stripping claim is updated accordingly. **Dead seams**: worlds.ts's
+`getDraft` deleted (zero callers — its last ones died with
+`reactIntegration`); `GraphHooks.classifyWrite` deleted (never installed,
+never called; the live classifier is worlds.ts's `classifyWrite` invoked
+directly from index.ts write paths, and the hook's doc comment contradicted
+its own boolean type), which left `trace` as the interface's only member —
+so the `GraphHooks` interface and `hooks` object are gone entirely,
+replaced by a `traceHook` module binding + `setTraceHook` setter (matching
+`useImpl`/`setUseImpl`), keeping the detached fast path at one null check
+per emit site. Public API rename: `Flags`-the-const-object and `ASYNC_MASK`
+are replaced by `Flag` (tests updated; the shared battery adapter never
+touched them). Gates: tsc clean; 275 passed; oracle 3 passed at 1200 seeds;
+battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
+`adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
+the unhandled error is the same refresh TypeError).

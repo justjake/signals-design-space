@@ -8,18 +8,17 @@
  * which opens and broadcasts a draft on the spot.
  */
 import * as React from 'react';
-import { reactIntegration as engine, type DraftId } from '../index.ts';
+import { openDraft, runInDraft, sealDraft } from '../worlds.ts';
 import { broadcastDraft } from './host.ts';
 
-function runDraftScope(scope: () => void): DraftId {
-  const draft = engine.openDraft();
+function runDraftScope(scope: () => void): void {
+  const draft = openDraft();
   broadcastDraft(draft.id);
   try {
-    engine.runInDraft(draft.id, scope);
+    runInDraft(draft, scope);
   } finally {
-    engine.sealDraft(draft.id);
+    sealDraft(draft);
   }
-  return draft.id;
 }
 
 /** Run writes as one transition batch: invisible to canonical readers and

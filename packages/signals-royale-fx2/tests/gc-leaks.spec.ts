@@ -14,12 +14,22 @@ import {
   computed,
   effect,
   effectScope,
-  reactIntegration as ri,
+  nodeOf,
   read,
   signal,
   type Signal,
 } from '../src/index.ts';
-import { type CellNode, type Link } from '../src/graph.ts';
+import { observeNode, type CellNode, type Link } from '../src/graph.ts';
+import {
+  liveDraftCount,
+  openDraft,
+  resolveState,
+  retireDraft,
+  runInDraft,
+  sealDraft,
+  worldOf,
+  type DraftId,
+} from '../src/worlds.ts';
 
 function subCount(x: Signal<number>): number {
   let n = 0;
@@ -74,7 +84,7 @@ describe('leak audit', () => {
   test('a dropped leaf subscription handle reclaims', async () => {
     const base = signal(1);
     (() => {
-      void ri.subscribe(base, () => {});
+      void observeNode(nodeOf(base), () => {});
     })();
     expect(subCount(base)).toBe(1);
     await collect(10);
@@ -84,20 +94,47 @@ describe('leak audit', () => {
   test('quiescence: retiring the last draft leaves no per-suspension state', () => {
     const a = signal(0);
     const c = computed(() => a.get() + 1);
-    const d1 = ri.openDraft();
-    const d2 = ri.openDraft();
-    ri.runInDraft(d1.id, () => a.set(1));
-    ri.runInDraft(d2.id, () => a.update((x) => x + 5));
-    ri.resolveState(c, [d1.id]);
-    ri.resolveState(c, [d1.id, d2.id]);
-    expect(ri.nodeOf(c).worldMemos).not.toBeNull();
-    ri.retireDraft(d1.id);
-    expect(ri.nodeOf(c).worldMemos).not.toBeNull(); // d2 still live
-    ri.retireDraft(d2.id);
-    expect(ri.nodeOf(c).worldMemos).toBeNull();
-    expect(ri.nodeOf(a).worldMemos).toBeNull();
-    expect(ri.liveDraftCount()).toBe(0);
+    const d1 = openDraft();
+    const d2 = openDraft();
+    runInDraft(d1, () => a.set(1));
+    runInDraft(d2, () => a.update((x) => x + 5));
+    resolveState(nodeOf(c), worldOf([d1.id]));
+    resolveState(nodeOf(c), worldOf([d1.id, d2.id]));
+    expect(nodeOf(c).worldMemos).not.toBeNull();
+    retireDraft(d1.id);
+    expect(nodeOf(c).worldMemos).not.toBeNull(); // d2 still live
+    retireDraft(d2.id);
+    expect(nodeOf(c).worldMemos).toBeNull();
+    expect(nodeOf(a).worldMemos).toBeNull();
+    expect(liveDraftCount()).toBe(0);
     expect(read(a)).toBe(6);
+  });
+
+  test('a retired draft id in long-lived state retains neither the Draft record nor its logged intents', async () => {
+    // The React bindings' contract: long-lived React state (reducer worlds,
+    // committed id sets) holds draft IDS, never Draft records — a record
+    // captured in a committed reducer state that never updates again would
+    // be retained forever, while a stale id is inert.
+    const a = signal({ n: 0 });
+    const committedReducerState: DraftId[] = []; // stands in for React state that never updates again
+    let draftRef!: WeakRef<object>;
+    let payloadRef!: WeakRef<object>;
+    (() => {
+      const draft = openDraft();
+      const payload = { n: 1 };
+      runInDraft(draft, () => a.set(payload));
+      sealDraft(draft);
+      committedReducerState.push(draft.id);
+      draftRef = new WeakRef(draft);
+      payloadRef = new WeakRef(payload);
+      retireDraft(draft.id);
+    })();
+    expect(read(a).n).toBe(1); // the fold landed the logged payload canonically
+    a.set({ n: 2 }); // canonical moves on: nothing references the payload
+    await collect(10);
+    expect(committedReducerState.length).toBe(1); // the id is still held — and inert
+    expect(draftRef.deref()).toBeUndefined();
+    expect(payloadRef.deref()).toBeUndefined();
   });
 
   test('promote/demote cycling leaves no back-edges; the demoted chain collects when dropped', async () => {
@@ -112,7 +149,7 @@ describe('leak audit', () => {
       // Subscribe without pulling, pull through the watched tier, then
       // unsubscribe: promote installed back-edges down to the cell, and
       // demote must remove every one of them.
-      const unsub = ri.subscribe(top, () => {});
+      const unsub = observeNode(nodeOf(top), () => {});
       expect(read(top)).toBe(3);
       expect(subCount(base)).toBe(1);
       unsub();
@@ -129,7 +166,7 @@ describe('leak audit', () => {
     const top = computed(() => base.get() + 1);
     (() => {
       // The subscription handle is dropped without being called.
-      void ri.subscribe(top, () => {});
+      void observeNode(nodeOf(top), () => {});
     })();
     expect(read(top)).toBe(2); // watched evaluation links base -> top
     expect(subCount(base)).toBe(1);

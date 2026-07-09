@@ -16,7 +16,6 @@ import {
   latest,
   nodeOf,
   read,
-  refresh,
   serializeAtomState,
   set,
   signal,
@@ -97,9 +96,6 @@ const adapter = {
   },
   isPending(x: unknown): boolean {
     return isPending(x as Atom);
-  },
-  refresh(x: unknown): void {
-    refresh(x as Atom);
   },
   effect(fn: () => void | (() => void)): () => void {
     return effect(fn);

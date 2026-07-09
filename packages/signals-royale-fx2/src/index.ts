@@ -15,19 +15,17 @@ import {
   type CellNode,
   type DerivedNode,
   type EqualsFn,
+  type Flags,
   type ReactiveNode,
   type UseFn,
-  type WatcherNode,
-  ASYNC_MASK,
-  Flags,
+  Flag,
+  flushLifetimeTransitions,
   getActiveConsumer,
-  hooks,
   isUninitialized,
   makeCell,
   makeDerived,
   makeEffect,
   makeScope,
-  observeNode,
   peekCell,
   readCell,
   readDerived,
@@ -37,17 +35,8 @@ import {
   untracked as graphUntracked,
   useImpl,
   writeCell,
-  ensureFresh,
-  pokeLeafObservers,
-  NO_EVENT,
 } from './graph.ts';
-import {
-  type DerivedState,
-  type ErrorBox,
-  type Suspension,
-  ensureRefreshNonce,
-  isErrorBox,
-} from './asyncs.ts';
+import { type DerivedState, type ErrorBox, type Suspension, isErrorBox } from './asyncs.ts';
 import {
   type Draft,
   type DraftId,
@@ -59,29 +48,16 @@ import {
   classifyWrite,
   committedWorldOf,
   discardAllDrafts,
-  discardDraft,
-  draftsAffecting,
   getCurrentPark,
   getCurrentWorld,
-  getDraft,
-  isLiveDraft,
   latestWorld,
-  liveDraftCount,
-  openDraft,
   peekWorldMemo,
   resolveState,
-  retireDraft,
-  runInDraft,
-  sealDraft,
   setAmbientClassifier,
-  setCommittedWorld,
   unwrapForEval,
   worldOf,
 } from './worlds.ts';
-import { installLifetimeHook, flushLifetimeTransitions } from './lifetime.ts';
 import { attachTracer, getActiveTracer, Tracer, type TraceEvent } from './tracer.ts';
-
-installLifetimeHook();
 
 // ---------------------------------------------------------------------------
 // Public handle types
@@ -169,14 +145,14 @@ function readValue(x: AnyReadable): unknown {
     // Inside a draft evaluation every read resolves that world.
     return unwrapForEval(resolveState(node, world), getCurrentPark()!);
   }
-  if ((node.flags & Flags.Cell) !== 0) return readCell(node as CellNode<unknown>);
+  if ((node.flags & Flag.Cell) !== 0) return readCell(node as CellNode<unknown>);
   const value = readDerived(node as DerivedNode<unknown>);
   const flags = node.flags;
-  if ((flags & ASYNC_MASK) !== 0) {
-    if ((flags & Flags.DerivedError) !== 0) throw (node.throwable as ErrorBox).error;
+  if ((flags & Flag.AsyncMask) !== 0) {
+    if ((flags & Flag.DerivedError) !== 0) throw (node.throwable as ErrorBox).error;
     const suspension = node.throwable as Suspension;
     const consumer = getActiveConsumer();
-    if (consumer !== null && (consumer.flags & Flags.Derived) !== 0) {
+    if (consumer !== null && (consumer.flags & Flag.Derived) !== 0) {
       // Pending forwards: park the evaluating computed on this suspension.
       useImpl(suspension.promise, consumer as DerivedNode<unknown>);
     }
@@ -208,14 +184,14 @@ export function latest<T>(x: Readable<T>): T {
       // a later change to x re-runs the consumer rather than leaving it
       // permanently stale.
       world = CANONICAL_WORLD;
-      if ((node.flags & Flags.Cell) !== 0) readCell(node as CellNode<unknown>);
+      if ((node.flags & Flag.Cell) !== 0) readCell(node as CellNode<unknown>);
       else readDerived(node as DerivedNode<unknown>);
     } else {
       world = renderWorld() ?? latestWorld();
     }
   }
   const st = resolveState(node, world);
-  if ((st.flags & Flags.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
+  if ((st.flags & Flag.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
   return stateValue(st) as T;
 }
 
@@ -223,8 +199,17 @@ export function latest<T>(x: Readable<T>): T {
 export function committed<T>(x: Readable<T>, container?: object): T {
   const node = nodeOf(x);
   const st = resolveState(node, committedWorldOf(container));
-  if ((st.flags & Flags.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
+  if ((st.flags & Flag.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
   return stateValue(st) as T;
+}
+
+/** Committed-view snapshot with stable identity: the value, or the ErrorBox
+ * itself (identity-stable for the whole error span — see isErrorBox) whose
+ * error the caller rethrows. The React bindings' useCommitted snapshot. */
+export function committedSnapshot(node: ReactiveNode, container: object | undefined): unknown {
+  const st = resolveState(node, committedWorldOf(container));
+  if ((st.flags & Flag.DerivedError) !== 0) return st.throwable;
+  return stateValue(st);
 }
 
 /** Cheap flip-only probe: true while newer data exists behind what is on
@@ -235,45 +220,21 @@ export function isPending(x: AnyReadable): boolean {
   return isPendingPassive(nodeOf(x), getCurrentWorld() ?? renderWorld());
 }
 
-function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
-  if ((node.flags & Flags.Cell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
-  if ((node.flags & Flags.Derived) === 0) return false;
-  if ((node.flags & Flags.DerivedSuspended) !== 0) return true;
+/** Node-level pendingness probe; `world` scopes the suspended-memo check
+ * (null = ambient). The React bindings' useIsPending snapshot. */
+export function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
+  if ((node.flags & Flag.Cell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
+  if ((node.flags & Flag.Derived) === 0) return false;
+  if ((node.flags & Flag.DerivedSuspended) !== 0) return true;
   if (world !== null && world.drafts.length > 0) {
     const memo = peekWorldMemo(node, world.sig);
-    if (memo !== undefined && (memo.flags & Flags.DerivedSuspended) !== 0) return true;
+    if (memo !== undefined && (memo.flags & Flag.DerivedSuspended) !== 0) return true;
   }
   // A drafted input means this computed has newer data pending too.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
-    if ((l.dep.flags & Flags.Cell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
+    if ((l.dep.flags & Flag.Cell) !== 0 && cellHasDraftIntents(l.dep as CellNode<unknown>)) return true;
   }
   return false;
-}
-
-const bumpNonce = (n: unknown): unknown => (n as number) + 1;
-
-/** Force a refetch with unchanged inputs; the stale value keeps serving.
- * An urgent refresh starts the refetch immediately (before subscribers are
- * notified, so pending probes flip in the same wave); a refresh inside a
- * transition belongs to that transition — its world refetches when that
- * world next evaluates, and the result commits with it. */
-export function refresh(x: AnyReadable): void {
-  const node = nodeOf(x);
-  if ((node.flags & Flags.Derived) === 0) {
-    throw new TypeError('refresh(x) expects a computed; signals have nothing to refetch');
-  }
-  const nonce = ensureRefreshNonce(node as DerivedNode<unknown>) as CellNode<unknown>;
-  const draft = classifyWrite();
-  if (draft !== null) {
-    appendDraftIntent(draft, nonce, 'update', bumpNonce);
-  } else {
-    guardRenderWrite();
-    appendUrgentIntent(nonce, 'update', bumpNonce);
-    graphBatch(() => {
-      writeCell(nonce, (graphUntracked(() => peekCell(nonce)) as number) + 1);
-      graphUntracked(() => ensureFresh(node as DerivedNode<unknown>));
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,8 +351,8 @@ export { attachTracer, getActiveTracer, Tracer };
 export type { TraceEvent };
 
 // ---------------------------------------------------------------------------
-// React integration surface (consumed by the ./react bindings; not part
-// of the app-facing API, but public so the bindings layer stays honest).
+// Render-world provider (installed by the ./react bindings, which import
+// engine modules directly — the react directory is part of the library).
 // ---------------------------------------------------------------------------
 
 /** Installed by the bindings: answers "what world is rendering right now".
@@ -405,6 +366,12 @@ export type { TraceEvent };
  * is rendering and which notes a pass refreshed. */
 let renderWorldProvider: (() => readonly DraftId[] | 'canonical' | null) | null = null;
 
+export function setRenderWorldProvider(
+  fn: (() => readonly DraftId[] | 'canonical' | null) | null,
+): void {
+  renderWorldProvider = fn;
+}
+
 function renderWorld(): World | null {
   if (renderWorldProvider === null) return null;
   const ids = renderWorldProvider();
@@ -412,104 +379,6 @@ function renderWorld(): World | null {
   if (ids === 'canonical') return CANONICAL_WORLD;
   return worldOf(ids);
 }
-
-export const reactIntegration = {
-  nodeOf,
-  worldOf,
-  resolveState: (x: AnyReadable, ids: readonly DraftId[]): DerivedState =>
-    resolveState(nodeOf(x), worldOf(ids)),
-  /** Leaf subscription. `notify` is the store-change channel (snapshot
-   * comparisons re-render); `draftWake` is the draft-lane channel — it
-   * receives the id of any draft whose intents reach this node, so only
-   * affected subscribers join a transition's render passes. */
-  subscribe(x: AnyReadable, notify: () => void, draftWake?: (id: DraftId) => void): () => void {
-    return observeNode(nodeOf(x), notify, draftWake);
-  },
-  openDraft,
-  sealDraft: (id: DraftId): void => {
-    const d = getDraft(id);
-    if (d !== undefined) sealDraft(d);
-  },
-  retireDraft,
-  discardDraft,
-  runInDraft: <T>(id: DraftId, fn: () => T): T => {
-    const d = getDraft(id);
-    if (d === undefined) throw new Error(`draft ${id} is not live`);
-    return runInDraft(d, fn);
-  },
-  liveDraftCount,
-  setAmbientClassifier: (fn: (() => DraftId | null) | null): void => {
-    if (fn === null) {
-      setAmbientClassifier(null);
-      return;
-    }
-    setAmbientClassifier(() => {
-      const id = fn();
-      return id === null ? null : (getDraft(id) ?? null);
-    });
-  },
-  setCommittedWorld,
-  setRenderWriteGuard,
-  setRenderWorldProvider(fn: (() => readonly DraftId[] | 'canonical' | null) | null): void {
-    renderWorldProvider = fn;
-  },
-  trace(kind: string, x: AnyReadable | null, cause: number, data?: unknown): number {
-    const t = getActiveTracer();
-    if (t === null) return NO_EVENT;
-    return t.emit(kind, x === null ? null : nodeOf(x), cause, data);
-  },
-  traceNode(kind: string, node: ReactiveNode | null, cause: number, data?: unknown): number {
-    const t = getActiveTracer();
-    if (t === null) return NO_EVENT;
-    return t.emit(kind, node, cause, data);
-  },
-  causeOf(x: AnyReadable): number {
-    return nodeOf(x).causeEvent;
-  },
-  draftEvents(id: DraftId): { open: number; lastWrite: number } {
-    const d = getDraft(id);
-    return { open: d?.openEvent ?? NO_EVENT, lastWrite: d?.lastWriteEvent ?? NO_EVENT };
-  },
-  flushLifetimeTransitions,
-  isPendingIn(x: AnyReadable, ids: readonly DraftId[] | null): boolean {
-    return isPendingPassive(nodeOf(x), ids === null ? null : worldOf(ids));
-  },
-  isLiveDraft,
-  /** Live drafts whose intents reach this node; late subscribers use it to
-   * discover transitions whose write-time wakes they missed. */
-  draftsAffecting(x: AnyReadable): readonly DraftId[] {
-    return draftsAffecting(nodeOf(x));
-  },
-  /** Subscription epoch: the useSyncExternalStore snapshot. Changes exactly
-   * when committed-view subscribers must re-render. */
-  epochSnapshot(x: AnyReadable): number {
-    return nodeOf(x).reactEpoch;
-  },
-  /** Like epochSnapshot, but silent draft folds count too. For subscribers
-   * outside any SignalScope: render-pass worlds never deliver to them, so
-   * the fold is the only channel that can repair their view. */
-  canonicalEpochSnapshot(x: AnyReadable): number {
-    return nodeOf(x).canonicalEpoch;
-  },
-  hasLiveDrafts(ids: readonly DraftId[]): boolean {
-    return worldOf(ids).drafts.length > 0;
-  },
-  /** Committed-view snapshot with stable identity: the value, or the
-   * ErrorBox itself (identity-stable for the whole error span — see
-   * isErrorBox) whose error the call site rethrows. */
-  committedSnapshot(x: AnyReadable, container: object | undefined): unknown {
-    const st = resolveState(nodeOf(x), committedWorldOf(container));
-    if ((st.flags & Flags.DerivedError) !== 0) return st.throwable;
-    return stateValue(st);
-  },
-  /** Wake leaf observers of every cell the given live drafts touch (used
-   * after a per-root commit updates that root's committed view). */
-  pokeDraftCells(ids: readonly DraftId[]): void {
-    for (const draft of worldOf(ids).drafts) {
-      for (const cell of draft.cells) pokeLeafObservers(cell);
-    }
-  },
-};
 
 /** Reset seam for tests: discard live drafts, settle lifetime flaps, drop
  * ambient classification, detach any tracer. Existing atoms stay valid. */
@@ -522,9 +391,9 @@ export function resetEngineForTest(): void {
   getActiveTracer()?.stop();
 }
 
-export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn };
-/** The DerivedState read protocol: flag word constants (test async bits via
- * ASYNC_MASK/DerivedError/DerivedSuspended), the error-box brand check, and
- * the never-settled sentinel test. */
-export { ASYNC_MASK, Flags, isErrorBox, isUninitialized };
+export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn, Flags };
+/** The DerivedState read protocol: the Flag bit constants (test async bits
+ * via Flag.AsyncMask/DerivedError/DerivedSuspended), the error-box identity
+ * check, and the never-settled sentinel test. */
+export { Flag, isErrorBox, isUninitialized };
 export { CANONICAL_WORLD };
