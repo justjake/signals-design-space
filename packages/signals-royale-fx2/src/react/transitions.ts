@@ -1,0 +1,46 @@
+/**
+ * Transition writes. The helper opens an engine draft, dispatches its id to
+ * every SignalScope INSIDE React.startTransition (so the dispatches ride the
+ * transition's lanes), and classifies the scope's writes into the draft.
+ *
+ * Plain React.startTransition works too: the first engine write inside any
+ * transition context is detected through the ambient classifier in host.ts,
+ * which opens and broadcasts a draft on the spot.
+ */
+import * as React from 'react';
+import { reactIntegration as engine, type DraftId } from '../index.ts';
+import { broadcastDraft } from './host.ts';
+
+function runDraftScope(scope: () => void): DraftId {
+  const draft = engine.openDraft();
+  broadcastDraft(draft.id);
+  try {
+    engine.runInDraft(draft.id, scope);
+  } finally {
+    engine.sealDraft(draft.id);
+  }
+  return draft.id;
+}
+
+/** Run writes as one transition batch: invisible to canonical readers and
+ * the committed DOM until React commits the transition. */
+export function startTransitionWrite(scope: () => void): void {
+  React.startTransition(() => {
+    runDraftScope(scope);
+  });
+}
+
+/** useTransition married to an engine batch: isPending covers the batch's
+ * whole lifetime, including renders it holds open. */
+export function useSignalTransition(): [boolean, (scope: () => void) => void] {
+  const [isPending, startTransition] = React.useTransition();
+  const start = React.useCallback(
+    (scope: () => void) => {
+      startTransition(() => {
+        runDraftScope(scope);
+      });
+    },
+    [startTransition],
+  );
+  return [isPending, start];
+}
