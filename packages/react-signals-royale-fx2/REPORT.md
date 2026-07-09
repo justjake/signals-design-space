@@ -23,8 +23,8 @@ epoch — never a value — so drafts never look like store mutations and
 React's transition machinery (holding, time slicing, interruption) keeps
 working with no sync-fallback de-opt. A draft retires when every root that
 received it commits it; retirement folds intents through the ordinary write
-path (effects fire once) and quiescence drops every per-episode structure.
-Async is graph state: computeds evaluate-to-pending with one stable episode
+path (effects fire once) and quiescence drops every per-suspension structure.
+Async is graph state: computeds evaluate-to-pending with one stable suspension
 promise per span, so Suspense retries never refetch. The only thing stock
 React cannot do is the DOM mutation window, so the fork is exactly that: 11
 lines.

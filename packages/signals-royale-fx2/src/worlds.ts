@@ -23,7 +23,7 @@
  * ordinary write path (effects, equality, propagation) and marks the draft
  * retired, so render passes still holding its id resolve identical values.
  * When the last draft touching a cell dies, the log is dropped — a
- * quiescent engine holds no per-episode state anywhere.
+ * quiescent engine holds no per-suspension state anywhere.
  */
 
 import {
@@ -50,7 +50,7 @@ import {
 import {
   type Envelope,
   envelopeOf,
-  makeEpisode,
+  makeSuspension,
   setOnSettlementEpoch,
   trackThenable,
 } from './asyncs.ts';
@@ -281,7 +281,7 @@ function releaseLogs(dead: Draft): void {
   }
 }
 
-/** Quiescence: with no live drafts, every per-episode structure empties. */
+/** Quiescence: with no live drafts, every per-suspension structure empties. */
 function maybeQuiesce(): void {
   if (liveDrafts.size > 0) return;
   rebaseLogs.clear();
@@ -338,7 +338,7 @@ export function cellHasDraftIntents(cell: CellNode<unknown>): boolean {
   return false;
 }
 
-/** Test/reset seam: discard every live draft and clear per-episode state. */
+/** Test/reset seam: discard every live draft and clear per-suspension state. */
 export function discardAllDrafts(): void {
   for (const id of [...liveDrafts.keys()]) discardDraft(id);
 }
@@ -460,7 +460,7 @@ function reconcileEnvelopes(node: ReactiveNode, prev: Envelope | undefined, next
     const equals = (node as DerivedNode<unknown>).equals ?? Object.is;
     return equals(prev.value, next.value) ? prev : next;
   }
-  if (prev.kind === 'pending' && next.kind === 'pending' && prev.episode === next.episode) {
+  if (prev.kind === 'pending' && next.kind === 'pending' && prev.suspension === next.suspension) {
     return prev.value === next.value ? prev : next;
   }
   if (prev.kind === 'error' && next.kind === 'error' && prev.box.error === next.box.error) {
@@ -514,15 +514,15 @@ function draftEvaluate(
   if (sigs === undefined) draftEvalStack.set(node, (sigs = new Set()));
   sigs.add(world.sig);
   // Suspense retries must observe one stable thenable per pending span.
-  const episode =
-    prev !== undefined && prev.kind === 'pending' && !prev.episode.settled
-      ? prev.episode
-      : makeEpisode();
+  const suspension =
+    prev !== undefined && prev.kind === 'pending' && !prev.suspension.settled
+      ? prev.suspension
+      : makeSuspension();
   const worldUse = (t: PromiseLike<unknown>): unknown => {
     const box = trackThenable(t);
     if (box.status === 'fulfilled') return box.value;
     if (box.status === 'rejected') throw box.reason;
-    box.parkedEpisodes.add(episode);
+    box.parkedSuspensions.add(suspension);
     throw WORLD_PARKED;
   };
   const prevPark = currentPark;
@@ -534,7 +534,7 @@ function draftEvaluate(
     if (e === WORLD_PARKED) {
       return {
         kind: 'pending',
-        episode,
+        suspension,
         stale: !isUninitialized(node.value),
         value: isUninitialized(node.value) ? undefined : node.value,
       };
@@ -563,7 +563,7 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
 export function unwrapForEval(env: Envelope, park: (t: PromiseLike<unknown>) => unknown): unknown {
   if (env.kind === 'value') return env.value;
   if (env.kind === 'error') throw env.box.error;
-  return park(env.episode.promise);
+  return park(env.suspension.promise);
 }
 
 // ---------------------------------------------------------------------------

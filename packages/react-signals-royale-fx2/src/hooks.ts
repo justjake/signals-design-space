@@ -65,9 +65,9 @@ function traceDelivery(x: AnyReadable, value: unknown): void {
 function unwrapEnvelope(env: Envelope, ids: readonly DraftId[]): unknown {
   if (env.kind === 'value') return env.value;
   if (env.kind === 'error') throw env.box.error;
-  if (engine.hasLiveDrafts(ids)) throw env.episode.promise;
+  if (engine.hasLiveDrafts(ids)) throw env.suspension.promise;
   if (env.stale) return env.value;
-  throw env.episode.promise;
+  throw env.suspension.promise;
 }
 
 /**

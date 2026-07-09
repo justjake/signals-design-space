@@ -1,6 +1,6 @@
 /**
  * Leak audit (--expose-gc): dropped handles reclaim; quiescence leaves no
- * per-episode state.
+ * per-suspension state.
  *
  * Reclamation model under test:
  * - Unwatched computeds hold references dependency-ward only, so dropping
@@ -81,7 +81,7 @@ describe('leak audit', () => {
     expect(subCount(base)).toBe(0);
   });
 
-  test('quiescence: retiring the last draft leaves no per-episode state', () => {
+  test('quiescence: retiring the last draft leaves no per-suspension state', () => {
     const a = signal(0);
     const c = computed(() => a.get() + 1);
     const d1 = ri.openDraft();

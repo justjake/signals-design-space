@@ -1,4 +1,4 @@
-/** Async semantics: pending/error as graph state, episodes, refresh. */
+/** Async semantics: pending/error as graph state, suspensions, refresh. */
 import { describe, expect, test } from 'vitest';
 import {
   computed,
@@ -40,7 +40,7 @@ describe('pending as graph state', () => {
       thrown2 = e;
     }
     expect(typeof (thrown1 as PromiseLike<void>).then).toBe('function');
-    expect(thrown1).toBe(thrown2); // stable episode thenable across retries
+    expect(thrown1).toBe(thrown2); // stable suspension thenable across retries
     expect(isPending(c)).toBe(true);
     gate.resolve('done');
     await tick();

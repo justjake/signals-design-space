@@ -172,11 +172,11 @@ function readValue(x: AnyReadable): unknown {
     if (st.kind === 'error') throw st.box.error;
     const consumer = getActiveConsumer();
     if (consumer !== null && consumer.kind === 'derived') {
-      // Pending forwards: park the evaluating computed on this episode.
-      useImpl(st.episode.promise, consumer as DerivedNode<unknown>);
+      // Pending forwards: park the evaluating computed on this suspension.
+      useImpl(st.suspension.promise, consumer as DerivedNode<unknown>);
     }
     if (!isUninitialized((node as DerivedNode<unknown>).value)) return value; // stale serves
-    throw st.episode.promise; // never settled: suspend
+    throw st.suspension.promise; // never settled: suspend
   }
   return value;
 }
