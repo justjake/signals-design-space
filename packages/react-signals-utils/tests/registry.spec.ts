@@ -84,7 +84,7 @@ describe('ReactBatchRegistry', () => {
 		]);
 	});
 
-	it('backfills React work scheduled before the first store write', () => {
+	it('backfill: setState-before-store-write transition survives event close', () => {
 		const taps = new TapsDouble();
 		const registry = new ReactBatchRegistry(taps.react);
 		const events = listen(registry);
@@ -110,7 +110,7 @@ describe('ReactBatchRegistry', () => {
 		]);
 	});
 
-	it('keeps a committed token locked into one root while another root is pending', () => {
+	it('lock-in: a root that committed a pending batch keeps including it', () => {
 		const taps = new TapsDouble();
 		const registry = new ReactBatchRegistry(taps.react);
 		const events = listen(registry);
@@ -146,7 +146,7 @@ describe('ReactBatchRegistry', () => {
 		]);
 	});
 
-	it('reports a rendered batch that re-pends, then reports and retires it later', () => {
+	it('re-pend: a rendered lane stays reported and locked in', () => {
 		const taps = new TapsDouble();
 		const registry = new ReactBatchRegistry(taps.react);
 		const events = listen(registry);
@@ -174,7 +174,28 @@ describe('ReactBatchRegistry', () => {
 		]);
 	});
 
-	it('parks a store-only async action and ignores its stale settlement', async () => {
+	it('parking: a store-only action retires at settlement, not event close', async () => {
+		const taps = new TapsDouble();
+		const registry = new ReactBatchRegistry(taps.react);
+		const events = listen(registry);
+		let settle!: () => void;
+		const action = new Promise<void>((resolve) => {
+			settle = resolve;
+		});
+		taps.writeIn(32, true);
+		const token = registry.getCurrentWriteBatch();
+		taps.emit('onEventClosed', 32, action);
+		expect(registry.isBatchLive(token)).toBe(true);
+		expect(events).toEqual([`open:${token}`]);
+
+		settle();
+		await action;
+		await Promise.resolve();
+		expect(registry.isBatchLive(token)).toBe(false);
+		expect(events).toEqual([`open:${token}`, `retire:${token}:false`]);
+	});
+
+	it('parking: stale settlement after reset and lane reuse does nothing', async () => {
 		const taps = new TapsDouble();
 		const registry = new ReactBatchRegistry(taps.react);
 		let settleFirst!: () => void;
