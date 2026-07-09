@@ -88,8 +88,8 @@ describe('leak audit', () => {
     const d2 = ri.openDraft();
     ri.runInDraft(d1.id, () => a.set(1));
     ri.runInDraft(d2.id, () => a.update((x) => x + 5));
-    ri.resolveEnvelope(c, [d1.id]);
-    ri.resolveEnvelope(c, [d1.id, d2.id]);
+    ri.resolveState(c, [d1.id]);
+    ri.resolveState(c, [d1.id, d2.id]);
     expect(ri.nodeOf(c).worldMemos).not.toBeNull();
     ri.retireDraft(d1.id);
     expect(ri.nodeOf(c).worldMemos).not.toBeNull(); // d2 still live
@@ -98,6 +98,44 @@ describe('leak audit', () => {
     expect(ri.nodeOf(a).worldMemos).toBeNull();
     expect(ri.liveDraftCount()).toBe(0);
     expect(read(a)).toBe(6);
+  });
+
+  test('promote/demote cycling leaves no back-edges; the demoted chain collects when dropped', async () => {
+    const base = signal(1);
+    let finalized = false;
+    const reg = new FinalizationRegistry(() => {
+      finalized = true;
+    });
+    (() => {
+      const mid = computed(() => base.get() * 2);
+      const top = computed(() => mid.get() + 1);
+      // Subscribe without pulling, pull through the watched tier, then
+      // unsubscribe: promote installed back-edges down to the cell, and
+      // demote must remove every one of them.
+      const unsub = ri.subscribe(top, () => {});
+      expect(read(top)).toBe(3);
+      expect(subCount(base)).toBe(1);
+      unsub();
+      expect(subCount(base)).toBe(0);
+      reg.register(top, null);
+    })();
+    await collect();
+    expect(finalized).toBe(true); // forward references only after demote
+    expect(subCount(base)).toBe(0);
+  });
+
+  test('a dropped subscription over a computed chain reclaims the whole watched closure', async () => {
+    const base = signal(1);
+    const top = computed(() => base.get() + 1);
+    (() => {
+      // The subscription handle is dropped without being called.
+      void ri.subscribe(top, () => {});
+    })();
+    expect(read(top)).toBe(2); // watched evaluation links base -> top
+    expect(subCount(base)).toBe(1);
+    await collect(10);
+    // The registry disposed the leaf; the demote cascade unhooked the chain.
+    expect(subCount(base)).toBe(0);
   });
 
   test('disposing an effect deterministically unlinks now (no GC needed)', () => {

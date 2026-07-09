@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import {
+  ASYNC_MASK,
   computed,
   effect,
   isPending,
@@ -339,10 +340,10 @@ function runSchedule(steps: Step[]): string | null {
           const ids = s.ids.filter((ix) => model.drafts.get(ix) === 'live');
           const engIds = ids.map((ix) => engDrafts.get(ix)!);
           const target = 'cell' in s.ref ? engCells[s.ref.cell] : engComps[s.ref.comp];
-          const env = ri.resolveEnvelope(target, engIds);
-          if (env.kind !== 'value') return fail(`world read: unexpected ${env.kind}`);
+          const st = ri.resolveState(target, engIds);
+          if ((st.flags & ASYNC_MASK) !== 0) return fail(`world read: unexpected flags ${st.flags}`);
           const want = modelEval(model, exprs, s.ref, ids);
-          if (env.value !== want) return fail(`world read [${ids}]: engine ${String(env.value)} != model ${want}`);
+          if (st.value !== want) return fail(`world read [${ids}]: engine ${String(st.value)} != model ${want}`);
           break;
         }
         case 'readLatest': {

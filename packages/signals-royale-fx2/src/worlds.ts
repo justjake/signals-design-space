@@ -31,13 +31,13 @@ import {
   type DerivedNode,
   type ReactiveNode,
   type TraceEventId,
+  ASYNC_MASK,
   Flags,
   NO_EVENT,
   bumpReactEpoch,
   currentWriteEpoch,
   ensureFresh,
   hooks,
-  isUninitialized,
   peekCell,
   pokeAndWakeLeafObservers,
   pokeLeafObservers,
@@ -49,8 +49,10 @@ import {
   writeCell,
 } from './graph.ts';
 import {
-  type Envelope,
-  envelopeOf,
+  type DerivedState,
+  type ErrorBox,
+  type Suspension,
+  makeErrorBox,
   makeSuspension,
   setOnSettlementEpoch,
   trackThenable,
@@ -431,16 +433,16 @@ export function worldOf(ids: readonly DraftId[]): World {
 interface WorldMemo {
   writeEpoch: number;
   worldEpoch: WorldEpoch;
-  env: Envelope;
+  state: DerivedState;
 }
 
 function memoFor(node: ReactiveNode, sig: string): WorldMemo | undefined {
   return node.worldMemos?.get(sig) as WorldMemo | undefined;
 }
 
-/** Passive view of a world memo's envelope (no evaluation, no validation). */
-export function peekWorldMemo(node: ReactiveNode, sig: string): Envelope | undefined {
-  return memoFor(node, sig)?.env;
+/** Passive view of a world memo's state (no evaluation, no validation). */
+export function peekWorldMemo(node: ReactiveNode, sig: string): DerivedState | undefined {
+  return memoFor(node, sig)?.state;
 }
 
 function storeMemo(node: ReactiveNode, sig: string, memo: WorldMemo): void {
@@ -451,36 +453,42 @@ function storeMemo(node: ReactiveNode, sig: string, memo: WorldMemo): void {
   node.worldMemos.set(sig, memo);
 }
 
-/** Envelope identity stability: keep the previous envelope object when the
- * fresh resolution is indistinguishable, so subscribers comparing snapshots
- * by identity do not re-render for no reason. */
-function reconcileEnvelopes(node: ReactiveNode, prev: Envelope | undefined, next: Envelope): Envelope {
+/** State identity stability: keep the previous state record when the fresh
+ * resolution is indistinguishable, so subscribers comparing snapshots by
+ * identity do not re-render for no reason. Value states compare with the
+ * node's equals(); suspended states are the same span iff the suspension and
+ * the stale value match; error states are the same span iff the box carries
+ * the same reason reference. */
+function reconcileStates(
+  node: ReactiveNode,
+  prev: DerivedState | undefined,
+  next: DerivedState,
+): DerivedState {
   if (prev === undefined) return next;
-  if (prev.kind === 'value' && next.kind === 'value') {
+  const asyncBits = next.flags & ASYNC_MASK;
+  if ((prev.flags & ASYNC_MASK) !== asyncBits) return next;
+  if (asyncBits === 0) {
     const equals = (node as DerivedNode<unknown>).equals ?? Object.is;
     return equals(prev.value, next.value) ? prev : next;
   }
-  if (prev.kind === 'pending' && next.kind === 'pending' && prev.suspension === next.suspension) {
-    return prev.value === next.value ? prev : next;
+  if (asyncBits === Flags.DerivedSuspended) {
+    return prev.throwable === next.throwable && prev.value === next.value ? prev : next;
   }
-  if (prev.kind === 'error' && next.kind === 'error' && prev.box.error === next.box.error) {
-    return prev;
-  }
-  return next;
+  return (prev.throwable as ErrorBox).error === (next.throwable as ErrorBox).error ? prev : next;
 }
 
-/** Resolve a node's value as seen by a world. Canonical worlds hit the
- * ordinary graph; drafted worlds replay intents (cells) or speculatively
- * evaluate (deriveds) with memoization per (node, world signature). */
-export function resolveEnvelope(node: ReactiveNode, world: World): Envelope {
+/** Resolve a node's value as seen by a world. A canonical world hits the
+ * ordinary graph and returns the NODE ITSELF as the state view (cells and
+ * deriveds carry the DerivedState shape; the trivial read allocates
+ * nothing); drafted worlds replay intents (cells) or speculatively evaluate
+ * (deriveds) into memo records per (node, world signature). */
+export function resolveState(node: ReactiveNode, world: World): DerivedState {
   if (world.drafts.length === 0) {
-    return untracked(() => {
-      if ((node.flags & Flags.Cell) !== 0) {
-        return { kind: 'value', value: peekCell(node as CellNode<unknown>) } as Envelope;
-      }
-      ensureFresh(node as DerivedNode<unknown>);
-      return envelopeOf(node as DerivedNode<unknown>);
+    untracked(() => {
+      if ((node.flags & Flags.Cell) !== 0) peekCell(node as CellNode<unknown>);
+      else ensureFresh(node as DerivedNode<unknown>);
     });
+    return node as CellNode<unknown> | DerivedNode<unknown>;
   }
   const memo = memoFor(node, world.sig);
   if (
@@ -488,15 +496,15 @@ export function resolveEnvelope(node: ReactiveNode, world: World): Envelope {
     memo.writeEpoch === currentWriteEpoch() &&
     memo.worldEpoch === worldEpoch
   ) {
-    return memo.env;
+    return memo.state;
   }
-  const fresh: Envelope =
+  const fresh: DerivedState =
     (node.flags & Flags.Cell) !== 0
-      ? { kind: 'value', value: replayLog(node as CellNode<unknown>, world) }
-      : draftEvaluate(node as DerivedNode<unknown>, world, memo?.env);
-  const env = reconcileEnvelopes(node, memo?.env, fresh);
-  storeMemo(node, world.sig, { writeEpoch: currentWriteEpoch(), worldEpoch, env });
-  return env;
+      ? { flags: 0, value: replayLog(node as CellNode<unknown>, world), throwable: null }
+      : draftEvaluate(node as DerivedNode<unknown>, world, memo?.state);
+  const state = reconcileStates(node, memo?.state, fresh);
+  storeMemo(node, world.sig, { writeEpoch: currentWriteEpoch(), worldEpoch, state });
+  return state;
 }
 
 /** Guards against a computed reading itself within one world. */
@@ -505,8 +513,8 @@ const draftEvalStack = new Map<ReactiveNode, Set<string>>();
 function draftEvaluate(
   node: DerivedNode<unknown>,
   world: World,
-  prev: Envelope | undefined,
-): Envelope {
+  prev: DerivedState | undefined,
+): DerivedState {
   let sigs = draftEvalStack.get(node);
   if (sigs?.has(world.sig)) {
     throw new Error(`cycle detected in computed${node.label ? ` "${node.label}"` : ''}`);
@@ -515,8 +523,10 @@ function draftEvaluate(
   sigs.add(world.sig);
   // Suspense retries must observe one stable thenable per pending span.
   const suspension =
-    prev !== undefined && prev.kind === 'pending' && !prev.suspension.settled
-      ? prev.suspension
+    prev !== undefined &&
+    (prev.flags & Flags.DerivedSuspended) !== 0 &&
+    !(prev.throwable as Suspension).settled
+      ? (prev.throwable as Suspension)
       : makeSuspension();
   const worldUse = (t: PromiseLike<unknown>): unknown => {
     const box = trackThenable(t);
@@ -529,18 +539,20 @@ function draftEvaluate(
   currentPark = worldUse;
   try {
     const value = untracked(() => withWorld(world, () => node.fn(worldUse as never)));
-    return { kind: 'value', value };
+    return { flags: 0, value, throwable: null };
   } catch (e) {
     if (e === WORLD_PARKED) {
-      return {
-        kind: 'pending',
-        suspension,
-        stale: !isUninitialized(node.value),
-        value: isUninitialized(node.value) ? undefined : node.value,
-      };
+      // The canonical value doubles as the stale serve (sentinel = none yet).
+      return { flags: Flags.DerivedSuspended, value: node.value, throwable: suspension };
     }
-    if (prev !== undefined && prev.kind === 'error' && prev.box.error === e) return prev;
-    return { kind: 'error', box: { error: e } };
+    if (
+      prev !== undefined &&
+      (prev.flags & Flags.DerivedError) !== 0 &&
+      (prev.throwable as ErrorBox).error === e
+    ) {
+      return prev;
+    }
+    return { flags: Flags.DerivedError, value: node.value, throwable: makeErrorBox(e) };
   } finally {
     currentPark = prevPark;
     sigs.delete(world.sig);
@@ -558,12 +570,15 @@ export function getCurrentPark(): ((t: PromiseLike<unknown>) => unknown) | null 
   return currentPark;
 }
 
-/** Unwrap an envelope from inside another evaluation: values flow, errors
- * rethrow their stable reason, pending forwards by parking the reader. */
-export function unwrapForEval(env: Envelope, park: (t: PromiseLike<unknown>) => unknown): unknown {
-  if (env.kind === 'value') return env.value;
-  if (env.kind === 'error') throw env.box.error;
-  return park(env.suspension.promise);
+/** Unwrap a resolved state from inside another evaluation: values flow,
+ * errors rethrow their stable reason, suspended forwards by parking the
+ * reader (no stale serve here — a world evaluation must not fold a stale
+ * canonical value into a speculative result). */
+export function unwrapForEval(st: DerivedState, park: (t: PromiseLike<unknown>) => unknown): unknown {
+  const asyncBits = st.flags & ASYNC_MASK;
+  if (asyncBits === 0) return st.value;
+  if (asyncBits === Flags.DerivedError) throw (st.throwable as ErrorBox).error;
+  return park((st.throwable as Suspension).promise);
 }
 
 // ---------------------------------------------------------------------------

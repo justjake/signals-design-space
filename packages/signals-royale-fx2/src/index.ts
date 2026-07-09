@@ -18,6 +18,7 @@ import {
   type ReactiveNode,
   type UseFn,
   type WatcherNode,
+  ASYNC_MASK,
   Flags,
   getActiveConsumer,
   hooks,
@@ -41,9 +42,11 @@ import {
   NO_EVENT,
 } from './graph.ts';
 import {
-  type Envelope,
-  asyncStateOf,
+  type DerivedState,
+  type ErrorBox,
+  type Suspension,
   ensureRefreshNonce,
+  isErrorBox,
 } from './asyncs.ts';
 import {
   type Draft,
@@ -66,7 +69,7 @@ import {
   liveDraftCount,
   openDraft,
   peekWorldMemo,
-  resolveEnvelope,
+  resolveState,
   retireDraft,
   runInDraft,
   sealDraft,
@@ -164,22 +167,30 @@ function readValue(x: AnyReadable): unknown {
   const world = getCurrentWorld();
   if (world !== null) {
     // Inside a draft evaluation every read resolves that world.
-    return unwrapForEval(resolveEnvelope(node, world), getCurrentPark()!);
+    return unwrapForEval(resolveState(node, world), getCurrentPark()!);
   }
   if ((node.flags & Flags.Cell) !== 0) return readCell(node as CellNode<unknown>);
   const value = readDerived(node as DerivedNode<unknown>);
-  const st = asyncStateOf(node as DerivedNode<unknown>);
-  if (st !== null) {
-    if (st.kind === 'error') throw st.box.error;
+  const flags = node.flags;
+  if ((flags & ASYNC_MASK) !== 0) {
+    if ((flags & Flags.DerivedError) !== 0) throw (node.throwable as ErrorBox).error;
+    const suspension = node.throwable as Suspension;
     const consumer = getActiveConsumer();
     if (consumer !== null && (consumer.flags & Flags.Derived) !== 0) {
       // Pending forwards: park the evaluating computed on this suspension.
-      useImpl(st.suspension.promise, consumer as DerivedNode<unknown>);
+      useImpl(suspension.promise, consumer as DerivedNode<unknown>);
     }
     if (!isUninitialized((node as DerivedNode<unknown>).value)) return value; // stale serves
-    throw st.suspension.promise; // never settled: suspend
+    throw suspension.promise; // never settled: suspend
   }
   return value;
+}
+
+/** The value slot of a state view, sentinel normalized: a suspended state
+ * with no settled value reads as undefined on the never-suspending channels
+ * (latest, committed). */
+function stateValue(st: DerivedState): unknown {
+  return isUninitialized(st.value) ? undefined : st.value;
 }
 
 /** Newest intent: canonical plus every live draft; never suspends. That is
@@ -203,17 +214,17 @@ export function latest<T>(x: Readable<T>): T {
       world = renderWorld() ?? latestWorld();
     }
   }
-  const env = resolveEnvelope(node, world);
-  if (env.kind === 'error') throw env.box.error;
-  return env.value as T;
+  const st = resolveState(node, world);
+  if ((st.flags & Flags.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
+  return stateValue(st) as T;
 }
 
 /** What is on screen: per-root when a container is given. Never subscribes. */
 export function committed<T>(x: Readable<T>, container?: object): T {
   const node = nodeOf(x);
-  const env = resolveEnvelope(node, committedWorldOf(container));
-  if (env.kind === 'error') throw env.box.error;
-  return env.value as T;
+  const st = resolveState(node, committedWorldOf(container));
+  if ((st.flags & Flags.DerivedError) !== 0) throw (st.throwable as ErrorBox).error;
+  return stateValue(st) as T;
 }
 
 /** Cheap flip-only probe: true while newer data exists behind what is on
@@ -227,11 +238,10 @@ export function isPending(x: AnyReadable): boolean {
 function isPendingPassive(node: ReactiveNode, world: World | null): boolean {
   if ((node.flags & Flags.Cell) !== 0) return cellHasDraftIntents(node as CellNode<unknown>);
   if ((node.flags & Flags.Derived) === 0) return false;
-  const st = asyncStateOf(node as DerivedNode<unknown>);
-  if (st !== null && st.kind === 'pending') return true;
+  if ((node.flags & Flags.DerivedSuspended) !== 0) return true;
   if (world !== null && world.drafts.length > 0) {
     const memo = peekWorldMemo(node, world.sig);
-    if (memo !== undefined && memo.kind === 'pending') return true;
+    if (memo !== undefined && (memo.flags & Flags.DerivedSuspended) !== 0) return true;
   }
   // A drafted input means this computed has newer data pending too.
   for (let l = node.deps; l !== undefined; l = l.nextDep) {
@@ -406,8 +416,8 @@ function renderWorld(): World | null {
 export const reactIntegration = {
   nodeOf,
   worldOf,
-  resolveEnvelope: (x: AnyReadable, ids: readonly DraftId[]): Envelope =>
-    resolveEnvelope(nodeOf(x), worldOf(ids)),
+  resolveState: (x: AnyReadable, ids: readonly DraftId[]): DerivedState =>
+    resolveState(nodeOf(x), worldOf(ids)),
   /** Leaf subscription. `notify` is the store-change channel (snapshot
    * comparisons re-render); `draftWake` is the draft-lane channel — it
    * receives the id of any draft whose intents reach this node, so only
@@ -484,12 +494,13 @@ export const reactIntegration = {
   hasLiveDrafts(ids: readonly DraftId[]): boolean {
     return worldOf(ids).drafts.length > 0;
   },
-  /** Committed-view snapshot with stable identity: the value, or a marker
-   * object carrying the stable error to rethrow at the call site. */
+  /** Committed-view snapshot with stable identity: the value, or the
+   * ErrorBox itself (identity-stable for the whole error span — see
+   * isErrorBox) whose error the call site rethrows. */
   committedSnapshot(x: AnyReadable, container: object | undefined): unknown {
-    const env = resolveEnvelope(nodeOf(x), committedWorldOf(container));
-    if (env.kind === 'error') return { engineErrorBox: env.box.error };
-    return env.value;
+    const st = resolveState(nodeOf(x), committedWorldOf(container));
+    if ((st.flags & Flags.DerivedError) !== 0) return st.throwable;
+    return stateValue(st);
   },
   /** Wake leaf observers of every cell the given live drafts touch (used
    * after a per-root commit updates that root's committed view). */
@@ -511,5 +522,9 @@ export function resetEngineForTest(): void {
   getActiveTracer()?.stop();
 }
 
-export type { Envelope, World, DraftId, Draft, UseFn, EqualsFn };
+export type { DerivedState, ErrorBox, Suspension, World, DraftId, Draft, UseFn, EqualsFn };
+/** The DerivedState read protocol: flag word constants (test async bits via
+ * ASYNC_MASK/DerivedError/DerivedSuspended), the error-box brand check, and
+ * the never-settled sentinel test. */
+export { ASYNC_MASK, Flags, isErrorBox, isUninitialized };
 export { CANONICAL_WORLD };

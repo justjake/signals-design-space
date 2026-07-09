@@ -17,6 +17,7 @@
 import * as React from 'react';
 import * as Scheduler from 'scheduler';
 import {
+  ASYNC_MASK,
   reactIntegration as engine,
   resetEngineForTest,
   type DraftId,
@@ -274,8 +275,8 @@ export function correctSubscription(
     if (audience === undefined || !audience.has(scope)) continue;
     deliver(id);
   }
-  const env = engine.resolveEnvelope(x as never, rendered.ids);
-  if (env.kind === 'value' && !Object.is(env.value, rendered.value)) {
+  const st = engine.resolveState(x as never, rendered.ids);
+  if ((st.flags & ASYNC_MASK) === 0 && !Object.is(st.value, rendered.value)) {
     dispatch(REPAIR_WAKE);
   }
 }

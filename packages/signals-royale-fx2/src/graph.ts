@@ -20,6 +20,8 @@
  *   reclaims those.
  */
 
+import type { ErrorBox, Suspension } from './asyncs.ts';
+
 export type EqualsFn<T> = (a: T, b: T) => boolean;
 /** Monotonic count of canonical writes; validation shortcut for unwatched reads. */
 export type WriteEpoch = number;
@@ -30,20 +32,36 @@ export type TraceEventId = number;
 /**
  * Per-node flags word — the full bit layout:
  *
- *   0b0000_0001  Cell     node type: writable source
- *   0b0000_0010  Derived  node type: cached computed
- *   0b0000_0100  Watcher  node type: effect or leaf observer
- *   0b0000_1000  Check    staleness: possibly stale; confirm dependency
- *                         versions before recomputing
- *   0b0001_0000  Dirty    staleness: must recompute on next pull
- *   0b0010_0000+          reserved for the watched/unwatched tier bits
+ *   0b0000_0001  Cell             node type: writable source
+ *   0b0000_0010  Derived          node type: cached computed
+ *   0b0000_0100  Watcher          node type: effect or leaf observer
+ *   0b0000_1000  Check            staleness: possibly stale; confirm
+ *                                 dependency versions before recomputing
+ *   0b0001_0000  Dirty            staleness: must recompute on next pull
+ *   0b0010_0000  Watched          tier: back-edges installed, push marks
+ *                                 trustworthy
+ *   0b0100_0000  DerivedError     async: latest evaluation threw; the
+ *                                 ErrorBox to rethrow is in node.throwable
+ *   0b1000_0000  DerivedSuspended async: latest evaluation parked; the
+ *                                 Suspension is in node.throwable
+ *   0b1_0000_0000+                reserved
  *
  * Exactly one type bit is set at creation and never changes. Check and
  * Dirty form an exclusive staleness field: at most one is set, and both
- * clear is the Clean state — staleness writes clear the whole field before
- * setting, so a single-bit test reads the exact state. Kept as
- * erasable-syntax consts (a const object, not a const enum) so the TS
- * source runs directly under node's type stripping.
+ * clear is the Clean state. DerivedError and DerivedSuspended form a second
+ * exclusive field (the value plane): at most one is set, both clear is the
+ * plain-value state. Writes to either field clear the whole field before
+ * setting, so a single-bit test reads the exact state.
+ *
+ * Watched semantics per node type:
+ * - cells and deriveds: mirror of observerCount > 0, set by promote (0→1)
+ *   and cleared by demote (1→0). observerCount stays authoritative
+ *   (lifetime.ts and demote need the count); the flag is the one-load test
+ *   on the hot paths;
+ * - watchers: set at creation, cleared at dispose.
+ *
+ * Kept as erasable-syntax consts (a const object, not a const enum) so the
+ * TS source runs directly under node's type stripping.
  */
 export type Flags = number;
 export const Flags = {
@@ -52,9 +70,15 @@ export const Flags = {
   Watcher: 0b0000_0100,
   Check: 0b0000_1000,
   Dirty: 0b0001_0000,
+  Watched: 0b0010_0000,
+  DerivedError: 0b0100_0000,
+  DerivedSuspended: 0b1000_0000,
 } as const satisfies Record<string, Flags>;
 /** Both staleness bits; (flags & STALE_MASK) === 0 is the Clean state. */
 const STALE_MASK: Flags = Flags.Check | Flags.Dirty;
+/** Both value-plane bits; (flags & ASYNC_MASK) === 0 is the plain-value
+ * state. Exported: this is how DerivedState views are read (see asyncs.ts). */
+export const ASYNC_MASK: Flags = Flags.DerivedError | Flags.DerivedSuspended;
 
 export interface Link {
   dep: ReactiveNode;
@@ -73,6 +97,16 @@ export interface Link {
 export interface ReactiveNode {
   flags: Flags;
   version: NodeVersion;
+  /**
+   * The value-plane companion to the DerivedError/DerivedSuspended flags:
+   * the ErrorBox to rethrow or the Suspension being awaited; null in the
+   * plain-value state. Initialized null at construction on every node kind
+   * (uniform shape — no post-construction property addition): cells never
+   * set the async bits but share the { flags, value, throwable } read
+   * protocol (DerivedState, asyncs.ts), and watchers carry the slot only
+   * for shape uniformity.
+   */
+  throwable: ErrorBox | Suspension | null;
   /** Subscriber list (watched edges + leaf observers). */
   subs: Link | undefined;
   subsTail: Link | undefined;
@@ -109,7 +143,18 @@ export interface ReactiveNode {
 }
 
 let writeEpoch: WriteEpoch = 1;
+/** The tracking stamp of the evaluation pass in progress. */
 let evalStamp = 1;
+/** Stamp mint — monotonic, never reused. Uniqueness is load-bearing for the
+ * same-pass dedup probe in trackRead: a stamp match there asserts "this edge
+ * was stamped by the pass in progress", and a recycled value could match an
+ * edge from a dead pass, whose position may be outside the kept prefix —
+ * trimming would then silently drop a dependency the evaluation read. */
+let stampMint = 1;
+function mintEvalStamp(): number {
+  evalStamp = ++stampMint;
+  return evalStamp;
+}
 let activeConsumer: ReactiveNode | null = null;
 let batchDepth = 0;
 
@@ -172,8 +217,6 @@ export interface DerivedNode<T> extends ReactiveNode {
   fn: (use: UseFn) => T;
   equals: EqualsFn<T>;
   computing: boolean;
-  /** Async state managed by asyncs.ts; null while the value is plain. */
-  asyncState: unknown;
   /** Hidden refresh input; created on first refresh(x). */
   refreshNonce: CellNode<number> | undefined;
 }
@@ -211,6 +254,7 @@ export function makeCell<T>(
   return {
     flags: Flags.Cell,
     version: 1,
+    throwable: null,
     subs: undefined,
     subsTail: undefined,
     deps: undefined,
@@ -239,6 +283,7 @@ export function makeDerived<T>(
   return {
     flags: Flags.Derived | Flags.Dirty,
     version: 0,
+    throwable: null,
     subs: undefined,
     subsTail: undefined,
     deps: undefined,
@@ -251,7 +296,6 @@ export function makeDerived<T>(
     fn,
     equals: opts?.equals ?? defaultEquals,
     computing: false,
-    asyncState: null,
     refreshNonce: undefined,
     worldMemos: null,
     reactEpoch: 1,
@@ -286,32 +330,58 @@ function unlinkFromSubs(link: Link): void {
   link.nextSub = undefined;
 }
 
-/** Add one observer to a node, propagating watch state into a derived's deps. */
+/**
+ * Promote: first observer arrives. Links the dep closure depth-first (cycles
+ * are impossible — dep edges exist only after an evaluation, and cyclic
+ * evaluation throws) and stamp-validates each edge once, because the node
+ * spent its unwatched span with no back-edges: writes moved dependency
+ * versions without any push mark reaching it, so its Clean flags may be
+ * lies. The version match alone is insufficient — a stale unwatched dep has
+ * not recomputed, so its own version cannot have moved even when its inputs
+ * did; the dep's post-promote staleness carries that information up. Where
+ * some edge fails validation, a Clean node is seeded Check, restoring the
+ * watched tier's invariant that flags are trustworthy (the stale-cover
+ * invariant: for every watched edge, dep stale ⇒ sub stale or scheduled).
+ */
 export function addObserver(node: ReactiveNode): void {
   node.observerCount++;
   if (node.observerCount === 1) {
+    node.flags |= Flags.Watched;
     if ((node.flags & Flags.Derived) !== 0) {
+      let invalid = false;
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         linkIntoSubs(l);
-        addObserver(l.dep);
+        const dep = l.dep;
+        addObserver(dep);
+        if (l.version !== dep.version || (dep.flags & STALE_MASK) !== 0) invalid = true;
       }
+      if (invalid && (node.flags & STALE_MASK) === 0) node.flags |= Flags.Check;
     }
     hooks.observation?.(node, true);
   }
 }
 
+/**
+ * Demote: last observer leaves. Cascade-unlinks the back-edges promote
+ * installed (after this, the chain holds forward references only — dropping
+ * user handles collects it whole) and seeds the unwatched tier's validation
+ * stamp: Clean at demote means no dependency changed since last validation
+ * (push marks were reliable while watched), so the next quiet read
+ * short-circuits O(1); stale at demote forces the up-walk. Flag distrust
+ * across the tier boundary lives entirely at the two crossings — promote
+ * validates on re-watch, and unwatched pulls never trust Clean without a
+ * current validatedEpoch — so no staleness seeding happens here.
+ */
 export function removeObserver(node: ReactiveNode): void {
   node.observerCount--;
   if (node.observerCount === 0) {
+    node.flags &= ~Flags.Watched;
     if ((node.flags & Flags.Derived) !== 0) {
       for (let l = node.deps; l !== undefined; l = l.nextDep) {
         unlinkFromSubs(l);
         removeObserver(l.dep);
       }
-      // An unwatched cache can no longer trust push marks; force lazy
-      // revalidation on the next read.
-      if ((node.flags & STALE_MASK) === 0) node.flags |= Flags.Check;
-      node.validatedEpoch = 0;
+      node.validatedEpoch = (node.flags & STALE_MASK) === 0 ? writeEpoch : 0;
     }
     hooks.observation?.(node, false);
   }
@@ -327,6 +397,18 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
     sub.depsTail = next;
     return next;
   }
+  const watched = (sub.flags & Flags.Watched) !== 0;
+  if (watched) {
+    // Same-pass dedup for non-adjacent re-reads: this sub's earlier link
+    // sits at the dep's subs tail (cursor reuse re-stamps, new watched edges
+    // land at the tail), so a stamp match means the edge already exists and
+    // is inside the kept prefix — return it instead of double-registering
+    // the observer. Unwatched edges never enter subs lists, so unwatched
+    // re-reads keep the tolerated duplicate forward edges (version-
+    // consistent, forward-only garbage).
+    const last = dep.subsTail;
+    if (last !== undefined && last.sub === sub && last.stamp === evalStamp) return last;
+  }
   const link: Link = {
     dep,
     sub,
@@ -340,8 +422,6 @@ function trackRead(dep: ReactiveNode, sub: ReactiveNode): Link {
   if (tail === undefined) sub.deps = link;
   else tail.nextDep = link;
   sub.depsTail = link;
-  const watched =
-    (sub.flags & Flags.Watcher) !== 0 ? !(sub as WatcherNode).disposed : sub.observerCount > 0;
   if (watched) {
     linkIntoSubs(link);
     addObserver(dep);
@@ -393,32 +473,83 @@ export function bumpReactEpoch(node: ReactiveNode): void {
   node.canonicalEpoch++;
 }
 
+/** Suspended traversal positions for the iterative wave (heap, not the JS
+ * call stack, so wave depth is bounded by memory rather than stack frames). */
+interface WaveFrame {
+  value: Link | undefined;
+  prev: WaveFrame | undefined;
+}
+
 /**
- * Invalidation marks are always Check ("possibly stale"): consumers confirm
- * against dependency VERSIONS before recomputing or re-running. Versions —
- * not marks — are the recompute trigger, which is what makes write-then-
- * revert inside a batch a true no-op.
+ * The invalidation wave: push marks down the watched subs closure.
+ *
+ * Marks are always Check ("possibly stale"): consumers confirm against
+ * dependency VERSIONS before recomputing or re-running. Versions — not
+ * marks — are the recompute trigger, which is what makes write-then-revert
+ * inside a batch a true no-op.
+ *
+ * Per-node visit rules (the wave's contract, also applied by any site that
+ * installs a back-edge onto a stale dep — see observeNode):
+ * 1. already stale → re-schedule an unscheduled Watcher; do not descend
+ *    (sound under the stale-cover invariant: dep stale ⇒ sub stale or
+ *    scheduled, so everything below is already marked);
+ * 2. Clean → set Check (never Dirty) and record the causal event;
+ * 3. Watcher → schedule; watchers have no subscribers, so never descend;
+ * 4. Derived → bump the subscription epochs exactly once per wave (the
+ *    Clean→Check transition is the wave's visited test) and descend.
+ *
+ * Iterative in alien-signals' shape: a link cursor, the pending sibling, and
+ * an explicit stack of suspended positions — single-child descents reuse the
+ * pending sibling instead of pushing, so plain chains run with no stack
+ * growth at all.
  */
-function mark(node: ReactiveNode, cause: TraceEventId): void {
-  if ((node.flags & STALE_MASK) !== 0) {
-    if ((node.flags & Flags.Watcher) !== 0 && !(node as WatcherNode).scheduled) {
-      scheduleWatcher(node as WatcherNode);
+function propagateWave(link: Link | undefined, cause: TraceEventId): void {
+  if (link === undefined) return;
+  let cur: Link = link;
+  let next: Link | undefined = cur.nextSub;
+  let stack: WaveFrame | undefined;
+  top: do {
+    const sub = cur.sub;
+    const flags = sub.flags;
+    if ((flags & STALE_MASK) !== 0) {
+      if ((flags & Flags.Watcher) !== 0 && !(sub as WatcherNode).scheduled) {
+        scheduleWatcher(sub as WatcherNode);
+      }
+    } else {
+      sub.flags = flags | Flags.Check;
+      sub.causeEvent = cause;
+      if ((flags & Flags.Watcher) !== 0) {
+        scheduleWatcher(sub as WatcherNode);
+      } else if ((flags & Flags.Derived) !== 0) {
+        sub.canonicalEpoch++;
+        if (!reactEpochSuppressed) sub.reactEpoch++;
+        const subSubs = sub.subs;
+        if (subSubs !== undefined) {
+          cur = subSubs;
+          if (cur.nextSub !== undefined) {
+            stack = { value: next, prev: stack };
+            next = cur.nextSub;
+          }
+          continue;
+        }
+      }
     }
-    return;
-  }
-  node.flags |= Flags.Check;
-  node.causeEvent = cause;
-  if ((node.flags & Flags.Watcher) !== 0) {
-    scheduleWatcher(node as WatcherNode);
-    return;
-  }
-  if ((node.flags & Flags.Derived) !== 0) {
-    node.canonicalEpoch++;
-    if (!reactEpochSuppressed) node.reactEpoch++;
-    for (let l = node.subs; l !== undefined; l = l.nextSub) {
-      mark(l.sub, cause);
+    if (next !== undefined) {
+      cur = next;
+      next = cur.nextSub;
+      continue;
     }
-  }
+    while (stack !== undefined) {
+      const resume = stack.value;
+      stack = stack.prev;
+      if (resume !== undefined) {
+        cur = resume;
+        next = cur.nextSub;
+        continue top;
+      }
+    }
+    break;
+  } while (true);
 }
 
 function scheduleWatcher(w: WatcherNode): void {
@@ -433,9 +564,7 @@ function scheduleWatcher(w: WatcherNode): void {
 
 /** Push a change wave from a cell whose canonical value advanced. */
 export function propagateFrom(cell: CellNode<unknown>, cause: TraceEventId): void {
-  for (let l = cell.subs; l !== undefined; l = l.nextSub) {
-    mark(l.sub, cause);
-  }
+  propagateWave(cell.subs, cause);
   if (batchDepth === 0) flush();
 }
 
@@ -451,9 +580,7 @@ export function invalidateDerived(node: DerivedNode<unknown>, cause: TraceEventI
   node.version++;
   node.reactEpoch++;
   node.canonicalEpoch++;
-  for (let l = node.subs; l !== undefined; l = l.nextSub) {
-    mark(l.sub, cause);
-  }
+  propagateWave(node.subs, cause);
   if (batchDepth === 0) flush();
 }
 
@@ -543,7 +670,7 @@ export function adoptDepLink(dep: ReactiveNode, sub: ReactiveNode): void {
   };
   sub.deps = link;
   if (sub.depsTail === undefined) sub.depsTail = link;
-  if (sub.observerCount > 0 || ((sub.flags & Flags.Watcher) !== 0 && !(sub as WatcherNode).disposed)) {
+  if ((sub.flags & Flags.Watched) !== 0) {
     linkIntoSubs(link);
     addObserver(dep);
   }
@@ -722,9 +849,8 @@ function recompute(node: DerivedNode<unknown>): void {
   node.computing = true;
   const prevConsumer = activeConsumer;
   activeConsumer = node;
-  evalStamp++;
+  const myStamp = mintEvalStamp();
   node.depsTail = undefined;
-  const myStamp = evalStamp;
   // Validation stamps at the PRE-eval epoch: if the evaluation itself writes
   // (self-affecting computed), the next read must revalidate.
   const preEpoch = writeEpoch;
@@ -758,10 +884,11 @@ function recompute(node: DerivedNode<unknown>): void {
 
 /** Bring a derived up to date; exact recompute counts are the contract. */
 export function ensureFresh(node: DerivedNode<unknown>): void {
-  if (node.observerCount > 0) {
-    // Watched: push marks are trustworthy.
-    if ((node.flags & STALE_MASK) === 0) return;
-  } else if ((node.flags & STALE_MASK) === 0 && node.validatedEpoch === writeEpoch) {
+  const flags = node.flags;
+  if ((flags & Flags.Watched) !== 0) {
+    // Watched: push marks are trustworthy (promote validated the closure).
+    if ((flags & STALE_MASK) === 0) return;
+  } else if ((flags & STALE_MASK) === 0 && node.validatedEpoch === writeEpoch) {
     return;
   }
   if ((node.flags & Flags.Dirty) !== 0 || node.value === UNINITIALIZED) {
@@ -817,8 +944,11 @@ export { UNINITIALIZED };
 
 function makeWatcher(fn: (() => void | (() => void)) | undefined): WatcherNode {
   return {
-    flags: Flags.Watcher,
+    // Watchers are born watched (they exist to observe) and drop the bit at
+    // dispose; their edges never go through promote/demote counting.
+    flags: Flags.Watcher | Flags.Watched,
     version: 0,
+    throwable: null,
     subs: undefined,
     subsTail: undefined,
     deps: undefined,
@@ -890,8 +1020,7 @@ function executeWatcher(w: WatcherNode): void {
   const prevScope = activeScope;
   activeConsumer = w;
   activeScope = w;
-  evalStamp++;
-  const myStamp = evalStamp;
+  const myStamp = mintEvalStamp();
   w.depsTail = undefined;
   const cause = hooks.trace !== null ? hooks.trace('effect-run', w, w.causeEvent) : NO_EVENT;
   const prevCause = setCurrentCause(cause);
@@ -910,6 +1039,7 @@ function executeWatcher(w: WatcherNode): void {
 export function disposeWatcher(w: WatcherNode): void {
   if (w.disposed) return;
   w.disposed = true;
+  w.flags &= ~Flags.Watched;
   try {
     if (w.children !== undefined) {
       for (const child of w.children) disposeWatcher(child);
@@ -1000,7 +1130,7 @@ export function observeNode(
   const leaf = makeWatcher(undefined);
   leaf.onNotify = notify;
   leaf.onDraftWake = draftWake;
-  evalStamp++;
+  mintEvalStamp();
   leaf.depsTail = undefined;
   const prevConsumer = activeConsumer;
   activeConsumer = leaf;
@@ -1010,10 +1140,26 @@ export function observeNode(
       // Subscribe to invalidation only; do not force evaluation here.
       const link = trackRead(node, leaf);
       link.version = node.version;
+      // This installed a back-edge without a pull, so the stale-cover
+      // invariant is on this site: a stale node means the staleness edge
+      // this subscriber cares about already fired (or, for promote-seeded
+      // Check, could never fire while unwatched) — apply the wave's visit
+      // rules to the new subscriber so it hears it once. A pull re-arms;
+      // edge-triggered semantics are preserved. Never-computed nodes
+      // (version 0) are exempt: they are born Dirty with no dependency
+      // edges, so no wave was ever swallowed and there is no missed edge —
+      // exactly the edge-triggered contract's "no Clean→stale transition
+      // happened yet".
+      if ((node.flags & STALE_MASK) !== 0 && node.version !== 0) {
+        leaf.flags |= Flags.Check;
+        leaf.causeEvent = node.causeEvent;
+        scheduleWatcher(leaf);
+      }
     }
   } finally {
     activeConsumer = prevConsumer;
   }
+  if (batchDepth === 0) flush();
   const dispose = () => {
     droppedDisposers.unregister(dispose);
     disposeWatcher(leaf);

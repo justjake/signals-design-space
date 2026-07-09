@@ -643,3 +643,79 @@ LOC self-count (consolidated package, same counter and rules as §4):
 node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2
 → libLoc 2362  (engine 1909 + react bindings 453)
 ```
+
+## 15. Two-tier graph rebuild + DerivedState merge
+
+The watched tier now runs the full alien-signals edge discipline; the
+unwatched tier keeps stamp-pull validation. Design and as-built deltas:
+`docs/two-tier-graph.md` (authoritative — mechanics, invariants, the three
+deviations found while landing, and the §11 DerivedState merge). Summary:
+
+- **Promote validates** (fixes two verified defects): the first observer's
+  cascade links the dep closure depth-first and stamp-validates every edge
+  (`version` match AND dep Clean post-promote); a Clean node with any invalid
+  edge is seeded Check. Falsify-first: `expected 2 to be 4` (stale-value
+  serve through the watched fast path), `expected 20 to be 30` (transitive),
+  both captured pre-change.
+- **Late-subscriber staleness delivery** (fixes a missed notify,
+  `expected +0 to be 1` pre-change): `observeNode` onto a stale,
+  previously-computed node applies the wave's visit rules to the new leaf —
+  one wake at the subscribe-time flush, pull re-arms. Never-computed nodes
+  (`version === 0`) are exempt: born Dirty, no dep edges, no missed edge.
+- **Demote seeds the unwatched tier**: back-edges cascade-unlink,
+  `validatedEpoch = writeEpoch` when Clean (next quiet read is O(1)) or `0`
+  when stale; the old unconditional Check seeding is gone — flag distrust
+  lives at the two tier crossings only.
+- **Iterative propagate** in alien's stack shape (Check-only marks,
+  causeEvent, once-per-wave epoch bumps, watcher scheduling preserved):
+  falsify-first deep-chain test overflowed the recursive wave at depth
+  150 000 pre-change (`RangeError: Maximum call stack size exceeded`),
+  completes now. Pull-side recursion consciously retained (benchmark-gated).
+- **trackRead case-3 dedup** kills duplicate watched edges on non-adjacent
+  same-pass re-reads (`expected 2 to be 1` pre-change). Its soundness needs
+  never-reused eval stamps, so stamping gained a monotonic mint
+  (`stampMint`) behind the pass-scoped `evalStamp` — the restore discipline
+  recycled values, and a recycled stamp could have made the probe return a
+  dead pass's edge and truncate a genuinely-read dependency.
+- **Flags**: `Watched` 0b0010_0000 (mirror of `observerCount > 0` for
+  cells/deriveds, creation-to-dispose for watchers; one-bit tier test in
+  trackRead/ensureFresh); `DerivedError`/`DerivedSuspended`
+  0b0100_0000/0b1000_0000 form the exclusive async field (`ASYNC_MASK`).
+  Link layout unchanged; `prevDep` stays omitted (all deps mutations are
+  forward-only; justification in the doc §2).
+- **DerivedState merge** (owner amendment): `node.asyncState` and the
+  per-read Envelope allocation are gone. Nodes carry `throwable`
+  (ErrorBox | Suspension | null, initialized on every node kind) and the
+  async flag bits; `resolveState` returns THE NODE for canonical worlds
+  (zero-alloc reads) and reshaped memo records for drafted worlds; stale is
+  derived (`value !== UNINITIALIZED`). Suspension-identity, sameError box
+  reuse, and settlement-as-write are preserved; `committedSnapshot` returns
+  the identity-stable ErrorBox instead of allocating a marker per
+  `getSnapshot` call (a uSES identity hazard). `Envelope` export replaced by
+  `DerivedState` + protocol exports; all importers converted, no alias.
+- **Leak story**: demote removes every back-edge promote installed; the
+  leak audit gained two tests (promote/demote cycling leaves zero subs
+  entries + dropped chain collects; a dropped watched subscription handle
+  reclaims the closure through the registry). 8/8 with `--expose-gc`.
+
+Perf (5-run medians vs same-session stash of pre-change `src/`, coarse
+floors): quiet reads parity (4.28 vs 4.18 ms/1e6), deep-chain 1k write+pull
+−13% (7.44 vs 8.51 ms/200), fanout-200 writes −10% (18.66 vs 20.74 ms/2000),
+promote/demote churn parity (35.7 vs 36.6 ms/2e5); react-bench in line with
+§12 (transition p95 ~10.0 ms, mount-5000 57 ms vs baseline 69 ms).
+
+Gates, all fresh in the landing session:
+
+```
+tsc --noEmit                     # clean
+Tests  278 passed (278)          # 265 prior + 11 graph-tiers + 2 gc-leaks
+Tests  3 passed (3)              # oracle deep (ROYALE_FX2_SEEDS=1200), canaries intact
+Tests  1 failed | 24 passed (25) # battery — scenario 16 DOM-mutation only (exempt)
+```
+
+LOC self-count (same counter and rules as §4):
+
+```
+node royale/verify-kit/count-loc.mjs --lib packages/signals-royale-fx2
+→ libLoc 2437  (engine 1973 + react bindings 464)
+```
