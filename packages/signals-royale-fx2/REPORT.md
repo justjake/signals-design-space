@@ -673,10 +673,10 @@ deviations found while landing, and the §11 DerivedState merge). Summary:
   completes now. Pull-side recursion consciously retained (benchmark-gated).
 - **trackRead case-3 dedup** kills duplicate watched edges on non-adjacent
   same-pass re-reads (`expected 2 to be 1` pre-change). Its soundness needs
-  never-reused eval stamps, so stamping gained a monotonic mint
-  (`stampMint`) behind the pass-scoped `evalStamp` — the restore discipline
-  recycled values, and a recycled stamp could have made the probe return a
-  dead pass's edge and truncate a genuinely-read dependency.
+  never-reused eval stamps, so new stamps come from a monotonic counter
+  (`stampCounter`) behind the pass-scoped `evalStamp` — the restore
+  discipline recycled values, and a recycled stamp could have made the probe
+  return a dead pass's edge and truncate a genuinely-read dependency.
 - **Flags**: `Watched` 0b0010_0000 (mirror of `observerCount > 0` for
   cells/deriveds, creation-to-dispose for watchers; one-bit tier test in
   trackRead/ensureFresh); `DerivedError`/`DerivedSuspended`

@@ -145,14 +145,14 @@ export interface ReactiveNode {
 let writeEpoch: WriteEpoch = 1;
 /** The tracking stamp of the evaluation pass in progress. */
 let evalStamp = 1;
-/** Stamp mint — monotonic, never reused. Uniqueness is load-bearing for the
- * same-pass dedup probe in trackRead: a stamp match there asserts "this edge
- * was stamped by the pass in progress", and a recycled value could match an
- * edge from a dead pass, whose position may be outside the kept prefix —
+/** Stamp counter — monotonic, never reused. Uniqueness is load-bearing for
+ * the same-pass dedup probe in trackRead: a stamp match there asserts "this
+ * edge was stamped by the pass in progress", and a recycled value could match
+ * an edge from a dead pass, whose position may be outside the kept prefix —
  * trimming would then silently drop a dependency the evaluation read. */
-let stampMint = 1;
-function mintEvalStamp(): number {
-  evalStamp = ++stampMint;
+let stampCounter = 1;
+function newEvalStamp(): number {
+  evalStamp = ++stampCounter;
   return evalStamp;
 }
 let activeConsumer: ReactiveNode | null = null;
@@ -849,7 +849,7 @@ function recompute(node: DerivedNode<unknown>): void {
   node.computing = true;
   const prevConsumer = activeConsumer;
   activeConsumer = node;
-  const myStamp = mintEvalStamp();
+  const myStamp = newEvalStamp();
   node.depsTail = undefined;
   // Validation stamps at the PRE-eval epoch: if the evaluation itself writes
   // (self-affecting computed), the next read must revalidate.
@@ -1020,7 +1020,7 @@ function executeWatcher(w: WatcherNode): void {
   const prevScope = activeScope;
   activeConsumer = w;
   activeScope = w;
-  const myStamp = mintEvalStamp();
+  const myStamp = newEvalStamp();
   w.depsTail = undefined;
   const cause = hooks.trace !== null ? hooks.trace('effect-run', w, w.causeEvent) : NO_EVENT;
   const prevCause = setCurrentCause(cause);
@@ -1130,7 +1130,7 @@ export function observeNode(
   const leaf = makeWatcher(undefined);
   leaf.onNotify = notify;
   leaf.onDraftWake = draftWake;
-  mintEvalStamp();
+  newEvalStamp();
   leaf.depsTail = undefined;
   const prevConsumer = activeConsumer;
   activeConsumer = leaf;

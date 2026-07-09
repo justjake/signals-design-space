@@ -16,8 +16,8 @@ documented inline where the design said something else:
 
 - stamp uniqueness (section 2): the case-3 dedup probe requires eval stamps
   that are NEVER reused; the pre-existing restore discipline recycles values,
-  so stamping gained a monotonic mint (`stampMint`) behind the pass-scoped
-  `evalStamp`;
+  so new stamps come from a monotonic counter (`stampCounter`) behind the
+  pass-scoped `evalStamp`;
 - never-computed exemption (section 6, step 5): pending-edge delivery skips
   nodes with `version === 0` — born-Dirty, no dep edges, so no wave was ever
   swallowed and there is no missed edge to deliver;
@@ -154,12 +154,12 @@ test T9]
 it sits inside the kept prefix". That implication needs stamp VALUES that are
 never reused, and the pre-existing discipline reuses them: every eval's
 `finally` restores `evalStamp = myStamp`, so after an outer eval completes,
-the global sits below values its nested evals minted, and a later pass can
-re-mint one. A recycled value could match an edge from a dead pass whose
-position is outside the kept prefix; trackRead would return it without
-advancing the cursor, and trimDeps would then truncate a dependency the
-evaluation genuinely read — a silently missing edge. Fix: minting goes
-through a monotonic `stampMint` counter (`mintEvalStamp()`), while
+the global sits below values its nested evals used, and a later pass can
+hand out one of those values again. A recycled value could match an edge
+from a dead pass whose position is outside the kept prefix; trackRead would
+return it without advancing the cursor, and trimDeps would then truncate a
+dependency the evaluation genuinely read — a silently missing edge. Fix:
+new stamps come from a monotonic `stampCounter` (`newEvalStamp()`), while
 `evalStamp` keeps the exact same pass-scoped restore behavior. Comparisons
 are equality-only, so nothing else observes the value change.
 
