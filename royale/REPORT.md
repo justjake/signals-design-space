@@ -147,3 +147,18 @@ milomg fork tip `4e7d83a2` with dalien pinned to `1fd018c`.
 - React-side perf: each entry's REPORT.md react-bench table (vs its own uSES
   baseline); standout verified numbers — fx1 transition p95 5.6ms vs 97ms
   baseline, fx2 10ms vs ~330ms max urgent, sx2 the only p95 win vs baseline
+
+## Post-tournament addendum (2026-07-09): fx2 production round
+
+Headline finding 1 is now superseded: fx2's production round (`b7d80c9` on
+`royale/fx2`) dropped the mutation-window line by ruling DOM-mutation
+attribution out of scope (it needs reconciler cooperation; nothing else does).
+**fx2 runs on stock React — fork LOC 0** (vendor/react at the base commit,
+built react-dom grep-verified clean). The same round closed the `latest()`
+no-hook tear (validity-gated render-world note) and killed the transition
+broad-wake (identity-stable ScopeContext; per-`useValue` draft-lane reducers
+woken per drafted cell in the owning transition's lanes — wake test: 8
+subscribers, 1 drafted cell, exactly 1 transition wake). Re-judged: both
+suites green (engine 224, react 38), all 8 production regressions verified
+failing on the pre-fix tree, lib 2339 (+100). Details: the package's
+REPORT.md §11.

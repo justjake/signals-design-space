@@ -14,7 +14,7 @@ on Jake+s milomg fork; sm1 = CI DNF after 1 test, sx1 = CI guard hit — see REP
 | fh1  | fable high | version-stamp predicates | worlds = pure visibility predicates (cutoff seq + batch set) over per-signal histories; state self-destructs at quiescence                          | 167    | 1957     | 1.83×     | clean after fix round (latest()-context tear ×3 shapes incl. untracked-stale)                                                                          |
 | fh2  | fable high | fiber-granular subs      | per-component-instance subscribers + draft-overlay batches over an attributed alien-v3 graph port                                                   | 211    | 2740     | **1.11×** | clean first pass; largest lib, judged "buys real substance"                                                                                            |
 | fx1  | fable max  | inverted scheduler       | store CLAIMS React lanes itself (write-time classification, episode auto-retire); engine-owned batching                                             | 80     | 2343     | 1.43×     | clean after fix round (latest() render-body tear + transition-refresh no-op); transition p95 5.6ms vs 97ms baseline                                    |
-| fx2  | fable max  | zero-fork ceiling        | **11-line fork** (mutation window only — argued impossible in userland); React's own updater queues carry world membership via SignalScope reducers | **11** | 2239     | **1.28×** | **clean** after fix round (bare-root fold convergence + isPending poke); build agent died at the finish, continuation completed it                                                                     |
+| fx2  | fable max  | zero-fork ceiling        | **FORKLESS** (production round b7d80c9 dropped the mutation-window line; runs on stock React, DOM-mutation attribution out of scope); React's own updater queues carry world membership via SignalScope reducers + per-hook draft-lane reducers | **0**  | 2339     | **1.28×** | **clean, production track**: forkless verified (vendor/react == base, zero FX2 symbols in build), latest() no-hook tear closed, transition broad-wake killed (wake test: 8 subs, 1 drafted cell → 1 wake); all 8 regressions re-verified failing pre-fix |
 | sh1  | sol high   | STM transactions         | operation-log STM: worlds are `Transaction[]`, reads fold ops over canonical base                                                                   | 94     | **1217** | 3.93×     | clean after fix round (adapter-seam semantics moved into library); smallest lib                                                                        |
 | sh2  | sol high   | bitmask slab             | the DoD entry: typed-array slabs + intrusive edge arena; batch-number overlay drafts                                                                | 235    | 1424     | 2.02×     | clean first pass; exemplary honesty (disclosed an unprovable abandoned-batch leak edge)                                                                |
 | sx1  | sol xhigh  | event-sourced log        | ONE ordered op log; canonical/latest/render/committed are four folds; React lanes ARE batch identity                                                | 476    | 1295     | CI DNF²  | clean first pass; \*cellx hung >15min — honestly reported unmeasured                                                                                   |
@@ -24,8 +24,9 @@ on Jake+s milomg fork; sm1 = CI DNF after 1 test, sx1 = CI guard hit — see REP
 
 Field notes for ballot reading: the `latest()`-context rule caught 5 of 12 (fh1,
 fm1-render-variant, fx1, sx2, sm2) — hardest requirement in the field. Every fork is
-3–137× smaller than the incumbent's 1510; every entry converged on some form of
-"React reports lane facts, semantics live in userland" — nobody rebuilt the
-in-reconciler batch registry. Nobody reached alien perf parity (incumbents' level);
+3–137× smaller than the incumbent's 1510 — and fx2's production round then dropped
+its last fork line entirely (fork 0, DOM-mutation attribution ruled out of scope);
+every entry converged on some form of "React reports lane facts, semantics live in
+userland" — nobody rebuilt the in-reconciler batch registry. Nobody reached alien perf parity (incumbents' level);
 fx2/fh2 lead at ~1.28×. Scorecards: `royale/judgement/<slug>.md`. Ballots:
 `royale/ballots/<judge>.md`.
