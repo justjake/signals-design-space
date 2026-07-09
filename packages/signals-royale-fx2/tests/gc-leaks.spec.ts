@@ -183,6 +183,67 @@ describe('leak audit', () => {
     expect(subCount(base)).toBe(0);
   });
 
+  test('[guard] a disposed effect collects even though the watcher queue retains capacity', async () => {
+    // The flush queues keep their backing stores across waves (logical-length
+    // clear, not `.length = 0`). The correctness price is that consumed slots
+    // must be nulled at drain: a soft-cleared slot that still held its watcher
+    // would pin the disposed watcher (and its closure) forever. Passes before
+    // and after the storage change; fails against a retained-capacity variant
+    // that skips the nulling.
+    const cell = signal(0);
+    const payloadRef = (() => {
+      const payload = { tag: 'effect-closure-payload' };
+      const dispose = effect(() => {
+        cell.get();
+        void payload;
+      });
+      cell.set(1); // flush enqueues and runs the watcher (slot consumed)
+      dispose();
+      return new WeakRef(payload);
+    })();
+    await collect(10);
+    expect(payloadRef.deref()).toBeUndefined();
+  });
+
+  test('[guard] a disposed leaf observer collects even though the leaf buffer retains capacity', async () => {
+    const cell = signal(0);
+    const payloadRef = (() => {
+      const payload = { tag: 'leaf-closure-payload' };
+      const unsub = observeNode(nodeOf(cell), () => void payload);
+      cell.set(1); // delivery consumes the leaf's buffer slot
+      unsub();
+      return new WeakRef(payload);
+    })();
+    await collect(10);
+    expect(payloadRef.deref()).toBeUndefined();
+  });
+
+  test('[guard] effects preempted by a throwing flush collect after disposal (catch-path slots nulled)', async () => {
+    const cell = signal(0);
+    let armed = false;
+    const payloadRef = (() => {
+      const disposeThrowing = effect(() => {
+        cell.get();
+        if (armed) throw new Error('boom');
+      });
+      // Scheduled behind the thrower: the aborted flush clears it via the
+      // catch path, which must null its unconsumed slot too.
+      const payload = { tag: 'preempted-effect-payload' };
+      const disposePreempted = effect(() => {
+        cell.get();
+        void payload;
+      });
+      armed = true;
+      expect(() => cell.set(1)).toThrow('boom');
+      disposeThrowing();
+      disposePreempted();
+      return new WeakRef(payload);
+    })();
+    armed = false;
+    await collect(10);
+    expect(payloadRef.deref()).toBeUndefined();
+  });
+
   test('a scope-owned effect survives GC of its unused per-effect disposer', async () => {
     const base = signal(1);
     let runs = 0;

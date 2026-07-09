@@ -823,3 +823,47 @@ touched them). Gates: tsc clean; 275 passed; oracle 3 passed at 1200 seeds;
 battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
 `adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
 the unhandled error is the same refresh TypeError).
+
+## 19. Queue storage discipline (retained capacity, nulled slots)
+
+The flush path's module-scope queues no longer clear with `.length = 0`
+(V8 right-trims the backing store on a length reset, so every wave re-grew
+capacity from zero — O(log n) reallocations plus copies, garbage
+proportional to peak wave width) and the leaf drain no longer
+splice-snapshots (one fresh array per wave). `watcherQueue` clears by
+logical length (`watcherCount`), keeping the `queueHead` cursor and the
+`w.disposed` drain-time tombstone (append-then-fully-drain queue, no
+mid-queue removal, so no compaction machinery — deliberately); the catch
+path gets the same discipline (unconsumed `[queueHead, count)` slots
+nulled, cursors reset, scheduled/staleness cleared exactly as before).
+`markedLeaves` is double-buffered with logical lengths: delivery iterates
+the wave's buffer while `onNotify` re-marks land in the spare, preserving
+the snapshot rule exactly — a wave's iteration never sees entries added
+during delivery; a doubly-nested delivery (onNotify inside onNotify) finds
+the spare checked out and takes a fresh array, paying the old per-wave
+allocation for that rare frame rather than clobbering a live iteration.
+The correctness price of retained capacity is total slot hygiene: every
+consumed slot is nulled at drain (drain loop, catch path, leaf finally —
+also on a throwing notify), because a soft-cleared slot must not pin a
+disposed watcher. Two-stage flush ordering (effects settle before any leaf
+notify) is untouched. `host.ts`'s `handle.errors.length = 0` in
+`resetReactSignalsForTest` stays, per audit exemption (test seam, cold).
+Tests: three `[guard]` gc-leaks tests (disposed effect / disposed leaf /
+catch-path-preempted effect all collect despite retained capacity;
+WeakRef-asserted) and two delivery re-entrancy tests (Q1: a leaf marked
+during delivery rides the nested wave, not the current iteration; Q2:
+doubly-nested delivery keeps undelivered snapshot entries intact). All five
+pass pre- AND post-change (the splice semantics already matched — verified
+by running them against the pre-change engine, so guard-labeled, not
+falsify-first), and each was proven to bite: skipping the slot nulling
+fails all three gc guards; a strict-swap sabotage that reuses a checked-out
+buffer fails Q2 with the exact clobbering failure mode. Memory evidence
+(bench/queue-probe.mts, --expose-gc, per-wave heapUsed delta after forced
+GC, 2000 subscribers x 50 waves, seconds of runtime): leaf-notify burst
+244,280 -> 256 B/wave median (mean 209,668 -> 857); effect burst 68,056 ->
+256 B/wave median (mean 68,236 -> 524); baseline reproduced on a second
+pre-change run. Gates: tsc clean; 280 passed (275 + the 5 new); oracle 3
+passed at ROYALE_FX2_SEEDS=1200 (title-verified 1200 seeds x 90 steps);
+battery at the pinned 23 passed / 2 failed / 1 unhandled error (scenario 11
+`adapter.refresh`, scenario 16 `adapter.onDomMutation`, both owner-exempt;
+the unhandled error is the same refresh TypeError).

@@ -650,3 +650,32 @@ oracle (whose `readWorld`/canary steps consume `resolveState` directly),
 the battery, and the leak audit referee the merge; the no-alloc property
 carries no dedicated test by owner ruling, this section stays honest about
 the residual allocation sites instead.
+
+## 12. Flush queue storage (as built, later round)
+
+The two scheduling queues keep their backing stores across waves. `.length =
+0` truncation makes V8 right-trim the backing store, so every wave re-grew
+capacity from zero (O(log n) reallocations, garbage proportional to peak
+wave width), and the leaf drain's splice snapshot added one array per wave.
+As built:
+
+- `watcherQueue` clears by logical length (`watcherCount`); the `queueHead`
+  drain cursor and the `w.disposed` drain-time tombstone are unchanged
+  (append-then-fully-drain, no mid-queue removal, no compaction).
+- `markedLeaves` is double-buffered: a wave iterates its own buffer while
+  re-marks from `onNotify` land in the spare, preserving the snapshot rule
+  (a wave's iteration never sees entries added during delivery). A
+  doubly-nested delivery finds the spare checked out and takes a fresh
+  array — the rare frame pays the old per-wave allocation, never a
+  clobbered iteration.
+- The correctness price of retained capacity: every consumed slot is nulled
+  at drain (drain loop, catch path, and leaf-delivery finally) — a
+  soft-cleared slot must not pin a disposed watcher. Guarded by three
+  `[guard]` gc-leaks tests and two delivery re-entrancy tests (Q1/Q2 in
+  graph-tiers), each proven to bite against sabotaged variants.
+- Two-stage flush ordering (effects settle before any leaf notify) and the
+  throwing-effect abort semantics are unchanged.
+
+Measured (bench/queue-probe.mts, 2000 subscribers x 50 waves, per-wave
+heapUsed delta after forced GC): leaf-notify burst 244,280 -> 256 B/wave
+median; effect burst 68,056 -> 256 B/wave median.
