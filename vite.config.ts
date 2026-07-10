@@ -25,6 +25,7 @@ const vendored = [
 	'reviews/**',
 	'spec/**',
 	'harness/results/**',
+	'**/src/debug/layout.debug.ts',
 	'**/dist/**',
 	'**/*.md',
 ]
