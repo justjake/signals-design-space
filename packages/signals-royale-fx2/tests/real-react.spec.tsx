@@ -410,8 +410,8 @@ describe('scenario 7 — one transition across two roots', () => {
 });
 
 describe('silent folds must repair subscribers the render-pass worlds never reached', () => {
-  // A retirement is silent (no storeVersion bump) because render-pass worlds
-  // already delivered the draft's values to every subscriber. That premise
+  // A retirement is silent for a subscriber because its rendered world
+  // resolves the same values the fold produced. That premise
   // only holds for subscribers whose root carried the draft. The shape below
   // never carried it, so the fold is its ONLY delivery channel — it must
   // converge, not stay stale until the next write.
