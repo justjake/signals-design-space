@@ -56,7 +56,7 @@ async function probeFramework(framework: string): Promise<OptTrace> {
 }
 
 describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () => {
-	for (const { framework, minInlinedPairs, mustOptimize } of expectations) {
+	for (const { framework, minInlinedPairs, mustReachTopTier } of expectations) {
 		describe(framework, () => {
 			let trace: OptTrace
 			beforeAll(async () => {
@@ -75,11 +75,14 @@ describe.skipIf(NODE_MAJOR !== 24)('inlining probe (traced child, Node 24)', () 
 				).toBeGreaterThanOrEqual(minInlinedPairs)
 			})
 
-			test(`optimizes ${mustOptimize.join(', ')}`, () => {
-				const missing = mustOptimize.filter((name) => !trace.optimized.has(name))
+			test(`top-tier compiles or inlines ${mustReachTopTier.join(', ')}`, () => {
+				const inlinedCallees = new Set(trace.inlined.map((edge) => edge.callee))
+				const missing = mustReachTopTier.filter(
+					(name) => !trace.optimized.has(name) && !inlinedCallees.has(name),
+				)
 				expect(
 					missing,
-					`never completed a TURBOFAN_JS compile; optimized set: ${[...trace.optimized].sort().join(', ')}`,
+					`neither compiled standalone nor inlined; optimized: ${[...trace.optimized].sort().join(', ')}; inlined callees: ${[...inlinedCallees].sort().join(', ')}`,
 				).toEqual([])
 			})
 

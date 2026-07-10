@@ -91,11 +91,11 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 		// Every instrumentation site captures it locally — `const tr =
 		// trace;` — and fires hooks only behind that local's undefined check.
 		const allowed = [
-			/^let trace: TraceHooks \| undefined;$/,
-			/^const tr = trace;/,
-			/^trace = undefined;$/,
-			/^return trace;$/,
-			/^trace = hooks;$/,
+			/^let trace: TraceHooks \| undefined$/,
+			/^const tr = trace$/,
+			/^trace = undefined$/,
+			/^return trace$/,
+			/^trace = hooks$/,
 			/^get trace\(\): TraceHooks \| undefined \{$/,
 			/^set trace\(hooks: TraceHooks \| undefined\) \{$/,
 		]
@@ -106,7 +106,7 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 				continue
 			}
 			const t = line.trim()
-			if (t === 'return trace;' || t === 'trace = hooks;') {
+			if (t === 'return trace' || t === 'trace = hooks') {
 				accessorPair++
 			}
 			expect(
@@ -127,8 +127,9 @@ describe('R11 zero-cost-when-off: source discipline', () => {
 					continue
 				}
 				const guardedInline = /^if \(tr !== undefined\) tr\.\w+\(/.test(t)
+				// A hook may sit inside one formatted cause branch under the guard.
 				const guardedBlock = lines
-					.slice(Math.max(0, i - 3), i)
+					.slice(Math.max(0, i - 8), i)
 					.some((l) => l.includes('if (tr !== undefined) {'))
 				expect(guardedInline || guardedBlock, `unguarded trace hook call in ${rel}: ${t}`).toBe(
 					true,
